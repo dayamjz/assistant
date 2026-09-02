@@ -10,8 +10,11 @@ until it has been independently reviewed, tested, documented, and linted.
 ## Status
 
 Early. The product requirements are settled and checked in at
-[`docs/prd.html`](docs/prd.html); the implementation is starting with the
-execution engine in `internal/graph`.
+[`docs/prd.html`](docs/prd.html). The execution engine in `internal/graph` is
+the first piece that runs: the graph builder with its construction-time checks,
+an executor with halt points and bounded cycles, and checkpoints behind a
+four-operation store. It is also the only piece so far, so there is nothing to
+run yet.
 
 ## The two promises
 
@@ -35,7 +38,7 @@ working as it always did.
 
 | Path | Contents |
 | --- | --- |
-| `cmd/assistant` | The binary. |
+| `cmd/assistant` | The binary. Not written yet, so `make build` has nothing to build. |
 | `internal/graph` | The execution engine: nodes, edges, bounds, halt points, checkpoints. |
 | `docs/prd.html` | The product requirements. The specification this code answers to. |
 
@@ -47,6 +50,12 @@ make test      # go test -race ./...
 make lint      # vet and golangci-lint
 make check     # lint and test, what CI runs
 ```
+
+`make lint` requires golangci-lint from the v2 series, the line that can read
+this module's `.golangci.yml`. It refuses when the linter is missing or comes
+from another major series rather than quietly running `go vet` alone, so a
+green `make check` always means lint ran. `make lint-guard-test` proves that
+refusal still fires.
 
 ## License
 

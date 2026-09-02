@@ -48,6 +48,13 @@ jobs:
       - name: Vet
         run: go vet ./...
 
+      # `make lint` must refuse a missing or wrong-major golangci-lint instead
+      # of degrading to `go vet` alone, which would make `make check` green
+      # with no lint having run. This proves those refusals still fire.
+      - name: Lint guard
+        if: matrix.os == 'ubuntu-latest'
+        run: make lint-guard-test
+
       # The race detector is the point of this job, so it is not optional.
       - name: Test
         run: go test -race -count=1 ./...
@@ -62,6 +69,10 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - uses: golangci/golangci-lint-action@v6
+      # .golangci.yml is a schema version 2 config, which needs action v7 or
+      # newer; v6 installs the v1 line and rejects the config before linting.
+      # The linter version is pinned so a new release cannot turn a green
+      # branch red on its own.
+      - uses: golangci/golangci-lint-action@v9
         with:
-          version: latest
+          version: v2.12.2
