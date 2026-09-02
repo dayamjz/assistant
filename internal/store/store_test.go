@@ -90,65 +90,119 @@ func TestPathIsAbsolute(t *testing.T) {
 	}
 }
 
-// The settings the package comment's durability and concurrency claims rest on
-// are in effect on both pools of a store that opened, which is what the request
-// in the connection string is for and what a request alone does not establish.
-// This is the accepting path for the check openPool applies, so it cannot pass
-// by refusing everything.
+// guaranteedSetting is this test's own statement about one connection setting:
+// what a connection carrying it reports, and a value it can be asked for
+// instead that reports differently.
+type guaranteedSetting struct {
+	// want is what a connection carrying the setting reports.
+	want string
+	// other is a value the setting can be asked for that a connection reports
+	// differently from want, which is the counterexample the refusal needs.
+	other string
+}
+
+// guaranteedSettings is the connection settings this store guarantees, written
+// out here by hand and deliberately not derived from requiredSettings.
+//
+// requiredSettings is the one owner of what the store asks for and checks at
+// run time, and that is why this list exists: a test that read its expectations
+// back out of that list could not fail when a row is deleted, because the
+// setting, its verification, and its coverage would go together and the suite
+// would stay green while the database ran in a mode the package comment does
+// not describe.
+//
+// So changing a setting is two edits on purpose. One in requiredSettings, and
+// one here, and the second is what records the decision. Do not resolve the
+// duplication by deriving this from the package.
+var guaranteedSettings = map[string]guaranteedSetting{
+	"busy_timeout": {want: "5000", other: "1"},
+	"journal_mode": {want: "wal", other: "DELETE"},
+	"foreign_keys": {want: "1", other: "0"},
+	"synchronous":  {want: "1", other: "FULL"},
+}
+
+// The settings the store asks for and checks are exactly the ones above, in
+// both directions: one that goes missing is a setting the store would open
+// without, and one that appears is a setting nobody decided belongs.
+func TestRequiredSettingsAreTheSettingsThisStoreGuarantees(t *testing.T) {
+	asked := make(map[string]setting)
+	for _, s := range requiredSettings() {
+		if _, twice := asked[s.name]; twice {
+			t.Fatalf("requiredSettings lists %s twice", s.name)
+		}
+		asked[s.name] = s
+	}
+
+	for name, guaranteed := range guaranteedSettings {
+		s, ok := asked[name]
+		if !ok {
+			t.Fatalf("requiredSettings no longer asks for or checks %s, so the store would open without it", name)
+		}
+		if !strings.EqualFold(s.want, guaranteed.want) {
+			t.Fatalf("requiredSettings expects %s to report %s, and this store guarantees %s",
+				name, s.want, guaranteed.want)
+		}
+	}
+	for name := range asked {
+		if _, ok := guaranteedSettings[name]; !ok {
+			t.Fatalf("requiredSettings asks for %s, which is not one of the settings this test states the store guarantees; add it there on purpose or drop it", name)
+		}
+	}
+}
+
+// Every setting this store guarantees is in effect on both of its pools, which
+// is what the request in the connection string is for and what a request alone
+// does not establish. This is the accepting path for the check openPool
+// applies, so it cannot pass by refusing everything.
 func TestOpenedStoreReportsTheSettingsItsGuaranteesRestOn(t *testing.T) {
 	ctx := context.Background()
 	s := openStore(t)
 
 	for pool, db := range map[string]*sql.DB{"writer": s.write, "reader": s.read} {
-		for _, want := range requiredSettings() {
+		for name, guaranteed := range guaranteedSettings {
 			var got string
-			if err := db.QueryRowContext(ctx, "PRAGMA "+want.name).Scan(&got); err != nil {
-				t.Fatalf("reading %s from the %s pool: %v", want.name, pool, err)
+			if err := db.QueryRowContext(ctx, "PRAGMA "+name).Scan(&got); err != nil {
+				t.Fatalf("reading %s from the %s pool: %v", name, pool, err)
 			}
-			if !strings.EqualFold(got, want.want) {
-				t.Fatalf("the %s pool was opened asking for %s(%s) and reports %s, want %s",
-					pool, want.name, want.arg, got, want.want)
+			if !strings.EqualFold(got, guaranteed.want) {
+				t.Fatalf("the %s pool reports %s = %s, and this store guarantees %s",
+					pool, name, got, guaranteed.want)
 			}
 		}
 	}
-}
-
-// otherArg is a value each setting can be asked for that a connection reports
-// differently from the value requiredSettings asks for. It is the counterexample
-// the refusal below needs, and a setting with no entry here fails rather than
-// going untested.
-var otherArg = map[string]string{
-	"busy_timeout": "1",
-	"journal_mode": "DELETE",
-	"foreign_keys": "0",
-	"synchronous":  "FULL",
 }
 
 // A pool whose connection does not come back carrying one of those settings is
 // refused rather than handed out, so the store never runs on a configuration
 // its documentation does not describe.
 func TestOpenPoolRefusesASettingThatDidNotApply(t *testing.T) {
-	for _, s := range requiredSettings() {
-		t.Run(s.name, func(t *testing.T) {
+	for name, guaranteed := range guaranteedSettings {
+		t.Run(name, func(t *testing.T) {
 			ctx := context.Background()
 			path := filepath.Join(t.TempDir(), "state.db")
 
-			other, ok := otherArg[s.name]
-			if !ok {
-				t.Fatalf("%s has no counterexample value, so its refusal is untested", s.name)
+			var asked setting
+			for _, s := range requiredSettings() {
+				if s.name == name {
+					asked = s
+				}
 			}
-			asked := poolDSN(path, false)
-			wrong := strings.Replace(asked,
-				s.name+"("+s.arg+")", s.name+"("+other+")", 1)
-			if wrong == asked {
+			if asked.name == "" {
+				t.Fatalf("the store no longer asks for %s, so nothing checks it", name)
+			}
+
+			dsn := poolDSN(path, false)
+			wrong := strings.Replace(dsn,
+				asked.name+"("+asked.arg+")", asked.name+"("+guaranteed.other+")", 1)
+			if wrong == dsn {
 				t.Fatalf("the connection string does not ask for %s(%s), so this case tests nothing",
-					s.name, s.arg)
+					asked.name, asked.arg)
 			}
 
 			// The same path opens cleanly with the settings this package asks
 			// for, so the refusal below is the changed setting and not the
 			// database.
-			accepted, err := openPool(ctx, asked, false)
+			accepted, err := openPool(ctx, dsn, false)
 			if err != nil {
 				t.Fatalf("openPool refused the settings this package asks for: %v", err)
 			}
@@ -167,7 +221,7 @@ func TestOpenPoolRefusesASettingThatDidNotApply(t *testing.T) {
 			if !errors.Is(err, ErrSettingNotApplied) {
 				t.Fatalf("the refusal is not one a caller can branch on: %v", err)
 			}
-			if !strings.Contains(err.Error(), s.name) {
+			if !strings.Contains(err.Error(), name) {
 				t.Fatalf("the refusal does not name the setting: %v", err)
 			}
 		})
