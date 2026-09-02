@@ -291,6 +291,19 @@ func TestExecutionStopsBeforeAHaltedNode(t *testing.T) {
 // haltingBuilder declares prep -> gate -> act, where gate halts for a decision
 // and routes on the answer.
 func haltingBuilder(rec *recorder) *graph.Builder {
+	return haltingBuilderWithGate(rec, func(_ context.Context, r graph.Reader, w graph.Writer) error {
+		answer, err := r.Get("answer")
+		if err != nil {
+			return err
+		}
+		got, _ := answer.Text()
+		return w.Set("trace", graph.ListValue("gate:"+got))
+	})
+}
+
+// haltingBuilderWithGate is haltingBuilder with the halt point's body supplied,
+// so a test can decide what happens when the answered node runs.
+func haltingBuilderWithGate(rec *recorder, gate graph.Body) *graph.Builder {
 	return graph.NewBuilder().
 		Start("prep").
 		Key(graph.Key{Name: "answer", Kind: graph.KindText}).
@@ -301,14 +314,9 @@ func haltingBuilder(rec *recorder) *graph.Builder {
 			Reads:  []string{"answer"},
 			Writes: []string{"trace"},
 			Halt:   &graph.Halt{Question: "ship it?", Options: []string{"approve", "cancel"}, Into: "answer"},
-			NewBody: body(func(_ context.Context, r graph.Reader, w graph.Writer) error {
+			NewBody: body(func(ctx context.Context, r graph.Reader, w graph.Writer) error {
 				rec.note("gate")
-				answer, err := r.Get("answer")
-				if err != nil {
-					return err
-				}
-				got, _ := answer.Text()
-				return w.Set("trace", graph.ListValue("gate:"+got))
+				return gate(ctx, r, w)
 			}),
 		}).
 		Node(graph.Node{Name: "act", Writes: []string{"trace"}, NewBody: appendTrace(rec, "act")}).

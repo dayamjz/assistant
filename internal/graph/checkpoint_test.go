@@ -423,6 +423,56 @@ func TestABoundParkedRunStandingAtAHaltPointHoldsNoAnswer(t *testing.T) {
 	}
 }
 
+func TestResumeAcceptsTheClaimAnAnsweredSegmentLeftBehind(t *testing.T) {
+	ctx := context.Background()
+	store := graph.NewMemoryStore()
+
+	// The answer is claimed and then the segment dies before the halt node can
+	// finish, so the run's tip is the claim: running at the halt point, no
+	// decision, carrying the answer that was given.
+	died := &recorder{}
+	crashing := mustBuild(t, haltingBuilderWithGate(died, func(_ context.Context, _ graph.Reader, _ graph.Writer) error {
+		return errors.New("the process died")
+	}))
+	if _, err := mustExecutor(t, crashing, store, 20).Run(ctx, "run", mustState(t, crashing, nil)); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if _, err := mustExecutor(t, crashing, store, 20).Answer(ctx, "run", "approve"); !errors.Is(err, graph.ErrNodeFailed) {
+		t.Fatalf("Answer = %v, want the halt node's failure", err)
+	}
+	claim, err := store.Latest(ctx, "run")
+	if err != nil {
+		t.Fatalf("Latest: %v", err)
+	}
+	if claim.Position != "gate" || claim.Status != graph.StatusRunning || claim.Decision != nil {
+		t.Fatalf("the tip is %s at %q with decision %v, want a running claim at the gate",
+			claim.Status, claim.Position, claim.Decision)
+	}
+	if answer := text(t, claim.State, "answer"); answer != "approve" {
+		t.Fatalf("the claim carries the answer %q, want the one that was given", answer)
+	}
+
+	// A restarted process resumes from that claim. Validate must accept it -
+	// the answer is there, so this decision was answered - and the halt node
+	// runs for the first time. Refusing it instead would strand the run for
+	// good: forking copies the same record.
+	rec := &recorder{}
+	g := mustBuild(t, haltingBuilder(rec))
+	done, err := mustExecutor(t, g, store, 20).Resume(ctx, "run")
+	if err != nil {
+		t.Fatalf("Resume from the claim an answered segment left behind: %v", err)
+	}
+	if done.Status != graph.StatusCompleted {
+		t.Fatalf("the resumed run ended %s, want completed", done.Status)
+	}
+	if !equalStrings(rec.order(), []string{"gate", "act"}) {
+		t.Errorf("bodies ran %v, want the halt node once and then the node it routed to", rec.order())
+	}
+	if trace := list(t, done.State, "trace"); !equalStrings(trace, []string{"prep", "gate:approve", "act"}) {
+		t.Errorf("trace = %v, want the run to have routed on the answer it was resumed with", trace)
+	}
+}
+
 func TestBuildRefusesASecondWriterOfAHaltAnswerKey(t *testing.T) {
 	rec := &recorder{}
 	cases := map[string]struct {

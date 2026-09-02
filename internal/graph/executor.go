@@ -30,11 +30,19 @@ type Config struct {
 //
 // A segment that is going to execute claims the run first: Resume and Answer
 // write their checkpoint, anchored to the one they read, before the first node
-// body runs, which is what Run already did with a run's first checkpoint. Two
-// callers that read the same checkpoint therefore both try to claim it, one is
-// refused before it starts a node, and a node body is not executed twice. What
-// a body does is outside this package, so this is the difference between
-// wasted work and an agent, a push, or a network call happening twice.
+// body runs, which is what Run already did with a run's first checkpoint. The
+// executor then re-reads the run's latest checkpoint immediately before every
+// body and refuses with ErrStaleAnchor when it is no longer the one this
+// segment wrote, so a segment that has lost the run stops rather than running
+// more of a caller's code.
+//
+// That narrows the window in which two callers can both execute one node to
+// the interval between a check and the body it guards; it does not close it,
+// because a claim can still be taken while a body is running. Closing it would
+// need a lease with an expiry and therefore a clock, which this package
+// deliberately does not have. What a body does is outside this package, so the
+// residue is worth stating plainly rather than rounding off: a node body can
+// still run twice, in that window, and this package cannot prevent it.
 type Executor struct {
 	graph  *Graph
 	store  CheckpointStore
@@ -259,6 +267,9 @@ func (e *Executor) advance(ctx context.Context, cp Checkpoint) (Result, error) {
 			return e.park(ctx, cp)
 		}
 
+		if err := e.holdsClaim(ctx, cp); err != nil {
+			return Result{}, err
+		}
 		body, made := bodies[node.Name]
 		if !made {
 			body = node.NewBody()
@@ -309,6 +320,28 @@ func (e *Executor) advance(ctx context.Context, cp Checkpoint) (Result, error) {
 func haltBefore(cp *Checkpoint, n Node) {
 	cp.Status = StatusHalted
 	cp.Decision = decisionFor(n)
+}
+
+// holdsClaim refuses when the run's latest checkpoint is no longer the one
+// this segment wrote, which is what says another caller has claimed the run
+// since. It is checked immediately before every node body, the first of a
+// segment included, where the claim the segment just wrote makes it trivially
+// true: one path, no special case for the node a segment starts on.
+//
+// It narrows the window rather than closing it. Between this read and the body
+// starting, another caller can still claim the run and execute the same node,
+// and nothing here can see that. Only a lease with an expiry would close it,
+// and expiry needs a clock this package does not have.
+func (e *Executor) holdsClaim(ctx context.Context, cp Checkpoint) error {
+	latest, err := e.store.Latest(ctx, cp.Run)
+	if err != nil {
+		return err
+	}
+	if latest.ID() != cp.ID() {
+		return fmt.Errorf("%w: this segment holds %s and the run now stands at %s",
+			ErrStaleAnchor, cp.ID(), latest.ID())
+	}
+	return nil
 }
 
 // checkEdgeBounds applies the two bounds that live on an edge and, when

@@ -612,22 +612,36 @@ func TestResumeAndAnswerRefuseACheckpointFromAnotherRun(t *testing.T) {
 	}
 }
 
-// racingStore holds every Latest until a fixed number of callers have asked
-// for one, so two operations on the same run are guaranteed to read the same
-// tip and then race to write it. Without the barrier the first caller could
-// finish before the second reads, and the interleaving under test would never
-// be attempted.
+// racingStore holds a Latest until a fixed number of callers have asked for
+// one, so two operations on the same run are guaranteed to read the same tip
+// and then race to write it. Without the barrier the first caller could finish
+// before the second reads, and the interleaving under test would never be
+// attempted.
+//
+// The barrier only applies once arm is called, and only to the first readers
+// arrivals after that: a run also reads its latest checkpoint while it is
+// advancing, and holding those would stop the setup a test does before the
+// callers it means to race.
 type racingStore struct {
 	inner   graph.CheckpointStore
 	readers int
 
 	mu      sync.Mutex
+	armed   bool
 	arrived int
 	ready   chan struct{}
 }
 
 func newRacingStore(readers int, inner graph.CheckpointStore) *racingStore {
 	return &racingStore{inner: inner, readers: readers, ready: make(chan struct{})}
+}
+
+// arm starts holding readers at the barrier, once whatever the test needed to
+// set up sequentially has been written.
+func (s *racingStore) arm() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.armed = true
 }
 
 func (s *racingStore) Write(ctx context.Context, anchor graph.CheckpointID, c graph.Checkpoint) (graph.CheckpointID, error) {
@@ -637,12 +651,17 @@ func (s *racingStore) Write(ctx context.Context, anchor graph.CheckpointID, c gr
 func (s *racingStore) Latest(ctx context.Context, run string) (graph.Checkpoint, error) {
 	cp, err := s.inner.Latest(ctx, run)
 	s.mu.Lock()
-	s.arrived++
-	if s.arrived == s.readers {
-		close(s.ready)
+	hold := s.armed && s.arrived < s.readers
+	if hold {
+		s.arrived++
+		if s.arrived == s.readers {
+			close(s.ready)
+		}
 	}
 	s.mu.Unlock()
-	<-s.ready
+	if hold {
+		<-s.ready
+	}
 	return cp, err
 }
 
@@ -672,6 +691,7 @@ func TestConcurrentAnswersToOneRunDoNotInterleave(t *testing.T) {
 	if err != nil {
 		t.Fatalf("History: %v", err)
 	}
+	store.arm()
 
 	const answers = 2
 	errs := make([]error, answers)
@@ -743,6 +763,7 @@ func TestConcurrentAnswersAreRefusedWhenTheStoreIgnoresTheAnchor(t *testing.T) {
 	if held.Status != graph.StatusHalted {
 		t.Fatalf("the run ended %s, want halted at its decision", held.Status)
 	}
+	store.arm()
 
 	const answers = 2
 	errs := make([]error, answers)
@@ -848,6 +869,68 @@ func TestAnsweringIsRefusedWhenTheStoreAnswersPastTheAnchor(t *testing.T) {
 	if got := rec.order(); !equalStrings(got, ranDuringSetup) {
 		t.Errorf("bodies ran %v, want nothing past the %v of the setup run: the claim was refused before the node",
 			got, ranDuringSetup)
+	}
+}
+
+// displacingStore lets another caller take a run out from under a segment that
+// is already advancing it, at a chosen moment and with no race to win: before
+// the nth read of a run's latest checkpoint it appends that tip again, which
+// is the shape of a second caller's Resume claim, so the segment that was
+// advancing finds its own claim is no longer the tip.
+type displacingStore struct {
+	inner      *graph.MemoryStore
+	displaceAt int
+
+	mu    sync.Mutex
+	reads int
+}
+
+func (s *displacingStore) Write(ctx context.Context, anchor graph.CheckpointID, c graph.Checkpoint) (graph.CheckpointID, error) {
+	return s.inner.Write(ctx, anchor, c)
+}
+
+func (s *displacingStore) Latest(ctx context.Context, run string) (graph.Checkpoint, error) {
+	s.mu.Lock()
+	s.reads++
+	displace := s.reads == s.displaceAt
+	s.mu.Unlock()
+	if displace {
+		tip, err := s.inner.Latest(ctx, run)
+		if err != nil {
+			return graph.Checkpoint{}, err
+		}
+		if _, err := s.inner.Write(ctx, tip.ID(), tip); err != nil {
+			return graph.Checkpoint{}, err
+		}
+	}
+	return s.inner.Latest(ctx, run)
+}
+
+func (s *displacingStore) History(ctx context.Context, run string) ([]graph.Checkpoint, error) {
+	return s.inner.History(ctx, run)
+}
+
+func (s *displacingStore) Fork(ctx context.Context, from graph.CheckpointID, into string) (graph.CheckpointID, error) {
+	return s.inner.Fork(ctx, from, into)
+}
+
+func TestASegmentThatLosesTheRunStopsBeforeTheNextNodeBody(t *testing.T) {
+	ctx := context.Background()
+	rec := &recorder{}
+	g := threeStepGraph(t, rec)
+	// The second check is the one guarding the second node, so the run is
+	// taken away after "a" has run and before "b" starts.
+	store := &displacingStore{inner: graph.NewMemoryStore(), displaceAt: 2}
+	exec := mustExecutor(t, g, store, 20)
+
+	_, err := exec.Run(ctx, "run", mustState(t, g, nil))
+	if !errors.Is(err, graph.ErrStaleAnchor) {
+		t.Fatalf("Run whose claim was taken mid-segment = %v, want ErrStaleAnchor", err)
+	}
+	// The refusal has to land before the body, not after it: a node body may
+	// touch the world, so refusing it afterwards would be refusing nothing.
+	if got := rec.order(); !equalStrings(got, []string{"a"}) {
+		t.Errorf("bodies ran %v, want only a: the displaced segment executed past its claim", got)
 	}
 }
 

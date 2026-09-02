@@ -127,12 +127,19 @@
 // resuming that, which is what keeps the original history intact.
 //
 // Every write is anchored to the checkpoint the operation read, and the store
-// refuses one whose run has moved since. A segment claims the run with that
-// write before it executes anything, so a caller whose run moved is refused
-// before it starts a node rather than after: node bodies belong to callers and
-// may touch the world, so one of them running twice is not a private matter. That is P6 at this boundary: an
+// refuses one whose run has moved since. That is P6 at this boundary: an
 // update is anchored to what the run actually observed rather than to a tip
 // read a moment before writing, which always matches and so protects nothing.
 // Two operations on one run therefore end with one refused and reported as
 // ErrStaleAnchor, never with two walks appended to one history.
+//
+// A segment claims the run with that write before it executes anything, and
+// the executor re-reads the run's latest checkpoint immediately before every
+// body, refusing when the claim it wrote is no longer the run's tip. Node
+// bodies belong to callers and may touch the world, so this narrows the window
+// in which two callers execute the same node to the interval between that
+// check and the body starting. It does not close it: a claim can still be
+// taken while a body is running, and closing that would need a lease with an
+// expiry and therefore a clock, which this package does not have. A node body
+// can still run twice inside that window.
 package graph
