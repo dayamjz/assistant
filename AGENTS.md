@@ -34,6 +34,24 @@ documentation gap to close. Do not edit the PRD to match the code.
   decide what is true now is always wrong.
 - **P14.** Every fact has one owner. Everything else points at it.
 
+## What review keeps catching
+
+These sit alongside `P1`-`P14` as a reading lens, not a replacement for them.
+Each has produced findings in more than one package.
+
+- **Claim only what a reader can verify from this repository.** A doc comment is
+  a contract, so it may not promise more than the mechanism enforces.
+  `internal/graph` and `internal/vcs` both shipped claims of protection nothing
+  implemented. When a measure is best-effort, say so and name the residual gap.
+- **Do not assert how an external system behaves internally.** Say what a measure
+  buys this package instead. `internal/vcs` lost four rounds to sentences about
+  git's internals, checkable only by probing git and falsified by the next round.
+- **Watch for a strict stance quietly relaxed in one path.** `internal/findings`
+  failed toward the human but substituted the schema example, `internal/config`
+  accepted nothing silently but let a duplicate key win last, and
+  `internal/graph` reported an exhausted guard set as a completed run. The
+  invisible exception is the part that would have shipped.
+
 ## Code
 
 - Go, formatted with `gofmt`. `make check` is what CI runs and what the gate
