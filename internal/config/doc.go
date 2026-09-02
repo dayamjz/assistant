@@ -90,7 +90,10 @@
 // selects commands that run with the operator's credentials.
 //
 // Keys are validated in sorted order, so a document with several problems
-// always reports the same one and a fix makes visible progress.
+// always reports the same one and a fix makes visible progress. A refusal that
+// came from inside a list says which element, and carries that element rather
+// than the whole list, so a fault in one of sixty-four review rules does not
+// arrive with the other sixty-three attached.
 //
 // # The path matcher
 //

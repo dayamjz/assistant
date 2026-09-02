@@ -34,13 +34,21 @@ type KeyError struct {
 	// repeated member indexes into a list, as in
 	// "review.path_rules[0].guidance", because only that refusal knows where
 	// in the document it stood. Every other fault inside a list names the
-	// list key itself and says which entry in Detail, so a caller matching on
-	// Key alone gets the list key for those.
+	// list key itself, so a caller matching on Key alone gets the list key
+	// for those and reads Detail for where in the list it was.
 	Key Key
 	// Value is the offending value rendered as JSON, or empty when the
-	// problem is the key itself rather than a value.
+	// problem is the key itself rather than a value. A refusal about one
+	// element of a list carries that element, or the one field of it the
+	// refusal is about, and never the rest of the list. A refusal about the
+	// list itself, such as one that exceeds its length limit or is not a list
+	// at all, carries the list.
 	Value string
-	// Detail says what was wrong with it.
+	// Detail says what was wrong with it. A refusal raised while decoding one
+	// element of a list says which element, counting from zero, either as the
+	// phrase it opens with ("rule 3 has no guidance", "entry 7 has no
+	// subject", "pattern 5 must be a string") or as the thing it is about
+	// ("the guidance of rule 3 is 4097 characters and the limit is 4096").
 	Detail string
 }
 

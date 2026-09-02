@@ -175,7 +175,7 @@ func TestParseRefusalsNameTheKeyAndValue(t *testing.T) {
 		{"zero run budget", `{"run_budget": 0}`, KeyRunBudget, "0"},
 		{"run budget over the limit", `{"run_budget": 100001}`, KeyRunBudget, "100001"},
 		{"bad pattern", `{"ignore_patterns": ["/docs"]}`, KeyIgnorePatterns, `"/docs"`},
-		{"pattern not a string", `{"ignore_patterns": [1]}`, KeyIgnorePatterns, "[1]"},
+		{"pattern not a string", `{"ignore_patterns": ["a.go", 42]}`, KeyIgnorePatterns, "42"},
 		{"patterns not a list", `{"ignore_patterns": "docs/**"}`, KeyIgnorePatterns, `"docs/**"`},
 		{"duration as a number", `{"checks_timeout": 168}`, KeyChecksTimeout, "168"},
 		{"duration unparseable", `{"checks_timeout": "a while"}`, KeyChecksTimeout, `"a while"`},
@@ -301,13 +301,7 @@ func TestDocumentErrorMessageNamesTheProblem(t *testing.T) {
 // Every bounded list and every bounded piece of text refuses at its limit and
 // accepts just under it, so a limit that was never enforced would fail here.
 func TestParseEnforcesItsBoundsAtTheEdge(t *testing.T) {
-	pattern := func(n int) string {
-		out := make([]string, n)
-		for i := range out {
-			out[i] = `"f` + itoa(i) + `.go"`
-		}
-		return "[" + strings.Join(out, ",") + "]"
-	}
+	pattern := listOf
 	rules := func(n int) string {
 		out := make([]string, n)
 		for i := range out {
@@ -654,4 +648,132 @@ func TestRepeatedMemberScanRefusesWhatItCannotFinish(t *testing.T) {
 	if err := checkNoRepeatedNames([]byte(`{"a": {"b": [1, {"c": 2}]}, "d": 1e400}`)); err != nil {
 		t.Errorf("checkNoRepeatedNames refused a complete document: %v", err)
 	}
+}
+
+// A refusal raised while decoding one element of a list says which element it
+// came from. Without that an author has to find the offending rule or entry by
+// counting through the list by hand.
+func TestParseListRefusalsLocateTheElement(t *testing.T) {
+	rule := func(body string) string {
+		return `{"review": {"path_rules": [{"paths": ["a.go"], "guidance": "g"}, ` + body + `]}}`
+	}
+	owner := func(body string) string {
+		return `{"document": {"ownership": [{"subject": "s", "document": "d.md"}, ` + body + `]}}`
+	}
+	long := strings.Repeat("x", MaxGuidanceRunes+1)
+	longSubject := strings.Repeat("x", MaxSubjectRunes+1)
+	manyPaths := listOf(MaxPathRulePaths + 1)
+	control := `a\u0001b`
+
+	cases := []struct {
+		name  string
+		doc   string
+		where string
+	}{
+		{"guidance over the length limit", rule(`{"paths": ["b.go"], "guidance": "` + long + `"}`), "rule 1"},
+		{"guidance with a control character", rule(`{"paths": ["b.go"], "guidance": "` + control + `"}`), "rule 1"},
+		{"guidance of the wrong type", rule(`{"paths": ["b.go"], "guidance": 7}`), "rule 1"},
+		{"a malformed pattern in a rule", rule(`{"paths": ["/bad"], "guidance": "g"}`), "rule 1"},
+		{"a non-string pattern in a rule", rule(`{"paths": [7], "guidance": "g"}`), "rule 1"},
+		{"paths that are not a list", rule(`{"paths": "b.go", "guidance": "g"}`), "rule 1"},
+		{"too many paths in a rule", rule(`{"paths": ` + manyPaths + `, "guidance": "g"}`), "rule 1"},
+		{"a rule that is not an object", rule(`"nope"`), "rule 1"},
+		{"a rule with an unknown field", rule(`{"paths": ["b.go"], "guidance": "g", "why": 1}`), "rule 1"},
+		{"a rule with no guidance", rule(`{"paths": ["b.go"]}`), "rule 1"},
+		{"a rule with empty guidance", rule(`{"paths": ["b.go"], "guidance": " "}`), "rule 1"},
+		{"a rule with no paths at all", rule(`{"guidance": "g"}`), "rule 1"},
+		{"a rule scoped to nothing", rule(`{"paths": [], "guidance": "g"}`), "rule 1"},
+		{"subject over the length limit", owner(`{"subject": "` + longSubject + `", "document": "d.md"}`), "entry 1"},
+		{"document with a control character", owner(`{"subject": "t", "document": "` + control + `"}`), "entry 1"},
+		{"subject of the wrong type", owner(`{"subject": 7, "document": "d.md"}`), "entry 1"},
+		{"an empty document path", owner(`{"subject": "t", "document": " "}`), "entry 1"},
+		{"an entry with no document", owner(`{"subject": "t"}`), "entry 1"},
+		{"an entry that is not an object", owner(`"nope"`), "entry 1"},
+		{"an entry with an unknown field", owner(`{"subject": "t", "document": "d.md", "why": 1}`), "entry 1"},
+		{"a second claim on a subject", owner(`{"subject": "s", "document": "e.md"}`), "entry 1"},
+		{"a malformed ignore pattern", `{"ignore_patterns": ["a.go", "b.go", "/bad"]}`, "pattern 2"},
+		{"a non-string ignore pattern", `{"ignore_patterns": ["a.go", 7]}`, "pattern 1"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := parseError(t, c.doc)
+			var ke *KeyError
+			if !errors.As(err, &ke) || !errors.Is(err, ErrInvalid) {
+				t.Fatalf("Parse returned %v, want a KeyError", err)
+			}
+			if !strings.Contains(ke.Detail, c.where) {
+				t.Errorf("detail %q does not say it came from %s", ke.Detail, c.where)
+			}
+		})
+	}
+	// The same shapes are accepted when nothing is wrong with them, so the
+	// locator is not coming from a check that refuses everything.
+	for _, doc := range []string{
+		rule(`{"paths": ["b.go", "c/**"], "guidance": "g"}`),
+		owner(`{"subject": "t", "document": "e.md"}`),
+		`{"ignore_patterns": ["a.go", "b.go", "docs/**"]}`,
+	} {
+		if _, err := Parse(OriginTrusted, []byte(doc)); err != nil {
+			t.Errorf("Parse refused a valid document %s: %v", doc, err)
+		}
+	}
+}
+
+// A refusal about one element carries that element and not the rest of the
+// list, so a fault in a long list does not arrive with every other entry
+// attached to it.
+func TestParseListRefusalDoesNotCarryTheOtherElements(t *testing.T) {
+	guidance := strings.Repeat("g", 200)
+	rules := make([]string, MaxPathRules)
+	for i := range rules {
+		rules[i] = `{"paths": ["keep` + itoa(i) + `.go"], "guidance": "` + guidance + `"}`
+	}
+	rules[MaxPathRules-1] = `{"paths": ["broken.go"]}`
+
+	err := parseError(t, `{"review": {"path_rules": [`+strings.Join(rules, ",")+`]}}`)
+	var ke *KeyError
+	if !errors.As(err, &ke) {
+		t.Fatalf("Parse returned %v, want a KeyError", err)
+	}
+	if !strings.Contains(ke.Value, "broken.go") {
+		t.Errorf("value %q does not carry the offending rule", ke.Value)
+	}
+	if strings.Contains(ke.Value, "keep0.go") {
+		t.Errorf("value carries an unrelated rule: %q", ke.Value)
+	}
+	if len(ke.Value) > 200 {
+		t.Errorf("value is %d bytes for a fault in one rule of %d", len(ke.Value), MaxPathRules)
+	}
+
+	owners := make([]string, MaxOwnership)
+	for i := range owners {
+		owners[i] = `{"subject": "keep` + itoa(i) + `", "document": "d.md"}`
+	}
+	owners[MaxOwnership-1] = `{"subject": "` + strings.Repeat("x", MaxSubjectRunes+1) + `", "document": "d.md"}`
+	err = parseError(t, `{"document": {"ownership": [`+strings.Join(owners, ",")+`]}}`)
+	if !errors.As(err, &ke) {
+		t.Fatalf("Parse returned %v, want a KeyError", err)
+	}
+	if strings.Contains(ke.Value, "keep0") {
+		t.Errorf("value carries an unrelated ownership entry: %q", ke.Value)
+	}
+
+	// A fault about the list itself still carries the list, because that is
+	// what it is about.
+	err = parseError(t, `{"ignore_patterns": `+listOf(MaxIgnorePatterns+1)+`}`)
+	if !errors.As(err, &ke) {
+		t.Fatalf("Parse returned %v, want a KeyError", err)
+	}
+	if !strings.Contains(ke.Value, `"f0.go"`) {
+		t.Errorf("a refusal about the whole list must carry it, got %q", ke.Value)
+	}
+}
+
+// listOf builds a JSON list of n distinct pattern strings.
+func listOf(n int) string {
+	out := make([]string, n)
+	for i := range out {
+		out[i] = `"f` + itoa(i) + `.go"`
+	}
+	return "[" + strings.Join(out, ",") + "]"
 }

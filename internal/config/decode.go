@@ -97,6 +97,37 @@ func unknownField(m map[string]any, allowed ...string) (string, bool) {
 	return "", false
 }
 
+// listEntry locates one element of a bounded list while that element is being
+// decoded. Every refusal raised about an element is built through it or names
+// its label, so the refusal says which element it came from and carries that
+// element rather than the list it sits in. A refusal about the list itself,
+// such as one that exceeds its length limit, is not built through a listEntry
+// and names the list.
+type listEntry struct {
+	key   Key
+	noun  string
+	index int
+	value any
+}
+
+// label names the element the way a refusal refers to it, counting from zero.
+func (e listEntry) label() string { return e.noun + " " + itoa(e.index) }
+
+// err refuses the element as a whole, naming the element as the value.
+func (e listEntry) err(detail string) error {
+	return keyErr(e.key, e.value, e.label()+" "+detail)
+}
+
+// fieldErr refuses one field of the element, naming that field's own value
+// rather than the element around it.
+func (e listEntry) fieldErr(value any, detail string) error {
+	return keyErr(e.key, value, e.label()+" "+detail)
+}
+
+// of names one field of an element for the checks that build their own
+// message, so "guidance" becomes "guidance of rule 3".
+func (e listEntry) of(what string) string { return what + " of " + e.label() }
+
 func checkLen(k Key, v any, what string, n, limit int) error {
 	if n > limit {
 		return keyErr(k, v, "there are "+itoa(n)+" "+what+" and the limit is "+itoa(limit))
@@ -256,23 +287,24 @@ func decodeFixMessage(k Key, v any) (any, error) {
 
 // decodePatterns compiles a list of path patterns, reporting the first that is
 // malformed with the pattern text in the message.
-func decodePatterns(k Key, v any, what string, limit int) (PatternSet, error) {
-	l, err := asList(k, v)
-	if err != nil {
-		return nil, err
+func decodePatterns(k Key, v any, where, what string, limit int) (PatternSet, error) {
+	l, ok := v.([]any)
+	if !ok {
+		return nil, keyErr(k, v, "expected a list of "+what)
 	}
 	if err := checkLen(k, v, what, len(l), limit); err != nil {
 		return nil, err
 	}
 	out := make(PatternSet, 0, len(l))
-	for _, e := range l {
-		s, ok := e.(string)
-		if !ok {
-			return nil, keyErr(k, v, "every pattern must be a string")
+	for i, e := range l {
+		entry := listEntry{key: k, noun: where + "pattern", index: i, value: e}
+		s, isString := e.(string)
+		if !isString {
+			return nil, entry.err("must be a string")
 		}
 		p, perr := ParsePattern(s)
 		if perr != nil {
-			return nil, keyErr(k, v, perr.Error())
+			return nil, entry.err("is malformed: " + perr.Error())
 		}
 		out = append(out, p)
 	}
@@ -283,7 +315,7 @@ func decodePatterns(k Key, v any, what string, limit int) (PatternSet, error) {
 // value and means this layer ignores nothing, which is not the same as the key
 // being absent and inheriting the layer below.
 func decodeIgnorePatterns(k Key, v any) (any, error) {
-	return decodePatterns(k, v, "ignore patterns", MaxIgnorePatterns)
+	return decodePatterns(k, v, "", "ignore patterns", MaxIgnorePatterns)
 }
 
 // decodePathRules accepts the path-scoped review rules, in declared order.
@@ -300,39 +332,40 @@ func decodePathRules(k Key, v any) (any, error) {
 	}
 	out := make([]PathRule, 0, len(l))
 	for i, e := range l {
+		entry := listEntry{key: k, noun: "rule", index: i, value: e}
 		m, ok := e.(map[string]any)
 		if !ok {
-			return nil, keyErr(k, v, "rule "+itoa(i)+" must be an object with a paths list and guidance")
+			return nil, entry.err("must be an object with a paths list and guidance")
 		}
 		if field, found := unknownField(m, "paths", "guidance"); found {
-			return nil, keyErr(k, v, "rule "+itoa(i)+" has an unrecognized field "+quote(field))
+			return nil, entry.err("has an unrecognized field " + quote(field))
 		}
 		rawPaths, ok := m["paths"]
 		if !ok {
-			return nil, keyErr(k, v, "rule "+itoa(i)+" has no paths")
+			return nil, entry.err("has no paths")
 		}
-		paths, perr := decodePatterns(k, rawPaths, "paths in one rule", MaxPathRulePaths)
+		paths, perr := decodePatterns(k, rawPaths, entry.label()+" ", "paths in "+entry.label(), MaxPathRulePaths)
 		if perr != nil {
 			return nil, perr
 		}
 		if len(paths) == 0 {
-			return nil, keyErr(k, v, "rule "+itoa(i)+" must name at least one path; a rule with no scope is not a scoped rule")
+			return nil, entry.err("must name at least one path; a rule with no scope is not a scoped rule")
 		}
 		guidance, gok := m["guidance"]
 		if !gok {
-			return nil, keyErr(k, v, "rule "+itoa(i)+" has no guidance")
+			return nil, entry.err("has no guidance")
 		}
 		text, gerr := asString(k, guidance)
 		if gerr != nil {
-			return nil, keyErr(k, guidance, "rule "+itoa(i)+" guidance must be a string")
+			return nil, entry.fieldErr(guidance, "guidance must be a string")
 		}
 		if strings.TrimSpace(text) == "" {
-			return nil, keyErr(k, v, "rule "+itoa(i)+" has empty guidance")
+			return nil, entry.err("has empty guidance")
 		}
-		if err := checkPrintable(k, guidance, "guidance", text); err != nil {
+		if err := checkPrintable(k, guidance, entry.of("guidance"), text); err != nil {
 			return nil, err
 		}
-		if err := checkRunes(k, guidance, "guidance", text, MaxGuidanceRunes); err != nil {
+		if err := checkRunes(k, guidance, entry.of("guidance"), text, MaxGuidanceRunes); err != nil {
 			return nil, err
 		}
 		out = append(out, PathRule{Paths: paths, Guidance: text})
@@ -355,24 +388,25 @@ func decodeOwnership(k Key, v any) (any, error) {
 	out := make([]Ownership, 0, len(l))
 	seen := make(map[string]int, len(l))
 	for i, e := range l {
+		entry := listEntry{key: k, noun: "entry", index: i, value: e}
 		m, ok := e.(map[string]any)
 		if !ok {
-			return nil, keyErr(k, v, "entry "+itoa(i)+" must be an object with a subject and a document")
+			return nil, entry.err("must be an object with a subject and a document")
 		}
 		if field, found := unknownField(m, "subject", "document"); found {
-			return nil, keyErr(k, v, "entry "+itoa(i)+" has an unrecognized field "+quote(field))
+			return nil, entry.err("has an unrecognized field " + quote(field))
 		}
-		subject, serr := ownershipField(k, m, i, "subject")
+		subject, serr := ownershipField(entry, m, "subject")
 		if serr != nil {
 			return nil, serr
 		}
-		document, derr := ownershipField(k, m, i, "document")
+		document, derr := ownershipField(entry, m, "document")
 		if derr != nil {
 			return nil, derr
 		}
 		if prev, dup := seen[subject]; dup {
-			return nil, keyErr(k, v, "entry "+itoa(i)+" claims subject "+quote(subject)+
-				" which entry "+itoa(prev)+" already owns; a subject has exactly one owner")
+			return nil, entry.err("claims subject " + quote(subject) +
+				" which entry " + itoa(prev) + " already owns; a subject has exactly one owner")
 		}
 		seen[subject] = i
 		out = append(out, Ownership{Subject: subject, Document: document})
@@ -380,22 +414,22 @@ func decodeOwnership(k Key, v any) (any, error) {
 	return out, nil
 }
 
-func ownershipField(k Key, m map[string]any, i int, field string) (string, error) {
+func ownershipField(entry listEntry, m map[string]any, field string) (string, error) {
 	raw, ok := m[field]
 	if !ok {
-		return "", keyErr(k, m, "entry "+itoa(i)+" has no "+field)
+		return "", entry.err("has no " + field)
 	}
-	s, err := asString(k, raw)
+	s, err := asString(entry.key, raw)
 	if err != nil {
-		return "", keyErr(k, raw, "entry "+itoa(i)+" "+field+" must be a string")
+		return "", entry.fieldErr(raw, field+" must be a string")
 	}
 	if strings.TrimSpace(s) == "" {
-		return "", keyErr(k, raw, "entry "+itoa(i)+" has an empty "+field)
+		return "", entry.fieldErr(raw, "has an empty "+field)
 	}
-	if err := checkPrintable(k, raw, field, s); err != nil {
+	if err := checkPrintable(entry.key, raw, entry.of(field), s); err != nil {
 		return "", err
 	}
-	if err := checkRunes(k, raw, field, s, MaxSubjectRunes); err != nil {
+	if err := checkRunes(entry.key, raw, entry.of(field), s, MaxSubjectRunes); err != nil {
 		return "", err
 	}
 	return s, nil
