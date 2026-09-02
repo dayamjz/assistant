@@ -67,9 +67,39 @@
 //
 // Opening refuses rather than degrades in two more cases: a database carrying a
 // migration this build does not have, which means an older binary is looking at
-// a newer schema, and a recorded migration whose name or statement count
-// differs from this build's copy, which means a shipped migration was edited
-// after it had already run somewhere.
+// a newer schema, and a recorded migration that differs from this build's copy,
+// which means a shipped migration was edited after it had already run
+// somewhere. That second comparison is over the migration's name, its statement
+// count, and a digest of its statement text, so an edit made in place is caught
+// and not only a renamed or resized migration. It is over the exact text, so
+// reformatting a shipped migration is refused the same way rewriting one is:
+// nothing here can tell them apart, and the answer to either is a new
+// migration.
+//
+// The row that comparison cannot speak for is one recorded before digests were
+// written. The digest column is nullable and is added to a schema_migration
+// table that predates it, which is what lets such a database open at all; for
+// those rows the digest is unknown and the comparison is name and count alone.
+// Every migration this build applies records a digest, so the gap closes as
+// those rows are the only ones left behind rather than growing.
+//
+// # Durability
+//
+// The database runs in WAL mode with synchronous set to NORMAL, which is a
+// choice about which failures a committed transaction survives, and the two
+// are not the same failure. A crash of the process holding the store does not
+// lose a committed transaction: it is durable against the process going away,
+// and a database reopened afterwards still carries it. An operating system
+// crash or a power loss can lose the most recent commits, because NORMAL
+// reports a commit without waiting for it to be forced to the disk. Neither
+// failure corrupts the database; the second one costs the last writes before
+// it.
+//
+// Process crash is the failure this product plans for, which is what recovery
+// from a checkpoint is for, so NORMAL is what the stated recovery requirement
+// needs. A gate that had to survive power loss without losing the last verdict
+// would need synchronous FULL and would pay an fsync per commit for it; this
+// package does not make that claim.
 //
 // # Credentials do not rest here
 //

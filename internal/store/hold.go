@@ -69,8 +69,9 @@ func (s *Store) RegisterHold(ctx context.Context, h Hold) (Hold, error) {
 
 // ResolveHold closes a hold with an explicit resolution and returns it as
 // stored. It refuses an empty resolution with ErrNoResolution, and it refuses
-// to overwrite a resolution that is already there: the second decision on a
-// closed hold is a new decision and belongs to a new key.
+// with ErrHoldResolved to overwrite a resolution that is already there: the
+// second decision on a closed hold is a new decision and belongs to a new key.
+// A hold that does not exist is ErrNotFound.
 func (s *Store) ResolveHold(ctx context.Context, key, resolution string) (Hold, error) {
 	if strings.TrimSpace(resolution) == "" {
 		return Hold{}, fmt.Errorf("%w: hold %s", ErrNoResolution, key)
@@ -96,7 +97,7 @@ func (s *Store) ResolveHold(ctx context.Context, key, resolution string) (Hold, 
 		case err != nil:
 			return err
 		}
-		return fmt.Errorf("hold is already resolved: %s", existing)
+		return fmt.Errorf("%w with %s", ErrHoldResolved, existing)
 	})
 	if err != nil {
 		return Hold{}, fmt.Errorf("store: resolving hold %s: %w", key, err)

@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"errors"
-	"strings"
 	"testing"
 )
 
@@ -102,8 +101,8 @@ func TestResolveHoldRefusesASecondAnswer(t *testing.T) {
 	if err == nil {
 		t.Fatal("ResolveHold overwrote a resolution that was already there")
 	}
-	if !strings.Contains(err.Error(), "already resolved") {
-		t.Fatalf("the refusal does not say why: %v", err)
+	if !errors.Is(err, ErrHoldResolved) {
+		t.Fatalf("the refusal is not one a caller can branch on: %v", err)
 	}
 	held, err := s.Hold(ctx, "k")
 	if err != nil {

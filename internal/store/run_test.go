@@ -356,3 +356,30 @@ func TestCheckpointRevisionIncreases(t *testing.T) {
 		t.Fatalf("the open decision came back as %q (known=%v)", decision, known)
 	}
 }
+
+// A checkpoint recorded with no state reads back the way it was written. In
+// this package a nil slice is unknown, and state is a column that is never
+// NULL, so an empty state must not come back as one.
+func TestCheckpointWithNoStateReadsBackEmptyNotNil(t *testing.T) {
+	ctx := context.Background()
+	s := openStore(t)
+	run := seedRun(t, s)
+
+	written, err := s.WriteCheckpoint(ctx, Checkpoint{RunID: run.ID, Position: "review"})
+	if err != nil {
+		t.Fatalf("WriteCheckpoint: %v", err)
+	}
+	if written.State == nil {
+		t.Fatal("WriteCheckpoint returned a nil state for a column that is never NULL")
+	}
+	got, err := s.Checkpoint(ctx, run.ID)
+	if err != nil {
+		t.Fatalf("Checkpoint: %v", err)
+	}
+	if got.State == nil {
+		t.Fatal("a checkpoint written with an empty state read back as nil, which in this package means unknown")
+	}
+	if len(got.State) != 0 {
+		t.Fatalf("the state read back as %q", got.State)
+	}
+}

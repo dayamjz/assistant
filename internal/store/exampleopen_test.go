@@ -16,7 +16,10 @@ func homeDir() (string, error) {
 	return os.MkdirTemp("", "assistant-example-")
 }
 
-func openForExample() *store.Store {
+// openForExample returns a store and the func that closes it and removes the
+// temporary home it was opened in. An example has no *testing.T, so t.TempDir
+// is not available and the cleanup is the caller's to defer.
+func openForExample() (*store.Store, func()) {
 	home, err := homeDir()
 	if err != nil {
 		panic(err)
@@ -27,7 +30,11 @@ func openForExample() *store.Store {
 			return userinfo.ReplaceAllString(s, "${1}REDACTED@")
 		})))
 	if err != nil {
+		_ = os.RemoveAll(home)
 		panic(err)
 	}
-	return s
+	return s, func() {
+		_ = s.Close()
+		_ = os.RemoveAll(home)
+	}
 }

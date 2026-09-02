@@ -2,22 +2,34 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 )
 
-// createMigrationTable records which migrations have been applied. It is the
-// one statement executed outside a migration's own transaction, and it is
+// createMigrationTable records which migrations have been applied. It is one of
+// the two statements executed outside a migration's own transaction, and it is
 // idempotent, so a database interrupted at any point still opens.
 const createMigrationTable = `CREATE TABLE IF NOT EXISTS schema_migration (
 	version    INTEGER PRIMARY KEY,
 	name       TEXT NOT NULL,
 	statements INTEGER NOT NULL,
+	digest     TEXT,
 	applied_at TEXT NOT NULL
 ) STRICT`
+
+// addMigrationDigest gives the digest column to a schema_migration table
+// created by a build that recorded no digest. That table is created outside the
+// migration system, so nothing in it is governed by verifyAdditive and this
+// statement carries the same rule by hand: the column is nullable and has no
+// default, so a row recorded before digests existed reads back as unknown
+// rather than as a fabricated fingerprint that would never match.
+const addMigrationDigest = `ALTER TABLE schema_migration ADD COLUMN digest TEXT`
 
 // columnFact is what this package checks a migration against. It is read from
 // the database's own catalog rather than from the migration text, because the
@@ -45,6 +57,9 @@ func migrate(ctx context.Context, db *sql.DB, ms []migration) error {
 	if _, err := db.ExecContext(ctx, createMigrationTable); err != nil {
 		return fmt.Errorf("store: creating the migration table: %w", err)
 	}
+	if err := ensureMigrationDigestColumn(ctx, db); err != nil {
+		return err
+	}
 	applied, err := appliedMigrations(ctx, db)
 	if err != nil {
 		return err
@@ -62,6 +77,11 @@ func migrate(ctx context.Context, db *sql.DB, ms []migration) error {
 		if known.name != record.name || len(known.statements) != record.statements {
 			return fmt.Errorf("%w: migration %d is recorded as %q with %d statements, this build has %q with %d",
 				ErrSchemaChanged, version, record.name, record.statements, known.name, len(known.statements))
+		}
+		recorded, hasDigest := record.digest.Get()
+		if hasDigest && recorded != statementsDigest(known) {
+			return fmt.Errorf("%w: migration %d (%s) is recorded with digest %s, this build's copy digests to %s",
+				ErrSchemaChanged, version, known.name, recorded, statementsDigest(known))
 		}
 	}
 	for _, m := range ms {
@@ -100,14 +120,57 @@ func lastVersion(ms []migration) int {
 	return ms[len(ms)-1].version
 }
 
+// statementsDigest fingerprints a migration's statements, so an edit to a
+// statement's text is visible to a build that did not make it. Each statement
+// is hashed with its length in front of it, so moving text from one statement
+// to the next changes the digest rather than cancelling out.
+//
+// The digest is over the exact text. Reformatting a shipped migration changes
+// it just as rewriting one does, and that is the intended reading: this package
+// cannot tell the two apart, and the answer to either is a new migration.
+func statementsDigest(m migration) string {
+	var b strings.Builder
+	for _, statement := range m.statements {
+		b.WriteString(strconv.Itoa(len(statement)))
+		b.WriteString(":")
+		b.WriteString(statement)
+	}
+	sum := sha256.Sum256([]byte(b.String()))
+	return hex.EncodeToString(sum[:])
+}
+
+// ensureMigrationDigestColumn adds the digest column to a schema_migration
+// table that predates it, so a database created by an earlier build opens
+// instead of failing on a column that is not there. It is idempotent: the
+// column is added only when the catalog says it is missing.
+func ensureMigrationDigestColumn(ctx context.Context, db *sql.DB) error {
+	var present int
+	if err := db.QueryRowContext(ctx,
+		`SELECT count(*) FROM pragma_table_info('schema_migration') WHERE name = 'digest'`,
+	).Scan(&present); err != nil {
+		return fmt.Errorf("store: reading the migration table's columns: %w", err)
+	}
+	if present > 0 {
+		return nil
+	}
+	if _, err := db.ExecContext(ctx, addMigrationDigest); err != nil {
+		return fmt.Errorf("store: adding the migration digest column: %w", err)
+	}
+	return nil
+}
+
 // migrationRecord is one row of schema_migration.
 type migrationRecord struct {
 	name       string
 	statements int
+	// digest is the fingerprint of the statements as applied. It is unknown for
+	// a row recorded by a build that did not write one, which is the one case
+	// where an in-place edit to that migration cannot be detected.
+	digest Optional[string]
 }
 
 func appliedMigrations(ctx context.Context, db *sql.DB) (map[int]migrationRecord, error) {
-	rows, err := db.QueryContext(ctx, `SELECT version, name, statements FROM schema_migration`)
+	rows, err := db.QueryContext(ctx, `SELECT version, name, statements, digest FROM schema_migration`)
 	if err != nil {
 		return nil, fmt.Errorf("store: reading applied migrations: %w", err)
 	}
@@ -116,10 +179,11 @@ func appliedMigrations(ctx context.Context, db *sql.DB) (map[int]migrationRecord
 	for rows.Next() {
 		var version, statements int
 		var name string
-		if err := rows.Scan(&version, &name, &statements); err != nil {
+		var digest Optional[string]
+		if err := rows.Scan(&version, &name, &statements, &digest); err != nil {
 			return nil, fmt.Errorf("store: reading applied migrations: %w", err)
 		}
-		applied[version] = migrationRecord{name: name, statements: statements}
+		applied[version] = migrationRecord{name: name, statements: statements, digest: digest}
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("store: reading applied migrations: %w", err)
@@ -154,8 +218,8 @@ func applyMigration(ctx context.Context, db *sql.DB, m migration) error {
 		return err
 	}
 	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO schema_migration (version, name, statements, applied_at) VALUES (?, ?, ?, ?)`,
-		m.version, m.name, len(m.statements), encodeTime(nowUTC()),
+		`INSERT INTO schema_migration (version, name, statements, digest, applied_at) VALUES (?, ?, ?, ?, ?)`,
+		m.version, m.name, len(m.statements), Known(statementsDigest(m)), encodeTime(nowUTC()),
 	); err != nil {
 		return err
 	}

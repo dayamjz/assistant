@@ -31,7 +31,12 @@ type StageResult struct {
 	Stage string
 	// Status is where the stage stands.
 	Status StageStatus
-	// FindingCount is how many findings the stage produced.
+	// FindingCount is how many findings the stage produced. It is a count and
+	// not the findings themselves: PRD section 8 lists findings under the
+	// stage result, but Round already owns the finding set, and one fact with
+	// two owners is what P14 forbids. The findings, which of them were
+	// selected, and by whom are in the Round for each execution of this stage,
+	// read back by Rounds.
 	FindingCount int
 	// Duration is how long the stage took. It is unknown until the stage ends,
 	// which is a different fact from a stage that took no measurable time.

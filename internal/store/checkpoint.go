@@ -92,5 +92,6 @@ func (s *Store) Checkpoint(ctx context.Context, runID string) (Checkpoint, error
 	if c.WrittenAt, err = decodeTime(written); err != nil {
 		return Checkpoint{}, fmt.Errorf("store: reading the checkpoint of run %s: %w", runID, err)
 	}
+	c.State = bytesOrEmpty(c.State)
 	return c, nil
 }

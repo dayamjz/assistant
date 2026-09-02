@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"path/filepath"
 	"regexp"
 
@@ -28,6 +29,8 @@ func Example() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	defer func() { _ = os.RemoveAll(home) }()
+
 	s, err := store.Open(ctx, filepath.Join(home, "state.db"), store.WithRedactor(redactor))
 	if err != nil {
 		log.Fatal(err)
@@ -103,8 +106,8 @@ func Example() {
 // them answers what is true now.
 func ExampleStore_TaskState() {
 	ctx := context.Background()
-	s := openForExample()
-	defer func() { _ = s.Close() }()
+	s, cleanup := openForExample()
+	defer cleanup()
 
 	task, err := s.CreateTask(ctx, store.Task{
 		ID: "task-1", Shape: store.TaskInvestigation, Project: "one",

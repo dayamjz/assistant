@@ -78,7 +78,19 @@ var ErrSchemaAhead = errors.New("store: database schema is newer than this build
 // already run on somebody's machine and will not run again there, so editing
 // one silently gives two databases different shapes under the same version
 // number. A schema change is a new migration.
+//
+// What is compared is the migration's name, its statement count, and a digest
+// of its statement text, so an edit made in place is caught rather than only a
+// renamed or resized migration. The one row this cannot speak for is a
+// migration recorded before this build's predecessor wrote digests: its digest
+// is unknown, and for it the comparison is name and count alone.
 var ErrSchemaChanged = errors.New("store: a recorded migration differs from this build's copy")
+
+// ErrHoldResolved is returned by ResolveHold when the hold already carries a
+// resolution. The second decision on a closed hold is a new decision and
+// belongs to a new key, so this is a typed result a caller branches on rather
+// than a failure of the write.
+var ErrHoldResolved = errors.New("store: hold is already resolved")
 
 // ErrMigrationsMalformed is returned when the migration list itself is wrong:
 // versions that do not start at one or do not increase by one. It is a

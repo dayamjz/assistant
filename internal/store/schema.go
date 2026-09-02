@@ -156,7 +156,7 @@ var schema = []migration{
 				resolution  TEXT,
 				resolved_at TEXT
 			) STRICT`,
-			`CREATE INDEX hold_open ON hold(opened_at) WHERE resolved_at IS NULL`,
+			`CREATE INDEX hold_open ON hold(opened_at) WHERE resolution IS NULL`,
 		},
 	},
 }

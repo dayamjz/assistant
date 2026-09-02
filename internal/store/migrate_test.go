@@ -352,3 +352,85 @@ func TestShippedSchemaIsWellFormed(t *testing.T) {
 		t.Fatalf("the shipped migration list is malformed: %v", err)
 	}
 }
+
+// editStatements returns m with its statements replaced, leaving its version,
+// name, and statement count exactly as they were. It is the shape of the edit
+// the recorded digest exists to catch: a shipped migration rewritten in place.
+func editStatements(m migration, statements ...string) migration {
+	if len(statements) != len(m.statements) {
+		panic("editStatements must keep the statement count")
+	}
+	m.statements = statements
+	return m
+}
+
+func TestMigrateRefusesAMigrationEditedInPlace(t *testing.T) {
+	ctx := context.Background()
+	s := openStore(t)
+
+	applied := extend(addColumn(2, "run notes", "notes TEXT"))
+	if err := migrate(ctx, s.write, applied); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+
+	// The same list is accepted again, so the guard is not one that refuses
+	// everything it is shown.
+	if err := migrate(ctx, s.write, applied); err != nil {
+		t.Fatalf("migrate refused the list it had just applied: %v", err)
+	}
+
+	// Migration 2 keeps its name and its statement count, and only the SQL
+	// text changes. Nothing but the digest can tell.
+	edited := extend(editStatements(applied[1], `ALTER TABLE run ADD COLUMN scratch TEXT`))
+	err := migrate(ctx, s.write, edited)
+	if !errors.Is(err, ErrSchemaChanged) {
+		t.Fatalf("migrate accepted a migration edited in place: %v", err)
+	}
+	if !strings.Contains(err.Error(), "digest") {
+		t.Fatalf("the refusal does not say what differed: %v", err)
+	}
+
+	// The refusal changed nothing: the column the edit named was never added,
+	// and the one the applied migration named is still there.
+	if _, err := s.read.ExecContext(ctx, `SELECT scratch FROM run`); err == nil {
+		t.Fatal("the refused list applied its statement anyway")
+	}
+	if _, err := s.read.ExecContext(ctx, `SELECT notes FROM run`); err != nil {
+		t.Fatalf("the refusal disturbed the schema: %v", err)
+	}
+}
+
+// A database recorded by a build that wrote no digest still opens, and every
+// migration applied after it is recorded with one, so the rows the guard cannot
+// speak for are the ones already there rather than a growing set.
+func TestMigrateAcceptsADatabaseRecordedWithoutDigests(t *testing.T) {
+	ctx := context.Background()
+	s := openStore(t)
+
+	// The shape a build without the digest column left behind.
+	if _, err := s.write.ExecContext(ctx, `ALTER TABLE schema_migration DROP COLUMN digest`); err != nil {
+		t.Fatalf("removing the digest column: %v", err)
+	}
+
+	list := extend(addColumn(2, "run notes", "notes TEXT"))
+	if err := migrate(ctx, s.write, list); err != nil {
+		t.Fatalf("migrate refused a database recorded without digests: %v", err)
+	}
+	applied, err := appliedMigrations(ctx, s.write)
+	if err != nil {
+		t.Fatalf("appliedMigrations: %v", err)
+	}
+	if applied[1].digest.IsKnown() {
+		t.Fatalf("the row recorded before digests existed came back with one: %v", applied[1].digest)
+	}
+	if digest, known := applied[2].digest.Get(); !known || digest != statementsDigest(list[1]) {
+		t.Fatalf("the migration applied afterwards recorded digest %v", applied[2].digest)
+	}
+
+	// And an in-place edit of that migration is caught, so the guard is live on
+	// this database rather than disabled by the older row beside it.
+	edited := extend(editStatements(list[1], `ALTER TABLE run ADD COLUMN scratch TEXT`))
+	if err := migrate(ctx, s.write, edited); !errors.Is(err, ErrSchemaChanged) {
+		t.Fatalf("migrate accepted an in-place edit on a database recorded without digests: %v", err)
+	}
+}
