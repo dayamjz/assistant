@@ -117,6 +117,12 @@ func TestLocationUnmarshalAcceptsObjectAndText(t *testing.T) {
 		{`""`, findings.Location{}},
 		{`null`, findings.Location{}},
 		{`{}`, findings.Location{}},
+		// Each part of the object form is read on its own terms, so one part
+		// nobody can read does not take the other part with it.
+		{`{"path":"a.go","line":"42"}`, findings.Location{Path: "a.go"}},
+		{`{"path":"a.go","line":{"of":42}}`, findings.Location{Path: "a.go"}},
+		{`{"path":42,"line":7}`, findings.Location{Line: 7}},
+		{`{"path":null,"line":null}`, findings.Location{}},
 	} {
 		var got findings.Location
 		if err := json.Unmarshal([]byte(tc.raw), &got); err != nil {
@@ -129,8 +135,8 @@ func TestLocationUnmarshalAcceptsObjectAndText(t *testing.T) {
 	}
 }
 
-// A location is not P3's field: one this package cannot read would point a
-// person at the wrong code, so it is refused rather than guessed at.
+// A value that is neither an object, nor a string, nor null says nothing
+// readable at all, so it is refused rather than guessed at.
 func TestLocationUnmarshalRefusesOtherShapes(t *testing.T) {
 	for _, raw := range []string{`42`, `true`, `["a.go", 3]`} {
 		var got findings.Location

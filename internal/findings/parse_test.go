@@ -232,14 +232,96 @@ func TestParseReportPrefersTheLastObjectThatValidates(t *testing.T) {
 	}
 }
 
-// When the last object cannot be validated, an earlier one that can is taken
-// rather than losing the whole report, and the refusal a caller sees when
-// nothing validates is the last object's.
+// When the last object cannot be validated, whether an earlier one is taken
+// instead turns on whether that last object was a report at all. An object
+// carrying none of "summary", "findings", or "risk" is something else the agent
+// printed, so the report before it stands; one carrying any of those keys is
+// the report the agent meant, so its refusal is what the caller sees rather
+// than a different object from earlier in the text.
 func TestParseReportFallsBackToAnEarlierValidObject(t *testing.T) {
-	raw := `{"summary": "the real one", "findings": []}` + "\n\nThoughts: {\"note\": \"no summary here\"}"
-	got := mustParse(t, raw)
-	if got.Summary != "the real one" {
-		t.Fatalf("Summary = %q", got.Summary)
+	t.Run("trailing object is not a report", func(t *testing.T) {
+		raw := `{"summary": "the real one", "findings": []}` + "\n\nThoughts: {\"note\": \"no summary here\"}"
+		got := mustParse(t, raw)
+		if got.Summary != "the real one" {
+			t.Fatalf("Summary = %q", got.Summary)
+		}
+	})
+
+	t.Run("trailing object is a report that does not validate", func(t *testing.T) {
+		raw := `{"summary": "the real one", "findings": []}` +
+			"\n\nAnd a correction: " + `{"findings": [{"action": "fix"}]}`
+		report, err := findings.ParseReport(raw)
+		var verr *findings.ValidationError
+		if !errors.As(err, &verr) {
+			t.Fatalf("ParseReport returned (%+v, %v), want a *ValidationError", report, err)
+		}
+		if !verr.HasDefect(findings.DefectMissingDescription) {
+			t.Fatalf("refusal reported %v, want the trailing report's own defects", verr.Flaws)
+		}
+	})
+}
+
+// The silent pass this fallback used to allow: a schema example quoted in the
+// prose validates, so a real report that fails validation after it must not be
+// replaced by the example. The caller has to see the refusal.
+func TestParseReportDoesNotSubstituteAQuotedExampleForARefusedReport(t *testing.T) {
+	raw := "The schema looks like this:\n\n" +
+		`{"summary": "an example, not my report", "findings": []}` +
+		"\n\nHere is my report:\n\n" +
+		`{"summary": "reviewed", "risk": "critical", "findings": [
+		  {"severity": "error", "action": "fix", "description": "the error is dropped"},
+		  {"severity": "error", "action": "fix", "description": "the lock is not released"},
+		  {"severity": "error", "action": "ask", "description": "was this removal deliberate?"}
+		]}`
+	report, err := findings.ParseReport(raw)
+	var verr *findings.ValidationError
+	if !errors.As(err, &verr) {
+		t.Fatalf("ParseReport returned (%+v, %v), want a *ValidationError", report, err)
+	}
+	if !verr.HasDefect(findings.DefectUnrecognizedRisk) {
+		t.Fatalf("refusal reported %v, want the unrecognized risk", verr.Flaws)
+	}
+	if report.Summary != "" || len(report.Findings) != 0 {
+		t.Fatalf("ParseReport returned %+v alongside its refusal, want the zero Report", report)
+	}
+}
+
+// An empty summary and an absent summary are different: the first is a report
+// with the defect the summary guard exists to catch, so its refusal is what a
+// caller sees rather than an earlier object.
+func TestParseReportRefusesATrailingReportWithAnEmptySummary(t *testing.T) {
+	raw := `{"summary": "the real one", "findings": []}` + "\n\nOn reflection: " + `{"summary": ""}`
+	report, err := findings.ParseReport(raw)
+	var verr *findings.ValidationError
+	if !errors.As(err, &verr) {
+		t.Fatalf("ParseReport returned (%+v, %v), want a *ValidationError", report, err)
+	}
+	if !verr.HasDefect(findings.DefectMissingSummary) {
+		t.Fatalf("refusal reported %v, want the missing summary", verr.Flaws)
+	}
+}
+
+// A location this package cannot read fully is not a reason to discard the
+// findings around it, so a wrong-typed line drops to zero and everything else
+// survives.
+func TestParseReportKeepsFindingsWhenALocationLineIsWrongTyped(t *testing.T) {
+	got := mustParse(t, `{"summary": "reviewed", "findings": [
+	  {"severity": "error", "action": "fix", "description": "the error is dropped",
+	   "location": {"path": "a.go", "line": "42"}},
+	  {"severity": "error", "action": "fix", "description": "the lock is not released",
+	   "location": {"path": "b.go", "line": 7}}
+	]}`)
+	if len(got.Findings) != 2 {
+		t.Fatalf("got %d findings, want both", len(got.Findings))
+	}
+	if got.Findings[0].Location != (findings.Location{Path: "a.go"}) {
+		t.Errorf("Location = %+v, want the path with no line", got.Findings[0].Location)
+	}
+	if got.Findings[1].Location != (findings.Location{Path: "b.go", Line: 7}) {
+		t.Errorf("Location = %+v", got.Findings[1].Location)
+	}
+	if len(got.Fixable()) != 2 {
+		t.Errorf("Fixable = %+v, want both findings", got.Fixable())
 	}
 }
 

@@ -41,9 +41,18 @@ func (l Location) Empty() bool { return l.Path == "" && l.Line == 0 }
 // tools print. In the string form the text after the final colon is the line
 // when it parses as a positive integer, and otherwise the whole string is the
 // path, so a path that happens to contain a colon is not silently truncated.
-// A JSON null leaves the location empty. Any other JSON value is refused,
-// because a location this package cannot read is not P3's case and guessing at
-// one would point a person at the wrong code.
+// A JSON null leaves the location empty.
+//
+// In the object form each part is read on its own terms, on the same grounds
+// Severity.UnmarshalJSON reads a severity that way: a location decides nothing
+// about who resolves a finding, so a part of it this package cannot read must
+// not discard the surrounding findings. A line that is not a JSON number leaves
+// Line at zero while Path is still read, which keeps the path rather than
+// pointing a person at the wrong line, and a path that is not a JSON string
+// leaves Path empty.
+//
+// A value that is neither an object, nor a string, nor null is refused, because
+// that shape says nothing readable at all.
 func (l *Location) UnmarshalJSON(b []byte) error {
 	trimmed := strings.TrimSpace(string(b))
 	if trimmed == "null" {
@@ -58,14 +67,25 @@ func (l *Location) UnmarshalJSON(b []byte) error {
 		*l = parseLocationText(s)
 		return nil
 	}
-	// The alias exists so decoding the object form does not re-enter this
-	// method and recurse forever.
-	type locationObject Location
-	var obj locationObject
+	// Holding each part as raw JSON is what lets one unreadable part be
+	// dropped without the other, and it does not re-enter this method.
+	var obj struct {
+		Path json.RawMessage `json:"path"`
+		Line json.RawMessage `json:"line"`
+	}
 	if err := json.Unmarshal(b, &obj); err != nil {
 		return err
 	}
-	*l = Location(obj)
+	var read Location
+	var path string
+	if json.Unmarshal(obj.Path, &path) == nil {
+		read.Path = path
+	}
+	var line int
+	if json.Unmarshal(obj.Line, &line) == nil {
+		read.Line = line
+	}
+	*l = read
 	return nil
 }
 

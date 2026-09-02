@@ -1,6 +1,7 @@
 package findings_test
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/findings"
@@ -165,34 +166,65 @@ func TestNormalizeFindingsPreservesNil(t *testing.T) {
 // The identifier search is bounded, so a set larger than that bound still gets
 // identifiers and still terminates. Sixty-five findings that are identical in
 // every field force the last one past the search entirely and onto the
-// suffixed fallback the package documents.
+// suffixed fallback the package documents; sixty-six force two onto it, and
+// because the fallback does not check what it returns, both get the same
+// identifier and Validate is what refuses the set.
 func TestIdentifierAssignmentTerminatesPastItsSearchBound(t *testing.T) {
 	one := findings.Finding{Severity: findings.SeverityError, Action: findings.ActionFix,
 		Location: findings.Location{Path: "a.go", Line: 1}, Description: "same"}
-	in := make([]findings.Finding, 65)
-	for i := range in {
-		in[i] = one
-	}
-	got := findings.NormalizeFindings(in)
-	seen := map[string]bool{}
-	for i, f := range got {
-		if f.ID == "" {
-			t.Fatalf("finding %d has no identifier", i)
+	identical := func(n int) []findings.Finding {
+		in := make([]findings.Finding, n)
+		for i := range in {
+			in[i] = one
 		}
-		if seen[f.ID] {
-			t.Fatalf("finding %d repeated identifier %q", i, f.ID)
+		return in
+	}
+	assigned := func(t *testing.T, in []findings.Finding) []findings.Finding {
+		t.Helper()
+		got := findings.NormalizeFindings(in)
+		for i, f := range got {
+			if f.ID == "" {
+				t.Fatalf("finding %d has no identifier", i)
+			}
 		}
-		seen[f.ID] = true
-	}
-	again := findings.NormalizeFindings(in)
-	for i := range got {
-		if got[i].ID != again[i].ID {
-			t.Fatalf("identifier %d is not stable: %q then %q", i, got[i].ID, again[i].ID)
+		again := findings.NormalizeFindings(in)
+		for i := range got {
+			if got[i].ID != again[i].ID {
+				t.Fatalf("identifier %d is not stable: %q then %q", i, got[i].ID, again[i].ID)
+			}
 		}
+		return got
 	}
-	if err := (findings.Report{Summary: "s", Findings: got}).Validate(); err != nil {
-		t.Fatalf("the normalized set does not validate: %v", err)
-	}
+
+	t.Run("one finding on the fallback", func(t *testing.T) {
+		got := assigned(t, identical(65))
+		seen := map[string]bool{}
+		for i, f := range got {
+			if seen[f.ID] {
+				t.Fatalf("finding %d repeated identifier %q", i, f.ID)
+			}
+			seen[f.ID] = true
+		}
+		if err := (findings.Report{Summary: "s", Findings: got}).Validate(); err != nil {
+			t.Fatalf("the normalized set does not validate: %v", err)
+		}
+	})
+
+	t.Run("two findings on the fallback", func(t *testing.T) {
+		got := assigned(t, identical(66))
+		if got[64].ID != got[65].ID {
+			t.Fatalf("identifiers %q and %q differ, so the documented fallback collision is gone; "+
+				"the refusal below no longer pins it", got[64].ID, got[65].ID)
+		}
+		err := (findings.Report{Summary: "s", Findings: got}).Validate()
+		var verr *findings.ValidationError
+		if !errors.As(err, &verr) {
+			t.Fatalf("Validate returned %v, want a *ValidationError", err)
+		}
+		if !verr.HasDefect(findings.DefectDuplicateID) {
+			t.Fatalf("Validate reported %v, want the duplicate identifier", verr.Flaws)
+		}
+	})
 }
 
 // The one case where position is an input, pinned so the documented exception

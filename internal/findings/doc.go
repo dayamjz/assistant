@@ -71,10 +71,14 @@
 //
 // Identifier assignment is deterministic: the same input yields the same
 // identifiers, and an identifier a finding already carries is never rewritten.
-// Derived identifiers avoid identifiers already present in the same set. They
-// are a truncated digest, so on a truncation collision the fallback may not
-// avoid one; Report.Validate refuses a set with duplicate identifiers, which is
-// where that case surfaces.
+// Derived identifiers avoid identifiers already present in the same set, but
+// the search for a free one is bounded at 64 attempts. Past that bound the
+// search stops and returns its last candidate with the attempt count appended,
+// without checking that against the identifiers already taken, so two findings
+// that both reach the fallback receive the same identifier. That needs no
+// digest collision: a set holding 66 findings identical in every hashed field
+// reaches it by counting. Report.Validate refuses a set with duplicate
+// identifiers, which is where that case surfaces.
 //
 // This package is pure. It performs no I/O, runs no agent, and reads no file.
 // An Evidence path is a string it carries and never resolves.
