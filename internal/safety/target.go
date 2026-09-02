@@ -7,13 +7,22 @@ import (
 	"github.com/dayamjz/assistant/internal/vcs"
 )
 
-// Target names the branch an update would move: a remote this repository can
-// address, and a full reference name on it.
+// Target names the reference an update would move: a remote this repository
+// can address, and a full reference name on it.
 //
 // The reference is required to be a full refs/ name because a short name is
 // ambiguous on the wire. A remote can advertise refs/heads/x and refs/tags/x
 // at once, and a policy that read the wrong one would be deciding about a
 // reference nobody is updating.
+//
+// Which reference it is stays the caller's choice, and nothing here
+// establishes that it is a branch. A remote advertises a lightweight tag as a
+// name and the commit it names, which is exactly how it advertises a branch,
+// so the two are not distinguishable in what this package reads back, and a
+// caller that points a Target at one gets a decision about it. That is not a
+// hole a run loses work through, because the lease and the reachability
+// comparisons read the same commit either way; it is a statement that picking
+// the reference is not a check performed here.
 type Target struct {
 	// Remote is a configured remote name or a URL, as git ls-remote takes it.
 	Remote string
@@ -250,10 +259,14 @@ func (g *Guard) readTarget(ctx context.Context, target Target) (RemoteState, err
 		}
 	}
 	if found.Commit != found.Object {
-		// The reference peels to something other than what it names, which is
-		// an annotated tag. A branch never does, and the lease this package
-		// hands back compares against the object the reference names, so a
-		// target that is not a branch is refused rather than decided about.
+		// The reference names one object and peels to another, which is an
+		// annotated tag. The lease this package hands back compares against
+		// the object the reference names, while the reachability comparisons
+		// read the commit it peels to, so the two would be answering about
+		// different objects. That is what this check rules out, and all of
+		// it: a reference that names its commit directly is advertised the
+		// same way whether it is a branch or a lightweight tag, so this does
+		// not establish that the target is a branch.
 		return RemoteState{}, &Refusal{
 			Reason: ReasonUnverifiable,
 			Target: target,

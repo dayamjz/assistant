@@ -372,11 +372,12 @@ func TestDecideRefusesAProposedCommitThatDoesNotResolve(t *testing.T) {
 	}
 }
 
-func TestObserveRefusesATargetThatIsNotABranch(t *testing.T) {
+func TestObserveRefusesATargetThatPeelsToAnotherObject(t *testing.T) {
 	t.Parallel()
 	// An annotated tag names a tag object that peels to a commit. The lease
 	// this package hands back compares against the object the reference
-	// names, so a reference that is not a branch is refused.
+	// names, while the reachability comparisons read the commit it peels to,
+	// so a reference whose two differ is refused rather than decided about.
 	git := &fakeGit{
 		parents:    linear("c1"),
 		advertised: map[string][][]vcs.Ref{remote: {{{Name: ref, Object: "tagobj", Commit: "c1"}}}},
@@ -388,6 +389,34 @@ func TestObserveRefusesATargetThatIsNotABranch(t *testing.T) {
 	}
 	if refusal.Observed != (safety.RemoteState{}) {
 		t.Fatalf("Observed = %v, want the zero state: the reference names a tag object, not a commit", refusal.Observed)
+	}
+}
+
+func TestDecideDecidesAboutAReferenceThatNamesItsCommitDirectly(t *testing.T) {
+	t.Parallel()
+	// The gap Target names, pinned so it is a stated behavior rather than an
+	// unexamined one. A lightweight tag is advertised as a name and the
+	// commit it names, exactly as a branch is, so this package cannot tell
+	// the two apart and decides about whichever reference the caller chose.
+	tag := safety.Target{Remote: remote, Ref: "refs/tags/v1"}
+	git := &fakeGit{
+		parents:    linear("c1", "c2"),
+		advertised: map[string][][]vcs.Ref{remote: {{branch(tag.Ref, "c1")}}},
+	}
+	guard := safety.New(git)
+	obs, err := guard.Observe(context.Background(), tag)
+	if err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+	decision, err := guard.Decide(context.Background(), safety.Update{Target: tag, Proposed: "c2", Anchor: obs})
+	if err != nil {
+		t.Fatalf("Decide: %v", err)
+	}
+	if !decision.Allowed() || decision.Kind() != safety.KindFastForward {
+		t.Fatalf("Decide = %v, want an allowed %s: the reference names its commit directly", decision, safety.KindFastForward)
+	}
+	if got, want := decision.Anchor().State(), (safety.RemoteState{Exists: true, Commit: "c1"}); got != want {
+		t.Fatalf("Anchor().State() = %v, want %v: the lease reads the commit the reference names", got, want)
 	}
 }
 
