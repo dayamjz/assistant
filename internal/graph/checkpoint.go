@@ -173,6 +173,16 @@ type Counters struct {
 	Fingerprints []string `json:"fingerprints"`
 }
 
+// clone returns counters whose slices are independent of these, so a value
+// already handed to a store does not change as the run spends more of its
+// bounds.
+func (c Counters) clone() Counters {
+	out := c
+	out.Traversals = append([]int(nil), c.Traversals...)
+	out.Fingerprints = append([]string(nil), c.Fingerprints...)
+	return out
+}
+
 // newCounters returns zeroed counters sized for a graph with n edges.
 func newCounters(n int) Counters {
 	return Counters{Traversals: make([]int, n), Fingerprints: make([]string, n)}

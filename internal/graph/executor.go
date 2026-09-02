@@ -181,11 +181,19 @@ func answerAllowed(d *Decision, answer string) bool {
 	return false
 }
 
-// load reads a run's latest checkpoint and validates it against the graph.
+// load reads a run's latest checkpoint, refuses one the store answered with
+// for some other run, and validates what is left against the graph. The run
+// check cannot live in Graph.Validate, which is not told which run was asked
+// for, and it has to happen here so every checkpoint the executor acts on and
+// every checkpoint it writes belongs to the run the caller named.
 func (e *Executor) load(ctx context.Context, run string) (Checkpoint, error) {
 	cp, err := e.store.Latest(ctx, run)
 	if err != nil {
 		return Checkpoint{}, err
+	}
+	if cp.Run != run {
+		return Checkpoint{}, &CheckpointError{Field: "run", Detail: fmt.Sprintf(
+			"the store answered with run %q when run %q was asked for", cp.Run, run)}
 	}
 	if err := e.graph.Validate(cp); err != nil {
 		return Checkpoint{}, err
@@ -328,9 +336,15 @@ func (e *Executor) park(ctx context.Context, cp Checkpoint) (Result, error) {
 // clears the fork lineage first: ForkedFrom marks a checkpoint a fork copied,
 // and a checkpoint the executor produced was copied from nothing, so carrying
 // the field forward off a resumed fork would give that fact a second owner.
+//
+// What it hands the store is the run's counters as they stand at this
+// checkpoint and not the slices the run keeps spending, so a store is free to
+// retain what it was given without its history rewriting itself underneath it.
 func (e *Executor) persist(ctx context.Context, cp *Checkpoint) error {
 	cp.ForkedFrom = nil
-	id, err := e.store.Write(ctx, *cp)
+	handed := *cp
+	handed.Counters = cp.Counters.clone()
+	id, err := e.store.Write(ctx, handed)
 	if err != nil {
 		return err
 	}

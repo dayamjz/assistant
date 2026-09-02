@@ -18,7 +18,9 @@ import (
 type CheckpointStore interface {
 	// Write appends c to the history of the run named by c.Run and returns the
 	// identifier assigned to it. The store, not the caller, assigns Seq, and
-	// the first checkpoint of a run is assigned Seq 1.
+	// the first checkpoint of a run is assigned Seq 1. The checkpoint is the
+	// caller's to give: an implementation may retain it as it stands, because
+	// what a caller hands over is never written to again.
 	//
 	// A checkpoint whose Seq is zero claims the run as a new one. Honouring
 	// that claim is required of every implementation, not a description of any

@@ -308,6 +308,203 @@ func TestRunRefusesAStoreThatDoesNotHonourTheRunClaim(t *testing.T) {
 	}
 }
 
+// retainingStore keeps the Checkpoint value it was handed rather than encoding
+// or copying it, which the Write contract permits. It stands in for a
+// substrate that holds checkpoints in memory as values, and it forwards
+// everything to a MemoryStore so the run itself behaves normally.
+type retainingStore struct {
+	inner *graph.MemoryStore
+	mu    sync.Mutex
+	held  []graph.Checkpoint
+}
+
+func (s *retainingStore) Write(ctx context.Context, c graph.Checkpoint) (graph.CheckpointID, error) {
+	s.mu.Lock()
+	s.held = append(s.held, c)
+	s.mu.Unlock()
+	return s.inner.Write(ctx, c)
+}
+
+func (s *retainingStore) Latest(ctx context.Context, run string) (graph.Checkpoint, error) {
+	return s.inner.Latest(ctx, run)
+}
+
+func (s *retainingStore) History(ctx context.Context, run string) ([]graph.Checkpoint, error) {
+	return s.inner.History(ctx, run)
+}
+
+func (s *retainingStore) Fork(ctx context.Context, from graph.CheckpointID, into string) (graph.CheckpointID, error) {
+	return s.inner.Fork(ctx, from, into)
+}
+
+func (s *retainingStore) retained() []graph.Checkpoint {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]graph.Checkpoint(nil), s.held...)
+}
+
+func TestARetainedCheckpointKeepsTheCountersItWasWrittenWith(t *testing.T) {
+	ctx := context.Background()
+	rec := &recorder{}
+	g := mustBuild(t, fixLoopBuilder(rec, 2, func(_ context.Context, _ graph.Reader, w graph.Writer) error {
+		rec.note("fix")
+		return w.Set("log", graph.ListValue("fix"))
+	}))
+	store := &retainingStore{inner: graph.NewMemoryStore()}
+	exec := mustExecutor(t, g, store, 20)
+
+	got, err := exec.Run(ctx, "run", mustState(t, g, nil))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got.Status != graph.StatusRoundsExhausted {
+		t.Fatalf("the run ended %s, want rounds_exhausted: the fixture must spend its bound", got.Status)
+	}
+
+	// The history MemoryStore decoded is what each checkpoint held at the
+	// moment it was written, because encoding snapshots it.
+	history, err := store.History(ctx, "run")
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	retained := store.retained()
+	if len(retained) != len(history) {
+		t.Fatalf("the store retained %d checkpoints and holds %d", len(retained), len(history))
+	}
+	if !countersMoved(history) {
+		t.Fatal("the fixture never changed the counters, so this proves nothing")
+	}
+	for i := range history {
+		if retained[i].Counters.Steps != history[i].Counters.Steps {
+			t.Errorf("retained checkpoint %d records %d steps, want the %d it was written with",
+				i+1, retained[i].Counters.Steps, history[i].Counters.Steps)
+		}
+		if !equalInts(retained[i].Counters.Traversals, history[i].Counters.Traversals) {
+			t.Errorf("retained checkpoint %d records traversals %v, want the %v it was written with",
+				i+1, retained[i].Counters.Traversals, history[i].Counters.Traversals)
+		}
+		if !equalStrings(retained[i].Counters.Fingerprints, history[i].Counters.Fingerprints) {
+			t.Errorf("retained checkpoint %d records fingerprints that are not the ones it was written with", i+1)
+		}
+	}
+}
+
+// countersMoved reports whether the traversal counts differ across the
+// history, which is what makes retaining an aliased slice observable.
+func countersMoved(history []graph.Checkpoint) bool {
+	for i := 1; i < len(history); i++ {
+		if !equalInts(history[i].Counters.Traversals, history[0].Counters.Traversals) {
+			return true
+		}
+	}
+	return false
+}
+
+func equalInts(got, want []int) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// misroutingStore answers Latest with a checkpoint belonging to another run,
+// the way a substrate with a key-prefix bug or a query missing its run filter
+// would. Everything else it forwards untouched.
+type misroutingStore struct {
+	inner *graph.MemoryStore
+	at    graph.CheckpointID
+}
+
+func (s misroutingStore) Write(ctx context.Context, c graph.Checkpoint) (graph.CheckpointID, error) {
+	return s.inner.Write(ctx, c)
+}
+
+func (s misroutingStore) Latest(ctx context.Context, _ string) (graph.Checkpoint, error) {
+	history, err := s.inner.History(ctx, s.at.Run)
+	if err != nil {
+		return graph.Checkpoint{}, err
+	}
+	if s.at.Seq < 1 || s.at.Seq > len(history) {
+		return graph.Checkpoint{}, fmt.Errorf("no checkpoint %s", s.at)
+	}
+	return history[s.at.Seq-1], nil
+}
+
+func (s misroutingStore) History(ctx context.Context, run string) ([]graph.Checkpoint, error) {
+	return s.inner.History(ctx, run)
+}
+
+func (s misroutingStore) Fork(ctx context.Context, from graph.CheckpointID, into string) (graph.CheckpointID, error) {
+	return s.inner.Fork(ctx, from, into)
+}
+
+func TestResumeAndAnswerRefuseACheckpointFromAnotherRun(t *testing.T) {
+	ctx := context.Background()
+	cases := map[string]struct {
+		seq  int
+		call func(*graph.Executor) error
+	}{
+		"resume a checkpoint the other run is still running": {
+			seq: 1,
+			call: func(e *graph.Executor) error {
+				_, err := e.Resume(ctx, "wanted")
+				return err
+			},
+		},
+		"answer a decision the other run is halted on": {
+			seq: 2,
+			call: func(e *graph.Executor) error {
+				_, err := e.Answer(ctx, "wanted", "approve")
+				return err
+			},
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			rec := &recorder{}
+			g := mustBuild(t, haltingBuilder(rec))
+			inner := graph.NewMemoryStore()
+			if _, err := mustExecutor(t, g, inner, 10).Run(ctx, "other", mustState(t, g, nil)); err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			before, err := inner.History(ctx, "other")
+			if err != nil {
+				t.Fatalf("History: %v", err)
+			}
+			ranDuringSetup := rec.order()
+
+			exec := mustExecutor(t, g, misroutingStore{
+				inner: inner,
+				at:    graph.CheckpointID{Run: "other", Seq: tc.seq},
+			}, 10)
+
+			var ce *graph.CheckpointError
+			if err := tc.call(exec); !errors.As(err, &ce) {
+				t.Fatalf("error = %T %v, want a *graph.CheckpointError", err, err)
+			}
+
+			after, err := inner.History(ctx, "other")
+			if err != nil {
+				t.Fatalf("History: %v", err)
+			}
+			if len(after) != len(before) {
+				t.Errorf("the other run's history grew from %d to %d checkpoints", len(before), len(after))
+			}
+			if history, err := inner.History(ctx, "wanted"); err != nil || len(history) != 0 {
+				t.Errorf("the requested run has %d checkpoints, %v", len(history), err)
+			}
+			if got := rec.order(); !equalStrings(got, ranDuringSetup) {
+				t.Errorf("bodies ran %v, want nothing past the %v of the setup run", got, ranDuringSetup)
+			}
+		})
+	}
+}
+
 func TestAnEmptyRunHasNoLatestAndNoHistory(t *testing.T) {
 	ctx := context.Background()
 	store := graph.NewMemoryStore()
