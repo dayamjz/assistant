@@ -34,7 +34,21 @@ import (
 type Git interface {
 	// RemoteRefs reads the references a remote advertises, without changing
 	// anything locally. This is the fresh read every decision is made
-	// against.
+	// against. Patterns narrow what comes back the way git ls-remote narrows
+	// it, and no pattern means every reference.
+	//
+	// Ref.Object has to be the object a reference names, and Ref.Commit the
+	// object it peels to whenever the read asked for the peeled name. This
+	// package needs those two apart, because the lease it hands back is
+	// compared against the object the reference names while its reachability
+	// comparisons are answered on the object that reference peels to, and a
+	// reference where the two differ is one it refuses rather than decides
+	// about. What it does to get them apart is ask for the reference name and
+	// its ^{} form together, so an implementation that reports a peeled
+	// object only when the read named it satisfies this. An implementation
+	// that reports Commit equal to Object for a reference peeling elsewhere,
+	// with the peeled name asked for, removes that refusal without anything
+	// here being able to tell.
 	RemoteRefs(ctx context.Context, remote string, patterns ...string) ([]vcs.Ref, error)
 	// ResolveCommit resolves a revision to a full commit identifier in the
 	// local repository.

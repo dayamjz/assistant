@@ -222,12 +222,11 @@ func (g *Guard) Observe(ctx context.Context, target Target) (Observation, error)
 // to say where a branch stands is the case P6 names, and there is no answer
 // this package is willing to assume in its place.
 //
-// It asks for the peeled name alongside the name itself, because a remote
-// advertises what a reference peels to on a separate line and a read that
-// names only the reference leaves that line behind. Without it the object a
-// reference names and the object it resolves to arrive indistinguishable, and
-// the peel check below could not fire. A reference that peels to nothing else
-// matches the second pattern with nothing, so the extra pattern costs a
+// It asks for the peeled name alongside the name itself. Git.RemoteRefs
+// states why: that is what this package does to receive the object a
+// reference names and the object it peels to as two values rather than one,
+// which is what the peel check below reads. A reference that peels to nothing
+// else matches the second pattern with nothing, so the extra pattern costs a
 // branch target nothing.
 func (g *Guard) readTarget(ctx context.Context, target Target) (RemoteState, error) {
 	refs, err := g.git.RemoteRefs(ctx, target.Remote, target.Ref, target.Ref+"^{}")

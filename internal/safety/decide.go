@@ -130,19 +130,22 @@ func (d Decision) String() string {
 // histories with no common ancestor are all refusals, and none of them has a
 // default.
 //
-// The caller has to have fetched the target before deciding. Every
-// reachability comparison is answered from the local repository, so a commit
-// the fresh read finds and the local repository does not hold leaves the
-// comparison unanswerable, and the result is ReasonUnverifiable. What that
-// costs depends on where it lands. On a target that moved it takes the place
-// of the ReasonWouldDiscard or ReasonTargetMoved that would have named what
-// the update drops, so the update is refused either way and only the
-// usefulness of the refusal is lost. On a target that did not move it lands
-// on the path to an allow, so an update that would have been a
-// KindFastForward or a KindAnchoredForce is refused instead: without the
-// fetch, no update onto a target that exists can be allowed at all. Neither
-// direction is unsafe, and a caller that wants a decision rather than a
-// refusal fetches the target first.
+// Every reachability comparison is answered from the local repository, so a
+// commit that repository does not hold cannot be resolved, and the comparison
+// that needed it is unanswerable. That is ReasonUnverifiable, and which
+// result it displaces depends on the path it lands on.
+//
+// On a target that moved, the commit compared is the one the fresh read
+// found. Unresolvable, it displaces the ReasonWouldDiscard that would have
+// named the commits the update drops, or the ReasonTargetMoved that would
+// have reported the move with nothing dropped. On a target that did not move,
+// the commit compared is the one the run observed. Unresolvable, it displaces
+// the KindFastForward or KindAnchoredForce that would have been allowed. Both
+// end at a refusal, so neither costs work.
+//
+// The precondition is that the local repository holds the commit the target
+// names, at the observation and at the fresh read alike. A caller that cannot
+// rely on already holding it fetches the target before deciding.
 func (g *Guard) Decide(ctx context.Context, u Update) (Decision, error) {
 	if err := u.Target.validate(); err != nil {
 		return Decision{}, err
