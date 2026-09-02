@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/safety"
-	"github.com/dayamjz/assistant/internal/vcs"
 )
 
 // The trap PRD principle P6 names is an anchor that came from the tip read a
@@ -19,7 +18,7 @@ func TestDecideRefusesAnAnchorThatIsNotAnObservation(t *testing.T) {
 	t.Parallel()
 	git := &fakeGit{
 		parents:    linear("c1", "c2"),
-		advertised: map[string][][]vcs.Ref{remote: {{branch(ref, "c1")}}},
+		advertised: map[string][][]advert{remote: {{branch(ref, "c1")}}},
 	}
 	decision, err := safety.New(git).Decide(context.Background(), safety.Update{
 		Target:   target,
@@ -43,7 +42,7 @@ func TestDecideRefusesAnAnchorObservedOnAnotherTarget(t *testing.T) {
 	other := safety.Target{Remote: remote, Ref: "refs/heads/other"}
 	git := &fakeGit{
 		parents: linear("c1", "c2"),
-		advertised: map[string][][]vcs.Ref{remote: {
+		advertised: map[string][][]advert{remote: {
 			{branch(ref, "c1"), branch(other.Ref, "c1")},
 		}},
 	}
@@ -88,7 +87,7 @@ func TestRestoredAnchorCarriesTheRecordedObservation(t *testing.T) {
 	t.Parallel()
 	git := &fakeGit{
 		parents:    linear("c1", "c2"),
-		advertised: map[string][][]vcs.Ref{remote: {{branch(ref, "c2")}}},
+		advertised: map[string][][]advert{remote: {{branch(ref, "c2")}}},
 	}
 	obs := observe(t, safety.New(git))
 	restored, err := safety.RestoreObservedFromCheckpoint(obs.Record())
@@ -116,7 +115,7 @@ func TestRestoredAnchorIsDecidedLikeAnObservedOne(t *testing.T) {
 			"c4": {"c3"},
 			"r3": {"c1"},
 		},
-		advertised: map[string][][]vcs.Ref{remote: {{branch(ref, "c4")}}},
+		advertised: map[string][][]advert{remote: {{branch(ref, "c4")}}},
 	}
 	restored, err := safety.RestoreObservedFromCheckpoint(safety.ObservationRecord{
 		Remote: remote, Ref: ref, Exists: true, Commit: "c2",
@@ -145,7 +144,7 @@ func TestDecideRefusesARestoredAnchorFromAnotherTarget(t *testing.T) {
 	// to an observed one.
 	git := &fakeGit{
 		parents: linear("c1", "c2"),
-		advertised: map[string][][]vcs.Ref{remote: {
+		advertised: map[string][][]advert{remote: {
 			{branch(ref, "c1"), branch("refs/heads/other", "c1")},
 		}},
 	}
@@ -195,7 +194,7 @@ func TestRestoredAbsenceIsAnAnchorForACreation(t *testing.T) {
 	t.Parallel()
 	git := &fakeGit{
 		parents:    linear("c1"),
-		advertised: map[string][][]vcs.Ref{remote: {nil}},
+		advertised: map[string][][]advert{remote: {nil}},
 	}
 	restored, err := safety.RestoreObservedFromCheckpoint(safety.ObservationRecord{Remote: remote, Ref: ref})
 	if err != nil {
@@ -214,7 +213,7 @@ func TestDecideRefusesAnUnusableTargetOrUpdate(t *testing.T) {
 	t.Parallel()
 	git := &fakeGit{
 		parents:    linear("c1"),
-		advertised: map[string][][]vcs.Ref{remote: {{branch(ref, "c1")}}},
+		advertised: map[string][][]advert{remote: {{branch(ref, "c1")}}},
 	}
 	guard := safety.New(git)
 	obs := observe(t, guard)
@@ -263,7 +262,7 @@ func TestATargetNameThatAddressesNothingNeverBecomesACreation(t *testing.T) {
 	prefix := safety.Target{Remote: remote, Ref: "refs/heads/"}
 	git := &fakeGit{
 		parents:    linear("c1"),
-		advertised: map[string][][]vcs.Ref{remote: {{branch(ref, "c1")}}},
+		advertised: map[string][][]advert{remote: {{branch(ref, "c1")}}},
 	}
 	guard := safety.New(git)
 
@@ -295,7 +294,7 @@ func TestARemoteThatReadsAsAnOptionIsRefusedBeforeGit(t *testing.T) {
 	optionish := safety.Target{Remote: "--upload-pack=x", Ref: ref}
 	git := &fakeGit{
 		parents:    linear("c1"),
-		advertised: map[string][][]vcs.Ref{optionish.Remote: {{branch(ref, "c1")}}},
+		advertised: map[string][][]advert{optionish.Remote: {{branch(ref, "c1")}}},
 	}
 	obs, err := safety.New(git).Observe(context.Background(), optionish)
 	if obs.Observed() || !errors.Is(err, safety.ErrInvalidTarget) {

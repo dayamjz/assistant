@@ -51,7 +51,7 @@ func TestObserveReportsWhereTheTargetStands(t *testing.T) {
 	t.Parallel()
 	git := &fakeGit{
 		parents:    linear("c1", "c2"),
-		advertised: map[string][][]vcs.Ref{remote: {{branch(ref, "c2")}}},
+		advertised: map[string][][]advert{remote: {{branch(ref, "c2")}}},
 	}
 	obs := observe(t, safety.New(git))
 	if !obs.Observed() {
@@ -69,7 +69,7 @@ func TestObserveOnAnAbsentTargetIsAnObservation(t *testing.T) {
 	t.Parallel()
 	git := &fakeGit{
 		parents:    linear("c1"),
-		advertised: map[string][][]vcs.Ref{remote: {{branch("refs/heads/other", "c1")}}},
+		advertised: map[string][][]advert{remote: {{branch("refs/heads/other", "c1")}}},
 	}
 	obs := observe(t, safety.New(git))
 	if !obs.Observed() {
@@ -103,7 +103,7 @@ func TestDecideAllowsCreatingAnAbsentTarget(t *testing.T) {
 	t.Parallel()
 	git := &fakeGit{
 		parents:    linear("c1", "c2"),
-		advertised: map[string][][]vcs.Ref{remote: {nil}},
+		advertised: map[string][][]advert{remote: {nil}},
 	}
 	guard := safety.New(git)
 	obs := observe(t, guard)
@@ -126,7 +126,7 @@ func TestDecideAllowsAFastForwardAndAnchorsOnTheObservedCommit(t *testing.T) {
 	t.Parallel()
 	git := &fakeGit{
 		parents:    linear("c1", "c2", "c3"),
-		advertised: map[string][][]vcs.Ref{remote: {{branch(ref, "c2")}}},
+		advertised: map[string][][]advert{remote: {{branch(ref, "c2")}}},
 	}
 	guard := safety.New(git)
 	obs := observe(t, guard)
@@ -165,7 +165,7 @@ func TestDecideAllowsAnAnchoredForceAndNamesWhatItRewrites(t *testing.T) {
 			"c3": {"c2"},
 			"r3": {"c1"},
 		},
-		advertised: map[string][][]vcs.Ref{remote: {{branch(ref, "c3")}}},
+		advertised: map[string][][]advert{remote: {{branch(ref, "c3")}}},
 	}
 	guard := safety.New(git)
 	obs := observe(t, guard)
@@ -198,7 +198,7 @@ func TestDecideRefusesAMovedTargetAndNamesEverythingItWouldDrop(t *testing.T) {
 			"c4": {"c3"},
 			"r3": {"c1"},
 		},
-		advertised: map[string][][]vcs.Ref{remote: {
+		advertised: map[string][][]advert{remote: {
 			{branch(ref, "c2")},
 			{branch(ref, "c4")},
 		}},
@@ -227,7 +227,7 @@ func TestDecideRefusesAMovedTargetEvenWhenNothingWouldBeLost(t *testing.T) {
 	// target, so proceeding would be a blind force wearing a lease.
 	git := &fakeGit{
 		parents: linear("c1", "c2", "c3", "c4"),
-		advertised: map[string][][]vcs.Ref{remote: {
+		advertised: map[string][][]advert{remote: {
 			{branch(ref, "c2")},
 			{branch(ref, "c3")},
 		}},
@@ -247,7 +247,7 @@ func TestDecideRefusesATargetThatVanished(t *testing.T) {
 	t.Parallel()
 	git := &fakeGit{
 		parents: linear("c1", "c2", "c3"),
-		advertised: map[string][][]vcs.Ref{remote: {
+		advertised: map[string][][]advert{remote: {
 			{branch(ref, "c2")},
 			nil,
 		}},
@@ -269,7 +269,7 @@ func TestDecideRefusesATargetThatAppearedAfterTheObservation(t *testing.T) {
 	// created it first, with a commit the run never saw.
 	git := &fakeGit{
 		parents: map[string][]string{"c1": nil, "theirs": {"c1"}, "ours": {"c1"}},
-		advertised: map[string][][]vcs.Ref{remote: {
+		advertised: map[string][][]advert{remote: {
 			nil,
 			{branch(ref, "theirs")},
 		}},
@@ -294,7 +294,7 @@ func TestRefusalDetailReadsAsASentenceWhenTheRunObservedAnAbsence(t *testing.T) 
 	// refusal has only the anchor to talk about.
 	git := &fakeGit{
 		parents: linear("c1", "c2"),
-		advertised: map[string][][]vcs.Ref{remote: {
+		advertised: map[string][][]advert{remote: {
 			nil,
 			{branch(ref, "c1")},
 		}},
@@ -315,7 +315,7 @@ func TestDecideRefusesWhenTheRemoteCannotBeRead(t *testing.T) {
 	t.Parallel()
 	git := &fakeGit{
 		parents:    linear("c1", "c2"),
-		advertised: map[string][][]vcs.Ref{remote: {{branch(ref, "c1")}}},
+		advertised: map[string][][]advert{remote: {{branch(ref, "c1")}}},
 	}
 	guard := safety.New(git)
 	obs := observe(t, guard)
@@ -333,7 +333,7 @@ func TestDecideRefusesUnrelatedHistories(t *testing.T) {
 	t.Parallel()
 	git := &fakeGit{
 		parents:    map[string][]string{"c1": nil, "c2": {"c1"}, "x1": nil},
-		advertised: map[string][][]vcs.Ref{remote: {{branch(ref, "c2")}}},
+		advertised: map[string][][]advert{remote: {{branch(ref, "c2")}}},
 	}
 	guard := safety.New(git)
 	obs := observe(t, guard)
@@ -362,7 +362,7 @@ func TestDecideRefusesWhenAComparisonCannotBeAnswered(t *testing.T) {
 			t.Parallel()
 			git := &fakeGit{
 				parents:    linear("c1", "c2", "c3"),
-				advertised: map[string][][]vcs.Ref{remote: {{branch(ref, "c2")}}},
+				advertised: map[string][][]advert{remote: {{branch(ref, "c2")}}},
 			}
 			guard := safety.New(git)
 			obs := observe(t, guard)
@@ -385,7 +385,7 @@ func TestDecideRefusesAProposedCommitThatDoesNotResolve(t *testing.T) {
 	t.Parallel()
 	git := &fakeGit{
 		parents:    linear("c1", "c2"),
-		advertised: map[string][][]vcs.Ref{remote: {{branch(ref, "c2")}}},
+		advertised: map[string][][]advert{remote: {{branch(ref, "c2")}}},
 	}
 	guard := safety.New(git)
 	obs := observe(t, guard)
@@ -400,13 +400,20 @@ func TestDecideRefusesAProposedCommitThatDoesNotResolve(t *testing.T) {
 
 func TestObserveRefusesATargetThatPeelsToAnotherObject(t *testing.T) {
 	t.Parallel()
-	// An annotated tag names a tag object that peels to a commit. The lease
-	// this package hands back compares against the object the reference
-	// names, while the reachability comparisons read the commit it peels to,
-	// so a reference whose two differ is refused rather than decided about.
+	// An annotated tag is advertised as two lines: the tag object under the
+	// reference name, and the commit it peels to under that name with the
+	// peel marker. The lease this package hands back compares against the
+	// object the reference names, while the reachability comparisons read the
+	// commit it peels to, so a reference whose two differ is refused rather
+	// than decided about.
+	//
+	// The second line only comes back when the read asks for it, which is why
+	// this drives the wire form rather than stating the folded reference: a
+	// read that asked for the name alone would receive one line, the two
+	// objects would arrive indistinguishable, and the guard could not fire.
 	git := &fakeGit{
 		parents:    linear("c1"),
-		advertised: map[string][][]vcs.Ref{remote: {{{Name: ref, Object: "tagobj", Commit: "c1"}}}},
+		advertised: map[string][][]advert{remote: {annotatedTag(ref, "tagobj", "c1")}},
 	}
 	_, err := safety.New(git).Observe(context.Background(), target)
 	var refusal *safety.Refusal
@@ -427,7 +434,7 @@ func TestDecideDecidesAboutAReferenceThatNamesItsCommitDirectly(t *testing.T) {
 	tag := safety.Target{Remote: remote, Ref: "refs/tags/v1"}
 	git := &fakeGit{
 		parents:    linear("c1", "c2"),
-		advertised: map[string][][]vcs.Ref{remote: {{branch(tag.Ref, "c1")}}},
+		advertised: map[string][][]advert{remote: {{branch(tag.Ref, "c1")}}},
 	}
 	guard := safety.New(git)
 	obs, err := guard.Observe(context.Background(), tag)
@@ -450,7 +457,7 @@ func TestObserveRefusesARemoteAdvertisingTheTargetTwice(t *testing.T) {
 	t.Parallel()
 	git := &fakeGit{
 		parents:    linear("c1", "c2"),
-		advertised: map[string][][]vcs.Ref{remote: {{branch(ref, "c1"), branch(ref, "c2")}}},
+		advertised: map[string][][]advert{remote: {{branch(ref, "c1"), branch(ref, "c2")}}},
 	}
 	_, err := safety.New(git).Observe(context.Background(), target)
 	var refusal *safety.Refusal
@@ -462,13 +469,42 @@ func TestObserveRefusesARemoteAdvertisingTheTargetTwice(t *testing.T) {
 	}
 }
 
-func TestObserveRefusesATargetAdvertisedWithNoObject(t *testing.T) {
+func TestObserveRefusesAnAdvertisementMissingItsObject(t *testing.T) {
 	t.Parallel()
+	// A line naming a reference and no object is not something the parser
+	// this package reads through will turn into a reference: it rejects the
+	// output instead. The remote was therefore not read, and that is the
+	// refusal, not an absent target.
 	git := &fakeGit{
 		parents:    linear("c1"),
-		advertised: map[string][][]vcs.Ref{remote: {{{Name: ref}}}},
+		advertised: map[string][][]advert{remote: {{{name: ref}}}},
 	}
-	_, err := safety.New(git).Observe(context.Background(), target)
+	obs, err := safety.New(git).Observe(context.Background(), target)
+	if obs.Observed() {
+		t.Fatalf("Observe returned %v, want none: output nobody could parse is not a reading of the target", obs)
+	}
+	var refusal *safety.Refusal
+	if !errors.As(err, &refusal) || refusal.Reason != safety.ReasonUnreadableRemote {
+		t.Fatalf("Observe error = %v, want a *Refusal with %s", err, safety.ReasonUnreadableRemote)
+	}
+}
+
+func TestObserveRefusesAReferenceHandedBackWithNoObject(t *testing.T) {
+	t.Parallel()
+	// The mechanism is an interface, and this drives it directly because the
+	// implementation this product uses rejects such a line while parsing and
+	// so can never hand this reference back. What is under test is the
+	// interface's contract: a reference naming no object establishes nothing
+	// about where the target stands, and this package will not read it as an
+	// absence or invent a commit for it.
+	git := &refsGit{
+		fakeGit: fakeGit{parents: linear("c1")},
+		refs:    []vcs.Ref{{Name: ref}},
+	}
+	obs, err := safety.New(git).Observe(context.Background(), target)
+	if obs.Observed() {
+		t.Fatalf("Observe returned %v, want none: a reference naming no object names no commit", obs)
+	}
 	var refusal *safety.Refusal
 	if !errors.As(err, &refusal) || refusal.Reason != safety.ReasonUnverifiable {
 		t.Fatalf("Observe error = %v, want a *Refusal with %s", err, safety.ReasonUnverifiable)
@@ -488,7 +524,7 @@ func TestObserveReadsOnlyTheExactlyNamedReference(t *testing.T) {
 		t.Parallel()
 		git := &fakeGit{
 			parents:    linear("c1", "c2"),
-			advertised: map[string][][]vcs.Ref{remote: {{branch(decoy, "c2"), branch(ref, "c1")}}},
+			advertised: map[string][][]advert{remote: {{branch(decoy, "c2"), branch(ref, "c1")}}},
 		}
 		obs, err := safety.New(git).Observe(context.Background(), target)
 		if err != nil {
@@ -502,7 +538,7 @@ func TestObserveReadsOnlyTheExactlyNamedReference(t *testing.T) {
 		t.Parallel()
 		git := &fakeGit{
 			parents:    linear("c1", "c2"),
-			advertised: map[string][][]vcs.Ref{remote: {{branch(decoy, "c2")}}},
+			advertised: map[string][][]advert{remote: {{branch(decoy, "c2")}}},
 		}
 		obs, err := safety.New(git).Observe(context.Background(), target)
 		if err != nil {
@@ -522,7 +558,7 @@ func TestRewrittenCannotBeEditedThroughTheDecision(t *testing.T) {
 			"c2": {"c1"},
 			"r2": {"c1"},
 		},
-		advertised: map[string][][]vcs.Ref{remote: {{branch(ref, "c2")}}},
+		advertised: map[string][][]advert{remote: {{branch(ref, "c2")}}},
 	}
 	guard := safety.New(git)
 	obs := observe(t, guard)
@@ -560,7 +596,7 @@ func TestDecideDecidesOnTheResolvedCommitNotTheSubmittedRevision(t *testing.T) {
 			git := &fakeGit{
 				parents:    tc.parents,
 				revs:       map[string]string{"head": "c3"},
-				advertised: map[string][][]vcs.Ref{remote: {{branch(ref, "c2")}}},
+				advertised: map[string][][]advert{remote: {{branch(ref, "c2")}}},
 			}
 			guard := safety.New(git)
 			obs := observe(t, guard)
@@ -585,7 +621,7 @@ func TestDecisionStringRendersWhatItsContractStates(t *testing.T) {
 	t.Parallel()
 	git := &fakeGit{
 		parents:    linear("c1", "c2", "c3"),
-		advertised: map[string][][]vcs.Ref{remote: {{branch(ref, "c2")}}},
+		advertised: map[string][][]advert{remote: {{branch(ref, "c2")}}},
 	}
 	guard := safety.New(git)
 	obs := observe(t, guard)

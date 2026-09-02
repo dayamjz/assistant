@@ -131,14 +131,18 @@ func (d Decision) String() string {
 // default.
 //
 // The caller has to have fetched the target before deciding. Every
-// reachability comparison is answered from the local repository, so when the
-// fresh read finds a commit the local repository does not have, the comparison
-// cannot be answered and the refusal carries ReasonUnverifiable rather than
-// the ReasonWouldDiscard or ReasonTargetMoved that would have named what the
-// update drops. What is lost there is the quality of the answer and never its
-// safety: the update is refused either way, so P6 holds whether or not the
-// caller fetched. A caller that wants the informative refusal fetches the
-// target first.
+// reachability comparison is answered from the local repository, so a commit
+// the fresh read finds and the local repository does not hold leaves the
+// comparison unanswerable, and the result is ReasonUnverifiable. What that
+// costs depends on where it lands. On a target that moved it takes the place
+// of the ReasonWouldDiscard or ReasonTargetMoved that would have named what
+// the update drops, so the update is refused either way and only the
+// usefulness of the refusal is lost. On a target that did not move it lands
+// on the path to an allow, so an update that would have been a
+// KindFastForward or a KindAnchoredForce is refused instead: without the
+// fetch, no update onto a target that exists can be allowed at all. Neither
+// direction is unsafe, and a caller that wants a decision rather than a
+// refusal fetches the target first.
 func (g *Guard) Decide(ctx context.Context, u Update) (Decision, error) {
 	if err := u.Target.validate(); err != nil {
 		return Decision{}, err

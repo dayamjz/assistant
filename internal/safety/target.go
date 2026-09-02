@@ -221,8 +221,16 @@ func (g *Guard) Observe(ctx context.Context, target Target) (Observation, error)
 // advertises for it. Every failure on the way out is a refusal: not being able
 // to say where a branch stands is the case P6 names, and there is no answer
 // this package is willing to assume in its place.
+//
+// It asks for the peeled name alongside the name itself, because a remote
+// advertises what a reference peels to on a separate line and a read that
+// names only the reference leaves that line behind. Without it the object a
+// reference names and the object it resolves to arrive indistinguishable, and
+// the peel check below could not fire. A reference that peels to nothing else
+// matches the second pattern with nothing, so the extra pattern costs a
+// branch target nothing.
 func (g *Guard) readTarget(ctx context.Context, target Target) (RemoteState, error) {
-	refs, err := g.git.RemoteRefs(ctx, target.Remote, target.Ref)
+	refs, err := g.git.RemoteRefs(ctx, target.Remote, target.Ref, target.Ref+"^{}")
 	if err != nil {
 		return RemoteState{}, &Refusal{
 			Reason: ReasonUnreadableRemote,
@@ -252,6 +260,11 @@ func (g *Guard) readTarget(ctx context.Context, target Target) (RemoteState, err
 		return RemoteState{}, nil
 	}
 	if found.Object == "" {
+		// The Git interface is what this package decides against, and
+		// *vcs.Repository is one implementation of it. That one rejects an
+		// advertisement with no object while parsing, so this guard is what
+		// the interface's contract rests on rather than what that
+		// implementation reaches.
 		return RemoteState{}, &Refusal{
 			Reason: ReasonUnverifiable,
 			Target: target,
@@ -263,10 +276,13 @@ func (g *Guard) readTarget(ctx context.Context, target Target) (RemoteState, err
 		// annotated tag. The lease this package hands back compares against
 		// the object the reference names, while the reachability comparisons
 		// read the commit it peels to, so the two would be answering about
-		// different objects. That is what this check rules out, and all of
-		// it: a reference that names its commit directly is advertised the
-		// same way whether it is a branch or a lightweight tag, so this does
-		// not establish that the target is a branch.
+		// different objects. The read above asks for the peeled name so this
+		// arrives rather than being folded away.
+		//
+		// That is what this rules out, and all of it: a reference that names
+		// its commit directly is advertised the same way whether it is a
+		// branch or a lightweight tag, so this does not establish that the
+		// target is a branch.
 		return RemoteState{}, &Refusal{
 			Reason: ReasonUnverifiable,
 			Target: target,

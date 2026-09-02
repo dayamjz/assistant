@@ -6,7 +6,6 @@ import (
 	"fmt"
 
 	"github.com/dayamjz/assistant/internal/safety"
-	"github.com/dayamjz/assistant/internal/vcs"
 )
 
 // The shape of a run: observe the target before doing the work, do the work,
@@ -17,7 +16,7 @@ func Example() {
 		parents: map[string][]string{
 			"base": nil, "submitted": {"base"}, "rebased": {"base"},
 		},
-		advertised: map[string][][]vcs.Ref{
+		advertised: map[string][][]advert{
 			"gate": {{branch("refs/heads/feature", "submitted")}},
 		},
 	}
@@ -56,7 +55,7 @@ func ExampleRefusal() {
 		parents: map[string][]string{
 			"base": nil, "submitted": {"base"}, "theirs": {"submitted"}, "rebased": {"base"},
 		},
-		advertised: map[string][][]vcs.Ref{"gate": {
+		advertised: map[string][][]advert{"gate": {
 			{branch("refs/heads/feature", "submitted")},
 			{branch("refs/heads/feature", "theirs")},
 		}},
