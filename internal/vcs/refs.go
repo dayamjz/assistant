@@ -11,12 +11,18 @@ type Ref struct {
 	// HEAD is reported under the name HEAD.
 	Name string
 	// Object is the object the reference points at directly. For an annotated
-	// tag this is the tag object, not a commit.
+	// tag this is the tag object, not what the tag points at.
 	Object string
-	// Commit is the commit the reference resolves to after peeling. It equals
-	// Object for everything except an annotated tag. It is empty when the
-	// reference points at an object that does not peel to a commit, such as a
-	// tag on a blob.
+	// Commit is the object the reference reaches once the annotated tags on
+	// the way are followed, and equals Object when there are none. It is named
+	// for the ordinary case, which is a branch or a tag on a commit.
+	//
+	// It is never empty, and nothing here checks that it holds a commit. A tag
+	// on a blob or a tree puts that blob or tree here: for-each-ref reports a
+	// peeled object without saying what type it is, and the ^{} line
+	// ls-remote emits carries no type at all, so RemoteRefs could not check
+	// one even if ListRefs did. A caller that needs a commit passes this to
+	// ResolveCommit, which refuses an object that does not peel to one.
 	Commit string
 }
 

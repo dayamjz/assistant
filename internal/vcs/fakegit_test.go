@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"os/exec"
 	"slices"
 	"strconv"
 	"strings"
@@ -28,7 +29,13 @@ const (
 	fakeGitStderr = "VCS_TEST_FAKE_GIT_STDERR_FILE"
 	fakeGitExit   = "VCS_TEST_FAKE_GIT_EXIT"
 	fakeGitDieOn  = "VCS_TEST_FAKE_GIT_DIE_ON"
+	fakeGitHoldOn = "VCS_TEST_FAKE_GIT_HOLD_PIPES_ON"
+	fakeGitHolder = "VCS_TEST_FAKE_GIT_PIPE_HOLDER"
 )
+
+// pipeHold is how long the grandchild keeps the pipes it inherited open. It
+// only has to outlast the package's own grace period by a clear margin.
+const pipeHold = 10 * time.Second
 
 // invocation is one recorded call to the stand-in git.
 type invocation struct {
@@ -47,6 +54,13 @@ func TestMain(m *testing.M) {
 }
 
 func fakeGitMain() int {
+	if os.Getenv(fakeGitHolder) != "" {
+		// The grandchild that inherited git's standard output and error.
+		// Keeping them open while git itself exits is the whole of its job.
+		time.Sleep(pipeHold)
+		return 0
+	}
+
 	args := os.Args[1:]
 
 	// Standard input is read to the end so the recorded byte count shows
@@ -85,6 +99,25 @@ func fakeGitMain() int {
 		// than returning a status that would defeat the point.
 		time.Sleep(time.Minute)
 		return 3
+	}
+
+	// A git that exits cleanly while something else holds its pipes open. The
+	// marker names the subcommand that does it, so the probes an open needs
+	// still answer normally.
+	if marker := os.Getenv(fakeGitHoldOn); marker != "" && slices.Contains(args, marker) {
+		exe, err := os.Executable()
+		if err != nil {
+			return 3
+		}
+		holder := exec.Command(exe)
+		holder.Env = append(os.Environ(), fakeGitHolder+"=1")
+		holder.Stdout = os.Stdout
+		holder.Stderr = os.Stderr
+		if err := holder.Start(); err != nil {
+			return 3
+		}
+		// Exit without waiting, leaving the pipes open behind this process.
+		return 0
 	}
 
 	joined := strings.Join(args, " ")

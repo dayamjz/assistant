@@ -57,9 +57,20 @@ const defaultMaxOutput = 64 << 20
 // stage's log.
 const maxStderr = 8 << 10
 
-// killGrace is how long a child gets to exit after its context is cancelled
-// before its pipes are abandoned, so a grandchild holding them open cannot
-// keep a cancelled call waiting.
+// killGrace is the deadline given to cmd.WaitDelay, which bounds two waits the
+// standard library folds into one setting.
+//
+// After a context is cancelled it is how long the child gets to exit before
+// its pipes are abandoned, so a grandchild holding them open cannot keep a
+// cancelled call waiting.
+//
+// It also bounds the wait for those pipes to close after a child exits on its
+// own, and that case has a cost worth stating rather than implying away: a git
+// that exits successfully while something else still holds its standard output
+// or error open past this deadline is reported as a failure, carrying the
+// status git exited with and exec.ErrWaitDelay as the cause. The output
+// collected in that case may be missing bytes git wrote, so reporting it as a
+// result would be worse, and waiting forever instead would be worse still.
 const killGrace = 2 * time.Second
 
 type settings struct {
@@ -238,18 +249,22 @@ func (r *Repository) run(ctx context.Context, op string, args ...string) ([]byte
 		return nil, r.commandError(op, full, -1, "", false, ErrOutputTooLarge)
 	}
 	if runErr != nil {
+		// The status git exited with is on the process state whether or not
+		// the error describing the run is the one that carries it, so a
+		// failure raised around a git that exited cleanly still names it. It
+		// stays -1 when git never ran or never reported a status.
 		code := -1
+		if cmd.ProcessState != nil {
+			code = cmd.ProcessState.ExitCode()
+		}
 		var exit *exec.ExitError
-		if errors.As(runErr, &exit) {
-			code = exit.ExitCode()
-			if code >= 0 {
-				// An exit status is the ordinary way git reports a failure, so
-				// it is not also carried as a wrapped process error.
-				runErr = nil
-			}
-			// A negative status means there was no exit status, because a
-			// signal ended the process. Then the process error is the only
-			// description of what happened, so it is kept.
+		if errors.As(runErr, &exit) && code >= 0 {
+			// An exit status is the ordinary way git reports a failure, so it
+			// is not also carried as a wrapped process error. A negative
+			// status means there was none, because a signal ended the process,
+			// and then the process error is the only description of what
+			// happened.
+			runErr = nil
 		}
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			// The context ended the call, so report that rather than the

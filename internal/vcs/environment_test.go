@@ -2,6 +2,7 @@ package vcs_test
 
 import (
 	"errors"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -304,4 +305,39 @@ func tail(s string) string {
 		return s
 	}
 	return "..." + s[len(s)-n:]
+}
+
+// A git that exits cleanly while something else still holds its pipes open is
+// reported as a failure, because the output collected may be missing bytes git
+// wrote. The report has to name the status git actually exited with, so an
+// operator can tell it apart from a git that never reported one at all.
+func TestGitThatLeavesItsPipesOpenReportsTheStatusItExitedWith(t *testing.T) {
+	gitEnvironment(t)
+	_, exe := useFakeGit(t)
+	// Only the diff invocation leaves its pipes behind, so the probes an open
+	// needs still answer.
+	t.Setenv(fakeGitHoldOn, "diff")
+
+	repo, err := vcs.OpenBare(ctx(t), fakeBareDir(t), vcs.WithGitBinary(exe))
+	if err != nil {
+		t.Fatalf("OpenBare against the stand-in git: %v", err)
+	}
+
+	_, err = repo.Diff(ctx(t), "a", "b")
+	var cmdErr *vcs.CommandError
+	if !errors.As(err, &cmdErr) {
+		t.Fatalf("Diff against a git that left its pipes open = %v; want a *CommandError", err)
+	}
+	if !errors.Is(err, exec.ErrWaitDelay) {
+		t.Errorf("the error does not name the wait that failed: %v", err)
+	}
+	if cmdErr.ExitCode != 0 {
+		t.Errorf("CommandError.ExitCode = %d; want 0, the status git exited with", cmdErr.ExitCode)
+	}
+
+	// The accepting path, through the same stand-in: an invocation that is not
+	// the one told to hold its pipes still succeeds.
+	if _, err := repo.ResolveCommit(ctx(t), "HEAD"); err != nil {
+		t.Errorf("ResolveCommit against the same stand-in = %v; want it to succeed", err)
+	}
 }

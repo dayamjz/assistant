@@ -759,3 +759,66 @@ func TestCredentialsInAURLDoNotReachTheError(t *testing.T) {
 		t.Errorf("the supplied redactor was not used: %s", joined)
 	}
 }
+
+// A tag can point at something that is not a commit. Ref.Commit is the peeled
+// object rather than a verified commit, so both producers report the blob
+// itself and neither hands back an empty field; a caller that needs a commit
+// learns otherwise from ResolveCommit.
+func TestRefsReportAPeeledObjectThatIsNotACommit(t *testing.T) {
+	gitEnvironment(t)
+	c := ctx(t)
+	source, _, _ := sourceRepo(t)
+	blob := strings.TrimSpace(rawGit(t, source, "hash-object", "-w", "kept.txt"))
+	rawGit(t, source, "tag", "-a", "blobtag", "-m", "a tag on a blob", blob)
+	rawGit(t, source, "tag", "lightblob", blob)
+
+	repo, err := vcs.OpenWorktree(c, source)
+	if err != nil {
+		t.Fatalf("OpenWorktree: %v", err)
+	}
+	local, err := repo.ListRefs(c, "refs/tags/")
+	if err != nil {
+		t.Fatalf("ListRefs: %v", err)
+	}
+	remote, err := repo.RemoteRefs(c, source, "refs/tags/*")
+	if err != nil {
+		t.Fatalf("RemoteRefs: %v", err)
+	}
+
+	for name, refs := range map[string][]vcs.Ref{"ListRefs": local, "RemoteRefs": remote} {
+		byName := map[string]vcs.Ref{}
+		for _, r := range refs {
+			byName[r.Name] = r
+		}
+		annotated, ok := byName["refs/tags/blobtag"]
+		if !ok {
+			t.Fatalf("%s = %+v; want refs/tags/blobtag", name, refs)
+		}
+		if annotated.Object == blob {
+			t.Errorf("%s annotated tag Object = %q; want the tag object, not the blob", name, annotated.Object)
+		}
+		if annotated.Commit != blob {
+			t.Errorf("%s annotated tag Commit = %q; want the peeled blob %q", name, annotated.Commit, blob)
+		}
+		light, ok := byName["refs/tags/lightblob"]
+		if !ok {
+			t.Fatalf("%s = %+v; want refs/tags/lightblob", name, refs)
+		}
+		if light.Object != blob || light.Commit != blob {
+			t.Errorf("%s lightweight tag = %+v; want both fields to be the blob %q", name, light, blob)
+		}
+	}
+
+	// What the field is not: a commit anything here verified. The caller that
+	// needs one finds out here rather than from a wrong answer.
+	if _, err := repo.ResolveCommit(c, blob); !errors.Is(err, vcs.ErrRefNotFound) {
+		t.Errorf("ResolveCommit of a blob = %v; want ErrRefNotFound", err)
+	}
+	// The accepting path, so the refusal above is about the blob rather than
+	// about this repository refusing every tag.
+	head := strings.TrimSpace(rawGit(t, source, "rev-parse", "HEAD"))
+	rawGit(t, source, "tag", "-a", "committag", "-m", "a tag on a commit", head)
+	if got, err := repo.ResolveCommit(c, "committag"); err != nil || got != head {
+		t.Errorf("ResolveCommit of a tag on a commit = %q, %v; want %q", got, err, head)
+	}
+}
