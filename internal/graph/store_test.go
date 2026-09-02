@@ -249,11 +249,12 @@ type appendOnlyStore struct {
 	inner *graph.MemoryStore
 }
 
-func (s appendOnlyStore) Write(ctx context.Context, c graph.Checkpoint) (graph.CheckpointID, error) {
-	if c.Seq == 0 {
-		c.Seq = 1
+func (s appendOnlyStore) Write(ctx context.Context, _ graph.CheckpointID, c graph.Checkpoint) (graph.CheckpointID, error) {
+	history, err := s.inner.History(ctx, c.Run)
+	if err != nil {
+		return graph.CheckpointID{}, err
 	}
-	return s.inner.Write(ctx, c)
+	return s.inner.Write(ctx, graph.CheckpointID{Run: c.Run, Seq: len(history)}, c)
 }
 
 func (s appendOnlyStore) Latest(ctx context.Context, run string) (graph.Checkpoint, error) {
@@ -319,8 +320,8 @@ type retainingStore struct {
 	held  []graph.Checkpoint
 }
 
-func (s *retainingStore) Write(ctx context.Context, c graph.Checkpoint) (graph.CheckpointID, error) {
-	id, err := s.inner.Write(ctx, c)
+func (s *retainingStore) Write(ctx context.Context, anchor graph.CheckpointID, c graph.Checkpoint) (graph.CheckpointID, error) {
+	id, err := s.inner.Write(ctx, anchor, c)
 	if err != nil {
 		return graph.CheckpointID{}, err
 	}
@@ -524,8 +525,8 @@ type misroutingStore struct {
 	at    graph.CheckpointID
 }
 
-func (s misroutingStore) Write(ctx context.Context, c graph.Checkpoint) (graph.CheckpointID, error) {
-	return s.inner.Write(ctx, c)
+func (s misroutingStore) Write(ctx context.Context, anchor graph.CheckpointID, c graph.Checkpoint) (graph.CheckpointID, error) {
+	return s.inner.Write(ctx, anchor, c)
 }
 
 func (s misroutingStore) Latest(ctx context.Context, _ string) (graph.Checkpoint, error) {
@@ -606,6 +607,155 @@ func TestResumeAndAnswerRefuseACheckpointFromAnotherRun(t *testing.T) {
 				t.Errorf("bodies ran %v, want nothing past the %v of the setup run", got, ranDuringSetup)
 			}
 		})
+	}
+}
+
+// racingStore holds every Latest until a fixed number of callers have asked
+// for one, so two operations on the same run are guaranteed to read the same
+// tip and then race to write it. Without the barrier the first caller could
+// finish before the second reads, and the interleaving under test would never
+// be attempted.
+type racingStore struct {
+	inner   *graph.MemoryStore
+	readers int
+
+	mu      sync.Mutex
+	arrived int
+	ready   chan struct{}
+}
+
+func newRacingStore(readers int) *racingStore {
+	return &racingStore{inner: graph.NewMemoryStore(), readers: readers, ready: make(chan struct{})}
+}
+
+func (s *racingStore) Write(ctx context.Context, anchor graph.CheckpointID, c graph.Checkpoint) (graph.CheckpointID, error) {
+	return s.inner.Write(ctx, anchor, c)
+}
+
+func (s *racingStore) Latest(ctx context.Context, run string) (graph.Checkpoint, error) {
+	cp, err := s.inner.Latest(ctx, run)
+	s.mu.Lock()
+	s.arrived++
+	if s.arrived == s.readers {
+		close(s.ready)
+	}
+	s.mu.Unlock()
+	<-s.ready
+	return cp, err
+}
+
+func (s *racingStore) History(ctx context.Context, run string) ([]graph.Checkpoint, error) {
+	return s.inner.History(ctx, run)
+}
+
+func (s *racingStore) Fork(ctx context.Context, from graph.CheckpointID, into string) (graph.CheckpointID, error) {
+	return s.inner.Fork(ctx, from, into)
+}
+
+func TestConcurrentAnswersToOneRunDoNotInterleave(t *testing.T) {
+	ctx := context.Background()
+	rec := &recorder{}
+	g := mustBuild(t, haltingBuilder(rec))
+	store := newRacingStore(2)
+	exec := mustExecutor(t, g, store, 20)
+
+	held, err := exec.Run(ctx, "run", mustState(t, g, nil))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if held.Status != graph.StatusHalted {
+		t.Fatalf("the run ended %s, want halted at its decision", held.Status)
+	}
+	before, err := store.History(ctx, "run")
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+
+	const answers = 2
+	errs := make([]error, answers)
+	var wg sync.WaitGroup
+	for i := 0; i < answers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, errs[i] = exec.Answer(ctx, "run", "approve")
+		}(i)
+	}
+	wg.Wait()
+
+	answered := 0
+	for i, err := range errs {
+		switch {
+		case err == nil:
+			answered++
+		case errors.Is(err, graph.ErrStaleAnchor):
+		default:
+			t.Fatalf("answer %d: %v, want either success or ErrStaleAnchor", i, err)
+		}
+	}
+	if answered != 1 {
+		t.Fatalf("%d of %d concurrent answers were accepted, want exactly 1", answered, answers)
+	}
+
+	after, err := store.History(ctx, "run")
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	for i := range before {
+		if before[i].Position != after[i].Position || before[i].Status != after[i].Status {
+			t.Fatalf("checkpoint %d changed under the answers", i+1)
+		}
+	}
+	// One answer's walk, appended once: the gate runs and the run stands at
+	// act, then act runs and the run completes.
+	wantPositions := []string{"act", ""}
+	if len(after) != len(before)+len(wantPositions) {
+		t.Fatalf("the run has %d checkpoints, want the %d it had plus one walk of %d: the answers interleaved",
+			len(after), len(before), len(wantPositions))
+	}
+	for i, want := range wantPositions {
+		cp := after[len(before)+i]
+		if cp.Seq != len(before)+i+1 || cp.Position != want {
+			t.Fatalf("checkpoint %d is %s at %q, want %d at %q", i+1, cp.ID(), cp.Position, len(before)+i+1, want)
+		}
+	}
+}
+
+func TestWriteRefusesACheckpointAnchoredToARunThatHasMoved(t *testing.T) {
+	ctx := context.Background()
+	rec := &recorder{}
+	g := threeStepGraph(t, rec)
+	store := graph.NewMemoryStore()
+	exec := mustExecutor(t, g, store, 20)
+	if _, err := exec.Run(ctx, "run", mustState(t, g, nil)); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	before, err := store.History(ctx, "run")
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	if len(before) < 2 {
+		t.Fatalf("the run has %d checkpoints, want enough for one of them to be stale", len(before))
+	}
+
+	stale := before[len(before)-2]
+	if _, err := store.Write(ctx, stale.ID(), stale); !errors.Is(err, graph.ErrStaleAnchor) {
+		t.Fatalf("writing against %s when the run stands at %s = %v, want ErrStaleAnchor",
+			stale.ID(), before[len(before)-1].ID(), err)
+	}
+
+	tip := before[len(before)-1]
+	if _, err := store.Write(ctx, tip.ID(), tip); err != nil {
+		t.Fatalf("writing against the run's own tip: %v, want it accepted", err)
+	}
+
+	after, err := store.History(ctx, "run")
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	if len(after) != len(before)+1 {
+		t.Errorf("the run has %d checkpoints, want %d: the refused write was appended",
+			len(after), len(before)+1)
 	}
 }
 

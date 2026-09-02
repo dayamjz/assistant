@@ -137,6 +137,13 @@ var (
 	// ErrRunExists is returned when a run is started under a name that already
 	// has checkpoint history. Starting over a run would discard work.
 	ErrRunExists = errors.New("graph: run already has checkpoint history")
+	// ErrStaleAnchor is returned when a checkpoint is written against an
+	// anchor that is no longer the run's latest, which means the run moved
+	// after the caller read it and the write was decided against a state that
+	// no longer exists. Read the run again and decide again from what it says
+	// now; retrying the same write would append a decision made against a run
+	// that has moved on.
+	ErrStaleAnchor = errors.New("graph: the run moved since the checkpoint this write is anchored to")
 	// ErrNoSuchRun is returned when a run has no checkpoints.
 	ErrNoSuchRun = errors.New("graph: no such run")
 	// ErrNoSuchCheckpoint is returned when a checkpoint identifier names

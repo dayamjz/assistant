@@ -483,7 +483,7 @@ func TestResumeRefusesATamperedCheckpoint(t *testing.T) {
 	}
 	cp.Position = "act"
 	cp.Decision.Node = "act"
-	if _, err := store.Write(context.Background(), cp); err != nil {
+	if _, err := store.Write(context.Background(), cp.ID(), cp); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
 
@@ -522,7 +522,7 @@ func TestResumeRefusesARunningCheckpointStandingAtAHaltPoint(t *testing.T) {
 	// stopped before.
 	cp.Status = graph.StatusRunning
 	cp.Decision = nil
-	if _, err := store.Write(ctx, cp); err != nil {
+	if _, err := store.Write(ctx, cp.ID(), cp); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
 

@@ -15,7 +15,9 @@ const (
 	StatusInvalid Status = iota
 	// StatusRunning means the run has more work to do at the recorded position.
 	StatusRunning
-	// StatusCompleted means the run left its last node with no edge to take.
+	// StatusCompleted means the run reached a terminal node, one that declares
+	// no outgoing edge. Any other node declares an unconditional edge, so a
+	// run leaving it always has somewhere to go.
 	StatusCompleted
 	// StatusHalted means the run stopped before the node at the recorded
 	// position, which has not started, and is waiting on the open decision.

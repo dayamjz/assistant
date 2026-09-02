@@ -122,9 +122,13 @@ type Edge struct {
 	// To is the node the transition enters.
 	To string
 	// Guard, when non-nil, must pass for the edge to be taken. A nil Guard is
-	// unconditional. At most one outgoing edge of a node may be unconditional,
-	// and it must be declared last, because edges are evaluated in declaration
-	// order and anything after an unconditional edge could never be reached.
+	// unconditional. A node that declares any outgoing edge declares exactly
+	// one unconditional edge and declares it last: edges are evaluated in
+	// declaration order, so anything after an unconditional edge could never
+	// be reached, and without one a run whose guards all fail would have
+	// nowhere to go and would report a clean completion for the work below
+	// that node it never did. A node with no outgoing edges is terminal, and
+	// is where a run legitimately completes.
 	Guard *Guard
 	// Rounds bounds how many times this edge may be traversed in one run.
 	// It is required on every back edge and permitted on any edge. On a back

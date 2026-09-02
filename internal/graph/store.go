@@ -22,17 +22,27 @@ type CheckpointStore interface {
 	// caller's to give: an implementation may retain it as it stands, because
 	// what a caller hands over is never written to again.
 	//
-	// A checkpoint whose Seq is zero claims the run as a new one. Honouring
-	// that claim is required of every implementation, not a description of any
-	// one of them: refuse such a write with an error wrapping ErrRunExists
-	// when c.Run already has history, and decide it atomically with assigning
-	// Seq, under whatever serializes the store's writes. Claiming a run is
-	// therefore one operation rather than a read followed by a write. The
-	// claim is what gives ErrRunExists its meaning and what keeps two callers
-	// starting the same run from interleaving into one history and losing a
-	// run's work; a substrate that only appends and assigns Seq loses both,
-	// and loses them silently.
-	Write(ctx context.Context, c Checkpoint) (CheckpointID, error)
+	// anchor is the checkpoint the caller decided this write against, and it
+	// is a property of the request rather than of the record: it is never
+	// stored, never serialized, and never appears in what a read hands back.
+	// Honouring it is required of every implementation, not a description of
+	// any one of them, and it is decided atomically with assigning Seq, under
+	// whatever serializes the store's writes:
+	//
+	//   - An anchor whose Seq is zero claims the run as a new one. Refuse it
+	//     with an error wrapping ErrRunExists when c.Run already has history.
+	//   - Any other anchor requires the run's latest checkpoint to be exactly
+	//     that one. Refuse it with an error wrapping ErrStaleAnchor when the
+	//     run has moved since, naming where the run actually stands.
+	//
+	// This is PRD principle P6 at this boundary: an update is anchored to what
+	// the caller actually observed, never to a tip read a moment before
+	// writing, which always matches and therefore protects nothing. It is what
+	// keeps two operations on one run from interleaving into a single history
+	// that reports success for both while one caller's work is gone. A
+	// substrate that only appends and assigns Seq loses that, and loses it
+	// silently.
+	Write(ctx context.Context, anchor CheckpointID, c Checkpoint) (CheckpointID, error)
 	// Latest returns the most recently written checkpoint for run. It returns
 	// an error wrapping ErrNoSuchRun when the run has no history. What it
 	// answers with may be the store's own storage: a caller never writes into
@@ -46,8 +56,10 @@ type CheckpointStore interface {
 	History(ctx context.Context, run string) ([]Checkpoint, error)
 	// Fork copies the history of from.Run up to and including from into a new
 	// run named into, and returns the identifier of the copy's last
-	// checkpoint. The source run is not modified. It returns an error wrapping
-	// ErrRunExists when into already has history.
+	// checkpoint. The source run is not modified. A fork claims its whole
+	// destination the way a zero anchor claims a new run, so it returns an
+	// error wrapping ErrRunExists when into already has history, decided
+	// atomically with the copy.
 	Fork(ctx context.Context, from CheckpointID, into string) (CheckpointID, error)
 }
 
@@ -68,7 +80,7 @@ func NewMemoryStore() *MemoryStore {
 }
 
 // Write implements CheckpointStore.
-func (s *MemoryStore) Write(ctx context.Context, c Checkpoint) (CheckpointID, error) {
+func (s *MemoryStore) Write(ctx context.Context, anchor CheckpointID, c Checkpoint) (CheckpointID, error) {
 	if err := ctx.Err(); err != nil {
 		return CheckpointID{}, fmt.Errorf("write checkpoint: %w", err)
 	}
@@ -77,10 +89,17 @@ func (s *MemoryStore) Write(ctx context.Context, c Checkpoint) (CheckpointID, er
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if c.Seq == 0 && len(s.runs[c.Run]) > 0 {
-		return CheckpointID{}, fmt.Errorf("%w: %q", ErrRunExists, c.Run)
+	tip := CheckpointID{Run: c.Run, Seq: len(s.runs[c.Run])}
+	switch {
+	case anchor.Seq == 0:
+		if tip.Seq > 0 {
+			return CheckpointID{}, fmt.Errorf("%w: %q", ErrRunExists, c.Run)
+		}
+	case anchor.Run != c.Run || anchor.Seq != tip.Seq:
+		return CheckpointID{}, fmt.Errorf("%w: anchored to %s, the run stands at %s",
+			ErrStaleAnchor, anchor, tip)
 	}
-	c.Seq = len(s.runs[c.Run]) + 1
+	c.Seq = tip.Seq + 1
 	encoded, err := encodeCheckpoint(c)
 	if err != nil {
 		return CheckpointID{}, err

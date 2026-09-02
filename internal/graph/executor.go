@@ -22,6 +22,12 @@ type Config struct {
 // Executor walks a built graph, writing a checkpoint after every node. It
 // holds no per-run state, so one Executor may drive any number of concurrent
 // runs of the same graph.
+//
+// Two operations on the same run do not interleave. Every checkpoint is
+// written anchored to the one the operation read, so when a run moves under a
+// Resume or an Answer the later write is refused with ErrStaleAnchor and its
+// work is discarded, rather than a second walk being appended to a history
+// that then reports success for both.
 type Executor struct {
 	graph  *Graph
 	store  CheckpointStore
@@ -304,8 +310,10 @@ func (e *Executor) checkEdgeBounds(cp *Checkpoint, edge int) (Status, string) {
 
 // next selects the edge leaving the node at idx. Outgoing edges are evaluated
 // in declaration order and the first whose guard passes is taken; a nil guard
-// always passes. When no edge is eligible the run has nowhere to go and
-// completes. The second result is the edge index, or -1.
+// always passes. A node that declares any outgoing edge declares an
+// unconditional one last, so the only node with no eligible edge is a terminal
+// node, which declares none at all and completes the run. The second result is
+// the edge index, or -1.
 func (e *Executor) next(s State, idx int) (string, int) {
 	for _, edge := range e.graph.outgoing[idx] {
 		declared := e.graph.edges[edge]
@@ -344,9 +352,15 @@ func (e *Executor) park(ctx context.Context, cp Checkpoint) (Result, error) {
 // What it hands over shares nothing with the checkpoint the run keeps
 // advancing, so a store is free to retain it as it stands without its history
 // rewriting itself underneath it.
+//
+// The write is anchored to the checkpoint the run last observed, which is the
+// identifier cp already carries: the store assigned it, and every write since
+// has recorded what it assigned. Reading the tip here instead would anchor to
+// something this run never acted on, which is the mistake the anchor exists
+// to prevent.
 func (e *Executor) persist(ctx context.Context, cp *Checkpoint) error {
 	cp.ForkedFrom = nil
-	id, err := e.store.Write(ctx, cp.clone())
+	id, err := e.store.Write(ctx, cp.ID(), cp.clone())
 	if err != nil {
 		return err
 	}
