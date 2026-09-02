@@ -73,6 +73,12 @@ Each has produced findings in more than one package.
 - `internal/store` is the only package that opens the database and the only one
   that writes SQL. Add a typed accessor there rather than a query elsewhere. Its
   driver is pure Go on purpose, so `make check` needs no cgo on any platform.
+- `internal/safety` owns whether a branch update may proceed and on what anchor.
+  `internal/vcs` stays mechanism only, so a lease, an incorporation check, or a
+  force decision belongs in `internal/safety` even when it would be shorter to
+  write at the git call. Its anchor is an `Observation` a caller cannot build
+  from a commit identifier; read its `doc.go` for why, and for the residual gap
+  that leaves.
 - `internal/agents` is the only package that starts an agent process. It owns
   the process tree, the per-invocation environment, and what is recorded about
   a call. P4 lives in its type split rather than in a rule callers follow:
