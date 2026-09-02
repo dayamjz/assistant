@@ -73,6 +73,11 @@ Each has produced findings in more than one package.
 - `internal/store` is the only package that opens the database and the only one
   that writes SQL. Add a typed accessor there rather than a query elsewhere. Its
   driver is pure Go on purpose, so `make check` needs no cgo on any platform.
+- `internal/agents` is the only package that starts an agent process. It owns
+  the process tree, the per-invocation environment, and what is recorded about
+  a call. P4 lives in its type split rather than in a rule callers follow:
+  `Runner.Run` cannot be given a session and `Fixer.Apply` cannot be given a
+  purpose, so keep any new entry point on one side of that line.
 
 ## Tests
 
