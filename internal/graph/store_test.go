@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 
@@ -697,6 +698,11 @@ func TestConcurrentAnswersToOneRunDoNotInterleave(t *testing.T) {
 	if answered != 1 {
 		t.Fatalf("%d of %d concurrent answers were accepted, want exactly 1", answered, answers)
 	}
+	// The refusal has to land before the node runs, not after it: what a node
+	// body does is the caller's business and may not be repeatable.
+	if n := rec.count("gate"); n != 1 {
+		t.Fatalf("the halt point's body ran %d times, want 1: the refused answer executed it too", n)
+	}
 
 	after, err := store.History(ctx, "run")
 	if err != nil {
@@ -707,9 +713,10 @@ func TestConcurrentAnswersToOneRunDoNotInterleave(t *testing.T) {
 			t.Fatalf("checkpoint %d changed under the answers", i+1)
 		}
 	}
-	// One answer's walk, appended once: the gate runs and the run stands at
-	// act, then act runs and the run completes.
-	wantPositions := []string{"act", ""}
+	// One answer's walk, appended once: the claim that carries the answer and
+	// still stands at the gate, then the gate runs and the run stands at act,
+	// then act runs and the run completes.
+	wantPositions := []string{"gate", "act", ""}
 	if len(after) != len(before)+len(wantPositions) {
 		t.Fatalf("the run has %d checkpoints, want the %d it had plus one walk of %d: the answers interleaved",
 			len(after), len(before), len(wantPositions))
@@ -779,6 +786,68 @@ func TestConcurrentAnswersAreRefusedWhenTheStoreIgnoresTheAnchor(t *testing.T) {
 	}
 	if completed > 1 {
 		t.Errorf("the run records %d completed walks, want at most 1: the answers interleaved", completed)
+	}
+}
+
+// interposingStore writes a checkpoint of its own ahead of every one it is
+// handed, the way a substrate multiplexing another writer into the same run
+// would, so the identifier it answers with is always two past the anchor
+// rather than one. It moves the run under a single sequential caller, with no
+// race to win, which is what makes the executor's post-condition on the
+// store's answer observable on its own.
+type interposingStore struct {
+	inner *graph.MemoryStore
+}
+
+func (s interposingStore) Write(ctx context.Context, anchor graph.CheckpointID, c graph.Checkpoint) (graph.CheckpointID, error) {
+	interposed, err := s.inner.Write(ctx, anchor, c)
+	if err != nil {
+		return graph.CheckpointID{}, err
+	}
+	return s.inner.Write(ctx, interposed, c)
+}
+
+func (s interposingStore) Latest(ctx context.Context, run string) (graph.Checkpoint, error) {
+	return s.inner.Latest(ctx, run)
+}
+
+func (s interposingStore) History(ctx context.Context, run string) ([]graph.Checkpoint, error) {
+	return s.inner.History(ctx, run)
+}
+
+func (s interposingStore) Fork(ctx context.Context, from graph.CheckpointID, into string) (graph.CheckpointID, error) {
+	return s.inner.Fork(ctx, from, into)
+}
+
+func TestAnsweringIsRefusedWhenTheStoreAnswersPastTheAnchor(t *testing.T) {
+	ctx := context.Background()
+	rec := &recorder{}
+	g := mustBuild(t, haltingBuilder(rec))
+	inner := graph.NewMemoryStore()
+
+	held, err := mustExecutor(t, g, inner, 20).Run(ctx, "run", mustState(t, g, nil))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if held.Status != graph.StatusHalted {
+		t.Fatalf("the run ended %s, want halted at its decision", held.Status)
+	}
+	ranDuringSetup := rec.order()
+
+	// The run now moves under the answer, deterministically: the store writes
+	// its own checkpoint ahead of the claim, so the claim is answered two past
+	// the checkpoint it was anchored to.
+	exec := mustExecutor(t, g, interposingStore{inner: inner}, 20)
+	_, err = exec.Answer(ctx, "run", "approve")
+	if !errors.Is(err, graph.ErrStaleAnchor) {
+		t.Fatalf("Answer over a store that answers past the anchor = %v, want ErrStaleAnchor", err)
+	}
+	if !strings.Contains(err.Error(), "run#2") || !strings.Contains(err.Error(), "run#4") {
+		t.Errorf("the refusal does not name both the anchor and the answer: %v", err)
+	}
+	if got := rec.order(); !equalStrings(got, ranDuringSetup) {
+		t.Errorf("bodies ran %v, want nothing past the %v of the setup run: the claim was refused before the node",
+			got, ranDuringSetup)
 	}
 }
 
@@ -888,8 +957,10 @@ func TestMemoryStoreIsSafeForConcurrentUse(t *testing.T) {
 		if err != nil {
 			t.Fatalf("History(%q): %v", name+"-retry", err)
 		}
-		if len(forked) != 4 {
-			t.Errorf("%s-retry has %d checkpoints, want 4", name, len(forked))
+		// Two copied, then the claim the resuming segment wrote before it ran
+		// anything, then one for each of the two nodes it had left.
+		if len(forked) != 5 {
+			t.Errorf("%s-retry has %d checkpoints, want 5", name, len(forked))
 		}
 	}
 }

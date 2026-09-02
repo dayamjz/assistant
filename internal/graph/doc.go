@@ -26,8 +26,9 @@
 // no node needs to be idempotent.
 //
 // A Checkpoint is state, position, and any open decision, written after every
-// node. Restoring one re-emits the open decision, and a single call can restore
-// and answer together.
+// node and once more when a segment claims the run before it starts one.
+// Restoring one re-emits the open decision, and a single call can restore and
+// answer together.
 //
 // # Rules enforced when the graph is built, not when it runs
 //
@@ -113,7 +114,10 @@
 // resuming that, which is what keeps the original history intact.
 //
 // Every write is anchored to the checkpoint the operation read, and the store
-// refuses one whose run has moved since. That is P6 at this boundary: an
+// refuses one whose run has moved since. A segment claims the run with that
+// write before it executes anything, so a caller whose run moved is refused
+// before it starts a node rather than after: node bodies belong to callers and
+// may touch the world, so one of them running twice is not a private matter. That is P6 at this boundary: an
 // update is anchored to what the run actually observed rather than to a tip
 // read a moment before writing, which always matches and so protects nothing.
 // Two operations on one run therefore end with one refused and reported as

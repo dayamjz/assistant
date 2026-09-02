@@ -131,16 +131,21 @@ func (g *Graph) Validate(c Checkpoint) error {
 		if c.Status == StatusCompleted {
 			return &CheckpointError{Field: "position", Detail: "names a node but the run is recorded as completed"}
 		}
-		if node := g.nodes[g.index[c.Position]]; node.Halt != nil && c.Status == StatusRunning {
+		if node := g.nodes[g.index[c.Position]]; node.Halt != nil && c.Status == StatusRunning && !haltAnswered(node, c.State) {
 			return &CheckpointError{Field: "status", Detail: fmt.Sprintf(
-				"is running at %q, which is a halt point: a run standing there is halted with that halt point's decision, or parked by a bound",
-				c.Position)}
+				"is running at %q, which is a halt point, while state key %q holds no answer that halt point accepts: "+
+					"a run standing there is halted with that halt point's decision, parked by a bound, or running "+
+					"because it was answered",
+				c.Position, node.Halt.Into)}
 		}
 	}
 	if err := g.validateState(c.State); err != nil {
 		return err
 	}
 	if err := g.validateDecision(c); err != nil {
+		return err
+	}
+	if err := g.validateReason(c); err != nil {
 		return err
 	}
 	return g.validateCounters(c.Counters)
@@ -231,6 +236,37 @@ func (g *Graph) validateCounters(c Counters) error {
 			return &CheckpointError{Field: "counters.traversals", Detail: fmt.Sprintf(
 				"edge %d records %d traversals, past its bound of %d", i, n, bound)}
 		}
+	}
+	return nil
+}
+
+// haltAnswered reports whether s holds an answer the halt point on n accepts.
+// It is what separates a run that was answered and is now running its halt
+// node from a checkpoint forged to walk straight through one: the halt-before
+// guarantee is that the node does not start until an answer exists, and
+// supplying an answer the halt point accepts is answering it.
+func haltAnswered(n Node, s State) bool {
+	if n.Halt == nil {
+		return false
+	}
+	v, ok := s.Get(n.Halt.Into)
+	if !ok {
+		return false
+	}
+	answer, ok := v.Text()
+	if !ok {
+		return false
+	}
+	return answerAllowed(n.Halt.Options, answer)
+}
+
+// validateReason refuses a reason on a checkpoint that is not parked. A reason
+// explains why a run stopped short, so carrying one on a run that is still
+// going or that finished would report a park that never happened.
+func (g *Graph) validateReason(c Checkpoint) error {
+	if c.Reason != "" && !c.Status.Parked() {
+		return &CheckpointError{Field: "reason", Detail: fmt.Sprintf(
+			"is set on a run that is %s, and a reason explains a parked run and nothing else", c.Status)}
 	}
 	return nil
 }

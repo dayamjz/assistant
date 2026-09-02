@@ -191,8 +191,9 @@ func newCounters(n int) Counters {
 }
 
 // Checkpoint is state, position, and any open decision, written after every
-// node. It carries the run's bound accounting as well, because those counters
-// are part of what must survive a resume.
+// node and once more when a segment claims the run before starting one. It
+// carries the run's bound accounting as well, because those counters are part
+// of what must survive a resume.
 //
 // A Checkpoint serializes as data and nothing else. It is validated against
 // the graph it claims to belong to before a run is resumed from it.

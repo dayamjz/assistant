@@ -109,5 +109,5 @@ func Example() {
 	// Output:
 	// halted before "gate": apply the fix? [fix stop]
 	// completed after 5 steps, 1 applied
-	// 6 checkpoints written
+	// 7 checkpoints written
 }

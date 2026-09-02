@@ -337,6 +337,13 @@ func TestValidateRefusesACheckpointThatDoesNotMatchTheGraph(t *testing.T) {
 		Key(graph.Key{Name: "answer", Kind: graph.KindInt}).
 		Node(graph.Node{Name: "only", NewBody: noteOnly(rec, "only")}))
 
+	// An answer the gate's declared options do not permit, which is no answer
+	// at all as far as the halt point is concerned.
+	unacceptable, err := g.NewState(map[string]graph.Value{"answer": graph.TextValue("ship anyway")})
+	if err != nil {
+		t.Fatalf("NewState: %v", err)
+	}
+
 	// Each case names the field the refusal must blame, so a case cannot start
 	// passing because some other rule caught it first.
 	cases := map[string]struct {
@@ -359,12 +366,33 @@ func TestValidateRefusesACheckpointThatDoesNotMatchTheGraph(t *testing.T) {
 			tamper: func(c *graph.Checkpoint) { c.Status = graph.StatusCompleted },
 			field:  "position",
 		},
-		"running at a halt point": {
+		// A run may stand at a halt point with StatusRunning only once it has
+		// been answered, which is what the claim an Answer writes looks like.
+		// Without an answer, and with one the halt point does not accept, the
+		// checkpoint is a forgery that would walk through the node.
+		"running at a halt point with no answer": {
 			tamper: func(c *graph.Checkpoint) {
 				c.Status = graph.StatusRunning
 				c.Decision = nil
 			},
 			field: "status",
+		},
+		"running at a halt point on an answer it does not accept": {
+			tamper: func(c *graph.Checkpoint) {
+				c.Status = graph.StatusRunning
+				c.Decision = nil
+				c.State = unacceptable
+			},
+			field: "status",
+		},
+		"reason on a run that is not parked": {
+			tamper: func(c *graph.Checkpoint) {
+				c.Status = graph.StatusRunning
+				c.Position = "prep"
+				c.Decision = nil
+				c.Reason = "the run-wide step budget of 8 was spent"
+			},
+			field: "reason",
 		},
 		"halted with no decision": {
 			tamper: func(c *graph.Checkpoint) { c.Decision = nil },

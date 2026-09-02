@@ -19,20 +19,22 @@ type Config struct {
 	Budget int
 }
 
-// Executor walks a built graph, writing a checkpoint after every node. It
-// holds no per-run state, so one Executor may drive any number of concurrent
-// runs of the same graph.
+// Executor walks a built graph, writing a checkpoint after every node and one
+// more when a segment claims the run. It holds no per-run state, so one
+// Executor may drive any number of concurrent runs of the same graph.
 //
 // A run's history never interleaves. Every checkpoint is written anchored to
 // the one the operation read, so when a run moves under a Resume or an Answer
 // the later write is refused with ErrStaleAnchor instead of a second walk
 // being appended to a history that then reports success for both.
 //
-// The refusal happens at the write, not before the work: a refused operation
-// has already executed the nodes it got through, and what is discarded is the
-// checkpoint rather than the execution. This package is pure, so that is
-// wasted work rather than a side effect happening twice, but it is why one run
-// is still best driven by one caller at a time.
+// A segment that is going to execute claims the run first: Resume and Answer
+// write their checkpoint, anchored to the one they read, before the first node
+// body runs, which is what Run already did with a run's first checkpoint. Two
+// callers that read the same checkpoint therefore both try to claim it, one is
+// refused before it starts a node, and a node body is not executed twice. What
+// a body does is outside this package, so this is the difference between
+// wasted work and an agent, a push, or a network call happening twice.
 type Executor struct {
 	graph  *Graph
 	store  CheckpointStore
@@ -128,17 +130,23 @@ func (e *Executor) Run(ctx context.Context, run string, initial State) (Result, 
 // fork it, or change the graph. A run interrupted mid-flight continues from
 // the node it had not yet reached.
 //
-// It returns an error wrapping ErrStaleAnchor when the run moved between the
-// checkpoint this call read and the checkpoint it went to write.
+// A run it is going to advance is claimed first, by writing the checkpoint it
+// read back under a new sequence number before any node runs. It returns an
+// error wrapping ErrStaleAnchor when that claim finds the run already moved,
+// which is what stops a second caller from re-executing the node this one is
+// about to start.
 func (e *Executor) Resume(ctx context.Context, run string) (Result, error) {
 	cp, err := e.load(ctx, run)
 	if err != nil {
 		return Result{}, err
 	}
-	if cp.Status == StatusRunning {
-		return e.advance(ctx, cp)
+	if cp.Status != StatusRunning {
+		return e.result(cp), nil
 	}
-	return e.result(cp), nil
+	if err := e.persist(ctx, &cp); err != nil {
+		return Result{}, err
+	}
+	return e.advance(ctx, cp)
 }
 
 // Answer restores a run from its latest checkpoint and answers the decision it
@@ -148,9 +156,11 @@ func (e *Executor) Resume(ctx context.Context, run string) (Result, error) {
 // Answering reaches the same state as calling Resume first and Answer second,
 // because Resume re-emits a decision without changing anything.
 //
-// It returns an error wrapping ErrStaleAnchor when the run moved between the
-// checkpoint this call read and the checkpoint it went to write, which is how
-// a decision answered twice at once resolves to one answer.
+// The answer is claimed before the halted node runs: the checkpoint carrying
+// it is written, still positioned at the halt point, and only then does the
+// node start. It returns an error wrapping ErrStaleAnchor when that claim
+// finds the run already moved, which is how a decision answered twice at once
+// resolves to one answer and one execution of the node behind it.
 func (e *Executor) Answer(ctx context.Context, run, answer string) (Result, error) {
 	cp, err := e.load(ctx, run)
 	if err != nil {
@@ -159,7 +169,7 @@ func (e *Executor) Answer(ctx context.Context, run, answer string) (Result, erro
 	if cp.Status != StatusHalted || cp.Decision == nil {
 		return Result{}, fmt.Errorf("%w: run %q is %s", ErrNoOpenDecision, run, cp.Status)
 	}
-	if !answerAllowed(cp.Decision, answer) {
+	if !answerAllowed(cp.Decision.Options, answer) {
 		return Result{}, fmt.Errorf("%w: run %q, answer %q, options %v",
 			ErrAnswerNotAllowed, run, answer, cp.Decision.Options)
 	}
@@ -174,19 +184,25 @@ func (e *Executor) Answer(ctx context.Context, run, answer string) (Result, erro
 	cp.State = acc.work
 	cp.Decision = nil
 	cp.Status = StatusRunning
+	if err := e.persist(ctx, &cp); err != nil {
+		return Result{}, err
+	}
 	return e.advance(ctx, cp)
 }
 
-// answerAllowed reports whether answer satisfies the decision. An empty answer
-// is never allowed, and a decision that declares options accepts nothing else.
-func answerAllowed(d *Decision, answer string) bool {
+// answerAllowed reports whether answer is one a halt point declaring these
+// options accepts. An empty answer is never allowed, and a halt point that
+// declares options accepts nothing else. It is the one place that decides what
+// counts as an answer, for the call that supplies one and for the validator
+// that has to recognize a checkpoint carrying one.
+func answerAllowed(options []string, answer string) bool {
 	if answer == "" {
 		return false
 	}
-	if len(d.Options) == 0 {
+	if len(options) == 0 {
 		return true
 	}
-	for _, opt := range d.Options {
+	for _, opt := range options {
 		if opt == answer {
 			return true
 		}
@@ -355,6 +371,9 @@ func (e *Executor) park(ctx context.Context, cp Checkpoint) (Result, error) {
 // clears the fork lineage first: ForkedFrom marks a checkpoint a fork copied,
 // and a checkpoint the executor produced was copied from nothing, so carrying
 // the field forward off a resumed fork would give that fact a second owner.
+// It clears the reason on the same grounds whenever the status it is writing
+// is not a parked one, because a reason explains a park and nothing else, and
+// a run that moved on from a park has left that explanation behind.
 //
 // What it hands over shares nothing with the checkpoint the run keeps
 // advancing, so a store is free to retain it as it stands without its history
@@ -374,6 +393,9 @@ func (e *Executor) park(ctx context.Context, cp Checkpoint) (Result, error) {
 // comparison covers both halves of the Write contract.
 func (e *Executor) persist(ctx context.Context, cp *Checkpoint) error {
 	cp.ForkedFrom = nil
+	if !cp.Status.Parked() {
+		cp.Reason = ""
+	}
 	anchor := cp.ID()
 	id, err := e.store.Write(ctx, anchor, cp.clone())
 	if err != nil {
