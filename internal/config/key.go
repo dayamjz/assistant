@@ -50,9 +50,11 @@ const (
 	KeySuppressProjectInstructions Key = "suppress_project_instructions"
 	// KeyNoCI is "no_ci": a positive declaration that there are no checks.
 	KeyNoCI Key = "no_ci"
-	// KeyChecksTimeout is "checks_timeout": the idle timeout for checks.
+	// KeyChecksTimeout is "checks_timeout": the idle timeout for checks. It is
+	// global-only, so only the operator's own file may set it.
 	KeyChecksTimeout Key = "checks_timeout"
-	// KeySessionReuse is "session_reuse": one durable fixer session per run.
+	// KeySessionReuse is "session_reuse": one durable fixer session per run. It
+	// is global-only, so only the operator's own file may set it.
 	KeySessionReuse Key = "session_reuse"
 	// KeyCommitFixMessage is "commit.fix_message": the fix commit subject
 	// template.
@@ -137,9 +139,9 @@ var specs = []spec{
 		func(c *Config, v any) { c.SuppressProjectInstructions = v.(bool) }},
 	{KeyNoCI, TrustTrusted, false, decodeBool,
 		func(c *Config, v any) { c.NoCI = v.(bool) }},
-	{KeyChecksTimeout, TrustPushed, DefaultChecksTimeout, decodeChecksTimeout,
+	{KeyChecksTimeout, TrustGlobal, DefaultChecksTimeout, decodeChecksTimeout,
 		func(c *Config, v any) { c.ChecksTimeout = v.(time.Duration) }},
-	{KeySessionReuse, TrustPushed, DefaultSessionReuse, decodeBool,
+	{KeySessionReuse, TrustGlobal, DefaultSessionReuse, decodeBool,
 		func(c *Config, v any) { c.SessionReuse = v.(bool) }},
 	{KeyCommitFixMessage, TrustPushed, DefaultCommitFixMessage, decodeFixMessage,
 		func(c *Config, v any) { c.CommitFixMessage = v.(string) }},

@@ -18,10 +18,15 @@ var (
 	// origin its bytes came from. Trust is a property of where a document was
 	// read from, and this package will not guess it.
 	ErrUnknownOrigin = errors.New("config: a configuration layer must state its origin")
-	// ErrUntrustedGlobal is returned when the global layer is offered with a
-	// pushed origin. The global layer is the operator's own file in their
-	// home; a pushed branch is never it.
-	ErrUntrustedGlobal = errors.New("config: the global layer must have a trusted origin")
+	// ErrNotGlobalLayer is returned when the layer offered as the global one
+	// does not have OriginGlobal. The global layer is the operator's own file
+	// in their home, and no repository file is ever it.
+	ErrNotGlobalLayer = errors.New("config: the global layer must have the global origin")
+	// ErrNotRepositoryLayer is returned when the layer offered as the
+	// repository one has OriginGlobal. A repository file is read from the
+	// default branch or from the branch under validation, and the operator's
+	// own file is neither.
+	ErrNotRepositoryLayer = errors.New("config: the repository layer must have a repository origin")
 )
 
 // KeyError reports one configuration key that could not be accepted. It names

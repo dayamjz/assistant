@@ -9,7 +9,7 @@ import (
 // A repository layer read from the branch under validation overrides what its
 // origin is allowed to override, and is refused the rest with a report.
 func ExampleResolve() {
-	global, err := config.Parse(config.OriginTrusted, []byte(`{
+	global, err := config.Parse(config.OriginGlobal, []byte(`{
 		"commands": {"test": "go test ./...", "lint": "make lint"},
 		"fix_rounds": {"rebase": 5}
 	}`))

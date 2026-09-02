@@ -23,14 +23,14 @@ func TestResolvedSlicesAreIndependentOfTheLayer(t *testing.T) {
 		"document": {"ownership": [{"subject": "s", "document": "d.md"}]},
 		"review": {"path_rules": [{"paths": ["internal/**"], "guidance": "g"}]}
 	}`)
-	first := resolve(t, Absent(OriginTrusted), repo).Config
+	first := resolve(t, Absent(OriginGlobal), repo).Config
 	first.Agent[0] = "mutated"
 	first.IgnorePatterns[0] = mustPattern(t, "*.mutated")
 	first.DocumentOwnership[0].Document = "mutated.md"
 	first.ReviewPathRules[0].Guidance = "mutated"
 	first.ReviewPathRules[0].Paths[0] = mustPattern(t, "*.mutated")
 
-	second := resolve(t, Absent(OriginTrusted), repo).Config
+	second := resolve(t, Absent(OriginGlobal), repo).Config
 	if second.Agent[0] != "claude" {
 		t.Errorf("Agent = %v", second.Agent)
 	}
@@ -46,7 +46,7 @@ func TestResolvedSlicesAreIndependentOfTheLayer(t *testing.T) {
 }
 
 func TestConfigIsIgnoredNamesThePattern(t *testing.T) {
-	c := resolve(t, Absent(OriginTrusted), mustParse(t, OriginTrusted,
+	c := resolve(t, Absent(OriginGlobal), mustParse(t, OriginTrusted,
 		`{"ignore_patterns": ["docs/**", "*.golden"]}`)).Config
 	p, ok := c.IsIgnored("docs/api/a.md")
 	if !ok || p.String() != "docs/**" {
@@ -70,7 +70,7 @@ func TestRenderFixMessage(t *testing.T) {
 		t.Errorf("RenderFixMessage = %q", got)
 	}
 
-	custom := resolve(t, Absent(OriginTrusted), mustParse(t, OriginTrusted,
+	custom := resolve(t, Absent(OriginGlobal), mustParse(t, OriginTrusted,
 		`{"commit": {"fix_message": "fix(gate): {summary}"}}`)).Config
 	if got, err := custom.RenderFixMessage("stop guessing"); err != nil || got != "fix(gate): stop guessing" {
 		t.Errorf("RenderFixMessage = (%q, %v)", got, err)
@@ -130,7 +130,7 @@ func TestRenderFixMessageMeasuresTheRenderedSubject(t *testing.T) {
 }
 
 func TestPathRuleScopeAndMatching(t *testing.T) {
-	c := resolve(t, Absent(OriginTrusted), mustParse(t, OriginTrusted, `{"review": {"path_rules": [
+	c := resolve(t, Absent(OriginGlobal), mustParse(t, OriginTrusted, `{"review": {"path_rules": [
 		{"paths": ["internal/**", "*.go"], "guidance": "state the contract"},
 		{"paths": ["docs/**"], "guidance": "no new owners"}
 	]}}`)).Config

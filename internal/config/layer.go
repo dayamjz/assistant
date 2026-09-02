@@ -11,8 +11,8 @@ import (
 
 // Layer is one parsed configuration document together with the origin it was
 // read from. Both halves are required: a value's admissibility depends on
-// where its document came from, so this package will not accept a document
-// without being told.
+// which document it is and where that document came from, so this package will
+// not accept one without being told.
 //
 // A Layer records which keys the document actually set, which is what makes a
 // repository layer override the global one key by key rather than section by
@@ -36,7 +36,14 @@ func Absent(origin Origin) Layer {
 	return Layer{origin: origin}
 }
 
-// Parse decodes a configuration document read from origin. The format is JSON,
+// Parse decodes a configuration document read from origin. The origin says
+// which document this is as well as where it came from, and a repository file
+// setting a global-only key is refused here: those keys are the operator's
+// preferences about their own machine, so a repository file may not carry one
+// at all. Every other trust class is decided when layers merge instead, since
+// a repository file may legitimately contain a key whose value is then dropped.
+//
+// The format is JSON,
 // with the dotted keys of the PRD section 10 schema written as nested objects,
 // so "fix_rounds.review" is a "review" field inside a "fix_rounds" object.
 // Nesting is the only accepted spelling: a member name written in the flat
@@ -52,7 +59,7 @@ func Absent(origin Origin) Layer {
 // in what Present reports.
 func Parse(origin Origin, data []byte) (Layer, error) {
 	switch origin {
-	case OriginTrusted, OriginPushed:
+	case OriginGlobal, OriginTrusted, OriginPushed:
 	default:
 		return Layer{}, ErrUnknownOrigin
 	}
@@ -76,7 +83,7 @@ func Parse(origin Origin, data []byte) (Layer, error) {
 	if err := checkNoRepeatedNames(data); err != nil {
 		return Layer{}, err
 	}
-	if err := walk("", obj, layer.values); err != nil {
+	if err := walk(origin, "", obj, layer.values); err != nil {
 		return Layer{}, err
 	}
 	return layer, nil
@@ -206,7 +213,7 @@ func namePath(stack []*jsonFrame, name string) string {
 // walk flattens nested objects into dotted keys and decodes each leaf. Keys
 // are visited in sorted order so a document with more than one problem always
 // reports the same one.
-func walk(prefix string, obj map[string]any, out map[Key]any) error {
+func walk(origin Origin, prefix string, obj map[string]any, out map[Key]any) error {
 	names := make([]string, 0, len(obj))
 	for name := range obj {
 		names = append(names, name)
@@ -226,7 +233,7 @@ func walk(prefix string, obj map[string]any, out map[Key]any) error {
 			if !ok {
 				return &KeyError{Key: Key(name), Value: jsonText(value), Detail: "expected an object"}
 			}
-			if err := walk(name, sub, out); err != nil {
+			if err := walk(origin, name, sub, out); err != nil {
 				return err
 			}
 			continue
@@ -242,6 +249,16 @@ func walk(prefix string, obj map[string]any, out map[Key]any) error {
 		decoded, err := s.decode(key, value)
 		if err != nil {
 			return err
+		}
+		// The value is validated before its placement, so a key is checked the
+		// same way whatever document it appears in, and an author fixing a
+		// repository file learns about a bad value as well as a misplaced key.
+		if origin.isRepository() && s.trust.refusedInRepositoryFile() {
+			return &KeyError{
+				Key:    key,
+				Value:  jsonText(value),
+				Detail: "the key is " + s.trust.String() + " and this is a repository file; only the operator's own configuration may set it",
+			}
 		}
 		out[key] = decoded
 	}

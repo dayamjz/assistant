@@ -18,15 +18,21 @@ type Resolution struct {
 // a repository that sets one fix round limit keeps the global values for
 // everything else, including the other fix round limits.
 //
-// The global layer must have a trusted origin: it is the operator's own file
-// in their home, and nothing pushed is ever it. The repository layer may have
-// either origin, and its origin decides which of its keys are admitted:
+// The two layers are distinguished by origin and neither may stand in for the
+// other: the global layer must have OriginGlobal, the operator's own file in
+// their home, and the repository layer must have a repository origin, trusted
+// or pushed. The repository layer's origin decides which of its keys are
+// admitted:
 //
-//   - A TrustPushed key is taken from either origin.
+//   - A TrustPushed key is taken from either repository origin.
 //   - A TrustCommands key is taken from a pushed origin only when
 //     KeyAllowPushedCommands resolved to true, and that key is TrustTrusted,
 //     so only a trusted layer can turn the opt-out on.
 //   - A TrustTrusted key is never taken from a pushed origin.
+//   - A TrustGlobal key is never taken from a repository layer at all. Parse
+//     refuses one in a repository file, so a layer built by Parse cannot carry
+//     one here; the check below states the rule anyway rather than relying on
+//     that.
 //
 // What Resolve enforces is the classification. It cannot check that an origin
 // was reported truthfully, because it does not fetch: reading the trusted
@@ -37,8 +43,11 @@ func Resolve(global, repo Layer) (Resolution, error) {
 	if global.origin == OriginUnknown || repo.origin == OriginUnknown {
 		return Resolution{}, ErrUnknownOrigin
 	}
-	if global.origin != OriginTrusted {
-		return Resolution{}, ErrUntrustedGlobal
+	if global.origin != OriginGlobal {
+		return Resolution{}, ErrNotGlobalLayer
+	}
+	if !repo.origin.isRepository() {
+		return Resolution{}, ErrNotRepositoryLayer
 	}
 	allowPushed := resolveAllowPushedCommands(global, repo)
 

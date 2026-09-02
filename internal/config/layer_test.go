@@ -32,12 +32,12 @@ func TestParseRequiresAnOrigin(t *testing.T) {
 // Absent and present-but-empty resolve the same way and are still
 // distinguishable, which is what lets a caller say which happened.
 func TestAbsentAndEmptyAreDistinctButBothValid(t *testing.T) {
-	absent := Absent(OriginTrusted)
+	absent := Absent(OriginGlobal)
 	if absent.Present() {
 		t.Error("Absent reported a present document")
 	}
 	for _, doc := range []string{"", "   \n\t ", "{}"} {
-		l := mustParse(t, OriginTrusted, doc)
+		l := mustParse(t, OriginGlobal, doc)
 		if !l.Present() {
 			t.Errorf("Parse(%q) reported no document", doc)
 		}
@@ -52,7 +52,7 @@ func TestAbsentAndEmptyAreDistinctButBothValid(t *testing.T) {
 		}
 		return res.Config
 	}
-	if from(absent).RunBudget != from(mustParse(t, OriginTrusted, "{}")).RunBudget {
+	if from(absent).RunBudget != from(mustParse(t, OriginGlobal, "{}")).RunBudget {
 		t.Error("an absent and an empty document must resolve to the same configuration")
 	}
 }
@@ -91,7 +91,7 @@ func TestParseAcceptsTheWholeSchema(t *testing.T) {
 		"commit": {"fix_message": "fix(gate): {summary}"},
 		"allow_pushed_commands": true
 	}`
-	l := mustParse(t, OriginTrusted, doc)
+	l := mustParse(t, OriginGlobal, doc)
 	if got, want := len(l.SetKeys()), len(Keys()); got != want {
 		t.Fatalf("SetKeys() has %d keys, want all %d schema keys: %v", got, want, l.SetKeys())
 	}
@@ -413,7 +413,7 @@ func TestParseRefusesTheFlatDottedSpelling(t *testing.T) {
 	}
 	// The nested spelling of the same key is still accepted and still merges
 	// key by key.
-	res, err := Resolve(mustParse(t, OriginTrusted, `{"fix_rounds": {"review": 2}}`), Absent(OriginTrusted))
+	res, err := Resolve(mustParse(t, OriginGlobal, `{"fix_rounds": {"review": 2}}`), Absent(OriginTrusted))
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -473,7 +473,7 @@ func TestParseAcceptsTheSameNameInDifferentObjects(t *testing.T) {
 	doc := `{"commands": {"test": "go test ./..."}, "fix_rounds": {"test": 2},
 		"review": {"path_rules": [{"paths": ["a.go"], "guidance": "g"},
 		                          {"paths": ["b.go"], "guidance": "h"}]}}`
-	res, err := Resolve(mustParse(t, OriginTrusted, doc), Absent(OriginTrusted))
+	res, err := Resolve(mustParse(t, OriginGlobal, doc), Absent(OriginTrusted))
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -580,14 +580,17 @@ func TestParseScansAcceptedDocumentsToTheEnd(t *testing.T) {
 		`{"checks_timeout": "168h", "session_reuse": false, "commit": {"fix_message": "fix: {summary}"}}`,
 		`{"suppress_project_instructions": true, "allow_pushed_commands": true, "no_ci": false}`,
 	}
+	// Parsed as the operator's own file, which is the one layer allowed to set
+	// every key, so the accepted set can cover the whole schema. The scan for
+	// repeated members does not depend on the origin.
 	for _, doc := range accepted {
-		if _, err := Parse(OriginTrusted, []byte(doc)); err != nil {
+		if _, err := Parse(OriginGlobal, []byte(doc)); err != nil {
 			t.Errorf("Parse(%s) was expected to be accepted: %v", doc, err)
 			continue
 		}
 		withRepeat := strings.TrimSuffix(doc, "}") + `,"no_ci": true, "no_ci": false}`
 		withRepeat = strings.Replace(withRepeat, "{,", "{", 1)
-		_, err := Parse(OriginTrusted, []byte(withRepeat))
+		_, err := Parse(OriginGlobal, []byte(withRepeat))
 		var ke *KeyError
 		if !errors.As(err, &ke) || !strings.Contains(ke.Detail, "more than once") {
 			t.Errorf("Parse(%s) returned %v, want the appended repetition refused", withRepeat, err)

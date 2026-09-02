@@ -33,21 +33,24 @@
 // from the pushed branch. Enforcing where the bytes came from needs git and
 // belongs to the gate. What lives here is the classification, and it is
 // mandatory rather than advisory: Parse requires an Origin, Absent requires an
-// Origin, the zero Layer has none, and Resolve refuses a layer without one. A
-// configuration therefore cannot be assembled without every field's trust
-// class being decided.
+// Origin, the zero Layer has none, and Resolve refuses a layer without one.
+// Resolve also refuses either layer standing in the other's position, since
+// the operator's own file and a repository file are different documents with
+// different standing. A configuration therefore cannot be assembled without
+// every field's trust class being decided.
 //
 // The limit of that is worth stating plainly: this package cannot verify that
 // an origin was reported honestly. A caller that reads a pushed branch and
-// labels it OriginTrusted gets a trusted layer. What the package guarantees is
-// that nobody can avoid making the claim, and that a claim of OriginPushed is
-// then honored key by key.
+// labels it OriginTrusted gets a trusted layer, and one that labels its own
+// repository file OriginGlobal gets a global layer. What the package
+// guarantees is that nobody can avoid making the claim, and that a claim of
+// OriginPushed or of a repository origin is then honored key by key.
 //
 // Each key has one class, assigned once in the key table:
 //
 //   - TrustPushed keys can neither execute anything nor weaken a check, so a
-//     contributor may set them: the ignore list, the fix round limits, the
-//     commit message template, the checks timeout, and session reuse.
+//     contributor may set them: the ignore list, the fix round limits, and the
+//     commit message template.
 //   - TrustCommands keys run shell or choose which process starts with the
 //     operator's credentials: the three commands and the agent list. They come
 //     from a trusted origin unless KeyAllowPushedCommands is set, and that key
@@ -56,22 +59,32 @@
 //     a check unnecessary: the path-scoped review rules, document ownership,
 //     instruction suppression, the no-CI declaration, and the run budget. A
 //     pushed branch may never set one.
+//   - TrustGlobal keys are the operator's preferences about how their own
+//     machine behaves rather than facts about a repository: the checks timeout
+//     and session reuse. Only the operator's own file may set one, and a
+//     repository file carrying one is refused when it is parsed.
 //
-// Two placements are this package's reading rather than the PRD's wording.
-// The section 10 diagram does not list "checks_timeout" or "session_reuse";
-// both are classified TrustPushed because neither can execute anything and
-// neither can turn a failing check into a passing one. Raise that against the
-// PRD rather than treating this comment as the contract. The opt-out key name
-// is also this package's, because section 10 describes the opt-out in prose
-// without giving it a schema row, but that name is settled and what the PRD
-// still owes is the schema row.
+// The fourth class is this package's reading rather than the PRD's wording,
+// and it is the larger of two such readings. PRD section 10 names three
+// classes and its trust diagram does not place "checks_timeout" or
+// "session_reuse" at all. They are global-only here because they are operator
+// preferences rather than repository facts, so a repository should not be able
+// to set the owner's idle timeout or session policy even harmlessly. That
+// makes section 10 short a class, and the amendment is a separate task: a
+// disagreement between this code and the PRD is a finding to raise, not a
+// documentation gap to close, so do not treat this comment as the contract.
+// The opt-out key name is the other reading, because section 10 describes the
+// opt-out in prose without giving it a schema row; that name is settled and
+// what the PRD still owes is the row.
 //
-// A key a layer set but its origin may not set is not an error. It is dropped,
-// the key falls back to the trusted layer or its default, and the drop is
-// reported as a Rejection so an author can be told their setting had no
-// effect. It is still validated first, because PRD section 10 requires an
-// invalid value to fail at parse time even on a branch whose fields are
-// otherwise ignored.
+// A key a layer set but its origin may not set is not an error, with the one
+// exception above. It is dropped, the key falls back to the trusted layer or
+// its default, and the drop is reported as a Rejection so an author can be
+// told their setting had no effect. It is still validated first, because PRD
+// section 10 requires an invalid value to fail at parse time even on a branch
+// whose fields are otherwise ignored. A global-only key in a repository file
+// is the exception because the file has no standing to carry it at all: that
+// is refused where its author will see it rather than dropped quietly.
 //
 // # Failing at parse time
 //
