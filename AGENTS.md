@@ -49,6 +49,9 @@ documentation gap to close. Do not edit the PRD to match the code.
   `internal/config/key.go`. A key's default, trust class, decoding, and where it
   lands in a `Config` are one row. Add a key by adding a row, never by adding a
   second list of keys somewhere else.
+- `internal/vcs` is the only package that invokes git. Do not shell out to git
+  anywhere else; add a typed operation there instead. Its package comment states
+  the two rules it applies to every invocation and the residual gaps in them.
 
 ## Tests
 

@@ -1,0 +1,311 @@
+package vcs
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"os"
+	"os/exec"
+	"strings"
+	"time"
+)
+
+// Option configures a repository handle. Options are supplied when the handle
+// is created and are fixed for its lifetime, so every invocation a handle
+// makes runs under the same configuration.
+type Option func(*settings)
+
+// WithGitBinary names the git executable to run. The default is "git",
+// resolved through PATH. A caller that pins a git version, or a test that
+// substitutes a stand-in, passes it here.
+func WithGitBinary(path string) Option {
+	return func(s *settings) { s.git = path }
+}
+
+// WithRedactor sets the Redactor applied to arguments and to git's messages
+// before either reaches a *CommandError. The default covers only the userinfo
+// of a URL that carries a scheme; see the Redactor documentation.
+func WithRedactor(r Redactor) Option {
+	return func(s *settings) {
+		if r != nil {
+			s.redactor = r
+		}
+	}
+}
+
+// WithMaxOutput sets the largest standard output, in bytes, that an invocation
+// may produce. An invocation that produces more fails with ErrOutputTooLarge
+// and its output is discarded rather than truncated. A value of zero or less
+// leaves the default in place.
+func WithMaxOutput(n int64) Option {
+	return func(s *settings) {
+		if n > 0 {
+			s.maxOutput = n
+		}
+	}
+}
+
+// defaultMaxOutput bounds what one invocation may return. A branch under
+// validation chooses the size of its own diff, so an unbounded read is a
+// memory exhaustion the branch controls.
+const defaultMaxOutput = 64 << 20
+
+// maxStderr bounds the message kept on a *CommandError. Git's diagnostics are
+// short; the whole output of a stage lives in that stage's log.
+const maxStderr = 8 << 10
+
+// killGrace is how long a child gets to exit after its context is cancelled
+// before its pipes are abandoned, so a grandchild holding them open cannot
+// keep a cancelled call waiting.
+const killGrace = 2 * time.Second
+
+type settings struct {
+	git       string
+	redactor  Redactor
+	maxOutput int64
+}
+
+func newSettings(opts []Option) settings {
+	s := settings{git: "git", redactor: defaultRedactor{}, maxOutput: defaultMaxOutput}
+	for _, o := range opts {
+		if o != nil {
+			o(&s)
+		}
+	}
+	return s
+}
+
+// redirectingVars names the environment variables removed from every child:
+// the ones that decide which repository git operates on, and the ones that
+// inject configuration into it. A process launched from a git hook has the
+// first three set, which is why removing them is a correctness requirement and
+// not tidiness.
+//
+// The list is written by hand, so it covers what is on it and nothing else. A
+// variable a later git introduces is not removed until it is added here.
+var redirectingVars = []string{
+	"GIT_DIR",
+	"GIT_WORK_TREE",
+	"GIT_INDEX_FILE",
+	"GIT_OBJECT_DIRECTORY",
+	"GIT_ALTERNATE_OBJECT_DIRECTORIES",
+	"GIT_COMMON_DIR",
+	"GIT_NAMESPACE",
+	"GIT_PREFIX",
+	"GIT_CEILING_DIRECTORIES",
+	"GIT_DISCOVERY_ACROSS_FILESYSTEM",
+	"GIT_CONFIG",
+	"GIT_CONFIG_PARAMETERS",
+	"GIT_CONFIG_COUNT",
+	// DISPLAY is here because git's askpass fallback consults it before
+	// deciding whether a graphical helper is worth running.
+	"DISPLAY",
+}
+
+// redirectingPrefixes are variable name prefixes removed for the same reason
+// as redirectingVars. GIT_CONFIG_KEY_n and GIT_CONFIG_VALUE_n are the
+// numbered halves of the GIT_CONFIG_COUNT mechanism.
+var redirectingPrefixes = []string{"GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_"}
+
+// nonInteractive is the environment every invocation runs under. Setting it
+// here rather than at call sites is the whole point of this package owning git
+// invocation: a call site cannot forget what it never writes.
+//
+// GIT_SSH_COMMAND is not in this list because it is derived from the inherited
+// value; envFor appends to it.
+var nonInteractive = [][2]string{
+	{"GIT_TERMINAL_PROMPT", "0"},
+	{"GIT_ASKPASS", "echo"},
+	{"SSH_ASKPASS", "echo"},
+	{"SSH_ASKPASS_REQUIRE", "never"},
+	{"GIT_EDITOR", "false"},
+	{"GIT_SEQUENCE_EDITOR", "false"},
+	{"GIT_MERGE_AUTOEDIT", "no"},
+	// Git's own diagnostics are what a *CommandError carries, so pin the
+	// locale rather than reporting whatever the operator's shell was set to.
+	{"LC_ALL", "C"},
+}
+
+// envFor builds the environment for one invocation from base, which is
+// normally os.Environ(). It removes the variables named by redirectingVars and
+// redirectingPrefixes, then applies the settings in nonInteractive, overriding
+// any inherited value, and appends BatchMode to whatever ssh command was
+// inherited.
+func envFor(base []string) []string {
+	drop := make(map[string]struct{}, len(redirectingVars)+len(nonInteractive))
+	for _, k := range redirectingVars {
+		drop[k] = struct{}{}
+	}
+	for _, kv := range nonInteractive {
+		drop[kv[0]] = struct{}{}
+	}
+	drop["GIT_SSH_COMMAND"] = struct{}{}
+
+	ssh := "ssh"
+	out := make([]string, 0, len(base)+len(nonInteractive)+1)
+	for _, entry := range base {
+		name, _, ok := strings.Cut(entry, "=")
+		if !ok {
+			continue
+		}
+		if name == "GIT_SSH_COMMAND" {
+			if v := entry[len(name)+1:]; strings.TrimSpace(v) != "" {
+				ssh = v
+			}
+			continue
+		}
+		if _, skip := drop[name]; skip {
+			continue
+		}
+		if hasAnyPrefix(name, redirectingPrefixes) {
+			continue
+		}
+		out = append(out, entry)
+	}
+	for _, kv := range nonInteractive {
+		out = append(out, kv[0]+"="+kv[1])
+	}
+	// BatchMode makes ssh fail rather than ask for a passphrase or a host key
+	// confirmation. It is appended so a caller's own ssh command survives.
+	out = append(out, "GIT_SSH_COMMAND="+ssh+" -o BatchMode=yes")
+	return out
+}
+
+func hasAnyPrefix(s string, prefixes []string) bool {
+	for _, p := range prefixes {
+		if strings.HasPrefix(s, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// globalArgs are the git-level options every invocation carries, before the
+// repository addressing and the subcommand.
+//
+// core.fsmonitor is disabled because a repository-local setting would start a
+// long-lived helper process for what are short one-shot invocations.
+// core.quotePath is disabled so paths come back as bytes rather than as git's
+// C-style escapes, which matters for the operations that do not use a
+// NUL-separated format.
+var globalArgs = []string{
+	// --no-pager is what keeps an invocation from waiting on a pager. It is
+	// the only mechanism used for that; GIT_PAGER is deliberately left alone,
+	// so a caller's configuration is not two things this package disagrees
+	// with itself about.
+	"--no-pager",
+	"-c", "core.quotePath=false",
+	"-c", "core.fsmonitor=false",
+	"-c", "advice.detachedHead=false",
+}
+
+// run invokes git for op with the given subcommand arguments and returns its
+// standard output. The repository addressing and the global options are added
+// here, so a caller passes only the subcommand and its arguments.
+func (r *Repository) run(ctx context.Context, op string, args ...string) ([]byte, error) {
+	addr := r.addressing()
+	full := make([]string, 0, len(addr)+len(globalArgs)+len(args))
+	full = append(full, addr...)
+	full = append(full, globalArgs...)
+	full = append(full, args...)
+
+	cmd := exec.CommandContext(ctx, r.set.git, full...)
+	cmd.Dir = r.path
+	cmd.Env = envFor(os.Environ())
+	// A nil Stdin is os.DevNull, so anything git reads from standard input
+	// sees EOF rather than waiting for a person.
+	cmd.Stdin = nil
+	cmd.WaitDelay = killGrace
+
+	stdout := &capWriter{limit: r.set.maxOutput}
+	var stderr bytes.Buffer
+	cmd.Stdout = stdout
+	cmd.Stderr = &stderr
+
+	runErr := cmd.Run()
+	if stdout.over {
+		return nil, r.commandError(op, full, -1, "", ErrOutputTooLarge)
+	}
+	if runErr != nil {
+		code := -1
+		var exit *exec.ExitError
+		if errors.As(runErr, &exit) {
+			code = exit.ExitCode()
+			// An exit status is the ordinary way git reports a failure, so it
+			// is not also carried as a wrapped process error.
+			runErr = nil
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			// The context ended the call, so report that rather than the
+			// signal git died of.
+			runErr = ctxErr
+		}
+		return stdout.buf.Bytes(), r.commandError(op, full, code, stderr.String(), runErr)
+	}
+	return stdout.buf.Bytes(), nil
+}
+
+// runExpecting is run for a command that answers with its exit status. The
+// caller lists the non-zero statuses that are answers rather than failures,
+// and gets the status back to classify. Any other status is a failure and is
+// returned as a *CommandError, so a command that fails for a reason the caller
+// did not anticipate cannot be read as one of the answers it did.
+func (r *Repository) runExpecting(ctx context.Context, op string, expected []int, args ...string) ([]byte, int, error) {
+	out, err := r.run(ctx, op, args...)
+	if err == nil {
+		return out, 0, nil
+	}
+	var ce *CommandError
+	if errors.As(err, &ce) && ce.Err == nil {
+		for _, code := range expected {
+			if ce.ExitCode == code {
+				return out, code, nil
+			}
+		}
+	}
+	return nil, -1, err
+}
+
+func (r *Repository) commandError(op string, args []string, code int, stderrText string, cause error) *CommandError {
+	red := make([]string, len(args))
+	for i, a := range args {
+		red[i] = r.set.redactor.Redact(a)
+	}
+	// Redaction runs before truncation. Cutting first could leave half of a
+	// credentialed URL, which the redactor would no longer recognize.
+	msg := r.set.redactor.Redact(strings.TrimSpace(stderrText))
+	if len(msg) > maxStderr {
+		msg = msg[:maxStderr] + "\n[git message truncated]"
+	}
+	return &CommandError{
+		Op:       op,
+		Repo:     r.path,
+		Args:     red,
+		ExitCode: code,
+		Stderr:   msg,
+		Err:      cause,
+	}
+}
+
+// capWriter collects output up to limit bytes and records whether more was
+// offered. Output past the limit is dropped rather than kept, because the
+// result is refused whole.
+type capWriter struct {
+	limit int64
+	n     int64
+	over  bool
+	buf   bytes.Buffer
+}
+
+func (w *capWriter) Write(p []byte) (int, error) {
+	if w.over {
+		return len(p), nil
+	}
+	if w.n+int64(len(p)) > w.limit {
+		w.over = true
+		w.buf.Reset()
+		return len(p), nil
+	}
+	w.n += int64(len(p))
+	return w.buf.Write(p)
+}
