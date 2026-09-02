@@ -89,6 +89,13 @@ Each has cost this repository more than one round of review.
   unrepresentable: a restored anchor's provenance rests on the checkpoint it came
   out of, not on the type. Read its `doc.go` for why, and for the residual gaps
   that leaves.
+- `internal/forge` is the only package that talks to a code host. Everything
+  provider-specific stays behind `Provider`, and `internal/vcs` still owns git,
+  so a forge adapter never shells out to it. Its checks model is the part that
+  is not a thin wrapper: an empty check list is not green, only a `no_ci`
+  declaration makes it so, a cancelled check is settled, and an unrecognized
+  state deliberately keeps the caller waiting. Read its `doc.go` before
+  changing any of those four.
 - `internal/agents` is the only package that starts an agent process. It owns
   the process tree, the per-invocation environment, and what is recorded about
   a call. P4 lives in its type split rather than in a rule callers follow:
