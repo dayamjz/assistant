@@ -34,3 +34,37 @@ review:
         is declared for it.
         A halt point must stop before its node runs, never inside it, so nothing
         needs to be idempotent on resume.
+
+    - path: "internal/findings/**"
+      instructions: |
+        Agent output is untrusted input here, so the failure direction matters
+        more than the happy path.
+        A finding whose action is missing, empty, unrecognized, or not a string
+        must become ask; that is P3, not an error path.
+        Fix eligibility must stay defined positively as equality with ActionFix,
+        so a finding that never went through Normalize is still not fix-eligible.
+        Parsing must refuse rather than substitute: an empty report is not a
+        clean pass, and an unrecognized risk word is not mapped to a neighbor.
+
+    - path: "internal/vcs/**"
+      instructions: |
+        This is the only package that invokes git, and the environment filter is
+        its security surface. Check the filter first.
+        A variable that can widen what git will do must be stripped; one that can
+        only narrow it is honored. A new keep needs its reason stated, since a
+        kept variable is a trust decision, not an omission.
+        Every invocation must address its repository explicitly, with --git-dir
+        for a bare repository and -C for a working copy, and must stay
+        non-interactive: no prompt, no askpass, no editor, no pager.
+
+    - path: "internal/config/**"
+      instructions: |
+        This configuration selects what runs with the operator's credentials, so
+        ambiguity is refused rather than resolved.
+        Trust class belongs to the key table row, not to a call site: a key that
+        executes code or shapes what a check demands must not be settable from a
+        pushed branch, and a global-only key in a repository file is refused
+        where its author sees it, not dropped.
+        A document must mean one thing: duplicate members, flat dotted spellings,
+        unrecognized keys, and nulls are refusals, and every refusal names the
+        key and the value.
