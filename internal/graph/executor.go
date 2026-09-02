@@ -107,10 +107,8 @@ func (e *Executor) Run(ctx context.Context, run string, initial State) (Result, 
 		State:    initial.Clone(),
 		Counters: newCounters(len(e.graph.edges)),
 	}
-	start, _ := e.graph.Node(e.graph.start)
-	if start.Halt != nil {
-		cp.Status = StatusHalted
-		cp.Decision = decisionFor(start)
+	if start, _ := e.graph.Node(e.graph.start); start.Halt != nil {
+		haltBefore(&cp, start)
 	}
 	if err := e.persist(ctx, &cp); err != nil {
 		return Result{}, err
@@ -294,8 +292,7 @@ func (e *Executor) advance(ctx context.Context, cp Checkpoint) (Result, error) {
 			return e.park(ctx, cp)
 		}
 		if next := e.graph.nodes[e.graph.index[to]]; next.Halt != nil {
-			cp.Status = StatusHalted
-			cp.Decision = decisionFor(next)
+			haltBefore(&cp, next)
 			return e.park(ctx, cp)
 		}
 		cp.Status = StatusRunning
@@ -303,6 +300,23 @@ func (e *Executor) advance(ctx context.Context, cp Checkpoint) (Result, error) {
 			return Result{}, err
 		}
 	}
+}
+
+// haltBefore parks cp in front of n, which declares a halt point: it emits the
+// decision n asks and clears the answer key that decision will land in.
+//
+// Clearing it is the point, not housekeeping. An answer is consent to one
+// decision, and consent here is explicit for a bounded scope and never a quiet
+// default, so an answer must not outlive the decision it answered: a halt
+// point re-entered in a loop asks afresh rather than inheriting the answer the
+// last round was given, and a run cannot be started with an answer pre-seeded
+// into its initial state. It is also what makes "the answer key holds an
+// answer this halt point accepts" mean "this decision was answered", which is
+// what the validator reads it as.
+func haltBefore(cp *Checkpoint, n Node) {
+	cp.Status = StatusHalted
+	cp.Decision = decisionFor(n)
+	cp.State.set(n.Halt.Into, TextValue(""))
 }
 
 // checkEdgeBounds applies the two bounds that live on an edge and, when

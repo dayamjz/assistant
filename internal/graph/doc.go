@@ -34,7 +34,9 @@
 //
 // A graph that breaks any of these fails to construct. Construction-time
 // failure is the point: these are defects that are close to invisible at run
-// time and expensive to diagnose once they are.
+// time and expensive to diagnose once they are. The first three are the ones
+// PRD section 7 states; the two after them are this package's own, so a reader
+// looking for them in section 7 will not find them there.
 //
 //   - Two nodes may not write the same state key unless that key declares a
 //     merge rule. Shared mutable state with no declared merge rule produces
@@ -52,6 +54,15 @@
 //     that it never did. The fallback edge is the point: it makes the author
 //     say where a run goes when no guard matches instead of defaulting to
 //     silent success. A node with no outgoing edges is terminal and says so.
+//   - A halt point's answer key is written by that halt point and nothing
+//     else: no other node may write it, no second halt point may ask into it,
+//     and it declares no merge rule. This is also this package's own rule. An
+//     answer is consent to one decision, and consent here is explicit for a
+//     bounded scope rather than a quiet default, so a run must never arrive at
+//     a halt point already holding an answer nobody gave for it. The executor
+//     clears the key whenever it parks at the halt, so a halt re-entered in a
+//     loop asks afresh instead of inheriting the last round's answer, and this
+//     rule is what keeps anything else from putting one back.
 //
 // # Bounding cycles
 //

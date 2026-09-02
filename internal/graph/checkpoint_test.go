@@ -249,26 +249,7 @@ func TestBoundAccountingSurvivesAHaltAndResume(t *testing.T) {
 	rec := &recorder{}
 	// A loop with a decision in it: every round parks, so the round counter
 	// only survives if the checkpoint carries it.
-	g := mustBuild(t, graph.NewBuilder().
-		Start("check").
-		Key(graph.Key{Name: "answer", Kind: graph.KindText}).
-		Key(graph.Key{Name: "log", Kind: graph.KindList, Merge: graph.MergeAppend}).
-		Node(graph.Node{Name: "check", Writes: []string{"log"}, NewBody: appendLog(rec, "check")}).
-		Node(graph.Node{
-			Name:    "gate",
-			Reads:   []string{"answer"},
-			Writes:  []string{"log"},
-			Halt:    &graph.Halt{Question: "fix it?", Options: []string{"fix", "stop"}, Into: "answer"},
-			NewBody: appendLog(rec, "gate"),
-		}).
-		Node(graph.Node{Name: "fix", Writes: []string{"log"}, NewBody: appendLog(rec, "fix")}).
-		Node(graph.Node{Name: "done", Writes: []string{"log"}, NewBody: appendLog(rec, "done")}).
-		Edge(graph.Edge{From: "check", To: "gate"}).
-		Edge(graph.Edge{From: "gate", To: "fix", Guard: &graph.Guard{
-			Key: "answer", Op: graph.OpEquals, Value: graph.TextValue("fix"),
-		}}).
-		Edge(graph.Edge{From: "gate", To: "done"}).
-		Edge(graph.Edge{From: "fix", To: "check", Rounds: 2}))
+	g := mustBuild(t, haltLoopBuilder(rec))
 
 	store := graph.NewMemoryStore()
 	if _, err := mustExecutor(t, g, store, 50).Run(context.Background(), "run", mustState(t, g, nil)); err != nil {
@@ -305,6 +286,153 @@ func TestBoundAccountingSurvivesAHaltAndResume(t *testing.T) {
 	if parked.Status != graph.StatusRoundsExhausted || parked.Checkpoint != got.Checkpoint {
 		t.Errorf("resuming a parked run produced %s at %s", parked.Status, parked.Checkpoint)
 	}
+}
+
+func TestAHaltPointReEnteredInALoopAsksAgainRatherThanInheritingTheAnswer(t *testing.T) {
+	ctx := context.Background()
+	rec := &recorder{}
+	g := mustBuild(t, haltLoopBuilder(rec))
+	store := graph.NewMemoryStore()
+
+	held, err := mustExecutor(t, g, store, 50).Run(ctx, "run", mustState(t, g, nil))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if held.Status != graph.StatusHalted {
+		t.Fatalf("the run ended %s, want halted at its decision", held.Status)
+	}
+	if answer := text(t, held.State, "answer"); answer != "" {
+		t.Errorf("the first halt already holds the answer %q", answer)
+	}
+
+	// Answering sends the run round the loop and back to the same halt point.
+	again, err := mustExecutor(t, g, store, 50).Answer(ctx, "run", "fix")
+	if err != nil {
+		t.Fatalf("Answer: %v", err)
+	}
+	if again.Status != graph.StatusHalted {
+		t.Fatalf("the run ended %s, want halted at the same decision again", again.Status)
+	}
+	if again.Decision == nil || again.Decision.Node != "gate" {
+		t.Fatalf("the re-entered halt point emitted %v, want the gate's decision again", again.Decision)
+	}
+	// An answer is consent to one decision. Carrying it round the loop would
+	// be standing consent nobody gave.
+	if answer := text(t, again.State, "answer"); answer != "" {
+		t.Errorf("the re-entered halt point still holds %q, want the previous answer cleared", answer)
+	}
+
+	// What the run was asked to resume from says the same thing.
+	latest, err := store.Latest(ctx, "run")
+	if err != nil {
+		t.Fatalf("Latest: %v", err)
+	}
+	if answer := text(t, latest.State, "answer"); answer != "" {
+		t.Errorf("the checkpoint written at the re-entered halt holds %q, want it cleared", answer)
+	}
+
+	// And the forgery the cleared key exists to keep refusable stays refused:
+	// the same record with its status flipped and its decision dropped.
+	latest.Status = graph.StatusRunning
+	latest.Decision = nil
+	if _, err := store.Write(ctx, latest.ID(), latest); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	ranBefore := rec.count("gate")
+	var ce *graph.CheckpointError
+	if _, err := mustExecutor(t, g, store, 50).Resume(ctx, "run"); !errors.As(err, &ce) {
+		t.Fatalf("Resume of a forged running checkpoint at the re-entered halt = %T %v, want a *graph.CheckpointError", err, err)
+	}
+	if rec.count("gate") != ranBefore {
+		t.Error("the halt point's body ran from a forged checkpoint at a re-entered halt")
+	}
+}
+
+func TestBuildRefusesASecondWriterOfAHaltAnswerKey(t *testing.T) {
+	rec := &recorder{}
+	cases := map[string]struct {
+		build *graph.Builder
+		names []string
+	}{
+		"another node writes the answer key": {
+			build: graph.NewBuilder().
+				Start("prep").
+				Key(graph.Key{Name: "answer", Kind: graph.KindText, Merge: graph.MergeLastWriteWins}).
+				Node(graph.Node{Name: "prep", Writes: []string{"answer"}, NewBody: noteOnly(rec, "prep")}).
+				Node(graph.Node{
+					Name:    "gate",
+					Halt:    &graph.Halt{Question: "ship it?", Into: "answer"},
+					NewBody: noteOnly(rec, "gate"),
+				}).
+				Edge(graph.Edge{From: "prep", To: "gate"}),
+			names: []string{`"answer"`, `"prep"`, `"gate"`},
+		},
+		"a second halt point asks into the same key": {
+			build: graph.NewBuilder().
+				Start("first").
+				Key(graph.Key{Name: "answer", Kind: graph.KindText}).
+				Node(graph.Node{
+					Name:    "first",
+					Halt:    &graph.Halt{Question: "ship it?", Into: "answer"},
+					NewBody: noteOnly(rec, "first"),
+				}).
+				Node(graph.Node{
+					Name:    "second",
+					Halt:    &graph.Halt{Question: "really?", Into: "answer"},
+					NewBody: noteOnly(rec, "second"),
+				}).
+				Edge(graph.Edge{From: "first", To: "second"}),
+			names: []string{`"answer"`, "first", "second"},
+		},
+		"the answer key declares a merge rule": {
+			build: graph.NewBuilder().
+				Start("gate").
+				Key(graph.Key{Name: "answer", Kind: graph.KindText, Merge: graph.MergeLastWriteWins}).
+				Node(graph.Node{
+					Name:    "gate",
+					Halt:    &graph.Halt{Question: "ship it?", Into: "answer"},
+					NewBody: noteOnly(rec, "gate"),
+				}),
+			names: []string{`"answer"`, `"gate"`, "last-write-wins"},
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := tc.build.Build()
+			be := requireBuildError(t, err, graph.RuleSingleWriter)
+			for _, want := range tc.names {
+				if !strings.Contains(be.Error(), want) {
+					t.Errorf("the refusal does not name %s: %v", want, be)
+				}
+			}
+		})
+	}
+}
+
+// haltLoopBuilder declares a decision inside a bounded loop: the gate halts,
+// answering it routes to the fixer, and the back edge brings the run round to
+// the same gate again.
+func haltLoopBuilder(rec *recorder) *graph.Builder {
+	return graph.NewBuilder().
+		Start("check").
+		Key(graph.Key{Name: "answer", Kind: graph.KindText}).
+		Key(graph.Key{Name: "log", Kind: graph.KindList, Merge: graph.MergeAppend}).
+		Node(graph.Node{Name: "check", Writes: []string{"log"}, NewBody: appendLog(rec, "check")}).
+		Node(graph.Node{
+			Name:    "gate",
+			Reads:   []string{"answer"},
+			Writes:  []string{"log"},
+			Halt:    &graph.Halt{Question: "fix it?", Options: []string{"fix", "stop"}, Into: "answer"},
+			NewBody: appendLog(rec, "gate"),
+		}).
+		Node(graph.Node{Name: "fix", Writes: []string{"log"}, NewBody: appendLog(rec, "fix")}).
+		Node(graph.Node{Name: "done", Writes: []string{"log"}, NewBody: appendLog(rec, "done")}).
+		Edge(graph.Edge{From: "check", To: "gate"}).
+		Edge(graph.Edge{From: "gate", To: "fix", Guard: &graph.Guard{
+			Key: "answer", Op: graph.OpEquals, Value: graph.TextValue("fix"),
+		}}).
+		Edge(graph.Edge{From: "gate", To: "done"}).
+		Edge(graph.Edge{From: "fix", To: "check", Rounds: 2})
 }
 
 // appendLog returns a body that appends its node's name to the "log" key.

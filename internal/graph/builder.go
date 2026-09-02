@@ -307,6 +307,7 @@ func (c *checker) checkEdgeDeterminism() {
 
 func (c *checker) checkSingleWriter() {
 	writers := make(map[string][]string)
+	answers := make(map[string][]string)
 	for _, n := range c.b.nodes {
 		if n.Name == "" {
 			continue
@@ -316,6 +317,7 @@ func (c *checker) checkSingleWriter() {
 		}
 		if n.Halt != nil && n.Halt.Into != "" {
 			writers[n.Halt.Into] = appendWriter(writers[n.Halt.Into], n.Name)
+			answers[n.Halt.Into] = appendWriter(answers[n.Halt.Into], n.Name)
 		}
 	}
 	names := make([]string, 0, len(writers))
@@ -329,12 +331,60 @@ func (c *checker) checkSingleWriter() {
 			// Already refused as an undeclared key.
 			continue
 		}
+		if halts := answers[key]; len(halts) > 0 {
+			c.checkAnswerKey(key, spec, halts, writers[key])
+			continue
+		}
 		if len(writers[key]) > 1 && spec.Merge == MergeNone {
 			c.refuse(RuleSingleWriter,
 				"state key %q is written by %v and declares no merge rule; a key more than one node can write must declare one",
 				key, writers[key])
 		}
 	}
+}
+
+// checkAnswerKey refuses anything that would give a halt point's answer key a
+// second author. An answer is what one person said to one decision, so the key
+// it lands in belongs to that halt point alone: another node writing it, or a
+// second halt point asking into it, would let a run arrive at a halt already
+// holding an answer nobody gave for it, and the halt-before rule reads an
+// answer sitting in that key as this decision having been answered.
+//
+// A merge rule on such a key is refused alongside them, because it promises to
+// combine writes that a key with one writer never receives. Listing the key in
+// the halt point's own node's Writes is permitted and changes nothing: that
+// node is the one writer, and the halt already grants it the write.
+func (c *checker) checkAnswerKey(key string, spec Key, halts, writers []string) {
+	if len(halts) > 1 {
+		c.refuse(RuleSingleWriter,
+			"state key %q is the answer key of the halt points on nodes %v; an answer key belongs to exactly one halt point",
+			key, halts)
+	}
+	for _, w := range writers {
+		if namesInclude(halts, w) {
+			continue
+		}
+		c.refuse(RuleSingleWriter,
+			"node %q writes state key %q, which is the answer key of the halt point on node %q; "+
+				"an answer key is written only by the halt point that asks for it, so a run cannot reach that halt already answered",
+			w, key, halts[0])
+	}
+	if spec.Merge != MergeNone {
+		c.refuse(RuleSingleWriter,
+			"state key %q is the answer key of the halt point on node %q and declares the %s merge rule; "+
+				"an answer key has exactly one writer, so a merge rule promises a combination that never happens",
+			key, halts[0], spec.Merge)
+	}
+}
+
+// namesInclude reports whether names contains name.
+func namesInclude(names []string, name string) bool {
+	for _, n := range names {
+		if n == name {
+			return true
+		}
+	}
+	return false
 }
 
 func appendWriter(existing []string, name string) []string {

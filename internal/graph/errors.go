@@ -13,7 +13,10 @@ type Rule string
 
 const (
 	// RuleSingleWriter is PRD section 7 rule 1: no two nodes write the same
-	// state key without a declared merge rule.
+	// state key without a declared merge rule. It owns the whole question of
+	// who may write a key, so it also covers this package's own tightening of
+	// that rule for a halt point's answer key, which has exactly one writer,
+	// the halt point that asks for it, and declares no merge rule.
 	RuleSingleWriter Rule = "single-writer"
 	// RuleBoundedCycle is PRD section 7 rule 2: every back edge carries a
 	// bound at construction time.
