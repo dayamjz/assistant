@@ -115,19 +115,23 @@ func Open(ctx context.Context, path string, opts ...Option) (*Store, error) {
 	return s, nil
 }
 
-// poolDSN is the connection string for one pool. The writer pool takes the
-// database lock when its transaction begins rather than when it first writes,
-// so a read-modify-write inside a transaction never has to be retried.
+// poolDSN is the connection string for one pool. Its pragmas are the rows of
+// requiredSettings and nothing else, so every setting this store asks for is
+// one the check on the way out reads back. The writer pool takes the database
+// lock when its transaction begins rather than when it first writes, so a
+// read-modify-write inside a transaction never has to be retried.
 func poolDSN(path string, writer bool) string {
-	dsn := "file:" + url.PathEscape(path) +
-		"?_pragma=busy_timeout(" + fmt.Sprint(busyTimeout.Milliseconds()) + ")" +
-		"&_pragma=journal_mode(WAL)" +
-		"&_pragma=foreign_keys(1)" +
-		"&_pragma=synchronous(NORMAL)"
-	if writer {
-		dsn += "&_txlock=immediate"
+	var b strings.Builder
+	b.WriteString("file:" + url.PathEscape(path))
+	separator := "?"
+	for _, s := range requiredSettings() {
+		b.WriteString(separator + "_pragma=" + s.name + "(" + s.arg + ")")
+		separator = "&"
 	}
-	return dsn
+	if writer {
+		b.WriteString(separator + "_txlock=immediate")
+	}
+	return b.String()
 }
 
 // openPool builds one connection pool from dsn and closes it again rather than
@@ -153,25 +157,34 @@ func openPool(ctx context.Context, dsn string, single bool) (*sql.DB, error) {
 	return db, nil
 }
 
-// setting is one connection setting this package asks for and then reads back.
+// setting is one connection setting, stated once. The row carries the pragma's
+// name, the argument the connection string asks for it with, and the value a
+// connection that carries it reports, because asking and checking are the same
+// fact and a second copy of it is a copy that can disagree.
 type setting struct {
-	// name is the pragma, which is also how the refusal names it.
+	// name is the pragma, which is also how a refusal names the setting.
 	name string
-	// want is the value the store was opened asking for, compared to what the
-	// connection reports without regard to case.
+	// arg is how the setting is spelled in the connection string, which is not
+	// always how it reads back: synchronous is asked for by name and reports a
+	// number.
+	arg string
+	// want is what a connection carrying this setting reports, compared to the
+	// read-back without regard to case.
 	want string
 }
 
-// requiredSettings are the settings the guarantees in the package comment rest
-// on. They are asked for in the DSN and read back from the connection, because
-// a setting that is asked for and not applied leaves this package describing a
-// database it does not have.
+// requiredSettings is the one owner of the connection settings the guarantees
+// in the package comment rest on. poolDSN builds its request from these rows
+// and verifySettings checks the read-back against the same rows, so a setting
+// cannot be asked for without being verified, nor verified against a value
+// nobody asked for. A new setting is a new row here and an edit nowhere else.
 func requiredSettings() []setting {
+	timeout := strconv.FormatInt(busyTimeout.Milliseconds(), 10)
 	return []setting{
-		{name: "journal_mode", want: "wal"},
-		{name: "synchronous", want: "1"},
-		{name: "busy_timeout", want: strconv.FormatInt(busyTimeout.Milliseconds(), 10)},
-		{name: "foreign_keys", want: "1"},
+		{name: "busy_timeout", arg: timeout, want: timeout},
+		{name: "journal_mode", arg: "WAL", want: "wal"},
+		{name: "foreign_keys", arg: "1", want: "1"},
+		{name: "synchronous", arg: "NORMAL", want: "1"},
 	}
 }
 
@@ -195,8 +208,8 @@ func verifySettings(ctx context.Context, db *sql.DB) error {
 			return fmt.Errorf("store: reading %s back: %w", s.name, err)
 		}
 		if !strings.EqualFold(got, s.want) {
-			return fmt.Errorf("%w: %s was opened as %s and reports %s",
-				ErrSettingNotApplied, s.name, s.want, got)
+			return fmt.Errorf("%w: %s was opened as %s and the connection reports %s, not %s",
+				ErrSettingNotApplied, s.name, s.arg, got, s.want)
 		}
 	}
 	return nil

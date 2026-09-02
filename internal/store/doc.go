@@ -177,6 +177,13 @@
 // after opening it, and refuses with ErrSettingNotApplied naming the setting,
 // the value asked for, and the value in effect.
 //
+// The request and the check come from one list, requiredSettings, whose rows
+// carry a setting's name, how the connection string asks for it, and what a
+// connection carrying it reports. The connection string is built from those
+// rows and the read-back is compared to them, so a setting cannot be asked for
+// without being checked, nor checked against a value nobody asked for. Adding
+// one is adding a row.
+//
 // What that establishes is bounded, and the bound is per setting. The journal
 // mode belongs to the database file, so reading it back says which mode the
 // file is in for as long as this store has it open. The busy timeout, the
