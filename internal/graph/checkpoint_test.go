@@ -483,6 +483,146 @@ func TestARunCannotStartHoldingAnAnswerNobodyWasAskedFor(t *testing.T) {
 	}
 }
 
+func TestARunWithNoStepLeftParksAtTheHaltPointWithoutAsking(t *testing.T) {
+	ctx := context.Background()
+	rec := &recorder{}
+	g := mustBuild(t, haltingBuilder(rec))
+	store := graph.NewMemoryStore()
+
+	// A budget of one is spent by "prep", so the run reaches the gate with
+	// nothing left to run it with.
+	got, err := mustExecutor(t, g, store, 1).Run(ctx, "run", mustState(t, g, nil))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got.Status != graph.StatusBudgetExhausted || got.Position != "gate" {
+		t.Fatalf("the run ended %s at %q, want budget_exhausted standing at gate", got.Status, got.Position)
+	}
+	// Asking for a decision the run could not act on is the thing this
+	// prevents: consent that cannot be used is not requested.
+	if got.Decision != nil {
+		t.Errorf("the run emitted the decision %v it had no step left to act on", got.Decision)
+	}
+	if got.Reason == "" {
+		t.Error("the parked run reports no reason")
+	}
+	if rec.count("gate") != 0 {
+		t.Error("the halt point's body ran")
+	}
+
+	latest, err := store.Latest(ctx, "run")
+	if err != nil {
+		t.Fatalf("Latest: %v", err)
+	}
+	if latest.Status != graph.StatusBudgetExhausted || latest.Decision != nil {
+		t.Errorf("the checkpoint written is %s carrying %v, want budget_exhausted with no decision",
+			latest.Status, latest.Decision)
+	}
+	// Nothing is open to answer, and the refusal says so.
+	if _, err := mustExecutor(t, g, store, 1).Answer(ctx, "run", "approve"); !errors.Is(err, graph.ErrNoOpenDecision) {
+		t.Errorf("answering a run parked before its halt point = %v, want ErrNoOpenDecision", err)
+	}
+}
+
+func TestAnsweringIsRefusedWhenNoStepIsLeftForTheHaltedNode(t *testing.T) {
+	ctx := context.Background()
+	rec := &recorder{}
+	g := mustBuild(t, haltingBuilder(rec))
+	store := graph.NewMemoryStore()
+
+	// Halted legitimately: this executor could afford the gate.
+	held, err := mustExecutor(t, g, store, 20).Run(ctx, "run", mustState(t, g, nil))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if held.Status != graph.StatusHalted {
+		t.Fatalf("the run ended %s, want halted at its decision", held.Status)
+	}
+	before, err := store.History(ctx, "run")
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+
+	// The budget is executor configuration, not checkpoint state, so the same
+	// run can be answered by an executor that cannot afford the halted node.
+	_, err = mustExecutor(t, g, store, 1).Answer(ctx, "run", "approve")
+	if !errors.Is(err, graph.ErrBudgetSpent) {
+		t.Fatalf("answering with no step left = %v, want ErrBudgetSpent", err)
+	}
+	if errors.Is(err, graph.ErrNoOpenDecision) {
+		t.Error("the refusal reads as no open decision; the decision is open and unanswerable, which is a different thing")
+	}
+	after, err := store.History(ctx, "run")
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	if len(after) != len(before) {
+		t.Errorf("the refused answer wrote %d checkpoints, want none", len(after)-len(before))
+	}
+	// The decision is still open and the answer was not consumed, so the same
+	// run answers normally once it can afford the node.
+	latest := after[len(after)-1]
+	if latest.Status != graph.StatusHalted || latest.Decision == nil {
+		t.Fatalf("the run is %s carrying %v, want its decision still open", latest.Status, latest.Decision)
+	}
+	if answer := text(t, latest.State, "answer"); answer != "" {
+		t.Errorf("the refused answer was recorded as %q", answer)
+	}
+	if rec.count("gate") != 0 {
+		t.Error("the halt point's body ran under a budget that could not afford it")
+	}
+	done, err := mustExecutor(t, g, store, 20).Answer(ctx, "run", "approve")
+	if err != nil {
+		t.Fatalf("Answer once the run can afford the node: %v", err)
+	}
+	if done.Status != graph.StatusCompleted {
+		t.Fatalf("the answered run ended %s, want completed", done.Status)
+	}
+}
+
+func TestResumingIsRefusedWhenNoStepIsLeftForTheClaimedHaltedNode(t *testing.T) {
+	ctx := context.Background()
+	store := graph.NewMemoryStore()
+
+	// An answered segment that died before the halt node finished leaves the
+	// run standing at the gate with the answer recorded.
+	died := &recorder{}
+	crashing := mustBuild(t, haltingBuilderWithGate(died, func(_ context.Context, _ graph.Reader, _ graph.Writer) error {
+		return errors.New("the process died")
+	}))
+	if _, err := mustExecutor(t, crashing, store, 20).Run(ctx, "run", mustState(t, crashing, nil)); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if _, err := mustExecutor(t, crashing, store, 20).Answer(ctx, "run", "approve"); !errors.Is(err, graph.ErrNodeFailed) {
+		t.Fatalf("Answer = %v, want the halt node's failure", err)
+	}
+	before, err := store.History(ctx, "run")
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+
+	// Resuming it under a budget that cannot afford the gate is refused rather
+	// than claimed and parked, which would discard the answer it carries.
+	rec := &recorder{}
+	g := mustBuild(t, haltingBuilder(rec))
+	if _, err := mustExecutor(t, g, store, 1).Resume(ctx, "run"); !errors.Is(err, graph.ErrBudgetSpent) {
+		t.Fatalf("resuming with no step left = %v, want ErrBudgetSpent", err)
+	}
+	after, err := store.History(ctx, "run")
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	if len(after) != len(before) {
+		t.Errorf("the refused resume wrote %d checkpoints, want none", len(after)-len(before))
+	}
+	if answer := text(t, after[len(after)-1].State, "answer"); answer != "approve" {
+		t.Errorf("the claim now holds %q, want the answer it was given to be kept", answer)
+	}
+	if rec.count("gate") != 0 {
+		t.Error("the halt point's body ran under a budget that could not afford it")
+	}
+}
+
 func TestResumeAcceptsTheClaimAnAnsweredSegmentLeftBehind(t *testing.T) {
 	ctx := context.Background()
 	store := graph.NewMemoryStore()

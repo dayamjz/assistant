@@ -152,6 +152,14 @@ var (
 	// point's decision, so a run cannot begin already holding one: leave the
 	// key out and let the run reach the halt point, which will ask.
 	ErrAnswerPreseeded = errors.New("graph: initial state sets a halt point's answer key")
+	// ErrBudgetSpent is returned when a run standing at a halt point is asked
+	// to go on and its run-wide step budget leaves no step for that halt
+	// point's node. The decision stays open and the answer, if one was given,
+	// is not recorded: continue the run with an executor configured with a
+	// budget it can afford, or fork it and give the fork more room. The budget
+	// is executor configuration rather than checkpoint state, so a run halted
+	// under a large budget can meet this under a smaller one.
+	ErrBudgetSpent = errors.New("graph: the run-wide step budget leaves no step for the halted node")
 	// ErrNoSuchRun is returned when a run has no checkpoints.
 	ErrNoSuchRun = errors.New("graph: no such run")
 	// ErrNoSuchCheckpoint is returned when a checkpoint identifier names

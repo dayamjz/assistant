@@ -19,8 +19,10 @@ type Node struct {
 	// other key fails the step.
 	Reads []string
 	// Writes lists every state key the node's Body may write. A write of any
-	// other key fails the step. A halt point's answer key counts as a write by
-	// its node for the purpose of the single-writer rule.
+	// other key fails the step. A halt point's answer key is already this
+	// node's to write and need not be listed; no other node may list it, and
+	// no merge rule makes that legal, because an answer key belongs to its
+	// halt point alone.
 	Writes []string
 	// Halt, when non-nil, marks this node as one the engine stops before. The
 	// node does not start, so a resume re-executes nothing.
@@ -54,7 +56,13 @@ type Halt struct {
 	// accepted.
 	Options []string
 	// Into is the state key the answer is written to. It must be declared with
-	// KindText, and it counts as a write by this node.
+	// KindText, and it belongs to this halt point exclusively: no other node
+	// may write it, no second halt point may ask into it, it declares no merge
+	// rule, and a caller cannot pre-seed it in a run's initial state. Building
+	// a graph that breaks any of those is refused. The key holds what a person
+	// said to this decision, and the executor clears it whenever it parks the
+	// run at this halt point, so an answer never outlives the decision it
+	// answered.
 	Into string
 }
 
