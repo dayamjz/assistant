@@ -88,6 +88,27 @@ func TestForkLeavesTheOriginalHistoryIntact(t *testing.T) {
 		t.Errorf("the original run's latest checkpoint moved to %s", latest.ID())
 	}
 
+	// Lineage stays on the checkpoints the fork copied. The ones the resumed
+	// run wrote afterwards were copied from nothing and say so.
+	forkedHistory, err := store.History(ctx, "retry")
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	if len(forkedHistory) <= forkPoint.Seq {
+		t.Fatalf("the fork has %d checkpoints, want more than the %d it copied",
+			len(forkedHistory), forkPoint.Seq)
+	}
+	for i, cp := range forkedHistory {
+		copied := i < forkPoint.Seq
+		if copied && cp.ForkedFrom == nil {
+			t.Errorf("copied checkpoint %s records no lineage", cp.ID())
+		}
+		if !copied && cp.ForkedFrom != nil {
+			t.Errorf("checkpoint %s, written after the fork resumed, claims to be copied from %s",
+				cp.ID(), cp.ForkedFrom)
+		}
+	}
+
 	// The fork replayed only the work after the fork point.
 	if !equalStrings(rec.order(), []string{"a", "b", "c", "b", "c"}) {
 		t.Errorf("bodies ran %v, want the fork to resume from b", rec.order())
@@ -157,6 +178,65 @@ func TestForkRefusesAPointOrDestinationItCannotHonour(t *testing.T) {
 	}
 	if history, err := store.History(ctx, "retry"); err != nil || len(history) != 1 {
 		t.Errorf("the refused fork changed the destination: %d checkpoints, %v", len(history), err)
+	}
+}
+
+func TestConcurrentRunsUnderOneNameClaimItExactlyOnce(t *testing.T) {
+	ctx := context.Background()
+	rec := &recorder{}
+	g := threeStepGraph(t, rec)
+	store := graph.NewMemoryStore()
+	exec := mustExecutor(t, g, store, 20)
+
+	const attempts = 8
+	errs := make([]error, attempts)
+	release := make(chan struct{})
+	var wg sync.WaitGroup
+	for i := 0; i < attempts; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-release
+			_, errs[i] = exec.Run(ctx, "run", mustStateNoHelper(g))
+		}(i)
+	}
+	close(release)
+	wg.Wait()
+
+	started := 0
+	for i, err := range errs {
+		switch {
+		case err == nil:
+			started++
+		case errors.Is(err, graph.ErrRunExists):
+		default:
+			t.Fatalf("attempt %d: %v, want either success or ErrRunExists", i, err)
+		}
+	}
+	if started != 1 {
+		t.Fatalf("%d of %d concurrent Run calls started the run, want exactly 1", started, attempts)
+	}
+
+	history, err := store.History(ctx, "run")
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	wantPositions := []string{"a", "b", "c", ""}
+	if len(history) != len(wantPositions) {
+		t.Fatalf("the run has %d checkpoints, want %d: the losing calls wrote into it",
+			len(history), len(wantPositions))
+	}
+	for i, cp := range history {
+		if cp.Seq != i+1 || cp.Position != wantPositions[i] {
+			t.Fatalf("checkpoint %d is %s at %q, want %d at %q: two runs interleaved",
+				i+1, cp.ID(), cp.Position, i+1, wantPositions[i])
+		}
+	}
+	if got := list(t, history[len(history)-1].State, "trace"); !equalStrings(got, []string{"a", "b", "c"}) {
+		t.Errorf("trace = %v, want one pass through the graph", got)
+	}
+	if got := rec.order(); !equalStrings(got, []string{"a", "b", "c"}) {
+		t.Errorf("bodies ran %v, want one pass: a refused Run must execute nothing", got)
 	}
 }
 

@@ -18,6 +18,13 @@ import (
 type CheckpointStore interface {
 	// Write appends c to the history of the run named by c.Run and returns the
 	// identifier assigned to it. The store, not the caller, assigns Seq.
+	//
+	// A checkpoint whose Seq is zero claims to be the first in its run. The
+	// store refuses it with an error wrapping ErrRunExists when that run
+	// already has history, and it decides that under whatever it serializes
+	// writes with. Claiming a run is therefore one operation rather than a
+	// read followed by a write, which is what keeps two callers starting the
+	// same run from interleaving into one history and losing a run's work.
 	Write(ctx context.Context, c Checkpoint) (CheckpointID, error)
 	// Latest returns the most recently written checkpoint for run. It returns
 	// an error wrapping ErrNoSuchRun when the run has no history.
@@ -58,6 +65,9 @@ func (s *MemoryStore) Write(ctx context.Context, c Checkpoint) (CheckpointID, er
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if c.Seq == 0 && len(s.runs[c.Run]) > 0 {
+		return CheckpointID{}, fmt.Errorf("%w: %q", ErrRunExists, c.Run)
+	}
 	c.Seq = len(s.runs[c.Run]) + 1
 	encoded, err := encodeCheckpoint(c)
 	if err != nil {

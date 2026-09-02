@@ -12,24 +12,30 @@ import (
 // findings, a decision the run stops before, a fixer, and a bounded back edge
 // that sends the run around again.
 func Example() {
-	reviewed := 0
 	g, err := graph.NewBuilder().
 		Start("review").
 		Key(graph.Key{Name: "findings", Kind: graph.KindInt}).
 		Key(graph.Key{Name: "fixes", Kind: graph.KindInt, Merge: graph.MergeSum}).
 		Key(graph.Key{Name: "answer", Kind: graph.KindText}).
+		// What the second pass sees is decided by declared state, never by a
+		// Go variable a body closes over: the executor constructs a fresh body
+		// for every Run, Resume, and Answer call, so a counter kept in the
+		// closure would be shared across concurrent runs and lost across this
+		// graph's halt point.
 		Node(graph.Node{
 			Name:   "review",
+			Reads:  []string{"fixes"},
 			Writes: []string{"findings"},
-			NewBody: func() graph.Body {
-				return func(_ context.Context, _ graph.Reader, w graph.Writer) error {
-					reviewed++
-					if reviewed > 1 {
-						return w.Set("findings", graph.IntValue(0))
-					}
-					return w.Set("findings", graph.IntValue(1))
+			NewBody: graph.Stateless(func(_ context.Context, r graph.Reader, w graph.Writer) error {
+				fixes, err := r.Get("fixes")
+				if err != nil {
+					return err
 				}
-			},
+				if applied, _ := fixes.Int(); applied > 0 {
+					return w.Set("findings", graph.IntValue(0))
+				}
+				return w.Set("findings", graph.IntValue(1))
+			}),
 		}).
 		Node(graph.Node{
 			Name:  "gate",

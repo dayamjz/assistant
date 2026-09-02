@@ -131,6 +131,11 @@ func (g *Graph) Validate(c Checkpoint) error {
 		if c.Status == StatusCompleted {
 			return &CheckpointError{Field: "position", Detail: "names a node but the run is recorded as completed"}
 		}
+		if node := g.nodes[g.index[c.Position]]; node.Halt != nil && c.Status == StatusRunning {
+			return &CheckpointError{Field: "status", Detail: fmt.Sprintf(
+				"is running at %q, which is a halt point: a run standing there is halted with that halt point's decision, or parked by a bound",
+				c.Position)}
+		}
 	}
 	if err := g.validateState(c.State); err != nil {
 		return err
@@ -141,20 +146,43 @@ func (g *Graph) Validate(c Checkpoint) error {
 	return g.validateCounters(c.Counters)
 }
 
-func (g *Graph) validateState(s State) error {
+// stateMismatch describes one way a State fails to hold exactly the graph's
+// declared keys with their declared kinds.
+type stateMismatch struct {
+	// detail says what did not match.
+	detail string
+	// wrongKind distinguishes a key holding a value of the wrong kind from a
+	// key set that does not match the declaration at all.
+	wrongKind bool
+}
+
+// checkStateShape is the single owner of what the right shape for a state is:
+// exactly the graph's declared keys, each holding a value of its declared
+// kind. It returns nil when s matches, and otherwise the mismatch, which each
+// caller wraps in the error type its own boundary reports.
+func (g *Graph) checkStateShape(s State) *stateMismatch {
 	if len(s.values) != len(g.keys) {
-		return &CheckpointError{Field: "state", Detail: fmt.Sprintf(
+		return &stateMismatch{detail: fmt.Sprintf(
 			"holds %d keys, the graph declares %d", len(s.values), len(g.keys))}
 	}
 	for _, k := range g.keys {
 		v, ok := s.values[k.Name]
 		if !ok {
-			return &CheckpointError{Field: "state", Detail: fmt.Sprintf("is missing declared key %q", k.Name)}
+			return &stateMismatch{detail: fmt.Sprintf("is missing declared key %q", k.Name)}
 		}
 		if v.Kind() != k.Kind {
-			return &CheckpointError{Field: "state", Detail: fmt.Sprintf(
-				"key %q declares %s but holds %s", k.Name, k.Kind, v.Kind())}
+			return &stateMismatch{
+				detail:    fmt.Sprintf("key %q declares %s but holds %s", k.Name, k.Kind, v.Kind()),
+				wrongKind: true,
+			}
 		}
+	}
+	return nil
+}
+
+func (g *Graph) validateState(s State) error {
+	if m := g.checkStateShape(s); m != nil {
+		return &CheckpointError{Field: "state", Detail: m.detail}
 	}
 	return nil
 }

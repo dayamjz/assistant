@@ -71,7 +71,11 @@
 // implementations are constructed per run and never shared, because a single
 // process drives concurrent runs and sharing an implementation across them is
 // a defect that only appears under concurrency. A Node therefore declares a
-// constructor, not a body, and the executor calls it once per run.
+// constructor, not a body, and the executor calls it once per advance segment,
+// meaning once per Run, Resume, or Answer call. That is strictly stronger than
+// once per run, so the rule holds: no body is shared between runs, and none is
+// shared across the halt that ends a segment. What a later segment needs
+// therefore lives in declared state, not in a Go value a body closed over.
 //
 // A Guard is data rather than a callback, so an edge's predicate is part of
 // the topology that can be inspected and checked rather than something only

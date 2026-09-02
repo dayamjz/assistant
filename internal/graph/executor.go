@@ -69,8 +69,10 @@ type Result struct {
 }
 
 // Run starts a new run of the graph under the given name, from initial state.
-// It refuses a name that already has checkpoint history rather than writing
-// over it.
+// It refuses a name that already has checkpoint history, with an error
+// wrapping ErrRunExists, rather than writing over it. The refusal is the
+// store's: Run claims the name by writing the run's first checkpoint, so two
+// concurrent calls under one name cannot both believe they started it.
 //
 // Run returns when the graph completes, halts before a halt point, or is
 // parked by one of the three bounds. A node that returns an error stops the
@@ -82,14 +84,6 @@ func (e *Executor) Run(ctx context.Context, run string, initial State) (Result, 
 	if err := e.graph.checkRunState(initial); err != nil {
 		return Result{}, err
 	}
-	history, err := e.store.History(ctx, run)
-	if err != nil {
-		return Result{}, err
-	}
-	if len(history) > 0 {
-		return Result{}, fmt.Errorf("%w: %q", ErrRunExists, run)
-	}
-
 	cp := Checkpoint{
 		Run:      run,
 		Position: e.graph.start,
@@ -194,9 +188,11 @@ func (e *Executor) load(ctx context.Context, run string) (Checkpoint, error) {
 // advance runs nodes from cp.Position until the graph completes, halts, or a
 // bound parks the run. cp must be a validated checkpoint with StatusRunning.
 //
-// Node bodies are constructed here, once per call, and never shared between
-// runs: a single process drives concurrent runs, and sharing an implementation
-// across them is a defect class that only appears under concurrency.
+// Node bodies are constructed here, once for this segment, and never shared
+// between runs or between segments: a single process drives concurrent runs,
+// and sharing an implementation across them is a defect class that only
+// appears under concurrency. A segment ends where the run does, at a halt, a
+// completion, or a bound, so state a body holds does not outlive one.
 func (e *Executor) advance(ctx context.Context, cp Checkpoint) (Result, error) {
 	bodies := make(map[string]Body, len(e.graph.nodes))
 	for {
@@ -320,8 +316,12 @@ func (e *Executor) park(ctx context.Context, cp Checkpoint) (Result, error) {
 	return e.result(cp), nil
 }
 
-// persist writes cp and records the sequence number the store assigned.
+// persist writes cp and records the sequence number the store assigned. It
+// clears the fork lineage first: ForkedFrom marks a checkpoint a fork copied,
+// and a checkpoint the executor produced was copied from nothing, so carrying
+// the field forward off a resumed fork would give that fact a second owner.
 func (e *Executor) persist(ctx context.Context, cp *Checkpoint) error {
+	cp.ForkedFrom = nil
 	id, err := e.store.Write(ctx, *cp)
 	if err != nil {
 		return err
@@ -344,20 +344,16 @@ func (e *Executor) result(cp Checkpoint) Result {
 }
 
 // checkRunState refuses a state that does not hold exactly the graph's
-// declared keys with their declared kinds.
+// declared keys with their declared kinds. It reports the same invariant
+// Graph.Validate applies to a checkpoint's state, as the sentinel errors a
+// caller starting a run handles.
 func (g *Graph) checkRunState(s State) error {
-	if len(s.values) != len(g.keys) {
-		return fmt.Errorf("%w: holds %d keys, the graph declares %d",
-			ErrStateMismatch, len(s.values), len(g.keys))
+	m := g.checkStateShape(s)
+	if m == nil {
+		return nil
 	}
-	for _, k := range g.keys {
-		v, ok := s.values[k.Name]
-		if !ok {
-			return fmt.Errorf("%w: missing declared key %q", ErrStateMismatch, k.Name)
-		}
-		if v.Kind() != k.Kind {
-			return fmt.Errorf("%w: key %q declares %s, got %s", ErrKindMismatch, k.Name, k.Kind, v.Kind())
-		}
+	if m.wrongKind {
+		return fmt.Errorf("%w: %s", ErrKindMismatch, m.detail)
 	}
-	return nil
+	return fmt.Errorf("%w: state %s", ErrStateMismatch, m.detail)
 }

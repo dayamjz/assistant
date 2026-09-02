@@ -445,6 +445,47 @@ func TestResumeRefusesATamperedCheckpoint(t *testing.T) {
 	}
 }
 
+func TestResumeRefusesARunningCheckpointStandingAtAHaltPoint(t *testing.T) {
+	ctx := context.Background()
+	rec := &recorder{}
+	g := mustBuild(t, haltingBuilder(rec))
+	store := graph.NewMemoryStore()
+	exec := mustExecutor(t, g, store, 10)
+	if _, err := exec.Run(ctx, "run", mustState(t, g, nil)); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	cp, err := store.Latest(ctx, "run")
+	if err != nil {
+		t.Fatalf("Latest: %v", err)
+	}
+	if cp.Status != graph.StatusHalted || cp.Position != "gate" {
+		t.Fatalf("the run is %s at %q, want halted at gate", cp.Status, cp.Position)
+	}
+	// A substrate hands back the halt point with the decision dropped and the
+	// status rewritten, which would walk the run straight through the node it
+	// stopped before.
+	cp.Status = graph.StatusRunning
+	cp.Decision = nil
+	if _, err := store.Write(ctx, cp); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+
+	var ce *graph.CheckpointError
+	if _, err := exec.Resume(ctx, "run"); !errors.As(err, &ce) {
+		t.Fatalf("Resume error = %T %v, want a *graph.CheckpointError", err, err)
+	}
+	if _, err := exec.Answer(ctx, "run", "approve"); !errors.As(err, &ce) {
+		t.Fatalf("Answer error = %T %v, want a *graph.CheckpointError", err, err)
+	}
+	if rec.count("gate") != 0 {
+		t.Error("the halt point's body ran from a forged running checkpoint")
+	}
+	if rec.count("act") != 0 {
+		t.Error("a node past the halt point ran from a forged running checkpoint")
+	}
+}
+
 func TestCheckpointRoundTripsThroughItsWireFormat(t *testing.T) {
 	rec := &recorder{}
 	g := mustBuild(t, haltingBuilder(rec))

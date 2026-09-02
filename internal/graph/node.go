@@ -32,9 +32,14 @@ type Node struct {
 	// Join, when non-empty, names the fan-out this node closes. Every cycle
 	// containing this node must also contain the node that opens that fan-out.
 	Join string
-	// NewBody constructs the node's implementation. The executor calls it once
-	// per run, so no implementation state is ever shared between concurrent
-	// runs of the same graph.
+	// NewBody constructs the node's implementation. The executor constructs a
+	// fresh Body for every advance segment - one per Run, Resume, or Answer
+	// call - and shares none between runs or between segments, so no
+	// implementation state is ever shared between concurrent runs of the same
+	// graph. Per-segment construction is strictly stronger than the per-run
+	// construction PRD section 7 rule 4 requires, so the rule holds; what a
+	// body holds in Go therefore does not survive the halt that ends a
+	// segment, and anything a later segment needs belongs in declared state.
 	NewBody func() Body
 }
 
