@@ -25,9 +25,13 @@ var (
 type Reason string
 
 const (
-	// ReasonUnavailable is the provider could not be reached at all: its
-	// command line could not be executed, or the call ended before the
-	// provider reported anything. Nothing is known about the request.
+	// ReasonUnavailable is the provider did not answer: its command line could
+	// not be executed, the call ended before the provider reported anything,
+	// the process ended without reporting a status of its own because
+	// something else ended it, or its output was still held open when the
+	// grace period ran out and so may be short of what it wrote. In none of
+	// them did the provider answer the request, and in the first three nothing
+	// at all is known about it.
 	ReasonUnavailable Reason = "unavailable"
 	// ReasonUnauthenticated is the provider reported that this caller is not
 	// authenticated for the repository. It is distinct from ReasonUnavailable

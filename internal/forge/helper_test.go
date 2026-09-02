@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -27,10 +28,16 @@ import (
 // pass over an answer the real command cannot produce.
 const (
 	fakeGHDir      = "FORGE_TEST_FAKE_GH_DIR"
+	fakeGHHold     = "FORGE_TEST_HOLD_PIPES"
 	fakeGHScript   = "script.json"
 	fakeGHCalls    = "calls.json"
 	fakeGHNoScript = 97
 )
+
+// fakeGHHoldFor is how long a descendant of the stand-in provider holds the
+// output pipes it inherited. It only has to outlast the grace period a test
+// gives the adapter, and it is short so that nothing lingers after the run.
+const fakeGHHoldFor = 5 * time.Second
 
 // ghResponse is one scripted answer from the stand-in provider.
 type ghResponse struct {
@@ -38,6 +45,15 @@ type ghResponse struct {
 	Stderr  string `json:"stderr"`
 	Exit    int    `json:"exit"`
 	SleepMs int    `json:"sleep_ms"`
+	// Kill ends the stand-in with a signal instead of an exit, so it reports
+	// no status of its own. It is the shape a provider the system kills puts
+	// on the wire, and standInSelfKill says where it can be produced.
+	Kill bool `json:"kill"`
+	// HoldPipes leaves a descendant behind that inherited the stand-in's
+	// standard output and error and outlives it. The stand-in itself exits
+	// normally, so what keeps the invocation waiting afterwards is the
+	// descendant holding pipes nobody is going to close.
+	HoldPipes bool `json:"hold_pipes"`
 }
 
 // ghScript maps a call key to the answers the stand-in gives for it, in order.
@@ -91,6 +107,14 @@ func TestMain(m *testing.M) {
 }
 
 func fakeGHMain(dir string) int {
+	if os.Getenv(fakeGHHold) != "" {
+		// The descendant of a stand-in asked to leave its pipes behind. It
+		// reads no script and prints nothing; holding the standard output and
+		// error it inherited is the whole of what it does.
+		time.Sleep(fakeGHHoldFor)
+		return 0
+	}
+
 	args := os.Args[1:]
 	key := callKey(args)
 
@@ -130,12 +154,32 @@ func fakeGHMain(dir string) int {
 	if seen < len(answers) {
 		answer = answers[seen]
 	}
+	if answer.HoldPipes && !startPipeHolder() {
+		os.Stderr.WriteString("stand-in provider: could not leave a descendant holding the pipes\n")
+		return fakeGHNoScript
+	}
 	if answer.SleepMs > 0 {
 		time.Sleep(time.Duration(answer.SleepMs) * time.Millisecond)
 	}
 	os.Stdout.WriteString(answer.Stdout)
 	os.Stderr.WriteString(answer.Stderr)
+	if answer.Kill {
+		standInSelfKill()
+	}
 	return answer.Exit
+}
+
+// startPipeHolder starts a descendant that inherits this process's standard
+// output and error and outlives it, and reports whether it started. Its
+// working directory is deliberately not this one, so a test's temporary
+// directory can be removed while it is still running.
+func startPipeHolder() bool {
+	child := exec.Command(os.Args[0])
+	child.Dir = os.TempDir()
+	child.Env = append(os.Environ(), fakeGHHold+"=1")
+	child.Stdout = os.Stdout
+	child.Stderr = os.Stderr
+	return child.Start() == nil
 }
 
 func readCalls(dir string) []ghCall {

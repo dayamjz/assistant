@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // DefaultMaxOutput bounds what one provider invocation may print on standard
@@ -24,6 +25,24 @@ const maxStderr = 8 << 10
 // stderrTruncatedMarker ends collected provider text that stopped at
 // maxStderr, so a reader is never shown a fragment that looks whole.
 const stderrTruncatedMarker = "[provider message truncated]"
+
+// DefaultProviderGrace is the deadline given to cmd.WaitDelay on every
+// invocation, which bounds two waits the standard library folds into one
+// setting.
+//
+// After a context ends and the provider is killed, it is how long the call
+// waits for the output pipes before abandoning them, so a descendant that
+// inherited one and holds it open cannot keep a cancelled call waiting past
+// it. Without that bound the caller's checks_timeout could not bound a check
+// read, because the wait for those pipes is not the wait a context ends.
+//
+// It also bounds the wait for those pipes to close after a provider exits on
+// its own, and that case has a cost worth stating rather than implying away:
+// an invocation whose output was still held open at the deadline is refused
+// rather than reported, because what was collected may be missing bytes the
+// provider wrote, and a partial answer read as a whole one is the failure this
+// package exists to prevent.
+const DefaultProviderGrace = 2 * time.Second
 
 // providerEnv is applied over the base environment of every invocation.
 //
@@ -55,6 +74,7 @@ type settings struct {
 	base    []string
 	baseSet bool
 	maxOut  int64
+	grace   time.Duration
 }
 
 // WithBinary names the provider executable to run. The default is "gh",
@@ -114,6 +134,23 @@ func WithMaxOutput(n int64) Option {
 	}
 }
 
+// WithProviderGrace sets how long an invocation waits for the provider's
+// output pipes once the provider has exited or its context has ended. The
+// default is DefaultProviderGrace, and what the deadline buys and costs is
+// stated there.
+//
+// A value of zero or less leaves the default in place. A zero WaitDelay is the
+// standard library's way of asking for no deadline at all, which is exactly
+// the unbounded wait this setting exists to prevent, so it is not something a
+// caller can ask for by passing nothing.
+func WithProviderGrace(d time.Duration) Option {
+	return func(s *settings) {
+		if d > 0 {
+			s.grace = d
+		}
+	}
+}
+
 // procResult is what one provider invocation produced. It reports what
 // happened rather than deciding what it means.
 type procResult struct {
@@ -127,6 +164,14 @@ type procResult struct {
 	// startErr is the error from starting the process, and is set only when
 	// the process never ran.
 	startErr error
+	// waitErr is what waiting on the process reported. A failing status is
+	// reported here as an *exec.ExitError and takes precedence over anything
+	// else the wait found, so the value worth testing for is
+	// exec.ErrWaitDelay: it means the wait for the output pipes was abandoned
+	// at the grace deadline, which is how a caller tells output that was
+	// collected whole from output that may be missing bytes the provider
+	// wrote.
+	waitErr error
 }
 
 // runProvider runs one provider invocation to completion and collects what it
@@ -149,13 +194,19 @@ func runProvider(ctx context.Context, s *settings, env []string, stdin string, a
 	errBuf := &capWriter{limit: maxStderr, truncate: true}
 	cmd.Stdout = out
 	cmd.Stderr = errBuf
+	// WaitDelay bounds how long this call waits for the output pipes after the
+	// provider has exited or its context has ended, so a descendant that
+	// inherited one and holds it open costs at most the grace period and then
+	// ends the invocation, rather than keeping a cancelled call waiting on a
+	// pipe nobody is going to close.
+	cmd.WaitDelay = s.grace
 
 	if err := cmd.Start(); err != nil {
 		return procResult{code: -1, startErr: err}
 	}
-	_ = cmd.Wait()
+	waitErr := cmd.Wait()
 
-	res := procResult{stderr: errBuf.text(), code: -1, over: out.over}
+	res := procResult{stderr: errBuf.text(), code: -1, over: out.over, waitErr: waitErr}
 	if cmd.ProcessState != nil {
 		res.code = cmd.ProcessState.ExitCode()
 	}
@@ -245,8 +296,22 @@ func (w *capWriter) Write(p []byte) (int, error) {
 
 // text renders a truncating writer's contents, marking them when the writer
 // stopped short.
+//
+// When something was lost to the bound the final line goes with it, because
+// the cut may have landed inside it, and half of a credentialed URL is exactly
+// what a Redactor cannot recognize: the userinfo pattern it matches needs the
+// "@" that the cut left on the other side. A writer that overran before any
+// newline arrived therefore renders as the marker alone.
 func (w *capWriter) text() string {
-	s := strings.TrimRight(string(w.buf), "\n")
+	s := string(w.buf)
+	if w.over {
+		if i := strings.LastIndexByte(s, '\n'); i >= 0 {
+			s = s[:i]
+		} else {
+			s = ""
+		}
+	}
+	s = strings.TrimRight(s, "\n")
 	if w.over {
 		if s != "" {
 			s += "\n"

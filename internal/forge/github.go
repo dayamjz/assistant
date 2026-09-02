@@ -3,6 +3,8 @@ package forge
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"os/exec"
 	"strconv"
 	"strings"
 
@@ -76,7 +78,7 @@ func NewGitHub(redact vcs.Redactor, opts ...Option) (*GitHub, error) {
 	if redact == nil {
 		panic("forge: NewGitHub requires a Redactor")
 	}
-	s := settings{bin: DefaultGitHubBinary, maxOut: DefaultMaxOutput}
+	s := settings{bin: DefaultGitHubBinary, maxOut: DefaultMaxOutput, grace: DefaultProviderGrace}
 	for _, opt := range opts {
 		opt(&s)
 	}
@@ -279,10 +281,19 @@ func (g *GitHub) Checks(ctx context.Context, number int) (ChecksReport, error) {
 		return ChecksReport{}, err
 	}
 	if raw.HeadRefOid == "" {
-		// The read asked which commit the checks belong to. Without it a
-		// caller cannot tell a current check list from one left over on an
-		// earlier head, and an answer that cannot be placed on a commit is
-		// not the answer that was asked for.
+		// Provider.Checks promises a report that names the commit its checks
+		// were read against, and ChecksReport.HeadCommit is what lets a caller
+		// tell a current check list from one left over on an earlier head, so
+		// an answer that cannot be placed on a commit is not the answer that
+		// was asked for and none of it is reported.
+		//
+		// This holds that contract rather than covering a shape gh is expected
+		// to produce. gh emits every field a --json read names, headRefOid is
+		// among the fields checkFields asks for, and it is not a nullable
+		// field, so no test in this package states an answer that reaches
+		// here: there is none the real command could return. What the guard
+		// buys is that the contract holds however this read is later changed,
+		// including a change to the field set above.
 		return ChecksReport{}, &Refusal{
 			Reason: ReasonMalformed,
 			Op:     op,
@@ -445,13 +456,19 @@ func statusContextState(state string) (CheckState, string) {
 
 // run performs one provider invocation and returns its standard output.
 //
-// Every failure is a *Refusal. A process that never started is
-// ReasonUnavailable, because nothing is known about the request; a call the
-// context ended is ReasonUnavailable carrying that context's error, for the
-// same reason. An authentication status is ReasonUnauthenticated and any other
-// non-zero status is ReasonRejected, both carrying the provider's own message
-// after redaction. Output past the configured bound is ReasonOversizeAnswer,
-// and the output is discarded rather than truncated.
+// Every failure is a *Refusal, and the reason turns on whether the provider
+// answered. Four cases are ReasonUnavailable, because in none of them did it:
+// a process that never started, a call the context ended, a process that ended
+// without reporting an exit status of its own, and a call whose output was
+// still held open at the grace deadline and so may be missing bytes the
+// provider wrote. The first three carry no answer at all; the fourth is
+// refused rather than reported for the reason DefaultProviderGrace states.
+//
+// A status the provider did report is its answer. The authentication status is
+// ReasonUnauthenticated and any other non-zero status is ReasonRejected, both
+// carrying the provider's own message after redaction. Output past the
+// configured bound is ReasonOversizeAnswer, and the output is discarded rather
+// than truncated.
 func (g *GitHub) run(ctx context.Context, op, stdin string, args ...string) ([]byte, error) {
 	full := make([]string, 0, len(args)+1)
 	full = append(full, args...)
@@ -475,6 +492,18 @@ func (g *GitHub) run(ctx context.Context, op, stdin string, args ...string) ([]b
 			Cause:  err,
 		}
 	}
+	if res.code < 0 {
+		// A process that started and then reported no status of its own was
+		// ended by something else, so it never answered the request. Reading
+		// that as a rejection would tell a caller the provider refused
+		// something it was never in a position to refuse, and the remedy for
+		// the two is different.
+		return nil, &Refusal{
+			Reason: ReasonUnavailable,
+			Op:     op,
+			Detail: g.redact.Redact(exitDetail(res.code, res.stderr)),
+		}
+	}
 	if res.code != 0 {
 		reason := ReasonRejected
 		if res.code == ghAuthExitStatus {
@@ -484,6 +513,17 @@ func (g *GitHub) run(ctx context.Context, op, stdin string, args ...string) ([]b
 			Reason: reason,
 			Op:     op,
 			Detail: g.redact.Redact(exitDetail(res.code, res.stderr)),
+		}
+	}
+	if errors.Is(res.waitErr, exec.ErrWaitDelay) {
+		// The provider exited, but something still held its output pipes at
+		// the grace deadline, so the bytes collected are not known to be all
+		// of the ones it wrote.
+		return nil, &Refusal{
+			Reason: ReasonUnavailable,
+			Op:     op,
+			Detail: "the provider's output was still held open when the grace period ran out, so what was collected may be short of what it wrote",
+			Cause:  res.waitErr,
 		}
 	}
 	if res.over {

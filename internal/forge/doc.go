@@ -131,11 +131,20 @@
 // and to checks_timeout.
 //
 // It does not own a process tree. A provider invocation is one short-lived
-// process, and a context that ends kills that process; a descendant it started
-// and left behind is not pursued, which is what internal/agents does for an
-// agent and what this package does not need for a command that reads and
-// prints. A provider command that leaves long-lived children behind would make
-// that a gap rather than a non-requirement.
+// process, and a context that ends kills that process.
+//
+// What the grace deadline on every invocation buys is that the call is
+// released either way. Killing the provider does not close the output pipes a
+// descendant inherited, and waiting for those is not a wait a context ends, so
+// without the deadline a descendant that stalls could hold Checks or Get open
+// indefinitely and the caller's checks_timeout would bound nothing. With it,
+// that costs at most DefaultProviderGrace and then the invocation refuses.
+//
+// The residual gap is that the descendant itself is not pursued. Nothing here
+// signals it and no process group is terminated, which is what internal/agents
+// does for an agent, so a provider command that leaves long-lived children
+// behind leaves them running after the invocation has returned. What that
+// costs is a stray process rather than a stuck run.
 //
 // It does not write a pull request body. What a body says is the pull request
 // stage's, generated from the round history; this package carries the text.

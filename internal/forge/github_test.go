@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dayamjz/assistant/internal/forge"
 	"github.com/dayamjz/assistant/internal/vcs"
@@ -273,17 +275,11 @@ func TestACancelledCheckDoesNotLeaveTheRunWaiting(t *testing.T) {
 	}
 }
 
-func TestChecksRefusesAnAnswerThatNamesNoCommit(t *testing.T) {
-	h := newHarness(t, ghScript{"checks": {{Stdout: `{"statusCheckRollup":[]}`}}})
-	_, err := h.gh.Checks(context.Background(), 12)
-	var refusal *forge.Refusal
-	if !errors.As(err, &refusal) {
-		t.Fatalf("Checks returned %v, want a *Refusal", err)
-	}
-	if refusal.Reason != forge.ReasonMalformed {
-		t.Errorf("reason is %q, want %q", refusal.Reason, forge.ReasonMalformed)
-	}
-}
+// The guard that refuses a check answer naming no commit has no test, and
+// deliberately: gh emits every field a --json read asks for and headRefOid is
+// not nullable, so there is no answer the real command could return that
+// reaches it. Stating one here would be a test passing over a shape the
+// mechanism cannot produce. Why the guard stays anyway is written where it is.
 
 func TestGetRefusesAnAnswerAboutADifferentPullRequest(t *testing.T) {
 	h := newHarness(t, ghScript{"view": {{Stdout: openPullRequestJSON}}})
@@ -416,6 +412,67 @@ func TestNoErrorPathCarriesACredential(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestATruncatedProviderMessageDropsTheLineTheCutLandedIn drives a provider
+// that says more than one invocation collects, with a credentialed URL placed
+// so the bound falls inside its userinfo.
+//
+// A Redactor recognizes a userinfo by the "@" that ends it, so half of one is
+// the shape it cannot match, and the token would reach the refusal if the
+// fragment were kept. What keeps it out is that the line the cut landed in is
+// dropped whole.
+func TestATruncatedProviderMessageDropsTheLineTheCutLandedIn(t *testing.T) {
+	// The bound on collected provider text is not exported, so this test says
+	// where it believes the cut falls and then checks that it fell there. A
+	// bound that moved fails that check rather than leaving a test that passes
+	// without ever reaching the boundary.
+	const collectedBound = 8 << 10
+	// The credentialed URL begins this far before the bound, so the cut lands
+	// inside the token rather than before or after it: the userinfo of
+	// secretURL runs from its byte 8 to its byte 54.
+	const intoTheURL = 40
+	const opening = "gh: the provider began with this line\n"
+
+	head := opening + strings.Repeat("x", collectedBound-intoTheURL-len(opening)-1) + "\n"
+	written := head + secretURL + " could not be reached\n" +
+		strings.Repeat("gh: and it went on talking after that\n", 20)
+
+	h := newHarness(t, ghScript{"checks": {{Exit: 1, Stderr: written}}})
+	_, err := h.gh.Checks(context.Background(), 12)
+	var refusal *forge.Refusal
+	if !errors.As(err, &refusal) {
+		t.Fatalf("Checks returned %v, want a *Refusal", err)
+	}
+
+	if strings.Contains(refusal.Detail, secret[:8]) {
+		t.Errorf("the refusal carries part of the credential: %q", tail(refusal.Detail))
+	}
+	if !strings.Contains(refusal.Detail, strings.TrimSuffix(opening, "\n")) {
+		t.Errorf("the refusal dropped what the provider said before the cut: %q", tail(refusal.Detail))
+	}
+	// Everything before the last line of the detail is what was collected; the
+	// last line is the marker saying it stopped short. Where that collected
+	// text ends is what says the cut fell inside the credential rather than
+	// somewhere the assertion above would pass without meaning anything.
+	cut := strings.LastIndexByte(refusal.Detail, '\n')
+	if cut < 0 {
+		t.Fatalf("the detail carries no truncation marker, so nothing was cut: %q", tail(refusal.Detail))
+	}
+	if kept := refusal.Detail[:cut]; !strings.HasSuffix(kept, strings.TrimSuffix(head, "\n")) {
+		t.Errorf("the cut did not land where this test places it, so the boundary was not exercised; %d bytes were kept, ending %q",
+			len(kept), tail(kept))
+	}
+}
+
+// tail returns the end of a message, for a failure report that should not
+// print kilobytes.
+func tail(s string) string {
+	const n = 120
+	if len(s) <= n {
+		return s
+	}
+	return "..." + s[len(s)-n:]
 }
 
 // TestADecoderMessageIsRedacted proves the filter on the decoding path is not
@@ -643,6 +700,48 @@ func TestACallTheContextEndsIsARefusal(t *testing.T) {
 	}
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("the refusal does not match the context's error: %v", err)
+	}
+}
+
+// A provider that exits while a descendant still holds its output pipes must
+// not hold the call. Killing the provider does not close a pipe a descendant
+// inherited, and nothing here pursues that descendant, so what releases the
+// call is the grace deadline. What it collected under that deadline is refused
+// rather than reported, because it may be short of what the provider wrote.
+func TestAProviderWhoseOutputIsHeldOpenIsReleasedRatherThanWaitedOn(t *testing.T) {
+	answer := rollup(checkRunNode("build", "COMPLETED", "SUCCESS"))
+	h := newHarness(t,
+		ghScript{"checks": {{Stdout: answer, HoldPipes: true}}},
+		forge.WithProviderGrace(100*time.Millisecond))
+
+	start := time.Now()
+	_, err := h.gh.Checks(context.Background(), 12)
+	elapsed := time.Since(start)
+
+	var refusal *forge.Refusal
+	if !errors.As(err, &refusal) {
+		t.Fatalf("Checks returned %v, want a *Refusal", err)
+	}
+	if refusal.Reason != forge.ReasonUnavailable {
+		t.Errorf("reason is %q, want %q", refusal.Reason, forge.ReasonUnavailable)
+	}
+	if !errors.Is(err, exec.ErrWaitDelay) {
+		t.Errorf("the refusal does not name the wait that was abandoned: %v", err)
+	}
+	// The descendant holds the pipes for fakeGHHoldFor, and without the
+	// deadline this call would wait all of it and then report the output as a
+	// whole answer.
+	if elapsed >= fakeGHHoldFor {
+		t.Errorf("Checks waited %v, as long as the descendant held the pipes", elapsed)
+	}
+
+	// The accepting path through the same stand-in and the same grace period:
+	// an invocation with nothing holding its pipes answers.
+	plain := newHarness(t,
+		ghScript{"checks": {{Stdout: answer}}},
+		forge.WithProviderGrace(100*time.Millisecond))
+	if _, err := plain.gh.Checks(context.Background(), 12); err != nil {
+		t.Errorf("Checks against a provider that held nothing open: %v", err)
 	}
 }
 

@@ -164,6 +164,10 @@ type Provider interface {
 	// commit they were read against. It reports what the provider says now and
 	// waits for nothing.
 	//
+	// A report returned without an error names that commit. An implementation
+	// whose provider answered without one refuses with ReasonMalformed rather
+	// than returning a report nobody can place on a head.
+	//
 	// An empty check list is an answer, not a failure: it means no check is
 	// registered. What that means for the run is ChecksReport.Evaluate's
 	// question, and the answer is not "green".
