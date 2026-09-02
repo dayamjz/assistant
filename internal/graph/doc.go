@@ -58,4 +58,45 @@
 // Checkpoints are resumed with the user's credentials, so a tampered checkpoint
 // is a code-execution path. Serialize them as data only, validate on read, and
 // never load one from outside the current home.
+//
+// Checkpoints here encode as JSON, which constructs no types on read, and they
+// are refused rather than repaired when decoding meets an unknown field, an
+// unrecognized kind or status, or a shape the graph does not declare. Where a
+// checkpoint comes from is the storage layer's rule, not this package's: a
+// CheckpointStore is the only thing that decides what it will hand back.
+//
+// # What this package settles that the summary above leaves open
+//
+// PRD section 7 states a fourth topology rule the summary omits: node
+// implementations are constructed per run and never shared, because a single
+// process drives concurrent runs and sharing an implementation across them is
+// a defect that only appears under concurrency. A Node therefore declares a
+// constructor, not a body, and the executor calls it once per run.
+//
+// A Guard is data rather than a callback, so an edge's predicate is part of
+// the topology that can be inspected and checked rather than something only
+// running the graph reveals.
+//
+// A Checkpoint carries the run's bound accounting alongside state, position,
+// and the open decision. The counters have to survive a resume: a resume that
+// restarted them would leave the run with bounds that no longer bound
+// anything, and each of the three would then be one restart away from useless.
+//
+// Fan-out is declared, not inferred. A node names the fan-out it opens or
+// closes, and the cycle-through-a-join rule is checked against those
+// declarations. Fan-out is not executed: the rule is in the checker before the
+// feature exists, which is where the PRD puts it.
+//
+// An edge is a back edge when its target can reach its source and the target
+// is no further from the start node in hops than the source is. Around any
+// cycle the hop distances cannot strictly increase the whole way round, so
+// every cycle carries at least one such edge and bounding all of them bounds
+// every cycle. The definition does not depend on the order edges were
+// declared in, so adding an unrelated edge cannot move where a bound is
+// required.
+//
+// The durability boundary is a CheckpointStore with exactly four operations:
+// write, read the latest for a run, list a run's history, and fork from a
+// point. Resuming from an earlier point is forking it into a new run and
+// resuming that, which is what keeps the original history intact.
 package graph

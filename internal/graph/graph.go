@@ -1,0 +1,222 @@
+package graph
+
+import (
+	"fmt"
+	"sort"
+)
+
+// Graph is a built topology: nodes, edges, and the state keys they may touch.
+// Every construction rule this package documents has already been checked by
+// the time a Graph exists, so an executor never re-checks them at run time.
+//
+// A Graph is immutable and safe for concurrent use by any number of runs.
+type Graph struct {
+	start    string
+	nodes    []Node
+	index    map[string]int
+	edges    []Edge
+	outgoing [][]int
+	back     []bool
+	keys     []Key
+	keyIndex map[string]Key
+	reads    []map[string]struct{}
+	writes   []map[string]struct{}
+}
+
+// Start returns the name of the node a run begins at.
+func (g *Graph) Start() string { return g.start }
+
+// Nodes returns the graph's nodes in declaration order. The result is a copy;
+// mutating it does not change the graph.
+func (g *Graph) Nodes() []Node {
+	out := make([]Node, len(g.nodes))
+	for i, n := range g.nodes {
+		out[i] = n.clone()
+	}
+	return out
+}
+
+// Node returns the node with the given name. The second result is false when
+// the graph has no such node.
+func (g *Graph) Node(name string) (Node, bool) {
+	i, ok := g.index[name]
+	if !ok {
+		return Node{}, false
+	}
+	return g.nodes[i].clone(), true
+}
+
+// Edges returns the graph's edges in declaration order. The result is a copy.
+func (g *Graph) Edges() []Edge {
+	out := make([]Edge, len(g.edges))
+	for i, e := range g.edges {
+		out[i] = e.clone()
+	}
+	return out
+}
+
+// Keys returns the declared state keys, sorted by name. The result is a copy.
+func (g *Graph) Keys() []Key {
+	out := make([]Key, len(g.keys))
+	copy(out, g.keys)
+	return out
+}
+
+// IsBackEdge reports whether the edge at index i, in the order Edges returns,
+// closes a cycle and therefore had to declare a bound.
+//
+// An edge is a back edge when its target can reach its source and the target
+// is no further from the start node than the source is. Around any cycle the
+// hop distances from the start cannot strictly increase all the way, so every
+// cycle contains at least one such edge, and bounding all of them bounds every
+// cycle. The definition does not depend on declaration order.
+func (g *Graph) IsBackEdge(i int) bool {
+	if i < 0 || i >= len(g.back) {
+		return false
+	}
+	return g.back[i]
+}
+
+// NewState returns the initial state for a run: every declared key holding the
+// zero value of its declared kind, with values applied on top. An override
+// naming an undeclared key, or holding a value of the wrong kind, is refused.
+func (g *Graph) NewState(values map[string]Value) (State, error) {
+	s := State{values: make(map[string]Value, len(g.keys))}
+	for _, k := range g.keys {
+		s.values[k.Name] = zeroValue(k.Kind)
+	}
+	names := make([]string, 0, len(values))
+	for name := range values {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		spec, ok := g.keyIndex[name]
+		if !ok {
+			return State{}, fmt.Errorf("%w: %q", ErrUndeclaredKey, name)
+		}
+		v := values[name]
+		if v.Kind() != spec.Kind {
+			return State{}, fmt.Errorf("%w: key %q declares %s, got %s",
+				ErrKindMismatch, name, spec.Kind, v.Kind())
+		}
+		s.values[name] = v
+	}
+	return s, nil
+}
+
+// Validate checks a checkpoint against this graph and refuses anything that
+// does not match it. This is the half of validating a checkpoint on read that
+// needs a graph; decoding already refused unknown fields and unrecognized
+// enumerations. A checkpoint is resumed with the user's credentials, so a
+// mismatch is refused rather than repaired.
+func (g *Graph) Validate(c Checkpoint) error {
+	if c.Run == "" {
+		return &CheckpointError{Field: "run", Detail: "is empty"}
+	}
+	if c.Seq < 1 {
+		return &CheckpointError{Field: "seq", Detail: fmt.Sprintf("is %d, want at least 1", c.Seq)}
+	}
+	if c.Status == StatusInvalid {
+		return &CheckpointError{Field: "status", Detail: "is missing"}
+	}
+	if c.Position == "" {
+		if c.Status != StatusCompleted {
+			return &CheckpointError{Field: "position", Detail: "is empty but the run did not complete"}
+		}
+	} else {
+		if _, ok := g.index[c.Position]; !ok {
+			return &CheckpointError{Field: "position", Detail: fmt.Sprintf("names no node in this graph: %q", c.Position)}
+		}
+		if c.Status == StatusCompleted {
+			return &CheckpointError{Field: "position", Detail: "names a node but the run is recorded as completed"}
+		}
+	}
+	if err := g.validateState(c.State); err != nil {
+		return err
+	}
+	if err := g.validateDecision(c); err != nil {
+		return err
+	}
+	return g.validateCounters(c.Counters)
+}
+
+func (g *Graph) validateState(s State) error {
+	if len(s.values) != len(g.keys) {
+		return &CheckpointError{Field: "state", Detail: fmt.Sprintf(
+			"holds %d keys, the graph declares %d", len(s.values), len(g.keys))}
+	}
+	for _, k := range g.keys {
+		v, ok := s.values[k.Name]
+		if !ok {
+			return &CheckpointError{Field: "state", Detail: fmt.Sprintf("is missing declared key %q", k.Name)}
+		}
+		if v.Kind() != k.Kind {
+			return &CheckpointError{Field: "state", Detail: fmt.Sprintf(
+				"key %q declares %s but holds %s", k.Name, k.Kind, v.Kind())}
+		}
+	}
+	return nil
+}
+
+func (g *Graph) validateDecision(c Checkpoint) error {
+	if c.Status != StatusHalted {
+		if c.Decision != nil {
+			return &CheckpointError{Field: "decision", Detail: fmt.Sprintf(
+				"is present but the run is %s, not halted", c.Status)}
+		}
+		return nil
+	}
+	if c.Decision == nil {
+		return &CheckpointError{Field: "decision", Detail: "is missing from a halted run"}
+	}
+	node, ok := g.Node(c.Position)
+	if !ok || node.Halt == nil {
+		return &CheckpointError{Field: "decision", Detail: fmt.Sprintf(
+			"halts at %q, which is not a halt point in this graph", c.Position)}
+	}
+	if !c.Decision.equals(decisionFor(node)) {
+		return &CheckpointError{Field: "decision", Detail: fmt.Sprintf(
+			"does not match the halt point declared on node %q", node.Name)}
+	}
+	return nil
+}
+
+func (g *Graph) validateCounters(c Counters) error {
+	if c.Steps < 0 {
+		return &CheckpointError{Field: "counters.steps", Detail: fmt.Sprintf("is negative: %d", c.Steps)}
+	}
+	if len(c.Traversals) != len(g.edges) {
+		return &CheckpointError{Field: "counters.traversals", Detail: fmt.Sprintf(
+			"holds %d entries, the graph has %d edges", len(c.Traversals), len(g.edges))}
+	}
+	if len(c.Fingerprints) != len(g.edges) {
+		return &CheckpointError{Field: "counters.fingerprints", Detail: fmt.Sprintf(
+			"holds %d entries, the graph has %d edges", len(c.Fingerprints), len(g.edges))}
+	}
+	for i, n := range c.Traversals {
+		if n < 0 {
+			return &CheckpointError{Field: "counters.traversals", Detail: fmt.Sprintf(
+				"edge %d has a negative count: %d", i, n)}
+		}
+		if bound := g.edges[i].Rounds; bound > 0 && n > bound {
+			return &CheckpointError{Field: "counters.traversals", Detail: fmt.Sprintf(
+				"edge %d records %d traversals, past its bound of %d", i, n, bound)}
+		}
+	}
+	return nil
+}
+
+// decisionFor builds the decision a halt point emits. It is the one place the
+// open decision is derived from the halt declaration.
+func decisionFor(n Node) *Decision {
+	if n.Halt == nil {
+		return nil
+	}
+	return &Decision{
+		Node:     n.Name,
+		Question: n.Halt.Question,
+		Options:  append([]string(nil), n.Halt.Options...),
+		Into:     n.Halt.Into,
+	}
+}
