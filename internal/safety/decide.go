@@ -3,6 +3,7 @@ package safety
 import (
 	"context"
 	"errors"
+	"slices"
 
 	"github.com/dayamjz/assistant/internal/vcs"
 )
@@ -85,7 +86,10 @@ func (d Decision) Anchor() Observation { return d.anchor }
 // These are commits the run observed at its anchor, so dropping them is the
 // run rewriting its own history rather than losing someone else's. A caller
 // reports them; it does not have to act on them.
-func (d Decision) Rewritten() []string { return d.rewritten }
+//
+// Each call returns a fresh slice, so a holder cannot edit the record of what
+// this decision drops.
+func (d Decision) Rewritten() []string { return slices.Clone(d.rewritten) }
 
 // String renders the decision as kind target proposed@anchor.
 func (d Decision) String() string {
@@ -164,10 +168,10 @@ func (g *Guard) Decide(ctx context.Context, u Update) (Decision, error) {
 		}, nil
 	}
 
-	if err := g.requireRelated(ctx, u, current.Commit, proposed); err != nil {
+	if err := g.requireRelated(ctx, u, current, proposed); err != nil {
 		return Decision{}, err
 	}
-	rewritten, err := g.commitsNotIn(ctx, u, current.Commit, proposed)
+	rewritten, err := g.commitsNotIn(ctx, u, current, proposed)
 	if err != nil {
 		return Decision{}, err
 	}
@@ -186,9 +190,13 @@ func (g *Guard) Decide(ctx context.Context, u Update) (Decision, error) {
 }
 
 // refuseMoved builds the refusal for a target that no longer stands where the
-// run observed it. The update is refused either way; the work here is to say
-// which commits the run never saw, because that is what a person needs in
-// order to decide what to do next.
+// run observed it. The update is refused either way; the work here is to name
+// every commit the target now holds that the proposed commit does not contain,
+// because that is what a person needs in order to decide what to do next.
+//
+// That list is not narrowed to commits the run never saw. The anchor no longer
+// describes the target, so the run cannot claim to have incorporated anything,
+// and naming everything the update would drop is the conservative answer.
 //
 // A comparison that cannot be answered stays a refusal, and one that could not
 // be answered is reported as unverifiable rather than as an empty list of
@@ -205,10 +213,10 @@ func (g *Guard) refuseMoved(ctx context.Context, u Update, proposed string, curr
 				" and the remote no longer advertises it, so the anchor cannot be honored",
 		}
 	}
-	if err := g.requireRelated(ctx, u, current.Commit, proposed); err != nil {
+	if err := g.requireRelated(ctx, u, current, proposed); err != nil {
 		return err
 	}
-	discarded, err := g.commitsNotIn(ctx, u, current.Commit, proposed)
+	discarded, err := g.commitsNotIn(ctx, u, current, proposed)
 	if err != nil {
 		return err
 	}
@@ -216,7 +224,7 @@ func (g *Guard) refuseMoved(ctx context.Context, u Update, proposed string, curr
 		" and it now stands at "+current.Commit+", so the anchor does not describe what would be updated"
 	if len(discarded) > 0 {
 		reason = ReasonWouldDiscard
-		detail = u.Target.Ref + " holds commits the run did not observe and " + proposed + " does not contain"
+		detail = u.Target.Ref + " holds commits that " + proposed + " does not contain"
 	}
 	return &Refusal{
 		Reason:    reason,
@@ -228,46 +236,53 @@ func (g *Guard) refuseMoved(ctx context.Context, u Update, proposed string, curr
 	}
 }
 
-// requireRelated refuses when two commits share no ancestor. Reachability
+// requireRelated refuses when the commit the fresh read found on the target
+// and the proposed commit share no ancestor. Reachability
 // between unrelated histories is answerable, and the answer is uninformative:
 // every commit of one is missing from the other, so the comparison this
 // package makes would report a rewrite of a branch that was never this
 // branch. There is no default worth returning, so this refuses.
-func (g *Guard) requireRelated(ctx context.Context, u Update, a, b string) error {
+func (g *Guard) requireRelated(ctx context.Context, u Update, current RemoteState, b string) error {
+	a := current.Commit
 	_, err := g.git.MergeBase(ctx, a, b)
 	if err == nil {
 		return nil
 	}
 	if errors.Is(err, vcs.ErrNoMergeBase) {
 		return &Refusal{
-			Reason: ReasonUnrelatedHistories,
-			Target: u.Target,
-			Anchor: u.Anchor,
-			Detail: a + " and " + b + " share no common ancestor, so neither can be said to contain the other's work",
-			Cause:  err,
+			Reason:   ReasonUnrelatedHistories,
+			Target:   u.Target,
+			Anchor:   u.Anchor,
+			Observed: current,
+			Detail:   a + " and " + b + " share no common ancestor, so neither can be said to contain the other's work",
+			Cause:    err,
 		}
 	}
 	return &Refusal{
-		Reason: ReasonUnverifiable,
-		Target: u.Target,
-		Anchor: u.Anchor,
-		Detail: "whether " + a + " and " + b + " are related could not be determined",
-		Cause:  err,
+		Reason:   ReasonUnverifiable,
+		Target:   u.Target,
+		Anchor:   u.Anchor,
+		Observed: current,
+		Detail:   "whether " + a + " and " + b + " are related could not be determined",
+		Cause:    err,
 	}
 }
 
-// commitsNotIn reports the commits reachable from have and not from
-// incorporated, and turns a failed comparison into a refusal rather than into
-// an empty result.
-func (g *Guard) commitsNotIn(ctx context.Context, u Update, have, incorporated string) ([]string, error) {
+// commitsNotIn reports the commits reachable from the commit the fresh read
+// found on the target and not from incorporated, and turns a failed comparison
+// into a refusal rather than into an empty result. A refusal it builds carries
+// that fresh read as Observed, because the read did succeed.
+func (g *Guard) commitsNotIn(ctx context.Context, u Update, current RemoteState, incorporated string) ([]string, error) {
+	have := current.Commit
 	commits, err := g.git.CommitsNotIn(ctx, have, incorporated)
 	if err != nil {
 		return nil, &Refusal{
-			Reason: ReasonUnverifiable,
-			Target: u.Target,
-			Anchor: u.Anchor,
-			Detail: "what " + incorporated + " contains of " + have + " could not be determined",
-			Cause:  err,
+			Reason:   ReasonUnverifiable,
+			Target:   u.Target,
+			Anchor:   u.Anchor,
+			Observed: current,
+			Detail:   "what " + incorporated + " contains of " + have + " could not be determined",
+			Cause:    err,
 		}
 	}
 	return commits, nil

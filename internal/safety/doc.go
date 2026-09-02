@@ -45,10 +45,13 @@
 //     discarding work it never saw. Decision.Rewritten names them.
 //
 // A target that moved since the observation is refused whether or not commits
-// would be lost. Where loss was identified the refusal names the commits, and
-// where it was not, the refusal still stands: an anchor that does not describe
-// the current target protects nothing, so proceeding on it would be a blind
-// force wearing a lease.
+// would be lost. Where loss was identified the refusal names every commit the
+// target holds that the proposed commit does not contain, without narrowing
+// that to commits the run never observed: the anchor no longer describes the
+// target, so nothing can be claimed to be incorporated. Where no loss was
+// identified the refusal still stands, because an anchor that does not
+// describe the current target protects nothing, so proceeding on it would be a
+// blind force wearing a lease.
 //
 // # Fail closed on an unverifiable fact
 //

@@ -184,10 +184,12 @@ func TestDecideAllowsAnAnchoredForceAndNamesWhatItRewrites(t *testing.T) {
 	}
 }
 
-func TestDecideRefusesAndNamesCommitsTheRunNeverObserved(t *testing.T) {
+func TestDecideRefusesAMovedTargetAndNamesEverythingItWouldDrop(t *testing.T) {
 	t.Parallel()
 	// The run observes c2 and rebases onto r3. Between the observation and
-	// the decision, someone pushes c3 and c4 onto the target.
+	// the decision, someone pushes c3 and c4 onto the target. The refusal
+	// names c2 as well as c3 and c4: the anchor no longer describes the
+	// target, so the run cannot claim r3 incorporated the commit it observed.
 	git := &fakeGit{
 		parents: map[string][]string{
 			"c1": nil,
@@ -316,6 +318,9 @@ func TestDecideRefusesUnrelatedHistories(t *testing.T) {
 	if !errors.Is(refusal, vcs.ErrNoMergeBase) {
 		t.Fatalf("refusal = %v, want it to carry vcs.ErrNoMergeBase", refusal)
 	}
+	if got, want := refusal.Observed, (safety.RemoteState{Exists: true, Commit: "c2"}); got != want {
+		t.Fatalf("Observed = %v, want %v: the fresh read succeeded, so the refusal must report what it found", got, want)
+	}
 }
 
 func TestDecideRefusesWhenAComparisonCannotBeAnswered(t *testing.T) {
@@ -342,6 +347,9 @@ func TestDecideRefusesWhenAComparisonCannotBeAnswered(t *testing.T) {
 			}
 			if len(refusal.Discarded) != 0 {
 				t.Fatalf("Discarded = %v, want none: an unanswered comparison must not report that nothing would be lost", refusal.Discarded)
+			}
+			if got, want := refusal.Observed, (safety.RemoteState{Exists: true, Commit: "c2"}); got != want {
+				t.Fatalf("Observed = %v, want %v: the fresh read succeeded, so the refusal must report what it found", got, want)
 			}
 		})
 	}
@@ -390,5 +398,67 @@ func TestDecideRefusesARemoteAdvertisingTheTargetTwice(t *testing.T) {
 	var refusal *safety.Refusal
 	if !errors.As(err, &refusal) || refusal.Reason != safety.ReasonUnverifiable {
 		t.Fatalf("Observe error = %v, want a *Refusal with %s", err, safety.ReasonUnverifiable)
+	}
+}
+
+func TestObserveReadsOnlyTheExactlyNamedReference(t *testing.T) {
+	t.Parallel()
+	// ls-remote matches a pattern against the tail of a reference name, so a
+	// read for refs/heads/feature also carries back refs/tags/refs/heads/
+	// feature. Only the exact name is the branch being decided about.
+	decoy := "refs/tags/" + ref
+	t.Run("the exact name wins", func(t *testing.T) {
+		t.Parallel()
+		git := &fakeGit{
+			parents:    linear("c1", "c2"),
+			advertised: map[string][][]vcs.Ref{remote: {{branch(decoy, "c2"), branch(ref, "c1")}}},
+		}
+		obs, err := safety.New(git).Observe(context.Background(), target)
+		if err != nil {
+			t.Fatalf("Observe: %v", err)
+		}
+		if got, want := obs.State(), (safety.RemoteState{Exists: true, Commit: "c1"}); got != want {
+			t.Fatalf("State() = %v, want %v: only %s is the target", got, want, ref)
+		}
+	})
+	t.Run("a tail match alone is still absent", func(t *testing.T) {
+		t.Parallel()
+		git := &fakeGit{
+			parents:    linear("c1", "c2"),
+			advertised: map[string][][]vcs.Ref{remote: {{branch(decoy, "c2")}}},
+		}
+		obs, err := safety.New(git).Observe(context.Background(), target)
+		if err != nil {
+			t.Fatalf("Observe: %v", err)
+		}
+		if obs.State().Exists {
+			t.Fatalf("State() = %v, want absent: the remote advertises %s and not %s", obs.State(), decoy, ref)
+		}
+	})
+}
+
+func TestRewrittenCannotBeEditedThroughTheDecision(t *testing.T) {
+	t.Parallel()
+	git := &fakeGit{
+		parents: map[string][]string{
+			"c1": nil,
+			"c2": {"c1"},
+			"r2": {"c1"},
+		},
+		advertised: map[string][][]vcs.Ref{remote: {{branch(ref, "c2")}}},
+	}
+	guard := safety.New(git)
+	obs := observe(t, guard)
+	decision, err := guard.Decide(context.Background(), safety.Update{Target: target, Proposed: "r2", Anchor: obs})
+	if err != nil {
+		t.Fatalf("Decide: %v", err)
+	}
+	rewritten := decision.Rewritten()
+	if want := []string{"c2"}; !slices.Equal(rewritten, want) {
+		t.Fatalf("Rewritten() = %v, want %v", rewritten, want)
+	}
+	rewritten[0] = "something else"
+	if want := []string{"c2"}; !slices.Equal(decision.Rewritten(), want) {
+		t.Fatalf("Rewritten() = %v after a caller edited an earlier result, want %v", decision.Rewritten(), want)
 	}
 }

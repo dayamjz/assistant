@@ -37,7 +37,8 @@ const (
 	// an anchor that does not describe the current target protects nothing.
 	ReasonTargetMoved Reason = "target-moved"
 	// ReasonWouldDiscard is the target holds commits the proposed commit does
-	// not contain, and the run did not observe them. The refusal names them.
+	// not contain, so the update would drop them from the branch. The refusal
+	// names them.
 	ReasonWouldDiscard Reason = "would-discard"
 	// ReasonUnrelatedHistories is the two commits compared share no ancestor,
 	// so no statement about what one contains of the other is available.
@@ -62,9 +63,14 @@ type Refusal struct {
 	// succeeded. Its zero value means the remote was not read, or was read
 	// and did not advertise the target.
 	Observed RemoteState
-	// Discarded names the commits the target holds that the proposed commit
-	// does not contain. It is populated for ReasonWouldDiscard and is empty
-	// for every other reason.
+	// Discarded names the commits the fresh read's target holds that the
+	// proposed commit does not contain. It is populated for ReasonWouldDiscard
+	// and is empty for every other reason.
+	//
+	// It is not narrowed to commits the run never observed. A refusal means
+	// the anchor no longer describes the target, so the run cannot claim to
+	// have incorporated anything, and this names everything the update would
+	// drop.
 	Discarded []string
 	// Detail states what specifically could not be established or what
 	// changed, in a sentence a caller can report without adding to it.

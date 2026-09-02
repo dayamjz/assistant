@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/dayamjz/assistant/internal/vcs"
 )
@@ -60,12 +61,22 @@ func (f *fakeGit) RemoteRefs(_ context.Context, remote string, patterns ...strin
 	var out []vcs.Ref
 	for _, ref := range round {
 		for _, p := range patterns {
-			if ref.Name == p {
+			if matchesTail(ref.Name, p) {
 				out = append(out, ref)
+				break
 			}
 		}
 	}
 	return out, nil
+}
+
+// matchesTail models how git ls-remote narrows its output: a pattern matches a
+// reference whose name it equals, or whose name ends with it on a
+// slash-separated component boundary. A read for refs/heads/feature therefore
+// also carries back refs/tags/refs/heads/feature, which is why the policy has
+// to pick the exact name out of what comes back.
+func matchesTail(name, pattern string) bool {
+	return name == pattern || strings.HasSuffix(name, "/"+pattern)
 }
 
 func (f *fakeGit) ResolveCommit(_ context.Context, rev string) (string, error) {
