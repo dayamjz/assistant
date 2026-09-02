@@ -219,6 +219,23 @@ type Checkpoint struct {
 	ForkedFrom *CheckpointID `json:"forked_from,omitempty"`
 }
 
+// clone returns a checkpoint that shares nothing mutable with this one, so a
+// value crossing the store boundary in either direction can be acted on
+// without reaching into what the other side still holds. Every field that
+// carries a reference is copied here, which is what keeps a field added to
+// Checkpoint from needing the same copy written again somewhere else.
+func (c Checkpoint) clone() Checkpoint {
+	out := c
+	out.State = c.State.Clone()
+	out.Decision = c.Decision.clone()
+	out.Counters = c.Counters.clone()
+	if c.ForkedFrom != nil {
+		origin := *c.ForkedFrom
+		out.ForkedFrom = &origin
+	}
+	return out
+}
+
 // ID returns the checkpoint's identifier.
 func (c Checkpoint) ID() CheckpointID { return CheckpointID{Run: c.Run, Seq: c.Seq} }
 

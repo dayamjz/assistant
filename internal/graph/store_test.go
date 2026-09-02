@@ -308,10 +308,11 @@ func TestRunRefusesAStoreThatDoesNotHonourTheRunClaim(t *testing.T) {
 	}
 }
 
-// retainingStore keeps the Checkpoint value it was handed rather than encoding
-// or copying it, which the Write contract permits. It stands in for a
-// substrate that holds checkpoints in memory as values, and it forwards
-// everything to a MemoryStore so the run itself behaves normally.
+// retainingStore keeps the Checkpoint value it was handed and answers Latest
+// with what it kept, which the Write, Latest and History contracts all permit.
+// It stands in for a substrate that holds checkpoints in memory as values
+// rather than encoding them, and it forwards to a MemoryStore so the run
+// itself behaves normally.
 type retainingStore struct {
 	inner *graph.MemoryStore
 	mu    sync.Mutex
@@ -319,14 +320,26 @@ type retainingStore struct {
 }
 
 func (s *retainingStore) Write(ctx context.Context, c graph.Checkpoint) (graph.CheckpointID, error) {
+	id, err := s.inner.Write(ctx, c)
+	if err != nil {
+		return graph.CheckpointID{}, err
+	}
+	c.Seq = id.Seq
 	s.mu.Lock()
 	s.held = append(s.held, c)
 	s.mu.Unlock()
-	return s.inner.Write(ctx, c)
+	return id, nil
 }
 
-func (s *retainingStore) Latest(ctx context.Context, run string) (graph.Checkpoint, error) {
-	return s.inner.Latest(ctx, run)
+func (s *retainingStore) Latest(_ context.Context, run string) (graph.Checkpoint, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := len(s.held) - 1; i >= 0; i-- {
+		if s.held[i].Run == run {
+			return s.held[i], nil
+		}
+	}
+	return graph.Checkpoint{}, fmt.Errorf("%w: %q", graph.ErrNoSuchRun, run)
 }
 
 func (s *retainingStore) History(ctx context.Context, run string) ([]graph.Checkpoint, error) {
@@ -343,22 +356,79 @@ func (s *retainingStore) retained() []graph.Checkpoint {
 	return append([]graph.Checkpoint(nil), s.held...)
 }
 
-func TestARetainedCheckpointKeepsTheCountersItWasWrittenWith(t *testing.T) {
+// haltingLoopBuilder declares a decision inside a bounded cycle: review routes
+// to the gate while there is anything to fix, the gate halts for an answer,
+// the fixer records a fix, and the bounded back edge sends the run around
+// again. Resuming it therefore crosses a halt point and a back edge, which is
+// what moves the state, the decision and the counters a checkpoint carries.
+func haltingLoopBuilder(rec *recorder) *graph.Builder {
+	return graph.NewBuilder().
+		Start("review").
+		Key(graph.Key{Name: "findings", Kind: graph.KindInt}).
+		Key(graph.Key{Name: "fixes", Kind: graph.KindInt, Merge: graph.MergeSum}).
+		Key(graph.Key{Name: "answer", Kind: graph.KindText}).
+		Node(graph.Node{
+			Name:   "review",
+			Reads:  []string{"fixes"},
+			Writes: []string{"findings"},
+			NewBody: body(func(_ context.Context, r graph.Reader, w graph.Writer) error {
+				rec.note("review")
+				fixes, err := r.Get("fixes")
+				if err != nil {
+					return err
+				}
+				if applied, _ := fixes.Int(); applied > 0 {
+					return w.Set("findings", graph.IntValue(0))
+				}
+				return w.Set("findings", graph.IntValue(1))
+			}),
+		}).
+		Node(graph.Node{
+			Name:    "gate",
+			Reads:   []string{"answer"},
+			Halt:    &graph.Halt{Question: "apply the fix?", Options: []string{"fix", "stop"}, Into: "answer"},
+			NewBody: noteOnly(rec, "gate"),
+		}).
+		Node(graph.Node{
+			Name:   "fix",
+			Writes: []string{"fixes"},
+			NewBody: body(func(_ context.Context, _ graph.Reader, w graph.Writer) error {
+				rec.note("fix")
+				return w.Set("fixes", graph.IntValue(1))
+			}),
+		}).
+		Node(graph.Node{Name: "done", NewBody: noteOnly(rec, "done")}).
+		Edge(graph.Edge{From: "review", To: "gate", Guard: &graph.Guard{
+			Key: "findings", Op: graph.OpGreaterThan, Value: graph.IntValue(0),
+		}}).
+		Edge(graph.Edge{From: "review", To: "done"}).
+		Edge(graph.Edge{From: "gate", To: "fix", Guard: &graph.Guard{
+			Key: "answer", Op: graph.OpEquals, Value: graph.TextValue("fix"),
+		}}).
+		Edge(graph.Edge{From: "gate", To: "done"}).
+		Edge(graph.Edge{From: "fix", To: "review", Rounds: 2})
+}
+
+func TestARetainedCheckpointKeepsWhatItWasWrittenWith(t *testing.T) {
 	ctx := context.Background()
 	rec := &recorder{}
-	g := mustBuild(t, fixLoopBuilder(rec, 2, func(_ context.Context, _ graph.Reader, w graph.Writer) error {
-		rec.note("fix")
-		return w.Set("log", graph.ListValue("fix"))
-	}))
+	g := mustBuild(t, haltingLoopBuilder(rec))
 	store := &retainingStore{inner: graph.NewMemoryStore()}
 	exec := mustExecutor(t, g, store, 20)
 
-	got, err := exec.Run(ctx, "run", mustState(t, g, nil))
+	held, err := exec.Run(ctx, "run", mustState(t, g, nil))
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if got.Status != graph.StatusRoundsExhausted {
-		t.Fatalf("the run ended %s, want rounds_exhausted: the fixture must spend its bound", got.Status)
+	if held.Status != graph.StatusHalted {
+		t.Fatalf("the run ended %s, want halted: the fixture must reach its decision", held.Status)
+	}
+	done, err := exec.Answer(ctx, "run", "fix")
+	if err != nil {
+		t.Fatalf("Answer: %v", err)
+	}
+	if done.Status != graph.StatusCompleted {
+		t.Fatalf("the run ended %s, want completed", done.Status)
 	}
 
 	// The history MemoryStore decoded is what each checkpoint held at the
@@ -371,8 +441,8 @@ func TestARetainedCheckpointKeepsTheCountersItWasWrittenWith(t *testing.T) {
 	if len(retained) != len(history) {
 		t.Fatalf("the store retained %d checkpoints and holds %d", len(retained), len(history))
 	}
-	if !countersMoved(history) {
-		t.Fatal("the fixture never changed the counters, so this proves nothing")
+	if !countersMoved(history) || !statesMoved(history) || !decisionsMoved(history) {
+		t.Fatal("the fixture left the counters, the state or the decision unchanged, so this proves nothing")
 	}
 	for i := range history {
 		if retained[i].Counters.Steps != history[i].Counters.Steps {
@@ -386,6 +456,14 @@ func TestARetainedCheckpointKeepsTheCountersItWasWrittenWith(t *testing.T) {
 		if !equalStrings(retained[i].Counters.Fingerprints, history[i].Counters.Fingerprints) {
 			t.Errorf("retained checkpoint %d records fingerprints that are not the ones it was written with", i+1)
 		}
+		if !retained[i].State.Equal(history[i].State) {
+			t.Errorf("retained checkpoint %d records state %v, want the %v it was written with",
+				i+1, retained[i].State, history[i].State)
+		}
+		if !sameDecision(retained[i].Decision, history[i].Decision) {
+			t.Errorf("retained checkpoint %d records decision %v, want the %v it was written with",
+				i+1, retained[i].Decision, history[i].Decision)
+		}
 	}
 }
 
@@ -398,6 +476,32 @@ func countersMoved(history []graph.Checkpoint) bool {
 		}
 	}
 	return false
+}
+
+// statesMoved reports whether the state differs across the history, which is
+// what makes retaining an aliased state map observable.
+func statesMoved(history []graph.Checkpoint) bool {
+	for i := 1; i < len(history); i++ {
+		if !history[i].State.Equal(history[0].State) {
+			return true
+		}
+	}
+	return false
+}
+
+// decisionsMoved reports whether the history holds a checkpoint carrying a
+// decision and another carrying none, which is what makes retaining an
+// aliased decision observable.
+func decisionsMoved(history []graph.Checkpoint) bool {
+	var open, closed bool
+	for _, cp := range history {
+		if cp.Decision != nil {
+			open = true
+		} else {
+			closed = true
+		}
+	}
+	return open && closed
 }
 
 func equalInts(got, want []int) bool {

@@ -34,10 +34,15 @@ type CheckpointStore interface {
 	// and loses them silently.
 	Write(ctx context.Context, c Checkpoint) (CheckpointID, error)
 	// Latest returns the most recently written checkpoint for run. It returns
-	// an error wrapping ErrNoSuchRun when the run has no history.
+	// an error wrapping ErrNoSuchRun when the run has no history. What it
+	// answers with may be the store's own storage: a caller never writes into
+	// a checkpoint a store handed back, so nothing it returns has to be copied
+	// defensively.
 	Latest(ctx context.Context, run string) (Checkpoint, error)
 	// History returns every checkpoint for run in write order. A run with no
-	// history yields an empty slice and no error.
+	// history yields an empty slice and no error. As with Latest, the
+	// checkpoints may be the store's own storage, because a caller treats what
+	// it is handed as read-only.
 	History(ctx context.Context, run string) ([]Checkpoint, error)
 	// Fork copies the history of from.Run up to and including from into a new
 	// run named into, and returns the identifier of the copy's last

@@ -337,29 +337,80 @@ func TestValidateRefusesACheckpointThatDoesNotMatchTheGraph(t *testing.T) {
 		Key(graph.Key{Name: "answer", Kind: graph.KindInt}).
 		Node(graph.Node{Name: "only", NewBody: noteOnly(rec, "only")}))
 
-	cases := map[string]func(c *graph.Checkpoint){
-		"no run name":              func(c *graph.Checkpoint) { c.Run = "" },
-		"no sequence number":       func(c *graph.Checkpoint) { c.Seq = 0 },
-		"position is not a node":   func(c *graph.Checkpoint) { c.Position = "elsewhere" },
-		"completed but positioned": func(c *graph.Checkpoint) { c.Status = graph.StatusCompleted },
-		"halted with no decision":  func(c *graph.Checkpoint) { c.Decision = nil },
-		"decision moved elsewhere": func(c *graph.Checkpoint) { c.Decision.Node = "prep" },
-		"decision rewritten": func(c *graph.Checkpoint) {
-			c.Decision.Options = []string{"approve", "cancel", "ship anyway"}
+	// Each case names the field the refusal must blame, so a case cannot start
+	// passing because some other rule caught it first.
+	cases := map[string]struct {
+		tamper func(c *graph.Checkpoint)
+		field  string
+	}{
+		"no run name": {
+			tamper: func(c *graph.Checkpoint) { c.Run = "" },
+			field:  "run",
 		},
-		"decision on a running checkpoint": func(c *graph.Checkpoint) {
-			c.Status = graph.StatusRunning
+		"no sequence number": {
+			tamper: func(c *graph.Checkpoint) { c.Seq = 0 },
+			field:  "seq",
 		},
-		"state from another graph": func(c *graph.Checkpoint) {
-			c.State = mustStateNoHelper(other)
+		"position is not a node": {
+			tamper: func(c *graph.Checkpoint) { c.Position = "elsewhere" },
+			field:  "position",
 		},
-		"counters sized for another graph": func(c *graph.Checkpoint) {
-			c.Counters = graph.Counters{Traversals: []int{0}, Fingerprints: []string{""}}
+		"completed but positioned": {
+			tamper: func(c *graph.Checkpoint) { c.Status = graph.StatusCompleted },
+			field:  "position",
 		},
-		"negative step count": func(c *graph.Checkpoint) { c.Counters.Steps = -1 },
-		"negative traversals": func(c *graph.Checkpoint) { c.Counters.Traversals[0] = -1 },
+		"running at a halt point": {
+			tamper: func(c *graph.Checkpoint) {
+				c.Status = graph.StatusRunning
+				c.Decision = nil
+			},
+			field: "status",
+		},
+		"halted with no decision": {
+			tamper: func(c *graph.Checkpoint) { c.Decision = nil },
+			field:  "decision",
+		},
+		"decision moved elsewhere": {
+			tamper: func(c *graph.Checkpoint) { c.Decision.Node = "prep" },
+			field:  "decision",
+		},
+		"decision rewritten": {
+			tamper: func(c *graph.Checkpoint) {
+				c.Decision.Options = []string{"approve", "cancel", "ship anyway"}
+			},
+			field: "decision",
+		},
+		// Positioned away from the halt point, so the run is legitimately
+		// running and the decision it still carries is what is wrong.
+		"decision on a running checkpoint": {
+			tamper: func(c *graph.Checkpoint) {
+				c.Status = graph.StatusRunning
+				c.Position = "prep"
+			},
+			field: "decision",
+		},
+		"state from another graph": {
+			tamper: func(c *graph.Checkpoint) {
+				c.State = mustStateNoHelper(other)
+			},
+			field: "state",
+		},
+		"counters sized for another graph": {
+			tamper: func(c *graph.Checkpoint) {
+				c.Counters = graph.Counters{Traversals: []int{0}, Fingerprints: []string{""}}
+			},
+			field: "counters.traversals",
+		},
+		"negative step count": {
+			tamper: func(c *graph.Checkpoint) { c.Counters.Steps = -1 },
+			field:  "counters.steps",
+		},
+		"negative traversals": {
+			tamper: func(c *graph.Checkpoint) { c.Counters.Traversals[0] = -1 },
+			field:  "counters.traversals",
+		},
 	}
-	for name, tamper := range cases {
+	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			cp := sound
 			cp.State = sound.State.Clone()
@@ -372,7 +423,7 @@ func TestValidateRefusesACheckpointThatDoesNotMatchTheGraph(t *testing.T) {
 			decision.Options = append([]string(nil), sound.Decision.Options...)
 			cp.Decision = &decision
 
-			tamper(&cp)
+			tc.tamper(&cp)
 			err := g.Validate(cp)
 			if err == nil {
 				t.Fatalf("Validate accepted a tampered checkpoint: %+v", cp)
@@ -380,6 +431,10 @@ func TestValidateRefusesACheckpointThatDoesNotMatchTheGraph(t *testing.T) {
 			var ce *graph.CheckpointError
 			if !errors.As(err, &ce) {
 				t.Fatalf("Validate error = %T %v, want a *graph.CheckpointError", err, err)
+			}
+			if ce.Field != tc.field {
+				t.Fatalf("Validate blamed %q (%s), want the refusal to name %q",
+					ce.Field, ce.Detail, tc.field)
 			}
 		})
 	}
