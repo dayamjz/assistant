@@ -183,6 +183,15 @@ func helperSpawn(stubborn, wait bool) {
 	if stubborn {
 		child.Env = append(child.Env, helperStderrVar+"=stubborn")
 	}
+	// The child runs outside the invocation's working directory, which the
+	// test owns and removes when the test returns. A running process holds its
+	// working directory open on Windows, and a descendant that outlives the
+	// invocation is a documented residual gap there, so a child left in that
+	// directory would fail the test's own cleanup for a reason none of these
+	// tests are about. Where the child runs is not part of what any of them
+	// assert; that it is still in the invocation's process group is, and that
+	// is unaffected.
+	child.Dir = os.TempDir()
 	if err := child.Start(); err != nil {
 		os.Exit(4)
 	}
