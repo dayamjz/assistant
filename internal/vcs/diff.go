@@ -71,7 +71,7 @@ func (r *Repository) Diff(ctx context.Context, from, to string) (string, error) 
 		return "", err
 	}
 	args := append([]string{"diff"}, diffArgs...)
-	args = append(args, a, b)
+	args = append(args, a, b, "--")
 	out, err := r.run(ctx, "diff", args...)
 	if err != nil {
 		return "", err
@@ -92,7 +92,7 @@ func (r *Repository) ChangedFiles(ctx context.Context, from, to string) ([]FileC
 		return nil, err
 	}
 	args := append([]string{"diff"}, diffArgs...)
-	args = append(args, "--name-status", "-z", a, b)
+	args = append(args, "--name-status", "-z", a, b, "--")
 	out, err := r.run(ctx, "changed-files", args...)
 	if err != nil {
 		return nil, err
@@ -207,7 +207,10 @@ func (r *Repository) FileAt(ctx context.Context, rev, path string) ([]byte, erro
 }
 
 // resolvePair resolves both ends of a comparison before either reaches a diff
-// command line, so a revision can never be read as a path or as an option.
+// command line, so neither can be read as an option. Its callers follow the
+// pair with --, which is what keeps git from reading either as a path: an
+// object identifier is a plausible file name, and git refuses an argument that
+// is both rather than choosing.
 func (r *Repository) resolvePair(ctx context.Context, from, to string) (string, string, error) {
 	a, err := r.ResolveCommit(ctx, from)
 	if err != nil {

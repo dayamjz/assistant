@@ -4,8 +4,11 @@ import (
 	"encoding/json"
 	"io"
 	"os"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // The tests need to see the exact argument vector, environment, and standard
@@ -22,6 +25,9 @@ const (
 	fakeGitMode   = "VCS_TEST_FAKE_GIT"
 	fakeGitLog    = "VCS_TEST_FAKE_GIT_LOG"
 	fakeGitStdout = "VCS_TEST_FAKE_GIT_STDOUT_FILE"
+	fakeGitStderr = "VCS_TEST_FAKE_GIT_STDERR_FILE"
+	fakeGitExit   = "VCS_TEST_FAKE_GIT_EXIT"
+	fakeGitDieOn  = "VCS_TEST_FAKE_GIT_DIE_ON"
 )
 
 // invocation is one recorded call to the stand-in git.
@@ -67,21 +73,51 @@ func fakeGitMain() int {
 		}
 	}
 
+	// Dying without an exit status is what a signal does to a process, and it
+	// is a case this package has to describe rather than swallow. The marker
+	// names the subcommand that dies, so the probes an open still needs can
+	// answer normally.
+	if marker := os.Getenv(fakeGitDieOn); marker != "" && slices.Contains(args, marker) {
+		if p, err := os.FindProcess(os.Getpid()); err == nil {
+			_ = p.Kill()
+		}
+		// Kill does not take effect synchronously, so wait to be killed rather
+		// than returning a status that would defeat the point.
+		time.Sleep(time.Minute)
+		return 3
+	}
+
 	joined := strings.Join(args, " ")
 	switch {
 	case strings.Contains(joined, "--is-bare-repository"),
 		strings.Contains(joined, "--is-inside-work-tree"):
 		os.Stdout.WriteString("true\n")
+		return 0
 	case strings.Contains(joined, "rev-parse"):
 		os.Stdout.WriteString(fakeCommit + "\n")
-	default:
-		if path := os.Getenv(fakeGitStdout); path != "" {
-			data, err := os.ReadFile(path)
-			if err != nil {
-				return 3
-			}
-			os.Stdout.Write(data)
+		return 0
+	}
+
+	if path := os.Getenv(fakeGitStdout); path != "" {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return 3
 		}
+		os.Stdout.Write(data)
+	}
+	if path := os.Getenv(fakeGitStderr); path != "" {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return 3
+		}
+		os.Stderr.Write(data)
+	}
+	if code := os.Getenv(fakeGitExit); code != "" {
+		n, err := strconv.Atoi(code)
+		if err != nil {
+			return 3
+		}
+		return n
 	}
 	return 0
 }
@@ -134,6 +170,19 @@ func fakeGitOutput(t *testing.T, out string) {
 		t.Fatalf("write stand-in git output: %v", err)
 	}
 	t.Setenv(fakeGitStdout, path)
+}
+
+// fakeGitStderrOutput makes the stand-in git write the given bytes to standard
+// error, and exit with the given status, for every invocation that is not one
+// of the probes it answers itself.
+func fakeGitStderrOutput(t *testing.T, text string, exit int) {
+	t.Helper()
+	path := t.TempDir() + string(os.PathSeparator) + "stderr"
+	if err := os.WriteFile(path, []byte(text), 0o600); err != nil {
+		t.Fatalf("write stand-in git standard error: %v", err)
+	}
+	t.Setenv(fakeGitStderr, path)
+	t.Setenv(fakeGitExit, strconv.Itoa(exit))
 }
 
 // useFakeGit puts the test binary into stand-in mode for the git invocations

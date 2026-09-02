@@ -50,8 +50,11 @@ func WithMaxOutput(n int64) Option {
 // memory exhaustion the branch controls.
 const defaultMaxOutput = 64 << 20
 
-// maxStderr bounds the message kept on a *CommandError. Git's diagnostics are
-// short; the whole output of a stage lives in that stage's log.
+// maxStderr bounds the diagnostic text one invocation collects from standard
+// error. The bound is applied while the stream is being read, not to the text
+// afterwards, so a remote that streams messages cannot grow the buffer past
+// it. Git's diagnostics are short; the whole output of a stage lives in that
+// stage's log.
 const maxStderr = 8 << 10
 
 // killGrace is how long a child gets to exit after its context is cancelled
@@ -115,8 +118,13 @@ var redirectingPrefixes = []string{"GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_"}
 // value; envFor appends to it.
 var nonInteractive = [][2]string{
 	{"GIT_TERMINAL_PROMPT", "0"},
-	{"GIT_ASKPASS", "echo"},
-	{"SSH_ASKPASS", "echo"},
+	// false exits non-zero without writing a line, so git treats the askpass
+	// as having failed and falls back to the terminal, which
+	// GIT_TERMINAL_PROMPT=0 refuses. Setting these at all is what keeps a
+	// graphical helper named in the environment or in git configuration from
+	// being run in its place.
+	{"GIT_ASKPASS", "false"},
+	{"SSH_ASKPASS", "false"},
 	{"SSH_ASKPASS_REQUIRE", "never"},
 	{"GIT_EDITOR", "false"},
 	{"GIT_SEQUENCE_EDITOR", "false"},
@@ -218,29 +226,38 @@ func (r *Repository) run(ctx context.Context, op string, args ...string) ([]byte
 	cmd.WaitDelay = killGrace
 
 	stdout := &capWriter{limit: r.set.maxOutput}
-	var stderr bytes.Buffer
+	// Standard error is diagnostic text rather than a result, so it is kept up
+	// to the limit and marked instead of being refused whole the way an
+	// over-limit standard output is.
+	stderr := &capWriter{limit: maxStderr, truncate: true}
 	cmd.Stdout = stdout
-	cmd.Stderr = &stderr
+	cmd.Stderr = stderr
 
 	runErr := cmd.Run()
 	if stdout.over {
-		return nil, r.commandError(op, full, -1, "", ErrOutputTooLarge)
+		return nil, r.commandError(op, full, -1, "", false, ErrOutputTooLarge)
 	}
 	if runErr != nil {
 		code := -1
 		var exit *exec.ExitError
 		if errors.As(runErr, &exit) {
 			code = exit.ExitCode()
-			// An exit status is the ordinary way git reports a failure, so it
-			// is not also carried as a wrapped process error.
-			runErr = nil
+			if code >= 0 {
+				// An exit status is the ordinary way git reports a failure, so
+				// it is not also carried as a wrapped process error.
+				runErr = nil
+			}
+			// A negative status means there was no exit status, because a
+			// signal ended the process. Then the process error is the only
+			// description of what happened, so it is kept.
 		}
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			// The context ended the call, so report that rather than the
 			// signal git died of.
 			runErr = ctxErr
 		}
-		return stdout.buf.Bytes(), r.commandError(op, full, code, stderr.String(), runErr)
+		msg, truncated := stderr.collected()
+		return stdout.buf.Bytes(), r.commandError(op, full, code, msg, truncated, runErr)
 	}
 	return stdout.buf.Bytes(), nil
 }
@@ -266,16 +283,17 @@ func (r *Repository) runExpecting(ctx context.Context, op string, expected []int
 	return nil, -1, err
 }
 
-func (r *Repository) commandError(op string, args []string, code int, stderrText string, cause error) *CommandError {
+func (r *Repository) commandError(op string, args []string, code int, stderrText string, truncated bool, cause error) *CommandError {
 	red := make([]string, len(args))
 	for i, a := range args {
 		red[i] = r.set.redactor.Redact(a)
 	}
-	// Redaction runs before truncation. Cutting first could leave half of a
-	// credentialed URL, which the redactor would no longer recognize.
+	// Redaction runs on whole lines. A cut made while collecting drops the
+	// partial line it ended in, so the redactor is never handed half of a
+	// credentialed URL it would no longer recognize.
 	msg := r.set.redactor.Redact(strings.TrimSpace(stderrText))
-	if len(msg) > maxStderr {
-		msg = msg[:maxStderr] + "\n[git message truncated]"
+	if truncated {
+		msg = strings.TrimSpace(msg + "\n" + stderrTruncatedMarker)
 	}
 	return &CommandError{
 		Op:       op,
@@ -287,14 +305,25 @@ func (r *Repository) commandError(op string, args []string, code int, stderrText
 	}
 }
 
+// stderrTruncatedMarker is appended to a *CommandError message that lost text
+// to the collection limit, so a reader can tell a short message from a cut
+// one.
+const stderrTruncatedMarker = "[git message truncated]"
+
 // capWriter collects output up to limit bytes and records whether more was
-// offered. Output past the limit is dropped rather than kept, because the
-// result is refused whole.
+// offered. The limit is enforced as the bytes arrive, so a stream that never
+// stops cannot grow the buffer past it.
+//
+// With truncate false, everything collected is dropped once the limit is
+// passed, because the result is refused whole. With truncate true, the bytes
+// that fit are kept, because the result is diagnostic text a caller is better
+// off seeing part of than none of.
 type capWriter struct {
-	limit int64
-	n     int64
-	over  bool
-	buf   bytes.Buffer
+	limit    int64
+	truncate bool
+	n        int64
+	over     bool
+	buf      bytes.Buffer
 }
 
 func (w *capWriter) Write(p []byte) (int, error) {
@@ -303,9 +332,33 @@ func (w *capWriter) Write(p []byte) (int, error) {
 	}
 	if w.n+int64(len(p)) > w.limit {
 		w.over = true
-		w.buf.Reset()
+		if !w.truncate {
+			w.buf.Reset()
+			return len(p), nil
+		}
+		if room := w.limit - w.n; room > 0 {
+			w.n = w.limit
+			if _, err := w.buf.Write(p[:room]); err != nil {
+				return 0, err
+			}
+		}
 		return len(p), nil
 	}
 	w.n += int64(len(p))
 	return w.buf.Write(p)
+}
+
+// collected returns the text kept for a *CommandError and whether anything was
+// lost to the limit. When something was, the final line is dropped because the
+// cut may have landed inside it, and half of a credentialed URL is exactly
+// what a redactor cannot recognize.
+func (w *capWriter) collected() (string, bool) {
+	text := w.buf.String()
+	if !w.over {
+		return text, false
+	}
+	if i := strings.LastIndexByte(text, '\n'); i >= 0 {
+		return text[:i], true
+	}
+	return "", true
 }

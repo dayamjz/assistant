@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -584,7 +585,19 @@ func TestFetchNeedingACredentialFailsInsteadOfWaiting(t *testing.T) {
 		t.Fatalf("OpenWorktree: %v", err)
 	}
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	// Every credential the server is offered is recorded, so the test can tell
+	// the one the URL supplied from one the askpass invented.
+	type credential struct{ user, password string }
+	var (
+		mu      sync.Mutex
+		offered []credential
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if user, password, ok := req.BasicAuth(); ok {
+			mu.Lock()
+			offered = append(offered, credential{user: user, password: password})
+			mu.Unlock()
+		}
 		w.Header().Set("WWW-Authenticate", `Basic realm="test"`)
 		w.WriteHeader(http.StatusUnauthorized)
 	}))
@@ -611,6 +624,89 @@ func TestFetchNeedingACredentialFailsInsteadOfWaiting(t *testing.T) {
 	var cmdErr *vcs.CommandError
 	if !errors.As(err, &cmdErr) {
 		t.Fatalf("Fetch error = %v; want a *CommandError", err)
+	}
+	// The URL carries a username and no password, so that is the whole of what
+	// git was given. A password reaching the server would be one the askpass
+	// made up out of the prompt it was handed, which is worse than useless: it
+	// authenticates as nobody while looking to the server like a wrong
+	// password from someone.
+	mu.Lock()
+	defer mu.Unlock()
+	for _, cred := range offered {
+		if cred.user != "someone" || cred.password != "" {
+			t.Errorf("git offered a credential nobody supplied: user %q, password %q", cred.user, cred.password)
+		}
+	}
+}
+
+// Git answers "there is no repository here" and "there is a repository here
+// and I will not use it" with the same exit status. Only the first is
+// ErrNotARepository. The second has to reach the caller as what git said, or
+// an operator goes looking for a mistyped path instead of the real obstacle.
+func TestOpenReportsARepositoryGitRefusesRatherThanCallingItAbsent(t *testing.T) {
+	gitEnvironment(t)
+	c := ctx(t)
+
+	barePath := filepath.Join(t.TempDir(), "gate.git")
+	if _, err := vcs.InitBare(c, barePath); err != nil {
+		t.Fatalf("InitBare: %v", err)
+	}
+	// A HEAD git will not parse is one of the conditions it reports with exit
+	// status 128 against a directory that is plainly a repository.
+	writeFile(t, filepath.Join(barePath, "HEAD"), "not a reference\n")
+
+	var cmdErr *vcs.CommandError
+	_, err := vcs.OpenBare(c, barePath)
+	if !errors.As(err, &cmdErr) {
+		t.Fatalf("OpenBare on a repository with an unreadable HEAD = %v; want a *CommandError", err)
+	}
+	if errors.Is(err, vcs.ErrNotARepository) {
+		t.Errorf("OpenBare called a directory that holds a repository absent: %v", err)
+	}
+	if cmdErr.Stderr == "" {
+		t.Errorf("the *CommandError carries no message from git, so the reason is lost: %v", err)
+	}
+
+	source, _, _ := sourceRepo(t)
+	writeFile(t, filepath.Join(source, ".git", "HEAD"), "not a reference\n")
+	_, err = vcs.OpenWorktree(c, source)
+	if !errors.As(err, &cmdErr) {
+		t.Fatalf("OpenWorktree on a working copy with an unreadable HEAD = %v; want a *CommandError", err)
+	}
+	if errors.Is(err, vcs.ErrNotARepository) {
+		t.Errorf("OpenWorktree called a directory that holds a working copy absent: %v", err)
+	}
+	if cmdErr.Stderr == "" {
+		t.Errorf("the *CommandError carries no message from git, so the reason is lost: %v", err)
+	}
+}
+
+// A commit identifier is a plausible file name. Without the -- that separates
+// revisions from paths, git refuses a comparison whose ends also name files as
+// ambiguous rather than performing it.
+func TestComparisonWorksWhenAFileIsNamedAfterACommit(t *testing.T) {
+	gitEnvironment(t)
+	c := ctx(t)
+	source, first, second := sourceRepo(t)
+	writeFile(t, filepath.Join(source, first), "a file whose name is a commit identifier\n")
+
+	repo, err := vcs.OpenWorktree(c, source)
+	if err != nil {
+		t.Fatalf("OpenWorktree: %v", err)
+	}
+	diff, err := repo.Diff(c, first, second)
+	if err != nil {
+		t.Fatalf("Diff with a file named after a commit: %v", err)
+	}
+	if !strings.Contains(diff, "+second version") {
+		t.Errorf("Diff did not compare the two commits:\n%s", diff)
+	}
+	changes, err := repo.ChangedFiles(c, first, second)
+	if err != nil {
+		t.Fatalf("ChangedFiles with a file named after a commit: %v", err)
+	}
+	if !hasChange(changes, vcs.FileChange{Status: vcs.StatusAdded, Path: "added.txt"}) {
+		t.Errorf("ChangedFiles = %+v; want added.txt reported as added", changes)
 	}
 }
 

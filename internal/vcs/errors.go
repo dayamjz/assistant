@@ -61,8 +61,10 @@ type CommandError struct {
 	// ExitCode is git's exit status, or -1 when git could not be started or
 	// was killed before reporting one.
 	ExitCode int
-	// Stderr is git's standard error, redacted and bounded. It is empty when
-	// git wrote nothing there.
+	// Stderr is git's standard error, redacted, and bounded as it was read
+	// rather than afterwards. When git wrote more than the bound allows, the
+	// text kept ends with "[git message truncated]". It is empty when git
+	// wrote nothing there.
 	Stderr string
 	// Err is the underlying error from starting or waiting on the process. It
 	// is nil when git ran and exited non-zero, which is the ordinary case.

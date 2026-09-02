@@ -74,7 +74,10 @@ func (r *Repository) addressing() []string {
 // It refuses with ErrNotARepository when path already holds something that is
 // not a bare repository, an empty directory apart. Git would otherwise write
 // a bare repository's files into a directory that is already a working copy,
-// leaving one directory that is two repositories.
+// leaving one directory that is two repositories. When path holds a bare
+// repository git itself refuses to use, that refusal is returned as the
+// *CommandError git described it with rather than as ErrNotARepository, and
+// nothing is written either way.
 func InitBare(ctx context.Context, path string, opts ...Option) (*Repository, error) {
 	abs, err := absolutePath(path)
 	if err != nil {
@@ -99,6 +102,10 @@ func InitBare(ctx context.Context, path string, opts ...Option) (*Repository, er
 // path is a bare repository and returns ErrNotARepository when it is not, so a
 // mistyped path fails here rather than as a confusing failure several
 // operations later.
+//
+// A path that holds a bare repository git refuses to use is a different
+// answer, and is returned as the *CommandError carrying git's own message. See
+// classifyOpenFailure for exactly what is distinguished and what is not.
 func OpenBare(ctx context.Context, path string, opts ...Option) (*Repository, error) {
 	abs, err := absolutePath(path)
 	if err != nil {
@@ -108,11 +115,9 @@ func OpenBare(ctx context.Context, path string, opts ...Option) (*Repository, er
 		return nil, &openError{path: abs, kind: KindBare}
 	}
 	r := &Repository{path: abs, kind: KindBare, set: newSettings(opts)}
-	// Exit status 128 is what git reports for a path that is not a
-	// repository at all, which is one of the answers this is asking for.
-	out, _, err := r.runExpecting(ctx, "open-bare", []int{128}, "rev-parse", "--is-bare-repository")
+	out, err := r.run(ctx, "open-bare", "rev-parse", "--is-bare-repository")
 	if err != nil {
-		return nil, err
+		return nil, classifyOpenFailure(err, abs, KindBare)
 	}
 	if strings.TrimSpace(string(out)) != "true" {
 		return nil, &openError{path: abs, kind: KindBare}
@@ -128,6 +133,9 @@ func OpenBare(ctx context.Context, path string, opts ...Option) (*Repository, er
 // from it, so opening a subdirectory addresses that subdirectory. Operations
 // here take revisions and repository-relative paths rather than working
 // directory paths, so that distinction does not change their results.
+//
+// As with OpenBare, a working copy git refuses to use is returned as the
+// *CommandError carrying git's own message rather than as ErrNotARepository.
 func OpenWorktree(ctx context.Context, path string, opts ...Option) (*Repository, error) {
 	abs, err := absolutePath(path)
 	if err != nil {
@@ -137,9 +145,9 @@ func OpenWorktree(ctx context.Context, path string, opts ...Option) (*Repository
 		return nil, &openError{path: abs, kind: KindWorktree}
 	}
 	r := &Repository{path: abs, kind: KindWorktree, set: newSettings(opts)}
-	out, _, err := r.runExpecting(ctx, "open-worktree", []int{128}, "rev-parse", "--is-inside-work-tree")
+	out, err := r.run(ctx, "open-worktree", "rev-parse", "--is-inside-work-tree")
 	if err != nil {
-		return nil, err
+		return nil, classifyOpenFailure(err, abs, KindWorktree)
 	}
 	if strings.TrimSpace(string(out)) != "true" {
 		return nil, &openError{path: abs, kind: KindWorktree}
@@ -175,6 +183,70 @@ func isOccupiedByOtherThanABareRepo(ctx context.Context, path string, opts []Opt
 		return false, err
 	}
 	return false, nil
+}
+
+// classifyOpenFailure decides whether a failed open probe means path holds no
+// repository of that kind, or means git found one and refused to use it.
+//
+// Git answers both with exit status 128 and separates them only in its English
+// message, so this makes its own distinction from something a caller can check
+// independently: whether the marker git discovers a repository from is on
+// disk. For a bare repository that marker is the HEAD, objects, and refs
+// entries in the directory itself; for a working copy it is a .git entry in
+// the directory or in one of its ancestors.
+//
+// What this distinguishes, and nothing more: a 128 against a path carrying no
+// marker becomes ErrNotARepository. A 128 against a path that does carry one
+// is returned unchanged, so dubious ownership, an object store that cannot be
+// read, and a HEAD git will not parse all reach the caller as the
+// *CommandError git described them with, rather than as a mistyped path.
+//
+// It never claims a path is not a repository on evidence it does not have: a
+// lookup that fails for any reason other than the entry not existing counts as
+// a marker that may be present, and the *CommandError is returned.
+func classifyOpenFailure(err error, path string, kind Kind) error {
+	var ce *CommandError
+	if !errors.As(err, &ce) || ce.Err != nil || ce.ExitCode != 128 {
+		return err
+	}
+	if marked, known := hasRepositoryMarker(path, kind); known && !marked {
+		return &openError{path: path, kind: kind}
+	}
+	return err
+}
+
+// hasRepositoryMarker reports whether path carries the on-disk marker git
+// discovers a repository of the given kind from. known is false when a lookup
+// failed for a reason other than the entry not existing, and then marked says
+// nothing.
+func hasRepositoryMarker(path string, kind Kind) (marked, known bool) {
+	if kind == KindBare {
+		for _, entry := range []string{"HEAD", "objects", "refs"} {
+			if _, err := os.Lstat(filepath.Join(path, entry)); err != nil {
+				if errors.Is(err, os.ErrNotExist) {
+					return false, true
+				}
+				return false, false
+			}
+		}
+		return true, true
+	}
+	// Git discovers a working copy by walking up from the directory it was
+	// pointed at, so the marker may be at any ancestor.
+	for dir := path; ; {
+		_, err := os.Lstat(filepath.Join(dir, ".git"))
+		if err == nil {
+			return true, true
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return false, false
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return false, true
+		}
+		dir = parent
+	}
 }
 
 // isDirectory reports whether path is a directory. Every invocation runs with

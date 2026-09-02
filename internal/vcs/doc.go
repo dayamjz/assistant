@@ -37,9 +37,12 @@
 //     immediately.
 //   - GIT_TERMINAL_PROMPT=0, so git does not read a credential from the
 //     terminal.
-//   - GIT_ASKPASS and SSH_ASKPASS are set to a program that prints an empty
-//     line, and SSH_ASKPASS_REQUIRE=never, so a graphical askpass helper
-//     configured in the user's environment or git configuration is not run.
+//   - GIT_ASKPASS and SSH_ASKPASS are set to false, which exits non-zero
+//     without writing a line, and SSH_ASKPASS_REQUIRE=never. Setting them is
+//     what keeps a graphical askpass helper named in the user's environment or
+//     git configuration from being run in their place; git then treats the
+//     askpass as having failed and falls back to the terminal, which
+//     GIT_TERMINAL_PROMPT=0 refuses. No credential is invented on the way.
 //   - GIT_EDITOR and GIT_SEQUENCE_EDITOR are set to false, so an operation
 //     that wants an editor gets one that exits non-zero rather than one that
 //     waits.

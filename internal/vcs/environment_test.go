@@ -3,6 +3,7 @@ package vcs_test
 import (
 	"errors"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -69,8 +70,8 @@ func TestEveryInvocationIsExplicitAndNonInteractive(t *testing.T) {
 		// Nothing may wait for a person.
 		for _, want := range [][2]string{
 			{"GIT_TERMINAL_PROMPT", "0"},
-			{"GIT_ASKPASS", "echo"},
-			{"SSH_ASKPASS", "echo"},
+			{"GIT_ASKPASS", "false"},
+			{"SSH_ASKPASS", "false"},
 			{"SSH_ASKPASS_REQUIRE", "never"},
 			{"GIT_EDITOR", "false"},
 			{"GIT_SEQUENCE_EDITOR", "false"},
@@ -177,4 +178,130 @@ func TestChangedFilesRefusesOutputItCannotRead(t *testing.T) {
 			t.Fatalf("ChangedFiles = %+v; want %+v", got, want)
 		}
 	})
+}
+
+// A git that dies without an exit status must still name what killed it. A
+// signal leaves no status behind, so the process error is the only description
+// of what happened, and a *CommandError that reports neither tells an operator
+// nothing at all.
+func TestGitThatDiesWithoutAnExitStatusNamesItsCause(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("a terminated process on Windows still carries an exit status, so this case does not arise there")
+	}
+	gitEnvironment(t)
+	_, exe := useFakeGit(t)
+	// Only the diff invocation dies, so the probes an open needs still answer.
+	t.Setenv(fakeGitDieOn, "diff")
+
+	repo, err := vcs.OpenBare(ctx(t), fakeBareDir(t), vcs.WithGitBinary(exe))
+	if err != nil {
+		t.Fatalf("OpenBare against the stand-in git: %v", err)
+	}
+
+	_, err = repo.Diff(ctx(t), "a", "b")
+	var cmdErr *vcs.CommandError
+	if !errors.As(err, &cmdErr) {
+		t.Fatalf("Diff against a git that was killed = %v; want a *CommandError", err)
+	}
+	if cmdErr.ExitCode >= 0 {
+		t.Fatalf("CommandError.ExitCode = %d; want -1, since the process reported no status", cmdErr.ExitCode)
+	}
+	if cmdErr.Err == nil {
+		t.Error("CommandError.Err is nil, so the only description of the death was discarded")
+	}
+	if strings.Contains(err.Error(), "no exit status and no message") {
+		t.Errorf("the failure is reported with no cause at all: %v", err)
+	}
+
+	// The accepting path, through the same stand-in: an invocation that is not
+	// the one told to die still succeeds, so the assertions above are about the
+	// death rather than about this stand-in failing everything.
+	if _, err := repo.ResolveCommit(ctx(t), "HEAD"); err != nil {
+		t.Errorf("ResolveCommit against the same stand-in = %v; want it to succeed", err)
+	}
+}
+
+// Standard error is bounded as it is read rather than afterwards. What a
+// caller can observe of that bound is this contract: the message kept is
+// small, it says it was cut, it still holds what git said first, it ends on a
+// line boundary so the redactor was never handed a fragment, and a credential
+// in it was removed.
+func TestOverLongStandardErrorIsBoundedMarkedAndRedacted(t *testing.T) {
+	const (
+		password    = "hunter2-should-never-appear"
+		sideband    = "remote: a sideband message the server chose to send"
+		truncateTag = "\n[git message truncated]"
+	)
+
+	t.Run("a failing invocation", func(t *testing.T) {
+		gitEnvironment(t)
+		_, exe := useFakeGit(t)
+		head := "fatal: could not read from https://someone:" + password + "@example.invalid/repo.git\n"
+		written := head + strings.Repeat(sideband+"\n", 8000)
+		fakeGitStderrOutput(t, written, 1)
+
+		repo, err := vcs.OpenBare(ctx(t), fakeBareDir(t), vcs.WithGitBinary(exe))
+		if err != nil {
+			t.Fatalf("OpenBare against the stand-in git: %v", err)
+		}
+		_, err = repo.ChangedFiles(ctx(t), "a", "b")
+		var cmdErr *vcs.CommandError
+		if !errors.As(err, &cmdErr) {
+			t.Fatalf("ChangedFiles against a failing git = %v; want a *CommandError", err)
+		}
+		if n := len(cmdErr.Stderr); n >= len(written) {
+			t.Errorf("CommandError.Stderr is %d bytes of the %d git wrote; want it bounded", n, len(written))
+		}
+		if !strings.HasSuffix(cmdErr.Stderr, truncateTag) {
+			t.Errorf("CommandError.Stderr does not say it was cut: %q", tail(cmdErr.Stderr))
+		}
+		if !strings.Contains(cmdErr.Stderr, "example.invalid") {
+			t.Errorf("CommandError.Stderr lost what git said first: %q", head)
+		}
+		// The cut lands on a line boundary, so no fragment of a line reaches
+		// the redactor, and a credential split across the cut cannot survive.
+		kept := strings.TrimSuffix(cmdErr.Stderr, truncateTag)
+		if !strings.HasSuffix(kept, sideband) {
+			t.Errorf("the kept message ends mid-line: %q", tail(kept))
+		}
+		if strings.Contains(err.Error(), password) {
+			t.Errorf("the error carries the password: %v", err)
+		}
+		if !strings.Contains(cmdErr.Stderr, "REDACTED") {
+			t.Errorf("the message does not show the credential was removed: %q", cmdErr.Stderr[:min(len(cmdErr.Stderr), 200)])
+		}
+	})
+
+	// Standard error is diagnostic text rather than a result, so writing more
+	// of it than the bound allows must not turn a successful invocation into a
+	// failure the way an over-limit standard output does.
+	t.Run("a successful invocation", func(t *testing.T) {
+		gitEnvironment(t)
+		_, exe := useFakeGit(t)
+		fakeGitStderrOutput(t, strings.Repeat(sideband+"\n", 8000), 0)
+		fakeGitOutput(t, "M\x00edited.txt\x00")
+
+		repo, err := vcs.OpenBare(ctx(t), fakeBareDir(t), vcs.WithGitBinary(exe))
+		if err != nil {
+			t.Fatalf("OpenBare against the stand-in git: %v", err)
+		}
+		got, err := repo.ChangedFiles(ctx(t), "a", "b")
+		if err != nil {
+			t.Fatalf("ChangedFiles alongside a chatty standard error: %v", err)
+		}
+		want := vcs.FileChange{Status: vcs.StatusModified, Path: "edited.txt"}
+		if len(got) != 1 || got[0] != want {
+			t.Fatalf("ChangedFiles = %+v; want %+v", got, want)
+		}
+	})
+}
+
+// tail returns the last stretch of a message, for a failure report that should
+// not print kilobytes.
+func tail(s string) string {
+	const n = 120
+	if len(s) <= n {
+		return s
+	}
+	return "..." + s[len(s)-n:]
 }
