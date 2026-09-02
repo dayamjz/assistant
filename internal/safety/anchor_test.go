@@ -175,6 +175,8 @@ func TestRestoreRefusesARecordNoReadCouldHaveProduced(t *testing.T) {
 		{"present but naming none", safety.ObservationRecord{Remote: remote, Ref: ref, Exists: true}, safety.ErrInvalidObservationRecord},
 		{"no remote", safety.ObservationRecord{Ref: ref, Exists: true, Commit: "c1"}, safety.ErrInvalidTarget},
 		{"short reference", safety.ObservationRecord{Remote: remote, Ref: "feature", Exists: true, Commit: "c1"}, safety.ErrInvalidTarget},
+		{"reference that is only a prefix", safety.ObservationRecord{Remote: remote, Ref: "refs/heads/", Exists: true, Commit: "c1"}, safety.ErrInvalidTarget},
+		{"remote that reads as an option", safety.ObservationRecord{Remote: "--upload-pack=x", Ref: ref, Exists: true, Commit: "c1"}, safety.ErrInvalidTarget},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -224,6 +226,8 @@ func TestDecideRefusesAnUnusableTargetOrUpdate(t *testing.T) {
 		{"no remote", safety.Update{Target: safety.Target{Ref: ref}, Proposed: "c1", Anchor: obs}, safety.ErrInvalidTarget},
 		{"short reference", safety.Update{Target: safety.Target{Remote: remote, Ref: "feature"}, Proposed: "c1", Anchor: obs}, safety.ErrInvalidTarget},
 		{"glob in reference", safety.Update{Target: safety.Target{Remote: remote, Ref: "refs/heads/*"}, Proposed: "c1", Anchor: obs}, safety.ErrInvalidTarget},
+		{"reference that is only a prefix", safety.Update{Target: safety.Target{Remote: remote, Ref: "refs/heads/"}, Proposed: "c1", Anchor: obs}, safety.ErrInvalidTarget},
+		{"remote that reads as an option", safety.Update{Target: safety.Target{Remote: "--upload-pack=x", Ref: ref}, Proposed: "c1", Anchor: obs}, safety.ErrInvalidTarget},
 		{"no proposed commit", safety.Update{Target: target, Anchor: obs}, safety.ErrInvalidUpdate},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -248,6 +252,57 @@ func TestObserveRefusesAnUnusableTarget(t *testing.T) {
 	}
 	if git.reads != 0 {
 		t.Fatalf("remote reads = %d, want 0: an unusable target is refused before git is invoked", git.reads)
+	}
+}
+
+func TestATargetNameThatAddressesNothingNeverBecomesACreation(t *testing.T) {
+	t.Parallel()
+	// refs/heads/ is a prefix, not a reference. Allowed to stand, a remote
+	// that advertises nothing under it reads as an absent target, and the
+	// creation of a reference no name can ever be would be permitted.
+	prefix := safety.Target{Remote: remote, Ref: "refs/heads/"}
+	git := &fakeGit{
+		parents:    linear("c1"),
+		advertised: map[string][][]vcs.Ref{remote: {{branch(ref, "c1")}}},
+	}
+	guard := safety.New(git)
+
+	obs, err := guard.Observe(context.Background(), prefix)
+	if obs.Observed() || !errors.Is(err, safety.ErrInvalidTarget) {
+		t.Fatalf("Observe = (%v, %v), want no observation and ErrInvalidTarget", obs, err)
+	}
+	restored, err := safety.RestoreObservedFromCheckpoint(safety.ObservationRecord{Remote: remote, Ref: prefix.Ref})
+	if restored.Observed() || !errors.Is(err, safety.ErrInvalidTarget) {
+		t.Fatalf("RestoreObservedFromCheckpoint = (%v, %v), want no anchor and ErrInvalidTarget", restored, err)
+	}
+	decision, err := guard.Decide(context.Background(), safety.Update{Target: prefix, Proposed: "c1", Anchor: restored})
+	if decision.Allowed() {
+		t.Fatalf("Decide allowed %v, want a refusal: %s addresses no reference", decision, prefix.Ref)
+	}
+	if !errors.Is(err, safety.ErrInvalidTarget) {
+		t.Fatalf("Decide error = %v, want ErrInvalidTarget", err)
+	}
+	if git.reads != 0 {
+		t.Fatalf("remote reads = %d, want 0: a target that addresses nothing is refused before git is invoked", git.reads)
+	}
+}
+
+func TestARemoteThatReadsAsAnOptionIsRefusedBeforeGit(t *testing.T) {
+	t.Parallel()
+	// A remote beginning with a dash is an option to the command the
+	// mechanism builds, not a remote. internal/vcs refuses one too; this
+	// package refuses it before the name reaches git at all.
+	optionish := safety.Target{Remote: "--upload-pack=x", Ref: ref}
+	git := &fakeGit{
+		parents:    linear("c1"),
+		advertised: map[string][][]vcs.Ref{optionish.Remote: {{branch(ref, "c1")}}},
+	}
+	obs, err := safety.New(git).Observe(context.Background(), optionish)
+	if obs.Observed() || !errors.Is(err, safety.ErrInvalidTarget) {
+		t.Fatalf("Observe = (%v, %v), want no observation and ErrInvalidTarget", obs, err)
+	}
+	if git.reads != 0 {
+		t.Fatalf("remote reads = %d, want 0: an option is not a remote to read", git.reads)
 	}
 }
 

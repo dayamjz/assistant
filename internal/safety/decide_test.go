@@ -285,6 +285,32 @@ func TestDecideRefusesATargetThatAppearedAfterTheObservation(t *testing.T) {
 	}
 }
 
+func TestRefusalDetailReadsAsASentenceWhenTheRunObservedAnAbsence(t *testing.T) {
+	t.Parallel()
+	// Detail is contracted as a sentence a caller reports without adding to
+	// it, and an observed absence is the case where the anchor has no commit
+	// to name. The run observed nothing, someone created the target at c1,
+	// and the proposed c2 contains c1, so no commit would be dropped and the
+	// refusal has only the anchor to talk about.
+	git := &fakeGit{
+		parents: linear("c1", "c2"),
+		advertised: map[string][][]vcs.Ref{remote: {
+			nil,
+			{branch(ref, "c1")},
+		}},
+	}
+	guard := safety.New(git)
+	obs := observe(t, guard)
+	refusal := refusalFor(t, guard, safety.Update{Target: target, Proposed: "c2", Anchor: obs})
+	if refusal.Reason != safety.ReasonTargetMoved {
+		t.Fatalf("Reason = %v, want %v", refusal.Reason, safety.ReasonTargetMoved)
+	}
+	want := "the run observed " + ref + " absent and it now stands at c1, so the anchor does not describe what would be updated"
+	if refusal.Detail != want {
+		t.Fatalf("Detail = %q, want %q", refusal.Detail, want)
+	}
+}
+
 func TestDecideRefusesWhenTheRemoteCannotBeRead(t *testing.T) {
 	t.Parallel()
 	git := &fakeGit{

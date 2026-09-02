@@ -129,6 +129,16 @@ func (d Decision) String() string {
 // revision that does not resolve, a comparison git could not answer, and two
 // histories with no common ancestor are all refusals, and none of them has a
 // default.
+//
+// The caller has to have fetched the target before deciding. Every
+// reachability comparison is answered from the local repository, so when the
+// fresh read finds a commit the local repository does not have, the comparison
+// cannot be answered and the refusal carries ReasonUnverifiable rather than
+// the ReasonWouldDiscard or ReasonTargetMoved that would have named what the
+// update drops. What is lost there is the quality of the answer and never its
+// safety: the update is refused either way, so P6 holds whether or not the
+// caller fetched. A caller that wants the informative refusal fetches the
+// target first.
 func (g *Guard) Decide(ctx context.Context, u Update) (Decision, error) {
 	if err := u.Target.validate(); err != nil {
 		return Decision{}, err
@@ -214,7 +224,7 @@ func (g *Guard) refuseMoved(ctx context.Context, u Update, proposed string, curr
 			Target:   u.Target,
 			Anchor:   u.Anchor,
 			Observed: current,
-			Detail: "the run observed " + u.Target.Ref + " at " + u.Anchor.State().String() +
+			Detail: observedClause(u) +
 				" and the remote no longer advertises it, so the anchor cannot be honored",
 		}
 	}
@@ -222,7 +232,7 @@ func (g *Guard) refuseMoved(ctx context.Context, u Update, proposed string, curr
 	if err != nil {
 		return err
 	}
-	reason, detail := ReasonTargetMoved, "the run observed "+u.Target.Ref+" at "+u.Anchor.State().String()+
+	reason, detail := ReasonTargetMoved, observedClause(u)+
 		" and it now stands at "+current.Commit+", so the anchor does not describe what would be updated"
 	if len(discarded) > 0 {
 		reason = ReasonWouldDiscard
@@ -236,6 +246,18 @@ func (g *Guard) refuseMoved(ctx context.Context, u Update, proposed string, curr
 		Discarded: discarded,
 		Detail:    detail,
 	}
+}
+
+// observedClause renders where the run saw the target as the opening of a
+// sentence a caller can report unedited. An observed absence is a state rather
+// than a missing commit, so it reads as observed absent rather than as
+// observed at a state named absent. Every refusal that names the anchor builds
+// its sentence from here, so the two cases cannot drift apart.
+func observedClause(u Update) string {
+	if !u.Anchor.State().Exists {
+		return "the run observed " + u.Target.Ref + " absent"
+	}
+	return "the run observed " + u.Target.Ref + " at " + u.Anchor.State().Commit
 }
 
 // dropped names the commits the fresh read found on the target that
