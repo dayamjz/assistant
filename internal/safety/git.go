@@ -26,9 +26,11 @@ import (
 // make. Until it exists, the typed operation vcs needs is the one declared
 // here: the commits reachable from one revision and not from another, which is
 // git rev-list incorporated..have. This is a named follow-up, not an oversight.
-// A compile-time assertion in this package's tests keeps both claims honest: it
-// fails the build if any of the other three signatures drifts from what
-// *vcs.Repository provides.
+// Two checks in this package's tests keep both claims honest. A compile-time
+// assertion fails the build if RemoteRefs, ResolveCommit, or MergeBase drifts
+// from what *vcs.Repository provides, and a test fails on the day
+// *vcs.Repository satisfies this interface in full, which is the day the
+// paragraph above stops being true.
 type Git interface {
 	// RemoteRefs reads the references a remote advertises, without changing
 	// anything locally. This is the fresh read every decision is made

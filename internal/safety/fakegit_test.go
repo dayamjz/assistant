@@ -95,6 +95,11 @@ func (f *fakeGit) ResolveCommit(_ context.Context, rev string) (string, error) {
 	return commit, nil
 }
 
+// MergeBase returns a best common ancestor, which is a shared commit no other
+// shared commit reaches, and not merely the first shared commit by name. The
+// interface it stands in for promises the best one, so a fake that answered
+// with a distant ancestor would hand the first policy rule that reads the value
+// a wrong answer out of a green suite.
 func (f *fakeGit) MergeBase(_ context.Context, a, b string) (string, error) {
 	if f.mergeBaseErr != nil {
 		return "", f.mergeBaseErr
@@ -107,17 +112,37 @@ func (f *fakeGit) MergeBase(_ context.Context, a, b string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	var shared []string
+	shared := map[string]bool{}
 	for c := range ra {
 		if rb[c] {
-			shared = append(shared, c)
+			shared[c] = true
 		}
 	}
 	if len(shared) == 0 {
 		return "", vcs.ErrNoMergeBase
 	}
-	sort.Strings(shared)
-	return shared[0], nil
+	var best []string
+	for c := range shared {
+		reached := false
+		for d := range shared {
+			if d == c {
+				continue
+			}
+			rd, err := f.reachable(d)
+			if err != nil {
+				return "", err
+			}
+			if rd[c] {
+				reached = true
+				break
+			}
+		}
+		if !reached {
+			best = append(best, c)
+		}
+	}
+	sort.Strings(best)
+	return best[0], nil
 }
 
 func (f *fakeGit) CommitsNotIn(_ context.Context, have, incorporated string) ([]string, error) {

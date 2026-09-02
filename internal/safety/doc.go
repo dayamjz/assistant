@@ -33,14 +33,21 @@
 // Without a durable form, a restarted push stage could only call Observe
 // again, which is the forbidden anchor exactly.
 //
-// So the guarantee moved rather than disappeared. It rests on the checkpoint
-// the record came out of, which the PRD places inside the trust boundary and
-// which internal/graph validates on read. What this package still enforces is
-// that the anchor names the target being updated, that a restored record
-// describes a state a read could have produced, and that every decision is
-// taken against a read Decide makes at decision time. A caller may restore
-// only from a validated checkpoint, and may never build a record from a live
-// read.
+// So the guarantee moved rather than disappeared, and it is worth being exact
+// about where it went. It rests on the PRD's rule that a checkpoint is never
+// loaded from a source outside this home. That is a trust boundary, not an
+// integrity check over the value: a record whose Commit was replaced with the
+// current tip is the same shape as the one the run wrote, so it decodes and
+// validates identically, and validating a checkpoint on read establishes
+// nothing about which commit the record names. A caller that persists an
+// ObservationRecord anywhere outside that boundary has given the guarantee up
+// entirely.
+//
+// What this package still enforces is that the anchor names the target being
+// updated, that a restored record describes a state a read could have
+// produced, and that every decision is taken against a read Decide makes at
+// decision time. A caller may restore only from inside that boundary, and may
+// never build a record from a live read.
 //
 // The residual gaps are real and are not papered over. A caller that calls
 // Observe and Decide back to back gets an anchor as worthless as the one P6

@@ -545,3 +545,23 @@ func TestDecisionStringRendersWhatItsContractStates(t *testing.T) {
 		t.Fatalf("the zero Decision renders as %q, want %q", (safety.Decision{}).String(), want)
 	}
 }
+
+func TestFakeMergeBaseAnswersWithTheNearestCommonAncestor(t *testing.T) {
+	t.Parallel()
+	// The fake stands in for Git.MergeBase, which promises the best common
+	// ancestor. c1 is a common ancestor of c3 and b3 and sorts first by name;
+	// c2 is the one git would report.
+	git := &fakeGit{parents: map[string][]string{
+		"c1": nil,
+		"c2": {"c1"},
+		"c3": {"c2"},
+		"b3": {"c2"},
+	}}
+	base, err := git.MergeBase(context.Background(), "c3", "b3")
+	if err != nil {
+		t.Fatalf("MergeBase: %v", err)
+	}
+	if base != "c2" {
+		t.Fatalf("MergeBase(c3, b3) = %q, want c2, the nearest common ancestor and not the first by name", base)
+	}
+}

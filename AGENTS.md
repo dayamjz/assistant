@@ -76,8 +76,10 @@ Each has produced findings in more than one package.
 - `internal/safety` owns whether a branch update may proceed and on what anchor.
   `internal/vcs` stays mechanism only, so a lease, an incorporation check, or a
   force decision belongs in `internal/safety` even when it would be shorter to
-  write at the git call. Its anchor is an `Observation` a caller cannot build
-  from a commit identifier; read its `doc.go` for why, and for the residual gap
+  write at the git call. Its anchor is an `Observation`, and only `Guard.Observe`
+  or `RestoreObservedFromCheckpoint` produces one. The wrong anchor is not
+  unrepresentable: a restored anchor's provenance rests on the checkpoint it came
+  out of, not on the type. Read its `doc.go` for why, and for the residual gaps
   that leaves.
 - `internal/agents` is the only package that starts an agent process. It owns
   the process tree, the per-invocation environment, and what is recorded about
