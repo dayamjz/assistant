@@ -3,6 +3,7 @@ package agents_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -49,18 +50,54 @@ func spawningInvocation(t *testing.T, mode string) (agents.Invocation, string) {
 }
 
 // awaitFile waits for the stand-in agent to record its process identifiers,
-// which is how a test knows the tree exists before it cancels.
-func awaitFile(t *testing.T, path string) []byte {
-	t.Helper()
+// which is how a test knows the tree exists before it cancels. It returns an
+// error rather than failing the test, because the tests call it from a
+// goroutine they started, where a t.Fatalf would exit that goroutine only:
+// the cancellation it guards would never happen, the invocation would run for
+// another helperHold, and a poll that expired after the test had returned
+// would panic the whole binary instead of failing one test.
+func awaitFile(path string) ([]byte, error) {
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		if content, err := os.ReadFile(path); err == nil && len(content) > 0 {
-			return content
+			return content, nil
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatalf("the stand-in agent never recorded its process identifiers at %s", path)
-	return nil
+	return nil, fmt.Errorf("the stand-in agent never recorded its process identifiers at %s", path)
+}
+
+// mustAwaitFile is awaitFile on the test's own goroutine, where failing is
+// allowed.
+func mustAwaitFile(t *testing.T, path string) []byte {
+	t.Helper()
+	content, err := awaitFile(path)
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+	return content
+}
+
+// cancelOnceSpawned cancels ctx as soon as the stand-in agent has recorded its
+// process identifiers, and cancels it anyway if it never does, so a broken
+// stand-in ends the invocation rather than leaving the test waiting on it. The
+// returned function reports what the wait saw and must be called from the test
+// goroutine after the invocation has returned.
+func cancelOnceSpawned(t *testing.T, pidFile string) (context.Context, func()) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(t.Context())
+	waited := make(chan error, 1)
+	go func() {
+		_, err := awaitFile(pidFile)
+		waited <- err
+		cancel()
+	}()
+	return ctx, func() {
+		t.Helper()
+		if err := <-waited; err != nil {
+			t.Fatalf("%v", err)
+		}
+	}
 }
 
 func TestACancelledInvocationIsATypedRefusal(t *testing.T) {
@@ -68,14 +105,11 @@ func TestACancelledInvocationIsATypedRefusal(t *testing.T) {
 	runner := newRunner(t, agents.WithRecorder(rec))
 	inv, pidFile := spawningInvocation(t, "spawn")
 
-	ctx, cancel := context.WithCancel(t.Context())
-	go func() {
-		awaitFile(t, pidFile)
-		cancel()
-	}()
+	ctx, spawned := cancelOnceSpawned(t, pidFile)
 
 	started := time.Now()
 	_, err := runner.Run(ctx, agents.PurposeReview, inv)
+	spawned()
 	// Cancellation ends the invocation rather than waiting for the agent to
 	// finish on its own, which it would not do for another helperHold.
 	if elapsed := time.Since(started); elapsed > promptly {
@@ -130,14 +164,11 @@ func TestTheSweepSeamIsAskedAboutEveryInvocation(t *testing.T) {
 	}
 
 	cancelled, pidFile := spawningInvocation(t, "spawn")
-	ctx, cancel := context.WithCancel(t.Context())
-	go func() {
-		awaitFile(t, pidFile)
-		cancel()
-	}()
+	ctx, spawned := cancelOnceSpawned(t, pidFile)
 	if _, err := runner.Run(ctx, agents.PurposeFix, cancelled); err == nil {
 		t.Fatal("the cancelled invocation reported success")
 	}
+	spawned()
 
 	got := sweep.seen()
 	want := []string{done.Dir, cancelled.Dir}

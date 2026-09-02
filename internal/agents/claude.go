@@ -274,6 +274,7 @@ func (r *claudeRunner) invoke(ctx context.Context, purpose Purpose, inv Invocati
 	proc := runProcess(ctx, procSpec{
 		bin:    r.resolved,
 		args:   r.arguments(inv, resume),
+		stdin:  inv.Prompt,
 		dir:    inv.Dir,
 		env:    environment(r.settings.base, inv.Env),
 		grace:  r.settings.grace,
@@ -291,30 +292,43 @@ func (r *claudeRunner) invoke(ctx context.Context, purpose Purpose, inv Invocati
 		return fail(&proc, FailureOversize,
 			fmt.Errorf("agent printed more than the limit of %d bytes", r.settings.maxOut), "")
 	}
-	// An *exec.ExitError says the process ran and reported a status, however
-	// that status was reached. Anything else says the process could not be run
-	// to a complete result, which is a different thing to report and is
-	// checked first so a status of -1 is not read as an exit.
+	// The envelope is read before anything is classified, so an agent that
+	// reported what it spent has that recorded whichever way it then signalled
+	// failure. A failed invocation is exactly the one whose cost is worth
+	// knowing, and recording a zero for it would understate what was spent.
+	var envelope claudeEnvelope
+	decodeErr := json.Unmarshal(proc.stdout, &envelope)
+	if decodeErr == nil {
+		record.Usage = envelope.usage()
+		if envelope.Model != "" {
+			record.Model = envelope.Model
+		}
+	}
+
+	// Two things have to hold before a status means anything: the process must
+	// have run, which an *exec.ExitError says and any other error denies, and
+	// it must have reported a status of its own rather than having been ended
+	// by something else. Checking both here is what keeps the -1 that stands
+	// for "no status" from being read as an ordinary exit, and the cause
+	// travels with the refusal, so an agent the system killed is not
+	// indistinguishable from one that crashed.
 	var exited *exec.ExitError
-	if proc.err != nil && !errors.As(proc.err, &exited) {
+	if !proc.exited || (proc.err != nil && !errors.As(proc.err, &exited)) {
 		return fail(&proc, FailureProcess, proc.err, "")
+	}
+	// The agent's own verdict outranks its exit status. An agent that says it
+	// failed is an agent failure whatever status came with it, and what it
+	// said about the failure is the best evidence there is of what went wrong.
+	if decodeErr == nil && envelope.IsError {
+		return fail(&proc, FailureAgent,
+			errors.New("agent reported its own failure"), envelope.failureText())
 	}
 	if proc.code != 0 {
 		return fail(&proc, FailureExit, nil, "")
 	}
-
-	var envelope claudeEnvelope
-	if err := json.Unmarshal(proc.stdout, &envelope); err != nil {
+	if decodeErr != nil {
 		return fail(&proc, FailureOutput,
-			fmt.Errorf("agent did not print a result envelope: %w", err), "")
-	}
-	record.Usage = envelope.usage()
-	if envelope.Model != "" {
-		record.Model = envelope.Model
-	}
-	if envelope.IsError {
-		return fail(&proc, FailureAgent,
-			errors.New("agent reported its own failure"), envelope.failureText())
+			fmt.Errorf("agent did not print a result envelope: %w", decodeErr), "")
 	}
 	if envelope.Result == "" {
 		return fail(&proc, FailureOutput,
@@ -347,12 +361,20 @@ func (r *claudeRunner) invoke(ctx context.Context, purpose Purpose, inv Invocati
 }
 
 // arguments builds the command line. The configured entry's own flags come
-// first, then the flags the run manages itself. internal/config refuses a
-// configured entry that names one of the managed flags, so the two cannot
-// disagree here.
+// first, then the four this run manages: --print, --output-format, --model,
+// and --resume.
 //
-// The prompt is the last argument and is separated by "--", so a prompt that
-// begins with a dash is read as the prompt rather than as an option.
+// Of those four, config.ReservedAgentFlags refuses a configured entry that
+// names --output-format or --resume, so an entry cannot contradict the two
+// that decide how output is read and which session is continued. --print and
+// --model are managed here without being reserved there, so an entry may
+// carry either: its own copy is placed ahead of the managed one and what a
+// repeated flag means is left to the agent's own argument parsing.
+//
+// The prompt is not on the command line at all. It is written to the agent's
+// standard input, so its size is bounded by MaxPromptBytes rather than by an
+// argument list, and a prompt that begins with a dash cannot be read as an
+// option.
 func (r *claudeRunner) arguments(inv Invocation, resume string) []string {
 	args := slices.Clone(r.extra)
 	args = append(args, "--print", "--output-format", "json")
@@ -362,7 +384,7 @@ func (r *claudeRunner) arguments(inv Invocation, resume string) []string {
 	if resume != "" {
 		args = append(args, "--resume", resume)
 	}
-	return append(args, "--", inv.Prompt)
+	return args
 }
 
 // report hands one record to the configured Recorder, if there is one.
@@ -398,24 +420,37 @@ type claudeEnvelope struct {
 	Result    string `json:"result"`
 	SessionID string `json:"session_id"`
 	Model     string `json:"model"`
-	NumTurns  int    `json:"num_turns"`
-	Usage     struct {
-		InputTokens              int64 `json:"input_tokens"`
-		OutputTokens             int64 `json:"output_tokens"`
-		CacheCreationInputTokens int64 `json:"cache_creation_input_tokens"`
-		CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
+	// Every count is a pointer so that a counter the agent omitted stays
+	// distinguishable from one it reported as zero. Decoding into a number
+	// would collapse the two here, where the difference is still knowable.
+	NumTurns *int64 `json:"num_turns"`
+	Usage    struct {
+		InputTokens              *int64 `json:"input_tokens"`
+		OutputTokens             *int64 `json:"output_tokens"`
+		CacheCreationInputTokens *int64 `json:"cache_creation_input_tokens"`
+		CacheReadInputTokens     *int64 `json:"cache_read_input_tokens"`
 	} `json:"usage"`
 }
 
-// usage converts the reported token counts into the recorded form.
+// usage converts the reported counts into the recorded form, carrying which of
+// them the agent actually reported.
 func (e claudeEnvelope) usage() Usage {
 	return Usage{
-		InputTokens:         e.Usage.InputTokens,
-		OutputTokens:        e.Usage.OutputTokens,
-		CacheReadTokens:     e.Usage.CacheReadInputTokens,
-		CacheCreationTokens: e.Usage.CacheCreationInputTokens,
-		Turns:               e.NumTurns,
+		InputTokens:         reportedCount(e.Usage.InputTokens),
+		OutputTokens:        reportedCount(e.Usage.OutputTokens),
+		CacheReadTokens:     reportedCount(e.Usage.CacheReadInputTokens),
+		CacheCreationTokens: reportedCount(e.Usage.CacheCreationInputTokens),
+		Turns:               reportedCount(e.NumTurns),
 	}
+}
+
+// reportedCount turns a decoded count into a Count, leaving one the agent
+// omitted or wrote as null unreported.
+func reportedCount(n *int64) Count {
+	if n == nil {
+		return Count{}
+	}
+	return ReportedCount(*n)
 }
 
 // failureText is what the agent said about its own failure. It is content, so

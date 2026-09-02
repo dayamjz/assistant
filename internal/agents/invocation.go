@@ -85,17 +85,26 @@ func (s Shape) String() string {
 	}
 }
 
-// MaxPromptBytes bounds one prompt. The bound exists so an oversized prompt is
-// refused by name here rather than surfacing as an argument list the operating
-// system rejected, which says nothing a caller can act on. It is far above any
-// prompt a stage assembles from bounded configuration.
+// MaxPromptBytes bounds one prompt. The prompt is delivered on the agent's
+// standard input rather than on its command line, so this is not a stand-in
+// for an argument list ceiling: it bounds what one invocation may hand an
+// agent, so a prompt assembled from something unbounded, such as a diff of
+// whatever the branch happens to contain, is refused by name here rather than
+// sent. It is far above any prompt a stage assembles from bounded
+// configuration.
+//
+// It bounds the prompt this package is handed. What the agent then does with
+// a prompt of that size, including refusing it for its own reasons, is the
+// agent's own limit and not this one.
 const MaxPromptBytes = 1 << 20
 
 // Invocation is one prompt and everything the agent needs to answer it. It
 // carries no session and no way to name one: session reuse lives on Fixer, so
 // a caller cannot attach memory to a review by filling in a field.
 type Invocation struct {
-	// Prompt is what the agent is asked. It is content: it is never recorded.
+	// Prompt is what the agent is asked. It is written to the agent's standard
+	// input rather than placed on its command line. It is content: it is never
+	// recorded.
 	Prompt string
 	// Shape is what the agent must return.
 	Shape Shape

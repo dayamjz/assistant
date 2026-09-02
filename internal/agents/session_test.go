@@ -137,13 +137,13 @@ func TestOnlyTheFixerCarriesASessionAcrossRounds(t *testing.T) {
 		t.Errorf("a fixer that has run nothing already holds %q", fixer.Reference())
 	}
 
-	inv := invocation(t, agents.ShapeText, map[string]string{helperModeVar: "args"})
+	inv := invocation(t, agents.ShapeText, map[string]string{helperModeVar: "call"})
 	first, err := fixer.Apply(t.Context(), inv)
 	if err != nil {
 		t.Fatalf("the first fix round failed: %v", err)
 	}
-	if strings.Contains(first.Text, "--resume") {
-		t.Errorf("the first round resumed something: %q", first.Text)
+	if resumed := decodeCall(t, first.Text).resumedSession(); resumed != "" {
+		t.Errorf("the first round resumed %q", resumed)
 	}
 	if fixer.Reference() != "session-opened" {
 		t.Errorf("the fixer holds %q after its first round, want the agent's session", fixer.Reference())
@@ -153,8 +153,8 @@ func TestOnlyTheFixerCarriesASessionAcrossRounds(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the second fix round failed: %v", err)
 	}
-	if !strings.Contains(second.Text, "--resume\nsession-opened") {
-		t.Errorf("the second round did not resume the first round's session: %q", second.Text)
+	if resumed := decodeCall(t, second.Text).resumedSession(); resumed != "session-opened" {
+		t.Errorf("the second round resumed %q, want the session the first round opened", resumed)
 	}
 
 	if len(rec.records) != 2 {
@@ -178,12 +178,12 @@ func TestAFixerSessionCanBeResumedFromItsReference(t *testing.T) {
 		t.Fatalf("resuming a fixer session: %v", err)
 	}
 
-	got, err := fixer.Apply(t.Context(), invocation(t, agents.ShapeText, map[string]string{helperModeVar: "args"}))
+	got, err := fixer.Apply(t.Context(), invocation(t, agents.ShapeText, map[string]string{helperModeVar: "call"}))
 	if err != nil {
 		t.Fatalf("the resumed round failed: %v", err)
 	}
-	if !strings.Contains(got.Text, "--resume\nsession-from-an-earlier-service") {
-		t.Errorf("the round did not resume the given session: %q", got.Text)
+	if resumed := decodeCall(t, got.Text).resumedSession(); resumed != "session-from-an-earlier-service" {
+		t.Errorf("the round resumed %q, want the session it was given", resumed)
 	}
 	if len(rec.records) != 1 || rec.records[0].Session != agents.SessionResumed {
 		t.Errorf("records are %+v, want one resumed fix", rec.records)

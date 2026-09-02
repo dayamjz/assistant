@@ -3,7 +3,7 @@
 package agents_test
 
 import (
-	"context"
+	"errors"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -70,16 +70,13 @@ func TestACancelledInvocationLeavesNoSurvivingChildProcess(t *testing.T) {
 			runner := newRunner(t)
 			inv, pidFile := spawningInvocation(t, mode)
 
-			ctx, cancel := context.WithCancel(t.Context())
-			go func() {
-				awaitFile(t, pidFile)
-				cancel()
-			}()
+			ctx, spawned := cancelOnceSpawned(t, pidFile)
 
 			started := time.Now()
 			if _, err := runner.Run(ctx, agents.PurposeReview, inv); err == nil {
 				t.Fatal("the cancelled invocation reported success")
 			}
+			spawned()
 			// The invocation was ended rather than waited out, including in
 			// the mode where the polite signal is ignored and only the
 			// escalation ends it.
@@ -91,7 +88,7 @@ func TestACancelledInvocationLeavesNoSurvivingChildProcess(t *testing.T) {
 			// is going to do about these processes. Both the agent and the
 			// child it started must be gone, including in the mode where both
 			// ignore the polite signal and only the forceful one ends them.
-			leader, child := readPids(t, awaitFile(t, pidFile))
+			leader, child := readPids(t, mustAwaitFile(t, pidFile))
 			assertGone(t, "the agent", leader)
 			assertGone(t, "the child the agent started", child)
 		})
@@ -114,7 +111,7 @@ func TestAFinishedInvocationLeavesNoSurvivingChildProcess(t *testing.T) {
 		t.Fatalf("the agent's result did not come back: %q", got.Text)
 	}
 
-	_, child := readPids(t, awaitFile(t, pidFile))
+	_, child := readPids(t, mustAwaitFile(t, pidFile))
 	assertGone(t, "the child the agent started", child)
 }
 
@@ -130,7 +127,7 @@ func TestTheStandInAgentsTreeSurvivesWithoutAnInvocation(t *testing.T) {
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("starting the stand-in agent directly: %v", err)
 	}
-	leader, child := readPids(t, awaitFile(t, pidFile))
+	leader, child := readPids(t, mustAwaitFile(t, pidFile))
 	t.Cleanup(func() {
 		_ = syscall.Kill(child, syscall.SIGKILL)
 		_ = syscall.Kill(leader, syscall.SIGKILL)
@@ -145,5 +142,45 @@ func TestTheStandInAgentsTreeSurvivesWithoutAnInvocation(t *testing.T) {
 	}
 	if !alive(child) {
 		t.Error("the child ended on its own, so the termination tests prove nothing")
+	}
+}
+
+// An agent the system ends with a signal reported no status of its own, so it
+// is a process failure rather than an exit, and the cause has to survive: a
+// killed agent whose error says only "exit" with no code and no cause cannot
+// be told apart from one that crashed, which is the difference a person
+// diagnosing a run needs most.
+func TestASignalledAgentIsAProcessFailureThatSaysWhatEndedIt(t *testing.T) {
+	rec := &recorder{}
+	runner := newRunner(t, agents.WithRecorder(rec))
+	inv := invocation(t, agents.ShapeText, map[string]string{helperModeVar: "self-kill"})
+
+	_, err := runner.Run(t.Context(), agents.PurposeReview, inv)
+	var refusal *agents.InvocationError
+	if !errors.As(err, &refusal) {
+		t.Fatalf("refusal is not an *InvocationError: %v", err)
+	}
+	if refusal.Failure != agents.FailureProcess {
+		t.Errorf("failure category is %q, want %q", refusal.Failure, agents.FailureProcess)
+	}
+	var exit *exec.ExitError
+	if !errors.As(refusal.Err, &exit) {
+		t.Fatalf("the refusal carries %v as its cause, want the error the process ended with", refusal.Err)
+	}
+	// The stand-in agent was signalled rather than exiting, which is the case
+	// this is about: there is no status to report and the code is -1.
+	if exit.ProcessState.Exited() {
+		t.Error("the agent reported an exit status, so this is not the signalled path")
+	}
+	if refusal.ExitCode >= 0 {
+		t.Errorf("exit code is %d, want the -1 that stands for no status", refusal.ExitCode)
+	}
+	// What the reader is left with names what happened rather than being a
+	// bare category with nothing after it.
+	if rendered := refusal.Error(); !strings.Contains(rendered, "signal") {
+		t.Errorf("the refusal reads %q, which does not say what ended the agent", rendered)
+	}
+	if len(rec.records) != 1 || rec.records[0].Failure != agents.FailureProcess {
+		t.Errorf("records are %+v, want one recording the process failure", rec.records)
 	}
 }

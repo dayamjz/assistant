@@ -3,11 +3,11 @@ package agents_test
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"os/signal"
 	"strconv"
-	"strings"
 	"testing"
 	"time"
 
@@ -55,30 +55,41 @@ func helperMain(mode string) {
 		// Print a well-formed result envelope carrying the configured result.
 		fmt.Print(helperEnvelope(os.Getenv(helperResultVar), helperSession()))
 	case "raw":
-		// Print whatever the test configured, envelope or not.
+		// Print whatever the test configured, envelope or not, and exit with
+		// the status it configured, so the two can be combined.
+		fmt.Fprint(os.Stderr, os.Getenv(helperStderrVar))
 		fmt.Print(os.Getenv(helperStdoutVar))
-	case "args":
-		// Report the command line this package built, as the result.
-		fmt.Print(helperEnvelope(strings.Join(os.Args[1:], "\n"), helperSession()))
+		os.Exit(helperExitCode())
+	case "call":
+		// Report how this package called the agent: the command line it built
+		// and what reached the agent's standard input.
+		input, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "reading standard input: "+err.Error())
+			os.Exit(6)
+		}
+		encoded, err := json.Marshal(agentCall{Args: os.Args[1:], Stdin: string(input)})
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "encoding the call: "+err.Error())
+			os.Exit(7)
+		}
+		fmt.Print(helperEnvelope(string(encoded), helperSession()))
 	case "env":
 		// Report the value of one environment variable, as the result.
 		fmt.Print(helperEnvelope(os.Getenv(os.Getenv(helperEchoVar)), helperSession()))
 	case "error-envelope":
 		// A result envelope in which the agent reports its own failure.
-		out := map[string]any{
-			"is_error": true,
-			"subtype":  "error_during_execution",
-			"result":   os.Getenv(helperResultVar),
-		}
-		encoded, _ := json.Marshal(out)
-		fmt.Print(string(encoded))
+		fmt.Print(helperErrorEnvelope(os.Getenv(helperResultVar)))
 	case "oversize":
 		n, _ := strconv.Atoi(os.Getenv(helperBytesVar))
 		_, _ = os.Stdout.Write(make([]byte, n))
 	case "fail":
 		fmt.Fprint(os.Stderr, os.Getenv(helperStderrVar))
-		code, _ := strconv.Atoi(os.Getenv(helperExitVar))
-		os.Exit(code)
+		os.Exit(helperExitCode())
+	case "self-kill":
+		// End without reporting a status of the agent's own, which is what an
+		// agent the system kills looks like to this package.
+		helperSelfKill()
 	case "spawn-and-exit":
 		// Start a child, then finish successfully and leave it running. It is
 		// the completion path: nothing was cancelled and the agent did nothing
@@ -102,6 +113,13 @@ func helperMain(mode string) {
 		os.Exit(2)
 	}
 	os.Exit(0)
+}
+
+// helperExitCode is the status the stand-in agent exits with, zero when the
+// test configured none.
+func helperExitCode() int {
+	code, _ := strconv.Atoi(os.Getenv(helperExitVar))
+	return code
 }
 
 // helperSpawn starts a grandchild that stays in the invocation's process
@@ -150,10 +168,21 @@ func helperSession() string {
 
 // helperEnvelope renders a result envelope of the shape the adapter reads.
 func helperEnvelope(result, session string) string {
+	return helperResultEnvelope(false, "success", result, session)
+}
+
+// helperErrorEnvelope renders a result envelope in which the agent reports its
+// own failure. It carries the same usage as a successful one, because an agent
+// that failed still spent what it spent.
+func helperErrorEnvelope(result string) string {
+	return helperResultEnvelope(true, "error_during_execution", result, "session-opened")
+}
+
+func helperResultEnvelope(isError bool, subtype, result, session string) string {
 	out := map[string]any{
 		"type":       "result",
-		"subtype":    "success",
-		"is_error":   false,
+		"subtype":    subtype,
+		"is_error":   isError,
 		"result":     result,
 		"session_id": session,
 		"model":      "stand-in-model",
@@ -170,6 +199,45 @@ func helperEnvelope(result, session string) string {
 		panic(err)
 	}
 	return string(encoded)
+}
+
+// helperUsage is the usage every envelope the stand-in agent prints reports.
+func helperUsage() agents.Usage {
+	return agents.Usage{
+		InputTokens:         agents.ReportedCount(11),
+		OutputTokens:        agents.ReportedCount(22),
+		CacheReadTokens:     agents.ReportedCount(33),
+		CacheCreationTokens: agents.ReportedCount(44),
+		Turns:               agents.ReportedCount(3),
+	}
+}
+
+// agentCall is what the stand-in agent's "call" mode reports: the command line
+// this package built and what reached the agent's standard input.
+type agentCall struct {
+	Args  []string `json:"args"`
+	Stdin string   `json:"stdin"`
+}
+
+// decodeCall reads what the "call" mode reported out of an invocation's text.
+func decodeCall(t *testing.T, text string) agentCall {
+	t.Helper()
+	var call agentCall
+	if err := json.Unmarshal([]byte(text), &call); err != nil {
+		t.Fatalf("the stand-in agent did not report how it was called: %v (%q)", err, text)
+	}
+	return call
+}
+
+// resumedSession is the session the command line asked to continue, empty when
+// it asked for none.
+func (c agentCall) resumedSession() string {
+	for i, a := range c.Args {
+		if a == "--resume" && i+1 < len(c.Args) {
+			return c.Args[i+1]
+		}
+	}
+	return ""
 }
 
 // helperBinary is the path tests point the adapter at.

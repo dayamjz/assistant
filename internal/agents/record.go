@@ -1,6 +1,7 @@
 package agents
 
 import (
+	"strconv"
 	"time"
 
 	"github.com/dayamjz/assistant/internal/findings"
@@ -24,21 +25,55 @@ const (
 	SessionResumed SessionUse = "resumed"
 )
 
-// Usage is what an invocation cost in tokens and turns. Zero values mean the
-// agent reported nothing, which is not the same as reporting zero; a caller
-// storing this should keep that distinction rather than fabricating a zero,
-// per the schema rule in PRD section 8.
+// Count is one quantity an agent reported about what an invocation cost, or
+// the absence of a report. Its fields are unexported and the only way to read
+// it is Value, which hands back whether the agent reported it alongside the
+// number, so a caller cannot read a count without learning whether it is a
+// reported one. The zero Count is an unreported count.
+//
+// This exists because a reported zero and a silence are different facts and
+// only one of them may be stored as a zero. An int cannot hold that
+// difference, so the distinction would be lost here, where the data is born,
+// and no layer downstream could recover it.
+type Count struct {
+	value    int64
+	reported bool
+}
+
+// ReportedCount is a count the agent reported, including a reported zero.
+func ReportedCount(n int64) Count { return Count{value: n, reported: true} }
+
+// Value returns the count and whether the agent reported it. The count is zero
+// when it was not reported, and that zero is not a measurement: a caller
+// storing it must store an unknown rather than a zero.
+func (c Count) Value() (int64, bool) { return c.value, c.reported }
+
+// String renders the count for a diagnostic, and says so when there is none.
+func (c Count) String() string {
+	if !c.reported {
+		return "unreported"
+	}
+	return strconv.FormatInt(c.value, 10)
+}
+
+// Usage is what an invocation cost in tokens and turns, as the agent reported
+// it. Every field is a Count, so a field the agent did not report reads back
+// as unreported rather than as a zero, which is the distinction PRD section
+// 8's schema rule needs at the point a caller stores one.
+//
+// What an agent reports is what is here. This package neither adds to it nor
+// checks it: a counter an agent reports wrongly is recorded as reported.
 type Usage struct {
 	// InputTokens is the prompt tokens the agent reported.
-	InputTokens int64
+	InputTokens Count
 	// OutputTokens is the tokens the agent generated.
-	OutputTokens int64
+	OutputTokens Count
 	// CacheReadTokens is prompt tokens served from a cache.
-	CacheReadTokens int64
+	CacheReadTokens Count
 	// CacheCreationTokens is prompt tokens written to a cache.
-	CacheCreationTokens int64
+	CacheCreationTokens Count
 	// Turns is how many turns the agent took.
-	Turns int
+	Turns Count
 }
 
 // Record is what is kept about one invocation. PRD section 8 lists it as

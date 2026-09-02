@@ -21,8 +21,13 @@ const maxStderr = 8 << 10
 // part of running an agent needs, so the adapter above it builds a spec and
 // this file owns the process.
 type procSpec struct {
-	bin    string
-	args   []string
+	bin  string
+	args []string
+	// stdin is written to the child's standard input, which is then closed.
+	// It is how the prompt reaches the agent: an argument list has a size
+	// ceiling this package does not set and cannot raise, and a prompt is the
+	// one input a stage can make large.
+	stdin  string
 	dir    string
 	env    []string
 	grace  time.Duration
@@ -44,6 +49,10 @@ type procResult struct {
 	// err is the error from starting or waiting on the process, nil when it
 	// ran and exited on its own.
 	err error
+	// exited is true when the process ran and reported an exit status of its
+	// own. It is false when it never started and when it was ended by
+	// something else, which is a different thing to report than a status.
+	exited bool
 }
 
 // runProcess starts one process, collects its output, and terminates the whole
@@ -63,9 +72,13 @@ func runProcess(ctx context.Context, spec procSpec) procResult {
 	cmd := exec.Command(spec.bin, spec.args...)
 	cmd.Dir = spec.dir
 	cmd.Env = spec.env
-	// A nil Stdin is os.DevNull, so an agent that reads standard input sees
-	// EOF rather than waiting for a person who is not there.
+	// Standard input carries spec.stdin and is then closed, so an agent
+	// reading it reaches EOF rather than waiting for a person who is not
+	// there. With nothing to carry it stays os.DevNull, which is EOF at once.
 	cmd.Stdin = nil
+	if spec.stdin != "" {
+		cmd.Stdin = strings.NewReader(spec.stdin)
+	}
 
 	stdout := &boundedWriter{limit: spec.maxOut}
 	// Standard error is diagnostic text rather than a result, so it is kept up
@@ -74,9 +87,10 @@ func runProcess(ctx context.Context, spec procSpec) procResult {
 	stderr := &boundedWriter{limit: maxStderr, truncate: true}
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
-	// WaitDelay bounds the wait for the output pipes to close after the leader
-	// exits, so a descendant holding them open cannot keep this call waiting
-	// past the grace period.
+	// WaitDelay bounds the wait for the pipes to close after the leader exits,
+	// so neither a descendant holding the output open nor an agent that never
+	// read its standard input can keep this call waiting past the grace
+	// period. Either one ends the invocation with a named failure instead.
 	cmd.WaitDelay = spec.grace
 	setProcessGroup(cmd)
 
@@ -110,6 +124,7 @@ func runProcess(ctx context.Context, spec procSpec) procResult {
 	res := procResult{
 		stderr: stderr.text(),
 		code:   exitStatus(cmd),
+		exited: exitedItself(cmd),
 		over:   stdout.over,
 		err:    waitErr,
 	}
@@ -127,6 +142,15 @@ func exitStatus(cmd *exec.Cmd) int {
 		return -1
 	}
 	return cmd.ProcessState.ExitCode()
+}
+
+// exitedItself reports whether the process ran and reported an exit status of
+// its own, which is false both for a process that never started and for one
+// that was ended by something else. The distinction is only observable where
+// the platform reports it: on unix a signalled process is not an exit, and on
+// Windows every process that ran reports a status.
+func exitedItself(cmd *exec.Cmd) bool {
+	return cmd.ProcessState != nil && cmd.ProcessState.Exited()
 }
 
 // boundedWriter collects output up to a limit. Over the limit it either stops

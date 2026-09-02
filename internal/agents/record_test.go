@@ -124,15 +124,74 @@ func TestASuccessfulInvocationRecordsWhatItCost(t *testing.T) {
 	if got.Duration < 0 {
 		t.Errorf("duration is %v", got.Duration)
 	}
-	want := agents.Usage{
-		InputTokens:         11,
-		OutputTokens:        22,
-		CacheReadTokens:     33,
-		CacheCreationTokens: 44,
-		Turns:               3,
+	if got.Usage != helperUsage() {
+		t.Errorf("usage is %+v, want %+v", got.Usage, helperUsage())
 	}
-	if got.Usage != want {
-		t.Errorf("usage is %+v, want %+v", got.Usage, want)
+}
+
+// A count the agent reported as zero and one it never reported are different
+// facts, and only the second may be stored as an unknown. The type is what
+// keeps them apart: there is no exported field holding a bare number, so a
+// caller reading either one is handed whether it was reported.
+func TestAReportedZeroCountIsNotAnUnreportedOne(t *testing.T) {
+	usageOf := func(t *testing.T, envelope string) agents.Usage {
+		t.Helper()
+		rec := &recorder{}
+		runner := newRunner(t, agents.WithRecorder(rec))
+		inv := invocation(t, agents.ShapeText, map[string]string{
+			helperModeVar:   "raw",
+			helperStdoutVar: envelope,
+		})
+		if _, err := runner.Run(t.Context(), agents.PurposeReview, inv); err != nil {
+			t.Fatalf("invocation failed: %v", err)
+		}
+		if len(rec.records) != 1 {
+			t.Fatalf("recorded %d invocations, want 1", len(rec.records))
+		}
+		return rec.records[0].Usage
+	}
+
+	reported := usageOf(t, `{"result":"done","num_turns":0,"usage":{"input_tokens":0}}`)
+	if n, ok := reported.InputTokens.Value(); !ok || n != 0 {
+		t.Errorf("a reported zero reads (%d, %v), want (0, true)", n, ok)
+	}
+	if n, ok := reported.Turns.Value(); !ok || n != 0 {
+		t.Errorf("a reported zero turn count reads (%d, %v), want (0, true)", n, ok)
+	}
+	// The same envelope said nothing about the rest, and silence is not zero.
+	if n, ok := reported.OutputTokens.Value(); ok || n != 0 {
+		t.Errorf("an omitted count reads (%d, %v), want (0, false)", n, ok)
+	}
+
+	silent := usageOf(t, `{"result":"done"}`)
+	if n, ok := silent.InputTokens.Value(); ok || n != 0 {
+		t.Errorf("an unreported count reads (%d, %v), want (0, false)", n, ok)
+	}
+	if reported == silent {
+		t.Error("an agent that reported zeros and one that reported nothing recorded the same usage")
+	}
+}
+
+// The distinction above cannot be kept by a caller that is handed a bare
+// number, so it is kept by the type: every count in a Usage carries whether it
+// was reported, and none of them can be read without it.
+func TestEveryCountInAUsageCarriesWhetherItWasReported(t *testing.T) {
+	usage := reflect.TypeFor[agents.Usage]()
+	if usage.NumField() == 0 {
+		t.Fatal("Usage holds no counts")
+	}
+	for i := range usage.NumField() {
+		field := usage.Field(i)
+		if field.Type != reflect.TypeFor[agents.Count]() {
+			t.Errorf("Usage.%s is %s, want %s, which a caller cannot read without its reported flag",
+				field.Name, field.Type, reflect.TypeFor[agents.Count]())
+		}
+	}
+	count := reflect.TypeFor[agents.Count]()
+	for i := range count.NumField() {
+		if field := count.Field(i); field.IsExported() {
+			t.Errorf("Count.%s is exported, so a count can be read as a bare number", field.Name)
+		}
 	}
 }
 

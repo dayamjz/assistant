@@ -245,12 +245,13 @@ func TestOversizeOutputIsDiscardedRatherThanTruncated(t *testing.T) {
 	}
 }
 
-// The run manages the flags that decide the output format and the session, so
-// this asserts they are on the command line and that a prompt beginning with a
-// dash is read as the prompt.
-func TestTheRunManagesTheOutputFormatAndPromptSeparation(t *testing.T) {
+// The run manages the flags that decide the output format, the model, and the
+// session. The prompt is not one of them: it reaches the agent on standard
+// input, so nothing about it is decided by an argument list, and a prompt
+// beginning with a dash cannot be read as an option.
+func TestTheRunManagesItsFlagsAndDeliversThePromptOnStandardInput(t *testing.T) {
 	runner := newRunner(t)
-	inv := invocation(t, agents.ShapeText, map[string]string{helperModeVar: "args"})
+	inv := invocation(t, agents.ShapeText, map[string]string{helperModeVar: "call"})
 	inv.Prompt = "--not-a-flag but a prompt"
 	inv.Model = "a-model"
 
@@ -258,18 +259,122 @@ func TestTheRunManagesTheOutputFormatAndPromptSeparation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("invocation failed: %v", err)
 	}
-	args := strings.Split(got.Text, "\n")
-	joined := strings.Join(args, " ")
+	call := decodeCall(t, got.Text)
+	joined := strings.Join(call.Args, " ")
 	for _, want := range []string{"--print", "--output-format json", "--model a-model"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("command line %q does not carry %q", joined, want)
 		}
 	}
-	if args[len(args)-1] != inv.Prompt || args[len(args)-2] != "--" {
-		t.Errorf("the prompt is not the last argument after a separator: %q", args)
+	for _, arg := range call.Args {
+		if strings.Contains(arg, inv.Prompt) {
+			t.Errorf("the prompt is on the command line: %q", call.Args)
+			break
+		}
 	}
-	if strings.Contains(joined, "--resume") {
-		t.Errorf("a session-free invocation carried --resume: %q", joined)
+	if call.Stdin != inv.Prompt {
+		t.Errorf("the agent read %q on standard input, want the prompt %q", call.Stdin, inv.Prompt)
+	}
+	if call.resumedSession() != "" {
+		t.Errorf("a session-free invocation asked to resume %q", call.resumedSession())
+	}
+}
+
+// A prompt of the largest size Validate accepts reaches the agent whole. This
+// is what delivering it on standard input buys: the same prompt in an argument
+// list meets a ceiling the operating system sets, which on the platforms this
+// module targets is below MaxPromptBytes, so the bound Validate applies would
+// have been unreachable and the refusal it promises pre-empted.
+func TestThePromptSizeThisPackageAcceptsIsThePromptSizeItCanDeliver(t *testing.T) {
+	runner := newRunner(t)
+	inv := invocation(t, agents.ShapeText, map[string]string{helperModeVar: "call"})
+	inv.Prompt = strings.Repeat("p", agents.MaxPromptBytes)
+
+	got, err := runner.Run(t.Context(), agents.PurposeReview, inv)
+	if err != nil {
+		t.Fatalf("a prompt of %d bytes, the largest Validate accepts, did not run: %v", len(inv.Prompt), err)
+	}
+	if call := decodeCall(t, got.Text); call.Stdin != inv.Prompt {
+		t.Errorf("the agent read %d bytes on standard input, want the whole %d byte prompt",
+			len(call.Stdin), len(inv.Prompt))
+	}
+}
+
+// An agent that printed what it spent has that recorded whichever way it then
+// signalled failure. A record that says an invocation cost nothing, when the
+// agent said otherwise, understates spend on exactly the invocations worth
+// understanding.
+func TestANonZeroExitStillRecordsWhatTheAgentReported(t *testing.T) {
+	rec := &recorder{}
+	runner := newRunner(t, agents.WithRecorder(rec))
+	inv := invocation(t, agents.ShapeText, map[string]string{
+		helperModeVar:   "raw",
+		helperStdoutVar: helperEnvelope("the work was done", "a-session"),
+		helperExitVar:   "4",
+		helperStderrVar: "the agent could not close cleanly",
+	})
+
+	_, err := runner.Run(t.Context(), agents.PurposeFix, inv)
+	var refusal *agents.InvocationError
+	if !errors.As(err, &refusal) {
+		t.Fatalf("refusal is not an *InvocationError: %v", err)
+	}
+	// The envelope carried no failure of the agent's own, so the status is
+	// what failed and stderr is what a person has to go on.
+	if refusal.Failure != agents.FailureExit {
+		t.Errorf("failure category is %q, want %q", refusal.Failure, agents.FailureExit)
+	}
+	if refusal.ExitCode != 4 {
+		t.Errorf("exit code is %d, want 4", refusal.ExitCode)
+	}
+	if !strings.Contains(refusal.Message, "could not close cleanly") {
+		t.Errorf("the agent's own message was not carried: %q", refusal.Message)
+	}
+	if len(rec.records) != 1 {
+		t.Fatalf("recorded %d invocations, want 1", len(rec.records))
+	}
+	got := rec.records[0]
+	if got.Usage != helperUsage() {
+		t.Errorf("the failed invocation recorded %+v, want the usage the agent reported %+v",
+			got.Usage, helperUsage())
+	}
+	if got.Model != "stand-in-model" {
+		t.Errorf("model is %q, want the one the agent reported", got.Model)
+	}
+}
+
+// An agent that says it failed is an agent failure whatever status came with
+// it, and what it said is the message, because it is better evidence of what
+// went wrong than the shell's status.
+func TestAnAgentsOwnFailureOutranksTheExitStatusThatCameWithIt(t *testing.T) {
+	rec := &recorder{}
+	runner := newRunner(t, agents.WithRecorder(rec))
+	inv := invocation(t, agents.ShapeText, map[string]string{
+		helperModeVar:   "raw",
+		helperStdoutVar: helperErrorEnvelope("the working copy is not clean"),
+		helperExitVar:   "5",
+		helperStderrVar: "a stack trace nobody needs",
+	})
+
+	_, err := runner.Run(t.Context(), agents.PurposeLint, inv)
+	var refusal *agents.InvocationError
+	if !errors.As(err, &refusal) {
+		t.Fatalf("refusal is not an *InvocationError: %v", err)
+	}
+	if refusal.Failure != agents.FailureAgent {
+		t.Errorf("failure category is %q, want %q", refusal.Failure, agents.FailureAgent)
+	}
+	if !strings.Contains(refusal.Message, "working copy is not clean") {
+		t.Errorf("the message is %q, want what the agent said about its own failure", refusal.Message)
+	}
+	if refusal.ExitCode != 5 {
+		t.Errorf("exit code is %d, want 5", refusal.ExitCode)
+	}
+	if len(rec.records) != 1 {
+		t.Fatalf("recorded %d invocations, want 1", len(rec.records))
+	}
+	if got := rec.records[0]; got.Failure != agents.FailureAgent || got.Usage != helperUsage() {
+		t.Errorf("recorded %+v, want an agent failure carrying the usage the agent reported", got)
 	}
 }
 
