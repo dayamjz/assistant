@@ -50,6 +50,14 @@ type Runner interface {
 // A Fixer holds one conversation, so its calls are serialized against each
 // other. It is safe to use from more than one goroutine, but rounds still
 // happen one at a time.
+//
+// A round that reported a session reference is continued by the next one
+// whether or not it produced a usable result, because a round that failed may
+// already have edited files and the round after it should see the conversation
+// those edits were made in rather than start blind. That is a statement about
+// which fix rounds share one memory and leaves P4 exactly where it was: Run
+// still has no session to pass in and returns nothing a session could be read
+// out of.
 type Fixer interface {
 	// Apply runs one fix round. The purpose is PurposeFix and cannot be
 	// anything else.

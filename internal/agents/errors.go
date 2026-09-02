@@ -51,10 +51,20 @@ const (
 	// FailureNone is recorded for an invocation that produced a result.
 	FailureNone Failure = ""
 	// FailureProcess is an agent process that could not be run to a complete
-	// result: it could not be started, waiting on it failed, or its output was
+	// result: it could not be started, it was ended by a signal without
+	// reporting a status of its own, waiting on it failed, or its output was
 	// abandoned after the grace period because something still held it open.
 	// In the last case the output collected may be missing bytes the agent
 	// wrote, so it is refused rather than read as whole.
+	//
+	// What the category buys a reader is that the agent's own verdict is
+	// absent here: whatever ended the process did so before it could report
+	// one, so an exit status of -1 stands for the absence of a status rather
+	// than for a status of -1. Where the signalled case lands is what the
+	// platform reports. On unix a signalled process is not an exit and is this
+	// category, so a cancellation is distinguishable from a crash; on Windows
+	// every process that ran reports a status, so an agent terminated there
+	// carries that status and surfaces as FailureExit instead.
 	FailureProcess Failure = "process"
 	// FailureExit is an agent process that exited non-zero.
 	FailureExit Failure = "exit"

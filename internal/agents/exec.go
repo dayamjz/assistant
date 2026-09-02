@@ -2,7 +2,6 @@ package agents
 
 import (
 	"context"
-	"os"
 	"os/exec"
 	"sort"
 	"strings"
@@ -87,10 +86,13 @@ func runProcess(ctx context.Context, spec procSpec) procResult {
 	stderr := &boundedWriter{limit: maxStderr, truncate: true}
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
-	// WaitDelay bounds the wait for the pipes to close after the leader exits,
-	// so neither a descendant holding the output open nor an agent that never
-	// read its standard input can keep this call waiting past the grace
-	// period. Either one ends the invocation with a named failure instead.
+	// WaitDelay bounds how long this call waits for the output pipes after the
+	// leader has exited, so a descendant that inherited one and holds it open
+	// costs at most the grace period and then ends the invocation with a named
+	// failure rather than waiting on it indefinitely. An agent that never read
+	// its standard input costs nothing here: the leader's exit ends the write
+	// this call is making, and the invocation is classified on what the agent
+	// printed like any other.
 	cmd.WaitDelay = spec.grace
 	setProcessGroup(cmd)
 
@@ -238,8 +240,3 @@ func environment(base []string, extra map[string]string) []string {
 	}
 	return out
 }
-
-// osEnvironment is the base environment a runner uses when a caller names
-// none. It is a variable so a test can build a runner over a known
-// environment rather than the one the test process happens to have.
-var osEnvironment = os.Environ

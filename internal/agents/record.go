@@ -1,6 +1,7 @@
 package agents
 
 import (
+	"encoding/json"
 	"strconv"
 	"time"
 
@@ -20,16 +21,21 @@ const (
 	// Run has nowhere to put a session and nothing to keep one in.
 	SessionNone SessionUse = "none"
 	// SessionOpened is the fixer round that opened the run's durable session.
+	// It is recorded only where the Fixer came away holding the reference, so
+	// a round that reported none, and a round refused before the agent could
+	// report one, are not this.
 	SessionOpened SessionUse = "opened"
 	// SessionResumed is a fixer round that resumed it.
 	SessionResumed SessionUse = "resumed"
 )
 
 // Count is one quantity an agent reported about what an invocation cost, or
-// the absence of a report. Its fields are unexported and the only way to read
-// it is Value, which hands back whether the agent reported it alongside the
-// number, so a caller cannot read a count without learning whether it is a
-// reported one. The zero Count is an unreported count.
+// the absence of a report. Its fields are unexported, and the two ways to read
+// it both carry whether the agent reported it: Value hands that back alongside
+// the number, and MarshalJSON writes a reported count as a number and an
+// unreported one as null. A caller therefore cannot read a count without
+// learning whether it is a reported one. The zero Count is an unreported
+// count.
 //
 // This exists because a reported zero and a silence are different facts and
 // only one of them may be stored as a zero. An int cannot hold that
@@ -47,6 +53,35 @@ func ReportedCount(n int64) Count { return Count{value: n, reported: true} }
 // when it was not reported, and that zero is not a measurement: a caller
 // storing it must store an unknown rather than a zero.
 func (c Count) Value() (int64, bool) { return c.value, c.reported }
+
+// MarshalJSON writes a reported count as a JSON number and an unreported one
+// as null. The type exists to carry that difference to whatever stores it, so
+// the encoding it reaches that store through has to keep it: a Count whose
+// fields are unexported would otherwise encode to an empty object, which loses
+// both the number and the fact that there was one.
+func (c Count) MarshalJSON() ([]byte, error) {
+	if !c.reported {
+		return []byte("null"), nil
+	}
+	return strconv.AppendInt(nil, c.value, 10), nil
+}
+
+// UnmarshalJSON reads back what MarshalJSON wrote: a number is a reported
+// count, and null is an unreported one. Anything else is refused rather than
+// read as an unreported count, because a count that could not be decoded is
+// not the same fact as one nothing was reported for.
+func (c *Count) UnmarshalJSON(data []byte) error {
+	if string(data) == "null" {
+		*c = Count{}
+		return nil
+	}
+	var n int64
+	if err := json.Unmarshal(data, &n); err != nil {
+		return err
+	}
+	*c = ReportedCount(n)
+	return nil
+}
 
 // String renders the count for a diagnostic, and says so when there is none.
 func (c Count) String() string {
@@ -106,9 +141,11 @@ type Record struct {
 	Usage Usage
 }
 
-// Recorder receives one Record per invocation that started a process,
-// including failed and cancelled ones. An invocation refused before it started
-// anything cost nothing and produces no record.
+// Recorder receives one Record per invocation that got past Invocation.
+// Validate, including failed and cancelled ones and including one whose
+// process could not be started. An invocation refused before that point, for
+// an unrecognized purpose or for an Invocation that cannot be run as written,
+// produces no record.
 //
 // It is called synchronously on the invoking goroutine, so an implementation
 // that writes to a database should not block for long. A Recorder shared

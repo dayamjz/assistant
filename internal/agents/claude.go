@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"slices"
 	"sync"
@@ -114,7 +115,7 @@ func newClaudeSettings(opts []ClaudeOption) claudeSettings {
 		}
 	}
 	if !s.baseSet {
-		s.base = osEnvironment()
+		s.base = os.Environ()
 	}
 	return s
 }
@@ -195,6 +196,17 @@ func (r *claudeRunner) Fixer(ctx context.Context, resume string) (Fixer, error) 
 // round's own result stands, because refusing a fix that already edited files
 // would be worse than losing the conversation, and the loss is visible rather
 // than silent: that round's record says the session was not opened.
+//
+// A round that reported one keeps it whether or not the round then succeeded.
+// A failing round may already have edited files, so the next round resumes the
+// conversation those edits were made in rather than starting blind, which is
+// the same reasoning the paragraph above applies to the round that reports
+// nothing. What is recorded follows the same fact: SessionOpened is written
+// only where this fixer holds the reference.
+//
+// None of this reaches P4. Runner.Run still passes no session in and keeps
+// none out, so a review invocation records SessionNone whatever it does; the
+// paragraphs here are about which fix rounds share one conversation.
 type claudeFixer struct {
 	runner *claudeRunner
 
@@ -228,7 +240,9 @@ func (f *claudeFixer) Reference() string {
 // either, which is what makes SessionNone structural for everything else.
 //
 // It returns the session reference the agent reported when keep is set, so the
-// Fixer can carry it to the next round.
+// Fixer can carry it to the next round. That happens whatever the invocation
+// then produced: one place decides what a round did with its session, and both
+// the record and the Fixer read that one decision.
 func (r *claudeRunner) invoke(ctx context.Context, purpose Purpose, inv Invocation, resume string, keep bool) (Result, string, error) {
 	if err := inv.Validate(); err != nil {
 		// Nothing started, so nothing cost anything and there is no record to
@@ -250,6 +264,10 @@ func (r *claudeRunner) invoke(ctx context.Context, purpose Purpose, inv Invocati
 	if keep && resume != "" {
 		record.Session = SessionResumed
 	}
+	// reference is what this invocation hands back to the Fixer. It is set
+	// once, from the envelope, and every exit below returns it, so the record
+	// and what the Fixer holds cannot disagree about the session.
+	reference := ""
 	fail := func(res *procResult, category Failure, cause error, message string) (Result, string, error) {
 		record.Duration = time.Since(record.Started)
 		record.Failure = category
@@ -261,7 +279,7 @@ func (r *claudeRunner) invoke(ctx context.Context, purpose Purpose, inv Invocati
 				message = res.stderr
 			}
 		}
-		return Result{}, "", &InvocationError{
+		return Result{}, reference, &InvocationError{
 			Purpose:  purpose,
 			Agent:    ClaudeName,
 			Failure:  category,
@@ -282,6 +300,34 @@ func (r *claudeRunner) invoke(ctx context.Context, purpose Purpose, inv Invocati
 	})
 	r.sweep(ctx, inv.Dir)
 
+	// The envelope is read before anything is classified, so an agent that
+	// reported what it spent has that recorded whichever way the invocation
+	// then ended, a cancellation and an elapsed deadline included. A failed
+	// invocation is exactly the one whose cost is worth knowing, and recording
+	// a zero for it would understate what was spent. An over-limit standard
+	// output was discarded whole rather than truncated, so there is nothing
+	// here to decode and nothing is recorded from it, which is the outcome
+	// output no part of which may be read as whole should have.
+	var envelope claudeEnvelope
+	decodeErr := json.Unmarshal(proc.stdout, &envelope)
+	if decodeErr == nil {
+		record.Usage = envelope.usage()
+		if envelope.Model != "" {
+			record.Model = envelope.Model
+		}
+	}
+	// What this round did with the session is settled here too, once, ahead of
+	// every classification below. A round that reported a session hands it
+	// back whatever category it then failed in, so the next round continues
+	// the conversation it may already have edited files in, and SessionOpened
+	// is recorded only where the Fixer really holds the reference.
+	if keep && decodeErr == nil && envelope.SessionID != "" {
+		reference = envelope.SessionID
+		if resume == "" {
+			record.Session = SessionOpened
+		}
+	}
+
 	switch {
 	case errors.Is(ctx.Err(), context.Canceled):
 		return fail(&proc, FailureCancelled, ctx.Err(), "")
@@ -291,18 +337,6 @@ func (r *claudeRunner) invoke(ctx context.Context, purpose Purpose, inv Invocati
 	if proc.over {
 		return fail(&proc, FailureOversize,
 			fmt.Errorf("agent printed more than the limit of %d bytes", r.settings.maxOut), "")
-	}
-	// The envelope is read before anything is classified, so an agent that
-	// reported what it spent has that recorded whichever way it then signalled
-	// failure. A failed invocation is exactly the one whose cost is worth
-	// knowing, and recording a zero for it would understate what was spent.
-	var envelope claudeEnvelope
-	decodeErr := json.Unmarshal(proc.stdout, &envelope)
-	if decodeErr == nil {
-		record.Usage = envelope.usage()
-		if envelope.Model != "" {
-			record.Model = envelope.Model
-		}
 	}
 
 	// Two things have to hold before a status means anything: the process must
@@ -334,10 +368,6 @@ func (r *claudeRunner) invoke(ctx context.Context, purpose Purpose, inv Invocati
 		return fail(&proc, FailureOutput,
 			errors.New("agent's result envelope carried no result"), "")
 	}
-	if keep && resume == "" && envelope.SessionID != "" {
-		record.Session = SessionOpened
-	}
-
 	result := Result{Text: envelope.Result}
 	if inv.Shape == ShapeReport {
 		report, err := findings.ParseReport(envelope.Result)
@@ -352,11 +382,6 @@ func (r *claudeRunner) invoke(ctx context.Context, purpose Purpose, inv Invocati
 	record.Failure = FailureNone
 	r.report(record)
 	result.Record = record
-
-	reference := ""
-	if keep {
-		reference = envelope.SessionID
-	}
 	return result, reference, nil
 }
 

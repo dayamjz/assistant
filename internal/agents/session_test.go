@@ -2,6 +2,7 @@ package agents_test
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -216,5 +217,60 @@ func TestAFixRoundWithNoSessionReferenceIsRecordedAsSessionFree(t *testing.T) {
 	}
 	if len(rec.records) != 1 || rec.records[0].Session != agents.SessionNone {
 		t.Errorf("records are %+v, want one fix recorded as session-free", rec.records)
+	}
+}
+
+// A fix round that opened a session and then failed keeps the session. The
+// round may already have edited files, so the next round continues the
+// conversation those edits were made in rather than starting blind, and the
+// record says what actually happened: a session was opened, and the round
+// failed on its output.
+//
+// The two assertions are one fact read from two places, which is the point. If
+// the reference is dropped on the failure path the first fails; if the record
+// claims an opened session the fixer does not hold, the pair disagree.
+func TestAFailedFixRoundKeepsTheSessionItOpened(t *testing.T) {
+	rec := &recorder{}
+	runner := newRunner(t, agents.WithRecorder(rec))
+	fixer, err := runner.Fixer(t.Context(), "")
+	if err != nil {
+		t.Fatalf("opening a fixer session: %v", err)
+	}
+
+	// The agent opens a session and prints a well-formed envelope whose result
+	// is not a stage report, so the round fails after the session exists.
+	failing := invocation(t, agents.ShapeReport, map[string]string{
+		helperModeVar:   "envelope",
+		helperResultVar: "I edited some files and then said something unparseable",
+	})
+	_, err = fixer.Apply(t.Context(), failing)
+	var refusal *agents.InvocationError
+	if !errors.As(err, &refusal) {
+		t.Fatalf("the round is not an *InvocationError: %v", err)
+	}
+	if refusal.Failure != agents.FailureOutput {
+		t.Fatalf("failure category is %q, want %q", refusal.Failure, agents.FailureOutput)
+	}
+
+	if fixer.Reference() != "session-opened" {
+		t.Errorf("the fixer holds %q after a failed round that opened a session, want it kept", fixer.Reference())
+	}
+	if len(rec.records) != 1 {
+		t.Fatalf("recorded %d invocations, want 1", len(rec.records))
+	}
+	if got := rec.records[0]; got.Session != agents.SessionOpened || got.Failure != agents.FailureOutput {
+		t.Errorf("the record is %+v, want an opened session and a failure on the output", got)
+	}
+
+	// The next round continues that conversation rather than opening another.
+	next, err := fixer.Apply(t.Context(), invocation(t, agents.ShapeText, map[string]string{helperModeVar: "call"}))
+	if err != nil {
+		t.Fatalf("the round after the failed one failed: %v", err)
+	}
+	if resumed := decodeCall(t, next.Text).resumedSession(); resumed != "session-opened" {
+		t.Errorf("the next round resumed %q, want the session the failed round opened", resumed)
+	}
+	if len(rec.records) != 2 || rec.records[1].Session != agents.SessionResumed {
+		t.Errorf("records are %+v, want the second recorded as a resumed fix", rec.records)
 	}
 }

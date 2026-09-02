@@ -1,6 +1,7 @@
 package agents_test
 
 import (
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"strings"
@@ -192,6 +193,67 @@ func TestEveryCountInAUsageCarriesWhetherItWasReported(t *testing.T) {
 		if field := count.Field(i); field.IsExported() {
 			t.Errorf("Count.%s is exported, so a count can be read as a bare number", field.Name)
 		}
+	}
+}
+
+// The distinction has to survive the route a record actually takes to a store,
+// and JSON is that route. A Count whose fields are unexported and which
+// defines neither method encodes to an empty object with no error, which
+// destroys both the number and the fact that there was one, so this fails if
+// either method is removed.
+func TestAUsageSurvivesEncodingAndDecodingWithItsCountsIntact(t *testing.T) {
+	original := agents.Usage{
+		InputTokens:         agents.ReportedCount(0),
+		OutputTokens:        agents.ReportedCount(22),
+		CacheReadTokens:     agents.Count{},
+		CacheCreationTokens: agents.ReportedCount(-1),
+		Turns:               agents.Count{},
+	}
+
+	encoded, err := json.Marshal(original)
+	if err != nil {
+		t.Fatalf("encoding a usage: %v", err)
+	}
+	// A reported zero is written as the number it is, and an unreported count
+	// as null, so a reader of the stored form can tell them apart too.
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &fields); err != nil {
+		t.Fatalf("the encoded usage is not an object: %v (%s)", err, encoded)
+	}
+	if got := string(fields["InputTokens"]); got != "0" {
+		t.Errorf("a reported zero encoded as %s, want the number 0", got)
+	}
+	if got := string(fields["CacheReadTokens"]); got != "null" {
+		t.Errorf("an unreported count encoded as %s, want null", got)
+	}
+
+	var decoded agents.Usage
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("decoding a usage: %v (%s)", err, encoded)
+	}
+	if decoded != original {
+		t.Fatalf("the usage came back as %+v, want %+v", decoded, original)
+	}
+	// Stated as the two facts the round trip is for, so a failure names which
+	// one was lost rather than only that something was.
+	if n, ok := decoded.InputTokens.Value(); !ok || n != 0 {
+		t.Errorf("a reported zero came back as (%d, %v), want (0, true)", n, ok)
+	}
+	if n, ok := decoded.CacheReadTokens.Value(); ok || n != 0 {
+		t.Errorf("an unreported count came back as (%d, %v), want (0, false)", n, ok)
+	}
+}
+
+// Decoding refuses what it cannot read rather than quietly calling it
+// unreported, because a count that failed to decode and a count nothing was
+// reported for are different facts and the second is the one this type stores.
+func TestACountThatCannotBeDecodedIsRefused(t *testing.T) {
+	var c agents.Count
+	if err := json.Unmarshal([]byte(`"eleven"`), &c); err == nil {
+		t.Fatalf("a string decoded into a count as %v", c)
+	}
+	if n, ok := c.Value(); ok || n != 0 {
+		t.Errorf("the refused count left (%d, %v), want the zero count", n, ok)
 	}
 }
 

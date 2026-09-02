@@ -130,6 +130,47 @@ func TestACancelledInvocationIsATypedRefusal(t *testing.T) {
 	}
 }
 
+// An invocation that was cancelled after its agent had already printed a
+// complete envelope still records what that envelope reported. A cancellation
+// is not a reason to record a zero for tokens that were really spent, and the
+// invocations whose cost is least visible elsewhere are exactly the ones that
+// did not produce a result. This fails if the envelope is read after the
+// cancellation is classified rather than before it, because the refusal
+// returns first and the usage is never taken off the envelope.
+func TestACancelledInvocationRecordsWhatItsAgentReportedSpending(t *testing.T) {
+	rec := &recorder{}
+	runner := newRunner(t, agents.WithRecorder(rec))
+	inv, pidFile := spawningInvocation(t, "envelope-then-hold")
+	inv.Env[helperResultVar] = "spent this before being ended"
+	inv.Model = "asked-for-model"
+
+	ctx, spawned := cancelOnceSpawned(t, pidFile)
+
+	_, err := runner.Run(ctx, agents.PurposeReview, inv)
+	spawned()
+	var refusal *agents.InvocationError
+	if !errors.As(err, &refusal) {
+		t.Fatalf("refusal is not an *InvocationError: %v", err)
+	}
+	if refusal.Failure != agents.FailureCancelled {
+		t.Fatalf("failure category is %q, want %q", refusal.Failure, agents.FailureCancelled)
+	}
+	if len(rec.records) != 1 {
+		t.Fatalf("recorded %d invocations, want 1", len(rec.records))
+	}
+	got := rec.records[0]
+	if got.Failure != agents.FailureCancelled {
+		t.Errorf("the record says %q, want %q", got.Failure, agents.FailureCancelled)
+	}
+	if got.Usage != helperUsage() {
+		t.Errorf("the cancelled invocation recorded usage %+v, want the %+v its agent reported",
+			got.Usage, helperUsage())
+	}
+	if got.Model != "stand-in-model" {
+		t.Errorf("the recorded model is %q, want the one the agent reported", got.Model)
+	}
+}
+
 func TestATimedOutInvocationIsATypedRefusal(t *testing.T) {
 	runner := newRunner(t)
 	inv, _ := spawningInvocation(t, "spawn")

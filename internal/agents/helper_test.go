@@ -103,6 +103,16 @@ func helperMain(mode string) {
 		// Both the agent and its child ignore the polite signal, so only the
 		// forceful one ends them.
 		helperSpawn(true, true)
+	case "envelope-then-hold":
+		// Print a complete result envelope, say so where the test can see it,
+		// and then outlive the invocation. It is an agent that reported what
+		// it spent and was then ended by something other than itself.
+		fmt.Print(helperEnvelope(os.Getenv(helperResultVar), helperSession()))
+		if err := os.WriteFile(os.Getenv(helperPidVar),
+			[]byte(strconv.Itoa(os.Getpid())+"\n"), 0o600); err != nil {
+			os.Exit(5)
+		}
+		time.Sleep(helperHold)
 	case "hold":
 		if os.Getenv(helperStderrVar) == "stubborn" {
 			signal.Ignore(helperPoliteSignals()...)

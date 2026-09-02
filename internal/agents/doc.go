@@ -71,8 +71,10 @@
 // travels on *InvocationError instead, where a caller can log it and must not
 // copy it into a record.
 //
-// An invocation refused before it started a process produces no record,
-// because it cost nothing.
+// A record is written for every invocation that got past Invocation.Validate,
+// including a cancelled one and one whose process could not be started at all.
+// An invocation refused before that, for an unrecognized purpose or for an
+// Invocation that cannot be run as written, produces no record.
 //
 // # Resolution happens before work starts
 //
