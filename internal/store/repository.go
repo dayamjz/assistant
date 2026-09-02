@@ -18,7 +18,10 @@ type Repository struct {
 	// ID is the caller's stable identifier for the repository.
 	ID string
 	// WorkingPath is the primary checkout this repository stands for. It is
-	// unique across repositories.
+	// unique across repositories: UpsertRepository refuses with
+	// ErrWorkingPathTaken when a different identifier claims a path one already
+	// holds, and a UNIQUE index on the column stands behind that refusal so the
+	// invariant survives a path that forgets to ask.
 	WorkingPath string
 	// UpstreamURL is the remote the change is destined for, redacted.
 	UpstreamURL string
@@ -39,7 +42,9 @@ type Repository struct {
 // redactor Open was given before they are bound to a statement, and nothing
 // else is ever written to those two columns. The remaining fields are stored as
 // supplied. Writing the same identifier again updates the row and keeps its
-// original CreatedAt.
+// original CreatedAt, including when it names the working path it already
+// holds. A different identifier claiming that path is refused with
+// ErrWorkingPathTaken, and the refusal writes nothing.
 //
 // This package does not decide what a credential looks like, per P14. What it
 // guarantees is that the redactor runs over those two fields on the way in, and
@@ -71,6 +76,16 @@ func (s *Store) UpsertRepository(ctx context.Context, r Repository) (Repository,
 
 	now := nowUTC()
 	err = s.inTx(ctx, func(tx *sql.Tx) error {
+		var holder string
+		switch err := tx.QueryRowContext(ctx,
+			`SELECT id FROM repository WHERE working_path = ?`, r.WorkingPath).Scan(&holder); {
+		case isNoRows(err):
+		case err != nil:
+			return err
+		case holder != r.ID:
+			return fmt.Errorf("%w: %s is the checkout of repository %s",
+				ErrWorkingPathTaken, r.WorkingPath, holder)
+		}
 		_, err := tx.ExecContext(ctx, `
 			INSERT INTO repository (id, working_path, upstream_url, fork_url, default_branch, created_at, updated_at)
 			VALUES (?, ?, ?, ?, ?, ?, ?)

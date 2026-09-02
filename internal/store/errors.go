@@ -33,6 +33,14 @@ var ErrBuildIdentityMissing = errors.New("store: run has no build identity")
 // configuration. It is the other half of what ErrBuildIdentityMissing covers.
 var ErrConfigDigestMissing = errors.New("store: run has no configuration digest")
 
+// ErrWorkingPathTaken is returned by UpsertRepository when the working path it
+// was given already belongs to a different repository identifier. A checkout
+// stands for one repository record, and registering an existing one under a
+// second identifier is an ordinary thing for an operator to try, so it is a
+// typed result a caller handles rather than a failed write it cannot tell apart
+// from any other. The error names the path and the identifier that holds it.
+var ErrWorkingPathTaken = errors.New("store: working path already belongs to another repository")
+
 // ErrNoResolution is returned by ResolveHold when no resolution text was given.
 // PRD section 8 says a hold is closed only by an explicit resolution, and an
 // empty one is not explicit.

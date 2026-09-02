@@ -140,3 +140,74 @@ func TestRepositoryRefusesIncompleteRecords(t *testing.T) {
 		t.Fatalf("UpsertRepository refused a complete repository: %v", err)
 	}
 }
+
+// A checkout stands for one repository record. The refusing side of that rule
+// is a sentinel a caller branches on rather than a driver's constraint text,
+// and a refused upsert writes nothing.
+func TestUpsertRepositoryRefusesATakenWorkingPath(t *testing.T) {
+	ctx := context.Background()
+	s := openStore(t)
+
+	first, err := s.UpsertRepository(ctx, Repository{
+		ID: "repo-1", WorkingPath: "/checkouts/one",
+		UpstreamURL: "https://example.test/one.git", DefaultBranch: "main",
+	})
+	if err != nil {
+		t.Fatalf("UpsertRepository: %v", err)
+	}
+
+	_, err = s.UpsertRepository(ctx, Repository{
+		ID: "repo-2", WorkingPath: "/checkouts/one",
+		UpstreamURL: "https://example.test/two.git", DefaultBranch: "main",
+	})
+	if !errors.Is(err, ErrWorkingPathTaken) {
+		t.Fatalf("a second identifier claimed a checkout that was already taken: %v", err)
+	}
+	if !strings.Contains(err.Error(), "/checkouts/one") || !strings.Contains(err.Error(), "repo-1") {
+		t.Fatalf("the refusal does not name the path and the record that holds it: %v", err)
+	}
+
+	// The refusal left nothing of its own behind and did not disturb the
+	// record that holds the path.
+	if _, err := s.Repository(ctx, "repo-2"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("the refused upsert left a row behind: %v", err)
+	}
+	all, err := s.Repositories(ctx)
+	if err != nil {
+		t.Fatalf("Repositories: %v", err)
+	}
+	if len(all) != 1 {
+		t.Fatalf("the refused upsert made %d repositories, want 1", len(all))
+	}
+	held, err := s.Repository(ctx, "repo-1")
+	if err != nil {
+		t.Fatalf("Repository: %v", err)
+	}
+	if held.UpstreamURL != first.UpstreamURL || !held.UpdatedAt.Equal(first.UpdatedAt) {
+		t.Fatalf("the refused upsert changed the repository holding the path: %+v then %+v", first, held)
+	}
+
+	// The accepting side, twice over: the identifier that holds the path can
+	// name it again, which is the ordinary update, and another identifier with
+	// its own checkout is written, so the refusal is about the path rather
+	// than about arriving second.
+	again, err := s.UpsertRepository(ctx, Repository{
+		ID: "repo-1", WorkingPath: "/checkouts/one",
+		UpstreamURL: "https://example.test/one.git", DefaultBranch: "trunk",
+	})
+	if err != nil {
+		t.Fatalf("UpsertRepository refused the identifier that holds the path: %v", err)
+	}
+	if again.DefaultBranch != "trunk" {
+		t.Fatalf("the update did not take: %+v", again)
+	}
+	if !again.CreatedAt.Equal(first.CreatedAt) {
+		t.Fatalf("the update changed CreatedAt from %s to %s", first.CreatedAt, again.CreatedAt)
+	}
+	if _, err := s.UpsertRepository(ctx, Repository{
+		ID: "repo-2", WorkingPath: "/checkouts/two",
+		UpstreamURL: "https://example.test/two.git", DefaultBranch: "main",
+	}); err != nil {
+		t.Fatalf("UpsertRepository refused a repository with a checkout of its own: %v", err)
+	}
+}
