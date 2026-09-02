@@ -114,6 +114,14 @@ func TestLocationUnmarshalAcceptsObjectAndText(t *testing.T) {
 		{`"the pull request body"`, findings.Location{Path: "the pull request body"}},
 		{`"a.go:notaline"`, findings.Location{Path: "a.go:notaline"}},
 		{`"a.go:0"`, findings.Location{Path: "a.go:0"}},
+		// The file:line:column form every common compiler and linter prints.
+		// The line is the middle segment; the column has nowhere to go.
+		{`"internal/gate/push.go:88:12"`,
+			findings.Location{Path: "internal/gate/push.go", Line: 88}},
+		// A colon in the path is still not truncated, because the segment
+		// before the line does not parse as a positive integer.
+		{`"weird:dir/a.go:88"`, findings.Location{Path: "weird:dir/a.go", Line: 88}},
+		{`"a.go:notaline:12"`, findings.Location{Path: "a.go:notaline", Line: 12}},
 		{`""`, findings.Location{}},
 		{`null`, findings.Location{}},
 		{`{}`, findings.Location{}},

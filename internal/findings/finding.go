@@ -37,11 +37,23 @@ func (l Location) String() string {
 func (l Location) Empty() bool { return l.Path == "" && l.Line == 0 }
 
 // UnmarshalJSON reads a location in either of the two shapes agents produce:
-// an object with path and line fields, or the single string "path:line" that
-// tools print. In the string form the text after the final colon is the line
-// when it parses as a positive integer, and otherwise the whole string is the
-// path, so a path that happens to contain a colon is not silently truncated.
+// an object with path and line fields, or the single string that tools print.
 // A JSON null leaves the location empty.
+//
+// The string form is read in three shapes, which parseLocationText decides
+// between by looking only at whether the trailing segments are positive
+// integers:
+//
+//   - "path:line:column", when the text after the final colon and the text
+//     between the two final colons both parse as positive integers. The line
+//     is the middle segment. The column is read and then discarded, because
+//     Location has no column field, and every common compiler and linter
+//     prints this form.
+//   - "path:line", when the text after the final colon parses as a positive
+//     integer and the segment before it does not.
+//   - "path", for anything else, so a path that happens to contain a colon is
+//     not silently truncated. That fallback is why the two rules above test
+//     for positive integers rather than splitting on colons.
 //
 // In the object form each part is read on its own terms, on the same grounds
 // Severity.UnmarshalJSON reads a severity that way: a location decides nothing
@@ -89,16 +101,25 @@ func (l *Location) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// parseLocationText splits the "path:line" form described on
-// Location.UnmarshalJSON.
+// parseLocationText splits the three string forms described on
+// Location.UnmarshalJSON. It is total: every input yields a location, and one
+// it cannot split becomes a path.
 func parseLocationText(s string) Location {
 	s = strings.TrimSpace(s)
-	if i := strings.LastIndex(s, ":"); i > 0 {
-		if n, err := strconv.Atoi(s[i+1:]); err == nil && n > 0 {
-			return Location{Path: strings.TrimSpace(s[:i]), Line: n}
+	last := strings.LastIndex(s, ":")
+	if last <= 0 {
+		return Location{Path: s}
+	}
+	trailing, err := strconv.Atoi(s[last+1:])
+	if err != nil || trailing <= 0 {
+		return Location{Path: s}
+	}
+	if middle := strings.LastIndex(s[:last], ":"); middle > 0 {
+		if line, err := strconv.Atoi(s[middle+1 : last]); err == nil && line > 0 {
+			return Location{Path: strings.TrimSpace(s[:middle]), Line: line}
 		}
 	}
-	return Location{Path: s}
+	return Location{Path: strings.TrimSpace(s[:last]), Line: trailing}
 }
 
 // Finding is one thing a stage found. Its Action decides who resolves it, and
