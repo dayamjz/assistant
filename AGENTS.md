@@ -96,6 +96,13 @@ Each has cost this repository more than one round of review.
   declaration makes it so, a cancelled check is settled, and an unrecognized
   state deliberately keeps the caller waiting. Read its `doc.go` before
   changing any of those four.
+- `internal/gate` owns the local bare repository a push is validated through:
+  where it lives, what it is born with, its hooks, and its identity across a
+  move or a copy. It composes `internal/vcs` and builds no command lines. The
+  binding between a gate and a working copy is the record file inside the gate,
+  not the hash in its directory name, which is only where the name came from.
+  Its `doc.go` states what a git template and `core.hooksPath` can still do to
+  a gate's hooks and which `internal/vcs` operations would close each gap.
 - `internal/agents` is the only package that starts an agent process. It owns
   the process tree, the per-invocation environment, and what is recorded about
   a call. P4 lives in its type split rather than in a rule callers follow:
