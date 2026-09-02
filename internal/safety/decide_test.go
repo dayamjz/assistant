@@ -398,6 +398,30 @@ func TestDecideRefusesAProposedCommitThatDoesNotResolve(t *testing.T) {
 	}
 }
 
+// A creation makes no reachability comparison, so nothing downstream of the
+// resolution step would notice a proposed commit this repository does not
+// hold. That makes the resolution the only guard on this path, and permission
+// naming a commit that does not exist is permission to push nothing.
+func TestDecideRefusesACreationProposingACommitThatDoesNotResolve(t *testing.T) {
+	t.Parallel()
+	git := &fakeGit{
+		parents:    linear("c1"),
+		advertised: map[string][][]advert{remote: {nil}},
+	}
+	guard := safety.New(git)
+	obs := observe(t, guard)
+	if obs.State().Exists {
+		t.Fatalf("State() = %v, want absent so this decides on the creation path", obs.State())
+	}
+	refusal := refusalFor(t, guard, safety.Update{Target: target, Proposed: "nowhere", Anchor: obs})
+	if refusal.Reason != safety.ReasonUnverifiable {
+		t.Fatalf("Reason = %v, want %v", refusal.Reason, safety.ReasonUnverifiable)
+	}
+	if !errors.Is(refusal, vcs.ErrRefNotFound) {
+		t.Fatalf("refusal = %v, want it to carry vcs.ErrRefNotFound", refusal)
+	}
+}
+
 func TestObserveRefusesATargetThatPeelsToAnotherObject(t *testing.T) {
 	t.Parallel()
 	// An annotated tag is advertised as two lines: the tag object under the
