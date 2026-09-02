@@ -1535,23 +1535,26 @@ flowchart TB
   <h3 class="text-xl font-semibold mb-3">The trust boundary</h3>
   <p class="mb-4 opacity-90">
     This is P7 made concrete, and it is the security-critical part of the design. Configuration
-    fields fall into three classes by where they are read from.
+    fields fall into four classes by where they are read from.
   </p>
   <div class="prd-mermaid mb-4">
     <pre class="mermaid">
 flowchart TB
   push["The pushed branch<br />untrusted input"]
   trusted["Your default branch<br />at a freshly fetched commit"]
+  global["Your global settings<br />in your home"]
 
   push -->|"read from here"| A["Ignore patterns<br />Fix limits<br />Commit message template<br />Intent settings"]
   trusted -->|"read from here, always"| B["Documentation instructions<br />Path-scoped review rules<br />Instruction suppression<br />No-CI declaration<br />Rerun budget"]
   trusted -->|"read from here, unless you opt out"| C["Test, lint, and format commands<br />Agent selection"]
 
+  global -->|"read from here only"| D["Checks timeout<br />Session reuse"]
+
   C -.->|"opt-in, itself trusted-only"| push
   trusted -->|"unreadable or unparseable"| stop["Abort before launching anything"]
     </pre>
   </div>
-  <div class="grid gap-4 md:grid-cols-3 mb-6">
+  <div class="grid gap-4 md:grid-cols-2 mb-6">
     <div class="card card-border bg-base-200">
       <div class="card-body">
         <h4 class="card-title text-sm">Read from the pushed branch</h4>
@@ -1568,6 +1571,12 @@ flowchart TB
       <div class="card-body">
         <h4 class="card-title text-sm">Always trusted-only</h4>
         <p class="text-xs opacity-90">Anything that shapes what review or documentation demands, or that declares a check unnecessary. A contributor must never be able to suppress a maintainer's review rule from their own branch.</p>
+      </div>
+    </div>
+    <div class="card card-border bg-base-200 border-error/40">
+      <div class="card-body">
+        <h4 class="card-title text-sm">Global-only</h4>
+        <p class="text-xs opacity-90">Fields a repository may not set at all, in either copy. These are operator preferences about how this machine behaves rather than facts about a repository, so a repository should not set them even where doing so could not weaken a check. The test is authority, not harm.</p>
       </div>
     </div>
   </div>
@@ -1600,9 +1609,10 @@ flowchart TB
         <tr><td><code>document.ownership</code></td><td>empty</td><td>Which document owns which subject. Without this the document stage guesses, and guessing produces documentation churn on most changes.</td></tr>
         <tr><td><code>suppress_project_instructions</code></td><td><code>false</code></td><td>For a repository whose own instructions would give a validating agent an operator identity. If any resolved agent lacks a verified suppression mechanism, the run fails before launching it.</td></tr>
         <tr><td><code>no_ci</code></td><td><code>false</code></td><td>A positive declaration that this repository has no checks. Only this makes an empty check list count as green.</td></tr>
-        <tr><td><code>checks_timeout</code></td><td><code>168h</code></td><td>Idle timeout, re-armed whenever the base branch advances. On elapse the run holds rather than ending.</td></tr>
-        <tr><td><code>session_reuse</code></td><td><code>true</code></td><td>One durable fixer session per run. Review turns are always fresh regardless, per P4.</td></tr>
-        <tr><td><code>commit.fix_message</code></td><td>template</td><td>Subject line for fix commits. The template, the agent's summary, and the rendered result are each validated for length and for characters that could disguise content before anything is staged.</td></tr>
+        <tr><td><code>allow_pushed_commands</code></td><td><code>false</code></td><td>The opt-out that lets the pushed branch set commands and agent selection. It is itself readable only from the trusted copy, so a branch cannot enable it for itself.</td></tr>
+        <tr><td><code>checks_timeout</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code>168h</code></td><td>Idle timeout, re-armed whenever the base branch advances. On elapse the run holds rather than ending.</td></tr>
+        <tr><td><code>session_reuse</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code>true</code></td><td>One durable fixer session per run. Review turns are always fresh regardless, per P4.</td></tr>
+        <tr><td><code>commit.fix_message</code></td><td><code>fix: {summary}</code></td><td>Subject line for fix commits. <code>{summary}</code> is the single required substitution, replaced by the agent's summary of the fix; a template without it is invalid. The template, the agent's summary, and the rendered result are each validated for length and for characters that could disguise content before anything is staged.</td></tr>
       </tbody>
     </table>
   </div>
@@ -1611,9 +1621,31 @@ flowchart TB
   <ul class="list-disc pl-6 space-y-1.5 mb-4 opacity-90">
     <li>Invalid configuration fails at parse time and names the offending key and value, including on a pushed branch whose fields are otherwise ignored. A broken rule should surface before it merges.</li>
     <li>Path patterns follow one documented matcher, and a wildcard never crosses a path separator on any platform.</li>
-    <li>Bounded lists and prompt sections have explicit limits, measured on what is actually assembled rather than on the raw source.</li>
+    <li>Bounded lists and prompt sections have explicit limits, measured on what is actually assembled rather than on the raw source. The limits are the table below. They are checked per layer as each document is parsed, which is sufficient: a repository layer replaces a list rather than appending to it, so a merged list is never longer than the longer of the two layers, and both were already checked.</li>
     <li>Reserved agent flags that would defeat managed behavior are rejected at load rather than silently ignored.</li>
   </ul>
+
+  <div class="overflow-x-auto rounded-box border border-base-content/10 bg-base-100 mb-4">
+    <table class="table table-sm table-zebra">
+      <thead><tr><th class="w-72">Limit</th><th class="w-28">Value</th><th>Measured on</th></tr></thead>
+      <tbody>
+        <tr><td>Agent fallback list length</td><td><code class="prd-num">8</code></td><td>Elements of <code>agent</code>.</td></tr>
+        <tr><td>Command line length</td><td><code class="prd-num">4096</code></td><td>Runes of one <code>commands.*</code> value.</td></tr>
+        <tr><td>Ignore pattern count</td><td><code class="prd-num">512</code></td><td>Elements of <code>ignore_patterns</code>.</td></tr>
+        <tr><td>Path pattern length</td><td><code class="prd-num">512</code></td><td>Runes of one pattern.</td></tr>
+        <tr><td>Path pattern segments</td><td><code class="prd-num">64</code></td><td>Its <code>/</code>-separated segments. Bounds the matcher's work together with the length of the path being tested.</td></tr>
+        <tr><td>Path-scoped review rules</td><td><code class="prd-num">64</code></td><td>Elements of <code>review.path_rules</code>.</td></tr>
+        <tr><td>Patterns per review rule</td><td><code class="prd-num">64</code></td><td>The paths one rule scopes to.</td></tr>
+        <tr><td>Review rule guidance length</td><td><code class="prd-num">4096</code></td><td>Runes of one rule's guidance text.</td></tr>
+        <tr><td>Document ownership entries</td><td><code class="prd-num">512</code></td><td>Elements of <code>document.ownership</code>.</td></tr>
+        <tr><td>Ownership subject or path length</td><td><code class="prd-num">512</code></td><td>Runes of one subject or document path.</td></tr>
+        <tr><td>Fix commit subject length</td><td><code class="prd-num">72</code></td><td>Runes of the template, and again of the rendered result.</td></tr>
+        <tr><td>Run budget ceiling</td><td><code class="prd-num">100000</code></td><td><code>run_budget</code>. The budget exists to bound a run, so it is itself bounded.</td></tr>
+        <tr><td>Per-stage fix round ceiling</td><td><code class="prd-num">100</code></td><td>Any <code>fix_rounds.*</code> value.</td></tr>
+        <tr><td>Checks idle timeout ceiling</td><td><code>8760h</code></td><td><code>checks_timeout</code>.</td></tr>
+      </tbody>
+    </table>
+  </div>
 </section>
 
 <!-- ============================ 11. RECOVERY ============================ -->
