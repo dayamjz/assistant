@@ -43,6 +43,9 @@ func TestEveryInvocationIsExplicitAndNonInteractive(t *testing.T) {
 	t.Setenv("GIT_REDIRECT_STDIN", "/tmp/in")
 	t.Setenv("GIT_REDIRECT_STDOUT", "/tmp/out")
 	t.Setenv("GIT_REDIRECT_STDERR", "/tmp/err")
+	t.Setenv("GIT_PROXY_COMMAND", "/tmp/evil-proxy")
+	t.Setenv("GIT_ALLOW_PROTOCOL", "ext")
+	t.Setenv("GIT_PROTOCOL_FROM_USER", "1")
 
 	barePath := fakeBareDir(t)
 	repo, err := vcs.OpenBare(ctx(t), barePath, vcs.WithGitBinary(exe))
@@ -71,7 +74,8 @@ func TestEveryInvocationIsExplicitAndNonInteractive(t *testing.T) {
 			"GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0", "DISPLAY",
 			"GIT_TEMPLATE_DIR", "GIT_EXEC_PATH",
 			"GIT_EXTERNAL_DIFF", "GIT_EXTERNAL_DIFF_TRUST_EXIT_CODE",
-			"GIT_SSH", "GIT_SSH_VARIANT",
+			"GIT_SSH", "GIT_SSH_VARIANT", "GIT_PROXY_COMMAND",
+			"GIT_ALLOW_PROTOCOL", "GIT_PROTOCOL_FROM_USER",
 			"GIT_REDIRECT_STDIN", "GIT_REDIRECT_STDOUT", "GIT_REDIRECT_STDERR",
 		} {
 			if v, ok := lookupEnv(call.Env, name); ok {

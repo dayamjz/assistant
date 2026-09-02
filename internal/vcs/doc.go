@@ -19,51 +19,61 @@
 // process started from a git hook inherits GIT_DIR, GIT_WORK_TREE, and
 // GIT_INDEX_FILE pointing at whatever repository invoked the hook, and those
 // would silently redirect an operation this package addressed at a different
-// repository. The redirectingVars list names every variable removed from the
-// environment of a child, and each one on it is documented by git. They fall
-// into four groups:
+// repository.
 //
-//   - Which repository git operates on: GIT_DIR, GIT_WORK_TREE,
-//     GIT_INDEX_FILE, GIT_OBJECT_DIRECTORY, GIT_ALTERNATE_OBJECT_DIRECTORIES,
-//     GIT_COMMON_DIR, GIT_NAMESPACE, GIT_PREFIX, GIT_CEILING_DIRECTORIES, and
-//     GIT_DISCOVERY_ACROSS_FILESYSTEM.
-//   - Configuration injected into git: GIT_CONFIG, GIT_CONFIG_PARAMETERS,
-//     GIT_CONFIG_COUNT, and the numbered GIT_CONFIG_KEY_n and
-//     GIT_CONFIG_VALUE_n that go with the last of those.
-//   - What a new repository is built from: GIT_TEMPLATE_DIR, whose hooks git
-//     copies into a repository at the moment it creates it.
-//   - A program git would run, or where git's own streams go: GIT_EXEC_PATH,
-//     GIT_EXTERNAL_DIFF, GIT_EXTERNAL_DIFF_TRUST_EXIT_CODE, GIT_SSH,
-//     GIT_SSH_VARIANT, and the Windows-only GIT_REDIRECT_STDIN,
-//     GIT_REDIRECT_STDOUT, and GIT_REDIRECT_STDERR. DISPLAY is here too,
-//     because git's askpass fallback consults it before deciding whether a
-//     graphical helper is worth running.
+// The guarantee the filter buys is stated as a property of this package rather
+// than as a description of how git behaves internally, because a reader can
+// check the first against this repository and cannot check the second at all.
+// An operation performed here takes each of the following from its own
+// arguments, from the repository it was pointed at, and from the settings
+// envFor writes, and not from what an ancestor process left in the
+// environment:
 //
-// That list is written by hand, so it covers the variables on it and nothing
-// else, and a variable a later git adds is not removed until it is added
-// there. The hedge is about the future rather than about anything knowable
-// today.
+//   - Which repository it resolves to.
+//   - Where its configuration is read from.
+//   - What a repository this package creates is built from.
+//   - What it may run, and where it finds it.
+//   - Where its own standard streams go.
 //
-// GIT_CONFIG_GLOBAL, GIT_CONFIG_SYSTEM, and GIT_CONFIG_NOSYSTEM are
-// deliberately kept. They are how a caller points git at a configuration file
-// on purpose, and this package's own tests rely on exactly that to isolate
-// from a developer's real git configuration. GIT_PAGER and PAGER are kept
-// because --no-pager is the single mechanism this package uses against a
-// pager. GIT_ALLOW_PROTOCOL and GIT_PROTOCOL_FROM_USER are kept because a
-// value inherited from a hardened environment restricts which transports git
-// will use, and removing it would loosen that rather than tighten anything.
+// The variables removed to make that hold are named in redirectingVars and
+// redirectingPrefixes in exec.go, grouped by which of the five they serve, so
+// a reader can check this paragraph against the list. Those five are also the
+// list's scope: a variable outside them, one that only tunes a timeout or a
+// transport's TLS settings, is absent because it is out of scope rather than
+// because it was missed. The list is written by hand, so a variable a later
+// git introduces is not removed until it is added there.
 //
-// What keeping the configuration-location variables costs is worth stating
-// rather than implying away. A configuration file whose location arrives
-// through GIT_CONFIG_GLOBAL or GIT_CONFIG_SYSTEM is a trusted input, in the
-// same category as PATH and the git binary this package executes. So the
-// settings such a file carries are not closed by this filter, and
+// Three keeps are deliberate, and each is this package's trust policy rather
+// than a claim about what git does with them.
+//
+// GIT_CONFIG_GLOBAL, GIT_CONFIG_SYSTEM, and GIT_CONFIG_NOSYSTEM are kept
+// because they are how a caller points git at a configuration file on purpose;
+// this package's own tests rely on exactly that to isolate from a developer's
+// real git configuration. A configuration file arriving that way is a trusted
+// input in the same category as PATH and the git binary this package executes.
+// The attributes-location variables GIT_ATTR_SOURCE, GIT_ATTR_GLOBAL, and
+// GIT_ATTR_SYSTEM are kept for the same reason; what keeps attributes from
+// selecting a program during a comparison is --no-ext-diff and --no-textconv
+// on the diff command lines in diff.go, not this filter.
+//
+// GIT_PAGER and PAGER are kept because --no-pager on every command line is the
+// single mechanism this package uses against a pager, and a second one would
+// be two mechanisms answering one question.
+//
+// What the keeps cost is worth stating rather than implying away. The settings
+// a kept configuration file carries are not closed by this filter, and
 // init.templateDir is the one with teeth: it decides the hooks InitBare's
-// repository is born with, which is exactly what removing GIT_TEMPLATE_DIR
-// closes on the direct route. Removing these variables too would not change
-// that, because an ancestor process able to set them is already able to set
-// PATH or replace the git binary. This filter closes the direct channels it
-// names above and nothing wider.
+// repository is born with, which is what removing GIT_TEMPLATE_DIR closes on
+// the direct route. Removing the configuration-location variables too would
+// not change that, because a process able to set them is already able to set
+// PATH or replace the git binary.
+//
+// Restricting which transports an operation may use is not offered here.
+// GIT_ALLOW_PROTOCOL is removed rather than honored, because a value inherited
+// from an ancestor process is that process choosing what an operation may run,
+// which is what PRD principle P7 forbids, and an operator who wants that
+// restriction loses it. An explicit option on this package would be the right
+// home for it. There is no such option today.
 //
 // Every invocation is non-interactive. There is nobody to answer a prompt
 // inside a pipeline, so a prompt is a hang rather than a question. What this

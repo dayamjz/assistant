@@ -89,18 +89,32 @@ func newSettings(opts []Option) settings {
 	return s
 }
 
-// redirectingVars names the environment variables removed from every child.
-// Each is documented by git, and each falls into one of four groups: the ones
-// that decide which repository git operates on, the ones that inject
-// configuration into it, the ones that name a program git would run, and the
-// ones that decide where git's own standard streams go. A process launched
-// from a git hook inherits several of these, which is why removing them is a
-// correctness requirement and not tidiness.
+// redirectingVars names the environment variables removed from the environment
+// of every child this package starts.
+//
+// What removing them buys is a property of this package, not a description of
+// how git behaves: an invocation made here takes each of the following from its
+// own arguments, from the repository it was pointed at, and from the settings
+// this file writes, rather than from whatever an ancestor process left in the
+// environment.
+//
+//   - Which repository the invocation resolves to.
+//   - Where its configuration is read from.
+//   - What a repository this package creates is built from.
+//   - What it may run, and where it finds it.
+//   - Where its own standard streams go.
+//
+// Those five are the scope of this list. A variable outside them, one that only
+// tunes a timeout or a transport's TLS settings, is absent because it is out of
+// scope rather than because it was missed.
 //
 // The list is written by hand, so it covers what is on it and nothing else. A
 // variable a later git introduces is not removed until it is added here.
 var redirectingVars = []string{
-	// Which repository git operates on.
+	// Which repository the invocation resolves to. A process launched from a
+	// git hook inherits several of these pointing at the repository that
+	// invoked the hook, which is why removing them is a correctness
+	// requirement rather than tidiness.
 	"GIT_DIR",
 	"GIT_WORK_TREE",
 	"GIT_INDEX_FILE",
@@ -112,45 +126,41 @@ var redirectingVars = []string{
 	"GIT_CEILING_DIRECTORIES",
 	"GIT_DISCOVERY_ACROSS_FILESYSTEM",
 
-	// Configuration injected into git.
+	// Where its configuration is read from. The variables that carry
+	// configuration values directly are here; the ones that relocate a
+	// configuration file are deliberately kept, and the package doc says why.
 	"GIT_CONFIG",
 	"GIT_CONFIG_PARAMETERS",
 	"GIT_CONFIG_COUNT",
 
-	// What a newly created repository is built from. git init copies the
-	// template directory's hooks into the repository it creates, so an
-	// inherited value chooses the code on the gate repository's push path at
-	// the moment it is created, and nothing later can undo it.
+	// What a repository this package creates is built from. InitBare's
+	// repository takes its hooks from a template directory, and this package
+	// does not let the surrounding environment pick it.
 	"GIT_TEMPLATE_DIR",
 
-	// Programs git would run. GIT_EXEC_PATH decides where git finds the
-	// subcommands and remote helpers it executes, so an inherited one from a
-	// different build defeats pinning a binary with WithGitBinary.
-	// GIT_EXTERNAL_DIFF names a program git runs while diffing, which is the
-	// hazard --no-ext-diff closes on the command line; its TRUST_EXIT_CODE
-	// companion is the other half of that one mechanism. GIT_SSH names the
-	// transport program, and is otherwise only shadowed by this package
-	// setting GIT_SSH_COMMAND, which would be a second mechanism answering
-	// the question. GIT_SSH_VARIANT names no program, but it decides how git
-	// builds the ssh command line, which is how the BatchMode this package
-	// appends reaches ssh at all.
+	// What it may run, and where it finds it. This package pins the git binary
+	// through WithGitBinary and writes the ssh command itself in envFor.
+	// Removing these keeps an inherited value from putting a different
+	// program, a different directory to load helpers from, or a transport this
+	// package did not ask for into an invocation or into the processes it
+	// starts.
 	"GIT_EXEC_PATH",
 	"GIT_EXTERNAL_DIFF",
 	"GIT_EXTERNAL_DIFF_TRUST_EXIT_CODE",
 	"GIT_SSH",
 	"GIT_SSH_VARIANT",
+	"GIT_PROXY_COMMAND",
+	"GIT_ALLOW_PROTOCOL",
+	"GIT_PROTOCOL_FROM_USER",
+	"DISPLAY",
 
-	// Where git's own standard streams go. These are Windows-only, and they
-	// point a stream at a path of the environment's choosing. Standard output
-	// is the result this package parses, so an inherited one turns an empty
-	// read into an answer rather than into a failure.
+	// Where its own standard streams go. Standard output is the result this
+	// package parses and standard error is what a *CommandError carries, so
+	// both are collected by the writers in run and by nothing an ancestor
+	// process chose.
 	"GIT_REDIRECT_STDIN",
 	"GIT_REDIRECT_STDOUT",
 	"GIT_REDIRECT_STDERR",
-
-	// DISPLAY is here because git's askpass fallback consults it before
-	// deciding whether a graphical helper is worth running.
-	"DISPLAY",
 }
 
 // redirectingPrefixes are variable name prefixes removed for the same reason
