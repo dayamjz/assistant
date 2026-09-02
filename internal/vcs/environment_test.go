@@ -1,0 +1,561 @@
+package vcs_test
+
+import (
+	"context"
+	"errors"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/dayamjz/assistant/internal/vcs"
+)
+
+// Every invocation must address its repository explicitly and must be unable
+// to wait for a person. Both land in the argument vector and the environment
+// of the child process, so the stand-in git is what makes them observable.
+func TestEveryInvocationIsExplicitAndNonInteractive(t *testing.T) {
+	gitEnvironment(t)
+	logPath, exe := useFakeGit(t)
+
+	// An inherited environment that would redirect git elsewhere, inject
+	// configuration, or re-enable a prompt. A process launched from a git hook
+	// has the first three set.
+	t.Setenv("GIT_DIR", filepath.Join(t.TempDir(), "somewhere-else.git"))
+	t.Setenv("GIT_WORK_TREE", t.TempDir())
+	t.Setenv("GIT_INDEX_FILE", filepath.Join(t.TempDir(), "index"))
+	t.Setenv("GIT_CONFIG_PARAMETERS", "'core.hooksPath=/tmp/evil'")
+	t.Setenv("GIT_CONFIG_COUNT", "1")
+	t.Setenv("GIT_CONFIG_KEY_0", "core.hooksPath")
+	t.Setenv("GIT_CONFIG_VALUE_0", "/tmp/evil")
+	t.Setenv("GIT_TERMINAL_PROMPT", "1")
+	t.Setenv("GIT_EDITOR", "vim")
+	t.Setenv("GIT_ASKPASS", "/usr/bin/graphical-askpass")
+	t.Setenv("DISPLAY", ":0")
+	// Variables that would choose a program git runs, what a repository it
+	// creates is built from, or where git's own streams go.
+	t.Setenv("GIT_TEMPLATE_DIR", filepath.Join(t.TempDir(), "templates"))
+	t.Setenv("GIT_EXEC_PATH", filepath.Join(t.TempDir(), "libexec"))
+	t.Setenv("GIT_EXTERNAL_DIFF", "/tmp/evil-diff")
+	t.Setenv("GIT_EXTERNAL_DIFF_TRUST_EXIT_CODE", "true")
+	t.Setenv("GIT_SSH", "/tmp/evil-ssh")
+	t.Setenv("GIT_SSH_VARIANT", "simple")
+	t.Setenv("GIT_REDIRECT_STDIN", "/tmp/in")
+	t.Setenv("GIT_REDIRECT_STDOUT", "/tmp/out")
+	t.Setenv("GIT_REDIRECT_STDERR", "/tmp/err")
+	t.Setenv("GIT_PROXY_COMMAND", "/tmp/evil-proxy")
+	t.Setenv("GIT_ALLOW_PROTOCOL", "ext")
+	// Set for the accepting half of the same rule: this one must survive.
+	t.Setenv("GIT_PROTOCOL_FROM_USER", "0")
+
+	barePath := fakeBareDir(t)
+	repo, err := vcs.OpenBare(ctx(t), barePath, vcs.WithGitBinary(exe))
+	if err != nil {
+		t.Fatalf("OpenBare against the stand-in git: %v", err)
+	}
+	if _, err := repo.ResolveCommit(ctx(t), "HEAD"); err != nil {
+		t.Fatalf("ResolveCommit against the stand-in git: %v", err)
+	}
+
+	for _, call := range readInvocations(t, logPath) {
+		args := strings.Join(call.Args, " ")
+
+		// Explicit addressing: the bare repository is named, not discovered.
+		if want := "--git-dir=" + repo.Path(); call.Args[0] != want {
+			t.Errorf("first argument = %q; want %q (args: %s)", call.Args[0], want, args)
+		}
+		if !strings.Contains(args, "--no-pager") {
+			t.Errorf("invocation is missing --no-pager: %s", args)
+		}
+
+		// Nothing inherited may redirect the invocation somewhere else.
+		for _, name := range []string{
+			"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE",
+			"GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT",
+			"GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0", "DISPLAY",
+			"GIT_TEMPLATE_DIR", "GIT_EXEC_PATH",
+			"GIT_EXTERNAL_DIFF", "GIT_EXTERNAL_DIFF_TRUST_EXIT_CODE",
+			"GIT_SSH", "GIT_SSH_VARIANT", "GIT_PROXY_COMMAND",
+			"GIT_ALLOW_PROTOCOL",
+			"GIT_REDIRECT_STDIN", "GIT_REDIRECT_STDOUT", "GIT_REDIRECT_STDERR",
+		} {
+			if v, ok := lookupEnv(call.Env, name); ok {
+				t.Errorf("%s reached git as %q; it must be removed", name, v)
+			}
+		}
+		// The other side of the rule: what a caller set deliberately stays.
+		// GIT_CONFIG_GLOBAL is the configuration file location it chose, and
+		// GIT_PROTOCOL_FROM_USER can only narrow what an invocation may do,
+		// so removing it would take away a protection and buy nothing.
+		for _, name := range []string{"GIT_CONFIG_GLOBAL", "GIT_PROTOCOL_FROM_USER"} {
+			if _, ok := lookupEnv(call.Env, name); !ok {
+				t.Errorf("%s was removed; only widening variables should be", name)
+			}
+		}
+
+		// Nothing may wait for a person.
+		for _, want := range [][2]string{
+			{"GIT_TERMINAL_PROMPT", "0"},
+			{"GIT_ASKPASS", "false"},
+			{"SSH_ASKPASS", "false"},
+			{"SSH_ASKPASS_REQUIRE", "never"},
+			{"GIT_EDITOR", "false"},
+			{"GIT_SEQUENCE_EDITOR", "false"},
+			{"GIT_MERGE_AUTOEDIT", "no"},
+		} {
+			if got, ok := lookupEnv(call.Env, want[0]); !ok || got != want[1] {
+				t.Errorf("%s = %q (present: %v); want %q", want[0], got, ok, want[1])
+			}
+		}
+		if ssh, _ := lookupEnv(call.Env, "GIT_SSH_COMMAND"); !strings.Contains(ssh, "BatchMode=yes") {
+			t.Errorf("GIT_SSH_COMMAND = %q; want it to carry BatchMode=yes", ssh)
+		}
+		if call.StdinBytes != 0 {
+			t.Errorf("git was given %d bytes on standard input; want an immediate end of input", call.StdinBytes)
+		}
+	}
+}
+
+// A working copy is addressed by its root rather than discovered from the
+// process working directory.
+func TestWorktreeInvocationsNameTheirDirectory(t *testing.T) {
+	gitEnvironment(t)
+	logPath, exe := useFakeGit(t)
+
+	dir := t.TempDir()
+	repo, err := vcs.OpenWorktree(ctx(t), dir, vcs.WithGitBinary(exe))
+	if err != nil {
+		t.Fatalf("OpenWorktree against the stand-in git: %v", err)
+	}
+	for _, call := range readInvocations(t, logPath) {
+		if len(call.Args) < 2 || call.Args[0] != "-C" || call.Args[1] != repo.Path() {
+			t.Errorf("arguments = %v; want them to start with -C %s", call.Args, repo.Path())
+		}
+	}
+}
+
+// The ssh command an invocation runs is this package's decision. An ancestor
+// process does not get to name the transport program, and a caller that needs
+// its own says so through the option.
+func TestTheSSHCommandComesFromTheOptionRatherThanTheEnvironment(t *testing.T) {
+	const inherited = "/tmp/attacker-ssh"
+
+	t.Run("an inherited command does not reach git", func(t *testing.T) {
+		gitEnvironment(t)
+		logPath, exe := useFakeGit(t)
+		t.Setenv("GIT_SSH_COMMAND", inherited)
+
+		if _, err := vcs.OpenBare(ctx(t), fakeBareDir(t), vcs.WithGitBinary(exe)); err != nil {
+			t.Fatalf("OpenBare against the stand-in git: %v", err)
+		}
+		for _, call := range readInvocations(t, logPath) {
+			ssh, ok := lookupEnv(call.Env, "GIT_SSH_COMMAND")
+			if !ok {
+				t.Fatalf("GIT_SSH_COMMAND is absent; this package writes it")
+			}
+			if strings.Contains(ssh, inherited) {
+				t.Errorf("GIT_SSH_COMMAND = %q; want the inherited program gone", ssh)
+			}
+			if !strings.Contains(ssh, "BatchMode=yes") {
+				t.Errorf("GIT_SSH_COMMAND = %q; want it to carry BatchMode=yes", ssh)
+			}
+		}
+	})
+
+	// The accepting path. A deploy key or a ProxyJump is ordinary here, so the
+	// option has to deliver one, with BatchMode still appended to it.
+	t.Run("a command supplied through the option does", func(t *testing.T) {
+		gitEnvironment(t)
+		logPath, exe := useFakeGit(t)
+		t.Setenv("GIT_SSH_COMMAND", inherited)
+		const chosen = "ssh -i /keys/deploy -J bastion"
+
+		if _, err := vcs.OpenBare(ctx(t), fakeBareDir(t),
+			vcs.WithGitBinary(exe), vcs.WithSSHCommand(chosen)); err != nil {
+			t.Fatalf("OpenBare against the stand-in git: %v", err)
+		}
+		for _, call := range readInvocations(t, logPath) {
+			ssh, _ := lookupEnv(call.Env, "GIT_SSH_COMMAND")
+			if !strings.Contains(ssh, chosen) {
+				t.Errorf("GIT_SSH_COMMAND = %q; want the command the option named", ssh)
+			}
+			if strings.Contains(ssh, inherited) {
+				t.Errorf("GIT_SSH_COMMAND = %q; want the inherited program gone", ssh)
+			}
+			if !strings.Contains(ssh, "BatchMode=yes") {
+				t.Errorf("GIT_SSH_COMMAND = %q; want it to carry BatchMode=yes", ssh)
+			}
+		}
+	})
+}
+
+// Git's change statuses are read rather than guessed at, and output that does
+// not have the promised shape is refused rather than partially believed.
+func TestChangedFilesRefusesOutputItCannotRead(t *testing.T) {
+	cases := []struct {
+		name   string
+		output string
+		want   error
+	}{
+		{"unrecognized status", "Q\x00some/path\x00", vcs.ErrUnknownStatus},
+		{"status with no path", "A\x00", vcs.ErrMalformedOutput},
+		{"rename with one path", "R100\x00only/one\x00", vcs.ErrMalformedOutput},
+		{"empty status field", "\x00some/path\x00", vcs.ErrMalformedOutput},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gitEnvironment(t)
+			_, exe := useFakeGit(t)
+			fakeGitOutput(t, tc.output)
+
+			repo, err := vcs.OpenBare(ctx(t), fakeBareDir(t), vcs.WithGitBinary(exe))
+			if err != nil {
+				t.Fatalf("OpenBare against the stand-in git: %v", err)
+			}
+			if _, err := repo.ChangedFiles(ctx(t), "a", "b"); !errors.Is(err, tc.want) {
+				t.Fatalf("ChangedFiles of %q = %v; want %v", tc.output, err, tc.want)
+			}
+		})
+	}
+
+	// The accepting path, through the same stand-in, so the refusals above are
+	// not simply what this method always does.
+	t.Run("well formed output", func(t *testing.T) {
+		gitEnvironment(t)
+		_, exe := useFakeGit(t)
+		fakeGitOutput(t, "M\x00edited.txt\x00R90\x00was.txt\x00is.txt\x00")
+
+		repo, err := vcs.OpenBare(ctx(t), fakeBareDir(t), vcs.WithGitBinary(exe))
+		if err != nil {
+			t.Fatalf("OpenBare against the stand-in git: %v", err)
+		}
+		got, err := repo.ChangedFiles(ctx(t), "a", "b")
+		if err != nil {
+			t.Fatalf("ChangedFiles: %v", err)
+		}
+		want := []vcs.FileChange{
+			{Status: vcs.StatusModified, Path: "edited.txt"},
+			{Status: vcs.StatusRenamed, Path: "is.txt", OldPath: "was.txt", Similarity: 90},
+		}
+		if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+			t.Fatalf("ChangedFiles = %+v; want %+v", got, want)
+		}
+	})
+}
+
+// A git that dies without an exit status must still name what killed it. A
+// signal leaves no status behind, so the process error is the only description
+// of what happened, and a *CommandError that reports neither tells an operator
+// nothing at all.
+func TestGitThatDiesWithoutAnExitStatusNamesItsCause(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("a terminated process on Windows still carries an exit status, so this case does not arise there")
+	}
+	gitEnvironment(t)
+	_, exe := useFakeGit(t)
+	// Only the diff invocation dies, so the probes an open needs still answer.
+	t.Setenv(fakeGitDieOn, "diff")
+
+	repo, err := vcs.OpenBare(ctx(t), fakeBareDir(t), vcs.WithGitBinary(exe))
+	if err != nil {
+		t.Fatalf("OpenBare against the stand-in git: %v", err)
+	}
+
+	_, err = repo.Diff(ctx(t), "a", "b")
+	var cmdErr *vcs.CommandError
+	if !errors.As(err, &cmdErr) {
+		t.Fatalf("Diff against a git that was killed = %v; want a *CommandError", err)
+	}
+	if cmdErr.ExitCode >= 0 {
+		t.Fatalf("CommandError.ExitCode = %d; want -1, since the process reported no status", cmdErr.ExitCode)
+	}
+	if cmdErr.Err == nil {
+		t.Error("CommandError.Err is nil, so the only description of the death was discarded")
+	}
+	if strings.Contains(err.Error(), "no exit status and no message") {
+		t.Errorf("the failure is reported with no cause at all: %v", err)
+	}
+
+	// The accepting path, through the same stand-in: an invocation that is not
+	// the one told to die still succeeds, so the assertions above are about the
+	// death rather than about this stand-in failing everything.
+	if _, err := repo.ResolveCommit(ctx(t), "HEAD"); err != nil {
+		t.Errorf("ResolveCommit against the same stand-in = %v; want it to succeed", err)
+	}
+}
+
+// Standard error is bounded as it is read rather than afterwards. What a
+// caller can observe of that bound is this contract: the message kept is
+// small, it says it was cut, it still holds what git said first, it ends on a
+// line boundary so the redactor was never handed a fragment, and a credential
+// in it was removed.
+func TestOverLongStandardErrorIsBoundedMarkedAndRedacted(t *testing.T) {
+	const (
+		password    = "hunter2-should-never-appear"
+		sideband    = "remote: a sideband message the server chose to send"
+		truncateTag = "\n[git message truncated]"
+	)
+
+	t.Run("a failing invocation", func(t *testing.T) {
+		gitEnvironment(t)
+		_, exe := useFakeGit(t)
+		head := "fatal: could not read from https://someone:" + password + "@example.invalid/repo.git\n"
+		written := head + strings.Repeat(sideband+"\n", 8000)
+		fakeGitStderrOutput(t, written, 1)
+
+		repo, err := vcs.OpenBare(ctx(t), fakeBareDir(t), vcs.WithGitBinary(exe))
+		if err != nil {
+			t.Fatalf("OpenBare against the stand-in git: %v", err)
+		}
+		_, err = repo.ChangedFiles(ctx(t), "a", "b")
+		var cmdErr *vcs.CommandError
+		if !errors.As(err, &cmdErr) {
+			t.Fatalf("ChangedFiles against a failing git = %v; want a *CommandError", err)
+		}
+		if n := len(cmdErr.Stderr); n >= len(written) {
+			t.Errorf("CommandError.Stderr is %d bytes of the %d git wrote; want it bounded", n, len(written))
+		}
+		if !strings.HasSuffix(cmdErr.Stderr, truncateTag) {
+			t.Errorf("CommandError.Stderr does not say it was cut: %q", tail(cmdErr.Stderr))
+		}
+		if !strings.Contains(cmdErr.Stderr, "example.invalid") {
+			t.Errorf("CommandError.Stderr lost what git said first: %q", head)
+		}
+		// The cut lands on a line boundary, so no fragment of a line reaches
+		// the redactor, and a credential split across the cut cannot survive.
+		kept := strings.TrimSuffix(cmdErr.Stderr, truncateTag)
+		if !strings.HasSuffix(kept, sideband) {
+			t.Errorf("the kept message ends mid-line: %q", tail(kept))
+		}
+		if strings.Contains(err.Error(), password) {
+			t.Errorf("the error carries the password: %v", err)
+		}
+		if !strings.Contains(cmdErr.Stderr, "REDACTED") {
+			t.Errorf("the message does not show the credential was removed: %q", cmdErr.Stderr[:min(len(cmdErr.Stderr), 200)])
+		}
+	})
+
+	// Standard error is diagnostic text rather than a result, so writing more
+	// of it than the bound allows must not turn a successful invocation into a
+	// failure the way an over-limit standard output does.
+	t.Run("a successful invocation", func(t *testing.T) {
+		gitEnvironment(t)
+		_, exe := useFakeGit(t)
+		fakeGitStderrOutput(t, strings.Repeat(sideband+"\n", 8000), 0)
+		fakeGitOutput(t, "M\x00edited.txt\x00")
+
+		repo, err := vcs.OpenBare(ctx(t), fakeBareDir(t), vcs.WithGitBinary(exe))
+		if err != nil {
+			t.Fatalf("OpenBare against the stand-in git: %v", err)
+		}
+		got, err := repo.ChangedFiles(ctx(t), "a", "b")
+		if err != nil {
+			t.Fatalf("ChangedFiles alongside a chatty standard error: %v", err)
+		}
+		want := vcs.FileChange{Status: vcs.StatusModified, Path: "edited.txt"}
+		if len(got) != 1 || got[0] != want {
+			t.Fatalf("ChangedFiles = %+v; want %+v", got, want)
+		}
+	})
+}
+
+// tail returns the last stretch of a message, for a failure report that should
+// not print kilobytes.
+func tail(s string) string {
+	const n = 120
+	if len(s) <= n {
+		return s
+	}
+	return "..." + s[len(s)-n:]
+}
+
+// A git that exits cleanly while something else still holds its pipes open is
+// reported as a failure, because the output collected may be missing bytes git
+// wrote. The report has to name the status git actually exited with, so an
+// operator can tell it apart from a git that never reported one at all.
+func TestGitThatLeavesItsPipesOpenReportsTheStatusItExitedWith(t *testing.T) {
+	gitEnvironment(t)
+	_, exe := useFakeGit(t)
+	// Only the diff invocation leaves its pipes behind, so the probes an open
+	// needs still answer.
+	t.Setenv(fakeGitHoldOn, "diff")
+
+	repo, err := vcs.OpenBare(ctx(t), fakeBareDir(t), vcs.WithGitBinary(exe))
+	if err != nil {
+		t.Fatalf("OpenBare against the stand-in git: %v", err)
+	}
+
+	_, err = repo.Diff(ctx(t), "a", "b")
+	var cmdErr *vcs.CommandError
+	if !errors.As(err, &cmdErr) {
+		t.Fatalf("Diff against a git that left its pipes open = %v; want a *CommandError", err)
+	}
+	if !errors.Is(err, exec.ErrWaitDelay) {
+		t.Errorf("the error does not name the wait that failed: %v", err)
+	}
+	if cmdErr.ExitCode != 0 {
+		t.Errorf("CommandError.ExitCode = %d; want 0, the status git exited with", cmdErr.ExitCode)
+	}
+
+	// The accepting path, through the same stand-in: an invocation that is not
+	// the one told to hold its pipes still succeeds.
+	if _, err := repo.ResolveCommit(ctx(t), "HEAD"); err != nil {
+		t.Errorf("ResolveCommit against the same stand-in = %v; want it to succeed", err)
+	}
+}
+
+// Refusing over-limit output must not throw away what git reported about the
+// run. An invocation that overran the limit and then also failed has an exit
+// status and a message, and those are the two facts an operator wants most.
+func TestOverLimitOutputStillReportsWhatGitSaid(t *testing.T) {
+	const complaint = "fatal: an object could not be read"
+
+	// The limit is above a commit identifier so revision resolution still
+	// succeeds, and below the output the stand-in writes.
+	t.Run("refused for the limit", func(t *testing.T) {
+		gitEnvironment(t)
+		_, exe := useFakeGit(t)
+		fakeGitOutput(t, strings.Repeat("M\x00some/path\x00", 200))
+		fakeGitStderrOutput(t, complaint+"\n", 3)
+
+		repo, err := vcs.OpenBare(ctx(t), fakeBareDir(t), vcs.WithGitBinary(exe), vcs.WithMaxOutput(100))
+		if err != nil {
+			t.Fatalf("OpenBare against the stand-in git: %v", err)
+		}
+		got, err := repo.ChangedFiles(ctx(t), "a", "b")
+		if !errors.Is(err, vcs.ErrOutputTooLarge) {
+			t.Fatalf("ChangedFiles over the limit = %v; want ErrOutputTooLarge", err)
+		}
+		if got != nil {
+			t.Errorf("ChangedFiles returned %d changes alongside the refusal; want none", len(got))
+		}
+		var cmdErr *vcs.CommandError
+		if !errors.As(err, &cmdErr) {
+			t.Fatalf("error = %v; want a *CommandError", err)
+		}
+		if cmdErr.ExitCode != 3 {
+			t.Errorf("CommandError.ExitCode = %d; want 3, the status git exited with", cmdErr.ExitCode)
+		}
+		if !strings.Contains(cmdErr.Stderr, complaint) {
+			t.Errorf("CommandError.Stderr = %q; want git's own message", cmdErr.Stderr)
+		}
+	})
+
+	// The same invocation under a limit that fits, so the facts above are
+	// carried because git reported them rather than because the limit was hit.
+	t.Run("failing within the limit", func(t *testing.T) {
+		gitEnvironment(t)
+		_, exe := useFakeGit(t)
+		fakeGitOutput(t, strings.Repeat("M\x00some/path\x00", 200))
+		fakeGitStderrOutput(t, complaint+"\n", 3)
+
+		repo, err := vcs.OpenBare(ctx(t), fakeBareDir(t), vcs.WithGitBinary(exe), vcs.WithMaxOutput(1<<20))
+		if err != nil {
+			t.Fatalf("OpenBare against the stand-in git: %v", err)
+		}
+		_, err = repo.ChangedFiles(ctx(t), "a", "b")
+		if errors.Is(err, vcs.ErrOutputTooLarge) {
+			t.Fatalf("ChangedFiles under a large limit = %v; want the failure git reported", err)
+		}
+		var cmdErr *vcs.CommandError
+		if !errors.As(err, &cmdErr) {
+			t.Fatalf("error = %v; want a *CommandError", err)
+		}
+		if cmdErr.ExitCode != 3 || !strings.Contains(cmdErr.Stderr, complaint) {
+			t.Errorf("CommandError = exit %d, %q; want exit 3 and git's message", cmdErr.ExitCode, cmdErr.Stderr)
+		}
+	})
+}
+
+// An invocation can fail two ways at once. Refusing its output for the limit
+// must not erase the fact that a deadline is what ended the call, or a caller
+// cannot tell a timeout from any other failure.
+func TestOverLimitOutputKeepsTheDeadlineThatEndedTheCall(t *testing.T) {
+	gitEnvironment(t)
+	_, exe := useFakeGit(t)
+	fakeGitOutput(t, strings.Repeat("worktree /somewhere\x00\x00", 40))
+	// The listing invocation writes past the limit and then waits, so the
+	// deadline ends the call after the overflow is already recorded.
+	t.Setenv(fakeGitStallOn, "list")
+
+	// The limit is above the probe an open makes and below what the stand-in
+	// writes for the listing.
+	repo, err := vcs.OpenBare(ctx(t), fakeBareDir(t), vcs.WithGitBinary(exe), vcs.WithMaxOutput(100))
+	if err != nil {
+		t.Fatalf("OpenBare against the stand-in git: %v", err)
+	}
+
+	deadlined, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	got, err := repo.ListWorktrees(deadlined)
+	if got != nil {
+		t.Errorf("ListWorktrees returned %d entries alongside the refusal; want none", len(got))
+	}
+	if !errors.Is(err, vcs.ErrOutputTooLarge) {
+		t.Errorf("error = %v; want it to match ErrOutputTooLarge", err)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("error = %v; want it to match context.DeadlineExceeded", err)
+	}
+	// The stand-in wrote nothing to standard error here, so every newline in
+	// the message would be one the joined causes put there, and one error
+	// spread over two log lines is worse than a long line.
+	if strings.Contains(err.Error(), "\n") {
+		t.Errorf("error message spans more than one line: %q", err.Error())
+	}
+
+	// The accepting path for the second half: an overflow with no deadline
+	// behind it must not claim one.
+	plain, err := vcs.OpenBare(ctx(t), fakeBareDir(t), vcs.WithGitBinary(exe), vcs.WithMaxOutput(100))
+	if err != nil {
+		t.Fatalf("OpenBare against the stand-in git: %v", err)
+	}
+	t.Setenv(fakeGitStallOn, "")
+	if _, err := plain.ListWorktrees(ctx(t)); !errors.Is(err, vcs.ErrOutputTooLarge) {
+		t.Errorf("error = %v; want ErrOutputTooLarge", err)
+	} else if errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("error = %v; want no deadline claimed when none expired", err)
+	}
+}
+
+// Refusing over-limit output must not erase how the invocation itself ended.
+// A git that exits cleanly while something holds its pipes open is the case
+// killGrace describes, and an operator needs both facts, not one of them.
+func TestOverLimitOutputKeepsTheProcessErrorThatEndedTheCall(t *testing.T) {
+	gitEnvironment(t)
+	_, exe := useFakeGit(t)
+	fakeGitOutput(t, strings.Repeat("worktree /somewhere\x00\x00", 40))
+	// The listing invocation writes past the limit and then leaves its pipes
+	// to a grandchild, so both failures land on the same call.
+	t.Setenv(fakeGitHoldOn, "list")
+
+	repo, err := vcs.OpenBare(ctx(t), fakeBareDir(t), vcs.WithGitBinary(exe), vcs.WithMaxOutput(100))
+	if err != nil {
+		t.Fatalf("OpenBare against the stand-in git: %v", err)
+	}
+	got, err := repo.ListWorktrees(ctx(t))
+	if got != nil {
+		t.Errorf("ListWorktrees returned %d entries alongside the refusal; want none", len(got))
+	}
+	if !errors.Is(err, vcs.ErrOutputTooLarge) {
+		t.Errorf("error = %v; want it to match ErrOutputTooLarge", err)
+	}
+	if !errors.Is(err, exec.ErrWaitDelay) {
+		t.Errorf("error = %v; want it to also name the wait that failed", err)
+	}
+
+	// The accepting path for the second half: an overflow with nothing else
+	// wrong must not invent a process error.
+	plain, err := vcs.OpenBare(ctx(t), fakeBareDir(t), vcs.WithGitBinary(exe), vcs.WithMaxOutput(100))
+	if err != nil {
+		t.Fatalf("OpenBare against the stand-in git: %v", err)
+	}
+	t.Setenv(fakeGitHoldOn, "")
+	if _, err := plain.ListWorktrees(ctx(t)); !errors.Is(err, vcs.ErrOutputTooLarge) {
+		t.Errorf("error = %v; want ErrOutputTooLarge", err)
+	} else if errors.Is(err, exec.ErrWaitDelay) {
+		t.Errorf("error = %v; want no wait failure claimed when none happened", err)
+	}
+}
