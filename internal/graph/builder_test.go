@@ -231,7 +231,8 @@ func TestBuildRefusesUndeclaredStateKeys(t *testing.T) {
 			Node(graph.Node{Name: "b", NewBody: noteOnly(rec, "b")}).
 			Edge(graph.Edge{From: "a", To: "b", Guard: &graph.Guard{
 				Key: "ghost", Op: graph.OpEquals, Value: graph.BoolValue(true),
-			}}),
+			}}).
+			Edge(graph.Edge{From: "a", To: "b"}),
 		"halt answer": graph.NewBuilder().
 			Start("a").
 			Node(graph.Node{
@@ -290,9 +291,34 @@ func TestBuildRefusesGuardsThatCannotApplyToTheirKey(t *testing.T) {
 		Edge(graph.Edge{From: "a", To: "b", Guard: &graph.Guard{
 			Key: "name", Op: graph.OpGreaterThan, Value: graph.IntValue(1),
 		}}).
+		Edge(graph.Edge{From: "a", To: "b"}).
 		Build()
 
 	requireBuildError(t, err, graph.RuleDeclaredKey)
+}
+
+func TestBuildRefusesANodeWhoseOutgoingEdgesAreAllGuarded(t *testing.T) {
+	rec := &recorder{}
+	_, err := graph.NewBuilder().
+		Start("pick").
+		Key(graph.Key{Name: "go", Kind: graph.KindBool}).
+		Node(graph.Node{Name: "pick", NewBody: noteOnly(rec, "pick")}).
+		Node(graph.Node{Name: "onward", NewBody: noteOnly(rec, "onward")}).
+		Edge(graph.Edge{From: "pick", To: "onward", Guard: &graph.Guard{
+			Key: "go", Op: graph.OpEquals, Value: graph.BoolValue(true),
+		}}).
+		Build()
+
+	be := requireBuildError(t, err, graph.RuleDeterministicEdges)
+	if !strings.Contains(be.Error(), `"pick"`) {
+		t.Errorf("refusal does not name the node that has no edge to take: %v", be)
+	}
+	if !strings.Contains(be.Error(), "unconditional") {
+		t.Errorf("refusal does not say what to declare instead: %v", be)
+	}
+	if rec.count("pick") != 0 {
+		t.Error("a refused graph ran a node")
+	}
 }
 
 func TestBuildRefusesAnEdgeThatCouldNeverBeTaken(t *testing.T) {

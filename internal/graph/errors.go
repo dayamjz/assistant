@@ -29,8 +29,13 @@ const (
 	// rules decidable: a start node, unique node names, edge endpoints that
 	// exist, a body on every node, and no node unreachable from the start.
 	RuleWellFormed Rule = "well-formed"
-	// RuleDeterministicEdges covers outgoing edges that could never be
-	// reached, because an unconditional edge on the same node precedes them.
+	// RuleDeterministicEdges is this package's own rule that a node's
+	// outgoing edges say exactly one thing: a node that declares any outgoing
+	// edge declares exactly one unconditional edge, and declares it last. It
+	// covers both halves of that, an edge that could never be reached because
+	// an unconditional edge on the same node precedes it, and a node whose
+	// edges are all guarded and so has nowhere to send a run when no guard
+	// matches. A node with no outgoing edges is terminal and is unaffected.
 	RuleDeterministicEdges Rule = "deterministic-edges"
 )
 

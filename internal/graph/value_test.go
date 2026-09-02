@@ -268,27 +268,34 @@ func routedTo(t *testing.T, key graph.Key, guard graph.Guard, initial map[string
 	return order[len(order)-1]
 }
 
-func TestARunEndsWhenNoGuardedEdgeMatches(t *testing.T) {
+func TestARunTakesTheFallbackEdgeWhenNoGuardMatches(t *testing.T) {
 	rec := &recorder{}
 	g := mustBuild(t, graph.NewBuilder().
 		Start("pick").
 		Key(graph.Key{Name: "go", Kind: graph.KindBool}).
 		Node(graph.Node{Name: "pick", NewBody: noteOnly(rec, "pick")}).
 		Node(graph.Node{Name: "onward", NewBody: noteOnly(rec, "onward")}).
+		Node(graph.Node{Name: "instead", NewBody: noteOnly(rec, "instead")}).
 		Edge(graph.Edge{From: "pick", To: "onward", Guard: &graph.Guard{
 			Key: "go", Op: graph.OpEquals, Value: graph.BoolValue(true),
-		}}))
+		}}).
+		Edge(graph.Edge{From: "pick", To: "instead"}))
 
 	exec := mustExecutor(t, g, graph.NewMemoryStore(), 10)
 	got, err := exec.Run(context.Background(), "run", mustState(t, g, nil))
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	if got.Status != graph.StatusCompleted || got.Position != "" {
-		t.Errorf("Status = %s at %q, want a completed run", got.Status, got.Position)
+	if !equalStrings(rec.order(), []string{"pick", "instead"}) {
+		t.Errorf("bodies ran %v, want the run to take the fallback edge to instead", rec.order())
 	}
 	if rec.count("onward") != 0 {
 		t.Error("a node behind a failing guard ran")
+	}
+	// The run ended at a node that declares no outgoing edge, which is what a
+	// completed run means now that a guarded branch must declare a fallback.
+	if got.Status != graph.StatusCompleted || got.Position != "" {
+		t.Errorf("Status = %s at %q, want a completed run", got.Status, got.Position)
 	}
 }
 

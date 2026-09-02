@@ -262,9 +262,21 @@ func (c *checker) checkEdges() {
 	}
 }
 
+// checkEdgeDeterminism owns the whole contract on a node's outgoing edges:
+// exactly one of them is unconditional and it is declared last. Anything after
+// an unconditional edge could never be taken, and a node whose edges are all
+// guarded has no answer for the case where no guard matches, which would leave
+// the run reporting a clean completion for work it never did.
 func (c *checker) checkEdgeDeterminism() {
 	unconditional := make(map[string]int)
+	guarded := make(map[string]int)
+	froms := make([]string, 0, len(c.b.edges))
 	for i, e := range c.b.edges {
+		if _, seen := unconditional[e.From]; !seen {
+			if _, seen := guarded[e.From]; !seen {
+				froms = append(froms, e.From)
+			}
+		}
 		if prev, ok := unconditional[e.From]; ok {
 			c.refuse(RuleDeterministicEdges,
 				"edge %d from %q to %q can never be taken: edge %d already leaves %q unconditionally",
@@ -273,7 +285,23 @@ func (c *checker) checkEdgeDeterminism() {
 		}
 		if e.Guard == nil {
 			unconditional[e.From] = i
+			continue
 		}
+		guarded[e.From] = i
+	}
+	for _, from := range froms {
+		if _, ok := unconditional[from]; ok {
+			continue
+		}
+		if _, ok := c.index[from]; !ok {
+			// Already refused as an edge leaving a node the graph does not
+			// declare; the remedy there is to declare the node.
+			continue
+		}
+		c.refuse(RuleDeterministicEdges,
+			"every edge leaving %q is guarded, so a run reaches %q with no edge to take when no guard matches: "+
+				"declare an unconditional edge from %q, after its guarded edges, naming where the run goes then",
+			from, from, from)
 	}
 }
 

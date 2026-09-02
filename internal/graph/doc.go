@@ -43,6 +43,14 @@
 //   - A cycle passing through a join must include that join's fork. Otherwise
 //     the join can be re-entered with a partial set of inputs and produce a
 //     result that looks complete.
+//   - A node that declares any outgoing edge declares exactly one
+//     unconditional edge, and declares it last. This is this package's own
+//     rule rather than one of the three the PRD states. Without it a node
+//     whose guards all fail leaves the run with nowhere to go, and a run with
+//     nowhere to go reports a clean completion for the work below that node
+//     that it never did. The fallback edge is the point: it makes the author
+//     say where a run goes when no guard matches instead of defaulting to
+//     silent success. A node with no outgoing edges is terminal and says so.
 //
 // # Bounding cycles
 //
