@@ -423,6 +423,66 @@ func TestABoundParkedRunStandingAtAHaltPointHoldsNoAnswer(t *testing.T) {
 	}
 }
 
+// stateHolding returns s with key holding answer. It goes through the state's
+// own wire format because the exported constructor deliberately refuses to
+// seed a halt point's answer key, and what this stands for is a record a
+// substrate hands back rather than a state a caller could build.
+func stateHolding(t *testing.T, s graph.State, key, answer string) graph.State {
+	t.Helper()
+	encoded, err := json.Marshal(s)
+	if err != nil {
+		t.Fatalf("Marshal state: %v", err)
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &raw); err != nil {
+		t.Fatalf("Unmarshal state: %v", err)
+	}
+	value, err := json.Marshal(graph.TextValue(answer))
+	if err != nil {
+		t.Fatalf("Marshal value: %v", err)
+	}
+	raw[key] = value
+	patched, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatalf("Marshal patched state: %v", err)
+	}
+	var out graph.State
+	if err := json.Unmarshal(patched, &out); err != nil {
+		t.Fatalf("Unmarshal patched state: %v", err)
+	}
+	return out
+}
+
+func TestARunCannotStartHoldingAnAnswerNobodyWasAskedFor(t *testing.T) {
+	ctx := context.Background()
+	rec := &recorder{}
+	g := mustBuild(t, haltingBuilder(rec))
+
+	// The constructor refuses it, naming the key, rather than dropping what
+	// the caller passed.
+	_, err := g.NewState(map[string]graph.Value{"answer": graph.TextValue("approve")})
+	if !errors.Is(err, graph.ErrAnswerPreseeded) {
+		t.Fatalf("NewState with an answer pre-seeded = %v, want ErrAnswerPreseeded", err)
+	}
+	if !strings.Contains(err.Error(), `"answer"`) {
+		t.Errorf("the refusal does not name the key: %v", err)
+	}
+
+	// And so does the run, for a state that never came through NewState - a
+	// Result's state carries whatever the run it came from was holding.
+	store := graph.NewMemoryStore()
+	seeded := stateHolding(t, mustState(t, g, nil), "answer", "approve")
+	if _, err := mustExecutor(t, g, store, 20).Run(ctx, "run", seeded); !errors.Is(err, graph.ErrAnswerPreseeded) {
+		t.Fatalf("Run from a state holding an answer = %v, want ErrAnswerPreseeded", err)
+	}
+	if history, err := store.History(ctx, "run"); err != nil || len(history) != 0 {
+		t.Errorf("the refused run wrote %d checkpoints, %v", len(history), err)
+	}
+	if got := rec.order(); len(got) != 0 {
+		t.Errorf("bodies ran %v, want none: the run was refused before it started", got)
+	}
+}
+
 func TestResumeAcceptsTheClaimAnAnsweredSegmentLeftBehind(t *testing.T) {
 	ctx := context.Background()
 	store := graph.NewMemoryStore()
@@ -592,10 +652,7 @@ func TestValidateRefusesACheckpointThatDoesNotMatchTheGraph(t *testing.T) {
 
 	// An answer the gate's declared options do not permit, which is no answer
 	// at all as far as the halt point is concerned.
-	unacceptable, err := g.NewState(map[string]graph.Value{"answer": graph.TextValue("ship anyway")})
-	if err != nil {
-		t.Fatalf("NewState: %v", err)
-	}
+	unacceptable := stateHolding(t, sound.State, "answer", "ship anyway")
 
 	// Each case names the field the refusal must blame, so a case cannot start
 	// passing because some other rule caught it first.

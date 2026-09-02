@@ -59,7 +59,10 @@
 //     and it declares no merge rule. This is also this package's own rule. An
 //     answer is consent to one decision, and consent here is explicit for a
 //     bounded scope rather than a quiet default, so a run must never arrive at
-//     a halt point already holding an answer nobody gave for it. The executor
+//     a halt point already holding an answer nobody gave for it. A state that
+//     sets an answer key is refused before a run starts, with an error
+//     wrapping ErrAnswerPreseeded, which is the same ownership applied to
+//     callers rather than to nodes. The executor
 //     clears the key on every checkpoint it writes standing at a halt point
 //     without running it, whether the run halted there or a bound parked it
 //     there, so a halt re-entered in a loop asks afresh instead of inheriting
@@ -136,10 +139,11 @@
 // A segment claims the run with that write before it executes anything, and
 // the executor re-reads the run's latest checkpoint immediately before every
 // body, refusing when the claim it wrote is no longer the run's tip. Node
-// bodies belong to callers and may touch the world, so this narrows the window
-// in which two callers execute the same node to the interval between that
-// check and the body starting. It does not close it: a claim can still be
-// taken while a body is running, and closing that would need a lease with an
-// expiry and therefore a clock, which this package does not have. A node body
-// can still run twice inside that window.
+// bodies belong to callers and may touch the world, so a segment that has
+// already lost the run stops before it runs another one. Two callers can still
+// execute one node concurrently: a segment writes its next checkpoint only
+// after a body returns, so a caller reading the tip while that body runs
+// claims the run and runs the same node alongside it, and the first learns of
+// it only when its own write is refused. Closing that would need a lease with
+// an expiry and therefore a clock, which this package does not have.
 package graph

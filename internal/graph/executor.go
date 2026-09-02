@@ -36,13 +36,15 @@ type Config struct {
 // segment wrote, so a segment that has lost the run stops rather than running
 // more of a caller's code.
 //
-// That narrows the window in which two callers can both execute one node to
-// the interval between a check and the body it guards; it does not close it,
-// because a claim can still be taken while a body is running. Closing it would
-// need a lease with an expiry and therefore a clock, which this package
-// deliberately does not have. What a body does is outside this package, so the
-// residue is worth stating plainly rather than rounding off: a node body can
-// still run twice, in that window, and this package cannot prevent it.
+// That is the whole of what the mechanism delivers: a segment that has already
+// lost the run stops before it runs another body. It does not prevent two
+// callers from executing one node concurrently. A segment writes its next
+// checkpoint only after a body returns, so from the check until that return
+// the run's tip does not move, and a second caller reading it in that interval
+// claims the run and runs the same node alongside the first. The first learns
+// of it when its own write is refused, which is after its body has finished.
+// Closing that would need a lease with an expiry and therefore a clock, which
+// this package deliberately does not have.
 type Executor struct {
 	graph  *Graph
 	store  CheckpointStore
@@ -166,14 +168,22 @@ func (e *Executor) Resume(ctx context.Context, run string) (Result, error) {
 // it is written, still positioned at the halt point, and only then does the
 // node start. It returns an error wrapping ErrStaleAnchor when that claim
 // finds the run already moved, which is how a decision answered twice at once
-// resolves to one answer and one execution of the node behind it.
+// resolves to one answer.
+//
+// Once that claim is written the run is running rather than halted, so if the
+// node then fails or the process dies, the run's latest checkpoint stands at
+// the halt point with the answer recorded and no decision open. Answering
+// again is refused with ErrNoOpenDecision because there is no longer a
+// decision to answer; Resume is what continues such a run, and it re-executes
+// only the node that had not finished.
 func (e *Executor) Answer(ctx context.Context, run, answer string) (Result, error) {
 	cp, err := e.load(ctx, run)
 	if err != nil {
 		return Result{}, err
 	}
 	if cp.Status != StatusHalted || cp.Decision == nil {
-		return Result{}, fmt.Errorf("%w: run %q is %s", ErrNoOpenDecision, run, cp.Status)
+		return Result{}, fmt.Errorf("%w: run %q is %s, so continue it with Resume rather than answering it",
+			ErrNoOpenDecision, run, cp.Status)
 	}
 	if !answerAllowed(cp.Decision.Options, answer) {
 		return Result{}, fmt.Errorf("%w: run %q, answer %q, options %v",
@@ -421,8 +431,7 @@ func (e *Executor) park(ctx context.Context, cp Checkpoint) (Result, error) {
 // and consent here is explicit for a bounded scope rather than a quiet
 // default, so an answer must not outlive the decision it answered: a halt
 // point re-entered in a loop asks afresh instead of inheriting the answer the
-// last round was given, and a run cannot be started with an answer pre-seeded
-// into its initial state. It is also what makes "the answer key holds an
+// last round was given. It is also what makes "the answer key holds an
 // answer this halt point accepts" mean "this decision was answered", which is
 // what the validator reads it as. The one checkpoint at a halt point that
 // keeps its answer is the running one a segment claims the run with, which is
@@ -485,11 +494,26 @@ func (e *Executor) result(cp Checkpoint) Result {
 	}
 }
 
-// checkRunState refuses a state that does not hold exactly the graph's
-// declared keys with their declared kinds. It reports the same invariant
-// Graph.Validate applies to a checkpoint's state, as the sentinel errors a
-// caller starting a run handles.
+// checkRunState refuses a state a run cannot start from. It reports the same
+// shape invariant Graph.Validate applies to a checkpoint's state, as the
+// sentinel errors a caller starting a run handles, and it refuses a state that
+// already holds a halt point's answer.
+//
+// NewState refuses that answer too, and this is not the same check twice: a
+// State can also arrive from a Result, whose state is whatever the run it came
+// from was holding, so this is the door a state that never passed through
+// NewState comes in by.
 func (g *Graph) checkRunState(s State) error {
+	for key, halt := range g.answers {
+		v, ok := s.values[key]
+		if !ok {
+			continue
+		}
+		if answer, _ := v.Text(); answer != "" {
+			return fmt.Errorf("%w: %q holds %q and is the answer key of the halt point on node %q",
+				ErrAnswerPreseeded, key, answer, halt)
+		}
+	}
 	m := g.checkStateShape(s)
 	if m == nil {
 		return nil

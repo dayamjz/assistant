@@ -505,6 +505,7 @@ func (c *checker) graph() *Graph {
 		keyIndex: c.keyIndex,
 		reads:    make([]map[string]struct{}, len(c.b.nodes)),
 		writes:   make([]map[string]struct{}, len(c.b.nodes)),
+		answers:  make(map[string]string),
 	}
 	for i, n := range c.b.nodes {
 		g.nodes[i] = n.clone()
@@ -512,6 +513,7 @@ func (c *checker) graph() *Graph {
 		writes := setOf(n.Writes)
 		if n.Halt != nil {
 			writes[n.Halt.Into] = struct{}{}
+			g.answers[n.Halt.Into] = n.Name
 		}
 		g.writes[i] = writes
 	}

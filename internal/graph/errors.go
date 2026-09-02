@@ -147,6 +147,11 @@ var (
 	// now; retrying the same write would append a decision made against a run
 	// that has moved on.
 	ErrStaleAnchor = errors.New("graph: the run moved since the checkpoint this write is anchored to")
+	// ErrAnswerPreseeded is returned when a state a run is started from sets a
+	// halt point's answer key. The key holds what a person said to that halt
+	// point's decision, so a run cannot begin already holding one: leave the
+	// key out and let the run reach the halt point, which will ask.
+	ErrAnswerPreseeded = errors.New("graph: initial state sets a halt point's answer key")
 	// ErrNoSuchRun is returned when a run has no checkpoints.
 	ErrNoSuchRun = errors.New("graph: no such run")
 	// ErrNoSuchCheckpoint is returned when a checkpoint identifier names

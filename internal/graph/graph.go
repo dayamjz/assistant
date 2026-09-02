@@ -19,6 +19,7 @@ type Graph struct {
 	back     []bool
 	keys     []Key
 	keyIndex map[string]Key
+	answers  map[string]string
 	reads    []map[string]struct{}
 	writes   []map[string]struct{}
 }
@@ -80,6 +81,14 @@ func (g *Graph) IsBackEdge(i int) bool {
 // NewState returns the initial state for a run: every declared key holding the
 // zero value of its declared kind, with values applied on top. An override
 // naming an undeclared key, or holding a value of the wrong kind, is refused.
+//
+// So is an override naming a halt point's answer key, with an error wrapping
+// ErrAnswerPreseeded. That key belongs to its halt point the same way the
+// construction rules give it exactly one writer, and this extends that
+// ownership from nodes to callers: a run does not start already holding an
+// answer to a decision nobody has been asked yet. The override is refused
+// rather than dropped, because silently discarding what a caller passed is its
+// own way of being wrong.
 func (g *Graph) NewState(values map[string]Value) (State, error) {
 	s := State{values: make(map[string]Value, len(g.keys))}
 	for _, k := range g.keys {
@@ -94,6 +103,10 @@ func (g *Graph) NewState(values map[string]Value) (State, error) {
 		spec, ok := g.keyIndex[name]
 		if !ok {
 			return State{}, fmt.Errorf("%w: %q", ErrUndeclaredKey, name)
+		}
+		if halt, ok := g.answers[name]; ok {
+			return State{}, fmt.Errorf("%w: %q is the answer key of the halt point on node %q",
+				ErrAnswerPreseeded, name, halt)
 		}
 		v := values[name]
 		if v.Kind() != spec.Kind {
