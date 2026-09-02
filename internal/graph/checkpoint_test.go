@@ -348,6 +348,81 @@ func TestAHaltPointReEnteredInALoopAsksAgainRatherThanInheritingTheAnswer(t *tes
 	}
 }
 
+func TestABoundParkedRunStandingAtAHaltPointHoldsNoAnswer(t *testing.T) {
+	ctx := context.Background()
+	rec := &recorder{}
+	// The bounded back edge re-enters the halt point itself, so spending the
+	// bound parks the run standing in front of a decision it was not asked.
+	g := mustBuild(t, graph.NewBuilder().
+		Start("gate").
+		Key(graph.Key{Name: "answer", Kind: graph.KindText}).
+		Key(graph.Key{Name: "log", Kind: graph.KindList, Merge: graph.MergeAppend}).
+		Node(graph.Node{
+			Name:    "gate",
+			Reads:   []string{"answer"},
+			Writes:  []string{"log"},
+			Halt:    &graph.Halt{Question: "go on?", Options: []string{"go", "stop"}, Into: "answer"},
+			NewBody: appendLog(rec, "gate"),
+		}).
+		Node(graph.Node{Name: "work", Writes: []string{"log"}, NewBody: appendLog(rec, "work")}).
+		Node(graph.Node{Name: "done", Writes: []string{"log"}, NewBody: appendLog(rec, "done")}).
+		Edge(graph.Edge{From: "gate", To: "work", Guard: &graph.Guard{
+			Key: "answer", Op: graph.OpEquals, Value: graph.TextValue("go"),
+		}}).
+		Edge(graph.Edge{From: "gate", To: "done"}).
+		Edge(graph.Edge{From: "work", To: "gate", Rounds: 1}))
+
+	store := graph.NewMemoryStore()
+	exec := mustExecutor(t, g, store, 50)
+	if _, err := exec.Run(ctx, "run", mustState(t, g, nil)); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if _, err := exec.Answer(ctx, "run", "go"); err != nil {
+		t.Fatalf("first Answer: %v", err)
+	}
+	parked, err := exec.Answer(ctx, "run", "go")
+	if err != nil {
+		t.Fatalf("second Answer: %v", err)
+	}
+	if parked.Status != graph.StatusRoundsExhausted || parked.Position != "gate" {
+		t.Fatalf("the run ended %s at %q, want rounds_exhausted standing at gate", parked.Status, parked.Position)
+	}
+	// The bound stopped the run in front of the gate without asking it, so the
+	// answer the last round was given must not be sitting there.
+	if answer := text(t, parked.State, "answer"); answer != "" {
+		t.Errorf("the parked run still holds the answer %q", answer)
+	}
+
+	forged, err := store.Latest(ctx, "run")
+	if err != nil {
+		t.Fatalf("Latest: %v", err)
+	}
+	if answer := text(t, forged.State, "answer"); answer != "" {
+		t.Errorf("the checkpoint written when the bound parked the run holds %q, want it cleared", answer)
+	}
+
+	// A substrate hands that record back as a running one. With the answer
+	// cleared it is the halt-bypass forgery again and is refused; with a stale
+	// answer left in it, it would walk straight through the gate.
+	forged.Status = graph.StatusRunning
+	forged.Reason = ""
+	if _, err := store.Write(ctx, forged.ID(), forged); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	ranBefore := rec.count("gate")
+	_, err = exec.Resume(ctx, "run")
+	var ce *graph.CheckpointError
+	if !errors.As(err, &ce) {
+		t.Fatalf("Resume of a forged running checkpoint at the parked halt = %T %v, want a *graph.CheckpointError", err, err)
+	}
+	if ce.Field != "status" {
+		t.Errorf("the refusal blames %q (%s), want the halt-point rule to name %q", ce.Field, ce.Detail, "status")
+	}
+	if rec.count("gate") != ranBefore {
+		t.Error("the halt point's body ran from a forged checkpoint built on a bound-parked answer")
+	}
+}
+
 func TestBuildRefusesASecondWriterOfAHaltAnswerKey(t *testing.T) {
 	rec := &recorder{}
 	cases := map[string]struct {

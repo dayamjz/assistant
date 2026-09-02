@@ -388,10 +388,8 @@ func namesInclude(names []string, name string) bool {
 }
 
 func appendWriter(existing []string, name string) []string {
-	for _, n := range existing {
-		if n == name {
-			return existing
-		}
+	if namesInclude(existing, name) {
+		return existing
 	}
 	return append(existing, name)
 }

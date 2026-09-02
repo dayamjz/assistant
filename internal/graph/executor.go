@@ -303,20 +303,12 @@ func (e *Executor) advance(ctx context.Context, cp Checkpoint) (Result, error) {
 }
 
 // haltBefore parks cp in front of n, which declares a halt point: it emits the
-// decision n asks and clears the answer key that decision will land in.
-//
-// Clearing it is the point, not housekeeping. An answer is consent to one
-// decision, and consent here is explicit for a bounded scope and never a quiet
-// default, so an answer must not outlive the decision it answered: a halt
-// point re-entered in a loop asks afresh rather than inheriting the answer the
-// last round was given, and a run cannot be started with an answer pre-seeded
-// into its initial state. It is also what makes "the answer key holds an
-// answer this halt point accepts" mean "this decision was answered", which is
-// what the validator reads it as.
+// decision n asks. The answer key that decision lands in is cleared by persist,
+// which owns that for every checkpoint the executor writes at a halt point
+// however the run got there, not only for this one.
 func haltBefore(cp *Checkpoint, n Node) {
 	cp.Status = StatusHalted
 	cp.Decision = decisionFor(n)
-	cp.State.set(n.Halt.Into, TextValue(""))
 }
 
 // checkEdgeBounds applies the two bounds that live on an edge and, when
@@ -389,6 +381,21 @@ func (e *Executor) park(ctx context.Context, cp Checkpoint) (Result, error) {
 // is not a parked one, because a reason explains a park and nothing else, and
 // a run that moved on from a park has left that explanation behind.
 //
+// It clears a halt point's answer key on every checkpoint it writes that
+// stands at that halt point without running it, whichever route left the run
+// there: halted for the decision, or parked by a bound in front of it. That is
+// the point rather than housekeeping. An answer is consent to one decision,
+// and consent here is explicit for a bounded scope rather than a quiet
+// default, so an answer must not outlive the decision it answered: a halt
+// point re-entered in a loop asks afresh instead of inheriting the answer the
+// last round was given, and a run cannot be started with an answer pre-seeded
+// into its initial state. It is also what makes "the answer key holds an
+// answer this halt point accepts" mean "this decision was answered", which is
+// what the validator reads it as. The one checkpoint at a halt point that
+// keeps its answer is the running one a segment claims the run with, which is
+// the answer being given rather than an old one lingering, and which the
+// validator requires an accepted answer on for exactly that reason.
+//
 // What it hands over shares nothing with the checkpoint the run keeps
 // advancing, so a store is free to retain it as it stands without its history
 // rewriting itself underneath it.
@@ -409,6 +416,11 @@ func (e *Executor) persist(ctx context.Context, cp *Checkpoint) error {
 	cp.ForkedFrom = nil
 	if !cp.Status.Parked() {
 		cp.Reason = ""
+	}
+	if idx, ok := e.graph.index[cp.Position]; ok && cp.Status != StatusRunning {
+		if node := e.graph.nodes[idx]; node.Halt != nil {
+			cp.State.set(node.Halt.Into, TextValue(""))
+		}
 	}
 	anchor := cp.ID()
 	id, err := e.store.Write(ctx, anchor, cp.clone())

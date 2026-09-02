@@ -60,9 +60,11 @@
 //     answer is consent to one decision, and consent here is explicit for a
 //     bounded scope rather than a quiet default, so a run must never arrive at
 //     a halt point already holding an answer nobody gave for it. The executor
-//     clears the key whenever it parks at the halt, so a halt re-entered in a
-//     loop asks afresh instead of inheriting the last round's answer, and this
-//     rule is what keeps anything else from putting one back.
+//     clears the key on every checkpoint it writes standing at a halt point
+//     without running it, whether the run halted there or a bound parked it
+//     there, so a halt re-entered in a loop asks afresh instead of inheriting
+//     the last round's answer, and this rule is what keeps anything else from
+//     putting one back.
 //
 // # Bounding cycles
 //
