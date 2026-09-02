@@ -71,5 +71,5 @@ review:
         itself. A global-only key in a repository file is refused where its
         author sees it, not dropped.
         A document must mean one thing: duplicate members, flat dotted spellings,
-        unrecognized keys, and nulls are refusals, and every refusal names the
-        key and the value.
+        unrecognized keys, and nulls are refusals, and a refusal names the key,
+        and the value when a value is what was refused.
