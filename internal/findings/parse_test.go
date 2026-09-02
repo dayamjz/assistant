@@ -138,12 +138,8 @@ func TestParseReportRefusesWhatItCannotValidate(t *testing.T) {
 		raw    string
 		defect findings.Defect
 	}{
-		{"empty object", `{}`, findings.DefectMissingSummary},
 		{"no summary", `{"findings": []}`, findings.DefectMissingSummary},
 		{"blank summary", `{"summary": "   "}`, findings.DefectMissingSummary},
-		// A top-level array is not the report shape. The object inside it is a
-		// balanced span, so it is tried and refused for what it lacks.
-		{"an array of findings", `[{"action": "fix", "description": "d"}]`, findings.DefectMissingSummary},
 		{"unrecognized risk", `{"summary": "s", "risk": "critical"}`, findings.DefectUnrecognizedRisk},
 		{"finding with no description", `{"summary": "s", "findings": [{"action": "fix"}]}`,
 			findings.DefectMissingDescription},
@@ -173,11 +169,23 @@ func TestParseReportRefusesOutputWithNoReportInIt(t *testing.T) {
 		{"prose only", "I could not complete the review."},
 		{"truncated object", `{"summary": "reviewed", "findings": [{"action": "fix"`},
 		{"not json at all", "```json\nsummary: reviewed\nfindings: none\n```"},
+		// An object carrying none of "summary", "findings", or "risk" is not a
+		// report, whatever else it decodes into, so it is refused as nothing
+		// rather than as a report with defects.
+		{"empty object", `{}`},
+		// A top-level array is not the report shape. The object inside it is a
+		// balanced span, and it carries no report key either.
+		{"an array of findings", `[{"action": "fix", "description": "d"}]`},
+		{"a stray object in prose", `I could not complete the review. {"note": "see log"}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			report, err := findings.ParseReport(tc.raw)
 			if !errors.Is(err, findings.ErrNoReport) {
 				t.Fatalf("ParseReport returned (%+v, %v), want ErrNoReport", report, err)
+			}
+			var verr *findings.ValidationError
+			if errors.As(err, &verr) {
+				t.Fatalf("refusal reported %v, but no candidate was a report", verr.Flaws)
 			}
 		})
 	}

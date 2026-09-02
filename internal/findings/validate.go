@@ -153,9 +153,13 @@ func (r Report) Validate() error {
 // Errors a caller is expected to handle. Each is a typed result, never a
 // warning execution continues past.
 var (
-	// ErrNoReport is returned when agent output holds no balanced JSON object
-	// that decodes into a report at all. The output is quoted in the wrapping
-	// error so the failure can be diagnosed from the refusal alone.
+	// ErrNoReport is returned when no object in the agent's output was a report:
+	// every balanced JSON object in it either was not valid JSON or carried none
+	// of the keys "summary", "findings", or "risk". An object carrying none of
+	// them contributes no defect to a refusal, so this error and a
+	// *ValidationError are never alternatives for the same output. The output is
+	// quoted in the wrapping error so the failure can be diagnosed from the
+	// refusal alone.
 	ErrNoReport = errors.New("findings: agent output holds no report object")
 	// ErrUnreadableReport is returned when agent output holds an object that is
 	// a report by its keys, carrying "summary", "findings", or "risk", but

@@ -16,10 +16,12 @@ const (
 	// eight bits is far more than a report's handful of findings needs, and it
 	// stays short enough to read aloud.
 	idDigits = 12
-	// idAttempts bounds the search for a free identifier. Each attempt hashes
-	// a different occurrence number, so a collision needs two attempts to
-	// agree in their leading idDigits; after this many, deriveID stops
-	// searching and returns a suffixed identifier so it always terminates.
+	// idAttempts bounds the search for a free identifier. Each attempt hashes a
+	// different occurrence number, and the search ends at the first candidate
+	// not already taken or at this many attempts, so it terminates on any
+	// input. Reaching the bound needs no digest collision, only this many
+	// findings identical in every hashed field; deriveID states what it returns
+	// then and what that costs.
 	idAttempts = 64
 )
 
