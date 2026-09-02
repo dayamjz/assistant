@@ -69,6 +69,12 @@
 //     the last round's answer, and this rule is what keeps anything else from
 //     putting one back.
 //
+// These are the rules worth stating in prose, not the whole list. The checker
+// also refuses the structural defects that make them decidable at all, such as
+// a node naming a state key the graph does not declare, or a graph with no
+// start node. The Rule constants name every rule the checker enforces and say
+// what each one covers.
+//
 // # Bounding cycles
 //
 // Three independent bounds apply, and each catches something the others miss.
