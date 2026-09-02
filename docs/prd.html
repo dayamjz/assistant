@@ -1059,7 +1059,7 @@ flowchart TD
         </tr>
         <tr>
           <td><b>Checkpoint</b></td>
-          <td>State plus position plus any open decision, written after every node. Restoring one re-emits the open decision. One call can restore and answer together.</td>
+          <td>State plus position plus any open decision, written after every node, plus once when an executing segment claims the run. That claim write is what lets a second caller be refused before it starts a node rather than after, so a node body is not run again by a caller that has already lost the run. Restoring one re-emits the open decision. One call can restore and answer together.</td>
         </tr>
       </tbody>
     </table>
