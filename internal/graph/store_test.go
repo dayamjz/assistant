@@ -240,6 +240,74 @@ func TestConcurrentRunsUnderOneNameClaimItExactlyOnce(t *testing.T) {
 	}
 }
 
+// appendOnlyStore satisfies the letter of "append and assign Seq" while
+// ignoring the claim a zero Seq makes on a new run: it forwards every
+// operation to a MemoryStore, and the only thing it declines to do is refuse a
+// checkpoint that claims a run which already has history. It stands in for a
+// substrate written against that half of the contract alone.
+type appendOnlyStore struct {
+	inner *graph.MemoryStore
+}
+
+func (s appendOnlyStore) Write(ctx context.Context, c graph.Checkpoint) (graph.CheckpointID, error) {
+	if c.Seq == 0 {
+		c.Seq = 1
+	}
+	return s.inner.Write(ctx, c)
+}
+
+func (s appendOnlyStore) Latest(ctx context.Context, run string) (graph.Checkpoint, error) {
+	return s.inner.Latest(ctx, run)
+}
+
+func (s appendOnlyStore) History(ctx context.Context, run string) ([]graph.Checkpoint, error) {
+	return s.inner.History(ctx, run)
+}
+
+func (s appendOnlyStore) Fork(ctx context.Context, from graph.CheckpointID, into string) (graph.CheckpointID, error) {
+	return s.inner.Fork(ctx, from, into)
+}
+
+func TestRunRefusesAStoreThatDoesNotHonourTheRunClaim(t *testing.T) {
+	ctx := context.Background()
+	rec := &recorder{}
+	g := threeStepGraph(t, rec)
+	store := appendOnlyStore{inner: graph.NewMemoryStore()}
+	exec := mustExecutor(t, g, store, 20)
+
+	if _, err := exec.Run(ctx, "run", mustState(t, g, nil)); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	before, err := store.History(ctx, "run")
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	if len(before) != 4 {
+		t.Fatalf("the first run wrote %d checkpoints, want 4", len(before))
+	}
+
+	if _, err := exec.Run(ctx, "run", mustState(t, g, nil)); !errors.Is(err, graph.ErrRunExists) {
+		t.Fatalf("starting over a run on a store that ignores the claim = %v, want ErrRunExists", err)
+	}
+
+	after, err := store.History(ctx, "run")
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	if len(after) != len(before)+1 {
+		t.Errorf("the refused run added %d checkpoints, want only the one that revealed the store",
+			len(after)-len(before))
+	}
+	for i := range before {
+		if before[i].Position != after[i].Position || !before[i].State.Equal(after[i].State) {
+			t.Errorf("the refused run changed the original checkpoint %d", i+1)
+		}
+	}
+	if got := rec.order(); !equalStrings(got, []string{"a", "b", "c"}) {
+		t.Errorf("bodies ran %v, want one pass: a refused Run must not walk the graph", got)
+	}
+}
+
 func TestAnEmptyRunHasNoLatestAndNoHistory(t *testing.T) {
 	ctx := context.Background()
 	store := graph.NewMemoryStore()

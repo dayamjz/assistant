@@ -72,7 +72,10 @@ type Result struct {
 // It refuses a name that already has checkpoint history, with an error
 // wrapping ErrRunExists, rather than writing over it. The refusal is the
 // store's: Run claims the name by writing the run's first checkpoint, so two
-// concurrent calls under one name cannot both believe they started it.
+// concurrent calls under one name cannot both believe they started it. Run
+// checks the answer it gets back, because the first checkpoint of a run is
+// Seq 1 and any other sequence number means the store appended into a history
+// that already existed instead of honouring the claim.
 //
 // Run returns when the graph completes, halts before a halt point, or is
 // parked by one of the three bounds. A node that returns an error stops the
@@ -98,6 +101,11 @@ func (e *Executor) Run(ctx context.Context, run string, initial State) (Result, 
 	}
 	if err := e.persist(ctx, &cp); err != nil {
 		return Result{}, err
+	}
+	if cp.Seq != 1 {
+		return Result{}, fmt.Errorf(
+			"%w: %q: the store did not honour the claim on a new run and answered %s",
+			ErrRunExists, run, cp.ID())
 	}
 	if cp.Status == StatusHalted {
 		return e.result(cp), nil

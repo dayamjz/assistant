@@ -17,14 +17,19 @@ import (
 // original history intact.
 type CheckpointStore interface {
 	// Write appends c to the history of the run named by c.Run and returns the
-	// identifier assigned to it. The store, not the caller, assigns Seq.
+	// identifier assigned to it. The store, not the caller, assigns Seq, and
+	// the first checkpoint of a run is assigned Seq 1.
 	//
-	// A checkpoint whose Seq is zero claims to be the first in its run. The
-	// store refuses it with an error wrapping ErrRunExists when that run
-	// already has history, and it decides that under whatever it serializes
-	// writes with. Claiming a run is therefore one operation rather than a
-	// read followed by a write, which is what keeps two callers starting the
-	// same run from interleaving into one history and losing a run's work.
+	// A checkpoint whose Seq is zero claims the run as a new one. Honouring
+	// that claim is required of every implementation, not a description of any
+	// one of them: refuse such a write with an error wrapping ErrRunExists
+	// when c.Run already has history, and decide it atomically with assigning
+	// Seq, under whatever serializes the store's writes. Claiming a run is
+	// therefore one operation rather than a read followed by a write. The
+	// claim is what gives ErrRunExists its meaning and what keeps two callers
+	// starting the same run from interleaving into one history and losing a
+	// run's work; a substrate that only appends and assigns Seq loses both,
+	// and loses them silently.
 	Write(ctx context.Context, c Checkpoint) (CheckpointID, error)
 	// Latest returns the most recently written checkpoint for run. It returns
 	// an error wrapping ErrNoSuchRun when the run has no history.
