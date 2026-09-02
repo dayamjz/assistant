@@ -10,11 +10,14 @@ until it has been independently reviewed, tested, documented, and linted.
 ## Status
 
 Early. The product requirements are settled and checked in at
-[`docs/prd.html`](docs/prd.html). The execution engine in `internal/graph` is
-the first piece that runs: the graph builder with its construction-time checks,
-an executor with halt points and bounded cycles, and checkpoints behind a
-four-operation store. It is also the only piece so far, so there is nothing to
-run yet.
+[`docs/prd.html`](docs/prd.html). Two pieces exist so far. The execution engine
+in `internal/graph` is the first: the graph builder with its construction-time
+checks, an executor with halt points and bounded cycles, and checkpoints behind
+a four-operation store. The second is `internal/findings`, the vocabulary every
+pipeline stage speaks: a finding with its severity and its action, the report a
+stage returns, and the defensive parsing that turns untrusted agent output into
+a validated report. Nothing joins them into a pipeline yet, so there is still
+nothing to run.
 
 ## The two promises
 
@@ -39,6 +42,7 @@ working as it always did.
 | Path | Contents |
 | --- | --- |
 | `cmd/assistant` | The binary. Not written yet, so `make build` has nothing to build. |
+| `internal/findings` | The stage vocabulary: findings, actions, reports, and parsing of agent output. |
 | `internal/graph` | The execution engine: nodes, edges, bounds, halt points, checkpoints. |
 | `docs/prd.html` | The product requirements. The specification this code answers to. |
 
