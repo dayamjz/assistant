@@ -136,22 +136,59 @@ func TestWorktreeInvocationsNameTheirDirectory(t *testing.T) {
 	}
 }
 
-// A caller's own ssh command survives; BatchMode is appended to it rather than
-// replacing it.
-func TestAnInheritedSSHCommandIsKept(t *testing.T) {
-	gitEnvironment(t)
-	logPath, exe := useFakeGit(t)
-	t.Setenv("GIT_SSH_COMMAND", "ssh -i /keys/deploy")
+// The ssh command an invocation runs is this package's decision. An ancestor
+// process does not get to name the transport program, and a caller that needs
+// its own says so through the option.
+func TestTheSSHCommandComesFromTheOptionRatherThanTheEnvironment(t *testing.T) {
+	const inherited = "/tmp/attacker-ssh"
 
-	if _, err := vcs.OpenBare(ctx(t), fakeBareDir(t), vcs.WithGitBinary(exe)); err != nil {
-		t.Fatalf("OpenBare against the stand-in git: %v", err)
-	}
-	for _, call := range readInvocations(t, logPath) {
-		ssh, _ := lookupEnv(call.Env, "GIT_SSH_COMMAND")
-		if !strings.Contains(ssh, "-i /keys/deploy") || !strings.Contains(ssh, "BatchMode=yes") {
-			t.Errorf("GIT_SSH_COMMAND = %q; want the inherited command with BatchMode appended", ssh)
+	t.Run("an inherited command does not reach git", func(t *testing.T) {
+		gitEnvironment(t)
+		logPath, exe := useFakeGit(t)
+		t.Setenv("GIT_SSH_COMMAND", inherited)
+
+		if _, err := vcs.OpenBare(ctx(t), fakeBareDir(t), vcs.WithGitBinary(exe)); err != nil {
+			t.Fatalf("OpenBare against the stand-in git: %v", err)
 		}
-	}
+		for _, call := range readInvocations(t, logPath) {
+			ssh, ok := lookupEnv(call.Env, "GIT_SSH_COMMAND")
+			if !ok {
+				t.Fatalf("GIT_SSH_COMMAND is absent; this package writes it")
+			}
+			if strings.Contains(ssh, inherited) {
+				t.Errorf("GIT_SSH_COMMAND = %q; want the inherited program gone", ssh)
+			}
+			if !strings.Contains(ssh, "BatchMode=yes") {
+				t.Errorf("GIT_SSH_COMMAND = %q; want it to carry BatchMode=yes", ssh)
+			}
+		}
+	})
+
+	// The accepting path. A deploy key or a ProxyJump is ordinary here, so the
+	// option has to deliver one, with BatchMode still appended to it.
+	t.Run("a command supplied through the option does", func(t *testing.T) {
+		gitEnvironment(t)
+		logPath, exe := useFakeGit(t)
+		t.Setenv("GIT_SSH_COMMAND", inherited)
+		const chosen = "ssh -i /keys/deploy -J bastion"
+
+		if _, err := vcs.OpenBare(ctx(t), fakeBareDir(t),
+			vcs.WithGitBinary(exe), vcs.WithSSHCommand(chosen)); err != nil {
+			t.Fatalf("OpenBare against the stand-in git: %v", err)
+		}
+		for _, call := range readInvocations(t, logPath) {
+			ssh, _ := lookupEnv(call.Env, "GIT_SSH_COMMAND")
+			if !strings.Contains(ssh, chosen) {
+				t.Errorf("GIT_SSH_COMMAND = %q; want the command the option named", ssh)
+			}
+			if strings.Contains(ssh, inherited) {
+				t.Errorf("GIT_SSH_COMMAND = %q; want the inherited program gone", ssh)
+			}
+			if !strings.Contains(ssh, "BatchMode=yes") {
+				t.Errorf("GIT_SSH_COMMAND = %q; want it to carry BatchMode=yes", ssh)
+			}
+		}
+	})
 }
 
 // Git's change statuses are read rather than guessed at, and output that does
@@ -462,6 +499,12 @@ func TestOverLimitOutputKeepsTheDeadlineThatEndedTheCall(t *testing.T) {
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("error = %v; want it to match context.DeadlineExceeded", err)
 	}
+	// The stand-in wrote nothing to standard error here, so every newline in
+	// the message would be one the joined causes put there, and one error
+	// spread over two log lines is worse than a long line.
+	if strings.Contains(err.Error(), "\n") {
+		t.Errorf("error message spans more than one line: %q", err.Error())
+	}
 
 	// The accepting path for the second half: an overflow with no deadline
 	// behind it must not claim one.
@@ -474,5 +517,45 @@ func TestOverLimitOutputKeepsTheDeadlineThatEndedTheCall(t *testing.T) {
 		t.Errorf("error = %v; want ErrOutputTooLarge", err)
 	} else if errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("error = %v; want no deadline claimed when none expired", err)
+	}
+}
+
+// Refusing over-limit output must not erase how the invocation itself ended.
+// A git that exits cleanly while something holds its pipes open is the case
+// killGrace describes, and an operator needs both facts, not one of them.
+func TestOverLimitOutputKeepsTheProcessErrorThatEndedTheCall(t *testing.T) {
+	gitEnvironment(t)
+	_, exe := useFakeGit(t)
+	fakeGitOutput(t, strings.Repeat("worktree /somewhere\x00\x00", 40))
+	// The listing invocation writes past the limit and then leaves its pipes
+	// to a grandchild, so both failures land on the same call.
+	t.Setenv(fakeGitHoldOn, "list")
+
+	repo, err := vcs.OpenBare(ctx(t), fakeBareDir(t), vcs.WithGitBinary(exe), vcs.WithMaxOutput(100))
+	if err != nil {
+		t.Fatalf("OpenBare against the stand-in git: %v", err)
+	}
+	got, err := repo.ListWorktrees(ctx(t))
+	if got != nil {
+		t.Errorf("ListWorktrees returned %d entries alongside the refusal; want none", len(got))
+	}
+	if !errors.Is(err, vcs.ErrOutputTooLarge) {
+		t.Errorf("error = %v; want it to match ErrOutputTooLarge", err)
+	}
+	if !errors.Is(err, exec.ErrWaitDelay) {
+		t.Errorf("error = %v; want it to also name the wait that failed", err)
+	}
+
+	// The accepting path for the second half: an overflow with nothing else
+	// wrong must not invent a process error.
+	plain, err := vcs.OpenBare(ctx(t), fakeBareDir(t), vcs.WithGitBinary(exe), vcs.WithMaxOutput(100))
+	if err != nil {
+		t.Fatalf("OpenBare against the stand-in git: %v", err)
+	}
+	t.Setenv(fakeGitHoldOn, "")
+	if _, err := plain.ListWorktrees(ctx(t)); !errors.Is(err, vcs.ErrOutputTooLarge) {
+		t.Errorf("error = %v; want ErrOutputTooLarge", err)
+	} else if errors.Is(err, exec.ErrWaitDelay) {
+		t.Errorf("error = %v; want no wait failure claimed when none happened", err)
 	}
 }

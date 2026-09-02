@@ -66,8 +66,12 @@ type CommandError struct {
 	// text kept ends with "[git message truncated]". It is empty when git
 	// wrote nothing there.
 	Stderr string
-	// Err is the underlying error from starting or waiting on the process. It
-	// is nil when git ran and exited non-zero, which is the ordinary case.
+	// Err is the cause of the failure, whether that is an error from starting
+	// or waiting on the process, the error of a context that ended the call,
+	// or a refusal this package raised such as ErrOutputTooLarge. When more
+	// than one applies they are joined, and each stays matchable with
+	// errors.Is. It is nil when git ran and exited non-zero, which is the
+	// ordinary case, because the exit status already says everything.
 	Err error
 }
 
@@ -80,7 +84,9 @@ func (e *CommandError) Error() string {
 		b.WriteString(": git exited " + strconv.Itoa(e.ExitCode))
 	}
 	if e.Err != nil {
-		b.WriteString(": " + e.Err.Error())
+		// Joined causes are separated by a newline, and one error reading as
+		// two log lines is worse than a longer line.
+		b.WriteString(": " + strings.ReplaceAll(e.Err.Error(), "\n", "; "))
 	}
 	if e.Stderr != "" {
 		b.WriteString(": " + e.Stderr)

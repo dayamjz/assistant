@@ -472,6 +472,7 @@ func (r *Repository) ListWorktrees(ctx context.Context) ([]WorktreeInfo, error) 
 func (r *Repository) optionsForChild() []Option {
 	return []Option{
 		WithGitBinary(r.set.git),
+		WithSSHCommand(r.set.ssh),
 		WithRedactor(r.set.redactor),
 		WithMaxOutput(r.set.maxOutput),
 	}

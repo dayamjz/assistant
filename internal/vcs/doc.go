@@ -107,8 +107,12 @@
 // configured in the user's git configuration is still invoked, because that is
 // where legitimate credentials come from; if that helper itself blocks on a
 // user, the invocation blocks with it, and the caller's context deadline is
-// what ends it. And setting GIT_SSH_COMMAND overrides a core.sshCommand set in
-// git configuration, so a caller that relies on core.sshCommand loses it here.
+// what ends it. And this package chooses the ssh command every invocation
+// runs under, which overrides a core.sshCommand set in git configuration, so a
+// caller that relies on core.sshCommand loses it here. A caller supplies its
+// own with WithSSHCommand, which is the only route: an ssh command left in the
+// environment is removed along with the rest of redirectingVars rather than
+// adopted.
 //
 // # What this package deliberately does not do
 //

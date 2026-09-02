@@ -839,18 +839,21 @@ func TestInitBareIgnoresAnInheritedTemplateDirectory(t *testing.T) {
 	}
 	writeFile(t, filepath.Join(template, "planted.txt"), "content the environment chose\n")
 
-	// The control: git honors this variable, so the assertions below are about
-	// the package removing it rather than about the variable doing nothing.
+	// The control, and it has to exercise the same mechanism the assertions
+	// below are about: raw git inherits this process environment, so setting
+	// the variable here and passing no --template proves git honors the
+	// variable. Without that, a git that stopped honoring it would let this
+	// test report success while proving nothing.
+	t.Setenv("GIT_TEMPLATE_DIR", template)
 	control := filepath.Join(t.TempDir(), "control.git")
 	if out, err := tryRawGit(t.TempDir(), "-c", "init.defaultBranch=main",
-		"init", "--bare", "--template="+template, "--", control); err != nil {
-		t.Fatalf("raw git init with a template: %v\n%s", err, out)
+		"init", "--bare", "--", control); err != nil {
+		t.Fatalf("raw git init with GIT_TEMPLATE_DIR set: %v\n%s", err, out)
 	}
 	if _, err := os.Stat(filepath.Join(control, "hooks", "pre-receive")); err != nil {
-		t.Fatalf("git did not honor the template directory, so this test proves nothing: %v", err)
+		t.Fatalf("git did not honor GIT_TEMPLATE_DIR, so this test proves nothing: %v", err)
 	}
 
-	t.Setenv("GIT_TEMPLATE_DIR", template)
 	barePath := filepath.Join(t.TempDir(), "gate.git")
 	bare, err := vcs.InitBare(c, barePath)
 	if err != nil {

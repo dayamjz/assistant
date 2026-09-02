@@ -102,25 +102,6 @@ func fakeGitMain() int {
 		return 3
 	}
 
-	// A git that exits cleanly while something else holds its pipes open. The
-	// marker names the subcommand that does it, so the probes an open needs
-	// still answer normally.
-	if marker := os.Getenv(fakeGitHoldOn); marker != "" && slices.Contains(args, marker) {
-		exe, err := os.Executable()
-		if err != nil {
-			return 3
-		}
-		holder := exec.Command(exe)
-		holder.Env = append(os.Environ(), fakeGitHolder+"=1")
-		holder.Stdout = os.Stdout
-		holder.Stderr = os.Stderr
-		if err := holder.Start(); err != nil {
-			return 3
-		}
-		// Exit without waiting, leaving the pipes open behind this process.
-		return 0
-	}
-
 	joined := strings.Join(args, " ")
 	switch {
 	case strings.Contains(joined, "--is-bare-repository"),
@@ -146,6 +127,26 @@ func fakeGitMain() int {
 		}
 		os.Stderr.Write(data)
 	}
+	// A git that exits cleanly while something else holds its pipes open. It
+	// comes after the writes so an invocation can both overrun its output
+	// limit and leave its pipes open. The marker names the subcommand that
+	// does it, so the probes an open needs still answer normally.
+	if marker := os.Getenv(fakeGitHoldOn); marker != "" && slices.Contains(args, marker) {
+		exe, err := os.Executable()
+		if err != nil {
+			return 3
+		}
+		holder := exec.Command(exe)
+		holder.Env = append(os.Environ(), fakeGitHolder+"=1")
+		holder.Stdout = os.Stdout
+		holder.Stderr = os.Stderr
+		if err := holder.Start(); err != nil {
+			return 3
+		}
+		// Exit without waiting, leaving the pipes open behind this process.
+		return 0
+	}
+
 	// Output first, then a wait long enough for a caller's deadline to end the
 	// call, which is how a test reaches the path where an invocation both
 	// overran its output limit and ran out of time.

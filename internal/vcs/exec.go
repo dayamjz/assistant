@@ -33,6 +33,23 @@ func WithRedactor(r Redactor) Option {
 	}
 }
 
+// WithSSHCommand names the ssh command git uses for an ssh transport, in the
+// form git expects: a program and its arguments, which a shell splits. The
+// default is plain "ssh".
+//
+// This package appends -o BatchMode=yes to whatever is given here, so ssh
+// fails rather than asking for a passphrase or a host key confirmation. That
+// is what a caller supplying a deploy key or a ProxyJump uses, and it is the
+// only route: an ssh command left in the environment is removed rather than
+// adopted. An empty value leaves the default in place.
+func WithSSHCommand(command string) Option {
+	return func(s *settings) {
+		if strings.TrimSpace(command) != "" {
+			s.ssh = command
+		}
+	}
+}
+
 // WithMaxOutput sets the largest standard output, in bytes, that an invocation
 // may produce. An invocation that produces more fails with ErrOutputTooLarge
 // and its output is discarded rather than truncated. A value of zero or less
@@ -44,6 +61,12 @@ func WithMaxOutput(n int64) Option {
 		}
 	}
 }
+
+// defaultSSHCommand is the ssh command an invocation uses when a caller names
+// none. It is what a plain git installation would reach for, and naming it
+// here rather than taking it from the environment is what makes the ssh
+// transport this package runs a decision of this package.
+const defaultSSHCommand = "ssh"
 
 // defaultMaxOutput bounds what one invocation may return. A branch under
 // validation chooses the size of its own diff, so an unbounded read is a
@@ -75,12 +98,13 @@ const killGrace = 2 * time.Second
 
 type settings struct {
 	git       string
+	ssh       string
 	redactor  Redactor
 	maxOutput int64
 }
 
 func newSettings(opts []Option) settings {
-	s := settings{git: "git", redactor: defaultRedactor{}, maxOutput: defaultMaxOutput}
+	s := settings{git: "git", ssh: defaultSSHCommand, redactor: defaultRedactor{}, maxOutput: defaultMaxOutput}
 	for _, o := range opts {
 		if o != nil {
 			o(&s)
@@ -149,6 +173,7 @@ var redirectingVars = []string{
 	"GIT_EXTERNAL_DIFF",
 	"GIT_EXTERNAL_DIFF_TRUST_EXIT_CODE",
 	"GIT_SSH",
+	"GIT_SSH_COMMAND",
 	"GIT_SSH_VARIANT",
 	"GIT_PROXY_COMMAND",
 	"GIT_ALLOW_PROTOCOL",
@@ -172,8 +197,8 @@ var redirectingPrefixes = []string{"GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_"}
 // here rather than at call sites is the whole point of this package owning git
 // invocation: a call site cannot forget what it never writes.
 //
-// GIT_SSH_COMMAND is not in this list because it is derived from the inherited
-// value; envFor appends to it.
+// GIT_SSH_COMMAND is not in this list because envFor writes it from the
+// setting WithSSHCommand carries rather than from a fixed value.
 var nonInteractive = [][2]string{
 	{"GIT_TERMINAL_PROMPT", "0"},
 	// false exits non-zero without writing a line, so git treats the askpass
@@ -195,9 +220,9 @@ var nonInteractive = [][2]string{
 // envFor builds the environment for one invocation from base, which is
 // normally os.Environ(). It removes the variables named by redirectingVars and
 // redirectingPrefixes, then applies the settings in nonInteractive, overriding
-// any inherited value, and appends BatchMode to whatever ssh command was
-// inherited.
-func envFor(base []string) []string {
+// any inherited value, and writes the ssh command from ssh, which is the value
+// WithSSHCommand set.
+func envFor(base []string, ssh string) []string {
 	drop := make(map[string]struct{}, len(redirectingVars)+len(nonInteractive))
 	for _, k := range redirectingVars {
 		drop[k] = struct{}{}
@@ -205,19 +230,11 @@ func envFor(base []string) []string {
 	for _, kv := range nonInteractive {
 		drop[kv[0]] = struct{}{}
 	}
-	drop["GIT_SSH_COMMAND"] = struct{}{}
 
-	ssh := "ssh"
 	out := make([]string, 0, len(base)+len(nonInteractive)+1)
 	for _, entry := range base {
 		name, _, ok := strings.Cut(entry, "=")
 		if !ok {
-			continue
-		}
-		if name == "GIT_SSH_COMMAND" {
-			if v := entry[len(name)+1:]; strings.TrimSpace(v) != "" {
-				ssh = v
-			}
 			continue
 		}
 		if _, skip := drop[name]; skip {
@@ -231,8 +248,11 @@ func envFor(base []string) []string {
 	for _, kv := range nonInteractive {
 		out = append(out, kv[0]+"="+kv[1])
 	}
+	if strings.TrimSpace(ssh) == "" {
+		ssh = defaultSSHCommand
+	}
 	// BatchMode makes ssh fail rather than ask for a passphrase or a host key
-	// confirmation. It is appended so a caller's own ssh command survives.
+	// confirmation. It is appended so the caller's own ssh command survives.
 	out = append(out, "GIT_SSH_COMMAND="+ssh+" -o BatchMode=yes")
 	return out
 }
@@ -277,7 +297,7 @@ func (r *Repository) run(ctx context.Context, op string, args ...string) ([]byte
 
 	cmd := exec.CommandContext(ctx, r.set.git, full...)
 	cmd.Dir = r.path
-	cmd.Env = envFor(os.Environ())
+	cmd.Env = envFor(os.Environ(), r.set.ssh)
 	// A nil Stdin is os.DevNull, so anything git reads from standard input
 	// sees EOF rather than waiting for a person.
 	cmd.Stdin = nil
@@ -292,52 +312,57 @@ func (r *Repository) run(ctx context.Context, op string, args ...string) ([]byte
 	cmd.Stderr = stderr
 
 	runErr := cmd.Run()
+	code := exitStatus(cmd)
+	cause := invocationCause(runErr, code, ctx.Err())
 	if stdout.over {
-		// The output is refused whole, but what git reported about the run is
-		// not thrown away with it: an invocation that overran the limit and
-		// then also failed has an exit status and a message, and they are the
-		// most wanted facts about it.
-		code := -1
-		if cmd.ProcessState != nil {
-			code = cmd.ProcessState.ExitCode()
+		// The output is refused whole, but nothing else about the run is
+		// thrown away with it: an invocation that overran the limit and then
+		// also failed has an exit status, a message, and a cause, and those
+		// are the most wanted facts about it. ErrOutputTooLarge stays the
+		// sentinel, and every joined cause stays matchable with errors.Is.
+		refusal := ErrOutputTooLarge
+		if cause != nil {
+			refusal = errors.Join(refusal, cause)
 		}
 		msg, truncated := stderr.collected()
-		cause := ErrOutputTooLarge
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			// A call the context ended has to keep saying so, or a caller
-			// cannot tell a deadline from any other failure. Both this and
-			// ErrOutputTooLarge stay matchable with errors.Is.
-			cause = errors.Join(cause, ctxErr)
-		}
-		return nil, r.commandError(op, full, code, msg, truncated, cause)
+		return nil, r.commandError(op, full, code, msg, truncated, refusal)
 	}
 	if runErr != nil {
-		// The status git exited with is on the process state whether or not
-		// the error describing the run is the one that carries it, so a
-		// failure raised around a git that exited cleanly still names it. It
-		// stays -1 when git never ran or never reported a status.
-		code := -1
-		if cmd.ProcessState != nil {
-			code = cmd.ProcessState.ExitCode()
-		}
-		var exit *exec.ExitError
-		if errors.As(runErr, &exit) && code >= 0 {
-			// An exit status is the ordinary way git reports a failure, so it
-			// is not also carried as a wrapped process error. A negative
-			// status means there was none, because a signal ended the process,
-			// and then the process error is the only description of what
-			// happened.
-			runErr = nil
-		}
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			// The context ended the call, so report that rather than the
-			// signal git died of.
-			runErr = ctxErr
-		}
 		msg, truncated := stderr.collected()
-		return stdout.buf.Bytes(), r.commandError(op, full, code, msg, truncated, runErr)
+		return stdout.buf.Bytes(), r.commandError(op, full, code, msg, truncated, cause)
 	}
 	return stdout.buf.Bytes(), nil
+}
+
+// exitStatus reports the status git exited with. It is on the process state
+// whether or not the error describing the run is the one that carries it, so a
+// failure raised around a git that exited cleanly still names it. It is -1 when
+// git never ran or never reported a status.
+func exitStatus(cmd *exec.Cmd) int {
+	if cmd.ProcessState == nil {
+		return -1
+	}
+	return cmd.ProcessState.ExitCode()
+}
+
+// invocationCause reduces what running the process reported to the one cause
+// worth carrying, and is used by every failure path so that they cannot drift
+// apart.
+//
+// An exit status is the ordinary way git reports a failure, so it is not also
+// carried as a wrapped process error. A negative status means there was none,
+// because a signal ended the process, and then the process error is the only
+// description of what happened. A context that ended the call is reported
+// instead of either, since it is the more useful explanation.
+func invocationCause(runErr error, code int, ctxErr error) error {
+	if ctxErr != nil {
+		return ctxErr
+	}
+	var exit *exec.ExitError
+	if errors.As(runErr, &exit) && code >= 0 {
+		return nil
+	}
+	return runErr
 }
 
 // runExpecting is run for a command that answers with its exit status. The
