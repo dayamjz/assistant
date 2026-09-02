@@ -62,6 +62,10 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - uses: golangci/golangci-lint-action@v6
+      # .golangci.yml is a schema version 2 config, which needs action v7 or
+      # newer; v6 installs the v1 line and rejects the config before linting.
+      # The linter version is pinned so a new release cannot turn a green
+      # branch red on its own.
+      - uses: golangci/golangci-lint-action@v9
         with:
-          version: latest
+          version: v2.12.2
