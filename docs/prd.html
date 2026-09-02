@@ -1406,10 +1406,14 @@ flowchart TB
         <h4 class="card-title text-sm">Event delivery</h4>
         <p class="text-xs opacity-90">
           Streams are bounded, so overflow is a design decision rather than an accident. Classify
-          events as activity, state, or control. Only activity may be dropped. Publishing never
-          blocks the executor. Anything dropped collapses into one sticky gap marker that is
-          delivered ahead of queued payload. Every state event carries a monotonic revision, and
-          every subscription opens in the gap state so attaching always reconciles first.
+          events as activity, state, or control. Bounded, never blocking the executor, and never
+          evicting state is a trilemma, so the property that holds is that state is never silently
+          dropped: activity is discarded first, a state event may be evicted only when that
+          eviction is collapsed into the sticky gap marker, and control is never discarded.
+          Publishing never blocks the executor. Anything dropped collapses into one sticky gap
+          marker that is delivered ahead of queued payload, so a consumer learns it is missing
+          something before it acts on what follows. Every state event carries a monotonic revision,
+          and every subscription opens in the gap state so attaching always reconciles first.
         </p>
       </div>
     </div>
