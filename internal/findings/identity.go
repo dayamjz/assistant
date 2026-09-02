@@ -28,22 +28,31 @@ const (
 // NormalizeFindings returns a copy of fs with every finding normalized and
 // with an identifier assigned to each finding that arrived without one.
 //
-// Assignment is deterministic: an identifier is derived from the finding's own
-// normalized severity, action, location, and description, so the same input
-// always produces the same identifiers, and a finding keeps its identifier
-// when other findings are added to or removed from the set around it.
+// Assignment is deterministic: the same input set always produces the same
+// identifiers, and an identifier a finding already carries is never rewritten.
 //
-// Position in the set is an input in exactly one case, and only that case.
-// Findings identical in every field named above cannot be told apart by
-// content, so they are separated by how many identical ones precede them:
-// adding another identical finding ahead of one does move its identifier.
+// A derived identifier is a function of two things and of nothing else: the
+// finding's own normalized severity, action, location, and description, and the
+// identifiers already taken in that same set. It does not otherwise depend on
+// where the finding sits, so reordering a set does not move one.
 //
-// An identifier a finding already carries is never rewritten, and a derived
-// identifier avoids every identifier already present in the set as well as
-// every one derived before it. Neither that nor deriveID's bounded search
-// makes the whole set unique: two findings that arrive already carrying one
-// identifier between them still do, and the fallback deriveID documents does
-// not check what it returns. Validate is what refuses a set with duplicates.
+// The second half of that is load-bearing, because it means a finding's
+// identifier can move when the set around it changes. It moves in exactly two
+// cases, both of them a clash with something already taken:
+//
+//   - Another finding identical in every field named above precedes it. Such
+//     findings cannot be told apart by content, so they are separated by how
+//     many identical ones come first, and adding another identical finding
+//     ahead of one does move its identifier.
+//   - Another finding in the set already carries the identifier this one would
+//     otherwise derive. Identifiers that arrive with a finding are collected
+//     before any is derived, so this holds whether that finding sits before or
+//     after this one.
+//
+// Neither avoidance makes the whole set unique: two findings that arrive
+// already carrying one identifier between them still do, and the fallback
+// deriveID documents does not check what it returns. Validate is what refuses a
+// set with duplicates.
 //
 // The result is a new slice and shares no backing array with fs. A nil input
 // returns nil.

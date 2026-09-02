@@ -29,7 +29,7 @@ var reportFields = [...]string{"summary", "findings", "risk"}
 // string literals, so a brace or a quote inside a string cannot open or close a
 // span. At depth zero, outside every span, a quote in prose is deliberately not
 // tracked, so prose holding one unmatched brace can still absorb the object
-// into a span that is not valid JSON.
+// into a span that never closes or that is not valid JSON.
 //
 // Candidates are tried from the last in the text backwards, because an agent
 // asked for a report ends with it, and prose before it may quote an example.
@@ -65,12 +65,15 @@ var reportFields = [...]string{"summary", "findings", "risk"}
 // carried one, the error wraps ErrNoReport rather than complaining about
 // whatever else the output held.
 //
-// Identifying a report by its keys is best effort, with one limit worth
-// stating. A span that is not valid JSON exposes no keys, so a report mangled
-// badly enough to break JSON syntax cannot be told apart from prose and is
-// skipped like prose. When such a report follows an object that does validate,
-// such as an example quoted in the prose, that earlier object is what
-// ParseReport returns.
+// All of that reasons about candidates, and finding the candidates is best
+// effort, which is the limit worth stating. A report mangled badly enough to
+// break JSON syntax exposes no keys, so it is skipped like prose; a report
+// absorbed by an unmatched brace in the prose before it is never offered as a
+// candidate at all. Either way the report the agent meant is not among the
+// candidates, and what a caller then sees depends on the rest of the output:
+// a refusal when no earlier object validates, and that earlier object returned
+// with no error when one does. That is the one outcome here that is not a
+// refusal, and the package doc lists the ways to reach it.
 func ParseReport(raw string) (Report, error) {
 	if len(raw) > MaxRawBytes {
 		return Report{}, fmt.Errorf("%w: %d bytes, limit %d", ErrRawTooLarge, len(raw), MaxRawBytes)
@@ -127,12 +130,13 @@ type span struct{ start, end int }
 // Only top-level spans are returned: an object nested inside another is part
 // of its parent's span and is not offered separately. So text whose braces do
 // not pair the way JSON would, such as prose holding one unmatched brace before
-// the report, can absorb the report into a span that is not valid JSON. A quote
-// in prose does not do this: string literals are tracked only at depth greater
-// than zero, so a quote outside every span is ignored. ParseReport skips a span
-// that is not valid JSON, so the outcome is a refusal unless the text also
-// holds an earlier object that validates, which is the best-effort limit
-// ParseReport states.
+// the report, can absorb the report into a span that never returns to depth
+// zero, and is therefore never returned at all, or into one that closes around
+// text that is not valid JSON. A quote in prose does not do this: string
+// literals are tracked only at depth greater than zero, so a quote outside
+// every span is ignored. Either way the report is not among the candidates
+// ParseReport sees, which yields a refusal when no earlier span holds a valid
+// report and that earlier report otherwise. ParseReport states the limit.
 func objectSpans(raw string) []span {
 	var spans []span
 	depth, start := 0, 0

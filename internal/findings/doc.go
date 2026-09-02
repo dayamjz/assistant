@@ -60,14 +60,25 @@
 // # What this package does not promise
 //
 // The object extraction in ParseReport is a brace scan that tracks JSON string
-// literals, not a recovery parser. Two consequences are worth stating rather
-// than discovering:
+// literals, not a recovery parser. Three ways the report an agent meant to
+// write can fail to be a candidate at all are worth stating rather than
+// discovering:
 //
 //   - If the agent's final object is truncated it is not balanced, so it is
-//     not a candidate, and an earlier complete object in the same text can be
-//     selected instead. Nothing in the text says which object the agent meant.
-//   - Prose holding an unmatched brace before the object can absorb it into a
-//     span that does not decode. The result is a refusal, not a wrong answer.
+//     not a candidate.
+//   - Prose holding an unmatched brace before the object absorbs it into a
+//     span that either never closes, and so is never offered as a candidate at
+//     all, or closes around text that is not valid JSON.
+//   - An object mangled badly enough to break JSON syntax exposes no keys, so
+//     nothing tells it apart from prose that happened to balance its braces.
+//
+// All three have the same consequence, and it is the one thing this package
+// cannot fail closed on. When the text holds no earlier object that validates,
+// the outcome is a refusal. When it does hold one, such as a schema example
+// quoted in the prose, that object is returned with no error and a caller reads
+// it as the stage's report. Nothing in the text says which object the agent
+// meant. Together these are the only way ParseReport returns a report the agent
+// did not write, and ParseReport states the same limit where a caller meets it.
 //
 // Identifier assignment is deterministic: the same input yields the same
 // identifiers, and an identifier a finding already carries is never rewritten.

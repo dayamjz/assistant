@@ -423,8 +423,9 @@ func TestParseReportHandlesBracesInsideStrings(t *testing.T) {
 	}
 }
 
-// The residual gap the package documents: an unmatched brace in prose absorbs
-// the report, and the result is a refusal rather than a different report.
+// Half of the residual gap the package documents: an unmatched brace in prose
+// absorbs the report, and with no earlier object in the text the result is a
+// refusal. The other half is the test below.
 func TestParseReportRefusesWhenProseAbsorbsTheObject(t *testing.T) {
 	raw := `consider the set {a, b ` + bareObject
 	report, err := findings.ParseReport(raw)
@@ -433,6 +434,26 @@ func TestParseReportRefusesWhenProseAbsorbsTheObject(t *testing.T) {
 	}
 	if !errors.Is(err, findings.ErrNoReport) {
 		t.Fatalf("ParseReport returned %v, want ErrNoReport", err)
+	}
+}
+
+// The other half of that gap, and the one outcome in this package that is not
+// a refusal: the absorbed report is never a candidate, so an earlier object
+// that validates comes back with no error in its place. This pins a known
+// limit so it cannot change unnoticed. It is not a behavior to rely on, and a
+// caller reading the returned report has no way to tell it apart from the one
+// the agent meant to write.
+func TestParseReportCanReturnAnEarlierReportWhenProseAbsorbsTheLast(t *testing.T) {
+	raw := `{"summary": "an example, not my report", "findings": []}` +
+		"\n\nconsider the set {a, b\n\n" +
+		`{"summary": "the report I meant to write",` +
+		` "findings": [{"action": "fix", "description": "the error is dropped"}]}`
+	got := mustParse(t, raw)
+	if got.Summary != "an example, not my report" {
+		t.Fatalf("Summary = %q, want the documented limit to still hold", got.Summary)
+	}
+	if len(got.Findings) != 0 {
+		t.Fatalf("Findings = %+v, want the earlier object's, which has none", got.Findings)
 	}
 }
 
