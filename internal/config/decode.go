@@ -1,0 +1,385 @@
+package config
+
+import (
+	"encoding/json"
+	"strings"
+	"time"
+	"unicode"
+)
+
+// The decoders below turn one JSON value into one typed configuration value.
+// Each refuses rather than coercing, and every refusal names the key and the
+// value it was given, which is what PRD section 10 requires of a parse-time
+// failure. None of them consults another key, so a document is validated the
+// same way whatever else it contains.
+
+func asString(k Key, v any) (string, error) {
+	s, ok := v.(string)
+	if !ok {
+		return "", keyErr(k, v, "expected a string")
+	}
+	return s, nil
+}
+
+func asBool(k Key, v any) (bool, error) {
+	b, ok := v.(bool)
+	if !ok {
+		return false, keyErr(k, v, "expected true or false")
+	}
+	return b, nil
+}
+
+func asInt(k Key, v any) (int, error) {
+	n, ok := v.(json.Number)
+	if !ok {
+		return 0, keyErr(k, v, "expected a whole number")
+	}
+	i, err := n.Int64()
+	if err != nil {
+		return 0, keyErr(k, v, "expected a whole number")
+	}
+	if int64(int(i)) != i {
+		return 0, keyErr(k, v, "the number does not fit in an int on this platform")
+	}
+	return int(i), nil
+}
+
+func asList(k Key, v any) ([]any, error) {
+	l, ok := v.([]any)
+	if !ok {
+		return nil, keyErr(k, v, "expected a list")
+	}
+	return l, nil
+}
+
+// checkPrintable refuses control and Unicode format characters in text that
+// ends up in a shell command or in a prompt, because a newline in a command
+// line, or a character that reorders how text renders, changes what a reader
+// believes they approved. A tab is allowed: it is ordinary whitespace in a
+// command line and cannot hide anything on its own.
+func checkPrintable(k Key, v any, what, s string) error {
+	for i, r := range s {
+		if r == '\t' {
+			continue
+		}
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+			return keyErr(k, v, "the "+what+" contains a control or formatting character at byte "+itoa(i))
+		}
+	}
+	return nil
+}
+
+func checkRunes(k Key, v any, what, s string, limit int) error {
+	if n := len([]rune(s)); n > limit {
+		return keyErr(k, v, "the "+what+" is "+itoa(n)+" characters and the limit is "+itoa(limit))
+	}
+	return nil
+}
+
+func checkLen(k Key, v any, what string, n, limit int) error {
+	if n > limit {
+		return keyErr(k, v, "there are "+itoa(n)+" "+what+" and the limit is "+itoa(limit))
+	}
+	return nil
+}
+
+// decodeCommand accepts a shell command line. The empty string is a legitimate
+// value and means the repository has no command of its own for that stage; it
+// is distinct from the key being absent, which inherits the layer below.
+func decodeCommand(k Key, v any) (any, error) {
+	s, err := asString(k, v)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkPrintable(k, v, "command", s); err != nil {
+		return nil, err
+	}
+	if err := checkRunes(k, v, "command", s, MaxCommandRunes); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+// decodeAgent accepts one agent name or an ordered fallback list of them. Each
+// entry is a command word optionally followed by flags, split on whitespace
+// with no quoting or escaping interpreted. Entries naming a reserved flag are
+// refused here rather than ignored later, per PRD section 10.
+func decodeAgent(k Key, v any) (any, error) {
+	var raw []string
+	switch t := v.(type) {
+	case string:
+		raw = []string{t}
+	case []any:
+		for _, e := range t {
+			s, ok := e.(string)
+			if !ok {
+				return nil, keyErr(k, v, "every entry must be a string")
+			}
+			raw = append(raw, s)
+		}
+	default:
+		return nil, keyErr(k, v, "expected an agent name or a list of agent names")
+	}
+	if len(raw) == 0 {
+		return nil, keyErr(k, v, "an agent list may not be empty; omit the key to use the default")
+	}
+	if err := checkLen(k, v, "agents", len(raw), MaxAgents); err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(raw))
+	for _, entry := range raw {
+		if strings.TrimSpace(entry) == "" {
+			return nil, keyErr(k, v, "an agent entry may not be blank")
+		}
+		if err := checkPrintable(k, v, "agent entry", entry); err != nil {
+			return nil, err
+		}
+		if err := checkRunes(k, v, "agent entry", entry, MaxCommandRunes); err != nil {
+			return nil, err
+		}
+		for _, tok := range strings.Fields(entry) {
+			flag, _, _ := strings.Cut(tok, "=")
+			for _, reserved := range ReservedAgentFlags {
+				if flag == reserved {
+					return nil, keyErr(k, v, "the agent flag "+quote(reserved)+" is reserved because the run manages it")
+				}
+			}
+		}
+		out = append(out, entry)
+	}
+	return out, nil
+}
+
+// decodeFixRounds accepts a per-stage automatic fix attempt limit. Zero is a
+// legitimate value and means every finding at that stage goes to the operator.
+func decodeFixRounds(k Key, v any) (any, error) {
+	n, err := asInt(k, v)
+	if err != nil {
+		return nil, err
+	}
+	if n < 0 {
+		return nil, keyErr(k, v, "a fix round limit may not be negative; zero sends every finding to you")
+	}
+	if n > MaxFixRounds {
+		return nil, keyErr(k, v, "a fix round limit may be at most "+itoa(MaxFixRounds))
+	}
+	return n, nil
+}
+
+// decodeRunBudget accepts the total node executions allowed per run. Zero is
+// refused: a run that may execute nothing cannot report anything about the
+// change, and a budget of zero is far more likely a mistake than a request for
+// that.
+func decodeRunBudget(k Key, v any) (any, error) {
+	n, err := asInt(k, v)
+	if err != nil {
+		return nil, err
+	}
+	if n < 1 {
+		return nil, keyErr(k, v, "a run budget must allow at least one node execution")
+	}
+	if n > MaxRunBudget {
+		return nil, keyErr(k, v, "a run budget may be at most "+itoa(MaxRunBudget))
+	}
+	return n, nil
+}
+
+func decodeBool(k Key, v any) (any, error) {
+	b, err := asBool(k, v)
+	if err != nil {
+		return nil, err
+	}
+	return b, nil
+}
+
+// decodeChecksTimeout accepts a Go duration string such as "168h". A number is
+// refused rather than guessed at, because the unit a bare number would mean is
+// exactly the thing the reader would have to assume.
+func decodeChecksTimeout(k Key, v any) (any, error) {
+	s, err := asString(k, v)
+	if err != nil {
+		return nil, keyErr(k, v, `expected a duration string such as "168h"`)
+	}
+	d, parseErr := time.ParseDuration(s)
+	if parseErr != nil {
+		return nil, keyErr(k, v, "not a duration: "+parseErr.Error())
+	}
+	if d <= 0 {
+		return nil, keyErr(k, v, "an idle timeout must be positive")
+	}
+	if d > MaxChecksTimeout {
+		return nil, keyErr(k, v, "an idle timeout may be at most "+MaxChecksTimeout.String())
+	}
+	return d, nil
+}
+
+// decodeFixMessage accepts the fix commit subject template. It must contain
+// the summary placeholder, because a template without it renders the same
+// subject for every fix, which makes a history of fix commits unreadable.
+func decodeFixMessage(k Key, v any) (any, error) {
+	s, err := asString(k, v)
+	if err != nil {
+		return nil, err
+	}
+	if !strings.Contains(s, FixMessagePlaceholder) {
+		return nil, keyErr(k, v, "the template must contain "+quote(FixMessagePlaceholder))
+	}
+	if err := checkSubjectText("template", s); err != nil {
+		return nil, err
+	}
+	if err := checkRunes(k, v, "template", s, MaxCommitSubjectRunes); err != nil {
+		return nil, err
+	}
+	return s, nil
+}
+
+// decodePatterns compiles a list of path patterns, reporting the first that is
+// malformed with the pattern text in the message.
+func decodePatterns(k Key, v any, what string, limit int) (PatternSet, error) {
+	l, err := asList(k, v)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkLen(k, v, what, len(l), limit); err != nil {
+		return nil, err
+	}
+	out := make(PatternSet, 0, len(l))
+	for _, e := range l {
+		s, ok := e.(string)
+		if !ok {
+			return nil, keyErr(k, v, "every pattern must be a string")
+		}
+		p, perr := ParsePattern(s)
+		if perr != nil {
+			return nil, keyErr(k, v, perr.Error())
+		}
+		out = append(out, p)
+	}
+	return out, nil
+}
+
+// decodeIgnorePatterns accepts the ignore list. An empty list is a legitimate
+// value and means this layer ignores nothing, which is not the same as the key
+// being absent and inheriting the layer below.
+func decodeIgnorePatterns(k Key, v any) (any, error) {
+	return decodePatterns(k, v, "ignore patterns", MaxIgnorePatterns)
+}
+
+// decodePathRules accepts the path-scoped review rules, in declared order.
+// Each rule states its own scope and its own guidance, and both are required:
+// guidance with no scope would be repository-wide review guidance wearing a
+// scoped rule's clothes.
+func decodePathRules(k Key, v any) (any, error) {
+	l, err := asList(k, v)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkLen(k, v, "path rules", len(l), MaxPathRules); err != nil {
+		return nil, err
+	}
+	out := make([]PathRule, 0, len(l))
+	for i, e := range l {
+		m, ok := e.(map[string]any)
+		if !ok {
+			return nil, keyErr(k, v, "rule "+itoa(i)+" must be an object with a paths list and guidance")
+		}
+		for field := range m {
+			if field != "paths" && field != "guidance" {
+				return nil, keyErr(k, v, "rule "+itoa(i)+" has an unrecognized field "+quote(field))
+			}
+		}
+		rawPaths, ok := m["paths"]
+		if !ok {
+			return nil, keyErr(k, v, "rule "+itoa(i)+" has no paths")
+		}
+		paths, perr := decodePatterns(k, rawPaths, "paths in one rule", MaxPathRulePaths)
+		if perr != nil {
+			return nil, perr
+		}
+		if len(paths) == 0 {
+			return nil, keyErr(k, v, "rule "+itoa(i)+" must name at least one path; a rule with no scope is not a scoped rule")
+		}
+		guidance, gok := m["guidance"]
+		if !gok {
+			return nil, keyErr(k, v, "rule "+itoa(i)+" has no guidance")
+		}
+		text, gerr := asString(k, guidance)
+		if gerr != nil {
+			return nil, keyErr(k, guidance, "rule "+itoa(i)+" guidance must be a string")
+		}
+		if strings.TrimSpace(text) == "" {
+			return nil, keyErr(k, v, "rule "+itoa(i)+" has empty guidance")
+		}
+		if err := checkPrintable(k, guidance, "guidance", text); err != nil {
+			return nil, err
+		}
+		if err := checkRunes(k, guidance, "guidance", text, MaxGuidanceRunes); err != nil {
+			return nil, err
+		}
+		out = append(out, PathRule{Paths: paths, Guidance: text})
+	}
+	return out, nil
+}
+
+// decodeOwnership accepts the document ownership list. A subject may be
+// claimed once: P14 gives every fact exactly one owner, and two documents
+// claiming one subject is that principle broken in configuration rather than
+// in prose.
+func decodeOwnership(k Key, v any) (any, error) {
+	l, err := asList(k, v)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkLen(k, v, "ownership entries", len(l), MaxOwnership); err != nil {
+		return nil, err
+	}
+	out := make([]Ownership, 0, len(l))
+	seen := make(map[string]int, len(l))
+	for i, e := range l {
+		m, ok := e.(map[string]any)
+		if !ok {
+			return nil, keyErr(k, v, "entry "+itoa(i)+" must be an object with a subject and a document")
+		}
+		for field := range m {
+			if field != "subject" && field != "document" {
+				return nil, keyErr(k, v, "entry "+itoa(i)+" has an unrecognized field "+quote(field))
+			}
+		}
+		subject, serr := ownershipField(k, m, i, "subject")
+		if serr != nil {
+			return nil, serr
+		}
+		document, derr := ownershipField(k, m, i, "document")
+		if derr != nil {
+			return nil, derr
+		}
+		if prev, dup := seen[subject]; dup {
+			return nil, keyErr(k, v, "entry "+itoa(i)+" claims subject "+quote(subject)+
+				" which entry "+itoa(prev)+" already owns; a subject has exactly one owner")
+		}
+		seen[subject] = i
+		out = append(out, Ownership{Subject: subject, Document: document})
+	}
+	return out, nil
+}
+
+func ownershipField(k Key, m map[string]any, i int, field string) (string, error) {
+	raw, ok := m[field]
+	if !ok {
+		return "", keyErr(k, m, "entry "+itoa(i)+" has no "+field)
+	}
+	s, err := asString(k, raw)
+	if err != nil {
+		return "", keyErr(k, raw, "entry "+itoa(i)+" "+field+" must be a string")
+	}
+	if strings.TrimSpace(s) == "" {
+		return "", keyErr(k, raw, "entry "+itoa(i)+" has an empty "+field)
+	}
+	if err := checkPrintable(k, raw, field, s); err != nil {
+		return "", err
+	}
+	if err := checkRunes(k, raw, field, s, MaxSubjectRunes); err != nil {
+		return "", err
+	}
+	return s, nil
+}
