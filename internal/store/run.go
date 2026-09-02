@@ -52,7 +52,10 @@ type Run struct {
 	// one.
 	ApprovedCommit Optional[string]
 	// PushBinding is what the run pushed and where, in the caller's own
-	// notation. It is unknown until the run pushes.
+	// notation. It is unknown until the run pushes. It is stored exactly as
+	// given: the redactor runs on the repository URL columns and on nothing
+	// else, so a caller that writes a credentialed remote here has stored the
+	// credential.
 	PushBinding Optional[string]
 	// PullRequest is the pull request the run opened, in the caller's own
 	// notation. It is unknown until one exists.

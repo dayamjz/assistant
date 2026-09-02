@@ -41,6 +41,15 @@ var ErrNoResolution = errors.New("store: a hold is closed only by an explicit re
 // ErrClosed is returned by every accessor called after Close.
 var ErrClosed = errors.New("store: database is closed")
 
+// ErrSettingNotApplied is returned by Open when a connection does not report
+// the journal mode, synchronous level, busy timeout, or foreign key
+// enforcement the store was opened asking for. The error names the setting, the
+// value asked for, and the value in effect. What the package comment says about
+// durability and about concurrent writers is true of a database configured that
+// way and of no other, so a store that cannot confirm the configuration refuses
+// to open rather than describing one it does not have.
+var ErrSettingNotApplied = errors.New("store: a connection setting is not the one the store was opened with")
+
 // MigrationError names the migration that failed and what went wrong. The
 // database is unchanged by the failed migration: each migration is applied in
 // one transaction together with the row recording it.

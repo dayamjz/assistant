@@ -34,15 +34,16 @@ type Repository struct {
 	UpdatedAt time.Time
 }
 
-// UpsertRepository writes r and returns the record as stored, which is the
-// redacted form: every URL passes through the redactor Open was given before it
-// is bound to a statement, and nothing else is ever written to a URL column.
-// Writing the same identifier again updates the row and keeps its original
-// CreatedAt.
+// UpsertRepository writes r and returns the record as stored, which for its two
+// URL fields is the redacted form: UpstreamURL and ForkURL each pass through the
+// redactor Open was given before they are bound to a statement, and nothing
+// else is ever written to those two columns. The remaining fields are stored as
+// supplied. Writing the same identifier again updates the row and keeps its
+// original CreatedAt.
 //
 // This package does not decide what a credential looks like, per P14. What it
-// guarantees is that the redactor runs on the way in, and Open has already
-// established that the redactor is not inert.
+// guarantees is that the redactor runs over those two fields on the way in, and
+// Open has already established that the redactor is not inert.
 func (s *Store) UpsertRepository(ctx context.Context, r Repository) (Repository, error) {
 	if strings.TrimSpace(r.ID) == "" {
 		return Repository{}, fmt.Errorf("store: repository has no identifier")
@@ -89,7 +90,10 @@ func (s *Store) UpsertRepository(ctx context.Context, r Repository) (Repository,
 	return s.Repository(ctx, r.ID)
 }
 
-// safeURL is the one path a URL takes into this database.
+// safeURL is the one path the repository URL columns take into this database,
+// and it is the only place the redactor runs. It says nothing about any other
+// column: everything else this package stores is bound exactly as the caller
+// supplied it.
 func (s *Store) safeURL(raw, column string) (string, error) {
 	if strings.TrimSpace(raw) == "" {
 		return "", fmt.Errorf("store: %s is empty", column)

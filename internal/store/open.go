@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -58,10 +59,10 @@ type options struct {
 // Option configures Open.
 type Option func(*options)
 
-// WithRedactor supplies the credential remover this package persists URLs
-// through. It is required: PRD section 8 gives credential removal one owner,
-// and this package refuses to be a second one, so Open without it fails with
-// ErrNoRedactor.
+// WithRedactor supplies the credential remover this package persists the
+// repository URL columns through. It is required: PRD section 8 gives
+// credential removal one owner, and this package refuses to be a second one, so
+// Open without it fails with ErrNoRedactor.
 func WithRedactor(r vcs.Redactor) Option {
 	return func(o *options) { o.redact = r }
 }
@@ -73,7 +74,10 @@ func WithRedactor(r vcs.Redactor) Option {
 // Open refuses rather than degrades. Without a redactor it fails with
 // ErrNoRedactor; against a database migrated by a newer build it fails with
 // ErrSchemaAhead; against one whose recorded migrations differ from this
-// build's it fails with ErrSchemaChanged.
+// build's it fails with ErrSchemaChanged; and when a connection does not come
+// back carrying the settings this package's stated guarantees rest on, it fails
+// with ErrSettingNotApplied rather than running on a configuration that is not
+// the one described.
 func Open(ctx context.Context, path string, opts ...Option) (*Store, error) {
 	var o options
 	for _, opt := range opts {
@@ -93,14 +97,14 @@ func Open(ctx context.Context, path string, opts ...Option) (*Store, error) {
 		return nil, fmt.Errorf("store: resolving %q: %w", path, err)
 	}
 
-	write, err := openPool(abs, true)
+	write, err := openPool(ctx, poolDSN(abs, true), true)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("store: opening %s: %w", abs, err)
 	}
-	read, err := openPool(abs, false)
+	read, err := openPool(ctx, poolDSN(abs, false), false)
 	if err != nil {
 		_ = write.Close()
-		return nil, err
+		return nil, fmt.Errorf("store: opening %s: %w", abs, err)
 	}
 	s := &Store{path: abs, redact: o.redact, write: write, read: read}
 
@@ -111,11 +115,10 @@ func Open(ctx context.Context, path string, opts ...Option) (*Store, error) {
 	return s, nil
 }
 
-// openPool builds one connection pool. The writer pool takes the database lock
-// when its transaction begins rather than when it first writes, so a
-// read-modify-write inside a transaction never has to be retried, and it holds
-// one connection so that writers queue rather than contend.
-func openPool(path string, writer bool) (*sql.DB, error) {
+// poolDSN is the connection string for one pool. The writer pool takes the
+// database lock when its transaction begins rather than when it first writes,
+// so a read-modify-write inside a transaction never has to be retried.
+func poolDSN(path string, writer bool) string {
 	dsn := "file:" + url.PathEscape(path) +
 		"?_pragma=busy_timeout(" + fmt.Sprint(busyTimeout.Milliseconds()) + ")" +
 		"&_pragma=journal_mode(WAL)" +
@@ -124,18 +127,79 @@ func openPool(path string, writer bool) (*sql.DB, error) {
 	if writer {
 		dsn += "&_txlock=immediate"
 	}
+	return dsn
+}
+
+// openPool builds one connection pool from dsn and closes it again rather than
+// return one whose connection does not report the settings requiredSettings
+// asks for. A single pool holds one connection, so its writers queue rather
+// than contend.
+func openPool(ctx context.Context, dsn string, single bool) (*sql.DB, error) {
 	db, err := sql.Open(driverName, dsn)
 	if err != nil {
-		return nil, fmt.Errorf("store: opening %s: %w", path, err)
+		return nil, err
 	}
-	if writer {
+	if single {
 		db.SetMaxOpenConns(1)
 	}
-	if err := db.PingContext(context.Background()); err != nil {
+	if err := db.PingContext(ctx); err != nil {
 		_ = db.Close()
-		return nil, fmt.Errorf("store: opening %s: %w", path, err)
+		return nil, err
+	}
+	if err := verifySettings(ctx, db); err != nil {
+		_ = db.Close()
+		return nil, err
 	}
 	return db, nil
+}
+
+// setting is one connection setting this package asks for and then reads back.
+type setting struct {
+	// name is the pragma, which is also how the refusal names it.
+	name string
+	// want is the value the store was opened asking for, compared to what the
+	// connection reports without regard to case.
+	want string
+}
+
+// requiredSettings are the settings the guarantees in the package comment rest
+// on. They are asked for in the DSN and read back from the connection, because
+// a setting that is asked for and not applied leaves this package describing a
+// database it does not have.
+func requiredSettings() []setting {
+	return []setting{
+		{name: "journal_mode", want: "wal"},
+		{name: "synchronous", want: "1"},
+		{name: "busy_timeout", want: strconv.FormatInt(busyTimeout.Milliseconds(), 10)},
+		{name: "foreign_keys", want: "1"},
+	}
+}
+
+// verifySettings reads each required setting back from db and returns
+// ErrSettingNotApplied naming the first that is not the value asked for.
+//
+// What it buys this package is that the connection it drew reports the
+// configuration the package comment describes, rather than that configuration
+// being assumed from the fact that opening returned no error. Its scope is that
+// one connection: journal_mode is a property of the database file, so reading
+// it says which mode the file is in, while busy_timeout, foreign_keys, and
+// synchronous belong to a connection, and a pool that opens another one later
+// is outside what this establishes.
+//
+// The pragma name is concatenated into the statement. It never comes from a
+// caller: it is one of the in-package literals above.
+func verifySettings(ctx context.Context, db *sql.DB) error {
+	for _, s := range requiredSettings() {
+		var got string
+		if err := db.QueryRowContext(ctx, "PRAGMA "+s.name).Scan(&got); err != nil {
+			return fmt.Errorf("store: reading %s back: %w", s.name, err)
+		}
+		if !strings.EqualFold(got, s.want) {
+			return fmt.Errorf("%w: %s was opened as %s and reports %s",
+				ErrSettingNotApplied, s.name, s.want, got)
+		}
+	}
+	return nil
 }
 
 // redactorProbe is a URL of the shape PRD section 8 requires stored without its
@@ -147,10 +211,10 @@ const (
 
 // probeRedactor refuses a redactor that leaves the probe's credential intact.
 //
-// It establishes one thing: the redactor that will run on every URL this
-// package stores is not inert. That is the failure a caller cannot see for
-// themselves, because a redactor that was never wired up produces a store that
-// looks completely normal and quietly holds passwords.
+// It establishes one thing: the redactor that will run on the repository URL
+// columns is not inert. That is the failure a caller cannot see for themselves,
+// because a redactor that was never wired up produces a store that looks
+// completely normal and quietly holds passwords.
 //
 // It does not establish that the redactor removes every credential. One probe
 // of one shape cannot, and deciding which shapes count belongs to the redactor,

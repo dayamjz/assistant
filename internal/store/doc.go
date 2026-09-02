@@ -101,26 +101,39 @@
 // would need synchronous FULL and would pay an fsync per commit for it; this
 // package does not make that claim.
 //
-// # Credentials do not rest here
+// # The repository URL columns are stored redacted
 //
 // PRD section 8 stores repository URLs with credentials removed and recovers
 // the credentialed URL from the gate at run time. P14 gives credential removal
 // one owner, so this package does not implement it: Open requires a
 // [vcs.Redactor] and fails with ErrNoRedactor without one.
 //
-// Requiring one leaves a gap that requiring cannot close, which is a redactor
-// wired up to something inert. That failure is invisible from the outside: the
-// store looks completely normal and quietly holds passwords. So Open runs the
-// supplied redactor over a probe URL carrying a credential and refuses with
-// ErrRedactorInert if the credential survives.
+// What the redactor covers is two columns, repository.upstream_url and
+// repository.fork_url, which are the columns PRD section 8 designates for
+// repository URLs. UpsertRepository is the only accessor that reaches the
+// redactor, and it runs it on both of them on the way in.
+//
+// Every other column holds exactly what the caller passed. A push binding, a
+// pull request reference, a run's intent, a task's session reference, a hold's
+// subject and detail, a stage's log path, and the round and checkpoint payloads
+// are all bound verbatim, so a caller that puts a credential in one of them has
+// stored a credential, and nothing in this package will notice or remove it.
+// That is the caller's responsibility, and this package does not claim
+// otherwise: it is not a scrubber that everything written to it passes through.
+//
+// Requiring a redactor leaves a gap that requiring cannot close, which is a
+// redactor wired up to something inert. That failure is invisible from the
+// outside: the store looks completely normal and quietly holds passwords. So
+// Open runs the supplied redactor over a probe URL carrying a credential and
+// refuses with ErrRedactorInert if the credential survives.
 //
 // What the probe establishes is exactly that the redactor is not inert. It does
 // not establish that the redactor removes every credential, because one probe
 // of one shape cannot, and because deciding which shapes count is the
-// redactor's question rather than this package's. There is no second check at
-// the write path: URLs go into the database through one function, which calls
-// the redactor, and adding a per-URL opinion about what a credential looks like
-// would make this package the second owner of the question P14 gives to one.
+// redactor's question rather than this package's. There is no second check on
+// the two columns it covers either: adding a per-URL opinion about what a
+// credential looks like would make this package the second owner of the
+// question P14 gives to one.
 //
 // The redactor is supplied rather than taken from internal/vcs because that
 // package's own implementation is unexported today. When the redact module PRD
@@ -152,6 +165,25 @@
 // the busy timeout gets an error. That is a failed write a caller sees and can
 // retry, not a lost one, but it is a different failure mode and this package
 // does not pretend to cover it.
+//
+// # The settings those two sections rest on are read back
+//
+// Everything said above about durability and about what serializing writers
+// buys is true of a database in WAL mode, with synchronous NORMAL, a busy
+// timeout, and foreign keys enforced, and is not true of one running some other
+// way. Those four are asked for in the connection string, and a connection
+// string is a request: a store that only asked would be describing a
+// configuration it never confirmed. So Open reads all four back from each pool
+// after opening it, and refuses with ErrSettingNotApplied naming the setting,
+// the value asked for, and the value in effect.
+//
+// What that establishes is bounded, and the bound is per setting. The journal
+// mode belongs to the database file, so reading it back says which mode the
+// file is in for as long as this store has it open. The busy timeout, the
+// foreign key setting, and the synchronous level belong to a connection, so
+// reading them back says they hold on the connection the check drew. The reader
+// pool is unbounded and may open more connections later, and those are outside
+// what the check speaks for.
 //
 // # What this package does not do
 //
