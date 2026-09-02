@@ -6,9 +6,10 @@ package config
 // inadmissible as another.
 //
 // The origin distinguishes the operator's own file from a repository file,
-// which two of the four trust classes depend on. A repository file is trusted
-// or pushed depending on where it was read from; the operator's file has no
-// such split, because it never travels with a branch.
+// which is what the global-only class turns on. A repository file is in turn
+// trusted or pushed depending on where it was read from, which is what the
+// command and trusted-only classes turn on; the operator's file has no such
+// split, because it never travels with a branch.
 //
 // This package classifies and admits. It does not fetch, and it cannot check
 // that an origin was reported honestly; a caller that reads a pushed branch
@@ -63,7 +64,7 @@ const (
 	// anything and cannot weaken a check.
 	TrustPushed Trust = iota + 1
 	// TrustCommands is a key that runs shell or chooses which process starts
-	// with the operator's credentials. It is read from a trusted origin unless
+	// with the operator's credentials. A pushed branch may set one only when
 	// KeyAllowPushedCommands is set, and that opt-out is itself TrustTrusted,
 	// so a branch cannot enable itself.
 	TrustCommands
@@ -138,7 +139,7 @@ func (t Trust) admits(o Origin, allowPushedCommands bool) bool {
 
 // Rejection is one key that parsed cleanly but was not admitted, because the
 // origin it was set from is not allowed to set it. It is not an error: the key
-// falls back to the trusted layer or to its default. It is reported so the
+// falls back to the global layer or to its default. It is reported so the
 // caller can tell an author that their setting had no effect rather than
 // leaving them to wonder.
 type Rejection struct {

@@ -52,8 +52,8 @@
 //     contributor may set them: the ignore list, the fix round limits, and the
 //     commit message template.
 //   - TrustCommands keys run shell or choose which process starts with the
-//     operator's credentials: the three commands and the agent list. They come
-//     from a trusted origin unless KeyAllowPushedCommands is set, and that key
+//     operator's credentials: the three commands and the agent list. A pushed
+//     branch may set one only when KeyAllowPushedCommands is set, and that key
 //     is itself TrustTrusted, so a branch cannot enable itself.
 //   - TrustTrusted keys shape what review or documentation demands or declare
 //     a check unnecessary: the path-scoped review rules, document ownership,
@@ -78,7 +78,7 @@
 // what the PRD still owes is the row.
 //
 // A key a layer set but its origin may not set is not an error, with the one
-// exception above. It is dropped, the key falls back to the trusted layer or
+// exception above. It is dropped, the key falls back to the global layer or
 // its default, and the drop is reported as a Rejection so an author can be
 // told their setting had no effect. It is still validated first, because PRD
 // section 10 requires an invalid value to fail at parse time even on a branch

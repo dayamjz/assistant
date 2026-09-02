@@ -49,8 +49,7 @@ type Config struct {
 	// with RenderFixMessage.
 	CommitFixMessage string
 	// AllowPushedCommands is the opt-out that lets a pushed branch set the
-	// command and agent keys. It is itself readable only from a trusted
-	// origin.
+	// command and agent keys. It is itself never taken from a pushed branch.
 	AllowPushedCommands bool
 }
 

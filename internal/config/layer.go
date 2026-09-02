@@ -43,9 +43,9 @@ func Absent(origin Origin) Layer {
 // at all. Every other trust class is decided when layers merge instead, since
 // a repository file may legitimately contain a key whose value is then dropped.
 //
-// The format is JSON,
-// with the dotted keys of the PRD section 10 schema written as nested objects,
-// so "fix_rounds.review" is a "review" field inside a "fix_rounds" object.
+// The format is JSON, with the dotted keys of the PRD section 10 schema
+// written as nested objects, so "fix_rounds.review" is a "review" field inside
+// a "fix_rounds" object.
 // Nesting is the only accepted spelling: a member name written in the flat
 // dotted form, "fix_rounds.review", is refused, and so is a member name
 // repeated within one object.

@@ -6,10 +6,8 @@ type Resolution struct {
 	// the winning layer set or the schema default.
 	Config Config
 	// Rejected lists the keys a layer set that its origin was not allowed to
-	// set, in schema order. These are not errors: the key fell back to the
-	// trusted layer or to its default. They are reported so a caller can tell
-	// an author their setting had no effect instead of leaving them to
-	// discover it from behavior.
+	// set, in schema order. Rejection documents what a dropped key falls back
+	// to and why it is not an error.
 	Rejected []Rejection
 }
 
@@ -27,7 +25,8 @@ type Resolution struct {
 //   - A TrustPushed key is taken from either repository origin.
 //   - A TrustCommands key is taken from a pushed origin only when
 //     KeyAllowPushedCommands resolved to true, and that key is TrustTrusted,
-//     so only a trusted layer can turn the opt-out on.
+//     so only the global layer or a trusted repository file can turn the
+//     opt-out on.
 //   - A TrustTrusted key is never taken from a pushed origin.
 //   - A TrustGlobal key is never taken from a repository layer at all. Parse
 //     refuses one in a repository file, so a layer built by Parse cannot carry

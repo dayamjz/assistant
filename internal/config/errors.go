@@ -23,9 +23,9 @@ var (
 	// in their home, and no repository file is ever it.
 	ErrNotGlobalLayer = errors.New("config: the global layer must have the global origin")
 	// ErrNotRepositoryLayer is returned when the layer offered as the
-	// repository one has OriginGlobal. A repository file is read from the
-	// default branch or from the branch under validation, and the operator's
-	// own file is neither.
+	// repository one does not have a repository origin. A repository file is
+	// read from the default branch or from the branch under validation, and
+	// the operator's own file is neither.
 	ErrNotRepositoryLayer = errors.New("config: the repository layer must have a repository origin")
 )
 
