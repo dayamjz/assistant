@@ -63,8 +63,10 @@ type Refusal struct {
 	// and reduced to one state for the target. Its zero value means the remote
 	// was not read, or was read and did not advertise the target, or was read
 	// and could not be reduced to one state for it. The last case is a target
-	// advertised more than once or advertised with no object, and no state is
-	// invented for either; Reason and Detail say which happened.
+	// advertised more than once, advertised with no object, or advertised as
+	// an object that peels to another and so names no commit of its own. No
+	// state is invented for any of them; Reason and Detail say which happened,
+	// and Detail carries the object identifiers where there are any.
 	Observed RemoteState
 	// Discarded names the commits the fresh read's target holds that the
 	// proposed commit does not contain. It is populated for ReasonWouldDiscard

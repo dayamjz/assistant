@@ -179,8 +179,8 @@ func TestDecideAllowsAnAnchoredForceAndNamesWhatItRewrites(t *testing.T) {
 	if got := decision.Anchor().State().Commit; got != "c3" {
 		t.Fatalf("Anchor commit = %q, want the observed commit c3", got)
 	}
-	if want := []string{"c2", "c3"}; !slices.Equal(decision.Rewritten(), want) {
-		t.Fatalf("Rewritten() = %v, want %v", decision.Rewritten(), want)
+	if want := []string{"c3", "c2"}; !slices.Equal(decision.Rewritten(), want) {
+		t.Fatalf("Rewritten() = %v, want %v, most recent first", decision.Rewritten(), want)
 	}
 }
 
@@ -209,8 +209,8 @@ func TestDecideRefusesAMovedTargetAndNamesEverythingItWouldDrop(t *testing.T) {
 	if refusal.Reason != safety.ReasonWouldDiscard {
 		t.Fatalf("Reason = %v, want %v", refusal.Reason, safety.ReasonWouldDiscard)
 	}
-	if want := []string{"c2", "c3", "c4"}; !slices.Equal(refusal.Discarded, want) {
-		t.Fatalf("Discarded = %v, want %v", refusal.Discarded, want)
+	if want := []string{"c4", "c3", "c2"}; !slices.Equal(refusal.Discarded, want) {
+		t.Fatalf("Discarded = %v, want %v, most recent first", refusal.Discarded, want)
 	}
 	if got := refusal.Observed; got != (safety.RemoteState{Exists: true, Commit: "c4"}) {
 		t.Fatalf("Observed = %v, want the tip the fresh read found", got)
@@ -386,6 +386,9 @@ func TestDecideRefusesATargetThatIsNotABranch(t *testing.T) {
 	if !errors.As(err, &refusal) || refusal.Reason != safety.ReasonUnverifiable {
 		t.Fatalf("Observe error = %v, want a *Refusal with %s", err, safety.ReasonUnverifiable)
 	}
+	if refusal.Observed != (safety.RemoteState{}) {
+		t.Fatalf("Observed = %v, want the zero state: the reference names a tag object, not a commit", refusal.Observed)
+	}
 }
 
 func TestDecideRefusesARemoteAdvertisingTheTargetTwice(t *testing.T) {
@@ -479,5 +482,46 @@ func TestRewrittenCannotBeEditedThroughTheDecision(t *testing.T) {
 	rewritten[0] = "something else"
 	if want := []string{"c2"}; !slices.Equal(decision.Rewritten(), want) {
 		t.Fatalf("Rewritten() = %v after a caller edited an earlier result, want %v", decision.Rewritten(), want)
+	}
+}
+
+func TestDecideDecidesOnTheResolvedCommitNotTheSubmittedRevision(t *testing.T) {
+	t.Parallel()
+	// "head" is a revision, not a commit identifier. What a caller pushes is
+	// Decision.Proposed(), so it has to be the commit the revision named when
+	// the decision was taken, and the reachability comparison has to have run
+	// on that same commit.
+	for _, tc := range []struct {
+		name          string
+		parents       map[string][]string
+		wantKind      safety.Kind
+		wantRewritten []string
+	}{
+		{"fast-forward", linear("c1", "c2", "c3"), safety.KindFastForward, nil},
+		{"anchored force", map[string][]string{"c1": nil, "c2": {"c1"}, "c3": {"c1"}}, safety.KindAnchoredForce, []string{"c2"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			git := &fakeGit{
+				parents:    tc.parents,
+				revs:       map[string]string{"head": "c3"},
+				advertised: map[string][][]vcs.Ref{remote: {{branch(ref, "c2")}}},
+			}
+			guard := safety.New(git)
+			obs := observe(t, guard)
+			decision, err := guard.Decide(context.Background(), safety.Update{Target: target, Proposed: "head", Anchor: obs})
+			if err != nil {
+				t.Fatalf("Decide: %v", err)
+			}
+			if got := decision.Proposed(); got != "c3" {
+				t.Fatalf("Proposed() = %q, want the resolved commit c3: a caller pushing the submitted revision would move the target to whatever that revision names later", got)
+			}
+			if decision.Kind() != tc.wantKind {
+				t.Fatalf("Kind() = %v, want %v: the comparison has to run on the resolved commit", decision.Kind(), tc.wantKind)
+			}
+			if !slices.Equal(decision.Rewritten(), tc.wantRewritten) {
+				t.Fatalf("Rewritten() = %v, want %v", decision.Rewritten(), tc.wantRewritten)
+			}
+		})
 	}
 }

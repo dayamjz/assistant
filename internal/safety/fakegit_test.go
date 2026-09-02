@@ -23,6 +23,11 @@ type fakeGit struct {
 	// entry answers every later read. This is how a test makes the remote
 	// move between the run's observation and the decision.
 	advertised map[string][][]vcs.Ref
+	// revs maps a symbolic revision, such as a branch name or a short
+	// identifier, to the commit it resolves to. A revision this does not name
+	// resolves to itself when the history holds it, so a test only states the
+	// ones where the distinction is the point.
+	revs map[string]string
 	// remoteErr, when set for a remote, fails every read of it.
 	remoteErr map[string]error
 	// mergeBaseErr and commitsErr fail those comparisons when set.
@@ -80,10 +85,14 @@ func matchesTail(name, pattern string) bool {
 }
 
 func (f *fakeGit) ResolveCommit(_ context.Context, rev string) (string, error) {
-	if _, ok := f.parents[rev]; !ok {
+	commit, ok := f.revs[rev]
+	if !ok {
+		commit = rev
+	}
+	if _, ok := f.parents[commit]; !ok {
 		return "", fmt.Errorf("fakegit: %s: %w", rev, vcs.ErrRefNotFound)
 	}
-	return rev, nil
+	return commit, nil
 }
 
 func (f *fakeGit) MergeBase(_ context.Context, a, b string) (string, error) {
@@ -123,14 +132,55 @@ func (f *fakeGit) CommitsNotIn(_ context.Context, have, incorporated string) ([]
 	if err != nil {
 		return nil, err
 	}
-	var out []string
+	in := map[string]bool{}
 	for c := range rh {
 		if !ri[c] {
-			out = append(out, c)
+			in[c] = true
 		}
 	}
-	sort.Strings(out)
-	return out, nil
+	return f.recentFirst(in), nil
+}
+
+// recentFirst orders a set of commits the way git rev-list prints one, most
+// recent first: no commit is emitted before a commit in the set that reaches
+// it. Commits with nothing left reaching them are taken in name order, so a
+// history a test states has exactly one answer.
+func (f *fakeGit) recentFirst(in map[string]bool) []string {
+	reaching := map[string]int{}
+	for c := range in {
+		if _, ok := reaching[c]; !ok {
+			reaching[c] = 0
+		}
+		for _, p := range f.parents[c] {
+			if in[p] {
+				reaching[p]++
+			}
+		}
+	}
+	var ready []string
+	for c, n := range reaching {
+		if n == 0 {
+			ready = append(ready, c)
+		}
+	}
+	sort.Strings(ready)
+	var out []string
+	for len(ready) > 0 {
+		c := ready[0]
+		ready = ready[1:]
+		out = append(out, c)
+		for _, p := range f.parents[c] {
+			if !in[p] {
+				continue
+			}
+			reaching[p]--
+			if reaching[p] == 0 {
+				ready = append(ready, p)
+			}
+		}
+		sort.Strings(ready)
+	}
+	return out
 }
 
 // reachable returns the commit and everything it reaches.

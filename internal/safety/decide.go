@@ -96,7 +96,10 @@ func (d Decision) Anchor() Observation { return d.anchor }
 // this decision drops.
 func (d Decision) Rewritten() []string { return slices.Clone(d.rewritten) }
 
-// String renders the decision as kind target proposed@anchor.
+// String renders an allowed decision as "<kind> <ref>@<remote> to <proposed>
+// anchored on <anchor state>", where the anchor state is the commit the target
+// named when the run observed it, or "absent". A value that is not permission,
+// including the zero Decision, renders as "no decision".
 func (d Decision) String() string {
 	if !d.allowed {
 		return "no decision"

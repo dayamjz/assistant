@@ -75,6 +75,6 @@ func ExampleRefusal() {
 	fmt.Println(errors.Is(err, safety.ErrRefused))
 
 	// Output:
-	// would-discard [submitted theirs]
+	// would-discard [theirs submitted]
 	// true
 }

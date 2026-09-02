@@ -187,10 +187,10 @@ func (g *Guard) readTarget(ctx context.Context, target Target) (RemoteState, err
 		// hands back compares against the object the reference names, so a
 		// target that is not a branch is refused rather than decided about.
 		return RemoteState{}, &Refusal{
-			Reason:   ReasonUnverifiable,
-			Target:   target,
-			Observed: RemoteState{Exists: true, Commit: found.Object},
-			Detail:   "the remote advertised " + target.Ref + " as an object that peels to another, so it is not a branch",
+			Reason: ReasonUnverifiable,
+			Target: target,
+			Detail: "the remote advertised " + target.Ref + " as " + found.Object +
+				", which peels to " + found.Commit + ", so it is not a branch",
 		}
 	}
 	return RemoteState{Exists: true, Commit: found.Object}, nil
