@@ -123,7 +123,7 @@ func (e *Executor) Run(ctx context.Context, run string, initial State) (Result, 
 	if err := e.persist(ctx, &cp); err != nil {
 		return Result{}, err
 	}
-	if cp.Status == StatusHalted {
+	if cp.Status != StatusRunning {
 		return e.result(cp), nil
 	}
 	return e.advance(ctx, cp)
@@ -140,8 +140,11 @@ func (e *Executor) Run(ctx context.Context, run string, initial State) (Result, 
 // interrupted mid-flight continues from the node it had not yet reached.
 //
 // It returns an error wrapping ErrBudgetSpent when the run stands at a halt
-// point its budget leaves no step for, rather than claiming the run only to
-// park it and discard the answer that checkpoint carries.
+// point its budget leaves no step for, whether it is halted waiting on that
+// decision or holds the claim an answer left behind. Nothing is written and
+// nothing runs: a decision nobody could act on is not put back to a caller,
+// and a run that could only be parked is not claimed at the cost of the
+// answer its checkpoint carries.
 //
 // A run it is going to advance is claimed first, by writing the checkpoint it
 // read back under a new sequence number before any node runs. It returns an
@@ -153,11 +156,11 @@ func (e *Executor) Resume(ctx context.Context, run string) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	if cp.Status != StatusRunning {
-		return e.result(cp), nil
-	}
 	if err := e.checkBudgetForHalt(cp); err != nil {
 		return Result{}, err
+	}
+	if cp.Status != StatusRunning {
+		return e.result(cp), nil
 	}
 	if err := e.persist(ctx, &cp); err != nil {
 		return Result{}, err
@@ -357,6 +360,13 @@ func (e *Executor) haltBefore(cp *Checkpoint, n Node) {
 	cp.Decision = decisionFor(n)
 }
 
+// awaitsItsNode reports whether a run with this status still has the node its
+// position names to run: a halted run runs it once its decision is answered,
+// and a running one once the segment holding the claim goes on. For every
+// other status the position records where the run stopped rather than what it
+// is waiting to do.
+func awaitsItsNode(s Status) bool { return s == StatusHalted || s == StatusRunning }
+
 // spent reports whether a run that has taken steps has none left to spend.
 func (e *Executor) spent(steps int) bool { return steps >= e.budget }
 
@@ -372,7 +382,12 @@ func (e *Executor) parkOnBudget(cp *Checkpoint, node string) {
 // further when its budget leaves no step for that halt point's node. Answer
 // and Resume both call it before they claim the run, so the answer stays on
 // the checkpoint that carries it rather than being consumed by a segment that
-// could only park.
+// could only park, and Resume calls it before it hands a halted run back, so
+// a decision the run cannot act on is not put to a caller a second time.
+//
+// It judges only a run that still has the node it stands at to run. A run a
+// bound parked in front of a halt point runs nothing more whatever the budget
+// says, and Resume returns it unchanged.
 //
 // It is not the same guard as the one in haltBefore, and neither makes the
 // other redundant: the budget is executor configuration and is deliberately
@@ -382,7 +397,7 @@ func (e *Executor) parkOnBudget(cp *Checkpoint, node string) {
 // differ across a resume is a known limitation of where it lives, not of these
 // checks.
 func (e *Executor) checkBudgetForHalt(cp Checkpoint) error {
-	if !e.spent(cp.Counters.Steps) {
+	if !awaitsItsNode(cp.Status) || !e.spent(cp.Counters.Steps) {
 		return nil
 	}
 	node, ok := e.graph.Node(cp.Position)

@@ -623,6 +623,147 @@ func TestResumingIsRefusedWhenNoStepIsLeftForTheClaimedHaltedNode(t *testing.T) 
 	}
 }
 
+func TestResumingAHaltedRunIsRefusedWhenItsBudgetCannotAffordTheHaltNode(t *testing.T) {
+	ctx := context.Background()
+	rec := &recorder{}
+	g := mustBuild(t, haltingBuilder(rec))
+	store := graph.NewMemoryStore()
+
+	held, err := mustExecutor(t, g, store, 20).Run(ctx, "run", mustState(t, g, nil))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if held.Status != graph.StatusHalted || held.Decision == nil {
+		t.Fatalf("the run ended %s carrying %v, want halted at its decision", held.Status, held.Decision)
+	}
+	before, err := store.History(ctx, "run")
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+
+	// Restoring the run under a budget that leaves no step for the gate must
+	// not put the decision to a caller who could never act on it.
+	got, err := mustExecutor(t, g, store, 1).Resume(ctx, "run")
+	if !errors.Is(err, graph.ErrBudgetSpent) {
+		t.Fatalf("resuming a halted run with no step left = %v, want ErrBudgetSpent", err)
+	}
+	if got.Decision != nil {
+		t.Errorf("the refused resume re-emitted the decision %v", got.Decision)
+	}
+	after, err := store.History(ctx, "run")
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	if len(after) != len(before) {
+		t.Errorf("the refused resume wrote %d checkpoints, want none: refusing is not parking", len(after)-len(before))
+	}
+	if rec.count("gate") != 0 {
+		t.Error("the halt point's body ran")
+	}
+
+	// The decision is untouched, so a caller with room for the gate still gets
+	// it back and Resume still writes nothing.
+	again, err := mustExecutor(t, g, store, 20).Resume(ctx, "run")
+	if err != nil {
+		t.Fatalf("Resume under a budget that affords the gate: %v", err)
+	}
+	if again.Status != graph.StatusHalted || again.Decision == nil {
+		t.Fatalf("the restored run is %s carrying %v, want its decision re-emitted", again.Status, again.Decision)
+	}
+	restored, err := store.History(ctx, "run")
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	if len(restored) != len(before) {
+		t.Errorf("re-emitting the decision wrote %d checkpoints, want none", len(restored)-len(before))
+	}
+	if rec.count("gate") != 0 {
+		t.Error("re-emitting the decision ran the halt point's body")
+	}
+}
+
+func TestABoundParkedRunAtAHaltPointStillResumesUnchanged(t *testing.T) {
+	ctx := context.Background()
+	rec := &recorder{}
+	g := mustBuild(t, haltingBuilder(rec))
+	store := graph.NewMemoryStore()
+
+	// A budget of one is spent by "prep", so the run parks in front of the
+	// gate: standing at a halt point, with the budget as spent as the run
+	// refused above, but parked by a bound rather than waiting on anything.
+	parked, err := mustExecutor(t, g, store, 1).Run(ctx, "run", mustState(t, g, nil))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if parked.Status != graph.StatusBudgetExhausted || parked.Position != "gate" {
+		t.Fatalf("the run ended %s at %q, want budget_exhausted standing at gate", parked.Status, parked.Position)
+	}
+	before, err := store.History(ctx, "run")
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+
+	got, err := mustExecutor(t, g, store, 1).Resume(ctx, "run")
+	if err != nil {
+		t.Fatalf("resuming a bound-parked run = %v, want it returned unchanged", err)
+	}
+	if got.Status != parked.Status || got.Position != parked.Position {
+		t.Errorf("the resumed run is %s at %q, want %s at %q", got.Status, got.Position, parked.Status, parked.Position)
+	}
+	after, err := store.History(ctx, "run")
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	if len(after) != len(before) {
+		t.Errorf("resuming a parked run wrote %d checkpoints, want none", len(after)-len(before))
+	}
+	if rec.count("gate") != 0 {
+		t.Error("the halt point's body ran")
+	}
+}
+
+func TestARunStartingAtAHaltPointStopsBeforeItsFirstNode(t *testing.T) {
+	ctx := context.Background()
+	rec := &recorder{}
+	g := mustBuild(t, graph.NewBuilder().
+		Start("gate").
+		Key(graph.Key{Name: "answer", Kind: graph.KindText}).
+		Key(graph.Key{Name: "log", Kind: graph.KindList, Merge: graph.MergeAppend}).
+		Node(graph.Node{
+			Name:    "gate",
+			Reads:   []string{"answer"},
+			Writes:  []string{"log"},
+			Halt:    &graph.Halt{Question: "go on?", Options: []string{"go", "stop"}, Into: "answer"},
+			NewBody: appendLog(rec, "gate"),
+		}).
+		Node(graph.Node{Name: "done", Writes: []string{"log"}, NewBody: appendLog(rec, "done")}).
+		Edge(graph.Edge{From: "gate", To: "done"}))
+
+	store := graph.NewMemoryStore()
+	got, err := mustExecutor(t, g, store, 50).Run(ctx, "run", mustState(t, g, nil))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	// Run hands back whatever the first checkpoint parked as rather than
+	// walking on from it, so the node it stands in front of never starts.
+	if got.Status != graph.StatusHalted || got.Position != "gate" {
+		t.Fatalf("the run ended %s at %q, want halted standing at gate", got.Status, got.Position)
+	}
+	if got.Decision == nil || got.Decision.Node != "gate" {
+		t.Fatalf("the run emitted %v, want the gate's decision", got.Decision)
+	}
+	if ran := rec.order(); len(ran) != 0 {
+		t.Errorf("bodies ran %v, want none: the run stops before its start node", ran)
+	}
+	history, err := store.History(ctx, "run")
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	if len(history) != 1 {
+		t.Errorf("the run wrote %d checkpoints, want the one it halted with", len(history))
+	}
+}
+
 func TestResumeAcceptsTheClaimAnAnsweredSegmentLeftBehind(t *testing.T) {
 	ctx := context.Background()
 	store := graph.NewMemoryStore()
