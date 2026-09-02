@@ -21,6 +21,10 @@ var (
 	ErrInvalidTarget = errors.New("safety: target is not a full reference on a named remote")
 	// ErrInvalidUpdate is returned when an update proposes no commit.
 	ErrInvalidUpdate = errors.New("safety: update does not propose a commit")
+	// ErrInvalidObservationRecord is returned when a checkpointed record
+	// describes a state no read could have produced: an absent target that
+	// names a commit, or a present one that names none.
+	ErrInvalidObservationRecord = errors.New("safety: observation record does not describe a state a read could produce")
 )
 
 // Reason says why an update was refused. Every reason is a fact that could not

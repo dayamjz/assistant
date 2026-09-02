@@ -64,21 +64,26 @@ func (s RemoteState) String() string {
 // Observation is where a target stood when the run actually looked at it. It
 // is the only thing this package accepts as an anchor for an update.
 //
-// The zero Observation is not an observation, and no exported field or
-// constructor can turn a commit identifier into one. Observe is the only way
-// to obtain one, and Observe reads the remote itself. That is the shape PRD
-// principle P6 asks for: the caller never holds a live tip it could pass as
-// the anchor, because the value it would have to pass has to come from a read
-// it took earlier and kept.
+// The zero Observation is not an observation, and its fields are unexported,
+// so an anchor cannot be assembled field by field out of a commit identifier.
+// Two constructors produce one: Observe, which reads the remote itself, and
+// RestoreObservedFromCheckpoint, which rebuilds the observation an earlier
+// stage of the same run recorded.
+//
+// That second constructor means the wrong anchor is representable. Where the
+// guarantee rests instead is stated on RestoreObservedFromCheckpoint and in
+// the package documentation: on the integrity of the checkpoint the record
+// came out of, not on this type. What this type still enforces is that an
+// anchor names the target it was taken against and carries a state a read
+// could have produced.
 //
 // The residual gap, stated rather than implied away: a caller that calls
-// Observe immediately before Decide gets an anchor as worthless as the tip
-// read a moment before pushing, and no rule inside this package can tell that
-// apart from a run that observed the target, did its work, and then decided.
-// What is enforced here is that the anchor is an observation of this target
-// and that the decision is made against a read taken after it. When the anchor
-// was taken is the calling stage's responsibility, and PRD section 13 asserts
-// on the anchor value for exactly that reason.
+// Observe immediately before Decide, or that builds a record out of a live
+// read, gets an anchor as worthless as the tip read a moment before pushing,
+// and no rule inside this package can tell either apart from a run that
+// observed the target, did its work, and then decided. When the anchor was
+// taken is the calling stage's responsibility, and PRD section 13 asserts on
+// the anchor value for exactly that reason.
 type Observation struct {
 	target   Target
 	state    RemoteState
@@ -93,9 +98,22 @@ func (o Observation) Target() Target { return o.target }
 // with.
 func (o Observation) State() RemoteState { return o.state }
 
-// Observed reports whether this value came from Observe. The zero Observation
-// reports false, and submitting it as an anchor is ErrAnchorNotObserved.
+// Observed reports whether this value came from Observe or from
+// RestoreObservedFromCheckpoint. The zero Observation reports false, and
+// submitting it as an anchor is ErrAnchorNotObserved.
 func (o Observation) Observed() bool { return o.observed }
+
+// Record returns the durable form of this observation, for a run that has to
+// carry its anchor across a restart. The zero Observation produces a record
+// that names no target, which RestoreObservedFromCheckpoint refuses.
+func (o Observation) Record() ObservationRecord {
+	return ObservationRecord{
+		Remote: o.target.Remote,
+		Ref:    o.target.Ref,
+		Exists: o.state.Exists,
+		Commit: o.state.Commit,
+	}
+}
 
 // String renders the observation as target=state, or as the zero value.
 func (o Observation) String() string {
@@ -103,6 +121,56 @@ func (o Observation) String() string {
 		return "unobserved"
 	}
 	return o.target.String() + "=" + o.state.String()
+}
+
+// ObservationRecord is the durable form of an Observation. Every field is a
+// plain scalar, so a checkpoint store whose values are text and booleans can
+// carry one without this package knowing anything about that store.
+//
+// A record is written by Observation.Record and read back by
+// RestoreObservedFromCheckpoint. It is not itself an anchor: it carries no
+// provenance, and the trust that it is the one this run wrote belongs to
+// whatever kept it.
+type ObservationRecord struct {
+	// Remote is the remote the observation was taken against.
+	Remote string
+	// Ref is the full reference name the observation was taken against.
+	Ref string
+	// Exists reports whether the remote advertised the target at that moment.
+	Exists bool
+	// Commit is the commit the target named, and is empty when Exists is
+	// false.
+	Commit string
+}
+
+// RestoreObservedFromCheckpoint rebuilds the observation an earlier stage of
+// this run recorded, so a run interrupted between observing its target and
+// deciding can carry its anchor across the restart. Without it a restarted
+// push stage could only call Observe again, which is the tip read a moment
+// before pushing that PRD principle P6 names outright.
+//
+// The name says what is trusted. This package cannot tell a record a run wrote
+// before doing its work from one built out of a tip read a moment ago, so the
+// provenance guarantee does not live here: it lives in the checkpoint the
+// record came out of. A caller may pass only a record read back from a
+// validated checkpoint, and may never build one from a live read.
+//
+// It refuses a record that could not have come from a read: ErrInvalidTarget
+// when the record names no usable target, and ErrInvalidObservationRecord when
+// an absent target names a commit or a present one names none.
+func RestoreObservedFromCheckpoint(rec ObservationRecord) (Observation, error) {
+	target := Target{Remote: rec.Remote, Ref: rec.Ref}
+	if err := target.validate(); err != nil {
+		return Observation{}, err
+	}
+	if rec.Exists == (rec.Commit == "") {
+		return Observation{}, ErrInvalidObservationRecord
+	}
+	return Observation{
+		target:   target,
+		state:    RemoteState{Exists: rec.Exists, Commit: rec.Commit},
+		observed: true,
+	}, nil
 }
 
 // Guard applies the data-loss rules of PRD principle P6 over a git mechanism.

@@ -3,6 +3,7 @@ package safety_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/safety"
@@ -63,19 +64,147 @@ func TestDecideRefusesAnAnchorObservedOnAnotherTarget(t *testing.T) {
 	}
 }
 
-func TestAnchorCannotBeBuiltFromACommitIdentifier(t *testing.T) {
+func TestTheZeroObservationIsNotAnAnchor(t *testing.T) {
 	t.Parallel()
-	// A caller holding the live tip has no way to turn it into an anchor: the
-	// fields of an Observation are unexported, so the only value it can build
-	// is the zero one, which Decide refuses. This is the "unrepresentable"
-	// half of the rule, and it is asserted here rather than left to a reading
-	// of the source.
+	// An Observation's fields are unexported, so the only one a caller can
+	// build by hand is the zero value, and that one is not an anchor. Producing
+	// a usable anchor takes Observe or RestoreObservedFromCheckpoint. The
+	// second of those makes the wrong anchor representable, which is why the
+	// provenance guarantee is stated to rest on the checkpoint rather than on
+	// this type; what stays true here is that nothing is an anchor by default.
 	forged := safety.Observation{}
 	if forged.Observed() {
 		t.Fatal("the zero Observation reports Observed() = true, so an anchor could be assembled without a read")
 	}
 	if forged.State() != (safety.RemoteState{}) {
 		t.Fatalf("the zero Observation carries state %v, want none", forged.State())
+	}
+	if _, err := safety.RestoreObservedFromCheckpoint(forged.Record()); err == nil {
+		t.Fatal("restoring the zero Observation's record succeeded, want a refusal: it names no target")
+	}
+}
+
+func TestRestoredAnchorCarriesTheRecordedObservation(t *testing.T) {
+	t.Parallel()
+	git := &fakeGit{
+		parents:    linear("c1", "c2"),
+		advertised: map[string][][]vcs.Ref{remote: {{branch(ref, "c2")}}},
+	}
+	obs := observe(t, safety.New(git))
+	restored, err := safety.RestoreObservedFromCheckpoint(obs.Record())
+	if err != nil {
+		t.Fatalf("RestoreObservedFromCheckpoint: %v", err)
+	}
+	if !restored.Observed() {
+		t.Fatal("Observed() = false on a restored anchor, want true: a run has to carry its anchor across a restart")
+	}
+	if restored.Target() != obs.Target() || restored.State() != obs.State() {
+		t.Fatalf("restored %v, want %v", restored, obs)
+	}
+}
+
+func TestRestoredAnchorIsDecidedLikeAnObservedOne(t *testing.T) {
+	t.Parallel()
+	// The run observed c2 and rebased onto r3, then restarted and restored its
+	// anchor from the checkpoint. Someone pushed c3 and c4 meanwhile. Restoring
+	// must not buy the update anything an observed anchor would not have.
+	git := &fakeGit{
+		parents: map[string][]string{
+			"c1": nil,
+			"c2": {"c1"},
+			"c3": {"c2"},
+			"c4": {"c3"},
+			"r3": {"c1"},
+		},
+		advertised: map[string][][]vcs.Ref{remote: {{branch(ref, "c4")}}},
+	}
+	restored, err := safety.RestoreObservedFromCheckpoint(safety.ObservationRecord{
+		Remote: remote, Ref: ref, Exists: true, Commit: "c2",
+	})
+	if err != nil {
+		t.Fatalf("RestoreObservedFromCheckpoint: %v", err)
+	}
+	guard := safety.New(git)
+	decision, err := guard.Decide(context.Background(), safety.Update{Target: target, Proposed: "r3", Anchor: restored})
+	if decision.Allowed() {
+		t.Fatalf("Decide allowed %v on a restored anchor the target has moved off, want a refusal", decision)
+	}
+	var refusal *safety.Refusal
+	if !errors.As(err, &refusal) || refusal.Reason != safety.ReasonWouldDiscard {
+		t.Fatalf("Decide error = %v, want a *Refusal with %s", err, safety.ReasonWouldDiscard)
+	}
+	if want := []string{"c4", "c3", "c2"}; !slices.Equal(refusal.Discarded, want) {
+		t.Fatalf("Discarded = %v, want %v, the same list an observed anchor would have produced", refusal.Discarded, want)
+	}
+}
+
+func TestDecideRefusesARestoredAnchorFromAnotherTarget(t *testing.T) {
+	t.Parallel()
+	// Both branches stand at c1, so only the target the record names is wrong.
+	// The provenance check has to apply to a restored anchor exactly as it does
+	// to an observed one.
+	git := &fakeGit{
+		parents: linear("c1", "c2"),
+		advertised: map[string][][]vcs.Ref{remote: {
+			{branch(ref, "c1"), branch("refs/heads/other", "c1")},
+		}},
+	}
+	elsewhere, err := safety.RestoreObservedFromCheckpoint(safety.ObservationRecord{
+		Remote: remote, Ref: "refs/heads/other", Exists: true, Commit: "c1",
+	})
+	if err != nil {
+		t.Fatalf("RestoreObservedFromCheckpoint: %v", err)
+	}
+	decision, err := safety.New(git).Decide(context.Background(), safety.Update{Target: target, Proposed: "c2", Anchor: elsewhere})
+	if decision.Allowed() {
+		t.Fatalf("Decide allowed %v on an anchor restored for another target, want a refusal", decision)
+	}
+	if !errors.Is(err, safety.ErrAnchorNotObserved) {
+		t.Fatalf("Decide error = %v, want ErrAnchorNotObserved", err)
+	}
+}
+
+func TestRestoreRefusesARecordNoReadCouldHaveProduced(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name   string
+		record safety.ObservationRecord
+		want   error
+	}{
+		{"absent but naming a commit", safety.ObservationRecord{Remote: remote, Ref: ref, Commit: "c1"}, safety.ErrInvalidObservationRecord},
+		{"present but naming none", safety.ObservationRecord{Remote: remote, Ref: ref, Exists: true}, safety.ErrInvalidObservationRecord},
+		{"no remote", safety.ObservationRecord{Ref: ref, Exists: true, Commit: "c1"}, safety.ErrInvalidTarget},
+		{"short reference", safety.ObservationRecord{Remote: remote, Ref: "feature", Exists: true, Commit: "c1"}, safety.ErrInvalidTarget},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			restored, err := safety.RestoreObservedFromCheckpoint(tc.record)
+			if restored.Observed() {
+				t.Fatalf("RestoreObservedFromCheckpoint returned the anchor %v, want none", restored)
+			}
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("RestoreObservedFromCheckpoint error = %v, want %v", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestRestoredAbsenceIsAnAnchorForACreation(t *testing.T) {
+	t.Parallel()
+	git := &fakeGit{
+		parents:    linear("c1"),
+		advertised: map[string][][]vcs.Ref{remote: {nil}},
+	}
+	restored, err := safety.RestoreObservedFromCheckpoint(safety.ObservationRecord{Remote: remote, Ref: ref})
+	if err != nil {
+		t.Fatalf("RestoreObservedFromCheckpoint: %v", err)
+	}
+	decision, err := safety.New(git).Decide(context.Background(), safety.Update{Target: target, Proposed: "c1", Anchor: restored})
+	if err != nil {
+		t.Fatalf("Decide: %v", err)
+	}
+	if decision.Kind() != safety.KindCreate {
+		t.Fatalf("Kind() = %v, want %v: an absent target is a state a record has to be able to carry", decision.Kind(), safety.KindCreate)
 	}
 }
 

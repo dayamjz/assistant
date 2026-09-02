@@ -372,7 +372,7 @@ func TestDecideRefusesAProposedCommitThatDoesNotResolve(t *testing.T) {
 	}
 }
 
-func TestDecideRefusesATargetThatIsNotABranch(t *testing.T) {
+func TestObserveRefusesATargetThatIsNotABranch(t *testing.T) {
 	t.Parallel()
 	// An annotated tag names a tag object that peels to a commit. The lease
 	// this package hands back compares against the object the reference
@@ -391,7 +391,7 @@ func TestDecideRefusesATargetThatIsNotABranch(t *testing.T) {
 	}
 }
 
-func TestDecideRefusesARemoteAdvertisingTheTargetTwice(t *testing.T) {
+func TestObserveRefusesARemoteAdvertisingTheTargetTwice(t *testing.T) {
 	t.Parallel()
 	git := &fakeGit{
 		parents:    linear("c1", "c2"),
@@ -523,5 +523,25 @@ func TestDecideDecidesOnTheResolvedCommitNotTheSubmittedRevision(t *testing.T) {
 				t.Fatalf("Rewritten() = %v, want %v", decision.Rewritten(), tc.wantRewritten)
 			}
 		})
+	}
+}
+
+func TestDecisionStringRendersWhatItsContractStates(t *testing.T) {
+	t.Parallel()
+	git := &fakeGit{
+		parents:    linear("c1", "c2", "c3"),
+		advertised: map[string][][]vcs.Ref{remote: {{branch(ref, "c2")}}},
+	}
+	guard := safety.New(git)
+	obs := observe(t, guard)
+	decision, err := guard.Decide(context.Background(), safety.Update{Target: target, Proposed: "c3", Anchor: obs})
+	if err != nil {
+		t.Fatalf("Decide: %v", err)
+	}
+	if want := "fast-forward refs/heads/feature@gate to c3 anchored on c2"; decision.String() != want {
+		t.Fatalf("String() = %q, want %q", decision.String(), want)
+	}
+	if want := "no decision"; (safety.Decision{}).String() != want {
+		t.Fatalf("the zero Decision renders as %q, want %q", (safety.Decision{}).String(), want)
 	}
 }

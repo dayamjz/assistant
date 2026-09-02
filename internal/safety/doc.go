@@ -10,27 +10,45 @@
 //
 // P6 names one trap outright: anchoring a lease to the tip you just read
 // always succeeds and therefore protects nothing. This package answers it by
-// refusing to accept a commit identifier as an anchor at all. Update.Anchor is
-// an Observation, Guard.Observe is the only way to obtain one, and Observe
-// reads the remote itself. A caller never holds a freshly read tip in a form
-// it could pass, because the only way to get one is a read this package took
-// and stamped with the target it was taken against.
+// refusing a bare commit identifier as an anchor. Update.Anchor is an
+// Observation, its fields are unexported, and exactly two constructors produce
+// one: Guard.Observe, which reads the remote itself, and
+// RestoreObservedFromCheckpoint, which rebuilds one an earlier stage of the
+// same run recorded.
 //
-// That is the "made unrepresentable" side of the choice rather than the
-// "rejected at decision time" side, and the reason is that the wrong anchor
+// The anchor is a type rather than a checked value because the wrong anchor
 // cannot be recognized by its value. When the remote has not moved, the
 // correct anchor and the tip read a moment before pushing are the same string.
 // Only where the value came from tells them apart, so provenance is what the
 // type carries.
 //
-// The residual gap is real and is not papered over. A caller that calls
+// # Where the provenance guarantee lives
+//
+// The wrong anchor is not unrepresentable. RestoreObservedFromCheckpoint takes
+// an ObservationRecord of plain scalar fields, and nothing here can tell a
+// record a run wrote before doing its work from one built out of a tip read a
+// moment ago. That path exists because a run has to survive a restart: PRD
+// section 5 puts the rebase at stage 2 and the push at stage 7, and section 13
+// requires the run to stay correct across a kill at every stage boundary.
+// Without a durable form, a restarted push stage could only call Observe
+// again, which is the forbidden anchor exactly.
+//
+// So the guarantee moved rather than disappeared. It rests on the checkpoint
+// the record came out of, which the PRD places inside the trust boundary and
+// which internal/graph validates on read. What this package still enforces is
+// that the anchor names the target being updated, that a restored record
+// describes a state a read could have produced, and that every decision is
+// taken against a read Decide makes at decision time. A caller may restore
+// only from a validated checkpoint, and may never build a record from a live
+// read.
+//
+// The residual gaps are real and are not papered over. A caller that calls
 // Observe and Decide back to back gets an anchor as worthless as the one P6
-// warns about, and no rule inside this package can distinguish that from a run
-// that observed the target, did its work, and then decided. What is enforced
-// here is that the anchor is an observation of the target being updated and
-// that every decision is taken against a read made at decision time. When the
-// observation was taken belongs to the calling stage, which is why PRD section
-// 13 asserts on the anchor value rather than on the outcome of a push.
+// warns about, a caller that fabricates a record gets the same, and no rule
+// inside this package can distinguish either from a run that observed the
+// target, did its work, and then decided. When the observation was taken
+// belongs to the calling stage, which is why PRD section 13 asserts on the
+// anchor value rather than on the outcome of a push.
 //
 // # What is allowed
 //
