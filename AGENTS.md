@@ -45,6 +45,10 @@ documentation gap to close. Do not edit the PRD to match the code.
   calls in it, and it should stay that way.
 - A refusal is a typed result a caller must handle, never a logged warning that
   execution continues past.
+- The configuration schema has one owner: the key table in
+  `internal/config/key.go`. A key's default, trust class, decoding, and where it
+  lands in a `Config` are one row. Add a key by adding a row, never by adding a
+  second list of keys somewhere else.
 
 ## Tests
 
