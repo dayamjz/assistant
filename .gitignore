@@ -1,0 +1,19 @@
+# Build output
+/bin/
+/dist/
+assistant
+
+# Go
+*.test
+*.out
+coverage.*
+
+# Local operational state, never tracked
+.no-mistakes/
+.lavish/
+
+# Editor and OS
+.DS_Store
+*.swp
+.idea/
+.vscode/

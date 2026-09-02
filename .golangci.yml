@@ -1,0 +1,36 @@
+version: "2"
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - bodyclose
+    - errorlint
+    - misspell
+    - revive
+    - unconvert
+    - copyloopvar
+
+  settings:
+    revive:
+      rules:
+        - name: exported
+          # Every exported symbol in this module carries a contract. Say it.
+          severity: warning
+        - name: error-strings
+        - name: context-as-argument
+
+  exclusions:
+    rules:
+      # Table-driven tests are allowed to ignore close and cleanup errors.
+      - path: _test\.go
+        linters:
+          - errcheck
+
+formatters:
+  enable:
+    - gofmt
+    - goimports

@@ -1,0 +1,36 @@
+# Validation gate configuration for this repository.
+#
+# Fields that execute code or select an agent are read from the default branch,
+# never from a pushed commit, so a branch cannot choose what runs here.
+
+commands:
+  # Deliberately empty. The gate's test step does targeted validation of the
+  # change and its intent; the full suite runs in CI, where it belongs.
+  test: ""
+  lint: "make lint"
+  format: "gofmt -w ."
+
+ignore_patterns:
+  - "docs/prd.html"
+
+document:
+  instructions: |
+    docs/prd.html is the specification and changes only by an explicit decision.
+    Do not edit it to match the code; if the code and the PRD disagree, that is a
+    finding, not a documentation gap.
+    README.md owns the introduction and the development commands.
+    Package-level doc comments own each package's contract.
+    AGENTS.md owns the working agreement for agents in this repository.
+
+review:
+  path_instructions:
+    - path: "internal/graph/**"
+      instructions: |
+        This package is the execution engine, and its correctness rules come from
+        the PRD rather than from taste. Check three things specifically.
+        Every back edge must carry a bound established when the graph is built, so
+        a graph with an unbounded cycle fails to construct rather than at run time.
+        Two nodes must not be able to write the same state key unless a merge rule
+        is declared for it.
+        A halt point must stop before its node runs, never inside it, so nothing
+        needs to be idempotent on resume.

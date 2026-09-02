@@ -1,0 +1,1983 @@
+<!doctype html>
+<html lang="en" data-theme="luxury">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Assistant PRD</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/daisyui@5.5.19/daisyui.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/daisyui@5.5.19/themes.css">
+<script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.2.4/dist/index.global.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; }
+  :where(.grid, .flex) > * { min-width: 0; }
+  :where(p, h1, h2, h3, h4, h5, h6, li, dd, blockquote, figcaption, td, th, .badge, .label) {
+    overflow-wrap: anywhere;
+  }
+  :where(img, svg, video, canvas, iframe) { max-width: 100%; height: auto; }
+  html { scroll-behavior: smooth; scroll-padding-top: 5rem; }
+  .prd-mermaid {
+    background: var(--color-base-200);
+    border: 1px solid color-mix(in oklch, var(--color-base-content) 10%, transparent);
+    border-radius: var(--radius-box, 1rem);
+    padding: 1.25rem;
+    overflow-x: auto;
+  }
+  .prd-mermaid svg { max-width: 100%; height: auto; display: block; margin: 0 auto; }
+  .prd-rule { counter-reset: prd-rule; }
+  .prd-anchor { scroll-margin-top: 5rem; }
+  .prd-kicker {
+    font-size: .7rem; letter-spacing: .14em; text-transform: uppercase;
+    font-weight: 700; opacity: .55;
+  }
+  .prd-num {
+    font-variant-numeric: tabular-nums;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .prd-nav a.active { color: var(--color-primary); }
+</style>
+</head>
+<body class="bg-base-100 text-base-content">
+
+<div class="navbar bg-base-200/95 backdrop-blur sticky top-0 z-50 border-b border-base-content/10">
+  <div class="navbar-start gap-2 min-w-0">
+    <span class="font-bold text-lg tracking-tight">Assistant</span>
+    <span class="badge badge-soft badge-primary badge-sm">PRD v0.1</span>
+  </div>
+  <div class="navbar-end">
+    <div class="dropdown dropdown-end">
+      <div tabindex="0" role="button" class="btn btn-sm btn-ghost">Contents</div>
+      <ul tabindex="0" class="dropdown-content menu menu-sm bg-base-200 rounded-box z-50 w-64 p-2 shadow-lg max-h-[70vh] flex-nowrap overflow-y-auto">
+        <li><a href="#summary">1. What Assistant is</a></li>
+        <li><a href="#vocabulary">2. Vocabulary</a></li>
+        <li><a href="#merge">3. Why the two halves merge</a></li>
+        <li><a href="#principles">4. Principles</a></li>
+        <li><a href="#gate">5. The delivery gate</a></li>
+        <li><a href="#orchestrator">6. The orchestrator</a></li>
+        <li><a href="#execution">7. Execution model</a></li>
+        <li><a href="#architecture">8. Architecture</a></li>
+        <li><a href="#surfaces">9. Surfaces</a></li>
+        <li><a href="#config">10. Configuration</a></li>
+        <li><a href="#recovery">11. Failure and recovery</a></li>
+        <li><a href="#mvp">12. The MVP cut</a></li>
+        <li><a href="#verification">13. Verification</a></li>
+        <li><a href="#decisions">14. Decisions recorded</a></li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<main class="mx-auto max-w-5xl px-4 sm:px-6 lg:px-8 py-10 lg:py-14">
+
+<!-- ============================ HERO ============================ -->
+<header class="mb-14">
+  <p class="prd-kicker text-primary mb-3">Product requirements</p>
+  <h1 class="text-4xl sm:text-5xl font-bold tracking-tight leading-tight mb-5">
+    Run many coding agents at once, and let none of them ship unvalidated work.
+  </h1>
+  <p class="text-lg opacity-80 max-w-3xl leading-relaxed">
+    Assistant is a local tool that does two things you currently do by hand. It runs a fleet of
+    coding agents in parallel, each in its own isolated copy of a repository, and it puts a
+    validation gate in front of your remote so no change reaches a shared branch until it has been
+    independently reviewed, tested, documented, and linted.
+  </p>
+
+  <div class="stats stats-vertical sm:stats-horizontal shadow mt-8 w-full">
+    <div class="stat">
+      <div class="stat-title">Validation stages</div>
+      <div class="stat-value prd-num text-primary">9</div>
+      <div class="stat-desc">fixed order, configurable contents</div>
+    </div>
+    <div class="stat">
+      <div class="stat-title">Task shapes</div>
+      <div class="stat-value prd-num">2</div>
+      <div class="stat-desc">delivery and investigation</div>
+    </div>
+    <div class="stat">
+      <div class="stat-title">Finding actions</div>
+      <div class="stat-value prd-num">3</div>
+      <div class="stat-desc">fix, ask, note</div>
+    </div>
+    <div class="stat">
+      <div class="stat-title">Loop bounds</div>
+      <div class="stat-value prd-num">3</div>
+      <div class="stat-desc">independent, per run</div>
+    </div>
+  </div>
+
+  <div role="alert" class="alert alert-soft alert-info mt-8 items-start">
+    <div class="min-w-0">
+      <p class="font-semibold mb-1">How to read this document</p>
+      <p class="text-sm opacity-90">
+        Sections 4 through 7 are the specification. Section 4 states the invariants, and those
+        invariants are the acceptance criteria, so they come before the feature descriptions rather
+        than after. Section 14 records the decisions that shaped it, and names what the first
+        working version should settle next.
+      </p>
+    </div>
+  </div>
+</header>
+
+<!-- ============================ 1. SUMMARY ============================ -->
+<section id="summary" class="prd-anchor mb-16">
+  <p class="prd-kicker mb-2">Section 1</p>
+  <h2 class="text-3xl font-bold tracking-tight mb-6">What Assistant is</h2>
+
+  <p class="mb-4 leading-relaxed">
+    You can run one coding agent without much trouble. The moment you want three tasks running at
+    once you become a tab manager: you babysit sessions, copy context between repositories, and
+    lose track of which terminal held the failing test. At the same time, the faster those agents
+    produce changes, the less of each change you actually read before it reaches a branch other
+    people pull from.
+  </p>
+  <p class="mb-8 leading-relaxed">
+    Assistant addresses both problems with one system. You talk to a single <b>coordinator</b>. It
+    dispatches <b>workers</b> into isolated copies of your repositories, supervises them, and brings
+    you only the decisions that genuinely need you. Every change a worker produces reaches a shared
+    branch through the same <b>gate</b>, so "this was validated" means the same thing for every
+    change, in every repository, whether an agent or you wrote it.
+  </p>
+
+  <div class="grid gap-4 md:grid-cols-2 mb-8">
+    <div class="card card-border bg-base-200">
+      <div class="card-body">
+        <h3 class="card-title text-base">Promise 1: parallel work you can watch</h3>
+        <p class="text-sm opacity-90">
+          Every worker runs in a real terminal you can attach to, read, and type into. Nothing
+          happens in a hidden process. If you intervene directly in a worker's terminal, that
+          intervention is authoritative and the coordinator reconciles around it.
+        </p>
+      </div>
+    </div>
+    <div class="card card-border bg-base-200">
+      <div class="card-body">
+        <h3 class="card-title text-base">Promise 2: nothing unvalidated is shared</h3>
+        <p class="text-sm opacity-90">
+          The gate is a named remote you push to on purpose. Pushing to it is how you consent to
+          having that change validated, fixed, pushed, and turned into a pull request. Nothing else
+          implies that consent, and your ordinary <code>git push</code> keeps working as it always did.
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <h3 class="text-xl font-semibold mb-3">Who this is for</h3>
+  <p class="mb-4 leading-relaxed">
+    One developer who operates several coding agents and whose own credentials and accountability
+    are on the line. Everything runs on your machine, under your identity, at your initiative.
+    Assistant is not a shared service and does not hold a team's policy.
+  </p>
+
+  <h3 class="text-xl font-semibold mb-3">What it is not</h3>
+  <ul class="list-disc pl-6 space-y-1.5 opacity-90">
+    <li>It is not continuous integration. Your CI stays the shared outer check.</li>
+    <li>It is not a code host, and it does not own merge policy. Your forge does.</li>
+    <li>It is not a model or an agent harness. It drives whichever coding agent you already use.</li>
+    <li>It is not a team governance platform, and it publishes facts rather than verdicts.</li>
+  </ul>
+</section>
+
+<!-- ============================ 2. VOCABULARY ============================ -->
+<section id="vocabulary" class="prd-anchor mb-16">
+  <p class="prd-kicker mb-2">Section 2</p>
+  <h2 class="text-3xl font-bold tracking-tight mb-3">Vocabulary</h2>
+  <p class="mb-6 opacity-80 max-w-3xl">
+    Every term below means exactly one thing throughout this document and in the product. Where a
+    word appears in both the interface and the implementation, it means the same thing in both.
+  </p>
+
+  <div class="overflow-x-auto rounded-box border border-base-content/10 bg-base-100">
+    <table class="table table-zebra">
+      <thead>
+        <tr><th class="w-52">Term</th><th>Definition</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><b>coordinator</b></td><td>The agent you talk to. It takes your request, dispatches work, supervises it, and reports outcomes. It never edits a project itself.</td></tr>
+        <tr><td><b>worker</b></td><td>An autonomous agent working one task in one isolated copy of a repository. It never talks to you directly.</td></tr>
+        <tr><td><b>delivery task</b></td><td>A task whose deliverable is a change to a project.</td></tr>
+        <tr><td><b>investigation task</b></td><td>A task whose deliverable is a written report. It creates no branch and opens no pull request.</td></tr>
+        <tr><td><b>delegate coordinator</b></td><td>A persistent worker that is itself a coordinator, running in its own isolated home with its own state and its own scope. Optional.</td></tr>
+        <tr><td><b>the gate</b></td><td>A local bare repository that sits between your working copy and your real remote. You push to it by name.</td></tr>
+        <tr><td><b>run</b></td><td>One pass of the validation pipeline over one branch.</td></tr>
+        <tr><td><b>stage</b></td><td>One of the nine steps of a run. The order is fixed.</td></tr>
+        <tr><td><b>finding</b></td><td>One issue a stage reports, carrying a severity and an action.</td></tr>
+        <tr><td><b>action</b></td><td>What a finding asks for: <code>fix</code>, <code>ask</code>, or <code>note</code>. This is the entire split between machine judgment and yours.</td></tr>
+        <tr><td><b>hold</b></td><td>A run or task paused because it needs a decision from you. A hold is durable and survives a restart.</td></tr>
+        <tr><td><b>wake</b></td><td>An event that might need attention. Most wakes are handled without involving a model.</td></tr>
+        <tr><td><b>home</b></td><td>One instance's private state directory. Locks, queues, and records are all scoped to a home.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div role="alert" class="alert alert-soft alert-warning mt-6 items-start">
+    <div class="min-w-0">
+      <p class="font-semibold mb-1">The interface vocabulary is narrower than this one</p>
+      <p class="text-sm opacity-90">
+        The terms above are the implementation vocabulary. What Assistant says to you is deliberately
+        smaller: outcomes, consequences, and decisions. Section 6 specifies that boundary, because
+        leaking internal mechanics into your chat is the most common way a tool like this becomes
+        exhausting to use.
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ 3. MERGE ============================ -->
+<section id="merge" class="prd-anchor mb-16">
+  <p class="prd-kicker mb-2">Section 3</p>
+  <h2 class="text-3xl font-bold tracking-tight mb-3">Why the two halves merge</h2>
+  <p class="mb-6 opacity-80 max-w-3xl">
+    Orchestration and validation are usually built as separate tools. Keeping them separate costs
+    you two state stores, two supervision loops, and two vocabularies for the same escalation. The
+    merge makes the gate the spine: a worker's only route to a shared branch runs through it.
+  </p>
+
+  <div class="prd-mermaid mb-6">
+    <pre class="mermaid">
+flowchart TB
+  you["You"]
+  co["Coordinator"]
+  you -->|"one request"| co
+  co -->|"outcomes and decisions only"| you
+
+  subgraph fleet ["Isolated copies, one per task"]
+    w1["Worker A<br />delivery task"]
+    w2["Worker B<br />delivery task"]
+    w3["Worker C<br />investigation task"]
+  end
+
+  co -->|dispatch| w1
+  co -->|dispatch| w2
+  co -->|dispatch| w3
+
+  gate{{"The gate<br />nine stages"}}
+  w1 -->|"push by name"| gate
+  w2 -->|"push by name"| gate
+  w3 -.->|"no branch, no push"| report["Report"]
+
+  gate -->|"only when every stage is green"| remote[("Your remote<br />branch + pull request")]
+  gate -.->|"needs your decision"| co
+  report -.-> co
+    </pre>
+  </div>
+
+  <div class="grid gap-4 md:grid-cols-3">
+    <div class="card card-border bg-base-200">
+      <div class="card-body">
+        <h3 class="card-title text-sm">One state store</h3>
+        <p class="text-xs opacity-90">A task's validation state and its supervision state are the same record. Today they live in two systems that have to be reconciled by reading logs.</p>
+      </div>
+    </div>
+    <div class="card card-border bg-base-200">
+      <div class="card-body">
+        <h3 class="card-title text-sm">One escalation path</h3>
+        <p class="text-xs opacity-90">A finding that needs your judgment and a worker that is stuck arrive the same way, in the same words, with the same options.</p>
+      </div>
+    </div>
+    <div class="card card-border bg-base-200">
+      <div class="card-body">
+        <h3 class="card-title text-sm">One supervision loop</h3>
+        <p class="text-xs opacity-90">The watcher that notices a stalled worker is the watcher that notices a run parked at a decision. Neither can be running while the other is not.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ 4. PRINCIPLES ============================ -->
+<section id="principles" class="prd-anchor mb-16">
+  <p class="prd-kicker mb-2">Section 4</p>
+  <h2 class="text-3xl font-bold tracking-tight mb-3">Principles</h2>
+  <p class="mb-6 opacity-80 max-w-3xl">
+    These are the acceptance criteria, not aspirations. Each one names the failure it prevents,
+    because each corresponds to a real failure in the systems this design draws from. A feature that
+    violates one of these is wrong even if it works.
+  </p>
+
+  <div class="space-y-3">
+
+    <div class="collapse collapse-arrow bg-base-200 border border-base-content/10">
+      <input type="checkbox" checked>
+      <div class="collapse-title font-semibold">
+        <span class="badge badge-primary badge-sm mr-2 prd-num">P1</span>
+        The push is the consent boundary
+      </div>
+      <div class="collapse-content text-sm opacity-90 space-y-2">
+        <p>Pushing to the gate by name authorizes that run to validate the change, apply reviewable fixes, push the branch, and open a pull request. Nothing else implies that consent.</p>
+        <p class="text-warning-content/90"><b>Prevents:</b> a tool that silently rewires <code>origin</code> and starts doing things with your credentials that you did not ask for. Your ordinary <code>git push</code> must keep behaving exactly as it always has.</p>
+      </div>
+    </div>
+
+    <div class="collapse collapse-arrow bg-base-200 border border-base-content/10">
+      <input type="checkbox">
+      <div class="collapse-title font-semibold">
+        <span class="badge badge-primary badge-sm mr-2 prd-num">P2</span>
+        A pass means the same thing everywhere
+      </div>
+      <div class="collapse-content text-sm opacity-90 space-y-2">
+        <p>The stage order is fixed and not configurable. A repository can make a stage stricter; it can never remove, reorder, or weaken one. You may skip stages for a single run, on purpose. Standing configuration may never skip a stage on your behalf.</p>
+        <p><b>Prevents:</b> "it passed the gate" quietly meaning something different in each repository, which makes the claim worthless.</p>
+      </div>
+    </div>
+
+    <div class="collapse collapse-arrow bg-base-200 border border-base-content/10">
+      <input type="checkbox">
+      <div class="collapse-title font-semibold">
+        <span class="badge badge-primary badge-sm mr-2 prd-num">P3</span>
+        A finding that is not classified stops for you
+      </div>
+      <div class="collapse-content text-sm opacity-90 space-y-2">
+        <p>Every finding carries an action. If the action is missing, malformed, or unrecognized, treat it as <code>ask</code>. An unclassified finding is never eligible for automatic fixing.</p>
+        <p><b>Prevents:</b> an agent that omits a field getting its output silently auto-applied. The safe default when you do not know whose call it is has to be yours.</p>
+      </div>
+    </div>
+
+    <div class="collapse collapse-arrow bg-base-200 border border-base-content/10">
+      <input type="checkbox">
+      <div class="collapse-title font-semibold">
+        <span class="badge badge-primary badge-sm mr-2 prd-num">P4</span>
+        The reviewer never certifies its own prescription
+      </div>
+      <div class="collapse-content text-sm opacity-90 space-y-2">
+        <p>Reviewing and fixing are separate roles with separate memory. Every review runs in a fresh context. Only the fixer keeps a session across rounds. Context crosses between rounds only as an explicit, sanitized summary of what was found and what was changed.</p>
+        <p><b>Prevents:</b> a re-review that resumes the session which prescribed the fix. That seats the prescriber as the certifier, and it has shipped incorrect code accompanied by a test that blessed it and a review that found nothing.</p>
+      </div>
+    </div>
+
+    <div class="collapse collapse-arrow bg-base-200 border border-base-content/10">
+      <input type="checkbox">
+      <div class="collapse-title font-semibold">
+        <span class="badge badge-primary badge-sm mr-2 prd-num">P5</span>
+        Fixes the gate writes are reviewed like code you wrote
+      </div>
+      <div class="collapse-content text-sm opacity-90 space-y-2">
+        <p>A change the pipeline authored is author code. It gets the same adversarial review as anything else. Previous findings, fix summaries, and tests written in the same round are claims, not evidence.</p>
+        <p><b>Prevents:</b> the gate trusting itself. Automatic fixes are the least-reviewed code in the system precisely because they look like housekeeping.</p>
+      </div>
+    </div>
+
+    <div class="collapse collapse-arrow bg-base-200 border border-base-content/10">
+      <input type="checkbox">
+      <div class="collapse-title font-semibold">
+        <span class="badge badge-error badge-sm mr-2 prd-num">P6</span>
+        Never lose work
+      </div>
+      <div class="collapse-content text-sm opacity-90 space-y-2">
+        <p>Not your commits, not commits that appeared on the remote out of band, not fixes the pipeline itself created. Every history-rewriting update is anchored to a commit the run actually observed, never to the tip read a moment before pushing. When a safety fact cannot be verified against fresh state, refuse the operation and report it.</p>
+        <p>Work the pipeline holds always has a path back into your hands, including after a crash, a cancellation, or a failed run.</p>
+        <p><b>Prevents:</b> the single unrecoverable failure. A refused push is an annoyance; a lost commit is not repairable. Note the specific trap: anchoring a lease to the tip you just read always succeeds and therefore protects nothing.</p>
+      </div>
+    </div>
+
+    <div class="collapse collapse-arrow bg-base-200 border border-base-content/10">
+      <input type="checkbox">
+      <div class="collapse-title font-semibold">
+        <span class="badge badge-error badge-sm mr-2 prd-num">P7</span>
+        The branch under validation does not choose what runs
+      </div>
+      <div class="collapse-content text-sm opacity-90 space-y-2">
+        <p>Configuration that executes code or selects which agent process starts is read from your default branch at a commit resolved by a fresh fetch, never from the pushed commit. If that trusted copy cannot be read and parsed, the run stops before launching anything.</p>
+        <p>The pushed branch is untrusted input. Nothing on it may direct what executes with your credentials, and no instruction file on it may give a validation agent an identity or authority it should not have.</p>
+        <p><b>Prevents:</b> a contributor landing a hostile command on a branch and having your machine run it. Also prevents a repository whose own instructions describe an agent operator from convincing the validating agent that it is that operator.</p>
+      </div>
+    </div>
+
+    <div class="collapse collapse-arrow bg-base-200 border border-base-content/10">
+      <input type="checkbox">
+      <div class="collapse-title font-semibold">
+        <span class="badge badge-secondary badge-sm mr-2 prd-num">P8</span>
+        An event log is not current state
+      </div>
+      <div class="collapse-content text-sm opacity-90 space-y-2">
+        <p>A worker appends events. Current state is a separate, authoritative record with one owner that resolves it deterministically. Reading the last line of an event log is always wrong: it cannot distinguish a stale note from a live condition, and it cannot see that a run has moved past what the note describes.</p>
+        <p><b>Prevents:</b> a coordinator that acts on a decision the worker already resolved, or that reports a task as blocked when its validation run finished twenty minutes ago.</p>
+      </div>
+    </div>
+
+    <div class="collapse collapse-arrow bg-base-200 border border-base-content/10">
+      <input type="checkbox">
+      <div class="collapse-title font-semibold">
+        <span class="badge badge-secondary badge-sm mr-2 prd-num">P9</span>
+        Supervision costs nothing until something is actionable
+      </div>
+      <div class="collapse-content text-sm opacity-90 space-y-2">
+        <p>A cheap non-model watcher classifies every wake. It absorbs a wake only on positive evidence that work is genuinely proceeding: an active validation stage attributed to that task's branch, or a live process signal from its terminal. Absence of evidence surfaces; it never absorbs.</p>
+        <p><b>Prevents:</b> two opposite failures. Waking a model on every heartbeat makes a fleet unaffordable. Absorbing wakes on a timer makes a finished or crashed worker invisible.</p>
+      </div>
+    </div>
+
+    <div class="collapse collapse-arrow bg-base-200 border border-base-content/10">
+      <input type="checkbox">
+      <div class="collapse-title font-semibold">
+        <span class="badge badge-secondary badge-sm mr-2 prd-num">P10</span>
+        No turn ends blind while work is under way
+      </div>
+      <div class="collapse-content text-sm opacity-90 space-y-2">
+        <p>Whenever a task is in flight, exactly one live supervision cycle exists. If the coordinator is about to stop while work is running and no healthy watcher holds this home's lock, it is either blocked from stopping or forced into one more turn.</p>
+        <p><b>Prevents:</b> the most expensive silent failure in the whole system. Work parks at a decision, nothing is watching, and you find out hours later. This warrants more than one mechanism.</p>
+      </div>
+    </div>
+
+    <div class="collapse collapse-arrow bg-base-200 border border-base-content/10">
+      <input type="checkbox">
+      <div class="collapse-title font-semibold">
+        <span class="badge badge-warning badge-sm mr-2 prd-num">P11</span>
+        Isolation is asserted, never assumed
+      </div>
+      <div class="collapse-content text-sm opacity-90 space-y-2">
+        <p>A worker does not launch unless the resolved path is a real isolated copy, distinct from the primary checkout. The check runs at launch and again in the worker's own instructions before it creates a branch. Being a linked copy is not sufficient proof on its own when the tool can be pointed at its own repository.</p>
+        <p><b>Prevents:</b> a worker doing its work in your primary checkout, which turns a routine task into a recovery operation.</p>
+      </div>
+    </div>
+
+    <div class="collapse collapse-arrow bg-base-200 border border-base-content/10">
+      <input type="checkbox">
+      <div class="collapse-title font-semibold">
+        <span class="badge badge-warning badge-sm mr-2 prd-num">P12</span>
+        Cleanup refuses when it cannot prove the work landed
+      </div>
+      <div class="collapse-content text-sm opacity-90 space-y-2">
+        <p>Removing an isolated copy requires positive proof that its work is reachable from a remote branch, or its pull request merged with a head containing the work, or its content is already present in an up-to-date default branch. Anything inconclusive refuses.</p>
+        <p>A refusal is a result that means stop and investigate. It is not an obstacle to work around with a force flag.</p>
+        <p><b>Prevents:</b> discarding a worker's committed but unlanded work because a lookup failed.</p>
+      </div>
+    </div>
+
+    <div class="collapse collapse-arrow bg-base-200 border border-base-content/10">
+      <input type="checkbox">
+      <div class="collapse-title font-semibold">
+        <span class="badge badge-accent badge-sm mr-2 prd-num">P13</span>
+        You get outcomes, not mechanics
+      </div>
+      <div class="collapse-content text-sm opacity-90 space-y-2">
+        <p>Everything Assistant says to you names the project outcome, the consequence, and the next decision. Internal terms do not appear: no task identifiers, no isolated-copy paths, no watcher or wake vocabulary, no stage names, no state labels, no compressed safety jargon. Worker reports and tool output are evidence to read, never text to relay.</p>
+        <p>Detailed evidence documents may keep exact identifiers. The message that points you at one still translates.</p>
+        <p><b>Prevents:</b> a tool that is technically correct and practically unusable, because using it requires holding its implementation in your head.</p>
+      </div>
+    </div>
+
+    <div class="collapse collapse-arrow bg-base-200 border border-base-content/10">
+      <input type="checkbox">
+      <div class="collapse-title font-semibold">
+        <span class="badge badge-accent badge-sm mr-2 prd-num">P14</span>
+        Every fact has exactly one owner
+      </div>
+      <div class="collapse-content text-sm opacity-90 space-y-2">
+        <p>A contract lives in one place. Everything else points at it. This applies to documentation, to configuration, and to code: when two mechanisms would judge the same question, reconcile them into one rather than stacking them.</p>
+        <p><b>Prevents:</b> duplicated rules drifting apart, and the specific version of that where two independent reviewers both feel responsible and neither is.</p>
+      </div>
+    </div>
+
+  </div>
+</section>
+
+<!-- ============================ 5. THE GATE ============================ -->
+<section id="gate" class="prd-anchor mb-16">
+  <p class="prd-kicker mb-2">Section 5</p>
+  <h2 class="text-3xl font-bold tracking-tight mb-3">The delivery gate</h2>
+  <p class="mb-6 opacity-80 max-w-3xl">
+    The gate is one deliberate place where validation happens before a branch is shared. It is not
+    an abstraction over git; it is a local bare repository that git can push to normally.
+  </p>
+
+  <h3 class="text-xl font-semibold mb-3">Setup</h3>
+  <p class="mb-4">Initializing a repository does five things, and repeating it repairs rather than fails:</p>
+  <ol class="list-decimal pl-6 space-y-1.5 mb-6 opacity-90">
+    <li>Create a local bare repository, identified by a stable hash of the working path.</li>
+    <li>Install an admission check that runs before any reference changes, and a notification that runs after.</li>
+    <li>Add a remote named <code>assistant</code> to your working copy pointing at it. Your <code>origin</code> is untouched.</li>
+    <li>Install the agent-facing instructions so a coding agent can drive the same gate.</li>
+    <li>Make sure the background service is running.</li>
+  </ol>
+  <p class="mb-8 opacity-90">
+    If the working copy moves, initialization reattaches the existing gate and keeps the run history.
+    If the working copy was copied while the original still exists, the copy gets its own gate.
+  </p>
+
+  <h3 class="text-xl font-semibold mb-3">The nine stages</h3>
+  <p class="mb-4 opacity-90">
+    The order is fixed. What each stage runs is yours to configure.
+  </p>
+
+  <div class="prd-mermaid mb-6">
+    <pre class="mermaid">
+flowchart LR
+  A["1 Intent"] --> B["2 Rebase"] --> C["3 Review"] --> D["4 Test"] --> E["5 Document"] --> F["6 Lint"] --> G["7 Push"] --> H["8 Pull request"] --> I["9 Checks"]
+  C -. findings .-> X{{"Fix, ask, or note"}}
+  D -. findings .-> X
+  E -. findings .-> X
+  F -. findings .-> X
+  I -. failures .-> X
+    </pre>
+  </div>
+
+  <div class="overflow-x-auto rounded-box border border-base-content/10 bg-base-100 mb-4">
+    <table class="table table-sm table-zebra">
+      <thead>
+        <tr><th class="w-10">#</th><th class="w-32">Stage</th><th>What it does and why it sits here</th><th class="w-24">Fix rounds</th></tr>
+      </thead>
+      <tbody>
+        <tr><td class="prd-num">1</td><td><b>Intent</b></td><td>Establishes what you set out to do. Supplied intent is authoritative acceptance criteria; inferred intent is a low-confidence hint, and the two are framed differently in every downstream prompt. This stage never blocks a run.</td><td class="opacity-60">none</td></tr>
+        <tr><td class="prd-num">2</td><td><b>Rebase</b></td><td>Fetches fresh upstream and the branch target, then rebases onto them, so everything after runs against current code. Stops if the branch would quietly carry commits from your local default branch that were never pushed. If nothing remains to change, the run ends successfully and the rest is skipped.</td><td class="prd-num">3</td></tr>
+        <tr><td class="prd-num">3</td><td><b>Review</b></td><td>Independent review of the change against the diff and your intent. Runs before tests so it reads code the fixer has not touched. Gets one automatic fix round, restricted to <code>fix</code> findings. Any <code>ask</code> finding parks immediately and is never included in that round.</td><td class="prd-num">1</td></tr>
+        <tr><td class="prd-num">4</td><td><b>Test</b></td><td>Targeted validation of this change and this intent, not a full suite. If no targeted check can establish the intent, the stage must write one, verify manually with recorded evidence, or report that sufficient evidence is not possible.</td><td class="prd-num">3</td></tr>
+        <tr><td class="prd-num">5</td><td><b>Document</b></td><td>Updates documentation the change made stale, then reports only what it could not resolve. Runs after tests so it documents code known to work. Scope is limited to what this change affected.</td><td class="opacity-60">in pass</td></tr>
+        <tr><td class="prd-num">6</td><td><b>Lint</b></td><td>Static analysis. Last among local checks so it does not churn over code that may still change.</td><td class="prd-num">3</td></tr>
+        <tr><td class="prd-num">7</td><td><b>Push</b></td><td>Forwards the exact verified commit, and only after confirming the update will not discard commits already on the target. Requires a durable record that a completed review approved a commit this one descends from.</td><td class="opacity-60">none</td></tr>
+        <tr><td class="prd-num">8</td><td><b>Pull request</b></td><td>Creates or updates the pull request. Body is written for a reviewer who was not present: what changed, what was checked, what the risks are, what the pipeline had to fix.</td><td class="opacity-60">none</td></tr>
+        <tr><td class="prd-num">9</td><td><b>Checks</b></td><td>Watches your CI and mergeability, fixes failures, resolves conflicts. The only stage that talks to the outside world for validation.</td><td class="prd-num">3</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div role="alert" class="alert alert-warning alert-soft mb-6 items-start">
+    <div class="min-w-0">
+      <p class="font-semibold mb-1">The review fix round has a condition attached</p>
+      <p class="text-sm opacity-90">
+        Letting review fix its own findings automatically is the one place where P4 and P5 are most
+        likely to be violated by accident, because the fixer has just been told exactly what to
+        change and it is tempting to let it confirm its own work. Two rules make the round safe, and
+        both are load-bearing rather than optional.
+      </p>
+      <ul class="text-sm opacity-90 list-disc pl-5 mt-2 space-y-1">
+        <li>The round covers <code>fix</code> findings only. An <code>ask</code> finding never enters
+          it, so the round can never resolve a question that was yours to answer.</li>
+        <li>The re-review after the round runs in a fresh session with no memory of the fix, and it
+          treats the fix commit as author code. It receives the previous findings and the fix summary
+          as claims to check, never as evidence that anything was resolved.</li>
+      </ul>
+      <p class="text-sm opacity-90 mt-2">
+        If either rule is dropped, this setting becomes the exact failure P4 describes: the reviewer
+        certifying its own prescription.
+      </p>
+    </div>
+  </div>
+
+  <div role="alert" class="alert alert-soft mb-8 items-start">
+    <div class="min-w-0">
+      <p class="font-semibold mb-1">Why review comes before test</p>
+      <p class="text-sm opacity-90">
+        If tests run first, their fix rounds modify the code, and review then reads code the fixer
+        wrote rather than code you wrote. Reviewing first keeps the reviewer's subject the actual
+        change. This ordering is load-bearing, which is why the order is not configurable.
+      </p>
+    </div>
+  </div>
+
+  <h3 class="text-xl font-semibold mb-3">Findings and their actions</h3>
+  <p class="mb-4 opacity-90">
+    A finding has a severity (<code>error</code>, <code>warning</code>, <code>info</code>) and an
+    action. The action decides who resolves it, and it is the single most important field in the
+    system.
+  </p>
+
+  <div class="grid gap-4 md:grid-cols-3 mb-6">
+    <div class="card card-border bg-base-200">
+      <div class="card-body">
+        <h4 class="card-title text-sm"><span class="badge badge-success badge-sm">fix</span></h4>
+        <p class="text-xs opacity-90 mb-2">Objectively wrong and mechanically fixable. Eligible for the automatic fix loop.</p>
+        <p class="text-xs opacity-70">Correctness, reliability, and security issues stay here even when the smallest correct fix restores a little previously deleted logic.</p>
+      </div>
+    </div>
+    <div class="card card-border bg-base-200 border-warning/40">
+      <div class="card-body">
+        <h4 class="card-title text-sm"><span class="badge badge-warning badge-sm">ask</span></h4>
+        <p class="text-xs opacity-90 mb-2">Touches your intent or your judgment. Parks for a decision; never enters the automatic fix loop.</p>
+        <p class="text-xs opacity-70">Questioning a deliberate product choice, arguing an intentional removal should be undone, or reporting that a stage could not gather enough evidence.</p>
+      </div>
+    </div>
+    <div class="card card-border bg-base-200">
+      <div class="card-body">
+        <h4 class="card-title text-sm"><span class="badge badge-ghost badge-sm">note</span></h4>
+        <p class="text-xs opacity-90 mb-2">Informational. Needs no fix and blocks nothing.</p>
+        <p class="text-xs opacity-70">A stage whose findings are all notes is approved as it stands.</p>
+      </div>
+    </div>
+  </div>
+
+  <div role="alert" class="alert alert-warning alert-soft mb-8 items-start">
+    <div class="min-w-0">
+      <p class="font-semibold mb-1">Missing action means ask</p>
+      <p class="text-sm opacity-90">
+        If a finding arrives with no action, an empty action, or an action the system does not
+        recognize, it becomes <code>ask</code>. This is not an error path to log and move past; it is
+        the defined behavior, and it is what makes P3 hold when an agent's output is imperfect.
+      </p>
+    </div>
+  </div>
+
+  <h3 class="text-xl font-semibold mb-3">The fix loop and its three bounds</h3>
+  <p class="mb-4 opacity-90">
+    When a stage returns fixable findings and its limit allows, the fixer applies them and the stage
+    re-runs to verify. This is the one cycle in the whole design, and unbounded cycles are the most
+    common defect in systems of this shape, so it carries three independent bounds.
+  </p>
+
+  <div class="prd-mermaid mb-4">
+    <pre class="mermaid">
+flowchart TD
+  run["Run the stage"] --> f{"Any findings?"}
+  f -- no --> done["Stage completes"]
+  f -- yes --> elig{"Fixable findings<br />and rounds remaining<br />and budget remaining?"}
+  elig -- no --> hold["Hold for your decision"]
+  elig -- yes --> fix["Fixer applies the selected findings"]
+  fix --> conv{"Did anything<br />actually change?"}
+  conv -- no --> hold
+  conv -- yes --> run
+  hold --> act["Approve, fix a selection, skip, or cancel"]
+  act -->|fix| fix
+  act -->|approve or skip| done
+    </pre>
+  </div>
+
+  <div class="overflow-x-auto rounded-box border border-base-content/10 bg-base-100 mb-6">
+    <table class="table table-sm">
+      <thead><tr><th class="w-44">Bound</th><th>Rule</th><th>Catches</th></tr></thead>
+      <tbody>
+        <tr><td><b>Per-stage rounds</b></td><td>Each stage has its own limit. Reaching it parks the stage rather than continuing.</td><td>One stage oscillating between two wrong fixes.</td></tr>
+        <tr><td><b>Run-wide budget</b></td><td>A total step budget across the whole run, independent of any stage's limit.</td><td>Several stages each staying under their own limit while the run as a whole never finishes.</td></tr>
+        <tr><td><b>Convergence</b></td><td>A fix round that produces no change ends the loop immediately and parks.</td><td>An agent that reports success each round without editing anything. Neither counter would catch this before exhausting itself.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3 class="text-xl font-semibold mb-3">What you do at a hold</h3>
+  <p class="mb-4 opacity-90">
+    A hold offers four actions, and they are the same whether you act through the terminal interface
+    or an agent acts through the machine interface.
+  </p>
+  <div class="overflow-x-auto rounded-box border border-base-content/10 bg-base-100 mb-6">
+    <table class="table table-sm table-zebra">
+      <thead><tr><th class="w-32">Action</th><th>Effect</th></tr></thead>
+      <tbody>
+        <tr><td><b>Approve</b></td><td>Accept the findings as they stand and advance.</td></tr>
+        <tr><td><b>Fix</b></td><td>Run one fix round over the findings you selected, with any notes you attached and any findings you wrote yourself. The stage re-runs and holds again so you see the result.</td></tr>
+        <tr><td><b>Skip</b></td><td>Mark this stage skipped for this run only.</td></tr>
+        <tr><td><b>Cancel</b></td><td>End the run. Work stays recoverable.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="mb-8 opacity-90">
+    What the fixer receives for a round is the selection you made, your notes, your own findings, and
+    a sanitized history of earlier rounds including which findings you deliberately left unselected.
+    A later review uses that history to avoid re-reporting something you already decided about,
+    unless the code now presents a materially different issue.
+  </p>
+
+  <h3 class="text-xl font-semibold mb-3">What passing the gate means</h3>
+  <p class="mb-3 opacity-90">Exactly this, and nothing more:</p>
+  <ul class="list-disc pl-6 space-y-1.5 opacity-90">
+    <li>The branch was rebased onto freshly fetched upstream and branch targets.</li>
+    <li>Review, targeted tests with evidence, documentation, and lint all ran before anything was pushed.</li>
+    <li>You stayed in control of every judgment call, or you explicitly consented to a bounded amount of unattended resolution.</li>
+    <li>The branch update was checked against the live target and refused rather than guessed at.</li>
+    <li>The pull request records what was checked, what was fixed, and how many attempts it took.</li>
+  </ul>
+  <p class="mt-4 opacity-90">
+    The gate does not define compliance. It publishes facts precise enough for any external system to
+    reach its own verdict.
+  </p>
+</section>
+
+<!-- ============================ 6. ORCHESTRATOR ============================ -->
+<section id="orchestrator" class="prd-anchor mb-16">
+  <p class="prd-kicker mb-2">Section 6</p>
+  <h2 class="text-3xl font-bold tracking-tight mb-3">The orchestrator</h2>
+  <p class="mb-6 opacity-80 max-w-3xl">
+    The coordinator turns one request from you into supervised work, and turns many workers' output
+    back into a small number of decisions for you.
+  </p>
+
+  <h3 class="text-xl font-semibold mb-3">Task lifecycle</h3>
+  <div class="prd-mermaid mb-6">
+    <pre class="mermaid">
+stateDiagram-v2
+  [*] --> Intake
+  Intake --> Queued: overlaps live work
+  Intake --> Dispatched: independent
+  Queued --> Dispatched: blocker clears
+  Dispatched --> Running: isolation proven
+  Dispatched --> [*]: isolation refused
+  Running --> Held: needs your decision
+  Held --> Running: you decide
+  Running --> Paused: known external wait
+  Paused --> Running: wait clears
+  Running --> Validating: delivery task, work committed
+  Validating --> Held: gate finding needs judgment
+  Validating --> Ready: every stage green
+  Running --> Reported: investigation task
+  Ready --> Landed: merge authority satisfied
+  Reported --> Complete: findings relayed, decisions recorded
+  Landed --> Complete: cleanup proves work landed
+  Running --> Failed: stopped, cannot proceed
+  Failed --> Dispatched: relaunched with context
+  Complete --> [*]
+    </pre>
+  </div>
+
+  <div class="grid gap-4 md:grid-cols-2 mb-8">
+    <div class="card card-border bg-base-200">
+      <div class="card-body">
+        <h4 class="card-title text-base">Delivery task</h4>
+        <ul class="text-sm opacity-90 list-disc pl-5 space-y-1">
+          <li>Deliverable is a change to a project.</li>
+          <li>Works on its own branch in its own isolated copy.</li>
+          <li>Reaches a shared branch only through the gate.</li>
+          <li>Its isolated copy is protected; cleanup refuses on unlanded work.</li>
+        </ul>
+      </div>
+    </div>
+    <div class="card card-border bg-base-200">
+      <div class="card-body">
+        <h4 class="card-title text-base">Investigation task</h4>
+        <ul class="text-sm opacity-90 list-disc pl-5 space-y-1">
+          <li>Deliverable is a self-contained report with evidence.</li>
+          <li>Creates no branch, pushes nothing, opens no pull request.</li>
+          <li>Its isolated copy is declared scratch and is discardable.</li>
+          <li>Can be promoted to a delivery task in place, keeping its context.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div role="alert" class="alert alert-soft alert-warning mb-8 items-start">
+    <div class="min-w-0">
+      <p class="font-semibold mb-1">A report is evidence, not authorization</p>
+      <p class="text-sm opacity-90">
+        A diagnosis, a recommendation, or an implementation-ready finding does not authorize changing
+        code. Implementation is a separate request. Promotion is the explicit mechanism: it flips the
+        task's contract in place, in the same terminal with the same loaded context, so the
+        protections that apply to delivery work start applying.
+      </p>
+    </div>
+  </div>
+
+  <h3 class="text-xl font-semibold mb-3">Events and current state</h3>
+  <p class="mb-4 opacity-90">
+    This is P8 made concrete, and it is the highest-value single change in the whole design. Two
+    records exist per task, and they answer different questions.
+  </p>
+  <div class="overflow-x-auto rounded-box border border-base-content/10 bg-base-100 mb-4">
+    <table class="table table-sm">
+      <thead><tr><th class="w-40">Record</th><th class="w-32">Shape</th><th>Answers</th></tr></thead>
+      <tbody>
+        <tr><td><b>Event log</b></td><td>Append-only</td><td>What has happened to this task, in order. Each append is a wake. Never read its tail to decide what is true now.</td></tr>
+        <tr><td><b>State record</b></td><td>Authoritative, one owner</td><td>What is true now. Resolved deterministically, with the source of the answer attached.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="mb-4 opacity-90">The state resolver answers in a fixed precedence:</p>
+  <ol class="list-decimal pl-6 space-y-1.5 mb-4 opacity-90">
+    <li>A validation run attributed to this task's own branch, whether active or finished. This outranks everything, because a worker handed off to the gate stops writing to its own log.</li>
+    <li>A live process signal from the task's terminal.</li>
+    <li>The event log, and only when its most recent event maps to a recognized state.</li>
+    <li>Otherwise, unknown. A dead terminal with no attributed run reports unknown rather than trusting a stale event.</li>
+  </ol>
+  <p class="mb-8 opacity-90">
+    An event that closes a decision is decision-only: it never becomes current state, and its text
+    never leaks into the state detail. If the log's last event says a decision is open but the
+    validation run has moved past it, the resolver reports that event as superseded.
+  </p>
+
+  <h3 class="text-xl font-semibold mb-3">Supervision</h3>
+  <p class="mb-4 opacity-90">
+    A watcher process blocks on the fleet and classifies every wake without invoking a model. It
+    absorbs a wake only on positive evidence of progress. This is what makes running many workers
+    affordable, and it is also where the design is easiest to get subtly wrong.
+  </p>
+
+  <div class="prd-mermaid mb-4">
+    <pre class="mermaid">
+flowchart TD
+  wake["Wake detected"] --> kind{"What kind?"}
+  kind -->|"authenticated check result"| esc["Surface: always actionable"]
+  kind -->|"event with a decision verb"| esc
+  kind -->|"event with no decision verb"| ev{"Positive evidence<br />of progress?"}
+  kind -->|"terminal unchanged"| st{"Positive evidence<br />of progress?"}
+  kind -->|"declared external wait"| pw{"Idle past the<br />recheck window?"}
+  kind -->|"no change"| abs["Absorb: advance markers, no model turn"]
+  ev -->|yes| abs
+  ev -->|no| esc
+  st -->|no| esc
+  st -->|yes| wedge{"Idle past the<br />escalation window?"}
+  wedge -->|no| abs
+  wedge -->|yes| esc
+  pw -->|no| abs
+  pw -->|yes| esc
+  esc --> queue["Write to the durable wake queue,<br />then wake the coordinator"]
+    </pre>
+  </div>
+
+  <div class="grid gap-4 md:grid-cols-2 mb-8">
+    <div class="card card-border bg-base-200">
+      <div class="card-body">
+        <h4 class="card-title text-sm">Absence of evidence surfaces</h4>
+        <p class="text-xs opacity-90">A wake is absorbed only when something positively proves work is proceeding. A worker that finished, crashed, or silently stopped produces no such proof, so it surfaces. Never absorb on elapsed time alone.</p>
+      </div>
+    </div>
+    <div class="card card-border bg-base-200">
+      <div class="card-body">
+        <h4 class="card-title text-sm">The queue is durable and written first</h4>
+        <p class="text-xs opacity-90">An actionable wake is recorded before any detector state advances, so a missed process exit is recoverable by draining. Every turn that handles a wake drains the queue before doing anything else.</p>
+      </div>
+    </div>
+    <div class="card card-border bg-base-200">
+      <div class="card-body">
+        <h4 class="card-title text-sm">A declared wait is not a stall</h4>
+        <p class="text-xs opacity-90">A worker waiting on something external that will clear on its own says so. That silences the stall detector but arms a slower recheck, so a forgotten wait cannot stay invisible indefinitely.</p>
+      </div>
+    </div>
+    <div class="card card-border bg-base-200">
+      <div class="card-body">
+        <h4 class="card-title text-sm">A terminal-ish wait surfaces once</h4>
+        <p class="text-xs opacity-90">A worker that finished and is waiting on a merge, or that stopped on a blocker, surfaces once, then is absorbed even as its idle screen redraws, then surfaces again when something actually changes. Otherwise it storms every poll.</p>
+      </div>
+    </div>
+  </div>
+
+  <h3 class="text-xl font-semibold mb-3">Keeping supervision alive</h3>
+  <p class="mb-4 opacity-90">
+    P10 is defended four independent ways, because a single mechanism has already failed in practice
+    and the cost of that failure is hours of silence.
+  </p>
+  <div class="overflow-x-auto rounded-box border border-base-content/10 bg-base-100 mb-8">
+    <table class="table table-sm table-zebra">
+      <thead><tr><th class="w-48">Layer</th><th class="w-24">Direction</th><th>What it does</th></tr></thead>
+      <tbody>
+        <tr><td><b>The live cycle</b></td><td>Active</td><td>The coordinator holds exactly one supervision wait whenever work is in flight, resumed as the last action of every turn.</td></tr>
+        <tr><td><b>Arm verification</b></td><td>Active</td><td>Starting a watcher confirms it is genuinely alive with a fresh liveness beacon and reports an honest started, attached, or failed. An unexplained exit is a typed failure, not silence.</td></tr>
+        <tr><td><b>Pull guard</b></td><td>Passive</td><td>Ordinary commands warn when work is in flight and the watcher has stopped, or when queued wakes are waiting to be drained.</td></tr>
+        <tr><td><b>Stop guard</b></td><td>Push</td><td>When the coordinator tries to end a turn while work is in flight and no matching live watcher holds this home's lock, it is blocked or forced into one bounded follow-up turn.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div role="alert" class="alert alert-error alert-soft mb-8 items-start">
+    <div class="min-w-0">
+      <p class="font-semibold mb-1">Never kill watchers broadly</p>
+      <p class="text-sm opacity-90">
+        A pattern-matched process kill reaches watchers belonging to other homes on the same machine.
+        Repair goes through the home-scoped owner path, which signals only the watcher recorded in
+        this home's lock. Command shapes that violate this should be refused before they run, not
+        cleaned up after.
+      </p>
+    </div>
+  </div>
+
+  <h3 class="text-xl font-semibold mb-3">What reaches you, and how it is worded</h3>
+  <div class="grid gap-4 md:grid-cols-2 mb-6">
+    <div class="card card-border bg-base-200 border-success/30">
+      <div class="card-body">
+        <h4 class="card-title text-sm text-success">Reaches you immediately</h4>
+        <ul class="text-xs opacity-90 list-disc pl-5 space-y-1">
+          <li>Work ready for your review, with the full pull request URL.</li>
+          <li>Finished investigation findings, relayed as findings rather than as a completion notice.</li>
+          <li>A finding that needs your decision.</li>
+          <li>A real blocker after the recovery path is exhausted.</li>
+          <li>Anything destructive, irreversible, or security-sensitive.</li>
+          <li>A credential or sign-in you need to provide.</li>
+        </ul>
+      </div>
+    </div>
+    <div class="card card-border bg-base-200 border-error/30">
+      <div class="card-body">
+        <h4 class="card-title text-sm text-error">Never reaches you</h4>
+        <ul class="text-xs opacity-90 list-disc pl-5 space-y-1">
+          <li>Automatic fixes and retries that succeeded.</li>
+          <li>Routine progress and elapsed waiting time.</li>
+          <li>Internal supervision mechanics of any kind.</li>
+          <li>Raw worker reports, event lines, or tool output.</li>
+          <li>An unchanged fleet reported as if it were progress.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+  <p class="mb-4 opacity-90">
+    Every escalation stands alone and leads with evidence, then the consequence, then the options,
+    then a recommendation. The same evidence-first shape applies when Assistant disagrees with you:
+    it states the evidence rather than deferring.
+  </p>
+  <p class="mb-8 opacity-90">
+    This is a testable contract, not a style preference. The translation table below should be
+    enforced by a test that asserts both the required wording and the absence of the internal terms.
+  </p>
+  <div class="overflow-x-auto rounded-box border border-base-content/10 bg-base-100 mb-8">
+    <table class="table table-sm table-zebra">
+      <thead><tr><th class="w-1/2">Internal term</th><th>What you hear instead</th></tr></thead>
+      <tbody>
+        <tr><td>isolated copy, worktree, checkout</td><td>the local copy, and only when the location matters</td></tr>
+        <tr><td>teardown</td><td>cleanup</td></tr>
+        <tr><td>wake, watcher, heartbeat, stale, poll</td><td>waiting too long, stopped responding, still monitoring</td></tr>
+        <tr><td>hold, gate, ask-user, blocked, paused</td><td>the actual decision, approval, blocker, or external delay</td></tr>
+        <tr><td>stage names, run states, fix rounds</td><td>the concrete result: what passed, what failed, what was changed</td></tr>
+        <tr><td>brief</td><td>instructions</td></tr>
+        <tr><td>worker, task identifier, state file, raw path</td><td>omit unless you need it to act</td></tr>
+        <tr><td>fail-closed, fails open, refuses loudly</td><td>stops safely rather than proceeding; or continues without that optional protection</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3 class="text-xl font-semibold mb-3">Delivery modes</h3>
+  <p class="mb-4 opacity-90">
+    Each project declares how its work ships. The gate is the default and the recommendation. The
+    autonomy flag is orthogonal to the mode.
+  </p>
+  <div class="overflow-x-auto rounded-box border border-base-content/10 bg-base-100 mb-6">
+    <table class="table table-sm table-zebra">
+      <thead><tr><th class="w-32">Mode</th><th>Path</th><th class="w-56">When to use it</th></tr></thead>
+      <tbody>
+        <tr><td><b>gated</b> <span class="badge badge-primary badge-xs">default</span></td><td>Implement, commit, run the full pipeline, open a pull request, watch checks, report ready when checks first go green.</td><td>Anything you or others will depend on.</td></tr>
+        <tr><td><b>direct</b></td><td>Implement, commit, push, open a pull request. No pipeline.</td><td>A repository where the outer CI is the real gate and speed matters more.</td></tr>
+        <tr><td><b>local</b></td><td>Implement and commit on a branch. Nothing is pushed. You approve, then Assistant performs a guarded fast-forward into your local default branch.</td><td>Work that never leaves your machine.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div role="alert" class="alert alert-soft mb-8 items-start">
+    <div class="min-w-0">
+      <p class="font-semibold mb-1">The selected path owns its own rigor</p>
+      <p class="text-sm opacity-90">
+        When the gate is selected, the gate alone owns review, fixes, tests, documentation, and
+        delivery. When it is not, take the faster path without inventing an extra reviewer. Never
+        stack a second manual review on top of a gated run, and never hold gated work outside the
+        pipeline for a separate clean verdict. If a fast path feels too risky, the decision to
+        escalate is whether to use the gate, not whether to add a review nobody specified.
+      </p>
+    </div>
+  </div>
+
+  <h3 class="text-xl font-semibold mb-3">The autonomy flag</h3>
+  <div class="grid gap-4 md:grid-cols-2 mb-6">
+    <div class="card card-border bg-base-200">
+      <div class="card-body">
+        <h4 class="card-title text-sm">Off, by default</h4>
+        <p class="text-xs opacity-90">You own every <code>ask</code> finding, every merge, and every local fast-forward approval.</p>
+      </div>
+    </div>
+    <div class="card card-border bg-base-200 border-warning/40">
+      <div class="card-body">
+        <h4 class="card-title text-sm">On, by your explicit instruction</h4>
+        <p class="text-xs opacity-90">Assistant resolves routine gates itself and merges work that is green or already approved. It still escalates anything destructive, irreversible, or security-sensitive, and it never merges a failing pull request. Every autonomous merge produces a one-line outcome with the full URL.</p>
+      </div>
+    </div>
+  </div>
+  <p class="mb-8 opacity-90">
+    Automating judgment expands only when you say so, never by a default changing underneath you.
+    Being away from the machine never expands this authority: it changes how you are reached, not
+    what may be decided without you.
+  </p>
+</section>
+
+<!-- ============================ 7. EXECUTION MODEL ============================ -->
+<section id="execution" class="prd-anchor mb-16">
+  <p class="prd-kicker mb-2">Section 7</p>
+  <h2 class="text-3xl font-bold tracking-tight mb-3">Execution model</h2>
+  <p class="mb-6 opacity-80 max-w-3xl">
+    Both halves of this product are graphs already. The pipeline is a linear sequence with a fix
+    cycle and human decision points. The fleet is a set of independent supervised runs. Neither is
+    written as a graph today, which is why resuming, displaying, and reasoning about them is harder
+    than it should be.
+  </p>
+
+  <h3 class="text-xl font-semibold mb-4">The decision</h3>
+  <div class="grid gap-4 lg:grid-cols-3 mb-6">
+    <div class="card card-border bg-base-200 opacity-70">
+      <div class="card-body">
+        <div class="badge badge-ghost badge-sm mb-2">Rejected</div>
+        <h4 class="card-title text-base">Keep it hardcoded</h4>
+        <p class="text-sm opacity-90 mb-3">A fixed sequence plus a state file, as today.</p>
+        <p class="text-xs opacity-80"><b>Cost:</b> resume logic is bespoke per stage, progress display is derived by parsing logs, and every new pause point is a new special case. Both source projects show the accumulated cost of this.</p>
+      </div>
+    </div>
+    <div class="card card-border bg-base-200 opacity-70">
+      <div class="card-body">
+        <div class="badge badge-ghost badge-sm mb-2">Rejected</div>
+        <h4 class="card-title text-base">Adopt a workflow engine</h4>
+        <p class="text-sm opacity-90 mb-3">Build on an existing agent-graph or durable-execution framework.</p>
+        <p class="text-xs opacity-80"><b>Cost:</b> a dependency, a domain-specific language, and a migration, to gain features this product needs a fraction of. A local single-user tool should not require a cluster, and none of the surveyed engines fits a local process model without pulling in most of their world.</p>
+      </div>
+    </div>
+    <div class="card card-border bg-base-200 border-primary/50 ring-1 ring-primary/20">
+      <div class="card-body">
+        <div class="badge badge-primary badge-sm mb-2">Recommended</div>
+        <h4 class="card-title text-base">Reify the graph you already have</h4>
+        <p class="text-sm opacity-90 mb-3">Make the existing topology an explicit, small, in-house structure.</p>
+        <p class="text-xs opacity-80"><b>Buys:</b> resume from a checkpoint instead of from stage boundaries, a live progress view that reads structure rather than logs, static checks over the topology, and one place where pause and resume are defined. Roughly one module, not a platform.</p>
+      </div>
+    </div>
+  </div>
+
+  <div role="alert" class="alert alert-soft alert-info mb-8 items-start">
+    <div class="min-w-0">
+      <p class="font-semibold mb-1">This is a survey result, not a preference</p>
+      <p class="text-sm opacity-90">
+        The graph frameworks in this space are converging on a shape worth copying and away from a
+        shape worth avoiding. Two of the leading agent libraries deleted their own built-in
+        persistence during 2026 and now plug into external durability substrates. One major vendor
+        shipped a visual workflow graph, deprecated it within eight months, and documented that
+        workflows "requiring strong determinism at their core may not migrate faithfully." Both the
+        gate and the fleet are squarely in that category, so the lesson is to own the determinism
+        and keep the machinery small.
+      </p>
+    </div>
+  </div>
+
+  <h3 class="text-xl font-semibold mb-3">Two different shapes for two different problems</h3>
+  <div class="grid gap-4 md:grid-cols-2 mb-8">
+    <div class="card card-border bg-base-200">
+      <div class="card-body">
+        <h4 class="card-title text-base">The gate is a bounded cyclic step graph</h4>
+        <p class="text-sm opacity-90">Nodes are stages, one edge is a back edge for the fix loop, and some nodes halt before running to wait for you. State is a typed record with declared merge rules. Determinism matters more than throughput.</p>
+      </div>
+    </div>
+    <div class="card card-border bg-base-200">
+      <div class="card-body">
+        <h4 class="card-title text-base">The fleet is supervised independent runs</h4>
+        <p class="text-sm opacity-90">Each task owns its own graph instance and advances on its own clock. There is no barrier between phases, because worker latency varies by orders of magnitude and a barrier would idle every fast task behind the slowest one.</p>
+      </div>
+    </div>
+  </div>
+
+  <h3 class="text-xl font-semibold mb-3">The minimum viable abstraction</h3>
+  <p class="mb-4 opacity-90">Five concepts. Everything else is built from them.</p>
+
+  <div class="overflow-x-auto rounded-box border border-base-content/10 bg-base-100 mb-6">
+    <table class="table table-sm table-zebra">
+      <thead><tr><th class="w-32">Concept</th><th>Definition</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><b>Node</b></td>
+          <td>A named unit of work that reads declared state keys and writes declared state keys. Declaring what it reads and writes is what makes replay and forking possible, so it is required, not optional.</td>
+        </tr>
+        <tr>
+          <td><b>Edge</b></td>
+          <td>A transition, either unconditional or guarded by a predicate over state. Back edges are permitted and must be bounded. An edge is data, not a callback.</td>
+        </tr>
+        <tr>
+          <td><b>State</b></td>
+          <td>A typed record. Every key that more than one node can write declares a merge rule. A key with no declared rule may be written by exactly one node.</td>
+        </tr>
+        <tr>
+          <td><b>Halt point</b></td>
+          <td>A marker on a node meaning "stop before running this and wait for a decision." The node does not start. Its inputs are already in state, so nothing needs to be re-executed on resume.</td>
+        </tr>
+        <tr>
+          <td><b>Checkpoint</b></td>
+          <td>State plus position plus any open decision, written after every node. Restoring one re-emits the open decision. One call can restore and answer together.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3 class="text-xl font-semibold mb-3">Halt before, not interrupt inside</h3>
+  <p class="mb-4 opacity-90">
+    There are two ways to model waiting for a person, and the difference is not cosmetic.
+  </p>
+  <div class="grid gap-4 md:grid-cols-2 mb-6">
+    <div class="card card-border bg-base-200 border-error/30">
+      <div class="card-body">
+        <h4 class="card-title text-sm text-error">Interrupt inside the node</h4>
+        <p class="text-xs opacity-90">The node starts, runs partway, and suspends. Resuming re-runs the node from the top with the answer injected, so everything before the suspension point must be idempotent. That requirement is invisible in the code and easy to violate later.</p>
+      </div>
+    </div>
+    <div class="card card-border bg-base-200 border-success/30">
+      <div class="card-body">
+        <h4 class="card-title text-sm text-success">Halt before the node runs</h4>
+        <p class="text-xs opacity-90">The graph stops at the boundary. The node never starts, so there is nothing to make idempotent and nothing to replay. The decision is collected outside the graph and supplied as input on the next call. This is also exactly how both source systems already park work.</p>
+      </div>
+    </div>
+  </div>
+  <p class="mb-8 opacity-90">
+    Use halt-before. It is strictly simpler, and it makes P6 easier to hold because a paused run has
+    performed no partial side effects that a resume might repeat.
+  </p>
+
+  <h3 class="text-xl font-semibold mb-3">Rules the topology must enforce</h3>
+  <div class="space-y-3 mb-8">
+    <div class="flex gap-3 items-start p-3 rounded-box bg-base-200 border border-base-content/10">
+      <span class="badge badge-primary badge-sm shrink-0 mt-0.5">1</span>
+      <div class="min-w-0">
+        <p class="font-medium text-sm">No two nodes write the same key without a declared merge rule.</p>
+        <p class="text-xs opacity-75">Checked when the graph is built, not at run time. One popular framework removed its thread-safety wrapper and now has a reproducible bug where the same definition produces different business results depending purely on scheduling. Declared merge rules are the fix.</p>
+      </div>
+    </div>
+    <div class="flex gap-3 items-start p-3 rounded-box bg-base-200 border border-base-content/10">
+      <span class="badge badge-primary badge-sm shrink-0 mt-0.5">2</span>
+      <div class="min-w-0">
+        <p class="font-medium text-sm">Every back edge carries a bound at construction time.</p>
+        <p class="text-xs opacity-75">A graph with an unbounded cycle fails to build. Most surveyed frameworks ship no default cycle guard at all, and one defaults to running until something escalates, which is to say forever.</p>
+      </div>
+    </div>
+    <div class="flex gap-3 items-start p-3 rounded-box bg-base-200 border border-base-content/10">
+      <span class="badge badge-primary badge-sm shrink-0 mt-0.5">3</span>
+      <div class="min-w-0">
+        <p class="font-medium text-sm">A cycle that passes through a join must include that join's fork.</p>
+        <p class="text-xs opacity-75">Otherwise the join can be re-entered with a partial set of inputs and produce a result that looks complete. Only relevant once fan-out exists, which is why it belongs to a later phase, but the rule should be in the checker from the start.</p>
+      </div>
+    </div>
+    <div class="flex gap-3 items-start p-3 rounded-box bg-base-200 border border-base-content/10">
+      <span class="badge badge-primary badge-sm shrink-0 mt-0.5">4</span>
+      <div class="min-w-0">
+        <p class="font-medium text-sm">Node implementations are constructed per run, not shared.</p>
+        <p class="text-xs opacity-75">A single background process runs concurrent validation runs. Sharing node instances across them is a defect class that only appears under concurrency, which is the worst time to find it.</p>
+      </div>
+    </div>
+  </div>
+
+  <h3 class="text-xl font-semibold mb-3">Topology and durability are separate layers</h3>
+  <div class="prd-mermaid mb-4">
+    <pre class="mermaid">
+flowchart TB
+  subgraph T ["Topology layer, in-house and small"]
+    direction LR
+    t1["Node and edge definitions"]
+    t2["Bound checker"]
+    t3["Executor and halt points"]
+  end
+  subgraph D ["Durability layer, replaceable behind one interface"]
+    direction LR
+    d1["Write checkpoint"]
+    d2["Read latest"]
+    d3["List history"]
+    d4["Fork from a point"]
+  end
+  T -->|"four operations, nothing more"| D
+  D --> store[("Local embedded store<br />default implementation")]
+  D -.-> alt[("Alternative substrate<br />if it ever pays for itself")]
+    </pre>
+  </div>
+  <p class="mb-4 opacity-90">
+    Keep the interface between them to four operations. The default implementation writes to the
+    local embedded database that already holds run state, because a local development tool must not
+    require a server. Keeping the boundary narrow means the substrate can change later without the
+    topology layer noticing.
+  </p>
+  <div role="alert" class="alert alert-warning alert-soft mb-8 items-start">
+    <div class="min-w-0">
+      <p class="font-semibold mb-1">The checkpoint store is inside the trust boundary</p>
+      <p class="text-sm opacity-90">
+        Checkpoints are resumed with your credentials, so a tampered checkpoint is a code-execution
+        path. Use a data-only serialization format, validate on read, and never load a checkpoint
+        from a source outside this home. This is the same rule P7 applies to configuration, extended
+        to run state.
+      </p>
+    </div>
+  </div>
+
+  <h3 class="text-xl font-semibold mb-3">Where this pays off</h3>
+  <div class="overflow-x-auto rounded-box border border-base-content/10 bg-base-100">
+    <table class="table table-sm table-zebra">
+      <thead><tr><th class="w-56">Capability</th><th>Because the graph is explicit</th></tr></thead>
+      <tbody>
+        <tr><td><b>Resume after a crash</b></td><td>Restore the last checkpoint and continue, instead of reconstructing intent from stage rows and log files.</td></tr>
+        <tr><td><b>Live progress</b></td><td>The display reads the topology and the current position. It does not parse logs to guess where a run is.</td></tr>
+        <tr><td><b>Re-run from a point</b></td><td>Fork from a checkpoint to retry one stage with a different agent or a changed configuration, without repeating everything before it.</td></tr>
+        <tr><td><b>One pause definition</b></td><td>Every decision point in the product is the same halt-point mechanism, so a new one is a declaration rather than new pause and resume code.</td></tr>
+        <tr><td><b>Diagram from source</b></td><td>The pipeline diagram is generated from the topology, so it cannot drift from what actually runs.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<!-- ============================ 8. ARCHITECTURE ============================ -->
+<section id="architecture" class="prd-anchor mb-16">
+  <p class="prd-kicker mb-2">Section 8</p>
+  <h2 class="text-3xl font-bold tracking-tight mb-3">Architecture</h2>
+  <p class="mb-6 opacity-80 max-w-3xl">
+    This section is language-agnostic on purpose. It fixes the module boundaries, the data model,
+    and the process model, and leaves the implementation language, libraries, and testing tools to
+    you.
+  </p>
+
+  <h3 class="text-xl font-semibold mb-3">What the coordinator is</h3>
+  <p class="mb-4 opacity-90">
+    The coordinator is two things with a hard line between them. An agent handles conversation,
+    intake, and judgment. A program owns every state change, every refusal, and every guard. The
+    agent decides what should happen; the program decides what is allowed to happen, and it is the
+    only thing that can make it happen.
+  </p>
+
+  <div class="prd-mermaid mb-4">
+    <pre class="mermaid">
+flowchart TB
+  you["You"] <--> ag["Coordinator agent<br />conversation, intake, judgment"]
+  ag -->|"typed commands only"| pr["Coordinator program<br />state, guards, refusals"]
+  pr -->|"structured results and refusals"| ag
+  pr --> st[("Authoritative state")]
+  pr --> gate["The gate"]
+  pr --> fleet["Workers and sessions"]
+  ag -.->|"cannot reach directly"| st
+  ag -.->|"cannot reach directly"| gate
+    </pre>
+  </div>
+
+  <div class="grid gap-4 md:grid-cols-2 mb-4">
+    <div class="card card-border bg-base-200">
+      <div class="card-body">
+        <h4 class="card-title text-sm">The agent owns</h4>
+        <ul class="text-xs opacity-90 list-disc pl-5 space-y-1">
+          <li>Understanding what you asked for, and which project you meant.</li>
+          <li>Choosing a task shape, writing the instructions, and deciding when work overlaps.</li>
+          <li>Reading a report or a finding and deciding whether it needs you.</li>
+          <li>Translating internal state into the outcome you hear, per P13.</li>
+          <li>Every judgment the autonomy flag permits it to make.</li>
+        </ul>
+      </div>
+    </div>
+    <div class="card card-border bg-base-200">
+      <div class="card-body">
+        <h4 class="card-title text-sm">The program owns</h4>
+        <ul class="text-xs opacity-90 list-disc pl-5 space-y-1">
+          <li>Every write to state, and the resolver that reads it back.</li>
+          <li>Every guard: isolation, custody, data loss, cleanup proofs, the trust boundary.</li>
+          <li>The graph, its checkpoints, and every hold.</li>
+          <li>Supervision, the wake queue, and the stop guard.</li>
+          <li>Every refusal, and the reason attached to it.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div role="alert" class="alert alert-error alert-soft mb-4 items-start">
+    <div class="min-w-0">
+      <p class="font-semibold mb-1">The split only holds if the agent has no second path</p>
+      <p class="text-sm opacity-90">
+        A hybrid degrades into a pile of instructions the moment the agent can reach around the
+        program: run a raw git command, edit a state file, kill a process. Then every guard becomes a
+        rule the model is asked to remember, and P6, P11, and P12 all become advisory. Three rules
+        keep the line real, and they are worth enforcing mechanically rather than describing.
+      </p>
+      <ul class="text-sm opacity-90 list-disc pl-5 mt-2 space-y-1">
+        <li>State files and gate repositories are written by the program only. The agent has no
+          direct write path to either.</li>
+        <li>A refusal is a typed result the agent must report, not an error it may retry a different
+          way. There is no force flag reachable from the agent side.</li>
+        <li>Command shapes that would bypass the program are refused before they run, not detected
+          afterwards.</li>
+      </ul>
+    </div>
+  </div>
+
+  <p class="mb-8 opacity-90">
+    The practical test for which side a behavior belongs to: if getting it wrong loses work, breaks
+    isolation, or weakens what a pass means, it belongs to the program. If getting it wrong produces
+    a worse decision that you can see and correct, it belongs to the agent.
+  </p>
+
+  <h3 class="text-xl font-semibold mb-3">Process model</h3>
+  <div class="prd-mermaid mb-4">
+    <pre class="mermaid">
+flowchart TB
+  cli["Command line and terminal interface"]
+  agent["An agent driving the machine interface"]
+  svc["Background service<br />one per home, holds an exclusive lock"]
+  cli <-->|"local socket, request and stream"| svc
+  agent <-->|"same socket, request and response"| svc
+
+  svc --> exec["Graph executor"]
+  svc --> sup["Supervisor and wake queue"]
+  svc --> store[("Embedded database<br />+ per-run logs")]
+
+  exec --> wt["Isolated copies, one per run"]
+  exec --> ag["Agent adapters"]
+  sup --> tm["Terminal sessions, one per worker"]
+
+  hook["Gate admission and notification"] --> svc
+  push["git push assistant"] --> bare[("Local bare repository")] --> hook
+    </pre>
+  </div>
+  <ul class="list-disc pl-6 space-y-1.5 mb-8 opacity-90">
+    <li>A push returns immediately. The notification hands off and exits; the service owns everything long-running.</li>
+    <li>Exactly one service owns a home. It takes an exclusive operating-system lock before recovery and before binding its socket, so the lock cannot go stale even after a hard kill.</li>
+    <li>Admission runs before any reference in the gate changes, so a refusal happens before mutation rather than after.</li>
+    <li>Pushes to the same branch serialize, and a new push supersedes the run in progress. Different branches run concurrently.</li>
+    <li>Launch and readiness are different states. Publishing a process identifier is not proof of readiness; only a real health response is.</li>
+  </ul>
+
+  <h3 class="text-xl font-semibold mb-3">Modules</h3>
+  <p class="mb-4 opacity-90">
+    Grouped by the boundary they own. Each row is one module with one responsibility, and the
+    interface column is what the rest of the system is allowed to depend on.
+  </p>
+  <div class="overflow-x-auto rounded-box border border-base-content/10 bg-base-100 mb-8">
+    <table class="table table-sm table-zebra">
+      <thead><tr><th class="w-44">Module</th><th>Owns</th><th class="w-64">Interface it exposes</th></tr></thead>
+      <tbody>
+        <tr class="bg-base-200"><td colspan="3" class="font-semibold text-xs uppercase tracking-wider opacity-70">Core execution</td></tr>
+        <tr><td><b>graph</b></td><td>Node and edge definitions, the bound checker, the executor, halt points.</td><td>Build a topology; run or resume one; the four checkpoint operations.</td></tr>
+        <tr><td><b>stages</b></td><td>The nine stage implementations and their prompts.</td><td>One node contract: read declared state, return findings and state writes.</td></tr>
+        <tr><td><b>findings</b></td><td>The finding and action vocabulary, normalization, identifier assignment, the fail-closed default.</td><td>Parse untrusted output into a validated finding set.</td></tr>
+        <tr><td><b>runs</b></td><td>Run and stage records, rounds, holds, and the run lifecycle.</td><td>Create, advance, hold, resolve, terminate.</td></tr>
+
+        <tr class="bg-base-200"><td colspan="3" class="font-semibold text-xs uppercase tracking-wider opacity-70">Git and delivery</td></tr>
+        <tr><td><b>gate</b></td><td>Bare repository creation, hooks, remotes, identity, reattachment.</td><td>Initialize; refresh; remove.</td></tr>
+        <tr><td><b>vcs</b></td><td>All git invocation. Explicit repository addressing, non-interactive environment, isolated-copy lifecycle.</td><td>Typed operations. Nothing else shells out to git.</td></tr>
+        <tr><td><b>safety</b></td><td>The data-loss rules: anchored force updates, incorporation checks, the refuse-when-unverifiable path.</td><td>May this update proceed, and on what anchor?</td></tr>
+        <tr><td><b>custody</b></td><td>Reconciling your local branch with what the pipeline pushed or holds.</td><td>Classify; synchronize; recover. The only sanctioned mutation path.</td></tr>
+        <tr><td><b>forge</b></td><td>Provider abstraction for pull requests, checks, and merge state.</td><td>One interface, one adapter per provider.</td></tr>
+
+        <tr class="bg-base-200"><td colspan="3" class="font-semibold text-xs uppercase tracking-wider opacity-70">Fleet</td></tr>
+        <tr><td><b>tasks</b></td><td>Task records, the two shapes, intake, queueing, promotion, cleanup proofs.</td><td>Create, dispatch, promote, complete, clean up.</td></tr>
+        <tr><td><b>session</b></td><td>Terminal session provider abstraction: create, capture, send, probe, close.</td><td>One interface; the default provider is the reference implementation.</td></tr>
+        <tr><td><b>supervisor</b></td><td>Wake classification, the durable queue, liveness beacons, the stop guard.</td><td>Classify a wake; drain the queue; assert supervision is live.</td></tr>
+        <tr><td><b>taskstate</b></td><td>The authoritative current-state resolver. Read-only and free of side effects.</td><td>One call in, one state plus source plus detail out.</td></tr>
+
+        <tr class="bg-base-200"><td colspan="3" class="font-semibold text-xs uppercase tracking-wider opacity-70">Shared</td></tr>
+        <tr><td><b>agents</b></td><td>Adapters for each coding agent, fallback ordering, retries, session reuse, structured output.</td><td>Run a prompt with an optional schema; return output, text, usage, session.</td></tr>
+        <tr><td><b>config</b></td><td>Schema, defaults, merge precedence, validation, and the trust boundary.</td><td>Resolve the effective configuration for a run, or fail.</td></tr>
+        <tr><td><b>store</b></td><td>The embedded database, the schema, and its migrations.</td><td>Typed accessors. No caller writes SQL.</td></tr>
+        <tr><td><b>ipc</b></td><td>The local protocol, its methods, and its bounded event stream.</td><td>Request and response; subscribe to a stream.</td></tr>
+        <tr><td><b>redact</b></td><td>Credential removal from URLs, errors, and anything persisted.</td><td>Redact. Called at every persistence boundary.</td></tr>
+        <tr><td><b>ui</b></td><td>The terminal interface.</td><td>Attach to a run.</td></tr>
+        <tr><td><b>machine</b></td><td>The agent-facing command surface and its output format.</td><td>Structured output, stable exit codes.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3 class="text-xl font-semibold mb-3">Data model</h3>
+  <p class="mb-4 opacity-90">
+    The important part is not the field list; it is which records are authoritative and which are
+    history.
+  </p>
+  <div class="overflow-x-auto rounded-box border border-base-content/10 bg-base-100 mb-4">
+    <table class="table table-sm">
+      <thead><tr><th class="w-40">Record</th><th class="w-28">Kind</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td><b>repository</b></td><td>Authoritative</td><td>Working path, upstream and optional fork, default branch. URLs are stored with credentials removed; the credentialed URL is recovered from the gate at run time.</td></tr>
+        <tr><td><b>run</b></td><td>Authoritative</td><td>Branch, submitted head, base, current head, status, the commit a completed review approved, the push binding, pull request state, intent and its source, and the exact build that produced this run.</td></tr>
+        <tr><td><b>stage result</b></td><td>Authoritative</td><td>Per stage: status, findings, duration, log path, last activity, and the effective fix limit.</td></tr>
+        <tr><td><b>round</b></td><td>History</td><td>One row per stage execution. Findings, which findings were selected and by whom, the exact payload sent to the fixer, and the one-line summary. This is what the pull request narrative is generated from.</td></tr>
+        <tr><td><b>checkpoint</b></td><td>Authoritative</td><td>State, position, and any open decision. Written after every node.</td></tr>
+        <tr><td><b>task</b></td><td>Authoritative</td><td>Shape, project, mode, isolated copy path, session reference, linked run, linked pull request.</td></tr>
+        <tr><td><b>task state</b></td><td>Authoritative</td><td>The current state, resolved. Distinct from the event log, per P8.</td></tr>
+        <tr><td><b>task event</b></td><td>History</td><td>Append-only. Every append is a wake.</td></tr>
+        <tr><td><b>hold</b></td><td>Authoritative</td><td>A decision waiting on you, with a stable key. Idempotent to register. Closed only by an explicit resolution, never by the surrounding work finishing.</td></tr>
+        <tr><td><b>agent invocation</b></td><td>History</td><td>Purpose, agent, model, timing, failure category, token usage. Never prompts, outputs, diffs, or credentials.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div role="alert" class="alert alert-soft mb-8 items-start">
+    <div class="min-w-0">
+      <p class="font-semibold mb-1">Two schema rules worth fixing now</p>
+      <p class="text-sm opacity-90">
+        Schema changes are additive, and a column added later reads back as unknown for old rows,
+        never as a fabricated zero. A surprising result must always be traceable to the exact build
+        and configuration that produced it, so record both on every run.
+      </p>
+    </div>
+  </div>
+
+  <h3 class="text-xl font-semibold mb-3">On-disk layout</h3>
+  <p class="mb-4 opacity-90">Everything lives under one root, relocatable by environment variable. One root is one home.</p>
+  <div class="mockup-code text-xs mb-4 overflow-x-auto">
+<pre><code>&lt;home&gt;/
+  config.yaml            global configuration
+  state.db               the embedded database
+  lock                   exclusive lock held for the service lifetime
+  socket                 local endpoint for the command line and agents
+  repos/&lt;id&gt;.git         bare gate repositories, id from a hash of the working path
+  worktrees/&lt;repo&gt;/&lt;run&gt; disposable isolated copies, removed when a run ends
+  evidence/&lt;run&gt;         test evidence, deliberately outside the isolated copy
+  tasks/&lt;id&gt;/            per-task records: instructions, report, state, events
+  queue/                 the durable wake queue
+  logs/&lt;run&gt;/&lt;stage&gt;.log per-stage logs, the authoritative full output
+  logs/service.log       bounded lifecycle log with rotation</code></pre>
+  </div>
+  <ul class="list-disc pl-6 space-y-1.5 mb-8 opacity-90">
+    <li><b>Evidence is never inside the isolated copy.</b> Test artifacts must not become part of the change being validated.</li>
+    <li><b>The full log is the authority.</b> What appears in findings, streams, and prompts is a bounded projection with an explicit marker naming what was omitted and how to read the rest.</li>
+    <li><b>Log rotation truncates in place.</b> A service or child process holding an open descriptor keeps writing to the bounded file rather than to an orphaned inode.</li>
+    <li><b>Records precede directories.</b> Insert the run row before creating its directory, so a directory with no row is always safe to remove.</li>
+  </ul>
+
+  <h3 class="text-xl font-semibold mb-3">Two boundaries that are easy to get wrong</h3>
+  <div class="grid gap-4 md:grid-cols-2">
+    <div class="card card-border bg-base-200">
+      <div class="card-body">
+        <h4 class="card-title text-sm">Process lifetime</h4>
+        <p class="text-xs opacity-90">
+          Agent processes are scoped to the invocation that started them. On completion, failure, or
+          cancellation, terminate the whole process tree, escalating from a polite signal to a
+          forceful one after a grace period. A descendant that detaches from its process group
+          escapes that, so keep an identity-based sweep that matches processes by the isolated copy
+          their working directory resolves under, never by command line. It must never touch a copy
+          whose run is still active.
+        </p>
+      </div>
+    </div>
+    <div class="card card-border bg-base-200">
+      <div class="card-body">
+        <h4 class="card-title text-sm">Event delivery</h4>
+        <p class="text-xs opacity-90">
+          Streams are bounded, so overflow is a design decision rather than an accident. Classify
+          events as activity, state, or control. Only activity may be dropped. Publishing never
+          blocks the executor. Anything dropped collapses into one sticky gap marker that is
+          delivered ahead of queued payload. Every state event carries a monotonic revision, and
+          every subscription opens in the gap state so attaching always reconciles first.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ 9. SURFACES ============================ -->
+<section id="surfaces" class="prd-anchor mb-16">
+  <p class="prd-kicker mb-2">Section 9</p>
+  <h2 class="text-3xl font-bold tracking-tight mb-3">Surfaces</h2>
+  <p class="mb-6 opacity-80 max-w-3xl">
+    A person at a terminal and an agent driving programmatically are both first-class users. They
+    share the same decisions, the same options, and the same authority. Only the rendering differs.
+  </p>
+
+  <h3 class="text-xl font-semibold mb-3">Command line</h3>
+  <div class="overflow-x-auto rounded-box border border-base-content/10 bg-base-100 mb-8">
+    <table class="table table-sm table-zebra">
+      <thead><tr><th class="w-52">Command</th><th>Purpose</th></tr></thead>
+      <tbody>
+        <tr><td><code>assistant</code></td><td>Attach to this branch's active run. With no run, start one.</td></tr>
+        <tr><td><code>assistant init</code></td><td>Create or repair the gate for this repository.</td></tr>
+        <tr><td><code>assistant status</code></td><td>Repository, gate, service, active run, and local branch state.</td></tr>
+        <tr><td><code>assistant runs</code></td><td>Recent runs, newest first.</td></tr>
+        <tr><td><code>assistant rerun</code></td><td>Start a fresh run from the last known head, inheriting the recorded intent.</td></tr>
+        <tr><td><code>assistant sync</code></td><td>Reconcile your local branch with what the pipeline pushed, or recover work it holds. Prints the exact plan and requires confirmation.</td></tr>
+        <tr><td><code>assistant tasks</code></td><td>List fleet work with its resolved current state.</td></tr>
+        <tr><td><code>assistant watch</code></td><td>Fleet view: everything in flight, everything waiting on you.</td></tr>
+        <tr><td><code>assistant doctor</code></td><td>Check every dependency, and decisively report whether a run can start at all.</td></tr>
+        <tr><td><code>assistant service …</code></td><td>Start, stop, restart, status.</td></tr>
+        <tr><td><code>assistant eject</code></td><td>Remove the gate and its records.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div role="alert" class="alert alert-error alert-soft mb-8 items-start">
+    <div class="min-w-0">
+      <p class="font-semibold mb-1">Commands that can destroy work refuse by default</p>
+      <p class="text-sm opacity-90">
+        Stopping or restarting the service, and replacing the binary, all refuse while runs are
+        active. Each lists the affected runs and requires an explicit force flag; a general
+        yes-to-everything flag does not satisfy it. Every invocation, forced or not, records who
+        called it. A process descended from an active validation stage cannot use the force flag at
+        all, because a validating agent must never be able to stop the thing validating it.
+      </p>
+    </div>
+  </div>
+
+  <h3 class="text-xl font-semibold mb-3">Terminal interface</h3>
+  <p class="mb-4 opacity-90">
+    One screen that answers four questions in order of urgency. It adapts from a two-column layout
+    to a stacked one on narrow terminals.
+  </p>
+  <div class="grid gap-3 sm:grid-cols-2 mb-6">
+    <div class="p-4 rounded-box bg-base-200 border border-base-content/10">
+      <p class="font-medium text-sm mb-1">Where am I?</p>
+      <p class="text-xs opacity-80">All nine stages with status icons, durations on completed stages, and a fixed count on stages that fixed something.</p>
+    </div>
+    <div class="p-4 rounded-box bg-base-200 border border-base-content/10">
+      <p class="font-medium text-sm mb-1">Why did it stop?</p>
+      <p class="text-xs opacity-80">The findings list with a risk header, selection checkboxes, severity, location, and any note you attached.</p>
+    </div>
+    <div class="p-4 rounded-box bg-base-200 border border-base-content/10">
+      <p class="font-medium text-sm mb-1">What changed?</p>
+      <p class="text-xs opacity-80">The diff for the fix round, loaded on demand. If it cannot load, approval is disabled rather than offered against unknown content.</p>
+    </div>
+    <div class="p-4 rounded-box bg-base-200 border border-base-content/10">
+      <p class="font-medium text-sm mb-1">What is happening now?</p>
+      <p class="text-xs opacity-80">A live log tail, and while checks are running, the pull request state and a clear signal once checks are green.</p>
+    </div>
+  </div>
+  <p class="mb-8 opacity-90">
+    Design constraints: use only the terminal's own palette so it follows the user's theme; keep a
+    fixed-width gutter so content never shifts as the selection moves; and reflect run state
+    honestly. Working, waiting on a person, and dead must be visually distinct, because a stall that
+    looks alive is worse than an error.
+  </p>
+
+  <h3 class="text-xl font-semibold mb-3">Machine interface</h3>
+  <p class="mb-4 opacity-90">
+    An agent drives the same gate through a structured command family. The contract has five parts.
+  </p>
+  <div class="overflow-x-auto rounded-box border border-base-content/10 bg-base-100 mb-6">
+    <table class="table table-sm table-zebra">
+      <thead><tr><th class="w-40">Element</th><th>Contract</th></tr></thead>
+      <tbody>
+        <tr><td><b>Blocking calls</b></td><td>Starting or responding blocks until the next decision point or a terminal outcome. A long call is working, not stalled, and a run never advances past a decision on its own.</td></tr>
+        <tr><td><b>Structured output</b></td><td>Machine-readable on standard output, progress on standard error. Control characters are escaped visibly rather than emitted raw.</td></tr>
+        <tr><td><b>Stable exit codes</b></td><td>Success and normal decision points; operational failure; incorrect usage. Three meanings, never overloaded.</td></tr>
+        <tr><td><b>Outcomes</b></td><td><code>checks-passed</code> means validated and green but not merged, and it means stop driving and ask the person. <code>passed</code> means merged or closed. Failure and cancellation are terminal and require a next action, never silence.</td></tr>
+        <tr><td><b>Relay verbatim</b></td><td>A finding that needs a decision is relayed with its full text, unsummarized and unjudged, unless standing consent to resolve unattended was given.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div role="alert" class="alert alert-soft mb-6 items-start">
+    <div class="min-w-0">
+      <p class="font-semibold mb-1">Rich intent is required, not optional</p>
+      <p class="text-sm opacity-90">
+        A driving agent supplies your goal in your terms, plus the decisions, tradeoffs, and
+        constraints behind it, and the approaches you ruled out. A one-line summary of the diff makes
+        the reviewer flag choices you already made deliberately, which is the fastest way to make the
+        gate feel like an obstacle.
+      </p>
+    </div>
+  </div>
+  <p class="mb-4 opacity-90">
+    An agent already running inside a validation stage is contained: it may inspect, fix, and return
+    its own stage, and nothing else. Attempts to start, stop, respond to, or push around a pipeline
+    return a specific containment error. An environment marker is diagnostic evidence only, never
+    authorization; authority comes from authenticated process ancestry.
+  </p>
+</section>
+
+<!-- ============================ 10. CONFIGURATION ============================ -->
+<section id="config" class="prd-anchor mb-16">
+  <p class="prd-kicker mb-2">Section 10</p>
+  <h2 class="text-3xl font-bold tracking-tight mb-3">Configuration</h2>
+  <p class="mb-6 opacity-80 max-w-3xl">
+    Two layers. Global settings live in your home; per-repository settings live in a file at the
+    repository root. The repository layer overrides the global one field by field.
+  </p>
+
+  <h3 class="text-xl font-semibold mb-3">The trust boundary</h3>
+  <p class="mb-4 opacity-90">
+    This is P7 made concrete, and it is the security-critical part of the design. Configuration
+    fields fall into three classes by where they are read from.
+  </p>
+  <div class="prd-mermaid mb-4">
+    <pre class="mermaid">
+flowchart TB
+  push["The pushed branch<br />untrusted input"]
+  trusted["Your default branch<br />at a freshly fetched commit"]
+
+  push -->|"read from here"| A["Ignore patterns<br />Fix limits<br />Commit message template<br />Intent settings"]
+  trusted -->|"read from here, always"| B["Documentation instructions<br />Path-scoped review rules<br />Instruction suppression<br />No-CI declaration<br />Rerun budget"]
+  trusted -->|"read from here, unless you opt out"| C["Test, lint, and format commands<br />Agent selection"]
+
+  C -.->|"opt-in, itself trusted-only"| push
+  trusted -->|"unreadable or unparseable"| stop["Abort before launching anything"]
+    </pre>
+  </div>
+  <div class="grid gap-4 md:grid-cols-3 mb-6">
+    <div class="card card-border bg-base-200">
+      <div class="card-body">
+        <h4 class="card-title text-sm">Read from the pushed branch</h4>
+        <p class="text-xs opacity-90">Fields that cannot execute anything or weaken a check. A contributor may set these freely.</p>
+      </div>
+    </div>
+    <div class="card card-border bg-base-200 border-warning/40">
+      <div class="card-body">
+        <h4 class="card-title text-sm">Trusted unless you opt out</h4>
+        <p class="text-xs opacity-90">Commands and agent selection. These run shell and choose which process starts with your credentials. The opt-out exists for a single-developer repository and is itself readable only from the trusted copy, so a branch cannot enable it for itself.</p>
+      </div>
+    </div>
+    <div class="card card-border bg-base-200 border-error/40">
+      <div class="card-body">
+        <h4 class="card-title text-sm">Always trusted-only</h4>
+        <p class="text-xs opacity-90">Anything that shapes what review or documentation demands, or that declares a check unnecessary. A contributor must never be able to suppress a maintainer's review rule from their own branch.</p>
+      </div>
+    </div>
+  </div>
+  <div role="alert" class="alert alert-error alert-soft mb-8 items-start">
+    <div class="min-w-0">
+      <p class="font-semibold mb-1">Unreadable trusted configuration aborts the run</p>
+      <p class="text-sm opacity-90">
+        If the trusted commit cannot be fetched, or its configuration file cannot be read and parsed,
+        the run stops before launching any agent. It does not guess at defaults. A readable tree with
+        no configuration file is valid and uses defaults; that is a different case and must be
+        distinguished.
+      </p>
+    </div>
+  </div>
+
+  <h3 class="text-xl font-semibold mb-3">Schema</h3>
+  <div class="overflow-x-auto rounded-box border border-base-content/10 bg-base-100 mb-6">
+    <table class="table table-sm table-zebra">
+      <thead><tr><th class="w-52">Key</th><th class="w-28">Default</th><th>Meaning</th></tr></thead>
+      <tbody>
+        <tr><td><code>agent</code></td><td><code>auto</code></td><td>One agent or an ordered fallback list. Resolved against what is actually runnable at run start. If nothing resolves, the run fails before its first stage rather than reporting command-only validation as a pass.</td></tr>
+        <tr><td><code>commands.test</code></td><td>empty</td><td>A targeted check for this change, not a full suite. Deliberately empty by default.</td></tr>
+        <tr><td><code>commands.lint</code></td><td>empty</td><td>Static analysis. When empty, the document stage performs a combined pass and routes its lint findings to the lint stage.</td></tr>
+        <tr><td><code>commands.format</code></td><td>empty</td><td>Run immediately before pushing.</td></tr>
+        <tr><td><code>fix_rounds.review</code></td><td><code class="prd-num">1</code></td><td>One round, and only over <code>fix</code> findings. An <code>ask</code> finding is never eligible, so the presence of one parks the stage regardless of this value. Setting it to zero sends every review finding to you.</td></tr>
+        <tr><td><code>fix_rounds.{rebase,test,lint,checks}</code></td><td><code class="prd-num">3</code></td><td>Per-stage attempt limits.</td></tr>
+        <tr><td><code>run_budget</code></td><td><code class="prd-num">40</code></td><td>Total node executions per run. The second of the three loop bounds.</td></tr>
+        <tr><td><code>ignore_patterns</code></td><td>empty</td><td>Paths excluded from review and documentation checks.</td></tr>
+        <tr><td><code>review.path_rules</code></td><td>empty</td><td>Extra review guidance scoped to paths. Applied in declared order, each labelled with its own scope and the files it matched, so a scoped rule never reads as repository-wide.</td></tr>
+        <tr><td><code>document.ownership</code></td><td>empty</td><td>Which document owns which subject. Without this the document stage guesses, and guessing produces documentation churn on most changes.</td></tr>
+        <tr><td><code>suppress_project_instructions</code></td><td><code>false</code></td><td>For a repository whose own instructions would give a validating agent an operator identity. If any resolved agent lacks a verified suppression mechanism, the run fails before launching it.</td></tr>
+        <tr><td><code>no_ci</code></td><td><code>false</code></td><td>A positive declaration that this repository has no checks. Only this makes an empty check list count as green.</td></tr>
+        <tr><td><code>checks_timeout</code></td><td><code>168h</code></td><td>Idle timeout, re-armed whenever the base branch advances. On elapse the run holds rather than ending.</td></tr>
+        <tr><td><code>session_reuse</code></td><td><code>true</code></td><td>One durable fixer session per run. Review turns are always fresh regardless, per P4.</td></tr>
+        <tr><td><code>commit.fix_message</code></td><td>template</td><td>Subject line for fix commits. The template, the agent's summary, and the rendered result are each validated for length and for characters that could disguise content before anything is staged.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3 class="text-xl font-semibold mb-3">Validation rules</h3>
+  <ul class="list-disc pl-6 space-y-1.5 mb-4 opacity-90">
+    <li>Invalid configuration fails at parse time and names the offending key and value, including on a pushed branch whose fields are otherwise ignored. A broken rule should surface before it merges.</li>
+    <li>Path patterns follow one documented matcher, and a wildcard never crosses a path separator on any platform.</li>
+    <li>Bounded lists and prompt sections have explicit limits, measured on what is actually assembled rather than on the raw source.</li>
+    <li>Reserved agent flags that would defeat managed behavior are rejected at load rather than silently ignored.</li>
+  </ul>
+</section>
+
+<!-- ============================ 11. RECOVERY ============================ -->
+<section id="recovery" class="prd-anchor mb-16">
+  <p class="prd-kicker mb-2">Section 11</p>
+  <h2 class="text-3xl font-bold tracking-tight mb-3">Failure and recovery</h2>
+  <p class="mb-6 opacity-80 max-w-3xl">
+    Failure is a first-class outcome: loud, attributed, explained, and followed by a next action. A
+    restart should be a non-event.
+  </p>
+
+  <h3 class="text-xl font-semibold mb-3">Service restart</h3>
+  <p class="mb-3 opacity-90">On startup, after taking the exclusive lock and before serving anything:</p>
+  <ol class="list-decimal pl-6 space-y-1.5 mb-6 opacity-90">
+    <li>Complete runs whose recorded pull request is already merged or closed.</li>
+    <li>Resume only fully recorded holds whose isolated copy and stage history both validate. An ambiguous or partially recorded active run fails closed rather than resuming on a guess.</li>
+    <li>Before resuming a hold that waits on external checks, re-read the pull request. Merged or closed completes the stale hold; open, unknown, or unreachable stays held.</li>
+    <li>Mark every other stale active run failed, with the reason recorded.</li>
+    <li>Reap orphaned agent processes, remove isolated copies no run owns, and never touch one whose run is still active.</li>
+    <li>Clear any waiting-on-a-person marker so a recovered failed run is not displayed as still waiting.</li>
+  </ol>
+
+  <h3 class="text-xl font-semibold mb-3">Fleet reconciliation</h3>
+  <p class="mb-4 opacity-90">
+    Fleet state lives on disk and in the live session provider, never in conversation memory. At
+    session start the coordinator does a cheap presence check per task, then reconciles only the
+    tasks recorded in this home. It never sweeps a shared namespace or claims another home's work.
+  </p>
+  <div class="overflow-x-auto rounded-box border border-base-content/10 bg-base-100 mb-8">
+    <table class="table table-sm table-zebra">
+      <thead><tr><th class="w-52">Situation</th><th>Response</th></tr></thead>
+      <tbody>
+        <tr><td>Terminal gone, work not landed</td><td>Preserve the isolated copy. Prove no live process owns it, then relaunch in that same copy with the same instructions plus a note about what already happened. Never a fresh generic launch while the copy is unaccounted for.</td></tr>
+        <tr><td>Terminal alive, screen unchanged</td><td>Only a stall if nothing positively proves progress. A worker thinking for a long time is not stuck.</td></tr>
+        <tr><td>Repeated stall on the same unchanged screen</td><td>Escalates. After enough repetitions it demands a deeper inspection rather than another surface look.</td></tr>
+        <tr><td>Ambiguous liveness</td><td>Leave it alone. Relaunching on an ambiguous reading risks two supervisors for one task, which is worse than one late check.</td></tr>
+        <tr><td>Queued wakes present at start</td><td>Drain before doing anything else, including before reading further.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3 class="text-xl font-semibold mb-3">Custody of your branch</h3>
+  <p class="mb-4 opacity-90">
+    Because the pipeline commits fixes in a copy, your local branch can fall behind or diverge from
+    what the pipeline holds. One service owns every mutation of your branch, and it classifies before
+    it acts.
+  </p>
+  <div class="overflow-x-auto rounded-box border border-base-content/10 bg-base-100 mb-4">
+    <table class="table table-sm table-zebra">
+      <thead><tr><th class="w-56">Classification</th><th>Meaning and next action</th></tr></thead>
+      <tbody>
+        <tr><td><b>Pipeline holds it</b></td><td>A run is active. Wait for it.</td></tr>
+        <tr><td><b>Recoverable</b></td><td>A terminated run moved the head. Recovery brings that work back to you.</td></tr>
+        <tr><td><b>Yours already</b></td><td>Termination positively verified the head never moved. Nothing to do, and recovery is a no-op.</td></tr>
+        <tr><td><b>Behind</b></td><td>Fast-forward a clean checked-out branch to a freshly verified pushed commit.</td></tr>
+        <tr><td><b>Diverged but equivalent</b></td><td>Contents match. Anchor the current head under a recovery reference first, then move.</td></tr>
+        <tr><td><b>Genuinely diverged</b></td><td>Blocked. Nothing changes and you are told why.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="grid gap-4 md:grid-cols-2 mb-8">
+    <div class="card card-border bg-base-200 border-error/30">
+      <div class="card-body">
+        <h4 class="card-title text-sm">Never</h4>
+        <p class="text-xs opacity-90">Stash, merge, rebase, force, switch branches, delete a branch, or touch a remote. Reading status never fetches and never mutates.</p>
+      </div>
+    </div>
+    <div class="card card-border bg-base-200">
+      <div class="card-body">
+        <h4 class="card-title text-sm">Adopting a diverged head requires proof</h4>
+        <p class="text-xs opacity-90">An executable three-way merge whose result matches the preserved tree, anchored on the merge base. Comparing patch identity is not sufficient: it discards hunk locations and whitespace, so it cannot tell a genuine replay from a similar edit somewhere else. Anything undecidable escalates.</p>
+      </div>
+    </div>
+  </div>
+
+  <h3 class="text-xl font-semibold mb-3">Recovering an investigation</h3>
+  <p class="opacity-90">
+    An investigation task's isolated copy is scratch, but its report is not. The report survives
+    cleanup, and any decision the investigation surfaced must be registered as a durable hold before
+    the task can be treated as complete. Cleanup verifies that registration and refuses without it.
+    A hold is not closed because the investigation finished, the report was filed, or the task was
+    cleaned up. It is closed when you answer it.
+  </p>
+</section>
+
+<!-- ============================ 12. MVP ============================ -->
+<section id="mvp" class="prd-anchor mb-16">
+  <p class="prd-kicker mb-2">Section 12</p>
+  <h2 class="text-3xl font-bold tracking-tight mb-3">The MVP cut</h2>
+  <p class="mb-6 opacity-80 max-w-3xl">
+    The source projects have a combined surface area of roughly a hundred commands, five session
+    providers, seven agent adapters, and four delivery paths. Most of that breadth is real, earned
+    response to real problems, and almost none of it is needed to find out whether the core idea
+    works for you.
+  </p>
+
+  <div class="grid gap-4 lg:grid-cols-3 mb-8">
+    <div class="card card-border bg-base-200 border-success/40">
+      <div class="card-body">
+        <div class="badge badge-success badge-sm mb-2">Phase 1</div>
+        <h3 class="card-title text-base mb-1">The irreducible core</h3>
+        <p class="text-xs opacity-70 mb-3">Everything here is load-bearing. Removing any one of them removes a promise.</p>
+        <ul class="text-sm opacity-90 list-disc pl-5 space-y-1.5">
+          <li>The gate: named remote, bare repository, admission and notification, background service.</li>
+          <li>All nine stages. Cutting one breaks P2.</li>
+          <li>Findings with three actions and the fail-closed default.</li>
+          <li>The fix loop with all three bounds.</li>
+          <li>Holds, the four actions, and durable resume.</li>
+          <li>The graph layer with halt points and checkpoints.</li>
+          <li>The data-loss rules in full. This is not phaseable.</li>
+          <li>The configuration trust boundary in full. Also not phaseable.</li>
+          <li><b>Claude Code</b> as the only agent adapter, behind the full adapter interface. It has a native output schema and resumable sessions, so the structured-output and session-reuse paths are exercised properly rather than stubbed.</li>
+          <li><b>One</b> forge adapter.</li>
+          <li>Fleet: <b>both task shapes</b>, dispatch, isolation assertion, the authoritative state record, cleanup proofs, and promotion from investigation to delivery.</li>
+          <li>Decision holds raised by an investigation, and the cleanup check that refuses without them.</li>
+          <li>The watcher, the durable queue, and the stop guard.</li>
+          <li>The terminal interface and the machine interface.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="card card-border bg-base-200 border-warning/40">
+      <div class="card-body">
+        <div class="badge badge-warning badge-sm mb-2">Phase 2 and later</div>
+        <h3 class="card-title text-base mb-1">Deferred, with reasons</h3>
+        <ul class="text-sm opacity-90 space-y-2.5">
+          <li><b>Agent adapters beyond Claude Code.</b> Each one is a week of quirks, and agents without a native output schema need a whole parsing path. Build the interface now, the adapters when you need them.</li>
+          <li><b>Extra forge adapters.</b> Same reasoning. Do not promise breadth ahead of demand.</li>
+          <li><b>Extra session providers.</b> One reference provider proves the abstraction. Four more prove nothing new.</li>
+          <li><b>Delegate coordinators.</b> The most complex feature in either source project. It only earns its cost at a fleet size you have not reached.</li>
+          <li><b>Direct and local delivery modes.</b> The gate is the thesis. Adding modes that bypass it before it is proven undermines the experiment.</li>
+          <li><b>Transcript-based intent inference.</b> Supply intent explicitly first. Inference is a convenience over a mechanism that must already work.</li>
+          <li><b>Away mode.</b> Requires the supervision loop to be trustworthy first.</li>
+          <li><b>Evidence publishing to a branch.</b> Store evidence locally and link it. Publishing is an optimization.</li>
+          <li><b>Review evaluation corpus.</b> A quality tool for when review quality is your bottleneck.</li>
+          <li><b>Fan-out and fan-in in the graph.</b> Nothing in phase one needs parallel nodes. Keep the checker rule; skip the feature.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="card card-border bg-base-200 border-error/40">
+      <div class="card-body">
+        <div class="badge badge-error badge-sm mb-2">Never</div>
+        <h3 class="card-title text-base mb-1">Permanent non-goals</h3>
+        <ul class="text-sm opacity-90 space-y-2.5">
+          <li><b>Configurable stage order.</b> It is the only thing making a pass comparable across repositories.</li>
+          <li><b>Standing configuration that skips a stage.</b> Per-run skips by a person, yes. A rule that skips on your behalf, never.</li>
+          <li><b>Adding stages.</b> A repository strengthens a stage; it does not add one.</li>
+          <li><b>Risk-based automatic skipping.</b> A classifier's guess must never weaken what a pass means.</li>
+          <li><b>A hosted service.</b> Your credentials, your machine, your initiative.</li>
+          <li><b>Owning merge policy.</b> That belongs to your forge.</li>
+          <li><b>Being your CI.</b> The gate is the inner check; CI stays the shared outer one.</li>
+          <li><b>Silent degradation.</b> A gate that cannot run completely refuses and explains. It never quietly becomes a weaker check.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div role="alert" class="alert alert-info alert-soft items-start">
+    <div class="min-w-0">
+      <p class="font-semibold mb-1">The one thing to build first</p>
+      <p class="text-sm opacity-90">
+        Before the graph layer, before the fleet, build the authoritative state record and its
+        resolver. It needs no new infrastructure, it is the smallest change in this document, and it
+        removes an entire class of wrong behavior: acting on a stale event because the tail of a log
+        was mistaken for the truth. Everything else in the orchestrator reads from it.
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ 13. VERIFICATION ============================ -->
+<section id="verification" class="prd-anchor mb-16">
+  <p class="prd-kicker mb-2">Section 13</p>
+  <h2 class="text-3xl font-bold tracking-tight mb-3">Verification</h2>
+  <p class="mb-6 opacity-80 max-w-3xl">
+    Each principle implies a test. Write these as the principles are implemented, not afterwards.
+    Several of them are the only reason the corresponding rule stays true a year later.
+  </p>
+
+  <div class="overflow-x-auto rounded-box border border-base-content/10 bg-base-100 mb-8">
+    <table class="table table-sm table-zebra">
+      <thead><tr><th class="w-16">Rule</th><th>The test</th></tr></thead>
+      <tbody>
+        <tr><td><b>P1</b></td><td>After initialization, an ordinary push to <code>origin</code> behaves exactly as before: same target, same refs, no run started.</td></tr>
+        <tr><td><b>P2</b></td><td>No configuration path can reorder, remove, or add a stage. A per-run skip works; a configuration file attempting a standing skip is rejected at parse time.</td></tr>
+        <tr><td><b>P3</b></td><td>Feed the parser a finding with a missing action, an empty action, and an unrecognized action. All three become <code>ask</code>. None is eligible for automatic fixing.</td></tr>
+        <tr><td><b>P4</b></td><td>Assert that every review invocation is session-free and that only fixer invocations carry a session. This is a structural assertion over invocation records, not a behavioral one.</td></tr>
+        <tr><td><b>P5</b></td><td>A run whose only changes came from a fix round still produces a full review of those changes, with the same finding schema.</td></tr>
+        <tr><td rowspan="3"><b>P6</b></td><td>A remote that advanced out of band with commits the run did not incorporate causes the push to refuse, not to force.</td></tr>
+        <tr><td>The lease anchor equals the head the run last observed, never a tip read immediately before pushing. Assert on the anchor value, since the wrong version always passes behaviorally.</td></tr>
+        <tr><td>Kill the service mid-run at each stage boundary. Every time, the work is recoverable and the classification is correct.</td></tr>
+        <tr><td rowspan="2"><b>P7</b></td><td>A branch that sets a command, an agent, or a review rule in its own configuration has no effect on what runs. The trusted copy governs.</td></tr>
+        <tr><td>An unreadable or unparseable trusted configuration aborts before any agent starts. A readable tree with no configuration file proceeds with defaults. These two cases are distinguished.</td></tr>
+        <tr><td><b>P8</b></td><td>Given an event log whose last line says a decision is open, and a validation run that has moved past it, the resolver reports the run's state and marks the event superseded. Assert the resolver never reads only the tail.</td></tr>
+        <tr><td><b>P9</b></td><td>A matrix over the wake classifier: for every combination of wake kind and evidence, assert absorb or surface. Include the case where evidence is absent and assert it surfaces.</td></tr>
+        <tr><td><b>P10</b></td><td>With work in flight and the watcher killed, the coordinator cannot end a turn silently. Also assert that a stale liveness beacon blocks even when the process is alive, and that a fresh beacon with a missing lock also blocks.</td></tr>
+        <tr><td><b>P11</b></td><td>Launching with a resolved path equal to the primary checkout refuses. Launching into a path that is not an isolated copy refuses.</td></tr>
+        <tr><td><b>P12</b></td><td>Cleanup with committed, unpushed work refuses. Cleanup after a squash merge and branch deletion succeeds through the content check. A provider lookup failure that leaves the question open refuses.</td></tr>
+        <tr><td><b>P13</b></td><td>A static test over every user-facing string: assert the required wording is present and assert the internal vocabulary is absent. Both directions, or it drifts.</td></tr>
+        <tr><td><b>P14</b></td><td>A static test asserting each contract appears in its owner and does not appear anywhere else. The negative half is the one that actually holds the line.</td></tr>
+        <tr><td><b>Graph</b></td><td>A topology with an unbounded back edge fails to build. Two nodes writing one key with no declared merge rule fails to build. A checkpoint restore re-emits the open decision.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3 class="text-xl font-semibold mb-3">End-to-end</h3>
+  <p class="mb-3 opacity-90">
+    One journey test running the real binary against a deterministic stand-in agent, covering the
+    whole path: push, every stage, a hold, a fix round, a re-review, push, pull request, checks. Run
+    it on every supported platform. Process spawning behaves differently enough across platforms that
+    only an end-to-end run finds those differences.
+  </p>
+  <p class="opacity-90">
+    Then use the tool on itself. Every change to Assistant goes through Assistant's own gate. That is
+    the first calibration loop, and it is how a field incident becomes a regression test before it
+    becomes a memory.
+  </p>
+</section>
+
+<!-- ============================ 14. DECISIONS ============================ -->
+<section id="decisions" class="prd-anchor mb-16">
+  <p class="prd-kicker mb-2">Section 14</p>
+  <h2 class="text-3xl font-bold tracking-tight mb-3">Decisions recorded</h2>
+  <p class="mb-6 opacity-80 max-w-3xl">
+    Five decisions were open when this document was first drafted. All five are answered, and the
+    rest of the document already reflects them. They are kept here because two of them changed the
+    shape of phase one and a later reader will want to know why.
+  </p>
+
+  <div class="overflow-x-auto rounded-box border border-base-content/10 bg-base-100 mb-8">
+    <table class="table table-zebra">
+      <thead>
+        <tr><th class="w-8">#</th><th class="w-64">Decision</th><th>What changed as a result</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="prd-num">1</td>
+          <td><b>Claude Code</b> is the phase-one agent adapter.</td>
+          <td>It has a native output schema and resumable sessions, so the structured-output path and the fixer-session path are both real in phase one rather than stubbed. Everything still sits behind the full adapter interface, so the second adapter is additive.</td>
+        </tr>
+        <tr>
+          <td class="prd-num">2</td>
+          <td><b>Both task shapes</b> ship in phase one.</td>
+          <td>Overrides the draft, which deferred investigation tasks. Section 12 now includes promotion and the decision holds an investigation raises. The cost is a second lifecycle from the start; the gain is that dispatch, isolation, supervision, and cleanup all get exercised on work that carries no delivery risk.</td>
+        </tr>
+        <tr>
+          <td class="prd-num">3</td>
+          <td>The <b>graph layer lands in phase one</b>.</td>
+          <td>As drafted. Resume, progress display, and hold semantics are correct from the first version instead of being retrofitted onto a sequence that already made assumptions about them.</td>
+        </tr>
+        <tr>
+          <td class="prd-num">4</td>
+          <td>The coordinator is a <b>hybrid</b>: an agent for conversation and judgment, calling a program that owns every state change.</td>
+          <td>The largest architectural consequence. Section 8 now opens with the split, the ownership lists, and the three rules that stop it degrading into instructions. The test for which side owns a behavior: if getting it wrong loses work or weakens a pass, it belongs to the program.</td>
+        </tr>
+        <tr>
+          <td class="prd-num">5</td>
+          <td>Review gets <b>one automatic fix round</b>, over <code>fix</code> findings only.</td>
+          <td>Overrides the draft default of zero. Section 5 carries the two conditions that make the round safe: an <code>ask</code> finding never enters it, and the re-review runs in a fresh session treating the fix as author code. Without both, this setting reproduces the exact failure P4 exists to prevent.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <h3 class="text-xl font-semibold mb-3">What to settle next</h3>
+  <p class="mb-4 opacity-90">
+    Nothing here blocks starting. These are the questions the first working version will answer
+    better than any amount of further discussion.
+  </p>
+  <ul class="list-disc pl-6 space-y-2 opacity-90">
+    <li><b>Where the hybrid line actually falls.</b> Section 8 draws it at state changes. The first
+      week of use will find behaviors that are awkward on the side they were assigned. Move them
+      deliberately, and keep the rule that decides.</li>
+    <li><b>Whether one automatic review round is enough, or too much.</b> Decision 5 is the setting
+      most likely to need tuning once you see real findings. Watch how often the round produces a
+      change the re-review then objects to; a high rate means the round is not paying for itself.</li>
+    <li><b>How much investigation work you actually dispatch.</b> If promotion turns out to be the
+      common path, the two shapes may be better modeled as one shape with a delivery flag.</li>
+    <li><b>The second agent adapter.</b> Not which one, but when. The signal is the first time the
+      single adapter's availability blocks a run you needed.</li>
+  </ul>
+</section>
+
+<footer class="border-t border-base-content/10 pt-8 mt-4 text-sm opacity-60">
+  <p class="mb-2">
+    Assistant, product requirements, version 0.1. Written from a behavioral reading of two source
+    projects, with no source code carried across.
+  </p>
+  <p>
+    Claims about the source systems were verified against their own source and reference
+    documentation rather than their marketing pages. Section 7 draws on a survey of graph
+    orchestration and durable execution approaches current to 2026.
+  </p>
+</footer>
+
+</main>
+
+<script type="module">
+  import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11.15.0/dist/mermaid.esm.min.mjs";
+
+  const darkQuery = window.matchMedia("(prefers-color-scheme: dark)");
+  const paint = document.createElement("canvas").getContext("2d");
+  function toRgba(color) {
+    paint.clearRect(0, 0, 1, 1);
+    paint.fillStyle = "#000";
+    paint.fillStyle = color;
+    paint.fillRect(0, 0, 1, 1);
+    return paint.getImageData(0, 0, 1, 1).data;
+  }
+  function compositeRgba(foreground, background) {
+    const fa = foreground[3] / 255, ba = background[3] / 255;
+    const alpha = fa + ba * (1 - fa);
+    if (alpha === 0) return [0, 0, 0, 0];
+    return [
+      (foreground[0] * fa + background[0] * ba * (1 - fa)) / alpha,
+      (foreground[1] * fa + background[1] * ba * (1 - fa)) / alpha,
+      (foreground[2] * fa + background[2] * ba * (1 - fa)) / alpha,
+      alpha * 255,
+    ];
+  }
+  function pageIsDark() {
+    const root = document.documentElement;
+    const rootBg = toRgba(getComputedStyle(root).backgroundColor);
+    const bodyBg = document.body ? toRgba(getComputedStyle(document.body).backgroundColor) : [0, 0, 0, 0];
+    const [r, g, b, a] = compositeRgba(bodyBg, rootBg);
+    if (a > 0) return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255 < 0.5;
+    const cs = getComputedStyle(root).colorScheme;
+    if (cs.includes("dark") && !cs.includes("light")) return true;
+    if (cs.includes("light") && !cs.includes("dark")) return false;
+    return darkQuery.matches;
+  }
+
+  const diagrams = [...document.querySelectorAll(".mermaid")].map((el) => ({ el, src: el.textContent }));
+  let applied, rendering = false, queued = false;
+  function queueRender() { queued = true; if (rendering) return; void render(); }
+  async function render() {
+    rendering = true;
+    try {
+      while (queued) {
+        queued = false;
+        const theme = pageIsDark() ? "dark" : "default";
+        if (theme === applied) continue;
+        mermaid.initialize({ startOnLoad: false, theme, securityLevel: "strict" });
+        for (const { el, src } of diagrams) { el.removeAttribute("data-processed"); el.textContent = src; }
+        try { await mermaid.run({ nodes: diagrams.map((d) => d.el) }); }
+        catch (error) { console.error("Mermaid diagram render failed:", error); return; }
+        applied = theme;
+      }
+    } finally { rendering = false; if (queued) queueRender(); }
+  }
+  if (document.readyState === "complete") queueRender();
+  else window.addEventListener("load", queueRender, { once: true });
+  const themeObserver = new MutationObserver(queueRender);
+  for (const el of [document.documentElement, document.body]) {
+    if (!el) continue;
+    themeObserver.observe(el, { attributes: true, attributeFilter: ["data-theme", "class", "style"] });
+  }
+  document.addEventListener("change", queueRender, true);
+  document.addEventListener("transitionend", ({ propertyName }) => {
+    if (propertyName === "background-color") queueRender();
+  }, true);
+  darkQuery.addEventListener("change", queueRender);
+</script>
+
+</body>
+</html>
