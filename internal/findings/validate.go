@@ -157,6 +157,14 @@ var (
 	// that decodes into a report at all. The output is quoted in the wrapping
 	// error so the failure can be diagnosed from the refusal alone.
 	ErrNoReport = errors.New("findings: agent output holds no report object")
+	// ErrUnreadableReport is returned when agent output holds an object that is
+	// a report by its keys, carrying "summary", "findings", or "risk", but
+	// whose shape this package cannot decode, such as a findings field that is
+	// not a list. The decoder's own error is wrapped, so the refusal names the
+	// field that could not be read. It is a different fact from ErrNoReport: a
+	// report was found rather than missing, so no earlier object in the output
+	// is read in its place.
+	ErrUnreadableReport = errors.New("findings: agent output holds a report this package cannot read")
 	// ErrRawTooLarge is returned when agent output exceeds MaxRawBytes.
 	// Scanning it is bounded work, and a report that large is not a report.
 	ErrRawTooLarge = errors.New("findings: agent output is larger than the parser accepts")

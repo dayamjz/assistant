@@ -29,33 +29,45 @@ var reportFields = [...]string{"summary", "findings", "risk"}
 // string literals, so a brace or a quote inside a string cannot open or close a
 // span. At depth zero, outside every span, a quote in prose is deliberately not
 // tracked, so prose holding one unmatched brace can still absorb the object
-// into a span that does not decode. That residual gap yields a refusal and
-// never a different report; objectSpans states it in full.
+// into a span that is not valid JSON.
 //
 // Candidates are tried from the last in the text backwards, because an agent
 // asked for a report ends with it, and prose before it may quote an example.
 // Each candidate is resolved by exactly one of these rules:
 //
-//   - A span that is not a valid JSON object, or that does not decode into a
-//     Report, is skipped and the scan continues with the candidate before it.
-//     Fields this package does not recognize are ignored rather than refused,
-//     so a stage that added a field of its own to its prompt does not lose an
-//     otherwise valid set of findings.
+//   - A span that is not a valid JSON object is skipped, and the scan continues
+//     with the candidate before it. No key can be read out of it, so nothing
+//     tells it apart from prose whose braces happened to balance.
+//   - A span that is a valid JSON object, carries at least one of the keys
+//     "summary", "findings", or "risk", and does not decode into a Report is
+//     the report the agent meant to write in a shape this package cannot read,
+//     such as a findings field that is not a list. The error wraps
+//     ErrUnreadableReport and no earlier candidate is tried.
 //   - A span that decodes and validates is returned, normalized. This is the
-//     only path that returns a report.
-//   - A span that decodes, fails validation, and carries at least one of the
-//     keys "summary", "findings", or "risk" is the report the agent meant to
-//     write, so its *ValidationError is returned and no earlier candidate is
-//     tried. Presence of the key is what counts, not its value: an empty
-//     summary is a report with a defect, not an object that is not a report.
+//     only path that returns a report. Fields this package does not recognize
+//     are ignored rather than refused, so a stage that added a field of its own
+//     to its prompt does not lose an otherwise valid set of findings; an
+//     unrecognized field never fails the decode, so it never reaches the rule
+//     above either.
+//   - A span that decodes, fails validation, and carries at least one of those
+//     keys is the report the agent meant to write, so its *ValidationError is
+//     returned and no earlier candidate is tried. Presence of the key is what
+//     counts, not its value: an empty summary is a report with a defect, not an
+//     object that is not a report.
 //   - A span that decodes, fails validation, and carries none of those keys is
 //     not a report at all, so the scan continues with the candidate before it.
 //     Its refusal is kept only in case no candidate turns out to be a report.
 //
-// It refuses rather than guesses in every other case. If no candidate decodes,
-// the error wraps ErrNoReport. If candidates decoded but none was a report and
-// none validated, the error is the *ValidationError from the last candidate in
-// the text that decoded.
+// Telling a report apart from anything else the agent printed is therefore done
+// by its keys, and that is best effort with one limit worth stating. A span
+// that is not valid JSON exposes no keys, so a report mangled badly enough to
+// break JSON syntax cannot be told apart from prose and is skipped like prose.
+// When such a report follows an object that does validate, such as an example
+// quoted in the prose, that earlier object is what ParseReport returns.
+//
+// If no candidate decodes, the error wraps ErrNoReport. If candidates decoded
+// but none was a report and none validated, the error is the *ValidationError
+// from the last candidate in the text that decoded.
 func ParseReport(raw string) (Report, error) {
 	if len(raw) > MaxRawBytes {
 		return Report{}, fmt.Errorf("%w: %d bytes, limit %d", ErrRawTooLarge, len(raw), MaxRawBytes)
@@ -70,6 +82,9 @@ func ParseReport(raw string) (Report, error) {
 		}
 		var report Report
 		if err := json.Unmarshal(object, &report); err != nil {
+			if carriesReportField(fields) {
+				return Report{}, fmt.Errorf("%w: %w", ErrUnreadableReport, err)
+			}
 			continue
 		}
 		report = report.Normalize()
@@ -117,8 +132,9 @@ type span struct{ start, end int }
 // of its parent's span and is not offered separately. So text whose braces do
 // not pair the way JSON would, such as prose holding one unmatched brace or
 // one unmatched double quote before the report, can absorb the report into a
-// span that does not decode. That produces a refusal from ParseReport, never a
-// different report.
+// span that is not valid JSON. ParseReport skips such a span, so the outcome is
+// a refusal unless the text also holds an earlier object that validates, which
+// is the best-effort limit ParseReport states.
 func objectSpans(raw string) []span {
 	var spans []span
 	depth, start := 0, 0

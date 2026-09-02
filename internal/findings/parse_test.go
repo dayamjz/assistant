@@ -172,10 +172,6 @@ func TestParseReportRefusesOutputWithNoReportInIt(t *testing.T) {
 		{"empty", ""},
 		{"prose only", "I could not complete the review."},
 		{"truncated object", `{"summary": "reviewed", "findings": [{"action": "fix"`},
-		{"findings is not a list", `{"summary": "s", "findings": "none"}`},
-		{"a finding is not an object", `{"summary": "s", "findings": ["fix a.go"]}`},
-		{"location is a number", `{"summary": "s", "findings": [{"description": "d", "location": 4}]}`},
-		{"risk is a number", `{"summary": "s", "risk": 3}`},
 		{"not json at all", "```json\nsummary: reviewed\nfindings: none\n```"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -184,6 +180,66 @@ func TestParseReportRefusesOutputWithNoReportInIt(t *testing.T) {
 				t.Fatalf("ParseReport returned (%+v, %v), want ErrNoReport", report, err)
 			}
 		})
+	}
+}
+
+// An object carrying a report's keys is the report the agent meant, so a shape
+// this package cannot decode is refused by name rather than being skipped for
+// whatever came before it.
+func TestParseReportRefusesAReportItCannotRead(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		raw   string
+		field string
+	}{
+		{"findings is not a list", `{"summary": "s", "findings": "none"}`, "findings"},
+		{"a finding is not an object", `{"summary": "s", "findings": ["fix a.go"]}`, "findings"},
+		{"location is a number",
+			`{"summary": "s", "findings": [{"description": "d", "location": 4}]}`, "location"},
+		{"risk is a number", `{"summary": "s", "risk": 3}`, "risk"},
+		{"tested is not a list", `{"summary": "s", "tested": "make check"}`, "tested"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			report, err := findings.ParseReport(tc.raw)
+			if !errors.Is(err, findings.ErrUnreadableReport) {
+				t.Fatalf("ParseReport returned (%+v, %v), want ErrUnreadableReport", report, err)
+			}
+			if errors.Is(err, findings.ErrNoReport) {
+				t.Fatalf("refusal also reports ErrNoReport, but a report was found: %v", err)
+			}
+			if !strings.Contains(err.Error(), tc.field) {
+				t.Errorf("refusal %q does not name the field it could not read", err)
+			}
+		})
+	}
+}
+
+// The silent pass on the decode path: a schema example quoted in the prose
+// validates, so a real report the decoder cannot read must not be replaced by
+// it. The caller has to see the refusal.
+func TestParseReportDoesNotSubstituteAQuotedExampleForAnUnreadableReport(t *testing.T) {
+	raw := `{"summary": "an example, not my report", "findings": []}` +
+		"\n\nHere is my report:\n\n" +
+		`{"summary": "reviewed", "findings": "none"}`
+	report, err := findings.ParseReport(raw)
+	if !errors.Is(err, findings.ErrUnreadableReport) {
+		t.Fatalf("ParseReport returned (%+v, %v), want ErrUnreadableReport", report, err)
+	}
+	if report.Summary != "" || len(report.Findings) != 0 {
+		t.Fatalf("ParseReport returned %+v alongside its refusal, want the zero Report", report)
+	}
+}
+
+// The best-effort limit ParseReport states: a span that is not valid JSON
+// exposes no keys, so it cannot be told apart from prose and an earlier object
+// that validates is what comes back.
+func TestParseReportCannotIdentifyAReportThatIsNotValidJSON(t *testing.T) {
+	raw := `{"summary": "an example, not my report", "findings": []}` +
+		"\n\nHere is my report:\n\n" +
+		`{"summary": "reviewed", "findings": [{"description": "a\qb"}]}`
+	got := mustParse(t, raw)
+	if got.Summary != "an example, not my report" {
+		t.Fatalf("Summary = %q, want the documented limit to still hold", got.Summary)
 	}
 }
 
@@ -241,6 +297,15 @@ func TestParseReportPrefersTheLastObjectThatValidates(t *testing.T) {
 func TestParseReportFallsBackToAnEarlierValidObject(t *testing.T) {
 	t.Run("trailing object is not a report", func(t *testing.T) {
 		raw := `{"summary": "the real one", "findings": []}` + "\n\nThoughts: {\"note\": \"no summary here\"}"
+		got := mustParse(t, raw)
+		if got.Summary != "the real one" {
+			t.Fatalf("Summary = %q", got.Summary)
+		}
+	})
+
+	t.Run("trailing object is not a report and does not decode", func(t *testing.T) {
+		raw := `{"summary": "the real one", "findings": []}` +
+			"\n\nFor the record: " + `{"tested": "make check"}`
 		got := mustParse(t, raw)
 		if got.Summary != "the real one" {
 			t.Fatalf("Summary = %q", got.Summary)
