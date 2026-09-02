@@ -37,7 +37,7 @@ documentation gap to close. Do not edit the PRD to match the code.
 ## What review keeps catching
 
 These sit alongside `P1`-`P14` as a reading lens, not a replacement for them.
-Each has produced findings in more than one package.
+Each has cost this repository more than one round of review.
 
 - **Claim only what a reader can verify from this repository.** A doc comment is
   a contract, so it may not promise more than the mechanism enforces.
@@ -51,6 +51,14 @@ Each has produced findings in more than one package.
   accepted nothing silently but let a duplicate key win last, and
   `internal/graph` reported an exhausted guard set as a completed run. The
   invisible exception is the part that would have shipped.
+- **A fake may not produce a shape the real mechanism cannot.** `internal/safety`
+  shipped a guard against a reference that peels to another object which could
+  never fire, because the read behind it did not ask for the peeled line and so
+  could only ever come back with the two fields it compares equal. Its test
+  passed because the fake stated `vcs.Ref` values directly and stated one that
+  read cannot produce. Mutation testing does not surface this, since deleting
+  the guard does fail the test. Model what the mechanism puts on the wire and
+  derive the values from it the way the real parser does.
 
 ## Code
 
