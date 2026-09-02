@@ -70,6 +70,9 @@ Each has produced findings in more than one package.
 - `internal/vcs` is the only package that invokes git. Do not shell out to git
   anywhere else; add a typed operation there instead. Its package comment states
   the two rules it applies to every invocation and the residual gaps in them.
+- `internal/store` is the only package that opens the database and the only one
+  that writes SQL. Add a typed accessor there rather than a query elsewhere. Its
+  driver is pure Go on purpose, so `make check` needs no cgo on any platform.
 
 ## Tests
 
