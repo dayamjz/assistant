@@ -32,6 +32,17 @@ func TestEveryInvocationIsExplicitAndNonInteractive(t *testing.T) {
 	t.Setenv("GIT_EDITOR", "vim")
 	t.Setenv("GIT_ASKPASS", "/usr/bin/graphical-askpass")
 	t.Setenv("DISPLAY", ":0")
+	// Variables that would choose a program git runs, what a repository it
+	// creates is built from, or where git's own streams go.
+	t.Setenv("GIT_TEMPLATE_DIR", filepath.Join(t.TempDir(), "templates"))
+	t.Setenv("GIT_EXEC_PATH", filepath.Join(t.TempDir(), "libexec"))
+	t.Setenv("GIT_EXTERNAL_DIFF", "/tmp/evil-diff")
+	t.Setenv("GIT_EXTERNAL_DIFF_TRUST_EXIT_CODE", "true")
+	t.Setenv("GIT_SSH", "/tmp/evil-ssh")
+	t.Setenv("GIT_SSH_VARIANT", "simple")
+	t.Setenv("GIT_REDIRECT_STDIN", "/tmp/in")
+	t.Setenv("GIT_REDIRECT_STDOUT", "/tmp/out")
+	t.Setenv("GIT_REDIRECT_STDERR", "/tmp/err")
 
 	barePath := fakeBareDir(t)
 	repo, err := vcs.OpenBare(ctx(t), barePath, vcs.WithGitBinary(exe))
@@ -58,6 +69,10 @@ func TestEveryInvocationIsExplicitAndNonInteractive(t *testing.T) {
 			"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE",
 			"GIT_CONFIG_PARAMETERS", "GIT_CONFIG_COUNT",
 			"GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0", "DISPLAY",
+			"GIT_TEMPLATE_DIR", "GIT_EXEC_PATH",
+			"GIT_EXTERNAL_DIFF", "GIT_EXTERNAL_DIFF_TRUST_EXIT_CODE",
+			"GIT_SSH", "GIT_SSH_VARIANT",
+			"GIT_REDIRECT_STDIN", "GIT_REDIRECT_STDOUT", "GIT_REDIRECT_STDERR",
 		} {
 			if v, ok := lookupEnv(call.Env, name); ok {
 				t.Errorf("%s reached git as %q; it must be removed", name, v)

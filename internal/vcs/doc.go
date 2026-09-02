@@ -19,15 +19,44 @@
 // process started from a git hook inherits GIT_DIR, GIT_WORK_TREE, and
 // GIT_INDEX_FILE pointing at whatever repository invoked the hook, and those
 // would silently redirect an operation this package addressed at a different
-// repository. The redirectingVars list names the variables removed from the
-// environment of every child: the ones that redirect git's repository
-// resolution and the ones that inject configuration. That list is written by
-// hand, so it covers the variables on it and nothing else, and a variable a
-// later git adds is not removed until it is added there.
+// repository. The redirectingVars list names every variable removed from the
+// environment of a child, and each one on it is documented by git. They fall
+// into four groups:
 //
-// GIT_CONFIG_GLOBAL and GIT_CONFIG_SYSTEM are deliberately kept. They relocate
-// configuration rather than redirect a repository, and a caller that sets them
-// means it.
+//   - Which repository git operates on: GIT_DIR, GIT_WORK_TREE,
+//     GIT_INDEX_FILE, GIT_OBJECT_DIRECTORY, GIT_ALTERNATE_OBJECT_DIRECTORIES,
+//     GIT_COMMON_DIR, GIT_NAMESPACE, GIT_PREFIX, GIT_CEILING_DIRECTORIES, and
+//     GIT_DISCOVERY_ACROSS_FILESYSTEM.
+//   - Configuration injected into git: GIT_CONFIG, GIT_CONFIG_PARAMETERS,
+//     GIT_CONFIG_COUNT, and the numbered GIT_CONFIG_KEY_n and
+//     GIT_CONFIG_VALUE_n that go with the last of those.
+//   - What a new repository is built from: GIT_TEMPLATE_DIR, whose hooks git
+//     copies into a repository at the moment it creates it.
+//   - A program git would run, or where git's own streams go: GIT_EXEC_PATH,
+//     GIT_EXTERNAL_DIFF, GIT_EXTERNAL_DIFF_TRUST_EXIT_CODE, GIT_SSH,
+//     GIT_SSH_VARIANT, and the Windows-only GIT_REDIRECT_STDIN,
+//     GIT_REDIRECT_STDOUT, and GIT_REDIRECT_STDERR. DISPLAY is here too,
+//     because git's askpass fallback consults it before deciding whether a
+//     graphical helper is worth running.
+//
+// That list is written by hand, so it covers the variables on it and nothing
+// else, and a variable a later git adds is not removed until it is added
+// there. The hedge is about the future rather than about anything knowable
+// today.
+//
+// GIT_CONFIG_GLOBAL, GIT_CONFIG_SYSTEM, and GIT_CONFIG_NOSYSTEM are
+// deliberately kept. They relocate configuration rather than redirect a
+// repository, and a caller that sets them means it. GIT_PAGER and PAGER are
+// kept for the same reason and because --no-pager is the single mechanism this
+// package uses against a pager. GIT_ALLOW_PROTOCOL and GIT_PROTOCOL_FROM_USER
+// are kept because a value inherited from a hardened environment restricts
+// which transports git will use, and removing it would loosen that rather than
+// tighten anything.
+//
+// One consequence of keeping GIT_CONFIG_GLOBAL is worth naming: an
+// init.templateDir in the operator's own git configuration still decides what
+// InitBare copies into a repository it creates. The environment cannot choose
+// those hooks; the operator's configuration can.
 //
 // Every invocation is non-interactive. There is nobody to answer a prompt
 // inside a pipeline, so a prompt is a hang rather than a question. What this

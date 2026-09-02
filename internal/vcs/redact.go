@@ -13,7 +13,9 @@ import (
 type Redactor interface {
 	// Redact returns s with any credential it recognizes replaced. It must be
 	// safe to call on text that holds no credential, and on text that is not a
-	// URL.
+	// URL, and it must be safe to call from several goroutines at once,
+	// because a Repository is safe for concurrent use and calls this from
+	// whichever invocation failed.
 	Redact(s string) string
 }
 

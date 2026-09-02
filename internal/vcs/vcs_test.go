@@ -822,3 +822,75 @@ func TestRefsReportAPeeledObjectThatIsNotACommit(t *testing.T) {
 		t.Errorf("ResolveCommit of a tag on a commit = %q, %v; want %q", got, err, head)
 	}
 }
+
+// The gate repository is the pipeline's trust anchor, and git init copies the
+// template directory's hooks into a repository at the moment it creates it. An
+// ancestor process that exports GIT_TEMPLATE_DIR must therefore not get to
+// choose the code on that repository's push path.
+func TestInitBareIgnoresAnInheritedTemplateDirectory(t *testing.T) {
+	gitEnvironment(t)
+	c := ctx(t)
+
+	template := filepath.Join(t.TempDir(), "templates")
+	const hook = "#!/bin/sh\nexit 1\n"
+	writeFile(t, filepath.Join(template, "hooks", "pre-receive"), hook)
+	if err := os.Chmod(filepath.Join(template, "hooks", "pre-receive"), 0o755); err != nil {
+		t.Fatalf("make the template hook executable: %v", err)
+	}
+	writeFile(t, filepath.Join(template, "planted.txt"), "content the environment chose\n")
+
+	// The control: git honors this variable, so the assertions below are about
+	// the package removing it rather than about the variable doing nothing.
+	control := filepath.Join(t.TempDir(), "control.git")
+	if out, err := tryRawGit(t.TempDir(), "-c", "init.defaultBranch=main",
+		"init", "--bare", "--template="+template, "--", control); err != nil {
+		t.Fatalf("raw git init with a template: %v\n%s", err, out)
+	}
+	if _, err := os.Stat(filepath.Join(control, "hooks", "pre-receive")); err != nil {
+		t.Fatalf("git did not honor the template directory, so this test proves nothing: %v", err)
+	}
+
+	t.Setenv("GIT_TEMPLATE_DIR", template)
+	barePath := filepath.Join(t.TempDir(), "gate.git")
+	bare, err := vcs.InitBare(c, barePath)
+	if err != nil {
+		t.Fatalf("InitBare: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(bare.Path(), "hooks", "pre-receive")); !os.IsNotExist(err) {
+		t.Errorf("the inherited template installed a pre-receive hook in the gate repository: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(bare.Path(), "planted.txt")); !os.IsNotExist(err) {
+		t.Errorf("the inherited template planted a file in the gate repository: %v", err)
+	}
+	// The repository is still a working bare repository, so the removal did
+	// not achieve its result by breaking initialization.
+	if got, err := bare.HeadBranch(c); err != nil || got != "main" {
+		t.Errorf("HeadBranch of the created repository = %q, %v; want main", got, err)
+	}
+}
+
+// Refusing to initialize over an occupied path has to say why. A message about
+// the path alone reads as a mistyped argument and sends an operator looking for
+// a typo instead of at the directory that is already there.
+func TestInitBareOverAnOccupiedPathSaysWhyItRefused(t *testing.T) {
+	gitEnvironment(t)
+	c := ctx(t)
+	source, _, _ := sourceRepo(t)
+
+	_, err := vcs.InitBare(c, source)
+	if !errors.Is(err, vcs.ErrNotARepository) {
+		t.Fatalf("InitBare over a working copy = %v; want ErrNotARepository", err)
+	}
+	for _, want := range []string{source, "already there", "two repositories"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not mention %q: %v", want, err)
+		}
+	}
+
+	// The accepting path, so the message above is about this refusal rather
+	// than about InitBare refusing everything.
+	fresh := filepath.Join(t.TempDir(), "gate.git")
+	if _, err := vcs.InitBare(c, fresh); err != nil {
+		t.Errorf("InitBare on a free path = %v; want it to succeed", err)
+	}
+}

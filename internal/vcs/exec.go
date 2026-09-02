@@ -89,15 +89,18 @@ func newSettings(opts []Option) settings {
 	return s
 }
 
-// redirectingVars names the environment variables removed from every child:
-// the ones that decide which repository git operates on, and the ones that
-// inject configuration into it. A process launched from a git hook has the
-// first three set, which is why removing them is a correctness requirement and
-// not tidiness.
+// redirectingVars names the environment variables removed from every child.
+// Each is documented by git, and each falls into one of four groups: the ones
+// that decide which repository git operates on, the ones that inject
+// configuration into it, the ones that name a program git would run, and the
+// ones that decide where git's own standard streams go. A process launched
+// from a git hook inherits several of these, which is why removing them is a
+// correctness requirement and not tidiness.
 //
 // The list is written by hand, so it covers what is on it and nothing else. A
 // variable a later git introduces is not removed until it is added here.
 var redirectingVars = []string{
+	// Which repository git operates on.
 	"GIT_DIR",
 	"GIT_WORK_TREE",
 	"GIT_INDEX_FILE",
@@ -108,9 +111,43 @@ var redirectingVars = []string{
 	"GIT_PREFIX",
 	"GIT_CEILING_DIRECTORIES",
 	"GIT_DISCOVERY_ACROSS_FILESYSTEM",
+
+	// Configuration injected into git.
 	"GIT_CONFIG",
 	"GIT_CONFIG_PARAMETERS",
 	"GIT_CONFIG_COUNT",
+
+	// What a newly created repository is built from. git init copies the
+	// template directory's hooks into the repository it creates, so an
+	// inherited value chooses the code on the gate repository's push path at
+	// the moment it is created, and nothing later can undo it.
+	"GIT_TEMPLATE_DIR",
+
+	// Programs git would run. GIT_EXEC_PATH decides where git finds the
+	// subcommands and remote helpers it executes, so an inherited one from a
+	// different build defeats pinning a binary with WithGitBinary.
+	// GIT_EXTERNAL_DIFF names a program git runs while diffing, which is the
+	// hazard --no-ext-diff closes on the command line; its TRUST_EXIT_CODE
+	// companion is the other half of that one mechanism. GIT_SSH names the
+	// transport program, and is otherwise only shadowed by this package
+	// setting GIT_SSH_COMMAND, which would be a second mechanism answering
+	// the question. GIT_SSH_VARIANT names no program, but it decides how git
+	// builds the ssh command line, which is how the BatchMode this package
+	// appends reaches ssh at all.
+	"GIT_EXEC_PATH",
+	"GIT_EXTERNAL_DIFF",
+	"GIT_EXTERNAL_DIFF_TRUST_EXIT_CODE",
+	"GIT_SSH",
+	"GIT_SSH_VARIANT",
+
+	// Where git's own standard streams go. These are Windows-only, and they
+	// point a stream at a path of the environment's choosing. Standard output
+	// is the result this package parses, so an inherited one turns an empty
+	// read into an answer rather than into a failure.
+	"GIT_REDIRECT_STDIN",
+	"GIT_REDIRECT_STDOUT",
+	"GIT_REDIRECT_STDERR",
+
 	// DISPLAY is here because git's askpass fallback consults it before
 	// deciding whether a graphical helper is worth running.
 	"DISPLAY",

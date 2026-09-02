@@ -74,10 +74,19 @@ func (r *Repository) addressing() []string {
 // It refuses with ErrNotARepository when path already holds something that is
 // not a bare repository, an empty directory apart. Git would otherwise write
 // a bare repository's files into a directory that is already a working copy,
-// leaving one directory that is two repositories. When path holds a bare
-// repository git itself refuses to use, that refusal is returned as the
-// *CommandError git described it with rather than as ErrNotARepository, and
-// nothing is written either way.
+// leaving one directory that is two repositories. That refusal says so in its
+// message, because a message about the path alone reads as a typo. When path
+// holds a bare repository git itself refuses to use, the refusal is returned
+// as the *CommandError git described it with rather than as
+// ErrNotARepository. Nothing is written in either case.
+//
+// The repository is created from git's own default template. An inherited
+// GIT_TEMPLATE_DIR is removed from the environment along with the rest of
+// redirectingVars, so a hook or a CI image cannot choose the hooks the gate
+// repository is born with. An init.templateDir in the user's git
+// configuration is still honored, because this package deliberately keeps
+// GIT_CONFIG_GLOBAL: that is the operator's own configuration rather than
+// something an ancestor process slipped in.
 func InitBare(ctx context.Context, path string, opts ...Option) (*Repository, error) {
 	abs, err := absolutePath(path)
 	if err != nil {
@@ -86,7 +95,7 @@ func InitBare(ctx context.Context, path string, opts ...Option) (*Repository, er
 	if occupied, err := isOccupiedByOtherThanABareRepo(ctx, abs, opts); err != nil {
 		return nil, err
 	} else if occupied {
-		return nil, &openError{path: abs, kind: KindBare}
+		return nil, &occupiedError{path: abs}
 	}
 	// git init addresses its target as an argument, so the handle used to run
 	// it does not point at a repository yet. Address the parent directory and
@@ -272,6 +281,22 @@ func (e *openError) Error() string {
 // Unwrap makes every open refusal match ErrNotARepository.
 func (e *openError) Unwrap() error { return ErrNotARepository }
 
+// occupiedError reports a path InitBare refused because something that is not
+// a bare repository is already there. It names the reason rather than the
+// path, so that a refusal is not read as a mistyped argument.
+type occupiedError struct {
+	path string
+}
+
+func (e *occupiedError) Error() string {
+	return "vcs: refusing to initialize a bare repository at " + e.path +
+		": something that is not a bare repository is already there, and writing over it would leave one directory that is two repositories"
+}
+
+// Unwrap makes the occupied refusal match ErrNotARepository, which is what it
+// has always reported, so a caller testing for that sentinel is unaffected.
+func (e *occupiedError) Unwrap() error { return ErrNotARepository }
+
 // WorktreeSpec describes a linked worktree to create.
 type WorktreeSpec struct {
 	// Path is where the worktree is created. It must not already exist.
@@ -448,9 +473,11 @@ func (r *Repository) optionsForChild() []Option {
 	}
 }
 
-// absolutePath rejects an empty path and one git would read as an option, then
-// makes it absolute so that neither the process working directory nor the -C
-// this package passes can change what it means.
+// absolutePath rejects an empty path and one carrying a NUL byte, then makes
+// it absolute, so that neither the process working directory nor the -C this
+// package passes can change what it means, and so that a path beginning with a
+// dash reaches git with a leading separator rather than as an option. It does
+// not refuse an option-shaped path; it makes one harmless.
 func absolutePath(path string) (string, error) {
 	if path == "" {
 		return "", &argumentError{what: "path", value: path, reason: "must not be empty"}
