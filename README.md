@@ -10,7 +10,7 @@ until it has been independently reviewed, tested, documented, and linted.
 ## Status
 
 Early. The product requirements are settled and checked in at
-[`docs/prd.html`](docs/prd.html). Five pieces exist so far. The execution
+[`docs/prd.html`](docs/prd.html). Six pieces exist so far. The execution
 engine in `internal/graph` is the first: the graph builder with its
 construction-time checks, an executor with halt points and bounded cycles, and
 checkpoints behind a four-operation store. The second is `internal/findings`,
@@ -22,7 +22,10 @@ the parse-time validation, and the path matcher. The fourth is `internal/vcs`,
 the only package that invokes git. The fifth is `internal/store`, the durable
 record of what the gate did: an embedded sqlite database behind typed
 accessors, with additive migrations checked against the database's own catalog.
-Nothing joins them into a pipeline yet, so there is still nothing to run.
+The sixth is `internal/agents`, the only package that starts an agent process:
+the separate reviewing and fixing roles, the Claude Code adapter, ordered
+fallback resolution, and a record of what each invocation cost. Nothing joins
+them into a pipeline yet, so there is still nothing to run.
 
 ## The two promises
 
@@ -47,6 +50,7 @@ working as it always did.
 | Path | Contents |
 | --- | --- |
 | `cmd/assistant` | The binary. Not written yet, so `make build` has nothing to build. |
+| `internal/agents` | The only package that starts an agent process: the run and fix roles, the Claude Code adapter, fallback resolution, and invocation records. |
 | `internal/config` | The configuration schema: layers, defaults, merge, validation, path matcher. |
 | `internal/findings` | The stage vocabulary: findings, actions, reports, and parsing of agent output. |
 | `internal/graph` | The execution engine: nodes, edges, bounds, halt points, checkpoints. |
