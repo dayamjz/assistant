@@ -169,7 +169,7 @@ func TestASignalledAgentIsAProcessFailureThatSaysWhatEndedIt(t *testing.T) {
 	}
 	// The stand-in agent was signalled rather than exiting, which is the case
 	// this is about: there is no status to report and the code is -1.
-	if exit.ProcessState.Exited() {
+	if exit.Exited() {
 		t.Error("the agent reported an exit status, so this is not the signalled path")
 	}
 	if refusal.ExitCode >= 0 {
