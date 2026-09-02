@@ -118,9 +118,11 @@
 //
 // It does not implement the data-loss rules. Anchored force updates,
 // incorporation checks, and the refuse-when-unverifiable path are policy and
-// belong to the safety module named in PRD section 8. This package exposes the
-// mechanism that policy needs, which is reading a remote ref, resolving a
-// commit, and comparing two commits, and stops there.
+// belong to internal/safety, the module named in PRD section 8. This package
+// exposes mechanism that policy needs, which is reading a remote ref,
+// resolving a commit, and comparing two commits, and stops there. It does not
+// expose everything internal/safety asks for: that package's git.go declares
+// the interface it decides against and names the operation still missing here.
 //
 // Nothing here pushes, and no operation moves a branch in a working copy.
 // Fetch is the exception worth naming: it writes references in the local

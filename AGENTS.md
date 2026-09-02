@@ -37,7 +37,7 @@ documentation gap to close. Do not edit the PRD to match the code.
 ## What review keeps catching
 
 These sit alongside `P1`-`P14` as a reading lens, not a replacement for them.
-Each has produced findings in more than one package.
+Each has cost this repository more than one round of review.
 
 - **Claim only what a reader can verify from this repository.** A doc comment is
   a contract, so it may not promise more than the mechanism enforces.
@@ -51,6 +51,14 @@ Each has produced findings in more than one package.
   accepted nothing silently but let a duplicate key win last, and
   `internal/graph` reported an exhausted guard set as a completed run. The
   invisible exception is the part that would have shipped.
+- **A fake may not produce a shape the real mechanism cannot.** `internal/safety`
+  shipped a guard against a reference that peels to another object which could
+  never fire, because the read behind it did not ask for the peeled line and so
+  could only ever come back with the two fields it compares equal. Its test
+  passed because the fake stated `vcs.Ref` values directly and stated one that
+  read cannot produce. Mutation testing does not surface this, since deleting
+  the guard does fail the test. Model what the mechanism puts on the wire and
+  derive the values from it the way the real parser does.
 
 ## Code
 
@@ -73,6 +81,14 @@ Each has produced findings in more than one package.
 - `internal/store` is the only package that opens the database and the only one
   that writes SQL. Add a typed accessor there rather than a query elsewhere. Its
   driver is pure Go on purpose, so `make check` needs no cgo on any platform.
+- `internal/safety` owns whether a branch update may proceed and on what anchor.
+  `internal/vcs` stays mechanism only, so a lease, an incorporation check, or a
+  force decision belongs in `internal/safety` even when it would be shorter to
+  write at the git call. Its anchor is an `Observation`, and only `Guard.Observe`
+  or `RestoreObservedFromCheckpoint` produces one. The wrong anchor is not
+  unrepresentable: a restored anchor's provenance rests on the checkpoint it came
+  out of, not on the type. Read its `doc.go` for why, and for the residual gaps
+  that leaves.
 - `internal/agents` is the only package that starts an agent process. It owns
   the process tree, the per-invocation environment, and what is recorded about
   a call. P4 lives in its type split rather than in a rule callers follow:
