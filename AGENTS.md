@@ -101,6 +101,14 @@ Each has cost this repository more than one round of review.
   a call. P4 lives in its type split rather than in a rule callers follow:
   `Runner.Run` cannot be given a session and `Fixer.Apply` cannot be given a
   purpose, so keep any new entry point on one side of that line.
+- `internal/ipc` owns the local protocol: the method table, the event
+  taxonomy, and the bounded stream. Two rules there are load-bearing rather
+  than stylistic. An event class decides what overflow may discard, and an
+  unrecognized type is state, so a type added later is retained; adding a type
+  means adding a row to the class table in `event.go`. Authority over a request
+  comes from `Credentials`, read off the socket, and never from `Marker`, which
+  a caller writes for itself. Read its `doc.go` for where state may still be
+  collapsed into a gap marker and why that is not the strict rule relaxed.
 
 ## Tests
 
