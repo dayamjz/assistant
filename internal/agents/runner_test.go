@@ -1,7 +1,10 @@
 package agents_test
 
 import (
+	"encoding/json"
 	"errors"
+	"os"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -375,6 +378,70 @@ func TestAnAgentsOwnFailureOutranksTheExitStatusThatCameWithIt(t *testing.T) {
 	}
 	if got := rec.records[0]; got.Failure != agents.FailureAgent || got.Usage != helperUsage() {
 		t.Errorf("recorded %+v, want an agent failure carrying the usage the agent reported", got)
+	}
+}
+
+// An empty base environment is an empty environment, on the path where the
+// invocation adds nothing to it as well. That path is the one worth guarding:
+// a caller choosing an empty base is withholding what the parent process
+// holds, most of which is credentials, and an environment that is merely
+// absent is os/exec's way of asking for the parent's own.
+//
+// The stand-in agent takes its mode from the command line here, because an
+// environment carrying a mode would not be the empty one under test.
+func TestAnEmptyBaseEnvironmentWithdrawsTheParentEnvironment(t *testing.T) {
+	const withheld = "AGENTS_A_VARIABLE_THE_AGENT_MUST_NOT_SEE"
+	t.Setenv(withheld, "the-value-nobody-should-inherit")
+
+	runner, err := agents.ClaudeFactory(
+		agents.WithBinary(helperBinary(t)),
+		agents.WithBaseEnvironment(nil),
+	).New(t.Context(), []string{helperModeFlag + "environment"})
+	if err != nil {
+		t.Fatalf("building a runner over the stand-in agent: %v", err)
+	}
+
+	got, err := runner.Run(t.Context(), agents.PurposeReview, agents.Invocation{
+		Prompt: "report the environment you were given",
+		Shape:  agents.ShapeText,
+		Dir:    t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("invocation failed: %v", err)
+	}
+
+	// os/exec adds SYSTEMROOT on Windows to any environment that does not
+	// already carry it, so that one name is not evidence of inheritance.
+	// Nothing else may appear.
+	inherited := func(name string) bool {
+		return runtime.GOOS == "windows" && strings.EqualFold(name, "SYSTEMROOT")
+	}
+	held := make(map[string]struct{})
+	for _, entry := range os.Environ() {
+		if name, _, ok := strings.Cut(entry, "="); ok {
+			held[name] = struct{}{}
+		}
+	}
+	if _, ok := held[withheld]; !ok {
+		t.Fatalf("%s is not set in the test process, so this proves nothing", withheld)
+	}
+
+	var given []string
+	if err := json.Unmarshal([]byte(got.Text), &given); err != nil {
+		t.Fatalf("the stand-in agent did not report its environment: %v (%q)", err, got.Text)
+	}
+	for _, entry := range given {
+		name, _, _ := strings.Cut(entry, "=")
+		if inherited(name) {
+			continue
+		}
+		if name == withheld {
+			t.Errorf("the agent was given %s, which the empty base was withholding", name)
+			continue
+		}
+		if _, ok := held[name]; ok {
+			t.Errorf("the agent was given %s, which it could only have inherited from this process", name)
+		}
 	}
 }
 

@@ -102,8 +102,11 @@ func runProcess(ctx context.Context, spec procSpec) procResult {
 
 	// The watcher terminates the tree the moment the context ends. It is
 	// joined before this function returns, so no goroutine outlives the call
-	// and no signal is sent after the process identifier could be reused by
-	// something else.
+	// and nothing is signalled once runProcess has returned. It does not close
+	// the window in which the leader has been reaped and its identifier could
+	// be given to something else, because the watcher may still be inside
+	// terminateTree when the reap lands; what terminateTree does about that
+	// window, and what it leaves open, is stated there.
 	done := make(chan struct{})
 	var watcher sync.WaitGroup
 	watcher.Add(1)
@@ -210,9 +213,14 @@ func (w *boundedWriter) text() string {
 // names sorted, so two invocations built from the same inputs produce the same
 // environment. Nothing here is recorded; an environment value may be a
 // credential and Record has no field it could be written into.
+//
+// It is never nil, including for an empty base and no extra. A nil environment
+// is os/exec's way of asking for the parent's own, so returning one for an
+// empty base would hand the agent every variable that base was chosen to
+// withhold, which is the opposite of what was asked for.
 func environment(base []string, extra map[string]string) []string {
 	if len(extra) == 0 {
-		return append([]string(nil), base...)
+		return append(make([]string, 0, len(base)), base...)
 	}
 	names := make([]string, 0, len(extra))
 	for name := range extra {

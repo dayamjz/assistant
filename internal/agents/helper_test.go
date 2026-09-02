@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,8 +18,9 @@ import (
 // The tests drive a stand-in agent rather than a real Claude Code
 // installation, so what they prove is a property of this package rather than
 // of whatever happens to be installed. The stand-in is this test binary
-// re-executed with helperModeVar set, which needs no build step and works on
-// every platform the module targets.
+// re-executed with a mode named in helperModeVar, or on its command line where
+// the environment under test carries nothing. It needs no build step and works
+// on every platform the module targets.
 // helperHold is how long the stand-in agent's waiting modes stay alive. It is
 // far longer than any assertion below allows, so a process still running when
 // one of them looks is a process this package did not end, and short enough
@@ -36,10 +38,34 @@ const (
 	helperEchoVar   = "AGENTS_HELPER_ECHO"
 )
 
-// TestMain turns this binary into the stand-in agent when the mode variable is
-// set, and runs the tests otherwise.
+// helperModeFlag carries the stand-in agent's mode on its command line, for
+// the tests that must run it with no environment at all. A configured entry's
+// own arguments reach the agent through ClaudeFactory.New, so this is a mode
+// the agent can be given without the per-invocation environment carrying
+// anything.
+const helperModeFlag = "--agents-helper-mode="
+
+// helperModeFromArgs is the mode named on the command line, empty when none
+// is. The flag is spelled distinctly enough that the real test binary, which
+// is this same executable, cannot be given one by accident.
+func helperModeFromArgs() string {
+	for _, a := range os.Args[1:] {
+		if after, ok := strings.CutPrefix(a, helperModeFlag); ok {
+			return after
+		}
+	}
+	return ""
+}
+
+// TestMain turns this binary into the stand-in agent when a mode is named,
+// either in the environment or on the command line, and runs the tests
+// otherwise.
 func TestMain(m *testing.M) {
-	if mode := os.Getenv(helperModeVar); mode != "" {
+	mode := os.Getenv(helperModeVar)
+	if mode == "" {
+		mode = helperModeFromArgs()
+	}
+	if mode != "" {
 		helperMain(mode)
 		return
 	}
@@ -72,6 +98,17 @@ func helperMain(mode string) {
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "encoding the call: "+err.Error())
 			os.Exit(7)
+		}
+		fmt.Print(helperEnvelope(string(encoded), helperSession()))
+	case "environment":
+		// Report the whole environment the agent was given, as the result. It
+		// takes its mode from the command line, so it is reachable with an
+		// environment that carries nothing at all, and it is encoded rather
+		// than joined so that an empty environment is still a result.
+		encoded, err := json.Marshal(os.Environ())
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "encoding the environment: "+err.Error())
+			os.Exit(8)
 		}
 		fmt.Print(helperEnvelope(string(encoded), helperSession()))
 	case "env":
