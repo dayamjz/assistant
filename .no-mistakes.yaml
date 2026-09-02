@@ -52,10 +52,11 @@ review:
       instructions: |
         This is the only package that invokes git, and the environment filter is
         its security surface. Check the filter first.
-        A variable that can widen what git will do is stripped by default; one
-        that can only narrow it is honored. The three keeps the package doc
-        names and justifies are the exception; a new keep needs its own reason
-        stated, since a kept variable is a trust decision, not an omission.
+        A variable that can widen what an operation may run is stripped by
+        default; one that can only narrow it is honored. The three keeps the
+        package doc names and justifies are the exception; a new keep needs its
+        own reason stated, since a kept variable is a trust decision, not an
+        omission.
         Every invocation must address its repository explicitly, with --git-dir
         for a bare repository and -C for a working copy, and must stay
         non-interactive: no prompt, no askpass, no editor, no pager.
