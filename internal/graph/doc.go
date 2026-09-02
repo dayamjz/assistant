@@ -111,4 +111,11 @@
 // write, read the latest for a run, list a run's history, and fork from a
 // point. Resuming from an earlier point is forking it into a new run and
 // resuming that, which is what keeps the original history intact.
+//
+// Every write is anchored to the checkpoint the operation read, and the store
+// refuses one whose run has moved since. That is P6 at this boundary: an
+// update is anchored to what the run actually observed rather than to a tip
+// read a moment before writing, which always matches and so protects nothing.
+// Two operations on one run therefore end with one refused and reported as
+// ErrStaleAnchor, never with two walks appended to one history.
 package graph

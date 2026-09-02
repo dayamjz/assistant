@@ -23,11 +23,16 @@ type Config struct {
 // holds no per-run state, so one Executor may drive any number of concurrent
 // runs of the same graph.
 //
-// Two operations on the same run do not interleave. Every checkpoint is
-// written anchored to the one the operation read, so when a run moves under a
-// Resume or an Answer the later write is refused with ErrStaleAnchor and its
-// work is discarded, rather than a second walk being appended to a history
-// that then reports success for both.
+// A run's history never interleaves. Every checkpoint is written anchored to
+// the one the operation read, so when a run moves under a Resume or an Answer
+// the later write is refused with ErrStaleAnchor instead of a second walk
+// being appended to a history that then reports success for both.
+//
+// The refusal happens at the write, not before the work: a refused operation
+// has already executed the nodes it got through, and what is discarded is the
+// checkpoint rather than the execution. This package is pure, so that is
+// wasted work rather than a side effect happening twice, but it is why one run
+// is still best driven by one caller at a time.
 type Executor struct {
 	graph  *Graph
 	store  CheckpointStore
@@ -108,11 +113,6 @@ func (e *Executor) Run(ctx context.Context, run string, initial State) (Result, 
 	if err := e.persist(ctx, &cp); err != nil {
 		return Result{}, err
 	}
-	if cp.Seq != 1 {
-		return Result{}, fmt.Errorf(
-			"%w: %q: the store did not honour the claim on a new run and answered %s",
-			ErrRunExists, run, cp.ID())
-	}
 	if cp.Status == StatusHalted {
 		return e.result(cp), nil
 	}
@@ -127,6 +127,9 @@ func (e *Executor) Run(ctx context.Context, run string, initial State) (Result, 
 // is returned unchanged, because no amount of resuming moves it; answer it,
 // fork it, or change the graph. A run interrupted mid-flight continues from
 // the node it had not yet reached.
+//
+// It returns an error wrapping ErrStaleAnchor when the run moved between the
+// checkpoint this call read and the checkpoint it went to write.
 func (e *Executor) Resume(ctx context.Context, run string) (Result, error) {
 	cp, err := e.load(ctx, run)
 	if err != nil {
@@ -144,6 +147,10 @@ func (e *Executor) Resume(ctx context.Context, run string) (Result, error) {
 //
 // Answering reaches the same state as calling Resume first and Answer second,
 // because Resume re-emits a decision without changing anything.
+//
+// It returns an error wrapping ErrStaleAnchor when the run moved between the
+// checkpoint this call read and the checkpoint it went to write, which is how
+// a decision answered twice at once resolves to one answer.
 func (e *Executor) Answer(ctx context.Context, run, answer string) (Result, error) {
 	cp, err := e.load(ctx, run)
 	if err != nil {
@@ -358,11 +365,27 @@ func (e *Executor) park(ctx context.Context, cp Checkpoint) (Result, error) {
 // has recorded what it assigned. Reading the tip here instead would anchor to
 // something this run never acted on, which is the mistake the anchor exists
 // to prevent.
+//
+// It then checks the answer rather than trusting it. A store that honoured the
+// anchor assigned exactly the checkpoint after it, so any other identifier
+// means the anchor decided nothing and this run is appending into a history
+// that moved. This is the one place that verification lives: a zero anchor is
+// the claim on a new run and every other anchor is the run's tip, so the same
+// comparison covers both halves of the Write contract.
 func (e *Executor) persist(ctx context.Context, cp *Checkpoint) error {
 	cp.ForkedFrom = nil
-	id, err := e.store.Write(ctx, cp.ID(), cp.clone())
+	anchor := cp.ID()
+	id, err := e.store.Write(ctx, anchor, cp.clone())
 	if err != nil {
 		return err
+	}
+	if want := (CheckpointID{Run: cp.Run, Seq: anchor.Seq + 1}); id != want {
+		refusal := ErrStaleAnchor
+		if anchor.Seq == 0 {
+			refusal = ErrRunExists
+		}
+		return fmt.Errorf("%w: the store answered %s to a write anchored to %s, which it must have answered %s",
+			refusal, id, anchor, want)
 	}
 	cp.Seq = id.Seq
 	return nil

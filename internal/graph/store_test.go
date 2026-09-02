@@ -240,11 +240,12 @@ func TestConcurrentRunsUnderOneNameClaimItExactlyOnce(t *testing.T) {
 	}
 }
 
-// appendOnlyStore satisfies the letter of "append and assign Seq" while
-// ignoring the claim a zero Seq makes on a new run: it forwards every
-// operation to a MemoryStore, and the only thing it declines to do is refuse a
-// checkpoint that claims a run which already has history. It stands in for a
-// substrate written against that half of the contract alone.
+// appendOnlyStore satisfies the letter of "append and assign Seq" and nothing
+// more: it discards the anchor it is handed and appends against whatever the
+// run's tip happens to be, so it neither refuses a claim on a run that already
+// has history nor refuses a write whose run has moved. It stands in for a
+// substrate written before the anchor was part of the contract, and it is
+// what makes the executor's post-condition on the store's answer observable.
 type appendOnlyStore struct {
 	inner *graph.MemoryStore
 }
@@ -616,7 +617,7 @@ func TestResumeAndAnswerRefuseACheckpointFromAnotherRun(t *testing.T) {
 // finish before the second reads, and the interleaving under test would never
 // be attempted.
 type racingStore struct {
-	inner   *graph.MemoryStore
+	inner   graph.CheckpointStore
 	readers int
 
 	mu      sync.Mutex
@@ -624,8 +625,8 @@ type racingStore struct {
 	ready   chan struct{}
 }
 
-func newRacingStore(readers int) *racingStore {
-	return &racingStore{inner: graph.NewMemoryStore(), readers: readers, ready: make(chan struct{})}
+func newRacingStore(readers int, inner graph.CheckpointStore) *racingStore {
+	return &racingStore{inner: inner, readers: readers, ready: make(chan struct{})}
 }
 
 func (s *racingStore) Write(ctx context.Context, anchor graph.CheckpointID, c graph.Checkpoint) (graph.CheckpointID, error) {
@@ -656,7 +657,7 @@ func TestConcurrentAnswersToOneRunDoNotInterleave(t *testing.T) {
 	ctx := context.Background()
 	rec := &recorder{}
 	g := mustBuild(t, haltingBuilder(rec))
-	store := newRacingStore(2)
+	store := newRacingStore(2, graph.NewMemoryStore())
 	exec := mustExecutor(t, g, store, 20)
 
 	held, err := exec.Run(ctx, "run", mustState(t, g, nil))
@@ -718,6 +719,66 @@ func TestConcurrentAnswersToOneRunDoNotInterleave(t *testing.T) {
 		if cp.Seq != len(before)+i+1 || cp.Position != want {
 			t.Fatalf("checkpoint %d is %s at %q, want %d at %q", i+1, cp.ID(), cp.Position, len(before)+i+1, want)
 		}
+	}
+}
+
+func TestConcurrentAnswersAreRefusedWhenTheStoreIgnoresTheAnchor(t *testing.T) {
+	ctx := context.Background()
+	rec := &recorder{}
+	g := mustBuild(t, haltingBuilder(rec))
+	store := newRacingStore(2, appendOnlyStore{inner: graph.NewMemoryStore()})
+	exec := mustExecutor(t, g, store, 20)
+
+	held, err := exec.Run(ctx, "run", mustState(t, g, nil))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if held.Status != graph.StatusHalted {
+		t.Fatalf("the run ended %s, want halted at its decision", held.Status)
+	}
+
+	const answers = 2
+	errs := make([]error, answers)
+	var wg sync.WaitGroup
+	for i := 0; i < answers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, errs[i] = exec.Answer(ctx, "run", "approve")
+		}(i)
+	}
+	wg.Wait()
+
+	accepted := 0
+	for i, err := range errs {
+		switch {
+		case err == nil:
+			accepted++
+		case errors.Is(err, graph.ErrStaleAnchor):
+		default:
+			t.Fatalf("answer %d: %v, want either success or ErrStaleAnchor", i, err)
+		}
+	}
+	if accepted > 1 {
+		t.Fatalf("%d of %d concurrent answers were accepted over a store that ignores the anchor, want at most 1",
+			accepted, answers)
+	}
+
+	// The store appended what the executor refused, because a substrate that
+	// ignores the anchor cannot be stopped from writing. What must not happen
+	// is a caller being told both walks landed.
+	history, err := store.History(ctx, "run")
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	completed := 0
+	for _, cp := range history {
+		if cp.Status == graph.StatusCompleted {
+			completed++
+		}
+	}
+	if completed > 1 {
+		t.Errorf("the run records %d completed walks, want at most 1: the answers interleaved", completed)
 	}
 }
 
