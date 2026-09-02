@@ -80,13 +80,17 @@ func (r *Repository) addressing() []string {
 // as the *CommandError git described it with rather than as
 // ErrNotARepository. Nothing is written in either case.
 //
-// The repository is created from git's own default template. An inherited
+// Which template the repository is created from is worth stating exactly,
+// because the template supplies the hooks it is born with. An inherited
 // GIT_TEMPLATE_DIR is removed from the environment along with the rest of
-// redirectingVars, so a hook or a CI image cannot choose the hooks the gate
-// repository is born with. An init.templateDir in the user's git
-// configuration is still honored, because this package deliberately keeps
-// GIT_CONFIG_GLOBAL: that is the operator's own configuration rather than
-// something an ancestor process slipped in.
+// redirectingVars, so that direct channel is closed. It is not the only one:
+// git also reads init.templateDir from configuration, and the location of the
+// configuration file is itself something GIT_CONFIG_GLOBAL and
+// GIT_CONFIG_SYSTEM can move, and those two are deliberately kept. An
+// ancestor process that can set them can therefore still choose this
+// repository's hooks. That is the same trust category as PATH and the git
+// binary, which such a process also controls, so this refuses to pretend
+// otherwise.
 func InitBare(ctx context.Context, path string, opts ...Option) (*Repository, error) {
 	abs, err := absolutePath(path)
 	if err != nil {

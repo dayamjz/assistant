@@ -45,18 +45,25 @@
 // today.
 //
 // GIT_CONFIG_GLOBAL, GIT_CONFIG_SYSTEM, and GIT_CONFIG_NOSYSTEM are
-// deliberately kept. They relocate configuration rather than redirect a
-// repository, and a caller that sets them means it. GIT_PAGER and PAGER are
-// kept for the same reason and because --no-pager is the single mechanism this
-// package uses against a pager. GIT_ALLOW_PROTOCOL and GIT_PROTOCOL_FROM_USER
-// are kept because a value inherited from a hardened environment restricts
-// which transports git will use, and removing it would loosen that rather than
-// tighten anything.
+// deliberately kept. They are how a caller points git at a configuration file
+// on purpose, and this package's own tests rely on exactly that to isolate
+// from a developer's real git configuration. GIT_PAGER and PAGER are kept
+// because --no-pager is the single mechanism this package uses against a
+// pager. GIT_ALLOW_PROTOCOL and GIT_PROTOCOL_FROM_USER are kept because a
+// value inherited from a hardened environment restricts which transports git
+// will use, and removing it would loosen that rather than tighten anything.
 //
-// One consequence of keeping GIT_CONFIG_GLOBAL is worth naming: an
-// init.templateDir in the operator's own git configuration still decides what
-// InitBare copies into a repository it creates. The environment cannot choose
-// those hooks; the operator's configuration can.
+// What keeping the configuration-location variables costs is worth stating
+// rather than implying away. A configuration file whose location arrives
+// through GIT_CONFIG_GLOBAL or GIT_CONFIG_SYSTEM is a trusted input, in the
+// same category as PATH and the git binary this package executes. So the
+// settings such a file carries are not closed by this filter, and
+// init.templateDir is the one with teeth: it decides the hooks InitBare's
+// repository is born with, which is exactly what removing GIT_TEMPLATE_DIR
+// closes on the direct route. Removing these variables too would not change
+// that, because an ancestor process able to set them is already able to set
+// PATH or replace the git binary. This filter closes the direct channels it
+// names above and nothing wider.
 //
 // Every invocation is non-interactive. There is nobody to answer a prompt
 // inside a pipeline, so a prompt is a hang rather than a question. What this

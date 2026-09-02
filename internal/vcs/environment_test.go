@@ -356,3 +356,66 @@ func TestGitThatLeavesItsPipesOpenReportsTheStatusItExitedWith(t *testing.T) {
 		t.Errorf("ResolveCommit against the same stand-in = %v; want it to succeed", err)
 	}
 }
+
+// Refusing over-limit output must not throw away what git reported about the
+// run. An invocation that overran the limit and then also failed has an exit
+// status and a message, and those are the two facts an operator wants most.
+func TestOverLimitOutputStillReportsWhatGitSaid(t *testing.T) {
+	const complaint = "fatal: an object could not be read"
+
+	// The limit is above a commit identifier so revision resolution still
+	// succeeds, and below the output the stand-in writes.
+	t.Run("refused for the limit", func(t *testing.T) {
+		gitEnvironment(t)
+		_, exe := useFakeGit(t)
+		fakeGitOutput(t, strings.Repeat("M\x00some/path\x00", 200))
+		fakeGitStderrOutput(t, complaint+"\n", 3)
+
+		repo, err := vcs.OpenBare(ctx(t), fakeBareDir(t), vcs.WithGitBinary(exe), vcs.WithMaxOutput(100))
+		if err != nil {
+			t.Fatalf("OpenBare against the stand-in git: %v", err)
+		}
+		got, err := repo.ChangedFiles(ctx(t), "a", "b")
+		if !errors.Is(err, vcs.ErrOutputTooLarge) {
+			t.Fatalf("ChangedFiles over the limit = %v; want ErrOutputTooLarge", err)
+		}
+		if got != nil {
+			t.Errorf("ChangedFiles returned %d changes alongside the refusal; want none", len(got))
+		}
+		var cmdErr *vcs.CommandError
+		if !errors.As(err, &cmdErr) {
+			t.Fatalf("error = %v; want a *CommandError", err)
+		}
+		if cmdErr.ExitCode != 3 {
+			t.Errorf("CommandError.ExitCode = %d; want 3, the status git exited with", cmdErr.ExitCode)
+		}
+		if !strings.Contains(cmdErr.Stderr, complaint) {
+			t.Errorf("CommandError.Stderr = %q; want git's own message", cmdErr.Stderr)
+		}
+	})
+
+	// The same invocation under a limit that fits, so the facts above are
+	// carried because git reported them rather than because the limit was hit.
+	t.Run("failing within the limit", func(t *testing.T) {
+		gitEnvironment(t)
+		_, exe := useFakeGit(t)
+		fakeGitOutput(t, strings.Repeat("M\x00some/path\x00", 200))
+		fakeGitStderrOutput(t, complaint+"\n", 3)
+
+		repo, err := vcs.OpenBare(ctx(t), fakeBareDir(t), vcs.WithGitBinary(exe), vcs.WithMaxOutput(1<<20))
+		if err != nil {
+			t.Fatalf("OpenBare against the stand-in git: %v", err)
+		}
+		_, err = repo.ChangedFiles(ctx(t), "a", "b")
+		if errors.Is(err, vcs.ErrOutputTooLarge) {
+			t.Fatalf("ChangedFiles under a large limit = %v; want the failure git reported", err)
+		}
+		var cmdErr *vcs.CommandError
+		if !errors.As(err, &cmdErr) {
+			t.Fatalf("error = %v; want a *CommandError", err)
+		}
+		if cmdErr.ExitCode != 3 || !strings.Contains(cmdErr.Stderr, complaint) {
+			t.Errorf("CommandError = exit %d, %q; want exit 3 and git's message", cmdErr.ExitCode, cmdErr.Stderr)
+		}
+	})
+}

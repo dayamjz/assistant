@@ -27,8 +27,11 @@ func (f RedactorFunc) Redact(s string) string { return f(s) }
 
 // urlUserinfo matches the userinfo of a URL that carries a scheme, which is
 // the shape a credentialed git remote takes: scheme://user:password@host.
-// The host part is required to be non-empty so that a bare "http://@" or a
-// mail-like token without a scheme does not match.
+//
+// What the pattern requires is a scheme, then at least one character before
+// the @, so "http://@" does not match and neither does a mail-like token that
+// carries no scheme. It requires nothing after the @, so "https://user:pw@"
+// with no host does match and is redacted.
 var urlUserinfo = regexp.MustCompile(`([a-zA-Z][a-zA-Z0-9+.\-]*://)([^/@\s]+)@`)
 
 // defaultRedactor is what this package uses when no Redactor is supplied. It

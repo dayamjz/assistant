@@ -283,7 +283,16 @@ func (r *Repository) run(ctx context.Context, op string, args ...string) ([]byte
 
 	runErr := cmd.Run()
 	if stdout.over {
-		return nil, r.commandError(op, full, -1, "", false, ErrOutputTooLarge)
+		// The output is refused whole, but what git reported about the run is
+		// not thrown away with it: an invocation that overran the limit and
+		// then also failed has an exit status and a message, and they are the
+		// most wanted facts about it.
+		code := -1
+		if cmd.ProcessState != nil {
+			code = cmd.ProcessState.ExitCode()
+		}
+		msg, truncated := stderr.collected()
+		return nil, r.commandError(op, full, code, msg, truncated, ErrOutputTooLarge)
 	}
 	if runErr != nil {
 		// The status git exited with is on the process state whether or not
