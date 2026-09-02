@@ -59,9 +59,12 @@ type Refusal struct {
 	// Anchor is the observation the update was submitted with. Its zero value
 	// means the refusal happened before the anchor was read.
 	Anchor Observation
-	// Observed is what the fresh read found on the remote, when one
-	// succeeded. Its zero value means the remote was not read, or was read
-	// and did not advertise the target.
+	// Observed is what the fresh read found on the remote, when one succeeded
+	// and reduced to one state for the target. Its zero value means the remote
+	// was not read, or was read and did not advertise the target, or was read
+	// and could not be reduced to one state for it. The last case is a target
+	// advertised more than once or advertised with no object, and no state is
+	// invented for either; Reason and Detail say which happened.
 	Observed RemoteState
 	// Discarded names the commits the fresh read's target holds that the
 	// proposed commit does not contain. It is populated for ReasonWouldDiscard

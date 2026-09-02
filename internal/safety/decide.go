@@ -32,8 +32,10 @@ const (
 	// KindFastForward is the target's commit is contained in the proposed
 	// commit, so the update discards nothing whatever else is true.
 	KindFastForward Kind = "fast-forward"
-	// KindAnchoredForce is the update rewrites history the run observed and
-	// therefore chose to rewrite. Decision.Rewritten names what it drops.
+	// KindAnchoredForce is the target still names the commit the run
+	// observed, and the proposed commit does not contain it, so the update
+	// drops commits the branch holds. Decision.Rewritten names every one of
+	// them.
 	KindAnchoredForce Kind = "anchored-force"
 )
 
@@ -83,9 +85,12 @@ func (d Decision) Anchor() Observation { return d.anchor }
 // not contain, and that this update therefore drops from the branch. It is
 // empty for KindCreate and KindFastForward.
 //
-// These are commits the run observed at its anchor, so dropping them is the
-// run rewriting its own history rather than losing someone else's. A caller
-// reports them; it does not have to act on them.
+// What is enforced is that the target still names the commit the run observed,
+// so the drop is anchored to a state the run saw, and that every commit the
+// update drops is named here. Who wrote them is not established: this package
+// never learns the run's base, so a commit that reached the target before the
+// observation is indistinguishable from one the run submitted. A caller reports
+// this list; it does not have to act on it.
 //
 // Each call returns a fresh slice, so a holder cannot edit the record of what
 // this decision drops.
@@ -110,9 +115,9 @@ func (d Decision) String() string {
 //   - The run observed a commit, the target still names it, and the proposed
 //     commit contains it. Nothing on the target is lost.
 //   - The run observed a commit, the target still names it, and the proposed
-//     commit does not contain it. The update rewrites commits the run
-//     observed, which is the run rewriting what it submitted. Decision.
-//     Rewritten names them.
+//     commit does not contain it. The update drops the commits the target
+//     holds that the proposed commit does not contain, anchored to the state
+//     the run observed. Decision.Rewritten names them.
 //
 // Everything else is a *Refusal. A target that moved since the observation is
 // refused whether or not commits would be lost, because an anchor that does
@@ -168,10 +173,7 @@ func (g *Guard) Decide(ctx context.Context, u Update) (Decision, error) {
 		}, nil
 	}
 
-	if err := g.requireRelated(ctx, u, current, proposed); err != nil {
-		return Decision{}, err
-	}
-	rewritten, err := g.commitsNotIn(ctx, u, current, proposed)
+	rewritten, err := g.dropped(ctx, u, current, proposed)
 	if err != nil {
 		return Decision{}, err
 	}
@@ -213,10 +215,7 @@ func (g *Guard) refuseMoved(ctx context.Context, u Update, proposed string, curr
 				" and the remote no longer advertises it, so the anchor cannot be honored",
 		}
 	}
-	if err := g.requireRelated(ctx, u, current, proposed); err != nil {
-		return err
-	}
-	discarded, err := g.commitsNotIn(ctx, u, current, proposed)
+	discarded, err := g.dropped(ctx, u, current, proposed)
 	if err != nil {
 		return err
 	}
@@ -234,6 +233,20 @@ func (g *Guard) refuseMoved(ctx context.Context, u Update, proposed string, curr
 		Discarded: discarded,
 		Detail:    detail,
 	}
+}
+
+// dropped names the commits the fresh read found on the target that
+// incorporated does not contain. It establishes that the two are related
+// first, because a comparison across unrelated histories answers a question
+// nobody asked.
+//
+// Both the allow path and refuseMoved go through here, so a rule added to this
+// sequence applies to both and cannot end up relaxed on one of them.
+func (g *Guard) dropped(ctx context.Context, u Update, current RemoteState, incorporated string) ([]string, error) {
+	if err := g.requireRelated(ctx, u, current, incorporated); err != nil {
+		return nil, err
+	}
+	return g.commitsNotIn(ctx, u, current, incorporated)
 }
 
 // requireRelated refuses when the commit the fresh read found on the target

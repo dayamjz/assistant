@@ -399,6 +399,25 @@ func TestDecideRefusesARemoteAdvertisingTheTargetTwice(t *testing.T) {
 	if !errors.As(err, &refusal) || refusal.Reason != safety.ReasonUnverifiable {
 		t.Fatalf("Observe error = %v, want a *Refusal with %s", err, safety.ReasonUnverifiable)
 	}
+	if refusal.Observed != (safety.RemoteState{}) {
+		t.Fatalf("Observed = %v, want the zero state: two advertisements do not reduce to one, and none is invented", refusal.Observed)
+	}
+}
+
+func TestObserveRefusesATargetAdvertisedWithNoObject(t *testing.T) {
+	t.Parallel()
+	git := &fakeGit{
+		parents:    linear("c1"),
+		advertised: map[string][][]vcs.Ref{remote: {{{Name: ref}}}},
+	}
+	_, err := safety.New(git).Observe(context.Background(), target)
+	var refusal *safety.Refusal
+	if !errors.As(err, &refusal) || refusal.Reason != safety.ReasonUnverifiable {
+		t.Fatalf("Observe error = %v, want a *Refusal with %s", err, safety.ReasonUnverifiable)
+	}
+	if refusal.Observed != (safety.RemoteState{}) {
+		t.Fatalf("Observed = %v, want the zero state: an advertisement with no object names no commit", refusal.Observed)
+	}
 }
 
 func TestObserveReadsOnlyTheExactlyNamedReference(t *testing.T) {

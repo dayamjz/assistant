@@ -77,7 +77,7 @@ func (s RemoteState) String() string {
 // apart from a run that observed the target, did its work, and then decided.
 // What is enforced here is that the anchor is an observation of this target
 // and that the decision is made against a read taken after it. When the anchor
-// was taken is the calling stage's responsibility, and PRD section 11 asserts
+// was taken is the calling stage's responsibility, and PRD section 13 asserts
 // on the anchor value for exactly that reason.
 type Observation struct {
 	target   Target

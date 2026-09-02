@@ -30,7 +30,7 @@
 // here is that the anchor is an observation of the target being updated and
 // that every decision is taken against a read made at decision time. When the
 // observation was taken belongs to the calling stage, which is why PRD section
-// 11 asserts on the anchor value rather than on the outcome of a push.
+// 13 asserts on the anchor value rather than on the outcome of a push.
 //
 // # What is allowed
 //
@@ -40,9 +40,13 @@
 //   - KindFastForward. The target still names the observed commit, and the
 //     proposed commit contains it, so nothing on the branch is lost.
 //   - KindAnchoredForce. The target still names the observed commit, and the
-//     proposed commit does not contain it. The commits dropped are ones the
-//     run observed, so this is the run rewriting what it submitted rather than
-//     discarding work it never saw. Decision.Rewritten names them.
+//     proposed commit does not contain it. The update drops the commits the
+//     target holds that the proposed commit does not contain, and
+//     Decision.Rewritten names every one of them. The drop is anchored to a
+//     state the run observed; that the run wrote what is dropped is not
+//     established, because this package never learns the run's base and so
+//     cannot tell a commit that reached the target before the observation from
+//     one the run submitted.
 //
 // A target that moved since the observation is refused whether or not commits
 // would be lost. Where loss was identified the refusal names every commit the
