@@ -51,6 +51,12 @@ make lint      # vet and golangci-lint
 make check     # lint and test, what CI runs
 ```
 
+`make lint` requires golangci-lint from the v2 series, the line that can read
+this module's `.golangci.yml`. It refuses when the linter is missing or comes
+from another major series rather than quietly running `go vet` alone, so a
+green `make check` always means lint ran. `make lint-guard-test` proves that
+refusal still fires.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
