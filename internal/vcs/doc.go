@@ -68,12 +68,19 @@
 // not change that, because a process able to set them is already able to set
 // PATH or replace the git binary.
 //
-// Restricting which transports an operation may use is not offered here.
-// GIT_ALLOW_PROTOCOL is removed rather than honored, because a value inherited
-// from an ancestor process is that process choosing what an operation may run,
-// which is what PRD principle P7 forbids, and an operator who wants that
-// restriction loses it. An explicit option on this package would be the right
-// home for it. There is no such option today.
+// Where an inherited variable bears on what an operation may run, this package
+// applies one rule: it removes a variable that can widen what an operation is
+// allowed to do, and it honors one that can only narrow it. Widening is an
+// ancestor process choosing what runs, which is what PRD principle P7 forbids.
+// Narrowing is an ancestor process protecting itself, and taking that away
+// would be a loss with nothing bought.
+//
+// Both sides of that line are named so the rule is checkable against the list.
+// On the removed side is GIT_ALLOW_PROTOCOL, and the cost is real: an operator
+// who set it to restrict transports loses that restriction here, and an
+// explicit option on this package would be the right home for it. There is no
+// such option today. On the honored side is GIT_PROTOCOL_FROM_USER, which is
+// absent from redirectingVars for that reason rather than by oversight.
 //
 // Every invocation is non-interactive. There is nobody to answer a prompt
 // inside a pipeline, so a prompt is a hang rather than a question. What this

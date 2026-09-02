@@ -1,12 +1,14 @@
 package vcs_test
 
 import (
+	"context"
 	"errors"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dayamjz/assistant/internal/vcs"
 )
@@ -45,7 +47,8 @@ func TestEveryInvocationIsExplicitAndNonInteractive(t *testing.T) {
 	t.Setenv("GIT_REDIRECT_STDERR", "/tmp/err")
 	t.Setenv("GIT_PROXY_COMMAND", "/tmp/evil-proxy")
 	t.Setenv("GIT_ALLOW_PROTOCOL", "ext")
-	t.Setenv("GIT_PROTOCOL_FROM_USER", "1")
+	// Set for the accepting half of the same rule: this one must survive.
+	t.Setenv("GIT_PROTOCOL_FROM_USER", "0")
 
 	barePath := fakeBareDir(t)
 	repo, err := vcs.OpenBare(ctx(t), barePath, vcs.WithGitBinary(exe))
@@ -75,16 +78,21 @@ func TestEveryInvocationIsExplicitAndNonInteractive(t *testing.T) {
 			"GIT_TEMPLATE_DIR", "GIT_EXEC_PATH",
 			"GIT_EXTERNAL_DIFF", "GIT_EXTERNAL_DIFF_TRUST_EXIT_CODE",
 			"GIT_SSH", "GIT_SSH_VARIANT", "GIT_PROXY_COMMAND",
-			"GIT_ALLOW_PROTOCOL", "GIT_PROTOCOL_FROM_USER",
+			"GIT_ALLOW_PROTOCOL",
 			"GIT_REDIRECT_STDIN", "GIT_REDIRECT_STDOUT", "GIT_REDIRECT_STDERR",
 		} {
 			if v, ok := lookupEnv(call.Env, name); ok {
 				t.Errorf("%s reached git as %q; it must be removed", name, v)
 			}
 		}
-		// The configuration file location a caller chose deliberately stays.
-		if _, ok := lookupEnv(call.Env, "GIT_CONFIG_GLOBAL"); !ok {
-			t.Errorf("GIT_CONFIG_GLOBAL was removed; only redirecting variables should be")
+		// The other side of the rule: what a caller set deliberately stays.
+		// GIT_CONFIG_GLOBAL is the configuration file location it chose, and
+		// GIT_PROTOCOL_FROM_USER can only narrow what an invocation may do,
+		// so removing it would take away a protection and buy nothing.
+		for _, name := range []string{"GIT_CONFIG_GLOBAL", "GIT_PROTOCOL_FROM_USER"} {
+			if _, ok := lookupEnv(call.Env, name); !ok {
+				t.Errorf("%s was removed; only widening variables should be", name)
+			}
 		}
 
 		// Nothing may wait for a person.
@@ -422,4 +430,49 @@ func TestOverLimitOutputStillReportsWhatGitSaid(t *testing.T) {
 			t.Errorf("CommandError = exit %d, %q; want exit 3 and git's message", cmdErr.ExitCode, cmdErr.Stderr)
 		}
 	})
+}
+
+// An invocation can fail two ways at once. Refusing its output for the limit
+// must not erase the fact that a deadline is what ended the call, or a caller
+// cannot tell a timeout from any other failure.
+func TestOverLimitOutputKeepsTheDeadlineThatEndedTheCall(t *testing.T) {
+	gitEnvironment(t)
+	_, exe := useFakeGit(t)
+	fakeGitOutput(t, strings.Repeat("worktree /somewhere\x00\x00", 40))
+	// The listing invocation writes past the limit and then waits, so the
+	// deadline ends the call after the overflow is already recorded.
+	t.Setenv(fakeGitStallOn, "list")
+
+	// The limit is above the probe an open makes and below what the stand-in
+	// writes for the listing.
+	repo, err := vcs.OpenBare(ctx(t), fakeBareDir(t), vcs.WithGitBinary(exe), vcs.WithMaxOutput(100))
+	if err != nil {
+		t.Fatalf("OpenBare against the stand-in git: %v", err)
+	}
+
+	deadlined, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	got, err := repo.ListWorktrees(deadlined)
+	if got != nil {
+		t.Errorf("ListWorktrees returned %d entries alongside the refusal; want none", len(got))
+	}
+	if !errors.Is(err, vcs.ErrOutputTooLarge) {
+		t.Errorf("error = %v; want it to match ErrOutputTooLarge", err)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("error = %v; want it to match context.DeadlineExceeded", err)
+	}
+
+	// The accepting path for the second half: an overflow with no deadline
+	// behind it must not claim one.
+	plain, err := vcs.OpenBare(ctx(t), fakeBareDir(t), vcs.WithGitBinary(exe), vcs.WithMaxOutput(100))
+	if err != nil {
+		t.Fatalf("OpenBare against the stand-in git: %v", err)
+	}
+	t.Setenv(fakeGitStallOn, "")
+	if _, err := plain.ListWorktrees(ctx(t)); !errors.Is(err, vcs.ErrOutputTooLarge) {
+		t.Errorf("error = %v; want ErrOutputTooLarge", err)
+	} else if errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("error = %v; want no deadline claimed when none expired", err)
+	}
 }

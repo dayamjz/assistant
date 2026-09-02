@@ -23,14 +23,15 @@ import (
 // the same way on every platform CI covers.
 
 const (
-	fakeGitMode   = "VCS_TEST_FAKE_GIT"
-	fakeGitLog    = "VCS_TEST_FAKE_GIT_LOG"
-	fakeGitStdout = "VCS_TEST_FAKE_GIT_STDOUT_FILE"
-	fakeGitStderr = "VCS_TEST_FAKE_GIT_STDERR_FILE"
-	fakeGitExit   = "VCS_TEST_FAKE_GIT_EXIT"
-	fakeGitDieOn  = "VCS_TEST_FAKE_GIT_DIE_ON"
-	fakeGitHoldOn = "VCS_TEST_FAKE_GIT_HOLD_PIPES_ON"
-	fakeGitHolder = "VCS_TEST_FAKE_GIT_PIPE_HOLDER"
+	fakeGitMode    = "VCS_TEST_FAKE_GIT"
+	fakeGitLog     = "VCS_TEST_FAKE_GIT_LOG"
+	fakeGitStdout  = "VCS_TEST_FAKE_GIT_STDOUT_FILE"
+	fakeGitStderr  = "VCS_TEST_FAKE_GIT_STDERR_FILE"
+	fakeGitExit    = "VCS_TEST_FAKE_GIT_EXIT"
+	fakeGitDieOn   = "VCS_TEST_FAKE_GIT_DIE_ON"
+	fakeGitHoldOn  = "VCS_TEST_FAKE_GIT_HOLD_PIPES_ON"
+	fakeGitStallOn = "VCS_TEST_FAKE_GIT_STALL_ON"
+	fakeGitHolder  = "VCS_TEST_FAKE_GIT_PIPE_HOLDER"
 )
 
 // pipeHold is how long the grandchild keeps the pipes it inherited open. It
@@ -144,6 +145,13 @@ func fakeGitMain() int {
 			return 3
 		}
 		os.Stderr.Write(data)
+	}
+	// Output first, then a wait long enough for a caller's deadline to end the
+	// call, which is how a test reaches the path where an invocation both
+	// overran its output limit and ran out of time.
+	if marker := os.Getenv(fakeGitStallOn); marker != "" && slices.Contains(args, marker) {
+		time.Sleep(pipeHold)
+		return 3
 	}
 	if code := os.Getenv(fakeGitExit); code != "" {
 		n, err := strconv.Atoi(code)

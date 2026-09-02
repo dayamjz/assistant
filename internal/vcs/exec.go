@@ -127,8 +127,9 @@ var redirectingVars = []string{
 	"GIT_DISCOVERY_ACROSS_FILESYSTEM",
 
 	// Where its configuration is read from. The variables that carry
-	// configuration values directly are here; the ones that relocate a
-	// configuration file are deliberately kept, and the package doc says why.
+	// configuration values directly are here, along with the historical
+	// selector git config alone reads; the global and system configuration
+	// file locations are deliberately kept, and the package doc says why.
 	"GIT_CONFIG",
 	"GIT_CONFIG_PARAMETERS",
 	"GIT_CONFIG_COUNT",
@@ -151,7 +152,6 @@ var redirectingVars = []string{
 	"GIT_SSH_VARIANT",
 	"GIT_PROXY_COMMAND",
 	"GIT_ALLOW_PROTOCOL",
-	"GIT_PROTOCOL_FROM_USER",
 	"DISPLAY",
 
 	// Where its own standard streams go. Standard output is the result this
@@ -302,7 +302,14 @@ func (r *Repository) run(ctx context.Context, op string, args ...string) ([]byte
 			code = cmd.ProcessState.ExitCode()
 		}
 		msg, truncated := stderr.collected()
-		return nil, r.commandError(op, full, code, msg, truncated, ErrOutputTooLarge)
+		cause := ErrOutputTooLarge
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			// A call the context ended has to keep saying so, or a caller
+			// cannot tell a deadline from any other failure. Both this and
+			// ErrOutputTooLarge stay matchable with errors.Is.
+			cause = errors.Join(cause, ctxErr)
+		}
+		return nil, r.commandError(op, full, code, msg, truncated, cause)
 	}
 	if runErr != nil {
 		// The status git exited with is on the process state whether or not
