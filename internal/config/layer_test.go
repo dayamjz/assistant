@@ -516,3 +516,142 @@ func TestParseRepeatedMemberRefusalIsDeterministic(t *testing.T) {
 		t.Errorf("expected the first repetition in document order, got %q", first)
 	}
 }
+
+// The repeated-member scan has to survive every value shape a document Parse
+// accepts can contain, and say so loudly when it cannot. A number outside
+// float64 range is the case that defeated an earlier scan: it decoded fine for
+// Parse, which reads numbers as json.Number, and errored for a scan that did
+// not, which then reported no repetition for the rest of the document.
+func TestParseRefusesARepeatedMemberPastAwkwardValues(t *testing.T) {
+	cases := []struct {
+		name string
+		doc  string
+		key  string
+	}{
+		{"after a number outside float64 range",
+			`{"run_budget": 1e400, "no_ci": false, "no_ci": true}`, "no_ci"},
+		{"the repeated key is itself the huge number",
+			`{"ignore_patterns": 1e400, "ignore_patterns": ["*.md"], "no_ci": false}`, "ignore_patterns"},
+		{"after a number with hundreds of digits",
+			`{"run_budget": ` + strings.Repeat("9", 400) + `, "no_ci": false, "no_ci": true}`, "no_ci"},
+		{"after a deeply negative exponent",
+			`{"run_budget": -1e-400, "no_ci": false, "no_ci": true}`, "no_ci"},
+		{"after a string with escapes and non-ASCII text",
+			`{"commands": {"test": "a\"b\\cé😀\n"}, "no_ci": false, "no_ci": true}`, "no_ci"},
+		{"after a null and a nested empty list",
+			`{"agent": null, "review": {"path_rules": []}, "no_ci": false, "no_ci": true}`, "no_ci"},
+		{"after a value of the wrong type for its key",
+			`{"no_ci": {"a": [1, 2, {"b": "c"}]}, "no_ci": true}`, "no_ci"},
+	}
+	for _, c := range cases {
+		_, err := Parse(OriginTrusted, []byte(c.doc))
+		var ke *KeyError
+		if !errors.As(err, &ke) || !errors.Is(err, ErrInvalid) {
+			t.Errorf("%s: Parse returned %v, want a KeyError for a repeated member", c.name, err)
+			continue
+		}
+		if string(ke.Key) != c.key {
+			t.Errorf("%s: refusal names %q, want %q", c.name, ke.Key, c.key)
+		}
+		if !strings.Contains(ke.Detail, "more than once") {
+			t.Errorf("%s: detail %q does not say the key is repeated", c.name, ke.Detail)
+		}
+	}
+	// The same awkward values are still accepted, or refused on their own
+	// merits, when nothing is repeated: the scan does not invent faults.
+	if _, err := Parse(OriginTrusted, []byte(`{"commands": {"test": "a\"b\\cé😀\t"}}`)); err != nil {
+		t.Errorf("Parse refused a document with an escaped string: %v", err)
+	}
+	_, err := Parse(OriginTrusted, []byte(`{"run_budget": 1e400}`))
+	var ke *KeyError
+	if !errors.As(err, &ke) || ke.Key != KeyRunBudget {
+		t.Errorf("Parse returned %v, want a KeyError naming %q", err, KeyRunBudget)
+	}
+}
+
+// A document Parse accepts was scanned all the way to its end. Appending a
+// repeated member to an accepted document must therefore always be caught: if
+// the scan had stopped early, the appended repetition would slip through.
+func TestParseScansAcceptedDocumentsToTheEnd(t *testing.T) {
+	accepted := []string{
+		`{}`,
+		`{"no_ci": true}`,
+		`{"commands": {"test": "go test ./...", "lint": "", "format": "gofmt -l ."}}`,
+		`{"agent": ["claude", "codex"], "fix_rounds": {"review": 0, "test": 3}}`,
+		`{"ignore_patterns": ["*.md", "docs/**", "**/vendor/**"], "run_budget": 40}`,
+		`{"review": {"path_rules": [{"paths": ["a.go"], "guidance": "g"},` +
+			`{"paths": ["b/**", "c.go"], "guidance": "h"}]}}`,
+		`{"document": {"ownership": [{"subject": "s", "document": "d.md"},` +
+			`{"subject": "t", "document": "e.md"}]}}`,
+		`{"checks_timeout": "168h", "session_reuse": false, "commit": {"fix_message": "fix: {summary}"}}`,
+		`{"suppress_project_instructions": true, "allow_pushed_commands": true, "no_ci": false}`,
+	}
+	for _, doc := range accepted {
+		if _, err := Parse(OriginTrusted, []byte(doc)); err != nil {
+			t.Errorf("Parse(%s) was expected to be accepted: %v", doc, err)
+			continue
+		}
+		withRepeat := strings.TrimSuffix(doc, "}") + `,"no_ci": true, "no_ci": false}`
+		withRepeat = strings.Replace(withRepeat, "{,", "{", 1)
+		_, err := Parse(OriginTrusted, []byte(withRepeat))
+		var ke *KeyError
+		if !errors.As(err, &ke) || !strings.Contains(ke.Detail, "more than once") {
+			t.Errorf("Parse(%s) returned %v, want the appended repetition refused", withRepeat, err)
+			continue
+		}
+		if ke.Key != KeyNoCI {
+			t.Errorf("Parse(%s) named %q, want %q", withRepeat, ke.Key, KeyNoCI)
+		}
+	}
+}
+
+// An entry with more than one unrecognized field names the same one every
+// time. Map iteration order is randomized, so an unsorted scan reports a
+// different field per run and a fix chases a moving target.
+func TestParseUnknownEntryFieldRefusalIsDeterministic(t *testing.T) {
+	cases := []struct {
+		name  string
+		doc   string
+		field string
+	}{
+		{"path rule", `{"review": {"path_rules": [{"paths": ["a.go"], "guidance": "g",` +
+			` "why": 1, "how": 2, "zeta": 3}]}}`, `"how"`},
+		{"ownership entry", `{"document": {"ownership": [{"subject": "s", "document": "d.md",` +
+			` "why": 1, "how": 2, "zeta": 3}]}}`, `"how"`},
+	}
+	for _, c := range cases {
+		first := ""
+		for range 50 {
+			_, err := Parse(OriginTrusted, []byte(c.doc))
+			if err == nil {
+				t.Fatalf("%s: Parse accepted an entry with unrecognized fields", c.name)
+			}
+			if first == "" {
+				first = err.Error()
+				continue
+			}
+			if err.Error() != first {
+				t.Fatalf("%s: Parse reported %q then %q for the same document", c.name, first, err)
+			}
+		}
+		if !strings.Contains(first, "unrecognized field "+c.field) {
+			t.Errorf("%s: expected the first unknown field in sorted order, got %q", c.name, first)
+		}
+	}
+}
+
+// The scan refuses rather than reporting "no repetition" when it cannot read a
+// document to its end. Parse rejects these documents before the scan sees
+// them, so this drives the scan directly: the property is that no path through
+// it returns success for bytes it did not finish reading.
+func TestRepeatedMemberScanRefusesWhatItCannotFinish(t *testing.T) {
+	for _, doc := range []string{`{"a": 1`, `{"a": [1, 2`, `{"a": {`, `{"a": 1} trailing`} {
+		err := checkNoRepeatedNames([]byte(doc))
+		if !errors.Is(err, ErrMalformed) {
+			t.Errorf("checkNoRepeatedNames(%s) = %v, want a refusal wrapping ErrMalformed", doc, err)
+		}
+	}
+	if err := checkNoRepeatedNames([]byte(`{"a": {"b": [1, {"c": 2}]}, "d": 1e400}`)); err != nil {
+		t.Errorf("checkNoRepeatedNames refused a complete document: %v", err)
+	}
+}

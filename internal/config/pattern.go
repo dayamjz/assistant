@@ -57,9 +57,12 @@ var ErrBadPattern = errors.New("config: malformed path pattern")
 // ErrBadPattern.
 //
 // A pattern is bounded at MaxPatternRunes characters and MaxPatternSegments
-// segments. Matching is bounded by the product of those two whatever the
-// pattern contains, so the ignore list, which a pushed branch may set, cannot
-// be turned into an expensive one.
+// segments, so the ignore list, which a pushed branch may set, cannot carry an
+// unbounded pattern. Matching one then costs at most the pattern's segment
+// count times the path's segment count, each step being one path.Match over a
+// single segment, however many "**" segments the pattern has. Only the pattern
+// is bounded here: a caller that tests arbitrarily deep paths bounds those
+// itself.
 func ParsePattern(s string) (Pattern, error) {
 	if s == "" {
 		return Pattern{}, patternErr(s, "a pattern may not be empty")

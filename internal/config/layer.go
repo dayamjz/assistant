@@ -3,6 +3,8 @@ package config
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
+	"io"
 	"sort"
 	"strings"
 )
@@ -89,17 +91,28 @@ func Parse(origin Origin, data []byte) (Layer, error) {
 // two things at once is refused rather than resolved to one of them.
 //
 // It rescans the raw bytes at the token level, because the decoded value has
-// already lost the repetition. Parse decoded the same bytes successfully
-// first, so a scanning error here is not reachable and is reported as no
-// repetition rather than as a second, differently worded refusal for a
-// document that was already accepted as well formed.
+// already lost the repetition. The scan decodes numbers the way Parse's own
+// decoder does, so a literal Parse accepts cannot be one the scan chokes on,
+// and it reports rather than assumes: an error from the scan, or a scan that
+// stops with a container still open, is a refusal of the whole document. It
+// returns nil in one case only, when the token stream reached its end with
+// every container it opened closed, so a document it admits is one it read
+// through.
 func checkNoRepeatedNames(data []byte) error {
 	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
 	var stack []*jsonFrame
 	for {
 		tok, err := dec.Token()
-		if err != nil {
+		if errors.Is(err, io.EOF) {
+			if len(stack) != 0 {
+				return &DocumentError{Detail: "the document ended with " + itoa(len(stack)) +
+					" unclosed values while it was scanned for repeated keys"}
+			}
 			return nil
+		}
+		if err != nil {
+			return &DocumentError{Detail: "the document could not be scanned for repeated keys", Err: err}
 		}
 		var top *jsonFrame
 		if n := len(stack); n > 0 {

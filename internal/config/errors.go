@@ -30,9 +30,12 @@ var (
 // wraps ErrInvalid.
 type KeyError struct {
 	// Key names what was refused, in the dotted form the PRD section 10
-	// schema uses, such as "fix_rounds.review". A fault inside a list also
-	// carries the element index, as in "review.path_rules[0].guidance", so a
-	// refusal points at the entry rather than at the list.
+	// schema uses, such as "fix_rounds.review". Only the refusal of a
+	// repeated member indexes into a list, as in
+	// "review.path_rules[0].guidance", because only that refusal knows where
+	// in the document it stood. Every other fault inside a list names the
+	// list key itself and says which entry in Detail, so a caller matching on
+	// Key alone gets the list key for those.
 	Key Key
 	// Value is the offending value rendered as JSON, or empty when the
 	// problem is the key itself rather than a value.

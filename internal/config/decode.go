@@ -2,6 +2,8 @@ package config
 
 import (
 	"encoding/json"
+	"slices"
+	"sort"
 	"strings"
 	"time"
 	"unicode"
@@ -74,6 +76,25 @@ func checkRunes(k Key, v any, what, s string, limit int) error {
 		return keyErr(k, v, "the "+what+" is "+itoa(n)+" characters and the limit is "+itoa(limit))
 	}
 	return nil
+}
+
+// unknownField returns the first field of an object that is not one of the
+// allowed ones, in sorted order. The order is the point: Go randomizes map
+// iteration, so an entry with two unrecognized fields would otherwise name a
+// different one on each run, and this package reports the same fault every
+// time for the same document.
+func unknownField(m map[string]any, allowed ...string) (string, bool) {
+	names := make([]string, 0, len(m))
+	for name := range m {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if !slices.Contains(allowed, name) {
+			return name, true
+		}
+	}
+	return "", false
 }
 
 func checkLen(k Key, v any, what string, n, limit int) error {
@@ -283,10 +304,8 @@ func decodePathRules(k Key, v any) (any, error) {
 		if !ok {
 			return nil, keyErr(k, v, "rule "+itoa(i)+" must be an object with a paths list and guidance")
 		}
-		for field := range m {
-			if field != "paths" && field != "guidance" {
-				return nil, keyErr(k, v, "rule "+itoa(i)+" has an unrecognized field "+quote(field))
-			}
+		if field, found := unknownField(m, "paths", "guidance"); found {
+			return nil, keyErr(k, v, "rule "+itoa(i)+" has an unrecognized field "+quote(field))
 		}
 		rawPaths, ok := m["paths"]
 		if !ok {
@@ -340,10 +359,8 @@ func decodeOwnership(k Key, v any) (any, error) {
 		if !ok {
 			return nil, keyErr(k, v, "entry "+itoa(i)+" must be an object with a subject and a document")
 		}
-		for field := range m {
-			if field != "subject" && field != "document" {
-				return nil, keyErr(k, v, "entry "+itoa(i)+" has an unrecognized field "+quote(field))
-			}
+		if field, found := unknownField(m, "subject", "document"); found {
+			return nil, keyErr(k, v, "entry "+itoa(i)+" has an unrecognized field "+quote(field))
 		}
 		subject, serr := ownershipField(k, m, i, "subject")
 		if serr != nil {

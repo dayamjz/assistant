@@ -103,10 +103,9 @@
 // an ordinary character.
 //
 // The matcher is also bounded, because the ignore list is one of the keys a
-// pushed branch may set. A pattern is capped at MaxPatternRunes characters and
-// MaxPatternSegments segments, and matching one costs at most the product of
-// the pattern's and the path's segment counts however many "**" segments the
-// pattern has.
+// pushed branch may set. ParsePattern documents the limits and what they do
+// and do not bound; the part that matters here is that no pattern can make one
+// match cost more than the pattern's segment count times the path's.
 //
 // # What this package does not do
 //
