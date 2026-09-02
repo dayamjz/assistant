@@ -202,4 +202,8 @@
 // It does not create the home directory layout, run git, or decide what a run
 // or a stage is allowed to do next. It records what happened and refuses what
 // it cannot record honestly.
+//
+// It does not yet carry every record PRD section 8 lists. The agent invocation
+// record has no table and no accessor here; adding it is a later migration, and
+// until then this package is not where a caller looks for one.
 package store
