@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func mustPattern(t *testing.T, s string) Pattern {
@@ -217,5 +218,85 @@ func TestPatternSetReportsWhichPatternMatched(t *testing.T) {
 	}
 	if PatternSet(nil).Matches("a.md") {
 		t.Error("an empty set must match nothing")
+	}
+}
+
+// A pattern with many "**" segments must not make matching expensive. The
+// recursive matcher this replaced explored one branch per way of distributing
+// path segments across the stars, which did not finish for this input; the
+// bound is now the product of the two lengths.
+func TestPatternManyDoubleStarsMatchQuickly(t *testing.T) {
+	pattern := strings.Repeat("**/", 20) + "z.go"
+	deep := strings.Repeat("a/", 40)
+	cases := []struct {
+		path string
+		want bool
+	}{
+		{deep + "y.go", false},
+		{deep + "z.go", true},
+	}
+	p := mustPattern(t, pattern)
+	for _, c := range cases {
+		done := make(chan bool, 1)
+		go func() { done <- p.Match(c.path) }()
+		select {
+		case got := <-done:
+			if got != c.want {
+				t.Errorf("%q.Match(%q) = %v, want %v", pattern, c.path, got, c.want)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("%q.Match(%q) did not finish in 5s", pattern, c.path)
+		}
+	}
+}
+
+// A pattern is bounded in both length and segment count, and each bound
+// accepts at its limit and refuses one past it.
+func TestParsePatternEnforcesItsBoundsAtTheEdge(t *testing.T) {
+	segments := func(n int) string { return strings.Repeat("a/", n-1) + "a" }
+	cases := []struct {
+		name string
+		at   string
+		over string
+	}{
+		{"length", strings.Repeat("a", MaxPatternRunes), strings.Repeat("a", MaxPatternRunes+1)},
+		{"segments", segments(MaxPatternSegments), segments(MaxPatternSegments + 1)},
+	}
+	for _, c := range cases {
+		if _, err := ParsePattern(c.at); err != nil {
+			t.Errorf("%s: ParsePattern refused a pattern at the limit: %v", c.name, err)
+		}
+		_, err := ParsePattern(c.over)
+		if !errors.Is(err, ErrBadPattern) {
+			t.Errorf("%s: ParsePattern accepted a pattern past the limit, err = %v", c.name, err)
+		}
+	}
+}
+
+// A set normalizes the path once and every pattern still sees the same path,
+// including a path that normalization changes.
+func TestPatternSetMatchesNormalizedPathsForEveryPattern(t *testing.T) {
+	set := PatternSet{
+		mustPattern(t, "src/**"),
+		mustPattern(t, "docs/*"),
+		mustPattern(t, "*.md"),
+	}
+	cases := []struct {
+		path string
+		want string
+	}{
+		{`docs\a.md`, "docs/*"},
+		{"./docs//a.md", "docs/*"},
+		{"src/x/y.go", "src/**"},
+		{"other/deep/a.md", "*.md"},
+	}
+	for _, c := range cases {
+		p, ok := set.Match(c.path)
+		if !ok || p.String() != c.want {
+			t.Errorf("Match(%q) = (%q, %v), want %q", c.path, p, ok, c.want)
+		}
+	}
+	if _, ok := set.Match(`docs\a\b.go`); ok {
+		t.Error("a backslash path must not smuggle a segment past a wildcard in a set")
 	}
 }

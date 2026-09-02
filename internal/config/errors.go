@@ -29,8 +29,10 @@ var (
 // which line caused it sends the reader back to guessing. Every KeyError
 // wraps ErrInvalid.
 type KeyError struct {
-	// Key is the dotted key from the PRD section 10 schema, such as
-	// "fix_rounds.review".
+	// Key names what was refused, in the dotted form the PRD section 10
+	// schema uses, such as "fix_rounds.review". A fault inside a list also
+	// carries the element index, as in "review.path_rules[0].guidance", so a
+	// refusal points at the entry rather than at the list.
 	Key Key
 	// Value is the offending value rendered as JSON, or empty when the
 	// problem is the key itself rather than a value.

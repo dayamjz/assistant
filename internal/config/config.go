@@ -159,6 +159,12 @@ const (
 	MaxCommandRunes = 4096
 	// MaxIgnorePatterns is the number of ignore patterns.
 	MaxIgnorePatterns = 512
+	// MaxPatternRunes is the length of one path pattern.
+	MaxPatternRunes = 512
+	// MaxPatternSegments is the number of "/"-separated segments one path
+	// pattern may have. It bounds the matcher's work together with the length
+	// of the path being tested.
+	MaxPatternSegments = 64
 	// MaxPathRules is the number of path-scoped review rules.
 	MaxPathRules = 64
 	// MaxPathRulePaths is the number of patterns one review rule may scope to.

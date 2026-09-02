@@ -385,3 +385,134 @@ func parseError(t *testing.T, doc string) error {
 	_, err := Parse(OriginTrusted, []byte(doc))
 	return err
 }
+
+// A dotted key has one spelling. The flat form is refused rather than accepted
+// alongside the nested form, because a document that carries both would take
+// effect one way and read the other way to whoever reviews it.
+func TestParseRefusesTheFlatDottedSpelling(t *testing.T) {
+	cases := []struct {
+		name string
+		doc  string
+		flat string
+	}{
+		{"on its own", `{"fix_rounds.review": 2}`, "fix_rounds.review"},
+		{"shadowing the nested form", `{"fix_rounds": {"review": 1}, "fix_rounds.review": 2}`, "fix_rounds.review"},
+		{"inside a section", `{"fix_rounds": {"review.extra": 1}}`, "review.extra"},
+		{"unrecognized but dotted", `{"nope.nope": 1}`, "nope.nope"},
+	}
+	for _, c := range cases {
+		_, err := Parse(OriginTrusted, []byte(c.doc))
+		if !errors.Is(err, ErrInvalid) {
+			t.Errorf("%s: Parse(%s) returned %v, want ErrInvalid", c.name, c.doc, err)
+			continue
+		}
+		msg := err.Error()
+		if !strings.Contains(msg, c.flat) {
+			t.Errorf("%s: message %q does not name the flat spelling", c.name, msg)
+		}
+		parts := strings.Split(c.flat, ".")
+		for _, part := range parts {
+			if !strings.Contains(msg, `{"`+part+`": `) {
+				t.Errorf("%s: message %q does not show the nested spelling of %q", c.name, msg, part)
+			}
+		}
+	}
+	// The nested spelling of the same key is still accepted and still merges
+	// key by key.
+	res, err := Resolve(mustParse(t, OriginTrusted, `{"fix_rounds": {"review": 2}}`), Absent(OriginTrusted))
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if res.Config.FixRounds.Review != 2 {
+		t.Errorf("FixRounds.Review = %d, want 2", res.Config.FixRounds.Review)
+	}
+	if res.Config.FixRounds.Test != DefaultFixRoundsStage {
+		t.Errorf("FixRounds.Test = %d, want the default", res.Config.FixRounds.Test)
+	}
+}
+
+// A member name written twice in one object is refused. JSON decoding keeps
+// the last of them, so accepting it would resolve a document to a value a
+// reader of the file cannot see.
+func TestParseRefusesARepeatedMemberAtEveryDepth(t *testing.T) {
+	cases := []struct {
+		name string
+		doc  string
+		key  string
+	}{
+		{"top level", `{"no_ci": true, "no_ci": false}`, "no_ci"},
+		{"in commands", `{"commands": {"test": "a", "test": "b"}}`, "commands.test"},
+		{"in fix_rounds", `{"fix_rounds": {"review": 1, "review": 2}}`, "fix_rounds.review"},
+		{"in review", `{"review": {"path_rules": [], "path_rules": []}}`, "review.path_rules"},
+		{"in commit", `{"commit": {"fix_message": "fix: {summary}", "fix_message": "fix: {summary}"}}`, "commit.fix_message"},
+		{"in a path rule", `{"review": {"path_rules": [{"paths": ["a.go"], "guidance": "g", "guidance": "h"}]}}`,
+			"review.path_rules[0].guidance"},
+		{"in a later path rule", `{"review": {"path_rules": [{"paths": ["a.go"], "guidance": "g"},` +
+			`{"paths": ["b.go"], "paths": ["c.go"], "guidance": "g"}]}}`, "review.path_rules[1].paths"},
+		{"in an ownership entry", `{"document": {"ownership": [{"subject": "s", "subject": "t", "document": "d.md"}]}}`,
+			"document.ownership[0].subject"},
+		{"in a section object", `{"document": {"ownership": []}, "document": {"ownership": []}}`, "document"},
+	}
+	for _, c := range cases {
+		_, err := Parse(OriginTrusted, []byte(c.doc))
+		if !errors.Is(err, ErrInvalid) {
+			t.Errorf("%s: Parse(%s) returned %v, want ErrInvalid", c.name, c.doc, err)
+			continue
+		}
+		var ke *KeyError
+		if !errors.As(err, &ke) {
+			t.Errorf("%s: error %v is not a KeyError", c.name, err)
+			continue
+		}
+		if string(ke.Key) != c.key {
+			t.Errorf("%s: refusal names %q, want %q", c.name, ke.Key, c.key)
+		}
+		if !strings.Contains(ke.Detail, "more than once") {
+			t.Errorf("%s: detail %q does not say the key is repeated", c.name, ke.Detail)
+		}
+	}
+}
+
+// The same name in two different objects is not a repetition, so a document
+// that uses it is still accepted and still resolves both values.
+func TestParseAcceptsTheSameNameInDifferentObjects(t *testing.T) {
+	doc := `{"commands": {"test": "go test ./..."}, "fix_rounds": {"test": 2},
+		"review": {"path_rules": [{"paths": ["a.go"], "guidance": "g"},
+		                          {"paths": ["b.go"], "guidance": "h"}]}}`
+	res, err := Resolve(mustParse(t, OriginTrusted, doc), Absent(OriginTrusted))
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if res.Config.Commands.Test != "go test ./..." {
+		t.Errorf("Commands.Test = %q", res.Config.Commands.Test)
+	}
+	if res.Config.FixRounds.Test != 2 {
+		t.Errorf("FixRounds.Test = %d, want 2", res.Config.FixRounds.Test)
+	}
+	if len(res.Config.ReviewPathRules) != 2 {
+		t.Errorf("ReviewPathRules has %d rules, want 2", len(res.Config.ReviewPathRules))
+	}
+}
+
+// A document with more than one repeated member reports the same one every
+// time, the same determinism a document with several broken keys has.
+func TestParseRepeatedMemberRefusalIsDeterministic(t *testing.T) {
+	doc := []byte(`{"no_ci": true, "no_ci": false, "run_budget": 1, "run_budget": 2, "agent": []}`)
+	first := ""
+	for range 50 {
+		_, err := Parse(OriginTrusted, doc)
+		if err == nil {
+			t.Fatal("Parse accepted a document with repeated keys")
+		}
+		if first == "" {
+			first = err.Error()
+			continue
+		}
+		if err.Error() != first {
+			t.Fatalf("Parse reported %q then %q for the same document", first, err)
+		}
+	}
+	if !strings.Contains(first, string(KeyNoCI)) {
+		t.Errorf("expected the first repetition in document order, got %q", first)
+	}
+}

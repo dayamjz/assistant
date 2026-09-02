@@ -82,6 +82,13 @@
 // second claim on a subject, which is P14 enforced in configuration rather
 // than stated in prose.
 //
+// A document also has to mean one thing. A dotted key is written as nested
+// objects and the flat spelling is refused, and a member name repeated within
+// one object is refused at any depth, rather than either being resolved to the
+// value that happens to win. Both would otherwise let a file read one way to
+// whoever reviews the diff and take effect another way, and this configuration
+// selects commands that run with the operator's credentials.
+//
 // Keys are validated in sorted order, so a document with several problems
 // always reports the same one and a fix makes visible progress.
 //
@@ -94,6 +101,12 @@
 // segment at a time and a separator is never inside a segment, and because a
 // backslash in a path being matched is treated as a separator rather than as
 // an ordinary character.
+//
+// The matcher is also bounded, because the ignore list is one of the keys a
+// pushed branch may set. A pattern is capped at MaxPatternRunes characters and
+// MaxPatternSegments segments, and matching one costs at most the product of
+// the pattern's and the path's segment counts however many "**" segments the
+// pattern has.
 //
 // # What this package does not do
 //

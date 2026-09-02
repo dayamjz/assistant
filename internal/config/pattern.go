@@ -55,9 +55,20 @@ var ErrBadPattern = errors.New("config: malformed path pattern")
 // rather than silently reinterpreting it, so a typo in configuration surfaces
 // at load instead of quietly matching nothing. Every returned error wraps
 // ErrBadPattern.
+//
+// A pattern is bounded at MaxPatternRunes characters and MaxPatternSegments
+// segments. Matching is bounded by the product of those two whatever the
+// pattern contains, so the ignore list, which a pushed branch may set, cannot
+// be turned into an expensive one.
 func ParsePattern(s string) (Pattern, error) {
 	if s == "" {
 		return Pattern{}, patternErr(s, "a pattern may not be empty")
+	}
+	if n := len([]rune(s)); n > MaxPatternRunes {
+		return Pattern{}, patternErr(s, "the pattern is "+itoa(n)+" characters and the limit is "+itoa(MaxPatternRunes))
+	}
+	if n := strings.Count(s, "/") + 1; n > MaxPatternSegments {
+		return Pattern{}, patternErr(s, "the pattern has "+itoa(n)+" segments and the limit is "+itoa(MaxPatternSegments))
 	}
 	if strings.ContainsRune(s, '\\') {
 		return Pattern{}, patternErr(s, `a backslash has no meaning in a pattern; separate segments with "/"`)
@@ -133,7 +144,12 @@ func (p Pattern) String() string { return p.raw }
 // and "." segments are dropped. An empty path matches nothing, and so does the
 // zero Pattern.
 func (p Pattern) Match(filePath string) bool {
-	segs := splitPath(filePath)
+	return p.matchSegs(splitPath(filePath))
+}
+
+// matchSegs matches an already normalized path, so a set can normalize once
+// and test every pattern against the same segments.
+func (p Pattern) matchSegs(segs []string) bool {
 	if len(segs) == 0 {
 		return false
 	}
@@ -164,25 +180,39 @@ func splitPath(filePath string) []string {
 // consumes zero or more path segments. When extra is true the path may have
 // segments left over after the pattern is exhausted, which is what makes a
 // trailing "/**" cover a directory's descendants as well as the directory.
+//
+// Only the most recent "**" is ever reconsidered, and each reconsideration
+// starts one path segment further along, so the work is bounded by
+// len(pat)*len(name) however many "**" segments a pattern contains. A pattern
+// arriving from a pushed branch therefore cannot make matching take
+// exponential time. Greedy backtracking is exact here rather than an
+// approximation, because every pattern segment other than "**" consumes
+// exactly one path segment.
 func matchSegments(pat, name []string, extra bool) bool {
-	if len(pat) == 0 {
-		return extra || len(name) == 0
-	}
-	if pat[0] == "**" {
-		for i := 0; i <= len(name); i++ {
-			if matchSegments(pat[1:], name[i:], extra) {
-				return true
-			}
+	starPat, starName := -1, 0
+	pi, ni := 0, 0
+	for ni < len(name) {
+		switch {
+		case pi < len(pat) && pat[pi] == "**":
+			starPat, starName = pi, ni
+			pi++
+		case pi < len(pat) && matchSegment(pat[pi], name[ni]):
+			pi++
+			ni++
+		case extra && pi == len(pat):
+			return true
+		case starPat >= 0:
+			starName++
+			ni = starName
+			pi = starPat + 1
+		default:
+			return false
 		}
-		return false
 	}
-	if len(name) == 0 {
-		return false
+	for pi < len(pat) && pat[pi] == "**" {
+		pi++
 	}
-	if !matchSegment(pat[0], name[0]) {
-		return false
-	}
-	return matchSegments(pat[1:], name[1:], extra)
+	return pi == len(pat)
 }
 
 // matchSegment matches one segment. The pattern was validated by ParsePattern,
@@ -200,8 +230,9 @@ type PatternSet []Pattern
 // so a caller can report which pattern was responsible, and reports whether
 // any did.
 func (s PatternSet) Match(filePath string) (Pattern, bool) {
+	segs := splitPath(filePath)
 	for _, p := range s {
-		if p.Match(filePath) {
+		if p.matchSegs(segs) {
 			return p, true
 		}
 	}
