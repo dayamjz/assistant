@@ -138,6 +138,12 @@ func fakeGitMain() int {
 		}
 		holder := exec.Command(exe)
 		holder.Env = append(os.Environ(), fakeGitHolder+"=1")
+		// The holder outlives the test that started it, and this process was
+		// started with its working directory inside the test's temporary
+		// directory. On Windows a directory that is a live process's working
+		// directory cannot be removed, so the holder is moved out of the tree
+		// the test cleanup deletes.
+		holder.Dir = os.TempDir()
 		holder.Stdout = os.Stdout
 		holder.Stderr = os.Stderr
 		if err := holder.Start(); err != nil {
