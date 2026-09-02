@@ -57,13 +57,14 @@
 //     instruction suppression, the no-CI declaration, and the run budget. A
 //     pushed branch may never set one.
 //
-// Two of those placements are this package's reading rather than the PRD's
-// wording. The section 10 diagram does not list "checks_timeout" or
-// "session_reuse"; both are classified TrustPushed because neither can execute
-// anything and neither can turn a failing check into a passing one. Raise that
-// against the PRD rather than treating this comment as the contract. The
-// opt-out key name is this package's for the same reason: section 10 describes
-// the opt-out in prose without giving it a schema row.
+// Two placements are this package's reading rather than the PRD's wording.
+// The section 10 diagram does not list "checks_timeout" or "session_reuse";
+// both are classified TrustPushed because neither can execute anything and
+// neither can turn a failing check into a passing one. Raise that against the
+// PRD rather than treating this comment as the contract. The opt-out key name
+// is also this package's, because section 10 describes the opt-out in prose
+// without giving it a schema row, but that name is settled and what the PRD
+// still owes is the schema row.
 //
 // A key a layer set but its origin may not set is not an error. It is dropped,
 // the key falls back to the trusted layer or its default, and the drop is

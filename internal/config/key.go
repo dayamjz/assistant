@@ -61,8 +61,9 @@ const (
 	// a pushed branch set the command and agent keys.
 	//
 	// PRD section 10 describes this opt-out in prose but does not give it a
-	// row in the schema table, so the key name is this package's. Raise it
-	// against the PRD rather than treating this comment as the contract.
+	// row in the schema table, so the name was chosen here. It is a settled
+	// decision, not an open question: the name says exactly what it permits,
+	// and what the PRD still owes is a schema row, not a rename.
 	KeyAllowPushedCommands Key = "allow_pushed_commands"
 )
 
