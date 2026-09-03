@@ -35,8 +35,9 @@ const chainedVar = "ASSISTANT_GATE_CHAINED"
 
 // hookMode is the mode an installed hook is written with. It is executable
 // because a hook that is not is a gate whose admission never runs.
-// TestInstallationLeavesExactlyTheTwoExecutableHooks checks the bit, and every
-// test that pushes checks what the bit is for by pushing.
+// TestInstallationLeavesExactlyTheTwoExecutableHooks checks the bit on a host
+// that records one, and every test that pushes checks what the bit is for by
+// pushing, which is what settles it on a host that records no such bit.
 const hookMode os.FileMode = 0o755
 
 // managed is one hook this package installs and the subcommand it invokes.
@@ -110,16 +111,33 @@ func installHooks(repo, id, command string) error {
 // The seal carries hookMarker so a later initialization replaces it as one of
 // this package's own. Without that it would be read as somebody's custom hook,
 // moved to the .local name, and chained into every push from then on.
+//
+// Every failure names the hook that was left unwritten, whichever step failed
+// and whatever the host reported. The step that fails is not the same
+// everywhere: where the hooks directory is occupied by a file, one host refuses
+// the inspection of a name below it and another reports that name as merely
+// absent and refuses the directory instead. What the operator has to be told is
+// which gate is open, so that answer is attached here rather than left to the
+// step that happened to fail on this host.
 func sealAdmission(repo string) error {
-	dir := hooksDir(repo)
-	path := filepath.Join(dir, AdmissionHook)
+	path := filepath.Join(hooksDir(repo), AdmissionHook)
+	if err := writeSeal(repo, path); err != nil {
+		return fmt.Errorf("gate: sealing %s: %w", path, err)
+	}
+	return nil
+}
+
+// writeSeal writes the seal at path, and reports what it could not do without
+// naming the hook, which sealAdmission adds to whatever comes back.
+func writeSeal(repo, path string) error {
 	if _, err := os.Lstat(path); err == nil {
 		return nil
 	} else if !os.IsNotExist(err) {
-		return fmt.Errorf("gate: inspecting %s: %w", path, err)
+		return fmt.Errorf("inspecting %s: %w", path, err)
 	}
+	dir := hooksDir(repo)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("gate: creating %s: %w", dir, err)
+		return fmt.Errorf("creating %s: %w", dir, err)
 	}
 	return replaceFile(path, []byte(sealScript()), hookMode)
 }

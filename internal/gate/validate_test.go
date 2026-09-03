@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/gate"
@@ -132,8 +133,8 @@ func TestHookCommandSurvivesAPathThatNeedsQuoting(t *testing.T) {
 }
 
 // TestInstallationLeavesExactlyTheTwoExecutableHooks checks the state
-// installation leaves behind: both hooks exist, both are executable, and
-// nothing else was put in the hooks directory.
+// installation leaves behind: both hooks exist, both are executable where the
+// host records that, and nothing else was put in the hooks directory.
 //
 // Which program those hooks actually run is not asked here, because reading it
 // out of the generated text would prove nothing a rewrite of the script could
@@ -156,11 +157,25 @@ func TestInstallationLeavesExactlyTheTwoExecutableHooks(t *testing.T) {
 		if err != nil {
 			t.Fatalf("stat %s: %v", path, err)
 		}
-		if info.Mode().Perm()&0o111 == 0 {
+		if recordsAnExecutableBit() && info.Mode().Perm()&0o111 == 0 {
 			t.Fatalf("%s is not executable, so it is not usable as a hook: mode %v", path, info.Mode())
 		}
 	}
 	if got, want := activeHookNames(t, g.Repository()), 2; len(got) != want {
 		t.Fatalf("the gate has hooks %v, want exactly the two this package installs", got)
 	}
+}
+
+// recordsAnExecutableBit reports whether this host keeps a permission bit that
+// says whether a file may be run.
+//
+// Windows does not: os.Stat there reports a writable regular file as 0666
+// whatever mode it was created with, so the bit answers nothing about a hook
+// git runs perfectly well, and asserting it would fail every gate on that host.
+// What makes a hook usable is that git runs it, and that is asked on every
+// platform by the tests that push: TestPathAtPushTimeCannotChooseWhatAdmissionRuns,
+// TestHookCommandSurvivesAPathThatNeedsQuoting, and every refusal test that
+// pushes to check the gate is closed.
+func recordsAnExecutableBit() bool {
+	return runtime.GOOS != "windows"
 }

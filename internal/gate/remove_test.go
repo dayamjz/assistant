@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -751,16 +752,27 @@ func namesDetaching(err error) bool {
 // admission hook, and errors.go states that as the one write every refusal
 // makes, so a refusal returned alone is a statement that the seal happened.
 //
-// The two arms are the same refusal over the same damage, differing only in
-// whether the seal can be written. The first is what makes the second mean
+// The arms are the same refusal over the same damage, differing only in
+// whether the seal can be written. The first is what makes the others mean
 // something: it shows the refusal is reached and the seal is what closes the
-// gate, so the second is not passing over a fixture that never sealed at all.
+// gate, so the others are not passing over a fixture that never sealed at all.
+//
+// The two failing arms take the seal down at different steps, because which
+// step fails is a host's choice rather than this package's. Where the hooks
+// directory is a file, one host refuses to inspect the hook name below it and
+// another reports that name as merely absent and refuses to create the
+// directory instead; the second arm reaches that later step wherever it runs,
+// by putting a link to nothing where the directory belongs, so the step is
+// asked for the hook's name on a host where the first arm never gets there.
+// What the operator is owed is the same from both, so both are asked for it.
 func TestASealThatFailsIsReportedEvenBehindARefusal(t *testing.T) {
 	gitEnvironment(t)
 	command, _ := recorderCommand(t, 0)
 
 	cases := []struct {
 		name string
+		// skip declines an arm whose damage this host cannot inflict.
+		skip func(t *testing.T)
 		// damage takes the gate's admission hook away, and decides whether a
 		// seal can be written in its place.
 		damage    func(t *testing.T, repo string)
@@ -777,16 +789,41 @@ func TestASealThatFailsIsReportedEvenBehindARefusal(t *testing.T) {
 			wantSeal: true,
 		},
 		{
-			name: "the seal cannot be written",
+			name: "the hooks directory is a file",
 			damage: func(t *testing.T, repo string) {
 				dir := filepath.Join(repo, "hooks")
 				if err := os.RemoveAll(dir); err != nil {
 					t.Fatalf("remove %s: %v", dir, err)
 				}
-				// A file where the hooks directory belongs is the shape an
-				// unwritable hooks directory has here: the seal cannot inspect
-				// the name it would fill, let alone write it.
+				// A file where the hooks directory belongs leaves the seal
+				// nowhere to write: the name it would fill has no directory
+				// above it.
 				writeFile(t, dir, "not a directory\n")
+			},
+			wantNamed: true,
+		},
+		{
+			name: "the hooks directory cannot be created",
+			skip: func(t *testing.T) {
+				if runtime.GOOS == "windows" {
+					t.Skip("creating a symbolic link needs a privilege this process may not hold on this host, and the arm above already takes the seal down here")
+				}
+			},
+			damage: func(t *testing.T, repo string) {
+				dir := filepath.Join(repo, "hooks")
+				if err := os.RemoveAll(dir); err != nil {
+					t.Fatalf("remove %s: %v", dir, err)
+				}
+				// A link to nothing is the arrangement that gets the seal past
+				// inspecting the hook, which resolves to nothing and reads as
+				// absent, and stops it at creating the directory, which cannot
+				// be created over the link. That is the order the arm above
+				// takes on a host that reports a name under a file as merely
+				// absent, and the step that fails there names no hook of its
+				// own.
+				if err := os.Symlink(filepath.Join(repo, "nowhere"), dir); err != nil {
+					t.Fatalf("link %s: %v", dir, err)
+				}
 			},
 			wantNamed: true,
 		},
@@ -794,6 +831,9 @@ func TestASealThatFailsIsReportedEvenBehindARefusal(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			if c.skip != nil {
+				c.skip(t)
+			}
 			wc := newWorkingCopy(t)
 			home, opts := newHome(t)
 			spec := gate.Spec{Home: home, WorkingPath: wc.path, Command: command}
