@@ -171,6 +171,31 @@ func TestRemoveRefusesAPathOutsideTheHomesRepositories(t *testing.T) {
 	if _, ok := remoteURL(t, wc.path, gate.RemoteName); !ok {
 		t.Fatal("the refused removal gave up the remote")
 	}
+
+	// Every refusal here owes the reader a step that succeeds from where they
+	// stand, and this is the one state where an initialization is not it: the
+	// path the remote names is not a gate of this home, so there is no binding
+	// to rebuild over it.
+	err := gate.Remove(ctx(t), spec, gate.WithOpener(detachingOpener))
+	if !namesDetaching(err) {
+		t.Fatalf("the refusal names no step the reader can take: %v", err)
+	}
+
+	// And that step completes.
+	rawGit(t, wc.path, "remote", "remove", gate.RemoteName)
+	own, err := gate.Initialize(ctx(t), spec)
+	if err != nil {
+		t.Fatalf("the step the refusal names did not complete: %v", err)
+	}
+	if err := gate.Remove(ctx(t), spec, gate.WithOpener(detachingOpener)); err != nil {
+		t.Fatalf("the gate that step gave it cannot be removed: %v", err)
+	}
+	if _, err := os.Stat(own.Repository()); !os.IsNotExist(err) {
+		t.Fatalf("the gate survived removal (stat error %v)", err)
+	}
+	if _, err := os.Stat(wc.origin); err != nil {
+		t.Fatalf("origin was deleted along the way: %v", err)
+	}
 }
 
 // TestRemoveRefusesARepositoryCarryingNoGateRecord is the same guard for a
@@ -538,11 +563,27 @@ func TestRemoveTellsARecordlessGateApartByWhoIsAsking(t *testing.T) {
 			t.Fatalf("the refusal does not name %q: %v", want, elsewhere)
 		}
 	}
-	// The refusal is the operator-facing output of this package, and these two
-	// readers need different instructions, so one message for both is the
-	// defect rather than a wording choice.
-	if elsewhere.Error() == strings.ReplaceAll(filedUnder.Error(), g.WorkingPath(), resolved(t, moved.path)) {
-		t.Fatalf("a working copy the gate is not filed under is told what the one it is filed under is told: %v", elsewhere)
+
+	// Which action each refusal names is the contract these two branches exist
+	// to get right, and the refusal text is this package's operator-facing
+	// output, so it is read here rather than inferred. Checking only that the
+	// two differ would pass with the two readers handed each other's
+	// instructions, which is the state that has to fail.
+	if !namesInitializing(filedUnder, g.WorkingPath()) {
+		t.Fatalf("the working copy the gate is filed under is not told to initialize, which is the step that "+
+			"rebuilds the record for it: %v", filedUnder)
+	}
+	if namesDetaching(filedUnder) {
+		t.Fatalf("the working copy the gate is filed under is told to detach, which gives up a gate it can "+
+			"repair instead: %v", filedUnder)
+	}
+	if !namesDetaching(elsewhere) {
+		t.Fatalf("a working copy the gate is not filed under is not told to detach, which is the only step that "+
+			"succeeds from there: %v", elsewhere)
+	}
+	if namesInitializing(elsewhere, resolved(t, moved.path)) {
+		t.Fatalf("a working copy the gate is not filed under is told to initialize, and the removal after that "+
+			"refuses: %v", elsewhere)
 	}
 
 	// The state the message must not send the reader into: initializing here
@@ -571,4 +612,20 @@ func TestRemoveTellsARecordlessGateApartByWhoIsAsking(t *testing.T) {
 	if got, want := refs(t, g.Repository()), []string{"refs/heads/main " + wc.commit}; !equal(got, want) {
 		t.Fatalf("the recordless gate holds %v, want its history %v", got, want)
 	}
+}
+
+// namesInitializing and namesDetaching read which recovery a refusal instructs.
+// A refusal's text is this package's operator-facing output and the action it
+// names is part of that contract, so a test may read it; what these do not do
+// is treat the rest of the sentence as a contract, which is why they look for
+// the instructed action alone.
+func namesInitializing(err error, workingPath string) bool {
+	return strings.Contains(err.Error(), "initializing "+workingPath)
+}
+
+func namesDetaching(err error) bool {
+	// Lowercased because the same instruction opens a sentence in one refusal
+	// and sits mid-sentence in another, and which it is says nothing about
+	// whether the action was named.
+	return strings.Contains(strings.ToLower(err.Error()), "removing the "+gate.RemoteName+" remote here")
 }

@@ -32,7 +32,9 @@ var (
 	// than deleting a directory it cannot identify. The message names the step
 	// that succeeds from the state the reader is in, which is an
 	// initialization when one would establish the binding and a detachment
-	// when it would not.
+	// when it would not. A path outside the repository directory is always the
+	// second: nothing there is a gate of this home, so there is no binding an
+	// initialization could establish over it.
 	ErrNotAGate = errors.New("gate: path is not a gate repository of this home")
 	// ErrNoGate is returned by Remove when the working copy has no gate to
 	// remove.

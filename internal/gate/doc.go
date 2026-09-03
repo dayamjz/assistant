@@ -92,13 +92,15 @@
 // every push. The preservation rule and the template channel are only safe
 // together, so the one that can be closed is closed everywhere.
 //
-// # A guard on a gate belongs to the operation, not to the call site
+// # What one side of an operation owes an operator, its sibling owes too
 //
-// Twice now a check in this package has covered one path and not its sibling:
-// ownership on adoption but not on removal, and a hook that arrives on
-// creation but not on repair. Both times the guard was written where the
-// problem was first noticed rather than around the operation that carries the
-// risk, and both times the sibling path was reachable and unguarded.
+// Three times now something in this package has covered one path and not its
+// sibling: ownership checked on adoption but not on removal, a hook guarded on
+// creation but not on repair, and a refusal that said what an action would
+// cost when it was the destructive one and said nothing when it was the
+// constructive one. Each was written where the problem was first noticed
+// rather than around the operation that carries the risk, and each left the
+// sibling path reachable and unaddressed.
 //
 // So when a rule about a gate is added here, ask what operation it constrains
 // and put it there, not at the call that prompted it. The two questions that
@@ -106,6 +108,13 @@
 // check do when the state it inspects was already there when the operation
 // started. A guard scoped to a code path is a guard the next caller of that
 // operation reopens without noticing.
+//
+// The same holds for what a refusal tells an operator, because a message is a
+// guard whose enforcement is the reader. Whatever one side of an operation
+// owes them, a caveat, a named action, or a cost, its sibling owes as well.
+// The side that is easy to forget is usually the one where being wrong cannot
+// be undone, which is why the forgetting is worth a rule rather than a fix
+// each time.
 //
 // The near relative of that mistake is a signal that answers two conditions
 // with one value. A gate whose record file is gone and a gate that is not
@@ -212,11 +221,13 @@
 // So the action each message names is the one that always succeeds from where
 // the reader is: detaching, by dropping the assistant remote, which no guard
 // refuses because it takes nothing away, followed by an initialization that
-// gives that working copy a gate of its own. ErrNotAGate names the
-// initialization that rebuilds what is missing. ErrGateClaimed names the
-// detachment of the working copy that holds the gate, after which the gate is
-// handed over. ErrGateBindingInferred names the detachment of the asker, after
-// which nothing names the gate and it is the operator's to delete.
+// gives that working copy a gate of its own. ErrNotAGate names an
+// initialization where one would rebuild what is missing and a detachment
+// where it would not. ErrGateClaimed names the detachment of the working copy
+// that holds the gate, after which the gate is handed over, and says first
+// what that costs the working copy losing it. ErrGateBindingInferred names the
+// detachment of the asker, and leaves the deleting of the gate to the operator
+// once they are satisfied whose history is in it.
 //
 // The residual gap in identity is the path itself. The identifier is computed
 // from the cleaned, symlink-resolved absolute path, so two spellings that

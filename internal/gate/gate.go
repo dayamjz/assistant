@@ -251,6 +251,12 @@ func Remove(ctx context.Context, spec Spec, opts ...Option) error {
 	}
 	rec, holds, err := gateRepository(home, repo)
 	if err != nil {
+		if errors.Is(err, ErrNotAGate) {
+			return fmt.Errorf("%w; nothing was removed. Removing the %s remote here detaches this working copy "+
+				"and always succeeds, because the path it names is not a gate of this home for anything to be "+
+				"lost from, and initializing %s afterwards gives it a gate of its own",
+				err, RemoteName, workingPath)
+		}
 		return err
 	}
 	switch holds {
@@ -462,10 +468,12 @@ func ensureOwnGateIsAvailable(ctx context.Context, set settings, repo, id, worki
 			ErrMalformedRecord, repo, rec.ID, id)
 	}
 	return ensureAvailableTo(ctx, set, repo, rec, workingPath, fmt.Sprintf(
-		"%s hashes to %s, so this home has no second gate to hand out for it; the gate is handed over as soon as "+
+		"%s hashes to %s, so this home has no second gate to hand out for it. Taking this one over takes it, and "+
+			"everything its runs recorded, away from a working copy that is still using it, so do this only once "+
+			"you are satisfied the history in %s is not that working copy's. The gate is handed over as soon as "+
 			"%s stops pointing at it, so removing the %s remote there detaches it and always succeeds, and "+
 			"initializing %s again then takes the gate over",
-		workingPath, id, rec.WorkingPath, RemoteName, workingPath))
+		workingPath, id, repo, rec.WorkingPath, RemoteName, workingPath))
 }
 
 // recordlessRefusal is what Remove answers when the gate a working copy names
@@ -487,8 +495,8 @@ func recordlessRefusal(home, repo, workingPath string) error {
 	}
 	if repositoryPath(home, own) == repo {
 		return fmt.Errorf("%w: %s carries no %s, so nothing there says whose gate it is; %s is the working copy "+
-			"it is filed under, so initializing that writes the record back and a removal after it succeeds",
-			ErrNotAGate, repo, recordName, workingPath)
+			"it is filed under, so initializing %s writes the record back and a removal after that succeeds",
+			ErrNotAGate, repo, recordName, workingPath, workingPath)
 	}
 	return fmt.Errorf("%w: %s carries no %s, so nothing there says whose gate it is, and %s is not the working "+
 		"copy it is filed under, so an initialization here would bind it on the strength of the %s remote alone "+
