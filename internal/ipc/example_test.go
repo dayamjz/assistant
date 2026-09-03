@@ -12,7 +12,10 @@ import (
 // when told to, apply a delta only when it is newer, and treat activity as
 // something to show rather than something to hold.
 func ExampleCursor() {
-	events := ipc.NewPublisher()
+	events, err := ipc.NewPublisher(ipc.PublisherConfig{})
+	if err != nil {
+		panic(err)
+	}
 	sub, err := events.Subscribe(8)
 	if err != nil {
 		panic(err)

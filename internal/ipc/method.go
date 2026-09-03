@@ -61,8 +61,13 @@ const (
 type Access uint8
 
 const (
-	// AccessOpen is available to any identified caller. It covers reading, and
-	// it covers a validating agent returning its own stage.
+	// AccessOpen is served without consulting the peer's credentials at all.
+	// It covers reading, and it covers a validating agent returning its own
+	// stage, and identification buys nothing for either: the only decision
+	// that rests on who is calling is containment, and a contained caller may
+	// reach these anyway. That is also what lets a build on a platform with no
+	// peer credentials serve every open method while every restricted one
+	// refuses.
 	AccessOpen Access = iota
 	// AccessRestricted is refused for a caller contained by an active
 	// validation stage. These are the calls that start, stop, respond to, or

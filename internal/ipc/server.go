@@ -79,7 +79,8 @@ type ServerConfig struct {
 	// Backlog is the per-subscriber queue depth. Zero means DefaultBacklog.
 	Backlog int
 	// MaxFrameBytes bounds one frame in either direction. Zero means
-	// DefaultMaxFrameBytes.
+	// DefaultMaxFrameBytes. A value below MinFrameBytes is refused, because a
+	// server has to be able to write a refusal that fits.
 	MaxFrameBytes int
 	// MaxStreams bounds how many event streams one connection may hold open at
 	// once. Zero means DefaultMaxStreams, and a negative value is refused.
@@ -131,6 +132,11 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		return nil, fmt.Errorf("ipc: %d is not a number of streams a connection may hold", cfg.MaxStreams)
 	case cfg.MaxInFlight < 0:
 		return nil, fmt.Errorf("ipc: %d is not a number of requests a connection may serve at once", cfg.MaxInFlight)
+	case cfg.MaxFrameBytes < 0:
+		return nil, fmt.Errorf("ipc: %d is not a frame size", cfg.MaxFrameBytes)
+	case cfg.MaxFrameBytes > 0 && cfg.MaxFrameBytes < minFrameBytes:
+		return nil, fmt.Errorf("ipc: a frame limit of %d bytes cannot carry the refusals this server has to be able to write, which need %d",
+			cfg.MaxFrameBytes, minFrameBytes)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Server{
@@ -354,6 +360,66 @@ func (c *conn) endRequest() {
 	c.inflight--
 }
 
+// errUndeliverableControl is why a stream ends when a control event cannot be
+// put in a frame on its connection. Its text is fixed, so MinFrameBytes can be
+// measured against the frame that carries it.
+var errUndeliverableControl = fmt.Errorf("%w: a control event does not fit in one frame here, and control may not be discarded", ErrEventUndeliverable)
+
+// undeliverableAnswer is the refusal a request gets when its answer could not
+// be put on the wire. It carries no method and a fixed message, so its size
+// depends on nothing but the identifier being answered.
+func undeliverableAnswer(id uint64, code Code) frame {
+	message := "this request was served and its answer could not be encoded"
+	if code == CodeFrameTooLarge {
+		message = "this request was served and its answer does not fit in one frame"
+	}
+	return frame{ID: id, Error: &Error{Code: code, Message: message}}
+}
+
+// fixedRefusals are the frames this package must always be able to write: the
+// fallback answer to a request whose reply could not be delivered, and each
+// reason a stream ends over something rather than nothing. Every one of them
+// carries a fixed message, so the widest identifier gives the widest frame.
+func fixedRefusals() []frame {
+	const widest = ^uint64(0)
+	return []frame{
+		undeliverableAnswer(widest, CodeFrameTooLarge),
+		undeliverableAnswer(widest, CodeInternal),
+		{ID: widest, Done: true, Error: newError(MethodEventsSubscribe, ErrSubscriberStalled)},
+		{ID: widest, Done: true, Error: newError(MethodEventsSubscribe, errUndeliverableControl)},
+	}
+}
+
+// minFrameBytes is the widest of those, measured rather than guessed so it
+// cannot drift from the messages it is measuring.
+var minFrameBytes = func() int {
+	widest := 0
+	for _, f := range fixedRefusals() {
+		var counted countingWriter
+		if err := newFrameWriter(&counted, DefaultMaxFrameBytes).write(f); err != nil {
+			panic("ipc: a fixed refusal does not fit in a default frame: " + err.Error())
+		}
+		if int(counted) > widest {
+			widest = int(counted)
+		}
+	}
+	return widest
+}()
+
+// countingWriter measures a frame without keeping it.
+type countingWriter int
+
+func (c *countingWriter) Write(p []byte) (int, error) {
+	*c += countingWriter(len(p))
+	return len(p), nil
+}
+
+// MinFrameBytes is the smallest frame limit a server may be built with. Below
+// it, a refusal this package must be able to write would not fit, and a caller
+// would wait on an answer that was refused for not fitting, which is the
+// failure the refusal exists to remove.
+func MinFrameBytes() int { return minFrameBytes }
+
 // answer writes the one reply a request gets, and answers with a refusal when
 // that reply cannot be put on the wire at all.
 //
@@ -361,8 +427,9 @@ func (c *conn) endRequest() {
 // about the answer rather than about the connection, and no other path answers
 // this identifier. Without the second write the caller would wait for an answer
 // that is never coming, so it is told the request was served and the answer
-// could not be delivered. The refusal carries no method and a fixed message, so
-// it fits in a frame whatever the answer that did not.
+// could not be delivered. The refusal carries no method and a fixed message, and
+// NewServer refuses a frame limit too small to carry it, so on a server that was
+// built it fits whatever the answer that did not.
 func (c *conn) answer(id uint64, f frame) {
 	err := c.w.write(f)
 	if err == nil {
@@ -370,15 +437,9 @@ func (c *conn) answer(id uint64, f frame) {
 	}
 	switch {
 	case errors.Is(err, ErrFrameTooLarge):
-		_ = c.w.write(frame{ID: id, Error: &Error{
-			Code:    CodeFrameTooLarge,
-			Message: "this request was served and its answer does not fit in one frame",
-		}})
+		_ = c.w.write(undeliverableAnswer(id, CodeFrameTooLarge))
 	case errors.Is(err, ErrInternal):
-		_ = c.w.write(frame{ID: id, Error: &Error{
-			Code:    CodeInternal,
-			Message: "this request was served and its answer could not be encoded",
-		}})
+		_ = c.w.write(undeliverableAnswer(id, CodeInternal))
 	}
 	// Anything else came from the connection rather than from the frame. There
 	// is nowhere to put a smaller answer, and the read loop ends the
@@ -451,9 +512,11 @@ func (c *conn) startStream(f frame) {
 // connection, never on the publisher: a caller that stops reading fills its own
 // queue and gaps itself, and the work being reported on is untouched.
 //
-// An event too large to put in a frame ends that event rather than the stream.
-// A connection that failed ends the stream, because there is nothing left to
-// deliver on.
+// An activity or state event too large to put in a frame ends that event rather
+// than the stream, because a gapped consumer reads back what it missed. A
+// control event too large to put in a frame ends the stream, because nothing
+// gives it back. A connection that failed ends the stream too, because there is
+// nothing left to deliver on.
 func (c *conn) pump(id uint64, sub *Subscription) {
 	for {
 		e, err := sub.Recv(c.ctx)
@@ -466,21 +529,21 @@ func (c *conn) pump(id uint64, sub *Subscription) {
 		if err == nil {
 			continue
 		}
-		if errors.Is(err, ErrFrameTooLarge) && event.Type != TypeGap {
-			// The event did not fit in a frame, which says a producer did not
-			// bound its projection and says nothing about the connection. It
+		if errors.Is(err, ErrFrameTooLarge) {
+			if event.Class() == ClassControl {
+				// Control may not be discarded, here as much as in the queue:
+				// no read gives a consumer back an event about the channel, so
+				// dropping one would be the invariant relaxed in the one path
+				// nobody looks at. The stream ends with a reason instead, and
+				// attaching again reconciles.
+				c.finishStream(id, errUndeliverableControl)
+				return
+			}
+			// Activity and state are recoverable, so an event that did not fit
 			// is a discard like any other: the gap is raised, the consumer
 			// reconciles from a full read, and the stream carries on.
 			sub.discard()
 			continue
-		}
-		if errors.Is(err, ErrFrameTooLarge) {
-			// The marker that reports a discard is itself the thing that does
-			// not fit, so there is no discard left to collapse into. The
-			// stream ends with a reason rather than looping on a frame it can
-			// never write.
-			c.finishStream(id, fmt.Errorf("%w: this stream's gap marker does not fit in a frame", ErrFrameTooLarge))
-			return
 		}
 		c.endStream(id, ErrStreamClosed)
 		return

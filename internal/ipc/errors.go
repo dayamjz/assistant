@@ -42,6 +42,18 @@ var (
 	ErrFrameTooLarge = errors.New("ipc: frame exceeds the size limit")
 	// ErrClientClosed reports use of a client whose connection has been closed.
 	ErrClientClosed = errors.New("ipc: client closed")
+	// ErrPayloadTooLarge reports an event refused at the publisher because its
+	// payload is past the bound a producer's projection must stay inside. It
+	// is a producer's own bug rather than anything about a subscriber, so it
+	// is reported to whoever published and nothing is delivered.
+	ErrPayloadTooLarge = errors.New("ipc: event payload exceeds the publisher's bound")
+	// ErrEventUndeliverable reports that a stream ended because an event that
+	// may not be discarded could not be put in a frame on that connection. It
+	// is not ErrSubscriberStalled: the consumer was keeping up, and the event
+	// itself is what could not travel. Attaching again reconciles, and an
+	// event that keeps failing this way is a producer that did not bound its
+	// projection.
+	ErrEventUndeliverable = errors.New("ipc: event cannot be delivered on this connection")
 	// ErrConnectionBusy reports a request refused because the connection it
 	// arrived on already holds as many open streams, or as many requests being
 	// served, as one connection may. It is a refusal that names the limit and
@@ -72,6 +84,13 @@ const (
 	CodeSubscriberStalled Code = "subscriber-stalled"
 	// CodeStreamClosed maps to ErrStreamClosed.
 	CodeStreamClosed Code = "stream-closed"
+	// CodePayloadTooLarge maps to ErrPayloadTooLarge.
+	CodePayloadTooLarge Code = "payload-too-large"
+	// CodeEventUndeliverable maps to ErrEventUndeliverable. A consumer that
+	// receives it knows its stream ended over one event rather than over
+	// anything it did, which is what tells it apart from a stalled
+	// subscription.
+	CodeEventUndeliverable Code = "event-undeliverable"
 	// CodeConnectionBusy maps to ErrConnectionBusy.
 	CodeConnectionBusy Code = "connection-busy"
 	// CodeFrameTooLarge maps to ErrFrameTooLarge. It is what an answer that
@@ -107,6 +126,8 @@ var codeRows = []struct {
 	{CodeContained, ErrContained},
 	{CodeUnavailable, ErrUnavailable},
 	{CodeSubscriberStalled, ErrSubscriberStalled},
+	{CodeEventUndeliverable, ErrEventUndeliverable},
+	{CodePayloadTooLarge, ErrPayloadTooLarge},
 	{CodeStreamClosed, ErrStreamClosed},
 	{CodeConnectionBusy, ErrConnectionBusy},
 	{CodeFrameTooLarge, ErrFrameTooLarge},

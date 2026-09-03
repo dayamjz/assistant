@@ -106,7 +106,7 @@ func serveOnSocket(t *testing.T, cfg func(*ipc.ServerConfig)) *harness {
 		socket:   filepath.Join(dir, "s"),
 		handler:  &recordingHandler{},
 		ancestry: &recordingAncestry{},
-		events:   ipc.NewPublisher(),
+		events:   publisher(t, ipc.PublisherConfig{}),
 	}
 	sc := ipc.ServerConfig{Handler: h.handler, Ancestry: h.ancestry, Events: h.events, Backlog: 8}
 	if cfg != nil {
@@ -169,7 +169,7 @@ func callCtx(t *testing.T) (context.Context, context.CancelFunc) {
 }
 
 func TestNewServerRefusesAnIncompleteConfiguration(t *testing.T) {
-	full := ipc.ServerConfig{Handler: &recordingHandler{}, Ancestry: &recordingAncestry{}, Events: ipc.NewPublisher()}
+	full := ipc.ServerConfig{Handler: &recordingHandler{}, Ancestry: &recordingAncestry{}, Events: publisher(t, ipc.PublisherConfig{})}
 	cases := map[string]func(*ipc.ServerConfig){
 		"no handler":                          func(c *ipc.ServerConfig) { c.Handler = nil },
 		"no ancestry":                         func(c *ipc.ServerConfig) { c.Ancestry = nil },
@@ -388,7 +388,7 @@ func (dummyAddr) String() string  { return "pipe" }
 func TestUnidentifiedPeerIsRefusedForRestrictedMethods(t *testing.T) {
 	handler := &recordingHandler{}
 	ancestry := &recordingAncestry{}
-	srv, err := ipc.NewServer(ipc.ServerConfig{Handler: handler, Ancestry: ancestry, Events: ipc.NewPublisher()})
+	srv, err := ipc.NewServer(ipc.ServerConfig{Handler: handler, Ancestry: ancestry, Events: publisher(t, ipc.PublisherConfig{})})
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
 	}
@@ -568,12 +568,14 @@ func (h *failingHandler) Serve(context.Context, ipc.Request) (json.RawMessage, e
 // wire rather than arriving as the internal category.
 func TestASentinelRefusalMatchesItselfAtTheClient(t *testing.T) {
 	sentinels := map[string]error{
-		"stalled":     ipc.ErrSubscriberStalled,
-		"closed":      ipc.ErrStreamClosed,
-		"too large":   ipc.ErrFrameTooLarge,
-		"busy":        ipc.ErrConnectionBusy,
-		"unavailable": ipc.ErrUnavailable,
-		"contained":   ipc.ErrContained,
+		"stalled":       ipc.ErrSubscriberStalled,
+		"closed":        ipc.ErrStreamClosed,
+		"too large":     ipc.ErrFrameTooLarge,
+		"busy":          ipc.ErrConnectionBusy,
+		"undeliverable": ipc.ErrEventUndeliverable,
+		"payload":       ipc.ErrPayloadTooLarge,
+		"unavailable":   ipc.ErrUnavailable,
+		"contained":     ipc.ErrContained,
 	}
 	for name, sentinel := range sentinels {
 		t.Run(name, func(t *testing.T) {
@@ -753,7 +755,7 @@ func TestCloseLeavesTheListenerToItsOwner(t *testing.T) {
 	srv, err := ipc.NewServer(ipc.ServerConfig{
 		Handler:  &recordingHandler{},
 		Ancestry: &recordingAncestry{},
-		Events:   ipc.NewPublisher(),
+		Events:   publisher(t, ipc.PublisherConfig{}),
 	})
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
@@ -872,5 +874,98 @@ func TestAnAbandonedSubscribeTellsTheServiceToStop(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("an abandoned subscribe left the service pumping a stream nothing reads")
+	}
+}
+
+// TestAnUndeliverableControlEventEndsTheStreamRatherThanBeingDiscarded is the
+// invariant the class table, the eviction order and PRD section 8 all state
+// without an exception: control is never discarded. A frame limit smaller than
+// the publisher's payload bound is a configuration a caller can write, and it
+// is the one that produces a control event this connection cannot carry.
+func TestAnUndeliverableControlEventEndsTheStreamRatherThanBeingDiscarded(t *testing.T) {
+	const limit = 4096
+	h := serveOnSocket(t, func(c *ipc.ServerConfig) { c.MaxFrameBytes = limit })
+	if h.events.MaxPayloadBytes() <= limit {
+		t.Fatalf("the publisher's bound is %d, which is not past the server's %d frame limit", h.events.MaxPayloadBytes(), limit)
+	}
+	c := h.dial(t, ipc.ClientConfig{})
+	ctx, cancel := callCtx(t)
+	defer cancel()
+
+	stream, err := c.Subscribe(ctx, nil)
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	defer stream.Close()
+	if first, err := stream.Recv(ctx); err != nil || first.Type != "stream.gap" {
+		t.Fatalf("first delivery = %q (err %v), want the opening gap marker", first.Type, err)
+	}
+
+	// The publisher accepts this: its payload is inside the bound a producer
+	// has to stay within, and it is the connection that cannot carry it.
+	stopping := ipc.Event{
+		Type:    "service.stopping",
+		Payload: json.RawMessage(`{"label":"` + strings.Repeat("x", 2*limit) + `"}`),
+	}
+	publish(t, h.events, stopping)
+
+	e, err := stream.Recv(ctx)
+	if err == nil {
+		t.Fatalf("Recv = %q with no error, want the stream to end over a control event it cannot deliver", e.Type)
+	}
+	if !errors.Is(err, ipc.ErrEventUndeliverable) {
+		t.Fatalf("Recv = %v, want ErrEventUndeliverable rather than a discarded control event", err)
+	}
+	if errors.Is(err, ipc.ErrSubscriberStalled) {
+		t.Error("an undeliverable event matches ErrSubscriberStalled, so a consumer cannot tell it from falling behind")
+	}
+	if e.Type != "" {
+		t.Errorf("Recv also produced %q, want nothing delivered", e.Type)
+	}
+}
+
+// TestNewServerRefusesAFrameLimitItCannotRefuseWith holds what answer() claims.
+// A limit too small to carry the fixed refusal would leave a caller waiting on
+// an answer that was refused for not fitting, so the limit is refused where the
+// server is built.
+func TestNewServerRefusesAFrameLimitItCannotRefuseWith(t *testing.T) {
+	base := ipc.ServerConfig{
+		Handler:  &recordingHandler{},
+		Ancestry: &recordingAncestry{},
+		Events:   publisher(t, ipc.PublisherConfig{}),
+	}
+	min := ipc.MinFrameBytes()
+	if min <= 0 {
+		t.Fatalf("MinFrameBytes() = %d, want the measured size of a refusal", min)
+	}
+	tooSmall := base
+	tooSmall.MaxFrameBytes = min - 1
+	if _, err := ipc.NewServer(tooSmall); err == nil {
+		t.Errorf("NewServer accepted a %d byte frame limit, which cannot carry its own refusal", min-1)
+	}
+	negative := base
+	negative.MaxFrameBytes = -1
+	if _, err := ipc.NewServer(negative); err == nil {
+		t.Error("NewServer accepted a negative frame limit")
+	}
+	atTheLimit := base
+	atTheLimit.MaxFrameBytes = min
+	if _, err := ipc.NewServer(atTheLimit); err != nil {
+		t.Errorf("NewServer at the minimum frame limit = %v, want it accepted", err)
+	}
+}
+
+// TestTheFallbackRefusalFitsTheSmallestServedFrame runs the answer that does
+// not fit through the smallest frame limit a server may be built with, which is
+// where the fallback has the least room to work in.
+func TestTheFallbackRefusalFitsTheSmallestServedFrame(t *testing.T) {
+	h := serveOnSocket(t, func(c *ipc.ServerConfig) { c.MaxFrameBytes = ipc.MinFrameBytes() })
+	h.handler.result = json.RawMessage(`{"pad":"` + strings.Repeat("x", 4*ipc.MinFrameBytes()) + `"}`)
+	c := h.dial(t, ipc.ClientConfig{})
+	ctx, cancel := callCtx(t)
+	defer cancel()
+
+	if err := c.Call(ctx, "status", nil, nil); !errors.Is(err, ipc.ErrFrameTooLarge) {
+		t.Fatalf("Call = %v, want the refusal to reach the caller even at the smallest frame limit", err)
 	}
 }

@@ -13,6 +13,30 @@ import (
 // bounded amount of memory.
 const DefaultBacklog = 256
 
+// eventEnvelopeBytes is the room a frame reserves around an event payload: the
+// frame's own fields, the event's type and revision, the JSON punctuation, and
+// the newline. The fields other than the type cost under a hundred bytes at
+// their widest, so the rest of this allowance is room for a type name.
+const eventEnvelopeBytes = 1 << 10
+
+// DefaultMaxPayloadBytes bounds the payload of one event when a caller does not
+// choose a bound. It is DefaultMaxFrameBytes less the envelope a frame adds
+// around a payload, so an event with a payload at the bound and a type name
+// inside that envelope fits in a default frame.
+//
+// It bounds what a producer may publish; it does not promise delivery. A server
+// may be given a smaller MaxFrameBytes than this, and a stream that meets an
+// event it cannot put in a frame still has to decide what to do about it.
+const DefaultMaxPayloadBytes = DefaultMaxFrameBytes - eventEnvelopeBytes
+
+// PublisherConfig is what a publisher may be given. Its one field has a
+// documented default, so the zero value is usable.
+type PublisherConfig struct {
+	// MaxPayloadBytes bounds the payload of one published event. Zero means
+	// DefaultMaxPayloadBytes, and a negative value is refused.
+	MaxPayloadBytes int
+}
+
 // Publisher fans events out to subscribers without ever waiting for one.
 //
 // Publishing takes each subscriber's lock only for as long as it takes to move
@@ -20,15 +44,30 @@ const DefaultBacklog = 256
 // consumer's read. A subscriber that stops reading therefore cannot slow, stall
 // or fail the work being reported on; it gaps itself instead.
 type Publisher struct {
+	maxPayload int
+
 	mu     sync.Mutex
 	subs   map[*Subscription]struct{}
 	closed bool
 }
 
-// NewPublisher returns a publisher with no subscribers.
-func NewPublisher() *Publisher {
-	return &Publisher{subs: make(map[*Subscription]struct{})}
+// NewPublisher returns a publisher with no subscribers, or an error naming what
+// it was given that is not a bound.
+func NewPublisher(cfg PublisherConfig) (*Publisher, error) {
+	if cfg.MaxPayloadBytes < 0 {
+		return nil, fmt.Errorf("ipc: %d is not an event payload size", cfg.MaxPayloadBytes)
+	}
+	maxPayload := cfg.MaxPayloadBytes
+	if maxPayload == 0 {
+		maxPayload = DefaultMaxPayloadBytes
+	}
+	return &Publisher{maxPayload: maxPayload, subs: make(map[*Subscription]struct{})}, nil
 }
+
+// MaxPayloadBytes reports the payload bound this publisher applies, so a
+// producer can project its output to fit rather than discover the bound by
+// being refused.
+func (p *Publisher) MaxPayloadBytes() int { return p.maxPayload }
 
 // Subscribe opens a stream with room for backlog events. A backlog below one
 // is a programming error and is refused; DefaultBacklog is used for zero.
@@ -66,9 +105,21 @@ func (p *Publisher) Subscribe(backlog int) (*Subscription, error) {
 // adjacent revisions can legitimately reach this call inverted, and refusing
 // the older one would discard state to enforce an ordering the consumer's
 // Cursor already enforces without discarding anything.
+//
+// An event whose payload is past this publisher's bound is refused, and the
+// refusal names the bound and the size so the caller can report it. That is a
+// producer bug rather than a delivery decision: PRD section 8 makes the full
+// log the authority and what travels a bounded projection of it, so producing
+// that projection is the publishing caller's obligation. The bound applies to
+// every class, because bounding a projection does not depend on what the event
+// is about.
 func (p *Publisher) Publish(e Event) error {
 	if e.Type == "" {
 		return errors.New("ipc: event has no type")
+	}
+	if len(e.Payload) > p.maxPayload {
+		return fmt.Errorf("%w: %q carries %d bytes of payload, and an event may carry at most %d",
+			ErrPayloadTooLarge, e.Type, len(e.Payload), p.maxPayload)
 	}
 	if e.Class() == ClassState && e.Revision == 0 {
 		return fmt.Errorf("ipc: state event %q has no revision", e.Type)

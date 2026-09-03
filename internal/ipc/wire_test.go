@@ -127,17 +127,19 @@ func TestReadRefusesAMalformedFrame(t *testing.T) {
 // the sentinel the service returned rather than against its prose.
 func TestErrorCodesSurviveTheWire(t *testing.T) {
 	cases := map[Code]error{
-		CodeUnknownMethod:     ErrUnknownMethod,
-		CodeInvalidRequest:    ErrInvalidRequest,
-		CodeUnidentifiedPeer:  ErrUnidentifiedPeer,
-		CodeContained:         ErrContained,
-		CodeUnavailable:       ErrUnavailable,
-		CodeSubscriberStalled: ErrSubscriberStalled,
-		CodeStreamClosed:      ErrStreamClosed,
-		CodeConnectionBusy:    ErrConnectionBusy,
-		CodeFrameTooLarge:     ErrFrameTooLarge,
-		CodeClientClosed:      ErrClientClosed,
-		CodeInternal:          ErrInternal,
+		CodeUnknownMethod:      ErrUnknownMethod,
+		CodeInvalidRequest:     ErrInvalidRequest,
+		CodeUnidentifiedPeer:   ErrUnidentifiedPeer,
+		CodeContained:          ErrContained,
+		CodeUnavailable:        ErrUnavailable,
+		CodeSubscriberStalled:  ErrSubscriberStalled,
+		CodeEventUndeliverable: ErrEventUndeliverable,
+		CodePayloadTooLarge:    ErrPayloadTooLarge,
+		CodeStreamClosed:       ErrStreamClosed,
+		CodeConnectionBusy:     ErrConnectionBusy,
+		CodeFrameTooLarge:      ErrFrameTooLarge,
+		CodeClientClosed:       ErrClientClosed,
+		CodeInternal:           ErrInternal,
 	}
 	for code, sentinel := range cases {
 		var buf bytes.Buffer
@@ -160,17 +162,19 @@ func TestErrorCodesSurviveTheWire(t *testing.T) {
 
 func TestCodeForClassifiesRefusals(t *testing.T) {
 	cases := map[Code]error{
-		CodeUnknownMethod:     ErrUnknownMethod,
-		CodeInvalidRequest:    ErrInvalidRequest,
-		CodeUnidentifiedPeer:  ErrUnidentifiedPeer,
-		CodeContained:         ErrContained,
-		CodeUnavailable:       ErrUnavailable,
-		CodeSubscriberStalled: ErrSubscriberStalled,
-		CodeStreamClosed:      ErrStreamClosed,
-		CodeConnectionBusy:    ErrConnectionBusy,
-		CodeFrameTooLarge:     ErrFrameTooLarge,
-		CodeClientClosed:      ErrClientClosed,
-		CodeInternal:          errors.New("something else entirely"),
+		CodeUnknownMethod:      ErrUnknownMethod,
+		CodeInvalidRequest:     ErrInvalidRequest,
+		CodeUnidentifiedPeer:   ErrUnidentifiedPeer,
+		CodeContained:          ErrContained,
+		CodeUnavailable:        ErrUnavailable,
+		CodeSubscriberStalled:  ErrSubscriberStalled,
+		CodeEventUndeliverable: ErrEventUndeliverable,
+		CodePayloadTooLarge:    ErrPayloadTooLarge,
+		CodeStreamClosed:       ErrStreamClosed,
+		CodeConnectionBusy:     ErrConnectionBusy,
+		CodeFrameTooLarge:      ErrFrameTooLarge,
+		CodeClientClosed:       ErrClientClosed,
+		CodeInternal:           errors.New("something else entirely"),
 	}
 	for want, err := range cases {
 		if got := codeFor(err); got != want {
@@ -196,6 +200,8 @@ func TestEverySentinelSurvivesTheWire(t *testing.T) {
 		ErrFrameTooLarge,
 		ErrClientClosed,
 		ErrConnectionBusy,
+		ErrPayloadTooLarge,
+		ErrEventUndeliverable,
 	}
 	for _, sentinel := range all {
 		// A handler's failure reaches the wire wrapped in whatever it said

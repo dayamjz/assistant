@@ -71,6 +71,29 @@
 // control vocabulary makes unlikely and which this package cannot promise about
 // a caller that adds to it.
 //
+// The same rule holds where a control event cannot be put in a frame rather
+// than cannot be queued. Activity and state that do not fit are discarded and
+// raise the gap, because a gapped consumer reads back what it missed. Control
+// that does not fit ends the stream with ErrEventUndeliverable instead, which
+// is a different value from ErrSubscriberStalled on purpose: one says the
+// consumer fell behind, the other says one event could not travel here while
+// the consumer was keeping up, and a consumer that cannot tell them apart
+// cannot report what happened.
+//
+// # Two bounds on an event's size, at two different boundaries
+//
+// A payload is bounded twice, and the two are not one question with two owners.
+// Publisher.MaxPayloadBytes answers whether an event may be published at all:
+// it is a producer obligation, checked where the producer is, and Publish
+// refuses ErrPayloadTooLarge naming the bound and the size so the caller fixes
+// its projection. A connection's frame limit answers what happens to an event
+// that exists anyway and will not fit on this connection, which a caller
+// reaches by giving a server a MaxFrameBytes smaller than its publisher's
+// bound, by delivering an event through some later path that does not go
+// through Publish, or by a bug in the publisher check itself. The first is a
+// refusal to the producer and the second is a decision about one delivery, so
+// neither can answer for the other.
+//
 // # Peer identification is authority
 //
 // PRD section 9 contains an agent that is running inside a validation stage: it
@@ -107,13 +130,20 @@
 // # What one connection may hold at once
 //
 // A connection holds a bounded number of open streams and a bounded number of
-// requests being served, because the method that opens a stream is open to any
-// identified caller and an unbounded resource reachable without authority is
-// the hazard the frame limit already exists for. Exceeding either bound is a
-// refusal naming the limit and the current count, never a silent drop, and a
-// slot frees when a stream ends or a call is answered. The bound on requests is
-// applied without waiting: the goroutine that would wait is the one reading the
-// connection, so waiting would stop the connection rather than pace it.
+// requests being served, because the method that opens a stream is served
+// without consulting any credentials and an unbounded resource reachable
+// without authority is the hazard the frame limit already exists for.
+// Exceeding either bound is a refusal naming the limit and the current count,
+// never a silent drop, and a slot frees when a stream ends or a call is
+// answered. The bound on requests is applied without waiting: the goroutine
+// that would wait is the one reading the connection, so waiting would stop the
+// connection rather than pace it.
+//
+// The residual gap is named rather than papered over: these bounds are per
+// connection, and Serve accepts connections without bounding how many. A caller
+// that can reach the socket multiplies both bounds by the number of connections
+// it opens, so this reduces the hazard rather than closing it. What closes it
+// is who can reach the socket file at all, which this package does not own.
 //
 // # What this package does not do
 //

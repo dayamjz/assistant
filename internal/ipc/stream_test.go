@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -63,6 +64,17 @@ func exhausted(t *testing.T, sub *ipc.Subscription) {
 	}
 }
 
+// publisher builds a publisher the way a caller would, failing the test rather
+// than returning an error nobody in these tests is exercising.
+func publisher(t *testing.T, cfg ipc.PublisherConfig) *ipc.Publisher {
+	t.Helper()
+	p, err := ipc.NewPublisher(cfg)
+	if err != nil {
+		t.Fatalf("NewPublisher(%+v): %v", cfg, err)
+	}
+	return p
+}
+
 func subscribe(t *testing.T, p *ipc.Publisher, backlog int) *ipc.Subscription {
 	t.Helper()
 	sub, err := p.Subscribe(backlog)
@@ -85,7 +97,7 @@ func publish(t *testing.T, p *ipc.Publisher, events ...ipc.Event) {
 // TestSubscriberThatNeverReadsCannotBlockThePublisher is the first acceptance
 // criterion. The subscriber is not slow, it is absent: nothing ever calls Recv.
 func TestSubscriberThatNeverReadsCannotBlockThePublisher(t *testing.T) {
-	p := ipc.NewPublisher()
+	p := publisher(t, ipc.PublisherConfig{})
 	subscribe(t, p, 4) // never read from
 
 	const published = 20000
@@ -113,7 +125,7 @@ func TestSubscriberThatNeverReadsCannotBlockThePublisher(t *testing.T) {
 // TestOneSlowSubscriberDoesNotGapAnother proves the queues are per subscriber:
 // the absent one gaps itself and the attentive one misses nothing.
 func TestOneSlowSubscriberDoesNotGapAnother(t *testing.T) {
-	p := ipc.NewPublisher()
+	p := publisher(t, ipc.PublisherConfig{})
 	absent := subscribe(t, p, 2)
 	attentive := subscribe(t, p, 64)
 
@@ -140,7 +152,7 @@ func TestOneSlowSubscriberDoesNotGapAnother(t *testing.T) {
 // TestSubscriptionOpensGapped is the acceptance criterion that a consumer
 // cannot apply a delta to state it never reconciled.
 func TestSubscriptionOpensGapped(t *testing.T) {
-	p := ipc.NewPublisher()
+	p := publisher(t, ipc.PublisherConfig{})
 	sub := subscribe(t, p, 8)
 	publish(t, p, state("run", 1))
 
@@ -166,7 +178,7 @@ func TestSubscriptionOpensGapped(t *testing.T) {
 // TestOverflowDropsOnlyActivity is the second acceptance criterion: every state
 // event survives, exactly one marker is delivered, and it arrives first.
 func TestOverflowDropsOnlyActivity(t *testing.T) {
-	p := ipc.NewPublisher()
+	p := publisher(t, ipc.PublisherConfig{})
 	sub := subscribe(t, p, 4)
 	if opening := drain(t, sub, 1); len(opening) != 1 || opening[0].Type != "stream.gap" {
 		t.Fatalf("opening delivery = %v, want the gap marker", opening)
@@ -212,7 +224,7 @@ func TestOverflowDropsOnlyActivity(t *testing.T) {
 // exists for: a queue with no activity in it must not lose state to make room
 // for a log line.
 func TestArrivingActivityNeverDisplacesADelta(t *testing.T) {
-	p := ipc.NewPublisher()
+	p := publisher(t, ipc.PublisherConfig{})
 	sub := subscribe(t, p, 2)
 	drain(t, sub, 1)
 
@@ -239,7 +251,7 @@ func TestArrivingActivityNeverDisplacesADelta(t *testing.T) {
 // activity: state may be discarded only because the marker forces the consumer
 // to read the state back in full, which supersedes whatever was queued.
 func TestStateCollapsesIntoTheMarkerWhenNothingElseCanGo(t *testing.T) {
-	p := ipc.NewPublisher()
+	p := publisher(t, ipc.PublisherConfig{})
 	sub := subscribe(t, p, 2)
 	drain(t, sub, 1)
 
@@ -269,7 +281,7 @@ func TestStateCollapsesIntoTheMarkerWhenNothingElseCanGo(t *testing.T) {
 // control events has nothing that may go, so the stream ends loudly instead of
 // discarding one or growing without bound.
 func TestControlIsNeverDiscarded(t *testing.T) {
-	p := ipc.NewPublisher()
+	p := publisher(t, ipc.PublisherConfig{})
 	sub := subscribe(t, p, 2)
 	drain(t, sub, 1)
 
@@ -307,7 +319,7 @@ func TestControlIsNeverDiscarded(t *testing.T) {
 // arrival here, so the unrecognized event survives only because it is treated
 // as state.
 func TestAnUnrecognizedTypeIsRetainedUnderOverflow(t *testing.T) {
-	p := ipc.NewPublisher()
+	p := publisher(t, ipc.PublisherConfig{})
 	sub := subscribe(t, p, 2)
 	drain(t, sub, 1)
 
@@ -332,7 +344,7 @@ func TestAnUnrecognizedTypeIsRetainedUnderOverflow(t *testing.T) {
 }
 
 func TestPublishRefusesWhatCannotBeDelivered(t *testing.T) {
-	p := ipc.NewPublisher()
+	p := publisher(t, ipc.PublisherConfig{})
 	subscribe(t, p, 4)
 
 	cases := map[string]ipc.Event{
@@ -355,7 +367,7 @@ func TestPublishRefusesWhatCannotBeDelivered(t *testing.T) {
 }
 
 func TestClosePublisherEndsSubscriptionsAfterTheQueue(t *testing.T) {
-	p := ipc.NewPublisher()
+	p := publisher(t, ipc.PublisherConfig{})
 	sub := subscribe(t, p, 8)
 	drain(t, sub, 1)
 	publish(t, p, state("s1", 1))
@@ -381,7 +393,7 @@ func TestClosePublisherEndsSubscriptionsAfterTheQueue(t *testing.T) {
 }
 
 func TestCloseSubscriptionDetachesIt(t *testing.T) {
-	p := ipc.NewPublisher()
+	p := publisher(t, ipc.PublisherConfig{})
 	sub, err := p.Subscribe(4)
 	if err != nil {
 		t.Fatalf("Subscribe: %v", err)
@@ -397,14 +409,14 @@ func TestCloseSubscriptionDetachesIt(t *testing.T) {
 }
 
 func TestSubscribeRefusesANegativeBacklog(t *testing.T) {
-	p := ipc.NewPublisher()
+	p := publisher(t, ipc.PublisherConfig{})
 	if _, err := p.Subscribe(-1); err == nil {
 		t.Error("Subscribe(-1) was accepted")
 	}
 }
 
 func TestRecvRespectsContext(t *testing.T) {
-	p := ipc.NewPublisher()
+	p := publisher(t, ipc.PublisherConfig{})
 	sub := subscribe(t, p, 4)
 	drain(t, sub, 1)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -420,4 +432,75 @@ func types(events []ipc.Event) []ipc.Type {
 		out[i] = e.Type
 	}
 	return out
+}
+
+// TestNewPublisherRefusesABoundThatIsNotASize covers the construction-time
+// half: a negative bound is a programming error, and it is refused where it is
+// written rather than at the first event that meets it.
+func TestNewPublisherRefusesABoundThatIsNotASize(t *testing.T) {
+	if _, err := ipc.NewPublisher(ipc.PublisherConfig{MaxPayloadBytes: -1}); err == nil {
+		t.Error("NewPublisher accepted a negative payload bound")
+	}
+	p, err := ipc.NewPublisher(ipc.PublisherConfig{})
+	if err != nil {
+		t.Fatalf("NewPublisher with no bound: %v", err)
+	}
+	if p.MaxPayloadBytes() != ipc.DefaultMaxPayloadBytes {
+		t.Errorf("an unset bound is %d, want DefaultMaxPayloadBytes %d", p.MaxPayloadBytes(), ipc.DefaultMaxPayloadBytes)
+	}
+}
+
+// TestPublishRefusesAPayloadPastTheBound covers the producer's obligation.
+// PRD section 8 makes what travels a bounded projection of the full log, and a
+// producer that did not bound its projection learns so at publish rather than
+// having a consumer find out by losing something.
+func TestPublishRefusesAPayloadPastTheBound(t *testing.T) {
+	const bound = 512
+	p := publisher(t, ipc.PublisherConfig{MaxPayloadBytes: bound})
+	sub := subscribe(t, p, 8)
+
+	atTheBound := json.RawMessage(`"` + strings.Repeat("x", bound-2) + `"`)
+	if len(atTheBound) != bound {
+		t.Fatalf("the test built a %d byte payload, want %d", len(atTheBound), bound)
+	}
+	if err := p.Publish(ipc.Event{Type: ipc.TypeLogLine, Payload: atTheBound}); err != nil {
+		t.Fatalf("Publish of a payload at the bound = %v, want it accepted", err)
+	}
+
+	past := json.RawMessage(`"` + strings.Repeat("x", bound) + `"`)
+	err := p.Publish(ipc.Event{Type: ipc.TypeLogLine, Payload: past})
+	if !errors.Is(err, ipc.ErrPayloadTooLarge) {
+		t.Fatalf("Publish of a payload past the bound = %v, want ErrPayloadTooLarge", err)
+	}
+	if !strings.Contains(err.Error(), "512") || !strings.Contains(err.Error(), "514") {
+		t.Errorf("the refusal reads %q, want it to name the bound and the size", err)
+	}
+
+	// The refusal is about the event, so nothing was delivered and the
+	// subscriber was not gapped for a producer's mistake.
+	drain(t, sub, 1) // the opening marker
+	got := drain(t, sub, 1)
+	if len(got[0].Payload) != bound {
+		t.Errorf("the subscriber holds a %d byte payload, want only the accepted %d", len(got[0].Payload), bound)
+	}
+	exhausted(t, sub)
+}
+
+// TestTheBoundAppliesToEveryClass holds the rule that bounding a projection
+// does not depend on what an event is about. Control is the class the stream
+// may never discard, so a control event past the bound must be refused where it
+// is published rather than becoming a delivery nobody can make.
+func TestTheBoundAppliesToEveryClass(t *testing.T) {
+	const bound = 256
+	p := publisher(t, ipc.PublisherConfig{MaxPayloadBytes: bound})
+	past := json.RawMessage(`"` + strings.Repeat("x", bound) + `"`)
+	for _, e := range []ipc.Event{
+		{Type: ipc.TypeLogLine, Payload: past},
+		{Type: ipc.TypeRunState, Revision: 1, Payload: past},
+		{Type: ipc.TypeServiceStopping, Payload: past},
+	} {
+		if err := p.Publish(e); !errors.Is(err, ipc.ErrPayloadTooLarge) {
+			t.Errorf("Publish(%q) = %v, want ErrPayloadTooLarge", e.Type, err)
+		}
+	}
 }
