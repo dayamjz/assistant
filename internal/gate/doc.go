@@ -84,6 +84,43 @@
 // reaches it then just as well. Stated as "no hook may appear across this
 // operation" it covers both, and covers whatever calls the operation next.
 //
+// One hook name is no longer reachable through that channel at all, which
+// narrows where the refusal fires by closing the case rather than by catching
+// it. Obtaining a gate seals it first, so a repair reaches the git call with
+// the admission hook name already occupied by a hook this package wrote. What
+// this package can state about that is what it checks afterwards: with a
+// template configured that carries a pre-receive, the hook that runs on a push
+// to the repaired gate is this package's admission and the template's hook is
+// neither installed nor preserved into the chain.
+// TestATemplateCannotDisplaceTheAdmissionHookDuringARepair holds that, and it
+// proves the closure rather than the refusal.
+//
+// The refusal covers everything else, so a reader can tell where it still
+// fires. Every other hook name arriving during a repair is refused with
+// ErrTemplateHooks, which TestAnUnmanagedTemplateHookArrivingDuringARepairIsRefused
+// holds at a name this package does not install. A repository that did not
+// exist when the operation started is refused for every name, the admission
+// hook included, because there was nothing there to seal beforehand; that is
+// TestARepositoryBornCarryingHooksIsRefused.
+//
+// The ordering the narrowing rests on is a property of the call graph rather
+// than a caution for a later reader, and every step of it is checkable by
+// reading this package. ensureRepository has one caller, the body of an
+// operation. That body is reached only through withGate, which acquires the
+// gate and only then runs it. acquire is the only thing that produces the
+// handle the body needs, and it seals every gate it observed from a deferred
+// call, so the seal has completed before it returns. The gate an operation acts
+// on is always one acquire observed, because the resolution can only return the
+// gate the working copy names or the gate its path hashes to, and both are
+// noted before either is resolved.
+//
+// What is left open is inside this package. The handle is a package-local type,
+// so nothing outside can reach ensureRepository without going through the seam,
+// while another function added here could construct one by hand and reach it
+// without an acquisition. Nothing does. Closing that completely would take
+// putting the handle behind a package boundary whose only exported constructor
+// is the seam, which is not done here.
+//
 // The refusal matters more than its own size because of what it composes with.
 // A hook this package did not write is preserved rather than discarded, which
 // is how an operator's own pre-receive keeps running, and preservation is
@@ -278,6 +315,12 @@
 // started, so an unrelated gate's unreadable hooks directory cannot turn a
 // completed operation into a reported failure, which is what it used to do.
 //
+// A seal that fails while a refusal is already in flight is joined onto that
+// refusal rather than dropped behind it, and one gate's failure does not stop
+// the other gates being sealed. Reporting only the refusal would say a gate was
+// closed that is open, which is the one failure this section ranks above the
+// rest.
+//
 // Doing it there rather than at each refusal is the other half. The refusals
 // are many and the next one added would not have carried it, which is exactly
 // the sibling-path shape above. It also means an operation seals a gate it is
@@ -328,9 +371,12 @@
 // each one is returned before the mutation it refuses rather than after.
 // Removal in particular checks that it can complete before it deletes
 // anything, so a gate is never half-removed with the working copy still
-// pointing at it, and it gives up the working copy's remote and its binding in
-// the index before it deletes the repository, so every step that can be undone
-// comes before the one that cannot.
+// pointing at it, and it gives up the three handles it holds in order of how
+// findable the gate stays without each one: the binding in the index, then the
+// working copy's remote, then the repository. A reattached gate is filed under
+// an identifier its working copy's path no longer hashes to, so its remote is
+// the only handle on it, and a removal that gave that up first and then failed
+// would leave the repository named by nothing.
 //
 // One write is common to every refusal and is stated once, in errors.go rather
 // than in each of them: obtaining a gate seals any gate the resolution observed

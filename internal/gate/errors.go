@@ -12,8 +12,11 @@ import "errors"
 // every push rather than one that accepts every push with nothing checking
 // them. Where a refusal below says nothing was created, written, or deleted, it
 // means nothing beyond that seal, and where the refusal happens before any
-// repository has been observed there is nothing to seal either. See doc.go for
-// why that outranks the losses the other refusals prevent.
+// repository has been observed there is nothing to seal either. A seal that
+// fails is joined onto the refusal rather than hidden behind it, so a refusal
+// below is never returned alone over a gate that was left open; both stay
+// matchable with errors.Is. See doc.go for why that outranks the losses the
+// other refusals prevent.
 var (
 	// ErrInvalidSpec is returned when a Spec cannot describe a gate: a home
 	// or working path that is not absolute, a working path that is not a

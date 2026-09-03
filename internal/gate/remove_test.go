@@ -744,3 +744,83 @@ func namesDetaching(err error) bool {
 	// whether the action was named.
 	return strings.Contains(strings.ToLower(err.Error()), "removing the "+gate.RemoteName+" remote here")
 }
+
+// TestASealThatFailsIsReportedEvenBehindARefusal is the other half of the
+// invariant a refusal already carries. Obtaining a gate seals one that has no
+// admission hook, and errors.go states that as the one write every refusal
+// makes, so a refusal returned alone is a statement that the seal happened.
+//
+// The two arms are the same refusal over the same damage, differing only in
+// whether the seal can be written. The first is what makes the second mean
+// something: it shows the refusal is reached and the seal is what closes the
+// gate, so the second is not passing over a fixture that never sealed at all.
+func TestASealThatFailsIsReportedEvenBehindARefusal(t *testing.T) {
+	gitEnvironment(t)
+	command, _ := recorderCommand(t, 0)
+
+	cases := []struct {
+		name string
+		// damage takes the gate's admission hook away, and decides whether a
+		// seal can be written in its place.
+		damage    func(t *testing.T, repo string)
+		wantSeal  bool
+		wantNamed bool
+	}{
+		{
+			name: "the seal is written",
+			damage: func(t *testing.T, repo string) {
+				if err := os.Remove(filepath.Join(repo, "hooks", gate.AdmissionHook)); err != nil {
+					t.Fatalf("remove the admission hook: %v", err)
+				}
+			},
+			wantSeal: true,
+		},
+		{
+			name: "the seal cannot be written",
+			damage: func(t *testing.T, repo string) {
+				dir := filepath.Join(repo, "hooks")
+				if err := os.RemoveAll(dir); err != nil {
+					t.Fatalf("remove %s: %v", dir, err)
+				}
+				// A file where the hooks directory belongs is the shape an
+				// unwritable hooks directory has here: the seal cannot inspect
+				// the name it would fill, let alone write it.
+				writeFile(t, dir, "not a directory\n")
+			},
+			wantNamed: true,
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			wc := newWorkingCopy(t)
+			home, opts := newHome(t)
+			spec := gate.Spec{Home: home, WorkingPath: wc.path, Command: command}
+			g, err := gate.Initialize(ctx(t), spec, opts()...)
+			if err != nil {
+				t.Fatalf("Initialize: %v", err)
+			}
+
+			// A copy of the working copy inherits the remote, so the gate is
+			// somebody else's and the removal refuses.
+			duplicate := filepath.Join(filepath.Dir(wc.path), "copy")
+			copyTree(t, wc.path, duplicate)
+			writeFile(t, filepath.Join(g.Repository(), recordName),
+				fmt.Sprintf(`{"version":1,"id":%q,"workingPath":%q}`, g.ID(), resolved(t, duplicate)))
+			c.damage(t, g.Repository())
+
+			err = gate.Remove(ctx(t), spec, opts(gate.WithOpener(detachingOpener))...)
+			if !errors.Is(err, gate.ErrGateClaimed) {
+				t.Fatalf("Remove error = %v, want ErrGateClaimed", err)
+			}
+			admission := filepath.Join(g.Repository(), "hooks", gate.AdmissionHook)
+			if named := strings.Contains(err.Error(), admission); named != c.wantNamed {
+				t.Fatalf("the refusal names %s = %v, want %v; the error was %v",
+					admission, named, c.wantNamed, err)
+			}
+			if _, statErr := os.Stat(admission); c.wantSeal != (statErr == nil) {
+				t.Fatalf("an admission hook at %s = %v, want %v", admission, statErr == nil, c.wantSeal)
+			}
+		})
+	}
+}

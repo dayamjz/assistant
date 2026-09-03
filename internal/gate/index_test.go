@@ -1,6 +1,7 @@
 package gate_test
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -8,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/gate"
+	"github.com/dayamjz/assistant/internal/store"
 )
 
 // TestEveryOperationRefusesWithoutAnOwnershipIndex is the requirement stated as
@@ -124,5 +126,90 @@ func TestAMovedWorkingCopyIsRecordedWhereItNowStands(t *testing.T) {
 	sort.Strings(want)
 	if got := boundWorkingPaths(t, index, original.ID()); !equal(got, want) {
 		t.Fatalf("the index records %v as bound to the gate, want %v", got, want)
+	}
+}
+
+// unbindableIndex is the ownership index with its unbind broken and nothing
+// else changed. The two accessors a resolution reads go to the live store, and
+// the write a removal makes goes to a second store of the same kind that has
+// been closed, so the failure it produces is one internal/store actually
+// returns rather than a shape invented here.
+type unbindableIndex struct {
+	*store.Store
+	shut *store.Store
+}
+
+func (i unbindableIndex) UnbindGate(ctx context.Context, workingPath string) error {
+	return i.shut.UnbindGate(ctx, workingPath)
+}
+
+var _ gate.Index = unbindableIndex{}
+
+// TestAFailedUnbindLeavesAReattachedGateFindable is PRD principle P6 at the one
+// sequence where a removal can lose a repository without deleting it.
+//
+// A reattached gate is filed under the identifier its working copy's path
+// hashed to before the move, so the working copy's assistant remote is the only
+// handle on it. A removal that gave that remote up and then failed to unbind
+// would leave the repository named by nothing, and nothing in this package
+// scans the home for a gate nobody names, so the history in it would be
+// unreachable.
+func TestAFailedUnbindLeavesAReattachedGateFindable(t *testing.T) {
+	gitEnvironment(t)
+	wc := newWorkingCopy(t)
+	home, index, opts := homeWithIndex(t)
+	command, _ := recorderCommand(t, 0)
+
+	original, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path, Command: command}, opts()...)
+	if err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+	moved := filepath.Join(filepath.Dir(wc.path), "moved")
+	if err := os.Rename(wc.path, moved); err != nil {
+		t.Fatalf("move the working copy: %v", err)
+	}
+	spec := gate.Spec{Home: home, WorkingPath: moved, Command: command}
+	reattached, err := gate.Initialize(ctx(t), spec, opts()...)
+	if err != nil {
+		t.Fatalf("Initialize after the move: %v", err)
+	}
+	if !reattached.Reattached() || reattached.ID() != original.ID() {
+		t.Fatalf("the gate after the move is %q reattached=%v, want %q reattached=true",
+			reattached.ID(), reattached.Reattached(), original.ID())
+	}
+	// The history the gate holds, which is what a lost repository loses.
+	rawGit(t, moved, "push", "--quiet", gate.RemoteName, "main")
+	recorded := refs(t, reattached.Repository())
+
+	shut := openIndex(t)
+	if err := shut.Close(); err != nil {
+		t.Fatalf("close the second index: %v", err)
+	}
+	broken := unbindableIndex{Store: index, shut: shut}
+	if err := gate.Remove(ctx(t), spec, gate.WithIndex(broken), gate.WithOpener(detachingOpener)); err == nil {
+		t.Fatal("Remove reported success over an index that cannot unbind")
+	}
+
+	// The gate is still there and the working copy still names it, so the
+	// removal can be run again once the index works.
+	if _, err := os.Stat(reattached.Repository()); err != nil {
+		t.Fatalf("the failed removal deleted %s anyway: %v", reattached.Repository(), err)
+	}
+	if url, ok := remoteURL(t, moved, gate.RemoteName); !ok || url != reattached.Repository() {
+		t.Fatalf("the %s remote of the moved working copy is %q, want %q; the gate is now named by nothing",
+			gate.RemoteName, url, reattached.Repository())
+	}
+
+	// Initializing again finds the same gate through that remote rather than
+	// creating an empty one at the identifier this path hashes to.
+	again, err := gate.Initialize(ctx(t), spec, opts()...)
+	if err != nil {
+		t.Fatalf("Initialize after the failed removal: %v", err)
+	}
+	if again.ID() != original.ID() {
+		t.Fatalf("the gate is now %q, want %q: the failed removal orphaned the original", again.ID(), original.ID())
+	}
+	if got := refs(t, again.Repository()); !equal(got, recorded) {
+		t.Fatalf("the gate holds %v, want %v", got, recorded)
 	}
 }

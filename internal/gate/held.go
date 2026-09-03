@@ -101,6 +101,12 @@ func withGate(ctx context.Context, spec Spec, want resolution, opts []Option, do
 // refusal because the refusals are many and the next one added would not have
 // carried it.
 //
+// A seal that fails is joined onto whatever was being returned rather than
+// dropped behind it, so a refusal already in flight cannot report a gate as
+// sealed that is not. Both stay matchable with errors.Is, and no handle comes
+// back either way: an operation must not proceed on a gate this could not
+// close.
+//
 // Sealing a gate this resolution is refusing to act on is deliberate, including
 // one another working copy owns. The only gate it changes is one that was
 // already accepting every push with nothing running, and leaving that alone to
@@ -109,8 +115,8 @@ func withGate(ctx context.Context, spec Spec, want resolution, opts []Option, do
 func acquire(ctx context.Context, set settings, home, workingPath string, want resolution) (h *held, err error) {
 	touched := touchedGates{home: home}
 	defer func() {
-		if sealErr := touched.seal(); sealErr != nil && err == nil {
-			h, err = nil, sealErr
+		if sealErr := touched.seal(); sealErr != nil {
+			h, err = nil, errors.Join(err, sealErr)
 		}
 	}()
 
@@ -296,14 +302,20 @@ func (t *touchedGates) add(repo string) {
 // that holds a repository and has no admission hook of its own. A gate that
 // already has one, and a path that holds nothing or is not filed where this
 // home keeps its gates, are left alone.
+//
+// One gate whose seal fails does not stop the others, and the failures are
+// joined rather than reduced to the first. A gate left open because a different
+// gate's hooks directory could not be written is the same invisible failure
+// this exists to prevent.
 func (t *touchedGates) seal() error {
+	var errs error
 	for _, repo := range t.paths {
 		if identifierAt(t.home, repo) == "" || holdsNoRepository(repo) {
 			continue
 		}
 		if err := sealAdmission(repo); err != nil {
-			return err
+			errs = errors.Join(errs, err)
 		}
 	}
-	return nil
+	return errs
 }

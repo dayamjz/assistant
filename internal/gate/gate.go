@@ -263,13 +263,22 @@ func (h *held) remove(ctx context.Context) error {
 	if h.holds != repositoryWithRecord {
 		return recordlessRefusal(h.repository, h.workingPath)
 	}
-	// The irreversible step is last, so every step before it can be undone by
-	// initializing again.
-	if err := detacher.RemoveRemote(ctx, RemoteName); err != nil && !errors.Is(err, vcs.ErrRemoteNotFound) {
-		return fmt.Errorf("gate: removing the %s remote of %s: %w", RemoteName, h.workingPath, err)
-	}
+	// The three handles are given up in order of how findable the gate stays
+	// without each one: the index binding first, because a gate whose working
+	// copy still names it is still reachable, then the remote, then the
+	// repository, which cannot be given back.
+	//
+	// The other order loses a reattached gate. Such a gate is filed under an
+	// identifier the working copy's current path no longer hashes to, so the
+	// remote is the only handle on it; giving that up first and then failing to
+	// unbind leaves the repository named by nothing, and nothing here scans the
+	// home for a gate nobody names. A binding given up over a gate that then
+	// survives costs nothing by comparison: initializing again writes it back.
 	if err := h.set.index.UnbindGate(ctx, h.workingPath); err != nil && !errors.Is(err, store.ErrNotFound) {
 		return fmt.Errorf("gate: giving up the binding of %s: %w", h.workingPath, err)
+	}
+	if err := detacher.RemoveRemote(ctx, RemoteName); err != nil && !errors.Is(err, vcs.ErrRemoteNotFound) {
+		return fmt.Errorf("gate: removing the %s remote of %s: %w", RemoteName, h.workingPath, err)
 	}
 	if err := os.RemoveAll(h.repository); err != nil {
 		return fmt.Errorf("gate: deleting %s: %w", h.repository, err)
