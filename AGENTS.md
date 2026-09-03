@@ -81,6 +81,9 @@ Each has cost this repository more than one round of review.
 - `internal/store` is the only package that opens the database and the only one
   that writes SQL. Add a typed accessor there rather than a query elsewhere. Its
   driver is pure Go on purpose, so `make check` needs no cgo on any platform.
+  A schema change is a new migration appended to `schema.go`, never an edit to
+  one that has shipped; the tests number what they append from the shipped list
+  rather than spelling a version out.
 - `internal/safety` owns whether a branch update may proceed and on what anchor.
   `internal/vcs` stays mechanism only, so a lease, an incorporation check, or a
   force decision belongs in `internal/safety` even when it would be shorter to
@@ -96,6 +99,21 @@ Each has cost this repository more than one round of review.
   declaration makes it so, a cancelled check is settled, and an unrecognized
   state deliberately keeps the caller waiting. Read its `doc.go` before
   changing any of those four.
+- `internal/gate` owns the local bare repository a push is validated through:
+  where it lives, what it is born with, its hooks, and its identity across a
+  move or a copy. It composes `internal/vcs` and builds no command lines, and it
+  composes `internal/store` for the ownership index without opening a database.
+  Two things there are mechanism rather than rule, because this package wrote
+  both rules down and then broke them. No exported operation takes a gate's
+  path, only the working copy it is asked about: one unexported seam resolves
+  the gate, settles who it belongs to, and seals it, and an operation that
+  cannot obtain a handle cannot skip any of that. And nothing this package
+  produced counts as evidence of ownership, so neither the `assistant` remote
+  nor the path hash is weighed; the question is asked of the store's ownership
+  index and the gate's own record, and every answer either gives is checked
+  against the working copy actually standing there. Read its `doc.go` before
+  changing any of that, and for the residual gaps: a path that outlives its
+  working copy, `core.hooksPath`, and letter case in a path.
 - `internal/agents` is the only package that starts an agent process. It owns
   the process tree, the per-invocation environment, and what is recorded about
   a call. P4 lives in its type split rather than in a rule callers follow:

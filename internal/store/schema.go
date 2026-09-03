@@ -159,4 +159,28 @@ var schema = []migration{
 			`CREATE INDEX hold_open ON hold(opened_at) WHERE resolution IS NULL`,
 		},
 	},
+	{
+		version: 2,
+		name:    "gate ownership index",
+		statements: []string{
+			// A gate binding is authoritative: one row per working copy,
+			// rewritten in place. It is what makes "which working copies are
+			// bound to this gate" a question a caller asks rather than infers,
+			// which a gate filed under a hash of a path cannot answer from its
+			// own directory.
+			//
+			// The working path is the primary key because a working copy is
+			// bound to at most one gate. The gate identifier is not unique:
+			// two rows may name it at once while a working copy that moved has
+			// not yet been unbound from its old path, and a reader that could
+			// not represent that could not detect it either.
+			`CREATE TABLE gate_binding (
+				working_path TEXT PRIMARY KEY,
+				gate_id      TEXT NOT NULL,
+				bound_at     TEXT NOT NULL,
+				updated_at   TEXT NOT NULL
+			) STRICT`,
+			`CREATE INDEX gate_binding_gate ON gate_binding(gate_id, working_path)`,
+		},
+	},
 }
