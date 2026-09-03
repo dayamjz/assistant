@@ -247,6 +247,48 @@ func TestArrivingActivityNeverDisplacesADelta(t *testing.T) {
 	}
 }
 
+// TestArrivingStateEvictsActivityBeforeADelta covers the other half of the
+// eviction order: the arriving event is a delta rather than progress, so the
+// queue it overflows has to give up its oldest activity before it may collapse
+// a queued delta into the marker. A queue that reached for the delta first
+// would keep stale log lines and make its consumer reconcile, which is the
+// order inverted.
+func TestArrivingStateEvictsActivityBeforeADelta(t *testing.T) {
+	p := publisher(t, ipc.PublisherConfig{})
+	sub := subscribe(t, p, 4)
+	drain(t, sub, 1)
+
+	publish(t, p, activity("a1"), activity("a2"), state("s1", 1), state("s2", 2)) // fills the queue
+	publish(t, p, state("s3", 3), state("s4", 4))                                 // both arrive to a full queue
+
+	got := drain(t, sub, 5)
+	exhausted(t, sub)
+	if got[0].Type != "stream.gap" {
+		t.Fatalf("delivery order is %v; the marker must arrive ahead of queued payload", types(got))
+	}
+	gap, err := ipc.GapPayload(got[0])
+	if err != nil {
+		t.Fatalf("GapPayload: %v", err)
+	}
+	if gap.Dropped != 2 {
+		t.Errorf("the marker reports %d dropped, want the 2 discarded activity events", gap.Dropped)
+	}
+	var kept []string
+	for _, e := range got[1:] {
+		kept = append(kept, label(t, e))
+	}
+	want := []string{"s1", "s2", "s3", "s4"}
+	if len(kept) != len(want) {
+		t.Fatalf("retained %v, want every delta and no activity", kept)
+	}
+	for i, w := range want {
+		if kept[i] != w {
+			t.Errorf("retained %v, want %v: a delta was discarded to make room for a delta", kept, want)
+			break
+		}
+	}
+}
+
 // TestStateCollapsesIntoTheMarkerWhenNothingElseCanGo covers the tier below
 // activity: state may be discarded only because the marker forces the consumer
 // to read the state back in full, which supersedes whatever was queued.

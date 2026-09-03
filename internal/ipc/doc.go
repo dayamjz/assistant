@@ -104,6 +104,12 @@
 // else: no frame this package defines has a field a caller could put a process
 // identifier or a user in, so nothing a caller sends can reach the decision.
 //
+// That read is the one reason this module depends on golang.org/x/sys/unix
+// directly. The socket options it needs, SO_PEERCRED on linux and
+// LOCAL_PEERCRED with LOCAL_PEERPID on darwin, have no accessor in the standard
+// library, and the alternative to the dependency is hand-written syscall
+// plumbing per platform for the fact every authority decision here rests on.
+//
 // What identification establishes is bounded, and the bound is real. It
 // describes the peer as it was when the connection was made, which is the only
 // thing a connection can be about, and a process identifier is reusable once
