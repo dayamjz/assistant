@@ -66,19 +66,46 @@
 // word holding no slash, so on a host whose separator is a backslash the
 // native spelling would arrive as a bare word and be looked up after all.
 //
-// A repository this package creates must be born with no hooks. Removing
-// GIT_TEMPLATE_DIR from the environment, which internal/vcs does on every
-// invocation, closes the direct route by which an ancestor process chooses
-// what a created repository contains, but internal/vcs deliberately keeps
-// GIT_CONFIG_GLOBAL and GIT_CONFIG_SYSTEM, and init.templateDir in a
-// configuration file those point at chooses a template just as effectively.
-// So Initialize inspects the hooks directory of a repository it has just
-// created and refuses with ErrTemplateHooks when it holds any active hook,
-// naming init.templateDir. That refusal exists because the alternative is
-// worse than losing the template: a hook this package did not write would
-// otherwise be preserved as somebody's custom hook and chained into the
-// admission path, which is an ancestor process choosing code that runs inside
-// the gate.
+// No hook may enter a gate except from this package. Removing GIT_TEMPLATE_DIR
+// from the environment, which internal/vcs does on every invocation, closes
+// the direct route by which an ancestor process chooses what a repository is
+// created with, but internal/vcs deliberately keeps GIT_CONFIG_GLOBAL and
+// GIT_CONFIG_SYSTEM, and init.templateDir in a configuration file those point
+// at chooses a template just as effectively. So Initialize lists the gate's
+// hooks directory on both sides of the git call it makes and refuses with
+// ErrTemplateHooks, naming init.templateDir, when a hook is there afterwards
+// that was not there before.
+//
+// That refusal is written against the operation and not against the case that
+// motivated it, and the difference is the whole of its value. Stated as "a
+// repository this package creates must be born with no hooks" it held on
+// creation and was silent on repair, while the channel it closes is open on
+// every initialization: an existing gate is reinitialized too, and a template
+// reaches it then just as well. Stated as "no hook may appear across this
+// operation" it covers both, and covers whatever calls the operation next.
+//
+// The refusal matters more than its own size because of what it composes with.
+// A hook this package did not write is preserved rather than discarded, which
+// is how an operator's own pre-receive keeps running, and preservation is
+// exactly what would promote an injected template hook into the admission
+// chain: it would be moved to the .local name and invoked after admission on
+// every push. The preservation rule and the template channel are only safe
+// together, so the one that can be closed is closed everywhere.
+//
+// # A guard on a gate belongs to the operation, not to the call site
+//
+// Three times now a check in this package has covered one path and not its
+// sibling: ownership on adoption but not on removal, and a hook that arrives
+// on creation but not on repair. Both times the guard was written where the
+// problem was first noticed rather than around the operation that carries the
+// risk, and both times the sibling path was reachable and unguarded.
+//
+// So when a rule about a gate is added here, ask what operation it constrains
+// and put it there, not at the call that prompted it. The two questions that
+// find this are: which other caller performs the same act, and what does this
+// check do when the state it inspects was already there when the operation
+// started. A guard scoped to a code path is a guard the next caller of that
+// operation reopens without noticing.
 //
 // The part that is open is core.hooksPath. A configuration file reachable
 // through the same two kept variables can point git at a hooks directory
@@ -139,9 +166,23 @@
 // old identifier unreachable, because nothing here scans the home for a gate
 // nobody names. What it costs is that with no record there is no ownership
 // evidence left to weigh, so a copy holding the inherited remote can take a
-// recordless gate over. That failure is loud in the same way an adoption is:
-// the original is refused with ErrGateClaimed rather than quietly losing
-// anything.
+// recordless gate over, and no reading of the two gates afterwards can tell
+// that apart from a working copy that moved and lost the same file.
+//
+// So the adoption is recorded as one. The record this package then writes says
+// that the binding came from a remote rather than from a record, that field is
+// carried into every record written afterwards rather than cleared by the next
+// ordinary initialization, and Remove refuses on it with
+// ErrGateBindingInferred. Deleting is the one act here that cannot be undone,
+// and an inferred binding does not justify it. Without that the adoption would
+// manufacture the very evidence a later removal reads, and the copy's eject
+// would delete the original's history with nothing having refused anything.
+//
+// What is left is loud in both directions. The copy is told it may not delete
+// the gate, and is told to drop the remote and remove the directory by hand if
+// it is sure. The original is refused with ErrGateClaimed the next time it
+// initializes, because the copy is by then a working copy that still points at
+// the gate. Neither loses a reference.
 //
 // The residual gap in identity is the path itself. The identifier is computed
 // from the cleaned, symlink-resolved absolute path, so two spellings that

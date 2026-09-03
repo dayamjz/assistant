@@ -42,6 +42,14 @@ var (
 	// it is returned. The message names the gate, the working copy holding
 	// it, the working copy asking, and what has to change.
 	ErrGateClaimed = errors.New("gate: another working copy holds the gate at this identifier")
+	// ErrGateBindingInferred is returned by Remove when the gate's record says
+	// its binding came from taking over a repository that carried no record.
+	// Nothing but a remote said the gate was this working copy's, and a copy
+	// of a gated project inherits that remote, so the binding is not evidence
+	// enough for the one act here that cannot be undone. Nothing has been
+	// removed when it is returned, and the message says what the operator can
+	// do instead.
+	ErrGateBindingInferred = errors.New("gate: gate binding rests on a remote rather than on a record")
 	// ErrMalformedRecord is returned when a gate's record file exists but
 	// cannot be read as one. The gate's binding to a working copy lives in
 	// that record, so a record that cannot be read is a fact that cannot be

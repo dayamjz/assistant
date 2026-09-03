@@ -33,6 +33,17 @@ type record struct {
 	// belongs to. It is rewritten whenever initialization reattaches the gate
 	// to a working copy that moved.
 	WorkingPath string `json:"workingPath"`
+	// Adopted reports that this binding was established by taking over a gate
+	// that carried no record, so nothing but the working copy's own remote
+	// ever said the gate was its, and a copy of a gated project inherits that
+	// remote. It is the difference between a binding a record established and
+	// one this package inferred, which is a difference no later state of the
+	// gate can show, so it is carried into every record written afterwards
+	// rather than cleared by the next ordinary initialization.
+	//
+	// Removal refuses on it, because deleting a gate is the one act here that
+	// cannot be undone and an inferred binding is not enough to justify it.
+	Adopted bool `json:"adopted,omitempty"`
 }
 
 // recordPath is where a gate repository keeps its record.

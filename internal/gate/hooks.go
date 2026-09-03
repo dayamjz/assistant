@@ -179,6 +179,23 @@ func activeHooks(repo string) ([]string, error) {
 	return names, nil
 }
 
+// namesAdded is the names present in after that were not present in before.
+// It is how this package tells a hook that arrived during an operation from
+// one that was already there, without asking git what it did.
+func namesAdded(before, after []string) []string {
+	had := make(map[string]struct{}, len(before))
+	for _, name := range before {
+		had[name] = struct{}{}
+	}
+	var added []string
+	for _, name := range after {
+		if _, ok := had[name]; !ok {
+			added = append(added, name)
+		}
+	}
+	return added
+}
+
 // hookScript renders the hook installed at name.
 //
 // Three things about the script are load-bearing rather than stylistic. The

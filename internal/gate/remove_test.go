@@ -262,3 +262,115 @@ func TestRemoveFromACopyRefusesAndLeavesTheOriginalsGate(t *testing.T) {
 		t.Fatalf("the gate survived removal by its own working copy (stat error %v)", statErr)
 	}
 }
+
+// TestACopyThatAdoptedARecordlessGateCannotDeleteIt is the sequence the
+// recordless adoption opens and has to close. A gate that lost its record is
+// adopted rather than abandoned, and nothing on disk afterwards can tell a copy
+// that took one over from a working copy that moved and lost the same file. So
+// the adoption is recorded as resting on a remote rather than on a record, and
+// the act that cannot be undone refuses on that. Without the refusal the
+// adoption would manufacture the very evidence the removal reads.
+func TestACopyThatAdoptedARecordlessGateCannotDeleteIt(t *testing.T) {
+	gitEnvironment(t)
+	wc := newWorkingCopy(t)
+	home := t.TempDir()
+	command, _ := recorderCommand(t, 0)
+
+	original, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path, Command: command})
+	if err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+	rawGit(t, wc.path, "push", "--quiet", gate.RemoteName, "main")
+
+	// The project directory is copied, so the copy inherits the original's
+	// configuration and with it the remote naming the original's gate.
+	duplicate := filepath.Join(filepath.Dir(wc.path), "copy")
+	copyTree(t, wc.path, duplicate)
+	if url, ok := remoteURL(t, duplicate, gate.RemoteName); !ok || url != original.Repository() {
+		t.Fatalf("the copy's %s remote is %q, want the original's gate %q; the fixture does not pose the question this test asks",
+			gate.RemoteName, url, original.Repository())
+	}
+	// The gate loses its record, which is the damage that leaves the copy's
+	// inherited remote as the only thing saying whose gate this is.
+	if err := os.Remove(filepath.Join(original.Repository(), "assistant-gate.json")); err != nil {
+		t.Fatalf("remove the record: %v", err)
+	}
+
+	adopted, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: duplicate, Command: command})
+	if err != nil {
+		t.Fatalf("Initialize the copy: %v", err)
+	}
+	if adopted.Repository() != original.Repository() {
+		t.Fatalf("the copy got gate %q, not the recordless one at %q; this test needs the adoption to happen",
+			adopted.Repository(), original.Repository())
+	}
+
+	err = gate.Remove(ctx(t), gate.Spec{Home: home, WorkingPath: duplicate}, gate.WithOpener(detachingOpener))
+	if !errors.Is(err, gate.ErrGateBindingInferred) {
+		t.Fatalf("Remove from the copy that adopted a recordless gate = %v, want ErrGateBindingInferred", err)
+	}
+	for _, want := range []string{original.Repository(), resolved(t, duplicate)} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("the refusal does not name %q: %v", want, err)
+		}
+	}
+
+	// The property that has to hold: the original's history is still there.
+	if got, want := refs(t, original.Repository()), []string{"refs/heads/main " + wc.commit}; !equal(got, want) {
+		t.Fatalf("the gate holds %v, want the original's history %v", got, want)
+	}
+	if url, ok := remoteURL(t, duplicate, gate.RemoteName); !ok || url != original.Repository() {
+		t.Fatalf("the refused removal changed the copy's %s remote to %q; it refuses without removing anything",
+			gate.RemoteName, url)
+	}
+
+	// An inferred binding stays inferred: initializing again is the ordinary
+	// case, and it must not launder the binding into one a removal accepts.
+	if _, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: duplicate, Command: command}); err != nil {
+		t.Fatalf("Initialize the copy again: %v", err)
+	}
+	if err := gate.Remove(ctx(t), gate.Spec{Home: home, WorkingPath: duplicate}, gate.WithOpener(detachingOpener)); !errors.Is(err, gate.ErrGateBindingInferred) {
+		t.Fatalf("Remove after a second initialization = %v, want ErrGateBindingInferred", err)
+	}
+	if got, want := refs(t, original.Repository()), []string{"refs/heads/main " + wc.commit}; !equal(got, want) {
+		t.Fatalf("the gate holds %v, want the original's history %v", got, want)
+	}
+
+	// And the original is refused loudly rather than losing anything quietly,
+	// which is the other half of what doc.go claims about this trade.
+	if _, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path, Command: command}); !errors.Is(err, gate.ErrGateClaimed) {
+		t.Fatalf("Initialize the original = %v, want ErrGateClaimed", err)
+	}
+}
+
+// TestAGateBoundByAnOrdinaryInitializationIsStillRemovable is the boundary of
+// the refusal above. Only a binding that came from taking over a recordless
+// gate is refused, so a gate whose record was written when the working copy's
+// own path hashed to it, including one whose record was lost and rebuilt from
+// that same hash, ejects normally.
+func TestAGateBoundByAnOrdinaryInitializationIsStillRemovable(t *testing.T) {
+	gitEnvironment(t)
+	wc := newWorkingCopy(t)
+	home := t.TempDir()
+	command, _ := recorderCommand(t, 0)
+	spec := gate.Spec{Home: home, WorkingPath: wc.path, Command: command}
+
+	g, err := gate.Initialize(ctx(t), spec)
+	if err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+	rawGit(t, wc.path, "push", "--quiet", gate.RemoteName, "main")
+	if err := os.Remove(filepath.Join(g.Repository(), "assistant-gate.json")); err != nil {
+		t.Fatalf("remove the record: %v", err)
+	}
+	if _, err := gate.Initialize(ctx(t), spec); err != nil {
+		t.Fatalf("Initialize to rebuild the record: %v", err)
+	}
+
+	if err := gate.Remove(ctx(t), spec, gate.WithOpener(detachingOpener)); err != nil {
+		t.Fatalf("Remove a gate the working copy's own path hashes to: %v", err)
+	}
+	if _, err := os.Stat(g.Repository()); !os.IsNotExist(err) {
+		t.Fatalf("the gate survived removal (stat error %v)", err)
+	}
+}

@@ -366,3 +366,104 @@ func freshWorkingCopyAt(t *testing.T, path string) string {
 	}
 	return path
 }
+
+// TestATemplateHookArrivingDuringARepairIsRefused is the template channel on
+// the repair path. Reinitializing an existing gate is a git invocation like any
+// other, so a template configured after the gate was created reaches it then,
+// and the hook it delivers would be preserved at the .local name and invoked
+// after admission on every push. The refusal that covers creation has to cover
+// this, because it is the same channel and the same consequence.
+func TestATemplateHookArrivingDuringARepairIsRefused(t *testing.T) {
+	cfg := gitEnvironment(t)
+	wc := newWorkingCopy(t)
+	home := t.TempDir()
+	command, log := recorderCommand(t, 0)
+	spec := gate.Spec{Home: home, WorkingPath: wc.path, Command: command}
+
+	g, err := gate.Initialize(ctx(t), spec)
+	if err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+
+	// The template is configured after the gate exists, so the initialization
+	// that created it had nothing to refuse.
+	template := t.TempDir()
+	injected := filepath.Join(template, "hooks", gate.AdmissionHook)
+	writeScript(t, injected, "#!/bin/sh\ncat >/dev/null\nexit 0\n")
+	appendConfig(t, cfg, "[init]\n\ttemplateDir = "+filepath.ToSlash(template)+"\n")
+
+	// The damage TestInitializeRepairsADamagedGate inflicts, which is what
+	// leaves the name the template fills.
+	if err := os.Remove(filepath.Join(g.Repository(), "hooks", gate.AdmissionHook)); err != nil {
+		t.Fatalf("remove the admission hook: %v", err)
+	}
+
+	if _, err := gate.Initialize(ctx(t), spec); !errors.Is(err, gate.ErrTemplateHooks) {
+		t.Fatalf("Initialize error = %v, want ErrTemplateHooks", err)
+	}
+	preserved := filepath.Join(g.Repository(), "hooks", gate.AdmissionHook+gate.CustomHookSuffix)
+	if _, err := os.Stat(preserved); err == nil {
+		t.Fatalf("the template's hook was preserved at %s, which chains it into admission", preserved)
+	}
+	for _, name := range activeHookNames(t, g.Repository()) {
+		if name == gate.AdmissionHook {
+			t.Fatalf("the template's hook was left in the gate as %s", name)
+		}
+	}
+
+	// The refusal has to hold on the next attempt too. A hook left behind
+	// would be there before that initialization started, which is the state
+	// this refusal exists to keep the gate out of.
+	if _, err := gate.Initialize(ctx(t), spec); !errors.Is(err, gate.ErrTemplateHooks) {
+		t.Fatalf("Initialize again error = %v, want ErrTemplateHooks", err)
+	}
+
+	// Nothing that arrived from the template runs. The gate has no admission
+	// hook, so a push is accepted with no hook invoked at all, which is a
+	// different failure from the template's hook running and is why this
+	// checks what ran rather than only what is on disk.
+	rawGit(t, wc.path, "push", "--quiet", gate.RemoteName, "main")
+	for _, line := range invocations(t, log) {
+		if strings.HasPrefix(line, "command gate admit") {
+			t.Fatalf("a refused repair left an admission path in place: %v", invocations(t, log))
+		}
+	}
+}
+
+// TestAnUnmanagedTemplateHookArrivingDuringARepairIsRefused is the same channel
+// at a hook name this package does not install. An update hook decides
+// per-reference acceptance by its exit status, so a template that lands one in
+// the gate gives the configuration a vote on admission, which is what PRD
+// principle P7 takes away from the pushed-from side.
+func TestAnUnmanagedTemplateHookArrivingDuringARepairIsRefused(t *testing.T) {
+	cfg := gitEnvironment(t)
+	wc := newWorkingCopy(t)
+	home := t.TempDir()
+	command, _ := recorderCommand(t, 0)
+	spec := gate.Spec{Home: home, WorkingPath: wc.path, Command: command}
+
+	g, err := gate.Initialize(ctx(t), spec)
+	if err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+
+	template := t.TempDir()
+	writeScript(t, filepath.Join(template, "hooks", "update"), "#!/bin/sh\nexit 1\n")
+	appendConfig(t, cfg, "[init]\n\ttemplateDir = "+filepath.ToSlash(template)+"\n")
+
+	if _, err := gate.Initialize(ctx(t), spec); !errors.Is(err, gate.ErrTemplateHooks) {
+		t.Fatalf("Initialize error = %v, want ErrTemplateHooks", err)
+	}
+	for _, name := range activeHookNames(t, g.Repository()) {
+		if name == "update" {
+			t.Fatal("the template's update hook was left in the gate, so it votes on every push")
+		}
+	}
+
+	// The gate the refusal left behind is the one it had: its own two hooks,
+	// and a push still reaches them.
+	rawGit(t, wc.path, "push", "--quiet", gate.RemoteName, "main")
+	if got, want := refs(t, g.Repository()), []string{"refs/heads/main " + wc.commit}; !equal(got, want) {
+		t.Fatalf("the gate holds %v, want %v", got, want)
+	}
+}
