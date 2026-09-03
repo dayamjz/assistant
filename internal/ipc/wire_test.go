@@ -154,6 +154,17 @@ var wireSentinels = map[Code]error{
 // it they test whichever codes somebody remembered to retype, which is how a
 // code added later stops being covered while every test still passes.
 func TestEveryCodeIsStatedHere(t *testing.T) {
+	// statedBySentinel reads the table the other way, so the resolved value can
+	// be named by the code that states it. What follows compares those codes,
+	// which are strings and not errors, on purpose: this table is about a code
+	// resolving to exactly the sentinel stated for it, and errors.Is would also
+	// accept a value that merely wraps that sentinel. A lookup by value keeps
+	// the identity the table is asserting, so do not simplify this back into a
+	// single errors.Is call.
+	statedBySentinel := make(map[error]Code, len(wireSentinels))
+	for code, sentinel := range wireSentinels {
+		statedBySentinel[sentinel] = code
+	}
 	seen := map[Code]bool{}
 	for _, row := range codeRows {
 		want, stated := wireSentinels[row.Code]
@@ -165,7 +176,8 @@ func TestEveryCodeIsStatedHere(t *testing.T) {
 			t.Errorf("%q appears twice in the table", row.Code)
 		}
 		seen[row.Code] = true
-		if got := sentinelFor(row.Code); got != want {
+		got := sentinelFor(row.Code)
+		if statedBySentinel[got] != row.Code {
 			t.Errorf("%q resolves to %v, want %v", row.Code, got, want)
 		}
 	}
