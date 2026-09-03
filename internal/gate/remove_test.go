@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/gate"
@@ -198,5 +199,66 @@ func TestRemoveRefusesARepositoryCarryingNoGateRecord(t *testing.T) {
 	}
 	if _, ok := remoteURL(t, wc.path, gate.RemoteName); !ok {
 		t.Fatal("the refused removal gave up the remote")
+	}
+}
+
+// TestRemoveFromACopyRefusesAndLeavesTheOriginalsGate is the ownership check on
+// the destructive side. A copied project directory carries the original's
+// configuration, so its assistant remote names a gate that is not its own, and
+// a removal that trusted that remote would delete the original's repository:
+// every reference in it, and everything recorded against its identifier. That
+// is the one loss in this package nothing can undo.
+func TestRemoveFromACopyRefusesAndLeavesTheOriginalsGate(t *testing.T) {
+	gitEnvironment(t)
+	wc := newWorkingCopy(t)
+	home := t.TempDir()
+	command, _ := recorderCommand(t, 0)
+
+	original, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path, Command: command})
+	if err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+	rawGit(t, wc.path, "push", "--quiet", gate.RemoteName, "main")
+
+	duplicate := filepath.Join(filepath.Dir(wc.path), "copy")
+	copyTree(t, wc.path, duplicate)
+	if url, ok := remoteURL(t, duplicate, gate.RemoteName); !ok || url != original.Repository() {
+		t.Fatalf("the copy's %s remote is %q, want the original's gate %q; the fixture does not pose the question this test asks",
+			gate.RemoteName, url, original.Repository())
+	}
+
+	err = gate.Remove(ctx(t), gate.Spec{Home: home, WorkingPath: duplicate}, gate.WithOpener(detachingOpener))
+	if !errors.Is(err, gate.ErrGateClaimed) {
+		t.Fatalf("Remove from the copy = %v, want ErrGateClaimed", err)
+	}
+	// An operator meeting this on a copy has to be told what was found, who
+	// holds it, and who asked, or the refusal reads as a mystery.
+	for _, want := range []string{original.Repository(), original.WorkingPath(), resolved(t, duplicate)} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("the refusal does not name %q: %v", want, err)
+		}
+	}
+
+	// The original keeps its gate, its references, and its remote.
+	if _, statErr := os.Stat(original.Repository()); statErr != nil {
+		t.Fatalf("the refused removal deleted the original's gate: %v", statErr)
+	}
+	if got, want := refs(t, original.Repository()), []string{"refs/heads/main " + wc.commit}; !equal(got, want) {
+		t.Fatalf("the original's gate holds %v, want %v", got, want)
+	}
+	if url, ok := remoteURL(t, wc.path, gate.RemoteName); !ok || url != original.Repository() {
+		t.Fatalf("the original's %s remote is %q, want %q", gate.RemoteName, url, original.Repository())
+	}
+	if url, ok := remoteURL(t, duplicate, gate.RemoteName); !ok || url != original.Repository() {
+		t.Fatalf("the refused removal changed the copy's %s remote to %q; it refuses without removing anything", gate.RemoteName, url)
+	}
+
+	// The original can still remove its own gate, so the guard refuses the
+	// copy rather than removal in general.
+	if err := gate.Remove(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path}, gate.WithOpener(detachingOpener)); err != nil {
+		t.Fatalf("Remove from the working copy the gate belongs to: %v", err)
+	}
+	if _, statErr := os.Stat(original.Repository()); !os.IsNotExist(statErr) {
+		t.Fatalf("the gate survived removal by its own working copy (stat error %v)", statErr)
 	}
 }

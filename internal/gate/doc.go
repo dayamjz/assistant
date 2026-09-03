@@ -61,7 +61,10 @@
 // time, never a name resolved through PATH. A push happens in whatever
 // environment the person pushing has, and letting that environment choose
 // which program admission runs would hand the decision to the pushed-from
-// side, which PRD principle P7 forbids.
+// side, which PRD principle P7 forbids. It is written into the hook with
+// forward slashes for the same reason: a shell searches PATH for a command
+// word holding no slash, so on a host whose separator is a backslash the
+// native spelling would arrive as a bare word and be looked up after all.
 //
 // A repository this package creates must be born with no hooks. Removing
 // GIT_TEMPLATE_DIR from the environment, which internal/vcs does on every
@@ -107,15 +110,38 @@
 // and still bound, so the claim holds, and the copy gets its own gate at its
 // own identifier rather than sharing the original's.
 //
-// The hash seeds a new binding, so a gate somebody else's record already
-// claims is not one to seed over. A working copy standing where a moved one
-// used to stand hashes to the moved one's identifier and would otherwise be
-// handed its gate: its references, and the binding everything recorded against
-// it rests on. Initialize reads the record of the repository at that
-// identifier before adopting it and refuses with ErrGateClaimed when it names
-// a working copy that is still pointing at the gate. A repository with no
-// record is adopted, because that is a gate whose record was lost rather than
-// one somebody holds.
+// # Every operation on a gate asks whose gate it is
+//
+// A remote and a path hash are both evidence a gate belongs to a working copy,
+// and both are evidence a copy of that working copy inherits or reproduces
+// exactly. The record inside the gate is the owner of the binding, so every
+// operation here reads it and refuses with ErrGateClaimed when it names a
+// different working copy that is still pointing at the gate. There is one
+// implementation of that question and both operations call it.
+//
+// The destructive operation is the one that has to ask. An adoption that goes
+// to the wrong working copy is loud and reversible: the gate's references stay
+// where they are, and the working copy that lost the binding meets
+// ErrGateClaimed the next time it initializes. A deletion is neither. This
+// package shipped the check on adoption first and left deletion deciding on an
+// inherited remote alone, which is the wrong way round, and the shape to watch
+// for anywhere else it appears.
+//
+// So a working copy standing where a moved one used to stand hashes to the
+// moved one's identifier and is refused rather than handed its gate, and a
+// copied project directory, whose configuration names the original's gate, is
+// refused rather than allowed to delete it.
+//
+// A gate carrying no record at all is adopted rather than refused, and that is
+// a deliberate trade rather than an exception. A gate that lost its record and
+// is reached only through a remote would otherwise be abandoned for a new
+// empty one at the current path's hash, with everything recorded against the
+// old identifier unreachable, because nothing here scans the home for a gate
+// nobody names. What it costs is that with no record there is no ownership
+// evidence left to weigh, so a copy holding the inherited remote can take a
+// recordless gate over. That failure is loud in the same way an adoption is:
+// the original is refused with ErrGateClaimed rather than quietly losing
+// anything.
 //
 // The residual gap in identity is the path itself. The identifier is computed
 // from the cleaned, symlink-resolved absolute path, so two spellings that

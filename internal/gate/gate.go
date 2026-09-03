@@ -55,9 +55,15 @@ func (g *Gate) Repository() string { return g.repository }
 // bound to.
 func (g *Gate) WorkingPath() string { return g.workingPath }
 
-// Reattached reports that initialization found this working copy already
-// naming a gate whose recorded working copy is gone, and bound that existing
-// gate to the path it is at now rather than creating a second one.
+// Reattached reports that this initialization is the one that bound an
+// existing gate to the path the working copy is at now. The working copy named
+// a gate whose record does not name it, either because the working copy moved
+// or because the record is gone, and that gate was kept, with its identifier
+// and everything recorded against it, rather than a second one being created
+// at the hash of the current path.
+//
+// Initializing the same working copy again reports false, because by then the
+// gate's record names it.
 func (g *Gate) Reattached() bool { return g.reattached }
 
 // Option configures an operation on a gate.
@@ -94,14 +100,22 @@ func openWithVCS(ctx context.Context, path string) (WorkingCopy, error) {
 // Initialize creates the gate for a working copy, or repairs the one it
 // already has, and points the working copy's assistant remote at it. It is
 // safe to run again: a gate that is already correct is left as it is, and a
-// gate that has lost its hooks, its record, or its remote gets them back.
+// gate that has lost its hooks or its record gets them back.
+//
+// Repair reaches a gate two ways, and only two: the assistant remote in the
+// working copy, and the identifier the working copy's current path hashes to.
+// A gate that answers to neither, which is a gate whose working copy moved and
+// then lost the remote naming it, cannot be found from here. Initialization
+// then creates a new gate at the current path's identifier and says so through
+// Gate rather than reporting a repair it did not perform.
 //
 // The working copy's other remotes are neither read nor written. An ordinary
 // push to origin after this returns behaves exactly as it did before.
 //
 // Three outcomes are possible and Gate reports which one happened. A working
 // copy with no gate gets one at the identifier Identify gives its path. A
-// working copy that names a gate whose recorded working copy is gone is
+// working copy that names a gate whose record does not name it back, because
+// the recorded working copy is gone or because the record itself is gone, is
 // reattached to that gate, keeping its identifier and everything recorded
 // against it. A working copy that names a gate whose recorded working copy is
 // still there and still bound to it is a copy of that working copy, and gets
@@ -170,6 +184,14 @@ func Initialize(ctx context.Context, spec Spec, opts ...Option) (*Gate, error) {
 // when there is no gate to remove, and with ErrNotAGate when the path the
 // remote names is not a gate repository of this home, rather than deleting a
 // directory it cannot identify.
+//
+// It refuses with ErrGateClaimed when the gate the remote names records a
+// different working copy that is still pointing at it, which is what a copy of
+// a gated project meets: the copy inherited the original's configuration, so
+// its remote names a gate that is not its own. Nothing is removed, not even
+// the copy's remote, because a removal that acted on somebody else's gate on
+// the strength of an inherited remote is the loss PRD principle P6 forbids and
+// is the one this package cannot undo.
 func Remove(ctx context.Context, spec Spec, opts ...Option) error {
 	set := resolveSettings(opts)
 	home, workingPath, err := validate(spec, false)
@@ -193,7 +215,17 @@ func Remove(ctx context.Context, spec Spec, opts ...Option) error {
 	if repo == "" {
 		return fmt.Errorf("%w: %s has no %s remote", ErrNoGate, workingPath, RemoteName)
 	}
-	if err := verifyGateRepository(home, repo); err != nil {
+	rec, exists, err := gateRepository(home, repo)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return fmt.Errorf("%w: %s carries no %s", ErrNotAGate, repo, recordName)
+	}
+	if err := ensureBelongsTo(ctx, set, repo, rec, workingPath, fmt.Sprintf(
+		"nothing was removed; a working copy copied from %s inherits its %s remote, so drop that remote here if this is such a copy, "+
+			"and run the removal from %s if the gate itself is what you meant to remove",
+		rec.WorkingPath, RemoteName, rec.WorkingPath)); err != nil {
 		return err
 	}
 
@@ -279,12 +311,24 @@ type claim struct {
 // It answers no without an opinion when the named gate is the one the working
 // copy's own path hashes to, because the caller is going to use that gate
 // anyway and calling it a reattachment would be wrong.
+//
+// A named gate carrying no record at all is kept rather than left behind. The
+// record is what binds a gate to a working copy, and a gate that lost it would
+// otherwise be abandoned for a new empty one at the current path's hash, with
+// everything recorded against the old identifier unreachable, because nothing
+// here scans the home for a gate nobody names. The identifier then comes from
+// the directory the gate is filed under, which is where it came from in the
+// first place. What that costs is stated in doc.go: with no record there is no
+// evidence of ownership left to check, so a copy that inherited the remote can
+// take a recordless gate over, and the original meets ErrGateClaimed the next
+// time it initializes rather than losing anything quietly.
 func alreadyNamedGate(ctx context.Context, set settings, home, own, workingPath string, copyOf WorkingCopy) (claim, bool, error) {
 	named, err := boundRepository(ctx, copyOf)
 	if err != nil || named == "" || named == own {
 		return claim{}, false, err
 	}
-	if err := verifyGateRepository(home, named); err != nil {
+	rec, exists, err := gateRepository(home, named)
+	if err != nil {
 		if errors.Is(err, ErrNotAGate) {
 			// A remote pointing at something that is not a gate of this home
 			// is not a claim on anything. Initialization proceeds with the
@@ -293,9 +337,12 @@ func alreadyNamedGate(ctx context.Context, set settings, home, own, workingPath 
 		}
 		return claim{}, false, err
 	}
-	rec, _, err := readRecord(named)
-	if err != nil {
-		return claim{}, false, err
+	if !exists {
+		id := identifierAt(home, named)
+		if id == "" {
+			return claim{}, false, nil
+		}
+		return claim{path: named, id: id, moved: true}, true, nil
 	}
 	if repositoryPath(home, rec.ID) != named {
 		return claim{}, false, fmt.Errorf("%w: %s records identifier %q, which belongs at %s",
@@ -344,6 +391,23 @@ func ensureOwnGateIsFree(ctx context.Context, set settings, repo, id, workingPat
 		return fmt.Errorf("%w: %s records identifier %q, but its name says %q",
 			ErrMalformedRecord, repo, rec.ID, id)
 	}
+	return ensureBelongsTo(ctx, set, repo, rec, workingPath, fmt.Sprintf(
+		"both paths hash to %s, so there is no second gate to hand out; "+
+			"remove the gate of %s, or move %s somewhere else, before initializing it",
+		id, rec.WorkingPath, workingPath))
+}
+
+// ensureBelongsTo refuses when a gate's own record binds it to a working copy
+// other than the one asking, and that working copy is still pointing at the
+// gate.
+//
+// It is the one place this package decides whether a gate belongs to whoever
+// is asking, so that adoption and deletion cannot drift apart. The first
+// version of this check guarded only adoption, which is the recoverable
+// operation, and left deletion, which is not, deciding on a remote alone. The
+// remedy differs by operation and is the caller's to word; what a gate is and
+// who holds it is not.
+func ensureBelongsTo(ctx context.Context, set settings, repo string, rec record, workingPath, remedy string) error {
 	if rec.WorkingPath == workingPath {
 		return nil
 	}
@@ -352,14 +416,13 @@ func ensureOwnGateIsFree(ctx context.Context, set settings, repo, id, workingPat
 		return err
 	}
 	if !held {
-		// The working copy the gate records is gone and this one hashes to the
-		// same identifier, so there is nobody left to take the gate from.
+		// The working copy the gate records is gone, so there is nobody left
+		// to take the gate from.
 		return nil
 	}
 	return fmt.Errorf("%w: the gate at %s belongs to the working copy at %s, which still points at it, "+
-		"and %s asks for the same gate because both paths hash to %s; "+
-		"remove the gate of %s, or move %s somewhere else, before initializing it",
-		ErrGateClaimed, repo, rec.WorkingPath, workingPath, id, rec.WorkingPath, workingPath)
+		"and %s is not that working copy; %s",
+		ErrGateClaimed, repo, rec.WorkingPath, workingPath, remedy)
 }
 
 // stillBound reports whether the working copy a gate records is still there
@@ -412,21 +475,31 @@ func boundRepository(ctx context.Context, copyOf WorkingCopy) (string, error) {
 	return filepath.Clean(url), nil
 }
 
-// verifyGateRepository refuses a path that is not a gate repository of this
-// home. It is what stands between Remove and deleting a directory only because
-// a remote pointed at it.
-func verifyGateRepository(home, repo string) error {
+// gateRepository refuses with ErrNotAGate a path that is not filed where this
+// home keeps its gates, and otherwise returns the record that path carries,
+// reporting separately whether it carries one at all. It is what stands
+// between Remove and deleting a directory only because a remote pointed at it.
+//
+// Deciding what a path is and reading who it belongs to are one read of one
+// file, so a caller cannot be told a path is a gate and then read a different
+// answer out of it a moment later.
+func gateRepository(home, repo string) (rec record, exists bool, err error) {
 	if filepath.Dir(repo) != repositoriesDir(home) || !strings.HasSuffix(repo, ".git") {
-		return fmt.Errorf("%w: %s is not in %s", ErrNotAGate, repo, repositoriesDir(home))
+		return record{}, false, fmt.Errorf("%w: %s is not in %s", ErrNotAGate, repo, repositoriesDir(home))
 	}
-	_, exists, err := readRecord(repo)
-	if err != nil {
-		return err
+	return readRecord(repo)
+}
+
+// identifierAt is the identifier a gate repository is filed under in this
+// home, or the empty string when the path is not one of this home's. It is
+// where the identifier of a gate whose record is gone comes from, so the name
+// is checked against repositoryPath rather than trusted to be one.
+func identifierAt(home, repo string) string {
+	id := strings.TrimSuffix(filepath.Base(repo), ".git")
+	if id == "" || repositoryPath(home, id) != repo {
+		return ""
 	}
-	if !exists {
-		return fmt.Errorf("%w: %s carries no %s", ErrNotAGate, repo, recordName)
-	}
-	return nil
+	return id
 }
 
 // ensureRepository creates the gate's bare repository when it is not there and

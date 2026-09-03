@@ -188,6 +188,16 @@ func activeHooks(repo string) ([]string, error) {
 // the preserved hook's exit status becomes the script's, so a custom
 // pre-receive can still reject a push after admission has accepted it.
 //
+// The command is written with forward slashes, whatever the host's own
+// separator is. A shell searches PATH for a command word that contains no
+// slash, so on a host whose separator is a backslash the native spelling of an
+// absolute path reaches the hook shell as a bare word, and the pushed-from
+// PATH would choose what admission runs after all, which is exactly what PRD
+// principle P7 takes away from it. Every shell these hooks run under,
+// including the one Git for Windows bundles, resolves the forward-slash
+// spelling as a path. On a host whose separator is already a forward slash
+// this changes nothing.
+//
 // Capturing the input is what lets both of them have it: standard input can be
 // consumed once, and a hook that handed it to the command would have nothing
 // left to give the preserved hook.
@@ -223,7 +233,7 @@ func hookScript(hook managed, id, command string) string {
 	fmt.Fprintf(&b, "cat >\"$refs\" || exit 1\n")
 	fmt.Fprintf(&b, "\n")
 	fmt.Fprintf(&b, "%s gate %s --gate %s <\"$refs\" || exit $?\n",
-		shellQuote(command), hook.subcommand, shellQuote(id))
+		shellQuote(filepath.ToSlash(command)), hook.subcommand, shellQuote(id))
 	fmt.Fprintf(&b, "\n")
 	fmt.Fprintf(&b, "custom=$hook_dir/%s%s\n", name, CustomHookSuffix)
 	fmt.Fprintf(&b, "if [ -x \"$custom\" ] && [ \"${%s:-}\" != %s ]; then\n", chainedVar, shellQuote(name))

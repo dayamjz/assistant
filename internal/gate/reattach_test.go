@@ -135,7 +135,10 @@ func TestARepositoryBornCarryingHooksIsRefused(t *testing.T) {
 
 	template := t.TempDir()
 	writeScript(t, filepath.Join(template, "hooks", gate.AdmissionHook), "#!/bin/sh\nexit 0\n")
-	appendConfig(t, cfg, "[init]\n\ttemplateDir = "+template+"\n")
+	// Git reads a backslash in a configuration value as an escape, so a
+	// native Windows path written here would make every later git invocation
+	// fail to parse this file instead of choosing the template.
+	appendConfig(t, cfg, "[init]\n\ttemplateDir = "+filepath.ToSlash(template)+"\n")
 
 	_, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path, Command: command})
 	if !errors.Is(err, gate.ErrTemplateHooks) {
@@ -234,6 +237,11 @@ func TestAWorkingCopyPlacedWhereAMovedOneStoodDoesNotTakeItsGate(t *testing.T) {
 // refusal above. A gate nobody is bound to any more is a gate to repair, not
 // one to refuse, so a working copy at the identifier it is filed under takes
 // it over with its history rather than being turned away.
+//
+// The gate's record has to name a path other than the one initializing, or the
+// refusal is never reached in the first place and this proves nothing. So the
+// working copy is moved and reattached first, which leaves the record naming
+// the moved path, and only then is that path deleted.
 func TestAGateWhoseWorkingCopyIsGoneIsStillAdoptable(t *testing.T) {
 	gitEnvironment(t)
 	wc := newWorkingCopy(t)
@@ -246,9 +254,22 @@ func TestAGateWhoseWorkingCopyIsGoneIsStillAdoptable(t *testing.T) {
 	}
 	rawGit(t, wc.path, "push", "--quiet", gate.RemoteName, "main")
 
-	// The working copy is deleted outright, which leaves the gate recording a
-	// path nothing stands on.
-	if err := os.RemoveAll(wc.path); err != nil {
+	moved := filepath.Join(filepath.Dir(wc.path), "moved")
+	if err := os.Rename(wc.path, moved); err != nil {
+		t.Fatalf("move the working copy: %v", err)
+	}
+	reattached, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: moved, Command: command})
+	if err != nil {
+		t.Fatalf("Initialize after the move: %v", err)
+	}
+	if reattached.Repository() != original.Repository() || reattached.WorkingPath() == original.WorkingPath() {
+		t.Fatalf("the gate at %q now records %q; this test needs it to record a path other than %q",
+			reattached.Repository(), reattached.WorkingPath(), original.WorkingPath())
+	}
+
+	// The working copy the gate now records is deleted outright, which leaves
+	// the gate recording a path nothing stands on.
+	if err := os.RemoveAll(moved); err != nil {
 		t.Fatalf("remove the working copy: %v", err)
 	}
 	fresh := freshWorkingCopyAt(t, wc.path)
@@ -262,6 +283,70 @@ func TestAGateWhoseWorkingCopyIsGoneIsStillAdoptable(t *testing.T) {
 	}
 	if got, want := refs(t, again.Repository()), []string{"refs/heads/main " + wc.commit}; !equal(got, want) {
 		t.Fatalf("adopting the freed gate lost its history: %v, want %v", got, want)
+	}
+}
+
+// TestAReattachedGateThatLostItsRecordIsRepairedNotAbandoned covers the damage
+// TestInitializeRepairsADamagedGate inflicts, on a gate that has been
+// reattached. The gate is then no longer filed under the hash of the path its
+// working copy is at, so the record is not what makes it findable, and losing
+// the record must not make initialization start over with an empty gate and
+// leave every reference recorded against the old identifier unreachable.
+func TestAReattachedGateThatLostItsRecordIsRepairedNotAbandoned(t *testing.T) {
+	gitEnvironment(t)
+	wc := newWorkingCopy(t)
+	home := t.TempDir()
+	command, _ := recorderCommand(t, 0)
+
+	original, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path, Command: command})
+	if err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+	rawGit(t, wc.path, "push", "--quiet", gate.RemoteName, "main")
+
+	moved := workingCopy{path: filepath.Join(filepath.Dir(wc.path), "moved"), origin: wc.origin}
+	if err := os.Rename(wc.path, moved.path); err != nil {
+		t.Fatalf("move the working copy: %v", err)
+	}
+	if _, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: moved.path, Command: command}); err != nil {
+		t.Fatalf("Initialize after the move: %v", err)
+	}
+	if err := os.Remove(filepath.Join(original.Repository(), "assistant-gate.json")); err != nil {
+		t.Fatalf("remove the record: %v", err)
+	}
+
+	repaired, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: moved.path, Command: command})
+	if err != nil {
+		t.Fatalf("Initialize a reattached gate that lost its record: %v", err)
+	}
+	if repaired.Repository() != original.Repository() {
+		t.Fatalf("the gate moved to %q, abandoning %q and everything recorded against it",
+			repaired.Repository(), original.Repository())
+	}
+	if repaired.ID() != original.ID() {
+		t.Fatalf("the repaired gate identifies as %q, want the identifier it was created with, %q",
+			repaired.ID(), original.ID())
+	}
+	if got, want := refs(t, repaired.Repository()), []string{"refs/heads/main " + wc.commit}; !equal(got, want) {
+		t.Fatalf("the repaired gate lost its history: %v, want %v", got, want)
+	}
+	if url, ok := remoteURL(t, moved.path, gate.RemoteName); !ok || url != original.Repository() {
+		t.Fatalf("the %s remote is %q, want %q", gate.RemoteName, url, original.Repository())
+	}
+
+	// Repaired means usable, and the record is back, so a second run is the
+	// ordinary case rather than another reattachment.
+	head := commitMore(t, moved, "after the repair\n")
+	rawGit(t, moved.path, "push", "--quiet", gate.RemoteName, "main")
+	if got, want := refs(t, repaired.Repository()), []string{"refs/heads/main " + head}; !equal(got, want) {
+		t.Fatalf("the repaired gate refused a push: refs %v, want %v", got, want)
+	}
+	settled, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: moved.path, Command: command})
+	if err != nil {
+		t.Fatalf("Initialize again: %v", err)
+	}
+	if settled.Reattached() {
+		t.Fatal("the gate reported another reattachment, so the record it was given does not name its working copy")
 	}
 }
 
