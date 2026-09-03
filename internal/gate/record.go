@@ -34,18 +34,16 @@ type record struct {
 	// to a working copy that moved.
 	WorkingPath string `json:"workingPath"`
 	// Adopted reports that this binding was established by taking over a gate
-	// that carried no record, so nothing but the working copy's own remote
-	// ever said the gate was its, and a copy of a gated project inherits that
-	// remote. It is the difference between a binding a record established and
-	// one this package inferred, which is a difference no later state of the
-	// gate can show, so it is carried into every record an initialization
-	// reached through that remote writes afterwards.
+	// that carried no record, on one piece of evidence rather than two. The
+	// remote alone is one, and a copy of a gated project inherits it; the path
+	// hash alone is one, and a path outlives the working copy that stood on
+	// it. Either can be produced by something that is not the gate's owner, so
+	// a binding resting on one of them is inferred rather than established.
 	//
-	// One thing does clear it: an initialization whose own path hashes to the
-	// gate, which is the evidence that creates a gate in the first place and
-	// evidence a copy cannot produce, because a copy stands elsewhere and
-	// hashes elsewhere. That is the difference between a fact about the past
-	// and a fact about now, and only the second one this field stands for.
+	// It is carried into every record an initialization reached the same way
+	// writes afterwards, and cleared by one that has two: a record naming this
+	// working copy over a gate its path hashes to, or a recordless gate whose
+	// remote and path hash agree.
 	//
 	// Removal refuses on it, because deleting a gate is the one act here that
 	// cannot be undone and an inferred binding is not enough to justify it.
@@ -67,20 +65,34 @@ func readRecord(repo string) (rec record, exists bool, err error) {
 		if os.IsNotExist(err) {
 			return record{}, false, nil
 		}
-		return record{}, false, fmt.Errorf("%w: %s: %w", ErrMalformedRecord, recordPath(repo), err)
+		return record{}, false, fmt.Errorf("%w: %s: %w%s", ErrMalformedRecord, recordPath(repo), err, recordRepair(repo))
 	}
 	if err := json.Unmarshal(data, &rec); err != nil {
-		return record{}, true, fmt.Errorf("%w: %s: %w", ErrMalformedRecord, recordPath(repo), err)
+		return record{}, true, fmt.Errorf("%w: %s: %w%s", ErrMalformedRecord, recordPath(repo), err, recordRepair(repo))
 	}
 	if rec.Version != recordVersion {
-		return record{}, true, fmt.Errorf("%w: %s: version %d, this build writes version %d",
-			ErrMalformedRecord, recordPath(repo), rec.Version, recordVersion)
+		return record{}, true, fmt.Errorf("%w: %s: version %d, this build writes version %d%s",
+			ErrMalformedRecord, recordPath(repo), rec.Version, recordVersion, recordRepair(repo))
 	}
 	if rec.ID == "" || rec.WorkingPath == "" {
-		return record{}, true, fmt.Errorf("%w: %s: identifier or working path is empty",
-			ErrMalformedRecord, recordPath(repo))
+		return record{}, true, fmt.Errorf("%w: %s: identifier or working path is empty%s",
+			ErrMalformedRecord, recordPath(repo), recordRepair(repo))
 	}
 	return rec, true, nil
+}
+
+// recordRepair is the step that gets an operator out of a record this build
+// cannot read, and it is appended to every refusal that reports one.
+//
+// Both operations refuse on such a record and detaching does not help, because
+// the gate is also found by the working copy's own path hash, with no remote
+// involved. So the only step that succeeds is removing the file, and a refusal
+// that did not name it is one an operator resolves by deleting the gate, which
+// is the loss every guard here exists to prevent.
+func recordRepair(repo string) string {
+	return fmt.Sprintf("; nothing but the binding is in that file, so removing %s leaves the gate and everything "+
+		"it holds, and initializing the working copy it belongs to then writes a record this build can read",
+		recordPath(repo))
 }
 
 // writeRecord replaces a gate's record. The replacement is a rename over a

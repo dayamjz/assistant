@@ -623,6 +623,13 @@ func namesInitializing(err error, workingPath string) bool {
 	return strings.Contains(err.Error(), "initializing "+workingPath)
 }
 
+// namesRemoving reads whether a refusal instructs removing a particular file,
+// which is the action ErrMalformedRecord has to name because it is the only
+// one that opens either operation from that state.
+func namesRemoving(err error, path string) bool {
+	return strings.Contains(strings.ToLower(err.Error()), "removing "+strings.ToLower(path))
+}
+
 func namesDetaching(err error) bool {
 	// Lowercased because the same instruction opens a sentence in one refusal
 	// and sits mid-sentence in another, and which it is says nothing about

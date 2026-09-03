@@ -158,6 +158,66 @@ func TestARecordFromAnotherVersionIsRefused(t *testing.T) {
 	}
 }
 
+// TestARecordThisBuildCannotReadNamesAWayOut is the other half of that
+// refusal. A record this build will not read shuts both operations, and
+// detaching does not open either, because the gate is also found by the
+// working copy's own path hash with no remote involved. So the step the
+// refusal names is the only one there is, and a refusal that named nothing
+// would leave deleting the gate as the way out, which is the loss every guard
+// here exists to prevent.
+func TestARecordThisBuildCannotReadNamesAWayOut(t *testing.T) {
+	gitEnvironment(t)
+	wc := newWorkingCopy(t)
+	home := t.TempDir()
+	command, _ := recorderCommand(t, 0)
+	spec := gate.Spec{Home: home, WorkingPath: wc.path, Command: command}
+
+	g, err := gate.Initialize(ctx(t), spec)
+	if err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+	rawGit(t, wc.path, "push", "--quiet", gate.RemoteName, "main")
+
+	record := filepath.Join(g.Repository(), "assistant-gate.json")
+	replaced, err := json.Marshal(map[string]any{"version": 99, "id": g.ID(), "workingPath": g.WorkingPath()})
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	writeFile(t, record, string(replaced))
+
+	// Both operations are shut, which is what makes the named step the only
+	// one, and detaching does not open either.
+	if _, err := gate.Initialize(ctx(t), spec); !errors.Is(err, gate.ErrMalformedRecord) {
+		t.Fatalf("Initialize error = %v, want ErrMalformedRecord", err)
+	}
+	refused := gate.Remove(ctx(t), spec, gate.WithOpener(detachingOpener))
+	if !errors.Is(refused, gate.ErrMalformedRecord) {
+		t.Fatalf("Remove error = %v, want ErrMalformedRecord", refused)
+	}
+	if !namesRemoving(refused, record) {
+		t.Fatalf("the refusal does not name removing %s, which is the only step that gets anywhere from here: %v",
+			record, refused)
+	}
+
+	// The step it names completes, and the gate keeps everything it holds.
+	if err := os.Remove(record); err != nil {
+		t.Fatalf("remove the record: %v", err)
+	}
+	repaired, err := gate.Initialize(ctx(t), spec)
+	if err != nil {
+		t.Fatalf("the step the refusal names did not complete: %v", err)
+	}
+	if repaired.Repository() != g.Repository() {
+		t.Fatalf("the repair moved the gate to %q, want %q", repaired.Repository(), g.Repository())
+	}
+	if got, want := refs(t, g.Repository()), []string{"refs/heads/main " + wc.commit}; !equal(got, want) {
+		t.Fatalf("the repaired gate holds %v, want its history %v", got, want)
+	}
+	if err := gate.Remove(ctx(t), spec, gate.WithOpener(detachingOpener)); err != nil {
+		t.Fatalf("Remove after the repair the refusal named: %v", err)
+	}
+}
+
 // TestAHomeThatDoesNotExistYetIsSpelledTheSameOnceItDoes is why the home is
 // resolved as far as it exists rather than only when all of it does. Spec.Home
 // is allowed not to exist yet, and the first initialization is the one that

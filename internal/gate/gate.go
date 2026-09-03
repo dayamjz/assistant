@@ -144,12 +144,18 @@ func openWithVCS(ctx context.Context, path string) (WorkingCopy, error) {
 // Every refusal happens before the working copy's remote is written, so a
 // refused initialization leaves the working copy as it was.
 //
-// A gate taken over while it carried no record is bound on the strength of a
-// remote alone. Initialize records that, and Remove refuses to delete a gate
-// bound that way; see ErrGateBindingInferred. An initialization whose own path
-// hashes to the gate records an evidenced binding instead, including over a
-// record left by an earlier inferred one, because standing where the gate is
-// named for is evidence a copy cannot produce.
+// A gate taken over while it carried no record is bound on whatever is left
+// saying it belongs here, and one thing saying so is not enough. The remote
+// alone is not, because a copy inherits it; the path hash alone is not, because
+// a path outlives the working copy that stood on it. Initialize records a
+// binding resting on one of them as inferred, and Remove refuses to delete a
+// gate bound that way; see ErrGateBindingInferred. Where the two agree, or
+// where a record already names this working copy and its path hashes to the
+// gate, the binding is evidenced and removal proceeds.
+//
+// The gate refuses every push while it has no admission hook, so a refused
+// initialization leaves a gate that admits nothing rather than one that admits
+// everything. See doc.go.
 func Initialize(ctx context.Context, spec Spec, opts ...Option) (*Gate, error) {
 	set := resolveSettings(opts)
 	home, workingPath, err := validate(spec, true)
@@ -166,14 +172,18 @@ func Initialize(ctx context.Context, spec Spec, opts ...Option) (*Gate, error) {
 		return nil, err
 	}
 	repo := repositoryPath(home, id)
+	named, err := boundRepository(ctx, copyOf)
+	if err != nil {
+		return nil, err
+	}
 	reattached, adopted := false, false
-	existing, ok, err := alreadyNamedGate(ctx, set, home, repo, workingPath, copyOf)
+	existing, ok, err := alreadyNamedGate(ctx, set, home, named, repo, workingPath)
 	if err != nil {
 		return nil, err
 	}
 	if ok {
 		repo, id, reattached, adopted = existing.path, existing.id, existing.moved, existing.adopted
-	} else if err := ensureOwnGateIsAvailable(ctx, set, repo, id, workingPath); err != nil {
+	} else if adopted, err = ownGateBinding(ctx, set, home, repo, id, workingPath, named == repo); err != nil {
 		return nil, err
 	}
 
@@ -276,11 +286,12 @@ func Remove(ctx context.Context, spec Spec, opts ...Option) error {
 		return err
 	}
 	if rec.Adopted {
-		return fmt.Errorf("%w: %s was bound to the working copy at %s by taking over a repository that carried no record, "+
-			"so only a %s remote ever said the gate was its, and a copy of a gated project inherits that remote too; "+
-			"nothing was removed. Removing the %s remote here detaches this working copy and always succeeds, and "+
-			"initializing it afterwards gives it a gate of its own; %s is left as it stands, yours to delete by hand "+
-			"once you are satisfied the history in it is not another working copy's",
+		return fmt.Errorf("%w: %s was bound to the working copy at %s by taking over a repository that carried no "+
+			"record, so one thing said the gate was its and no second thing agreed; a copy of a gated project "+
+			"inherits the %s remote, and a path outlives the working copy that stood on it, so neither on its own "+
+			"is enough to delete on. Nothing was removed. Removing the %s remote here detaches this working copy "+
+			"and always succeeds, and initializing it afterwards gives it a gate of its own; %s is left as it "+
+			"stands, yours to delete by hand once you are satisfied the history in it is not another working copy's",
 			ErrGateBindingInferred, repo, rec.WorkingPath, RemoteName, RemoteName, repo)
 	}
 
@@ -381,10 +392,9 @@ type claim struct {
 // evidence of ownership left to check, so a copy that inherited the remote can
 // take a recordless gate over, and the original meets ErrGateClaimed the next
 // time it initializes rather than losing anything quietly.
-func alreadyNamedGate(ctx context.Context, set settings, home, own, workingPath string, copyOf WorkingCopy) (claim, bool, error) {
-	named, err := boundRepository(ctx, copyOf)
-	if err != nil || named == "" || named == own {
-		return claim{}, false, err
+func alreadyNamedGate(ctx context.Context, set settings, home, named, own, workingPath string) (claim, bool, error) {
+	if named == "" || named == own {
+		return claim{}, false, nil
 	}
 	rec, holds, err := gateRepository(home, named)
 	if err != nil {
@@ -429,9 +439,9 @@ func alreadyNamedGate(ctx context.Context, set settings, home, own, workingPath 
 	}, true, nil
 }
 
-// ensureOwnGateIsAvailable decides whether the repository already sitting
-// where this working copy's identifier puts it may be adopted. Every binding
-// it permits is an evidenced one, so it reports a refusal and nothing else.
+// ownGateBinding decides whether the repository already sitting where this
+// working copy's identifier puts it may be adopted, and reports whether the
+// binding that follows rests on evidence or on inference.
 //
 // The identifier is the hash of a path, and a path is not a working copy. A
 // working copy that moves away leaves its path free for another one, and the
@@ -448,32 +458,54 @@ func alreadyNamedGate(ctx context.Context, set settings, home, own, workingPath 
 // else is not, because the binding it carries is exactly the fact that cannot
 // then be established.
 //
-// A binding this permits is an evidenced one whatever the record it writes
-// over said, including a record left by an earlier inferred binding. The
-// evidence is the same either way and it is evidence no copy can produce,
-// because a copy stands at another path and hashes elsewhere. Carrying the
-// earlier answer forward here would leave a gate whose owner is standing
-// exactly where the gate is named for permanently unremovable, on the strength
-// of a moment that has passed.
-func ensureOwnGateIsAvailable(ctx context.Context, set settings, repo, id, workingPath string) error {
-	rec, exists, err := readRecord(repo)
+// A binding this permits over a record that names this working copy is an
+// evidenced one whatever that record said, including a record left by an
+// earlier inferred binding. Two things agree there, the record and the path
+// hash, and no copy can produce either, because a copy stands at another path
+// and hashes elsewhere. Carrying the earlier answer forward would leave a gate
+// whose owner is standing exactly where the gate is named for permanently
+// unremovable, on the strength of a moment that has passed.
+//
+// A binding over no record at all is the weaker case, and the remote is what
+// separates its two shapes; the body says which is which.
+func ownGateBinding(ctx context.Context, set settings, home, repo, id, workingPath string, remoteAgrees bool) (adopted bool, err error) {
+	rec, holds, err := gateRepository(home, repo)
 	if err != nil {
-		return err
+		return false, err
 	}
-	if !exists {
-		return nil
+	switch holds {
+	case noRepository:
+		// Nothing is there, so this initialization is the one creating the
+		// gate and there is nobody to take it from.
+		return false, nil
+	case repositoryWithoutRecord:
+		// A repository is there and holds whatever its runs put in it, but
+		// nothing in it says whose it is. The only thing saying it is this
+		// working copy's is the hash of a path, and a path outlives the
+		// working copy that stood on it. The assistant remote is the second
+		// binding and an independent one: where it names this gate too, the
+		// two agree and the binding is evidenced. Where it does not, a project
+		// that merely landed on a path some other working copy vacated looks
+		// exactly like the one that made the gate, so the binding is inferred
+		// and removal refuses on it rather than deleting the history of
+		// whoever moved away.
+		return !remoteAgrees, nil
+	case repositoryWithRecord:
 	}
 	if rec.ID != id {
-		return fmt.Errorf("%w: %s records identifier %q, but its name says %q",
+		return false, fmt.Errorf("%w: %s records identifier %q, but its name says %q",
 			ErrMalformedRecord, repo, rec.ID, id)
 	}
-	return ensureAvailableTo(ctx, set, repo, rec, workingPath, fmt.Sprintf(
+	if err := ensureAvailableTo(ctx, set, repo, rec, workingPath, fmt.Sprintf(
 		"%s hashes to %s, so this home has no second gate to hand out for it. Taking this one over takes it, and "+
 			"everything its runs recorded, away from a working copy that is still using it, so do this only once "+
 			"you are satisfied the history in %s is not that working copy's. The gate is handed over as soon as "+
 			"%s stops pointing at it, so removing the %s remote there detaches it and always succeeds, and "+
 			"initializing %s again then takes the gate over",
-		workingPath, id, repo, rec.WorkingPath, RemoteName, workingPath))
+		workingPath, id, repo, rec.WorkingPath, RemoteName, workingPath)); err != nil {
+		return false, err
+	}
+	return false, nil
 }
 
 // recordlessRefusal is what Remove answers when the gate a working copy names
@@ -692,14 +724,23 @@ func ensureRepository(ctx context.Context, repo string) error {
 	}
 	arrived := namesAdded(before, after)
 	if len(arrived) == 0 {
-		return nil
+		return sealAdmission(repo)
 	}
 	if err := undoArrivedHooks(repo, creating, arrived); err != nil {
 		return err
 	}
+	if !creating {
+		// The repository is still there, so it still takes pushes, and the
+		// hook that just went away may have been the only one in it. A
+		// repository this call created and then deleted takes nothing.
+		if err := sealAdmission(repo); err != nil {
+			return err
+		}
+	}
 	return fmt.Errorf("%w: %s gained %s while being initialized; this package writes no hook before the "+
 		"repository exists, and an init.templateDir in a configuration file it cannot see past is what puts one "+
-		"there, so the hook was refused rather than adopted",
+		"there, so the hook was refused rather than adopted. The gate refuses every push until an initialization "+
+		"succeeds, so take the hook out of that template, or point init.templateDir elsewhere, and initialize again",
 		ErrTemplateHooks, repo, strings.Join(arrived, ", "))
 }
 

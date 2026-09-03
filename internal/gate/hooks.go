@@ -97,6 +97,51 @@ func installHooks(repo, id, command string) error {
 	return nil
 }
 
+// sealAdmission puts a hook that refuses every push into a gate that has no
+// admission hook, and leaves one that is already there alone.
+//
+// A gate takes pushes from the moment its repository exists, and the hook is
+// the only thing that makes a push mean anything. A gate with no admission
+// hook is not merely an unconfigured gate: it accepts everything, runs
+// nothing, and tells nobody. So the absence is filled before any refusal can
+// return, and installHooks writes the real admission hook over the seal when
+// an initialization gets that far.
+//
+// The seal carries hookMarker so a later initialization replaces it as one of
+// this package's own. Without that it would be read as somebody's custom hook,
+// moved to the .local name, and chained into every push from then on.
+func sealAdmission(repo string) error {
+	dir := hooksDir(repo)
+	path := filepath.Join(dir, AdmissionHook)
+	if _, err := os.Lstat(path); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("gate: inspecting %s: %w", path, err)
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("gate: creating %s: %w", dir, err)
+	}
+	return replaceFile(path, []byte(sealScript()), hookMode)
+}
+
+// sealScript renders the admission hook a sealed gate refuses with. It names
+// the initialization that replaces it, because a refusal a person cannot act
+// on is how a gate ends up worked around.
+func sealScript() string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "#!/bin/sh\n")
+	fmt.Fprintf(&b, "# %s %s\n", hookMarker, AdmissionHook)
+	fmt.Fprintf(&b, "#\n")
+	fmt.Fprintf(&b, "# This gate has no admission hook, so it refuses every push rather than\n")
+	fmt.Fprintf(&b, "# accepting one nothing has checked. Initializing the working copy it\n")
+	fmt.Fprintf(&b, "# belongs to installs the real hook over this one.\n")
+	fmt.Fprintf(&b, "cat >/dev/null\n")
+	fmt.Fprintf(&b, "echo 'assistant: this gate has no admission hook, so every push is refused.' >&2\n")
+	fmt.Fprintf(&b, "echo 'assistant: initialize the working copy it belongs to; if that refuses, it says why.' >&2\n")
+	fmt.Fprintf(&b, "exit 1\n")
+	return b.String()
+}
+
 // checkPreservable reports whether the hook at name can be installed without
 // discarding a file somebody else wrote.
 func checkPreservable(dir, name string) error {

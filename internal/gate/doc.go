@@ -94,13 +94,15 @@
 //
 // # What one side of an operation owes an operator, its sibling owes too
 //
-// Three times now something in this package has covered one path and not its
+// Four times now something in this package has covered one path and not its
 // sibling: ownership checked on adoption but not on removal, a hook guarded on
-// creation but not on repair, and a refusal that said what an action would
-// cost when it was the destructive one and said nothing when it was the
-// constructive one. Each was written where the problem was first noticed
-// rather than around the operation that carries the risk, and each left the
-// sibling path reachable and unaddressed.
+// creation but not on repair, a refusal that said what an action would cost
+// when it was the destructive one and said nothing when it was the
+// constructive one, and a recordless gate marked as inferred when a remote
+// alone claimed it but not when a path hash alone did. Each was written where
+// the problem was first noticed rather than around the operation, or the
+// question, that carries the risk, and each left the sibling reachable and
+// unaddressed.
 //
 // So when a rule about a gate is added here, ask what operation it constrains
 // and put it there, not at the call that prompted it. The two questions that
@@ -189,12 +191,20 @@
 // that apart from a working copy that moved and lost the same file.
 //
 // So the adoption is recorded as one. The record this package then writes says
-// that the binding came from a remote rather than from a record, that field is
-// carried into every record an initialization reached through that remote
-// writes afterwards, and Remove refuses on it with ErrGateBindingInferred. Deleting is the one act here that cannot be undone,
-// and an inferred binding does not justify it. Without that the adoption would
-// manufacture the very evidence a later removal reads, and the copy's eject
-// would delete the original's history with nothing having refused anything.
+// the binding rested on one piece of evidence rather than two, that field is
+// carried into every record an initialization reached the same way writes
+// afterwards, and Remove refuses on it with ErrGateBindingInferred. Deleting is
+// the one act here that cannot be undone, and an inferred binding does not
+// justify it. Without that the adoption would manufacture the very evidence a
+// later removal reads, and the eject that followed would delete somebody
+// else's history with nothing having refused anything.
+//
+// One piece of evidence is what a remote alone is, because a copy inherits it,
+// and it is equally what a path hash alone is, because a path outlives the
+// working copy that stood on it and the next project to land there hashes the
+// same. Those are siblings and they are marked alike: a recordless gate is
+// adopted with an evidenced binding only where the remote and the path hash
+// agree, and with an inferred one where only one of them speaks.
 //
 // What is left is loud in both directions. The copy is told it may not delete
 // the gate, and is told the detachment that does succeed from where it stands.
@@ -202,10 +212,10 @@
 // because the copy is by then a working copy that still points at the gate.
 // Neither loses a reference.
 //
-// The mark is not permanent, and it should not be. An initialization whose own
-// path hashes to the gate re-establishes the binding on the evidence that
-// creates a gate in the first place, which no copy can produce from another
-// path, so it writes an evidenced binding over the inferred one. A mark that
+// The mark is not permanent, and it should not be. An initialization that has
+// two pieces of evidence writes an evidenced binding over the inferred one: a
+// record naming this working copy over a gate its path hashes to, or a
+// recordless gate its remote and its path hash both point at. A mark that
 // outlived the ambiguity would leave a gate whose owner is standing exactly
 // where it is named for permanently unremovable.
 //
@@ -227,7 +237,30 @@
 // that holds the gate, after which the gate is handed over, and says first
 // what that costs the working copy losing it. ErrGateBindingInferred names the
 // detachment of the asker, and leaves the deleting of the gate to the operator
-// once they are satisfied whose history is in it.
+// once they are satisfied whose history is in it. ErrMalformedRecord names the
+// record file, because both operations refuse on it and detaching does not
+// help, so removing that file is the only step that gets anywhere.
+//
+// # A gate never accepts a push that admission has not seen
+//
+// This is an invariant, not a description. A gate takes pushes from the moment
+// its repository exists, and the admission hook is the only thing that makes a
+// push mean anything, so a gate with no admission hook is not an unconfigured
+// gate: it accepts everything, runs nothing, and tells nobody. No path here
+// may leave one, including a path that is undoing what it just did.
+//
+// The invariant is held by filling the absence rather than by remembering to.
+// Every initialization, before it can refuse for any reason, puts a hook that
+// refuses every push into a gate that has none, and installs the real
+// admission hook over it when it gets that far. So a refused initialization
+// leaves a gate that admits nothing, and what the refusal cost is a closed
+// gate rather than an open one.
+//
+// It is worth saying why this outranks the loss paths above. Losing history
+// announces itself: something that was there is gone, and somebody notices. A
+// gate with no admission behaves perfectly, accepts everything, and reports
+// nothing in between, so the failure is invisible until the day it matters.
+// Given a choice, fail in the direction that shows.
 //
 // The residual gap in identity is the path itself. The identifier is computed
 // from the cleaned, symlink-resolved absolute path, so two spellings that
