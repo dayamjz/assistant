@@ -537,6 +537,7 @@ func TestClientCloseReleasesWaitingCallers(t *testing.T) {
 type blockingHandler struct {
 	entered chan struct{}
 	release chan struct{}
+	err     error
 }
 
 func (h *blockingHandler) Serve(ctx context.Context, _ ipc.Request) (json.RawMessage, error) {
@@ -548,6 +549,9 @@ func (h *blockingHandler) Serve(ctx context.Context, _ ipc.Request) (json.RawMes
 	}
 	select {
 	case <-h.release:
+		if h.err != nil {
+			return nil, h.err
+		}
 		return json.RawMessage(`{"served":true}`), nil
 	case <-ctx.Done():
 		return nil, ctx.Err()
@@ -1045,4 +1049,134 @@ func TestTheServiceReasonForEndingAConnectionReachesTheCaller(t *testing.T) {
 	if h.handler.count() != 0 {
 		t.Error("a frame the service could not read reached the handler")
 	}
+}
+
+// TestALateAnswerToAnAbandonedCallDisturbsNothing covers what happens after a
+// Call gives up. Nothing cancels a request at the service, so its answer still
+// arrives, naming an identifier this client is no longer waiting on. That is
+// ordinary: the caller already has its context's error, and every other call
+// and stream on the connection has to go on working.
+func TestALateAnswerToAnAbandonedCallDisturbsNothing(t *testing.T) {
+	handler := &blockingHandler{
+		entered: make(chan struct{}, 1),
+		release: make(chan struct{}),
+		err:     ipc.ErrUnavailable,
+	}
+	h := serveOnSocket(t, func(c *ipc.ServerConfig) { c.Handler = handler })
+	c := h.dial(t, ipc.ClientConfig{})
+	ctx, cancel := callCtx(t)
+	defer cancel()
+
+	stream, err := c.Subscribe(ctx, nil)
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	defer stream.Close()
+	if first, err := stream.Recv(ctx); err != nil || first.Type != "stream.gap" {
+		t.Fatalf("first delivery = %q (err %v), want the opening gap marker", first.Type, err)
+	}
+
+	abandoned, giveUp := context.WithCancel(context.Background())
+	gave := make(chan error, 1)
+	go func() { gave <- c.Call(abandoned, "status", nil, nil) }()
+	select {
+	case <-handler.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the call never reached the handler")
+	}
+	giveUp()
+	if err := <-gave; !errors.Is(err, context.Canceled) {
+		t.Fatalf("the abandoned Call = %v, want its context's error", err)
+	}
+
+	// The handler answers now, so the refusal for a request nobody is waiting
+	// on crosses the connection ahead of everything below.
+	close(handler.release)
+
+	if err := c.Call(ctx, "health", nil, nil); !errors.Is(err, ipc.ErrUnavailable) {
+		t.Fatalf("a later Call = %v, want it served rather than the client torn down", err)
+	}
+	if errors.Is(c.Call(ctx, "health", nil, nil), ipc.ErrClientClosed) {
+		t.Fatal("the client closed itself over an answer to a call that had been abandoned")
+	}
+	publish(t, h.events, state("after", 3))
+	e, err := stream.Recv(ctx)
+	if err != nil {
+		t.Fatalf("Recv on the open stream = %v, want it still delivering", err)
+	}
+	if e.Type != "run.state" || label(t, e) != "after" {
+		t.Errorf("delivery = %+v, want the event published after the late answer", e)
+	}
+}
+
+// TestAMalformedFrameIsAnsweredAndTheConnectionSurvives separates the two ways
+// a frame can be unreadable. A line that does not decode leaves the reader at
+// the start of the next frame, so the connection carries on; an over-long frame
+// leaves nowhere to resume from, so it ends.
+func TestAMalformedFrameIsAnsweredAndTheConnectionSurvives(t *testing.T) {
+	const limit = 512
+	h := serveOnSocket(t, func(c *ipc.ServerConfig) { c.MaxFrameBytes = limit })
+
+	conn, err := net.Dial("unix", h.socket)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+	if err := conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatalf("read deadline: %v", err)
+	}
+
+	if _, err := conn.Write([]byte("not a frame\n")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	reply := readFrame(t, reader)
+	if reply.Error == nil || reply.Error.Code != ipc.CodeInvalidRequest {
+		t.Fatalf("reply = %+v, want an invalid-request refusal", reply.Error)
+	}
+	if reply.ID != 0 {
+		t.Errorf("the refusal names request %d, want the zero identifier a frame with no readable id gets", reply.ID)
+	}
+
+	// The connection is still serving, which is the whole point of resuming.
+	if _, err := conn.Write([]byte(`{"id":7,"method":"health"}` + "\n")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	served := readFrame(t, reader)
+	if served.ID != 7 || served.Error != nil {
+		t.Fatalf("reply = %+v, want request 7 served on the surviving connection", served)
+	}
+
+	// An over-long frame is the other case, and it ends the connection.
+	if _, err := conn.Write([]byte(`{"id":8,"method":"health","params":"` + strings.Repeat("x", 4*limit) + `"}` + "\n")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	ended := readFrame(t, reader)
+	if ended.Error == nil || ended.Error.Code != ipc.CodeFrameTooLarge {
+		t.Fatalf("reply = %+v, want a frame-too-large refusal", ended.Error)
+	}
+	if _, err := reader.ReadBytes('\n'); err == nil {
+		t.Error("the connection survived a frame there was no position to resume from")
+	}
+}
+
+// readFrame reads one frame off the wire, which is the protocol's own text
+// contract: newline-delimited JSON objects.
+func readFrame(t *testing.T, r *bufio.Reader) struct {
+	ID    uint64     `json:"id"`
+	Error *ipc.Error `json:"error"`
+} {
+	t.Helper()
+	var f struct {
+		ID    uint64     `json:"id"`
+		Error *ipc.Error `json:"error"`
+	}
+	line, err := r.ReadBytes('\n')
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if err := json.Unmarshal(line, &f); err != nil {
+		t.Fatalf("decode %q: %v", line, err)
+	}
+	return f
 }

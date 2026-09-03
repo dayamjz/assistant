@@ -215,11 +215,24 @@ func (c *Client) Close() error {
 }
 
 // read demultiplexes the connection until it ends.
+//
+// The service reports a frame it could not read with the zero identifier,
+// because such a frame carried none to answer. That report is about the
+// connection rather than about any request, so it ends nothing by itself; it is
+// kept as the reason this client ended if the connection then does end, in
+// place of the end of input a caller would otherwise be left with.
 func (c *Client) read(r *frameReader) {
+	// reported is the last thing the service said about a frame of this
+	// client's it could not read. It is only ever read and written here.
+	var reported error
 	for {
 		f, err := r.read()
 		if err != nil {
-			c.finish(fmt.Errorf("%w: %w", ErrClientClosed, err))
+			cause := err
+			if reported != nil {
+				cause = reported
+			}
+			c.finish(fmt.Errorf("%w: %w", ErrClientClosed, cause))
 			return
 		}
 		switch {
@@ -242,27 +255,27 @@ func (c *Client) read(r *frameReader) {
 				cause = f.Error
 			}
 			c.dropStream(f.ID, cause)
+		case f.ID == 0:
+			// register allocates from one upwards, so no answer to anything
+			// this client asked for can arrive with the zero identifier. A
+			// frame that carries it belongs to no request and is the service's
+			// report about the connection itself.
+			if f.Error != nil {
+				reported = f.Error
+			}
 		default:
 			c.mu.Lock()
 			reply := c.calls[f.ID]
-			_, streamed := c.streams[f.ID]
 			c.mu.Unlock()
-			switch {
-			case reply != nil:
+			if reply != nil {
 				select {
 				case reply <- f:
 				default:
 				}
-			case !streamed && f.Error != nil:
-				// The service answered no request of this client's and no
-				// stream of its own, which is how it reports a failure of the
-				// connection itself: a frame it could not read has no
-				// identifier to answer. Keeping it as the cause is what lets a
-				// caller see that reason rather than the end of input behind
-				// it. The read loop carries on, and the first cause is the one
-				// that is kept.
-				c.finish(fmt.Errorf("%w: %w", ErrClientClosed, f.Error))
 			}
+			// An answer naming a request this client is no longer waiting for
+			// is a late answer to a call whose context ended, which is ordinary
+			// and disturbs nothing else on the connection. It is dropped.
 		}
 	}
 }

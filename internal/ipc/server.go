@@ -282,10 +282,20 @@ func (c *conn) serve() {
 	for {
 		f, err := c.r.read()
 		if err != nil {
-			if errors.Is(err, ErrFrameTooLarge) || errors.Is(err, ErrInvalidRequest) {
-				// The reader has no position to resume from, so the failure is
-				// reported and the connection ends.
-				_ = c.w.write(frame{Error: newError("", err)})
+			switch {
+			case errors.Is(err, ErrInvalidRequest):
+				// The reader took the whole line before it tried to decode it,
+				// so it is positioned at the start of the next frame and this
+				// connection can carry on. Dropping it here would take every
+				// other call and stream this caller holds along with one frame
+				// it got wrong.
+				c.reportConnection(err)
+				continue
+			case errors.Is(err, ErrFrameTooLarge):
+				// The rest of an over-long frame cannot be told apart from the
+				// frames behind it, so there is no position to resume from and
+				// the connection ends behind the report.
+				c.reportConnection(err)
 			}
 			return
 		}
@@ -295,6 +305,17 @@ func (c *conn) serve() {
 		}
 		c.dispatch(f)
 	}
+}
+
+// reportConnection tells the peer about a frame this connection could not read.
+//
+// It names no request, because a frame that did not decode carries no
+// identifier to answer, and the zero identifier is what says so: this package's
+// Client allocates from one upwards and never asks with zero, so a peer can
+// tell a report about the connection from an answer to something it asked for
+// without guessing.
+func (c *conn) reportConnection(cause error) {
+	_ = c.w.write(frame{Error: newError("", cause)})
 }
 
 // dispatch serves one request frame.
@@ -370,10 +391,14 @@ var errUndeliverableControl = fmt.Errorf("%w: a control event could not be put i
 // undeliverableAnswer is the refusal a request gets when its answer could not
 // be put on the wire. It carries no method and a fixed message, so its size
 // depends on nothing but the identifier being answered.
+//
+// It says only what is known here. Every answer takes this path, including a
+// refusal raised before any handler was reached, so it reports that the answer
+// could not be delivered rather than claiming the request was served.
 func undeliverableAnswer(id uint64, code Code) frame {
-	message := "this request was served and its answer could not be encoded"
+	message := "the answer to this request could not be encoded"
 	if code == CodeFrameTooLarge {
-		message = "this request was served and its answer does not fit in one frame"
+		message = "the answer to this request does not fit in one frame"
 	}
 	return frame{ID: id, Error: &Error{Code: code, Message: message}}
 }
@@ -428,8 +453,8 @@ func MinFrameBytes() int { return minFrameBytes }
 // An answer past the frame limit, or one that does not encode, is a failure
 // about the answer rather than about the connection, and no other path answers
 // this identifier. Without the second write the caller would wait for an answer
-// that is never coming, so it is told the request was served and the answer
-// could not be delivered. The refusal carries no method and a fixed message, and
+// that is never coming, so it is told that its answer could not be delivered.
+// The refusal carries no method and a fixed message, and
 // NewServer refuses a frame limit too small to carry it, so on a server that was
 // built it fits whatever the answer that did not.
 func (c *conn) answer(id uint64, f frame) {

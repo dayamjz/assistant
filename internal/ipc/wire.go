@@ -55,10 +55,16 @@ func newFrameReader(r io.Reader, limit int) *frameReader {
 	return &frameReader{r: bufio.NewReader(r), limit: limit}
 }
 
-// read returns the next frame. It reports io.EOF at a clean end of input, and
-// ErrFrameTooLarge for a frame past the limit. The latter ends the connection
-// for the caller: the rest of an over-long frame cannot be told apart from the
-// frames that follow it, so there is no position to resume reading from.
+// read returns the next frame. It reports io.EOF at a clean end of input,
+// ErrFrameTooLarge for a frame past the limit, and ErrInvalidRequest for a line
+// that does not decode.
+//
+// The two failures leave a caller in different places, and this is where that
+// difference comes from. A whole line is taken before it is decoded, so after
+// one that did not decode the reader sits at the start of the next frame and a
+// caller may carry on. The rest of an over-long frame cannot be told apart from
+// the frames that follow it, so there is no position to resume reading from and
+// the connection is all a caller can end.
 func (fr *frameReader) read() (frame, error) {
 	for {
 		line, err := fr.readLine()
