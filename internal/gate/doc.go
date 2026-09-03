@@ -181,9 +181,8 @@
 //
 // So the adoption is recorded as one. The record this package then writes says
 // that the binding came from a remote rather than from a record, that field is
-// carried into every record written afterwards rather than cleared by the next
-// ordinary initialization, and Remove refuses on it with
-// ErrGateBindingInferred. Deleting is the one act here that cannot be undone,
+// carried into every record an initialization reached through that remote
+// writes afterwards, and Remove refuses on it with ErrGateBindingInferred. Deleting is the one act here that cannot be undone,
 // and an inferred binding does not justify it. Without that the adoption would
 // manufacture the very evidence a later removal reads, and the copy's eject
 // would delete the original's history with nothing having refused anything.

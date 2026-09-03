@@ -29,17 +29,18 @@ var (
 	// ErrNotAGate is returned when a path that would be deleted as a gate
 	// repository is not one: it is outside this home's repository directory,
 	// nothing is there, or it carries no gate record. Removal refuses rather
-	// than deleting a directory it cannot identify. For the last two an
-	// initialization of the working copy is what makes a removal possible,
-	// and the message says so.
+	// than deleting a directory it cannot identify. The message names the step
+	// that succeeds from the state the reader is in, which is an
+	// initialization when one would establish the binding and a detachment
+	// when it would not.
 	ErrNotAGate = errors.New("gate: path is not a gate repository of this home")
 	// ErrNoGate is returned by Remove when the working copy has no gate to
 	// remove.
 	ErrNoGate = errors.New("gate: working copy has no gate")
 	// ErrGateClaimed is returned by any operation asked to act on a gate
 	// whose own record binds it to a different working copy that is still
-	// pointing at it. Initialize meets it when two paths hash to one
-	// identifier, and Remove when a copied project directory carries the
+	// pointing at it. Initialize meets it when the gate its path hashes to is
+	// bound elsewhere, and Remove when a copied project directory carries the
 	// original's remote. Nothing has been created, written, or deleted when
 	// it is returned. The message names the gate, the working copy holding
 	// it, the working copy asking, and what has to change.
