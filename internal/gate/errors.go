@@ -28,8 +28,10 @@ var (
 	ErrDetachUnsupported = errors.New("gate: working copy cannot remove a remote")
 	// ErrNotAGate is returned when a path that would be deleted as a gate
 	// repository is not one: it is outside this home's repository directory,
-	// or it carries no gate record. Removal refuses rather than deleting a
-	// directory it cannot identify.
+	// nothing is there, or it carries no gate record. Removal refuses rather
+	// than deleting a directory it cannot identify. For the last two an
+	// initialization of the working copy is what makes a removal possible,
+	// and the message says so.
 	ErrNotAGate = errors.New("gate: path is not a gate repository of this home")
 	// ErrNoGate is returned by Remove when the working copy has no gate to
 	// remove.
@@ -47,8 +49,12 @@ var (
 	// Nothing but a remote said the gate was this working copy's, and a copy
 	// of a gated project inherits that remote, so the binding is not evidence
 	// enough for the one act here that cannot be undone. Nothing has been
-	// removed when it is returned, and the message says what the operator can
-	// do instead.
+	// removed when it is returned, and the message names the detachment that
+	// does succeed from there.
+	//
+	// A later initialization whose own path hashes to the gate replaces the
+	// inferred binding with an evidenced one, so this does not outlive the
+	// ambiguity that produced it.
 	ErrGateBindingInferred = errors.New("gate: gate binding rests on a remote rather than on a record")
 	// ErrMalformedRecord is returned when a gate's record file exists but
 	// cannot be read as one. The gate's binding to a working copy lives in

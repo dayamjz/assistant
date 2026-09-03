@@ -38,8 +38,14 @@ type record struct {
 	// ever said the gate was its, and a copy of a gated project inherits that
 	// remote. It is the difference between a binding a record established and
 	// one this package inferred, which is a difference no later state of the
-	// gate can show, so it is carried into every record written afterwards
-	// rather than cleared by the next ordinary initialization.
+	// gate can show, so it is carried into every record an initialization
+	// reached through that remote writes afterwards.
+	//
+	// One thing does clear it: an initialization whose own path hashes to the
+	// gate, which is the evidence that creates a gate in the first place and
+	// evidence a copy cannot produce, because a copy stands elsewhere and
+	// hashes elsewhere. That is the difference between a fact about the past
+	// and a fact about now, and only the second one this field stands for.
 	//
 	// Removal refuses on it, because deleting a gate is the one act here that
 	// cannot be undone and an inferred binding is not enough to justify it.

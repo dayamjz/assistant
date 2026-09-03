@@ -94,9 +94,9 @@
 //
 // # A guard on a gate belongs to the operation, not to the call site
 //
-// Three times now a check in this package has covered one path and not its
-// sibling: ownership on adoption but not on removal, and a hook that arrives
-// on creation but not on repair. Both times the guard was written where the
+// Twice now a check in this package has covered one path and not its sibling:
+// ownership on adoption but not on removal, and a hook that arrives on
+// creation but not on repair. Both times the guard was written where the
 // problem was first noticed rather than around the operation that carries the
 // risk, and both times the sibling path was reachable and unguarded.
 //
@@ -106,6 +106,16 @@
 // check do when the state it inspects was already there when the operation
 // started. A guard scoped to a code path is a guard the next caller of that
 // operation reopens without noticing.
+//
+// The near relative of that mistake is a signal that answers two conditions
+// with one value. A gate whose record file is gone and a gate that is not
+// there at all both read as "no record", and they call for opposite things:
+// the first still holds every reference its runs produced and is repaired in
+// place, the second holds nothing and must not be reported as a gate carried
+// across a move. So what a path holds is a three-valued answer here rather
+// than a boolean, and it is computed once. When a check reads state, ask what
+// its "absent" answer covers, because absent and empty are rarely the same
+// thing and the code that reads them cannot tell them apart afterwards.
 //
 // The part that is open is core.hooksPath. A configuration file reachable
 // through the same two kept variables can point git at a hooks directory
@@ -179,10 +189,35 @@
 // would delete the original's history with nothing having refused anything.
 //
 // What is left is loud in both directions. The copy is told it may not delete
-// the gate, and is told to drop the remote and remove the directory by hand if
-// it is sure. The original is refused with ErrGateClaimed the next time it
-// initializes, because the copy is by then a working copy that still points at
-// the gate. Neither loses a reference.
+// the gate, and is told the detachment that does succeed from where it stands.
+// The original is refused with ErrGateClaimed the next time it initializes,
+// because the copy is by then a working copy that still points at the gate.
+// Neither loses a reference.
+//
+// The mark is not permanent, and it should not be. An initialization whose own
+// path hashes to the gate re-establishes the binding on the evidence that
+// creates a gate in the first place, which no copy can produce from another
+// path, so it writes an evidenced binding over the inferred one. A mark that
+// outlived the ambiguity would leave a gate whose owner is standing exactly
+// where it is named for permanently unremovable.
+//
+// # A refusal has to name an action that succeeds
+//
+// Every refusal here is a dead end for somebody unless it says what to do, and
+// the actions available differ by the state the operator is in. Removing a
+// gate can itself be refused, so a refusal must not send an operator to a
+// removal that will refuse them again: a chain of refusals is what makes
+// somebody delete a directory by hand, and losing that directory is the loss
+// every guard here exists to prevent.
+//
+// So the action each message names is the one that always succeeds from where
+// the reader is: detaching, by dropping the assistant remote, which no guard
+// refuses because it takes nothing away, followed by an initialization that
+// gives that working copy a gate of its own. ErrNotAGate names the
+// initialization that rebuilds what is missing. ErrGateClaimed names the
+// detachment of the working copy that holds the gate, after which the gate is
+// handed over. ErrGateBindingInferred names the detachment of the asker, after
+// which nothing names the gate and it is the operator's to delete.
 //
 // The residual gap in identity is the path itself. The identifier is computed
 // from the cleaned, symlink-resolved absolute path, so two spellings that

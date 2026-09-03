@@ -95,6 +95,14 @@ func isDirectory(path string) bool {
 	return err == nil && info.IsDir()
 }
 
+// holdsNoRepository reports that a path this home files a gate at holds
+// nothing: it is not there, or it is an empty directory. It is the one
+// definition of that, so what an initialization counts as creating a
+// repository and what a caller counts as a gate that is gone cannot disagree.
+func holdsNoRepository(path string) bool {
+	return !isDirectory(path) || isEmptyDirectory(path)
+}
+
 // isEmptyDirectory reports whether path is a directory with nothing in it.
 // InitBare accepts an empty directory, so an initialization that died between
 // creating the directory and creating the repository is still repairable, and
