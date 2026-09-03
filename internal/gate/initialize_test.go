@@ -460,6 +460,91 @@ func TestAnInitializationSealsEveryGateItLooksAt(t *testing.T) {
 	rawGit(t, wc.path, "push", "--quiet", gate.RemoteName, "main")
 }
 
+// TestAGateThatCannotBeSealedDoesNotLeaveTheOthersOpen is the same invariant
+// when one of the gates a resolution looked at cannot be closed.
+//
+// A resolution looks at two gates: the one the working copy's remote names and
+// the one its path hashes to. If the first cannot be sealed, stopping there
+// leaves the second accepting every push with nothing running, which is the
+// failure the seal exists to prevent and is invisible to whoever pushes. So
+// every gate is attempted and the failures are reported together.
+//
+// The fixture makes the first gate's hooks directory refuse the write the seal
+// needs. Where a directory's mode does not restrict writes, which includes
+// running as the superuser, the question cannot be posed at all, so this skips
+// rather than passing over a seal that in fact succeeded.
+func TestAGateThatCannotBeSealedDoesNotLeaveTheOthersOpen(t *testing.T) {
+	gitEnvironment(t)
+	wc := newWorkingCopy(t)
+	home, opts := newHome(t)
+	command, _ := recorderCommand(t, 0)
+
+	original, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path, Command: command}, opts()...)
+	if err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+	duplicate := filepath.Join(filepath.Dir(wc.path), "copy")
+	copyTree(t, wc.path, duplicate)
+	own, err := gate.Initialize(ctx(t),
+		gate.Spec{Home: home, WorkingPath: duplicate, Command: command}, opts()...)
+	if err != nil {
+		t.Fatalf("Initialize the copy: %v", err)
+	}
+	if own.Repository() == original.Repository() {
+		t.Fatalf("the copy took the original's gate at %q", own.Repository())
+	}
+
+	// The copy is pointed back at the original's gate, so the next
+	// initialization there looks at two gates that both exist: the one the
+	// remote names and the one the copy's path hashes to.
+	rawGit(t, duplicate, "remote", "set-url", gate.RemoteName, original.Repository())
+	for _, repo := range []string{original.Repository(), own.Repository()} {
+		if err := os.Remove(filepath.Join(repo, "hooks", gate.AdmissionHook)); err != nil {
+			t.Fatalf("remove the admission hook of %s: %v", repo, err)
+		}
+	}
+	refuseWrites(t, filepath.Join(original.Repository(), "hooks"))
+
+	if _, err := gate.Initialize(ctx(t),
+		gate.Spec{Home: home, WorkingPath: duplicate, Command: command}, opts()...); err == nil {
+		t.Fatal("Initialize reported success over a gate whose seal could not be written")
+	} else if !strings.Contains(err.Error(), original.Repository()) {
+		t.Fatalf("the error does not name the gate that could not be sealed at %s: %v",
+			original.Repository(), err)
+	}
+
+	// The second gate was sealed anyway, which is what a push to it shows.
+	before := refs(t, own.Repository())
+	out, pushErr := tryRawGit(duplicate, "push", own.Repository(), "main")
+	if pushErr == nil {
+		t.Fatalf("the second gate accepted a push with no admission hook:\n%s", out)
+	}
+	if got := refs(t, own.Repository()); !equal(got, before) {
+		t.Fatalf("the refused push moved references in the gate: %v, want %v", got, before)
+	}
+}
+
+// refuseWrites takes the write permission off a directory and puts it back when
+// the test ends, so the temporary directory it sits in can still be removed.
+//
+// It proves the restriction took effect rather than assuming it, because a host
+// where it does not, such as one running as the superuser, would otherwise turn
+// a test of a failing write into a test of a write that succeeded.
+func refuseWrites(t *testing.T, dir string) {
+	t.Helper()
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Skipf("this host does not allow the mode of %s to be changed: %v", dir, err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	probe, err := os.CreateTemp(dir, "probe.*")
+	if err == nil {
+		name := probe.Name()
+		_ = probe.Close()
+		_ = os.Remove(name)
+		t.Skipf("this host does not restrict writes to %s by its mode, so a seal there cannot be made to fail", dir)
+	}
+}
+
 // TestEveryEarlyRefusalLeavesTheGateRefusingPushes is the invariant on the
 // paths that reach no hooks at all. An initialization can refuse before it
 // looks at the gate's hooks, and a gate that has lost its admission hook is

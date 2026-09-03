@@ -119,13 +119,23 @@ func (h *held) ensureUnclaimed(ctx context.Context, remedy func(claimant string)
 // behind, so the gate is free; a working copy that was copied leaves the
 // original behind, so the gate is not.
 //
-// Anything that cannot be established counts as not bound, and which way that
-// fails is a decision rather than an accident. Treating an unreadable claimant
-// as still bound would give a moved working copy a second gate and orphan the
-// run history recorded against the first, which is the loss PRD principle P6 is
-// about. Treating it as free costs a copy the original's gate only once the
-// original has become unopenable, at which point the original has lost it
-// either way.
+// A claimant that is not there or will not resolve counts as not bound, and so
+// does one that will not open. Which way those fail is a decision rather than
+// an accident. Treating an unreadable claimant as still bound would give a
+// moved working copy a second gate and orphan the run history recorded against
+// the first, which is the loss PRD principle P6 is about. Treating it as free
+// costs a copy the original's gate only once the original has become
+// unopenable, at which point the original has lost it either way.
+//
+// A claimant that opens but whose assistant remote cannot be read is the
+// deliberate opposite: the error is returned and the operation asking is
+// refused. The two directions differ because the two states differ. A working
+// copy that is gone or unopenable is one this package can say something about,
+// and what it says is that nothing there points at the gate. A working copy
+// that is standing there with a configuration that cannot be read is a fact
+// this package failed to establish, and reading it as "nothing points at the
+// gate" would hand a copy the original's gate on the strength of a read that
+// did not happen.
 func stillBound(ctx context.Context, set settings, claimant, repo string) (bool, error) {
 	if !isDirectory(claimant) {
 		return false, nil

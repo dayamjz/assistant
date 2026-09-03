@@ -370,11 +370,12 @@ func freshWorkingCopyAt(t *testing.T, path string) string {
 //
 // A gate takes pushes from the moment its repository exists, so obtaining a
 // gate leaves an admission hook in one that has none before anything else runs.
-// That happens before the git invocation a repair makes, and git's template
-// copy does not overwrite a file that is already there, so the name a template
-// would land its pre-receive at is occupied by the time the template is
-// consulted. The refusal below is therefore never reached for that one name:
-// the channel is shut instead of caught.
+// That happens before the git invocation a repair makes, so the admission hook
+// name is already occupied by a hook this package wrote when a template is
+// consulted. What this test establishes is not what became of the template's
+// file but what runs on a push afterwards: the gate's own admission, with the
+// template still configured. The refusal below is never reached for that one
+// name, so the channel is shut rather than caught.
 //
 // Every other hook name is still caught, because nothing occupies those; see
 // TestAnUnmanagedTemplateHookArrivingDuringARepairIsRefused, which is the same
