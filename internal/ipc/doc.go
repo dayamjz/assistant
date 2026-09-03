@@ -135,9 +135,13 @@
 // without authority is the hazard the frame limit already exists for.
 // Exceeding either bound is a refusal naming the limit and the current count,
 // never a silent drop, and a slot frees when a stream ends or a call is
-// answered. The bound on requests is applied without waiting: the goroutine
-// that would wait is the one reading the connection, so waiting would stop the
-// connection rather than pace it.
+// answered. A request's slot is taken before its authority is decided and held
+// until its answer has been written, so what the bound counts is everything a
+// request costs this connection rather than the handler call inside it: a
+// caller that stops reading cannot leave answers piling up behind a count that
+// reads as zero. The bound is applied without waiting: the goroutine that would
+// wait is the one reading the connection, so waiting would stop the connection
+// rather than pace it.
 //
 // The residual gap is named rather than papered over: these bounds are per
 // connection, and Serve accepts connections without bounding how many. A caller

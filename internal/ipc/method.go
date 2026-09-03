@@ -1,5 +1,7 @@
 package ipc
 
+import "fmt"
+
 // Method names one call the service serves. The set is closed: a name not in
 // the table below is refused with ErrUnknownMethod rather than reaching a
 // handler, so a client running a newer build learns that this service does not
@@ -108,20 +110,43 @@ var specs = []Spec{
 	{MethodEventsSubscribe, KindStream, AccessOpen, "Open the event stream."},
 }
 
-// specByMethod indexes the table. A duplicate name would make one row
-// unreachable and would make the table disagree with itself about a method's
-// access, so building the index panics on one rather than letting the last row
-// quietly win.
+// specByMethod indexes the table, refusing at build time a table this server
+// could not serve as written.
 var specByMethod = func() map[Method]Spec {
-	m := make(map[Method]Spec, len(specs))
-	for _, s := range specs {
-		if _, dup := m[s.Method]; dup {
-			panic("ipc: method table declares " + string(s.Method) + " twice")
-		}
-		m[s.Method] = s
+	m, err := indexSpecs(specs)
+	if err != nil {
+		panic(err.Error())
 	}
 	return m
 }()
+
+// indexSpecs indexes a method table, or reports what makes it unservable.
+//
+// A duplicate name would make one row unreachable and would make the table
+// disagree with itself about a method's access, so it is refused rather than
+// letting the last row quietly win.
+//
+// A streaming method that is restricted is refused too, and that one is about
+// where a decision runs rather than about the table. Opening a stream is
+// ordered against a cancel that may follow it on the same connection, so the
+// server opens it on the goroutine that reads that connection, and deciding
+// containment there would put a caller's Ancestry on the path that reads every
+// other request on it. Serving such a method needs the stream path to carry its
+// own authorization the way a request already does, so the table may not
+// declare one until it can.
+func indexSpecs(rows []Spec) (map[Method]Spec, error) {
+	m := make(map[Method]Spec, len(rows))
+	for _, s := range rows {
+		if _, dup := m[s.Method]; dup {
+			return nil, fmt.Errorf("ipc: method table declares %q twice", s.Method)
+		}
+		if s.Kind == KindStream && s.Access == AccessRestricted {
+			return nil, fmt.Errorf("ipc: %q opens a stream and is restricted, which the server would have to decide on the goroutine reading the connection", s.Method)
+		}
+		m[s.Method] = s
+	}
+	return m, nil
+}
 
 // Methods returns every method the service serves, in the order the table
 // declares them.

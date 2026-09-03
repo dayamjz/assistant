@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -1352,4 +1354,232 @@ func TestAnEscapeHeavyPayloadAtTheBoundStillTravels(t *testing.T) {
 	if string(e.Payload) != string(payload) {
 		t.Errorf("the payload arrived %d bytes long, want the %d published", len(e.Payload), len(payload))
 	}
+}
+
+// slowAncestry answers containment only when the test lets it, which is what a
+// resolver that reads a process tree and asks which runs are active does under
+// load. It panics instead when told to.
+type slowAncestry struct {
+	entered chan struct{}
+	release chan struct{}
+	panics  bool
+}
+
+func (a *slowAncestry) Contained(ctx context.Context, _ ipc.Credentials) (ipc.Containment, error) {
+	if a.panics {
+		panic("an ancestry bug")
+	}
+	select {
+	case a.entered <- struct{}{}:
+	default:
+	}
+	select {
+	case <-a.release:
+		return ipc.Containment{}, nil
+	case <-ctx.Done():
+		return ipc.Containment{}, ctx.Err()
+	}
+}
+
+// TestASlowAncestryDoesNotStopTheConnection covers where containment is
+// decided. Resolving it is the caller's work, and doing it on the goroutine
+// that reads the connection would stop every other request, cancel and stream
+// on that connection for as long as it takes.
+func TestASlowAncestryDoesNotStopTheConnection(t *testing.T) {
+	ancestry := &slowAncestry{entered: make(chan struct{}, 1), release: make(chan struct{})}
+	h := serveOnSocket(t, func(c *ipc.ServerConfig) { c.Ancestry = ancestry })
+	c := h.dial(t, ipc.ClientConfig{})
+	ctx, cancel := callCtx(t)
+	defer cancel()
+
+	stream, err := c.Subscribe(ctx, nil)
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	defer stream.Close()
+	if first, err := stream.Recv(ctx); err != nil || first.Type != "stream.gap" {
+		t.Fatalf("first delivery = %q (err %v), want the opening gap marker", first.Type, err)
+	}
+
+	restricted := make(chan error, 1)
+	go func() { restricted <- c.Call(ctx, "run.start", nil, nil) }()
+	select {
+	case <-ancestry.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the restricted call never reached the ancestry")
+	}
+
+	// The connection is still reading while that decision is outstanding.
+	if err := c.Call(ctx, "health", nil, nil); err != nil {
+		t.Fatalf("an open call while an ancestry is working = %v, want it answered", err)
+	}
+	publish(t, h.events, state("meanwhile", 2))
+	if e, err := stream.Recv(ctx); err != nil || label(t, e) != "meanwhile" {
+		t.Fatalf("delivery = %+v (err %v), want the stream still served", e, err)
+	}
+
+	close(ancestry.release)
+	if err := <-restricted; err != nil {
+		t.Fatalf("the restricted call = %v, want it served once the ancestry answered", err)
+	}
+}
+
+// TestAPanickingAncestryCostsOneRequest holds the containment the Handler
+// contract states, for the other piece of caller-supplied code reached through
+// the same configuration.
+func TestAPanickingAncestryCostsOneRequest(t *testing.T) {
+	reported := make(chan any, 1)
+	h := serveOnSocket(t, func(c *ipc.ServerConfig) {
+		c.Ancestry = &slowAncestry{panics: true}
+		c.MaxInFlight = 1
+		c.ReportPanic = func(value any, _ []byte) {
+			select {
+			case reported <- value:
+			default:
+			}
+		}
+	})
+	c := h.dial(t, ipc.ClientConfig{})
+	ctx, cancel := callCtx(t)
+	defer cancel()
+
+	if err := c.Call(ctx, "run.start", nil, nil); !errors.Is(err, ipc.ErrInternal) {
+		t.Fatalf("Call whose ancestry panicked = %v, want ErrInternal", err)
+	}
+	select {
+	case value := <-reported:
+		if value != "an ancestry bug" {
+			t.Errorf("the reporter saw %v, want the value the ancestry panicked with", value)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the panic was contained without being reported")
+	}
+	if err := c.Call(ctx, "health", nil, nil); err != nil {
+		t.Fatalf("a later Call = %v, want the connection and its in-flight slot intact", err)
+	}
+}
+
+// scriptedConn is a connection whose peer hands the service the frames a test
+// gives it, takes a few answers, and then stops reading, which is what a caller
+// that walks away from a connection whose buffers then fill looks like from the
+// service.
+type scriptedConn struct {
+	requests chan []byte
+	absorb   int
+	stuck    chan struct{}
+	closed   chan struct{}
+	once     sync.Once
+	pending  []byte
+
+	mu     sync.Mutex
+	writes int
+}
+
+func newScriptedConn(requests, absorb int) *scriptedConn {
+	return &scriptedConn{
+		requests: make(chan []byte, requests),
+		absorb:   absorb,
+		stuck:    make(chan struct{}, 1),
+		closed:   make(chan struct{}),
+	}
+}
+
+func (c *scriptedConn) Read(p []byte) (int, error) {
+	if len(c.pending) == 0 {
+		select {
+		case line := <-c.requests:
+			c.pending = line
+		case <-c.closed:
+			return 0, io.EOF
+		}
+	}
+	n := copy(p, c.pending)
+	c.pending = c.pending[n:]
+	return n, nil
+}
+
+func (c *scriptedConn) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	c.writes++
+	taken := c.writes <= c.absorb
+	c.mu.Unlock()
+	if taken {
+		return len(p), nil
+	}
+	select {
+	case c.stuck <- struct{}{}:
+	default:
+	}
+	<-c.closed
+	return 0, io.ErrClosedPipe
+}
+
+func (c *scriptedConn) Close() error {
+	c.once.Do(func() { close(c.closed) })
+	return nil
+}
+
+func (c *scriptedConn) LocalAddr() net.Addr              { return dummyAddr{} }
+func (c *scriptedConn) RemoteAddr() net.Addr             { return dummyAddr{} }
+func (c *scriptedConn) SetDeadline(time.Time) error      { return nil }
+func (c *scriptedConn) SetReadDeadline(time.Time) error  { return nil }
+func (c *scriptedConn) SetWriteDeadline(time.Time) error { return nil }
+
+// TestTheInFlightCapCountsAnswersNobodyIsReading covers the case the cap exists
+// for. A caller that stops reading leaves every answer stuck in the write, so a
+// slot released at the handler's return would let it accumulate one goroutine
+// and one encoded answer per request behind a count that reads as zero. Holding
+// the slot across the write is what makes the cap the real bound: as many
+// requests are served as there are slots, and the rest are refused.
+//
+// The requests are sent one at a time, each after the one before it reached the
+// handler, so what the cap does is measured rather than how fast the reader
+// outruns the goroutines it starts.
+func TestTheInFlightCapCountsAnswersNobodyIsReading(t *testing.T) {
+	const requests, slots = 8, 4
+	handler := &recordingHandler{}
+	srv, err := ipc.NewServer(ipc.ServerConfig{
+		Handler:     handler,
+		Ancestry:    &recordingAncestry{},
+		Events:      publisher(t, ipc.PublisherConfig{}),
+		MaxInFlight: slots,
+	})
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	// The peer takes nothing at all, so every answer is stuck from the first.
+	conn := newScriptedConn(requests, 0)
+	l := &pipeListener{conn: conn, done: make(chan struct{})}
+	go srv.Serve(l)
+	t.Cleanup(func() {
+		srv.Close()
+		l.Close()
+		conn.Close()
+	})
+
+	served := 0
+	for id := 1; id <= requests; id++ {
+		conn.requests <- []byte(fmt.Sprintf(`{"id":%d,"method":"status"}`+"\n", id))
+		if !reaches(handler, served+1) {
+			break
+		}
+		served++
+	}
+	if served != slots {
+		t.Errorf("%d of %d requests reached the handler, want the %d the cap allows to be outstanding at once", served, requests, slots)
+	}
+}
+
+// reaches waits for the handler to have been reached want times, and reports
+// whether it was. Not reaching it is an answer here rather than a failure: it
+// is how a refused request looks from outside.
+func reaches(h *recordingHandler, want int) bool {
+	deadline := time.Now().Add(time.Second)
+	for h.count() < want {
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	return true
 }

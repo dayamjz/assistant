@@ -73,6 +73,13 @@ type Ancestry interface {
 	// Contained reports whether the process named by c is inside an active
 	// validation stage. An error is a fact that could not be established, and
 	// the server refuses the request rather than serving it on an assumption.
+	//
+	// It is called on the goroutine serving the request it decides, so it may
+	// take as long as resolving a process tree takes without holding up
+	// anything else on that connection, and it is counted against
+	// ServerConfig.MaxInFlight while it does. A panic here costs that one
+	// request, exactly as a panic in a Handler does: it is recovered, reported
+	// through ServerConfig.ReportPanic, and answered as an internal error.
 	Contained(ctx context.Context, c Credentials) (Containment, error)
 }
 
@@ -353,7 +360,7 @@ func (c *conn) serve() {
 // request of the peer's, and the service refuses a request that arrives with
 // that identifier so nothing else can claim it.
 func (c *conn) reportConnection(cause error) {
-	_ = c.w.write(frame{ID: reservedID, Error: newError("", cause)})
+	_ = c.w.write(c.ctx, frame{ID: reservedID, Error: newError("", cause)})
 }
 
 // dispatch serves one request frame.
@@ -364,14 +371,23 @@ func (c *conn) dispatch(f frame) {
 		return
 	}
 	peer := c.peer.withMarker(f.Marker)
-	if err := c.authorize(spec, peer); err != nil {
-		c.answer(f.ID, frame{ID: f.ID, Error: newError(f.Method, err)})
-		return
-	}
 	if spec.Kind == KindStream {
+		// A stream is authorized here rather than on a goroutine of its own,
+		// because opening it has to be ordered against a cancel that may
+		// follow it on this connection. Nothing a caller supplied runs here:
+		// the method table refuses a streaming method that is restricted, so
+		// this decides an open method, which is a comparison.
+		if err := c.authorize(spec, peer); err != nil {
+			c.answer(f.ID, frame{ID: f.ID, Error: newError(f.Method, err)})
+			return
+		}
 		c.startStream(f)
 		return
 	}
+	// The slot is taken before authority is decided, because deciding it is
+	// the caller-supplied work this cap exists to bound. A request refused for
+	// containment therefore holds a slot for as long as that decision takes,
+	// and releases it the same way a served one does.
 	if err := c.beginRequest(); err != nil {
 		c.answer(f.ID, frame{ID: f.ID, Error: newError(f.Method, err)})
 		return
@@ -379,12 +395,13 @@ func (c *conn) dispatch(f frame) {
 	c.wg.Add(1)
 	go func() {
 		defer c.wg.Done()
-		result, err := c.invoke(f, peer)
-		// The slot is returned before the answer is written, so a caller
-		// holding its answer is a caller whose slot is already free rather
-		// than one racing the write that delivered it. A handler that panicked
-		// returns through here too, so its slot comes back like any other.
-		c.endRequest()
+		// The slot is held until this goroutine is done, the answer included.
+		// Releasing it at the handler's return would leave the cap reading as
+		// satisfied while a caller that stopped reading accumulated one
+		// blocked write and one encoded answer per request, which is the
+		// unbounded resource the cap exists to refuse.
+		defer c.endRequest()
+		result, err := c.serveRequest(f, spec, peer)
 		if err != nil {
 			c.answer(f.ID, frame{ID: f.ID, Error: newError(f.Method, err)})
 			return
@@ -393,21 +410,31 @@ func (c *conn) dispatch(f frame) {
 	}()
 }
 
-// invoke runs the handler, turning a panic into a refusal its caller can act on.
+// serveRequest decides authority and then serves the request, turning a panic
+// in either into a refusal its caller can act on.
 //
-// A handler's bug ends that request rather than the process: the alternative
+// Ancestry and Handler are both supplied by the same caller, and both run here
+// rather than on the goroutine reading this connection. An Ancestry resolves a
+// process tree and asks which runs are active, which is exactly the work that
+// would otherwise stop this connection from reading its next frame, answering
+// anything else, or tearing down a stream.
+//
+// A bug in either ends that request rather than the process: the alternative
 // takes down every other connection, every open stream, and the supervision of
 // every run that was going fine. The panic is reported before this returns, so
 // what it costs is one refused call rather than the evidence of the bug.
-func (c *conn) invoke(f frame, peer Peer) (result json.RawMessage, err error) {
+func (c *conn) serveRequest(f frame, spec Spec, peer Peer) (result json.RawMessage, err error) {
 	defer func() {
 		value := recover()
 		if value == nil {
 			return
 		}
 		c.srv.reportPanic(value, debug.Stack())
-		result, err = nil, fmt.Errorf("%w: the handler panicked", ErrInternal)
+		result, err = nil, fmt.Errorf("%w: serving this request panicked", ErrInternal)
 	}()
+	if err := c.authorize(spec, peer); err != nil {
+		return nil, err
+	}
 	return c.srv.cfg.Handler.Serve(c.ctx, Request{Method: f.Method, Params: f.Params, Peer: peer})
 }
 
@@ -480,7 +507,7 @@ var minFrameBytes = func() int {
 	widest := 0
 	for _, f := range fixedRefusals() {
 		var counted countingWriter
-		if err := newFrameWriter(&counted, DefaultMaxFrameBytes).write(f); err != nil {
+		if err := newFrameWriter(&counted, DefaultMaxFrameBytes).write(context.Background(), f); err != nil {
 			panic("ipc: a fixed refusal does not fit in a default frame: " + err.Error())
 		}
 		if int(counted) > widest {
@@ -515,7 +542,7 @@ func MinFrameBytes() int { return minFrameBytes }
 // NewServer refuses a frame limit too small to carry it, so on a server that was
 // built it fits whatever the answer that did not.
 func (c *conn) answer(id uint64, f frame) {
-	err := c.w.write(f)
+	err := c.w.write(c.ctx, f)
 	if err == nil {
 		return
 	}
@@ -528,7 +555,7 @@ func (c *conn) answer(id uint64, f frame) {
 	if errors.Is(err, ErrFrameTooLarge) {
 		code = CodeFrameTooLarge
 	}
-	_ = c.w.write(undeliverableAnswer(id, code))
+	_ = c.w.write(c.ctx, undeliverableAnswer(id, code))
 }
 
 // authorize applies the access class of a method to a peer.
@@ -582,7 +609,7 @@ func (c *conn) startStream(f frame) {
 	}
 	c.streams[f.ID] = sub
 	c.mu.Unlock()
-	if err := c.w.write(frame{ID: f.ID, Result: json.RawMessage("{}")}); err != nil {
+	if err := c.w.write(c.ctx, frame{ID: f.ID, Result: json.RawMessage("{}")}); err != nil {
 		c.endStream(f.ID, ErrStreamClosed)
 		return
 	}
@@ -610,7 +637,7 @@ func (c *conn) pump(id uint64, sub *Subscription) {
 			return
 		}
 		event := e
-		err = c.w.write(frame{ID: id, Event: &event})
+		err = c.w.write(c.ctx, frame{ID: id, Event: &event})
 		switch {
 		case err == nil:
 		case !unbuildable(err):
@@ -649,7 +676,7 @@ func (c *conn) finishStream(id uint64, cause error) {
 	if cause != nil && !errors.Is(cause, ErrStreamClosed) && !errors.Is(cause, context.Canceled) {
 		f.Error = newError(MethodEventsSubscribe, cause)
 	}
-	_ = c.w.write(f)
+	_ = c.w.write(c.ctx, f)
 }
 
 // endStream closes a stream without reporting anything back, for the paths

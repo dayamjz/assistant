@@ -2,6 +2,7 @@ package ipc
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -21,7 +22,7 @@ func TestFrameRoundTrip(t *testing.T) {
 		{ID: 3, Done: true},
 	}
 	for _, f := range sent {
-		if err := w.write(f); err != nil {
+		if err := w.write(context.Background(), f); err != nil {
 			t.Fatalf("write: %v", err)
 		}
 	}
@@ -96,7 +97,7 @@ func TestWriteRefusesAFrameOverTheLimit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	err = w.write(frame{ID: 1, Event: &Event{Type: TypeLogLine, Payload: payload}})
+	err = w.write(context.Background(), frame{ID: 1, Event: &Event{Type: TypeLogLine, Payload: payload}})
 	if !errors.Is(err, ErrFrameTooLarge) {
 		t.Fatalf("write = %v, want ErrFrameTooLarge", err)
 	}
@@ -180,7 +181,7 @@ func TestEveryCodeIsStatedHere(t *testing.T) {
 func TestErrorCodesSurviveTheWire(t *testing.T) {
 	for code, sentinel := range wireSentinels {
 		var buf bytes.Buffer
-		if err := newFrameWriter(&buf, 0).write(frame{ID: 1, Error: &Error{Code: code, Message: "m"}}); err != nil {
+		if err := newFrameWriter(&buf, 0).write(context.Background(), frame{ID: 1, Error: &Error{Code: code, Message: "m"}}); err != nil {
 			t.Fatalf("write: %v", err)
 		}
 		f, err := newFrameReader(&buf, 0).read()
@@ -218,7 +219,7 @@ func TestEverySentinelSurvivesTheWire(t *testing.T) {
 		// about it, which is the shape codeFor really classifies.
 		wrapped := fmt.Errorf("while doing the work: %w", sentinel)
 		var buf bytes.Buffer
-		if err := newFrameWriter(&buf, 0).write(frame{ID: 1, Error: newError("status", wrapped)}); err != nil {
+		if err := newFrameWriter(&buf, 0).write(context.Background(), frame{ID: 1, Error: newError("status", wrapped)}); err != nil {
 			t.Fatalf("write: %v", err)
 		}
 		f, err := newFrameReader(&buf, 0).read()
@@ -246,7 +247,7 @@ func TestTheWriterSaysWhichSideAFailureCameFrom(t *testing.T) {
 	var kept bytes.Buffer
 	built := map[string]frame{"a frame past the limit": oversized, "a frame that does not encode": unencodable}
 	for name, f := range built {
-		err := newFrameWriter(&kept, 512).write(f)
+		err := newFrameWriter(&kept, 512).write(context.Background(), f)
 		if err == nil {
 			t.Fatalf("%s was written", name)
 		}
@@ -257,15 +258,15 @@ func TestTheWriterSaysWhichSideAFailureCameFrom(t *testing.T) {
 			t.Errorf("%s reached the connection anyway", name)
 		}
 	}
-	if !errors.Is(newFrameWriter(&kept, 512).write(oversized), ErrFrameTooLarge) {
+	if !errors.Is(newFrameWriter(&kept, 512).write(context.Background(), oversized), ErrFrameTooLarge) {
 		t.Error("a frame past the limit no longer names ErrFrameTooLarge")
 	}
-	if !errors.Is(newFrameWriter(&kept, 512).write(unencodable), ErrInternal) {
+	if !errors.Is(newFrameWriter(&kept, 512).write(context.Background(), unencodable), ErrInternal) {
 		t.Error("a frame that does not encode no longer names ErrInternal")
 	}
 
 	// A connection that failed is the other side, and stays there.
-	err := newFrameWriter(failingWriter{}, 0).write(frame{ID: 3, Result: json.RawMessage("null")})
+	err := newFrameWriter(failingWriter{}, 0).write(context.Background(), frame{ID: 3, Result: json.RawMessage("null")})
 	if err == nil {
 		t.Fatal("a write to a failed connection reported success")
 	}

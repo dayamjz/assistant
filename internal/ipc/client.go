@@ -30,14 +30,28 @@ type ClientConfig struct {
 
 // Client is one connection to the service.
 //
-// It is safe for concurrent use. Replies are matched to calls by identifier,
-// so a long call does not hold up a short one on the same connection, and a
-// stream does not hold up either.
+// It is safe for concurrent use. Replies are matched to calls by identifier, so
+// a long call does not hold up a short one on the same connection, and a stream
+// does not hold up either. Requests share one connection, so a peer that has
+// stopped reading blocks whichever caller's write is already in progress, and
+// what every other caller then waits on is its own context rather than that
+// write.
+//
+// The caller whose write is in progress is the one its context cannot release,
+// because abandoning a write midway would leave a partial line on a connection
+// both sides read by line. Close, which closes the connection under that write,
+// is what releases it.
 type Client struct {
 	conn    net.Conn
 	w       *frameWriter
 	marker  Marker
 	backlog int
+
+	// ctx ends when this client does. It is what the writes this client makes
+	// for its own bookkeeping, which have no caller's context to wait under,
+	// wait on instead.
+	ctx    context.Context
+	cancel context.CancelFunc
 
 	mu      sync.Mutex
 	next    uint64
@@ -66,9 +80,12 @@ func NewClient(conn net.Conn, cfg ClientConfig) *Client {
 	if marker == "" {
 		marker = LocalMarker(os.Getenv)
 	}
+	ctx, cancel := context.WithCancel(context.Background())
 	c := &Client{
 		conn:    conn,
 		w:       newFrameWriter(conn, cfg.MaxFrameBytes),
+		ctx:     ctx,
+		cancel:  cancel,
 		marker:  marker,
 		backlog: cfg.Backlog,
 		calls:   make(map[uint64]chan frame),
@@ -101,7 +118,7 @@ func (c *Client) Call(ctx context.Context, method Method, params, out any) error
 		return err
 	}
 	defer c.unregister(id)
-	if err := c.w.write(frame{ID: id, Method: method, Marker: c.marker, Params: body}); err != nil {
+	if err := c.w.write(ctx, frame{ID: id, Method: method, Marker: c.marker, Params: body}); err != nil {
 		return fmt.Errorf("ipc: sending %s: %w", method, err)
 	}
 	select {
@@ -157,7 +174,7 @@ func (c *Client) Subscribe(ctx context.Context, params any) (*Stream, error) {
 	}
 	c.streams[id] = sub
 	c.mu.Unlock()
-	if err := c.w.write(frame{ID: id, Method: MethodEventsSubscribe, Marker: c.marker, Params: body}); err != nil {
+	if err := c.w.write(ctx, frame{ID: id, Method: MethodEventsSubscribe, Marker: c.marker, Params: body}); err != nil {
 		c.unregister(id)
 		c.dropStream(id, ErrStreamClosed)
 		// A frame refused before it was written leaves nothing at the service,
@@ -197,14 +214,14 @@ func (s *Stream) Recv(ctx context.Context) (Event, error) { return s.sub.Recv(ct
 // Close detaches the stream and tells the service to stop sending it.
 func (s *Stream) Close() error {
 	s.c.dropStream(s.id, ErrStreamClosed)
-	return s.c.w.write(frame{ID: s.id, Cancel: true})
+	return s.c.w.write(s.c.ctx, frame{ID: s.id, Cancel: true})
 }
 
 // cancelStream tells the service to stop sending a stream this client will not
 // read. It is best effort by nature: the connection may already be gone, and
 // there is nothing further to do about that from here.
 func (c *Client) cancelStream(id uint64) {
-	_ = c.w.write(frame{ID: id, Cancel: true})
+	_ = c.w.write(c.ctx, frame{ID: id, Cancel: true})
 }
 
 // Close ends the connection. Calls waiting on an answer and streams waiting on
@@ -327,6 +344,7 @@ func (c *Client) finish(cause error) {
 	}
 	c.calls = make(map[uint64]chan frame)
 	c.mu.Unlock()
+	c.cancel()
 	for _, sub := range subs {
 		sub.finish(cause)
 	}

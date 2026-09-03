@@ -3,11 +3,11 @@ package ipc
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"sync"
 )
 
 // DefaultMaxFrameBytes bounds one frame. Input from a local socket is still
@@ -122,10 +122,15 @@ func trimEOL(b []byte) []byte {
 	return b
 }
 
-// frameWriter writes newline-delimited frames. Writes are serialized, so a
-// frame from one goroutine never interleaves with a frame from another.
+// frameWriter writes newline-delimited frames. One writer holds the
+// connection at a time, so a frame from one goroutine never interleaves with
+// a frame from another, and waiting for that turn is bounded by the waiter's
+// context rather than by the write ahead of it.
 type frameWriter struct {
-	mu    sync.Mutex
+	// turn holds one token. Taking it is holding the connection, and taking
+	// it through a select is what lets a waiter give up on its own terms
+	// when the peer has stopped reading whatever is already being written.
+	turn  chan struct{}
 	w     io.Writer
 	limit int
 }
@@ -136,7 +141,7 @@ func newFrameWriter(w io.Writer, limit int) *frameWriter {
 	if limit <= 0 {
 		limit = DefaultMaxFrameBytes
 	}
-	return &frameWriter{w: w, limit: limit}
+	return &frameWriter{turn: make(chan struct{}, 1), w: w, limit: limit}
 }
 
 // frameError says a frame could not be built. Everything the writer decides
@@ -165,7 +170,14 @@ func unbuildable(err error) bool {
 	return errors.As(err, &fe)
 }
 
-// write encodes f and writes it as one line.
+// write encodes f and writes it as one line, waiting for its turn at the
+// connection no longer than ctx allows.
+//
+// The frame is built before that wait, so a frame that cannot be built is
+// refused without taking a turn from anyone. The write itself is not bounded
+// by ctx: abandoning one midway would leave a partial line on a connection
+// both sides read by line, so closing the connection is what releases a write
+// whose peer has stopped reading.
 //
 // A frame past the limit is refused here rather than written for the peer to
 // choke on, because the peer's only recovery is to drop the connection. PRD
@@ -177,13 +189,17 @@ func unbuildable(err error) bool {
 // about the frame rather than about the connection, and both come back as a
 // frameError, so a caller can tell them from a connection that went away and
 // answer with something smaller instead of leaving its peer waiting.
-func (fw *frameWriter) write(f frame) error {
+func (fw *frameWriter) write(ctx context.Context, f frame) error {
 	body, err := fw.build(f)
 	if err != nil {
 		return frameError{cause: err}
 	}
-	fw.mu.Lock()
-	defer fw.mu.Unlock()
+	select {
+	case fw.turn <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	defer func() { <-fw.turn }()
 	_, err = fw.w.Write(body)
 	return err
 }
