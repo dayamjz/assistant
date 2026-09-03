@@ -143,11 +143,12 @@
 // It was written down as a rule and then violated twice more, which says the
 // rule was not what was missing. What was missing is a mechanism, so there is
 // one now. Every operation here obtains its gate from one unexported seam and
-// takes that handle rather than a path: no exported entry point takes a path,
-// and the seam is what resolves the repository, reads its contents once, asks
-// and refuses on the ownership question, and leaves no gate it looked at
-// accepting pushes with nothing checking them. An operation added later cannot
-// skip any of that, because it cannot obtain a gate without going through it.
+// takes that handle rather than a path: no exported entry point takes a gate's
+// path, only the home and the working copy the gate is asked about, and the
+// seam is what resolves the repository, reads its contents once, asks and
+// refuses on the ownership question, and leaves no gate it looked at accepting
+// pushes with nothing checking them. An operation added later cannot skip any
+// of that, because it cannot obtain a gate without going through it.
 // This repository has solved this class twice the same way: internal/agents
 // puts P4 in a type split rather than in a rule callers follow, and
 // internal/safety makes an anchor's provenance a constructor rather than a

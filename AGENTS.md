@@ -104,15 +104,16 @@ Each has cost this repository more than one round of review.
   move or a copy. It composes `internal/vcs` and builds no command lines, and it
   composes `internal/store` for the ownership index without opening a database.
   Two things there are mechanism rather than rule, because this package wrote
-  both rules down and then broke them. No exported operation takes a path: one
-  unexported seam resolves the gate, settles who it belongs to, and seals it,
-  and an operation that cannot obtain a handle cannot skip any of that. And
-  nothing this package produced counts as evidence of ownership, so neither the
-  `assistant` remote nor the path hash is weighed; the question is asked of the
-  store's ownership index and the gate's own record, and every answer either
-  gives is checked against the working copy actually standing there. Read its
-  `doc.go` before changing any of that, and for the residual gaps: a path that
-  outlives its working copy, `core.hooksPath`, and letter case in a path.
+  both rules down and then broke them. No exported operation takes a gate's
+  path, only the working copy it is asked about: one unexported seam resolves
+  the gate, settles who it belongs to, and seals it, and an operation that
+  cannot obtain a handle cannot skip any of that. And nothing this package
+  produced counts as evidence of ownership, so neither the `assistant` remote
+  nor the path hash is weighed; the question is asked of the store's ownership
+  index and the gate's own record, and every answer either gives is checked
+  against the working copy actually standing there. Read its `doc.go` before
+  changing any of that, and for the residual gaps: a path that outlives its
+  working copy, `core.hooksPath`, and letter case in a path.
 - `internal/agents` is the only package that starts an agent process. It owns
   the process tree, the per-invocation environment, and what is recorded about
   a call. P4 lives in its type split rather than in a rule callers follow:

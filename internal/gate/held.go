@@ -34,7 +34,9 @@ const (
 // contents read once, the ownership question is asked and refused on, and every
 // gate the resolution looked at is left with an admission hook. An operation
 // added later cannot skip any of it, because it cannot get a held without going
-// through the seam, and no exported entry point here takes a path.
+// through the seam, and no exported entry point here takes a gate's path: a
+// Spec names the home and the working copy, and which gate those resolve to is
+// the seam's to work out.
 //
 // This package kept meeting the opposite arrangement, where each obligation sat
 // at the call that first needed it and the sibling call added afterwards did

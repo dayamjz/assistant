@@ -10,7 +10,7 @@ until it has been independently reviewed, tested, documented, and linted.
 ## Status
 
 Early. The product requirements are settled and checked in at
-[`docs/prd.html`](docs/prd.html). Nine pieces exist so far. The execution
+[`docs/prd.html`](docs/prd.html). Ten pieces exist so far. The execution
 engine in `internal/graph` is the first: the graph builder with its
 construction-time checks, an executor with halt points and bounded cycles, and
 checkpoints behind a four-operation store. The second is `internal/findings`,
@@ -34,7 +34,12 @@ the `gh` command line, and a checks model in which an empty check list is not a
 pass. The ninth is `internal/ipc`, the local protocol between the command line
 and the background service: the method table, the event taxonomy and its
 bounded stream, a client, a server, and peer identification the kernel answers
-for. Nothing joins them into a pipeline yet, so there is still nothing to run.
+for. The tenth is `internal/gate`, which owns the local bare repository a push
+is validated through: where it lives, the admission and notification hooks that
+make a push mean something, its identity across a move or a copy, and one seam
+every operation obtains its gate from, so no operation can skip the ownership
+question that an index in `internal/store` answers. Nothing joins them into a
+pipeline yet, so there is still nothing to run.
 
 ## The two promises
 
@@ -63,10 +68,11 @@ working as it always did.
 | `internal/config` | The configuration schema: layers, defaults, merge, validation, path matcher. |
 | `internal/findings` | The stage vocabulary: findings, actions, reports, and parsing of agent output. |
 | `internal/forge` | The only package that talks to a code host: the provider interface over pull requests, mergeability, and checks, and the GitHub adapter over the `gh` command line. |
+| `internal/gate` | The local bare repository a push is validated through: where it lives, its two hooks, its identity across a move or a copy, and the ownership question every operation asks before it adopts or deletes one. |
 | `internal/graph` | The execution engine: nodes, edges, bounds, halt points, checkpoints. |
 | `internal/ipc` | The local protocol between the command line and the background service: the method table, the event taxonomy, the bounded stream, the client and the server, and peer identification. |
 | `internal/safety` | The data-loss policy over git: whether a branch update may proceed, on what anchor, and when to refuse. |
-| `internal/store` | The only package that opens the database: the schema, its additive migrations, and typed accessors for repositories, runs, stages, rounds, checkpoints, tasks, task state and events, and holds. |
+| `internal/store` | The only package that opens the database: the schema, its additive migrations, and typed accessors for repositories, runs, stages, rounds, checkpoints, tasks, task state and events, holds, and the gate ownership index. |
 | `internal/vcs` | The only package that invokes git: typed operations over repositories, worktrees, refs, diffs, and remotes. |
 | `docs/prd.html` | The product requirements. The specification this code answers to. |
 
@@ -79,8 +85,9 @@ make lint      # vet and golangci-lint
 make check     # lint and test, what CI runs
 ```
 
-`make test` exercises `internal/vcs` against a real git, so it needs a git
-binary on `PATH`; that package's comment states the minimum version it needs.
+`make test` exercises `internal/vcs` and `internal/gate` against a real git, so
+it needs a git binary on `PATH`; `internal/vcs`'s package comment states the
+minimum version it needs.
 
 `make lint` requires golangci-lint from the v2 series, the line that can read
 this module's `.golangci.yml`. It refuses when the linter is missing or comes
