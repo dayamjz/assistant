@@ -74,3 +74,87 @@ review:
         A document must mean one thing: duplicate members, flat dotted spellings,
         unrecognized keys, and nulls are refusals, and a refusal names the key,
         and the value when a value is what was refused.
+
+    - path: "internal/store/**"
+      instructions: |
+        This package owns the database, so a schema change and a read-back of an
+        old row are where mistakes land.
+        A shipped migration is never edited; a new one is appended. The check
+        against the recorded copy must compare digested text, not a count, since
+        an in-place edit keeps the count. Rows recorded before digests existed
+        compare on name and count alone, so do not read that as the rule relaxed.
+        Additivity is checked against sqlite's own catalog after the statements
+        run, never against the migration's text.
+        A column added later reads back as unknown for old rows. A caller may
+        substitute a zero on purpose, but nothing here may hand one out.
+        No SQL outside this package: the answer to a needed query is an accessor.
+
+    - path: "internal/agents/**"
+      instructions: |
+        P4 lives in the types here, not in a rule callers follow. A review
+        invocation must have nowhere to put a session: no session field, no
+        session parameter, no option that supplies one. Only the fixer carries a
+        session across rounds, and it takes no purpose. A new entry point that
+        blurs that line is the defect, wherever it is called from.
+        A Record carries no prompt, no agent output, no diff, no credential, and
+        the type must keep having no field for one; that text belongs on the
+        invocation error instead.
+        Agent output is parsed by internal/findings only, per P14, and output
+        that yields no valid report is an error, never a zero report with nil.
+
+    - path: "internal/safety/**"
+      instructions: |
+        This package holds P6, and the trap is anchoring to a tip read just
+        before pushing, which always succeeds.
+        An anchor is an Observation, and only Guard.Observe or
+        RestoreObservedFromCheckpoint may produce one. A restored anchor's
+        provenance rests on the checkpoint boundary rather than on the type, so
+        a new path that builds a record from a live read defeats it.
+        A target that moved since the observation is refused even where nothing
+        would be lost.
+        Every fact a decision rests on is established or the update is refused:
+        an unreadable remote, an unresolvable revision, or a comparison git could
+        not answer refuse, and a failed comparison must not report an empty list
+        of commits that would be lost.
+
+    - path: "internal/forge/**"
+      instructions: |
+        Everything provider-specific stays behind Provider, and git stays in
+        internal/vcs. The checks model is the part worth reading closely.
+        An empty check list is VerdictNoChecks, not a pass. Only a
+        NoCIDeclaration built from resolved configuration turns it green, and the
+        declaration travels on the result so the evidence stays inspectable.
+        Once a check exists the declaration decides nothing.
+        A cancelled check is settled and does not pass. An unrecognized state is
+        not settled, so the caller keeps waiting; the timeout that bounds that
+        wait belongs to the caller.
+        A provider that cannot answer returns a typed refusal, never an empty
+        list of checks or a missing pull request.
+
+    - path: "internal/ipc/**"
+      instructions: |
+        Event class is the whole of the overflow policy, so check what a new
+        event type is classified as; an unrecognized type is state on purpose.
+        Activity is discarded first. A state event may be evicted only when the
+        eviction collapses into the sticky gap marker, which is delivered ahead
+        of whatever the queue already holds, so a consumer learns it is missing
+        something before applying a delta. Control is never discarded: a
+        subscription that cannot deliver one ends the stream, and the stalled and
+        undeliverable errors stay distinct values.
+        Authority over a request comes from Credentials read off the socket,
+        never from Marker, which a caller writes for itself.
+
+    - path: "internal/gate/**"
+      instructions: |
+        This package broke its own written rules until they were given
+        mechanisms, so watch for a rule reintroduced as a paragraph.
+        No exported operation takes a gate's path. Every one obtains its handle
+        from the single seam that resolves the gate, settles ownership, and seals
+        it, so an operation added later cannot skip any of that.
+        Nothing this package produced is evidence of ownership: neither the
+        assistant remote nor the path hash is weighed. Ownership is asked of the
+        store's index and the gate's own record, and every answer either gives is
+        checked against the working copy actually standing there.
+        Whatever a guard or a message owes an operator on one side of an
+        operation, its sibling owes too, and a refusal names an action that
+        succeeds from where the reader stands rather than one that refuses again.
