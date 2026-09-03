@@ -14,10 +14,26 @@
 //
 // The important part of the data model is not the field list; it is which
 // records answer what is true now and which record what happened. A repository,
-// a run, a stage result, a checkpoint, a task, a task state, and a hold are
-// authoritative: each has one owner and one row, rewritten in place. A round
-// and a task event are history: appended, never revised, and no answer to any
-// present-tense question.
+// a run, a stage result, a checkpoint, a task, a task state, a hold, and a gate
+// binding are authoritative: each has one owner and one row, rewritten in
+// place. A round and a task event are history: appended, never revised, and no
+// answer to any present-tense question.
+//
+// # The gate ownership index
+//
+// GateBinding is the one record here that exists to answer a question another
+// package cannot answer for itself. PRD section 8 files a gate under a hash of
+// its working copy's path, which makes a gate findable from a path and leaves
+// the reverse, which working copies are bound to a given gate, derivable from
+// nothing. That reverse is what an operation asks before it adopts a gate or
+// deletes one, and inferring it from a single probe of a single path is what
+// this index replaces.
+//
+// It enumerates rather than decides. A binding says a working copy was bound
+// and has not been unbound since, which is a durable pointer and not a claim
+// that the working copy is still there or still names the gate. Deciding that
+// is the asking package's, and what this record buys it is the list of working
+// copies worth asking about.
 //
 // P8 says reading the last line of an event log to decide what is true now is
 // always wrong. Three things here make that mistake harder to write than to

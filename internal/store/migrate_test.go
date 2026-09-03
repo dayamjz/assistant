@@ -7,22 +7,42 @@ import (
 	"testing"
 )
 
-// extend returns the shipped schema with extra migrations appended, without
-// touching the package-level list.
+// extend returns the shipped schema with extra migrations appended, numbering
+// them from firstExtraVersion, without touching the package-level list.
+//
+// The numbering is done here rather than written into each test's migration so
+// that a test cannot spell out a version the shipped list later grows into. A
+// test that appended a version 2 of its own collided silently with the day the
+// schema gained one, and the failure read as a broken migration rather than as
+// a stale test.
 func extend(extra ...migration) []migration {
 	out := make([]migration, 0, len(schema)+len(extra))
 	out = append(out, schema...)
-	out = append(out, extra...)
+	for i, m := range extra {
+		m.version = firstExtraVersion() + i
+		out = append(out, m)
+	}
 	return out
 }
 
-// addColumn builds a migration that adds one column to the run table.
-func addColumn(version int, name, declaration string) migration {
+// firstExtraVersion is the version extend gives the first migration appended to
+// the shipped list.
+func firstExtraVersion() int { return len(schema) + 1 }
+
+// addColumn builds a migration that adds one column to the run table. It
+// carries no version: extend assigns one.
+func addColumn(name, declaration string) migration {
 	return migration{
-		version:    version,
 		name:       name,
 		statements: []string{`ALTER TABLE run ADD COLUMN ` + declaration},
 	}
+}
+
+// versioned stamps a version onto a migration, for the tests that build a list
+// by hand rather than through extend.
+func versioned(version int, m migration) migration {
+	m.version = version
+	return m
 }
 
 // runNotes reads the value of a column this package's own types do not carry,
@@ -46,7 +66,7 @@ func TestMigrationPreservesRowsAndAddsUnknownColumn(t *testing.T) {
 		t.Fatalf("AppendRound: %v", err)
 	}
 
-	if err := migrate(ctx, s.write, extend(addColumn(2, "run notes", "notes TEXT"))); err != nil {
+	if err := migrate(ctx, s.write, extend(addColumn("run notes", "notes TEXT"))); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 
@@ -98,29 +118,29 @@ func TestMigrationRefusesNonAdditiveChanges(t *testing.T) {
 			// sqlite accepts a NOT NULL column when it carries a default, so
 			// this reaches the check rather than being refused by the engine.
 			name: "not null with a default",
-			m:    addColumn(2, "not null", `notes TEXT NOT NULL DEFAULT ''`),
+			m:    addColumn("not null", `notes TEXT NOT NULL DEFAULT ''`),
 			want: "NOT NULL",
 		},
 		{
 			name: "nullable with a default",
-			m:    addColumn(2, "default", `notes TEXT DEFAULT 'none'`),
+			m:    addColumn("default", `notes TEXT DEFAULT 'none'`),
 			want: "default",
 		},
 		{
 			name: "dropping a column",
-			m: migration{version: 2, name: "drop", statements: []string{
+			m: migration{name: "drop", statements: []string{
 				`ALTER TABLE run DROP COLUMN intent_source`,
 			}},
 			want: "removes column run.intent_source",
 		},
 		{
 			name: "dropping a table",
-			m:    migration{version: 2, name: "drop table", statements: []string{`DROP TABLE round`}},
+			m:    migration{name: "drop table", statements: []string{`DROP TABLE round`}},
 			want: "removes table round",
 		},
 		{
 			name: "renaming a column",
-			m: migration{version: 2, name: "rename", statements: []string{
+			m: migration{name: "rename", statements: []string{
 				`ALTER TABLE run RENAME COLUMN intent TO purpose`,
 			}},
 			want: "removes column run.intent",
@@ -141,7 +161,7 @@ func TestMigrationRefusesNonAdditiveChanges(t *testing.T) {
 				t.Fatalf("the refusal does not say what it refused: %v", err)
 			}
 			var migrationErr *MigrationError
-			if !errors.As(err, &migrationErr) || migrationErr.Version != 2 {
+			if !errors.As(err, &migrationErr) || migrationErr.Version != firstExtraVersion() {
 				t.Fatalf("the refusal does not name the migration: %v", err)
 			}
 
@@ -157,7 +177,7 @@ func TestMigrationRefusesNonAdditiveChanges(t *testing.T) {
 			if err != nil {
 				t.Fatalf("appliedMigrations: %v", err)
 			}
-			if _, ok := applied[2]; ok {
+			if _, ok := applied[firstExtraVersion()]; ok {
 				t.Fatal("the refused migration was recorded as applied")
 			}
 		})
@@ -171,8 +191,8 @@ func TestMigrationAcceptsAnAdditiveChange(t *testing.T) {
 	s := openStore(t)
 
 	list := extend(
-		addColumn(2, "run notes", "notes TEXT"),
-		migration{version: 3, name: "new table", statements: []string{
+		addColumn("run notes", "notes TEXT"),
+		migration{name: "new table", statements: []string{
 			// A table the migration creates has no old rows, so NOT NULL and a
 			// default are both fine on it.
 			`CREATE TABLE note (id TEXT PRIMARY KEY, body TEXT NOT NULL DEFAULT '') STRICT`,
@@ -185,8 +205,8 @@ func TestMigrationAcceptsAnAdditiveChange(t *testing.T) {
 	if err != nil {
 		t.Fatalf("appliedMigrations: %v", err)
 	}
-	if len(applied) != 3 {
-		t.Fatalf("applied %d migrations, want 3", len(applied))
+	if want := len(schema) + 2; len(applied) != want {
+		t.Fatalf("applied %d migrations, want %d", len(applied), want)
 	}
 }
 
@@ -195,7 +215,7 @@ func TestMigrateTwiceIsANoOp(t *testing.T) {
 	s := openStore(t)
 	run := seedRun(t, s)
 
-	list := extend(addColumn(2, "run notes", "notes TEXT"))
+	list := extend(addColumn("run notes", "notes TEXT"))
 	if err := migrate(ctx, s.write, list); err != nil {
 		t.Fatalf("first migrate: %v", err)
 	}
@@ -253,36 +273,37 @@ func TestInterruptedMigrationReopensAndResumes(t *testing.T) {
 	run := seedRun(t, s)
 
 	broken := extend(
-		addColumn(2, "run notes", "notes TEXT"),
-		migration{version: 3, name: "broken", statements: []string{`ALTER TABLE run ADD COLUMN`}},
+		addColumn("run notes", "notes TEXT"),
+		migration{name: "broken", statements: []string{`ALTER TABLE run ADD COLUMN`}},
 	)
 	err := migrate(ctx, s.write, broken)
 	if err == nil {
 		t.Fatal("migrate accepted a migration with a broken statement")
 	}
 	var migrationErr *MigrationError
-	if !errors.As(err, &migrationErr) || migrationErr.Version != 3 {
+	if !errors.As(err, &migrationErr) || migrationErr.Version != firstExtraVersion()+1 {
 		t.Fatalf("the failure does not name the migration that failed: %v", err)
 	}
 
-	// Version 2 committed before version 3 failed, and version 3 recorded
-	// nothing, so the database is at a version rather than between two.
+	// The first appended migration committed before the second failed, and the
+	// second recorded nothing, so the database is at a version rather than
+	// between two.
 	applied, err := appliedMigrations(ctx, s.write)
 	if err != nil {
 		t.Fatalf("appliedMigrations: %v", err)
 	}
-	if _, ok := applied[2]; !ok {
-		t.Fatal("version 2 committed before version 3 failed, but is not recorded")
+	if _, ok := applied[firstExtraVersion()]; !ok {
+		t.Fatalf("version %d committed before the next one failed, but is not recorded", firstExtraVersion())
 	}
-	if _, ok := applied[3]; ok {
+	if _, ok := applied[firstExtraVersion()+1]; ok {
 		t.Fatal("the failed migration was recorded as applied")
 	}
 
 	// The database still opens, and migrating again with the statement fixed
 	// picks up where it stopped without disturbing what was already there.
 	fixed := extend(
-		addColumn(2, "run notes", "notes TEXT"),
-		addColumn(3, "broken", "extra TEXT"),
+		addColumn("run notes", "notes TEXT"),
+		addColumn("broken", "extra TEXT"),
 	)
 	if err := migrate(ctx, s.write, fixed); err != nil {
 		t.Fatalf("migrate after the interruption: %v", err)
@@ -299,7 +320,7 @@ func TestOpenRefusesADatabaseAheadOfThisBuild(t *testing.T) {
 	ctx := context.Background()
 	path := t.TempDir() + "/state.db"
 	s := openStoreAt(t, path)
-	if err := migrate(ctx, s.write, extend(addColumn(2, "run notes", "notes TEXT"))); err != nil {
+	if err := migrate(ctx, s.write, extend(addColumn("run notes", "notes TEXT"))); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
 	if err := s.Close(); err != nil {
@@ -328,9 +349,9 @@ func TestMigrateRefusesAnEditedMigration(t *testing.T) {
 
 func TestMigrateRefusesAMalformedList(t *testing.T) {
 	cases := map[string][]migration{
-		"a gap in the versions": {schema[0], addColumn(3, "gap", "notes TEXT")},
+		"a gap in the versions": {schema[0], versioned(3, addColumn("gap", "notes TEXT"))},
 		"a version out of order": {
-			addColumn(2, "second first", "notes TEXT"), schema[0],
+			versioned(2, addColumn("second first", "notes TEXT")), schema[0],
 		},
 		"a migration with no name":       {{version: 1, statements: []string{`SELECT 1`}}},
 		"a migration with no statements": {{version: 1, name: "empty"}},
@@ -368,7 +389,7 @@ func TestMigrateRefusesAMigrationEditedInPlace(t *testing.T) {
 	ctx := context.Background()
 	s := openStore(t)
 
-	applied := extend(addColumn(2, "run notes", "notes TEXT"))
+	applied := extend(addColumn("run notes", "notes TEXT"))
 	if err := migrate(ctx, s.write, applied); err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
@@ -379,9 +400,9 @@ func TestMigrateRefusesAMigrationEditedInPlace(t *testing.T) {
 		t.Fatalf("migrate refused the list it had just applied: %v", err)
 	}
 
-	// Migration 2 keeps its name and its statement count, and only the SQL
-	// text changes. Nothing but the digest can tell.
-	edited := extend(editStatements(applied[1], `ALTER TABLE run ADD COLUMN scratch TEXT`))
+	// The appended migration keeps its name and its statement count, and only
+	// the SQL text changes. Nothing but the digest can tell.
+	edited := extend(editStatements(applied[len(applied)-1], `ALTER TABLE run ADD COLUMN scratch TEXT`))
 	err := migrate(ctx, s.write, edited)
 	if !errors.Is(err, ErrSchemaChanged) {
 		t.Fatalf("migrate accepted a migration edited in place: %v", err)
@@ -412,7 +433,7 @@ func TestMigrateAcceptsADatabaseRecordedWithoutDigests(t *testing.T) {
 		t.Fatalf("removing the digest column: %v", err)
 	}
 
-	list := extend(addColumn(2, "run notes", "notes TEXT"))
+	list := extend(addColumn("run notes", "notes TEXT"))
 	if err := migrate(ctx, s.write, list); err != nil {
 		t.Fatalf("migrate refused a database recorded without digests: %v", err)
 	}
@@ -423,13 +444,14 @@ func TestMigrateAcceptsADatabaseRecordedWithoutDigests(t *testing.T) {
 	if applied[1].digest.IsKnown() {
 		t.Fatalf("the row recorded before digests existed came back with one: %v", applied[1].digest)
 	}
-	if digest, known := applied[2].digest.Get(); !known || digest != statementsDigest(list[1]) {
-		t.Fatalf("the migration applied afterwards recorded digest %v", applied[2].digest)
+	last := list[len(list)-1]
+	if digest, known := applied[last.version].digest.Get(); !known || digest != statementsDigest(last) {
+		t.Fatalf("the migration applied afterwards recorded digest %v", applied[last.version].digest)
 	}
 
 	// And an in-place edit of that migration is caught, so the guard is live on
 	// this database rather than disabled by the older row beside it.
-	edited := extend(editStatements(list[1], `ALTER TABLE run ADD COLUMN scratch TEXT`))
+	edited := extend(editStatements(last, `ALTER TABLE run ADD COLUMN scratch TEXT`))
 	if err := migrate(ctx, s.write, edited); !errors.Is(err, ErrSchemaChanged) {
 		t.Fatalf("migrate accepted an in-place edit on a database recorded without digests: %v", err)
 	}
