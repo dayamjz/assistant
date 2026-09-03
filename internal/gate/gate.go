@@ -490,28 +490,37 @@ func ensureRepository(ctx context.Context, repo string) error {
 		return err
 	}
 	arrived := namesAdded(before, after)
+	var refusal error
 	if len(arrived) > 0 {
 		if err := undoArrivedHooks(repo, creating, arrived); err != nil {
 			return err
 		}
+		refusal = fmt.Errorf("%w: %s gained %s while being initialized; this package writes no hook before the "+
+			"repository exists, and an init.templateDir in a configuration file it cannot see past is what puts "+
+			"one there, so the hook was refused rather than adopted. The gate refuses every push until an "+
+			"initialization succeeds, so take the hook out of that template, or point init.templateDir "+
+			"elsewhere, and initialize again",
+			ErrTemplateHooks, repo, strings.Join(arrived, ", "))
 	}
 	// A repository that is still here takes pushes from this moment on, and
 	// this is the only function that can leave behind one the seam has not
 	// already seen. A repository this call created and then deleted again takes
 	// nothing, and is left deleted rather than brought back by a seal.
+	//
+	// A seal that fails is joined onto the refusal rather than returned in its
+	// place, which is the shape the two sites in held.go use. Reaching that
+	// join takes a narrow state: on a repair the seam has already occupied the
+	// admission hook name, so the seal returns at its first check, and when
+	// this call created the repository the arrived hooks have just deleted it
+	// and the seal is skipped. It is written this way because this is the third
+	// place a seal and a refusal share one return, and three places that decide
+	// this differently is how the two that already agree stop agreeing.
 	if !holdsNoRepository(repo) {
 		if err := sealAdmission(repo); err != nil {
-			return err
+			return errors.Join(refusal, err)
 		}
 	}
-	if len(arrived) == 0 {
-		return nil
-	}
-	return fmt.Errorf("%w: %s gained %s while being initialized; this package writes no hook before the "+
-		"repository exists, and an init.templateDir in a configuration file it cannot see past is what puts one "+
-		"there, so the hook was refused rather than adopted. The gate refuses every push until an initialization "+
-		"succeeds, so take the hook out of that template, or point init.templateDir elsewhere, and initialize again",
-		ErrTemplateHooks, repo, strings.Join(arrived, ", "))
+	return refusal
 }
 
 // undoArrivedHooks puts back what the initialization that is about to be

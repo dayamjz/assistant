@@ -732,8 +732,9 @@ func namesInitializing(err error, workingPath string) bool {
 }
 
 // namesRemoving reads whether a refusal instructs removing a particular file,
-// which is the action ErrMalformedRecord has to name because it is the only
-// one that opens either operation from that state.
+// which is the action ErrMalformedRecord has to name for the working copy the
+// gate is filed under, because for that reader it is the only one that opens
+// either operation from that state.
 func namesRemoving(err error, path string) bool {
 	return strings.Contains(strings.ToLower(err.Error()), "removing "+strings.ToLower(path))
 }

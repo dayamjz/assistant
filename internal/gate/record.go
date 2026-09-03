@@ -96,15 +96,28 @@ func malformedRecord(repo, format string, args ...any) error {
 // cannot read, and malformedRecord appends it to every refusal that reports
 // one.
 //
-// Both operations refuse on such a record and detaching does not help, because
-// the gate is also found by the working copy's own path hash, with no remote
-// involved. So the only step that succeeds is removing the file, and a refusal
-// that did not name it is one an operator resolves by deleting the gate, which
-// is the loss every guard here exists to prevent.
+// Both operations refuse on such a record, and which step gets a reader out
+// depends on which working copy is asking. For the working copy the gate is
+// filed under, and for one that moved and would lose its history otherwise, the
+// gate is reached by the path hash as well as by the remote, so detaching does
+// not help and removing the file is the step that does. For a working copy that
+// reaches the gate only through an inherited remote, the path hash names a
+// different, empty path, so detaching and initializing gives it a gate of its
+// own and takes nothing from anyone.
+//
+// This package cannot tell those two askers apart where the refusal is built,
+// so the message names both steps and says which reader each one is for rather
+// than guessing. Naming only the first would send the copy's operator to delete
+// the record of another project's gate, and a refusal that instructs damage is
+// worse than one that instructs nothing.
 func recordRepair(repo string) string {
 	return fmt.Sprintf("; nothing but the binding is in that file, so removing %s leaves the gate and everything "+
-		"it holds, and initializing the working copy it belongs to then writes a record this build can read",
-		recordPath(repo))
+		"it holds, and initializing the working copy it belongs to then writes a record this build can read. "+
+		"That is the step for the working copy this gate is filed under, and for one that moved and would "+
+		"otherwise lose the history in it. If this working copy reaches the gate only through a %s remote it "+
+		"inherited from a project it was copied from, the gate is that project's: removing the %s remote here "+
+		"detaches this working copy, always succeeds, and initializing it afterwards gives it a gate of its own",
+		recordPath(repo), RemoteName, RemoteName)
 }
 
 // writeRecord replaces a gate's record. The replacement is a rename over a

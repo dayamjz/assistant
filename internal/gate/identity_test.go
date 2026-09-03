@@ -277,6 +277,65 @@ func TestARecordFiledUnderTheWrongIdentifierNamesAWayOut(t *testing.T) {
 	}
 }
 
+// TestACopyIsToldTheStepThatSucceedsFromAnUnreadableRecord is the other reader
+// of that same refusal, and it is the one for whom the record file is the wrong
+// answer.
+//
+// A copy of a gated project inherits the original's remote, so the gate it is
+// refused over is another project's. Removing that gate's record is not a step
+// this reader may take, and a refusal instructing it would have an operator
+// damage state that is not theirs. What succeeds from where the copy stands is
+// detaching and initializing, which takes nothing from anyone, so the refusal
+// names that too and this checks the step it names completes.
+func TestACopyIsToldTheStepThatSucceedsFromAnUnreadableRecord(t *testing.T) {
+	gitEnvironment(t)
+	wc := newWorkingCopy(t)
+	home, opts := newHome(t)
+	command, _ := recorderCommand(t, 0)
+
+	original, err := gate.Initialize(ctx(t),
+		gate.Spec{Home: home, WorkingPath: wc.path, Command: command}, opts()...)
+	if err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+	rawGit(t, wc.path, "push", "--quiet", gate.RemoteName, "main")
+
+	duplicate := filepath.Join(filepath.Dir(wc.path), "copy")
+	copyTree(t, wc.path, duplicate)
+	record := filepath.Join(original.Repository(), recordName)
+	writeFile(t, record, fmt.Sprintf(`{"version":99,"id":%q,"workingPath":%q}`, original.ID(), original.WorkingPath()))
+
+	spec := gate.Spec{Home: home, WorkingPath: duplicate, Command: command}
+	refused := func() error {
+		_, err := gate.Initialize(ctx(t), spec, opts()...)
+		return err
+	}()
+	if !errors.Is(refused, gate.ErrMalformedRecord) {
+		t.Fatalf("Initialize from the copy = %v, want ErrMalformedRecord", refused)
+	}
+	if !namesDetaching(refused) {
+		t.Fatalf("the copy is not told to detach, which is the step that succeeds from there without touching "+
+			"another project's gate: %v", refused)
+	}
+
+	// The step the message names completes, and the original's gate is left as
+	// it was, record and history included.
+	rawGit(t, duplicate, "remote", "remove", gate.RemoteName)
+	own, err := gate.Initialize(ctx(t), spec, opts()...)
+	if err != nil {
+		t.Fatalf("the step the refusal names did not complete: %v", err)
+	}
+	if own.Repository() == original.Repository() {
+		t.Fatalf("the copy took the original's gate at %q", own.Repository())
+	}
+	if _, err := os.Stat(record); err != nil {
+		t.Fatalf("the original's record was disturbed: %v", err)
+	}
+	if got, want := refs(t, original.Repository()), []string{"refs/heads/main " + wc.commit}; !equal(got, want) {
+		t.Fatalf("the original's gate holds %v, want its history %v", got, want)
+	}
+}
+
 // TestAHomeThatDoesNotExistYetIsSpelledTheSameOnceItDoes is why the home is
 // resolved as far as it exists rather than only when all of it does. Spec.Home
 // is allowed not to exist yet, and the first initialization is the one that

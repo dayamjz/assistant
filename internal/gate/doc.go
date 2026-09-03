@@ -285,12 +285,21 @@
 // initialization where one would rebuild what is missing and a detachment
 // where it would not. ErrGateClaimed names the detachment of the working copy
 // that holds the gate, after which the gate is handed over, and says first
-// what that costs the working copy losing it. ErrMalformedRecord names the
-// record file, because both operations refuse on it and detaching does not
-// help, so removing that file is the only step that gets anywhere; every
-// producer of it goes through one constructor that attaches that step, so a
-// refusal with no action is not something a new producer can write by leaving
-// something out.
+// what that costs the working copy losing it. ErrMalformedRecord names two
+// steps and says which reader each is for, because which one gets anywhere
+// depends on who is asking. For the working copy the gate is filed under, and
+// for one that moved and would otherwise lose the history in it, the gate is
+// reached by the path hash as well as by the remote, so detaching does not help
+// and removing the record file is the step that does. For a working copy that
+// reaches the gate only through an inherited remote, the path hash names a
+// different, empty path, so detaching and initializing gives it a gate of its
+// own and takes nothing from anyone. Naming only the first would instruct that
+// operator to delete the record of another project's gate, and a refusal that
+// instructs damage is worse than one that instructs nothing. Nothing here can
+// tell the two askers apart where the refusal is built, which is why it names
+// both rather than guessing; every producer goes through one constructor that
+// attaches them, so a refusal with no action is not something a new producer
+// can write by leaving something out.
 //
 // # A gate never accepts a push that admission has not seen
 //

@@ -32,11 +32,14 @@ var (
 	// so an operation that would have guessed does nothing instead. See
 	// WithIndex.
 	ErrNoIndex = errors.New("gate: no ownership index was supplied")
-	// ErrTemplateHooks is returned when a repository this package has just
-	// created was born carrying a hook. A git template chose that hook, which
-	// means a process outside this one chose code that would run inside the
-	// gate, so initialization refuses instead of adopting it. See doc.go for
-	// how a template reaches a repository whose environment was filtered.
+	// ErrTemplateHooks is returned when a hook that was not in the gate's
+	// hooks directory before the git invocation an initialization makes is
+	// there afterwards, whether that invocation created the repository or
+	// repaired one that was already there. A git template chose that hook,
+	// which means a process outside this one chose code that would run inside
+	// the gate, so initialization refuses instead of adopting it. See doc.go
+	// for how a template reaches a repository whose environment was filtered,
+	// and for the one hook name this can no longer fire for on a repair.
 	ErrTemplateHooks = errors.New("gate: repository was created carrying hooks from a git template")
 	// ErrCustomHookConflict is returned when a hook this package did not
 	// write has to be moved aside and the name it would move to is already
@@ -71,10 +74,16 @@ var (
 	// ErrMalformedRecord is returned when a gate's record file exists but
 	// cannot be read as one. A record that cannot be read is a fact that
 	// cannot be established rather than one to guess at. Both operations
-	// refuse on it and detaching does not help, so the message names the one
-	// step that does: removing the file, which leaves the gate and everything
-	// it holds. Every producer goes through one constructor that attaches that
-	// step, so a refusal with no action is not something a new producer can
-	// write by omission.
+	// refuse on it, and the message names both steps that get a reader out
+	// because which one applies depends on who is asking. For the working copy
+	// the gate is filed under, and for one that moved and would otherwise lose
+	// the history in it, the gate is reached by the path hash too, so detaching
+	// does not help and removing the file is the step that does, which leaves
+	// the gate and everything it holds. For a working copy that reaches the
+	// gate only through an inherited remote, the path hash names a different,
+	// empty path, so detaching and initializing gives it a gate of its own and
+	// takes nothing from anyone. Every producer goes through one constructor
+	// that attaches both, so a refusal with no action is not something a new
+	// producer can write by omission.
 	ErrMalformedRecord = errors.New("gate: gate record cannot be read")
 )
