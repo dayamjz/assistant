@@ -149,33 +149,52 @@ func openWithVCS(ctx context.Context, path string) (WorkingCopy, error) {
 // alone is not, because a copy inherits it; the path hash alone is not, because
 // a path outlives the working copy that stood on it. Initialize records a
 // binding resting on one of them as inferred, and Remove refuses to delete a
-// gate bound that way; see ErrGateBindingInferred. Where the two agree, or
-// where a record already names this working copy and its path hashes to the
-// gate, the binding is evidenced and removal proceeds.
+// gate bound that way; see ErrGateBindingInferred. The mark is cleared only by
+// something the gate did not produce: a record naming a working copy that has
+// since let go, over a gate this one's path hashes to. A record naming the
+// working copy that is asking is not that, because an earlier initialization
+// of that same working copy is what wrote it.
 //
-// The gate refuses every push while it has no admission hook, so a refused
-// initialization leaves a gate that admits nothing rather than one that admits
-// everything. See doc.go.
-func Initialize(ctx context.Context, spec Spec, opts ...Option) (*Gate, error) {
+// Every gate this looks at is left refusing pushes if it has no admission
+// hook, whatever this returns, so a refused initialization leaves a gate that
+// admits nothing rather than one that admits everything. See doc.go.
+func Initialize(ctx context.Context, spec Spec, opts ...Option) (g *Gate, err error) {
 	set := resolveSettings(opts)
-	home, workingPath, err := validate(spec, true)
+	home, workingPath, err := validatePaths(spec)
 	if err != nil {
 		return nil, err
 	}
-	copyOf, err := set.open(ctx, workingPath)
-	if err != nil {
-		return nil, fmt.Errorf("gate: opening the working copy at %s: %w", workingPath, err)
-	}
+
+	// From here every return passes through this, so a gate that has lost its
+	// admission hook cannot be left accepting pushes by a refusal that happens
+	// before the hooks are reached.
+	var touched touchedGates
+	touched.home = home
+	defer func() {
+		if sealErr := touched.seal(); sealErr != nil && err == nil {
+			g, err = nil, sealErr
+		}
+	}()
 
 	id, err := Identify(workingPath)
 	if err != nil {
 		return nil, err
 	}
 	repo := repositoryPath(home, id)
+	touched.add(repo)
+
+	if err := validateCommand(spec.Command); err != nil {
+		return nil, err
+	}
+	copyOf, err := set.open(ctx, workingPath)
+	if err != nil {
+		return nil, fmt.Errorf("gate: opening the working copy at %s: %w", workingPath, err)
+	}
 	named, err := boundRepository(ctx, copyOf)
 	if err != nil {
 		return nil, err
 	}
+	touched.add(named)
 	reattached, adopted := false, false
 	existing, ok, err := alreadyNamedGate(ctx, set, home, named, repo, workingPath)
 	if err != nil {
@@ -238,7 +257,7 @@ func Initialize(ctx context.Context, spec Spec, opts ...Option) (*Gate, error) {
 // established was this working copy's is not that.
 func Remove(ctx context.Context, spec Spec, opts ...Option) error {
 	set := resolveSettings(opts)
-	home, workingPath, err := validate(spec, false)
+	home, workingPath, err := validatePaths(spec)
 	if err != nil {
 		return err
 	}
@@ -304,9 +323,10 @@ func Remove(ctx context.Context, spec Spec, opts ...Option) error {
 	return nil
 }
 
-// validate turns a Spec into the two resolved paths every operation needs.
-// requireCommand is false for an operation that writes no hook.
-func validate(spec Spec, requireCommand bool) (home, workingPath string, err error) {
+// validatePaths turns a Spec into the two resolved paths every operation needs.
+// The hook command is validated separately by validateCommand, because an
+// initialization has a gate to seal before it may refuse over the command.
+func validatePaths(spec Spec) (home, workingPath string, err error) {
 	if spec.Home == "" {
 		return "", "", fmt.Errorf("%w: home is empty", ErrInvalidSpec)
 	}
@@ -325,13 +345,57 @@ func validate(spec Spec, requireCommand bool) (home, workingPath string, err err
 	if err != nil {
 		return "", "", err
 	}
+	return home, workingPath, nil
+}
 
-	if requireCommand {
-		if err := validateCommand(spec.Command); err != nil {
-			return "", "", err
+// touchedGates is the set of gates an operation has looked at, and the seal it
+// owes each of them.
+//
+// The seal runs from a deferred call rather than from each refusal because the
+// refusals are many, and one added later would otherwise reopen the gap
+// silently. That is the shape this package keeps meeting: a guard written at
+// the call that prompted it, and a sibling call added afterwards that does not
+// have it. Written here, a future early return is covered by construction.
+//
+// Sealing a gate an operation is about to refuse over is deliberate, including
+// one another working copy owns. The only gate it changes is one that was
+// already accepting every push with nothing running, and leaving that alone to
+// avoid touching somebody else's gate would be choosing the silent failure
+// over the loud one.
+type touchedGates struct {
+	home  string
+	paths []string
+}
+
+// add records a path this operation has learned about. A path that is not a
+// gate of this home is filtered when the seal runs, not here, so a caller can
+// hand over whatever it has.
+func (t *touchedGates) add(repo string) {
+	if repo == "" {
+		return
+	}
+	for _, seen := range t.paths {
+		if seen == repo {
+			return
 		}
 	}
-	return home, workingPath, nil
+	t.paths = append(t.paths, repo)
+}
+
+// seal puts a refusing admission hook into every gate this operation looked at
+// that holds a repository and has no admission hook of its own. A gate that
+// already has one, and a path that holds nothing or is not filed where this
+// home keeps its gates, are left alone.
+func (t *touchedGates) seal() error {
+	for _, repo := range t.paths {
+		if identifierAt(t.home, repo) == "" || holdsNoRepository(repo) {
+			continue
+		}
+		if err := sealAdmission(repo); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // validateCommand refuses a hook command that a push could reinterpret. It
@@ -458,16 +522,18 @@ func alreadyNamedGate(ctx context.Context, set settings, home, named, own, worki
 // else is not, because the binding it carries is exactly the fact that cannot
 // then be established.
 //
-// A binding this permits over a record that names this working copy is an
-// evidenced one whatever that record said, including a record left by an
-// earlier inferred binding. Two things agree there, the record and the path
-// hash, and no copy can produce either, because a copy stands at another path
-// and hashes elsewhere. Carrying the earlier answer forward would leave a gate
-// whose owner is standing exactly where the gate is named for permanently
-// unremovable, on the strength of a moment that has passed.
+// What counts as two pieces of evidence is the whole of this. A record naming
+// the working copy that is asking is not one of them when an earlier
+// initialization of that same working copy wrote it: reading back what you
+// wrote is one fact and its own echo, and treating it as two is how an
+// inferred binding launders itself into an evidenced one. So a mark an earlier
+// binding set is carried until something the gate did not produce disagrees
+// with it.
 //
-// A binding over no record at all is the weaker case, and the remote is what
-// separates its two shapes; the body says which is which.
+// A record naming somebody else who has since let go is a fact this
+// initialization did not write, so that one does count, and with the path hash
+// it clears the mark. A binding over no record at all is weaker still, and the
+// remote is what separates its two shapes; the body says which is which.
 func ownGateBinding(ctx context.Context, set settings, home, repo, id, workingPath string, remoteAgrees bool) (adopted bool, err error) {
 	rec, holds, err := gateRepository(home, repo)
 	if err != nil {
@@ -505,6 +571,18 @@ func ownGateBinding(ctx context.Context, set settings, home, repo, id, workingPa
 		workingPath, id, repo, rec.WorkingPath, RemoteName, workingPath)); err != nil {
 		return false, err
 	}
+	if rec.WorkingPath == workingPath {
+		// The record names the working copy asking, and this initialization is
+		// not what makes that true: an earlier one wrote it. So the record and
+		// the path hash are not two facts here, they are one fact and its own
+		// echo, and a mark an earlier binding set stands until something the
+		// gate did not produce disagrees with it.
+		return rec.Adopted, nil
+	}
+	// The record names somebody else and ensureAvailableTo established that
+	// they have let go. That is a fact about the world this initialization did
+	// not write, so with the path hash it makes two, and the binding is
+	// evidenced whatever an earlier one rested on.
 	return false, nil
 }
 

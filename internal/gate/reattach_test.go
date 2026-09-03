@@ -675,18 +675,36 @@ func TestAProjectOnAFreedPathCannotDeleteARecordlessGate(t *testing.T) {
 		t.Fatalf("the moved working copy's %s remote is %q, want %q", gate.RemoteName, url, original.Repository())
 	}
 
-	// And the route the refusal names completes: detached, the project takes a
-	// gate of its own and can remove that.
+	// Detaching and initializing again lands on the same gate, because the
+	// project's own path still hashes to it. What must not happen is that the
+	// second initialization reads back the record the first one wrote and
+	// calls that a second piece of evidence: the mark has to survive an
+	// initialization that established nothing new, or the refusal above only
+	// delays the loss by one command.
 	rawGit(t, fresh, "remote", "remove", gate.RemoteName)
 	own, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: fresh, Command: command})
 	if err != nil {
-		t.Fatalf("the route the refusal names did not complete: %v", err)
+		t.Fatalf("Initialize the detached project: %v", err)
 	}
 	if own.Repository() != original.Repository() {
 		t.Fatalf("the detached project got %q; its path still hashes to %q", own.Repository(), original.Repository())
 	}
+	if err := gate.Remove(ctx(t), gate.Spec{Home: home, WorkingPath: fresh}, gate.WithOpener(detachingOpener)); !errors.Is(err, gate.ErrGateBindingInferred) {
+		t.Fatalf("Remove after a second initialization = %v, want ErrGateBindingInferred", err)
+	}
 	if got, want := refs(t, original.Repository()), []string{"refs/heads/main " + wc.commit}; !equal(got, want) {
-		t.Fatalf("the gate holds %v after that initialization, want %v", got, want)
+		t.Fatalf("the gate holds %v, want the moved working copy's history %v", got, want)
+	}
+
+	// The moved working copy still has everything it pushed, which is the
+	// property no sequence here may end by breaking.
+	if url, ok := remoteURL(t, moved.path, gate.RemoteName); !ok || url != original.Repository() {
+		t.Fatalf("the moved working copy's %s remote is %q, want %q", gate.RemoteName, url, original.Repository())
+	}
+	head := commitMore(t, moved, "still here\n")
+	rawGit(t, moved.path, "push", "--quiet", gate.RemoteName, "main")
+	if got, want := refs(t, original.Repository()), []string{"refs/heads/main " + head}; !equal(got, want) {
+		t.Fatalf("the moved working copy could not go on using its gate: refs %v, want %v", got, want)
 	}
 }
 

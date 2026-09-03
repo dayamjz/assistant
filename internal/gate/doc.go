@@ -250,17 +250,27 @@
 // may leave one, including a path that is undoing what it just did.
 //
 // The invariant is held by filling the absence rather than by remembering to.
-// Every initialization, before it can refuse for any reason, puts a hook that
-// refuses every push into a gate that has none, and installs the real
-// admission hook over it when it gets that far. So a refused initialization
-// leaves a gate that admits nothing, and what the refusal cost is a closed
-// gate rather than an open one.
+// An initialization notes every gate it looks at, and on its way out, whatever
+// it is on its way out with, puts a hook that refuses every push into any of
+// them that has none. Where it gets far enough it installs the real admission
+// hook over that. So a refused initialization leaves a gate that admits
+// nothing, and what the refusal costs is a closed gate rather than an open one.
+//
+// Deferring the seal rather than writing it at each refusal is the point. The
+// refusals are many and the next one added would not have carried it, which is
+// exactly the sibling-path shape above. It also means an initialization can
+// seal a gate it is refusing to act on, including one another working copy
+// owns: the only gate it changes is one that was already accepting everything
+// with nothing running, and leaving that alone out of politeness would be
+// choosing the silent failure over the loud one.
 //
 // It is worth saying why this outranks the loss paths above. Losing history
 // announces itself: something that was there is gone, and somebody notices. A
-// gate with no admission behaves perfectly, accepts everything, and reports
-// nothing in between, so the failure is invisible until the day it matters.
-// Given a choice, fail in the direction that shows.
+// gate with no admission accepts everything and reports nothing in between, so
+// the failure is invisible until the day it matters. Worse, the notification
+// hook still runs on such a push, so the run is recorded as one admission saw,
+// which is not a missing check but a false record of a check that never
+// happened. Given a choice, fail in the direction that shows.
 //
 // The residual gap in identity is the path itself. The identifier is computed
 // from the cleaned, symlink-resolved absolute path, so two spellings that

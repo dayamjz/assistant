@@ -2,7 +2,9 @@ package gate_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -397,4 +399,99 @@ func equal(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// TestEveryEarlyRefusalLeavesTheGateRefusingPushes is the invariant on the
+// paths that reach no hooks at all. An initialization can refuse before it
+// looks at the gate's hooks, and a gate that has lost its admission hook is
+// then left taking every push with nothing running.
+//
+// That failure is worse than it sounds and worse than losing history, which is
+// why it is tested per refusal rather than once. The notification hook still
+// fires on such a push, so the run is recorded as one admission saw: not a
+// missing check, a false record of a check that never happened.
+func TestEveryEarlyRefusalLeavesTheGateRefusingPushes(t *testing.T) {
+	gitEnvironment(t)
+	command, _ := recorderCommand(t, 0)
+
+	// Each case damages a gate the same way, then makes an initialization
+	// refuse before it reaches the hooks, by a different route.
+	cases := []struct {
+		name string
+		// refuse returns the spec to initialize with and the error wanted.
+		refuse func(t *testing.T, home string, wc workingCopy, g *gate.Gate) (gate.Spec, error)
+	}{
+		{
+			name: "the hook command is gone",
+			refuse: func(t *testing.T, home string, wc workingCopy, _ *gate.Gate) (gate.Spec, error) {
+				return gate.Spec{
+					Home:        home,
+					WorkingPath: wc.path,
+					Command:     filepath.Join(t.TempDir(), "upgraded-away"),
+				}, gate.ErrInvalidSpec
+			},
+		},
+		{
+			name: "the record cannot be read",
+			refuse: func(t *testing.T, home string, wc workingCopy, g *gate.Gate) (gate.Spec, error) {
+				replaced, err := json.Marshal(map[string]any{
+					"version": 99, "id": g.ID(), "workingPath": g.WorkingPath(),
+				})
+				if err != nil {
+					t.Fatalf("encode: %v", err)
+				}
+				writeFile(t, filepath.Join(g.Repository(), "assistant-gate.json"), string(replaced))
+				return gate.Spec{Home: home, WorkingPath: wc.path, Command: command}, gate.ErrMalformedRecord
+			},
+		},
+		{
+			name: "another working copy holds the gate",
+			refuse: func(t *testing.T, home string, wc workingCopy, g *gate.Gate) (gate.Spec, error) {
+				// The gate's record is rewritten to a copy that is still bound
+				// to it, so the working copy standing at the hashed path is
+				// refused ownership of its own identifier.
+				duplicate := filepath.Join(filepath.Dir(wc.path), "copy")
+				copyTree(t, wc.path, duplicate)
+				writeFile(t, filepath.Join(g.Repository(), "assistant-gate.json"),
+					fmt.Sprintf(`{"version":1,"id":%q,"workingPath":%q}`, g.ID(), resolved(t, duplicate)))
+				return gate.Spec{Home: home, WorkingPath: wc.path, Command: command}, gate.ErrGateClaimed
+			},
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			wc := newWorkingCopy(t)
+			home := t.TempDir()
+			g, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path, Command: command})
+			if err != nil {
+				t.Fatalf("Initialize: %v", err)
+			}
+			rawGit(t, wc.path, "push", "--quiet", gate.RemoteName, "main")
+
+			// The damage TestInitializeRepairsADamagedGate inflicts, which
+			// this package treats as an ordinary thing to repair.
+			if err := os.Remove(filepath.Join(g.Repository(), "hooks", gate.AdmissionHook)); err != nil {
+				t.Fatalf("remove the admission hook: %v", err)
+			}
+
+			spec, want := c.refuse(t, home, wc, g)
+			if _, err := gate.Initialize(ctx(t), spec); !errors.Is(err, want) {
+				t.Fatalf("Initialize error = %v, want %v", err, want)
+			}
+
+			// The gate must not take a push now, and nothing must run on one.
+			// The recorder is shared across the subtests, so what is asserted
+			// is the push, which is the observable this invariant is about.
+			commitMore(t, wc, "after the refusal\n")
+			before := refs(t, g.Repository())
+			out, pushErr := tryRawGit(wc.path, "push", gate.RemoteName, "main")
+			if pushErr == nil {
+				t.Fatalf("the gate accepted a push after a refused initialization:\n%s", out)
+			}
+			if got := refs(t, g.Repository()); !equal(got, before) {
+				t.Fatalf("the refused push moved references in the gate: %v, want %v", got, before)
+			}
+		})
+	}
 }
