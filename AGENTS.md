@@ -81,6 +81,9 @@ Each has cost this repository more than one round of review.
 - `internal/store` is the only package that opens the database and the only one
   that writes SQL. Add a typed accessor there rather than a query elsewhere. Its
   driver is pure Go on purpose, so `make check` needs no cgo on any platform.
+  A schema change is a new migration appended to `schema.go`, never an edit to
+  one that has shipped; the tests number what they append from the shipped list
+  rather than spelling a version out.
 - `internal/safety` owns whether a branch update may proceed and on what anchor.
   `internal/vcs` stays mechanism only, so a lease, an incorporation check, or a
   force decision belongs in `internal/safety` even when it would be shorter to
@@ -98,15 +101,18 @@ Each has cost this repository more than one round of review.
   changing any of those four.
 - `internal/gate` owns the local bare repository a push is validated through:
   where it lives, what it is born with, its hooks, and its identity across a
-  move or a copy. It composes `internal/vcs` and builds no command lines. The
-  binding between a gate and a working copy is the record file inside the gate,
-  not the hash in its directory name, which is only where the name came from.
-  Its `doc.go` states what a git template and `core.hooksPath` can still do to
-  a gate's hooks and which `internal/vcs` operations would close each gap.
-  `internal/gate/HANDOVER.md` is the open state: safety items still outstanding,
-  two findings deferred rather than resolved, and the mechanism proposal for the
-  sibling-asymmetry rule this package documented and then violated twice more.
-  Read it before changing anything here.
+  move or a copy. It composes `internal/vcs` and builds no command lines, and it
+  composes `internal/store` for the ownership index without opening a database.
+  Two things there are mechanism rather than rule, because this package wrote
+  both rules down and then broke them. No exported operation takes a path: one
+  unexported seam resolves the gate, settles who it belongs to, and seals it,
+  and an operation that cannot obtain a handle cannot skip any of that. And
+  nothing this package produced counts as evidence of ownership, so neither the
+  `assistant` remote nor the path hash is weighed; the question is asked of the
+  store's ownership index and the gate's own record, and every answer either
+  gives is checked against the working copy actually standing there. Read its
+  `doc.go` before changing any of that, and for the residual gaps: a path that
+  outlives its working copy, `core.hooksPath`, and letter case in a path.
 - `internal/agents` is the only package that starts an agent process. It owns
   the process tree, the per-invocation environment, and what is recorded about
   a call. P4 lives in its type split rather than in a rule callers follow:

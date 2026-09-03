@@ -17,6 +17,13 @@ const recordName = "assistant-gate.json"
 // future version is refused rather than half-understood: the binding it
 // carries is what decides whether a gate is reattached or left alone, and
 // guessing at it is how a copy steals the original's gate.
+//
+// A build before this one wrote one more field, recording that a binding had
+// been established over a gate that carried no record. That question is now
+// asked of the ownership index instead of remembered, so the field is ignored
+// where it is still on disk. Ignoring a field this build does not read is not a
+// change of shape, and bumping the version over it would make every gate a
+// previous build wrote unreadable, which is a worse answer than reading them.
 const recordVersion = 1
 
 // record is a gate's own account of what it is bound to. Per PRD principle
@@ -32,22 +39,13 @@ type record struct {
 	// WorkingPath is the resolved absolute path of the working copy this gate
 	// belongs to. It is rewritten whenever initialization reattaches the gate
 	// to a working copy that moved.
+	//
+	// It is the gate's own account of its working copy rather than the owner of
+	// the ownership question. What it buys is that a gate found on disk names a
+	// working copy when the home's database has been lost or replaced, which is
+	// exactly what the ownership index cannot do. Neither is believed alone;
+	// see held.claimants.
 	WorkingPath string `json:"workingPath"`
-	// Adopted reports that this binding was established by taking over a gate
-	// that carried no record, on one piece of evidence rather than two. The
-	// remote alone is one, and a copy of a gated project inherits it; the path
-	// hash alone is one, and a path outlives the working copy that stood on
-	// it. Either can be produced by something that is not the gate's owner, so
-	// a binding resting on one of them is inferred rather than established.
-	//
-	// It is carried into every record an initialization reached the same way
-	// writes afterwards, and cleared by one that has two: a record naming this
-	// working copy over a gate its path hashes to, or a recordless gate whose
-	// remote and path hash agree.
-	//
-	// Removal refuses on it, because deleting a gate is the one act here that
-	// cannot be undone and an inferred binding is not enough to justify it.
-	Adopted bool `json:"adopted,omitempty"`
 }
 
 // recordPath is where a gate repository keeps its record.
@@ -65,24 +63,38 @@ func readRecord(repo string) (rec record, exists bool, err error) {
 		if os.IsNotExist(err) {
 			return record{}, false, nil
 		}
-		return record{}, false, fmt.Errorf("%w: %s: %w%s", ErrMalformedRecord, recordPath(repo), err, recordRepair(repo))
+		return record{}, false, malformedRecord(repo, "%s: %w", recordPath(repo), err)
 	}
 	if err := json.Unmarshal(data, &rec); err != nil {
-		return record{}, true, fmt.Errorf("%w: %s: %w%s", ErrMalformedRecord, recordPath(repo), err, recordRepair(repo))
+		return record{}, true, malformedRecord(repo, "%s: %w", recordPath(repo), err)
 	}
 	if rec.Version != recordVersion {
-		return record{}, true, fmt.Errorf("%w: %s: version %d, this build writes version %d%s",
-			ErrMalformedRecord, recordPath(repo), rec.Version, recordVersion, recordRepair(repo))
+		return record{}, true, malformedRecord(repo, "%s: version %d, this build writes version %d",
+			recordPath(repo), rec.Version, recordVersion)
 	}
 	if rec.ID == "" || rec.WorkingPath == "" {
-		return record{}, true, fmt.Errorf("%w: %s: identifier or working path is empty%s",
-			ErrMalformedRecord, recordPath(repo), recordRepair(repo))
+		return record{}, true, malformedRecord(repo, "%s: identifier or working path is empty", recordPath(repo))
 	}
 	return rec, true, nil
 }
 
+// malformedRecord builds every ErrMalformedRecord this package returns.
+//
+// It exists so that the step that gets an operator out of one is attached by
+// the constructor rather than by each producer remembering to attach it. Two
+// producers did not, while errors.go and doc.go both promised that every one of
+// them named the step that succeeds, and a message with no action is a dead end
+// an operator resolves by deleting the gate by hand.
+func malformedRecord(repo, format string, args ...any) error {
+	// The detail is built with fmt.Errorf rather than fmt.Sprintf so that a
+	// producer reporting an underlying failure can wrap it with %w and have the
+	// chain survive being wrapped again here.
+	return fmt.Errorf("%w: %w%s", ErrMalformedRecord, fmt.Errorf(format, args...), recordRepair(repo))
+}
+
 // recordRepair is the step that gets an operator out of a record this build
-// cannot read, and it is appended to every refusal that reports one.
+// cannot read, and malformedRecord appends it to every refusal that reports
+// one.
 //
 // Both operations refuse on such a record and detaching does not help, because
 // the gate is also found by the working copy's own path hash, with no remote

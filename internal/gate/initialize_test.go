@@ -26,7 +26,7 @@ import (
 func TestOrdinaryPushToOriginIsUnaffected(t *testing.T) {
 	gitEnvironment(t)
 	wc := newWorkingCopy(t)
-	home := t.TempDir()
+	home, opts := newHome(t)
 	command, log := recorderCommand(t, 0)
 
 	originURLBefore, ok := remoteURL(t, wc.path, "origin")
@@ -34,7 +34,7 @@ func TestOrdinaryPushToOriginIsUnaffected(t *testing.T) {
 		t.Fatal("the fixture working copy has no origin remote")
 	}
 
-	g, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path, Command: command})
+	g, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path, Command: command}, opts()...)
 	if err != nil {
 		t.Fatalf("Initialize: %v", err)
 	}
@@ -70,10 +70,10 @@ func TestOrdinaryPushToOriginIsUnaffected(t *testing.T) {
 func TestAdmissionRunsBeforeAnyReferenceChanges(t *testing.T) {
 	gitEnvironment(t)
 	wc := newWorkingCopy(t)
-	home := t.TempDir()
+	home, opts := newHome(t)
 	command, log := recorderCommand(t, 1)
 
-	g, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path, Command: command})
+	g, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path, Command: command}, opts()...)
 	if err != nil {
 		t.Fatalf("Initialize: %v", err)
 	}
@@ -103,10 +103,10 @@ func TestAdmissionRunsBeforeAnyReferenceChanges(t *testing.T) {
 func TestAdmissionReceivesTheReferenceUpdatesAndThenNotificationRuns(t *testing.T) {
 	gitEnvironment(t)
 	wc := newWorkingCopy(t)
-	home := t.TempDir()
+	home, opts := newHome(t)
 	command, log := recorderCommand(t, 0)
 
-	g, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path, Command: command})
+	g, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path, Command: command}, opts()...)
 	if err != nil {
 		t.Fatalf("Initialize: %v", err)
 	}
@@ -144,10 +144,10 @@ func TestAdmissionReceivesTheReferenceUpdatesAndThenNotificationRuns(t *testing.
 func TestCustomHookIsPreservedAndStillRuns(t *testing.T) {
 	gitEnvironment(t)
 	wc := newWorkingCopy(t)
-	home := t.TempDir()
+	home, opts := newHome(t)
 	command, log := recorderCommand(t, 0)
 
-	g, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path, Command: command})
+	g, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path, Command: command}, opts()...)
 	if err != nil {
 		t.Fatalf("Initialize: %v", err)
 	}
@@ -157,7 +157,7 @@ func TestCustomHookIsPreservedAndStillRuns(t *testing.T) {
 	custom := filepath.Join(g.Repository(), "hooks", gate.AdmissionHook)
 	writeScript(t, custom, "#!/bin/sh\nprintf 'custom %s\\n' \"$(cat | tr '\\n' ';')\" >>"+shellQuoteForTest(log)+"\nexit 0\n")
 
-	if _, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path, Command: command}); err != nil {
+	if _, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path, Command: command}, opts()...); err != nil {
 		t.Fatalf("Initialize again: %v", err)
 	}
 
@@ -193,15 +193,15 @@ func TestCustomHookIsPreservedAndStillRuns(t *testing.T) {
 func TestPreservedHookCanStillRejectAPush(t *testing.T) {
 	gitEnvironment(t)
 	wc := newWorkingCopy(t)
-	home := t.TempDir()
+	home, opts := newHome(t)
 	command, _ := recorderCommand(t, 0)
 
-	g, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path, Command: command})
+	g, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path, Command: command}, opts()...)
 	if err != nil {
 		t.Fatalf("Initialize: %v", err)
 	}
 	writeScript(t, filepath.Join(g.Repository(), "hooks", gate.AdmissionHook), "#!/bin/sh\ncat >/dev/null\nexit 3\n")
-	if _, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path, Command: command}); err != nil {
+	if _, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path, Command: command}, opts()...); err != nil {
 		t.Fatalf("Initialize again: %v", err)
 	}
 
@@ -222,14 +222,14 @@ func TestPreservedHookCanStillRejectAPush(t *testing.T) {
 func TestRepeatedInitializationDoesNotAdoptItsOwnHooks(t *testing.T) {
 	gitEnvironment(t)
 	wc := newWorkingCopy(t)
-	home := t.TempDir()
+	home, opts := newHome(t)
 	command, _ := recorderCommand(t, 0)
 	spec := gate.Spec{Home: home, WorkingPath: wc.path, Command: command}
 
 	var g *gate.Gate
 	for round := 1; round <= 3; round++ {
 		var err error
-		g, err = gate.Initialize(ctx(t), spec)
+		g, err = gate.Initialize(ctx(t), spec, opts()...)
 		if err != nil {
 			t.Fatalf("Initialize round %d: %v", round, err)
 		}
@@ -254,10 +254,10 @@ func TestRepeatedInitializationDoesNotAdoptItsOwnHooks(t *testing.T) {
 func TestChainingStopsAfterOneLevel(t *testing.T) {
 	gitEnvironment(t)
 	wc := newWorkingCopy(t)
-	home := t.TempDir()
+	home, opts := newHome(t)
 	command, log := recorderCommand(t, 0)
 
-	g, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path, Command: command})
+	g, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path, Command: command}, opts()...)
 	if err != nil {
 		t.Fatalf("Initialize: %v", err)
 	}
@@ -287,10 +287,10 @@ func TestChainingStopsAfterOneLevel(t *testing.T) {
 func TestCustomHookConflictRefusesAndChangesNothing(t *testing.T) {
 	gitEnvironment(t)
 	wc := newWorkingCopy(t)
-	home := t.TempDir()
+	home, opts := newHome(t)
 	command, _ := recorderCommand(t, 0)
 
-	g, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path, Command: command})
+	g, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path, Command: command}, opts()...)
 	if err != nil {
 		t.Fatalf("Initialize: %v", err)
 	}
@@ -299,7 +299,7 @@ func TestCustomHookConflictRefusesAndChangesNothing(t *testing.T) {
 	writeScript(t, filepath.Join(hooks, gate.AdmissionHook+gate.CustomHookSuffix), "#!/bin/sh\nexit 0\n# also mine\n")
 	notificationBefore := readFile(t, filepath.Join(hooks, gate.NotificationHook))
 
-	_, err = gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path, Command: command})
+	_, err = gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path, Command: command}, opts()...)
 	if !errors.Is(err, gate.ErrCustomHookConflict) {
 		t.Fatalf("Initialize error = %v, want ErrCustomHookConflict", err)
 	}
@@ -319,11 +319,11 @@ func TestCustomHookConflictRefusesAndChangesNothing(t *testing.T) {
 func TestInitializeRepairsADamagedGate(t *testing.T) {
 	gitEnvironment(t)
 	wc := newWorkingCopy(t)
-	home := t.TempDir()
+	home, opts := newHome(t)
 	command, log := recorderCommand(t, 0)
 	spec := gate.Spec{Home: home, WorkingPath: wc.path, Command: command}
 
-	first, err := gate.Initialize(ctx(t), spec)
+	first, err := gate.Initialize(ctx(t), spec, opts()...)
 	if err != nil {
 		t.Fatalf("Initialize: %v", err)
 	}
@@ -336,12 +336,12 @@ func TestInitializeRepairsADamagedGate(t *testing.T) {
 			t.Fatalf("remove %s: %v", name, err)
 		}
 	}
-	if err := os.Remove(filepath.Join(first.Repository(), "assistant-gate.json")); err != nil {
+	if err := os.Remove(filepath.Join(first.Repository(), recordName)); err != nil {
 		t.Fatalf("remove the record: %v", err)
 	}
 	rawGit(t, wc.path, "remote", "remove", gate.RemoteName)
 
-	second, err := gate.Initialize(ctx(t), spec)
+	second, err := gate.Initialize(ctx(t), spec, opts()...)
 	if err != nil {
 		t.Fatalf("Initialize again: %v", err)
 	}
@@ -401,6 +401,65 @@ func equal(a, b []string) bool {
 	return true
 }
 
+// TestAnInitializationSealsEveryGateItLooksAt is the part of the invariant that
+// reaches past the gate an operation acts on.
+//
+// A copy of a gated project carries the original's remote, so obtaining a gate
+// for the copy reads the original's gate before deciding the copy gets one of
+// its own. If that gate has lost its admission hook it is accepting every push
+// with nothing running, and the copy's initialization is the only thing that
+// has looked at it. Leaving it alone out of politeness, because it belongs to
+// somebody else, would be choosing the silent failure over the loud one: the
+// only change made to it is to close a gate that was open.
+func TestAnInitializationSealsEveryGateItLooksAt(t *testing.T) {
+	gitEnvironment(t)
+	wc := newWorkingCopy(t)
+	home, opts := newHome(t)
+	command, _ := recorderCommand(t, 0)
+
+	original, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path, Command: command}, opts()...)
+	if err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+	rawGit(t, wc.path, "push", "--quiet", gate.RemoteName, "main")
+
+	duplicate := filepath.Join(filepath.Dir(wc.path), "copy")
+	copyTree(t, wc.path, duplicate)
+	if url, ok := remoteURL(t, duplicate, gate.RemoteName); !ok || url != original.Repository() {
+		t.Fatalf("the copy's %s remote is %q, want the original's gate %q; the fixture does not pose the "+
+			"question this test asks", gate.RemoteName, url, original.Repository())
+	}
+	if err := os.Remove(filepath.Join(original.Repository(), "hooks", gate.AdmissionHook)); err != nil {
+		t.Fatalf("remove the admission hook: %v", err)
+	}
+
+	// The copy gets a gate of its own, which is the ordinary outcome, and the
+	// original's gate is the one this initialization only looked at.
+	own, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: duplicate, Command: command}, opts()...)
+	if err != nil {
+		t.Fatalf("Initialize the copy: %v", err)
+	}
+	if own.Repository() == original.Repository() {
+		t.Fatalf("the copy took the original's gate at %q", own.Repository())
+	}
+
+	commitMore(t, wc, "after the copy initialized\n")
+	before := refs(t, original.Repository())
+	out, pushErr := tryRawGit(wc.path, "push", gate.RemoteName, "main")
+	if pushErr == nil {
+		t.Fatalf("the original's gate accepted a push with no admission hook:\n%s", out)
+	}
+	if got := refs(t, original.Repository()); !equal(got, before) {
+		t.Fatalf("the refused push moved references in the gate: %v, want %v", got, before)
+	}
+
+	// And the seal is not a state the gate stays in: the original repairs it.
+	if _, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path, Command: command}, opts()...); err != nil {
+		t.Fatalf("Initialize the original again: %v", err)
+	}
+	rawGit(t, wc.path, "push", "--quiet", gate.RemoteName, "main")
+}
+
 // TestEveryEarlyRefusalLeavesTheGateRefusingPushes is the invariant on the
 // paths that reach no hooks at all. An initialization can refuse before it
 // looks at the gate's hooks, and a gate that has lost its admission hook is
@@ -440,7 +499,7 @@ func TestEveryEarlyRefusalLeavesTheGateRefusingPushes(t *testing.T) {
 				if err != nil {
 					t.Fatalf("encode: %v", err)
 				}
-				writeFile(t, filepath.Join(g.Repository(), "assistant-gate.json"), string(replaced))
+				writeFile(t, filepath.Join(g.Repository(), recordName), string(replaced))
 				return gate.Spec{Home: home, WorkingPath: wc.path, Command: command}, gate.ErrMalformedRecord
 			},
 		},
@@ -452,7 +511,7 @@ func TestEveryEarlyRefusalLeavesTheGateRefusingPushes(t *testing.T) {
 				// refused ownership of its own identifier.
 				duplicate := filepath.Join(filepath.Dir(wc.path), "copy")
 				copyTree(t, wc.path, duplicate)
-				writeFile(t, filepath.Join(g.Repository(), "assistant-gate.json"),
+				writeFile(t, filepath.Join(g.Repository(), recordName),
 					fmt.Sprintf(`{"version":1,"id":%q,"workingPath":%q}`, g.ID(), resolved(t, duplicate)))
 				return gate.Spec{Home: home, WorkingPath: wc.path, Command: command}, gate.ErrGateClaimed
 			},
@@ -462,8 +521,8 @@ func TestEveryEarlyRefusalLeavesTheGateRefusingPushes(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			wc := newWorkingCopy(t)
-			home := t.TempDir()
-			g, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path, Command: command})
+			home, opts := newHome(t)
+			g, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path, Command: command}, opts()...)
 			if err != nil {
 				t.Fatalf("Initialize: %v", err)
 			}
@@ -476,7 +535,7 @@ func TestEveryEarlyRefusalLeavesTheGateRefusingPushes(t *testing.T) {
 			}
 
 			spec, want := c.refuse(t, home, wc, g)
-			if _, err := gate.Initialize(ctx(t), spec); !errors.Is(err, want) {
+			if _, err := gate.Initialize(ctx(t), spec, opts()...); !errors.Is(err, want) {
 				t.Fatalf("Initialize error = %v, want %v", err, want)
 			}
 

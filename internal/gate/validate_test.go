@@ -16,7 +16,7 @@ import (
 func TestInitializeRefusesASpecItCannotTrust(t *testing.T) {
 	gitEnvironment(t)
 	wc := newWorkingCopy(t)
-	home := t.TempDir()
+	home, opts := newHome(t)
 	command, _ := recorderCommand(t, 0)
 
 	notExecutable := filepath.Join(t.TempDir(), "not-executable")
@@ -37,7 +37,7 @@ func TestInitializeRefusesASpecItCannotTrust(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			_, err := gate.Initialize(ctx(t), c.spec)
+			_, err := gate.Initialize(ctx(t), c.spec, opts()...)
 			if !errors.Is(err, gate.ErrInvalidSpec) {
 				t.Fatalf("Initialize error = %v, want ErrInvalidSpec", err)
 			}
@@ -58,14 +58,14 @@ func TestInitializeRefusesASpecItCannotTrust(t *testing.T) {
 func TestARelativeHookCommandIsRefusedEvenWhenPATHResolvesIt(t *testing.T) {
 	gitEnvironment(t)
 	wc := newWorkingCopy(t)
-	home := t.TempDir()
+	home, opts := newHome(t)
 	command, _ := recorderCommand(t, 0)
 	t.Setenv("PATH", filepath.Dir(command)+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	if _, err := exec.LookPath(filepath.Base(command)); err != nil {
 		t.Fatalf("the fixture command is not resolvable through PATH, so this test asks nothing: %v", err)
 	}
-	_, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path, Command: filepath.Base(command)})
+	_, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path, Command: filepath.Base(command)}, opts()...)
 	if !errors.Is(err, gate.ErrInvalidSpec) {
 		t.Fatalf("Initialize error = %v, want ErrInvalidSpec", err)
 	}
@@ -78,10 +78,10 @@ func TestARelativeHookCommandIsRefusedEvenWhenPATHResolvesIt(t *testing.T) {
 func TestPathAtPushTimeCannotChooseWhatAdmissionRuns(t *testing.T) {
 	gitEnvironment(t)
 	wc := newWorkingCopy(t)
-	home := t.TempDir()
+	home, opts := newHome(t)
 	command, log := recorderCommand(t, 0)
 
-	if _, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path, Command: command}); err != nil {
+	if _, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path, Command: command}, opts()...); err != nil {
 		t.Fatalf("Initialize: %v", err)
 	}
 
@@ -109,6 +109,7 @@ func TestPathAtPushTimeCannotChooseWhatAdmissionRuns(t *testing.T) {
 func TestHookCommandSurvivesAPathThatNeedsQuoting(t *testing.T) {
 	gitEnvironment(t)
 	wc := newWorkingCopy(t)
+	opts := indexOptions(t)
 	home := filepath.Join(t.TempDir(), "an odd 'home'")
 	if err := os.MkdirAll(home, 0o755); err != nil {
 		t.Fatalf("mkdir %s: %v", home, err)
@@ -117,7 +118,7 @@ func TestHookCommandSurvivesAPathThatNeedsQuoting(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "bin dir with 'quotes'")
 	command, log := stubCommand(t, dir, "assistant stub", 0)
 
-	g, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path, Command: command})
+	g, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path, Command: command}, opts()...)
 	if err != nil {
 		t.Fatalf("Initialize: %v", err)
 	}
@@ -142,10 +143,10 @@ func TestHookCommandSurvivesAPathThatNeedsQuoting(t *testing.T) {
 func TestInstallationLeavesExactlyTheTwoExecutableHooks(t *testing.T) {
 	gitEnvironment(t)
 	wc := newWorkingCopy(t)
-	home := t.TempDir()
+	home, opts := newHome(t)
 	command, _ := recorderCommand(t, 0)
 
-	g, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path, Command: command})
+	g, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path, Command: command}, opts()...)
 	if err != nil {
 		t.Fatalf("Initialize: %v", err)
 	}

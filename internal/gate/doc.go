@@ -92,31 +92,38 @@
 // every push. The preservation rule and the template channel are only safe
 // together, so the one that can be closed is closed everywhere.
 //
-// # What one side of an operation owes an operator, its sibling owes too
+// # One seam, and every operation on a gate goes through it
 //
-// Four times now something in this package has covered one path and not its
+// Five times this package covered one path of an operation and not its
 // sibling: ownership checked on adoption but not on removal, a hook guarded on
 // creation but not on repair, a refusal that said what an action would cost
 // when it was the destructive one and said nothing when it was the
-// constructive one, and a recordless gate marked as inferred when a remote
-// alone claimed it but not when a path hash alone did. Each was written where
-// the problem was first noticed rather than around the operation, or the
-// question, that carries the risk, and each left the sibling reachable and
-// unaddressed.
+// constructive one, a recordless gate marked as inferred when a remote alone
+// claimed it but not when a path hash alone did, and the invariant below held
+// by initialization and not by removal. Each was written where the problem was
+// first noticed rather than around the operation that carries the risk.
 //
-// So when a rule about a gate is added here, ask what operation it constrains
-// and put it there, not at the call that prompted it. The two questions that
-// find this are: which other caller performs the same act, and what does this
-// check do when the state it inspects was already there when the operation
-// started. A guard scoped to a code path is a guard the next caller of that
-// operation reopens without noticing.
+// It was written down as a rule and then violated twice more, which says the
+// rule was not what was missing. What was missing is a mechanism, so there is
+// one now. Every operation here obtains its gate from one unexported seam and
+// takes that handle rather than a path: no exported entry point takes a path,
+// and the seam is what resolves the repository, reads its contents once, asks
+// and refuses on the ownership question, and leaves no gate it looked at
+// accepting pushes with nothing checking them. An operation added later cannot
+// skip any of that, because it cannot obtain a gate without going through it.
+// This repository has solved this class twice the same way: internal/agents
+// puts P4 in a type split rather than in a rule callers follow, and
+// internal/safety makes an anchor's provenance a constructor rather than a
+// value somebody remembers to check.
 //
 // The same holds for what a refusal tells an operator, because a message is a
 // guard whose enforcement is the reader. Whatever one side of an operation
 // owes them, a caveat, a named action, or a cost, its sibling owes as well.
-// The side that is easy to forget is usually the one where being wrong cannot
-// be undone, which is why the forgetting is worth a rule rather than a fix
-// each time.
+// Where that has a mechanism it is used: every ErrMalformedRecord goes through
+// one constructor that attaches the step that gets a reader out, because two
+// producers of it did not attach one while this file promised that all of them
+// did. Where it does not yet, it is still only a rule, and the record of this
+// package says how far a rule gets.
 //
 // The near relative of that mistake is a signal that answers two conditions
 // with one value. A gate whose record file is gone and a gate that is not
@@ -145,79 +152,85 @@
 // computes it. It is a starting point rather than a standing truth: after a
 // working copy moves, the gate keeps the identifier it was created with, so
 // the run history recorded against it survives the move. What binds a gate to
-// a working copy from then on is the record file inside the gate, and the
-// remote in the working copy that points at it. Per PRD principle P14 that
-// record is the owner of the binding, and the hash only seeds a new one.
+// a working copy from then on is what the next section describes, and the hash
+// only seeds a new gate.
 //
 // Reattachment and copying are the same question asked twice. When a working
-// copy already names a gate under this home, Initialize reads that gate's
-// record and asks whether the working copy the record names is still bound to
-// it. A working copy that moved leaves nothing behind, so the claim is stale
-// and the gate is reattached to the new path with its identifier and its
-// contents intact. A working copy that was copied leaves the original in place
-// and still bound, so the claim holds, and the copy gets its own gate at its
-// own identifier rather than sharing the original's.
+// copy already names a gate under this home, Initialize asks whether any other
+// working copy is still bound to it. A working copy that moved leaves nothing
+// behind, so nobody is, and the gate is reattached to the new path with its
+// identifier and its contents intact. A working copy that was copied leaves the
+// original in place and still bound, so somebody is, and the copy gets its own
+// gate at its own identifier rather than sharing the original's.
 //
-// # Every operation on a gate asks whose gate it is
+// # Every operation on a gate asks whose gate it is, and asks the same way
 //
-// A remote and a path hash are both evidence a gate belongs to a working copy,
-// and both are evidence a copy of that working copy inherits or reproduces
-// exactly. The record inside the gate is the owner of the binding, so every
-// operation here reads it and refuses with ErrGateClaimed when it names a
-// different working copy that is still pointing at the gate. There is one
-// implementation of that question and both operations call it.
+// The question is whether another working copy is still bound to this gate,
+// and it is asked once, by the seam, before either operation begins. An
+// operation whose gate is held by somebody else is refused with
+// ErrGateClaimed, except that an initialization holding a gate through an
+// inherited remote falls back to a gate of its own instead, because there is
+// one to hand out and taking the other would be the refusal.
 //
-// The destructive operation is the one that has to ask. An adoption that goes
-// to the wrong working copy is loud and reversible: the gate's references stay
-// where they are, and the working copy that lost the binding meets
-// ErrGateClaimed the next time it initializes. A deletion is neither. This
-// package shipped the check on adoption first and left deletion deciding on an
-// inherited remote alone, which is the wrong way round, and the shape to watch
-// for anywhere else it appears.
+// A remote and a path hash are not evidence of ownership and are not weighed as
+// any. This package writes the remote, and a copy of a gated project inherits
+// it byte for byte; the path hash is reproduced by whatever project lands on a
+// path next. Both are how a gate is found, and neither says whose it is.
+// Weighing something this package produced as though it were a second fact is
+// how an adoption launders itself into a deletion.
 //
-// So a working copy standing where a moved one used to stand hashes to the
-// moved one's identifier and is refused rather than handed its gate, and a
-// copied project directory, whose configuration names the original's gate, is
-// refused rather than allowed to delete it.
+// What the question is answered from is two records, neither believed alone.
+// The ownership index in internal/store maps a working path to a gate, so the
+// home can enumerate every working copy bound to a gate, which a gate filed
+// under a hash of a path can never do from its own directory. The record inside
+// the gate names the working copy the gate last belonged to, and it travels
+// with the repository, so it still answers when the home's database has been
+// lost or replaced. Every working copy either of them names is then checked
+// against the present: it counts only if it is still there and its own
+// assistant remote still names this gate. Checking rather than believing is
+// what keeps two records from becoming two owners of one fact, per PRD
+// principle P14; neither decides anything, and what they contribute is the list
+// of working copies worth asking about.
 //
-// A gate carrying no record at all is adopted rather than refused, and that is
-// a deliberate trade rather than an exception. A gate that lost its record and
-// is reached only through a remote would otherwise be abandoned for a new
-// empty one at the current path's hash, with everything recorded against the
-// old identifier unreachable, because nothing here scans the home for a gate
-// nobody names. What it costs is that with no record there is no ownership
-// evidence left to weigh, so a copy holding the inherited remote can take a
-// recordless gate over, and no reading of the two gates afterwards can tell
-// that apart from a working copy that moved and lost the same file.
+// So a working copy standing where a moved one used to stand is refused rather
+// than handed the moved one's gate, and a copied project directory, whose
+// configuration names the original's gate, is neither given it nor allowed to
+// delete it. Both hold whether or not the gate still carries its record, which
+// is the part that needed the index: with the record gone there used to be no
+// ownership evidence left to weigh at all.
 //
-// So the adoption is recorded as one. The record this package then writes says
-// the binding rested on one piece of evidence rather than two, that field is
-// carried into every record an initialization reached the same way writes
-// afterwards, and Remove refuses on it with ErrGateBindingInferred. Deleting is
-// the one act here that cannot be undone, and an inferred binding does not
-// justify it. Without that the adoption would manufacture the very evidence a
-// later removal reads, and the eject that followed would delete somebody
-// else's history with nothing having refused anything.
+// A gate carrying no record is repaired rather than abandoned or deleted. It
+// still holds everything its runs recorded, and starting over with an empty
+// gate at the current path's hash would leave all of that unreachable, because
+// nothing here scans the home for a gate nobody names. So an initialization
+// adopts it and writes the record back, and a removal refuses it with
+// ErrNotAGate and names that initialization, which completes: the refusal is
+// reached only after the seam established that nobody else is bound to the
+// gate, so the removal after the repair succeeds. There is one such message
+// now. There used to be two, because for one of the two askers the
+// initialization it would have named led to a second refusal.
 //
-// One piece of evidence is what a remote alone is, because a copy inherits it,
-// and it is equally what a path hash alone is, because a path outlives the
-// working copy that stood on it and the next project to land there hashes the
-// same. Those are siblings and they are marked alike: a recordless gate is
-// adopted with an evidenced binding only where the remote and the path hash
-// agree, and with an inferred one where only one of them speaks.
+// # The residual gap is a path that outlives its working copy
 //
-// What is left is loud in both directions. The copy is told it may not delete
-// the gate, and is told the detachment that does succeed from where it stands.
-// The original is refused with ErrGateClaimed the next time it initializes,
-// because the copy is by then a working copy that still points at the gate.
-// Neither loses a reference.
+// A working copy that moves and does not initialize anywhere afterwards leaves
+// nothing behind saying where it went. The gate's record still names the path
+// it left, the index's row is against that same path, and the working copy
+// itself is only reachable from a path nothing here knows. The next project to
+// stand on that path hashes to the same identifier and, from everything this
+// package can read, is that working copy: it takes the gate, and can then
+// delete it.
 //
-// The mark is not permanent, and it should not be. An initialization that has
-// two pieces of evidence writes an evidenced binding over the inferred one: a
-// record naming this working copy over a gate its path hashes to, or a
-// recordless gate its remote and its path hash both point at. A mark that
-// outlived the ambiguity would leave a gate whose owner is standing exactly
-// where it is named for permanently unremovable.
+// That is stated rather than guarded because it cannot be told apart from the
+// state it has to allow. A working copy that lost its assistant remote, over a
+// gate that lost its record, standing at the path the gate is filed under, is
+// the same three facts and must be repaired rather than refused. An earlier
+// arrangement refused half of this, the half where the gate had lost its
+// record, and let the ordinary half through; the half it let through is the
+// common one, so what the refusal bought was mostly the appearance of a guard.
+//
+// One initialization at the new path closes it. That writes a binding the home
+// can enumerate, and from then on the project landing on the freed path is
+// refused with ErrGateClaimed even if the gate's own record is gone.
 //
 // # A refusal has to name an action that succeeds
 //
@@ -235,11 +248,12 @@
 // initialization where one would rebuild what is missing and a detachment
 // where it would not. ErrGateClaimed names the detachment of the working copy
 // that holds the gate, after which the gate is handed over, and says first
-// what that costs the working copy losing it. ErrGateBindingInferred names the
-// detachment of the asker, and leaves the deleting of the gate to the operator
-// once they are satisfied whose history is in it. ErrMalformedRecord names the
+// what that costs the working copy losing it. ErrMalformedRecord names the
 // record file, because both operations refuse on it and detaching does not
-// help, so removing that file is the only step that gets anywhere.
+// help, so removing that file is the only step that gets anywhere; every
+// producer of it goes through one constructor that attaches that step, so a
+// refusal with no action is not something a new producer can write by leaving
+// something out.
 //
 // # A gate never accepts a push that admission has not seen
 //
@@ -249,20 +263,35 @@
 // gate: it accepts everything, runs nothing, and tells nobody. No path here
 // may leave one, including a path that is undoing what it just did.
 //
-// The invariant is held by filling the absence rather than by remembering to.
-// An initialization notes every gate it looks at, and on its way out, whatever
-// it is on its way out with, puts a hook that refuses every push into any of
-// them that has none. Where it gets far enough it installs the real admission
-// hook over that. So a refused initialization leaves a gate that admits
-// nothing, and what the refusal costs is a closed gate rather than an open one.
+// The invariant is held by filling the absence rather than by remembering to,
+// and it is held by both operations because both obtain their gate the same
+// way. Obtaining one notes every gate the resolution looks at and, whatever it
+// is on its way out with, puts a hook that refuses every push into any of them
+// that has none. An operation that gets far enough installs the real admission
+// hook over that. So a refused operation, of either kind, leaves a gate that
+// admits nothing, and what the refusal costs is a closed gate rather than an
+// open one.
 //
-// Deferring the seal rather than writing it at each refusal is the point. The
-// refusals are many and the next one added would not have carried it, which is
-// exactly the sibling-path shape above. It also means an initialization can
-// seal a gate it is refusing to act on, including one another working copy
-// owns: the only gate it changes is one that was already accepting everything
-// with nothing running, and leaving that alone out of politeness would be
-// choosing the silent failure over the loud one.
+// The seal is discharged before the operation begins rather than on its way
+// out, and the ordering is what keeps a failure meaning one thing. A seal that
+// fails is then a gate that was never obtained and an operation that has not
+// started, so an unrelated gate's unreadable hooks directory cannot turn a
+// completed operation into a reported failure, which is what it used to do.
+//
+// Doing it there rather than at each refusal is the other half. The refusals
+// are many and the next one added would not have carried it, which is exactly
+// the sibling-path shape above. It also means an operation seals a gate it is
+// refusing to act on, including one another working copy owns: the only gate it
+// changes is one that was already accepting everything with nothing running,
+// and leaving that alone out of politeness would be choosing the silent failure
+// over the loud one.
+//
+// One condition is outside what the seam can cover, and ensureRepository owns
+// it: a repository that does not exist when the operation starts, between the
+// git invocation that creates it and the hooks being installed. That window is
+// left only by an I/O failure or the process dying, so it is the one guard here
+// that has been reasoned about rather than watched to fail; ensureRepository
+// says so where it is written.
 //
 // It is worth saying why this outranks the loss paths above. Losing history
 // announces itself: something that was there is gone, and somebody notices. A
@@ -299,5 +328,12 @@
 // each one is returned before the mutation it refuses rather than after.
 // Removal in particular checks that it can complete before it deletes
 // anything, so a gate is never half-removed with the working copy still
-// pointing at it.
+// pointing at it, and it gives up the working copy's remote and its binding in
+// the index before it deletes the repository, so every step that can be undone
+// comes before the one that cannot.
+//
+// One write is common to every refusal and is stated once, in errors.go rather
+// than in each of them: obtaining a gate seals any gate the resolution observed
+// that has no admission hook. Where a refusal says nothing was created,
+// written, or deleted, it means nothing beyond that.
 package gate

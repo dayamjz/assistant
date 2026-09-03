@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -99,10 +100,10 @@ func TestIdentifyRefusesWhatItCannotResolve(t *testing.T) {
 func TestGateLivesWhereTheOnDiskLayoutSaysItDoes(t *testing.T) {
 	gitEnvironment(t)
 	wc := newWorkingCopy(t)
-	home := t.TempDir()
+	home, opts := newHome(t)
 	command, _ := recorderCommand(t, 0)
 
-	g, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path, Command: command})
+	g, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path, Command: command}, opts()...)
 	if err != nil {
 		t.Fatalf("Initialize: %v", err)
 	}
@@ -131,15 +132,15 @@ func TestGateLivesWhereTheOnDiskLayoutSaysItDoes(t *testing.T) {
 func TestARecordFromAnotherVersionIsRefused(t *testing.T) {
 	gitEnvironment(t)
 	wc := newWorkingCopy(t)
-	home := t.TempDir()
+	home, opts := newHome(t)
 	command, _ := recorderCommand(t, 0)
 	spec := gate.Spec{Home: home, WorkingPath: wc.path, Command: command}
 
-	g, err := gate.Initialize(ctx(t), spec)
+	g, err := gate.Initialize(ctx(t), spec, opts()...)
 	if err != nil {
 		t.Fatalf("Initialize: %v", err)
 	}
-	record := filepath.Join(g.Repository(), "assistant-gate.json")
+	record := filepath.Join(g.Repository(), recordName)
 	replaced, err := json.Marshal(map[string]any{"version": 99, "id": g.ID(), "workingPath": g.WorkingPath()})
 	if err != nil {
 		t.Fatalf("encode: %v", err)
@@ -152,7 +153,7 @@ func TestARecordFromAnotherVersionIsRefused(t *testing.T) {
 	if err := os.Rename(wc.path, moved); err != nil {
 		t.Fatalf("move the working copy: %v", err)
 	}
-	_, err = gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: moved, Command: command})
+	_, err = gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: moved, Command: command}, opts()...)
 	if !errors.Is(err, gate.ErrMalformedRecord) {
 		t.Fatalf("Initialize error = %v, want ErrMalformedRecord", err)
 	}
@@ -168,17 +169,17 @@ func TestARecordFromAnotherVersionIsRefused(t *testing.T) {
 func TestARecordThisBuildCannotReadNamesAWayOut(t *testing.T) {
 	gitEnvironment(t)
 	wc := newWorkingCopy(t)
-	home := t.TempDir()
+	home, opts := newHome(t)
 	command, _ := recorderCommand(t, 0)
 	spec := gate.Spec{Home: home, WorkingPath: wc.path, Command: command}
 
-	g, err := gate.Initialize(ctx(t), spec)
+	g, err := gate.Initialize(ctx(t), spec, opts()...)
 	if err != nil {
 		t.Fatalf("Initialize: %v", err)
 	}
 	rawGit(t, wc.path, "push", "--quiet", gate.RemoteName, "main")
 
-	record := filepath.Join(g.Repository(), "assistant-gate.json")
+	record := filepath.Join(g.Repository(), recordName)
 	replaced, err := json.Marshal(map[string]any{"version": 99, "id": g.ID(), "workingPath": g.WorkingPath()})
 	if err != nil {
 		t.Fatalf("encode: %v", err)
@@ -187,10 +188,10 @@ func TestARecordThisBuildCannotReadNamesAWayOut(t *testing.T) {
 
 	// Both operations are shut, which is what makes the named step the only
 	// one, and detaching does not open either.
-	if _, err := gate.Initialize(ctx(t), spec); !errors.Is(err, gate.ErrMalformedRecord) {
+	if _, err := gate.Initialize(ctx(t), spec, opts()...); !errors.Is(err, gate.ErrMalformedRecord) {
 		t.Fatalf("Initialize error = %v, want ErrMalformedRecord", err)
 	}
-	refused := gate.Remove(ctx(t), spec, gate.WithOpener(detachingOpener))
+	refused := gate.Remove(ctx(t), spec, opts(gate.WithOpener(detachingOpener))...)
 	if !errors.Is(refused, gate.ErrMalformedRecord) {
 		t.Fatalf("Remove error = %v, want ErrMalformedRecord", refused)
 	}
@@ -203,7 +204,7 @@ func TestARecordThisBuildCannotReadNamesAWayOut(t *testing.T) {
 	if err := os.Remove(record); err != nil {
 		t.Fatalf("remove the record: %v", err)
 	}
-	repaired, err := gate.Initialize(ctx(t), spec)
+	repaired, err := gate.Initialize(ctx(t), spec, opts()...)
 	if err != nil {
 		t.Fatalf("the step the refusal names did not complete: %v", err)
 	}
@@ -213,8 +214,66 @@ func TestARecordThisBuildCannotReadNamesAWayOut(t *testing.T) {
 	if got, want := refs(t, g.Repository()), []string{"refs/heads/main " + wc.commit}; !equal(got, want) {
 		t.Fatalf("the repaired gate holds %v, want its history %v", got, want)
 	}
-	if err := gate.Remove(ctx(t), spec, gate.WithOpener(detachingOpener)); err != nil {
+	if err := gate.Remove(ctx(t), spec, opts(gate.WithOpener(detachingOpener))...); err != nil {
 		t.Fatalf("Remove after the repair the refusal named: %v", err)
+	}
+}
+
+// TestARecordFiledUnderTheWrongIdentifierNamesAWayOut is the second producer of
+// that refusal, and it is here because it did not always name a way out.
+//
+// A record whose identifier is not the one the gate is filed under is a record
+// this build will not act on: the identifier is what the run history is
+// recorded against, and a gate that disagrees with itself about which one it is
+// cannot be adopted or deleted on. What it owes the reader is the same step the
+// unreadable record owes, and every producer now goes through one constructor
+// that attaches it rather than each remembering to.
+func TestARecordFiledUnderTheWrongIdentifierNamesAWayOut(t *testing.T) {
+	gitEnvironment(t)
+	wc := newWorkingCopy(t)
+	home, opts := newHome(t)
+	command, _ := recorderCommand(t, 0)
+	spec := gate.Spec{Home: home, WorkingPath: wc.path, Command: command}
+
+	g, err := gate.Initialize(ctx(t), spec, opts()...)
+	if err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+	rawGit(t, wc.path, "push", "--quiet", gate.RemoteName, "main")
+
+	// A record this build reads in full, whose identifier is not the one the
+	// directory it sits in is named for.
+	record := filepath.Join(g.Repository(), recordName)
+	writeFile(t, record, fmt.Sprintf(`{"version":1,"id":%q,"workingPath":%q}`, "0f0f0f0f0f0f0f0f", g.WorkingPath()))
+
+	refusedInit := func() error {
+		_, err := gate.Initialize(ctx(t), spec, opts()...)
+		return err
+	}()
+	refusedRemove := gate.Remove(ctx(t), spec, opts(gate.WithOpener(detachingOpener))...)
+	for name, refused := range map[string]error{"Initialize": refusedInit, "Remove": refusedRemove} {
+		if !errors.Is(refused, gate.ErrMalformedRecord) {
+			t.Fatalf("%s error = %v, want ErrMalformedRecord", name, refused)
+		}
+		if !namesRemoving(refused, record) {
+			t.Fatalf("the %s refusal does not name removing %s, which is the only step that gets anywhere "+
+				"from here: %v", name, record, refused)
+		}
+	}
+
+	// The step both name completes, and the gate keeps everything it holds.
+	if err := os.Remove(record); err != nil {
+		t.Fatalf("remove the record: %v", err)
+	}
+	repaired, err := gate.Initialize(ctx(t), spec, opts()...)
+	if err != nil {
+		t.Fatalf("the step the refusals name did not complete: %v", err)
+	}
+	if repaired.Repository() != g.Repository() {
+		t.Fatalf("the repair moved the gate to %q, want %q", repaired.Repository(), g.Repository())
+	}
+	if got, want := refs(t, g.Repository()), []string{"refs/heads/main " + wc.commit}; !equal(got, want) {
+		t.Fatalf("the repaired gate holds %v, want its history %v", got, want)
 	}
 }
 
@@ -231,6 +290,7 @@ func TestAHomeThatDoesNotExistYetIsSpelledTheSameOnceItDoes(t *testing.T) {
 	wc := newWorkingCopy(t)
 	command, _ := recorderCommand(t, 0)
 
+	opts := indexOptions(t)
 	root := t.TempDir()
 	actual := filepath.Join(root, "actual")
 	if err := os.Mkdir(actual, 0o700); err != nil {
@@ -244,11 +304,11 @@ func TestAHomeThatDoesNotExistYetIsSpelledTheSameOnceItDoes(t *testing.T) {
 	// somewhere else.
 	spec := gate.Spec{Home: filepath.Join(link, "assistant"), WorkingPath: wc.path, Command: command}
 
-	first, err := gate.Initialize(ctx(t), spec)
+	first, err := gate.Initialize(ctx(t), spec, opts()...)
 	if err != nil {
 		t.Fatalf("Initialize into a home that does not exist yet: %v", err)
 	}
-	second, err := gate.Initialize(ctx(t), spec)
+	second, err := gate.Initialize(ctx(t), spec, opts()...)
 	if err != nil {
 		t.Fatalf("Initialize again once the home exists: %v", err)
 	}
@@ -258,7 +318,7 @@ func TestAHomeThatDoesNotExistYetIsSpelledTheSameOnceItDoes(t *testing.T) {
 	if url, ok := remoteURL(t, wc.path, gate.RemoteName); !ok || url != first.Repository() {
 		t.Fatalf("the %s remote is %q, want %q", gate.RemoteName, url, first.Repository())
 	}
-	if err := gate.Remove(ctx(t), spec, gate.WithOpener(detachingOpener)); err != nil {
+	if err := gate.Remove(ctx(t), spec, opts(gate.WithOpener(detachingOpener))...); err != nil {
 		t.Fatalf("Remove a gate this package created in a home it created: %v", err)
 	}
 }

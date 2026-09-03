@@ -6,11 +6,89 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/dayamjz/assistant/internal/gate"
+	"github.com/dayamjz/assistant/internal/store"
+	"github.com/dayamjz/assistant/internal/vcs"
 )
+
+// newHome returns an assistant home and a builder for the options every
+// operation in that home takes.
+//
+// The ownership index is a real internal/store rather than a stand-in. What the
+// index answers is what decides whether a gate is adopted or deleted, and a
+// stand-in that could answer in a shape the real one cannot produce would make
+// every test using it unreliable in exactly the direction that matters here.
+func newHome(t *testing.T) (home string, opts func(...gate.Option) []gate.Option) {
+	t.Helper()
+	home, _, opts = homeWithIndex(t)
+	return home, opts
+}
+
+// homeWithIndex is newHome for a test that reads the index back as well as
+// passing it in.
+func homeWithIndex(t *testing.T) (home string, index *store.Store, opts func(...gate.Option) []gate.Option) {
+	t.Helper()
+	index = openIndex(t)
+	return t.TempDir(), index, func(extra ...gate.Option) []gate.Option {
+		return append([]gate.Option{gate.WithIndex(index)}, extra...)
+	}
+}
+
+// boundWorkingPaths is the working copies the index records as bound to a gate,
+// read back through internal/store's own accessor.
+func boundWorkingPaths(t *testing.T, index *store.Store, gateID string) []string {
+	t.Helper()
+	bindings, err := index.GateBindings(context.Background(), gateID)
+	if err != nil {
+		t.Fatalf("read the bindings of gate %s: %v", gateID, err)
+	}
+	paths := make([]string, 0, len(bindings))
+	for _, binding := range bindings {
+		paths = append(paths, binding.WorkingPath)
+	}
+	return paths
+}
+
+// indexOptions is newHome for a test that builds its own home path, such as one
+// checking a home that does not exist yet.
+func indexOptions(t *testing.T) func(...gate.Option) []gate.Option {
+	t.Helper()
+	_, _, opts := homeWithIndex(t)
+	return opts
+}
+
+// openIndex opens the ownership index on a database of its own. It is not under
+// the home under test, because a home is allowed not to exist yet and opening a
+// database does not create the directory it sits in.
+func openIndex(t *testing.T) *store.Store {
+	t.Helper()
+	index, err := store.Open(context.Background(), filepath.Join(t.TempDir(), "state.db"),
+		store.WithRedactor(testRedactor()))
+	if err != nil {
+		t.Fatalf("open the ownership index: %v", err)
+	}
+	t.Cleanup(func() { _ = index.Close() })
+	return index
+}
+
+// seamUserinfo is the shape the redaction seam in internal/vcs covers: the
+// userinfo of a URL that carries a scheme.
+var seamUserinfo = regexp.MustCompile(`([a-zA-Z][a-zA-Z0-9+.\-]*://)([^/@\s]+)@`)
+
+// testRedactor is the credential remover internal/store requires of whoever
+// opens it. Nothing in this package stores a URL through it; it is here because
+// the store refuses to open without one that works.
+func testRedactor() vcs.Redactor {
+	return vcs.RedactorFunc(func(s string) string {
+		return seamUserinfo.ReplaceAllString(s, "${1}REDACTED@")
+	})
+}
 
 // gitEnvironment points git at a configuration file this test owns, so that a
 // developer's own git configuration cannot change what a test proves. It
@@ -256,6 +334,21 @@ func invocations(t *testing.T, log string) []string {
 		return nil
 	}
 	return strings.Split(text, "\n")
+}
+
+// recordName is the file inside a gate repository that names the working copy
+// it belongs to. It is spelled here rather than taken from the package under
+// test so that a test that damages the record and one that reads it cannot both
+// be wrong about which file that is.
+const recordName = "assistant-gate.json"
+
+// removeRecord deletes a gate's record, which is the damage that leaves nothing
+// inside the gate saying whose it is.
+func removeRecord(t *testing.T, repo string) {
+	t.Helper()
+	if err := os.Remove(filepath.Join(repo, recordName)); err != nil {
+		t.Fatalf("remove the record of %s: %v", repo, err)
+	}
 }
 
 // copyTree copies a directory the way a person copying a project would.

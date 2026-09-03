@@ -5,12 +5,30 @@ import "errors"
 // Errors a caller is expected to handle. Each is a typed result rather than a
 // warning execution continues past, and each is returned before the mutation
 // it refuses. Test with errors.Is.
+//
+// One write is common to every refusal here and is stated once rather than in
+// each of them. Obtaining a gate seals any gate repository the resolution
+// observed that has no admission hook, so a refusal leaves a gate that refuses
+// every push rather than one that accepts every push with nothing checking
+// them. Where a refusal below says nothing was created, written, or deleted, it
+// means nothing beyond that seal, and where the refusal happens before any
+// repository has been observed there is nothing to seal either. See doc.go for
+// why that outranks the losses the other refusals prevent.
 var (
 	// ErrInvalidSpec is returned when a Spec cannot describe a gate: a home
 	// or working path that is not absolute, a working path that is not a
 	// directory, or a hook command that is not an absolute path to an
-	// executable file. The refusal happens before anything is created.
+	// executable file. A spec whose paths do not describe a gate is refused
+	// before any gate is looked at; a hook command is refused after, so that
+	// the gate it would have been written into is sealed first.
 	ErrInvalidSpec = errors.New("gate: specification cannot describe a gate")
+	// ErrNoIndex is returned by every operation when no Index was supplied.
+	// Whether another working copy is still bound to a gate is the question
+	// that decides whether a gate may be adopted or deleted, and without an
+	// index it can only be inferred. This package refuses rather than infer,
+	// so an operation that would have guessed does nothing instead. See
+	// WithIndex.
+	ErrNoIndex = errors.New("gate: no ownership index was supplied")
 	// ErrTemplateHooks is returned when a repository this package has just
 	// created was born carrying a hook. A git template chose that hook, which
 	// means a process outside this one chose code that would run inside the
@@ -40,30 +58,20 @@ var (
 	// remove.
 	ErrNoGate = errors.New("gate: working copy has no gate")
 	// ErrGateClaimed is returned by any operation asked to act on a gate
-	// whose own record binds it to a different working copy that is still
-	// pointing at it. Initialize meets it when the gate its path hashes to is
-	// bound elsewhere, and Remove when a copied project directory carries the
-	// original's remote. Nothing has been created, written, or deleted when
-	// it is returned. The message names the gate, the working copy holding
-	// it, the working copy asking, and what has to change.
-	ErrGateClaimed = errors.New("gate: another working copy holds the gate at this identifier")
-	// ErrGateBindingInferred is returned by Remove when the gate's record says
-	// its binding came from taking over a repository that carried no record on
-	// one piece of evidence rather than two: a remote a copy of a gated
-	// project inherits, or a path hash the next project to land on that path
-	// reproduces. Neither on its own is enough for the one act here that
-	// cannot be undone. Nothing has been removed when it is returned, and the
-	// message names the detachment that does succeed from there.
-	//
-	// A later initialization that has two replaces the inferred binding with
-	// an evidenced one, so this does not outlive the ambiguity that produced
-	// it.
-	ErrGateBindingInferred = errors.New("gate: gate binding rests on a remote rather than on a record")
+	// another working copy is still bound to. Initialize meets it when the
+	// gate its path hashes to is held elsewhere, and Remove when a copied
+	// project directory carries the original's remote. Nothing has been
+	// created, written, or deleted when it is returned. The message names the
+	// gate, the working copy holding it, the working copy asking, and what has
+	// to change.
+	ErrGateClaimed = errors.New("gate: another working copy is bound to this gate")
 	// ErrMalformedRecord is returned when a gate's record file exists but
-	// cannot be read as one. The gate's binding to a working copy lives in
-	// that record, so a record that cannot be read is a fact that cannot be
-	// established rather than one to guess at. Both operations refuse on it
-	// and detaching does not help, so the message names the one step that
-	// does: removing the file, which leaves the gate and everything it holds.
+	// cannot be read as one. A record that cannot be read is a fact that
+	// cannot be established rather than one to guess at. Both operations
+	// refuse on it and detaching does not help, so the message names the one
+	// step that does: removing the file, which leaves the gate and everything
+	// it holds. Every producer goes through one constructor that attaches that
+	// step, so a refusal with no action is not something a new producer can
+	// write by omission.
 	ErrMalformedRecord = errors.New("gate: gate record cannot be read")
 )

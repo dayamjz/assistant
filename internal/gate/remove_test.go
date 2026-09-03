@@ -3,6 +3,7 @@ package gate_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -66,17 +67,17 @@ func TestRemoveRemoteIsStillTheNamedFollowUp(t *testing.T) {
 func TestRemoveRefusesBeforeDeletingAnythingWhenItCannotDetach(t *testing.T) {
 	gitEnvironment(t)
 	wc := newWorkingCopy(t)
-	home := t.TempDir()
+	home, opts := newHome(t)
 	command, _ := recorderCommand(t, 0)
 	spec := gate.Spec{Home: home, WorkingPath: wc.path, Command: command}
 
-	g, err := gate.Initialize(ctx(t), spec)
+	g, err := gate.Initialize(ctx(t), spec, opts()...)
 	if err != nil {
 		t.Fatalf("Initialize: %v", err)
 	}
 
 	// The default opener is *vcs.Repository, which cannot remove a remote.
-	if err := gate.Remove(ctx(t), spec); !errors.Is(err, gate.ErrDetachUnsupported) {
+	if err := gate.Remove(ctx(t), spec, opts()...); !errors.Is(err, gate.ErrDetachUnsupported) {
 		t.Fatalf("Remove error = %v, want ErrDetachUnsupported", err)
 	}
 	if _, err := os.Stat(g.Repository()); err != nil {
@@ -92,17 +93,17 @@ func TestRemoveRefusesBeforeDeletingAnythingWhenItCannotDetach(t *testing.T) {
 func TestRemoveLeavesTheWorkingCopyUsableAndOriginIntact(t *testing.T) {
 	gitEnvironment(t)
 	wc := newWorkingCopy(t)
-	home := t.TempDir()
+	home, opts := newHome(t)
 	command, log := recorderCommand(t, 0)
 	spec := gate.Spec{Home: home, WorkingPath: wc.path, Command: command}
 
-	g, err := gate.Initialize(ctx(t), spec)
+	g, err := gate.Initialize(ctx(t), spec, opts()...)
 	if err != nil {
 		t.Fatalf("Initialize: %v", err)
 	}
 	originURL, _ := remoteURL(t, wc.path, "origin")
 
-	if err := gate.Remove(ctx(t), spec, gate.WithOpener(detachingOpener)); err != nil {
+	if err := gate.Remove(ctx(t), spec, opts(gate.WithOpener(detachingOpener))...); err != nil {
 		t.Fatalf("Remove: %v", err)
 	}
 
@@ -133,17 +134,17 @@ func TestRemoveLeavesTheWorkingCopyUsableAndOriginIntact(t *testing.T) {
 func TestRemoveIsSafeToRepeat(t *testing.T) {
 	gitEnvironment(t)
 	wc := newWorkingCopy(t)
-	home := t.TempDir()
+	home, opts := newHome(t)
 	command, _ := recorderCommand(t, 0)
 	spec := gate.Spec{Home: home, WorkingPath: wc.path, Command: command}
 
-	if _, err := gate.Initialize(ctx(t), spec); err != nil {
+	if _, err := gate.Initialize(ctx(t), spec, opts()...); err != nil {
 		t.Fatalf("Initialize: %v", err)
 	}
-	if err := gate.Remove(ctx(t), spec, gate.WithOpener(detachingOpener)); err != nil {
+	if err := gate.Remove(ctx(t), spec, opts(gate.WithOpener(detachingOpener))...); err != nil {
 		t.Fatalf("Remove: %v", err)
 	}
-	if err := gate.Remove(ctx(t), spec, gate.WithOpener(detachingOpener)); !errors.Is(err, gate.ErrNoGate) {
+	if err := gate.Remove(ctx(t), spec, opts(gate.WithOpener(detachingOpener))...); !errors.Is(err, gate.ErrNoGate) {
 		t.Fatalf("Remove again = %v, want ErrNoGate", err)
 	}
 }
@@ -153,16 +154,16 @@ func TestRemoveIsSafeToRepeat(t *testing.T) {
 func TestRemoveRefusesAPathOutsideTheHomesRepositories(t *testing.T) {
 	gitEnvironment(t)
 	wc := newWorkingCopy(t)
-	home := t.TempDir()
+	home, opts := newHome(t)
 	command, _ := recorderCommand(t, 0)
 	spec := gate.Spec{Home: home, WorkingPath: wc.path, Command: command}
 
-	if _, err := gate.Initialize(ctx(t), spec); err != nil {
+	if _, err := gate.Initialize(ctx(t), spec, opts()...); err != nil {
 		t.Fatalf("Initialize: %v", err)
 	}
 	rawGit(t, wc.path, "remote", "set-url", gate.RemoteName, wc.origin)
 
-	if err := gate.Remove(ctx(t), spec, gate.WithOpener(detachingOpener)); !errors.Is(err, gate.ErrNotAGate) {
+	if err := gate.Remove(ctx(t), spec, opts(gate.WithOpener(detachingOpener))...); !errors.Is(err, gate.ErrNotAGate) {
 		t.Fatalf("Remove error = %v, want ErrNotAGate", err)
 	}
 	if _, err := os.Stat(wc.origin); err != nil {
@@ -176,18 +177,18 @@ func TestRemoveRefusesAPathOutsideTheHomesRepositories(t *testing.T) {
 	// stand, and this is the one state where an initialization is not it: the
 	// path the remote names is not a gate of this home, so there is no binding
 	// to rebuild over it.
-	err := gate.Remove(ctx(t), spec, gate.WithOpener(detachingOpener))
+	err := gate.Remove(ctx(t), spec, opts(gate.WithOpener(detachingOpener))...)
 	if !namesDetaching(err) {
 		t.Fatalf("the refusal names no step the reader can take: %v", err)
 	}
 
 	// And that step completes.
 	rawGit(t, wc.path, "remote", "remove", gate.RemoteName)
-	own, err := gate.Initialize(ctx(t), spec)
+	own, err := gate.Initialize(ctx(t), spec, opts()...)
 	if err != nil {
 		t.Fatalf("the step the refusal names did not complete: %v", err)
 	}
-	if err := gate.Remove(ctx(t), spec, gate.WithOpener(detachingOpener)); err != nil {
+	if err := gate.Remove(ctx(t), spec, opts(gate.WithOpener(detachingOpener))...); err != nil {
 		t.Fatalf("the gate that step gave it cannot be removed: %v", err)
 	}
 	if _, err := os.Stat(own.Repository()); !os.IsNotExist(err) {
@@ -204,19 +205,17 @@ func TestRemoveRefusesAPathOutsideTheHomesRepositories(t *testing.T) {
 func TestRemoveRefusesARepositoryCarryingNoGateRecord(t *testing.T) {
 	gitEnvironment(t)
 	wc := newWorkingCopy(t)
-	home := t.TempDir()
+	home, opts := newHome(t)
 	command, _ := recorderCommand(t, 0)
 	spec := gate.Spec{Home: home, WorkingPath: wc.path, Command: command}
 
-	g, err := gate.Initialize(ctx(t), spec)
+	g, err := gate.Initialize(ctx(t), spec, opts()...)
 	if err != nil {
 		t.Fatalf("Initialize: %v", err)
 	}
-	if err := os.Remove(filepath.Join(g.Repository(), "assistant-gate.json")); err != nil {
-		t.Fatalf("remove the record: %v", err)
-	}
+	removeRecord(t, g.Repository())
 
-	if err := gate.Remove(ctx(t), spec, gate.WithOpener(detachingOpener)); !errors.Is(err, gate.ErrNotAGate) {
+	if err := gate.Remove(ctx(t), spec, opts(gate.WithOpener(detachingOpener))...); !errors.Is(err, gate.ErrNotAGate) {
 		t.Fatalf("Remove error = %v, want ErrNotAGate", err)
 	}
 	if _, err := os.Stat(g.Repository()); err != nil {
@@ -236,10 +235,10 @@ func TestRemoveRefusesARepositoryCarryingNoGateRecord(t *testing.T) {
 func TestRemoveFromACopyRefusesAndLeavesTheOriginalsGate(t *testing.T) {
 	gitEnvironment(t)
 	wc := newWorkingCopy(t)
-	home := t.TempDir()
+	home, opts := newHome(t)
 	command, _ := recorderCommand(t, 0)
 
-	original, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path, Command: command})
+	original, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path, Command: command}, opts()...)
 	if err != nil {
 		t.Fatalf("Initialize: %v", err)
 	}
@@ -252,7 +251,7 @@ func TestRemoveFromACopyRefusesAndLeavesTheOriginalsGate(t *testing.T) {
 			gate.RemoteName, url, original.Repository())
 	}
 
-	err = gate.Remove(ctx(t), gate.Spec{Home: home, WorkingPath: duplicate}, gate.WithOpener(detachingOpener))
+	err = gate.Remove(ctx(t), gate.Spec{Home: home, WorkingPath: duplicate}, opts(gate.WithOpener(detachingOpener))...)
 	if !errors.Is(err, gate.ErrGateClaimed) {
 		t.Fatalf("Remove from the copy = %v, want ErrGateClaimed", err)
 	}
@@ -280,7 +279,7 @@ func TestRemoveFromACopyRefusesAndLeavesTheOriginalsGate(t *testing.T) {
 
 	// The original can still remove its own gate, so the guard refuses the
 	// copy rather than removal in general.
-	if err := gate.Remove(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path}, gate.WithOpener(detachingOpener)); err != nil {
+	if err := gate.Remove(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path}, opts(gate.WithOpener(detachingOpener))...); err != nil {
 		t.Fatalf("Remove from the working copy the gate belongs to: %v", err)
 	}
 	if _, statErr := os.Stat(original.Repository()); !os.IsNotExist(statErr) {
@@ -288,20 +287,24 @@ func TestRemoveFromACopyRefusesAndLeavesTheOriginalsGate(t *testing.T) {
 	}
 }
 
-// TestACopyThatAdoptedARecordlessGateCannotDeleteIt is the sequence the
-// recordless adoption opens and has to close. A gate that lost its record is
-// adopted rather than abandoned, and nothing on disk afterwards can tell a copy
-// that took one over from a working copy that moved and lost the same file. So
-// the adoption is recorded as resting on a remote rather than on a record, and
-// the act that cannot be undone refuses on that. Without the refusal the
-// adoption would manufacture the very evidence the removal reads.
-func TestACopyThatAdoptedARecordlessGateCannotDeleteIt(t *testing.T) {
+// TestACopyDoesNotAdoptARecordlessGate is the sequence the recordless adoption
+// used to open. A gate that lost its record is adopted rather than abandoned,
+// and nothing inside such a gate says whose it is, so a copy of a gated project
+// holding the inherited remote used to be able to take it over and only be
+// stopped at the deletion afterwards, by a mark recorded at the adoption.
+//
+// The home's index answers the question the gate could not. The original is
+// still there and still bound to the gate, and that is enumerable whether the
+// gate carries a record or not, so the copy is not offered the gate at all and
+// gets one of its own. Nothing is taken over and nothing has to be remembered
+// about how a binding was reached.
+func TestACopyDoesNotAdoptARecordlessGate(t *testing.T) {
 	gitEnvironment(t)
 	wc := newWorkingCopy(t)
-	home := t.TempDir()
+	home, opts := newHome(t)
 	command, _ := recorderCommand(t, 0)
 
-	original, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path, Command: command})
+	original, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path, Command: command}, opts()...)
 	if err != nil {
 		t.Fatalf("Initialize: %v", err)
 	}
@@ -315,32 +318,75 @@ func TestACopyThatAdoptedARecordlessGateCannotDeleteIt(t *testing.T) {
 		t.Fatalf("the copy's %s remote is %q, want the original's gate %q; the fixture does not pose the question this test asks",
 			gate.RemoteName, url, original.Repository())
 	}
-	// The gate loses its record, which is the damage that leaves the copy's
-	// inherited remote as the only thing saying whose gate this is.
-	if err := os.Remove(filepath.Join(original.Repository(), "assistant-gate.json")); err != nil {
-		t.Fatalf("remove the record: %v", err)
-	}
+	// The gate loses its record, which used to leave the copy's inherited
+	// remote as the only thing saying whose gate this is.
+	removeRecord(t, original.Repository())
 
-	adopted, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: duplicate, Command: command})
+	own, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: duplicate, Command: command}, opts()...)
 	if err != nil {
 		t.Fatalf("Initialize the copy: %v", err)
 	}
-	if adopted.Repository() != original.Repository() {
-		t.Fatalf("the copy got gate %q, not the recordless one at %q; this test needs the adoption to happen",
-			adopted.Repository(), original.Repository())
+	if own.Repository() == original.Repository() {
+		t.Fatalf("the copy took the recordless gate at %q instead of getting one of its own", own.Repository())
+	}
+	if id, err := gate.Identify(duplicate); err != nil {
+		t.Fatalf("Identify: %v", err)
+	} else if own.ID() != id {
+		t.Fatalf("the copy got gate %q, want the one its own path hashes to, %q", own.ID(), id)
 	}
 
-	err = gate.Remove(ctx(t), gate.Spec{Home: home, WorkingPath: duplicate}, gate.WithOpener(detachingOpener))
-	if !errors.Is(err, gate.ErrGateBindingInferred) {
-		t.Fatalf("Remove from the copy that adopted a recordless gate = %v, want ErrGateBindingInferred", err)
+	// The property that has to hold: the original's history is still there and
+	// still the original's.
+	if got, want := refs(t, original.Repository()), []string{"refs/heads/main " + wc.commit}; !equal(got, want) {
+		t.Fatalf("the gate holds %v, want the original's history %v", got, want)
 	}
-	for _, want := range []string{original.Repository(), resolved(t, duplicate)} {
+	if url, ok := remoteURL(t, wc.path, gate.RemoteName); !ok || url != original.Repository() {
+		t.Fatalf("the original's %s remote is %q, want %q", gate.RemoteName, url, original.Repository())
+	}
+
+	// And the original is not refused: nothing took its gate, so initializing
+	// writes the record back and the removal after that succeeds.
+	back, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path, Command: command}, opts()...)
+	if err != nil {
+		t.Fatalf("Initialize the original: %v", err)
+	}
+	if back.Repository() != original.Repository() {
+		t.Fatalf("the original got %q, want its own gate at %q", back.Repository(), original.Repository())
+	}
+	if err := gate.Remove(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path}, opts(gate.WithOpener(detachingOpener))...); err != nil {
+		t.Fatalf("the original cannot remove its own gate: %v", err)
+	}
+}
+
+// TestACopyCannotRemoveTheOriginalsRecordlessGate is the destructive half of the
+// sequence above, asked directly rather than after an adoption. A copy that
+// never initializes still holds the inherited remote, and a removal run there
+// names the original's gate. It is refused, and the gate a removal is refused
+// over is left exactly as it was, remote included.
+func TestACopyCannotRemoveTheOriginalsRecordlessGate(t *testing.T) {
+	gitEnvironment(t)
+	wc := newWorkingCopy(t)
+	home, opts := newHome(t)
+	command, _ := recorderCommand(t, 0)
+
+	original, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path, Command: command}, opts()...)
+	if err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+	rawGit(t, wc.path, "push", "--quiet", gate.RemoteName, "main")
+	duplicate := filepath.Join(filepath.Dir(wc.path), "copy")
+	copyTree(t, wc.path, duplicate)
+	removeRecord(t, original.Repository())
+
+	err = gate.Remove(ctx(t), gate.Spec{Home: home, WorkingPath: duplicate}, opts(gate.WithOpener(detachingOpener))...)
+	if !errors.Is(err, gate.ErrGateClaimed) {
+		t.Fatalf("Remove from the copy = %v, want ErrGateClaimed", err)
+	}
+	for _, want := range []string{original.Repository(), resolved(t, wc.path), resolved(t, duplicate)} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("the refusal does not name %q: %v", want, err)
 		}
 	}
-
-	// The property that has to hold: the original's history is still there.
 	if got, want := refs(t, original.Repository()), []string{"refs/heads/main " + wc.commit}; !equal(got, want) {
 		t.Fatalf("the gate holds %v, want the original's history %v", got, want)
 	}
@@ -348,51 +394,33 @@ func TestACopyThatAdoptedARecordlessGateCannotDeleteIt(t *testing.T) {
 		t.Fatalf("the refused removal changed the copy's %s remote to %q; it refuses without removing anything",
 			gate.RemoteName, url)
 	}
-
-	// An inferred binding stays inferred: initializing again is the ordinary
-	// case, and it must not launder the binding into one a removal accepts.
-	if _, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: duplicate, Command: command}); err != nil {
-		t.Fatalf("Initialize the copy again: %v", err)
-	}
-	if err := gate.Remove(ctx(t), gate.Spec{Home: home, WorkingPath: duplicate}, gate.WithOpener(detachingOpener)); !errors.Is(err, gate.ErrGateBindingInferred) {
-		t.Fatalf("Remove after a second initialization = %v, want ErrGateBindingInferred", err)
-	}
-	if got, want := refs(t, original.Repository()), []string{"refs/heads/main " + wc.commit}; !equal(got, want) {
-		t.Fatalf("the gate holds %v, want the original's history %v", got, want)
-	}
-
-	// And the original is refused loudly rather than losing anything quietly,
-	// which is the other half of what doc.go claims about this trade.
-	if _, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path, Command: command}); !errors.Is(err, gate.ErrGateClaimed) {
-		t.Fatalf("Initialize the original = %v, want ErrGateClaimed", err)
-	}
 }
 
-// TestAGateBoundByAnOrdinaryInitializationIsStillRemovable is the boundary of
-// the refusal above. Only a binding that came from taking over a recordless
-// gate is refused, so a gate whose record was written when the working copy's
-// own path hashed to it, including one whose record was lost and rebuilt from
-// that same hash, ejects normally.
-func TestAGateBoundByAnOrdinaryInitializationIsStillRemovable(t *testing.T) {
+// TestAGateWhoseRecordWasLostAndRebuiltIsRemovable is the boundary of the
+// refusals above. Removal refuses a gate that carries no record and a gate
+// another working copy is bound to, and neither is what a working copy whose
+// own gate lost its record has: it repairs the record by initializing, nobody
+// else is bound, and the removal after that ejects normally.
+//
+// This is the promise recordlessRefusal makes, checked rather than assumed.
+func TestAGateWhoseRecordWasLostAndRebuiltIsRemovable(t *testing.T) {
 	gitEnvironment(t)
 	wc := newWorkingCopy(t)
-	home := t.TempDir()
+	home, opts := newHome(t)
 	command, _ := recorderCommand(t, 0)
 	spec := gate.Spec{Home: home, WorkingPath: wc.path, Command: command}
 
-	g, err := gate.Initialize(ctx(t), spec)
+	g, err := gate.Initialize(ctx(t), spec, opts()...)
 	if err != nil {
 		t.Fatalf("Initialize: %v", err)
 	}
 	rawGit(t, wc.path, "push", "--quiet", gate.RemoteName, "main")
-	if err := os.Remove(filepath.Join(g.Repository(), "assistant-gate.json")); err != nil {
-		t.Fatalf("remove the record: %v", err)
-	}
-	if _, err := gate.Initialize(ctx(t), spec); err != nil {
+	removeRecord(t, g.Repository())
+	if _, err := gate.Initialize(ctx(t), spec, opts()...); err != nil {
 		t.Fatalf("Initialize to rebuild the record: %v", err)
 	}
 
-	if err := gate.Remove(ctx(t), spec, gate.WithOpener(detachingOpener)); err != nil {
+	if err := gate.Remove(ctx(t), spec, opts(gate.WithOpener(detachingOpener))...); err != nil {
 		t.Fatalf("Remove a gate the working copy's own path hashes to: %v", err)
 	}
 	if _, err := os.Stat(g.Repository()); !os.IsNotExist(err) {
@@ -401,79 +429,73 @@ func TestAGateBoundByAnOrdinaryInitializationIsStillRemovable(t *testing.T) {
 }
 
 // TestTheRemedyEachRefusalNamesActuallyCompletes is the property a refusal has
-// to have beyond being correct: it must leave the operator somewhere. Both
-// refusals here name detaching, by dropping the assistant remote, as the step
-// that always succeeds, because no guard refuses a detachment. A refusal that
-// pointed at a removal which then refused again would be a dead end, and a dead
-// end next to a destructive act is what makes somebody delete a directory by
-// hand and lose the history every guard here protects.
+// to have beyond being correct: it must leave the operator somewhere. A refusal
+// that pointed at a removal which then refused again would be a dead end, and a
+// dead end next to a destructive act is what makes somebody delete a directory
+// by hand and lose the history every guard here protects.
+//
+// The two refusals a working copy meets over somebody else's gate are checked
+// together, because what each one owes an operator is the same debt and the
+// side that gets forgotten is the one nobody walked.
 func TestTheRemedyEachRefusalNamesActuallyCompletes(t *testing.T) {
 	gitEnvironment(t)
 	wc := newWorkingCopy(t)
-	home := t.TempDir()
+	home, opts := newHome(t)
 	command, _ := recorderCommand(t, 0)
 
-	original, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path, Command: command})
+	original, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path, Command: command}, opts()...)
 	if err != nil {
 		t.Fatalf("Initialize: %v", err)
 	}
 	rawGit(t, wc.path, "push", "--quiet", gate.RemoteName, "main")
 
-	// A copy inherits the remote, the record is lost, and the copy takes the
-	// gate over on the strength of that remote alone.
+	// A copy inherits the remote, so a removal run there names a gate that is
+	// not its own and is refused.
 	duplicate := filepath.Join(filepath.Dir(wc.path), "copy")
 	copyTree(t, wc.path, duplicate)
-	if err := os.Remove(filepath.Join(original.Repository(), "assistant-gate.json")); err != nil {
-		t.Fatalf("remove the record: %v", err)
+	refused := gate.Remove(ctx(t), gate.Spec{Home: home, WorkingPath: duplicate}, opts(gate.WithOpener(detachingOpener))...)
+	if !errors.Is(refused, gate.ErrGateClaimed) {
+		t.Fatalf("Remove from the copy = %v, want ErrGateClaimed", refused)
 	}
-	if adopted, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: duplicate, Command: command}); err != nil {
-		t.Fatalf("Initialize the copy: %v", err)
-	} else if adopted.Repository() != original.Repository() {
-		t.Fatalf("the copy got %q, not the recordless gate at %q; this test needs the adoption to happen",
-			adopted.Repository(), original.Repository())
+	if !namesDetaching(refused) {
+		t.Fatalf("the copy is not told to detach, which is the only step that succeeds from there: %v", refused)
 	}
 
-	// The copy is refused a removal, and the original is refused an
-	// initialization. Both refusals fire, which is what earlier rounds
-	// established; what this test adds is that neither is a dead end.
-	if err := gate.Remove(ctx(t), gate.Spec{Home: home, WorkingPath: duplicate}, gate.WithOpener(detachingOpener)); !errors.Is(err, gate.ErrGateBindingInferred) {
-		t.Fatalf("Remove from the copy = %v, want ErrGateBindingInferred", err)
-	}
-	if _, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path, Command: command}); !errors.Is(err, gate.ErrGateClaimed) {
-		t.Fatalf("Initialize the original = %v, want ErrGateClaimed", err)
-	}
-
-	// The step both messages name: detach the working copy that is holding the
-	// gate. Nothing refuses this.
+	// The step the message names. Nothing refuses this, and initializing
+	// afterwards gives the copy a gate of its own that it can remove.
 	rawGit(t, duplicate, "remote", "remove", gate.RemoteName)
-
-	// The original's remedy completes: it takes its gate back, with its
-	// history, and can then remove it.
-	back, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path, Command: command})
+	own, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: duplicate, Command: command}, opts()...)
 	if err != nil {
 		t.Fatalf("the remedy ErrGateClaimed names did not complete: %v", err)
 	}
-	if back.Repository() != original.Repository() {
-		t.Fatalf("the original got %q, want its gate back at %q", back.Repository(), original.Repository())
+	if own.Repository() == original.Repository() {
+		t.Fatalf("the detached copy took the original's gate at %q", own.Repository())
 	}
-	if got, want := refs(t, back.Repository()), []string{"refs/heads/main " + wc.commit}; !equal(got, want) {
-		t.Fatalf("the gate holds %v, want the original's history %v", got, want)
-	}
-	if err := gate.Remove(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path}, gate.WithOpener(detachingOpener)); err != nil {
-		t.Fatalf("the original still cannot remove its own gate: %v", err)
+	if err := gate.Remove(ctx(t), gate.Spec{Home: home, WorkingPath: duplicate}, opts(gate.WithOpener(detachingOpener))...); err != nil {
+		t.Fatalf("the copy cannot remove the gate it was given: %v", err)
 	}
 
-	// And the copy's remedy completes too: detached, it initializes into a
-	// gate of its own and can remove that.
-	own, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: duplicate, Command: command})
-	if err != nil {
-		t.Fatalf("the remedy ErrGateBindingInferred names did not complete: %v", err)
+	// The other refusal: the original's gate loses its record, so a removal
+	// there refuses too, and the initialization it names completes.
+	removeRecord(t, original.Repository())
+	recordless := gate.Remove(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path}, opts(gate.WithOpener(detachingOpener))...)
+	if !errors.Is(recordless, gate.ErrNotAGate) {
+		t.Fatalf("Remove with the record gone = %v, want ErrNotAGate", recordless)
 	}
-	if own.Repository() == original.Repository() {
-		t.Fatalf("the copy took the original's gate again at %q", own.Repository())
+	if !namesInitializing(recordless, resolved(t, wc.path)) {
+		t.Fatalf("the working copy holding a recordless gate is not told to initialize: %v", recordless)
 	}
-	if err := gate.Remove(ctx(t), gate.Spec{Home: home, WorkingPath: duplicate}, gate.WithOpener(detachingOpener)); err != nil {
-		t.Fatalf("the copy cannot remove the gate it was given: %v", err)
+	if _, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path, Command: command}, opts()...); err != nil {
+		t.Fatalf("the remedy ErrNotAGate names did not complete: %v", err)
+	}
+	if got, want := refs(t, original.Repository()), []string{"refs/heads/main " + wc.commit}; !equal(got, want) {
+		t.Fatalf("the repair lost the gate's history: %v, want %v", got, want)
+	}
+	if err := gate.Remove(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path}, opts(gate.WithOpener(detachingOpener))...); err != nil {
+		t.Fatalf("the original still cannot remove its own gate: %v", err)
+	}
+	if _, err := os.Stat(original.Repository()); !os.IsNotExist(err) {
+		t.Fatalf("the gate survived removal (stat error %v)", err)
 	}
 }
 
@@ -484,11 +506,11 @@ func TestTheRemedyEachRefusalNamesActuallyCompletes(t *testing.T) {
 func TestRemoveTellsAWorkingCopyWhoseGateIsGoneWhatToDo(t *testing.T) {
 	gitEnvironment(t)
 	wc := newWorkingCopy(t)
-	home := t.TempDir()
+	home, opts := newHome(t)
 	command, _ := recorderCommand(t, 0)
 	spec := gate.Spec{Home: home, WorkingPath: wc.path, Command: command}
 
-	g, err := gate.Initialize(ctx(t), spec)
+	g, err := gate.Initialize(ctx(t), spec, opts()...)
 	if err != nil {
 		t.Fatalf("Initialize: %v", err)
 	}
@@ -496,7 +518,7 @@ func TestRemoveTellsAWorkingCopyWhoseGateIsGoneWhatToDo(t *testing.T) {
 		t.Fatalf("delete the gate: %v", err)
 	}
 
-	err = gate.Remove(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path}, gate.WithOpener(detachingOpener))
+	err = gate.Remove(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path}, opts(gate.WithOpener(detachingOpener))...)
 	if !errors.Is(err, gate.ErrNotAGate) {
 		t.Fatalf("Remove with the gate deleted = %v, want ErrNotAGate", err)
 	}
@@ -505,112 +527,198 @@ func TestRemoveTellsAWorkingCopyWhoseGateIsGoneWhatToDo(t *testing.T) {
 	}
 
 	// The remedy it names completes.
-	if _, err := gate.Initialize(ctx(t), spec); err != nil {
+	if _, err := gate.Initialize(ctx(t), spec, opts()...); err != nil {
 		t.Fatalf("the remedy ErrNotAGate names did not complete: %v", err)
 	}
-	if err := gate.Remove(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path}, gate.WithOpener(detachingOpener)); err != nil {
+	if err := gate.Remove(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path}, opts(gate.WithOpener(detachingOpener))...); err != nil {
 		t.Fatalf("Remove after the initialization the refusal named: %v", err)
 	}
 }
 
-// TestRemoveTellsARecordlessGateApartByWhoIsAsking is the second of those two
-// states, and the one where the answer depends on who is asking. A repository
-// whose record is gone still holds its references, and whether initializing
-// makes a removal possible turns on a fact the reader does not have: an
-// initialization by the working copy the gate is filed under writes the record
-// back on path-hash evidence, and one by any other working copy takes the gate
-// over on the strength of a remote alone, which a removal refuses in turn.
+// TestARecordlessGateNamesAnInitializationThatCompletes is the second of those
+// two states: a repository whose record is gone. It still holds its references,
+// so a removal will not delete it on the strength of a remote, and the action
+// the refusal names has to be one that actually gets the reader out.
 //
-// So the refusal has to tell those two apart. Naming one remedy for both sends
-// a moved working copy to a removal that refuses it, which is the dead end
-// doc.go says a refusal here must never create.
-func TestRemoveTellsARecordlessGateApartByWhoIsAsking(t *testing.T) {
+// It is one action for every asker now, and that is the point of the test. The
+// refusal is reached only after this operation has established that no other
+// working copy is bound to the gate, so the initialization it names writes the
+// record back and the removal after it succeeds, whether the asker is the
+// working copy the gate is filed under or one that has moved. The earlier
+// arrangement had to tell those two apart, because for one of them the
+// initialization it would have named led to a second refusal.
+func TestARecordlessGateNamesAnInitializationThatCompletes(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		// move is where the working copy stands when it asks. Returning the
+		// path it started at leaves it where its gate is filed under.
+		move func(t *testing.T, wc workingCopy) string
+	}{
+		{
+			name: "asked by the working copy the gate is filed under",
+			move: func(_ *testing.T, wc workingCopy) string { return wc.path },
+		},
+		{
+			name: "asked by a working copy that moved",
+			move: func(t *testing.T, wc workingCopy) string {
+				moved := filepath.Join(filepath.Dir(wc.path), "moved")
+				if err := os.Rename(wc.path, moved); err != nil {
+					t.Fatalf("move the working copy: %v", err)
+				}
+				return moved
+			},
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			gitEnvironment(t)
+			wc := newWorkingCopy(t)
+			home, opts := newHome(t)
+			command, _ := recorderCommand(t, 0)
+
+			g, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path, Command: command}, opts()...)
+			if err != nil {
+				t.Fatalf("Initialize: %v", err)
+			}
+			rawGit(t, wc.path, "push", "--quiet", gate.RemoteName, "main")
+			removeRecord(t, g.Repository())
+			asking := c.move(t, wc)
+
+			refused := gate.Remove(ctx(t), gate.Spec{Home: home, WorkingPath: asking}, opts(gate.WithOpener(detachingOpener))...)
+			if !errors.Is(refused, gate.ErrNotAGate) {
+				t.Fatalf("Remove with the record gone = %v, want ErrNotAGate", refused)
+			}
+			for _, want := range []string{g.Repository(), resolved(t, asking)} {
+				if !strings.Contains(refused.Error(), want) {
+					t.Fatalf("the refusal does not name %q: %v", want, refused)
+				}
+			}
+			// Which action the refusal instructs is the contract this test
+			// exists for, and the refusal text is this package's
+			// operator-facing output, so it is read rather than inferred.
+			if !namesInitializing(refused, resolved(t, asking)) {
+				t.Fatalf("the reader is not told to initialize, which is the step that rebuilds the record "+
+					"and opens the removal: %v", refused)
+			}
+
+			// The refusal left the gate exactly as it was.
+			if got, want := refs(t, g.Repository()), []string{"refs/heads/main " + wc.commit}; !equal(got, want) {
+				t.Fatalf("the refused removal disturbed the gate: refs %v, want %v", got, want)
+			}
+
+			// And the action it named completes, keeping the gate's identifier
+			// and its history rather than starting over with an empty one.
+			repaired, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: asking, Command: command}, opts()...)
+			if err != nil {
+				t.Fatalf("the remedy the refusal names did not complete: %v", err)
+			}
+			if repaired.Repository() != g.Repository() {
+				t.Fatalf("the repair moved the gate to %q, want %q", repaired.Repository(), g.Repository())
+			}
+			if got, want := refs(t, repaired.Repository()), []string{"refs/heads/main " + wc.commit}; !equal(got, want) {
+				t.Fatalf("the repair lost the gate's history: %v, want %v", got, want)
+			}
+			if err := gate.Remove(ctx(t), gate.Spec{Home: home, WorkingPath: asking}, opts(gate.WithOpener(detachingOpener))...); err != nil {
+				t.Fatalf("the removal after the initialization the refusal named: %v", err)
+			}
+			if _, err := os.Stat(g.Repository()); !os.IsNotExist(err) {
+				t.Fatalf("the gate survived removal (stat error %v)", err)
+			}
+		})
+	}
+}
+
+// TestEveryRemovalRefusalLeavesTheGateRefusingPushes is the sibling of
+// TestEveryEarlyRefusalLeavesTheGateRefusingPushes, and it exists because the
+// invariant doc.go states is written without qualification: a gate never
+// accepts a push that admission has not seen.
+//
+// A removal cannot create a gate with no admission hook, so this was for a
+// while an argument rather than a mechanism, and an argument is what the next
+// operation added here would not inherit. Both operations now obtain their gate
+// the same way and the seal comes with it, so this test is the same question
+// asked on the other side.
+func TestEveryRemovalRefusalLeavesTheGateRefusingPushes(t *testing.T) {
 	gitEnvironment(t)
-	wc := newWorkingCopy(t)
-	home := t.TempDir()
 	command, _ := recorderCommand(t, 0)
-	spec := gate.Spec{Home: home, WorkingPath: wc.path, Command: command}
 
-	g, err := gate.Initialize(ctx(t), spec)
-	if err != nil {
-		t.Fatalf("Initialize: %v", err)
-	}
-	rawGit(t, wc.path, "push", "--quiet", gate.RemoteName, "main")
-	record := filepath.Join(g.Repository(), "assistant-gate.json")
-	if err := os.Remove(record); err != nil {
-		t.Fatalf("remove the record: %v", err)
-	}
-
-	// Asked by the working copy the gate is filed under, the remedy is an
-	// initialization, and it completes.
-	filedUnder := gate.Remove(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path}, gate.WithOpener(detachingOpener))
-	if !errors.Is(filedUnder, gate.ErrNotAGate) {
-		t.Fatalf("Remove with the record gone = %v, want ErrNotAGate", filedUnder)
-	}
-
-	// The same gate, now asked by a working copy that moved, which is the
-	// state an initialization cannot resolve.
-	moved := workingCopy{path: filepath.Join(filepath.Dir(wc.path), "moved"), origin: wc.origin}
-	if err := os.Rename(wc.path, moved.path); err != nil {
-		t.Fatalf("move the working copy: %v", err)
-	}
-	elsewhere := gate.Remove(ctx(t), gate.Spec{Home: home, WorkingPath: moved.path}, gate.WithOpener(detachingOpener))
-	if !errors.Is(elsewhere, gate.ErrNotAGate) {
-		t.Fatalf("Remove from the moved working copy = %v, want ErrNotAGate", elsewhere)
-	}
-	for _, want := range []string{g.Repository(), resolved(t, moved.path)} {
-		if !strings.Contains(elsewhere.Error(), want) {
-			t.Fatalf("the refusal does not name %q: %v", want, elsewhere)
-		}
-	}
-
-	// Which action each refusal names is the contract these two branches exist
-	// to get right, and the refusal text is this package's operator-facing
-	// output, so it is read here rather than inferred. Checking only that the
-	// two differ would pass with the two readers handed each other's
-	// instructions, which is the state that has to fail.
-	if !namesInitializing(filedUnder, g.WorkingPath()) {
-		t.Fatalf("the working copy the gate is filed under is not told to initialize, which is the step that "+
-			"rebuilds the record for it: %v", filedUnder)
-	}
-	if namesDetaching(filedUnder) {
-		t.Fatalf("the working copy the gate is filed under is told to detach, which gives up a gate it can "+
-			"repair instead: %v", filedUnder)
-	}
-	if !namesDetaching(elsewhere) {
-		t.Fatalf("a working copy the gate is not filed under is not told to detach, which is the only step that "+
-			"succeeds from there: %v", elsewhere)
-	}
-	if namesInitializing(elsewhere, resolved(t, moved.path)) {
-		t.Fatalf("a working copy the gate is not filed under is told to initialize, and the removal after that "+
-			"refuses: %v", elsewhere)
+	cases := []struct {
+		name string
+		// refuse damages the state so that a removal from wc refuses, and
+		// returns the error wanted and the options the removal takes.
+		refuse func(t *testing.T, home string, wc workingCopy, g *gate.Gate,
+			opts func(...gate.Option) []gate.Option) ([]gate.Option, error)
+	}{
+		{
+			name: "the working copy cannot detach",
+			refuse: func(_ *testing.T, _ string, _ workingCopy, _ *gate.Gate,
+				opts func(...gate.Option) []gate.Option) ([]gate.Option, error) {
+				// The default opener cannot remove a remote, which is refused
+				// after the gate has been obtained.
+				return opts(), gate.ErrDetachUnsupported
+			},
+		},
+		{
+			name: "the gate carries no record",
+			refuse: func(t *testing.T, _ string, _ workingCopy, g *gate.Gate,
+				opts func(...gate.Option) []gate.Option) ([]gate.Option, error) {
+				removeRecord(t, g.Repository())
+				return opts(gate.WithOpener(detachingOpener)), gate.ErrNotAGate
+			},
+		},
+		{
+			name: "the record cannot be read",
+			refuse: func(t *testing.T, _ string, _ workingCopy, g *gate.Gate,
+				opts func(...gate.Option) []gate.Option) ([]gate.Option, error) {
+				writeFile(t, filepath.Join(g.Repository(), recordName),
+					fmt.Sprintf(`{"version":99,"id":%q,"workingPath":%q}`, g.ID(), g.WorkingPath()))
+				return opts(gate.WithOpener(detachingOpener)), gate.ErrMalformedRecord
+			},
+		},
+		{
+			name: "another working copy is bound to the gate",
+			refuse: func(t *testing.T, _ string, wc workingCopy, g *gate.Gate,
+				opts func(...gate.Option) []gate.Option) ([]gate.Option, error) {
+				duplicate := filepath.Join(filepath.Dir(wc.path), "copy")
+				copyTree(t, wc.path, duplicate)
+				writeFile(t, filepath.Join(g.Repository(), recordName),
+					fmt.Sprintf(`{"version":1,"id":%q,"workingPath":%q}`, g.ID(), resolved(t, duplicate)))
+				return opts(gate.WithOpener(detachingOpener)), gate.ErrGateClaimed
+			},
+		},
 	}
 
-	// The state the message must not send the reader into: initializing here
-	// binds the gate on the remote alone, and the removal after it refuses.
-	if _, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: moved.path, Command: command}); err != nil {
-		t.Fatalf("Initialize the moved working copy: %v", err)
-	}
-	if err := gate.Remove(ctx(t), gate.Spec{Home: home, WorkingPath: moved.path}, gate.WithOpener(detachingOpener)); !errors.Is(err, gate.ErrGateBindingInferred) {
-		t.Fatalf("Remove after that initialization = %v, want ErrGateBindingInferred; "+
-			"if this now succeeds the refusal above may name it again", err)
-	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			wc := newWorkingCopy(t)
+			home, opts := newHome(t)
+			g, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path, Command: command}, opts()...)
+			if err != nil {
+				t.Fatalf("Initialize: %v", err)
+			}
+			rawGit(t, wc.path, "push", "--quiet", gate.RemoteName, "main")
 
-	// The route the message does name completes, and the gate's history is
-	// still there afterwards rather than deleted by a guess.
-	rawGit(t, moved.path, "remote", "remove", gate.RemoteName)
-	own, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: moved.path, Command: command})
-	if err != nil {
-		t.Fatalf("the route the refusal names did not complete: %v", err)
-	}
-	if own.Repository() == g.Repository() {
-		t.Fatalf("the detached working copy took the recordless gate again at %q", own.Repository())
-	}
-	if err := gate.Remove(ctx(t), gate.Spec{Home: home, WorkingPath: moved.path}, gate.WithOpener(detachingOpener)); err != nil {
-		t.Fatalf("the gate the route gave it cannot be removed: %v", err)
-	}
-	if got, want := refs(t, g.Repository()), []string{"refs/heads/main " + wc.commit}; !equal(got, want) {
-		t.Fatalf("the recordless gate holds %v, want its history %v", got, want)
+			// The damage TestInitializeRepairsADamagedGate inflicts, which
+			// this package treats as an ordinary thing to repair.
+			if err := os.Remove(filepath.Join(g.Repository(), "hooks", gate.AdmissionHook)); err != nil {
+				t.Fatalf("remove the admission hook: %v", err)
+			}
+
+			removeOpts, want := c.refuse(t, home, wc, g, opts)
+			if err := gate.Remove(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path}, removeOpts...); !errors.Is(err, want) {
+				t.Fatalf("Remove error = %v, want %v", err, want)
+			}
+
+			// The gate is still there, and it takes no push now.
+			commitMore(t, wc, "after the refusal\n")
+			before := refs(t, g.Repository())
+			out, pushErr := tryRawGit(wc.path, "push", gate.RemoteName, "main")
+			if pushErr == nil {
+				t.Fatalf("the gate accepted a push after a refused removal:\n%s", out)
+			}
+			if got := refs(t, g.Repository()); !equal(got, before) {
+				t.Fatalf("the refused push moved references in the gate: %v, want %v", got, before)
+			}
+		})
 	}
 }
 
