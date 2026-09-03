@@ -34,9 +34,9 @@ const hookMarker = "assistant-gate-hook v1"
 const chainedVar = "ASSISTANT_GATE_CHAINED"
 
 // hookMode is the mode an installed hook is written with. It is executable
-// because a hook that is not is a gate whose admission never runs, which
-// TestTheInstalledHooksAreTheOnesGitRuns and every test that pushes check by
-// pushing rather than by asserting anything about git.
+// because a hook that is not is a gate whose admission never runs.
+// TestInstallationLeavesExactlyTheTwoExecutableHooks checks the bit, and every
+// test that pushes checks what the bit is for by pushing.
 const hookMode os.FileMode = 0o755
 
 // managed is one hook this package installs and the subcommand it invokes.
@@ -77,7 +77,7 @@ func hooksDir(repo string) string {
 // left with one hook installed and the other refused.
 func installHooks(repo, id, command string) error {
 	dir := hooksDir(repo)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("gate: creating %s: %w", dir, err)
 	}
 	for _, hook := range managedHooks {

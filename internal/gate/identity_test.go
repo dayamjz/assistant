@@ -157,3 +157,48 @@ func TestARecordFromAnotherVersionIsRefused(t *testing.T) {
 		t.Fatalf("Initialize error = %v, want ErrMalformedRecord", err)
 	}
 }
+
+// TestAHomeThatDoesNotExistYetIsSpelledTheSameOnceItDoes is why the home is
+// resolved as far as it exists rather than only when all of it does. Spec.Home
+// is allowed not to exist yet, and the first initialization is the one that
+// creates it, so a home under a symbolically linked prefix would otherwise be
+// written into the working copy's remote under one spelling and looked for
+// under another from the second call onwards. Removal is what meets that
+// first: it refuses a repository outside the home's repository directory, and
+// two spellings of one directory are not the same string.
+func TestAHomeThatDoesNotExistYetIsSpelledTheSameOnceItDoes(t *testing.T) {
+	gitEnvironment(t)
+	wc := newWorkingCopy(t)
+	command, _ := recorderCommand(t, 0)
+
+	root := t.TempDir()
+	actual := filepath.Join(root, "actual")
+	if err := os.Mkdir(actual, 0o700); err != nil {
+		t.Fatalf("mkdir %s: %v", actual, err)
+	}
+	link := filepath.Join(root, "link")
+	if err := os.Symlink(actual, link); err != nil {
+		t.Skipf("this host does not allow symbolic links: %v", err)
+	}
+	// The home itself is what does not exist yet, under a prefix that resolves
+	// somewhere else.
+	spec := gate.Spec{Home: filepath.Join(link, "assistant"), WorkingPath: wc.path, Command: command}
+
+	first, err := gate.Initialize(ctx(t), spec)
+	if err != nil {
+		t.Fatalf("Initialize into a home that does not exist yet: %v", err)
+	}
+	second, err := gate.Initialize(ctx(t), spec)
+	if err != nil {
+		t.Fatalf("Initialize again once the home exists: %v", err)
+	}
+	if second.Repository() != first.Repository() {
+		t.Fatalf("the gate is at %q on the second call and was at %q on the first", second.Repository(), first.Repository())
+	}
+	if url, ok := remoteURL(t, wc.path, gate.RemoteName); !ok || url != first.Repository() {
+		t.Fatalf("the %s remote is %q, want %q", gate.RemoteName, url, first.Repository())
+	}
+	if err := gate.Remove(ctx(t), spec, gate.WithOpener(detachingOpener)); err != nil {
+		t.Fatalf("Remove a gate this package created in a home it created: %v", err)
+	}
+}

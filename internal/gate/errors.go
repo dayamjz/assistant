@@ -34,6 +34,13 @@ var (
 	// ErrNoGate is returned by Remove when the working copy has no gate to
 	// remove.
 	ErrNoGate = errors.New("gate: working copy has no gate")
+	// ErrGateClaimed is returned by Initialize when the gate at the
+	// identifier a working copy's path hashes to records a different working
+	// copy that still points at it. Two paths that hash to one identifier ask
+	// for one gate, and the one already holding it keeps it. The message
+	// names the gate, the working copy holding it, the working copy asking,
+	// and what has to change for the request to succeed.
+	ErrGateClaimed = errors.New("gate: another working copy holds the gate at this identifier")
 	// ErrMalformedRecord is returned when a gate's record file exists but
 	// cannot be read as one. The gate's binding to a working copy lives in
 	// that record, so a record that cannot be read is a fact that cannot be

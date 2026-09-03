@@ -107,9 +107,16 @@ func openWithVCS(ctx context.Context, path string) (WorkingCopy, error) {
 // still there and still bound to it is a copy of that working copy, and gets
 // its own gate rather than sharing the original's.
 //
+// It refuses with ErrGateClaimed when the gate at the identifier this working
+// copy's path hashes to records a different working copy that is still bound
+// to it, which is what a working copy placed at the path a moved one left
+// behind meets. Taking that gate over would hand this working copy the other
+// one's references and rewrite the binding everything recorded against the
+// gate rests on.
+//
 // It refuses with ErrTemplateHooks when the repository it creates is born
 // carrying a hook, and with ErrCustomHookConflict when a hook it did not write
-// cannot be preserved. Both refusals happen before the working copy's remote
+// cannot be preserved. Every refusal happens before the working copy's remote
 // is written, so a refused initialization leaves the working copy as it was.
 func Initialize(ctx context.Context, spec Spec, opts ...Option) (*Gate, error) {
 	set := resolveSettings(opts)
@@ -134,6 +141,8 @@ func Initialize(ctx context.Context, spec Spec, opts ...Option) (*Gate, error) {
 	}
 	if ok {
 		repo, id, reattached = existing.path, existing.id, existing.moved
+	} else if err := ensureOwnGateIsFree(ctx, set, repo, id, workingPath); err != nil {
+		return nil, err
 	}
 
 	if err := ensureRepository(ctx, repo); err != nil {
@@ -308,6 +317,51 @@ func alreadyNamedGate(ctx context.Context, set settings, home, own, workingPath 
 	return claim{path: named, id: rec.ID, moved: true}, true, nil
 }
 
+// ensureOwnGateIsFree decides whether the repository already sitting where
+// this working copy's identifier puts it may be adopted.
+//
+// The identifier is the hash of a path, and a path is not a working copy. A
+// working copy that moves away leaves its path free for another one, and the
+// gate that path hashes to is by then bound to the moved copy and holding
+// everything its runs recorded. Adopting it because the directory happens to
+// be there would give the new working copy the moved one's references and take
+// the moved one's gate away from it, which is the loss PRD principle P6 is
+// about applied to the record of what was validated rather than to a commit.
+//
+// A repository with no record is adoptable: that is a gate whose record was
+// lost, and repairing it is ordinary. A record that will not read is not, for
+// the same reason a record naming somebody else is not, because the binding it
+// carries is exactly the fact that cannot then be established.
+func ensureOwnGateIsFree(ctx context.Context, set settings, repo, id, workingPath string) error {
+	rec, exists, err := readRecord(repo)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return nil
+	}
+	if rec.ID != id {
+		return fmt.Errorf("%w: %s records identifier %q, but its name says %q",
+			ErrMalformedRecord, repo, rec.ID, id)
+	}
+	if rec.WorkingPath == workingPath {
+		return nil
+	}
+	held, err := stillBound(ctx, set, rec.WorkingPath, repo)
+	if err != nil {
+		return err
+	}
+	if !held {
+		// The working copy the gate records is gone and this one hashes to the
+		// same identifier, so there is nobody left to take the gate from.
+		return nil
+	}
+	return fmt.Errorf("%w: the gate at %s belongs to the working copy at %s, which still points at it, "+
+		"and %s asks for the same gate because both paths hash to %s; "+
+		"remove the gate of %s, or move %s somewhere else, before initializing it",
+		ErrGateClaimed, repo, rec.WorkingPath, workingPath, id, rec.WorkingPath, workingPath)
+}
+
 // stillBound reports whether the working copy a gate records is still there
 // and still names that gate. A working copy that moved leaves nothing behind,
 // so the gate is free; a working copy that was copied leaves the original
@@ -388,7 +442,10 @@ func verifyGateRepository(home, repo string) error {
 // and is preserved.
 func ensureRepository(ctx context.Context, repo string) error {
 	parent := filepath.Dir(repo)
-	if err := os.MkdirAll(parent, 0o755); err != nil {
+	// The assistant home holds every gated project's whole history, alongside
+	// the lock, the socket, and the database PRD section 8 puts there, so the
+	// directories this package creates under it are the owner's alone.
+	if err := os.MkdirAll(parent, 0o700); err != nil {
 		return fmt.Errorf("gate: creating %s: %w", parent, err)
 	}
 	creating := !isDirectory(repo) || isEmptyDirectory(repo)

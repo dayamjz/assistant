@@ -107,6 +107,16 @@
 // and still bound, so the claim holds, and the copy gets its own gate at its
 // own identifier rather than sharing the original's.
 //
+// The hash seeds a new binding, so a gate somebody else's record already
+// claims is not one to seed over. A working copy standing where a moved one
+// used to stand hashes to the moved one's identifier and would otherwise be
+// handed its gate: its references, and the binding everything recorded against
+// it rests on. Initialize reads the record of the repository at that
+// identifier before adopting it and refuses with ErrGateClaimed when it names
+// a working copy that is still pointing at the gate. A repository with no
+// record is adopted, because that is a gate whose record was lost rather than
+// one somebody holds.
+//
 // The residual gap in identity is the path itself. The identifier is computed
 // from the cleaned, symlink-resolved absolute path, so two spellings that
 // differ only by a symlink agree. Two that differ only by letter case do not,

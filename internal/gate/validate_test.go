@@ -5,7 +5,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/gate"
@@ -87,11 +86,12 @@ func TestPathAtPushTimeCannotChooseWhatAdmissionRuns(t *testing.T) {
 	}
 
 	// A decoy of the same name, earlier in PATH, that would admit nothing.
-	decoyDir := t.TempDir()
-	decoyLog := filepath.Join(decoyDir, "decoy.log")
-	writeScript(t, filepath.Join(decoyDir, filepath.Base(command)),
-		"#!/bin/sh\ncat >/dev/null\nprintf 'decoy %s\\n' \"$*\" >>"+shellQuoteForTest(decoyLog)+"\nexit 1\n")
-	t.Setenv("PATH", decoyDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	decoy, decoyLog := stubCommand(t, t.TempDir(), stubName, 1)
+	if filepath.Base(decoy) != filepath.Base(command) {
+		t.Fatalf("the decoy is named %q and the recorded command %q, so PATH could never have chosen it and this test asks nothing",
+			filepath.Base(decoy), filepath.Base(command))
+	}
+	t.Setenv("PATH", filepath.Dir(decoy)+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	rawGit(t, wc.path, "push", "--quiet", gate.RemoteName, "main")
 
@@ -115,12 +115,7 @@ func TestHookCommandSurvivesAPathThatNeedsQuoting(t *testing.T) {
 	}
 
 	dir := filepath.Join(t.TempDir(), "bin dir with 'quotes'")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		t.Fatalf("mkdir %s: %v", dir, err)
-	}
-	command := filepath.Join(dir, "assistant stub")
-	log := filepath.Join(dir, "invocations.log")
-	writeScript(t, command, "#!/bin/sh\ncat >/dev/null\nprintf 'ran %s\\n' \"$*\" >>"+shellQuoteForTest(log)+"\nexit 0\n")
+	command, log := stubCommand(t, dir, "assistant stub", 0)
 
 	g, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path, Command: command})
 	if err != nil {
@@ -129,17 +124,22 @@ func TestHookCommandSurvivesAPathThatNeedsQuoting(t *testing.T) {
 	rawGit(t, wc.path, "push", "--quiet", gate.RemoteName, "main")
 
 	got := invocations(t, log)
-	want := "ran gate admit --gate " + g.ID()
+	want := "command gate admit --gate " + g.ID()
 	if len(got) == 0 || got[0] != want {
 		t.Fatalf("invocations = %v, want the first to be %q", got, want)
 	}
 }
 
-// TestTheInstalledHooksAreTheOnesGitRuns checks the post-condition of
-// installation rather than its inputs: both hooks exist, both are executable,
-// and both are recognizable as this package's own so that a later repair
-// replaces them instead of preserving them as somebody else's.
-func TestTheInstalledHooksAreTheOnesGitRuns(t *testing.T) {
+// TestInstallationLeavesExactlyTheTwoExecutableHooks checks the state
+// installation leaves behind: both hooks exist, both are executable, and
+// nothing else was put in the hooks directory.
+//
+// Which program those hooks actually run is not asked here, because reading it
+// out of the generated text would prove nothing a rewrite of the script could
+// not break while the behavior held. TestPathAtPushTimeCannotChooseWhatAdmissionRuns
+// and TestHookCommandSurvivesAPathThatNeedsQuoting settle it by pushing and
+// watching which program runs.
+func TestInstallationLeavesExactlyTheTwoExecutableHooks(t *testing.T) {
 	gitEnvironment(t)
 	wc := newWorkingCopy(t)
 	home := t.TempDir()
@@ -157,9 +157,6 @@ func TestTheInstalledHooksAreTheOnesGitRuns(t *testing.T) {
 		}
 		if info.Mode().Perm()&0o111 == 0 {
 			t.Fatalf("%s is not executable, so it is not usable as a hook: mode %v", path, info.Mode())
-		}
-		if got := readFile(t, path); !strings.Contains(got, command) {
-			t.Fatalf("%s does not name the recorded command", path)
 		}
 	}
 	if got, want := activeHookNames(t, g.Repository()), 2; len(got) != want {

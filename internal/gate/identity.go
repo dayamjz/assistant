@@ -53,19 +53,29 @@ func resolvePath(path string) (string, error) {
 	return resolved, nil
 }
 
-// resolveExisting returns the symlink-resolved form of an absolute path when
-// it exists, and its cleaned form when it does not. A home is allowed not to
-// exist yet, so it cannot be resolved the way a working copy is; resolving it
-// when it does exist is what keeps two spellings of one home, such as a
-// directory reached through a symbolic link, from producing two sets of gate
-// paths that never match each other.
+// resolveExisting returns an absolute path with every symbolic link in it
+// resolved as far as the path exists, and the rest of it appended unchanged. A
+// home is allowed not to exist yet, so it cannot be resolved the way a working
+// copy is.
+//
+// Resolving as far as the path goes, rather than only when the whole of it is
+// there, is what makes the answer the same before and after the home is
+// created. A home under a symbolically linked prefix that resolved to one
+// spelling on the run that created it and another on every run afterwards
+// would put one spelling in the working copy's remote and compare the other
+// against it, so Remove would refuse a gate this package itself made.
 func resolveExisting(path string) string {
 	cleaned := filepath.Clean(path)
-	resolved, err := filepath.EvalSymlinks(cleaned)
-	if err != nil {
+	if resolved, err := filepath.EvalSymlinks(cleaned); err == nil {
+		return resolved
+	}
+	parent := filepath.Dir(cleaned)
+	if parent == cleaned {
+		// The root of a volume, which cannot be resolved and has no parent to
+		// fall back to.
 		return cleaned
 	}
-	return resolved
+	return filepath.Join(resolveExisting(parent), filepath.Base(cleaned))
 }
 
 // repositoriesDir is where a home keeps its gate repositories, per PRD

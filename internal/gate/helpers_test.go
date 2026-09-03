@@ -2,6 +2,7 @@ package gate_test
 
 import (
 	"context"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -178,25 +179,61 @@ func refs(t *testing.T, dir string) []string {
 	return strings.Split(out, "\n")
 }
 
-// recorderCommand writes an executable that appends one line per invocation to
-// a log, together with the standard input git handed the hook, and exits with
-// status. It stands in for the agent-facing command surface the hooks invoke.
-//
-// It is a real program on disk rather than a fake object, because what these
-// tests need to establish is that git runs it at all, which no in-process
-// substitute can show.
+// recorderCommand installs a stand-in for the agent-facing command surface the
+// hooks invoke, in a directory of its own, and returns the path the hooks
+// invoke it by and the log it appends a line per invocation to.
 func recorderCommand(t *testing.T, status int) (command, log string) {
 	t.Helper()
-	dir := t.TempDir()
-	command = filepath.Join(dir, "assistant-stub")
-	log = filepath.Join(dir, "invocations.log")
-	writeScript(t, command, "#!/bin/sh\n"+
-		"{\n"+
-		"  printf 'command %s\\n' \"$*\"\n"+
-		"  printf 'input %s\\n' \"$(cat | tr '\\n' ';')\"\n"+
-		"} >>"+shellQuoteForTest(log)+"\n"+
-		"exit "+strconv.Itoa(status)+"\n")
-	return command, log
+	return stubCommand(t, t.TempDir(), stubName, status)
+}
+
+// stubCommand installs a stand-in command named name in dir and returns the
+// path it is invoked by and the log it appends to. See stub_test.go for what
+// the stand-in is and why it is a copy of this test binary rather than a
+// script.
+//
+// The name is given without an extension: what this host needs to treat a
+// path as executable is added here, so that a test naming a decoy and the
+// command it must not displace cannot give them names that differ.
+func stubCommand(t *testing.T, dir, name string, status int) (command, log string) {
+	t.Helper()
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatalf("locate the test executable: %v", err)
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", dir, err)
+	}
+	command = filepath.Join(dir, name+exeSuffix())
+	copyExecutable(t, self, command)
+	if err := os.WriteFile(filepath.Join(dir, stubStatusName), []byte(strconv.Itoa(status)), 0o600); err != nil {
+		t.Fatalf("write the stand-in exit status: %v", err)
+	}
+	t.Setenv(stubMode, "1")
+	return command, filepath.Join(dir, stubLogName)
+}
+
+// copyExecutable copies a file and makes the copy executable. It is a copy
+// rather than a link so that the stand-in, which finds its log and its exit
+// status beside itself, cannot be told it is somewhere it is not.
+func copyExecutable(t *testing.T, from, to string) {
+	t.Helper()
+	source, err := os.Open(from)
+	if err != nil {
+		t.Fatalf("open %s: %v", from, err)
+	}
+	defer source.Close()
+	destination, err := os.OpenFile(to, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o755)
+	if err != nil {
+		t.Fatalf("create %s: %v", to, err)
+	}
+	if _, err := io.Copy(destination, source); err != nil {
+		_ = destination.Close()
+		t.Fatalf("copy %s to %s: %v", from, to, err)
+	}
+	if err := destination.Close(); err != nil {
+		t.Fatalf("close %s: %v", to, err)
+	}
 }
 
 func shellQuoteForTest(s string) string {

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/gate"
@@ -155,4 +156,128 @@ func TestARepositoryBornCarryingHooksIsRefused(t *testing.T) {
 	if url, ok := remoteURL(t, wc.path, gate.RemoteName); ok {
 		t.Fatalf("the refused initialization pointed the %s remote at %q", gate.RemoteName, url)
 	}
+}
+
+// TestAWorkingCopyPlacedWhereAMovedOneStoodDoesNotTakeItsGate is the other
+// direction of the same claim. A gate's identifier is the hash of a path, and
+// a path outlives the working copy that stood on it, so a new working copy put
+// where a moved one used to be asks for the gate the moved one is still using.
+// Answering that with the gate itself would hand over its references and
+// rewrite the binding that everything recorded against it rests on, which is
+// the loss PRD principle P6 forbids.
+func TestAWorkingCopyPlacedWhereAMovedOneStoodDoesNotTakeItsGate(t *testing.T) {
+	gitEnvironment(t)
+	wc := newWorkingCopy(t)
+	home := t.TempDir()
+	command, _ := recorderCommand(t, 0)
+
+	original, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path, Command: command})
+	if err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+	rawGit(t, wc.path, "push", "--quiet", gate.RemoteName, "main")
+
+	moved := workingCopy{path: filepath.Join(filepath.Dir(wc.path), "moved"), origin: wc.origin}
+	if err := os.Rename(wc.path, moved.path); err != nil {
+		t.Fatalf("move the working copy: %v", err)
+	}
+	reattached, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: moved.path, Command: command})
+	if err != nil {
+		t.Fatalf("Initialize after the move: %v", err)
+	}
+	if !reattached.Reattached() || reattached.Repository() != original.Repository() {
+		t.Fatalf("the moved working copy did not keep its gate: reattached %v at %q, want the original %q",
+			reattached.Reattached(), reattached.Repository(), original.Repository())
+	}
+
+	// Somebody starts a different project at the path the move left free. It
+	// has no assistant remote of its own, and it hashes to the gate the moved
+	// working copy is using.
+	fresh := freshWorkingCopyAt(t, wc.path)
+	if id, err := gate.Identify(fresh); err != nil {
+		t.Fatalf("Identify: %v", err)
+	} else if id != original.ID() {
+		t.Fatalf("the fresh working copy identifies as %q, not the moved copy's %q, so this test asks nothing", id, original.ID())
+	}
+
+	_, err = gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: fresh, Command: command})
+	if !errors.Is(err, gate.ErrGateClaimed) {
+		t.Fatalf("Initialize the fresh working copy = %v, want ErrGateClaimed", err)
+	}
+	// The refusal has to tell an operator meeting it on a fresh clone what it
+	// found, who holds it, and who asked, or it reads as a mystery.
+	for _, want := range []string{original.Repository(), reattached.WorkingPath(), resolved(t, fresh)} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("the refusal does not name %q: %v", want, err)
+		}
+	}
+
+	// The moved working copy still has everything: its gate, its history, and
+	// the ability to go on pushing into it.
+	if url, ok := remoteURL(t, moved.path, gate.RemoteName); !ok || url != original.Repository() {
+		t.Fatalf("the moved working copy's %s remote is %q, want %q", gate.RemoteName, url, original.Repository())
+	}
+	if got, want := refs(t, original.Repository()), []string{"refs/heads/main " + wc.commit}; !equal(got, want) {
+		t.Fatalf("the gate's references are %v, want %v", got, want)
+	}
+	head := commitMore(t, moved, "after the fresh clone\n")
+	rawGit(t, moved.path, "push", "--quiet", gate.RemoteName, "main")
+	if got, want := refs(t, original.Repository()), []string{"refs/heads/main " + head}; !equal(got, want) {
+		t.Fatalf("the moved working copy could not go on using its gate: refs %v, want %v", got, want)
+	}
+	if url, ok := remoteURL(t, fresh, gate.RemoteName); ok {
+		t.Fatalf("the refused initialization pointed the fresh working copy's %s remote at %q", gate.RemoteName, url)
+	}
+}
+
+// TestAGateWhoseWorkingCopyIsGoneIsStillAdoptable is the boundary of the
+// refusal above. A gate nobody is bound to any more is a gate to repair, not
+// one to refuse, so a working copy at the identifier it is filed under takes
+// it over with its history rather than being turned away.
+func TestAGateWhoseWorkingCopyIsGoneIsStillAdoptable(t *testing.T) {
+	gitEnvironment(t)
+	wc := newWorkingCopy(t)
+	home := t.TempDir()
+	command, _ := recorderCommand(t, 0)
+
+	original, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path, Command: command})
+	if err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+	rawGit(t, wc.path, "push", "--quiet", gate.RemoteName, "main")
+
+	// The working copy is deleted outright, which leaves the gate recording a
+	// path nothing stands on.
+	if err := os.RemoveAll(wc.path); err != nil {
+		t.Fatalf("remove the working copy: %v", err)
+	}
+	fresh := freshWorkingCopyAt(t, wc.path)
+
+	again, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: fresh, Command: command})
+	if err != nil {
+		t.Fatalf("Initialize a working copy at the freed path: %v", err)
+	}
+	if again.Repository() != original.Repository() {
+		t.Fatalf("the gate moved to %q, want %q", again.Repository(), original.Repository())
+	}
+	if got, want := refs(t, again.Repository()), []string{"refs/heads/main " + wc.commit}; !equal(got, want) {
+		t.Fatalf("adopting the freed gate lost its history: %v, want %v", got, want)
+	}
+}
+
+// freshWorkingCopyAt starts an unrelated working copy at path, with no
+// assistant remote of its own, and returns the path.
+func freshWorkingCopyAt(t *testing.T, path string) string {
+	t.Helper()
+	if err := os.MkdirAll(path, 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", path, err)
+	}
+	rawGit(t, path, "init", "--quiet", ".")
+	writeFile(t, filepath.Join(path, "unrelated.txt"), "another project\n")
+	rawGit(t, path, "add", "-A")
+	rawGit(t, path, "commit", "--quiet", "-m", "another project")
+	if url, ok := remoteURL(t, path, gate.RemoteName); ok {
+		t.Fatalf("the fresh working copy at %s already names a gate at %q", path, url)
+	}
+	return path
 }
