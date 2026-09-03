@@ -216,8 +216,8 @@ func (c *Client) Close() error {
 
 // read demultiplexes the connection until it ends.
 //
-// The service reports a frame it could not read with the zero identifier,
-// because such a frame carried none to answer. That report is about the
+// The service reports a frame it would not serve with reservedID, because such
+// a frame has no identifier of its own to answer. That report is about the
 // connection rather than about any request, so it ends nothing by itself; it is
 // kept as the reason this client ended if the connection then does end, in
 // place of the end of input a caller would otherwise be left with.
@@ -255,11 +255,10 @@ func (c *Client) read(r *frameReader) {
 				cause = f.Error
 			}
 			c.dropStream(f.ID, cause)
-		case f.ID == 0:
-			// register allocates from one upwards, so no answer to anything
-			// this client asked for can arrive with the zero identifier. A
-			// frame that carries it belongs to no request and is the service's
-			// report about the connection itself.
+		case f.ID == reservedID:
+			// reservedID answers no request, and register never allocates it,
+			// so a frame carrying it is the service's report about the
+			// connection itself rather than an answer to anything asked here.
 			if f.Error != nil {
 				reported = f.Error
 			}
@@ -280,7 +279,8 @@ func (c *Client) read(r *frameReader) {
 	}
 }
 
-// register allocates an identifier and a place to put its answer.
+// register allocates an identifier and a place to put its answer. It counts up
+// from one, so it never hands out reservedID, which answers no request.
 func (c *Client) register() (uint64, chan frame, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

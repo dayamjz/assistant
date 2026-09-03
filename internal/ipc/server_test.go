@@ -1180,3 +1180,176 @@ func readFrame(t *testing.T, r *bufio.Reader) struct {
 	}
 	return f
 }
+
+// panicOnMethod panics for one method and serves everything else, which is how
+// a test sees whether one handler's bug takes anything else with it.
+type panicOnMethod struct {
+	method ipc.Method
+	value  string
+}
+
+func (h panicOnMethod) Serve(_ context.Context, req ipc.Request) (json.RawMessage, error) {
+	if req.Method == h.method {
+		panic(h.value)
+	}
+	return json.RawMessage(`{"served":true}`), nil
+}
+
+// TestAPanickingHandlerCostsOneRequest covers the blast radius of a handler
+// bug. Ending the process would take every other connection, every open stream
+// and the supervision of every run that was going fine, so the panic is
+// contained; and containing it without reporting it would trade one silent
+// failure for another, so the reporter sees it.
+func TestAPanickingHandlerCostsOneRequest(t *testing.T) {
+	type report struct {
+		value any
+		stack []byte
+	}
+	reported := make(chan report, 1)
+	h := serveOnSocket(t, func(c *ipc.ServerConfig) {
+		c.Handler = panicOnMethod{method: "status", value: "a handler bug"}
+		// One slot, so a slot the panicking handler failed to return would
+		// refuse everything after it.
+		c.MaxInFlight = 1
+		c.ReportPanic = func(value any, stack []byte) {
+			select {
+			case reported <- report{value: value, stack: stack}:
+			default:
+			}
+		}
+	})
+	c := h.dial(t, ipc.ClientConfig{})
+	ctx, cancel := callCtx(t)
+	defer cancel()
+
+	stream, err := c.Subscribe(ctx, nil)
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	defer stream.Close()
+	if first, err := stream.Recv(ctx); err != nil || first.Type != "stream.gap" {
+		t.Fatalf("first delivery = %q (err %v), want the opening gap marker", first.Type, err)
+	}
+
+	err = c.Call(ctx, "status", nil, nil)
+	if !errors.Is(err, ipc.ErrInternal) {
+		t.Fatalf("Call into a panicking handler = %v, want ErrInternal rather than nothing at all", err)
+	}
+
+	select {
+	case got := <-reported:
+		if got.value != "a handler bug" {
+			t.Errorf("the reporter saw %v, want the value the handler panicked with", got.value)
+		}
+		if len(got.stack) == 0 {
+			t.Error("the reporter saw no stack, so the bug is contained and invisible")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the panic was contained without being reported")
+	}
+
+	// The connection, its slot and its stream all survived the one bad request.
+	var served struct {
+		Served bool `json:"served"`
+	}
+	if err := c.Call(ctx, "health", nil, &served); err != nil {
+		t.Fatalf("a later Call = %v, want the connection and its in-flight slot intact", err)
+	}
+	if !served.Served {
+		t.Error("a later Call was not served by the handler")
+	}
+	publish(t, h.events, state("after", 4))
+	e, err := stream.Recv(ctx)
+	if err != nil {
+		t.Fatalf("Recv on the open stream = %v, want it still delivering", err)
+	}
+	if label(t, e) != "after" {
+		t.Errorf("delivery = %+v, want the event published after the panic", e)
+	}
+}
+
+// TestTheServiceRefusesTheReservedIdentifier holds the other half of the
+// reservation. A report that belongs to no request carries it, so a request
+// carrying it could not be answered without saying something else entirely,
+// and a marker only this package's client honors is not a marker.
+func TestTheServiceRefusesTheReservedIdentifier(t *testing.T) {
+	h := serveOnSocket(t, nil)
+	conn, err := net.Dial("unix", h.socket)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+	if err := conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatalf("read deadline: %v", err)
+	}
+
+	if _, err := conn.Write([]byte(`{"id":0,"method":"health"}` + "\n")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	reply := readFrame(t, reader)
+	if reply.Error == nil || reply.Error.Code != ipc.CodeInvalidRequest {
+		t.Fatalf("reply = %+v, want the reserved identifier refused", reply.Error)
+	}
+	if reply.ID != 0 {
+		t.Errorf("the refusal names request %d, want the reserved identifier it is about", reply.ID)
+	}
+	if h.handler.count() != 0 {
+		t.Error("a request carrying the reserved identifier reached the handler")
+	}
+
+	// Refusing it is not the same as ending the connection.
+	if _, err := conn.Write([]byte(`{"id":9,"method":"health"}` + "\n")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if served := readFrame(t, reader); served.ID != 9 || served.Error != nil {
+		t.Fatalf("reply = %+v, want request 9 served on the surviving connection", served)
+	}
+}
+
+// TestAnEscapeHeavyPayloadAtTheBoundStillTravels covers the size a producer
+// counts against being the size its event costs. The characters here are the
+// ones an HTML-escaping encoder would expand sixfold, and a projection full of
+// them is ordinary: a diff, shell output, a git author line.
+func TestAnEscapeHeavyPayloadAtTheBoundStillTravels(t *testing.T) {
+	const bound = 4096
+	envelope := ipc.DefaultMaxFrameBytes - ipc.DefaultMaxPayloadBytes
+	events := publisher(t, ipc.PublisherConfig{MaxPayloadBytes: bound})
+	h := serveOnSocket(t, func(c *ipc.ServerConfig) {
+		c.Events = events
+		// The same relationship the defaults have: a frame holds a payload at
+		// the bound plus the envelope around it.
+		c.MaxFrameBytes = bound + envelope
+	})
+	c := h.dial(t, ipc.ClientConfig{})
+	ctx, cancel := callCtx(t)
+	defer cancel()
+
+	stream, err := c.Subscribe(ctx, nil)
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	defer stream.Close()
+	if first, err := stream.Recv(ctx); err != nil || first.Type != "stream.gap" {
+		t.Fatalf("first delivery = %q (err %v), want the opening gap marker", first.Type, err)
+	}
+
+	payload := json.RawMessage(`"` + strings.Repeat("<&>", (bound-2)/3) + `"`)
+	if len(payload) > bound {
+		t.Fatalf("the test built a %d byte payload, want it within the %d bound", len(payload), bound)
+	}
+	// Control is the class with the least recovery, so it is the one whose
+	// silent failure would cost the most.
+	publish(t, events, ipc.Event{Type: "service.stopping", Payload: payload})
+
+	e, err := stream.Recv(ctx)
+	if err != nil {
+		t.Fatalf("Recv = %v, want an event the producer bounded to be deliverable", err)
+	}
+	if e.Type != "service.stopping" {
+		t.Fatalf("delivery is %q, want the control event rather than a marker for a discarded one", e.Type)
+	}
+	if string(e.Payload) != string(payload) {
+		t.Errorf("the payload arrived %d bytes long, want the %d published", len(e.Payload), len(payload))
+	}
+}

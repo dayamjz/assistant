@@ -106,8 +106,10 @@ const (
 	// CodeConnectionBusy maps to ErrConnectionBusy.
 	CodeConnectionBusy Code = "connection-busy"
 	// CodeFrameTooLarge maps to ErrFrameTooLarge. It is what an answer that
-	// does not fit in one frame comes back as, so a caller learns its request
-	// was served and the answer could not be delivered.
+	// does not fit in one frame comes back as, and it says nothing about
+	// whether a handler ran: a refusal raised before one was reached, and a
+	// report about a frame the service could not read at all, both arrive
+	// under it.
 	CodeFrameTooLarge Code = "frame-too-large"
 	// CodeClientClosed maps to ErrClientClosed. The service never reports it,
 	// because it is about a client's own connection; the row exists so every

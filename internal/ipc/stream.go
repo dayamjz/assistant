@@ -17,17 +17,26 @@ const DefaultBacklog = 256
 // eventEnvelopeBytes is the room a frame reserves around an event payload: the
 // frame's own fields, the event's type and revision, the JSON punctuation, and
 // the newline. The fields other than the type cost under a hundred bytes at
-// their widest, so the rest of this allowance is room for a type name.
+// their widest, so the rest of this allowance is room for a type name, which
+// this package does not bound.
 const eventEnvelopeBytes = 1 << 10
 
 // DefaultMaxPayloadBytes bounds the payload of one event when a caller does not
 // choose a bound. It is DefaultMaxFrameBytes less the envelope a frame adds
-// around a payload, so an event with a payload at the bound and a type name
-// inside that envelope fits in a default frame.
+// around a payload.
 //
-// It bounds what a producer may publish; it does not promise delivery. A server
-// may be given a smaller MaxFrameBytes than this, and a stream that meets an
-// event it cannot put in a frame still has to decide what to do about it.
+// A payload is written as it stands rather than re-escaped, so the bytes counted
+// against this bound are the bytes the payload costs in a frame, and an event
+// whose payload is within it and whose type name fits the envelope allowance
+// fits in a default frame. Nothing bounds a type name, so an event can still
+// outgrow a frame by carrying an enormous one.
+//
+// It bounds what a producer may publish; it does not promise delivery, and it is
+// not the only answer to an event that cannot travel. A server may be given a
+// smaller MaxFrameBytes than this, and an event that will not fit in a frame is
+// answered by its class rather than silently: control ends the stream with
+// ErrEventUndeliverable, and activity or state is discarded and raises the gap
+// its consumer reconciles from.
 const DefaultMaxPayloadBytes = DefaultMaxFrameBytes - eventEnvelopeBytes
 
 // PublisherConfig is what a publisher may be given. Its one field has a
@@ -388,10 +397,18 @@ func (s *Subscription) evict(want func(Class) bool) bool {
 		if !want(s.ring[idx].Class()) {
 			continue
 		}
-		for j := i; j < s.length-1; j++ {
-			s.ring[(s.head+j)%len(s.ring)] = s.ring[(s.head+j+1)%len(s.ring)]
+		if i == 0 {
+			// The oldest queued event is the one the eviction order reaches
+			// for most, so it advances the head rather than copying the rest
+			// of the queue down a slot to reach the same arrangement.
+			s.ring[idx] = Event{}
+			s.head = (s.head + 1) % len(s.ring)
+		} else {
+			for j := i; j < s.length-1; j++ {
+				s.ring[(s.head+j)%len(s.ring)] = s.ring[(s.head+j+1)%len(s.ring)]
+			}
+			s.ring[(s.head+s.length-1)%len(s.ring)] = Event{}
 		}
-		s.ring[(s.head+s.length-1)%len(s.ring)] = Event{}
 		s.length--
 		s.discarded()
 		return true

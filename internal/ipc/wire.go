@@ -2,6 +2,7 @@ package ipc
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +15,14 @@ import (
 // grow until the service dies, which is a way to take the service down without
 // any authority at all.
 const DefaultMaxFrameBytes = 1 << 20
+
+// reservedID is the identifier a report that belongs to no request carries. A
+// frame the service could not read has none of its own to answer, so it is
+// answered with this one instead, and both sides read that the same way: the
+// service refuses a request frame carrying it, because it could not be answered
+// without saying something else, and a client takes a frame carrying it as a
+// report about the connection rather than as an answer to anything it asked.
+const reservedID uint64 = 0
 
 // frame is one line on the wire, in either direction. One shape for both
 // directions keeps the encoding in one place; which fields are set says what
@@ -183,12 +192,20 @@ func (fw *frameWriter) write(f frame) error {
 // be. Nothing it decides has touched the connection yet, which is what makes
 // every failure it returns one about the frame.
 func (fw *frameWriter) build(f frame) ([]byte, error) {
-	body, err := json.Marshal(f)
-	if err != nil {
+	var line bytes.Buffer
+	enc := json.NewEncoder(&line)
+	// A producer bounds a payload by its length, so a payload has to cost what
+	// it measures once it is in a frame. Escaping is what would break that, by
+	// rewriting ordinary characters into longer sequences, so a payload goes
+	// out as it stands and what a producer counted is what its event costs
+	// here. TestAnEscapeHeavyPayloadAtTheBoundStillTravels is what holds this
+	// to the content that would otherwise expand.
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(f); err != nil {
 		return nil, fmt.Errorf("%w: encoding a frame: %w", ErrInternal, err)
 	}
-	if len(body)+1 > fw.limit {
-		return nil, fmt.Errorf("%w: %d bytes", ErrFrameTooLarge, len(body)+1)
+	if line.Len() > fw.limit {
+		return nil, fmt.Errorf("%w: %d bytes", ErrFrameTooLarge, line.Len())
 	}
-	return append(body, '\n'), nil
+	return line.Bytes(), nil
 }

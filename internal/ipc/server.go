@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"os"
+	"runtime/debug"
 	"sync"
 )
 
@@ -24,6 +26,16 @@ type Request struct {
 
 // Handler serves requests. A refusal is a returned error, and one that matches
 // a sentinel in this package crosses the wire with that sentinel's code.
+//
+// A panic is contained rather than fatal. It is recovered on the goroutine
+// serving that one request, the caller is answered with ErrInternal so it is
+// not left waiting, the connection's in-flight slot is returned, and every
+// other request, stream and connection carries on: one handler's bug may not
+// end a process that is supervising work which is fine.
+//
+// Containing it does not hide it. ServerConfig.ReportPanic is given the value
+// and the stack, and writes them to standard error when a caller configures
+// nothing, so a bug that stops being fatal does not thereby become invisible.
 type Handler interface {
 	Serve(ctx context.Context, req Request) (json.RawMessage, error)
 }
@@ -89,6 +101,16 @@ type ServerConfig struct {
 	// served at once. Zero means DefaultMaxInFlight, and a negative value is
 	// refused.
 	MaxInFlight int
+	// ReportPanic records a panic a handler did not survive, with the value it
+	// panicked with and the stack at the panic. It is called from the goroutine
+	// that recovered it, after that request has been answered, and it should
+	// not panic itself.
+	//
+	// Zero writes both to standard error. This package holds no logger and will
+	// not invent one, so a caller that wants a panic in the service log supplies
+	// one here. A caller that installs a reporter which does nothing has chosen
+	// silence, which is a different thing from this package choosing it.
+	ReportPanic func(value any, stack []byte)
 }
 
 // DefaultMaxStreams bounds the event streams one connection may hold open at
@@ -215,6 +237,17 @@ func (s *Server) isClosed() bool {
 	return s.closed
 }
 
+// reportPanic hands a recovered panic to the configured reporter, or to
+// standard error when a caller configured none. Nothing here decides that a
+// panic is unimportant; a caller may, by supplying a reporter that ignores it.
+func (s *Server) reportPanic(value any, stack []byte) {
+	if s.cfg.ReportPanic != nil {
+		s.cfg.ReportPanic(value, stack)
+		return
+	}
+	fmt.Fprintf(os.Stderr, "ipc: a handler panicked: %v\n%s", value, stack)
+}
+
 // maxStreams is how many streams one connection may hold open at once.
 func (s *Server) maxStreams() int {
 	if s.cfg.MaxStreams == 0 {
@@ -299,6 +332,14 @@ func (c *conn) serve() {
 			}
 			return
 		}
+		if f.ID == reservedID {
+			// The reserved identifier answers no request, so a request may not
+			// arrive carrying it: answering one would put a frame on the wire
+			// that says the connection failed. The reader is fine, so this
+			// refuses the frame and carries on.
+			c.reportConnection(fmt.Errorf("%w: %d is reserved for a report that belongs to no request", ErrInvalidRequest, reservedID))
+			continue
+		}
 		if f.Cancel {
 			c.endStream(f.ID, ErrStreamClosed)
 			continue
@@ -307,15 +348,12 @@ func (c *conn) serve() {
 	}
 }
 
-// reportConnection tells the peer about a frame this connection could not read.
-//
-// It names no request, because a frame that did not decode carries no
-// identifier to answer, and the zero identifier is what says so: this package's
-// Client allocates from one upwards and never asks with zero, so a peer can
-// tell a report about the connection from an answer to something it asked for
-// without guessing.
+// reportConnection tells the peer about a frame this connection would not
+// serve. It carries reservedID, which states there that the report answers no
+// request of the peer's, and the service refuses a request that arrives with
+// that identifier so nothing else can claim it.
 func (c *conn) reportConnection(cause error) {
-	_ = c.w.write(frame{Error: newError("", cause)})
+	_ = c.w.write(frame{ID: reservedID, Error: newError("", cause)})
 }
 
 // dispatch serves one request frame.
@@ -341,10 +379,11 @@ func (c *conn) dispatch(f frame) {
 	c.wg.Add(1)
 	go func() {
 		defer c.wg.Done()
-		result, err := c.srv.cfg.Handler.Serve(c.ctx, Request{Method: f.Method, Params: f.Params, Peer: peer})
+		result, err := c.invoke(f, peer)
 		// The slot is returned before the answer is written, so a caller
 		// holding its answer is a caller whose slot is already free rather
-		// than one racing the write that delivered it.
+		// than one racing the write that delivered it. A handler that panicked
+		// returns through here too, so its slot comes back like any other.
 		c.endRequest()
 		if err != nil {
 			c.answer(f.ID, frame{ID: f.ID, Error: newError(f.Method, err)})
@@ -352,6 +391,24 @@ func (c *conn) dispatch(f frame) {
 		}
 		c.answer(f.ID, frame{ID: f.ID, Result: nullIfEmpty(result)})
 	}()
+}
+
+// invoke runs the handler, turning a panic into a refusal its caller can act on.
+//
+// A handler's bug ends that request rather than the process: the alternative
+// takes down every other connection, every open stream, and the supervision of
+// every run that was going fine. The panic is reported before this returns, so
+// what it costs is one refused call rather than the evidence of the bug.
+func (c *conn) invoke(f frame, peer Peer) (result json.RawMessage, err error) {
+	defer func() {
+		value := recover()
+		if value == nil {
+			return
+		}
+		c.srv.reportPanic(value, debug.Stack())
+		result, err = nil, fmt.Errorf("%w: the handler panicked", ErrInternal)
+	}()
+	return c.srv.cfg.Handler.Serve(c.ctx, Request{Method: f.Method, Params: f.Params, Peer: peer})
 }
 
 // beginRequest takes one of this connection's in-flight slots, or reports the
