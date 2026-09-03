@@ -103,6 +103,10 @@ Each has cost this repository more than one round of review.
   not the hash in its directory name, which is only where the name came from.
   Its `doc.go` states what a git template and `core.hooksPath` can still do to
   a gate's hooks and which `internal/vcs` operations would close each gap.
+  `internal/gate/HANDOVER.md` is the open state: safety items still outstanding,
+  two findings deferred rather than resolved, and the mechanism proposal for the
+  sibling-asymmetry rule this package documented and then violated twice more.
+  Read it before changing anything here.
 - `internal/agents` is the only package that starts an agent process. It owns
   the process tree, the per-invocation environment, and what is recorded about
   a call. P4 lives in its type split rather than in a rule callers follow:
