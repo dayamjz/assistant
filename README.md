@@ -10,7 +10,7 @@ until it has been independently reviewed, tested, documented, and linted.
 ## Status
 
 Early. The product requirements are settled and checked in at
-[`docs/prd.html`](docs/prd.html). Seven pieces exist so far. The execution
+[`docs/prd.html`](docs/prd.html). Eight pieces exist so far. The execution
 engine in `internal/graph` is the first: the graph builder with its
 construction-time checks, an executor with halt points and bounded cycles, and
 checkpoints behind a four-operation store. The second is `internal/findings`,
@@ -27,8 +27,11 @@ the gate did: an embedded sqlite database behind typed accessors, with additive
 migrations checked against the database's own catalog. The seventh is
 `internal/agents`, the only package that starts an agent process: the separate
 reviewing and fixing roles, the Claude Code adapter, ordered fallback
-resolution, and a record of what each invocation cost. Nothing joins them into
-a pipeline yet, so there is still nothing to run.
+resolution, and a record of what each invocation cost. The eighth is
+`internal/forge`, the only package that talks to a code host: the provider
+interface over pull requests, mergeability, and checks, a GitHub adapter over
+the `gh` command line, and a checks model in which an empty check list is not a
+pass. Nothing joins them into a pipeline yet, so there is still nothing to run.
 
 ## The two promises
 
@@ -56,6 +59,7 @@ working as it always did.
 | `internal/agents` | The only package that starts an agent process: the run and fix roles, the Claude Code adapter, fallback resolution, and invocation records. |
 | `internal/config` | The configuration schema: layers, defaults, merge, validation, path matcher. |
 | `internal/findings` | The stage vocabulary: findings, actions, reports, and parsing of agent output. |
+| `internal/forge` | The only package that talks to a code host: the provider interface over pull requests, mergeability, and checks, and the GitHub adapter over the `gh` command line. |
 | `internal/graph` | The execution engine: nodes, edges, bounds, halt points, checkpoints. |
 | `internal/safety` | The data-loss policy over git: whether a branch update may proceed, on what anchor, and when to refuse. |
 | `internal/store` | The only package that opens the database: the schema, its additive migrations, and typed accessors for repositories, runs, stages, rounds, checkpoints, tasks, task state and events, and holds. |
