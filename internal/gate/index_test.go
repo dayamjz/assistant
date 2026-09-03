@@ -2,10 +2,12 @@ package gate_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/gate"
@@ -211,5 +213,86 @@ func TestAFailedUnbindLeavesAReattachedGateFindable(t *testing.T) {
 	}
 	if got := refs(t, again.Repository()); !equal(got, recorded) {
 		t.Fatalf("the gate holds %v, want %v", got, recorded)
+	}
+}
+
+// TestAClaimantWhoseConfigurationCannotBeReadRefusesTheOperation watches the
+// third direction stillBound can take, and the only one that refuses.
+//
+// A claimant that is not there and a claimant that will not open both count as
+// holding nothing. A claimant that is standing there but whose configuration
+// cannot be read is the deliberate opposite: whether it points at this gate is
+// a fact this package failed to establish, not one it may read as "nothing
+// points at the gate". Under the opposite behaviour the copy here takes the
+// original's gate and the record inside it, which is the loss the ownership
+// index exists to prevent, so the refusal is the assertion.
+//
+// The fixture is a real repository state rather than a stand-in opener: a
+// [remote "assistant"] section whose url key has no value leaves
+// rev-parse --is-inside-work-tree succeeding, so the claimant opens, while
+// remote get-url fails, so the read this package makes of it errors. Both
+// halves are asserted with raw git before the operation runs, because a fixture
+// that stopped posing the question would otherwise pass silently.
+func TestAClaimantWhoseConfigurationCannotBeReadRefusesTheOperation(t *testing.T) {
+	gitEnvironment(t)
+	wc := newWorkingCopy(t)
+	home, index, opts := homeWithIndex(t)
+	command, _ := recorderCommand(t, 0)
+
+	original, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path, Command: command}, opts()...)
+	if err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+
+	// The copy is taken while the original's configuration is still valid, so
+	// it inherits the remote naming the original's gate; the original is broken
+	// afterwards.
+	duplicate := filepath.Join(filepath.Dir(wc.path), "copy")
+	copyTree(t, wc.path, duplicate)
+	if url, ok := remoteURL(t, duplicate, gate.RemoteName); !ok || url != original.Repository() {
+		t.Fatalf("the copy's %s remote is %q, want the original's gate %q; the fixture does not pose the "+
+			"question this test asks", gate.RemoteName, url, original.Repository())
+	}
+	config := filepath.Join(wc.path, ".git", "config")
+	writeFile(t, config, readFile(t, config)+"[remote \""+gate.RemoteName+"\"]\nurl\n")
+
+	if out, err := tryRawGit(wc.path, "rev-parse", "--is-inside-work-tree"); err != nil ||
+		strings.TrimSpace(out) != "true" {
+		t.Fatalf("the broken working copy no longer opens (%v, output %q), so the claimant would be skipped "+
+			"rather than read", err, out)
+	}
+	if out, err := tryRawGit(wc.path, "remote", "get-url", "--", gate.RemoteName); err == nil {
+		t.Fatalf("reading the %s remote of the broken working copy succeeded with %q, so there is no failed "+
+			"read for this test to watch", gate.RemoteName, strings.TrimSpace(out))
+	}
+
+	_, refused := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: duplicate, Command: command}, opts()...)
+	if refused == nil {
+		t.Fatal("Initialize reported success over a claimant whose configuration could not be read")
+	}
+	if want := "gate: reading the " + gate.RemoteName + " remote"; !strings.Contains(refused.Error(), want) {
+		t.Fatalf("the refusal is %v, want one naming the failed read as %q", refused, want)
+	}
+	if errors.Is(refused, gate.ErrGateClaimed) {
+		t.Fatalf("the refusal is ErrGateClaimed, so the copy was refused for a claimant this package read "+
+			"rather than for the read it could not make: %v", refused)
+	}
+
+	// The gate and its record are what the refusal protects: under the opposite
+	// behaviour the copy would have taken both.
+	var rec struct {
+		WorkingPath string `json:"workingPath"`
+	}
+	if err := json.Unmarshal([]byte(readFile(t, filepath.Join(original.Repository(), recordName))), &rec); err != nil {
+		t.Fatalf("decode the record of %s: %v", original.Repository(), err)
+	}
+	if rec.WorkingPath != original.WorkingPath() {
+		t.Fatalf("the gate's record now names %q, want the original working copy %q", rec.WorkingPath,
+			original.WorkingPath())
+	}
+	for _, bound := range boundWorkingPaths(t, index, original.ID()) {
+		if bound == resolved(t, duplicate) {
+			t.Fatalf("the index records the copy at %q as bound to the original's gate", bound)
+		}
 	}
 }
