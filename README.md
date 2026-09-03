@@ -10,7 +10,7 @@ until it has been independently reviewed, tested, documented, and linted.
 ## Status
 
 Early. The product requirements are settled and checked in at
-[`docs/prd.html`](docs/prd.html). Eight pieces exist so far. The execution
+[`docs/prd.html`](docs/prd.html). Nine pieces exist so far. The execution
 engine in `internal/graph` is the first: the graph builder with its
 construction-time checks, an executor with halt points and bounded cycles, and
 checkpoints behind a four-operation store. The second is `internal/findings`,
@@ -31,7 +31,10 @@ resolution, and a record of what each invocation cost. The eighth is
 `internal/forge`, the only package that talks to a code host: the provider
 interface over pull requests, mergeability, and checks, a GitHub adapter over
 the `gh` command line, and a checks model in which an empty check list is not a
-pass. Nothing joins them into a pipeline yet, so there is still nothing to run.
+pass. The ninth is `internal/ipc`, the local protocol between the command line
+and the background service: the method table, the event taxonomy and its
+bounded stream, a client, a server, and peer identification the kernel answers
+for. Nothing joins them into a pipeline yet, so there is still nothing to run.
 
 ## The two promises
 
@@ -61,6 +64,7 @@ working as it always did.
 | `internal/findings` | The stage vocabulary: findings, actions, reports, and parsing of agent output. |
 | `internal/forge` | The only package that talks to a code host: the provider interface over pull requests, mergeability, and checks, and the GitHub adapter over the `gh` command line. |
 | `internal/graph` | The execution engine: nodes, edges, bounds, halt points, checkpoints. |
+| `internal/ipc` | The local protocol between the command line and the background service: the method table, the event taxonomy, the bounded stream, the client and the server, and peer identification. |
 | `internal/safety` | The data-loss policy over git: whether a branch update may proceed, on what anchor, and when to refuse. |
 | `internal/store` | The only package that opens the database: the schema, its additive migrations, and typed accessors for repositories, runs, stages, rounds, checkpoints, tasks, task state and events, and holds. |
 | `internal/vcs` | The only package that invokes git: typed operations over repositories, worktrees, refs, diffs, and remotes. |

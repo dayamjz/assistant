@@ -1,0 +1,1605 @@
+package ipc_test
+
+import (
+	"bufio"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/dayamjz/assistant/internal/ipc"
+)
+
+// recordingAncestry stands in for the ancestry resolver this repository does
+// not have yet. It answers what a test told it to answer and records what it
+// was asked, which is how a test shows the server asked at all.
+type recordingAncestry struct {
+	mu     sync.Mutex
+	asked  []ipc.Credentials
+	result ipc.Containment
+	err    error
+}
+
+func (a *recordingAncestry) Contained(_ context.Context, c ipc.Credentials) (ipc.Containment, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.asked = append(a.asked, c)
+	return a.result, a.err
+}
+
+func (a *recordingAncestry) questions() []ipc.Credentials {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return append([]ipc.Credentials(nil), a.asked...)
+}
+
+// recordingHandler answers every request with the request it was given, so a
+// test can see what reached it, and records whether it was reached at all.
+type recordingHandler struct {
+	mu       sync.Mutex
+	requests []ipc.Request
+	result   json.RawMessage
+	err      error
+}
+
+type served struct {
+	Method string `json:"method"`
+	Params string `json:"params"`
+	Marker string `json:"marker"`
+	PID    int    `json:"pid"`
+	UID    int    `json:"uid"`
+	PeerOK bool   `json:"peer_ok"`
+}
+
+func (h *recordingHandler) Serve(_ context.Context, req ipc.Request) (json.RawMessage, error) {
+	h.mu.Lock()
+	h.requests = append(h.requests, req)
+	h.mu.Unlock()
+	if h.err != nil {
+		return nil, h.err
+	}
+	if h.result != nil {
+		return h.result, nil
+	}
+	out := served{Method: string(req.Method), Params: string(req.Params), Marker: string(req.Peer.Marker())}
+	if creds, err := req.Peer.Credentials(); err == nil {
+		out.PeerOK, out.PID, out.UID = true, creds.PID, creds.UID
+	}
+	body, err := json.Marshal(out)
+	if err != nil {
+		return nil, err
+	}
+	return body, nil
+}
+
+func (h *recordingHandler) count() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return len(h.requests)
+}
+
+type harness struct {
+	socket   string
+	handler  *recordingHandler
+	ancestry *recordingAncestry
+	events   *ipc.Publisher
+	server   *ipc.Server
+}
+
+// serveOnSocket starts a server on a local socket, which is the transport the
+// service actually uses and the only one a peer can be identified over.
+func serveOnSocket(t *testing.T, cfg func(*ipc.ServerConfig)) *harness {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "ipc")
+	if err != nil {
+		t.Fatalf("temp dir: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	h := &harness{
+		socket:   filepath.Join(dir, "s"),
+		handler:  &recordingHandler{},
+		ancestry: &recordingAncestry{},
+		events:   publisher(t, ipc.PublisherConfig{}),
+	}
+	sc := ipc.ServerConfig{Handler: h.handler, Ancestry: h.ancestry, Events: h.events, Backlog: 8}
+	if cfg != nil {
+		cfg(&sc)
+	}
+	srv, err := ipc.NewServer(sc)
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	h.server = srv
+	l := listenLocal(t, h.socket)
+	done := make(chan error, 1)
+	go func() { done <- srv.Serve(l) }()
+	t.Cleanup(func() {
+		srv.Close()
+		l.Close()
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Errorf("Serve: %v", err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Error("Serve did not return after Close")
+		}
+	})
+	return h
+}
+
+// listenLocal opens the local socket the service is specified to use. A
+// platform with no such transport cannot serve this protocol or identify a peer
+// over it, so the tests that need one skip loudly there rather than passing;
+// on the platforms the product runs on, a failure here is a failure.
+func listenLocal(t *testing.T, path string) net.Listener {
+	t.Helper()
+	l, err := net.Listen("unix", path)
+	if err != nil {
+		if !platformIdentifiesPeers() {
+			t.Skipf("%s has no local socket transport to serve this protocol over: %v", runtime.GOOS, err)
+		}
+		t.Fatalf("listen: %v", err)
+	}
+	return l
+}
+
+func (h *harness) dial(t *testing.T, cfg ipc.ClientConfig) *ipc.Client {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	c, err := ipc.Dial(ctx, h.socket, cfg)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	t.Cleanup(func() { c.Close() })
+	return c
+}
+
+func callCtx(t *testing.T) (context.Context, context.CancelFunc) {
+	t.Helper()
+	return context.WithTimeout(context.Background(), 5*time.Second)
+}
+
+func TestNewServerRefusesAnIncompleteConfiguration(t *testing.T) {
+	full := ipc.ServerConfig{Handler: &recordingHandler{}, Ancestry: &recordingAncestry{}, Events: publisher(t, ipc.PublisherConfig{})}
+	cases := map[string]func(*ipc.ServerConfig){
+		"no handler":                          func(c *ipc.ServerConfig) { c.Handler = nil },
+		"no ancestry":                         func(c *ipc.ServerConfig) { c.Ancestry = nil },
+		"no publisher":                        func(c *ipc.ServerConfig) { c.Events = nil },
+		"a backlog that is not a queue depth": func(c *ipc.ServerConfig) { c.Backlog = -1 },
+		"a negative stream limit":             func(c *ipc.ServerConfig) { c.MaxStreams = -1 },
+		"a negative in-flight limit":          func(c *ipc.ServerConfig) { c.MaxInFlight = -1 },
+	}
+	for name, breakIt := range cases {
+		cfg := full
+		breakIt(&cfg)
+		if _, err := ipc.NewServer(cfg); err == nil {
+			t.Errorf("NewServer with %s was accepted", name)
+		}
+	}
+	if _, err := ipc.NewServer(full); err != nil {
+		t.Errorf("NewServer with everything: %v", err)
+	}
+}
+
+func TestCallRoundTrip(t *testing.T) {
+	h := serveOnSocket(t, nil)
+	c := h.dial(t, ipc.ClientConfig{})
+	ctx, cancel := callCtx(t)
+	defer cancel()
+
+	var got served
+	if err := c.Call(ctx, "status", map[string]string{"repo": "here"}, &got); err != nil {
+		t.Fatalf("Call: %v", err)
+	}
+	if got.Method != "status" {
+		t.Errorf("handler saw method %q, want status", got.Method)
+	}
+	if got.Params != `{"repo":"here"}` {
+		t.Errorf("handler saw params %q", got.Params)
+	}
+}
+
+func TestCallReportsAHandlerRefusalWithItsSentinel(t *testing.T) {
+	h := serveOnSocket(t, nil)
+	h.handler.err = ipc.ErrUnavailable
+	c := h.dial(t, ipc.ClientConfig{})
+	ctx, cancel := callCtx(t)
+	defer cancel()
+
+	err := c.Call(ctx, "status", nil, nil)
+	if !errors.Is(err, ipc.ErrUnavailable) {
+		t.Fatalf("Call = %v, want ErrUnavailable", err)
+	}
+	var wire *ipc.Error
+	if !errors.As(err, &wire) {
+		t.Fatalf("Call error is %T, want *ipc.Error", err)
+	}
+	if wire.Method != "status" {
+		t.Errorf("the refusal names method %q, want status", wire.Method)
+	}
+}
+
+// TestUnknownMethodNeverReachesTheHandler sends the frame directly, because a
+// client refuses an unknown method before it sends one and the service must
+// refuse it as well.
+func TestUnknownMethodNeverReachesTheHandler(t *testing.T) {
+	h := serveOnSocket(t, nil)
+	conn, err := net.Dial("unix", h.socket)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+	if _, err := conn.Write([]byte(`{"id":1,"method":"run.obliterate"}` + "\n")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	var reply struct {
+		ID    uint64     `json:"id"`
+		Error *ipc.Error `json:"error"`
+	}
+	line, err := bufio.NewReader(conn).ReadBytes('\n')
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if err := json.Unmarshal(line, &reply); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if reply.Error == nil || reply.Error.Code != ipc.CodeUnknownMethod {
+		t.Fatalf("reply = %+v, want an unknown-method error", reply.Error)
+	}
+	if h.handler.count() != 0 {
+		t.Error("an unknown method reached the handler")
+	}
+}
+
+func TestClientRefusesAMethodItCannotSend(t *testing.T) {
+	h := serveOnSocket(t, nil)
+	c := h.dial(t, ipc.ClientConfig{})
+	ctx, cancel := callCtx(t)
+	defer cancel()
+
+	if err := c.Call(ctx, "run.obliterate", nil, nil); !errors.Is(err, ipc.ErrUnknownMethod) {
+		t.Errorf("Call = %v, want ErrUnknownMethod", err)
+	}
+	if err := c.Call(ctx, "events.subscribe", nil, nil); !errors.Is(err, ipc.ErrInvalidRequest) {
+		t.Errorf("Call(events.subscribe) = %v, want ErrInvalidRequest", err)
+	}
+}
+
+func TestRestrictedMethodRefusesAContainedCaller(t *testing.T) {
+	requiresIdentifiedPeer(t)
+	h := serveOnSocket(t, nil)
+	h.ancestry.result = ipc.Containment{Contained: true, Run: "r7", Stage: "test"}
+	c := h.dial(t, ipc.ClientConfig{})
+	ctx, cancel := callCtx(t)
+	defer cancel()
+
+	err := c.Call(ctx, "service.stop", nil, nil)
+	if !errors.Is(err, ipc.ErrContained) {
+		t.Fatalf("Call = %v, want ErrContained", err)
+	}
+	if h.handler.count() != 0 {
+		t.Error("a contained caller reached the handler")
+	}
+	if len(h.ancestry.questions()) != 1 {
+		t.Errorf("the ancestry was asked %d times, want once", len(h.ancestry.questions()))
+	}
+}
+
+func TestRestrictedMethodRefusesWhenContainmentCannotBeDetermined(t *testing.T) {
+	requiresIdentifiedPeer(t)
+	h := serveOnSocket(t, nil)
+	h.ancestry.err = errors.New("the process table could not be read")
+	c := h.dial(t, ipc.ClientConfig{})
+	ctx, cancel := callCtx(t)
+	defer cancel()
+
+	err := c.Call(ctx, "run.start", nil, nil)
+	if !errors.Is(err, ipc.ErrUnavailable) {
+		t.Fatalf("Call = %v, want ErrUnavailable: an unanswered containment question is not a no", err)
+	}
+	if h.handler.count() != 0 {
+		t.Error("a request whose containment was unknown reached the handler")
+	}
+}
+
+func TestOpenMethodIsServedWithoutAskingAboutContainment(t *testing.T) {
+	h := serveOnSocket(t, nil)
+	h.ancestry.result = ipc.Containment{Contained: true, Run: "r7", Stage: "test"}
+	c := h.dial(t, ipc.ClientConfig{})
+	ctx, cancel := callCtx(t)
+	defer cancel()
+
+	var got served
+	if err := c.Call(ctx, "stage.report", map[string]string{"stage": "test"}, &got); err != nil {
+		t.Fatalf("Call = %v, want a contained caller to be able to return its own stage", err)
+	}
+	if len(h.ancestry.questions()) != 0 {
+		t.Error("an open method consulted the ancestry")
+	}
+}
+
+// TestTheMarkerNeitherAuthorizesNorRefuses is the rule that keeps an
+// environment variable from becoming authority. The claim is carried and
+// reported, and the decision is taken on what the kernel said instead.
+func TestTheMarkerNeitherAuthorizesNorRefuses(t *testing.T) {
+	requiresIdentifiedPeer(t)
+	h := serveOnSocket(t, nil)
+	c := h.dial(t, ipc.ClientConfig{Marker: "run=r7 stage=test"})
+	ctx, cancel := callCtx(t)
+	defer cancel()
+
+	// Claiming to be inside a stage does not refuse the call.
+	var got served
+	if err := c.Call(ctx, "run.start", nil, &got); err != nil {
+		t.Fatalf("Call = %v, want the call served: the ancestry said the caller is not contained", err)
+	}
+	if got.Marker != "run=r7 stage=test" {
+		t.Errorf("the handler saw marker %q, want the claim carried through as evidence", got.Marker)
+	}
+
+	// Claiming nothing does not allow it either.
+	h.ancestry.result = ipc.Containment{Contained: true, Run: "r7", Stage: "test"}
+	plain := h.dial(t, ipc.ClientConfig{Marker: ""})
+	if err := plain.Call(ctx, "run.start", nil, nil); !errors.Is(err, ipc.ErrContained) {
+		t.Errorf("Call = %v, want ErrContained for a caller that claimed no marker", err)
+	}
+}
+
+// pipeListener hands out one connection that is not a local socket, which is
+// the shape the transport really produces when the protocol is carried over
+// something the kernel cannot be asked about.
+type pipeListener struct {
+	conn net.Conn
+	once sync.Once
+	done chan struct{}
+}
+
+func (l *pipeListener) Accept() (net.Conn, error) {
+	var c net.Conn
+	l.once.Do(func() { c = l.conn })
+	if c != nil {
+		return c, nil
+	}
+	<-l.done
+	return nil, net.ErrClosed
+}
+
+func (l *pipeListener) Close() error {
+	close(l.done)
+	return nil
+}
+
+func (l *pipeListener) Addr() net.Addr { return dummyAddr{} }
+
+type dummyAddr struct{}
+
+func (dummyAddr) Network() string { return "pipe" }
+func (dummyAddr) String() string  { return "pipe" }
+
+// TestUnidentifiedPeerIsRefusedForRestrictedMethods covers a connection the
+// kernel cannot be asked about. Authority comes from the identification, so
+// there is nothing to decide on and the request is refused rather than served.
+func TestUnidentifiedPeerIsRefusedForRestrictedMethods(t *testing.T) {
+	handler := &recordingHandler{}
+	ancestry := &recordingAncestry{}
+	srv, err := ipc.NewServer(ipc.ServerConfig{Handler: handler, Ancestry: ancestry, Events: publisher(t, ipc.PublisherConfig{})})
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	serverSide, clientSide := net.Pipe()
+	l := &pipeListener{conn: serverSide, done: make(chan struct{})}
+	go srv.Serve(l)
+	t.Cleanup(func() {
+		srv.Close()
+		l.Close()
+	})
+	c := ipc.NewClient(clientSide, ipc.ClientConfig{})
+	t.Cleanup(func() { c.Close() })
+	ctx, cancel := callCtx(t)
+	defer cancel()
+
+	if err := c.Call(ctx, "run.cancel", nil, nil); !errors.Is(err, ipc.ErrUnidentifiedPeer) {
+		t.Fatalf("Call = %v, want ErrUnidentifiedPeer", err)
+	}
+	if handler.count() != 0 {
+		t.Error("a request from an unidentified peer reached the handler")
+	}
+	if len(ancestry.questions()) != 0 {
+		t.Error("the ancestry was asked about a peer with no credentials")
+	}
+	var got served
+	if err := c.Call(ctx, "status", nil, &got); err != nil {
+		t.Fatalf("an open method was refused for an unidentified peer: %v", err)
+	}
+	if got.PeerOK {
+		t.Error("the handler read credentials out of a peer that was never identified")
+	}
+}
+
+func TestSubscribeOpensGappedAndDelivers(t *testing.T) {
+	h := serveOnSocket(t, nil)
+	c := h.dial(t, ipc.ClientConfig{})
+	ctx, cancel := callCtx(t)
+	defer cancel()
+
+	stream, err := c.Subscribe(ctx, nil)
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	defer stream.Close()
+
+	first, err := stream.Recv(ctx)
+	if err != nil {
+		t.Fatalf("Recv: %v", err)
+	}
+	if first.Type != "stream.gap" {
+		t.Fatalf("first delivery is %q, want the opening gap marker", first.Type)
+	}
+	if gap, err := ipc.GapPayload(first); err != nil || gap.Dropped != 0 {
+		t.Fatalf("opening marker = %+v (err %v), want a marker reporting nothing dropped", gap, err)
+	}
+	publish(t, h.events, state("s1", 4), activity("a1"))
+	for i, want := range []ipc.Type{"run.state", "log.line"} {
+		e, err := stream.Recv(ctx)
+		if err != nil {
+			t.Fatalf("Recv %d: %v", i, err)
+		}
+		if e.Type != want {
+			t.Fatalf("delivery %d is %q, want %q", i, e.Type, want)
+		}
+		if want == "run.state" && e.Revision != 4 {
+			t.Errorf("revision = %d, want the published 4", e.Revision)
+		}
+	}
+}
+
+func TestStreamEndsWhenThePublisherCloses(t *testing.T) {
+	h := serveOnSocket(t, nil)
+	c := h.dial(t, ipc.ClientConfig{})
+	ctx, cancel := callCtx(t)
+	defer cancel()
+
+	stream, err := c.Subscribe(ctx, nil)
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	if _, err := stream.Recv(ctx); err != nil {
+		t.Fatalf("Recv: %v", err)
+	}
+	h.events.Close()
+	if _, err := stream.Recv(ctx); !errors.Is(err, ipc.ErrStreamClosed) {
+		t.Errorf("Recv after the publisher closed = %v, want ErrStreamClosed", err)
+	}
+}
+
+func TestCallsAndStreamsShareAConnection(t *testing.T) {
+	h := serveOnSocket(t, nil)
+	c := h.dial(t, ipc.ClientConfig{})
+	ctx, cancel := callCtx(t)
+	defer cancel()
+
+	stream, err := c.Subscribe(ctx, nil)
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	defer stream.Close()
+	if _, err := stream.Recv(ctx); err != nil {
+		t.Fatalf("Recv: %v", err)
+	}
+	publish(t, h.events, state("s1", 1))
+	var got served
+	if err := c.Call(ctx, "health", nil, &got); err != nil {
+		t.Fatalf("Call while a stream is open: %v", err)
+	}
+	if got.Method != "health" {
+		t.Errorf("handler saw %q, want health", got.Method)
+	}
+	e, err := stream.Recv(ctx)
+	if err != nil {
+		t.Fatalf("Recv after a call: %v", err)
+	}
+	if e.Type != "run.state" {
+		t.Errorf("delivery is %q, want run.state", e.Type)
+	}
+}
+
+func TestClientCloseReleasesWaitingCallers(t *testing.T) {
+	h := serveOnSocket(t, nil)
+	c := h.dial(t, ipc.ClientConfig{})
+	ctx, cancel := callCtx(t)
+	defer cancel()
+
+	stream, err := c.Subscribe(ctx, nil)
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	if _, err := stream.Recv(ctx); err != nil {
+		t.Fatalf("Recv: %v", err)
+	}
+	c.Close()
+	if _, err := stream.Recv(ctx); !errors.Is(err, ipc.ErrClientClosed) {
+		t.Errorf("Recv after Close = %v, want ErrClientClosed", err)
+	}
+	if err := c.Call(ctx, "health", nil, nil); !errors.Is(err, ipc.ErrClientClosed) {
+		t.Errorf("Call after Close = %v, want ErrClientClosed", err)
+	}
+}
+
+// blockingHandler holds every request inside the handler until the test lets
+// it go, which is how a test holds a connection's in-flight slots open and sees
+// what the request behind them gets.
+type blockingHandler struct {
+	entered chan struct{}
+	release chan struct{}
+	err     error
+}
+
+func (h *blockingHandler) Serve(ctx context.Context, _ ipc.Request) (json.RawMessage, error) {
+	select {
+	case h.entered <- struct{}{}:
+	default:
+		// The channel is a signal for the test to wait on, not a rendezvous
+		// every request has to be met at.
+	}
+	select {
+	case <-h.release:
+		if h.err != nil {
+			return nil, h.err
+		}
+		return json.RawMessage(`{"served":true}`), nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// failingHandler refuses every request with one error, so a test can watch a
+// sentinel cross a real connection.
+type failingHandler struct{ err error }
+
+func (h *failingHandler) Serve(context.Context, ipc.Request) (json.RawMessage, error) {
+	return nil, h.err
+}
+
+// TestASentinelRefusalMatchesItselfAtTheClient covers what a code is for. A
+// consumer told its subscription stalled has to reattach and reconcile, and it
+// can only tell that from "the service broke" if the sentinel survives the
+// wire rather than arriving as the internal category.
+func TestASentinelRefusalMatchesItselfAtTheClient(t *testing.T) {
+	sentinels := map[string]error{
+		"stalled":       ipc.ErrSubscriberStalled,
+		"closed":        ipc.ErrStreamClosed,
+		"too large":     ipc.ErrFrameTooLarge,
+		"busy":          ipc.ErrConnectionBusy,
+		"undeliverable": ipc.ErrEventUndeliverable,
+		"payload":       ipc.ErrPayloadTooLarge,
+		"unavailable":   ipc.ErrUnavailable,
+		"contained":     ipc.ErrContained,
+	}
+	for name, sentinel := range sentinels {
+		t.Run(name, func(t *testing.T) {
+			h := serveOnSocket(t, func(c *ipc.ServerConfig) { c.Handler = &failingHandler{err: sentinel} })
+			c := h.dial(t, ipc.ClientConfig{})
+			ctx, cancel := callCtx(t)
+			defer cancel()
+			if err := c.Call(ctx, "status", nil, nil); !errors.Is(err, sentinel) {
+				t.Fatalf("Call = %v, want it to match %v after the wire", err, sentinel)
+			}
+		})
+	}
+}
+
+// TestAnAnswerTooLargeForAFrameIsReportedRatherThanDropped covers a request
+// that was served and whose answer cannot be delivered. Nothing else answers
+// that identifier, so without a refusal the caller waits for an answer that is
+// never coming, and forever when its context has no deadline.
+func TestAnAnswerTooLargeForAFrameIsReportedRatherThanDropped(t *testing.T) {
+	const limit = 4096
+	oversized, err := json.Marshal(map[string]string{"pad": strings.Repeat("x", 4*limit)})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	h := serveOnSocket(t, func(c *ipc.ServerConfig) { c.MaxFrameBytes = limit })
+	h.handler.result = oversized
+	c := h.dial(t, ipc.ClientConfig{})
+	ctx, cancel := callCtx(t)
+	defer cancel()
+
+	err = c.Call(ctx, "status", nil, nil)
+	if !errors.Is(err, ipc.ErrFrameTooLarge) {
+		t.Fatalf("Call = %v, want the caller told its answer does not fit rather than left waiting", err)
+	}
+	var wire *ipc.Error
+	if !errors.As(err, &wire) {
+		t.Fatalf("Call error is %T, want *ipc.Error", err)
+	}
+	// The connection is healthy, so it is still serving.
+	if err := c.Call(ctx, "health", nil, nil); !errors.Is(err, ipc.ErrFrameTooLarge) {
+		t.Fatalf("second Call = %v, want the connection still answering", err)
+	}
+}
+
+// TestAnEventTooLargeForAFrameGapsTheStreamRatherThanEndingIt covers the
+// producer that did not bound its projection. The connection is healthy, so
+// the event is a discard like any other: the consumer is told to reconcile and
+// keeps its stream.
+func TestAnEventTooLargeForAFrameGapsTheStreamRatherThanEndingIt(t *testing.T) {
+	const limit = 4096
+	h := serveOnSocket(t, func(c *ipc.ServerConfig) { c.MaxFrameBytes = limit })
+	c := h.dial(t, ipc.ClientConfig{})
+	ctx, cancel := callCtx(t)
+	defer cancel()
+
+	stream, err := c.Subscribe(ctx, nil)
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	defer stream.Close()
+	if first, err := stream.Recv(ctx); err != nil || first.Type != "stream.gap" {
+		t.Fatalf("first delivery = %q (err %v), want the opening gap marker", first.Type, err)
+	}
+	oversized := ipc.Event{
+		Type:     "run.state",
+		Revision: 7,
+		Payload:  json.RawMessage(`{"label":"` + strings.Repeat("x", 4*limit) + `"}`),
+	}
+	publish(t, h.events, oversized, state("fits", 8))
+
+	marker, err := stream.Recv(ctx)
+	if err != nil {
+		t.Fatalf("Recv after an event that does not fit = %v, want the stream to survive it", err)
+	}
+	if marker.Type != "stream.gap" {
+		t.Fatalf("delivery after an oversized event is %q, want a gap marker", marker.Type)
+	}
+	gap, err := ipc.GapPayload(marker)
+	if err != nil || gap.Dropped != 1 {
+		t.Fatalf("marker = %+v (err %v), want one discard reported", gap, err)
+	}
+	next, err := stream.Recv(ctx)
+	if err != nil {
+		t.Fatalf("Recv after the marker: %v", err)
+	}
+	if next.Type != "run.state" || next.Revision != 8 || label(t, next) != "fits" {
+		t.Fatalf("delivery after the marker = %+v, want the state event that does fit", next)
+	}
+}
+
+// TestConnectionRefusesMoreStreamsThanItMayHold covers the bound on a resource
+// any identified caller can reach. Exceeding it names the limit rather than
+// dropping the request, and ending a stream gives the slot back.
+func TestConnectionRefusesMoreStreamsThanItMayHold(t *testing.T) {
+	h := serveOnSocket(t, func(c *ipc.ServerConfig) { c.MaxStreams = 2 })
+	c := h.dial(t, ipc.ClientConfig{})
+	ctx, cancel := callCtx(t)
+	defer cancel()
+
+	first, err := c.Subscribe(ctx, nil)
+	if err != nil {
+		t.Fatalf("first Subscribe: %v", err)
+	}
+	defer first.Close()
+	second, err := c.Subscribe(ctx, nil)
+	if err != nil {
+		t.Fatalf("second Subscribe: %v", err)
+	}
+	if _, err := c.Subscribe(ctx, nil); !errors.Is(err, ipc.ErrConnectionBusy) {
+		t.Fatalf("Subscribe past the limit = %v, want ErrConnectionBusy", err)
+	} else if !strings.Contains(err.Error(), "2 of 2 allowed") {
+		t.Errorf("the refusal reads %q, want it to name the limit and the count", err)
+	}
+
+	// Closing a stream attempts its cancel rather than waiting for it, so the
+	// slot frees when that cancel reaches the service rather than by the time
+	// Close returns. What is asserted is that it frees.
+	second.Close()
+	third, err := subscribeOnceFreed(ctx, t, c)
+	if err != nil {
+		t.Fatalf("Subscribe after a stream ended = %v, want the slot freed", err)
+	}
+	third.Close()
+}
+
+// subscribeOnceFreed opens a stream, retrying while the connection is still at
+// its limit, and gives up when a slot has not come free in time. A refusal that
+// keeps repeating is returned as it stands, so a slot that never frees fails the
+// caller with the reason rather than with a timeout.
+func subscribeOnceFreed(ctx context.Context, t *testing.T, c *ipc.Client) (*ipc.Stream, error) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		stream, err := c.Subscribe(ctx, nil)
+		if !errors.Is(err, ipc.ErrConnectionBusy) || time.Now().After(deadline) {
+			return stream, err
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// TestConnectionRefusesMoreRequestsThanItMayServeAtOnce covers the same bound
+// for work in a handler. The refusal must come back while the connection keeps
+// serving, because the goroutine that would wait for a slot is the one reading
+// the connection.
+func TestConnectionRefusesMoreRequestsThanItMayServeAtOnce(t *testing.T) {
+	handler := &blockingHandler{entered: make(chan struct{}, 1), release: make(chan struct{})}
+	h := serveOnSocket(t, func(c *ipc.ServerConfig) {
+		c.Handler = handler
+		c.MaxInFlight = 1
+	})
+	c := h.dial(t, ipc.ClientConfig{})
+	ctx, cancel := callCtx(t)
+	defer cancel()
+
+	held := make(chan error, 1)
+	go func() { held <- c.Call(ctx, "status", nil, nil) }()
+	select {
+	case <-handler.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the first call never reached the handler")
+	}
+
+	err := c.Call(ctx, "health", nil, nil)
+	if !errors.Is(err, ipc.ErrConnectionBusy) {
+		t.Fatalf("Call past the limit = %v, want ErrConnectionBusy", err)
+	}
+	if !strings.Contains(err.Error(), "1 of 1 allowed") {
+		t.Errorf("the refusal reads %q, want it to name the limit and the count", err)
+	}
+
+	close(handler.release)
+	if err := <-held; err != nil {
+		t.Fatalf("the held call = %v, want it served", err)
+	}
+	if err := c.Call(ctx, "health", nil, nil); err != nil {
+		t.Fatalf("Call after the held one finished = %v, want the slot freed", err)
+	}
+}
+
+// TestCloseLeavesTheListenerToItsOwner holds Serve's contract. The listener is
+// the caller's, so Close drops the connections and closing the listener is what
+// makes Serve return. A caller that waited for Serve after Close alone would
+// wait forever.
+func TestCloseLeavesTheListenerToItsOwner(t *testing.T) {
+	dir, err := os.MkdirTemp("", "ipc")
+	if err != nil {
+		t.Fatalf("temp dir: %v", err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	socket := filepath.Join(dir, "s")
+	srv, err := ipc.NewServer(ipc.ServerConfig{
+		Handler:  &recordingHandler{},
+		Ancestry: &recordingAncestry{},
+		Events:   publisher(t, ipc.PublisherConfig{}),
+	})
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	l := listenLocal(t, socket)
+	defer l.Close()
+	done := make(chan error, 1)
+	go func() { done <- srv.Serve(l) }()
+
+	conn, err := net.Dial("unix", socket)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+	// An answered request is how this test knows the connection is accepted and
+	// being served, and therefore that Serve is back in Accept rather than
+	// about to reach it.
+	if _, err := conn.Write([]byte(`{"id":1,"method":"health"}` + "\n")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	reader := bufio.NewReader(conn)
+	if err := conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatalf("read deadline: %v", err)
+	}
+	if _, err := reader.ReadBytes('\n'); err != nil {
+		t.Fatalf("reading the answer: %v", err)
+	}
+	srv.Close()
+
+	// Close dropped the connection it accepted.
+	if _, err := reader.ReadBytes('\n'); err == nil {
+		t.Error("a connection survived Close")
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("Serve returned %v while the listener it does not own is still open", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+	l.Close()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("Serve after the listener closed = %v, want nil", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Serve did not return after the listener it was given was closed")
+	}
+}
+
+// wireFrame is the part of a frame this test reads off the socket. The wire
+// form is the contract between the two halves of this package, and a scripted
+// peer is how a test sees what a client sent without a service answering it.
+type wireFrame struct {
+	ID     uint64 `json:"id"`
+	Method string `json:"method"`
+	Cancel bool   `json:"cancel"`
+}
+
+// TestAnAbandonedSubscribeTellsTheServiceToStop covers a Subscribe whose
+// context ends after the request is already on the wire. The service may have
+// opened the stream and started pumping it, and a client that walks away
+// without saying so leaves that queue, its goroutine, and its share of the
+// connection's writer in place for as long as the connection lives.
+func TestAnAbandonedSubscribeTellsTheServiceToStop(t *testing.T) {
+	peer, clientSide := net.Pipe()
+	defer peer.Close()
+	c := ipc.NewClient(clientSide, ipc.ClientConfig{})
+	defer c.Close()
+
+	frames := make(chan wireFrame, 4)
+	go func() {
+		r := bufio.NewReader(peer)
+		for {
+			line, err := r.ReadBytes('\n')
+			if err != nil {
+				return
+			}
+			var f wireFrame
+			if err := json.Unmarshal(line, &f); err != nil {
+				return
+			}
+			frames <- f
+		}
+	}()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	opened := make(chan error, 1)
+	go func() {
+		_, err := c.Subscribe(ctx, nil)
+		opened <- err
+	}()
+
+	var request wireFrame
+	select {
+	case request = <-frames:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Subscribe never sent its request")
+	}
+	if request.Method != "events.subscribe" {
+		t.Fatalf("the first frame is %q, want the subscribe request", request.Method)
+	}
+
+	// The request is on the wire and no acknowledgement has been sent, which is
+	// the window where the service may already be pumping the stream.
+	cancel()
+	if err := <-opened; !errors.Is(err, context.Canceled) {
+		t.Fatalf("Subscribe = %v, want the context's error", err)
+	}
+	select {
+	case f := <-frames:
+		if !f.Cancel {
+			t.Fatalf("the frame after an abandoned subscribe is %+v, want a cancel", f)
+		}
+		if f.ID != request.ID {
+			t.Errorf("the cancel names stream %d, want the abandoned %d", f.ID, request.ID)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("an abandoned subscribe left the service pumping a stream nothing reads")
+	}
+}
+
+// TestAnUndeliverableControlEventEndsTheStreamRatherThanBeingDiscarded is the
+// invariant the class table, the eviction order and PRD section 8 all state
+// without an exception: control is never discarded. A frame limit smaller than
+// the publisher's payload bound is a configuration a caller can write, and it
+// is the one that produces a control event this connection cannot carry.
+func TestAnUndeliverableControlEventEndsTheStreamRatherThanBeingDiscarded(t *testing.T) {
+	const limit = 4096
+	h := serveOnSocket(t, func(c *ipc.ServerConfig) { c.MaxFrameBytes = limit })
+	if h.events.MaxPayloadBytes() <= limit {
+		t.Fatalf("the publisher's bound is %d, which is not past the server's %d frame limit", h.events.MaxPayloadBytes(), limit)
+	}
+	c := h.dial(t, ipc.ClientConfig{})
+	ctx, cancel := callCtx(t)
+	defer cancel()
+
+	stream, err := c.Subscribe(ctx, nil)
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	defer stream.Close()
+	if first, err := stream.Recv(ctx); err != nil || first.Type != "stream.gap" {
+		t.Fatalf("first delivery = %q (err %v), want the opening gap marker", first.Type, err)
+	}
+
+	// The publisher accepts this: its payload is inside the bound a producer
+	// has to stay within, and it is the connection that cannot carry it.
+	stopping := ipc.Event{
+		Type:    "service.stopping",
+		Payload: json.RawMessage(`{"label":"` + strings.Repeat("x", 2*limit) + `"}`),
+	}
+	publish(t, h.events, stopping)
+
+	e, err := stream.Recv(ctx)
+	if err == nil {
+		t.Fatalf("Recv = %q with no error, want the stream to end over a control event it cannot deliver", e.Type)
+	}
+	if !errors.Is(err, ipc.ErrEventUndeliverable) {
+		t.Fatalf("Recv = %v, want ErrEventUndeliverable rather than a discarded control event", err)
+	}
+	if errors.Is(err, ipc.ErrSubscriberStalled) {
+		t.Error("an undeliverable event matches ErrSubscriberStalled, so a consumer cannot tell it from falling behind")
+	}
+	if e.Type != "" {
+		t.Errorf("Recv also produced %q, want nothing delivered", e.Type)
+	}
+}
+
+// TestNewServerRefusesAFrameLimitItCannotRefuseWith holds what answer() claims.
+// A limit too small to carry the fixed refusal would leave a caller waiting on
+// an answer that was refused for not fitting, so the limit is refused where the
+// server is built.
+func TestNewServerRefusesAFrameLimitItCannotRefuseWith(t *testing.T) {
+	base := ipc.ServerConfig{
+		Handler:  &recordingHandler{},
+		Ancestry: &recordingAncestry{},
+		Events:   publisher(t, ipc.PublisherConfig{}),
+	}
+	min := ipc.MinFrameBytes()
+	if min <= 0 {
+		t.Fatalf("MinFrameBytes() = %d, want the measured size of a refusal", min)
+	}
+	tooSmall := base
+	tooSmall.MaxFrameBytes = min - 1
+	if _, err := ipc.NewServer(tooSmall); err == nil {
+		t.Errorf("NewServer accepted a %d byte frame limit, which cannot carry its own refusal", min-1)
+	}
+	negative := base
+	negative.MaxFrameBytes = -1
+	if _, err := ipc.NewServer(negative); err == nil {
+		t.Error("NewServer accepted a negative frame limit")
+	}
+	atTheLimit := base
+	atTheLimit.MaxFrameBytes = min
+	if _, err := ipc.NewServer(atTheLimit); err != nil {
+		t.Errorf("NewServer at the minimum frame limit = %v, want it accepted", err)
+	}
+}
+
+// TestTheFallbackRefusalFitsTheSmallestServedFrame runs the answer that does
+// not fit through the smallest frame limit a server may be built with, which is
+// where the fallback has the least room to work in.
+func TestTheFallbackRefusalFitsTheSmallestServedFrame(t *testing.T) {
+	h := serveOnSocket(t, func(c *ipc.ServerConfig) { c.MaxFrameBytes = ipc.MinFrameBytes() })
+	h.handler.result = json.RawMessage(`{"pad":"` + strings.Repeat("x", 4*ipc.MinFrameBytes()) + `"}`)
+	c := h.dial(t, ipc.ClientConfig{})
+	ctx, cancel := callCtx(t)
+	defer cancel()
+
+	if err := c.Call(ctx, "status", nil, nil); !errors.Is(err, ipc.ErrFrameTooLarge) {
+		t.Fatalf("Call = %v, want the refusal to reach the caller even at the smallest frame limit", err)
+	}
+}
+
+// TestAStalledRelayQueueReleasesTheServiceStream covers the leak from the
+// consumer's end. A client whose own queue ends under a delivery it cannot make
+// room for still holds a stream the service is pumping, and saying nothing
+// would leave the service a subscription, a goroutine and a share of the
+// connection's writer for a consumer that has stopped reading.
+func TestAStalledRelayQueueReleasesTheServiceStream(t *testing.T) {
+	h := serveOnSocket(t, nil)
+	// A queue one event deep, and nothing reading it: the opening gap marker
+	// fills it, and the control event behind that has nothing droppable to
+	// make room with.
+	c := h.dial(t, ipc.ClientConfig{Backlog: 1})
+	ctx, cancel := callCtx(t)
+	defer cancel()
+
+	stream, err := c.Subscribe(ctx, nil)
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	defer stream.Close()
+	if h.events.Subscribers() != 1 {
+		t.Fatalf("the service holds %d subscriptions, want the one just opened", h.events.Subscribers())
+	}
+	publish(t, h.events, control("stopping"))
+
+	deadline := time.Now().Add(5 * time.Second)
+	for h.events.Subscribers() != 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the service still holds a subscription for a consumer whose queue stalled")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	// The consumer is told what happened rather than left to infer it from a
+	// stream that went quiet: whatever the queue still holds, and then the
+	// reason. Nothing it holds is payload, because the only events this stream
+	// ever carried were markers.
+	for {
+		e, err := stream.Recv(ctx)
+		if err != nil {
+			if !errors.Is(err, ipc.ErrSubscriberStalled) {
+				t.Fatalf("Recv after the queue stalled = %v, want ErrSubscriberStalled", err)
+			}
+			break
+		}
+		if e.Type != "stream.gap" {
+			t.Fatalf("the queue held %q, want only markers before the stream ends", e.Type)
+		}
+	}
+}
+
+// TestTheServiceReasonForEndingAConnectionReachesTheCaller covers a frame the
+// service cannot read. It answers with why before it drops the connection, and
+// that answer names no request because no identifier could be read out of the
+// frame that caused it, so a client that could not route it would report the
+// end of input rather than the reason for it.
+func TestTheServiceReasonForEndingAConnectionReachesTheCaller(t *testing.T) {
+	const limit = 512
+	h := serveOnSocket(t, func(c *ipc.ServerConfig) { c.MaxFrameBytes = limit })
+	c := h.dial(t, ipc.ClientConfig{})
+	ctx, cancel := callCtx(t)
+	defer cancel()
+
+	// The client's own frame limit is the default, so this is written whole
+	// and refused at the service, which is the configuration a caller reaches
+	// by talking to a service bounded more tightly than it is.
+	err := c.Call(ctx, "status", map[string]string{"pad": strings.Repeat("x", 4*limit)}, nil)
+	if !errors.Is(err, ipc.ErrFrameTooLarge) {
+		t.Fatalf("Call = %v, want the service's reason for ending the connection", err)
+	}
+	if !errors.Is(err, ipc.ErrClientClosed) {
+		t.Errorf("Call = %v, want it also to say the connection is gone", err)
+	}
+	if h.handler.count() != 0 {
+		t.Error("a frame the service could not read reached the handler")
+	}
+}
+
+// TestALateAnswerToAnAbandonedCallDisturbsNothing covers what happens after a
+// Call gives up. Nothing cancels a request at the service, so its answer still
+// arrives, naming an identifier this client is no longer waiting on. That is
+// ordinary: the caller already has its context's error, and every other call
+// and stream on the connection has to go on working.
+func TestALateAnswerToAnAbandonedCallDisturbsNothing(t *testing.T) {
+	handler := &blockingHandler{
+		entered: make(chan struct{}, 1),
+		release: make(chan struct{}),
+		err:     ipc.ErrUnavailable,
+	}
+	h := serveOnSocket(t, func(c *ipc.ServerConfig) { c.Handler = handler })
+	c := h.dial(t, ipc.ClientConfig{})
+	ctx, cancel := callCtx(t)
+	defer cancel()
+
+	stream, err := c.Subscribe(ctx, nil)
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	defer stream.Close()
+	if first, err := stream.Recv(ctx); err != nil || first.Type != "stream.gap" {
+		t.Fatalf("first delivery = %q (err %v), want the opening gap marker", first.Type, err)
+	}
+
+	abandoned, giveUp := context.WithCancel(context.Background())
+	gave := make(chan error, 1)
+	go func() { gave <- c.Call(abandoned, "status", nil, nil) }()
+	select {
+	case <-handler.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the call never reached the handler")
+	}
+	giveUp()
+	if err := <-gave; !errors.Is(err, context.Canceled) {
+		t.Fatalf("the abandoned Call = %v, want its context's error", err)
+	}
+
+	// The handler answers now, so the refusal for a request nobody is waiting
+	// on crosses the connection ahead of everything below.
+	close(handler.release)
+
+	if err := c.Call(ctx, "health", nil, nil); !errors.Is(err, ipc.ErrUnavailable) {
+		t.Fatalf("a later Call = %v, want it served rather than the client torn down", err)
+	}
+	if errors.Is(c.Call(ctx, "health", nil, nil), ipc.ErrClientClosed) {
+		t.Fatal("the client closed itself over an answer to a call that had been abandoned")
+	}
+	publish(t, h.events, state("after", 3))
+	e, err := stream.Recv(ctx)
+	if err != nil {
+		t.Fatalf("Recv on the open stream = %v, want it still delivering", err)
+	}
+	if e.Type != "run.state" || label(t, e) != "after" {
+		t.Errorf("delivery = %+v, want the event published after the late answer", e)
+	}
+}
+
+// TestAMalformedFrameIsAnsweredAndTheConnectionSurvives separates the two ways
+// a frame can be unreadable. A line that does not decode leaves the reader at
+// the start of the next frame, so the connection carries on; an over-long frame
+// leaves nowhere to resume from, so it ends.
+func TestAMalformedFrameIsAnsweredAndTheConnectionSurvives(t *testing.T) {
+	const limit = 512
+	h := serveOnSocket(t, func(c *ipc.ServerConfig) { c.MaxFrameBytes = limit })
+
+	conn, err := net.Dial("unix", h.socket)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+	if err := conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatalf("read deadline: %v", err)
+	}
+
+	if _, err := conn.Write([]byte("not a frame\n")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	reply := readFrame(t, reader)
+	if reply.Error == nil || reply.Error.Code != ipc.CodeInvalidRequest {
+		t.Fatalf("reply = %+v, want an invalid-request refusal", reply.Error)
+	}
+	if reply.ID != 0 {
+		t.Errorf("the refusal names request %d, want the zero identifier a frame with no readable id gets", reply.ID)
+	}
+
+	// The connection is still serving, which is the whole point of resuming.
+	if _, err := conn.Write([]byte(`{"id":7,"method":"health"}` + "\n")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	served := readFrame(t, reader)
+	if served.ID != 7 || served.Error != nil {
+		t.Fatalf("reply = %+v, want request 7 served on the surviving connection", served)
+	}
+
+	// An over-long frame is the other case, and it ends the connection.
+	if _, err := conn.Write([]byte(`{"id":8,"method":"health","params":"` + strings.Repeat("x", 4*limit) + `"}` + "\n")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	ended := readFrame(t, reader)
+	if ended.Error == nil || ended.Error.Code != ipc.CodeFrameTooLarge {
+		t.Fatalf("reply = %+v, want a frame-too-large refusal", ended.Error)
+	}
+	if _, err := reader.ReadBytes('\n'); err == nil {
+		t.Error("the connection survived a frame there was no position to resume from")
+	}
+}
+
+// readFrame reads one frame off the wire, which is the protocol's own text
+// contract: newline-delimited JSON objects.
+func readFrame(t *testing.T, r *bufio.Reader) struct {
+	ID    uint64     `json:"id"`
+	Error *ipc.Error `json:"error"`
+} {
+	t.Helper()
+	var f struct {
+		ID    uint64     `json:"id"`
+		Error *ipc.Error `json:"error"`
+	}
+	line, err := r.ReadBytes('\n')
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if err := json.Unmarshal(line, &f); err != nil {
+		t.Fatalf("decode %q: %v", line, err)
+	}
+	return f
+}
+
+// panicOnMethod panics for one method and serves everything else, which is how
+// a test sees whether one handler's bug takes anything else with it.
+type panicOnMethod struct {
+	method ipc.Method
+	value  string
+}
+
+func (h panicOnMethod) Serve(_ context.Context, req ipc.Request) (json.RawMessage, error) {
+	if req.Method == h.method {
+		panic(h.value)
+	}
+	return json.RawMessage(`{"served":true}`), nil
+}
+
+// TestAPanickingHandlerCostsOneRequest covers the blast radius of a handler
+// bug. Ending the process would take every other connection, every open stream
+// and the supervision of every run that was going fine, so the panic is
+// contained; and containing it without reporting it would trade one silent
+// failure for another, so the reporter sees it.
+func TestAPanickingHandlerCostsOneRequest(t *testing.T) {
+	type report struct {
+		value any
+		stack []byte
+	}
+	reported := make(chan report, 1)
+	h := serveOnSocket(t, func(c *ipc.ServerConfig) {
+		c.Handler = panicOnMethod{method: "status", value: "a handler bug"}
+		// One slot, so a slot the panicking handler failed to return would
+		// refuse everything after it.
+		c.MaxInFlight = 1
+		c.ReportPanic = func(value any, stack []byte) {
+			select {
+			case reported <- report{value: value, stack: stack}:
+			default:
+			}
+		}
+	})
+	c := h.dial(t, ipc.ClientConfig{})
+	ctx, cancel := callCtx(t)
+	defer cancel()
+
+	stream, err := c.Subscribe(ctx, nil)
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	defer stream.Close()
+	if first, err := stream.Recv(ctx); err != nil || first.Type != "stream.gap" {
+		t.Fatalf("first delivery = %q (err %v), want the opening gap marker", first.Type, err)
+	}
+
+	err = c.Call(ctx, "status", nil, nil)
+	if !errors.Is(err, ipc.ErrInternal) {
+		t.Fatalf("Call into a panicking handler = %v, want ErrInternal rather than nothing at all", err)
+	}
+
+	select {
+	case got := <-reported:
+		if got.value != "a handler bug" {
+			t.Errorf("the reporter saw %v, want the value the handler panicked with", got.value)
+		}
+		if len(got.stack) == 0 {
+			t.Error("the reporter saw no stack, so the bug is contained and invisible")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the panic was contained without being reported")
+	}
+
+	// The connection, its slot and its stream all survived the one bad request.
+	var served struct {
+		Served bool `json:"served"`
+	}
+	if err := c.Call(ctx, "health", nil, &served); err != nil {
+		t.Fatalf("a later Call = %v, want the connection and its in-flight slot intact", err)
+	}
+	if !served.Served {
+		t.Error("a later Call was not served by the handler")
+	}
+	publish(t, h.events, state("after", 4))
+	e, err := stream.Recv(ctx)
+	if err != nil {
+		t.Fatalf("Recv on the open stream = %v, want it still delivering", err)
+	}
+	if label(t, e) != "after" {
+		t.Errorf("delivery = %+v, want the event published after the panic", e)
+	}
+}
+
+// TestTheServiceRefusesTheReservedIdentifier holds the other half of the
+// reservation. A report that belongs to no request carries it, so a request
+// carrying it could not be answered without saying something else entirely,
+// and a marker only this package's client honors is not a marker.
+func TestTheServiceRefusesTheReservedIdentifier(t *testing.T) {
+	h := serveOnSocket(t, nil)
+	conn, err := net.Dial("unix", h.socket)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+	if err := conn.SetReadDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatalf("read deadline: %v", err)
+	}
+
+	if _, err := conn.Write([]byte(`{"id":0,"method":"health"}` + "\n")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	reply := readFrame(t, reader)
+	if reply.Error == nil || reply.Error.Code != ipc.CodeInvalidRequest {
+		t.Fatalf("reply = %+v, want the reserved identifier refused", reply.Error)
+	}
+	if reply.ID != 0 {
+		t.Errorf("the refusal names request %d, want the reserved identifier it is about", reply.ID)
+	}
+	if h.handler.count() != 0 {
+		t.Error("a request carrying the reserved identifier reached the handler")
+	}
+
+	// Refusing it is not the same as ending the connection.
+	if _, err := conn.Write([]byte(`{"id":9,"method":"health"}` + "\n")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if served := readFrame(t, reader); served.ID != 9 || served.Error != nil {
+		t.Fatalf("reply = %+v, want request 9 served on the surviving connection", served)
+	}
+}
+
+// TestAnEscapeHeavyPayloadAtTheBoundStillTravels covers the size a producer
+// counts against being the size its event costs. The characters here are the
+// ones an HTML-escaping encoder would expand sixfold, and a projection full of
+// them is ordinary: a diff, shell output, a git author line.
+func TestAnEscapeHeavyPayloadAtTheBoundStillTravels(t *testing.T) {
+	const bound = 4096
+	envelope := ipc.DefaultMaxFrameBytes - ipc.DefaultMaxPayloadBytes
+	events := publisher(t, ipc.PublisherConfig{MaxPayloadBytes: bound})
+	h := serveOnSocket(t, func(c *ipc.ServerConfig) {
+		c.Events = events
+		// The same relationship the defaults have: a frame holds a payload at
+		// the bound plus the envelope around it.
+		c.MaxFrameBytes = bound + envelope
+	})
+	c := h.dial(t, ipc.ClientConfig{})
+	ctx, cancel := callCtx(t)
+	defer cancel()
+
+	stream, err := c.Subscribe(ctx, nil)
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	defer stream.Close()
+	if first, err := stream.Recv(ctx); err != nil || first.Type != "stream.gap" {
+		t.Fatalf("first delivery = %q (err %v), want the opening gap marker", first.Type, err)
+	}
+
+	payload := json.RawMessage(`"` + strings.Repeat("<&>", (bound-2)/3) + `"`)
+	if len(payload) > bound {
+		t.Fatalf("the test built a %d byte payload, want it within the %d bound", len(payload), bound)
+	}
+	// Control is the class with the least recovery, so it is the one whose
+	// silent failure would cost the most.
+	publish(t, events, ipc.Event{Type: "service.stopping", Payload: payload})
+
+	e, err := stream.Recv(ctx)
+	if err != nil {
+		t.Fatalf("Recv = %v, want an event the producer bounded to be deliverable", err)
+	}
+	if e.Type != "service.stopping" {
+		t.Fatalf("delivery is %q, want the control event rather than a marker for a discarded one", e.Type)
+	}
+	if string(e.Payload) != string(payload) {
+		t.Errorf("the payload arrived %d bytes long, want the %d published", len(e.Payload), len(payload))
+	}
+}
+
+// slowAncestry answers containment only when the test lets it, which is what a
+// resolver that reads a process tree and asks which runs are active does under
+// load. It panics instead when told to.
+type slowAncestry struct {
+	entered chan struct{}
+	release chan struct{}
+	panics  bool
+}
+
+func (a *slowAncestry) Contained(ctx context.Context, _ ipc.Credentials) (ipc.Containment, error) {
+	if a.panics {
+		panic("an ancestry bug")
+	}
+	select {
+	case a.entered <- struct{}{}:
+	default:
+	}
+	select {
+	case <-a.release:
+		return ipc.Containment{}, nil
+	case <-ctx.Done():
+		return ipc.Containment{}, ctx.Err()
+	}
+}
+
+// TestASlowAncestryDoesNotStopTheConnection covers where containment is
+// decided. Resolving it is the caller's work, and doing it on the goroutine
+// that reads the connection would stop every other request, cancel and stream
+// on that connection for as long as it takes.
+func TestASlowAncestryDoesNotStopTheConnection(t *testing.T) {
+	requiresIdentifiedPeer(t)
+	ancestry := &slowAncestry{entered: make(chan struct{}, 1), release: make(chan struct{})}
+	h := serveOnSocket(t, func(c *ipc.ServerConfig) { c.Ancestry = ancestry })
+	c := h.dial(t, ipc.ClientConfig{})
+	ctx, cancel := callCtx(t)
+	defer cancel()
+
+	stream, err := c.Subscribe(ctx, nil)
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	defer stream.Close()
+	if first, err := stream.Recv(ctx); err != nil || first.Type != "stream.gap" {
+		t.Fatalf("first delivery = %q (err %v), want the opening gap marker", first.Type, err)
+	}
+
+	restricted := make(chan error, 1)
+	go func() { restricted <- c.Call(ctx, "run.start", nil, nil) }()
+	select {
+	case <-ancestry.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the restricted call never reached the ancestry")
+	}
+
+	// The connection is still reading while that decision is outstanding.
+	if err := c.Call(ctx, "health", nil, nil); err != nil {
+		t.Fatalf("an open call while an ancestry is working = %v, want it answered", err)
+	}
+	publish(t, h.events, state("meanwhile", 2))
+	if e, err := stream.Recv(ctx); err != nil || label(t, e) != "meanwhile" {
+		t.Fatalf("delivery = %+v (err %v), want the stream still served", e, err)
+	}
+
+	close(ancestry.release)
+	if err := <-restricted; err != nil {
+		t.Fatalf("the restricted call = %v, want it served once the ancestry answered", err)
+	}
+}
+
+// TestAPanickingAncestryCostsOneRequest holds the containment the Handler
+// contract states, for the other piece of caller-supplied code reached through
+// the same configuration.
+func TestAPanickingAncestryCostsOneRequest(t *testing.T) {
+	requiresIdentifiedPeer(t)
+	reported := make(chan any, 1)
+	h := serveOnSocket(t, func(c *ipc.ServerConfig) {
+		c.Ancestry = &slowAncestry{panics: true}
+		c.MaxInFlight = 1
+		c.ReportPanic = func(value any, _ []byte) {
+			select {
+			case reported <- value:
+			default:
+			}
+		}
+	})
+	c := h.dial(t, ipc.ClientConfig{})
+	ctx, cancel := callCtx(t)
+	defer cancel()
+
+	if err := c.Call(ctx, "run.start", nil, nil); !errors.Is(err, ipc.ErrInternal) {
+		t.Fatalf("Call whose ancestry panicked = %v, want ErrInternal", err)
+	}
+	select {
+	case value := <-reported:
+		if value != "an ancestry bug" {
+			t.Errorf("the reporter saw %v, want the value the ancestry panicked with", value)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the panic was contained without being reported")
+	}
+	if err := c.Call(ctx, "health", nil, nil); err != nil {
+		t.Fatalf("a later Call = %v, want the connection and its in-flight slot intact", err)
+	}
+}
+
+// scriptedConn is a connection whose peer hands the service the frames a test
+// gives it, takes a few answers, and then stops reading, which is what a caller
+// that walks away from a connection whose buffers then fill looks like from the
+// service.
+type scriptedConn struct {
+	requests chan []byte
+	absorb   int
+	stuck    chan struct{}
+	closed   chan struct{}
+	once     sync.Once
+	pending  []byte
+
+	mu     sync.Mutex
+	writes int
+}
+
+func newScriptedConn(requests, absorb int) *scriptedConn {
+	return &scriptedConn{
+		requests: make(chan []byte, requests),
+		absorb:   absorb,
+		stuck:    make(chan struct{}, 1),
+		closed:   make(chan struct{}),
+	}
+}
+
+func (c *scriptedConn) Read(p []byte) (int, error) {
+	if len(c.pending) == 0 {
+		select {
+		case line := <-c.requests:
+			c.pending = line
+		case <-c.closed:
+			return 0, io.EOF
+		}
+	}
+	n := copy(p, c.pending)
+	c.pending = c.pending[n:]
+	return n, nil
+}
+
+func (c *scriptedConn) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	c.writes++
+	taken := c.writes <= c.absorb
+	c.mu.Unlock()
+	if taken {
+		return len(p), nil
+	}
+	select {
+	case c.stuck <- struct{}{}:
+	default:
+	}
+	<-c.closed
+	return 0, io.ErrClosedPipe
+}
+
+func (c *scriptedConn) Close() error {
+	c.once.Do(func() { close(c.closed) })
+	return nil
+}
+
+func (c *scriptedConn) LocalAddr() net.Addr              { return dummyAddr{} }
+func (c *scriptedConn) RemoteAddr() net.Addr             { return dummyAddr{} }
+func (c *scriptedConn) SetDeadline(time.Time) error      { return nil }
+func (c *scriptedConn) SetReadDeadline(time.Time) error  { return nil }
+func (c *scriptedConn) SetWriteDeadline(time.Time) error { return nil }
+
+// TestTheInFlightCapCountsAnswersNobodyIsReading covers the case the cap exists
+// for. A caller that stops reading leaves every answer stuck in the write, so a
+// slot released at the handler's return would let it accumulate one goroutine
+// and one encoded answer per request behind a count that reads as zero. Holding
+// the slot across the write is what makes the cap the real bound: as many
+// requests are served as there are slots, and the rest are refused.
+//
+// The requests are sent one at a time, each after the one before it reached the
+// handler, so what the cap does is measured rather than how fast the reader
+// outruns the goroutines it starts.
+func TestTheInFlightCapCountsAnswersNobodyIsReading(t *testing.T) {
+	const requests, slots = 8, 4
+	handler := &recordingHandler{}
+	srv, err := ipc.NewServer(ipc.ServerConfig{
+		Handler:     handler,
+		Ancestry:    &recordingAncestry{},
+		Events:      publisher(t, ipc.PublisherConfig{}),
+		MaxInFlight: slots,
+	})
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	// The peer takes nothing at all, so every answer is stuck from the first.
+	conn := newScriptedConn(requests, 0)
+	l := &pipeListener{conn: conn, done: make(chan struct{})}
+	go srv.Serve(l)
+	t.Cleanup(func() {
+		srv.Close()
+		l.Close()
+		conn.Close()
+	})
+
+	served := 0
+	for id := 1; id <= requests; id++ {
+		conn.requests <- []byte(fmt.Sprintf(`{"id":%d,"method":"status"}`+"\n", id))
+		if !reaches(handler, served+1) {
+			break
+		}
+		served++
+	}
+	if served != slots {
+		t.Errorf("%d of %d requests reached the handler, want the %d the cap allows to be outstanding at once", served, requests, slots)
+	}
+}
+
+// reaches waits for the handler to have been reached want times, and reports
+// whether it was. Not reaching it is an answer here rather than a failure: it
+// is how a refused request looks from outside.
+func reaches(h *recordingHandler, want int) bool {
+	deadline := time.Now().Add(time.Second)
+	for h.count() < want {
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	return true
+}
