@@ -176,11 +176,10 @@ func (c *Client) Subscribe(ctx context.Context, params any) (*Stream, error) {
 	c.mu.Unlock()
 	if err := c.w.write(ctx, frame{ID: id, Method: MethodEventsSubscribe, Marker: c.marker, Params: body}); err != nil {
 		c.unregister(id)
-		c.dropStream(id, ErrStreamClosed)
 		// A frame refused before it was written leaves nothing at the service,
 		// and a frame the connection failed under may have arrived whole. The
 		// cancel costs one small frame and covers the second case.
-		c.cancelStream(id)
+		c.release(id, ErrStreamClosed)
 		return nil, fmt.Errorf("ipc: opening the event stream: %w", err)
 	}
 	defer c.unregister(id)
@@ -191,8 +190,7 @@ func (c *Client) Subscribe(ctx context.Context, params any) (*Stream, error) {
 		// Abandoning it here without saying so would leave that queue, its
 		// goroutine, and its share of the connection's writer in place for as
 		// long as the connection lives.
-		c.dropStream(id, ErrStreamClosed)
-		c.cancelStream(id)
+		c.release(id, ErrStreamClosed)
 		return nil, ctx.Err()
 	case <-c.done:
 		return nil, c.closedErr()
@@ -212,16 +210,39 @@ func (c *Client) Subscribe(ctx context.Context, params any) (*Stream, error) {
 func (s *Stream) Recv(ctx context.Context) (Event, error) { return s.sub.Recv(ctx) }
 
 // Close detaches the stream and tells the service to stop sending it.
-func (s *Stream) Close() error {
-	s.c.dropStream(s.id, ErrStreamClosed)
-	return s.c.w.write(s.c.ctx, frame{ID: s.id, Cancel: true})
+//
+// It returns nothing because neither half can fail in a way a caller could act
+// on: detaching is local, and the cancel that follows it is best effort in the
+// sense release describes. That cancel is attempted rather than awaited, so the
+// stream slot it frees at the service frees when the cancel arrives rather than
+// by the time this returns, and a caller already at ServerConfig.MaxStreams may
+// have to ask again.
+func (s *Stream) Close() {
+	s.c.release(s.id, ErrStreamClosed)
 }
 
-// cancelStream tells the service to stop sending a stream this client will not
-// read. It is best effort by nature: the connection may already be gone, and
-// there is nothing further to do about that from here.
-func (c *Client) cancelStream(id uint64) {
-	_ = c.w.write(c.ctx, frame{ID: id, Cancel: true})
+// release detaches a stream this client will not read and tells the service to
+// stop sending it. Every path that leaves a stream open at the service comes
+// through here, so the cancel is never forgotten beside the detachment; the two
+// places that detach without it are the ones where the service has already let
+// the stream go, and each says so.
+//
+// Detaching is not optional and happens here, before this returns: from that
+// point the client routes nothing to that stream.
+//
+// The cancel is optional, and best effort means something specific. One cancel
+// frame is attempted, on a goroutine of its own, so no caller and not the
+// goroutine reading this connection ever waits for the connection's writer to
+// come free. That attempt gives up when this client ends, which is the point at
+// which there is nothing left to cancel, because the service releases every
+// stream a connection held when that connection goes. A cancel that never got
+// through therefore costs one subscription and one pump goroutine at the
+// service until the connection ends, and nothing after that.
+func (c *Client) release(id uint64, cause error) {
+	c.dropStream(id, cause)
+	go func() {
+		_ = c.w.write(c.ctx, frame{ID: id, Cancel: true})
+	}()
 }
 
 // Close ends the connection. Calls waiting on an answer and streams waiting on
@@ -263,8 +284,7 @@ func (c *Client) read(r *frameReader) {
 				// stop rather than left pumping a stream this client has
 				// stopped reading, which is the same leak an abandoned
 				// Subscribe would leave.
-				c.dropStream(f.ID, ErrStreamClosed)
-				c.cancelStream(f.ID)
+				c.release(f.ID, ErrStreamClosed)
 			}
 		case f.Done:
 			cause := ErrStreamClosed

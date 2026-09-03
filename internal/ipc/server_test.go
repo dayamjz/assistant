@@ -696,16 +696,31 @@ func TestConnectionRefusesMoreStreamsThanItMayHold(t *testing.T) {
 		t.Errorf("the refusal reads %q, want it to name the limit and the count", err)
 	}
 
-	// The service reads a connection's frames in order, so the cancel this
-	// sends is applied before the request behind it: the slot is free.
-	if err := second.Close(); err != nil {
-		t.Fatalf("closing a stream: %v", err)
-	}
-	third, err := c.Subscribe(ctx, nil)
+	// Closing a stream attempts its cancel rather than waiting for it, so the
+	// slot frees when that cancel reaches the service rather than by the time
+	// Close returns. What is asserted is that it frees.
+	second.Close()
+	third, err := subscribeOnceFreed(t, c, ctx)
 	if err != nil {
 		t.Fatalf("Subscribe after a stream ended = %v, want the slot freed", err)
 	}
 	third.Close()
+}
+
+// subscribeOnceFreed opens a stream, retrying while the connection is still at
+// its limit, and gives up when a slot has not come free in time. A refusal that
+// keeps repeating is returned as it stands, so a slot that never frees fails the
+// caller with the reason rather than with a timeout.
+func subscribeOnceFreed(t *testing.T, c *ipc.Client, ctx context.Context) (*ipc.Stream, error) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		stream, err := c.Subscribe(ctx, nil)
+		if !errors.Is(err, ipc.ErrConnectionBusy) || time.Now().After(deadline) {
+			return stream, err
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 }
 
 // TestConnectionRefusesMoreRequestsThanItMayServeAtOnce covers the same bound
