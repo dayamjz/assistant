@@ -42,8 +42,12 @@ func (c Class) String() string {
 }
 
 // Droppable reports whether an overflowing stream may discard an event of this
-// class outright. Only activity is droppable; every other class is either
-// retained or collapsed into a gap marker.
+// class outright, and it is what Subscription.deliver asks rather than a second
+// statement of the same rule. Only activity is droppable. State may be evicted
+// only when that eviction collapses into the gap marker its consumer reconciles
+// from, which is a different question and lives with the eviction. Control is
+// never discarded at all: a queue that holds only control ends the subscription
+// instead.
 func (c Class) Droppable() bool { return c == ClassActivity }
 
 // Type names one kind of event. The vocabulary is closed in the sense that

@@ -1019,3 +1019,30 @@ func TestAStalledRelayQueueReleasesTheServiceStream(t *testing.T) {
 		}
 	}
 }
+
+// TestTheServiceReasonForEndingAConnectionReachesTheCaller covers a frame the
+// service cannot read. It answers with why before it drops the connection, and
+// that answer names no request because no identifier could be read out of the
+// frame that caused it, so a client that could not route it would report the
+// end of input rather than the reason for it.
+func TestTheServiceReasonForEndingAConnectionReachesTheCaller(t *testing.T) {
+	const limit = 512
+	h := serveOnSocket(t, func(c *ipc.ServerConfig) { c.MaxFrameBytes = limit })
+	c := h.dial(t, ipc.ClientConfig{})
+	ctx, cancel := callCtx(t)
+	defer cancel()
+
+	// The client's own frame limit is the default, so this is written whole
+	// and refused at the service, which is the configuration a caller reaches
+	// by talking to a service bounded more tightly than it is.
+	err := c.Call(ctx, "status", map[string]string{"pad": strings.Repeat("x", 4*limit)}, nil)
+	if !errors.Is(err, ipc.ErrFrameTooLarge) {
+		t.Fatalf("Call = %v, want the service's reason for ending the connection", err)
+	}
+	if !errors.Is(err, ipc.ErrClientClosed) {
+		t.Errorf("Call = %v, want it also to say the connection is gone", err)
+	}
+	if h.handler.count() != 0 {
+		t.Error("a frame the service could not read reached the handler")
+	}
+}

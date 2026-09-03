@@ -6,65 +6,70 @@ import "errors"
 // them survives the wire: a failure the service reports is decoded back into
 // an *Error whose Unwrap names the same sentinel, so a client matches the same
 // value the handler returned.
+//
+// That holds by construction rather than by anyone remembering it. Each of
+// these is taken out of codeRows by its code, so a sentinel that no code names
+// cannot be declared here at all, and none of them can cross the wire as a
+// category a caller cannot act on.
 var (
 	// ErrStreamClosed reports that a stream ended in an orderly way: the
 	// consumer detached, the publisher closed, or the connection carrying it
 	// went away.
-	ErrStreamClosed = errors.New("ipc: stream closed")
+	ErrStreamClosed = sentinelFor(CodeStreamClosed)
 	// ErrSubscriberStalled reports that a subscription ended because its queue
 	// held only events that may not be discarded and the consumer was not
 	// reading. Attaching again reconciles.
-	ErrSubscriberStalled = errors.New("ipc: subscriber stalled")
+	ErrSubscriberStalled = sentinelFor(CodeSubscriberStalled)
 	// ErrUnknownMethod reports a method this build does not serve.
-	ErrUnknownMethod = errors.New("ipc: unknown method")
+	ErrUnknownMethod = sentinelFor(CodeUnknownMethod)
 	// ErrInvalidRequest reports a request this build serves but cannot read:
 	// a malformed frame, a body that does not decode, or a stream method
 	// called as a request.
-	ErrInvalidRequest = errors.New("ipc: invalid request")
+	ErrInvalidRequest = sentinelFor(CodeInvalidRequest)
 	// ErrUnidentifiedPeer reports that a request needing authority arrived on
 	// a connection whose peer the kernel could not be asked about. It is a
 	// refusal, not a warning: authority comes from the identification, so
 	// without one there is nothing to decide on.
-	ErrUnidentifiedPeer = errors.New("ipc: peer could not be identified")
+	ErrUnidentifiedPeer = sentinelFor(CodeUnidentifiedPeer)
 	// ErrContained reports a request refused because its peer is running
 	// inside an active validation stage. A validating agent may inspect, fix,
 	// and return its own stage, and nothing else.
-	ErrContained = errors.New("ipc: refused, caller is contained by an active validation stage")
+	ErrContained = sentinelFor(CodeContained)
 	// ErrUnavailable reports that a fact the service needed to decide the
 	// request could not be established. It fails closed, so this is a refusal
 	// rather than a request served on an assumption.
-	ErrUnavailable = errors.New("ipc: a fact this request depends on could not be established")
+	ErrUnavailable = sentinelFor(CodeUnavailable)
 	// ErrInternal reports a handler failure with no more specific code.
-	ErrInternal = errors.New("ipc: internal error")
+	ErrInternal = sentinelFor(CodeInternal)
 	// ErrFrameTooLarge reports a frame longer than the transport accepts. The
 	// connection cannot continue, because the rest of the frame is
 	// indistinguishable from the frames that follow it.
-	ErrFrameTooLarge = errors.New("ipc: frame exceeds the size limit")
+	ErrFrameTooLarge = sentinelFor(CodeFrameTooLarge)
 	// ErrClientClosed reports use of a client whose connection has been closed.
-	ErrClientClosed = errors.New("ipc: client closed")
+	ErrClientClosed = sentinelFor(CodeClientClosed)
 	// ErrPayloadTooLarge reports an event refused at the publisher because its
 	// payload is past the bound a producer's projection must stay inside. It
 	// is a producer's own bug rather than anything about a subscriber, so it
 	// is reported to whoever published and nothing is delivered.
-	ErrPayloadTooLarge = errors.New("ipc: event payload exceeds the publisher's bound")
+	ErrPayloadTooLarge = sentinelFor(CodePayloadTooLarge)
 	// ErrInvalidPayload reports an event refused at the publisher because its
 	// payload is not JSON. A payload travels as written, so one that cannot be
 	// encoded could not have reached anybody, and it is refused where it was
 	// written rather than ending some consumer's stream later.
-	ErrInvalidPayload = errors.New("ipc: event payload is not JSON")
+	ErrInvalidPayload = sentinelFor(CodeInvalidPayload)
 	// ErrEventUndeliverable reports that a stream ended because an event that
 	// may not be discarded could not be put in a frame on that connection. It
 	// is not ErrSubscriberStalled: the consumer was keeping up, and the event
 	// itself is what could not travel. Attaching again reconciles, and an
 	// event that keeps failing this way is a producer that did not bound its
 	// projection.
-	ErrEventUndeliverable = errors.New("ipc: event cannot be delivered on this connection")
+	ErrEventUndeliverable = sentinelFor(CodeEventUndeliverable)
 	// ErrConnectionBusy reports a request refused because the connection it
 	// arrived on already holds as many open streams, or as many requests being
 	// served, as one connection may. It is a refusal that names the limit and
 	// the count rather than a silent drop, and a slot frees when a stream ends
 	// or a call completes.
-	ErrConnectionBusy = errors.New("ipc: connection is at its concurrency limit")
+	ErrConnectionBusy = sentinelFor(CodeConnectionBusy)
 )
 
 // Code is the machine-readable category of a failure crossing the wire. It
@@ -114,9 +119,10 @@ const (
 	CodeInternal Code = "internal"
 )
 
-// codeRows is the one owner of which code names which sentinel. A sentinel
-// without a row would cross the wire as some other category, and a caller
-// would be left matching on prose, so every sentinel in this package has one.
+// codeRows is the one owner of the failures this package names. A row is a
+// code and the message its sentinel carries, and the exported sentinels are
+// taken from here rather than declared beside it, so a failure cannot exist
+// without a code that carries it across the wire.
 //
 // The order is the order codeFor tries: a failure takes the first row whose
 // sentinel it wraps. CodeInternal is last because it is also the answer for a
@@ -124,45 +130,56 @@ const (
 var codeRows = []struct {
 	// Code is the category on the wire.
 	Code Code
-	// Sentinel is the value a client matches that category against.
-	Sentinel error
+	// Message is what the sentinel for that category says.
+	Message string
 }{
-	{CodeUnknownMethod, ErrUnknownMethod},
-	{CodeInvalidRequest, ErrInvalidRequest},
-	{CodeUnidentifiedPeer, ErrUnidentifiedPeer},
-	{CodeContained, ErrContained},
-	{CodeUnavailable, ErrUnavailable},
-	{CodeSubscriberStalled, ErrSubscriberStalled},
-	{CodeEventUndeliverable, ErrEventUndeliverable},
-	{CodePayloadTooLarge, ErrPayloadTooLarge},
-	{CodeInvalidPayload, ErrInvalidPayload},
-	{CodeStreamClosed, ErrStreamClosed},
-	{CodeConnectionBusy, ErrConnectionBusy},
-	{CodeFrameTooLarge, ErrFrameTooLarge},
-	{CodeClientClosed, ErrClientClosed},
-	{CodeInternal, ErrInternal},
+	{CodeUnknownMethod, "ipc: unknown method"},
+	{CodeInvalidRequest, "ipc: invalid request"},
+	{CodeUnidentifiedPeer, "ipc: peer could not be identified"},
+	{CodeContained, "ipc: refused, caller is contained by an active validation stage"},
+	{CodeUnavailable, "ipc: a fact this request depends on could not be established"},
+	{CodeSubscriberStalled, "ipc: subscriber stalled"},
+	{CodeEventUndeliverable, "ipc: event cannot be delivered on this connection"},
+	{CodePayloadTooLarge, "ipc: event payload exceeds the publisher's bound"},
+	{CodeInvalidPayload, "ipc: event payload is not JSON"},
+	{CodeStreamClosed, "ipc: stream closed"},
+	{CodeConnectionBusy, "ipc: connection is at its concurrency limit"},
+	{CodeFrameTooLarge, "ipc: frame exceeds the size limit"},
+	{CodeClientClosed, "ipc: client closed"},
+	{CodeInternal, "ipc: internal error"},
 }
 
-// sentinels indexes the table by code. A duplicate code would make one row
-// unreachable and would make the table disagree with itself about what a
-// failure means, so building the index panics on one rather than letting the
-// last row quietly win.
+// sentinels is the table indexed by code, built once. A duplicate code would
+// make one row unreachable and would make the table disagree with itself about
+// what a failure means, so building the index panics on one rather than letting
+// the last row quietly win.
 var sentinels = func() map[Code]error {
 	m := make(map[Code]error, len(codeRows))
 	for _, r := range codeRows {
 		if _, dup := m[r.Code]; dup {
 			panic("ipc: error table declares " + string(r.Code) + " twice")
 		}
-		m[r.Code] = r.Sentinel
+		m[r.Code] = errors.New(r.Message)
 	}
 	return m
 }()
+
+// sentinelFor returns the value a client matches a code against. A code with no
+// row is a programming error and panics at build time rather than producing a
+// sentinel that would cross the wire as something else.
+func sentinelFor(c Code) error {
+	s, ok := sentinels[c]
+	if !ok {
+		panic("ipc: no error row for code " + string(c))
+	}
+	return s
+}
 
 // codeFor classifies err for the wire. An error that matches no row is
 // internal, which is the category that claims the least.
 func codeFor(err error) Code {
 	for _, r := range codeRows {
-		if errors.Is(err, r.Sentinel) {
+		if errors.Is(err, sentinels[r.Code]) {
 			return r.Code
 		}
 	}

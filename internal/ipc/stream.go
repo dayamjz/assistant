@@ -137,10 +137,15 @@ func (p *Publisher) Publish(e Event) error {
 		return ErrStreamClosed
 	}
 	for s := range p.subs {
-		// A subscription that ended under this delivery is the subscriber's
-		// own state, and Publish never reports one: it detaches itself, and
-		// this returns only what is wrong with e.
-		_ = s.deliver(e)
+		if !s.deliver(e) {
+			// The subscription ended under this delivery, so it is detached
+			// here: an ended queue takes nothing more, and leaving it in the
+			// set would iterate it and hold its ring for as long as this
+			// publisher lives. Its consumer still drains what it holds and
+			// then sees why it ended, and this still reports only what is
+			// wrong with e rather than anything about a subscriber.
+			delete(p.subs, s)
+		}
 	}
 	return nil
 }
@@ -309,7 +314,10 @@ func (s *Subscription) finish(err error) {
 // It reports whether the subscription is still open afterwards. A delivery that
 // could only be made by discarding something no read gives back ends it, and a
 // caller relaying a stream into this queue has to know that so it can stop the
-// stream it is relaying rather than keep feeding a queue nobody reads.
+// stream it is relaying rather than keep feeding a queue nobody reads. Ending
+// it here does not detach it from anything: releasing it belongs to whoever
+// delivered, which is Publish for a subscription on a publisher and the client
+// for a relayed one.
 func (s *Subscription) deliver(e Event) bool {
 	s.mu.Lock()
 	defer func() {
@@ -323,17 +331,17 @@ func (s *Subscription) deliver(e Event) bool {
 		s.push(e)
 		return true
 	}
-	if e.Class() == ClassActivity {
+	if e.Class().Droppable() {
 		// Progress never displaces a delta. Room is made by discarding older
 		// progress, and when there is none the arriving event is what goes.
-		if !s.evict(ClassActivity) {
+		if !s.evict(Class.Droppable) {
 			s.discarded()
 			return true
 		}
 		s.push(e)
 		return true
 	}
-	if s.evict(ClassActivity) || s.evict(ClassState) {
+	if s.evict(Class.Droppable) || s.evict(evictableByReconciling) {
 		s.push(e)
 		return true
 	}
@@ -364,12 +372,20 @@ func (s *Subscription) push(e Event) {
 	s.length++
 }
 
-// evict discards the oldest queued event of class c and reports whether it
-// found one. The gap is raised for whatever it discarded.
-func (s *Subscription) evict(c Class) bool {
+// evictableByReconciling reports whether a queued event of this class may be
+// evicted once nothing droppable is left. It is the one step of the order
+// Class.Droppable cannot answer: state is not droppable outright, and goes only
+// because the eviction collapses into the gap marker that makes its consumer
+// read the state back in full. Control has no such recovery and is never
+// evicted, which is why this is not simply "not droppable".
+func evictableByReconciling(c Class) bool { return c == ClassState }
+
+// evict discards the oldest queued event whose class matches want and reports
+// whether it found one. The gap is raised for whatever it discarded.
+func (s *Subscription) evict(want func(Class) bool) bool {
 	for i := 0; i < s.length; i++ {
 		idx := (s.head + i) % len(s.ring)
-		if s.ring[idx].Class() != c {
+		if !want(s.ring[idx].Class()) {
 			continue
 		}
 		for j := i; j < s.length-1; j++ {

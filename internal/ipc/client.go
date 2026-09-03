@@ -245,12 +245,23 @@ func (c *Client) read(r *frameReader) {
 		default:
 			c.mu.Lock()
 			reply := c.calls[f.ID]
+			_, streamed := c.streams[f.ID]
 			c.mu.Unlock()
-			if reply != nil {
+			switch {
+			case reply != nil:
 				select {
 				case reply <- f:
 				default:
 				}
+			case !streamed && f.Error != nil:
+				// The service answered no request of this client's and no
+				// stream of its own, which is how it reports a failure of the
+				// connection itself: a frame it could not read has no
+				// identifier to answer. Keeping it as the cause is what lets a
+				// caller see that reason rather than the end of input behind
+				// it. The read loop carries on, and the first cause is the one
+				// that is kept.
+				c.finish(fmt.Errorf("%w: %w", ErrClientClosed, f.Error))
 			}
 		}
 	}

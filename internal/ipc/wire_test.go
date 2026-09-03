@@ -123,25 +123,62 @@ func TestReadRefusesAMalformedFrame(t *testing.T) {
 	}
 }
 
+// wireSentinels states what every code means, independently of the table the
+// package keeps. The package supplies which codes exist and this supplies the
+// value each one has to resolve to, so a code the package added without a
+// stated meaning fails here, a meaning stated for a code the package does not
+// have fails here, and a code wired to the wrong sentinel fails here.
+//
+// The set is complete by construction rather than by anyone maintaining it: an
+// exported sentinel is taken out of codeRows by its code, so a sentinel with no
+// row cannot be declared and no sentinel can escape this table.
+var wireSentinels = map[Code]error{
+	CodeUnknownMethod:      ErrUnknownMethod,
+	CodeInvalidRequest:     ErrInvalidRequest,
+	CodeUnidentifiedPeer:   ErrUnidentifiedPeer,
+	CodeContained:          ErrContained,
+	CodeUnavailable:        ErrUnavailable,
+	CodeSubscriberStalled:  ErrSubscriberStalled,
+	CodeEventUndeliverable: ErrEventUndeliverable,
+	CodePayloadTooLarge:    ErrPayloadTooLarge,
+	CodeInvalidPayload:     ErrInvalidPayload,
+	CodeStreamClosed:       ErrStreamClosed,
+	CodeConnectionBusy:     ErrConnectionBusy,
+	CodeFrameTooLarge:      ErrFrameTooLarge,
+	CodeClientClosed:       ErrClientClosed,
+	CodeInternal:           ErrInternal,
+}
+
+// TestEveryCodeIsStatedHere is the coverage the tables below rest on. Without
+// it they test whichever codes somebody remembered to retype, which is how a
+// code added later stops being covered while every test still passes.
+func TestEveryCodeIsStatedHere(t *testing.T) {
+	seen := map[Code]bool{}
+	for _, row := range codeRows {
+		want, stated := wireSentinels[row.Code]
+		if !stated {
+			t.Errorf("the package maps %q, which this test states no sentinel for", row.Code)
+			continue
+		}
+		if seen[row.Code] {
+			t.Errorf("%q appears twice in the table", row.Code)
+		}
+		seen[row.Code] = true
+		if got := sentinelFor(row.Code); got != want {
+			t.Errorf("%q resolves to %v, want %v", row.Code, got, want)
+		}
+	}
+	for code := range wireSentinels {
+		if !seen[code] {
+			t.Errorf("this test states a sentinel for %q, which the package does not map, so that failure would cross the wire as %q", code, CodeInternal)
+		}
+	}
+}
+
 // TestErrorCodesSurviveTheWire is what lets a client match a refusal against
 // the sentinel the service returned rather than against its prose.
 func TestErrorCodesSurviveTheWire(t *testing.T) {
-	cases := map[Code]error{
-		CodeUnknownMethod:      ErrUnknownMethod,
-		CodeInvalidRequest:     ErrInvalidRequest,
-		CodeUnidentifiedPeer:   ErrUnidentifiedPeer,
-		CodeContained:          ErrContained,
-		CodeUnavailable:        ErrUnavailable,
-		CodeSubscriberStalled:  ErrSubscriberStalled,
-		CodeEventUndeliverable: ErrEventUndeliverable,
-		CodePayloadTooLarge:    ErrPayloadTooLarge,
-		CodeStreamClosed:       ErrStreamClosed,
-		CodeConnectionBusy:     ErrConnectionBusy,
-		CodeFrameTooLarge:      ErrFrameTooLarge,
-		CodeClientClosed:       ErrClientClosed,
-		CodeInternal:           ErrInternal,
-	}
-	for code, sentinel := range cases {
+	for code, sentinel := range wireSentinels {
 		var buf bytes.Buffer
 		if err := newFrameWriter(&buf, 0).write(frame{ID: 1, Error: &Error{Code: code, Message: "m"}}); err != nil {
 			t.Fatalf("write: %v", err)
@@ -161,49 +198,22 @@ func TestErrorCodesSurviveTheWire(t *testing.T) {
 }
 
 func TestCodeForClassifiesRefusals(t *testing.T) {
-	cases := map[Code]error{
-		CodeUnknownMethod:      ErrUnknownMethod,
-		CodeInvalidRequest:     ErrInvalidRequest,
-		CodeUnidentifiedPeer:   ErrUnidentifiedPeer,
-		CodeContained:          ErrContained,
-		CodeUnavailable:        ErrUnavailable,
-		CodeSubscriberStalled:  ErrSubscriberStalled,
-		CodeEventUndeliverable: ErrEventUndeliverable,
-		CodePayloadTooLarge:    ErrPayloadTooLarge,
-		CodeStreamClosed:       ErrStreamClosed,
-		CodeConnectionBusy:     ErrConnectionBusy,
-		CodeFrameTooLarge:      ErrFrameTooLarge,
-		CodeClientClosed:       ErrClientClosed,
-		CodeInternal:           errors.New("something else entirely"),
-	}
-	for want, err := range cases {
-		if got := codeFor(err); got != want {
-			t.Errorf("codeFor(%v) = %q, want %q", err, got, want)
+	for want, sentinel := range wireSentinels {
+		if got := codeFor(sentinel); got != want {
+			t.Errorf("codeFor(%v) = %q, want %q", sentinel, got, want)
 		}
+	}
+	if got := codeFor(errors.New("something else entirely")); got != CodeInternal {
+		t.Errorf("codeFor(an error naming no sentinel) = %q, want %q", got, CodeInternal)
 	}
 }
 
 // TestEverySentinelSurvivesTheWire is the claim the errors block makes about
-// all of them rather than most of them. A sentinel with no row crosses as
-// "internal", and a consumer is left telling "attach again and reconcile" from
-// "the service broke" by reading prose, which is what a code exists to avoid.
+// all of them rather than most of them. A sentinel that crossed as "internal"
+// would leave a consumer telling "attach again and reconcile" from "the service
+// broke" by reading prose, which is what a code exists to avoid.
 func TestEverySentinelSurvivesTheWire(t *testing.T) {
-	all := []error{
-		ErrStreamClosed,
-		ErrSubscriberStalled,
-		ErrUnknownMethod,
-		ErrInvalidRequest,
-		ErrUnidentifiedPeer,
-		ErrContained,
-		ErrUnavailable,
-		ErrInternal,
-		ErrFrameTooLarge,
-		ErrClientClosed,
-		ErrConnectionBusy,
-		ErrPayloadTooLarge,
-		ErrEventUndeliverable,
-	}
-	for _, sentinel := range all {
+	for code, sentinel := range wireSentinels {
 		// A handler's failure reaches the wire wrapped in whatever it said
 		// about it, which is the shape codeFor really classifies.
 		wrapped := fmt.Errorf("while doing the work: %w", sentinel)
@@ -219,7 +229,7 @@ func TestEverySentinelSurvivesTheWire(t *testing.T) {
 			t.Fatalf("%v arrived with no error at all", sentinel)
 		}
 		if !errors.Is(f.Error, sentinel) {
-			t.Errorf("%v crossed the wire as %q, which resolves to %v", sentinel, f.Error.Code, sentinels[f.Error.Code])
+			t.Errorf("%v crossed the wire as %q, want %q", sentinel, f.Error.Code, code)
 		}
 	}
 }

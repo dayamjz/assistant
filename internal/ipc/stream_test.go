@@ -534,3 +534,44 @@ func TestPublishRefusesAPayloadThatIsNotJSON(t *testing.T) {
 	}
 	exhausted(t, sub)
 }
+
+// TestThePublisherReleasesASubscriptionThatEnded covers what Publish does with
+// a queue that stalled under its own delivery. Leaving it attached would
+// iterate it and hold its ring for as long as the publisher lives, which a
+// caller using Subscribe directly cannot see and cannot fix.
+func TestThePublisherReleasesASubscriptionThatEnded(t *testing.T) {
+	p := publisher(t, ipc.PublisherConfig{})
+	sub := subscribe(t, p, 1)
+	if p.Subscribers() != 1 {
+		t.Fatalf("the publisher holds %d subscriptions, want the one just opened", p.Subscribers())
+	}
+
+	// Nothing reads, and control may not be discarded, so the second one ends
+	// the subscription rather than making room.
+	publish(t, p, control("first"))
+	publish(t, p, control("second"))
+	if p.Subscribers() != 0 {
+		t.Errorf("the publisher still holds %d subscriptions after one ended", p.Subscribers())
+	}
+
+	// Releasing it does not take away what its consumer had already been
+	// given, nor the reason it ended.
+	got := drain(t, sub, 2)
+	if got[0].Type != "stream.gap" {
+		t.Errorf("first delivery is %q, want the opening marker", got[0].Type)
+	}
+	if label(t, got[1]) != "first" {
+		t.Errorf("second delivery is %q, want the queued control event", label(t, got[1]))
+	}
+	if _, err := sub.Recv(context.Background()); !errors.Is(err, ipc.ErrSubscriberStalled) {
+		t.Errorf("Recv after the queue stalled = %v, want ErrSubscriberStalled", err)
+	}
+
+	// A later publish reaches whoever is left rather than the released one.
+	live := subscribe(t, p, 4)
+	publish(t, p, activity("after"))
+	if p.Subscribers() != 1 {
+		t.Errorf("the publisher holds %d subscriptions, want only the live one", p.Subscribers())
+	}
+	drain(t, live, 2)
+}
