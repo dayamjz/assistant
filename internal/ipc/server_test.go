@@ -277,6 +277,7 @@ func TestClientRefusesAMethodItCannotSend(t *testing.T) {
 }
 
 func TestRestrictedMethodRefusesAContainedCaller(t *testing.T) {
+	requiresIdentifiedPeer(t)
 	h := serveOnSocket(t, nil)
 	h.ancestry.result = ipc.Containment{Contained: true, Run: "r7", Stage: "test"}
 	c := h.dial(t, ipc.ClientConfig{})
@@ -296,6 +297,7 @@ func TestRestrictedMethodRefusesAContainedCaller(t *testing.T) {
 }
 
 func TestRestrictedMethodRefusesWhenContainmentCannotBeDetermined(t *testing.T) {
+	requiresIdentifiedPeer(t)
 	h := serveOnSocket(t, nil)
 	h.ancestry.err = errors.New("the process table could not be read")
 	c := h.dial(t, ipc.ClientConfig{})
@@ -331,6 +333,7 @@ func TestOpenMethodIsServedWithoutAskingAboutContainment(t *testing.T) {
 // environment variable from becoming authority. The claim is carried and
 // reported, and the decision is taken on what the kernel said instead.
 func TestTheMarkerNeitherAuthorizesNorRefuses(t *testing.T) {
+	requiresIdentifiedPeer(t)
 	h := serveOnSocket(t, nil)
 	c := h.dial(t, ipc.ClientConfig{Marker: "run=r7 stage=test"})
 	ctx, cancel := callCtx(t)
@@ -1401,6 +1404,7 @@ func (a *slowAncestry) Contained(ctx context.Context, _ ipc.Credentials) (ipc.Co
 // that reads the connection would stop every other request, cancel and stream
 // on that connection for as long as it takes.
 func TestASlowAncestryDoesNotStopTheConnection(t *testing.T) {
+	requiresIdentifiedPeer(t)
 	ancestry := &slowAncestry{entered: make(chan struct{}, 1), release: make(chan struct{})}
 	h := serveOnSocket(t, func(c *ipc.ServerConfig) { c.Ancestry = ancestry })
 	c := h.dial(t, ipc.ClientConfig{})
@@ -1443,6 +1447,7 @@ func TestASlowAncestryDoesNotStopTheConnection(t *testing.T) {
 // contract states, for the other piece of caller-supplied code reached through
 // the same configuration.
 func TestAPanickingAncestryCostsOneRequest(t *testing.T) {
+	requiresIdentifiedPeer(t)
 	reported := make(chan any, 1)
 	h := serveOnSocket(t, func(c *ipc.ServerConfig) {
 		c.Ancestry = &slowAncestry{panics: true}

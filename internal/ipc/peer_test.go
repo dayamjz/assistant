@@ -19,6 +19,25 @@ func platformIdentifiesPeers() bool {
 	return runtime.GOOS == "linux" || runtime.GOOS == "darwin"
 }
 
+// requiresIdentifiedPeer skips a test whose subject is a decision taken on
+// kernel-reported credentials, on a platform that reports none. There a
+// restricted method is refused for the missing identity before containment is
+// ever reached, so the containment behavior this test names does not exist to
+// observe. That refusal is not left unchecked:
+// TestUnidentifiedPeerIsRefusedForRestrictedMethods holds it on every
+// platform, over a connection the kernel cannot be asked about.
+//
+// The skip cannot hide a regression on a platform that does identify peers,
+// because platformIdentifiesPeers is written down rather than derived, and
+// TestCredentialsComeFromTheKernel fails there when the kernel stops
+// answering.
+func requiresIdentifiedPeer(t *testing.T) {
+	t.Helper()
+	if !platformIdentifiesPeers() {
+		t.Skipf("%s reports no local socket peer credentials, so a restricted call is refused before containment is decided", runtime.GOOS)
+	}
+}
+
 // acceptedPair returns the two ends of a local socket connection inside this
 // process, which makes the process identifier and user the kernel should
 // report values the test already knows.
