@@ -81,7 +81,27 @@ type ServerConfig struct {
 	// MaxFrameBytes bounds one frame in either direction. Zero means
 	// DefaultMaxFrameBytes.
 	MaxFrameBytes int
+	// MaxStreams bounds how many event streams one connection may hold open at
+	// once. Zero means DefaultMaxStreams, and a negative value is refused.
+	MaxStreams int
+	// MaxInFlight bounds how many requests one connection may have being
+	// served at once. Zero means DefaultMaxInFlight, and a negative value is
+	// refused.
+	MaxInFlight int
 }
+
+// DefaultMaxStreams bounds the event streams one connection may hold open at
+// once when a caller does not choose a bound. Each stream costs a queue and a
+// goroutine, and a consumer needs one of them, so the default leaves room for
+// a client that opens a few and refuses a caller that opens them without end.
+const DefaultMaxStreams = 16
+
+// DefaultMaxInFlight bounds the requests one connection may have being served
+// at once when a caller does not choose a bound. Each one is a goroutine
+// inside a handler, and the protocol exists so a short call is not held up
+// behind a long one, so the default leaves room for that and refuses a caller
+// that turns the connection into an unbounded work queue.
+const DefaultMaxInFlight = 64
 
 // Server serves the local protocol over a listener.
 type Server struct {
@@ -107,6 +127,10 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 		return nil, errors.New("ipc: server needs a publisher to subscribe to")
 	case cfg.Backlog < 0:
 		return nil, fmt.Errorf("ipc: backlog %d is not a queue depth", cfg.Backlog)
+	case cfg.MaxStreams < 0:
+		return nil, fmt.Errorf("ipc: %d is not a number of streams a connection may hold", cfg.MaxStreams)
+	case cfg.MaxInFlight < 0:
+		return nil, fmt.Errorf("ipc: %d is not a number of requests a connection may serve at once", cfg.MaxInFlight)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Server{
@@ -117,8 +141,14 @@ func NewServer(cfg ServerConfig) (*Server, error) {
 	}, nil
 }
 
-// Serve accepts connections until the listener fails or the server is closed.
-// It returns nil when it stopped because of Close.
+// Serve accepts connections from l and serves each one until it ends. It
+// returns nil once the server has been closed, and whatever Accept reported
+// otherwise.
+//
+// The listener belongs to the caller. Close drops the connections this server
+// accepted and does not close l, so a Serve waiting in Accept returns when the
+// caller closes l or when one more connection arrives, whichever happens
+// first.
 func (s *Server) Serve(l net.Listener) error {
 	for {
 		conn, err := l.Accept()
@@ -135,8 +165,12 @@ func (s *Server) Serve(l net.Listener) error {
 			return nil
 		}
 		s.conns[conn] = struct{}{}
-		s.mu.Unlock()
+		// The counter is raised under the same lock that Close takes before it
+		// waits, so a connection accepted before Close is one Close waits for,
+		// and there is no window where Close observes an empty counter while
+		// this goroutine is about to raise it.
 		s.wg.Add(1)
+		s.mu.Unlock()
 		go func() {
 			defer s.wg.Done()
 			s.serveConn(conn)
@@ -144,8 +178,11 @@ func (s *Server) Serve(l net.Listener) error {
 	}
 }
 
-// Close stops serving, drops every connection, and waits for the goroutines
-// serving them to finish.
+// Close stops serving, drops every connection this server accepted, and waits
+// for the goroutines serving them to finish.
+//
+// It does not close the listener Serve was given, which the caller owns and
+// may still be sharing. Closing that listener is what makes Serve return.
 func (s *Server) Close() error {
 	s.mu.Lock()
 	if s.closed {
@@ -172,6 +209,23 @@ func (s *Server) isClosed() bool {
 	return s.closed
 }
 
+// maxStreams is how many streams one connection may hold open at once.
+func (s *Server) maxStreams() int {
+	if s.cfg.MaxStreams == 0 {
+		return DefaultMaxStreams
+	}
+	return s.cfg.MaxStreams
+}
+
+// maxInFlight is how many requests one connection may have being served at
+// once.
+func (s *Server) maxInFlight() int {
+	if s.cfg.MaxInFlight == 0 {
+		return DefaultMaxInFlight
+	}
+	return s.cfg.MaxInFlight
+}
+
 func (s *Server) forget(conn net.Conn) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -188,9 +242,10 @@ type conn struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	mu      sync.Mutex
-	streams map[uint64]*Subscription
-	wg      sync.WaitGroup
+	mu       sync.Mutex
+	streams  map[uint64]*Subscription
+	inflight int
+	wg       sync.WaitGroup
 }
 
 // serveConn identifies the peer once and then serves frames until the
@@ -240,28 +295,94 @@ func (c *conn) serve() {
 func (c *conn) dispatch(f frame) {
 	spec, ok := Lookup(f.Method)
 	if !ok {
-		_ = c.w.write(frame{ID: f.ID, Error: newError(f.Method, fmt.Errorf("%w: %q", ErrUnknownMethod, f.Method))})
+		c.answer(f.ID, frame{ID: f.ID, Error: newError(f.Method, fmt.Errorf("%w: %q", ErrUnknownMethod, f.Method))})
 		return
 	}
 	peer := c.peer.withMarker(f.Marker)
 	if err := c.authorize(spec, peer); err != nil {
-		_ = c.w.write(frame{ID: f.ID, Error: newError(f.Method, err)})
+		c.answer(f.ID, frame{ID: f.ID, Error: newError(f.Method, err)})
 		return
 	}
 	if spec.Kind == KindStream {
 		c.startStream(f)
 		return
 	}
+	if err := c.beginRequest(); err != nil {
+		c.answer(f.ID, frame{ID: f.ID, Error: newError(f.Method, err)})
+		return
+	}
 	c.wg.Add(1)
 	go func() {
 		defer c.wg.Done()
 		result, err := c.srv.cfg.Handler.Serve(c.ctx, Request{Method: f.Method, Params: f.Params, Peer: peer})
+		// The slot is returned before the answer is written, so a caller
+		// holding its answer is a caller whose slot is already free rather
+		// than one racing the write that delivered it.
+		c.endRequest()
 		if err != nil {
-			_ = c.w.write(frame{ID: f.ID, Error: newError(f.Method, err)})
+			c.answer(f.ID, frame{ID: f.ID, Error: newError(f.Method, err)})
 			return
 		}
-		_ = c.w.write(frame{ID: f.ID, Result: nullIfEmpty(result)})
+		c.answer(f.ID, frame{ID: f.ID, Result: nullIfEmpty(result)})
 	}()
+}
+
+// beginRequest takes one of this connection's in-flight slots, or reports the
+// refusal a caller gets instead.
+//
+// It refuses rather than waiting. The goroutine that would wait is the one
+// reading the connection, and a request cannot finish while nothing is reading
+// the connection it would answer on, so waiting here would trade a refusal a
+// caller can act on for a connection that has stopped.
+func (c *conn) beginRequest() error {
+	limit := c.srv.maxInFlight()
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.inflight >= limit {
+		return fmt.Errorf("%w: this connection is already serving %d of %d allowed requests at once",
+			ErrConnectionBusy, c.inflight, limit)
+	}
+	c.inflight++
+	return nil
+}
+
+// endRequest returns an in-flight slot once the handler holding it has
+// returned.
+func (c *conn) endRequest() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.inflight--
+}
+
+// answer writes the one reply a request gets, and answers with a refusal when
+// that reply cannot be put on the wire at all.
+//
+// An answer past the frame limit, or one that does not encode, is a failure
+// about the answer rather than about the connection, and no other path answers
+// this identifier. Without the second write the caller would wait for an answer
+// that is never coming, so it is told the request was served and the answer
+// could not be delivered. The refusal carries no method and a fixed message, so
+// it fits in a frame whatever the answer that did not.
+func (c *conn) answer(id uint64, f frame) {
+	err := c.w.write(f)
+	if err == nil {
+		return
+	}
+	switch {
+	case errors.Is(err, ErrFrameTooLarge):
+		_ = c.w.write(frame{ID: id, Error: &Error{
+			Code:    CodeFrameTooLarge,
+			Message: "this request was served and its answer does not fit in one frame",
+		}})
+	case errors.Is(err, ErrInternal):
+		_ = c.w.write(frame{ID: id, Error: &Error{
+			Code:    CodeInternal,
+			Message: "this request was served and its answer could not be encoded",
+		}})
+	}
+	// Anything else came from the connection rather than from the frame. There
+	// is nowhere to put a smaller answer, and the read loop ends the
+	// connection.
 }
 
 // authorize applies the access class of a method to a peer.
@@ -295,14 +416,22 @@ func (c *conn) authorize(spec Spec, peer Peer) error {
 func (c *conn) startStream(f frame) {
 	sub, err := c.srv.cfg.Events.Subscribe(c.srv.cfg.Backlog)
 	if err != nil {
-		_ = c.w.write(frame{ID: f.ID, Error: newError(f.Method, err)})
+		c.answer(f.ID, frame{ID: f.ID, Error: newError(f.Method, err)})
 		return
 	}
 	c.mu.Lock()
 	if _, dup := c.streams[f.ID]; dup {
 		c.mu.Unlock()
 		sub.Close()
-		_ = c.w.write(frame{ID: f.ID, Error: newError(f.Method, fmt.Errorf("%w: stream %d is already open", ErrInvalidRequest, f.ID))})
+		c.answer(f.ID, frame{ID: f.ID, Error: newError(f.Method, fmt.Errorf("%w: stream %d is already open", ErrInvalidRequest, f.ID))})
+		return
+	}
+	if limit := c.srv.maxStreams(); len(c.streams) >= limit {
+		open := len(c.streams)
+		c.mu.Unlock()
+		sub.Close()
+		c.answer(f.ID, frame{ID: f.ID, Error: newError(f.Method, fmt.Errorf("%w: this connection already holds %d of %d allowed event streams",
+			ErrConnectionBusy, open, limit))})
 		return
 	}
 	c.streams[f.ID] = sub
@@ -321,6 +450,10 @@ func (c *conn) startStream(f frame) {
 // pump moves events from a subscription onto the connection. It blocks on the
 // connection, never on the publisher: a caller that stops reading fills its own
 // queue and gaps itself, and the work being reported on is untouched.
+//
+// An event too large to put in a frame ends that event rather than the stream.
+// A connection that failed ends the stream, because there is nothing left to
+// deliver on.
 func (c *conn) pump(id uint64, sub *Subscription) {
 	for {
 		e, err := sub.Recv(c.ctx)
@@ -329,10 +462,28 @@ func (c *conn) pump(id uint64, sub *Subscription) {
 			return
 		}
 		event := e
-		if err := c.w.write(frame{ID: id, Event: &event}); err != nil {
-			c.endStream(id, ErrStreamClosed)
+		err = c.w.write(frame{ID: id, Event: &event})
+		if err == nil {
+			continue
+		}
+		if errors.Is(err, ErrFrameTooLarge) && event.Type != TypeGap {
+			// The event did not fit in a frame, which says a producer did not
+			// bound its projection and says nothing about the connection. It
+			// is a discard like any other: the gap is raised, the consumer
+			// reconciles from a full read, and the stream carries on.
+			sub.discard()
+			continue
+		}
+		if errors.Is(err, ErrFrameTooLarge) {
+			// The marker that reports a discard is itself the thing that does
+			// not fit, so there is no discard left to collapse into. The
+			// stream ends with a reason rather than looping on a frame it can
+			// never write.
+			c.finishStream(id, fmt.Errorf("%w: this stream's gap marker does not fit in a frame", ErrFrameTooLarge))
 			return
 		}
+		c.endStream(id, ErrStreamClosed)
+		return
 	}
 }
 

@@ -281,6 +281,19 @@ func (s *Subscription) deliver(e Event) {
 	s.done, s.err = true, ErrSubscriberStalled
 }
 
+// discard records that an event this subscription already handed out could not
+// be delivered any further. It is the same discard the queue does under
+// overflow: the gap is raised, so the consumer reconciles rather than acting on
+// state it never saw, and the subscription survives.
+func (s *Subscription) discard() {
+	s.mu.Lock()
+	if !s.done {
+		s.discarded()
+	}
+	s.mu.Unlock()
+	s.signal()
+}
+
 // push appends e to the queue, which the caller has checked has room.
 func (s *Subscription) push(e Event) {
 	s.ring[(s.head+s.length)%len(s.ring)] = e

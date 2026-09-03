@@ -26,7 +26,7 @@
 // front of the write is what turns the stall into a gap rather than into
 // pressure on the producer.
 //
-// Only activity may be discarded. Activity is progress, and nothing a consumer
+// Activity is discarded first. Activity is progress, and nothing a consumer
 // holds depends on it. State is a delta to something a consumer holds, and
 // control is about the channel itself. An event type this build does not
 // recognize is classified as state, so a type added by a newer peer is retained
@@ -47,13 +47,19 @@
 //
 // # Where state may be discarded, and why that is not the exception it looks like
 //
-// Subscription documents the eviction order: activity first, then state, and
-// control never. Discarding a queued state event looks like the rule quietly
-// relaxed, so it is worth being exact about why it is not. A discard raises the
-// gap, and a gapped consumer must read the state back in full before applying
-// another delta. That read supersedes every delta still queued, so the queued
-// deltas are not information the consumer loses. This is the collapse into a
-// marker the design calls for, not a quiet discard.
+// Bounded, never blocking the executor, and never evicting state is a trilemma,
+// so the property that holds is that state is never silently dropped: activity
+// is discarded first, a state event may be evicted only when that eviction is
+// collapsed into the sticky gap marker, and control is never discarded. PRD
+// section 8 states it in those words, and Subscription implements it in that
+// order.
+//
+// Discarding a queued state event looks like the rule quietly relaxed, so it is
+// worth being exact about why it is not. A discard raises the gap, and a gapped
+// consumer must read the state back in full before applying another delta. That
+// read supersedes every delta still queued, so the queued deltas are not
+// information the consumer loses. This is the collapse into a marker the design
+// calls for, not a quiet discard.
 //
 // Control has no such recovery, because no read gives a consumer back an event
 // about the channel. So when a queue holds only control events and something
@@ -98,6 +104,17 @@
 // prevent. Where a fact cannot be established, the request is refused. An
 // unidentified peer, and an ancestry that could not answer, both refuse.
 //
+// # What one connection may hold at once
+//
+// A connection holds a bounded number of open streams and a bounded number of
+// requests being served, because the method that opens a stream is open to any
+// identified caller and an unbounded resource reachable without authority is
+// the hazard the frame limit already exists for. Exceeding either bound is a
+// refusal naming the limit and the current count, never a silent drop, and a
+// slot frees when a stream ends or a call is answered. The bound on requests is
+// applied without waiting: the goroutine that would wait is the one reading the
+// connection, so waiting would stop the connection rather than pace it.
+//
 // # What this package does not do
 //
 // It does not open the socket, hold the home's lock, or decide when the service
@@ -112,7 +129,12 @@
 // full log the authority and what travels a bounded projection of it, and
 // producing that projection belongs to whatever writes the event. A frame past
 // the size limit is refused rather than written, because the receiver's only
-// recovery from an over-long frame is to drop the connection.
+// recovery from an over-long frame is to drop the connection. An event that
+// cannot be put in a frame is therefore a discard rather than the end of the
+// stream: it raises the gap the consumer reconciles from, and the stream
+// carries on. An answer to a request that cannot be put in a frame is reported
+// to the caller as that refusal, because the alternative is a caller waiting
+// for an answer that is never coming.
 //
 // It does not cancel work that is already running. A Call whose context ended
 // stops waiting for the answer; the handler keeps its connection's context, so

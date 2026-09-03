@@ -160,17 +160,28 @@ func (c *Client) Subscribe(ctx context.Context, params any) (*Stream, error) {
 	if err := c.w.write(frame{ID: id, Method: MethodEventsSubscribe, Marker: c.marker, Params: body}); err != nil {
 		c.unregister(id)
 		c.dropStream(id, ErrStreamClosed)
+		// A frame refused before it was written leaves nothing at the service,
+		// and a frame the connection failed under may have arrived whole. The
+		// cancel costs one small frame and covers the second case.
+		c.cancelStream(id)
 		return nil, fmt.Errorf("ipc: opening the event stream: %w", err)
 	}
 	defer c.unregister(id)
 	select {
 	case <-ctx.Done():
+		// The request is already on the wire, so the service may have opened
+		// the stream and be pumping it at a queue nothing will read again.
+		// Abandoning it here without saying so would leave that queue, its
+		// goroutine, and its share of the connection's writer in place for as
+		// long as the connection lives.
 		c.dropStream(id, ErrStreamClosed)
+		c.cancelStream(id)
 		return nil, ctx.Err()
 	case <-c.done:
 		return nil, c.closedErr()
 	case f := <-reply:
 		if f.Error != nil {
+			// The service refused, so it opened nothing to cancel.
 			c.dropStream(id, ErrStreamClosed)
 			return nil, f.Error
 		}
@@ -187,6 +198,13 @@ func (s *Stream) Recv(ctx context.Context) (Event, error) { return s.sub.Recv(ct
 func (s *Stream) Close() error {
 	s.c.dropStream(s.id, ErrStreamClosed)
 	return s.c.w.write(frame{ID: s.id, Cancel: true})
+}
+
+// cancelStream tells the service to stop sending a stream this client will not
+// read. It is best effort by nature: the connection may already be gone, and
+// there is nothing further to do about that from here.
+func (c *Client) cancelStream(id uint64) {
+	_ = c.w.write(frame{ID: id, Cancel: true})
 }
 
 // Close ends the connection. Calls waiting on an answer and streams waiting on

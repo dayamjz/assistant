@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"testing"
@@ -126,12 +127,17 @@ func TestReadRefusesAMalformedFrame(t *testing.T) {
 // the sentinel the service returned rather than against its prose.
 func TestErrorCodesSurviveTheWire(t *testing.T) {
 	cases := map[Code]error{
-		CodeUnknownMethod:    ErrUnknownMethod,
-		CodeInvalidRequest:   ErrInvalidRequest,
-		CodeUnidentifiedPeer: ErrUnidentifiedPeer,
-		CodeContained:        ErrContained,
-		CodeUnavailable:      ErrUnavailable,
-		CodeInternal:         ErrInternal,
+		CodeUnknownMethod:     ErrUnknownMethod,
+		CodeInvalidRequest:    ErrInvalidRequest,
+		CodeUnidentifiedPeer:  ErrUnidentifiedPeer,
+		CodeContained:         ErrContained,
+		CodeUnavailable:       ErrUnavailable,
+		CodeSubscriberStalled: ErrSubscriberStalled,
+		CodeStreamClosed:      ErrStreamClosed,
+		CodeConnectionBusy:    ErrConnectionBusy,
+		CodeFrameTooLarge:     ErrFrameTooLarge,
+		CodeClientClosed:      ErrClientClosed,
+		CodeInternal:          ErrInternal,
 	}
 	for code, sentinel := range cases {
 		var buf bytes.Buffer
@@ -154,16 +160,60 @@ func TestErrorCodesSurviveTheWire(t *testing.T) {
 
 func TestCodeForClassifiesRefusals(t *testing.T) {
 	cases := map[Code]error{
-		CodeUnknownMethod:    ErrUnknownMethod,
-		CodeInvalidRequest:   ErrInvalidRequest,
-		CodeUnidentifiedPeer: ErrUnidentifiedPeer,
-		CodeContained:        ErrContained,
-		CodeUnavailable:      ErrUnavailable,
-		CodeInternal:         errors.New("something else entirely"),
+		CodeUnknownMethod:     ErrUnknownMethod,
+		CodeInvalidRequest:    ErrInvalidRequest,
+		CodeUnidentifiedPeer:  ErrUnidentifiedPeer,
+		CodeContained:         ErrContained,
+		CodeUnavailable:       ErrUnavailable,
+		CodeSubscriberStalled: ErrSubscriberStalled,
+		CodeStreamClosed:      ErrStreamClosed,
+		CodeConnectionBusy:    ErrConnectionBusy,
+		CodeFrameTooLarge:     ErrFrameTooLarge,
+		CodeClientClosed:      ErrClientClosed,
+		CodeInternal:          errors.New("something else entirely"),
 	}
 	for want, err := range cases {
 		if got := codeFor(err); got != want {
 			t.Errorf("codeFor(%v) = %q, want %q", err, got, want)
+		}
+	}
+}
+
+// TestEverySentinelSurvivesTheWire is the claim the errors block makes about
+// all of them rather than most of them. A sentinel with no row crosses as
+// "internal", and a consumer is left telling "attach again and reconcile" from
+// "the service broke" by reading prose, which is what a code exists to avoid.
+func TestEverySentinelSurvivesTheWire(t *testing.T) {
+	all := []error{
+		ErrStreamClosed,
+		ErrSubscriberStalled,
+		ErrUnknownMethod,
+		ErrInvalidRequest,
+		ErrUnidentifiedPeer,
+		ErrContained,
+		ErrUnavailable,
+		ErrInternal,
+		ErrFrameTooLarge,
+		ErrClientClosed,
+		ErrConnectionBusy,
+	}
+	for _, sentinel := range all {
+		// A handler's failure reaches the wire wrapped in whatever it said
+		// about it, which is the shape codeFor really classifies.
+		wrapped := fmt.Errorf("while doing the work: %w", sentinel)
+		var buf bytes.Buffer
+		if err := newFrameWriter(&buf, 0).write(frame{ID: 1, Error: newError("status", wrapped)}); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+		f, err := newFrameReader(&buf, 0).read()
+		if err != nil {
+			t.Fatalf("read: %v", err)
+		}
+		if f.Error == nil {
+			t.Fatalf("%v arrived with no error at all", sentinel)
+		}
+		if !errors.Is(f.Error, sentinel) {
+			t.Errorf("%v crossed the wire as %q, which resolves to %v", sentinel, f.Error.Code, sentinels[f.Error.Code])
 		}
 	}
 }

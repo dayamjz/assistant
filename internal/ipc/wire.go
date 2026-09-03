@@ -131,10 +131,15 @@ func newFrameWriter(w io.Writer, limit int) *frameWriter {
 // section 8 makes the full log the authority and what travels a bounded
 // projection of it, so an oversized frame is a producer that did not bound its
 // projection.
+//
+// A frame this refuses, and a frame that does not encode, are both failures
+// about the frame rather than about the connection: both name a sentinel, so a
+// caller can tell them from a connection that went away and answer with
+// something smaller instead of leaving its peer waiting.
 func (fw *frameWriter) write(f frame) error {
 	body, err := json.Marshal(f)
 	if err != nil {
-		return fmt.Errorf("ipc: encoding a frame: %w", err)
+		return fmt.Errorf("%w: encoding a frame: %w", ErrInternal, err)
 	}
 	if len(body)+1 > fw.limit {
 		return fmt.Errorf("%w: %d bytes", ErrFrameTooLarge, len(body)+1)
