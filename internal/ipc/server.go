@@ -361,9 +361,11 @@ func (c *conn) endRequest() {
 }
 
 // errUndeliverableControl is why a stream ends when a control event cannot be
-// put in a frame on its connection. Its text is fixed, so MinFrameBytes can be
+// put in a frame on its connection, whether it was too large or would not
+// encode: the consumer's answer to both is to attach again, and the producer
+// learns which at the publisher. Its text is fixed, so MinFrameBytes can be
 // measured against the frame that carries it.
-var errUndeliverableControl = fmt.Errorf("%w: a control event does not fit in one frame here, and control may not be discarded", ErrEventUndeliverable)
+var errUndeliverableControl = fmt.Errorf("%w: a control event could not be put in one frame here, and control may not be discarded", ErrEventUndeliverable)
 
 // undeliverableAnswer is the refusal a request gets when its answer could not
 // be put on the wire. It carries no method and a fixed message, so its size
@@ -435,15 +437,16 @@ func (c *conn) answer(id uint64, f frame) {
 	if err == nil {
 		return
 	}
-	switch {
-	case errors.Is(err, ErrFrameTooLarge):
-		_ = c.w.write(undeliverableAnswer(id, CodeFrameTooLarge))
-	case errors.Is(err, ErrInternal):
-		_ = c.w.write(undeliverableAnswer(id, CodeInternal))
+	if !unbuildable(err) {
+		// The connection failed rather than the frame. There is nowhere to put
+		// a smaller answer, and the read loop ends the connection.
+		return
 	}
-	// Anything else came from the connection rather than from the frame. There
-	// is nowhere to put a smaller answer, and the read loop ends the
-	// connection.
+	code := CodeInternal
+	if errors.Is(err, ErrFrameTooLarge) {
+		code = CodeFrameTooLarge
+	}
+	_ = c.w.write(undeliverableAnswer(id, code))
 }
 
 // authorize applies the access class of a method to a peer.
@@ -512,11 +515,11 @@ func (c *conn) startStream(f frame) {
 // connection, never on the publisher: a caller that stops reading fills its own
 // queue and gaps itself, and the work being reported on is untouched.
 //
-// An activity or state event too large to put in a frame ends that event rather
-// than the stream, because a gapped consumer reads back what it missed. A
-// control event too large to put in a frame ends the stream, because nothing
-// gives it back. A connection that failed ends the stream too, because there is
-// nothing left to deliver on.
+// An event that could not be put in a frame is answered by its class rather
+// than by which frame failure it was: activity and state are discarded and
+// raise the gap, because a gapped consumer reads back what it missed, and
+// control ends the stream, because nothing gives it back. A connection that
+// failed ends the stream too, because there is nothing left to deliver on.
 func (c *conn) pump(id uint64, sub *Subscription) {
 	for {
 		e, err := sub.Recv(c.ctx)
@@ -526,27 +529,28 @@ func (c *conn) pump(id uint64, sub *Subscription) {
 		}
 		event := e
 		err = c.w.write(frame{ID: id, Event: &event})
-		if err == nil {
-			continue
-		}
-		if errors.Is(err, ErrFrameTooLarge) {
-			if event.Class() == ClassControl {
-				// Control may not be discarded, here as much as in the queue:
-				// no read gives a consumer back an event about the channel, so
-				// dropping one would be the invariant relaxed in the one path
-				// nobody looks at. The stream ends with a reason instead, and
-				// attaching again reconciles.
-				c.finishStream(id, errUndeliverableControl)
-				return
-			}
-			// Activity and state are recoverable, so an event that did not fit
-			// is a discard like any other: the gap is raised, the consumer
-			// reconciles from a full read, and the stream carries on.
+		switch {
+		case err == nil:
+		case !unbuildable(err):
+			// The connection failed under the write, so there is nothing left
+			// to deliver on and nowhere to report that.
+			c.endStream(id, ErrStreamClosed)
+			return
+		case event.Class() == ClassControl:
+			// Control may not be discarded, here as much as in the queue: no
+			// read gives a consumer back an event about the channel, so
+			// dropping one would be the invariant relaxed in the one path
+			// nobody looks at. The stream ends with a reason instead, and
+			// attaching again reconciles.
+			c.finishStream(id, errUndeliverableControl)
+			return
+		default:
+			// Activity and state are recoverable, so an event that could not
+			// be put in a frame is a discard like any other: the gap is
+			// raised, the consumer reconciles from a full read, and the stream
+			// carries on.
 			sub.discard()
-			continue
 		}
-		c.endStream(id, ErrStreamClosed)
-		return
 	}
 }
 

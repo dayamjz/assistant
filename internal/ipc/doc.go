@@ -155,16 +155,18 @@
 // and result travel as written, so nothing here becomes a second owner of a
 // record another package defines, per P14.
 //
-// It does not bound what a producer puts in a payload. PRD section 8 makes the
-// full log the authority and what travels a bounded projection of it, and
-// producing that projection belongs to whatever writes the event. A frame past
-// the size limit is refused rather than written, because the receiver's only
-// recovery from an over-long frame is to drop the connection. An event that
-// cannot be put in a frame is therefore a discard rather than the end of the
-// stream: it raises the gap the consumer reconciles from, and the stream
-// carries on. An answer to a request that cannot be put in a frame is reported
-// to the caller as that refusal, because the alternative is a caller waiting
-// for an answer that is never coming.
+// It does not decide what a producer puts in a payload, only that it is bounded
+// and that it can be written. PRD section 8 makes the full log the authority and
+// what travels a bounded projection of it, and producing that projection belongs
+// to whatever writes the event; Publish refuses one that is past the bound or
+// that is not JSON, and the section above on the two bounds says where each of
+// those questions is answered and why they are not one question twice.
+//
+// It does not answer an event that cannot be put in a frame the same way for
+// every event, and the class is what decides, exactly as it does for a queue
+// that overflowed. An answer to a request that cannot be put in a frame is a
+// third thing again: it is reported to the caller as a refusal, because the
+// alternative is a caller waiting for an answer that is never coming.
 //
 // It does not cancel work that is already running. A Call whose context ended
 // stops waiting for the answer; the handler keeps its connection's context, so

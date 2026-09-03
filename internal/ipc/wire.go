@@ -124,6 +124,32 @@ func newFrameWriter(w io.Writer, limit int) *frameWriter {
 	return &frameWriter{w: w, limit: limit}
 }
 
+// frameError says a frame could not be built. Everything the writer decides
+// before it touches the connection is returned inside one of these, so the two
+// failures a caller has to tell apart are told apart by where they came from
+// rather than by a list of the ones a caller happens to know about, and a
+// reason added here later lands on the same side without that caller changing.
+//
+// It wraps its cause rather than replacing it, so a caller that wants the
+// specific reason still matches ErrFrameTooLarge or ErrInternal with errors.Is.
+type frameError struct{ cause error }
+
+// Error renders the cause.
+func (e frameError) Error() string { return e.cause.Error() }
+
+// Unwrap resolves to the cause, so the sentinel it names still matches.
+func (e frameError) Unwrap() error { return e.cause }
+
+// unbuildable reports whether err says a frame could not be built, as opposed
+// to a connection that failed under one that could. The distinction decides
+// what a caller does next: a frame that could not be built leaves a healthy
+// connection to report the failure on, and a connection that is gone leaves
+// nowhere to report anything.
+func unbuildable(err error) bool {
+	var fe frameError
+	return errors.As(err, &fe)
+}
+
 // write encodes f and writes it as one line.
 //
 // A frame past the limit is refused here rather than written for the peer to
@@ -133,20 +159,30 @@ func newFrameWriter(w io.Writer, limit int) *frameWriter {
 // projection.
 //
 // A frame this refuses, and a frame that does not encode, are both failures
-// about the frame rather than about the connection: both name a sentinel, so a
-// caller can tell them from a connection that went away and answer with
-// something smaller instead of leaving its peer waiting.
+// about the frame rather than about the connection, and both come back as a
+// frameError, so a caller can tell them from a connection that went away and
+// answer with something smaller instead of leaving its peer waiting.
 func (fw *frameWriter) write(f frame) error {
-	body, err := json.Marshal(f)
+	body, err := fw.build(f)
 	if err != nil {
-		return fmt.Errorf("%w: encoding a frame: %w", ErrInternal, err)
+		return frameError{cause: err}
 	}
-	if len(body)+1 > fw.limit {
-		return fmt.Errorf("%w: %d bytes", ErrFrameTooLarge, len(body)+1)
-	}
-	body = append(body, '\n')
 	fw.mu.Lock()
 	defer fw.mu.Unlock()
 	_, err = fw.w.Write(body)
 	return err
+}
+
+// build renders f as the line that would be written, or reports why it cannot
+// be. Nothing it decides has touched the connection yet, which is what makes
+// every failure it returns one about the frame.
+func (fw *frameWriter) build(f frame) ([]byte, error) {
+	body, err := json.Marshal(f)
+	if err != nil {
+		return nil, fmt.Errorf("%w: encoding a frame: %w", ErrInternal, err)
+	}
+	if len(body)+1 > fw.limit {
+		return nil, fmt.Errorf("%w: %d bytes", ErrFrameTooLarge, len(body)+1)
+	}
+	return append(body, '\n'), nil
 }

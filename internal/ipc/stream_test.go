@@ -504,3 +504,33 @@ func TestTheBoundAppliesToEveryClass(t *testing.T) {
 		}
 	}
 }
+
+// TestPublishRefusesAPayloadThatIsNotJSON covers the other half of the
+// producer's obligation. A payload travels as written, so one that cannot be
+// encoded could not reach anybody, and the producer learns that where it wrote
+// it rather than by a consumer's stream ending later.
+func TestPublishRefusesAPayloadThatIsNotJSON(t *testing.T) {
+	p := publisher(t, ipc.PublisherConfig{})
+	sub := subscribe(t, p, 8)
+
+	err := p.Publish(ipc.Event{Type: ipc.TypeServiceStopping, Payload: json.RawMessage("not json")})
+	if !errors.Is(err, ipc.ErrInvalidPayload) {
+		t.Fatalf("Publish of a payload that is not JSON = %v, want ErrInvalidPayload", err)
+	}
+	if !strings.Contains(err.Error(), string(ipc.TypeServiceStopping)) {
+		t.Errorf("the refusal reads %q, want it to name the event", err)
+	}
+
+	// An event has no payload of its own to declare, so an absent one is not a
+	// payload that fails to encode.
+	if err := p.Publish(ipc.Event{Type: ipc.TypeHeartbeat}); err != nil {
+		t.Fatalf("Publish of an event with no payload = %v, want it accepted", err)
+	}
+
+	drain(t, sub, 1) // the opening marker
+	got := drain(t, sub, 1)
+	if got[0].Type != ipc.TypeHeartbeat {
+		t.Errorf("the subscriber holds %q, want only the accepted event", got[0].Type)
+	}
+	exhausted(t, sub)
+}

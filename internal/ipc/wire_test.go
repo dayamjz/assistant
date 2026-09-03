@@ -223,3 +223,48 @@ func TestEverySentinelSurvivesTheWire(t *testing.T) {
 		}
 	}
 }
+
+// TestTheWriterSaysWhichSideAFailureCameFrom is the distinction pump and answer
+// both act on: a frame that could not be built leaves a healthy connection to
+// report on, and a connection that failed leaves nowhere to report anything.
+// Every failure the writer decides before it touches the connection has to land
+// on the first side, whichever one it is.
+func TestTheWriterSaysWhichSideAFailureCameFrom(t *testing.T) {
+	oversized := frame{ID: 1, Event: &Event{Type: TypeLogLine, Payload: json.RawMessage(`"` + strings.Repeat("x", 4096) + `"`)}}
+	unencodable := frame{ID: 2, Event: &Event{Type: TypeServiceStopping, Payload: json.RawMessage("not json")}}
+
+	var kept bytes.Buffer
+	built := map[string]frame{"a frame past the limit": oversized, "a frame that does not encode": unencodable}
+	for name, f := range built {
+		err := newFrameWriter(&kept, 512).write(f)
+		if err == nil {
+			t.Fatalf("%s was written", name)
+		}
+		if !unbuildable(err) {
+			t.Errorf("%s reads as a connection failure (%v), so a caller would drop a healthy connection", name, err)
+		}
+		if kept.Len() != 0 {
+			t.Errorf("%s reached the connection anyway", name)
+		}
+	}
+	if !errors.Is(newFrameWriter(&kept, 512).write(oversized), ErrFrameTooLarge) {
+		t.Error("a frame past the limit no longer names ErrFrameTooLarge")
+	}
+	if !errors.Is(newFrameWriter(&kept, 512).write(unencodable), ErrInternal) {
+		t.Error("a frame that does not encode no longer names ErrInternal")
+	}
+
+	// A connection that failed is the other side, and stays there.
+	err := newFrameWriter(failingWriter{}, 0).write(frame{ID: 3, Result: json.RawMessage("null")})
+	if err == nil {
+		t.Fatal("a write to a failed connection reported success")
+	}
+	if unbuildable(err) {
+		t.Errorf("a connection failure reads as a frame that could not be built (%v), so a caller would answer on a connection that is gone", err)
+	}
+}
+
+// failingWriter is a connection that is already gone.
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) { return 0, io.ErrClosedPipe }

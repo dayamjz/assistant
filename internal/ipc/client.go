@@ -227,8 +227,14 @@ func (c *Client) read(r *frameReader) {
 			c.mu.Lock()
 			sub := c.streams[f.ID]
 			c.mu.Unlock()
-			if sub != nil {
-				sub.deliver(*f.Event)
+			if sub != nil && !sub.deliver(*f.Event) {
+				// The relay queue ended under a delivery it could not make
+				// room for. The service is still sending, so it is told to
+				// stop rather than left pumping a stream this client has
+				// stopped reading, which is the same leak an abandoned
+				// Subscribe would leave.
+				c.dropStream(f.ID, ErrStreamClosed)
+				c.cancelStream(f.ID)
 			}
 		case f.Done:
 			cause := ErrStreamClosed

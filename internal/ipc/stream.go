@@ -2,6 +2,7 @@ package ipc
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -106,13 +107,13 @@ func (p *Publisher) Subscribe(backlog int) (*Subscription, error) {
 // the older one would discard state to enforce an ordering the consumer's
 // Cursor already enforces without discarding anything.
 //
-// An event whose payload is past this publisher's bound is refused, and the
-// refusal names the bound and the size so the caller can report it. That is a
-// producer bug rather than a delivery decision: PRD section 8 makes the full
-// log the authority and what travels a bounded projection of it, so producing
-// that projection is the publishing caller's obligation. The bound applies to
-// every class, because bounding a projection does not depend on what the event
-// is about.
+// An event whose payload is past this publisher's bound, or whose payload is
+// not JSON, is refused, and the refusal names what was wrong so the caller can
+// report it. Both are producer bugs rather than delivery decisions: PRD section
+// 8 makes the full log the authority and what travels a bounded projection of
+// it, so producing a projection that is bounded and that can be written is the
+// publishing caller's obligation. Both apply to every class, because neither
+// depends on what the event is about.
 func (p *Publisher) Publish(e Event) error {
 	if e.Type == "" {
 		return errors.New("ipc: event has no type")
@@ -120,6 +121,9 @@ func (p *Publisher) Publish(e Event) error {
 	if len(e.Payload) > p.maxPayload {
 		return fmt.Errorf("%w: %q carries %d bytes of payload, and an event may carry at most %d",
 			ErrPayloadTooLarge, e.Type, len(e.Payload), p.maxPayload)
+	}
+	if len(e.Payload) > 0 && !json.Valid(e.Payload) {
+		return fmt.Errorf("%w: %q carries a payload that is not JSON", ErrInvalidPayload, e.Type)
 	}
 	if e.Class() == ClassState && e.Revision == 0 {
 		return fmt.Errorf("ipc: state event %q has no revision", e.Type)
@@ -133,7 +137,10 @@ func (p *Publisher) Publish(e Event) error {
 		return ErrStreamClosed
 	}
 	for s := range p.subs {
-		s.deliver(e)
+		// A subscription that ended under this delivery is the subscriber's
+		// own state, and Publish never reports one: it detaches itself, and
+		// this returns only what is wrong with e.
+		_ = s.deliver(e)
 	}
 	return nil
 }
@@ -298,38 +305,44 @@ func (s *Subscription) finish(err error) {
 }
 
 // deliver queues e, applying the overflow policy. It never blocks.
-func (s *Subscription) deliver(e Event) {
+//
+// It reports whether the subscription is still open afterwards. A delivery that
+// could only be made by discarding something no read gives back ends it, and a
+// caller relaying a stream into this queue has to know that so it can stop the
+// stream it is relaying rather than keep feeding a queue nobody reads.
+func (s *Subscription) deliver(e Event) bool {
 	s.mu.Lock()
 	defer func() {
 		s.mu.Unlock()
 		s.signal()
 	}()
 	if s.done {
-		return
+		return false
 	}
 	if s.length < len(s.ring) {
 		s.push(e)
-		return
+		return true
 	}
 	if e.Class() == ClassActivity {
 		// Progress never displaces a delta. Room is made by discarding older
 		// progress, and when there is none the arriving event is what goes.
 		if !s.evict(ClassActivity) {
 			s.discarded()
-			return
+			return true
 		}
 		s.push(e)
-		return
+		return true
 	}
 	if s.evict(ClassActivity) || s.evict(ClassState) {
 		s.push(e)
-		return
+		return true
 	}
 	// Only control events are queued, and none of them may be discarded. The
 	// arriving event is still a discard, so it raises the gap, and the stream
 	// ends behind it.
 	s.discarded()
 	s.done, s.err = true, ErrSubscriberStalled
+	return false
 }
 
 // discard records that an event this subscription already handed out could not

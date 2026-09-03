@@ -47,6 +47,11 @@ var (
 	// is a producer's own bug rather than anything about a subscriber, so it
 	// is reported to whoever published and nothing is delivered.
 	ErrPayloadTooLarge = errors.New("ipc: event payload exceeds the publisher's bound")
+	// ErrInvalidPayload reports an event refused at the publisher because its
+	// payload is not JSON. A payload travels as written, so one that cannot be
+	// encoded could not have reached anybody, and it is refused where it was
+	// written rather than ending some consumer's stream later.
+	ErrInvalidPayload = errors.New("ipc: event payload is not JSON")
 	// ErrEventUndeliverable reports that a stream ended because an event that
 	// may not be discarded could not be put in a frame on that connection. It
 	// is not ErrSubscriberStalled: the consumer was keeping up, and the event
@@ -86,6 +91,8 @@ const (
 	CodeStreamClosed Code = "stream-closed"
 	// CodePayloadTooLarge maps to ErrPayloadTooLarge.
 	CodePayloadTooLarge Code = "payload-too-large"
+	// CodeInvalidPayload maps to ErrInvalidPayload.
+	CodeInvalidPayload Code = "invalid-payload"
 	// CodeEventUndeliverable maps to ErrEventUndeliverable. A consumer that
 	// receives it knows its stream ended over one event rather than over
 	// anything it did, which is what tells it apart from a stalled
@@ -128,6 +135,7 @@ var codeRows = []struct {
 	{CodeSubscriberStalled, ErrSubscriberStalled},
 	{CodeEventUndeliverable, ErrEventUndeliverable},
 	{CodePayloadTooLarge, ErrPayloadTooLarge},
+	{CodeInvalidPayload, ErrInvalidPayload},
 	{CodeStreamClosed, ErrStreamClosed},
 	{CodeConnectionBusy, ErrConnectionBusy},
 	{CodeFrameTooLarge, ErrFrameTooLarge},

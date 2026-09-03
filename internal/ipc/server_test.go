@@ -969,3 +969,53 @@ func TestTheFallbackRefusalFitsTheSmallestServedFrame(t *testing.T) {
 		t.Fatalf("Call = %v, want the refusal to reach the caller even at the smallest frame limit", err)
 	}
 }
+
+// TestAStalledRelayQueueReleasesTheServiceStream covers the leak from the
+// consumer's end. A client whose own queue ends under a delivery it cannot make
+// room for still holds a stream the service is pumping, and saying nothing
+// would leave the service a subscription, a goroutine and a share of the
+// connection's writer for a consumer that has stopped reading.
+func TestAStalledRelayQueueReleasesTheServiceStream(t *testing.T) {
+	h := serveOnSocket(t, nil)
+	// A queue one event deep, and nothing reading it: the opening gap marker
+	// fills it, and the control event behind that has nothing droppable to
+	// make room with.
+	c := h.dial(t, ipc.ClientConfig{Backlog: 1})
+	ctx, cancel := callCtx(t)
+	defer cancel()
+
+	stream, err := c.Subscribe(ctx, nil)
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	defer stream.Close()
+	if h.events.Subscribers() != 1 {
+		t.Fatalf("the service holds %d subscriptions, want the one just opened", h.events.Subscribers())
+	}
+	publish(t, h.events, control("stopping"))
+
+	deadline := time.Now().Add(5 * time.Second)
+	for h.events.Subscribers() != 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the service still holds a subscription for a consumer whose queue stalled")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	// The consumer is told what happened rather than left to infer it from a
+	// stream that went quiet: whatever the queue still holds, and then the
+	// reason. Nothing it holds is payload, because the only events this stream
+	// ever carried were markers.
+	for {
+		e, err := stream.Recv(ctx)
+		if err != nil {
+			if !errors.Is(err, ipc.ErrSubscriberStalled) {
+				t.Fatalf("Recv after the queue stalled = %v, want ErrSubscriberStalled", err)
+			}
+			break
+		}
+		if e.Type != "stream.gap" {
+			t.Fatalf("the queue held %q, want only markers before the stream ends", e.Type)
+		}
+	}
+}
