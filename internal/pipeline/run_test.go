@@ -84,6 +84,45 @@ func TestAnAskFindingHoldsEvenWithRoundsRemaining(t *testing.T) {
 	}
 }
 
+// TestAnAskFindingHoldsAReportThatAlsoHasFixableFindings is the precedence the
+// same rule turns on when one report carries both: the stage holds for the ask
+// finding rather than taking a round on the fixable one, so the person decides
+// before a fixer touches the change. Reviewing a report of one kind cannot show
+// this; only a mixed one can.
+func TestAnAskFindingHoldsAReportThatAlsoHasFixableFindings(t *testing.T) {
+	c := newCalls()
+	stages := recordingStages(c)
+	set(&stages, StageReview, recording(c, nil, nil, func(Input, int) (Output, error) {
+		return Output{Report: findings.Report{
+			Summary: "one to fix and one to decide",
+			Findings: []findings.Finding{
+				{Action: findings.ActionFix, Description: "this import is unused"},
+				{Action: findings.ActionAsk, Description: "is this deletion deliberate?"},
+			},
+		}}, nil
+	}))
+	p := build(t, Options{
+		Stages: stages,
+		Fixer:  recordingFixer(c, nil, nil, nil),
+		Rounds: rounds(3),
+		Budget: 100,
+	})
+	_, result := start(t, p, complete())
+
+	if result.Status != graph.StatusHalted || result.Position != StageReview.HoldNode() {
+		t.Fatalf("status %s at %q, want halted at %q", result.Status, result.Position, StageReview.HoldNode())
+	}
+	if got := StageOutcome(result.State, StageReview); got != OutcomeHeld {
+		t.Errorf("review outcome %q, want %q: the fixable finding decided the outcome", got, OutcomeHeld)
+	}
+	if n := c.fixCount(StageReview); n != 0 {
+		t.Errorf("the fixer ran %d times on a report holding for a person, want 0", n)
+	}
+	if n := c.stageCount(StageReview); n != 1 {
+		t.Errorf("review ran %d times, want 1: it was re-run after a fix round it should not have taken", n)
+	}
+}
+
 // TestAnUnclassifiedFindingHolds is P3 reaching this package: a finding with no
 // action is not fix-eligible and is not a note, so the stage holds for a
 // person rather than advancing.
