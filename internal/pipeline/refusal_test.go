@@ -482,24 +482,35 @@ func TestAStageMayRecordAnInferredIntentButNotCallItSupplied(t *testing.T) {
 // schema row rather than to the configuration. One Fixer serves every fix node,
 // so a key it declares has as many writers as there are stages taking rounds,
 // and the graph refuses a second writer of a key with no merge rule. Deciding
-// that in checkDeclared is what keeps the answer the same under a configuration
-// that builds one fix node and one that builds several: P7 re-reads those
-// limits from the default branch, so a Fixer legal today would otherwise be
-// refused tomorrow without having changed.
+// that in checkDeclared is what keeps the answer the same across every
+// configuration: P7 re-reads those limits from the default branch, so a Fixer
+// legal today would otherwise be refused tomorrow without having changed.
+//
+// The three cases are the three counts a configuration can produce - no fix
+// node, one, and one per fix-capable stage - because the answer has to be the
+// same at both boundaries, zero against one and one against several.
 func TestAFixerMayOnlyWriteAKeyThatDeclaresAMergeRule(t *testing.T) {
-	configurations := map[string]config.FixRounds{
-		"one fix node":   {Lint: 1},
-		"five fix nodes": config.Defaults().FixRounds,
-	}
-	for name, limits := range configurations {
-		t.Run(name, func(t *testing.T) {
-			if n := fixNodes(t, limits); n == 0 {
-				t.Fatalf("this configuration builds no fix node, so it cannot test a fixer's declaration")
+	// The five stages PRD section 5 gives automatic fix rounds, written out
+	// here rather than read from the package, so the node count below is an
+	// expectation this test can fail against rather than a restatement of it.
+	fixCapable := []string{"rebase", "review", "test", "lint", "ci"}
+	for _, tc := range []struct {
+		name   string
+		limits config.FixRounds
+		nodes  int
+	}{
+		{"no fix node at all", config.FixRounds{}, 0},
+		{"one fix node", config.FixRounds{Lint: 1}, 1},
+		{"one fix node per fix-capable stage", config.Defaults().FixRounds, len(fixCapable)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if n := fixNodes(t, tc.limits); n != tc.nodes {
+				t.Fatalf("this configuration builds %d fix nodes, want %d: the case does not cover what it is named for", n, tc.nodes)
 			}
 			_, err := New(Options{
 				Stages: ConstantStages(passing()),
 				Fixer:  recordingFixer(newCalls(), nil, []Key{KeyDiffEmpty}, nil),
-				Rounds: limits,
+				Rounds: tc.limits,
 				Budget: 100,
 			})
 			if !errors.Is(err, ErrUnmergeableFixerWrite) {
@@ -519,8 +530,9 @@ func TestAFixerMayOnlyWriteAKeyThatDeclaresAMergeRule(t *testing.T) {
 	})
 }
 
-// fixNodes counts the fix nodes a configuration builds, so the test above can
-// say which of its two cases is the single-node one rather than assuming it.
+// fixNodes counts the fix nodes a configuration builds, so the test above
+// asserts which case is which rather than assuming it. A fixer declaring the
+// one mergeable key is used here, because this helper must build.
 func fixNodes(t *testing.T, limits config.FixRounds) int {
 	t.Helper()
 	p := build(t, Options{

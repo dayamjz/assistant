@@ -84,10 +84,14 @@ func New(o Options) (*Pipeline, error) {
 		limits[i] = rounds
 		fixing = fixing || rounds > 0
 	}
-	if fixing {
-		if o.Fixer.NewBody == nil {
-			return nil, ErrMissingFixer
-		}
+	if fixing && o.Fixer.NewBody == nil {
+		return nil, ErrMissingFixer
+	}
+	// A fixer is required only when some stage takes rounds, and checked
+	// whenever one was supplied. Whether its declaration is legal must not
+	// depend on the fix round limits, because P7 has those re-read from the
+	// default branch and they can change under a running service.
+	if o.Fixer.NewBody != nil {
 		if err := checkDeclared("the fixer", "reads", o.Fixer.Reads, declaredReads); err != nil {
 			return nil, err
 		}

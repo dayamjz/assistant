@@ -36,9 +36,16 @@ var (
 	// configured limits are: without this, the same Fixer would build under a
 	// configuration giving one stage rounds and fail under one giving two.
 	//
+	// It is checked whenever a fixer was supplied, whatever the limits are, so
+	// a fixer refused under one configuration is refused under all of them.
+	//
 	// KeyHead is what the schema admits today, and it is the key a fixer that
 	// commits its work needs. A stage's writes are not narrowed this way,
-	// because a stage node is the only writer of its own declaration.
+	// because no configuration can multiply the nodes writing one stage's
+	// declaration. Two stages declaring the same key with no merge rule is a
+	// different case and still reachable: internal/graph's single-writer rule
+	// refuses it, so the refusal arrives as a graph.BuildError carrying
+	// RuleSingleWriter rather than as a sentinel here.
 	ErrUnmergeableFixerWrite = errors.New("pipeline: the fixer writes a state key that declares no merge rule")
 	// ErrUndeclaredRead is returned when a stage or fixer body reads a key its
 	// implementation did not declare. The step fails.
