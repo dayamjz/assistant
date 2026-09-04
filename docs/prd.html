@@ -611,22 +611,30 @@ flowchart LR
     common defect in systems of this shape, so it carries three independent bounds.
   </p>
 
+  <p class="mb-4 opacity-90">
+    The loop has three outcomes and not two, and anything that redraws the diagram below has to keep
+    room for all three. A finding that needs your decision holds. A stage whose fix round limit is
+    zero holds as well, because it has no fixer to send the finding to. A limit or a budget that is
+    spent, or a round that changed nothing, parks. A hold waits for you; a park stops the run.
+  </p>
+
   <div class="prd-mermaid mb-4">
     <pre class="mermaid">
 flowchart TD
   run["Run the stage"] --> f{"Any findings?"}
   f -- no --> done["Stage completes"]
-  f -- yes --> elig{"Fixable findings,<br />and none needing<br />your decision?"}
+  f -- yes --> elig{"Fixable findings, <br />none needing your decision, <br />and this stage takes fix rounds?"}
   elig -- no --> hold["Hold for your decision"]
-  elig -- yes --> bounds{"Rounds remaining<br />and budget remaining?"}
+  elig -- yes --> bounds{"Rounds remaining <br />and budget remaining?"}
   bounds -- no --> park["Park the run"]
   bounds -- yes --> fix["Fixer applies the selected findings"]
-  fix --> conv{"Did anything<br />actually change?"}
+  fix --> conv{"Did anything <br />actually change?"}
   conv -- no --> park
   conv -- yes --> run
   hold --> act["Approve, fix a selection, skip, or cancel"]
   act -->|fix| fix
-  act -->|approve or skip| done
+  act -->|approve| done
+  act -->|skip| done
     </pre>
   </div>
 
