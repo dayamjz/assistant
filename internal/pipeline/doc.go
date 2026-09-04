@@ -122,12 +122,28 @@
 // review and lint down one index, and the persisted counters are then read
 // against different edges than the ones that produced them. A fix loop that
 // has not finished can start from another edge's traversal count, so its round
-// limit fires early or late. A convergence fingerprint left in the wrong slot
-// compares a stage's state against a fingerprint another edge recorded, so a
-// loop can be parked as converged when nothing about it converged. Reaching
-// this needs a configuration change between a checkpoint and a resume, which
-// P7 makes reachable, because configuration is re-read from the default branch
-// rather than carried forward from the run that checkpointed.
+// limit fires early or late. Reaching this needs a configuration change
+// between a checkpoint and a resume, which P7 makes reachable, because
+// configuration is re-read from the default branch rather than carried forward
+// from the run that checkpointed.
+//
+// The shift does not reach convergence, and the reasoning is short enough to
+// check rather than take on trust. internal/graph writes and reads a
+// fingerprint only on a back edge and skips the comparison when the slot is
+// empty. The only back edges here are the fix nodes' returns, and wire emits
+// that return first in a stage's block of six, so a back-edge index is five
+// times the stage's position plus the number of earlier stages taking rounds.
+// At most five stages can take rounds, so an index that is a back edge under
+// two different configurations must belong to the same stage: a fingerprint
+// that is read is never another edge's, and a slot the new graph reads but the
+// old one never wrote is empty and skipped.
+//
+// That sentence was here and was wrong, so it is worth saying why it counts as
+// a defect. Confessing a failure the mechanism cannot produce is the same
+// defect as promising a protection it does not deliver: both are claims the
+// code does not support. A disclosure that overclaims danger sends a reader
+// chasing a bound that is not broken, and teaches them to discount the next
+// one.
 //
 // The fix is not here. internal/graph would have to carry a topology identity
 // in the checkpoint and check it on read; this package hands the graph a

@@ -59,6 +59,12 @@ Each has cost this repository more than one round of review.
   read cannot produce. Mutation testing does not surface this, since deleting
   the guard does fail the test. Model what the mechanism puts on the wire and
   derive the values from it the way the real parser does.
+- **Check a confession as hard as a promise.** `internal/pipeline` came within a
+  fix round of disclosing that a configuration change could defeat its
+  convergence bound, a failure the mechanism cannot produce; the round-limit
+  half of the same disclosure was true, which is what made the false half read
+  as plausible. A doc comment is a contract in both directions, so verify a
+  stated gap against the mechanism before writing it down.
 
 ## Code
 

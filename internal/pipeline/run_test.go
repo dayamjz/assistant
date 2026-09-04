@@ -32,7 +32,7 @@ func TestARunWhereEveryStagePassesCompletes(t *testing.T) {
 }
 
 // TestAnAskFindingHoldsEvenWithRoundsRemaining is PRD section 5's rule that an
-// ask finding parks immediately and never enters a fix round, whatever the
+// ask finding holds immediately and never enters a fix round, whatever the
 // stage's limit allows.
 func TestAnAskFindingHoldsEvenWithRoundsRemaining(t *testing.T) {
 	c := newCalls()
