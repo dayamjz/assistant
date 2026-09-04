@@ -111,8 +111,15 @@ func TestConfigurationCannotChangeWhichStagesRun(t *testing.T) {
 				t.Fatalf("rounds %+v walked %v, want %v", limits, got, want)
 			}
 		}
-		if gotKeys := Keys(); len(gotKeys) != len(wantKeys) {
-			t.Fatalf("rounds %+v declare %d keys, want %d", limits, len(gotKeys), len(wantKeys))
+		gotKeys := p.Graph().Keys()
+		if len(gotKeys) != len(wantKeys) {
+			t.Fatalf("rounds %+v built a graph declaring %d keys, want the schema's %d", limits, len(gotKeys), len(wantKeys))
+		}
+		for i := range wantKeys {
+			if gotKeys[i].Name != string(wantKeys[i]) {
+				t.Fatalf("rounds %+v built a graph declaring %q where the schema declares %q",
+					limits, gotKeys[i].Name, wantKeys[i])
+			}
 		}
 	}
 }

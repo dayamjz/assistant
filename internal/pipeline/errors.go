@@ -26,6 +26,20 @@ var (
 	// and its fix summary are reported by the pipeline, so a stage writing one
 	// would give that fact a second author.
 	ErrReservedKey = errors.New("pipeline: state key is written by the pipeline, not by a stage")
+	// ErrUnmergeableFixerWrite is returned when the fixer declares a write of a
+	// state key whose row declares no merge rule.
+	//
+	// One Fixer serves every fix node, so a key the fixer writes is written by
+	// as many nodes as there are stages taking fix rounds, and a key with no
+	// merge rule may have only one writer. Refusing it here rather than letting
+	// the graph refuse the built topology keeps the answer the same whatever the
+	// configured limits are: without this, the same Fixer would build under a
+	// configuration giving one stage rounds and fail under one giving two.
+	//
+	// KeyHead is what the schema admits today, and it is the key a fixer that
+	// commits its work needs. A stage's writes are not narrowed this way,
+	// because a stage node is the only writer of its own declaration.
+	ErrUnmergeableFixerWrite = errors.New("pipeline: the fixer writes a state key that declares no merge rule")
 	// ErrUndeclaredRead is returned when a stage or fixer body reads a key its
 	// implementation did not declare. The step fails.
 	ErrUndeclaredRead = errors.New("pipeline: body read a state key its implementation did not declare")

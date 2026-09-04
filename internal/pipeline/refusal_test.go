@@ -477,3 +477,97 @@ func TestAStageMayRecordAnInferredIntentButNotCallItSupplied(t *testing.T) {
 		t.Error("intent.supplied is true after a run that supplied none")
 	}
 }
+
+// TestAFixerMayOnlyWriteAKeyThatDeclaresAMergeRule pins the constraint to the
+// schema row rather than to the configuration. One Fixer serves every fix node,
+// so a key it declares has as many writers as there are stages taking rounds,
+// and the graph refuses a second writer of a key with no merge rule. Deciding
+// that in checkDeclared is what keeps the answer the same under a configuration
+// that builds one fix node and one that builds several: P7 re-reads those
+// limits from the default branch, so a Fixer legal today would otherwise be
+// refused tomorrow without having changed.
+func TestAFixerMayOnlyWriteAKeyThatDeclaresAMergeRule(t *testing.T) {
+	configurations := map[string]config.FixRounds{
+		"one fix node":   {Lint: 1},
+		"five fix nodes": config.Defaults().FixRounds,
+	}
+	for name, limits := range configurations {
+		t.Run(name, func(t *testing.T) {
+			if n := fixNodes(t, limits); n == 0 {
+				t.Fatalf("this configuration builds no fix node, so it cannot test a fixer's declaration")
+			}
+			_, err := New(Options{
+				Stages: ConstantStages(passing()),
+				Fixer:  recordingFixer(newCalls(), nil, []Key{KeyDiffEmpty}, nil),
+				Rounds: limits,
+				Budget: 100,
+			})
+			if !errors.Is(err, ErrUnmergeableFixerWrite) {
+				t.Fatalf("a fixer writing %q: %v, want ErrUnmergeableFixerWrite", KeyDiffEmpty, err)
+			}
+		})
+	}
+
+	t.Run("a stage may still write it", func(t *testing.T) {
+		stages := ConstantStages(passing())
+		impl := Constant(passing())
+		impl.Writes = []Key{KeyDiffEmpty}
+		set(&stages, StageRebase, impl)
+		if _, err := New(Options{Stages: stages, Budget: 100}); err != nil {
+			t.Fatalf("a stage writing %q: %v, want no refusal: a stage node is its own only writer", KeyDiffEmpty, err)
+		}
+	})
+}
+
+// fixNodes counts the fix nodes a configuration builds, so the test above can
+// say which of its two cases is the single-node one rather than assuming it.
+func fixNodes(t *testing.T, limits config.FixRounds) int {
+	t.Helper()
+	p := build(t, Options{
+		Stages: ConstantStages(passing()),
+		Fixer:  recordingFixer(newCalls(), nil, []Key{KeyHead}, nil),
+		Rounds: limits,
+		Budget: 100,
+	})
+	n := 0
+	for _, stage := range Order() {
+		if _, ok := p.Graph().Node(stage.FixNode()); ok {
+			n++
+		}
+	}
+	return n
+}
+
+// TestAFixerMayWriteTheHeadItCommits is the control: the one key the schema
+// admits to a fixer builds and reaches state, so the refusal above is about the
+// missing merge rule and not about fixers writing at all.
+func TestAFixerMayWriteTheHeadItCommits(t *testing.T) {
+	c := newCalls()
+	stages := recordingStages(c)
+	set(&stages, StageLint, recording(c, nil, nil, func(_ Input, call int) (Output, error) {
+		if call == 1 {
+			return Output{Report: reportWith(findings.ActionFix, "unused import")}, nil
+		}
+		return Output{Report: passing()}, nil
+	}))
+	fixer := recordingFixer(c, nil, []Key{KeyHead}, func(FixInput, int) (FixOutput, error) {
+		return FixOutput{
+			Summary: "removed it",
+			Writes:  map[Key]graph.Value{KeyHead: graph.TextValue("c1")},
+		}, nil
+	})
+	p := build(t, Options{
+		Stages: stages,
+		Fixer:  fixer,
+		Rounds: config.FixRounds{Lint: 1},
+		Budget: 100,
+	})
+	_, result := start(t, p, complete())
+	if result.Status != graph.StatusCompleted {
+		t.Fatalf("status %s, reason %q, want completed", result.Status, result.Reason)
+	}
+	v, _ := result.State.Get(string(KeyHead))
+	if head, _ := v.Text(); head != "c1" {
+		t.Errorf("head %q, want the commit the fixer wrote", head)
+	}
+}

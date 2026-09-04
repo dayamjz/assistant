@@ -88,10 +88,10 @@ func New(o Options) (*Pipeline, error) {
 		if o.Fixer.NewBody == nil {
 			return nil, ErrMissingFixer
 		}
-		if err := checkDeclared("the fixer", "reads", o.Fixer.Reads, false); err != nil {
+		if err := checkDeclared("the fixer", "reads", o.Fixer.Reads, declaredReads); err != nil {
 			return nil, err
 		}
-		if err := checkDeclared("the fixer", "writes", o.Fixer.Writes, true); err != nil {
+		if err := checkDeclared("the fixer", "writes", o.Fixer.Writes, declaredFixerWrites); err != nil {
 			return nil, err
 		}
 	}
@@ -126,10 +126,10 @@ func wire(b *graph.Builder, stage Stage, impl Implementation, fixer Fixer, round
 	if impl.NewBody == nil {
 		return fmt.Errorf("%w: %s", ErrMissingStage, stage)
 	}
-	if err := checkDeclared("stage "+stage.String(), "reads", impl.Reads, false); err != nil {
+	if err := checkDeclared("stage "+stage.String(), "reads", impl.Reads, declaredReads); err != nil {
 		return err
 	}
-	if err := checkDeclared("stage "+stage.String(), "writes", impl.Writes, true); err != nil {
+	if err := checkDeclared("stage "+stage.String(), "writes", impl.Writes, declaredStageWrites); err != nil {
 		return err
 	}
 	b.Node(stageNode(stage, impl))

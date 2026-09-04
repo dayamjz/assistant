@@ -175,9 +175,23 @@ func graphKeys() []graph.Key {
 	return out
 }
 
+// declaration says which of the three declarations is being checked, because
+// the schema admits a different set to each. A fixer's writes are the narrowest
+// of the three.
+type declaration uint8
+
+const (
+	// declaredReads is a stage's or a fixer's reads.
+	declaredReads declaration = iota
+	// declaredStageWrites is one stage implementation's writes.
+	declaredStageWrites
+	// declaredFixerWrites is the pipeline's one fixer's writes.
+	declaredFixerWrites
+)
+
 // checkDeclared refuses a read or write declaration this schema does not
 // admit. what names the declaration in the refusal.
-func checkDeclared(who, what string, keys []Key, write bool) error {
+func checkDeclared(who, what string, keys []Key, kind declaration) error {
 	seen := make(map[Key]struct{}, len(keys))
 	for _, key := range keys {
 		spec, ok := schema[key]
@@ -188,11 +202,15 @@ func checkDeclared(who, what string, keys []Key, write bool) error {
 			return fmt.Errorf("%w: %s %s state key %q more than once", ErrUndeclaredKey, who, what, key)
 		}
 		seen[key] = struct{}{}
-		if !write {
+		if kind == declaredReads {
 			continue
 		}
 		if spec.owner != ownerStage {
 			return fmt.Errorf("%w: %s writes state key %q, which the pipeline owns", ErrReservedKey, who, key)
+		}
+		if kind == declaredFixerWrites && spec.merge == graph.MergeNone {
+			return fmt.Errorf("%w: %s writes state key %q, which declares no merge rule",
+				ErrUnmergeableFixerWrite, who, key)
 		}
 	}
 	return nil
