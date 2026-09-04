@@ -118,10 +118,13 @@ func StageRan(s graph.State, stage Stage) bool {
 	return text != ""
 }
 
-// StageReport returns the report a stage recorded. A stage that has not run,
-// or one that was skipped, reports the zero Report. A recorded report that
-// cannot be decoded is refused with an error wrapping ErrBadReport rather than
-// returned empty, because an empty report reads as a stage that found nothing.
+// StageReport returns the report a stage recorded. A stage whose body never
+// ran reports the zero Report; a stage that ran and was then skipped past at
+// its hold keeps the report it recorded, which is the fact StageRan reads.
+//
+// A recorded report that cannot be decoded is refused with an error wrapping
+// ErrBadReport rather than returned empty, because an empty report reads as a
+// stage that found nothing.
 func StageReport(s graph.State, stage Stage) (findings.Report, error) {
 	v, ok := s.Get(string(stage.ReportKey()))
 	if !ok {

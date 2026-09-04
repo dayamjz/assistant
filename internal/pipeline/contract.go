@@ -21,8 +21,9 @@ type Implementation struct {
 	// fails the step with ErrUndeclaredRead.
 	Reads []Key
 	// Writes lists every state key the body may write. Returning a write of
-	// any other key fails the step with ErrUndeclaredWrite. A key the pipeline
-	// owns, such as a stage's outcome or its report, may not be listed here.
+	// any other key fails the step with ErrUndeclaredWrite. Only a key the
+	// schema marks writable by a stage may be listed at all; anything else is
+	// refused with ErrReservedKey when the pipeline is built.
 	Writes []Key
 	// NewBody constructs the implementation for one execution of the stage.
 	// The pipeline calls it each time the stage runs and never reuses a body,
@@ -130,8 +131,8 @@ type FixInput struct {
 	//
 	// PRD section 5 has the re-review check the previous findings and the fix
 	// summary as claims. A stage that wants to see them declares a read of its
-	// own Stage.FixKey and Stage.ReportKey, which the schema permits because
-	// only writes of pipeline-owned keys are refused.
+	// own Stage.FixKey and Stage.ReportKey, which the schema permits: it bounds
+	// what a declaration may write and never what it may read.
 	Previous string
 	// State reads exactly the keys the fixer declared.
 	State Reader

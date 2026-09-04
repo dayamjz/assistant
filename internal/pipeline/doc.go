@@ -82,17 +82,18 @@
 // next round of the same stage. Nothing here routes it to a stage body: PRD
 // section 5 has the re-review check the previous findings and the fix summary
 // as claims, and a stage that wants them declares a read of its own FixKey and
-// ReportKey, which the schema permits because only writes of pipeline-owned
-// keys are refused.
+// ReportKey, which the schema permits: it bounds what a declaration may write
+// and never what it may read.
 //
 // # The state schema has one owner
 //
 // The key table in key.go is the whole schema. A key's kind, its merge rule,
 // and who may write it are one row, per P14, and a stage that declares a read
-// or a write the table does not hold fails to build. A stage that declares a
-// write of a key this package owns - a stage's outcome, its report, its hold
-// answer, its fix summary - fails to build too, because those are facts this
-// package reports and a second author would make them mean two things.
+// or a write the table does not hold fails to build. Which keys a stage may
+// write is the same rows read again: a stage that declares a write of a key
+// the table does not mark writable by a stage fails to build too. Stating it
+// as the rule rather than as a list is deliberate, because a key added later
+// is then covered without this comment changing.
 //
 // The schema does not depend on configuration: a run's state holds the same
 // keys whatever the fix round limits are.
@@ -107,10 +108,10 @@
 // been lowered. Both refusals are the graph declining to resume a run into a
 // topology it did not walk.
 //
-// Five keys are run inputs no node may write: the branch, the base, the
-// submitted commit, the skip list, and whether the intent was supplied. The
-// last is there for a reason worth stating, because it is semantic rather than
-// defensive. That bit asserts that a person supplied the acceptance criteria,
+// The rows the table marks as run inputs are the ones no node may write: what
+// the run was started with, including whether the intent was supplied. That
+// last one is there for a reason worth stating, because it is semantic rather
+// than defensive. That bit asserts that a person supplied the acceptance criteria,
 // and no stage can make that true, so no stage should be able to say it. A
 // stage that set it would have review check a diff against a guess while every
 // downstream prompt framed the guess as requirements, which is exactly the

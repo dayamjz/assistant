@@ -22,10 +22,15 @@ var (
 	// twice.
 	ErrUndeclaredKey = errors.New("pipeline: state key is not declared by the pipeline schema")
 	// ErrReservedKey is returned when an implementation declares a write of a
-	// key this package owns. A stage's outcome, its report, its hold answer,
-	// and its fix summary are reported by the pipeline, so a stage writing one
-	// would give that fact a second author.
-	ErrReservedKey = errors.New("pipeline: state key is written by the pipeline, not by a stage")
+	// key the schema does not mark writable by a stage. The key table decides
+	// that per row, so the rule holds for keys added later without this
+	// sentinel changing.
+	//
+	// Two kinds of key are refused, for opposite reasons. One is a key this
+	// package's own nodes write, where a stage writing it would give a fact
+	// the pipeline reports a second author. The other is a run input, which no
+	// node writes at all: it is what the run was started with.
+	ErrReservedKey = errors.New("pipeline: state key is not one a stage may write")
 	// ErrUnmergeableFixerWrite is returned when the fixer declares a write of a
 	// state key whose row declares no merge rule.
 	//

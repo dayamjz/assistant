@@ -22,7 +22,8 @@ const (
 	// StageRebase brings the branch onto freshly fetched upstream and target.
 	StageRebase
 	// StageReview reviews the change against the diff and the intent. It runs
-	// before StageTest so it reads code the fixer has not touched.
+	// before StageTest, so its first look is at the code the person wrote
+	// rather than at code a later stage's fixer changed.
 	StageReview
 	// StageTest validates this change and this intent, not a full suite.
 	StageTest

@@ -26,7 +26,7 @@ const (
 	KeySubmitted Key = "submitted"
 	// KeyHead is the commit the run is working on now. It starts at
 	// KeySubmitted and moves when a rebase or a fix round rewrites it, so it
-	// carries a merge rule: more than one node writes it.
+	// carries a merge rule, which is what lets more than one node write it.
 	KeyHead Key = "head"
 	// KeyIntent is what the change set out to do, in words.
 	KeyIntent Key = "intent"
@@ -39,12 +39,13 @@ const (
 	// what it inferred in KeyIntent and cannot promote that inference to
 	// authoritative.
 	KeyIntentSupplied Key = "intent.supplied"
-	// KeyDiffEmpty says that nothing remains to change. The rebase stage sets
-	// it, and every stage after it is skipped when it holds, which is PRD
-	// section 5's empty-diff short circuit.
+	// KeyDiffEmpty says that nothing remains to change. Every stage node reads
+	// it and does not run its body while it holds, which is PRD section 5's
+	// empty-diff short circuit; the rebase stage is what sets it.
 	KeyDiffEmpty Key = "diff.empty"
-	// KeyApproved is the commit a completed review approved. The push stage
-	// requires a durable record of one that this commit descends from.
+	// KeyApproved is the commit a completed review approved. PRD section 5 has
+	// the push stage require a durable record of one this commit descends
+	// from; nothing in this package checks that.
 	KeyApproved Key = "approved"
 	// KeyPushed is the commit the push stage forwarded.
 	KeyPushed Key = "pushed"
@@ -78,6 +79,16 @@ const (
 	// this package reports a second author.
 	ownerPipeline
 )
+
+// refusal says why a key with this owner is not one a stage may write. The two
+// reasons are opposite, so a stage author told the wrong one would look for the
+// wrong mistake.
+func (o owner) refusal() string {
+	if o == ownerRun {
+		return "is a run input no node writes"
+	}
+	return "the pipeline's own nodes write"
+}
 
 // keySpec is one row of the state schema.
 type keySpec struct {
@@ -119,9 +130,9 @@ func (s Stage) OutcomeKey() Key { return Key("outcome." + s.String()) }
 // starts with one already set.
 func (s Stage) AnswerKey() Key { return Key("answer." + s.String()) }
 
-// FixKey is where the fixer's sanitized summary of the last round lands. It is
-// what P4 lets cross between rounds, and it exists only for the stages that
-// take automatic fix rounds.
+// FixKey is where the fixer's sanitized summary of the last round lands. It
+// carries that summary from one fix round to the next round of the same stage,
+// and it exists only for the stages that take automatic fix rounds.
 func (s Stage) FixKey() Key { return Key("fix." + s.String()) }
 
 // schema is every key the pipeline declares, built once from the shared table
@@ -206,7 +217,7 @@ func checkDeclared(who, what string, keys []Key, kind declaration) error {
 			continue
 		}
 		if spec.owner != ownerStage {
-			return fmt.Errorf("%w: %s writes state key %q, which the pipeline owns", ErrReservedKey, who, key)
+			return fmt.Errorf("%w: %s writes state key %q, which %s", ErrReservedKey, who, key, spec.owner.refusal())
 		}
 		if kind == declaredFixerWrites && spec.merge == graph.MergeNone {
 			return fmt.Errorf("%w: %s writes state key %q, which declares no merge rule",

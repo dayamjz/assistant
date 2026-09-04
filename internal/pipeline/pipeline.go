@@ -66,9 +66,9 @@ type Pipeline struct {
 	budget int
 }
 
-// New builds the pipeline. It refuses an Options that leaves a stage without
-// an implementation, that gives a stage fix rounds with no fixer to apply
-// them, or that declares a read or write the state schema does not admit.
+// New builds the pipeline. Every way an Options can be refused returns one of
+// the sentinels in errors.go, so a caller matches on those rather than on a
+// list kept here that would go stale as refusals are added.
 //
 // The three bounds on the fix loop are settled here and cannot be settled
 // later. Each stage's round limit bounds the cycle it sits on, which the graph
