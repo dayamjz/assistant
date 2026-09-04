@@ -131,15 +131,19 @@
 // check rather than take on trust. internal/graph writes and reads a
 // fingerprint only on a back edge and skips the comparison when the slot is
 // empty. The only back edges here are the fix nodes' returns, and wire emits
-// that return first in a stage's block of six, so a back-edge index is five
-// times the stage's position plus the number of earlier stages taking rounds.
-// At most five stages can take rounds, so an index that is a back edge under
-// two different configurations must belong to the same stage: a fingerprint
-// that is read is never another edge's, and a slot the new graph reads but the
-// old one never wrote is empty and skipped.
+// that return first in a stage's block: six edges for a stage whose limit is
+// above zero, and the five every stage has when it is zero, because the fix
+// node's return is there only when there is a fixer. So a back-edge index is
+// five times the stage's position plus the number of earlier stages taking
+// rounds, rather than six times its position. At most five stages can take
+// rounds, so an index that is a back edge under two different configurations
+// must belong to the same stage: a fingerprint that is read is never another
+// edge's, and a slot the new graph reads but the old one never wrote is empty
+// and skipped.
 //
-// That sentence was here and was wrong, so it is worth saying why it counts as
-// a defect. Confessing a failure the mechanism cannot produce is the same
+// The claim withdrawn there was that a fingerprint read from the wrong slot
+// could defeat convergence, and it is worth saying why that counts as a
+// defect. Confessing a failure the mechanism cannot produce is the same
 // defect as promising a protection it does not deliver: both are claims the
 // code does not support. A disclosure that overclaims danger sends a reader
 // chasing a bound that is not broken, and teaches them to discount the next
