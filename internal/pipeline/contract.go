@@ -115,9 +115,10 @@ type Fixer struct {
 	// inside the loop still running; the graph's Resume then continues it in a
 	// new segment and builds a new fix body, so the rounds after the break get
 	// a different FixBody than the rounds before it. That is why
-	// agents.Fixer.Reference is persisted: an in-Go session does not survive a
-	// resume, and anything a later segment needs is either behind that
-	// reference or in declared state.
+	// agents.Fixer.Reference exists: an in-Go session does not survive a
+	// resume, so anything a later segment needs is either behind that
+	// reference or in declared state. Nothing in this repository persists the
+	// reference yet, so a fix body built after a break starts with no session.
 	//
 	// The asymmetry with Implementation.NewBody, which is built per execution,
 	// is the point: only the fixer keeps a session across rounds.

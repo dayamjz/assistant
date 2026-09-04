@@ -66,9 +66,11 @@
 // of one. A round whose body errors, or a run interrupted mid-loop, leaves the
 // latest checkpoint standing inside the loop still running, and the graph's
 // Resume continues it in a new segment with a newly built fix body. That is
-// the residual gap, and it is why agents.Fixer.Reference is persisted: the
-// session outlives the Go value that opened it, and only because it is written
-// down.
+// the residual gap, and it is why agents.Fixer.Reference exists: the Go value
+// that opened the session does not survive a resume, so the only thing that
+// could carry the session across one is a reference written down outside the
+// run. Nothing in this repository writes it down, so a fix body built in a
+// later segment starts with no session behind it.
 //
 // The split is a narrowing, not P4 itself, and the difference matters. NewBody
 // is a caller-supplied closure on both sides, so it may capture anything that
@@ -296,10 +298,15 @@
 // worth more than a stage that is structurally unable to interrupt one.
 //
 // The fixer's agent session reference is not pipeline state, and the schema
-// declares no key for it on purpose. agents.Fixer.Reference is persisted so a
-// restarted service can resume the same session, and the service that owns
-// runs carries it, alongside the run records PRD section 8 puts in
-// internal/store.
+// declares no key for it on purpose. agents.Fixer.Reference exists so that a
+// fixer's session can be written down and resumed by a restarted service, and
+// the service that owns runs is where it would live, alongside the run records
+// PRD section 8 puts in internal/store. Nothing in this repository writes it
+// down today: there is no such service, and the one session reference
+// internal/store holds is the task table's, which points at a fleet task's
+// terminal session rather than a fixer's. Naming the owner anyway is the point
+// of saying this, because a fact that belongs to nobody in particular is how
+// it ends up back in this package's schema.
 //
 // The reason is not layering taste. Graph state is what internal/graph
 // fingerprints for the convergence bound, and a session reference that changes
