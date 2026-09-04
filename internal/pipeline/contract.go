@@ -88,11 +88,18 @@ type Fixer struct {
 	Writes []Key
 	// NewBody constructs the fixer for one fix node per advance segment, not
 	// for one round: a run with rounds on several stages builds one fix body
-	// per fix node it executes. The one that matters to an implementation is
-	// that a fix body spans every round of the one stage's loop it serves,
-	// because that loop cannot straddle a segment boundary. So a fix body may
-	// hold state across those rounds - an agent session, for one - and must
-	// keep anything a later segment needs in declared state.
+	// per fix node it executes. A fix body spans the rounds of the one stage's
+	// loop it serves that fall within one advance segment, so it may hold
+	// state across those rounds - an agent session, for one.
+	//
+	// It does not span the whole loop. A round whose body returns an error, or
+	// a run interrupted mid-loop, leaves the run's latest checkpoint standing
+	// inside the loop still running; the graph's Resume then continues it in a
+	// new segment and builds a new fix body, so the rounds after the break get
+	// a different FixBody than the rounds before it. That is why
+	// agents.Fixer.Reference is persisted: an in-Go session does not survive a
+	// resume, and anything a later segment needs is either behind that
+	// reference or in declared state.
 	//
 	// The asymmetry with Implementation.NewBody, which is built per execution,
 	// is the point: only the fixer keeps a session across rounds.
@@ -135,6 +142,13 @@ type FixOutput struct {
 // Reader gives a body read access to exactly the state keys its
 // implementation declared. A read of any other key is refused, which is what
 // makes the declaration load-bearing rather than documentation.
+//
+// A body confines its state access to the goroutine it runs on. A body that
+// fans out and reads from several goroutines races, and that is a residual gap
+// rather than a guarantee: the refusal this Reader records and the graph.Reader
+// underneath it are both unsynchronized, so locking this layer alone would buy
+// nothing and would suggest a safety this package cannot provide. Fan out the
+// work if it helps, and read what it needs before it does.
 type Reader interface {
 	// Get returns the current value of key. It returns an error wrapping
 	// ErrUndeclaredRead when the implementation did not declare reading it.

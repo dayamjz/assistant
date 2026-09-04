@@ -33,6 +33,11 @@ const (
 	// KeyIntentSupplied says whether the intent was supplied, and so is
 	// authoritative acceptance criteria, or inferred, and so is a
 	// low-confidence hint. The two are framed differently downstream.
+	//
+	// It is a run input. The bit asserts that a person supplied the criteria,
+	// which no stage can make true, so no stage may write it. A stage records
+	// what it inferred in KeyIntent and cannot promote that inference to
+	// authoritative.
 	KeyIntentSupplied Key = "intent.supplied"
 	// KeyDiffEmpty says that nothing remains to change. The rebase stage sets
 	// it, and every stage after it is skipped when it holds, which is PRD
@@ -90,7 +95,7 @@ var sharedKeys = []keySpec{
 	{KeySkip, graph.KindList, graph.MergeNone, ownerRun},
 	{KeyHead, graph.KindText, graph.MergeLastWriteWins, ownerStage},
 	{KeyIntent, graph.KindText, graph.MergeNone, ownerStage},
-	{KeyIntentSupplied, graph.KindBool, graph.MergeNone, ownerStage},
+	{KeyIntentSupplied, graph.KindBool, graph.MergeNone, ownerRun},
 	{KeyDiffEmpty, graph.KindBool, graph.MergeNone, ownerStage},
 	{KeyApproved, graph.KindText, graph.MergeNone, ownerStage},
 	{KeyPushed, graph.KindText, graph.MergeNone, ownerStage},

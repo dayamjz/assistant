@@ -146,3 +146,81 @@ func TestAHoldAcceptsOnlyTheOutcomesAPersonMayGive(t *testing.T) {
 		}
 	}
 }
+
+// TestSkippedDoesNotSayWhetherTheStageRan drives all three producers of
+// OutcomeSkipped through the real executor. All three carry the same outcome
+// and only the third ran, which is the distinction StageRan exists to make and
+// the outcome key cannot.
+func TestSkippedDoesNotSayWhetherTheStageRan(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		ran  bool
+		run  func(t *testing.T) graph.State
+	}{
+		{"named by this run's skip list", false, func(t *testing.T) graph.State {
+			t.Helper()
+			c := newCalls()
+			stages := recordingStages(c)
+			p := build(t, Options{Stages: stages, Budget: 100})
+			begin := complete()
+			begin.Skip = []Stage{StageTest}
+			_, result := start(t, p, begin)
+			if result.Status != graph.StatusCompleted {
+				t.Fatalf("status %s, reason %q, want completed", result.Status, result.Reason)
+			}
+			if n := c.stageCount(StageTest); n != 0 {
+				t.Fatalf("test ran %d times, want 0: this case is the never-ran one", n)
+			}
+			return result.State
+		}},
+		{"passed over by the empty-diff short circuit", false, func(t *testing.T) graph.State {
+			t.Helper()
+			c := newCalls()
+			stages := recordingStages(c)
+			set(&stages, StageRebase, recording(c, nil, []Key{KeyDiffEmpty}, func(Input, int) (Output, error) {
+				return Output{
+					Report: passing(),
+					Writes: map[Key]graph.Value{KeyDiffEmpty: graph.BoolValue(true)},
+				}, nil
+			}))
+			p := build(t, Options{Stages: stages, Budget: 100})
+			_, result := start(t, p, complete())
+			if result.Status != graph.StatusCompleted {
+				t.Fatalf("status %s, reason %q, want completed", result.Status, result.Reason)
+			}
+			if n := c.stageCount(StageTest); n != 0 {
+				t.Fatalf("test ran %d times, want 0: this case is the never-ran one", n)
+			}
+			return result.State
+		}},
+		{"answered skipped by a person at its hold", true, func(t *testing.T) graph.State {
+			t.Helper()
+			c := newCalls()
+			stages := recordingStages(c)
+			alwaysFixable(c, StageTest, &stages)
+			p := build(t, Options{Stages: stages, Budget: 100})
+			exec, result := start(t, p, complete())
+			if result.Status != graph.StatusHalted {
+				t.Fatalf("status %s, want halted at %q", result.Status, StageTest.HoldNode())
+			}
+			answered, err := exec.Answer(context.Background(), "run", string(OutcomeSkipped))
+			if err != nil {
+				t.Fatalf("Answer: %v", err)
+			}
+			if n := c.stageCount(StageTest); n == 0 {
+				t.Fatal("test never ran, so this case cannot be the ran-and-was-waved-past one")
+			}
+			return answered.State
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			state := tc.run(t)
+			if got := StageOutcome(state, StageTest); got != OutcomeSkipped {
+				t.Fatalf("test outcome %q, want %q: all three produce the same outcome", got, OutcomeSkipped)
+			}
+			if got := StageRan(state, StageTest); got != tc.ran {
+				t.Errorf("StageRan %v, want %v: it answers what the outcome cannot", got, tc.ran)
+			}
+		})
+	}
+}

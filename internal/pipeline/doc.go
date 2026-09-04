@@ -58,9 +58,17 @@
 // rounds gets a new body each round and this package hands it nothing the
 // round before it held; what that round established has to be in declared
 // state to survive. A fix body is built once per fix node per advance segment,
-// so it spans every round of the one stage's loop it serves, because that loop
-// cannot straddle a segment boundary. That is what lets a fixer keep a durable
-// agent session while the review checking it starts cold.
+// so it spans the rounds of the one stage's loop it serves that fall within
+// one segment. That is what lets a fixer keep a durable agent session while
+// the review checking it starts cold.
+//
+// A loop can straddle a segment, so a fix body does not always span the whole
+// of one. A round whose body errors, or a run interrupted mid-loop, leaves the
+// latest checkpoint standing inside the loop still running, and the graph's
+// Resume continues it in a new segment with a newly built fix body. That is
+// the residual gap, and it is why agents.Fixer.Reference is persisted: the
+// session outlives the Go value that opened it, and only because it is written
+// down.
 //
 // The split is a narrowing, not P4 itself, and the difference matters. NewBody
 // is a caller-supplied closure on both sides, so it may capture anything that
@@ -89,6 +97,26 @@
 // The schema does not depend on configuration: a run's state holds the same
 // keys whatever the fix round limits are, so a checkpoint written under one
 // configuration is the same shape as one written under another.
+//
+// Five keys are run inputs no node may write: the branch, the base, the
+// submitted commit, the skip list, and whether the intent was supplied. The
+// last is there for a reason worth stating, because it is semantic rather than
+// defensive. That bit asserts that a person supplied the acceptance criteria,
+// and no stage can make that true, so no stage should be able to say it. A
+// stage that set it would have review check a diff against a guess while every
+// downstream prompt framed the guess as requirements, which is exactly the
+// distinction PRD section 5 draws between a supplied intent and an inferred
+// one. What a stage may still write is the intent itself, because recording
+// what it inferred is the intent stage's job; what it may not do is promote
+// that inference to authoritative.
+//
+// The shape of that defect is worth remembering, because this repository keeps
+// meeting it. NewState refuses a run claiming a supplied intent with none
+// behind it, and that refusal is right and stays. But it guarded one entrance
+// while the field had a second writer, which is the same defect as a check
+// covering adoption but not removal, or creation but not repair. Guard the
+// field, not the doorway: the schema row is what makes the invariant hold
+// everywhere the front door cannot see.
 //
 // # The fix loop and its three bounds
 //

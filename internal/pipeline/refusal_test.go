@@ -55,6 +55,7 @@ func TestADeclarationOutsideTheSchemaIsRefused(t *testing.T) {
 		{"write of a hold answer", nil, []Key{StagePush.AnswerKey()}, ErrReservedKey},
 		{"write of a fix summary", nil, []Key{StageTest.FixKey()}, ErrReservedKey},
 		{"write of a run input", nil, []Key{KeyBranch}, ErrReservedKey},
+		{"write of the supplied-intent flag", nil, []Key{KeyIntentSupplied}, ErrReservedKey},
 		{"write of the cancelled flag", nil, []Key{KeyCancelled}, ErrReservedKey},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -437,4 +438,42 @@ func TestARunThatClaimsASuppliedIntentMustSupplyOne(t *testing.T) {
 			t.Errorf("intent %q, want it seeded verbatim: this package does not edit it", got)
 		}
 	})
+}
+
+// TestAStageMayRecordAnInferredIntentButNotCallItSupplied pins which half of
+// the intent pair is narrowed and which is not. Recording what a stage inferred
+// is the intent stage's job, so the intent itself stays writable; the flag
+// saying a person supplied it is a run input, because no stage can make that
+// true and a stage that set it would have every downstream prompt frame a guess
+// as requirements.
+func TestAStageMayRecordAnInferredIntentButNotCallItSupplied(t *testing.T) {
+	refused := ConstantStages(passing())
+	claiming := Constant(passing())
+	claiming.Writes = []Key{KeyIntentSupplied}
+	set(&refused, StageIntent, claiming)
+	if _, err := New(Options{Stages: refused, Budget: 100}); !errors.Is(err, ErrReservedKey) {
+		t.Fatalf("a stage declaring a write of %q: %v, want ErrReservedKey", KeyIntentSupplied, err)
+	}
+
+	c := newCalls()
+	stages := recordingStages(c)
+	set(&stages, StageIntent, recording(c, nil, []Key{KeyIntent}, func(Input, int) (Output, error) {
+		return Output{
+			Report: passing(),
+			Writes: map[Key]graph.Value{KeyIntent: graph.TextValue("inferred from the diff")},
+		}, nil
+	}))
+	p := build(t, Options{Stages: stages, Budget: 100})
+	_, result := start(t, p, complete())
+	if result.Status != graph.StatusCompleted {
+		t.Fatalf("status %s, reason %q, want completed", result.Status, result.Reason)
+	}
+	v, _ := result.State.Get(string(KeyIntent))
+	if got, _ := v.Text(); got != "inferred from the diff" {
+		t.Errorf("intent %q, want what the stage inferred: recording one is still allowed", got)
+	}
+	supplied, _ := result.State.Get(string(KeyIntentSupplied))
+	if flag, _ := supplied.Bool(); flag {
+		t.Error("intent.supplied is true after a run that supplied none")
+	}
 }

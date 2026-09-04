@@ -28,8 +28,13 @@ const (
 	// OutcomeHeld means the stage found something a person has to decide, so
 	// the run halts before the hold node runs.
 	OutcomeHeld Outcome = "held"
-	// OutcomeSkipped means the stage did not run: this one run skipped it, or
-	// nothing remained to change after the rebase. It is not a failure.
+	// OutcomeSkipped means the stage was passed over. It is not a failure, and
+	// it has three producers, one of which is a stage that did run: this run's
+	// skip list named it, nothing remained to change after the rebase, or a
+	// person answered skipped at its hold, which happens only after the stage
+	// ran and reported something a person had to decide.
+	//
+	// So this value does not say whether the stage ran. StageRan does.
 	OutcomeSkipped Outcome = "skipped"
 	// OutcomeApproved means a person accepted the stage's findings as they
 	// stand and let the run advance.
@@ -83,6 +88,30 @@ func StageOutcome(s graph.State, stage Stage) Outcome {
 	}
 	text, _ := v.Text()
 	return Outcome(text)
+}
+
+// StageRan reports whether a stage's body ran in the run this state belongs
+// to. It is the question a stage's outcome alone cannot answer, because
+// OutcomeSkipped covers both a stage that was passed over and one that ran and
+// had a person answer skipped at its hold.
+//
+// It reads whether the stage recorded a report, which is the fact that
+// distinguishes them: the stage node records one for every execution and
+// records none for a stage it skipped, so a report is present exactly when the
+// body ran. A hold answer never writes one, so a stage skipped at its hold
+// still carries the report it ran to produce.
+//
+// Two callers need this rather than the outcome. PRD section 5's pull request
+// stage narrates what every stage found, and cannot narrate a stage that never
+// looked. The push stage requires a durable record of an approval, and a
+// review a person waved past is not a review that ran clean.
+func StageRan(s graph.State, stage Stage) bool {
+	v, ok := s.Get(string(stage.ReportKey()))
+	if !ok {
+		return false
+	}
+	text, _ := v.Text()
+	return text != ""
 }
 
 // StageReport returns the report a stage recorded. A stage that has not run,
