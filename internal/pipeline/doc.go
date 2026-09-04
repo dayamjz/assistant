@@ -167,7 +167,7 @@
 // draw from are disjoint, whatever pair of configurations they come from.
 //
 // The emission order settles the formula and not the conclusion. Moving the
-// return below the other four edges would add the same constant to every
+// return below the other five edges would add the same constant to every
 // back-edge index, because one function wires all nine stages, and a constant
 // added to every index leaves index-to-stage injective. So the conclusion
 // survives any placement of that edge within a stage's block. It is the
