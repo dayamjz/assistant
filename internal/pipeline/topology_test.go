@@ -193,3 +193,86 @@ func TestEveryCycleEdgeCarriesTheStagesRoundLimit(t *testing.T) {
 		}
 	}
 }
+
+// backEdgeOwners returns, for every edge index the built graph reports as a
+// back edge, the stage whose fix node that edge leaves. The owner is read off
+// the topology - the node the edge starts at - rather than computed from any
+// formula, so what it reports is what the graph is rather than what a
+// derivation says it should be.
+func backEdgeOwners(t *testing.T, g *graph.Graph) map[int]Stage {
+	t.Helper()
+	owners := map[int]Stage{}
+	for i, e := range g.Edges() {
+		if !g.IsBackEdge(i) {
+			continue
+		}
+		found := false
+		for _, stage := range Order() {
+			if e.From == stage.FixNode() {
+				owners[i] = stage
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("edge %d, %q -> %q, is a back edge leaving no stage's fix node", i, e.From, e.To)
+		}
+	}
+	return owners
+}
+
+// TestBackEdgeIndicesNeverCrossStagesAcrossConfigurations pins the property
+// doc.go's counter-misattribution paragraph argues from. A checkpoint's
+// per-edge fingerprint vector is indexed by position in the edge list, and
+// internal/graph admits a checkpoint on length alone, so a resume under a
+// configuration that changed which stages take fix rounds reads each slot
+// against whatever edge now sits there. Convergence stays sound only because a
+// slot that is a back edge in both topologies belongs to the same stage in
+// both; if it ever did not, a fingerprint would be compared against another
+// stage's loop.
+//
+// The check is over every combination of which of the five configurable stages
+// take rounds, which covers none, each one alone, and all five.
+func TestBackEdgeIndicesNeverCrossStagesAcrossConfigurations(t *testing.T) {
+	var configurable []stageSpec
+	for _, row := range stageTable {
+		if row.rounds != nil {
+			configurable = append(configurable, row)
+		}
+	}
+
+	owner := map[int]Stage{}
+	from := map[int]string{}
+	for mask := range 1 << len(configurable) {
+		var limits config.FixRounds
+		var taking []string
+		for bit, row := range configurable {
+			if mask&(1<<bit) != 0 {
+				*row.rounds(&limits) = 1
+				taking = append(taking, row.stage.String())
+			}
+		}
+		name := "no stage takes rounds"
+		if len(taking) > 0 {
+			name = strings.Join(taking, "+")
+		}
+
+		p := build(t, Options{
+			Stages: ConstantStages(passingSummary),
+			Fixer:  recordingFixer(newCalls(), nil, nil, nil),
+			Rounds: limits,
+			Budget: 100,
+		})
+		owners := backEdgeOwners(t, p.Graph())
+		if len(owners) != len(taking) {
+			t.Errorf("configuration %q has %d back edges, want %d", name, len(owners), len(taking))
+		}
+		for i, stage := range owners {
+			if previous, seen := owner[i]; seen && previous != stage {
+				t.Errorf("edge index %d is %s's back edge under %q and %s's under %q",
+					i, stage, name, previous, from[i])
+			}
+			owner[i] = stage
+			from[i] = name
+		}
+	}
+}

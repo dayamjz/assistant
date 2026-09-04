@@ -66,11 +66,14 @@
 // of one. A round whose body errors, or a run interrupted mid-loop, leaves the
 // latest checkpoint standing inside the loop still running, and the graph's
 // Resume continues it in a new segment with a newly built fix body. That is
-// the residual gap, and it is why agents.Fixer.Reference exists: the Go value
-// that opened the session does not survive a resume, so the only thing that
-// could carry the session across one is a reference written down outside the
-// run. Nothing in this repository writes it down, so a fix body built in a
-// later segment starts with no session behind it.
+// the residual gap, and it is why agents.Fixer.Reference exists. Nothing in
+// this repository writes the reference down, so nothing here makes a session
+// survive a break, and what the new body has behind it differs by case. Within
+// one process the graph rebuilds it from the caller's own NewBody closure, so
+// whatever that closure holds survives - a Fixer constructed outside it, for
+// one - which this package neither requires nor refuses. Across a process
+// restart the Go value is gone and no reference was written down, so there is
+// nothing left to rebuild the session from.
 //
 // The split is a narrowing, not P4 itself, and the difference matters. NewBody
 // is a caller-supplied closure on both sides, so it may capture anything that
