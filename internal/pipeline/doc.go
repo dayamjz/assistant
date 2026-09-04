@@ -95,8 +95,17 @@
 // package reports and a second author would make them mean two things.
 //
 // The schema does not depend on configuration: a run's state holds the same
-// keys whatever the fix round limits are, so a checkpoint written under one
-// configuration is the same shape as one written under another.
+// keys whatever the fix round limits are.
+//
+// The topology does depend on it. A stage whose limit is zero gets no fixer
+// node and no back edge, so whether a limit is zero decides the graph's edge
+// count, and a checkpoint's traversal and fingerprint counters are sized by
+// that count. internal/graph refuses a checkpoint whose counters do not match
+// the graph it is handed, so a run checkpointed while a stage had rounds
+// cannot be resumed once that stage's limit reads zero, or the other way
+// round. It also refuses a traversal count already past a limit that has since
+// been lowered. Both refusals are the graph declining to resume a run into a
+// topology it did not walk.
 //
 // Five keys are run inputs no node may write: the branch, the base, the
 // submitted commit, the skip list, and whether the intent was supplied. The
@@ -110,13 +119,15 @@
 // what it inferred is the intent stage's job; what it may not do is promote
 // that inference to authoritative.
 //
-// The shape of that defect is worth remembering, because this repository keeps
-// meeting it. NewState refuses a run claiming a supplied intent with none
-// behind it, and that refusal is right and stays. But it guarded one entrance
-// while the field had a second writer, which is the same defect as a check
-// covering adoption but not removal, or creation but not repair. Guard the
-// field, not the doorway: the schema row is what makes the invariant hold
-// everywhere the front door cannot see.
+// NewState refuses a run claiming a supplied intent with none behind it. What
+// the schema row adds is narrower than that refusal: no stage can assert the
+// flag, in any run, whatever it was started with.
+//
+// The intent text is a gap and stays one. It is stage-writable on purpose, so
+// a stage may overwrite or empty a supplied intent while the flag still stands
+// beside it, and nothing in this package sees that happen. The key table has
+// no way to say writable only while intent.supplied is false, so this is a gap
+// to state rather than a row to add.
 //
 // # The fix loop and its three bounds
 //
@@ -236,12 +247,18 @@
 // table, and closing it needs a bound section 10 does not declare.
 //
 // Convergence is computed over the whole state, which is internal/graph's
-// definition and not this package's. A stage whose recorded report differs
-// between two rounds that changed nothing else therefore defeats it, because
-// the state is not identical. Nothing here trims a report to make convergence
-// fire more often: that would decide on a stage's behalf that a differently
-// worded report says the same thing. The per-stage round limit and the
-// run-wide budget still bound such a loop.
+// definition and not this package's. Two things a round writes therefore
+// defeat it even when the round changed nothing else, because the state is
+// then not identical. A stage whose recorded report differs between two such
+// rounds is one. The other is the fixer's own summary: the fix node writes it
+// to the stage's fix key every round, and that key is declared, so it is in
+// the fingerprint. A summary naming a round number or a count costs its Fixer
+// this bound.
+//
+// Nothing here trims either one to make convergence fire more often: that
+// would decide on a stage's behalf that a differently worded report says the
+// same thing. The per-stage round limit and the run-wide budget still bound
+// such a loop.
 //
 // A run a person cancelled completes, as far as internal/graph is concerned,
 // because its cancel node is terminal and a terminal node is where a run

@@ -101,10 +101,14 @@ func StageOutcome(s graph.State, stage Stage) Outcome {
 // body ran. A hold answer never writes one, so a stage skipped at its hold
 // still carries the report it ran to produce.
 //
-// Two callers need this rather than the outcome. PRD section 5's pull request
-// stage narrates what every stage found, and cannot narrate a stage that never
-// looked. The push stage requires a durable record of an approval, and a
-// review a person waved past is not a review that ran clean.
+// PRD section 5's pull request stage needs this rather than the outcome: it
+// narrates what every stage found, and cannot narrate a stage that never
+// looked.
+//
+// It answers that one question and no other. It does not tell a stage that ran
+// clean from one a person waved past at its hold, because both recorded a
+// report. Whether a stage was approved is the outcome key's answer, not this
+// one's.
 func StageRan(s graph.State, stage Stage) bool {
 	v, ok := s.Get(string(stage.ReportKey()))
 	if !ok {
