@@ -98,15 +98,40 @@
 // The schema does not depend on configuration: a run's state holds the same
 // keys whatever the fix round limits are.
 //
-// The topology does depend on it. A stage whose limit is zero gets no fixer
-// node and no back edge, so whether a limit is zero decides the graph's edge
-// count, and a checkpoint's traversal and fingerprint counters are sized by
-// that count. internal/graph refuses a checkpoint whose counters do not match
-// the graph it is handed, so a run checkpointed while a stage had rounds
-// cannot be resumed once that stage's limit reads zero, or the other way
-// round. It also refuses a traversal count already past a limit that has since
-// been lowered. Both refusals are the graph declining to resume a run into a
-// topology it did not walk.
+// The topology does depend on it. This package adds exactly one edge, the back
+// edge from a stage's fix node to that stage's node, for each stage whose fix
+// round limit is above zero, so whether a limit is zero decides the graph's
+// edge count, and a checkpoint's traversal and fingerprint counters are sized
+// by that count. internal/graph refuses a checkpoint whose counter vectors are
+// not the length of its edge list, so a run checkpointed while one stage had
+// rounds cannot be resumed once that stage's limit reads zero, or the other
+// way round. It also refuses a traversal count already past the bound on the
+// edge sitting at that index.
+//
+// That check is a length comparison and nothing more. internal/graph compares
+// the length of the per-edge traversal and fingerprint vectors against its
+// number of edges, and nothing compares edge identity. So a configuration
+// change that alters the edge count is refused, and a change that preserves it
+// is not.
+//
+// The gap that leaves is reachable. Lowering fix_rounds.review from 1 to 0
+// while raising fix_rounds.lint from 0 to 1 removes one back edge and adds
+// another, so the edge count is unchanged and a checkpoint standing at a node
+// that still exists - document, say - validates cleanly. The stages are wired
+// in table order, so review's block losing an edge shifts every edge between
+// review and lint down one index, and the persisted counters are then read
+// against different edges than the ones that produced them. A fix loop that
+// has not finished can start from another edge's traversal count, so its round
+// limit fires early or late. A convergence fingerprint left in the wrong slot
+// compares a stage's state against a fingerprint another edge recorded, so a
+// loop can be parked as converged when nothing about it converged. Reaching
+// this needs a configuration change between a checkpoint and a resume, which
+// P7 makes reachable, because configuration is re-read from the default branch
+// rather than carried forward from the run that checkpointed.
+//
+// The fix is not here. internal/graph would have to carry a topology identity
+// in the checkpoint and check it on read; this package hands the graph a
+// topology and never sees a checkpoint.
 //
 // The rows the table marks as run inputs are the ones no node may write: what
 // the run was started with, including whether the intent was supplied. That
@@ -162,7 +187,7 @@
 //
 // Review's default is one round over fix findings only. An ask finding never
 // enters the loop: classify holds the stage for one whatever the limit allows,
-// so its presence parks the stage rather than being fixed and re-reviewed by
+// so its presence holds the stage rather than being fixed and re-reviewed by
 // the session that prescribed the fix.
 //
 // # Halt points
@@ -176,8 +201,10 @@
 // The hold's options are exactly the outcomes a person may give a held stage,
 // so the hold node records the answer as the stage's outcome and translates
 // nothing. The graph refuses an answer outside the options, clears the answer
-// key whenever it parks at a halt point, and refuses a run whose initial state
-// already holds one, so a stage never arrives at its hold already answered.
+// key on every checkpoint that stands at a halt point without running it,
+// whether the run halted there for the decision or a bound parked it in front
+// of one, and refuses a run whose initial state already holds an answer, so a
+// stage never arrives at its hold already answered.
 //
 // # Two behaviours from PRD section 5 that are easy to miss
 //
