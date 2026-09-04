@@ -107,11 +107,12 @@ func normalizeEvidence(evidence []Evidence) []Evidence {
 func (r Report) Fixable() []Finding { return Fixable(r.Findings) }
 
 // Parked returns the report's findings that hold for a person's decision, in
-// their original order.
+// their original order. On the name, see Finding.Parks.
 func (r Report) Parked() []Finding { return Parked(r.Findings) }
 
 // HasParked reports whether any finding holds for a person's decision. A stage
 // with one holds regardless of how many fix rounds its configuration allows.
+// On the name, see Finding.Parks.
 func (r Report) HasParked() bool {
 	for _, f := range r.Findings {
 		if f.Parks() {

@@ -154,6 +154,13 @@ func (f Finding) FixEligible() bool { return f.Action == ActionFix }
 // It is true for exactly ActionAsk after normalization; on an un-normalized
 // finding an unrecognized action reports false here while still reporting
 // false from FixEligible, so nothing is ever both.
+//
+// The name predates the PRD section 5 amendment on this branch and reads
+// against the vocabulary that amendment settled: what Parks, Parked, and
+// Report.HasParked mean is a hold, a stage waiting on a person's decision, and
+// not a park, which now names a bound stopping the run and is the sense
+// internal/graph uses the word in. Renaming the three is a queued follow-up,
+// not an oversight.
 func (f Finding) Parks() bool { return f.Action == ActionAsk }
 
 // normalized returns the finding with its text trimmed, its action and
@@ -178,7 +185,7 @@ func (f Finding) normalized() Finding {
 func Fixable(fs []Finding) []Finding { return selectBy(fs, Finding.FixEligible) }
 
 // Parked returns the findings holding for a person's decision, in their
-// original order, as a new slice.
+// original order, as a new slice. On the name, see Finding.Parks.
 func Parked(fs []Finding) []Finding { return selectBy(fs, Finding.Parks) }
 
 // selectBy returns the findings satisfying keep, in order, as a new slice.
