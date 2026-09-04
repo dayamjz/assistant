@@ -12,17 +12,22 @@ import (
 // implementations of the same contract, and each one decides what it reads,
 // what it writes, and what it reports.
 //
-// The summary is a parameter rather than a field a caller may leave empty,
-// because the pipeline refuses a report with no summary. A helper that could
-// build a report the pipeline rejects would let a test start from a shape the
-// real mechanism never accepts.
+// It panics when the report it would produce is one the pipeline refuses,
+// which it decides by normalizing and validating exactly as the stage node
+// adapter does. A caller who asks for such a report made a programming error
+// rather than supplied input, and this helper exists so a test can start from
+// a shape the real mechanism accepts; buildSchema panics on a defect in this
+// package's own table for the same reason.
 //
-// The report is returned as given otherwise. The pipeline normalizes it before
-// recording it, so a finding built here with no action still becomes an ask and
-// still holds the stage, which is P3 applying to this implementation exactly as
-// it applies to a real one.
+// The report is returned as given otherwise. The pipeline normalizes it again
+// before recording it, so a finding built here with no action still becomes an
+// ask and still holds the stage, which is P3 applying to this implementation
+// exactly as it applies to a real one.
 func Constant(summary string, found ...findings.Finding) Implementation {
 	report := findings.Report{Summary: summary, Findings: found}
+	if err := report.Normalize().Validate(); err != nil {
+		panic("pipeline: Constant: " + err.Error())
+	}
 	return Implementation{
 		NewBody: func() Body {
 			return func(context.Context, Input) (Output, error) {

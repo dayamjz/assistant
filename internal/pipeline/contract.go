@@ -66,10 +66,19 @@ type Input struct {
 // Output is what a stage body returns: what it found, and what it wants
 // written to state.
 type Output struct {
-	// Report is what the stage found. The pipeline normalizes it before
-	// recording it, which is where P3's fail-closed default lands: a finding
-	// with a missing, empty, or unrecognized action becomes ask, and an ask
-	// finding holds the stage for a person.
+	// Report is what the stage found. Every stage returns one, including a
+	// stage with nothing to say: the pipeline normalizes it and then validates
+	// it, and a report that does not validate fails the step with
+	// ErrUnusableReport.
+	//
+	// Validating asks for more than a summary. Every finding needs a
+	// description, every evidence entry needs a path, and the risk must be a
+	// recognized word or left unstated, because normalizing deliberately does
+	// not resolve an unrecognized one.
+	//
+	// Normalizing is where P3's fail-closed default lands: a finding with a
+	// missing, empty, or unrecognized action becomes ask, and an ask finding
+	// holds the stage for a person.
 	Report findings.Report
 	// Writes are the state writes the stage asks for, at most one per key.
 	// Every key must be one the implementation declared.

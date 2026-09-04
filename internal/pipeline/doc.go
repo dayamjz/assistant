@@ -202,6 +202,12 @@
 // in nine stages, and it applies to a report an implementation built by hand
 // exactly as it applies to one parsed from an agent.
 //
+// The same adapter then validates what it normalized, so every stage returns a
+// report and a report that does not validate fails the step. A stage author
+// owes a summary, a description on every finding, a path on every evidence
+// entry, and a risk that is a recognized word or left unstated, since
+// normalizing does not resolve an unrecognized one.
+//
 // # What this package does not promise
 //
 // The intent stage never blocking a run is owed by the intent stage

@@ -96,10 +96,10 @@ func StageOutcome(s graph.State, stage Stage) Outcome {
 // had a person answer skipped at its hold.
 //
 // It reads whether the stage recorded a report, which is the fact that
-// distinguishes them: the stage node records one for every execution and
-// records none for a stage it skipped, so a report is present exactly when the
-// body ran. A hold answer never writes one, so a stage skipped at its hold
-// still carries the report it ran to produce.
+// distinguishes them: the stage node records one for every execution that
+// completed, and records none for a stage it skipped. A hold answer never
+// writes one, so a stage skipped at its hold still carries the report it ran
+// to produce.
 //
 // PRD section 5's pull request stage needs this rather than the outcome: it
 // narrates what every stage found, and cannot narrate a stage that never
