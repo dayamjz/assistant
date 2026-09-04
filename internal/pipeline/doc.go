@@ -125,20 +125,23 @@
 // late.
 //
 // Take the checkpoint written once document's hold is answered, which stands
-// at lint with the traversal into lint already counted at one. On resume under
-// the new configuration the counter vectors are still the same length, and
-// validation admits the checkpoint because one is not greater than one. Lint
-// runs, reports fix-eligible findings, and takes its entry edge, which under
-// the new indices carries a count of zero. The fixer runs. The back edge,
-// which under the new indices is the slot already holding one, then reads its
-// bound as reached and parks the run rounds-exhausted.
+// at lint with the traversal into lint already counted at one. The segment has
+// to end on that checkpoint, either because lint's body returns an error and
+// no further checkpoint is written or because the process is interrupted. On
+// resume under the new configuration the counter vectors are still the same
+// length, and validation admits the checkpoint because one is not greater than
+// one. Lint runs, reports fix-eligible findings, and takes its entry edge,
+// which under the new indices carries a count of zero. The fixer runs. The
+// back edge, which under the new indices is the slot already holding one, then
+// reads its bound as reached and parks the run rounds-exhausted.
 //
-// So the run parks with the fix applied and never re-reviewed, and a change
-// the pipeline itself authored ships without the independent review P5
-// requires. Reaching this needs a configuration change between a checkpoint
-// and a resume, which P7 makes reachable, because configuration is re-read
-// from the default branch rather than carried forward from the run that
-// checkpointed.
+// So the run parks with the fix applied and never re-reviewed: the round limit
+// fires one round early, so the loop takes a fix and parks before the round
+// that would have verified it, leaving a commit the pipeline authored on the
+// branch that no stage looked at, and a person's fork deciding what happens to
+// it. Reaching this needs a configuration change between a checkpoint and a
+// resume, which P7 makes reachable, because configuration is re-read from the
+// default branch rather than carried forward from the run that checkpointed.
 //
 // The shift does not reach convergence, and the reasoning is short enough to
 // check rather than take on trust. internal/graph writes and reads a
