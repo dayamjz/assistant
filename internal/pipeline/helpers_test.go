@@ -14,14 +14,53 @@ import (
 // is what a test asks "did this body run at all", which no state key answers:
 // a body that did not run leaves the same state as one that ran and wrote
 // nothing.
+// It also records how many times each of those bodies was constructed, which
+// is a different question: a body that ran twice was either built twice or
+// built once and reused, and only the constructor count tells the two apart.
 type calls struct {
-	mu     sync.Mutex
-	stages map[Stage]int
-	fixes  map[Stage]int
+	mu        sync.Mutex
+	stages    map[Stage]int
+	fixes     map[Stage]int
+	stageNews map[Stage]int
+	fixNews   int
 }
 
 func newCalls() *calls {
-	return &calls{stages: make(map[Stage]int), fixes: make(map[Stage]int)}
+	return &calls{
+		stages:    make(map[Stage]int),
+		fixes:     make(map[Stage]int),
+		stageNews: make(map[Stage]int),
+	}
+}
+
+// newStage records one construction of the body of the stage this
+// implementation was placed in. A constructor is handed no stage, so the
+// caller names the field it filled.
+func (c *calls) newStage(s Stage) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.stageNews[s]++
+}
+
+// newFix records one construction of a fix body. A pipeline has one Fixer
+// serving every fix node, and its constructor is told no more than a stage
+// body's is, so this is a total across the run rather than a per-stage count.
+func (c *calls) newFix() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.fixNews++
+}
+
+func (c *calls) stageNewCount(s Stage) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.stageNews[s]
+}
+
+func (c *calls) fixNewCount() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.fixNews
 }
 
 // stage records one execution of a stage body and returns how many there have
@@ -105,6 +144,29 @@ func recordingFixer(c *calls, reads, writes []Key, fix func(in FixInput, call in
 			}
 		},
 	}
+}
+
+// constructing wraps an implementation so its constructions are counted as
+// well as its executions. stage names the field the result is placed in, since
+// a constructor is told nothing about which stage it serves.
+func constructing(c *calls, stage Stage, impl Implementation) Implementation {
+	inner := impl.NewBody
+	impl.NewBody = func() Body {
+		c.newStage(stage)
+		return inner()
+	}
+	return impl
+}
+
+// constructingFixer wraps a fixer so its constructions are counted as well as
+// its executions.
+func constructingFixer(c *calls, fixer Fixer) Fixer {
+	inner := fixer.NewBody
+	fixer.NewBody = func() FixBody {
+		c.newFix()
+		return inner()
+	}
+	return fixer
 }
 
 // passing is a report a stage returns when it found nothing.

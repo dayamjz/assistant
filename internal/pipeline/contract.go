@@ -24,10 +24,16 @@ type Implementation struct {
 	// any other key fails the step with ErrUndeclaredWrite. A key the pipeline
 	// owns, such as a stage's outcome or its report, may not be listed here.
 	Writes []Key
-	// NewBody constructs the implementation for one advance segment. The graph
-	// calls it once per Run, Resume, or Answer call and shares nothing between
-	// runs, so a body may hold state for the rounds within one segment and
-	// must keep anything a later segment needs in declared state.
+	// NewBody constructs the implementation for one execution of the stage.
+	// The pipeline calls it each time the stage runs and never reuses a body,
+	// so a stage that takes fix rounds is built again for every round and a
+	// body holds nothing from one round, one segment, or one run to the next.
+	// Anything a later execution needs lives in declared state. That is P4's
+	// fresh review expressed as construction: it is not a rule an
+	// implementation is trusted to follow.
+	//
+	// A stage this run skips does not run its body, so nothing is constructed
+	// for it.
 	NewBody func() Body
 }
 
@@ -74,8 +80,14 @@ type Fixer struct {
 	// convergence bound meaningful: a round that changed nothing leaves state
 	// as it was.
 	Writes []Key
-	// NewBody constructs the fixer for one advance segment, on the same terms
-	// as Implementation.NewBody.
+	// NewBody constructs the fixer for one advance segment, not for one round.
+	// The graph calls it once per Run, Resume, or Answer call and shares
+	// nothing between runs, so a fix body may hold state across the rounds
+	// within one segment - an agent session, for one - and must keep anything
+	// a later segment needs in declared state.
+	//
+	// The asymmetry with Implementation.NewBody, which is built per execution,
+	// is P4 itself: only the fixer keeps a session across rounds.
 	NewBody func() FixBody
 }
 
@@ -90,8 +102,11 @@ type FixInput struct {
 	// finding never reaches here: it holds the stage before the round starts.
 	Findings []findings.Finding
 	// Previous is the sanitized summary the last round of this stage's fixer
-	// wrote, empty on the first round. It is the only thing P4 lets cross
-	// between rounds.
+	// wrote, empty on the first round. It is what the fixing role hands the
+	// reviewing role, and the only thing that crosses in that direction: a
+	// stage body is constructed again every round and so can be handed nothing
+	// else. It does not bound what the fixer carries forward for itself, which
+	// stays in the fix body built for the segment.
 	Previous string
 	// State reads exactly the keys the fixer declared.
 	State Reader

@@ -50,9 +50,23 @@
 //
 // Fixing is a separate contract. P4 keeps reviewing and fixing apart with
 // separate memory, and that lives in the type split rather than in a rule
-// callers follow: an Implementation cannot fix, a Fixer cannot report
-// findings, and the only thing that crosses between rounds is the sanitized
-// summary in FixInput.Previous.
+// callers follow: an Implementation cannot fix and a Fixer cannot report
+// findings.
+//
+// The two halves are also constructed on different terms, and that asymmetry
+// is the rest of P4 expressed as construction rather than as a rule callers
+// follow. A stage body is built fresh for every execution of the stage, so a
+// stage that takes fix rounds gets a new body each round and cannot carry
+// anything from one round to the next in a Go value; what the round before
+// established has to be in declared state to survive. A fix body is built once
+// per advance segment and therefore does span the rounds within it, which is
+// what lets a fixer keep a durable agent session while the review checking it
+// starts cold. Only the fixer keeps a session across rounds.
+//
+// What the fixing role hands the reviewing role is the sanitized summary in
+// FixInput.Previous, and that is the only thing crossing in that direction.
+// The graph does not build the bodies, this package does, so the asymmetry
+// holds for every stage rather than for the ones that remember to honour it.
 //
 // # The state schema has one owner
 //
@@ -140,6 +154,26 @@
 // exactly as it applies to one parsed from an agent.
 //
 // # What this package does not promise
+//
+// The intent stage never blocking a run is owed by the intent stage
+// implementation, not by this topology. Every one of the nine stages is wired
+// the same way, so intent routes to a hold node exactly as the other eight do,
+// and an intent report carrying any finding that is not a note halts the run
+// there waiting on a person. PRD section 5 says stage 1 never blocks a run;
+// nothing here enforces that, and nothing here will.
+//
+// So the implementation written against this contract owes two things. It must
+// never return a finding whose action is anything but note, including when it
+// could not read its own output: P3 normalizes a missing, empty, or
+// unrecognized action to ask, and an ask finding holds. And it owes a test
+// proving both, the unparseable case included, because that is the one a stage
+// falls into by accident rather than by choice.
+//
+// Not enforcing it here is deliberate. A row saying intent may not hold would
+// have to do something with an ask finding intent reported, and the only thing
+// left to do with it is drop it - which is the failure P3 exists to prevent,
+// bought for tidiness. An unclassified finding failing closed to a person is
+// worth more than a stage that is structurally unable to interrupt one.
 //
 // A bound that stops a run parks it, and internal/graph parks a run rather
 // than halting it for a decision: a parked run is resumed by forking it, not

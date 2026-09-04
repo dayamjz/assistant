@@ -22,7 +22,6 @@ func stageNode(stage Stage, impl Implementation) graph.Node {
 		Reads:  reads,
 		Writes: writes,
 		NewBody: func() graph.Body {
-			body := impl.NewBody()
 			return func(ctx context.Context, r graph.Reader, w graph.Writer) error {
 				skip, err := skipped(r, stage)
 				if err != nil {
@@ -31,6 +30,12 @@ func stageNode(stage Stage, impl Implementation) graph.Node {
 				if skip {
 					return w.Set(string(stage.OutcomeKey()), graph.TextValue(string(OutcomeSkipped)))
 				}
+				// Constructing here rather than in the enclosing closure is
+				// what makes P4's fresh review a mechanism: the graph builds
+				// one graph.Body per node for a whole advance segment, so a
+				// body built out there would be the same Go value in every
+				// round of the fix loop and could carry anything between them.
+				body := impl.NewBody()
 				out, err := body(ctx, Input{
 					Stage: stage,
 					State: reader{from: r, allowed: declared, who: "stage " + stage.String()},
