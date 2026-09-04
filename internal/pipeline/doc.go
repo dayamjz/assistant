@@ -117,15 +117,28 @@
 // The gap that leaves is reachable. Lowering fix_rounds.review from 1 to 0
 // while raising fix_rounds.lint from 0 to 1 removes one back edge and adds
 // another, so the edge count is unchanged and a checkpoint standing at a node
-// that still exists - document, say - validates cleanly. The stages are wired
-// in table order, so review's block losing an edge shifts every edge between
-// review and lint down one index, and the persisted counters are then read
-// against different edges than the ones that produced them. A fix loop that
-// has not finished can start from another edge's traversal count, so its round
-// limit fires early or late. Reaching this needs a configuration change
-// between a checkpoint and a resume, which P7 makes reachable, because
-// configuration is re-read from the default branch rather than carried forward
-// from the run that checkpointed.
+// that still exists validates cleanly. The stages are wired in table order, so
+// review's block losing an edge shifts every edge between review and lint down
+// one index, and the persisted counters are then read against different edges
+// than the ones that produced them, so a fix loop that has not finished can
+// start from another edge's traversal count and its round limit fires early or
+// late.
+//
+// Take the checkpoint written once document's hold is answered, which stands
+// at lint with the traversal into lint already counted at one. On resume under
+// the new configuration the counter vectors are still the same length, and
+// validation admits the checkpoint because one is not greater than one. Lint
+// runs, reports fix-eligible findings, and takes its entry edge, which under
+// the new indices carries a count of zero. The fixer runs. The back edge,
+// which under the new indices is the slot already holding one, then reads its
+// bound as reached and parks the run rounds-exhausted.
+//
+// So the run parks with the fix applied and never re-reviewed, and a change
+// the pipeline itself authored ships without the independent review P5
+// requires. Reaching this needs a configuration change between a checkpoint
+// and a resume, which P7 makes reachable, because configuration is re-read
+// from the default branch rather than carried forward from the run that
+// checkpointed.
 //
 // The shift does not reach convergence, and the reasoning is short enough to
 // check rather than take on trust. internal/graph writes and reads a
