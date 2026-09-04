@@ -70,9 +70,9 @@ type Commands struct {
 type FixRounds struct {
 	// Review is the number of automatic fix rounds the review stage may take,
 	// and it applies only to findings whose action is fix. An ask finding is
-	// never eligible, so one parks the stage whatever this value is; that
-	// eligibility rule belongs to the review stage, not to this package. Zero
-	// sends every review finding to the operator.
+	// never eligible, so one holds the stage for a person whatever this value
+	// is; that eligibility rule belongs to the review stage, not to this
+	// package. Zero sends every review finding to the operator.
 	Review int
 	// Rebase is the rebase stage's attempt limit.
 	Rebase int

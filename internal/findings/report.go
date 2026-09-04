@@ -111,7 +111,7 @@ func (r Report) Fixable() []Finding { return Fixable(r.Findings) }
 func (r Report) Parked() []Finding { return Parked(r.Findings) }
 
 // HasParked reports whether any finding holds for a person's decision. A stage
-// with one parks regardless of how many fix rounds its configuration allows.
+// with one holds regardless of how many fix rounds its configuration allows.
 func (r Report) HasParked() bool {
 	for _, f := range r.Findings {
 		if f.Parks() {
