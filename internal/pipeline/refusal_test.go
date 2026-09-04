@@ -311,3 +311,130 @@ func TestAFixerMayDeclareAKeyTheAdapterAlsoReads(t *testing.T) {
 		t.Error("the fixer never read the keys it declared")
 	}
 }
+
+// TestASwallowedReadRefusalStillFailsTheStep is the half of the declaration a
+// body could otherwise decide for itself. The bodies in
+// TestABodyThatStepsOutsideItsDeclarationFailsTheStep hand the refusal back,
+// so they prove only that the error reaches the caller. These discard it and
+// carry on reporting a clean stage, which is what an implementation does by
+// accident, and the step must fail anyway.
+func TestASwallowedReadRefusalStillFailsTheStep(t *testing.T) {
+	c := newCalls()
+	stages := recordingStages(c)
+	set(&stages, StageReview, recording(c, nil, nil, func(in Input, _ int) (Output, error) {
+		v, _ := in.State.Get(KeySkip)
+		if skipped, _ := v.Bool(); skipped {
+			return Output{Report: reportWith(findings.ActionAsk, "unreachable")}, nil
+		}
+		// A second refused read, so the reported refusal can be pinned to the
+		// first one rather than to whichever happened last.
+		if _, err := in.State.Get(KeyApproved); err == nil {
+			t.Error("a read of an undeclared key returned no error to the body")
+		}
+		return Output{Report: passing()}, nil
+	}))
+	p := build(t, Options{Stages: stages, Budget: 100})
+	exec, err := p.Executor(graph.NewMemoryStore())
+	if err != nil {
+		t.Fatalf("Executor: %v", err)
+	}
+	state, err := p.NewState(complete())
+	if err != nil {
+		t.Fatalf("NewState: %v", err)
+	}
+	result, err := exec.Run(context.Background(), "run", state)
+	if !errors.Is(err, ErrUndeclaredRead) {
+		t.Fatalf("Run: %v (status %s), want ErrUndeclaredRead", err, result.Status)
+	}
+	if !strings.Contains(err.Error(), string(KeySkip)) {
+		t.Errorf("refusal %q does not name %q: the first refusal is the one that happened", err, KeySkip)
+	}
+	if n := c.stageCount(StageTest); n != 0 {
+		t.Errorf("test ran %d times after review read outside its declaration, want 0", n)
+	}
+}
+
+// TestASwallowedFixerReadRefusalStillFailsTheStep is the same for the fix node,
+// which reaches a body through the same reader.
+func TestASwallowedFixerReadRefusalStillFailsTheStep(t *testing.T) {
+	c := newCalls()
+	stages := recordingStages(c)
+	set(&stages, StageLint, recording(c, nil, nil, func(_ Input, call int) (Output, error) {
+		if call == 1 {
+			return Output{Report: reportWith(findings.ActionFix, "unused import")}, nil
+		}
+		return Output{Report: passing()}, nil
+	}))
+	fixer := recordingFixer(c, nil, nil, func(in FixInput, _ int) (FixOutput, error) {
+		v, _ := in.State.Get(KeyHead)
+		head, _ := v.Text()
+		return FixOutput{Summary: "removed it at " + head}, nil
+	})
+	p := build(t, Options{
+		Stages: stages,
+		Fixer:  fixer,
+		Rounds: config.FixRounds{Lint: 1},
+		Budget: 100,
+	})
+	exec, err := p.Executor(graph.NewMemoryStore())
+	if err != nil {
+		t.Fatalf("Executor: %v", err)
+	}
+	state, err := p.NewState(complete())
+	if err != nil {
+		t.Fatalf("NewState: %v", err)
+	}
+	result, err := exec.Run(context.Background(), "run", state)
+	if !errors.Is(err, ErrUndeclaredRead) {
+		t.Fatalf("Run: %v (status %s), want ErrUndeclaredRead", err, result.Status)
+	}
+	if n := c.stageCount(StageLint); n != 1 {
+		t.Errorf("lint ran %d times, want 1: the fix round it was verifying failed", n)
+	}
+	if n := c.stageCount(StagePush); n != 0 {
+		t.Errorf("push ran %d times after the fixer read outside its declaration, want 0", n)
+	}
+}
+
+// TestARunThatClaimsASuppliedIntentMustSupplyOne pins the guard to the pair
+// rather than to emptiness alone: an absent intent falls back to inference and
+// stays legal, and only the claim of authoritative criteria with none behind it
+// is refused.
+func TestARunThatClaimsASuppliedIntentMustSupplyOne(t *testing.T) {
+	p := build(t, Options{Stages: ConstantStages(passing()), Budget: 100})
+	for _, tc := range []struct {
+		name   string
+		intent string
+	}{
+		{"empty", ""},
+		{"whitespace only", "  \n\t "},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := complete()
+			s.IntentSupplied, s.Intent = true, tc.intent
+			if _, err := p.NewState(s); !errors.Is(err, ErrEmptyIntent) {
+				t.Fatalf("NewState: %v, want ErrEmptyIntent", err)
+			}
+		})
+	}
+
+	t.Run("no intent claimed", func(t *testing.T) {
+		s := complete()
+		s.IntentSupplied, s.Intent = false, ""
+		if _, err := p.NewState(s); err != nil {
+			t.Fatalf("NewState: %v, want no refusal: an inferred intent is the fallback", err)
+		}
+	})
+	t.Run("supplied intent padded with whitespace", func(t *testing.T) {
+		s := complete()
+		s.IntentSupplied, s.Intent = true, "\n  make the gate refuse an unverified push  \n"
+		state, err := p.NewState(s)
+		if err != nil {
+			t.Fatalf("NewState: %v, want no refusal: there is real text here", err)
+		}
+		v, _ := state.Get(string(KeyIntent))
+		if got, _ := v.Text(); got != s.Intent {
+			t.Errorf("intent %q, want it seeded verbatim: this package does not edit it", got)
+		}
+	})
+}

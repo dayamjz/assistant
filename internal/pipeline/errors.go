@@ -39,6 +39,18 @@ var (
 	// ErrIncompleteRun is returned when a run is started without the branch,
 	// the base, or the submitted commit it is validating.
 	ErrIncompleteRun = errors.New("pipeline: a run needs a branch, a base, and a submitted commit")
+	// ErrEmptyIntent is returned when a run claims its intent was supplied and
+	// supplies none. It is separate from ErrIncompleteRun because the two mean
+	// different things: that one says the run did not say what it is
+	// validating, this one says the run claimed authoritative acceptance
+	// criteria and gave none.
+	//
+	// An empty supplied intent is worse than an absent one. Absent falls back
+	// to inference, whereas supplied is framed as authoritative in every
+	// downstream prompt, so review would check the diff against nothing while
+	// being told that nothing was the contract. A run that supplied no intent
+	// says so with IntentSupplied false, which stays legal.
+	ErrEmptyIntent = errors.New("pipeline: a run claims a supplied intent and supplies none")
 	// ErrBadReport is returned when a stage's recorded report cannot be read
 	// back out of state. It is refused rather than read as an empty report,
 	// which would present a stage that found something as one that found

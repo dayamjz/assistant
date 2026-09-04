@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/graph"
@@ -218,19 +219,24 @@ type Start struct {
 	// Intent is what the change set out to do, when the person supplied it.
 	Intent string
 	// IntentSupplied says the intent above was supplied rather than inferred,
-	// which makes it authoritative acceptance criteria downstream.
+	// which makes it authoritative acceptance criteria downstream. Setting it
+	// with an empty or whitespace-only Intent is refused with ErrEmptyIntent,
+	// because there is nothing for those criteria to be.
 	IntentSupplied bool
 	// Skip names the stages this one run skips, on purpose.
 	Skip []Stage
 }
 
 // NewState returns the initial state for a run. It refuses a start that does
-// not say what is being validated, and one naming a stage to skip that is not
-// one of the nine.
+// not say what is being validated, one that claims a supplied intent and
+// supplies none, and one naming a stage to skip that is not one of the nine.
 func (p *Pipeline) NewState(s Start) (graph.State, error) {
 	if s.Branch == "" || s.Base == "" || s.Submitted == "" {
 		return graph.State{}, fmt.Errorf("%w: branch %q, base %q, submitted %q",
 			ErrIncompleteRun, s.Branch, s.Base, s.Submitted)
+	}
+	if s.IntentSupplied && strings.TrimSpace(s.Intent) == "" {
+		return graph.State{}, fmt.Errorf("%w: intent %q", ErrEmptyIntent, s.Intent)
 	}
 	skip := make([]string, 0, len(s.Skip))
 	for _, stage := range s.Skip {

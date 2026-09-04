@@ -53,20 +53,29 @@
 // callers follow: an Implementation cannot fix and a Fixer cannot report
 // findings.
 //
-// The two halves are also constructed on different terms, and that asymmetry
-// is the rest of P4 expressed as construction rather than as a rule callers
-// follow. A stage body is built fresh for every execution of the stage, so a
-// stage that takes fix rounds gets a new body each round and cannot carry
-// anything from one round to the next in a Go value; what the round before
-// established has to be in declared state to survive. A fix body is built once
-// per advance segment and therefore does span the rounds within it, which is
-// what lets a fixer keep a durable agent session while the review checking it
-// starts cold. Only the fixer keeps a session across rounds.
+// The two halves are also constructed on different terms. A stage body is
+// built fresh for every execution of the stage, so a stage that takes fix
+// rounds gets a new body each round and this package hands it nothing the
+// round before it held; what that round established has to be in declared
+// state to survive. A fix body is built once per fix node per advance segment,
+// so it spans every round of the one stage's loop it serves, because that loop
+// cannot straddle a segment boundary. That is what lets a fixer keep a durable
+// agent session while the review checking it starts cold.
 //
-// What the fixing role hands the reviewing role is the sanitized summary in
-// FixInput.Previous, and that is the only thing crossing in that direction.
-// The graph does not build the bodies, this package does, so the asymmetry
-// holds for every stage rather than for the ones that remember to honour it.
+// The split is a narrowing, not P4 itself, and the difference matters. NewBody
+// is a caller-supplied closure on both sides, so it may capture anything that
+// outlives every round and every run, and nothing in this package refuses it.
+// What the per-execution build removes is the easiest way a stage keeps a Go
+// value between rounds. P4's load-bearing half is enforced downstream and
+// typed, at agents.Runner.Run, which has no parameter a session could be named
+// in, with agents.Fixer the only route to one.
+//
+// The sanitized summary in FixInput.Previous crosses from one fix round to the
+// next round of the same stage. Nothing here routes it to a stage body: PRD
+// section 5 has the re-review check the previous findings and the fix summary
+// as claims, and a stage that wants them declares a read of its own FixKey and
+// ReportKey, which the schema permits because only writes of pipeline-owned
+// keys are refused.
 //
 // # The state schema has one owner
 //
@@ -174,6 +183,18 @@
 // left to do with it is drop it - which is the failure P3 exists to prevent,
 // bought for tidiness. An unclassified finding failing closed to a person is
 // worth more than a stage that is structurally unable to interrupt one.
+//
+// The fixer's agent session reference is not pipeline state, and the schema
+// declares no key for it on purpose. agents.Fixer.Reference is persisted so a
+// restarted service can resume the same session, and the service that owns
+// runs carries it, alongside the run records PRD section 8 puts in
+// internal/store.
+//
+// The reason is not layering taste. Graph state is what internal/graph
+// fingerprints for the convergence bound, and a session reference that changes
+// across a resume would make the state never repeat, so convergence would stop
+// being able to fire while every run still looked green. A bound that cannot
+// fire is worse than no bound, because it reads as a bound.
 //
 // A bound that stops a run parks it, and internal/graph parks a run rather
 // than halting it for a decision: a parked run is resumed by forking it, not

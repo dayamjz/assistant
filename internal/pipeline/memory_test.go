@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"strconv"
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/config"
@@ -8,31 +9,44 @@ import (
 	"github.com/dayamjz/assistant/internal/graph"
 )
 
-// TestTheStageBodyIsRebuiltEveryRoundAndTheFixerIsNot drives one stage through
-// two fix rounds inside a single advance segment and counts constructions
+// TestTheStageBodyIsRebuiltEveryRoundAndTheFixerIsNot drives two stages through
+// two fix rounds each inside a single advance segment and counts constructions
 // rather than executions, because that is the only thing that tells a body
-// that ran three times apart from three bodies that ran once each.
+// which ran three times apart from three bodies that ran once each.
 //
-// P4's asymmetry is the claim under test. A review body may carry nothing from
-// the round before it, so the stage's constructor must run once per execution;
-// a fixer may keep a session across the rounds it is fixing, so its
-// constructor must run once for the whole segment. Both halves are asserted
-// here, since making either one match the other would break the split.
+// The asymmetry is the claim under test. This package hands no stage body to
+// the round after it, so a stage's constructor must run once per execution; a
+// fixer may keep a session across the rounds of the loop it serves, so its
+// constructor must run once per fix node rather than once per round. Two fix
+// nodes are what pins the second half: with one stage taking rounds, once per
+// node and once per segment predict the same number and neither can fail.
 func TestTheStageBodyIsRebuiltEveryRoundAndTheFixerIsNot(t *testing.T) {
 	const rounds = 2
+	looping := []Stage{StageReview, StageLint}
 	c := newCalls()
 	stages := recordingStages(c)
-	review := recording(c, nil, nil, func(_ Input, call int) (Output, error) {
-		if call > rounds {
-			return Output{Report: passing()}, nil
-		}
-		return Output{Report: reportWith(findings.ActionFix, "still wrong")}, nil
+	for _, stage := range looping {
+		impl := recording(c, nil, nil, func(_ Input, call int) (Output, error) {
+			if call > rounds {
+				return Output{Report: passing()}, nil
+			}
+			return Output{Report: reportWith(findings.ActionFix, "still wrong")}, nil
+		})
+		set(&stages, stage, constructing(c, stage, impl))
+	}
+	// A head nobody repeats, so convergence can never be what ends a loop and
+	// the round limit is left as the only thing that does.
+	fixer := recordingFixer(c, nil, []Key{KeyHead}, func(in FixInput, call int) (FixOutput, error) {
+		mark := in.Stage.String() + strconv.Itoa(call)
+		return FixOutput{
+			Summary: "round " + mark,
+			Writes:  map[Key]graph.Value{KeyHead: graph.TextValue("c" + mark)},
+		}, nil
 	})
-	set(&stages, StageReview, constructing(c, StageReview, review))
 	p := build(t, Options{
 		Stages: stages,
-		Fixer:  constructingFixer(c, movingFixer(c)),
-		Rounds: config.FixRounds{Review: rounds},
+		Fixer:  constructingFixer(c, fixer),
+		Rounds: config.FixRounds{Review: rounds, Lint: rounds},
 		Budget: 200,
 	})
 	_, result := start(t, p, complete())
@@ -40,19 +54,21 @@ func TestTheStageBodyIsRebuiltEveryRoundAndTheFixerIsNot(t *testing.T) {
 	if result.Status != graph.StatusCompleted {
 		t.Fatalf("status %s, reason %q, want completed: the run has to reach the end in one segment for the counts to mean anything", result.Status, result.Reason)
 	}
-	if n := c.fixCount(StageReview); n != rounds {
-		t.Fatalf("the fixer ran %d times, want %d: the run did not take the rounds this test counts constructions over", n, rounds)
+	for _, stage := range looping {
+		if n := c.fixCount(stage); n != rounds {
+			t.Fatalf("%s's fixer ran %d times, want %d: the run did not take the rounds this test counts constructions over", stage, n, rounds)
+		}
+		executions := c.stageCount(stage)
+		if executions != rounds+1 {
+			t.Fatalf("%s ran %d times, want %d: one first look plus one verification per round", stage, executions, rounds+1)
+		}
+		if n := c.stageNewCount(stage); n != executions {
+			t.Errorf("%s's body was constructed %d times for %d executions, want one per execution: a body built fewer times than it ran is the same Go value in two rounds", stage, n, executions)
+		}
 	}
-
-	executions := c.stageCount(StageReview)
-	if executions != rounds+1 {
-		t.Fatalf("review ran %d times, want %d: one first look plus one verification per round", executions, rounds+1)
-	}
-	if n := c.stageNewCount(StageReview); n != executions {
-		t.Errorf("review's body was constructed %d times for %d executions, want one per execution: a body built fewer times than it ran is the same Go value in two rounds and can carry anything between them", n, executions)
-	}
-	if n := c.fixNewCount(); n != 1 {
-		t.Errorf("the fixer was constructed %d times across %d rounds, want 1: only the fixer keeps a session across rounds, and rebuilding it takes that away", n, rounds)
+	if n := c.fixNewCount(); n != len(looping) {
+		t.Errorf("the fixer was constructed %d times for %d fix nodes over %d rounds each, want %d: one per fix node, spanning that node's rounds",
+			n, len(looping), rounds, len(looping))
 	}
 }
 

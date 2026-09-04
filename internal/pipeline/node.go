@@ -31,15 +31,25 @@ func stageNode(stage Stage, impl Implementation) graph.Node {
 					return w.Set(string(stage.OutcomeKey()), graph.TextValue(string(OutcomeSkipped)))
 				}
 				// Constructing here rather than in the enclosing closure is
-				// what makes P4's fresh review a mechanism: the graph builds
-				// one graph.Body per node for a whole advance segment, so a
-				// body built out there would be the same Go value in every
-				// round of the fix loop and could carry anything between them.
+				// what keeps a stage body out of the round after it: the graph
+				// builds one graph.Body per node for a whole advance segment,
+				// so a body built out there would be the same Go value in
+				// every round of the fix loop. It narrows what a stage can
+				// carry; it does not close the constructor's own closure.
 				body := impl.NewBody()
+				refused := &refusal{}
 				out, err := body(ctx, Input{
 					Stage: stage,
-					State: reader{from: r, allowed: declared, who: "stage " + stage.String()},
+					State: reader{
+						from:    r,
+						allowed: declared,
+						who:     "stage " + stage.String(),
+						refused: refused,
+					},
 				})
+				if err == nil {
+					err = refused.err
+				}
 				if err != nil {
 					return err
 				}
@@ -152,12 +162,21 @@ func fixNode(stage Stage, fixer Fixer) graph.Node {
 					return err
 				}
 				summary, _ := previous.Text()
+				refused := &refusal{}
 				out, err := body(ctx, FixInput{
 					Stage:    stage,
 					Findings: report.Fixable(),
 					Previous: summary,
-					State:    reader{from: r, allowed: declared, who: "the fixer for " + stage.String()},
+					State: reader{
+						from:    r,
+						allowed: declared,
+						who:     "the fixer for " + stage.String(),
+						refused: refused,
+					},
 				})
+				if err == nil {
+					err = refused.err
+				}
 				if err != nil {
 					return err
 				}

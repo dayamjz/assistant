@@ -26,22 +26,28 @@ type Implementation struct {
 	Writes []Key
 	// NewBody constructs the implementation for one execution of the stage.
 	// The pipeline calls it each time the stage runs and never reuses a body,
-	// so a stage that takes fix rounds is built again for every round and a
-	// body holds nothing from one round, one segment, or one run to the next.
-	// Anything a later execution needs lives in declared state. That is P4's
-	// fresh review expressed as construction: it is not a rule an
-	// implementation is trusted to follow.
+	// so a stage that takes fix rounds is built again for every round: this
+	// package hands no stage body from one round, one segment, or one run to
+	// the next, and anything a later execution needs lives in declared state.
+	//
+	// That is a narrowing rather than a guarantee. NewBody is supplied by the
+	// caller, so its closure may capture whatever the caller likes and keep it
+	// across every round and every run; nothing here refuses that. What it
+	// does remove is the easiest way a stage keeps a value between rounds, and
+	// P4's load-bearing half is enforced downstream and typed, at
+	// agents.Runner.Run, which has no parameter a session could be named in.
 	//
 	// A stage this run skips does not run its body, so nothing is constructed
 	// for it.
 	NewBody func() Body
 }
 
-// Body is a stage's work for one advance segment. It reads through in.State,
-// returns what it found and what it wants written, and returns an error only
-// when the stage could not run at all. A finding is not an error: a stage that
-// ran and found something wrong returns it in the report, which is what
-// decides whether the run fixes, holds, or advances.
+// Body is a stage's work for one execution of the stage: a stage taking fix
+// rounds is handed a different Body value each round. It reads through
+// in.State, returns what it found and what it wants written, and returns an
+// error only when the stage could not run at all. A finding is not an error: a
+// stage that ran and found something wrong returns it in the report, which is
+// what decides whether the run fixes, holds, or advances.
 //
 // A body that returns an error stops the run and leaves state untouched.
 type Body func(ctx context.Context, in Input) (Output, error)
@@ -80,14 +86,16 @@ type Fixer struct {
 	// convergence bound meaningful: a round that changed nothing leaves state
 	// as it was.
 	Writes []Key
-	// NewBody constructs the fixer for one advance segment, not for one round.
-	// The graph calls it once per Run, Resume, or Answer call and shares
-	// nothing between runs, so a fix body may hold state across the rounds
-	// within one segment - an agent session, for one - and must keep anything
-	// a later segment needs in declared state.
+	// NewBody constructs the fixer for one fix node per advance segment, not
+	// for one round: a run with rounds on several stages builds one fix body
+	// per fix node it executes. The one that matters to an implementation is
+	// that a fix body spans every round of the one stage's loop it serves,
+	// because that loop cannot straddle a segment boundary. So a fix body may
+	// hold state across those rounds - an agent session, for one - and must
+	// keep anything a later segment needs in declared state.
 	//
 	// The asymmetry with Implementation.NewBody, which is built per execution,
-	// is P4 itself: only the fixer keeps a session across rounds.
+	// is the point: only the fixer keeps a session across rounds.
 	NewBody func() FixBody
 }
 
@@ -102,11 +110,14 @@ type FixInput struct {
 	// finding never reaches here: it holds the stage before the round starts.
 	Findings []findings.Finding
 	// Previous is the sanitized summary the last round of this stage's fixer
-	// wrote, empty on the first round. It is what the fixing role hands the
-	// reviewing role, and the only thing that crosses in that direction: a
-	// stage body is constructed again every round and so can be handed nothing
-	// else. It does not bound what the fixer carries forward for itself, which
-	// stays in the fix body built for the segment.
+	// wrote, empty on the first round. It crosses from one fix round to the
+	// next round of the same stage, and this package routes it nowhere else:
+	// a stage body's Input carries no summary.
+	//
+	// PRD section 5 has the re-review check the previous findings and the fix
+	// summary as claims. A stage that wants to see them declares a read of its
+	// own Stage.FixKey and Stage.ReportKey, which the schema permits because
+	// only writes of pipeline-owned keys are refused.
 	Previous string
 	// State reads exactly the keys the fixer declared.
 	State Reader
@@ -130,6 +141,20 @@ type Reader interface {
 	Get(key Key) (graph.Value, error)
 }
 
+// refusal records the first read a reader turned down, so the node adapter
+// can fail the step even when the body discarded the error it was handed. It
+// is the same device internal/graph applies one layer down, for the same
+// reason: an error a body may ignore bounds nothing.
+type refusal struct{ err error }
+
+// fail records err if it is the first refusal and returns it either way.
+func (f *refusal) fail(err error) error {
+	if f.err == nil {
+		f.err = err
+	}
+	return err
+}
+
 // reader restricts a graph.Reader to the keys one implementation declared.
 // The graph node also declares the keys the pipeline's own adapter reads, so
 // without this a body could read them; the declaration would then bound the
@@ -138,12 +163,14 @@ type reader struct {
 	from    graph.Reader
 	allowed map[Key]struct{}
 	who     string
+	refused *refusal
 }
 
 // Get implements Reader.
 func (r reader) Get(key Key) (graph.Value, error) {
 	if _, ok := r.allowed[key]; !ok {
-		return graph.Value{}, fmt.Errorf("%w: %s, key %q", ErrUndeclaredRead, r.who, key)
+		return graph.Value{}, r.refused.fail(
+			fmt.Errorf("%w: %s, key %q", ErrUndeclaredRead, r.who, key))
 	}
 	return r.from.Get(string(key))
 }
