@@ -103,10 +103,11 @@
 // round limit is above zero, so whether a limit is zero decides the graph's
 // edge count, and a checkpoint's traversal and fingerprint counters are sized
 // by that count. internal/graph refuses a checkpoint whose counter vectors are
-// not the length of its edge list, so a run checkpointed while one stage had
-// rounds cannot be resumed once that stage's limit reads zero, or the other
-// way round. It also refuses a traversal count already past the bound on the
-// edge sitting at that index.
+// not the length of its edge list, which refuses a configuration change that
+// alters the edge count and admits one that does not - one stage's limit
+// dropping to zero while another's rises from zero. The next two paragraphs
+// trace what that admits and what it costs. It also refuses a traversal count
+// already past the bound on the edge sitting at that index.
 //
 // That check is a length comparison and nothing more. internal/graph compares
 // the length of the per-edge traversal and fingerprint vectors against its
@@ -202,13 +203,14 @@
 //
 //   - Per-stage rounds. Each stage's limit bounds the one cycle it sits on.
 //     Both of that cycle's edges carry the limit, because the graph requires a
-//     bound on the back edge, and within one configuration the edge that stops
-//     a run is the one into the fixer, because that is where a round is
-//     decided: a stage still reporting fix-eligible findings after its last
-//     round parks in front of the fixer rather than taking a round nothing
-//     would verify. Across a resume under changed limits the back edge can be
-//     the one that stops it, which the counter-misattribution paragraph above
-//     traces. It catches one stage oscillating between two wrong fixes.
+//     bound on the back edge, and within one configuration the edge that
+//     reaches that bound first is the one into the fixer, because that is
+//     where a round is decided: a stage still reporting fix-eligible findings
+//     after its last round parks in front of the fixer rather than taking a
+//     round nothing would verify. Across a resume under changed limits the
+//     back edge can be the one that reaches it, which the
+//     counter-misattribution paragraph above traces. It catches one stage
+//     oscillating between two wrong fixes.
 //   - The run-wide step budget. It is carried to the executor and counts every
 //     node execution however they are distributed. It catches several stages
 //     each staying under their own limit while the run as a whole never

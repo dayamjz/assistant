@@ -151,10 +151,10 @@ func wire(b *graph.Builder, stage Stage, impl Implementation, fixer Fixer, round
 		// The back edge, which closes the one cycle in the pipeline. The graph
 		// requires a bound on it and the stage's round limit is that bound. It
 		// is the same limit the edge into the fixer carries below. Within one
-		// configuration it cannot be the first to stop a run, because every
-		// return through here follows an entry that edge already counted, so
-		// that edge reaches the bound first. Across a resume under changed fix
-		// round limits it does not hold, because the two edges can inherit
+		// configuration it cannot be the first to reach its round bound,
+		// because every return through here follows an entry that edge already
+		// counted, so that edge reaches the bound first. Across a resume under
+		// changed fix round limits that does not hold, because they can inherit
 		// counts from different edges: the counter-misattribution paragraph in
 		// doc.go traces a run this edge stops on an inherited count while the
 		// entry edge passed on an inherited zero.
