@@ -135,13 +135,14 @@
 // back edge, which under the new indices is the slot already holding one, then
 // reads its bound as reached and parks the run rounds-exhausted.
 //
-// So the run parks with the fix applied and never re-reviewed: the round limit
-// fires one round early, so the loop takes a fix and parks before the round
-// that would have verified it, leaving a commit the pipeline authored on the
-// branch that no stage looked at, and a person's fork deciding what happens to
-// it. Reaching this needs a configuration change between a checkpoint and a
-// resume, which P7 makes reachable, because configuration is re-read from the
-// default branch rather than carried forward from the run that checkpointed.
+// So the run parks with the fix applied and never re-reviewed: the bound stops
+// the loop after the fix but before the re-run that would verify it, so the
+// round is taken and never completed, leaving a commit the pipeline authored
+// on the branch that no stage looked at, and a person's fork deciding what
+// happens to it. Reaching this needs a configuration change between a
+// checkpoint and a resume, which P7 makes reachable, because configuration is
+// re-read from the default branch rather than carried forward from the run
+// that checkpointed.
 //
 // The shift does not reach convergence, and the reasoning is short enough to
 // check rather than take on trust. internal/graph writes and reads a
@@ -201,11 +202,13 @@
 //
 //   - Per-stage rounds. Each stage's limit bounds the one cycle it sits on.
 //     Both of that cycle's edges carry the limit, because the graph requires a
-//     bound on the back edge, and the edge that stops a run is the one into
-//     the fixer, because that is where a round is decided: a stage still
-//     reporting fix-eligible findings after its last round parks in front of
-//     the fixer rather than taking a round nothing would verify. It catches
-//     one stage oscillating between two wrong fixes.
+//     bound on the back edge, and within one configuration the edge that stops
+//     a run is the one into the fixer, because that is where a round is
+//     decided: a stage still reporting fix-eligible findings after its last
+//     round parks in front of the fixer rather than taking a round nothing
+//     would verify. Across a resume under changed limits the back edge can be
+//     the one that stops it, which the counter-misattribution paragraph above
+//     traces. It catches one stage oscillating between two wrong fixes.
 //   - The run-wide step budget. It is carried to the executor and counts every
 //     node execution however they are distributed. It catches several stages
 //     each staying under their own limit while the run as a whole never
