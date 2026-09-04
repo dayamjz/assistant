@@ -230,6 +230,12 @@ func backEdgeOwners(t *testing.T, g *graph.Graph) map[int]Stage {
 // both; if it ever did not, a fingerprint would be compared against another
 // stage's loop.
 //
+// It guards that property and not the order wire emits edges in. Moving the
+// fix node's return within a stage's block shifts every back-edge index by the
+// same constant, which leaves the index-to-stage map injective and this test
+// passing. What would fail it is a stage table admitting more than five stages
+// that take rounds, where the indices of two stages could coincide.
+//
 // The check is over every combination of which of the five configurable stages
 // take rounds, which covers none, each one alone, and all five.
 func TestBackEdgeIndicesNeverCrossStagesAcrossConfigurations(t *testing.T) {

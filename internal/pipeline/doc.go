@@ -150,16 +150,32 @@
 // The shift does not reach convergence, and the reasoning is short enough to
 // check rather than take on trust. internal/graph writes and reads a
 // fingerprint only on a back edge and skips the comparison when the slot is
-// empty. The only back edges here are the fix nodes' returns, and wire emits
-// that return first in a stage's block: six edges for a stage whose limit is
-// above zero, and the five every stage has when it is zero, because the fix
-// node's return is there only when there is a fixer. So a back-edge index is
-// five times the stage's position plus the number of earlier stages taking
-// rounds, rather than six times its position. At most five stages can take
-// rounds, so an index that is a back edge under two different configurations
-// must belong to the same stage: a fingerprint that is read is never another
-// edge's, and a slot the new graph reads but the old one never wrote is empty
-// and skipped.
+// empty. The only back edges here are the fix nodes' returns, one per stage
+// taking rounds. What the conclusion rests on is that an index which is a back
+// edge under two different configurations belongs to the same stage in both:
+// a fingerprint that is read is never another edge's, and a slot the new graph
+// reads but the old one never wrote is empty and skipped.
+//
+// The arithmetic is worth writing out, because a conclusion a reader cannot
+// check is worth no more than no conclusion. Every stage is wired by wire,
+// which emits five edges for a stage whose round limit is zero, and those five
+// plus the fix node's return when it is above zero, the return first. So today
+// a back-edge index is five times the stage's position plus the number of
+// earlier stages taking rounds. At most four stages sit before any one of them
+// and can take rounds, so a stage's index stays within four of five times its
+// position and cannot reach five times the next stage's. The ranges two stages
+// draw from are disjoint, whatever pair of configurations they come from.
+//
+// The emission order settles the formula and not the conclusion. Moving the
+// return below the other four edges would add the same constant to every
+// back-edge index, because one function wires all nine stages, and a constant
+// added to every index leaves index-to-stage injective. So the conclusion
+// survives any placement of that edge within a stage's block. It is the
+// uniqueness that TestBackEdgeIndicesNeverCrossStagesAcrossConfigurations
+// pins, over every combination of which stages take rounds, and not the order;
+// what would break it is a stage table admitting more than five stages that
+// take rounds, where the earlier-stage count could carry one stage's index
+// onto another's.
 //
 // The claim withdrawn there was that a fingerprint read from the wrong slot
 // could defeat convergence, and it is worth saying why that counts as a
