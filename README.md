@@ -10,7 +10,7 @@ until it has been independently reviewed, tested, documented, and linted.
 ## Status
 
 Early. The product requirements are settled and checked in at
-[`docs/prd.html`](docs/prd.html). Ten pieces exist so far. The execution
+[`docs/prd.html`](docs/prd.html). Eleven pieces exist so far. The execution
 engine in `internal/graph` is the first: the graph builder with its
 construction-time checks, an executor with halt points and bounded cycles, and
 checkpoints behind a four-operation store. The second is `internal/findings`,
@@ -38,8 +38,14 @@ for. The tenth is `internal/gate`, which owns the local bare repository a push
 is validated through: where it lives, the admission and notification hooks that
 make a push mean something, its identity across a move or a copy, and one seam
 every operation obtains its gate from, so no operation can skip the ownership
-question that an index in `internal/store` answers. Nothing joins them into a
-pipeline yet, so there is still nothing to run.
+question that an index in `internal/store` answers. The eleventh is
+`internal/pipeline`, the nine delivery-gate stages as a graph over the
+execution engine: the contract one stage implements, the fixed order carried as
+nine named fields rather than a list, the state schema as one key table, and
+the fix loop with its halt points and its three bounds. It defines a topology
+and executes nothing. The nine stage bodies are separate work against that
+contract and do not exist yet, and neither does the binary, so there is still
+nothing to run.
 
 ## The two promises
 
@@ -71,6 +77,7 @@ working as it always did.
 | `internal/gate` | The local bare repository a push is validated through: where it lives, its two hooks, its identity across a move or a copy, and the ownership question every operation asks before it adopts or deletes one. |
 | `internal/graph` | The execution engine: nodes, edges, bounds, halt points, checkpoints. |
 | `internal/ipc` | The local protocol between the command line and the background service: the method table, the event taxonomy, the bounded stream, the client and the server, and peer identification. |
+| `internal/pipeline` | The nine stages as a graph definition over `internal/graph`: the stage contract, the fixed order, the state key table, the fix loop, and its halt points and bounds. |
 | `internal/safety` | The data-loss policy over git: whether a branch update may proceed, on what anchor, and when to refuse. |
 | `internal/store` | The only package that opens the database: the schema, its additive migrations, and typed accessors for repositories, runs, stages, rounds, checkpoints, tasks, task state and events, holds, and the gate ownership index. |
 | `internal/vcs` | The only package that invokes git: typed operations over repositories, worktrees, refs, diffs, and remotes. |

@@ -59,6 +59,12 @@ Each has cost this repository more than one round of review.
   read cannot produce. Mutation testing does not surface this, since deleting
   the guard does fail the test. Model what the mechanism puts on the wire and
   derive the values from it the way the real parser does.
+- **Check a confession as hard as a promise.** `internal/pipeline` came within a
+  fix round of disclosing that a configuration change could defeat its
+  convergence bound, a failure the mechanism cannot produce; the round-limit
+  half of the same disclosure was true, which is what made the false half read
+  as plausible. A doc comment is a contract in both directions, so verify a
+  stated gap against the mechanism before writing it down.
 
 ## Code
 
@@ -127,6 +133,17 @@ Each has cost this repository more than one round of review.
   comes from `Credentials`, read off the socket, and never from `Marker`, which
   a caller writes for itself. Read its `doc.go` for where state may still be
   collapsed into a gap marker and why that is not the strict rule relaxed.
+- `internal/pipeline` is the nine stages as a graph definition, not a second
+  executor: `internal/graph` owns execution, halting, and all three bounds. P2
+  is structural there rather than checked. A `Stages` is nine named fields, so
+  another order, a missing stage, and an added one are unsayable, and the order
+  itself is the unexported stage table in `stage.go`, which also says which
+  five stages may take fix rounds. The state schema is the key table in
+  `key.go`, on the same terms as `internal/config`: a key's kind, its merge
+  rule, and whether a stage may write it are one row, and a stage that names
+  anything else fails to build. Read its `doc.go` before changing the loop or
+  the holds, and for the residual gaps: the requested fix round PRD section 5's
+  hold offers is not wired, and convergence is over the whole state.
 
 ## Tests
 
