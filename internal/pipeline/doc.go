@@ -103,11 +103,8 @@
 // round limit is above zero, so whether a limit is zero decides the graph's
 // edge count, and a checkpoint's traversal and fingerprint counters are sized
 // by that count. internal/graph refuses a checkpoint whose counter vectors are
-// not the length of its edge list, which refuses a configuration change that
-// alters the edge count and admits one that does not - one stage's limit
-// dropping to zero while another's rises from zero. The next two paragraphs
-// trace what that admits and what it costs. It also refuses a traversal count
-// already past the bound on the edge sitting at that index.
+// not the length of its edge list. It also refuses a traversal count already
+// past the bound on the edge sitting at that index.
 //
 // That check is a length comparison and nothing more. internal/graph compares
 // the length of the per-edge traversal and fingerprint vectors against its
