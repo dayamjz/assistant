@@ -83,9 +83,11 @@ type Fixer struct {
 	Reads []Key
 	// Writes lists every state key a fix body may write. Every key here must
 	// declare a merge rule, and a key that does not is refused with
-	// ErrUnmergeableFixerWrite: one Fixer serves every fix node, so a key it
-	// declares is written by as many nodes as there are stages taking fix
-	// rounds, and a key with no merge rule may have only one writer.
+	// ErrUnmergeableFixerWrite. One Fixer serves every fix node, so under some
+	// fix round limits a key it declares has more writers than the graph
+	// permits a key with no merge rule; the refusal is made whenever a Fixer is
+	// supplied rather than only under those limits, so the answer does not vary
+	// with configuration.
 	//
 	// A fixer that commits its work declares KeyHead here, which is the key the
 	// schema admits today. It is also what makes the graph's convergence bound

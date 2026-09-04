@@ -37,13 +37,15 @@ type Stages struct {
 // Options is everything the pipeline is built from. There is deliberately no
 // field here that removes a stage, reorders the stages, or skips one: a
 // standing configuration may make a stage stricter and may not weaken one, so
-// the only skip this package admits is the per-run list in Start.
+// the only skip a caller may ask for is the per-run list in Start.
 type Options struct {
 	// Stages are the nine implementations. Every field is required.
 	Stages Stages
 	// Fixer applies fix-eligible findings for every stage that takes automatic
-	// fix rounds. It is required when any of those limits is above zero, and
-	// unused when they are all zero.
+	// fix rounds. It is required when any of those limits is above zero, and a
+	// Fixer that is supplied is validated whatever the limits are, so that one
+	// legal under a repository's current limits does not become illegal when
+	// they change.
 	Fixer Fixer
 	// Rounds are the per-stage automatic fix round limits, the first of the
 	// three bounds on the fix loop. A limit of zero gives the stage no fixer
@@ -211,8 +213,8 @@ func (p *Pipeline) Executor(store graph.CheckpointStore) (*graph.Executor, error
 	return graph.NewExecutor(p.graph, graph.Config{Store: store, Budget: p.budget})
 }
 
-// Start is what a run begins with. Skip is the only way a stage does not run,
-// and it is per run: nothing in Options can set it.
+// Start is what a run begins with. Skip is the only way a caller may choose
+// that a stage does not run, and it is per run: nothing in Options can set it.
 type Start struct {
 	// Branch is the branch under validation.
 	Branch string
