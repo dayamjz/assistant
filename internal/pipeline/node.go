@@ -57,6 +57,9 @@ func stageNode(stage Stage, impl Implementation) graph.Node {
 				// a finding with a missing, empty, or unrecognized action
 				// becomes ask, and classify then holds the stage for it.
 				report := out.Report.Normalize()
+				if err := report.Validate(); err != nil {
+					return fmt.Errorf("%w: %s: %w", ErrUnusableReport, stage, err)
+				}
 				encoded, err := json.Marshal(report)
 				if err != nil {
 					return fmt.Errorf("pipeline: record the %s report: %w", stage, err)

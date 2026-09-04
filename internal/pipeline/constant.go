@@ -12,11 +12,17 @@ import (
 // implementations of the same contract, and each one decides what it reads,
 // what it writes, and what it reports.
 //
-// The report is returned as given. The pipeline normalizes it before recording
-// it, so a finding built here with no action still becomes an ask and still
-// holds the stage, which is P3 applying to this implementation exactly as it
-// applies to a real one.
-func Constant(report findings.Report) Implementation {
+// The summary is a parameter rather than a field a caller may leave empty,
+// because the pipeline refuses a report with no summary. A helper that could
+// build a report the pipeline rejects would let a test start from a shape the
+// real mechanism never accepts.
+//
+// The report is returned as given otherwise. The pipeline normalizes it before
+// recording it, so a finding built here with no action still becomes an ask and
+// still holds the stage, which is P3 applying to this implementation exactly as
+// it applies to a real one.
+func Constant(summary string, found ...findings.Finding) Implementation {
+	report := findings.Report{Summary: summary, Findings: found}
 	return Implementation{
 		NewBody: func() Body {
 			return func(context.Context, Input) (Output, error) {
@@ -29,10 +35,10 @@ func Constant(report findings.Report) Implementation {
 // ConstantStages returns the nine stages, each of them Constant with the same
 // report. It is the smallest complete Stages, and it is what a test that cares
 // about the topology rather than about any stage's behaviour starts from.
-func ConstantStages(report findings.Report) Stages {
+func ConstantStages(summary string, found ...findings.Finding) Stages {
 	var s Stages
 	for _, row := range stageTable {
-		*row.implementation(&s) = Constant(report)
+		*row.implementation(&s) = Constant(summary, found...)
 	}
 	return s
 }

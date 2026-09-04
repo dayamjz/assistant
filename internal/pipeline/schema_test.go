@@ -71,7 +71,7 @@ func TestEveryStageHasItsOwnKeys(t *testing.T) {
 // TestTheGraphDeclaresExactlyTheSchema is what keeps the schema the one owner
 // of the state shape: the built graph holds these keys and no others.
 func TestTheGraphDeclaresExactlyTheSchema(t *testing.T) {
-	p := build(t, Options{Stages: ConstantStages(passing()), Budget: 100})
+	p := build(t, Options{Stages: ConstantStages(passingSummary), Budget: 100})
 	got := p.Graph().Keys()
 	want := Keys()
 	if len(got) != len(want) {
@@ -89,7 +89,7 @@ func TestTheGraphDeclaresExactlyTheSchema(t *testing.T) {
 // it must declare a merge rule or the graph refuses to build. An answer key
 // has exactly one, its halt point, and the graph refuses a merge rule on it.
 func TestAnOutcomeKeyMergesAndAnAnswerKeyDoesNot(t *testing.T) {
-	p := build(t, Options{Stages: ConstantStages(passing()), Budget: 100})
+	p := build(t, Options{Stages: ConstantStages(passingSummary), Budget: 100})
 	for _, k := range p.Graph().Keys() {
 		for _, stage := range Order() {
 			switch Key(k.Name) {

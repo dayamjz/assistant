@@ -170,7 +170,12 @@ func constructingFixer(c *calls, fixer Fixer) Fixer {
 }
 
 // passing is a report a stage returns when it found nothing.
-func passing() findings.Report { return findings.Report{Summary: "nothing to report"} }
+func passing() findings.Report { return findings.Report{Summary: passingSummary} }
+
+// passingSummary is the summary a stage that found nothing reports. Constant
+// takes it as an argument, so the helper cannot build the summary-less report
+// the pipeline refuses.
+const passingSummary = "nothing to report"
 
 // reportWith is a report carrying one finding with the given action.
 func reportWith(action findings.Action, description string) findings.Report {

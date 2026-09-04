@@ -22,8 +22,9 @@ type Implementation struct {
 	Reads []Key
 	// Writes lists every state key the body may write. Returning a write of
 	// any other key fails the step with ErrUndeclaredWrite. Only a key the
-	// schema marks writable by a stage may be listed at all; anything else is
-	// refused with ErrReservedKey when the pipeline is built.
+	// schema marks writable by a stage may be listed at all; a key that is not
+	// is refused when the pipeline is built, with the sentinel errors.go names
+	// for that case.
 	Writes []Key
 	// NewBody constructs the implementation for one execution of the stage.
 	// The pipeline calls it each time the stage runs and never reuses a body,

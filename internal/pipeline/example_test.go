@@ -5,7 +5,6 @@ import (
 	"fmt"
 
 	"github.com/dayamjz/assistant/internal/config"
-	"github.com/dayamjz/assistant/internal/findings"
 	"github.com/dayamjz/assistant/internal/graph"
 	"github.com/dayamjz/assistant/internal/pipeline"
 )
@@ -15,7 +14,7 @@ import (
 // the halt points, the fix loop, and its bounds are the pipeline's.
 func Example() {
 	p, err := pipeline.New(pipeline.Options{
-		Stages: pipeline.ConstantStages(findings.Report{Summary: "nothing to report"}),
+		Stages: pipeline.ConstantStages("nothing to report"),
 		Rounds: config.Defaults().FixRounds,
 		Fixer: pipeline.Fixer{
 			NewBody: func() pipeline.FixBody {

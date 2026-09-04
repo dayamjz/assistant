@@ -13,21 +13,21 @@ import (
 
 func TestAStageThatTakesFixRoundsNeedsAFixer(t *testing.T) {
 	_, err := New(Options{
-		Stages: ConstantStages(passing()),
+		Stages: ConstantStages(passingSummary),
 		Rounds: config.FixRounds{Review: 1},
 		Budget: 100,
 	})
 	if !errors.Is(err, ErrMissingFixer) {
 		t.Fatalf("New with rounds and no fixer: %v, want ErrMissingFixer", err)
 	}
-	if _, err := New(Options{Stages: ConstantStages(passing()), Budget: 100}); err != nil {
+	if _, err := New(Options{Stages: ConstantStages(passingSummary), Budget: 100}); err != nil {
 		t.Fatalf("New with no rounds and no fixer: %v, want no refusal", err)
 	}
 }
 
 func TestANegativeRoundLimitIsRefused(t *testing.T) {
 	_, err := New(Options{
-		Stages: ConstantStages(passing()),
+		Stages: ConstantStages(passingSummary),
 		Fixer:  recordingFixer(newCalls(), nil, nil, nil),
 		Rounds: config.FixRounds{Lint: -1},
 		Budget: 100,
@@ -59,8 +59,8 @@ func TestADeclarationOutsideTheSchemaIsRefused(t *testing.T) {
 		{"write of the cancelled flag", nil, []Key{KeyCancelled}, ErrReservedKey},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			stages := ConstantStages(passing())
-			impl := Constant(passing())
+			stages := ConstantStages(passingSummary)
+			impl := Constant(passingSummary)
 			impl.Reads, impl.Writes = tc.reads, tc.wants
 			set(&stages, StageDocument, impl)
 			_, err := New(Options{Stages: stages, Budget: 100})
@@ -74,7 +74,7 @@ func TestADeclarationOutsideTheSchemaIsRefused(t *testing.T) {
 func TestAFixerDeclarationOutsideTheSchemaIsRefused(t *testing.T) {
 	fixer := recordingFixer(newCalls(), nil, []Key{StageReview.OutcomeKey()}, nil)
 	_, err := New(Options{
-		Stages: ConstantStages(passing()),
+		Stages: ConstantStages(passingSummary),
 		Fixer:  fixer,
 		Rounds: config.FixRounds{Review: 1},
 		Budget: 100,
@@ -163,7 +163,7 @@ func TestABodyMayReachEveryKeyItDeclared(t *testing.T) {
 }
 
 func TestARunNeedsToSayWhatItIsValidating(t *testing.T) {
-	p := build(t, Options{Stages: ConstantStages(passing()), Budget: 100})
+	p := build(t, Options{Stages: ConstantStages(passingSummary), Budget: 100})
 	for _, s := range []Start{
 		{Base: "main", Submitted: "c0"},
 		{Branch: "topic", Submitted: "c0"},
@@ -179,7 +179,7 @@ func TestARunNeedsToSayWhatItIsValidating(t *testing.T) {
 }
 
 func TestARunCannotSkipAStageThatDoesNotExist(t *testing.T) {
-	p := build(t, Options{Stages: ConstantStages(passing()), Budget: 100})
+	p := build(t, Options{Stages: ConstantStages(passingSummary), Budget: 100})
 	begin := complete()
 	begin.Skip = []Stage{Stage(200)}
 	if _, err := p.NewState(begin); !errors.Is(err, ErrUnknownStage) {
@@ -190,7 +190,7 @@ func TestARunCannotSkipAStageThatDoesNotExist(t *testing.T) {
 // TestARunCannotStartAlreadyHoldingAHoldAnswer is the graph's rule reaching
 // this package: a run must not begin with an answer nobody gave.
 func TestARunCannotStartAlreadyHoldingAHoldAnswer(t *testing.T) {
-	p := build(t, Options{Stages: ConstantStages(passing()), Budget: 100})
+	p := build(t, Options{Stages: ConstantStages(passingSummary), Budget: 100})
 	_, err := p.Graph().NewState(map[string]graph.Value{
 		string(StageReview.AnswerKey()): graph.TextValue(string(OutcomeApproved)),
 	})
@@ -203,7 +203,7 @@ func TestARunCannotStartAlreadyHoldingAHoldAnswer(t *testing.T) {
 // back as empty when it cannot be decoded, since an empty report presents a
 // stage that found something as one that found nothing.
 func TestARecordedReportThatCannotBeReadIsRefused(t *testing.T) {
-	p := build(t, Options{Stages: ConstantStages(passing()), Budget: 100})
+	p := build(t, Options{Stages: ConstantStages(passingSummary), Budget: 100})
 	state, err := p.NewState(complete())
 	if err != nil {
 		t.Fatalf("NewState: %v", err)
@@ -402,7 +402,7 @@ func TestASwallowedFixerReadRefusalStillFailsTheStep(t *testing.T) {
 // stays legal, and only the claim of authoritative criteria with none behind it
 // is refused.
 func TestARunThatClaimsASuppliedIntentMustSupplyOne(t *testing.T) {
-	p := build(t, Options{Stages: ConstantStages(passing()), Budget: 100})
+	p := build(t, Options{Stages: ConstantStages(passingSummary), Budget: 100})
 	for _, tc := range []struct {
 		name   string
 		intent string
@@ -447,8 +447,8 @@ func TestARunThatClaimsASuppliedIntentMustSupplyOne(t *testing.T) {
 // true and a stage that set it would have every downstream prompt frame a guess
 // as requirements.
 func TestAStageMayRecordAnInferredIntentButNotCallItSupplied(t *testing.T) {
-	refused := ConstantStages(passing())
-	claiming := Constant(passing())
+	refused := ConstantStages(passingSummary)
+	claiming := Constant(passingSummary)
 	claiming.Writes = []Key{KeyIntentSupplied}
 	set(&refused, StageIntent, claiming)
 	if _, err := New(Options{Stages: refused, Budget: 100}); !errors.Is(err, ErrReservedKey) {
@@ -508,7 +508,7 @@ func TestAFixerMayOnlyWriteAKeyThatDeclaresAMergeRule(t *testing.T) {
 				t.Fatalf("this configuration builds %d fix nodes, want %d: the case does not cover what it is named for", n, tc.nodes)
 			}
 			_, err := New(Options{
-				Stages: ConstantStages(passing()),
+				Stages: ConstantStages(passingSummary),
 				Fixer:  recordingFixer(newCalls(), nil, []Key{KeyDiffEmpty}, nil),
 				Rounds: tc.limits,
 				Budget: 100,
@@ -520,8 +520,8 @@ func TestAFixerMayOnlyWriteAKeyThatDeclaresAMergeRule(t *testing.T) {
 	}
 
 	t.Run("a stage may still write it", func(t *testing.T) {
-		stages := ConstantStages(passing())
-		impl := Constant(passing())
+		stages := ConstantStages(passingSummary)
+		impl := Constant(passingSummary)
 		impl.Writes = []Key{KeyDiffEmpty}
 		set(&stages, StageRebase, impl)
 		if _, err := New(Options{Stages: stages, Budget: 100}); err != nil {
@@ -536,7 +536,7 @@ func TestAFixerMayOnlyWriteAKeyThatDeclaresAMergeRule(t *testing.T) {
 func fixNodes(t *testing.T, limits config.FixRounds) int {
 	t.Helper()
 	p := build(t, Options{
-		Stages: ConstantStages(passing()),
+		Stages: ConstantStages(passingSummary),
 		Fixer:  recordingFixer(newCalls(), nil, []Key{KeyHead}, nil),
 		Rounds: limits,
 		Budget: 100,
@@ -581,5 +581,66 @@ func TestAFixerMayWriteTheHeadItCommits(t *testing.T) {
 	v, _ := result.State.Get(string(KeyHead))
 	if head, _ := v.Text(); head != "c1" {
 		t.Errorf("head %q, want the commit the fixer wrote", head)
+	}
+}
+
+// TestAStageThatSaysNothingFailsTheStep is the fail-open this guard closes. A
+// report with no summary normalizes cleanly and classifies as passed, so
+// without the validation an empty or truncated stage output would be recorded
+// as a stage that found nothing and the run would advance on it.
+func TestAStageThatSaysNothingFailsTheStep(t *testing.T) {
+	c := newCalls()
+	stages := recordingStages(c)
+	set(&stages, StageReview, recording(c, nil, nil, func(Input, int) (Output, error) {
+		return Output{Report: findings.Report{}}, nil
+	}))
+	p := build(t, Options{Stages: stages, Budget: 100})
+	store := graph.NewMemoryStore()
+	exec, err := p.Executor(store)
+	if err != nil {
+		t.Fatalf("Executor: %v", err)
+	}
+	state, err := p.NewState(complete())
+	if err != nil {
+		t.Fatalf("NewState: %v", err)
+	}
+	result, err := exec.Run(context.Background(), "run", state)
+	if !errors.Is(err, ErrUnusableReport) {
+		t.Fatalf("Run: %v (status %s), want ErrUnusableReport", err, result.Status)
+	}
+	if !strings.Contains(err.Error(), string(findings.DefectMissingSummary)) {
+		t.Errorf("refusal %q does not name the defect, so a caller cannot read what was wrong", err)
+	}
+
+	latest, err := store.Latest(context.Background(), "run")
+	if err != nil {
+		t.Fatalf("Latest: %v", err)
+	}
+	if got := StageOutcome(latest.State, StageReview); got != OutcomePending {
+		t.Errorf("review outcome %q, want %q: a step that failed records nothing", got, OutcomePending)
+	}
+	if StageRan(latest.State, StageReview) {
+		t.Error("review recorded a report, and the step that would have recorded it failed")
+	}
+	if n := c.stageCount(StageTest); n != 0 {
+		t.Errorf("test ran %d times after review failed, want 0", n)
+	}
+}
+
+// TestAStageThatSaysSomethingPasses is the control: the refusal above is about
+// the missing summary and not about reporting at all.
+func TestAStageThatSaysSomethingPasses(t *testing.T) {
+	c := newCalls()
+	stages := recordingStages(c)
+	set(&stages, StageReview, recording(c, nil, nil, func(Input, int) (Output, error) {
+		return Output{Report: findings.Report{Summary: "read the diff, found nothing"}}, nil
+	}))
+	p := build(t, Options{Stages: stages, Budget: 100})
+	_, result := start(t, p, complete())
+	if result.Status != graph.StatusCompleted {
+		t.Fatalf("status %s, reason %q, want completed", result.Status, result.Reason)
+	}
+	if got := StageOutcome(result.State, StageReview); got != OutcomePassed {
+		t.Errorf("review outcome %q, want %q", got, OutcomePassed)
 	}
 }

@@ -77,6 +77,23 @@ var (
 	// being told that nothing was the contract. A run that supplied no intent
 	// says so with IntentSupplied false, which stays legal.
 	ErrEmptyIntent = errors.New("pipeline: a run claims a supplied intent and supplies none")
+	// ErrUnusableReport is returned when a stage's report does not validate
+	// after normalization. The step fails, nothing is recorded, and the run
+	// stops; the wrapped error names which defects the report had.
+	//
+	// It is a refusal rather than something to log past because of what the
+	// shape means. An empty or truncated output decodes to a report with no
+	// summary, and recording that would mark the stage passed: a stage that
+	// said nothing read as a stage that found nothing.
+	//
+	// Validating in the stage node adapter is the same argument as normalizing
+	// there. It is the one place every report from all nine stages passes
+	// through, so the fact has one owner instead of nine.
+	// findings.ParseReport already validates what it parses, so a stage that
+	// parsed agent output meets this twice and a stage that built a report by
+	// hand meets it once. It refuses a shape, not a lie: a well-formed report
+	// saying something false passes here.
+	ErrUnusableReport = errors.New("pipeline: a stage's report did not validate")
 	// ErrBadReport is returned when a stage's recorded report cannot be read
 	// back out of state. It is refused rather than read as an empty report,
 	// which would present a stage that found something as one that found

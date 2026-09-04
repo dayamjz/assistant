@@ -66,9 +66,9 @@ type Pipeline struct {
 	budget int
 }
 
-// New builds the pipeline. Every way an Options can be refused returns one of
-// the sentinels in errors.go, so a caller matches on those rather than on a
-// list kept here that would go stale as refusals are added.
+// New builds the pipeline. This package's own refusals are the sentinels in
+// errors.go. A topology internal/graph refuses arrives as its error, which
+// ErrUnmergeableFixerWrite's comment names the reachable case of.
 //
 // The three bounds on the fix loop are settled here and cannot be settled
 // later. Each stage's round limit bounds the cycle it sits on, which the graph

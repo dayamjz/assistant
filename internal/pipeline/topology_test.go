@@ -53,7 +53,7 @@ func chain(t *testing.T, g *graph.Graph) []string {
 }
 
 func TestTheNineStagesRunInTheFixedOrder(t *testing.T) {
-	p := build(t, Options{Stages: ConstantStages(passing()), Budget: 100})
+	p := build(t, Options{Stages: ConstantStages(passingSummary), Budget: 100})
 	walked := chain(t, p.Graph())
 	if len(walked) != len(theNineStages) {
 		t.Fatalf("walked %v, want %v", walked, theNineStages)
@@ -68,7 +68,7 @@ func TestTheNineStagesRunInTheFixedOrder(t *testing.T) {
 func TestEveryStageMustHaveAnImplementation(t *testing.T) {
 	for _, stage := range Order() {
 		t.Run(stage.String(), func(t *testing.T) {
-			stages := ConstantStages(passing())
+			stages := ConstantStages(passingSummary)
 			set(&stages, stage, Implementation{})
 			_, err := New(Options{Stages: stages, Budget: 100})
 			if !errors.Is(err, ErrMissingStage) {
@@ -86,7 +86,7 @@ func TestEveryStageMustHaveAnImplementation(t *testing.T) {
 // and nothing else. The chain of stages, and the state schema, are the same
 // under every configuration.
 func TestConfigurationCannotChangeWhichStagesRun(t *testing.T) {
-	baseline := build(t, Options{Stages: ConstantStages(passing()), Budget: 100})
+	baseline := build(t, Options{Stages: ConstantStages(passingSummary), Budget: 100})
 	want := chain(t, baseline.Graph())
 	wantKeys := Keys()
 
@@ -97,7 +97,7 @@ func TestConfigurationCannotChangeWhichStagesRun(t *testing.T) {
 		{Rebase: 0, Review: 1, Test: 0, Lint: 7, Checks: 0},
 	} {
 		p := build(t, Options{
-			Stages: ConstantStages(passing()),
+			Stages: ConstantStages(passingSummary),
 			Fixer:  recordingFixer(newCalls(), nil, nil, nil),
 			Rounds: limits,
 			Budget: 100,
@@ -130,7 +130,7 @@ func TestConfigurationCannotChangeWhichStagesRun(t *testing.T) {
 func TestOnlyTheFiveConfiguredStagesTakeFixRounds(t *testing.T) {
 	withRounds := map[Stage]bool{StageRebase: true, StageReview: true, StageTest: true, StageLint: true, StageCI: true}
 	p := build(t, Options{
-		Stages: ConstantStages(passing()),
+		Stages: ConstantStages(passingSummary),
 		Fixer:  recordingFixer(newCalls(), nil, nil, nil),
 		Rounds: rounds(config.MaxFixRounds),
 		Budget: 100,
@@ -144,7 +144,7 @@ func TestOnlyTheFiveConfiguredStagesTakeFixRounds(t *testing.T) {
 }
 
 func TestEveryStageHasAHaltPointItStopsBefore(t *testing.T) {
-	p := build(t, Options{Stages: ConstantStages(passing()), Budget: 100})
+	p := build(t, Options{Stages: ConstantStages(passingSummary), Budget: 100})
 	for _, stage := range Order() {
 		node, ok := p.Graph().Node(stage.HoldNode())
 		if !ok {
@@ -166,7 +166,7 @@ func TestEveryStageHasAHaltPointItStopsBefore(t *testing.T) {
 func TestEveryCycleEdgeCarriesTheStagesRoundLimit(t *testing.T) {
 	limits := config.FixRounds{Rebase: 2, Review: 1, Test: 4, Lint: 3, Checks: 5}
 	p := build(t, Options{
-		Stages: ConstantStages(passing()),
+		Stages: ConstantStages(passingSummary),
 		Fixer:  recordingFixer(newCalls(), nil, nil, nil),
 		Rounds: limits,
 		Budget: 100,
