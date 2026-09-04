@@ -616,11 +616,13 @@ flowchart LR
 flowchart TD
   run["Run the stage"] --> f{"Any findings?"}
   f -- no --> done["Stage completes"]
-  f -- yes --> elig{"Fixable findings<br />and rounds remaining<br />and budget remaining?"}
+  f -- yes --> elig{"Fixable findings,<br />and none needing<br />your decision?"}
   elig -- no --> hold["Hold for your decision"]
-  elig -- yes --> fix["Fixer applies the selected findings"]
+  elig -- yes --> bounds{"Rounds remaining<br />and budget remaining?"}
+  bounds -- no --> park["Park the run"]
+  bounds -- yes --> fix["Fixer applies the selected findings"]
   fix --> conv{"Did anything<br />actually change?"}
-  conv -- no --> hold
+  conv -- no --> park
   conv -- yes --> run
   hold --> act["Approve, fix a selection, skip, or cancel"]
   act -->|fix| fix
