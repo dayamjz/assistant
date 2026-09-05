@@ -182,6 +182,14 @@ func Build(root string, opts ...Option) (*Fixture, error) {
 		f.Scenarios = append(f.Scenarios, *scenario)
 		f.Conditions = append(f.Conditions, conditions...)
 	}
+	// A planted executable is drained by the commit that stages it, which is
+	// where its mode is stated in the index. One left pending is one that was
+	// written and then committed by some other plant with the mode git infers,
+	// which is the executable bit lost on any platform that does not carry one,
+	// and nothing else here would notice.
+	if err := b.git.requireDrained(); err != nil {
+		return nil, err
+	}
 	sort.Slice(f.Scenarios, func(i, j int) bool { return f.Scenarios[i].Name < f.Scenarios[j].Name })
 	sort.Slice(f.Conditions, func(i, j int) bool { return f.Conditions[i].ID < f.Conditions[j].ID })
 	return f, nil

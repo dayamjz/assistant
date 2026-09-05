@@ -119,6 +119,29 @@ func (s Scenario) GitInvocation() (string, []string, error) {
 	return binary, gitEnvironment(home, config), nil
 }
 
+// gitConfigPathValue renders a filesystem path as a git configuration value
+// that git parses back to the same path.
+//
+// Two things about the format are load-bearing. A backslash introduces an
+// escape in a configuration value, so a Windows path written raw is either
+// refused as a bad config line or folded into a different path, and the
+// separator is written forward-slashed because git accepts that form on every
+// platform. Quoting is what carries a path holding a space or a comment
+// character; the quote and the backslash are then the two bytes that have to
+// be escaped inside it.
+func gitConfigPathValue(path string) string {
+	var out strings.Builder
+	out.WriteByte('"')
+	for _, r := range filepath.ToSlash(path) {
+		if r == '"' || r == '\\' {
+			out.WriteByte('\\')
+		}
+		out.WriteRune(r)
+	}
+	out.WriteByte('"')
+	return out.String()
+}
+
 // run invokes git in dir and returns its trimmed standard output. A failure
 // carries git's own message, because a fixture that fails to build is debugged
 // from what git said and nothing else here knows more.
@@ -169,6 +192,20 @@ func (g *gitRunner) commitAll(dir, message string) (string, error) {
 		return "", err
 	}
 	return g.run(dir, "rev-parse", "HEAD")
+}
+
+// requireDrained reports the planted executables that were written and never
+// staged by a commit. A pending entry is a file some other plant committed with
+// the mode git infers rather than the mode this package stated, which is the
+// executable bit lost wherever core.fileMode is false.
+func (g *gitRunner) requireDrained() error {
+	if len(g.executables) == 0 {
+		return nil
+	}
+	first := g.executables[0]
+	return fmt.Errorf("fixture: %d planted executable(s) were never staged by a commit, starting with "+
+		"%s in %s, so their mode was left to be inferred rather than stated; every writeExecutable "+
+		"needs a commitAll on the same working copy", len(g.executables), first.rel, first.dir)
 }
 
 // writeExecutable writes a planted executable into a working copy and records

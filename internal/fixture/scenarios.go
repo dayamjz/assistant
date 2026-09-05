@@ -189,9 +189,19 @@ func buildUnparseableTrustedConfig(b *builder) (*Scenario, []Condition, error) {
 		subjectDocsBehavior+"\nThis paragraph is the change under validation.\n"); err != nil {
 		return nil, nil, err
 	}
-	if _, err := b.git.commitAll(s.WorkingCopy, "add a paragraph"); err != nil {
+	// The branch's own copy is well formed and names a different agent. Without
+	// it the branch would carry the same malformed document it was started
+	// from, and a run that read the pushed copy as trusted would abort with the
+	// same error for the wrong reason, so which layer was read would not be
+	// observable from the outcome.
+	if err := writeFile(s.WorkingCopy, ConfigPath, 0o644, subjectPushedConfig); err != nil {
 		return nil, nil, err
 	}
+	branchCommit, err := b.git.commitAll(s.WorkingCopy, "add a paragraph and repair the configuration document")
+	if err != nil {
+		return nil, nil, err
+	}
+	s.Commits["branch-well-formed-config"] = branchCommit
 	if err := b.pushBranch(s); err != nil {
 		return nil, nil, err
 	}
@@ -202,16 +212,19 @@ func buildUnparseableTrustedConfig(b *builder) (*Scenario, []Condition, error) {
 		Kind:      KindRefusal,
 		Principle: "P7",
 		Planted: "The configuration document on the default branch has a trailing comma, so no key in it can " +
-			"be named. The branch under validation carries an ordinary change, so a run that got past this " +
-			"would have work to do and the difference is observable.",
-		Mechanism: "config.Parse over the trusted layer",
+			"be named. The branch under validation carries an ordinary change and its own copy of the " +
+			"document, which is well formed and names " + pushedAgentName + ", so which layer was read is " +
+			"observable from the outcome rather than inferred: a run that read the pushed copy as trusted " +
+			"parses it, launches, and does not abort at all.",
+		Mechanism: "config.Parse over the trusted layer, which is the default branch's copy",
 		Expect: Outcome{
 			Summary: "Parsing returns a *config.DocumentError and nothing in the document is applied. The run " +
 				"aborts before launching anything: no agent process starts and no configured command runs. " +
 				"Falling back to defaults is the wrong answer, because the defaults are not what this " +
-				"repository asked for and nothing establishes that they are safe here.",
+				"repository asked for and nothing establishes that they are safe here. A run that completed, " +
+				"or that launched " + pushedAgentName + ", read the pushed copy as trusted.",
 			Sentinel:        "config.ErrMalformed",
-			MessageContains: []string{"config: "},
+			MessageContains: []string{"config: ", ConfigPath},
 			NamesAction: "The refusal names the document that could not be parsed and the decoding failure " +
 				"underneath it, so the operator can find the line.",
 			ActionSucceeds: "Fixing the document on the default branch and running again: the trusted copy is " +
@@ -254,9 +267,21 @@ func buildUnreadableTrustedConfig(b *builder) (*Scenario, []Condition, error) {
 		subjectDocsBehavior+"\nThis paragraph is the change under validation.\n"); err != nil {
 		return nil, nil, err
 	}
-	if _, err := b.git.commitAll(s.WorkingCopy, "add a paragraph"); err != nil {
+	// The branch replaces the directory with a document that reads and parses,
+	// for the same reason the unparseable scenario's branch repairs its copy: a
+	// branch carrying the same directory would fail the same read, and which
+	// layer was read would not be observable from the outcome.
+	if err := os.RemoveAll(filepath.Join(s.WorkingCopy, ConfigPath)); err != nil {
+		return nil, nil, fmt.Errorf("fixture: removing the configuration directory on the branch: %w", err)
+	}
+	if err := writeFile(s.WorkingCopy, ConfigPath, 0o644, subjectPushedConfig); err != nil {
 		return nil, nil, err
 	}
+	branchCommit, err := b.git.commitAll(s.WorkingCopy, "add a paragraph and make the configuration path a document")
+	if err != nil {
+		return nil, nil, err
+	}
+	s.Commits["branch-readable-config"] = branchCommit
 	if err := b.pushBranch(s); err != nil {
 		return nil, nil, err
 	}
@@ -268,13 +293,17 @@ func buildUnreadableTrustedConfig(b *builder) (*Scenario, []Condition, error) {
 		Principle: "P7",
 		Planted: "The configuration path on the default branch is a directory holding a document, not a " +
 			"document. It resolves to an object and then fails to read as one, which is a different failure " +
-			"from a path that is absent and a different failure from a document that will not parse.",
-		Mechanism: "vcs.Repository.FileAt against the trusted commit",
+			"from a path that is absent and a different failure from a document that will not parse. On the " +
+			"branch under validation the same path is a document that reads and parses and names " +
+			pushedAgentName + ", so which layer was read is observable from the outcome rather than " +
+			"inferred: a run that read the pushed copy as trusted reads it, launches, and does not abort.",
+		Mechanism: "vcs.Repository.FileAt against the trusted commit, which is the default branch's",
 		Expect: Outcome{
 			Summary: "The read fails with a *vcs.CommandError carrying git's own message, not with " +
 				"vcs.ErrPathNotFound: the path exists and is not a file whose bytes can be read. The run " +
 				"aborts before launching anything rather than treating an unreadable trusted document as an " +
-				"absent one and falling back to defaults.",
+				"absent one and falling back to defaults. A run that completed, or that launched " +
+				pushedAgentName + ", read the pushed copy as trusted.",
 			MessageContains: []string{"vcs: file-at failed in", "git exited 128", "bad file"},
 			NamesAction: "The refusal carries git's message and the operation, so the operator is told which " +
 				"read failed rather than being told the repository is misconfigured.",
@@ -353,12 +382,17 @@ func buildHostileTemplate(b *builder) (*Scenario, []Condition, error) {
 			quiet[t.dir] = append(quiet[t.dir], h.id)
 		}
 		config := filepath.Join(s.Root, "gitconfig-"+t.dir)
-		content := "[init]\n\ttemplateDir = " + dir + "\n"
+		content := "[init]\n\ttemplateDir = " + gitConfigPathValue(dir) + "\n"
 		if err := os.WriteFile(config, []byte(content), 0o600); err != nil {
 			return nil, nil, fmt.Errorf("fixture: writing %s: %w", config, err)
 		}
 		s.Paths[t.dir] = dir
 		s.Paths["gitconfig-"+t.dir] = config
+	}
+
+	hooksPathCondition, err := plantHostileHooksPath(s)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	return s, []Condition{
@@ -446,8 +480,69 @@ func buildHostileTemplate(b *builder) (*Scenario, []Condition, error) {
 				TripwiresQuiet: quiet[templateMixed],
 			},
 		},
+		hooksPathCondition,
 	}, nil
 }
+
+// plantHostileHooksPath writes the hooks directory a gate's own hooks can be
+// redirected away from and the git configuration file that redirects them.
+//
+// This is the gap internal/gate/doc.go names, planted through the channel that
+// document describes: internal/vcs keeps GIT_CONFIG_GLOBAL and
+// GIT_CONFIG_SYSTEM, so a configuration file reached through either can set
+// core.hooksPath and point git somewhere other than the gate's own hooks
+// directory. The gate installs pre-receive and post-receive, so those are the
+// two names planted here; a redirect makes both inert while initialization
+// reports success.
+//
+// The file is written and its path is carried. Which process is given it, and
+// whether a push is then driven through the gate, is the harness's decision
+// and is recorded as an open question rather than made here.
+func plantHostileHooksPath(s *Scenario) (Condition, error) {
+	dir := filepath.Join(s.Root, hostileHooksDir)
+	ids := []string{"hookspath-hook-pre-receive", "hookspath-hook-post-receive"}
+	for i, name := range []string{"pre-receive", "post-receive"} {
+		if err := writeFile(dir, "hooks/"+name, 0o755, tripwireScript(ids[i], s.Tripwire,
+			"A hook git runs in place of the gate's own when core.hooksPath redirects it.")); err != nil {
+			return Condition{}, err
+		}
+	}
+	config := filepath.Join(s.Root, "gitconfig-"+hostileHooksDir)
+	content := "[core]\n\thooksPath = " + gitConfigPathValue(filepath.Join(dir, "hooks")) + "\n"
+	if err := os.WriteFile(config, []byte(content), 0o600); err != nil {
+		return Condition{}, fmt.Errorf("fixture: writing %s: %w", config, err)
+	}
+	s.Paths[hostileHooksDir] = dir
+	s.Paths["gitconfig-"+hostileHooksDir] = config
+
+	return Condition{
+		ID:        "gap-core-hookspath-redirects-the-gate",
+		Scenario:  s.Name,
+		Kind:      KindRefusal,
+		Principle: "P7",
+		Planted: "A hooks directory outside any gate, carrying pre-receive and post-receive, and a git " +
+			"configuration file setting core.hooksPath to it. internal/vcs keeps GIT_CONFIG_GLOBAL and " +
+			"GIT_CONFIG_SYSTEM, so a file reached through either redirects the hooks of every repository " +
+			"the invocation touches, including the gate's own. Both planted names are the ones " +
+			"internal/gate installs, so a redirect leaves the gate with no hook of its own that git runs.",
+		Mechanism: "internal/gate, which cannot see the value because reading a git configuration value " +
+			"is a git invocation and internal/vcs exposes no such operation; see gate/doc.go and gate/git.go",
+		Expect: Outcome{
+			Summary: "Initialization succeeds and reports success. This is not a refusal and must not be " +
+				"reported as a pass: the hooks the gate installed are not the hooks git would run, so " +
+				"the admission the gate believes it put in front of a push is not there. The two planted " +
+				"scripts are tripwires, so a harness that does drive a push under this configuration " +
+				"sees which hook ran; whether it drives one is its own decision.",
+			Gap: "internal/gate/doc.go names core.hooksPath as an open gap and internal/gate/git.go names " +
+				"the internal/vcs operation still owed for it. The harness reports this condition as a " +
+				"known gap; it becomes an expected refusal when that operation exists.",
+		},
+	}, nil
+}
+
+// hostileHooksDir is the directory the core.hooksPath plant redirects to, and
+// the stem of the configuration file that redirects to it.
+const hostileHooksDir = "hostile-hooks"
 
 // buildCopiedWorkingCopy builds a working copy that will be gated and then
 // copied. The copy cannot be taken here: what makes it the condition is that

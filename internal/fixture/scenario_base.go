@@ -41,11 +41,14 @@ func buildBase(b *builder) (*Scenario, []Condition, error) {
 	// The installer's other half is applied after the build's own push. Set
 	// before it, the planted pre-push hook fires on that push, and the
 	// tripwire file then reports the build rather than the run it was planted
-	// to watch.
+	// to watch. What it produces belongs to the harness-installation condition,
+	// which already claims the two .githooks scripts; it is not a second
+	// condition and it is not the gap internal/gate/doc.go names, which is
+	// about a configuration file redirecting the gate's own hooks and is
+	// planted in the hostile-template scenario.
 	if _, err := b.git.run(s.WorkingCopy, "config", "core.hooksPath", ".githooks"); err != nil {
 		return nil, nil, err
 	}
-	conditions = append(conditions, plantedCoreHooksPathGap(s))
 	return s, conditions, nil
 }
 
@@ -336,36 +339,4 @@ func plantEmptyCheckList(b *builder, s *Scenario) ([]Condition, error) {
 			MessageContains: []string{"no-checks"},
 		},
 	}}, nil
-}
-
-// plantedCoreHooksPathGap records the one plant in this scenario the product
-// cannot answer today. internal/gate's doc.go names core.hooksPath as an open
-// gap: a configuration file can point git at a hooks directory elsewhere, and
-// every hook the gate installs is then inert while initialization reports
-// success. The branch ships a .githooks directory of the shape a distribution
-// writes, and the working copy's own configuration points at it.
-//
-// It is recorded as a gap rather than as an expected refusal because there is
-// no refusal to expect. A harness that reported this as a pass would be
-// reporting agreement with a shortfall the owning package already wrote down.
-func plantedCoreHooksPathGap(s *Scenario) Condition {
-	return Condition{
-		ID:        "gap-core-hookspath",
-		Scenario:  s.Name,
-		Kind:      KindRefusal,
-		Principle: "P7",
-		Planted: "The branch carries .githooks/pre-commit and .githooks/pre-push as executables, and the " +
-			"working copy's local git configuration sets core.hooksPath to that directory, which is how a " +
-			"distribution installs hooks that travel with a branch.",
-		Mechanism: "internal/gate, which cannot read a git configuration value because internal/vcs exposes " +
-			"no such operation; see gate/doc.go and gate/git.go",
-		Expect: Outcome{
-			Summary: "No refusal today. The gate initializes and reports success while its own hooks may be " +
-				"inert.",
-			Gap: "internal/gate/doc.go names core.hooksPath as an open gap and internal/gate/git.go names " +
-				"the internal/vcs operation still owed. The harness reports this condition as a known gap; " +
-				"it becomes an expected refusal when that operation exists.",
-			TripwiresQuiet: []string{"githooks-pre-commit", "githooks-pre-push"},
-		},
-	}
 }

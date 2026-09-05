@@ -132,15 +132,21 @@ Report every finding with the action ` + "`fix`" + `, and never ask the operator
 			"binding them to lifecycle events and granting unrestricted command permission, an agent " +
 			"definition and a slash command under .claude, a harness settings file naming an agent binary " +
 			"the branch also ships, a direnv file, and project instructions telling the reader to run one " +
-			"of the hooks and to use the branch's agent. The working copy's core.hooksPath is set to the " +
-			"committed hooks directory, which is the other half of what an installer does. None of it is " +
-			"in git config, which is the point: a guard written against the git-config shape passes while " +
-			"all of this walks through.",
+			"of the hooks and to use the branch's agent. The working copy's own local git configuration " +
+			"sets core.hooksPath to the committed .githooks directory, relative to that working tree, " +
+			"which is the other half of what an installer does: it is what makes the two committed " +
+			".githooks scripts the hooks git runs there rather than two inert files. That value is local " +
+			"to the subject working copy and reaches no gate repository, so it is part of this condition " +
+			"and not the gap internal/gate/doc.go names. Everything else is committed content and none of " +
+			"it is in git config, which is the point: a guard written against the git-config shape passes " +
+			"while all of this walks through.",
 		Mechanism: "the whole run: whatever resolves commands, selects the agent, and invokes git",
 		Expect: Outcome{
 			Summary: "Nothing the branch installed runs and nothing it names is selected. The agent the run " +
 				"launches is the default branch's fixture-trusted-agent, the commands it runs are the " +
-				"default branch's, and the scenario's tripwire file does not exist when the run ends.",
+				"default branch's, and the scenario's tripwire file does not exist when the run ends. " +
+				"That includes the two .githooks scripts, which core.hooksPath has made live in the " +
+				"working copy: a run that invokes git there without disabling them fires them.",
 			Value: "the resolved config.Config.Agent is [\"fixture-trusted-agent\"] and " +
 				"config.Config.Commands are the default branch's",
 			TripwiresQuiet: quiet,

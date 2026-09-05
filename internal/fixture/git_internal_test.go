@@ -71,6 +71,96 @@ func TestAPlantedExecutableIsCommittedExecutableWhereGitIgnoresTheFilesystemBit(
 	}
 }
 
+// TestAPlantedExecutableLeftUnstagedIsRefused holds the guard Build applies
+// after every scenario. A plant that writes an executable and lets some other
+// plant commit that working copy hands git a file whose mode it infers, which
+// is the lost executable bit above with nothing reporting it.
+func TestAPlantedExecutableLeftUnstagedIsRefused(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skipf("git is not on PATH: %v", err)
+	}
+	g, err := newGitRunner("", t.TempDir())
+	if err != nil {
+		t.Fatalf("build the runner: %v", err)
+	}
+	work := filepath.Join(t.TempDir(), "work")
+	if err := os.MkdirAll(work, 0o755); err != nil {
+		t.Fatalf("create the working copy: %v", err)
+	}
+	if _, err := g.run(work, "init", "--quiet", "."); err != nil {
+		t.Fatalf("initialize the working copy: %v", err)
+	}
+	if err := g.requireDrained(); err != nil {
+		t.Fatalf("a runner that has planted nothing is not drained: %v", err)
+	}
+	if err := g.writeExecutable(work, "hooks/planted.sh", "#!/bin/sh\nexit 0\n"); err != nil {
+		t.Fatalf("write the planted executable: %v", err)
+	}
+	err = g.requireDrained()
+	if err == nil {
+		t.Fatal("a planted executable that no commit staged was not reported")
+	}
+	if !strings.Contains(err.Error(), "hooks/planted.sh") {
+		t.Errorf("the refusal does not name the executable left pending: %v", err)
+	}
+	if _, err := g.commitAll(work, "plant one script"); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+	if err := g.requireDrained(); err != nil {
+		t.Fatalf("the commit that staged it did not drain it: %v", err)
+	}
+}
+
+// TestAPathSurvivesBeingWrittenAsAGitConfigurationValue holds the format the
+// two planted configuration files rest on. A path is written into them and read
+// back with git, because a value git refuses to parse and a value git parses
+// into a different path are both invisible to anything that reads the file's
+// bytes instead.
+//
+// The control is the same path concatenated raw, which is what this package did
+// before: it has to come back different, or the quoting is doing nothing and
+// the assertion above would hold either way.
+func TestAPathSurvivesBeingWrittenAsAGitConfigurationValue(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skipf("git is not on PATH: %v", err)
+	}
+	g, err := newGitRunner("", t.TempDir())
+	if err != nil {
+		t.Fatalf("build the runner: %v", err)
+	}
+	home := t.TempDir()
+	// A space, a comment character and a quote: the three a raw value loses.
+	// Backslash is the fourth and cannot be put in a path component here,
+	// because it is a separator on the platform where it matters.
+	planted := filepath.Join(home, `a dir #1 "x"`, "template")
+	if err := os.MkdirAll(planted, 0o755); err != nil {
+		t.Fatalf("create the path being written: %v", err)
+	}
+
+	stated := filepath.Join(home, "stated")
+	if err := os.WriteFile(stated,
+		[]byte("[init]\n\ttemplateDir = "+gitConfigPathValue(planted)+"\n"), 0o600); err != nil {
+		t.Fatalf("write the configuration file: %v", err)
+	}
+	got, err := g.run(home, "config", "--file", stated, "--get", "init.templateDir")
+	if err != nil {
+		t.Fatalf("git cannot read the value back: %v", err)
+	}
+	if want := filepath.ToSlash(planted); got != want {
+		t.Errorf("git reads the value back as %q, want %q", got, want)
+	}
+
+	raw := filepath.Join(home, "raw")
+	if err := os.WriteFile(raw, []byte("[init]\n\ttemplateDir = "+planted+"\n"), 0o600); err != nil {
+		t.Fatalf("write the control: %v", err)
+	}
+	control, err := g.run(home, "config", "--file", raw, "--get", "init.templateDir")
+	if err == nil && control == filepath.ToSlash(planted) {
+		t.Errorf("the raw value round-trips too, so the assertion above does not hold the format: %q",
+			control)
+	}
+}
+
 // committedMode reads the mode a path is committed with at HEAD.
 func committedMode(t *testing.T, g *gitRunner, work, rel string) string {
 	t.Helper()

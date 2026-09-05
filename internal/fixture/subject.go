@@ -175,6 +175,32 @@ func subjectConfig(testCommand string) string {
 `
 }
 
+// pushedAgentName is the agent a branch's own configuration document names. It
+// differs from the trusted document's on purpose, so which layer a run read is
+// observable from what it launched rather than inferred from it not having
+// launched anything.
+const pushedAgentName = "fixture-pushed-agent"
+
+// subjectPushedConfig is a well-formed, readable configuration document for the
+// branch under validation, for the two scenarios whose default-branch copy is
+// the condition. Without it the branch carries whatever the default branch had,
+// and a run that mistakenly read the pushed copy as trusted would fail on the
+// same document for the same reason, so the outcome would not say which layer
+// was read.
+//
+// It is otherwise an ordinary document. The condition in those scenarios is
+// what happens to the trusted copy, and a branch document that also carried a
+// second condition would put two answers behind one outcome.
+const subjectPushedConfig = `{
+  "commands": {
+    "test": "go test ./...",
+    "lint": "go vet ./..."
+  },
+  "agent": "` + pushedAgentName + `",
+  "ignore_patterns": ["vendor/**"]
+}
+`
+
 // quoteJSON renders s as a JSON string. The documents here are written as text
 // rather than marshalled, because one of them has to be malformed and a
 // marshaller cannot produce that.

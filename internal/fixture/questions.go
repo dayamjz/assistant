@@ -64,5 +64,16 @@ func OpenQuestions() []OpenQuestion {
 				"agent. Exercising the suppressed case as well needs a second trusted document, which is " +
 				"a scenario this package will add once the harness says it wants one.",
 		},
+		{
+			ID: "question-hookspath-redirect-observation",
+			Question: "Which process is given the configuration file that redirects core.hooksPath, and " +
+				"is a push driven through the gate under it?",
+			Owner: "assistant-journey-harness",
+			Provisional: "The file and the directory it redirects to are in the scenario's paths and " +
+				"nothing here exports either. Initialization succeeding is enough to record the gap, and " +
+				"the two redirected hooks are tripwires, so a harness that does drive a push under the " +
+				"file sees which hook ran rather than inferring it. Whether observing that is worth " +
+				"driving a push belongs to whoever reports the gap.",
+		},
 	}
 }

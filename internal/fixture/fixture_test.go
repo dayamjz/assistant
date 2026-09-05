@@ -110,6 +110,35 @@ func gitIn(t *testing.T, s fixture.Scenario, dir string, args ...string) (string
 	return string(out), err == nil
 }
 
+// gitInUnder is gitIn with entries of the scenario's environment replaced, for
+// the assertions that have to invoke git under a configuration file the
+// scenario planted rather than under the one the build wrote.
+func gitInUnder(t *testing.T, s fixture.Scenario, dir string, override []string, args ...string) (string, bool) {
+	t.Helper()
+	binary, env, err := s.GitInvocation()
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+	for _, kv := range override {
+		key := kv[:strings.IndexByte(kv, '=')+1]
+		replaced := false
+		for i, existing := range env {
+			if strings.HasPrefix(existing, key) {
+				env[i], replaced = kv, true
+				break
+			}
+		}
+		if !replaced {
+			env = append(env, kv)
+		}
+	}
+	cmd := exec.Command(binary, args...)
+	cmd.Dir = dir
+	cmd.Env = env
+	out, err := cmd.CombinedOutput()
+	return string(out), err == nil
+}
+
 func scenario(t *testing.T, f *fixture.Fixture, name fixture.ScenarioName) fixture.Scenario {
 	t.Helper()
 	s, ok := f.Scenario(name)
@@ -326,18 +355,58 @@ func TestTheHarnessInstallationIsCommittedInTheShapeADistributionWrites(t *testi
 			t.Errorf("%s is not committed on the branch", path)
 		}
 	}
-	// None of it is in git config, which is what makes the condition distinct
-	// from the git-config plants. The one thing the installer does put in git
-	// config is core.hooksPath, and that is the documented open gap.
-	settings := showFile(t, s, f.Branch+":.claude/settings.json")
-	if !strings.Contains(settings, ".claude/hooks/session-start.sh") {
-		t.Errorf("the settings document does not bind the planted hook to anything:\n%s", settings)
+	// The settings document is machine-consumed declarative output this
+	// package writes, so it is decoded and asked what it binds rather than
+	// searched for a path that could sit anywhere in it, including the env
+	// block or an entry no harness would run.
+	settings := decodeConfig(t, showFile(t, s, f.Branch+":.claude/settings.json"))
+	if got := hookCommandsFor(t, settings, "SessionStart"); !contains(got, "sh .claude/hooks/session-start.sh") {
+		t.Errorf("SessionStart binds %v, and none of it is a command hook running the planted script", got)
 	}
+	if got := hookCommandsFor(t, settings, "PreToolUse"); !contains(got, "sh .claude/hooks/pre-tool-use.sh") {
+		t.Errorf("PreToolUse binds %v, and none of it is a command hook running the planted script", got)
+	}
+	// The one thing the installer puts in git config is core.hooksPath, local
+	// to this working copy. It is what makes the two committed .githooks
+	// scripts the hooks git runs here rather than two inert files.
 	out, ok := gitIn(t, s, s.WorkingCopy, "config", "--local", "--get", "core.hooksPath")
 	if !ok || strings.TrimSpace(out) != ".githooks" {
 		t.Errorf("core.hooksPath is %q, want .githooks: without it the .githooks plant is two inert files",
 			strings.TrimSpace(out))
 	}
+}
+
+// hookCommandsFor returns the commands a settings document binds to an event
+// through a hook whose type is "command", which is the only shape that runs
+// anything. Anything else in the document is deliberately not reported.
+func hookCommandsFor(t *testing.T, settings map[string]any, event string) []string {
+	t.Helper()
+	hooks, _ := settings["hooks"].(map[string]any)
+	entries, _ := hooks[event].([]any)
+	var commands []string
+	for _, entry := range entries {
+		group, _ := entry.(map[string]any)
+		inner, _ := group["hooks"].([]any)
+		for _, h := range inner {
+			hook, _ := h.(map[string]any)
+			if kind, _ := hook["type"].(string); kind != "command" {
+				continue
+			}
+			if command, ok := hook["command"].(string); ok {
+				commands = append(commands, command)
+			}
+		}
+	}
+	return commands
+}
+
+func contains(all []string, want string) bool {
+	for _, got := range all {
+		if got == want {
+			return true
+		}
+	}
+	return false
 }
 
 // TestAPlantedExecutableRecordsHavingRun is the guard on the guard. Every
@@ -399,6 +468,49 @@ func TestTheTrustedConfigurationIsUnparseableAndUnreadableWhereItIsPlanted(t *te
 	}
 }
 
+// TestOnlyTheDefaultBranchCarriesTheTrustedConfigurationFailure holds what
+// makes those two conditions observable. If the branch carried the same broken
+// document, a run that read the pushed copy as trusted would abort for the same
+// reason and the harness would report a pass either way.
+func TestOnlyTheDefaultBranchCarriesTheTrustedConfigurationFailure(t *testing.T) {
+	f := readOnly(t)
+	for _, name := range []fixture.ScenarioName{
+		fixture.ScenarioUnparseableTrustedConfig,
+		fixture.ScenarioUnreadableTrustedConfig,
+	} {
+		s := scenario(t, f, name)
+		// The branch's copy is a document git reads and a decoder accepts,
+		// which is what the default branch's copy is not.
+		object, ok := gitIn(t, s, s.WorkingCopy, "rev-parse", "--verify", "--quiet",
+			f.Branch+":"+f.ConfigPath)
+		if !ok || strings.TrimSpace(object) == "" {
+			t.Errorf("%s: the branch carries no configuration document at %s: %s", name, f.ConfigPath, object)
+			continue
+		}
+		body, ok := gitIn(t, s, s.WorkingCopy, "cat-file", "blob", strings.TrimSpace(object))
+		if !ok {
+			t.Errorf("%s: the branch's configuration document does not read as one: %s", name, body)
+			continue
+		}
+		branchAgent, _ := decodeConfig(t, body)["agent"].(string)
+		trustedAgent, _ := decodeConfig(t, subjectTrustedDocument(t, f))["agent"].(string)
+		if branchAgent == "" || branchAgent == trustedAgent {
+			t.Errorf("%s: the branch names agent %q and a well-formed trusted document names %q, so a run "+
+				"that read the pushed copy as trusted is not distinguishable from one that refused",
+				name, branchAgent, trustedAgent)
+		}
+	}
+}
+
+// subjectTrustedDocument returns a well-formed trusted document from a scenario
+// whose default-branch copy is not the planted condition, which is where the
+// agent the other two are compared against comes from.
+func subjectTrustedDocument(t *testing.T, f *fixture.Fixture) string {
+	t.Helper()
+	s := scenario(t, f, fixture.ScenarioBase)
+	return showFile(t, s, f.DefaultBranch+":"+f.ConfigPath)
+}
+
 // TestTheBranchHasNoDiffOnceItIsRebased runs the rebase rather than asserting
 // that it would empty the branch. An empty commit planted directly is a state
 // a rebase does not produce, and the short-circuit is about the state a rebase
@@ -434,24 +546,67 @@ func TestTheHostileTemplateWouldPutAHookInARepositoryBornFromIt(t *testing.T) {
 	f := readOnly(t)
 	s := scenario(t, f, fixture.ScenarioHostileTemplate)
 	template := s.Paths["template-mixed"]
-	if template == "" {
-		t.Fatal("the scenario names no template directory")
+	config := s.Paths["gitconfig-template-mixed"]
+	if template == "" || config == "" {
+		t.Fatal("the scenario names no template directory and configuration file")
 	}
+	// The configuration file is the channel the condition rests on, so what it
+	// selects is read back out of git rather than out of the file's bytes: a
+	// value git refuses to parse, or parses into some other path, is the whole
+	// failure mode and looks identical to a substring search.
+	out, ok := gitIn(t, s, s.Root, "config", "--file", config, "--get", "init.templateDir")
+	if !ok {
+		t.Fatalf("git cannot read init.templateDir out of %s: %s", config, out)
+	}
+	if got, want := strings.TrimSpace(out), filepath.ToSlash(template); got != want {
+		t.Fatalf("%s points init.templateDir at %q, want %q", config, got, want)
+	}
+	// And a repository born under that file alone, with no --template flag,
+	// has to carry the hooks. That is the channel the gate meets.
 	born := filepath.Join(t.TempDir(), "born.git")
-	if out, ok := gitIn(t, s, s.Root, "init", "--bare", "--quiet",
-		"--template="+template, born); !ok {
-		t.Fatalf("create a repository from the template: %s", out)
+	if out, ok := gitInUnder(t, s, s.Root, []string{"GIT_CONFIG_GLOBAL=" + config},
+		"init", "--bare", "--quiet", born); !ok {
+		t.Fatalf("create a repository under the planted configuration: %s", out)
 	}
 	for _, name := range []string{"pre-receive", "post-update", "update"} {
 		if _, err := os.Stat(filepath.Join(born, "hooks", name)); err != nil {
-			t.Errorf("a repository born from the template does not carry %s: %v", name, err)
+			t.Errorf("a repository created under %s does not carry %s, so the configuration channel "+
+				"selects nothing: %v", config, name, err)
 		}
 	}
-	// The configuration file is the channel that is open, so it has to select
-	// the template on its own.
-	config := s.Paths["gitconfig-template-mixed"]
-	if !strings.Contains(readFile(t, config), template) {
-		t.Errorf("%s does not point init.templateDir at %s", config, template)
+}
+
+// TestTheHooksPathRedirectIsTheOneGateDocumentsAsOpen holds the plant for the
+// gap internal/gate/doc.go names. The condition is that a configuration file
+// reached through a kept variable moves where git looks for hooks, so it is
+// checked by asking git where it looks, not by reading the file back.
+func TestTheHooksPathRedirectIsTheOneGateDocumentsAsOpen(t *testing.T) {
+	f := readOnly(t)
+	s := scenario(t, f, fixture.ScenarioHostileTemplate)
+	hostile := s.Paths["hostile-hooks"]
+	config := s.Paths["gitconfig-hostile-hooks"]
+	if hostile == "" || config == "" {
+		t.Fatal("the scenario names no hostile hooks directory and configuration file")
+	}
+	hooks := filepath.Join(hostile, "hooks")
+	// Both names internal/gate installs are planted, or the redirect would
+	// leave one of the gate's own hooks still running.
+	for _, name := range []string{"pre-receive", "post-receive"} {
+		if _, err := os.Stat(filepath.Join(hooks, name)); err != nil {
+			t.Errorf("the hostile hooks directory does not carry %s: %v", name, err)
+		}
+	}
+	repo := filepath.Join(t.TempDir(), "gate.git")
+	if out, ok := gitIn(t, s, s.Root, "init", "--bare", "--quiet", repo); !ok {
+		t.Fatalf("create a repository to stand in for a gate: %s", out)
+	}
+	out, ok := gitInUnder(t, s, repo, []string{"GIT_CONFIG_GLOBAL=" + config}, "rev-parse", "--git-path", "hooks")
+	if !ok {
+		t.Fatalf("ask git where it looks for hooks: %s", out)
+	}
+	if got, want := filepath.ToSlash(strings.TrimSpace(out)), filepath.ToSlash(hooks); got != want {
+		t.Fatalf("under %s git looks for hooks in %q, want %q: the redirect the condition rests on is "+
+			"not in force, so a gate's own hooks would still run", config, got, want)
 	}
 }
 
@@ -496,8 +651,14 @@ func TestCopyingRefusesUntilThereIsARemoteToInherit(t *testing.T) {
 	f := build(t)
 	s := scenario(t, f, fixture.ScenarioCopiedWorkingCopy)
 
+	// The remote name is the one fact this package restates rather than
+	// imports, so the refusal is asked to name gate.RemoteName. Restating it
+	// keeps the fixture from being built out of the package it is a fixture
+	// for; this is what keeps the restatement honest.
 	if _, err := fixture.CopyGatedWorkingCopy(s); err == nil {
 		t.Fatal("copying succeeded over a working copy with no gate remote to inherit")
+	} else if !strings.Contains(err.Error(), gate.RemoteName) {
+		t.Fatalf("the fixture looks for a remote other than %s: %v", gate.RemoteName, err)
 	}
 
 	// Stand in for what an initialization writes, using git directly. This
@@ -521,20 +682,6 @@ func TestCopyingRefusesUntilThereIsARemoteToInherit(t *testing.T) {
 	if _, err := os.Stat(s.WorkingCopy); err != nil {
 		t.Fatalf("the original no longer stands, and a copy is only distinguishable from a move while "+
 			"it does: %v", err)
-	}
-}
-
-// TestTheRemoteNameThisPackagePlantsIsTheOneTheGateUses holds the one fact
-// this package restates rather than imports. It is restated so that a fixture
-// is not built out of the package it is a fixture for; this is what keeps the
-// restatement honest.
-func TestTheRemoteNameThisPackagePlantsIsTheOneTheGateUses(t *testing.T) {
-	f := build(t)
-	s := scenario(t, f, fixture.ScenarioCopiedWorkingCopy)
-	if _, err := fixture.CopyGatedWorkingCopy(s); err == nil {
-		t.Fatal("copying succeeded with no gate remote")
-	} else if !strings.Contains(err.Error(), gate.RemoteName) {
-		t.Fatalf("the fixture looks for a remote other than %s: %v", gate.RemoteName, err)
 	}
 }
 
