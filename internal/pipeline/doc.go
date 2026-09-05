@@ -344,9 +344,11 @@
 // fire is worse than no bound, because it reads as a bound.
 //
 // A bound that stops a run parks it, and internal/graph parks a run rather
-// than halting it for a decision: a parked run is resumed by forking it, not
-// by answering it. PRD section 5's hold offers four actions, and only three of
-// them are reachable here. Approve, skip, and cancel are hold answers. A
+// than halting it for a decision: no park is answered. A run its own budget
+// parked is moved onto a new one with graph.Executor.AdoptBudget, and a run a
+// round limit or convergence parked is taken further by forking it. PRD
+// section 5's hold offers four actions, and only three of them are reachable
+// here. Approve, skip, and cancel are hold answers. A
 // requested fix round is not offered at all: it would be a second entry into
 // the same bounded cycle, and the bound it would need could never fire before
 // the bound on the round the loop already counts, which is a guard that exists
