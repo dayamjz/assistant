@@ -13,13 +13,16 @@
 // # It ships on, and no key turns it off
 //
 // The lens is shipped guidance rather than a configured value, so a repository
-// that has never heard of it still gets it. That is deliberate and not an
-// oversight of the configuration schema: a repository layer replaces a list
-// rather than appending to it, so a scope rule shipped as the default of
-// config's "review.path_rules" would be erased by any repository that set that
-// key for an unrelated reason, which is exactly the opt-out PRD section 5
-// says the lens does not have. Path-scoped review rules still strengthen it,
-// the way they strengthen review anywhere.
+// that has never heard of it still gets it once a review stage puts it in
+// front of a reviewer. That wiring lands with that stage, which this
+// repository does not have yet, so what ships today is this package and its
+// guidance rather than a lens any run has been through. That is deliberate
+// and not an oversight of the configuration schema: a repository layer
+// replaces a list rather than appending to it, so a scope rule shipped as
+// the default of config's "review.path_rules" would be erased by any
+// repository that set that key for an unrelated reason, which is exactly the
+// opt-out PRD section 5 says the lens does not have. Path-scoped review
+// rules still strengthen it, the way they strengthen review anywhere.
 //
 // # A scope observation is a note, and can be nothing else
 //
