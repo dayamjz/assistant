@@ -218,8 +218,22 @@ func TestTheEnvironmentCarriesThePlatformThroughAndDropsWhatRedirects(t *testing
 	}
 	elsewhere := filepath.Join(t.TempDir(), "elsewhere.git")
 	carried := filepath.Join(t.TempDir(), "carried")
+	// A template that exists and carries a hook no default template ships,
+	// because git init honours GIT_TEMPLATE_DIR whatever the configuration
+	// says. A template directory that was not there would leave a variable
+	// that survived and one that was dropped producing the same repository,
+	// so the assertion below would hold under both.
+	template := filepath.Join(t.TempDir(), "template")
+	const templateHook = "pre-receive"
+	if err := os.MkdirAll(filepath.Join(template, "hooks"), 0o755); err != nil {
+		t.Fatalf("create the template: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(template, "hooks", templateHook),
+		[]byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("write the template hook: %v", err)
+	}
 	t.Setenv("GIT_DIR", elsewhere)
-	t.Setenv("GIT_TEMPLATE_DIR", filepath.Join(t.TempDir(), "template"))
+	t.Setenv("GIT_TEMPLATE_DIR", template)
 	t.Setenv("GIT_CONFIG_COUNT", "1")
 	t.Setenv("GIT_CONFIG_KEY_0", "core.hooksPath")
 	t.Setenv("GIT_CONFIG_VALUE_0", filepath.Join(t.TempDir(), "hooks"))
@@ -262,6 +276,33 @@ func TestTheEnvironmentCarriesThePlatformThroughAndDropsWhatRedirects(t *testing
 	if filepath.IsAbs(hooks) {
 		t.Errorf("git looks for hooks in %s, so the GIT_CONFIG_COUNT pair in the environment reached it",
 			hooks)
+	}
+	// The template channel, which is the one that would put a hook into every
+	// repository this package creates: each scenario's working copy, each
+	// origin, and the second clone.
+	dropped := filepath.Join(t.TempDir(), "dropped.git")
+	if _, err := g.run(work, "init", "--bare", "--quiet", dropped); err != nil {
+		t.Fatalf("create a repository through the runner: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dropped, "hooks", templateHook)); err == nil {
+		t.Errorf("a repository the runner created carries %s from %s, so the GIT_TEMPLATE_DIR in the "+
+			"environment reached git init", templateHook, template)
+	}
+	// And the same probe with the variable put back, which has to show the
+	// hook arriving. Without it the assertion above would hold over a git that
+	// ignores the variable, over a template git would not read, and over a
+	// hook name git overwrites, and would report the channel closed in every
+	// one of those cases without having closed anything.
+	honoured := filepath.Join(t.TempDir(), "honoured.git")
+	restored := exec.Command(g.binary, "init", "--bare", "--quiet", honoured)
+	restored.Dir = work
+	restored.Env = append(append([]string{}, g.env...), "GIT_TEMPLATE_DIR="+template)
+	if out, err := restored.CombinedOutput(); err != nil {
+		t.Fatalf("create a repository with the variable put back: %v: %s", err, out)
+	}
+	if _, err := os.Stat(filepath.Join(honoured, "hooks", templateHook)); err != nil {
+		t.Fatalf("the template hook does not arrive even when GIT_TEMPLATE_DIR is honoured, so the "+
+			"assertion above cannot tell a variable that survived from one that was dropped: %v", err)
 	}
 }
 
