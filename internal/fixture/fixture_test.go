@@ -79,11 +79,33 @@ func requireGo(t *testing.T) {
 
 // run invokes a command in dir and returns its combined output along with
 // whether it succeeded. Several assertions here are about a command failing,
-// so the failure is a result rather than a fatal.
+// so the failure is a result rather than a fatal. It is for the toolchain;
+// git goes through gitIn.
 func run(t *testing.T, dir, name string, args ...string) (string, bool) {
 	t.Helper()
 	cmd := exec.Command(name, args...)
 	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	return string(out), err == nil
+}
+
+// gitIn invokes git in dir the way the scenario was built, and returns its
+// combined output along with whether it succeeded.
+//
+// The isolation is the point rather than a convenience. These assertions are
+// what hold the plants, and reading them under the ambient environment would
+// let a developer's own init.templateDir, core.hooksPath, commit.gpgsign, or
+// rebase configuration decide what the assertions see, which is the thing the
+// build takes the trouble to shut out.
+func gitIn(t *testing.T, s fixture.Scenario, dir string, args ...string) (string, bool) {
+	t.Helper()
+	binary, env, err := s.GitInvocation()
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
+	cmd := exec.Command(binary, args...)
+	cmd.Dir = dir
+	cmd.Env = env
 	out, err := cmd.CombinedOutput()
 	return string(out), err == nil
 }
@@ -149,7 +171,7 @@ func TestEveryRefusalThatIsADeadEndNamesAnAction(t *testing.T) {
 func TestEveryScenarioHasAWorkingCopyOnTheBranchAndARemoteHoldingIt(t *testing.T) {
 	f := readOnly(t)
 	for _, s := range f.Scenarios {
-		out, ok := run(t, s.WorkingCopy, "git", "rev-parse", "--abbrev-ref", "HEAD")
+		out, ok := gitIn(t, s, s.WorkingCopy, "rev-parse", "--abbrev-ref", "HEAD")
 		if !ok {
 			t.Errorf("%s: reading the checked-out branch: %s", s.Name, out)
 			continue
@@ -157,7 +179,7 @@ func TestEveryScenarioHasAWorkingCopyOnTheBranchAndARemoteHoldingIt(t *testing.T
 		if got := strings.TrimSpace(out); got != f.Branch {
 			t.Errorf("%s: the working copy is on %s, want %s", s.Name, got, f.Branch)
 		}
-		out, ok = run(t, s.WorkingCopy, "git", "ls-remote", "--heads", s.Origin, f.Branch)
+		out, ok = gitIn(t, s, s.WorkingCopy, "ls-remote", "--heads", s.Origin)
 		if !ok {
 			t.Errorf("%s: reading the remote: %s", s.Name, out)
 			continue
@@ -165,8 +187,17 @@ func TestEveryScenarioHasAWorkingCopyOnTheBranchAndARemoteHoldingIt(t *testing.T
 		if !strings.Contains(out, "refs/heads/"+f.Branch) {
 			t.Errorf("%s: %s does not hold %s: %s", s.Name, s.Origin, f.Branch, out)
 		}
-		if !strings.Contains(out, "refs/heads/"+f.Branch) {
-			t.Errorf("%s: the branch was not published", s.Name)
+		// The default branch has to be there too: it is what the trusted
+		// configuration is read from and what the branch is diffed against.
+		if !strings.Contains(out, "refs/heads/"+f.DefaultBranch) {
+			t.Errorf("%s: %s does not hold %s: %s", s.Name, s.Origin, f.DefaultBranch, out)
+		}
+		// ls-remote prints one identifier and one name per line, so two heads
+		// is four fields. Anything else is a scenario carrying a branch the
+		// catalog says nothing about.
+		if got := len(strings.Fields(out)) / 2; got != 2 {
+			t.Errorf("%s: %s holds %d heads, want exactly %s and %s: %s",
+				s.Name, s.Origin, got, f.DefaultBranch, f.Branch, out)
 		}
 	}
 }
@@ -182,7 +213,7 @@ func TestTheDefaultBranchIsGreenAndTheBranchIsNot(t *testing.T) {
 	// The default branch is the control. A stage plant proves nothing if the
 	// same command also fails on the branch it was planted against.
 	clean := filepath.Join(t.TempDir(), "default-branch")
-	if out, ok := run(t, s.Root, "git", "clone", "--quiet", "--branch", f.DefaultBranch, s.Origin, clean); !ok {
+	if out, ok := gitIn(t, s, s.Root, "clone", "--quiet", "--branch", f.DefaultBranch, s.Origin, clean); !ok {
 		t.Fatalf("clone the default branch: %s", out)
 	}
 	if out, ok := run(t, clean, "go", "test", "./..."); !ok {
@@ -237,8 +268,8 @@ func TestTheBranchSetsTheKeysAPushedBranchMayNotSet(t *testing.T) {
 	f := readOnly(t)
 	s := scenario(t, f, fixture.ScenarioBase)
 
-	pushed := decodeConfig(t, showFile(t, s.WorkingCopy, f.Branch+":"+f.ConfigPath))
-	trusted := decodeConfig(t, showFile(t, s.WorkingCopy, f.DefaultBranch+":"+f.ConfigPath))
+	pushed := decodeConfig(t, showFile(t, s, f.Branch+":"+f.ConfigPath))
+	trusted := decodeConfig(t, showFile(t, s, f.DefaultBranch+":"+f.ConfigPath))
 
 	if pushed["agent"] == trusted["agent"] {
 		t.Errorf("both documents name the same agent, so which one was read is not observable: %v", pushed["agent"])
@@ -285,24 +316,24 @@ func TestTheHarnessInstallationIsCommittedInTheShapeADistributionWrites(t *testi
 		"CLAUDE.md",
 	}
 	for _, path := range executables {
-		if mode := treeMode(t, s.WorkingCopy, f.Branch, path); mode != "100755" {
+		if mode := treeMode(t, s, f.Branch, path); mode != "100755" {
 			t.Errorf("%s is committed with mode %q, want 100755: a harness distribution writes an "+
 				"executable, and a plant that is not one is a weaker condition", path, mode)
 		}
 	}
 	for _, path := range documents {
-		if mode := treeMode(t, s.WorkingCopy, f.Branch, path); mode == "" {
+		if mode := treeMode(t, s, f.Branch, path); mode == "" {
 			t.Errorf("%s is not committed on the branch", path)
 		}
 	}
 	// None of it is in git config, which is what makes the condition distinct
 	// from the git-config plants. The one thing the installer does put in git
 	// config is core.hooksPath, and that is the documented open gap.
-	settings := showFile(t, s.WorkingCopy, f.Branch+":.claude/settings.json")
+	settings := showFile(t, s, f.Branch+":.claude/settings.json")
 	if !strings.Contains(settings, ".claude/hooks/session-start.sh") {
 		t.Errorf("the settings document does not bind the planted hook to anything:\n%s", settings)
 	}
-	out, ok := run(t, s.WorkingCopy, "git", "config", "--local", "--get", "core.hooksPath")
+	out, ok := gitIn(t, s, s.WorkingCopy, "config", "--local", "--get", "core.hooksPath")
 	if !ok || strings.TrimSpace(out) != ".githooks" {
 		t.Errorf("core.hooksPath is %q, want .githooks: without it the .githooks plant is two inert files",
 			strings.TrimSpace(out))
@@ -343,20 +374,20 @@ func TestTheTrustedConfigurationIsUnparseableAndUnreadableWhereItIsPlanted(t *te
 	f := readOnly(t)
 
 	malformed := scenario(t, f, fixture.ScenarioUnparseableTrustedConfig)
-	body := showFile(t, malformed.WorkingCopy, f.DefaultBranch+":"+f.ConfigPath)
+	body := showFile(t, malformed, f.DefaultBranch+":"+f.ConfigPath)
 	var into any
 	if err := json.Unmarshal([]byte(body), &into); err == nil {
 		t.Errorf("the document planted as unparseable parses:\n%s", body)
 	}
 
 	unreadable := scenario(t, f, fixture.ScenarioUnreadableTrustedConfig)
-	object, ok := run(t, unreadable.WorkingCopy, "git", "rev-parse", "--verify", "--quiet",
+	object, ok := gitIn(t, unreadable, unreadable.WorkingCopy, "rev-parse", "--verify", "--quiet",
 		f.DefaultBranch+":"+f.ConfigPath)
 	if !ok || strings.TrimSpace(object) == "" {
 		t.Fatalf("the configuration path does not resolve, so the read would fail as a missing path "+
 			"rather than as an unreadable one: %s", object)
 	}
-	out, ok := run(t, unreadable.WorkingCopy, "git", "cat-file", "blob", strings.TrimSpace(object))
+	out, ok := gitIn(t, unreadable, unreadable.WorkingCopy, "cat-file", "blob", strings.TrimSpace(object))
 	if ok {
 		t.Fatalf("the configuration path reads as a document, so nothing is unreadable:\n%s", out)
 	}
@@ -376,18 +407,17 @@ func TestTheBranchHasNoDiffOnceItIsRebased(t *testing.T) {
 	f := build(t)
 	s := scenario(t, f, fixture.ScenarioEmptyAfterRebase)
 
-	before, ok := run(t, s.WorkingCopy, "git", "diff", "--name-only", f.DefaultBranch+"..."+f.Branch)
+	before, ok := gitIn(t, s, s.WorkingCopy, "diff", "--name-only", f.DefaultBranch+"..."+f.Branch)
 	if !ok {
 		t.Fatalf("diff before the rebase: %s", before)
 	}
 	if strings.TrimSpace(before) == "" {
 		t.Fatal("the branch already has no diff before it is rebased, so the rebase is not what empties it")
 	}
-	if out, ok := run(t, s.WorkingCopy, "git", "-c", "user.name=T", "-c", "user.email=t@t.invalid",
-		"rebase", f.DefaultBranch); !ok {
+	if out, ok := gitIn(t, s, s.WorkingCopy, "rebase", f.DefaultBranch); !ok {
 		t.Fatalf("rebase the branch: %s", out)
 	}
-	after, ok := run(t, s.WorkingCopy, "git", "diff", "--name-only", f.DefaultBranch+"..."+f.Branch)
+	after, ok := gitIn(t, s, s.WorkingCopy, "diff", "--name-only", f.DefaultBranch+"..."+f.Branch)
 	if !ok {
 		t.Fatalf("diff after the rebase: %s", after)
 	}
@@ -408,7 +438,7 @@ func TestTheHostileTemplateWouldPutAHookInARepositoryBornFromIt(t *testing.T) {
 		t.Fatal("the scenario names no template directory")
 	}
 	born := filepath.Join(t.TempDir(), "born.git")
-	if out, ok := run(t, s.Root, "git", "init", "--bare", "--quiet",
+	if out, ok := gitIn(t, s, s.Root, "init", "--bare", "--quiet",
 		"--template="+template, born); !ok {
 		t.Fatalf("create a repository from the template: %s", out)
 	}
@@ -432,7 +462,7 @@ func TestTheOutOfBandAdvanceMovesTheBranchOnTheRemote(t *testing.T) {
 	f := build(t)
 	s := scenario(t, f, fixture.ScenarioRemoteAdvanced)
 
-	before, ok := run(t, s.WorkingCopy, "git", "ls-remote", s.Origin, "refs/heads/"+f.Branch)
+	before, ok := gitIn(t, s, s.WorkingCopy, "ls-remote", s.Origin, "refs/heads/"+f.Branch)
 	if !ok {
 		t.Fatalf("read the remote before the advance: %s", before)
 	}
@@ -440,7 +470,7 @@ func TestTheOutOfBandAdvanceMovesTheBranchOnTheRemote(t *testing.T) {
 	if err != nil {
 		t.Fatalf("advance the remote: %v", err)
 	}
-	after, ok := run(t, s.WorkingCopy, "git", "ls-remote", s.Origin, "refs/heads/"+f.Branch)
+	after, ok := gitIn(t, s, s.WorkingCopy, "ls-remote", s.Origin, "refs/heads/"+f.Branch)
 	if !ok {
 		t.Fatalf("read the remote after the advance: %s", after)
 	}
@@ -452,7 +482,7 @@ func TestTheOutOfBandAdvanceMovesTheBranchOnTheRemote(t *testing.T) {
 	}
 	// The commit the run would drop has to be one the branch's own history
 	// does not contain, or there is nothing to discard.
-	if out, ok := run(t, s.WorkingCopy, "git", "merge-base", "--is-ancestor", landed, "HEAD"); ok {
+	if out, ok := gitIn(t, s, s.WorkingCopy, "merge-base", "--is-ancestor", landed, "HEAD"); ok {
 		t.Fatalf("the landed commit is already contained in the run's branch, so nothing would be "+
 			"discarded: %s", out)
 	}
@@ -474,17 +504,17 @@ func TestCopyingRefusesUntilThereIsARemoteToInherit(t *testing.T) {
 	// test is about the fixture's own helper, so the remote is written here
 	// rather than by the package the helper is a fixture for.
 	pretendGate := filepath.Join(t.TempDir(), "gate.git")
-	if out, ok := run(t, s.Root, "git", "init", "--bare", "--quiet", pretendGate); !ok {
+	if out, ok := gitIn(t, s, s.Root, "init", "--bare", "--quiet", pretendGate); !ok {
 		t.Fatalf("create a repository to stand in for a gate: %s", out)
 	}
-	if out, ok := run(t, s.WorkingCopy, "git", "remote", "add", gate.RemoteName, pretendGate); !ok {
+	if out, ok := gitIn(t, s, s.WorkingCopy, "remote", "add", gate.RemoteName, pretendGate); !ok {
 		t.Fatalf("add the gate remote: %s", out)
 	}
 	copied, err := fixture.CopyGatedWorkingCopy(s)
 	if err != nil {
 		t.Fatalf("copy the gated working copy: %v", err)
 	}
-	out, ok := run(t, copied, "git", "config", "--get", "remote."+gate.RemoteName+".url")
+	out, ok := gitIn(t, s, copied, "config", "--get", "remote."+gate.RemoteName+".url")
 	if !ok || strings.TrimSpace(out) != pretendGate {
 		t.Fatalf("the copy's %s remote is %q, want %q", gate.RemoteName, strings.TrimSpace(out), pretendGate)
 	}
@@ -559,22 +589,22 @@ func readFile(t *testing.T, path string) string {
 	return string(body)
 }
 
-// showFile reads a path out of a commit, which is what a run reads: a file in
-// the working directory is not what was pushed.
-func showFile(t *testing.T, dir, spec string) string {
+// showFile reads a path out of a commit in the scenario's working copy, which
+// is what a run reads: a file in the working directory is not what was pushed.
+func showFile(t *testing.T, s fixture.Scenario, spec string) string {
 	t.Helper()
-	out, ok := run(t, dir, "git", "show", spec)
+	out, ok := gitIn(t, s, s.WorkingCopy, "show", spec)
 	if !ok {
-		t.Fatalf("git show %s in %s: %s", spec, dir, out)
+		t.Fatalf("git show %s in %s: %s", spec, s.WorkingCopy, out)
 	}
 	return out
 }
 
 // treeMode returns the mode a path is committed with, empty when the branch
 // does not carry it.
-func treeMode(t *testing.T, dir, ref, path string) string {
+func treeMode(t *testing.T, s fixture.Scenario, ref, path string) string {
 	t.Helper()
-	out, ok := run(t, dir, "git", "ls-tree", ref, "--", path)
+	out, ok := gitIn(t, s, s.WorkingCopy, "ls-tree", ref, "--", path)
 	if !ok {
 		t.Fatalf("git ls-tree %s -- %s: %s", ref, path, out)
 	}

@@ -6,22 +6,35 @@ import (
 	"path/filepath"
 )
 
-// GitHomeKey is the key in Scenario.Paths naming the directory the git
-// configuration every invocation here runs under was written into. A deferred
-// plant reads it so that it runs git the same way the build did, which is what
-// keeps a plant applied later from picking up a developer's own configuration.
-const GitHomeKey = "git-home"
+// The keys in Scenario.Paths that record how the build ran git. Together they
+// are what a plant applied later, or a harness in another process, needs to
+// run git the same way: the binary that was resolved, the home its
+// configuration was written into, and that configuration file. Recording only
+// one of them would leave a caller reconstructing the rest from its own PATH
+// and its own configuration, which is the thing this isolation exists to
+// prevent. GitInvocation reads all three.
+const (
+	GitHomeKey   = "git-home"
+	GitConfigKey = "git-config"
+	GitBinaryKey = "git-binary"
+)
 
-// runnerFor rebuilds the runner the scenario was built with.
+// runnerFor rebuilds the runner the scenario was built with. A caller may name
+// another git, and otherwise the one the scenario records is used rather than
+// whatever git the caller's PATH resolves to.
 func runnerFor(s Scenario, opts ...Option) (*gitRunner, error) {
 	home := s.Paths[GitHomeKey]
 	if home == "" {
 		return nil, fmt.Errorf("fixture: scenario %s carries no %s, so git cannot be run the way the "+
 			"build ran it", s.Name, GitHomeKey)
 	}
-	b := &builder{}
+	b := &builder{gitBinary: s.Paths[GitBinaryKey]}
 	for _, opt := range opts {
 		opt(b)
+	}
+	if b.gitBinary == "" {
+		return nil, fmt.Errorf("fixture: scenario %s carries no %s and no git was named, so the git the "+
+			"build ran cannot be reconstructed", s.Name, GitBinaryKey)
 	}
 	return newGitRunner(b.gitBinary, home)
 }

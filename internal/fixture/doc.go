@@ -41,6 +41,14 @@
 // committer identity and dates stated, so two builds of one scenario differ
 // only where their absolute paths differ.
 //
+// A scenario records how it was built rather than leaving it to be guessed:
+// the resolved git binary, the home, and that configuration file are in
+// Scenario.Paths, and GitInvocation hands back the pair a caller needs to run
+// the same git under the same isolation. A plant applied partway through a run,
+// or a harness in another process reading the manifest, would otherwise fall
+// back to whatever git its own PATH resolves and whatever configuration its own
+// home carries, which is the isolation lost at exactly the point it matters.
+//
 // # Every condition is reached by the path the mechanism sees
 //
 // A fixture that assembles a state directly, rather than by the route the

@@ -132,9 +132,16 @@ func plantStaleDocumentation(b *builder, s *Scenario) ([]Condition, error) {
 	}}, nil
 }
 
-// plantLintViolation adds a printf verb that does not match its argument.
-// `go vet` names both the verb and the argument, so the expected message is
-// the toolchain's rather than this package's invention.
+// plantLintViolation adds a call to context.WithCancel whose cancel function
+// is discarded, which is the lostcancel check. `go vet` names the call and the
+// function that goes unused, so the expected message is the toolchain's rather
+// than this package's invention.
+//
+// The check is chosen for what `go test` does not run. A violation inside the
+// vet subset `go test` runs for itself fails the build of the test binary, and
+// the failing-test condition planted in the same scenario is then never
+// observed, so a printf verb that does not match its argument would hide the
+// condition beside it rather than sit alongside it.
 func plantLintViolation(b *builder, s *Scenario) ([]Condition, error) {
 	if err := writeFile(s.WorkingCopy, "report.go", 0o644, subjectReportGo); err != nil {
 		return nil, err
@@ -172,7 +179,7 @@ func plantLintViolation(b *builder, s *Scenario) ([]Condition, error) {
 // invisible.
 func plantPushedCommandsAndAgent(b *builder, s *Scenario) ([]Condition, error) {
 	const scriptPath = ".fixture/pushed-test-command.sh"
-	if err := writeFile(s.WorkingCopy, scriptPath, 0o755,
+	if err := b.git.writeExecutable(s.WorkingCopy, scriptPath,
 		tripwireScript("pushed-commands-test", s.Tripwire,
 			"The commands.test a pushed branch asked for.")); err != nil {
 		return nil, err

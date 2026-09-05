@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // ManifestName is the file WriteManifest writes, relative to the build root.
@@ -89,28 +90,10 @@ func (s Scenario) Fired() ([]string, bool, error) {
 		return nil, false, fmt.Errorf("fixture: reading the tripwire file %s: %w", s.Tripwire, err)
 	}
 	var fired []string
-	for _, line := range splitLines(string(body)) {
+	for _, line := range strings.Split(string(body), "\n") {
 		if line != "" {
 			fired = append(fired, line)
 		}
 	}
 	return fired, true, nil
-}
-
-// splitLines splits on newlines without pulling in a dependency for it, and
-// drops a trailing empty field so a file ending in a newline does not report
-// one more entry than it holds.
-func splitLines(s string) []string {
-	var out []string
-	start := 0
-	for i := 0; i < len(s); i++ {
-		if s[i] == '\n' {
-			out = append(out, s[start:i])
-			start = i + 1
-		}
-	}
-	if start < len(s) {
-		out = append(out, s[start:])
-	}
-	return out
 }

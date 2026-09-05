@@ -239,7 +239,11 @@ func (b *builder) newScenario(name ScenarioName, purpose string) (*Scenario, err
 		Commits:           map[string]string{},
 		AgentResponses:    map[string]string{},
 		ProviderResponses: map[string]string{},
-		Paths:             map[string]string{GitHomeKey: filepath.Join(b.root, ".githome")},
+		Paths: map[string]string{
+			GitHomeKey:   b.git.home,
+			GitConfigKey: b.git.config,
+			GitBinaryKey: b.git.binary,
+		},
 	}, nil
 }
 

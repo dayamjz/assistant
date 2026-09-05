@@ -36,7 +36,7 @@ func plantHarnessInstallation(b *builder, s *Scenario) ([]Condition, error) {
 	}
 	quiet := make([]string, 0, len(tripwires))
 	for _, t := range tripwires {
-		if err := writeFile(s.WorkingCopy, t.rel, 0o755, tripwireScript(t.id, s.Tripwire, t.comment)); err != nil {
+		if err := b.git.writeExecutable(s.WorkingCopy, t.rel, tripwireScript(t.id, s.Tripwire, t.comment)); err != nil {
 			return nil, err
 		}
 		quiet = append(quiet, t.id)

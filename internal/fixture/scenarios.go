@@ -283,6 +283,14 @@ func buildUnreadableTrustedConfig(b *builder) (*Scenario, []Condition, error) {
 	}}, nil
 }
 
+// The two hostile templates, named here because each is a directory on disk, a
+// git configuration file selecting it, and a key in Scenario.Paths reaching
+// both.
+const (
+	templateMixed          = "template-mixed"
+	templatePreReceiveOnly = "template-pre-receive-only"
+)
+
 // buildHostileTemplate plants the git templates a gate must not be born from,
 // and the configuration file that selects one. The environment variable half
 // is planted as a value rather than exported here, because which process gets
@@ -313,28 +321,36 @@ func buildHostileTemplate(b *builder) (*Scenario, []Condition, error) {
 	// fires for every hook name on a creation and for every name except the
 	// admission hook on a repair. One template exercises the refusal, the
 	// other exercises the case that was closed rather than caught.
+	//
+	// The hooks are an ordered list rather than a map, and each template
+	// records its own tripwires. Ranging a map would put the tripwire
+	// identifiers into the manifest in whatever order that range produced, so
+	// two builds of this scenario would differ where doc.go says they differ
+	// only in their absolute paths; and one shared list would have every
+	// condition expect quiet from a template it never applies.
+	type templateHook struct{ name, id string }
 	templates := []struct {
 		dir   string
-		hooks map[string]string
+		hooks []templateHook
 	}{
-		{"template-mixed", map[string]string{
-			"pre-receive": "template-hook-pre-receive",
-			"post-update": "template-hook-post-update",
-			"update":      "template-hook-update",
+		{templateMixed, []templateHook{
+			{"pre-receive", "template-hook-pre-receive"},
+			{"post-update", "template-hook-post-update"},
+			{"update", "template-hook-update"},
 		}},
-		{"template-pre-receive-only", map[string]string{
-			"pre-receive": "template-hook-pre-receive-only",
+		{templatePreReceiveOnly, []templateHook{
+			{"pre-receive", "template-hook-pre-receive-only"},
 		}},
 	}
-	var quiet []string
+	quiet := map[string][]string{}
 	for _, t := range templates {
 		dir := filepath.Join(s.Root, t.dir)
-		for name, id := range t.hooks {
-			if err := writeFile(dir, "hooks/"+name, 0o755,
-				tripwireScript(id, s.Tripwire, "A hook a git template would put in a repository at birth.")); err != nil {
+		for _, h := range t.hooks {
+			if err := writeFile(dir, "hooks/"+h.name, 0o755,
+				tripwireScript(h.id, s.Tripwire, "A hook a git template would put in a repository at birth.")); err != nil {
 				return nil, nil, err
 			}
-			quiet = append(quiet, id)
+			quiet[t.dir] = append(quiet[t.dir], h.id)
 		}
 		config := filepath.Join(s.Root, "gitconfig-"+t.dir)
 		content := "[init]\n\ttemplateDir = " + dir + "\n"
@@ -372,7 +388,7 @@ func buildHostileTemplate(b *builder) (*Scenario, []Condition, error) {
 				ActionSucceeds: "The gate refuses every push until an initialization succeeds, and an " +
 					"initialization with no template hook arriving does succeed, so the named action ends " +
 					"the state the reader is in rather than leading to a second refusal.",
-				TripwiresQuiet: quiet,
+				TripwiresQuiet: quiet[templateMixed],
 			},
 		},
 		{
@@ -391,7 +407,7 @@ func buildHostileTemplate(b *builder) (*Scenario, []Condition, error) {
 					"is already occupied by a hook the gate wrote.",
 				Sentinel:        "gate.ErrTemplateHooks",
 				MessageContains: []string{"post-update", "init.templateDir"},
-				TripwiresQuiet:  quiet,
+				TripwiresQuiet:  quiet[templateMixed],
 			},
 		},
 		{
@@ -409,7 +425,7 @@ func buildHostileTemplate(b *builder) (*Scenario, []Condition, error) {
 					"is the gate's own admission hook, and the template's pre-receive is neither installed " +
 					"nor preserved into the chain at the .local name. A harness that saw ErrTemplateHooks " +
 					"here has found a change in behavior, not a pass.",
-				TripwiresQuiet: []string{"template-hook-pre-receive-only"},
+				TripwiresQuiet: quiet[templatePreReceiveOnly],
 			},
 		},
 		{
@@ -427,7 +443,7 @@ func buildHostileTemplate(b *builder) (*Scenario, []Condition, error) {
 					"before git is invoked, so this channel is closed rather than caught. This is the " +
 					"negative case that gives the refusal above its meaning, and a harness that saw " +
 					"ErrTemplateHooks here would be seeing the variable survive.",
-				TripwiresQuiet: quiet,
+				TripwiresQuiet: quiet[templateMixed],
 			},
 		},
 	}, nil

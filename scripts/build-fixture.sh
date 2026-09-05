@@ -14,5 +14,18 @@ if [ "$#" -ne 1 ]; then
 	exit 2
 fi
 
+# The output directory is resolved before the working directory moves, because
+# `go run` has to be invoked from inside this module and a relative DIR would
+# then be resolved against the module root rather than against where the caller
+# stands. The consumer of this script is another repository, so a relative path
+# from somewhere else entirely is the ordinary case rather than the odd one.
+out_parent=$(dirname -- "$1")
+out_name=$(basename -- "$1")
+if ! out_parent=$(CDPATH= cd -- "$out_parent" 2>/dev/null && pwd); then
+	echo "$0: $1 cannot be resolved: its parent directory does not exist" >&2
+	exit 2
+fi
+
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-exec "${GO:-go}" run "$root/cmd/fixture" -out "$1"
+CDPATH= cd -- "$root"
+exec "${GO:-go}" run ./cmd/fixture -out "$out_parent/$out_name"
