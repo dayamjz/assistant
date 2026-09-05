@@ -157,12 +157,12 @@ var (
 	// point's node. Nothing is written and the run is left exactly as it
 	// stands, so a decision still open stays open and an answer already
 	// recorded stays recorded: give the run more room with
-	// Executor.AdoptBudget, which is what a fork of it needs too, because a
-	// fork copies the counters and so inherits the budget that stopped the
-	// original. A run this executor produced is here only after its budget was
-	// deliberately lowered below what it had already spent, because a run
-	// reaching a halt point with nothing left is parked in front of it rather
-	// than halted at it; a checkpoint that arrives from a store already
+	// Executor.AdoptBudget, or fork it from a checkpoint written before the
+	// budget was lowered, which still records the budget in force then and the
+	// steps spent by then. A run this executor produced is here only after its
+	// budget was deliberately lowered below what it had already spent, because
+	// a run reaching a halt point with nothing left is parked in front of it
+	// rather than halted at it; a checkpoint that arrives from a store already
 	// standing at such a halt point meets it too.
 	ErrBudgetSpent = errors.New("graph: the run-wide step budget leaves no step for the halted node")
 	// ErrBudgetChanged is returned when a run is advanced by an executor

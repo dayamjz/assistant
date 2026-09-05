@@ -21,8 +21,12 @@ import (
 // so a bound that changed between the count accruing and the comparison fires
 // early or late with nothing to say it did.
 //
-// It covers nothing else. Nodes, state keys, and node bodies are outside it,
-// and a checkpoint's position and state are checked against those separately.
+// It covers nothing else. Nodes and state keys are outside it, and a
+// checkpoint's position and state are checked against them separately. Node
+// bodies are outside it and outside every other check a checkpoint meets: a
+// graph rebuilt with different bodies under the same node names resumes, on
+// purpose, because a body is code the caller supplies rather than something a
+// checkpoint records.
 func edgeDigest(edges []Edge, back []bool) string {
 	// The version prefix is what keeps a later change to this rendering from
 	// digesting alike with the current one.

@@ -235,9 +235,13 @@ func (g *Graph) validateDecision(c Checkpoint) error {
 // budget below one bounds nothing, and counters indexed against another edge
 // vector would be read against edges that did not produce them.
 //
-// The digest is compared last so the narrower refusals keep their own
-// diagnostics. A wrongly sized counter vector is a length mismatch, which
-// names the vector, rather than a digest mismatch, which names neither.
+// Only the two length checks precede the digest comparison, because a wrongly
+// sized counter vector is a length mismatch, which names the vector, rather
+// than a digest mismatch, which names neither. Everything indexed by edge
+// comes after it: comparing a count against the bound on the edge sitting at
+// its index says something only once the edge vector is known to be the one
+// the count accrued against, so a changed edge is reported as the changed edge
+// it is rather than as a count past a bound it never ran under.
 func (g *Graph) validateCounters(c Counters) error {
 	if c.Steps < 0 {
 		return &CheckpointError{Field: "counters.steps", Detail: fmt.Sprintf("is negative: %d", c.Steps)}
@@ -254,6 +258,12 @@ func (g *Graph) validateCounters(c Counters) error {
 		return &CheckpointError{Field: "counters.fingerprints", Detail: fmt.Sprintf(
 			"holds %d entries, the graph has %d edges", len(c.Fingerprints), len(g.edges))}
 	}
+	if c.EdgeDigest != g.digest {
+		return &CheckpointError{Field: "counters.edge_digest", Detail: fmt.Sprintf(
+			"was accrued against edges digesting %s and this graph's edges digest %s, so its "+
+				"per-edge counts and fingerprints would be read against edges that did not produce them",
+			shortDigest(c.EdgeDigest), shortDigest(g.digest))}
+	}
 	for i, n := range c.Traversals {
 		if n < 0 {
 			return &CheckpointError{Field: "counters.traversals", Detail: fmt.Sprintf(
@@ -263,12 +273,6 @@ func (g *Graph) validateCounters(c Counters) error {
 			return &CheckpointError{Field: "counters.traversals", Detail: fmt.Sprintf(
 				"edge %d records %d traversals, past its bound of %d", i, n, bound)}
 		}
-	}
-	if c.EdgeDigest != g.digest {
-		return &CheckpointError{Field: "counters.edge_digest", Detail: fmt.Sprintf(
-			"was accrued against edges digesting %s and this graph's edges digest %s, so its "+
-				"per-edge counts and fingerprints would be read against edges that did not produce them",
-			shortDigest(c.EdgeDigest), shortDigest(g.digest))}
 	}
 	return nil
 }

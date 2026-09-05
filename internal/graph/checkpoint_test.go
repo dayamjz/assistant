@@ -1122,6 +1122,10 @@ func TestValidateRefusesTraversalsPastAnEdgeBound(t *testing.T) {
 	if !errors.As(err, &ce) {
 		t.Fatalf("Validate error = %T %v, want a *graph.CheckpointError", err, err)
 	}
+	if ce.Field != "counters.traversals" {
+		t.Fatalf("Validate blamed %q (%s), want the count named: these are this graph's own edges",
+			ce.Field, ce.Detail)
+	}
 }
 
 func TestResumeRefusesATamperedCheckpoint(t *testing.T) {

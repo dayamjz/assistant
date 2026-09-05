@@ -144,15 +144,18 @@ func (e *Executor) Run(ctx context.Context, run string, initial State) (Result, 
 //
 // A run waiting on a decision re-emits it and executes nothing: the halted
 // node has not started, so there is nothing to replay. A run parked by a bound
-// is returned unchanged, because no amount of resuming moves it. The run-wide
-// budget is the one bound with a remedy in place: AdoptBudget gives the run
-// more room. A run parked by a round limit or by convergence has none, because
-// a fork copies the counters that parked it and raising an edge's round bound
-// changes the edge digest, which this resume refuses; what is left is a new
-// run started from the state this one reached, on NewState's terms. Answering is not among the remedies
-// either, because Answer takes a run that is halted and a bound-parked one is
-// not. A run interrupted mid-flight continues from the node it had not yet
-// reached.
+// is returned unchanged, because no amount of resuming moves it, and what
+// takes it further differs by bound. AdoptBudget moves a budget-exhausted run
+// onto more room where it stands. A run parked by a round limit or by
+// convergence is taken further by forking it from an earlier checkpoint, one
+// whose counters had not yet reached the bound, and resuming that fork: the
+// graph is unchanged, so the digest and the budget match, and the loop counts
+// again from what that checkpoint recorded. The one refusal no fork point
+// reaches is the edge digest, because every checkpoint a run writes carries
+// the digest of the graph it started under. Answering is not among the
+// remedies either, because Answer takes a run that is halted and a
+// bound-parked one is not. A run interrupted mid-flight continues from the
+// node it had not yet reached.
 //
 // It returns an error wrapping ErrBudgetChanged, before anything else, when
 // this executor is configured with a run-wide step budget other than the one

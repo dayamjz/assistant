@@ -526,3 +526,128 @@ func TestAdoptBudgetReParksARunTheNewBudgetStillLeavesNoStepFor(t *testing.T) {
 		t.Fatalf("the history records budgets %v, want the change from 2 to 1 written down", budgets(history))
 	}
 }
+
+// TestAChangedBoundIsReportedAsChangedEdgesRatherThanAsAPastCount orders the
+// two refusals one checkpoint can earn at once. A round bound is part of the
+// edge digest and is also the number the count at that index is compared
+// against, so lowering it makes both true; naming the count would send a
+// reader after a corrupt checkpoint when what happened is a configuration
+// change, and the bound it named belongs to edges the count never accrued on.
+func TestAChangedBoundIsReportedAsChangedEdgesRatherThanAsAPastCount(t *testing.T) {
+	ctx := context.Background()
+	rec := &recorder{}
+	generous := mustBuild(t, digestBuilder(rec, 1, 3, true, 0))
+	store := graph.NewMemoryStore()
+	parked, err := mustExecutor(t, generous, store, 50).Run(ctx, "run", mustState(t, generous, nil))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if parked.Status != graph.StatusRoundsExhausted {
+		t.Fatalf("the run ended %s (%s), want its round limit to have parked it", parked.Status, parked.Reason)
+	}
+	cp, err := store.Latest(ctx, "run")
+	if err != nil {
+		t.Fatalf("Latest: %v", err)
+	}
+
+	// The same declarations with one lower round bound: the same edges in the
+	// same order, so nothing but the bound and the digest it feeds differ.
+	strict := mustBuild(t, digestBuilder(rec, 1, 1, true, 0))
+	past := false
+	for i, e := range strict.Edges() {
+		if e.Rounds > 0 && cp.Counters.Traversals[i] > e.Rounds {
+			past = true
+		}
+	}
+	if !past {
+		t.Fatalf("the run recorded traversals %v, want one past a bound the stricter graph declares: "+
+			"without that this test would not reach the ordering it is about", cp.Counters.Traversals)
+	}
+
+	err = strict.Validate(cp)
+	var ce *graph.CheckpointError
+	if !errors.As(err, &ce) {
+		t.Fatalf("Validate error = %T %v, want a *graph.CheckpointError", err, err)
+	}
+	if ce.Field != "counters.edge_digest" {
+		t.Fatalf("Validate blamed %q (%s), want the changed edges named rather than a bound the count never ran under",
+			ce.Field, ce.Detail)
+	}
+}
+
+// TestForkingFromAnEarlierPointGetsARoundsExhaustedRunItsLoopBack is the
+// remedy the docs name for the two bounds AdoptBudget does not release. A fork
+// runs on the counters of the checkpoint it was taken from, so one taken from
+// inside the loop resumes under the same graph, with the same digest and the
+// same budget, and the round bound counts again from what that checkpoint
+// recorded rather than from the count that parked the original.
+func TestForkingFromAnEarlierPointGetsARoundsExhaustedRunItsLoopBack(t *testing.T) {
+	ctx := context.Background()
+	rec := &recorder{}
+	g := mustBuild(t, digestBuilder(rec, 1, 2, true, 0))
+	store := graph.NewMemoryStore()
+	exec := mustExecutor(t, g, store, 50)
+
+	parked, err := exec.Run(ctx, "run", mustState(t, g, nil))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if parked.Status != graph.StatusRoundsExhausted {
+		t.Fatalf("the run ended %s (%s), want its round limit to have parked it", parked.Status, parked.Reason)
+	}
+	if _, err := exec.Resume(ctx, "run"); err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	fixesBefore := rec.count("fix")
+
+	back := -1
+	for i := range g.Edges() {
+		if g.IsBackEdge(i) {
+			back = i
+		}
+	}
+	if back < 0 {
+		t.Fatal("the graph declares no back edge, so there is no round bound to fork out from")
+	}
+	history, err := store.History(ctx, "run")
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	from := graph.CheckpointID{}
+	for _, cp := range history {
+		if cp.Status == graph.StatusRunning && cp.Counters.Traversals[back] < g.Edges()[back].Rounds {
+			from = cp.ID()
+			break
+		}
+	}
+	if from.Seq == 0 {
+		t.Fatal("the run wrote no running checkpoint with rounds left, so there is no point to fork from")
+	}
+
+	if _, err := store.Fork(ctx, from, "again"); err != nil {
+		t.Fatalf("Fork: %v", err)
+	}
+	forked, err := exec.Resume(ctx, "again")
+	if err != nil {
+		t.Fatalf("resuming the fork: %v", err)
+	}
+	if rec.count("fix") <= fixesBefore {
+		t.Errorf("the fork ran %d fix rounds beyond the original's %d, want the loop to have run again",
+			rec.count("fix")-fixesBefore, fixesBefore)
+	}
+	if forked.Status != graph.StatusRoundsExhausted {
+		t.Errorf("the fork ended %s (%s), want the round bound to have counted again and parked it",
+			forked.Status, forked.Reason)
+	}
+
+	// The original is untouched by any of it: a fork is a second run, not a
+	// second chance the first one gets.
+	still, err := store.Latest(ctx, "run")
+	if err != nil {
+		t.Fatalf("Latest: %v", err)
+	}
+	if still.Status != graph.StatusRoundsExhausted || still.Counters.Traversals[back] != g.Edges()[back].Rounds {
+		t.Errorf("the original is %s with %d traversals on its back edge, want it left exactly as it parked",
+			still.Status, still.Counters.Traversals[back])
+	}
+}

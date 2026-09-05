@@ -56,9 +56,10 @@ func (s Status) String() string {
 // Parked reports whether the status is one a run does not advance out of on
 // its own. A halted run needs a decision. A run parked by a bound needs
 // something other than an answer, because Answer takes only a halted run:
-// Executor.AdoptBudget for a budget-exhausted one, and for the other two a
-// new run started from the state this one reached, because a fork carries the
-// same counters and a changed round bound is refused as a changed edge digest.
+// Executor.AdoptBudget moves a budget-exhausted one onto more room where it
+// stands, and any of the three is taken further by forking the run from an
+// earlier checkpoint and resuming that, which runs on the counters that
+// checkpoint recorded rather than the ones the park is standing on.
 func (s Status) Parked() bool {
 	switch s {
 	case StatusHalted, StatusRoundsExhausted, StatusBudgetExhausted, StatusConverged:
