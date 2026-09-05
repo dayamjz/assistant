@@ -20,7 +20,9 @@ type Change struct {
 	// Touched is the repository-relative paths the change touched, as the run
 	// knows them and not as the reviewer reports them. That is what makes the
 	// lens able to fail: a reviewer cannot drop a path out of the question by
-	// not mentioning it. Order is preserved and repeats are collapsed.
+	// not mentioning it. Order is preserved and repeats are collapsed. The
+	// lens refuses a set holding no path once trimmed, on the same terms as
+	// an empty intent.
 	Touched []string
 }
 
@@ -41,15 +43,21 @@ type Trace struct {
 // Guidance returns the scope section the review stage puts in front of its
 // reviewer. It names every touched path, so the reviewer is asked about each
 // one rather than about the change in general, and it frames the intent by its
-// source. It returns ErrNoIntent when there is no recorded intent to trace to.
+// source. It returns ErrNoIntent when there is no recorded intent to trace to,
+// and ErrNoTouched when there is no path to ask about.
 //
 // The text says what the lens will and will not do with the answer, including
 // that scope alone is a note, so a reviewer is not invited to escalate a
-// change merely for being unexplained.
+// change merely for being unexplained. It also asks for each path back exactly
+// as listed, because that is the comparison Observe makes.
 func Guidance(c Change) (string, error) {
 	intent := strings.TrimSpace(c.Intent)
 	if intent == "" {
 		return "", ErrNoIntent
+	}
+	touched := dedupe(c.Touched)
+	if len(touched) == 0 {
+		return "", ErrNoTouched
 	}
 
 	var b strings.Builder
@@ -64,9 +72,12 @@ func Guidance(c Change) (string, error) {
 	b.WriteString("Intent:\n")
 	b.WriteString(intent)
 	b.WriteString("\n\nThe change touches these paths. For each one, say what part of the " +
-		"intent it follows from, in your own words. A path you cannot account " +
-		"for is left untraced rather than explained away.\n")
-	for _, path := range dedupe(c.Touched) {
+		"intent it follows from, in your own words, and repeat the path itself " +
+		"exactly as it is listed below, character for character: a trace is matched " +
+		"to a touched path by exact string equality, so a path you retype, reformat, " +
+		"or re-case accounts for nothing and leaves its note standing. A path you " +
+		"cannot account for is left untraced rather than explained away.\n")
+	for _, path := range touched {
 		b.WriteString("  - ")
 		b.WriteString(path)
 		b.WriteString("\n")
@@ -81,7 +92,9 @@ func Guidance(c Change) (string, error) {
 
 // Observe returns the lens's findings: one note per touched path the traces do
 // not account for, in the order Change.Touched lists them. It returns
-// ErrNoIntent when there is no recorded intent to trace to.
+// ErrNoIntent when there is no recorded intent to trace to, and ErrNoTouched
+// when there is no path to account for, so silence here always means a change
+// whose paths were asked about and answered.
 //
 // Every finding it returns carries findings.ActionNote, so none is fix-eligible
 // and none parks the run. That is by construction here rather than by a cap
@@ -95,6 +108,10 @@ func Observe(c Change, traces []Trace) ([]findings.Finding, error) {
 	if strings.TrimSpace(c.Intent) == "" {
 		return nil, ErrNoIntent
 	}
+	touched := dedupe(c.Touched)
+	if len(touched) == 0 {
+		return nil, ErrNoTouched
+	}
 
 	traced := make(map[string]struct{}, len(traces))
 	for _, t := range traces {
@@ -106,7 +123,7 @@ func Observe(c Change, traces []Trace) ([]findings.Finding, error) {
 	}
 
 	var out []findings.Finding
-	for _, path := range dedupe(c.Touched) {
+	for _, path := range touched {
 		if _, ok := traced[path]; ok {
 			continue
 		}

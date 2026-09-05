@@ -218,6 +218,52 @@ func TestNoIntentIsRefused(t *testing.T) {
 	}
 }
 
+// A lens asked about no path could only ever return silence, which is a check
+// that passes without checking anything. Both entry points refuse instead.
+func TestNoTouchedPathIsRefused(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		touched []string
+	}{
+		{"no paths at all", nil},
+		{"an empty list", []string{}},
+		{"paths that are empty once trimmed", []string{"", "  \n\t "}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := Change{
+				Intent:   "Add a bounded retry to the fetch path.",
+				Supplied: true,
+				Touched:  tc.touched,
+			}
+			got, err := Observe(c, nil)
+			if !errors.Is(err, ErrNoTouched) {
+				t.Errorf("Observe: got %v, want ErrNoTouched", err)
+			}
+			if len(got) != 0 {
+				t.Errorf("Observe returned %v alongside a refusal", paths(got))
+			}
+			text, err := Guidance(c)
+			if !errors.Is(err, ErrNoTouched) {
+				t.Errorf("Guidance: got %v, want ErrNoTouched", err)
+			}
+			if text != "" {
+				t.Errorf("Guidance returned text alongside a refusal:\n%s", text)
+			}
+		})
+	}
+}
+
+// The intent is the yardstick, so a call missing both reports the missing
+// yardstick rather than the missing question.
+func TestNeitherAnIntentNorATouchedPathReportsTheIntent(t *testing.T) {
+	if _, err := Observe(Change{}, nil); !errors.Is(err, ErrNoIntent) {
+		t.Errorf("Observe: got %v, want ErrNoIntent", err)
+	}
+	if _, err := Guidance(Change{}); !errors.Is(err, ErrNoIntent) {
+		t.Errorf("Guidance: got %v, want ErrNoIntent", err)
+	}
+}
+
 // The reviewer is asked about each path by name, because that is what makes an
 // answer that omits one visible as an omission rather than as agreement.
 func TestGuidanceNamesEveryTouchedPath(t *testing.T) {
@@ -236,6 +282,65 @@ func TestGuidanceNamesEveryTouchedPath(t *testing.T) {
 	}
 	if !strings.Contains(text, strings.TrimSpace(c.Intent)) {
 		t.Errorf("guidance does not carry the intent:\n%s", text)
+	}
+}
+
+// listedPaths returns the paths the guidance asks about, read back off the
+// emitted text the way a reviewer reads them.
+func listedPaths(text string) []string {
+	var out []string
+	for _, line := range strings.Split(text, "\n") {
+		if path, ok := strings.CutPrefix(line, "  - "); ok {
+			out = append(out, path)
+		}
+	}
+	return out
+}
+
+// Observe matches a trace to a touched path by exact string equality, so the
+// reviewer has to be told to copy the path, and told it where it meets the
+// list rather than after it. The reason stays prose.
+func TestGuidanceAsksForEachPathExactlyAsListed(t *testing.T) {
+	const path = "internal/log/format.go"
+	text, err := Guidance(change(path))
+	if err != nil {
+		t.Fatalf("Guidance: %v", err)
+	}
+	instruction := strings.Index(text, "exactly as it is listed")
+	if instruction < 0 {
+		t.Fatalf("guidance does not ask for each path exactly as listed:\n%s", text)
+	}
+	list := strings.Index(text, "  - "+path)
+	if list < 0 {
+		t.Fatalf("guidance does not list %q:\n%s", path, text)
+	}
+	if instruction > list {
+		t.Errorf("the instruction trails the path list, where a reviewer has already answered:\n%s", text)
+	}
+	if !strings.Contains(text, "in your own words") {
+		t.Errorf("guidance no longer asks for the reason in the reviewer's own words:\n%s", text)
+	}
+}
+
+// The instruction is only worth giving if following it works, so the paths the
+// guidance lists have to be exactly the strings a trace is matched against: a
+// reviewer that copies every one of them back leaves no note standing.
+func TestATraceCopiedFromTheGuidanceSilencesItsPath(t *testing.T) {
+	c := change("  internal/fetch/retry.go\n", "internal/log/format.go", "internal/fetch/retry.go")
+	text, err := Guidance(c)
+	if err != nil {
+		t.Fatalf("Guidance: %v", err)
+	}
+	listed := listedPaths(text)
+	if len(listed) != 2 {
+		t.Fatalf("guidance lists %v, want the two distinct touched paths", listed)
+	}
+	traces := make([]Trace, len(listed))
+	for i, path := range listed {
+		traces[i] = Trace{Path: path, Reason: "the bounded retry the intent asks for"}
+	}
+	if got := observe(t, c, traces...); len(got) != 0 {
+		t.Fatalf("Observe reported %v after every listed path was copied back verbatim", paths(got))
 	}
 }
 

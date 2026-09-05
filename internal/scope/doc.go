@@ -43,7 +43,16 @@
 // reviewer therefore cannot make a note disappear by omitting a file: silence
 // on a path requires an affirmative trace naming that path and saying what
 // part of the intent it follows from. That claim is recorded in the reviewer's
-// own words and is attributable to it.
+// own words and is attributable to it. Only the path is asked for verbatim,
+// and the guidance says so where the reviewer meets the list, because exact
+// equality after trimming surrounding space is the comparison Observe makes.
+//
+// A lens asked about no path at all is refused with ErrNoTouched rather than
+// answered with silence, on the same terms as a missing intent: it would be a
+// check that passes without checking anything, and its silence would be
+// indistinguishable from a change that traced. A run with nothing to review
+// does not reach here, because the rebase stage's empty-diff short circuit
+// ends it first.
 //
 // What the claim is not is verified. This package does not read the intent or
 // the reason for sense, so a reviewer that writes a false reason for a path
@@ -57,9 +66,10 @@
 //     traced. The heading of PRD section 5 is about lines; this mechanism is
 //     about paths, and the difference is a gap rather than a restatement.
 //   - Paths are compared exactly, after trimming surrounding space and
-//     nothing else. A trace whose path differs from the run's by letter case
-//     or by any other spelling matches nothing and so silences nothing, which
-//     fails toward a note rather than toward silence.
+//     nothing else. The guidance asks for the path verbatim, but asking is all
+//     it does: a trace whose path differs from the run's by letter case or by
+//     any other spelling matches nothing and so silences nothing, which fails
+//     toward a note rather than toward silence.
 //   - A trace naming a path the change did not touch silences nothing and is
 //     not itself reported. It is a claim about nothing.
 //   - The ceiling on what the lens is worth at all - that it checks a change

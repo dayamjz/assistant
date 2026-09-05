@@ -13,4 +13,15 @@ var (
 	// person nothing. The intent stage runs first precisely so this cannot
 	// happen, and a caller that reaches here has skipped it.
 	ErrNoIntent = errors.New("scope: the lens needs a recorded intent to trace a change to")
+
+	// ErrNoTouched is returned when the lens is asked about no path: a
+	// Change whose Touched is absent, empty, or holds only entries that are
+	// empty once trimmed. The touched paths are the whole question, so
+	// without one Guidance would ask the reviewer to account for nothing and
+	// Observe could only ever return silence, which is a check that passes
+	// without checking anything and so reads as a clean lens rather than as
+	// an unasked one. A run with nothing to review does not reach here: the
+	// rebase stage's empty-diff short circuit ends it first, and a caller
+	// arriving with no paths has lost them somewhere else.
+	ErrNoTouched = errors.New("scope: the lens needs at least one touched path to ask about")
 )
