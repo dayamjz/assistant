@@ -1,0 +1,364 @@
+package fixture
+
+import "path/filepath"
+
+// buildBase builds the scenario carrying every condition a run can meet while
+// still reaching the end of the pipeline: the four stage plants, the two
+// trust-boundary plants on the branch, the agent output P3 is about, and the
+// empty check list the code host answers with.
+func buildBase(b *builder) (*Scenario, []Condition, error) {
+	s, err := b.newScenario(ScenarioBase,
+		"Every condition a run can meet without the run being stopped before the stage that meets it.")
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := b.initSubject(s, "go test ./..."); err != nil {
+		return nil, nil, err
+	}
+	if err := b.startBranch(s); err != nil {
+		return nil, nil, err
+	}
+
+	var conditions []Condition
+	for _, plant := range []func(*builder, *Scenario) ([]Condition, error){
+		plantLogicBugAndFailingTest,
+		plantStaleDocumentation,
+		plantLintViolation,
+		plantPushedCommandsAndAgent,
+		plantHarnessInstallation,
+		plantFindingsWithoutAction,
+		plantEmptyCheckList,
+	} {
+		planted, err := plant(b, s)
+		if err != nil {
+			return nil, nil, err
+		}
+		conditions = append(conditions, planted...)
+	}
+	if err := b.pushBranch(s); err != nil {
+		return nil, nil, err
+	}
+	// The installer's other half is applied after the build's own push. Set
+	// before it, the planted pre-push hook fires on that push, and the
+	// tripwire file then reports the build rather than the run it was planted
+	// to watch.
+	if _, err := b.git.run(s.WorkingCopy, "config", "core.hooksPath", ".githooks"); err != nil {
+		return nil, nil, err
+	}
+	conditions = append(conditions, plantedCoreHooksPathGap(s))
+	return s, conditions, nil
+}
+
+// plantLogicBugAndFailingTest moves the loop bound in Total by one. One edit
+// produces two conditions, and they are recorded separately because they are
+// answered by different stages: review reads the code against the doc comment
+// above it, and the test stage reads the failure the toolchain reports.
+func plantLogicBugAndFailingTest(b *builder, s *Scenario) ([]Condition, error) {
+	if err := writeFile(s.WorkingCopy, "total.go", 0o644, subjectTotalGoBuggy); err != nil {
+		return nil, err
+	}
+	commit, err := b.git.commitAll(s.WorkingCopy, "narrow the Total loop bound")
+	if err != nil {
+		return nil, err
+	}
+	s.Commits["logic-bug"] = commit
+
+	return []Condition{
+		{
+			ID:       "stage-logic-bug",
+			Scenario: s.Name,
+			Kind:     KindStage,
+			Planted: "total.go on the branch loops to len(xs)-1 while its own doc comment above it still says " +
+				"every element, so the defect is visible from the diff alone and does not need the test to " +
+				"be read.",
+			Mechanism: "the review stage, over the diff between the default branch and the branch",
+			Expect: Outcome{
+				Summary: "Review reports one finding against total.go naming the loop bound, with action fix: " +
+					"the code contradicts the contract stated beside it, which is a mechanical fix and not a " +
+					"question of intent.",
+				Value:           "findings.ActionFix",
+				MessageContains: []string{"total.go"},
+			},
+		},
+		{
+			ID:       "stage-failing-test",
+			Scenario: s.Name,
+			Kind:     KindStage,
+			Planted: "The same edit breaks TestTotalSumsEveryElement, which was passing on the default branch. " +
+				"It is the only failing test in the scenario, so a stage reporting more than one has found " +
+				"something this fixture did not plant.",
+			Mechanism: "the test stage, running the trusted commands.test",
+			Expect: Outcome{
+				Summary: "The trusted test command exits non-zero and the stage reports the failure naming " +
+					"the test.",
+				MessageContains: []string{"TestTotalSumsEveryElement", "Total([1 2 3]) = 3, want 6"},
+			},
+		},
+	}, nil
+}
+
+// plantStaleDocumentation changes the default unit deliberately and leaves the
+// documentation saying what it used to be. It is a change of intent rather
+// than a defect, so the correct answer is to update the document; the test
+// that asserted the old default is updated in the same commit, which is what
+// keeps the failing-test condition unambiguous.
+func plantStaleDocumentation(b *builder, s *Scenario) ([]Condition, error) {
+	if err := writeFile(s.WorkingCopy, "total.go", 0o644, subjectTotalGoBuggyShortUnit); err != nil {
+		return nil, err
+	}
+	if err := writeFile(s.WorkingCopy, "total_test.go", 0o644, subjectTotalTestGoShortUnit); err != nil {
+		return nil, err
+	}
+	commit, err := b.git.commitAll(s.WorkingCopy, "render the default unit as B")
+	if err != nil {
+		return nil, err
+	}
+	s.Commits["stale-documentation"] = commit
+
+	return []Condition{{
+		ID:       "stage-stale-documentation",
+		Scenario: s.Name,
+		Kind:     KindStage,
+		Planted: "Format's default unit changes from \"bytes\" to \"B\" on the branch. docs/behavior.md still " +
+			"says bytes and is not touched by the commit, so the document is made stale by a change rather " +
+			"than being wrong when it was written.",
+		Mechanism: "the document stage, over the diff and the documents the change made stale",
+		Expect: Outcome{
+			Summary: "The document stage reports docs/behavior.md as made stale by the change and the fix is " +
+				"to the document, not to the code: the change of default was deliberate.",
+			Value:           "findings.ActionFix",
+			MessageContains: []string{"docs/behavior.md"},
+		},
+	}}, nil
+}
+
+// plantLintViolation adds a printf verb that does not match its argument.
+// `go vet` names both the verb and the argument, so the expected message is
+// the toolchain's rather than this package's invention.
+func plantLintViolation(b *builder, s *Scenario) ([]Condition, error) {
+	if err := writeFile(s.WorkingCopy, "report.go", 0o644, subjectReportGo); err != nil {
+		return nil, err
+	}
+	commit, err := b.git.commitAll(s.WorkingCopy, "add Report")
+	if err != nil {
+		return nil, err
+	}
+	s.Commits["lint-violation"] = commit
+
+	return []Condition{{
+		ID:       "stage-lint-violation",
+		Scenario: s.Name,
+		Kind:     KindStage,
+		Planted: "report.go discards the cancel function context.WithCancel returns, which the trusted " +
+			"commands.lint reports. The check is one `go test` does not run for itself, so this condition " +
+			"and the failing-test condition can both be observed in one run rather than the first hiding " +
+			"the second.",
+		Mechanism: "the lint stage, running the trusted commands.lint",
+		Expect: Outcome{
+			Summary: "The trusted lint command exits non-zero and the stage reports the violation naming " +
+				"report.go.",
+			MessageContains: []string{"report.go", "the cancel function returned by context.WithCancel"},
+		},
+	}}, nil
+}
+
+// plantPushedCommandsAndAgent rewrites the repository configuration document
+// on the branch so that it sets the two keys a pushed branch may not set. The
+// document is committed and pushed, which is the route P7 is about: a document
+// written into a checkout would never reach the branch a run reads.
+//
+// The values it sets are tripwires rather than plausible commands. A condition
+// whose failure produces a plausible test run is a condition whose failure is
+// invisible.
+func plantPushedCommandsAndAgent(b *builder, s *Scenario) ([]Condition, error) {
+	const scriptPath = ".fixture/pushed-test-command.sh"
+	if err := writeFile(s.WorkingCopy, scriptPath, 0o755,
+		tripwireScript("pushed-commands-test", s.Tripwire,
+			"The commands.test a pushed branch asked for.")); err != nil {
+		return nil, err
+	}
+	pushed := `{
+  "commands": {
+    "test": "sh ` + scriptPath + `",
+    "lint": "sh ` + scriptPath + `"
+  },
+  "agent": "fixture-pushed-agent",
+  "ignore_patterns": ["vendor/**"]
+}
+`
+	if err := writeFile(s.WorkingCopy, ConfigPath, 0o644, pushed); err != nil {
+		return nil, err
+	}
+	commit, err := b.git.commitAll(s.WorkingCopy, "point the commands and the agent at the branch's own script")
+	if err != nil {
+		return nil, err
+	}
+	s.Commits["pushed-commands"] = commit
+
+	return []Condition{{
+		ID:        "refusal-pushed-commands-and-agent",
+		Scenario:  s.Name,
+		Kind:      KindRefusal,
+		Principle: "P7",
+		Planted: "The branch commits a configuration document setting commands.test, commands.lint, and " +
+			"agent, and pushes it. The default branch's document sets all three to something else, so " +
+			"which copy was read is observable rather than inferred. ignore_patterns is set alongside them " +
+			"and is a key a pushed branch may set, so a run that dropped the whole document rather than the " +
+			"three keys is distinguishable from one that applied the trust classes.",
+		Mechanism: "config.Resolve over a trusted layer and a pushed layer",
+		Expect: Outcome{
+			Summary: "The resolved commands and agent are the default branch's, the resolved ignore_patterns " +
+				"are the branch's, and each dropped key is reported as a config.Rejection rather than " +
+				"silently ignored. Nothing the branch named is executed.",
+			MessageContains: []string{
+				"commands.test is trusted-unless-opted-out and was set from the pushed layer",
+				"commands.lint is trusted-unless-opted-out and was set from the pushed layer",
+				"agent is trusted-unless-opted-out and was set from the pushed layer",
+			},
+			TripwiresQuiet: []string{"pushed-commands-test"},
+		},
+	}}, nil
+}
+
+// plantFindingsWithoutAction writes the agent output P3 is about. It is the
+// bytes an agent prints, not a constructed report: the path P3 lives on runs
+// from the agent's text through findings.ParseReport, and a fixture that
+// handed a caller an assembled Finding would skip every step of it.
+//
+// Three shapes are planted because P3 has three ways in, and the one most
+// likely to be handled and the two most likely to be forgotten are not the
+// same shape.
+func plantFindingsWithoutAction(b *builder, s *Scenario) ([]Condition, error) {
+	responses := []struct {
+		id      ID
+		file    string
+		missing string
+		body    string
+		planted string
+	}{
+		{
+			id:      "refusal-finding-action-missing",
+			file:    "review-action-missing.txt",
+			missing: "no action field at all",
+			body:    `{"id": "total-loop-bound", "severity": "error", "location": {"path": "total.go", "line": 10}, "description": "The loop stops one element short."}`,
+			planted: "a finding object carrying no action field",
+		},
+		{
+			id:      "refusal-finding-action-empty",
+			file:    "review-action-empty.txt",
+			missing: "an empty action",
+			body:    `{"id": "total-loop-bound", "severity": "error", "action": "", "location": {"path": "total.go", "line": 10}, "description": "The loop stops one element short."}`,
+			planted: "a finding whose action is the empty string",
+		},
+		{
+			id:      "refusal-finding-action-unrecognized",
+			file:    "review-action-unrecognized.txt",
+			missing: "an unrecognized action",
+			body:    `{"id": "total-loop-bound", "severity": "error", "action": "autofix", "location": {"path": "total.go", "line": 10}, "description": "The loop stops one element short."}`,
+			planted: "a finding whose action is a word this product does not define",
+		},
+	}
+
+	var conditions []Condition
+	for _, r := range responses {
+		raw := "I read the diff against the intent and found one thing.\n\n" +
+			"```json\n" +
+			"{\n" +
+			`  "summary": "One finding on the change to Total.",` + "\n" +
+			`  "risk": "medium",` + "\n" +
+			`  "findings": [` + "\n" +
+			"    " + r.body + "\n" +
+			"  ]\n" +
+			"}\n" +
+			"```\n"
+		path := filepath.Join(s.Root, "agent-responses", r.file)
+		if err := writeFile(s.Root, "agent-responses/"+r.file, 0o644, raw); err != nil {
+			return nil, err
+		}
+		s.AgentResponses[string(r.id)] = path
+		conditions = append(conditions, Condition{
+			ID:        r.id,
+			Scenario:  s.Name,
+			Kind:      KindRefusal,
+			Principle: "P3",
+			Planted: "The exact bytes a review agent prints, carrying " + r.planted + ". The report is " +
+				"otherwise well formed and the finding is otherwise complete, so nothing but the action " +
+				"decides the outcome.",
+			Mechanism: "findings.ParseReport, then Report.Normalize",
+			Expect: Outcome{
+				Summary: "The report parses, the finding survives, and its action is ask. It is not " +
+					"fix-eligible and never enters the automatic fix loop; it parks for a person. " +
+					"A run that reported " + r.missing + " as an error, or dropped the finding, has the " +
+					"wrong answer: this is defined behavior, not an error path.",
+				Value: "findings.ActionAsk",
+			},
+		})
+	}
+	return conditions, nil
+}
+
+// plantEmptyCheckList writes the bytes the code host's provider command prints
+// for a head with no check registered, and leaves the configuration without a
+// no-CI declaration. The empty list is the answer; what it means is the
+// condition.
+func plantEmptyCheckList(b *builder, s *Scenario) ([]Condition, error) {
+	head, err := b.git.run(s.WorkingCopy, "rev-parse", "HEAD")
+	if err != nil {
+		return nil, err
+	}
+	body := `{"headRefOid":"` + head + `","statusCheckRollup":[]}` + "\n"
+	const file = "checks-empty.json"
+	if err := writeFile(s.Root, "provider-responses/"+file, 0o644, body); err != nil {
+		return nil, err
+	}
+	s.ProviderResponses["checks-empty"] = filepath.Join(s.Root, "provider-responses", file)
+
+	return []Condition{{
+		ID:       "refusal-no-registered-checks",
+		Scenario: s.Name,
+		Kind:     KindRefusal,
+		Planted: "The provider answers the checks read with an empty rollup on a named head, which is what a " +
+			"repository with nothing registered looks like on the wire. Neither the trusted document nor " +
+			"the branch's sets no_ci, so nothing declares that this repository has no checks.",
+		Mechanism: "forge.ChecksReport.Evaluate with forge.DeclaredNoCI over the resolved configuration",
+		Expect: Outcome{
+			Summary: "The verdict is no-checks, which is not green and not a failure: the run waits, bounded " +
+				"by checks_timeout, and never reports the checks as passed. An empty list means " +
+				"unregistered, and only the no_ci declaration turns it into a pass.",
+			Value:           "forge.VerdictNoChecks",
+			MessageContains: []string{"no-checks"},
+		},
+	}}, nil
+}
+
+// plantedCoreHooksPathGap records the one plant in this scenario the product
+// cannot answer today. internal/gate's doc.go names core.hooksPath as an open
+// gap: a configuration file can point git at a hooks directory elsewhere, and
+// every hook the gate installs is then inert while initialization reports
+// success. The branch ships a .githooks directory of the shape a distribution
+// writes, and the working copy's own configuration points at it.
+//
+// It is recorded as a gap rather than as an expected refusal because there is
+// no refusal to expect. A harness that reported this as a pass would be
+// reporting agreement with a shortfall the owning package already wrote down.
+func plantedCoreHooksPathGap(s *Scenario) Condition {
+	return Condition{
+		ID:        "gap-core-hookspath",
+		Scenario:  s.Name,
+		Kind:      KindRefusal,
+		Principle: "P7",
+		Planted: "The branch carries .githooks/pre-commit and .githooks/pre-push as executables, and the " +
+			"working copy's local git configuration sets core.hooksPath to that directory, which is how a " +
+			"distribution installs hooks that travel with a branch.",
+		Mechanism: "internal/gate, which cannot read a git configuration value because internal/vcs exposes " +
+			"no such operation; see gate/doc.go and gate/git.go",
+		Expect: Outcome{
+			Summary: "No refusal today. The gate initializes and reports success while its own hooks may be " +
+				"inert.",
+			Gap: "internal/gate/doc.go names core.hooksPath as an open gap and internal/gate/git.go names " +
+				"the internal/vcs operation still owed. The harness reports this condition as a known gap; " +
+				"it becomes an expected refusal when that operation exists.",
+			TripwiresQuiet: []string{"githooks-pre-commit", "githooks-pre-push"},
+		},
+	}
+}
