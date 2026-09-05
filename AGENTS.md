@@ -171,6 +171,20 @@ Each has cost this repository more than one round of review.
   reported for being wrong through the ordinary review path. Read its `doc.go`
   before changing what fires, and for the residual gaps: the granularity is the
   path rather than the line, and a trace's reason is recorded, not verified.
+- `internal/fixture` builds the adversarial subject repository the end-to-end
+  harness validates against, and records beside each planted condition what it
+  must produce, down to the substrings the message has to carry. It is the one
+  documented exception to the rule above that `internal/vcs` is the only package
+  invoking git: a fixture built with the code under validation cannot show that
+  code wrong, so it runs git directly the way `internal/vcs`'s own test helpers
+  do. Two rules there are load-bearing. A condition is reached by the path the
+  product takes to it, so the two states that only exist partway through a run
+  are deferred to `AdvanceRemoteOutOfBand` and `CopyGatedWorkingCopy` rather
+  than assembled. And "nothing executed" is checked, not assumed: every planted
+  executable appends to the scenario's tripwire file, and the package's own
+  tests run one to prove the tripwire fires. Nothing here decides how a harness
+  drives a condition; what it ran into is in `OpenQuestions`. Build it with
+  `scripts/build-fixture.sh DIR`, and read `doc.go` first.
 
 ## Tests
 
