@@ -115,8 +115,14 @@
 // accrued against, and internal/graph refuses one whose digest is not this
 // graph's. That is what a fix round limit changing between a checkpoint and a
 // resume now meets, and it is a refusal rather than an adjustment: nothing
-// here reinterprets the counts, and the run is left exactly as it stood for a
-// person or a fork to take further.
+// here reinterprets the counts, and the run is left exactly as it stood. There
+// is no in-place way past it. What is left is resuming the run under the fix
+// round limits it recorded, or starting a new run from the state it reached,
+// which internal/graph takes without the hold answers that state carries,
+// because a run may not begin already holding an answer. Forking is not the
+// way out: a fork copies a checkpoint's counters and the digest with them, and
+// the run's first checkpoint already carries the old digest, so a fork from
+// any point meets the same refusal.
 //
 // The refusal is load-bearing rather than defensive, because the gap it closes
 // was reachable. Lowering fix_rounds.review from 1 to 0 while raising

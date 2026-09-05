@@ -91,7 +91,14 @@
 // its per-edge counts and fingerprints are indexed against. A graph whose
 // edges differ is refused rather than resumed, because its counters would be
 // read against edges that did not produce them, and comparing how many entries
-// they hold does not catch a change that drops one edge and adds another.
+// they hold does not catch a change that drops one edge and adds another. That
+// refusal has no in-place remedy, deliberately: counts accrued against another
+// edge vector are not reinterpretable, forking copies both the counters and
+// the digest they were accrued under, and a run's first checkpoint already
+// carries that digest. Such a run is resumed under the edges it recorded, or
+// left behind for a new run started from the state it reached, which NewState
+// takes on its own terms: a halt point's answer key may not be preseeded, so
+// what a fresh run begins from is that state without those keys.
 //
 // The budget is settled differently, because raising one on a resume is a
 // legitimate thing to want and refusing it outright would only push a caller

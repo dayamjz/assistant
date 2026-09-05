@@ -54,8 +54,11 @@ func (s Status) String() string {
 }
 
 // Parked reports whether the status is one a run does not advance out of on
-// its own. A halted run needs a decision; a run parked by a bound needs a fork
-// or a changed graph, because Answer takes only a halted run.
+// its own. A halted run needs a decision. A run parked by a bound needs
+// something other than an answer, because Answer takes only a halted run:
+// Executor.AdoptBudget for a budget-exhausted one, and for the other two a
+// new run started from the state this one reached, because a fork carries the
+// same counters and a changed round bound is refused as a changed edge digest.
 func (s Status) Parked() bool {
 	switch s {
 	case StatusHalted, StatusRoundsExhausted, StatusBudgetExhausted, StatusConverged:

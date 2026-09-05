@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/graph"
@@ -385,5 +386,143 @@ func TestAdoptBudgetWritesNothingWhenThereIsNothingToRecord(t *testing.T) {
 	}
 	if len(last) != len(finished) {
 		t.Errorf("the refused adoption wrote %d checkpoints, want none", len(last)-len(finished))
+	}
+}
+
+// linearBuilder returns a straight line of nodes with no halt point and no
+// cycle, so the run-wide step budget is the only thing that can stop a run of
+// it and every node it parks in front of is an ordinary one.
+func linearBuilder(rec *recorder, names ...string) *graph.Builder {
+	b := graph.NewBuilder().Start(names[0])
+	for i, name := range names {
+		b = b.Node(graph.Node{Name: name, NewBody: noteOnly(rec, name)})
+		if i > 0 {
+			b = b.Edge(graph.Edge{From: names[i-1], To: name})
+		}
+	}
+	return b
+}
+
+// TestAdoptBudgetRevivesARunParkedInFrontOfAnOrdinaryNode is what raising a
+// budget is for. The node the run stands in front of is not a halt point, so
+// reviving it leaves it running rather than halted, and the run then has to
+// actually go on: a revival that reported StatusRunning without the resume
+// carrying on would have released nothing.
+func TestAdoptBudgetRevivesARunParkedInFrontOfAnOrdinaryNode(t *testing.T) {
+	ctx := context.Background()
+	rec := &recorder{}
+	g := mustBuild(t, linearBuilder(rec, "one", "two", "three"))
+	store := graph.NewMemoryStore()
+
+	parked, err := mustExecutor(t, g, store, 1).Run(ctx, "run", mustState(t, g, nil))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if parked.Status != graph.StatusBudgetExhausted || parked.Position != "two" {
+		t.Fatalf("the run ended %s at %q, want budget_exhausted standing in front of two",
+			parked.Status, parked.Position)
+	}
+
+	roomy := mustExecutor(t, g, store, 3)
+	revived, err := roomy.AdoptBudget(ctx, "run")
+	if err != nil {
+		t.Fatalf("AdoptBudget: %v", err)
+	}
+	if revived.Status != graph.StatusRunning {
+		t.Fatalf("the revived run is %s (%s), want it running: the node it stands at asks nothing",
+			revived.Status, revived.Reason)
+	}
+	if revived.Position != "two" {
+		t.Errorf("the revived run stands at %q, want the node that never started", revived.Position)
+	}
+	if revived.Reason != "" {
+		t.Errorf("the revived run still reports %q, want the park it was released from left behind", revived.Reason)
+	}
+	if revived.Budget != 3 {
+		t.Errorf("the run reports a budget of %d, want the 3 it adopted", revived.Budget)
+	}
+	if got := rec.order(); len(got) != 1 || got[0] != "one" {
+		t.Fatalf("adopting a budget ran %v, want only the node the original budget paid for", got)
+	}
+
+	done, err := roomy.Resume(ctx, "run")
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	if done.Status != graph.StatusCompleted {
+		t.Fatalf("the resumed run ended %s (%s), want completed: raising the budget released the bound",
+			done.Status, done.Reason)
+	}
+	if got := rec.order(); !equalStrings(got, []string{"one", "two", "three"}) {
+		t.Errorf("the run executed %v, want it to continue from the node it was parked in front of", got)
+	}
+	if done.Steps != 3 {
+		t.Errorf("the run spent %d steps, want the 3 its adopted budget allowed", done.Steps)
+	}
+}
+
+// TestAdoptBudgetReParksARunTheNewBudgetStillLeavesNoStepFor covers the third
+// outcome: a budget may be lowered, and one lowered past what the run has
+// already spent releases nothing. The run parks again, and the reason it
+// carries has to name the budget it is now held to rather than the one it was
+// released from, because a reason naming the old number would describe a bound
+// that is no longer in force.
+func TestAdoptBudgetReParksARunTheNewBudgetStillLeavesNoStepFor(t *testing.T) {
+	ctx := context.Background()
+	rec := &recorder{}
+	g := mustBuild(t, linearBuilder(rec, "one", "two", "three", "four"))
+	store := graph.NewMemoryStore()
+
+	parked, err := mustExecutor(t, g, store, 2).Run(ctx, "run", mustState(t, g, nil))
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if parked.Status != graph.StatusBudgetExhausted || parked.Position != "three" {
+		t.Fatalf("the run ended %s at %q, want budget_exhausted standing in front of three",
+			parked.Status, parked.Position)
+	}
+
+	got, err := mustExecutor(t, g, store, 1).AdoptBudget(ctx, "run")
+	if err != nil {
+		t.Fatalf("AdoptBudget: %v", err)
+	}
+	if got.Status != graph.StatusBudgetExhausted {
+		t.Fatalf("the run is %s after a budget below what it had spent, want it parked again", got.Status)
+	}
+	if got.Budget != 1 || got.Steps != 2 {
+		t.Fatalf("the run reports %d steps against a budget of %d, want 2 spent against the adopted 1",
+			got.Steps, got.Budget)
+	}
+	if !strings.Contains(got.Reason, strconv.Itoa(got.Budget)) {
+		t.Errorf("the re-parked run reports %q, want a reason naming the budget of %d now in force",
+			got.Reason, got.Budget)
+	}
+	if strings.Contains(got.Reason, strconv.Itoa(parked.Budget)) {
+		t.Errorf("the re-parked run reports %q, want the budget of %d it was released from gone from it",
+			got.Reason, parked.Budget)
+	}
+	if !strings.Contains(got.Reason, got.Position) {
+		t.Errorf("the re-parked run reports %q, want a reason naming node %q", got.Reason, got.Position)
+	}
+	if n := rec.count("three"); n != 0 {
+		t.Errorf("the node the run is parked in front of ran %d times, want 0", n)
+	}
+
+	// The lowering is in the history like any other adoption, and the run is
+	// still parked rather than resumable.
+	after, err := mustExecutor(t, g, store, 1).Resume(ctx, "run")
+	if err != nil {
+		t.Fatalf("Resume: %v", err)
+	}
+	if after.Status != graph.StatusBudgetExhausted || after.Reason != got.Reason {
+		t.Errorf("resuming the re-parked run gave %s (%s), want it returned exactly as it stood",
+			after.Status, after.Reason)
+	}
+	history, err := store.History(ctx, "run")
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	if n := len(history); n < 2 || history[n-1].Counters.Budget != 1 || history[n-2].Counters.Budget != 2 {
+		t.Fatalf("the history records budgets %v, want the change from 2 to 1 written down", budgets(history))
 	}
 }

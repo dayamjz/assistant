@@ -144,11 +144,15 @@ func (e *Executor) Run(ctx context.Context, run string, initial State) (Result, 
 //
 // A run waiting on a decision re-emits it and executes nothing: the halted
 // node has not started, so there is nothing to replay. A run parked by a bound
-// is returned unchanged, because no amount of resuming moves it; fork it,
-// change the graph, or, for the run-wide budget alone, give it more room with
-// AdoptBudget. Answering is not among the remedies, because Answer takes a run
-// that is halted and a bound-parked one is not. A run interrupted mid-flight
-// continues from the node it had not yet reached.
+// is returned unchanged, because no amount of resuming moves it. The run-wide
+// budget is the one bound with a remedy in place: AdoptBudget gives the run
+// more room. A run parked by a round limit or by convergence has none, because
+// a fork copies the counters that parked it and raising an edge's round bound
+// changes the edge digest, which this resume refuses; what is left is a new
+// run started from the state this one reached, on NewState's terms. Answering is not among the remedies
+// either, because Answer takes a run that is halted and a bound-parked one is
+// not. A run interrupted mid-flight continues from the node it had not yet
+// reached.
 //
 // It returns an error wrapping ErrBudgetChanged, before anything else, when
 // this executor is configured with a run-wide step budget other than the one
@@ -303,7 +307,7 @@ func (e *Executor) reviveOnBudget(cp *Checkpoint) {
 		e.haltBefore(cp, node)
 		return
 	}
-	if spent(*cp) {
+	if spent(cp.Counters) {
 		parkOnBudget(cp, node.Name)
 	}
 }
@@ -401,7 +405,7 @@ func (e *Executor) advance(ctx context.Context, cp Checkpoint) (Result, error) {
 		}
 		node := e.graph.nodes[idx]
 
-		if spent(cp) {
+		if spent(cp.Counters) {
 			parkOnBudget(&cp, node.Name)
 			return e.park(ctx, cp)
 		}
@@ -464,7 +468,7 @@ func (e *Executor) advance(ctx context.Context, cp Checkpoint) (Result, error) {
 // the two rules hold for every route that gets there: the run that halts at
 // the start node and the run that reaches one mid-flight.
 func (e *Executor) haltBefore(cp *Checkpoint, n Node) {
-	if spent(*cp) {
+	if spent(cp.Counters) {
 		parkOnBudget(cp, n.Name)
 		return
 	}
@@ -482,7 +486,7 @@ func awaitsItsNode(s Status) bool { return s == StatusHalted || s == StatusRunni
 // spent reports whether a run has no step left to spend. The bound it reads is
 // the one the run recorded, not the one this executor was configured with, so
 // a run is held to the budget it is running under however it was loaded.
-func spent(cp Checkpoint) bool { return cp.Counters.Steps >= cp.Counters.Budget }
+func spent(c Counters) bool { return c.Steps >= c.Budget }
 
 // parkOnBudget records that the run stopped in front of node because its
 // run-wide budget was spent. It is the one owner of what that park says.
@@ -506,13 +510,16 @@ func parkOnBudget(cp *Checkpoint, node string) {
 // It is not the same guard as the one in haltBefore, and neither makes the
 // other redundant. haltBefore is what stops a run from asking a question it
 // has no step left to act on; this is what stops a run already standing at
-// such a question from being taken further. A run reaches here only through
-// AdoptBudget lowering a budget below what the run has already spent, because
-// that is the one way a run can stand at a halt point it cannot afford:
-// haltBefore parks rather than halts when the budget is spent, and Answer
-// checks this before it records anything.
+// such a question from being taken further. AdoptBudget lowering a budget
+// below what a run has already spent is the only way this executor itself
+// produces a run standing at a halt point it cannot afford: haltBefore parks
+// rather than halts when the budget is spent, and Answer checks this before it
+// records anything. It is not the only way a run arrives here, because a
+// checkpoint comes from a store and validateCounters compares no step count
+// against the budget, so one that already stands at such a halt point is
+// refused here rather than anywhere earlier.
 func (e *Executor) checkBudgetForHalt(cp Checkpoint) error {
-	if !awaitsItsNode(cp.Status) || !spent(cp) {
+	if !awaitsItsNode(cp.Status) || !spent(cp.Counters) {
 		return nil
 	}
 	node, ok := e.graph.Node(cp.Position)
