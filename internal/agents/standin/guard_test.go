@@ -2,6 +2,7 @@ package standin
 
 import (
 	"fmt"
+	"os"
 	"runtime"
 	"strings"
 	"testing"
@@ -30,7 +31,23 @@ func TestNewRefusesABinaryThatDoesNotAnswerTheHandshake(t *testing.T) {
 
 // The same check passes against this binary, which does answer. Without this
 // half the test above would also pass if the check refused everything.
+//
+// It asks handshakeWith rather than New, because New reaches the answer
+// through the per-binary cache and a run in which something else built an
+// Agent first would assert on a remembered answer instead of one this test
+// obtained. handshakeWith always starts a process, so the property holds
+// whatever order the tests in this binary run in. The New below is the second
+// half of the same fact: that the cached path accepts what the handshake
+// answered.
 func TestNewAcceptsThisBinary(t *testing.T) {
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatalf("locating this test binary, which is the stand-in agent: %v", err)
+	}
+	if reason := handshakeWith(t, self, handshakeFlag); reason != "" {
+		t.Fatalf("this binary did not answer the handshake: %s", reason)
+	}
+
 	fake := &fatalTB{TB: t}
 	run(func() { newAgent(fake, oneStep(Text("done")), handshakeFlag) })
 

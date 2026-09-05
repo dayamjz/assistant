@@ -12,9 +12,11 @@
 // against that value looked alive while being dead. Deleting the guard failed
 // the test, so mutation testing said nothing about it.
 //
-// So this package implements none of agents.Runner, agents.Fixer, or
-// agents.Result, and it has no function that returns one. It writes bytes on
-// standard output and standard error, exits with a status, and lets
+// So no type here implements agents.Runner or agents.Fixer, and nothing here
+// constructs an agents.Result, an *agents.InvocationError, or an agents.Record.
+// Agent.Runner hands back the adapter's own Runner, which is the one of those
+// this package passes along rather than makes. It writes bytes on standard
+// output and standard error, exits with a status, and lets
 // agents.ClaudeFactory read all of that. Every Result, every InvocationError,
 // and every Record a test sees was built by the production adapter out of a
 // process's output, on the path a real Claude Code installation is read on.
@@ -35,8 +37,10 @@
 // A test stands in for that check: TestAdapterReadsBackEveryStatedField
 // declares a result, a session, a model, all five counts, and the subtype an
 // agent-reported failure carrying no result says about itself, and asserts the
-// adapter reports each one back, so a key renamed on one side and not the
-// other fails there rather than quietly reading as unreported.
+// adapter reports each one back, so one of those keys renamed on one side and
+// not the other fails there rather than quietly reading as unreported. The one
+// key that is outside this is "type", which the adapter's reader does not name
+// at all; it is written for realism and nothing can fail on it.
 //
 // # Wiring
 //

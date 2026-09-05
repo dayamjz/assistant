@@ -44,8 +44,15 @@ type Step struct {
 	// Match narrows which invocations this step answers. The zero Match
 	// answers any of them.
 	Match Match `json:"match"`
-	// Times bounds how many invocations this step may answer. The zero value
-	// answers one, and Always answers every invocation it matches.
+	// Times bounds how many invocations this step may take. The zero value
+	// takes one, and Always takes every invocation it matches.
+	//
+	// It bounds what is taken rather than what is answered: a stand-in claims
+	// a use before it records the call and before it replies, so one ended in
+	// between has consumed the use and left no Call, and the invocation after
+	// it falls through to a later step. Nothing makes the two one act, so a
+	// script whose steps must be told apart under cancellation tells them
+	// apart with a Match rather than by count.
 	Times int `json:"times"`
 	// Reply is what the agent does for an invocation this step answers.
 	Reply Reply `json:"reply"`
@@ -285,10 +292,12 @@ func NoSession() *string { none := ""; return &none }
 // wire encodes the envelope as the adapter reads it, resolving the session and
 // the model against the call it is answering.
 //
-// The keys here are the ones claudeEnvelope in internal/agents decodes. They
-// are spelled out rather than derived from a shared type because the adapter's
-// reader is unexported and holds only the fields it uses; what keeps the two
-// aligned is a test that reads every field back through the adapter.
+// Every key here but "type" is one claudeEnvelope in internal/agents decodes.
+// They are spelled out rather than derived from a shared type because the
+// adapter's reader is unexported and holds only the fields it uses; what keeps
+// the two aligned is a test that reads every one of them back through the
+// adapter. "type" is the exception: the adapter's reader does not name it, so
+// it is written for the shape a real agent prints and no test can fail on it.
 func (e Envelope) wire(c Call) ([]byte, error) {
 	subtype := e.Subtype
 	if subtype == "" {

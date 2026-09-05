@@ -177,6 +177,10 @@ func (a *Agent) Runner() agents.Runner { return a.runner }
 // read the script leave nothing here. A test that needs a call to exist waits
 // for it rather than assuming the invocation's return put it here.
 //
+// One of those absences is not free: a stand-in claims a bounded step's use
+// before it claims its place here, so an invocation ended between the two has
+// spent a use of Step.Times and left nothing here to say it did.
+//
 // Each record is complete or absent; there is nothing partial to read, and a
 // record that cannot be decoded is fatal rather than skipped.
 func (a *Agent) Calls() []Call {
