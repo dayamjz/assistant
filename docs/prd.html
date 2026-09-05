@@ -604,6 +604,89 @@ flowchart LR
     </div>
   </div>
 
+  <h3 class="text-xl font-semibold mb-3">What a review report has to carry</h3>
+  <p class="mb-4 opacity-90">
+    A finding is a claim about code, and a claim is worth what a reader can check. So a review report
+    carries the revision it read and the set of paths it actually read. This fixes a property of the
+    report, not a field name or a wire shape.
+  </p>
+  <ul class="list-disc pl-6 space-y-1.5 mb-4 opacity-90">
+    <li>A report whose revision is not the commit the stage was asked to review is refused rather
+      than credited. A reading of some other commit is not a review of this change.</li>
+    <li>A finding whose location names a path outside the declared evidence set is refused, and it is
+      reported as refused with the path it named. A reviewer asserting past what it read is visible
+      rather than quietly trimmed.</li>
+    <li>A finding with no location and no explicit citation normalizes to <code>note</code>. Nothing
+      supports it, so it may inform you and may not stop a run.</li>
+    <li>That last rule does not reach P3. A finding whose action is missing, empty, or unrecognized
+      becomes <code>ask</code> and stays <code>ask</code>; normalizing to <code>note</code> applies
+      only where the reviewer stated an action the system recognized.</li>
+  </ul>
+
+  <div role="alert" class="alert alert-warning alert-soft mb-8 items-start">
+    <div class="min-w-0">
+      <p class="font-semibold mb-1">The evidence set has to be able to fail</p>
+      <p class="text-sm opacity-90">
+        A reviewer satisfies the rule above by declaring every changed file and nothing else, and
+        then reading nothing but the diff. That declaration is derivable from the run without asking
+        the reviewer, so on its own it proves nothing about what was read. A check that can pass
+        without checking anything is worse than no check, so the discriminator belongs in the
+        requirement rather than in a later reading of it.
+      </p>
+      <ul class="text-sm opacity-90 list-disc pl-5 mt-2 space-y-1">
+        <li>The evidence set and the change's own set of touched paths are reported separately and
+          compared. The discriminating part is the paths the reviewer read that the change did not
+          touch, and that part is reported whether or not it is empty.</li>
+        <li>A finding asserting something about code the change does not touch, such as a caller, an
+          interface, or a test that covers it, cites that code, and the finding is refused unless the
+          evidence set names the cited path. Declaring the diff wholesale therefore buys nothing:
+          it forfeits every finding that reaches past the diff, which is most of what an independent
+          review is for.</li>
+        <li>An evidence set equal to the touched paths is a permitted outcome, not an error. Small
+          changes need nothing else, and a guard that failed here would fail on correct work. What it
+          may not be is invisible: it is a reported outcome, so a reviewer that never reads past the
+          diff is a fact you can see across runs rather than a possibility you have to assume away.</li>
+      </ul>
+    </div>
+  </div>
+
+  <h3 class="text-xl font-semibold mb-3">Scope as a review lens</h3>
+  <p class="mb-4 opacity-90">
+    Every changed line should trace to the stated intent. That is a lens the review stage applies,
+    and it ships in the default review guidance rather than as a stage of its own. P2 fixes the list
+    at nine and this adds none.
+  </p>
+  <ul class="list-disc pl-6 space-y-1.5 mb-8 opacity-90">
+    <li>A scope observation is a <code>note</code> by default. It informs you, blocks nothing, and
+      never enters the automatic fix loop.</li>
+    <li>It rises above <code>note</code> only when it independently meets the bar for
+      <code>fix</code> or <code>ask</code>. A line being unexplained is not that bar. A change nobody
+      asked for that is also wrong is reported for being wrong.</li>
+    <li>The lens is measured against the recorded intent and inherits that intent's source. Against
+      supplied intent it compares a change to acceptance criteria; against inferred intent it
+      compares a change to a low-confidence hint, which is the second reason its default is
+      <code>note</code>.</li>
+    <li>Being guidance, it is strengthened the way review is strengthened anywhere, through
+      path-scoped review rules. No key in the configuration schema turns it off, and turning it off
+      would not skip a stage, because it is not one.</li>
+  </ul>
+
+  <h3 class="text-xl font-semibold mb-3">Recurring findings become a proposal, never a rule</h3>
+  <p class="mb-4 opacity-90">
+    A class of finding that keeps recurring across runs of the same repository is usually a missing
+    review rule rather than a run of accidents. Assistant may say so. It may not act on it.
+  </p>
+  <ul class="list-disc pl-6 space-y-1.5 mb-8 opacity-90">
+    <li>A recurring class may be raised as a <code>note</code> proposing an addition to that
+      repository's path-scoped review rules, for a person to accept or discard.</li>
+    <li>The proposal names the class and the runs it recurred in, so the reader checks the pattern
+      instead of taking a count on faith.</li>
+    <li>It is never applied and never inferred into effect. The review rules in force for a run are
+      exactly the resolved configuration, and path-scoped rules are read only from the trusted copy,
+      so accepting a proposal means a person putting the rule on the default branch.</li>
+    <li>Being a <code>note</code>, it parks nothing and enters no fix round.</li>
+  </ul>
+
   <h3 class="text-xl font-semibold mb-3">The fix loop and its three bounds</h3>
   <p class="mb-4 opacity-90">
     When a stage returns fixable findings and its limit allows, the fixer applies them and the stage
@@ -684,6 +767,26 @@ flowchart TD
   <p class="mt-4 opacity-90">
     The gate does not define compliance. It publishes facts precise enough for any external system to
     reach its own verdict.
+  </p>
+
+  <h3 class="text-xl font-semibold mt-8 mb-3">What the gate does not establish</h3>
+  <p class="mb-3 opacity-90">
+    One limit is worth writing down now rather than meeting it later. The gate validates a diff. It
+    does not establish where the intent behind that diff came from.
+  </p>
+  <p class="mb-3 opacity-90">
+    A worker steered by content it read while working produces an intent the intent stage records
+    faithfully, and a diff that implements that intent consistently. Review, tests, and lint still
+    read the change on its merits, so this is not a bypass of them: a change that is wrong is still
+    caught for being wrong. The scope lens is the part that gives no warning at all, because every
+    changed line does trace to the stated intent. The lens measures a change against the intent; it
+    never asks where the intent came from.
+  </p>
+  <p class="opacity-90">
+    Nothing in this document closes that. P7 bounds what a pushed branch may execute, may configure,
+    and may claim about a validating agent's authority, which is a different question from what a
+    worker was persuaded you wanted. A change that passes the gate has been validated on its merits.
+    Passing is not evidence that the intent behind it was yours.
   </p>
 </section>
 
@@ -1340,6 +1443,30 @@ flowchart TB
     </table>
   </div>
 
+  <div role="alert" class="alert alert-warning alert-soft mb-8 items-start">
+    <div class="min-w-0">
+      <p class="font-semibold mb-1">An adapter declares what it supports, and undeclared means unavailable</p>
+      <p class="text-sm opacity-90">
+        Agent adapters differ in what they can do, and that difference has to be a declaration the
+        program reads before it commits to a path, not something a stage discovers halfway through
+        one. Each adapter declares its capabilities. A path the resolved adapter has not declared is
+        refused before that adapter is launched, naming the capability that is missing, and is never
+        replaced by a weaker path that would still be reported as a pass. Section 10 already
+        specifies this shape for instruction suppression; this generalizes it to the rest of the
+        interface.
+      </p>
+      <p class="text-sm opacity-90 mt-2">
+        The case that decides whether this is worth having is P4. A review may never resume the
+        session that prescribed the fix it is checking, and a fixer session is the only memory that
+        crosses a round. So an adapter that has not declared resumable sessions gets no substitute
+        for one: nothing shared, replayed, or reconstructed may carry a fixer's memory into the
+        review that checks it. Either the run has a declared session or it has no memory across
+        rounds. Running both roles in one session is not a degraded mode that an undeclared
+        capability may fall back to.
+      </p>
+    </div>
+  </div>
+
   <h3 class="text-xl font-semibold mb-3">Data model</h3>
   <p class="mb-4 opacity-90">
     The important part is not the field list; it is which records are authoritative and which are
@@ -1369,6 +1496,26 @@ flowchart TB
         Schema changes are additive, and a column added later reads back as unknown for old rows,
         never as a fabricated zero. A surprising result must always be traceable to the exact build
         and configuration that produced it, so record both on every run.
+      </p>
+    </div>
+  </div>
+
+  <div role="alert" class="alert alert-soft mb-8 items-start">
+    <div class="min-w-0">
+      <p class="font-semibold mb-1">Every hold resolution records who resolved it</p>
+      <p class="text-sm opacity-90">
+        A hold is closed only by an explicit resolution, and that resolution carries who made it,
+        drawn from a closed set of values. The set is closed, so there is no free-text alternative
+        that could grow into an unaudited one. The value meaning a person decided cannot be produced
+        by any path an agent reaches, on any surface. An agent driving the machine interface resolves
+        holds with the same options and the same authority as you, per section 9; what it cannot do
+        is produce a record saying a person decided.
+      </p>
+      <p class="text-sm opacity-90 mt-2">
+        This records, it does not gate. Nothing reads the value to decide whether a resolution is
+        allowed, and no resolution that standing authority permits today may become refused because
+        of what it would say. It exists so a run's history answers who made each call directly,
+        rather than by inferring it from what the autonomy flag happened to be at the time.
       </p>
     </div>
   </div>
