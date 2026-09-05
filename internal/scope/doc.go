@@ -48,11 +48,9 @@
 // equality after trimming surrounding space is the comparison Observe makes.
 //
 // A lens asked about no path at all is refused with ErrNoTouched rather than
-// answered with silence, on the same terms as a missing intent: it would be a
-// check that passes without checking anything, and its silence would be
-// indistinguishable from a change that traced. A run with nothing to review
-// does not reach here, because the rebase stage's empty-diff short circuit
-// ends it first.
+// answered with silence, on the same terms as a missing intent. That error
+// owns why, and owns what a caller does when a run legitimately reaches it
+// with nothing left to ask about.
 //
 // What the claim is not is verified. This package does not read the intent or
 // the reason for sense, so a reviewer that writes a false reason for a path

@@ -18,10 +18,18 @@ var (
 	// Change whose Touched is absent, empty, or holds only entries that are
 	// empty once trimmed. The touched paths are the whole question, so
 	// without one Guidance would ask the reviewer to account for nothing and
-	// Observe could only ever return silence, which is a check that passes
-	// without checking anything and so reads as a clean lens rather than as
-	// an unasked one. A run with nothing to review does not reach here: the
-	// rebase stage's empty-diff short circuit ends it first, and a caller
-	// arriving with no paths has lost them somewhere else.
+	// Observe could only ever return silence. That silence would mean either
+	// that there was nothing reviewable in the change or that every path
+	// traced to the intent, and the lens cannot tell those apart. A pass that
+	// reads the same either way is a check that passes without checking
+	// anything, so the lens refuses instead of producing one.
+	//
+	// A legitimate run can arrive this way, so it is not only a caller's
+	// mistake. Ignore patterns exclude paths from review, this package
+	// applies none of that filtering itself, and a change touching only
+	// ignored paths therefore reaches a caller with every path removed while
+	// the change itself is not empty. A caller meeting this refusal skips the
+	// lens for that run and records that it was skipped, rather than failing
+	// the review stage over a shape that is not the change's fault.
 	ErrNoTouched = errors.New("scope: the lens needs at least one touched path to ask about")
 )
