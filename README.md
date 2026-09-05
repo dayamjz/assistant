@@ -10,7 +10,7 @@ until it has been independently reviewed, tested, documented, and linted.
 ## Status
 
 Early. The product requirements are settled and checked in at
-[`docs/prd.html`](docs/prd.html). Eleven pieces exist so far. The execution
+[`docs/prd.html`](docs/prd.html). Twelve pieces exist so far. The execution
 engine in `internal/graph` is the first: the graph builder with its
 construction-time checks, an executor with halt points and bounded cycles, and
 checkpoints behind a four-operation store. The second is `internal/findings`,
@@ -43,9 +43,14 @@ question that an index in `internal/store` answers. The eleventh is
 execution engine: the contract one stage implements, the fixed order carried as
 nine named fields rather than a list, the state schema as one key table, and
 the fix loop with its halt points and its three bounds. It defines a topology
-and executes nothing. The nine stage bodies are separate work against that
-contract and do not exist yet, and neither does the binary, so there is still
-nothing to run.
+and executes nothing. The twelfth is `internal/scope`, the review stage's scope
+lens rather than a tenth stage: the guidance that asks a reviewer to trace every
+path a change touched back to the recorded intent, and the notes an untraced
+path becomes. It ships on and no configuration key turns it off, and what it
+produces is always a note that informs and blocks nothing. The nine stage bodies
+are separate work against that contract and do not exist yet, including the
+review stage that puts the scope lens in front of a reviewer, and neither does
+the binary, so there is still nothing to run.
 
 ## The two promises
 
@@ -79,6 +84,7 @@ working as it always did.
 | `internal/ipc` | The local protocol between the command line and the background service: the method table, the event taxonomy, the bounded stream, the client and the server, and peer identification. |
 | `internal/pipeline` | The nine stages as a graph definition over `internal/graph`: the stage contract, the fixed order, the state key table, the fix loop, and its halt points and bounds. |
 | `internal/safety` | The data-loss policy over git: whether a branch update may proceed, on what anchor, and when to refuse. |
+| `internal/scope` | The review stage's scope lens, not a tenth stage: the guidance a reviewer traces each touched path against, and the note an untraced path becomes. |
 | `internal/store` | The only package that opens the database: the schema, its additive migrations, and typed accessors for repositories, runs, stages, rounds, checkpoints, tasks, task state and events, holds, and the gate ownership index. |
 | `internal/vcs` | The only package that invokes git: typed operations over repositories, worktrees, refs, diffs, and remotes. |
 | `docs/prd.html` | The product requirements. The specification this code answers to. |
