@@ -125,6 +125,14 @@ Each has cost this repository more than one round of review.
   a call. P4 lives in its type split rather than in a rule callers follow:
   `Runner.Run` cannot be given a session and `Fixer.Apply` cannot be given a
   purpose, so keep any new entry point on one side of that line.
+- `internal/agents/standin` is the scripted agent the tests outside
+  `internal/agents` run against. It implements no `agents` interface and builds
+  no `agents.Result`: it prints bytes and exits with a status, and the real
+  adapter reads that, so a shape the adapter cannot produce is unsayable
+  there. A consuming package's `TestMain` must call `standin.Main()`, and the
+  first `New` in a process refuses loudly when it did not. Read its
+  `doc.go` for what a recorded `Call` does and does not prove about P4, and for
+  the two residual gaps.
 - `internal/ipc` owns the local protocol: the method table, the event
   taxonomy, and the bounded stream. Two rules there are load-bearing rather
   than stylistic. An event class decides what overflow may discard, and an
@@ -154,6 +162,10 @@ Each has cost this repository more than one round of review.
   fail to build, and an undeclared shared state key must fail to build.
 - Concurrency rules need the race detector, so `make test` runs it and CI runs
   it on every platform.
+- A test that needs a coding agent scripts `internal/agents/standin` rather
+  than writing its own `Runner`. A double that states typed values directly is
+  how this repository shipped a dead guard once; one that answers over the wire
+  and is read by the real adapter cannot repeat it.
 
 ## Commits and pull requests
 
