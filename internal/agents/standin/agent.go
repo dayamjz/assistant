@@ -166,13 +166,19 @@ func handshakeWith(tb testing.TB, self, probeFlag string) string {
 // between the two.
 func (a *Agent) Runner() agents.Runner { return a.runner }
 
-// Calls returns what the stand-in was asked, in arrival order.
+// Calls returns what the stand-in processes recorded, in arrival order.
 //
 // A stand-in records what it was asked before it replies and before it holds,
-// so a call is here once the invocation that made it has returned, and one
-// still in flight is here from the moment the agent has read it. Each record
-// is complete or absent; there is nothing partial to read, and a record that
-// cannot be read is fatal rather than skipped.
+// so a call is here once its stand-in got that far, which an invocation still
+// in flight may already have. What is not here is an invocation whose stand-in
+// was ended before it claimed its place, or between claiming and recording,
+// and an invocation that never started a process at all: a refused Invocation,
+// one whose process failed to start, and one cancelled before the stand-in
+// read the script leave nothing here. A test that needs a call to exist waits
+// for it rather than assuming the invocation's return put it here.
+//
+// Each record is complete or absent; there is nothing partial to read, and a
+// record that cannot be decoded is fatal rather than skipped.
 func (a *Agent) Calls() []Call {
 	a.tb.Helper()
 	calls, err := readCalls(a.control)
@@ -182,10 +188,10 @@ func (a *Agent) Calls() []Call {
 	return calls
 }
 
-// Call returns the one call the stand-in answered, and is fatal when it
-// answered none or more than one. It is for the common test that makes a
-// single invocation and would otherwise index into a slice it has not checked
-// the length of.
+// Call returns the one call the stand-in recorded, and is fatal when it
+// recorded none or more than one, on the terms Calls states. It is for the
+// common test that makes a single invocation and would otherwise index into a
+// slice it has not checked the length of.
 func (a *Agent) Call() Call {
 	a.tb.Helper()
 	calls := a.Calls()

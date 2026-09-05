@@ -37,6 +37,9 @@ const (
 	exitNoRecord = 6
 	// exitNoOutput is a reply that could not be encoded or printed.
 	exitNoOutput = 7
+	// exitNoUse is a use of a bounded step this stand-in could not claim, so
+	// it does not know whether the step was still free to answer with.
+	exitNoUse = 8
 )
 
 // Main runs this process as the stand-in agent when it was started as one, and
@@ -116,7 +119,7 @@ func serve(control string, args []string) int {
 	step, err := choose(control, script, call)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "standin: "+err.Error())
-		return exitNoRecord
+		return exitNoUse
 	}
 	call.Step = step
 	seq, err := claimCall(control, call)

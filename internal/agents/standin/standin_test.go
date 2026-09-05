@@ -317,6 +317,32 @@ func TestAnEnvelopeReportingNoSessionLeavesTheFixerNothing(t *testing.T) {
 	}
 }
 
+// A Reply derived with a With method owns its envelope, so a script that
+// adjusts the derived one still answers the base with what the base states.
+func TestADerivedReplyDoesNotShareTheBaseEnvelope(t *testing.T) {
+	base := Text("answered by the base")
+	derived := base.WithExit(1)
+	derived.Envelope.Result = "answered by the derived reply"
+	derived.Envelope.Model = "model-derived"
+	agent := New(t, Script{Steps: []Step{
+		{Match: Match{PromptContains: "derived"}, Times: Always, Reply: derived},
+		{Match: Match{PromptContains: "base"}, Times: Always, Reply: base},
+	}})
+
+	ask := invocation(t, agents.ShapeText)
+	ask.Prompt = "answer from the base step"
+	result, err := agent.Runner().Run(t.Context(), agents.PurposeReview, ask)
+	if err != nil {
+		t.Fatalf("running the base invocation: %v", err)
+	}
+	if result.Text != "answered by the base" {
+		t.Errorf("the base step answered %q, want what the base envelope states", result.Text)
+	}
+	if result.Record.Model != DefaultModel {
+		t.Errorf("the base step reported model %q, want %q", result.Record.Model, DefaultModel)
+	}
+}
+
 func TestCallReportsWhatTheAgentWasAsked(t *testing.T) {
 	agent := New(t, oneStep(Text("done")))
 	inv := invocation(t, agents.ShapeText)

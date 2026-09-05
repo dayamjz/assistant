@@ -1,7 +1,8 @@
 // Package standin is the scripted agent every test that needs a coding agent
 // runs against. A test writes a Script saying what the agent prints, what it
 // exits with, and whether it lingers; New builds a real agents.Runner over it;
-// and Calls reports what each invocation actually asked the agent.
+// and Calls reports what the stand-in processes recorded of what they were
+// asked, on the terms that method states.
 //
 // # The rule this package exists to obey
 //

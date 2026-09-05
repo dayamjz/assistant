@@ -113,6 +113,11 @@ func Fresh() *bool { no := false; return &no }
 // bytes of filler. The adapter decodes the whole of standard output as one
 // JSON document, so anything printed alongside an envelope makes it unreadable
 // and is how a Reply describes an agent that talked instead of answering.
+//
+// Envelope is a pointer, so a Reply assigned to a second variable shares one
+// envelope with the first and a field set through either is set on both. The
+// With methods derive a Reply that owns its envelope, which is what makes one
+// built from a shared base safe to adjust; a plain copy is not.
 type Reply struct {
 	// Stdout is printed on standard output before the envelope.
 	Stdout string `json:"stdout,omitempty"`
@@ -138,14 +143,25 @@ type Reply struct {
 
 // WithExit returns the reply with a different exit status, so an envelope and
 // a non-zero exit can be scripted together.
-func (r Reply) WithExit(code int) Reply { r.Exit = code; return r }
+func (r Reply) WithExit(code int) Reply { r = r.own(); r.Exit = code; return r }
 
 // WithStderr returns the reply with text printed on standard error.
-func (r Reply) WithStderr(text string) Reply { r.Stderr = text; return r }
+func (r Reply) WithStderr(text string) Reply { r = r.own(); r.Stderr = text; return r }
 
 // WithHold returns the reply held alive for d after it has printed. An
 // invocation answered by it ends on its context rather than on the agent.
-func (r Reply) WithHold(d time.Duration) Reply { r.Hold = d; return r }
+func (r Reply) WithHold(d time.Duration) Reply { r = r.own(); r.Hold = d; return r }
+
+// own returns the reply with an envelope of its own, so a reply derived from
+// another can be adjusted through Envelope without reaching the one it came
+// from. Every other field is already a value the copy owns.
+func (r Reply) own() Reply {
+	if r.Envelope != nil {
+		envelope := *r.Envelope
+		r.Envelope = &envelope
+	}
+	return r
+}
 
 // Report replies with a well-formed envelope whose result is r, encoded with
 // the struct tags internal/findings decodes, so what a test describes is what
