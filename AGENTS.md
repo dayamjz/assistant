@@ -144,6 +144,15 @@ Each has cost this repository more than one round of review.
   anything else fails to build. Read its `doc.go` before changing the loop or
   the holds, and for the residual gaps: the requested fix round PRD section 5's
   hold offers is not wired, and convergence is over the whole state.
+- `internal/scope` is the review stage's scope lens, not a tenth stage: every
+  changed line should trace to the recorded intent, and P2 fixes the list at
+  nine. It ships on and has no off switch, which is why it is shipped guidance
+  rather than the default of `review.path_rules`: a repository layer replaces a
+  list, so that default would be erased by any repository that set the key.
+  Its findings are `note` by construction, and a change that is also wrong is
+  reported for being wrong through the ordinary review path. Read its `doc.go`
+  before changing what fires, and for the residual gaps: the granularity is the
+  path rather than the line, and a trace's reason is recorded, not verified.
 
 ## Tests
 
