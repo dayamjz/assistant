@@ -134,6 +134,44 @@ type builder struct {
 	root      string
 	gitBinary string
 	git       *gitRunner
+	// headWrites are the writes a plant asked for that name the branch head.
+	// A plant cannot make them when it runs, because the head is not final
+	// until the branch is published, and pushBranch is the one place that
+	// records it.
+	headWrites []headWrite
+}
+
+// headWrite is one write waiting for the branch head of the scenario it names.
+type headWrite struct {
+	scenario ScenarioName
+	what     string
+	write    func(head string) error
+}
+
+// afterBranchHead registers a write to be made once the branch under
+// validation is published and its head recorded.
+//
+// It exists so that a plant naming the branch head and Commits["branch-head"]
+// are one fact rather than two that agree. Reading the head at plant time gave
+// the same answer only while nothing committed between that plant and the
+// push, which is an ordering nothing stated and nothing checked; a plant added
+// after it would have left the two describing different commits with the
+// catalog still claiming they matched.
+func (b *builder) afterBranchHead(s *Scenario, what string, write func(head string) error) {
+	b.headWrites = append(b.headWrites, headWrite{scenario: s.Name, what: what, write: write})
+}
+
+// requireHeadWritesMade reports the writes that were registered and never
+// made, which is a scenario whose branch was never published carrying a plant
+// that names its head.
+func (b *builder) requireHeadWritesMade() error {
+	if len(b.headWrites) == 0 {
+		return nil
+	}
+	first := b.headWrites[0]
+	return fmt.Errorf("fixture: %d write(s) naming a branch head were registered and never made, "+
+		"starting with %s in scenario %s; a scenario carrying one has to publish its branch",
+		len(b.headWrites), first.what, first.scenario)
 }
 
 // Build constructs every scenario under root and returns the catalog beside
@@ -188,6 +226,9 @@ func Build(root string, opts ...Option) (*Fixture, error) {
 	// which is the executable bit lost on any platform that does not carry one,
 	// and nothing else here would notice.
 	if err := b.git.requireDrained(); err != nil {
+		return nil, err
+	}
+	if err := b.requireHeadWritesMade(); err != nil {
 		return nil, err
 	}
 	sort.Slice(f.Scenarios, func(i, j int) bool { return f.Scenarios[i].Name < f.Scenarios[j].Name })
@@ -257,10 +298,9 @@ func (b *builder) newScenario(name ScenarioName, purpose string) (*Scenario, err
 
 // initSubject lays down the default branch of the subject repository, creates
 // the bare repository standing in for the real remote, and pushes the default
-// branch to it. testCommand is what the trusted configuration names, so a
-// scenario that wants the trusted command to be observable can name a
-// tripwire.
-func (b *builder) initSubject(s *Scenario, testCommand string) error {
+// branch to it. Every scenario starts from the same trusted document, which is
+// what the pushed-branch condition is measured against.
+func (b *builder) initSubject(s *Scenario) error {
 	work := s.WorkingCopy
 	if err := os.MkdirAll(work, 0o755); err != nil {
 		return fmt.Errorf("fixture: creating %s: %w", work, err)
@@ -273,7 +313,7 @@ func (b *builder) initSubject(s *Scenario, testCommand string) error {
 		"total.go":         subjectTotalGo,
 		"total_test.go":    subjectTotalTestGo,
 		"docs/behavior.md": subjectDocsBehavior,
-		ConfigPath:         subjectConfig(testCommand),
+		ConfigPath:         subjectConfig,
 	}
 	for rel, content := range files {
 		if err := writeFile(work, rel, 0o644, content); err != nil {
@@ -316,6 +356,17 @@ func (b *builder) pushBranch(s *Scenario) error {
 		return err
 	}
 	s.Commits["branch-head"] = head
+	var pending []headWrite
+	for _, w := range b.headWrites {
+		if w.scenario != s.Name {
+			pending = append(pending, w)
+			continue
+		}
+		if err := w.write(head); err != nil {
+			return fmt.Errorf("fixture: writing %s for scenario %s: %w", w.what, s.Name, err)
+		}
+	}
+	b.headWrites = pending
 	return nil
 }
 

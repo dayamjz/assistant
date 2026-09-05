@@ -417,6 +417,48 @@ func contains(all []string, want string) bool {
 	return false
 }
 
+// TestTheCheckAnswerNamesTheRecordedBranchHead holds the two together. The
+// catalog tells a harness the answer carries Commits["branch-head"] and has to
+// have it replaced with the commit the run pushed; an answer naming some other
+// commit leaves that substitution with nothing to find, and the run then reads
+// a stale check list rather than the planted condition.
+//
+// The answer is the exact bytes the provider command prints, which is the
+// contract this package owns, so it is decoded and asked which head it names.
+func TestTheCheckAnswerNamesTheRecordedBranchHead(t *testing.T) {
+	f := readOnly(t)
+	s := scenario(t, f, fixture.ScenarioBase)
+
+	path := s.ProviderResponses["checks-empty"]
+	if path == "" {
+		t.Fatal("the scenario names no empty check-list answer")
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read the check-list answer: %v", err)
+	}
+	var answer struct {
+		HeadRefOid        string `json:"headRefOid"`
+		StatusCheckRollup []any  `json:"statusCheckRollup"`
+	}
+	if err := json.Unmarshal(body, &answer); err != nil {
+		t.Fatalf("decode the check-list answer: %v\n%s", err, body)
+	}
+	recorded := s.Commits["branch-head"]
+	if recorded == "" {
+		t.Fatal("the scenario records no branch head for the answer to name")
+	}
+	if answer.HeadRefOid != recorded {
+		t.Errorf("the check-list answer names %q and the scenario records the branch head as %q, so the "+
+			"substitution the catalog requires would find nothing to replace",
+			answer.HeadRefOid, recorded)
+	}
+	if len(answer.StatusCheckRollup) != 0 {
+		t.Errorf("the rollup carries %d entries, and the condition is that it carries none",
+			len(answer.StatusCheckRollup))
+	}
+}
+
 // TestAPlantedExecutableRecordsHavingRun is the guard on the guard. Every
 // harness-installation expectation is "the tripwire file does not exist", and
 // a tripwire that could not fire would make that check pass while proving

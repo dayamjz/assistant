@@ -1,6 +1,7 @@
 package fixture
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -111,15 +112,54 @@ func TestAPlantedExecutableLeftUnstagedIsRefused(t *testing.T) {
 	}
 }
 
+// TestAWriteNamingABranchHeadThatWasNeverPublishedIsRefused holds the guard
+// Build applies after every scenario. A plant that names the branch head in a
+// scenario whose branch is never published leaves a file that was never
+// written, and the catalog would still tell a harness to read it.
+func TestAWriteNamingABranchHeadThatWasNeverPublishedIsRefused(t *testing.T) {
+	b := &builder{}
+	if err := b.requireHeadWritesMade(); err != nil {
+		t.Fatalf("a builder nothing registered against is not settled: %v", err)
+	}
+
+	s := &Scenario{Name: ScenarioBase}
+	made := ""
+	b.afterBranchHead(s, "a canned answer", func(head string) error {
+		made = head
+		return nil
+	})
+	err := b.requireHeadWritesMade()
+	if err == nil {
+		t.Fatal("a registered write that was never made was not reported")
+	}
+	if !strings.Contains(err.Error(), "a canned answer") {
+		t.Errorf("the refusal does not name the write left pending: %v", err)
+	}
+	if made != "" {
+		t.Errorf("the write ran without a branch head, with %q", made)
+	}
+}
+
 // TestAPathSurvivesBeingWrittenAsAGitConfigurationValue holds the format the
-// two planted configuration files rest on. A path is written into them and read
-// back with git, because a value git refuses to parse and a value git parses
-// into a different path are both invisible to anything that reads the file's
-// bytes instead.
+// two planted configuration files rest on. Each path is written into a
+// configuration file and read back with git, because a value git refuses to
+// parse and a value git parses into a different path are both invisible to
+// anything that reads the file's bytes instead.
 //
-// The control is the same path concatenated raw, which is what this package did
-// before: it has to come back different, or the quoting is doing nothing and
-// the assertion above would hold either way.
+// The paths are strings rather than directories anybody creates. git parses a
+// configuration value without resolving it, so nothing here needs the path to
+// exist, and not creating it is what lets the quote case run on every platform:
+// a double quote is a character Windows reserves in a filename, and it is
+// exactly the character the escaping half of gitConfigPathValue is for. That a
+// planted path really resolves to a template git uses is held separately, by
+// the scenario test that creates a repository under the planted file.
+//
+// Each case carries a control: the same path concatenated raw, which is what
+// this package did before. It has to come back different, or the quoting is
+// doing nothing and the assertion beside it would hold either way. The control
+// fails on every platform this runs on, for a reason that differs by platform:
+// where the separator is a backslash it is an invalid escape, and elsewhere the
+// comment character truncates the value.
 func TestAPathSurvivesBeingWrittenAsAGitConfigurationValue(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skipf("git is not on PATH: %v", err)
@@ -129,35 +169,35 @@ func TestAPathSurvivesBeingWrittenAsAGitConfigurationValue(t *testing.T) {
 		t.Fatalf("build the runner: %v", err)
 	}
 	home := t.TempDir()
-	// A space, a comment character and a quote: the three a raw value loses.
-	// Backslash is the fourth and cannot be put in a path component here,
-	// because it is a separator on the platform where it matters.
-	planted := filepath.Join(home, `a dir #1 "x"`, "template")
-	if err := os.MkdirAll(planted, 0o755); err != nil {
-		t.Fatalf("create the path being written: %v", err)
-	}
+	for i, component := range []string{
+		"a dir #1",     // a space and a comment character
+		`a dir #1 "x"`, // and a quote, which is what the escaping is for
+	} {
+		planted := filepath.Join(home, component, "template")
 
-	stated := filepath.Join(home, "stated")
-	if err := os.WriteFile(stated,
-		[]byte("[init]\n\ttemplateDir = "+gitConfigPathValue(planted)+"\n"), 0o600); err != nil {
-		t.Fatalf("write the configuration file: %v", err)
-	}
-	got, err := g.run(home, "config", "--file", stated, "--get", "init.templateDir")
-	if err != nil {
-		t.Fatalf("git cannot read the value back: %v", err)
-	}
-	if want := filepath.ToSlash(planted); got != want {
-		t.Errorf("git reads the value back as %q, want %q", got, want)
-	}
+		stated := filepath.Join(home, fmt.Sprintf("stated-%d", i))
+		if err := os.WriteFile(stated,
+			[]byte("[init]\n\ttemplateDir = "+gitConfigPathValue(planted)+"\n"), 0o600); err != nil {
+			t.Fatalf("write the configuration file: %v", err)
+		}
+		got, err := g.run(home, "config", "--file", stated, "--get", "init.templateDir")
+		if err != nil {
+			t.Errorf("git cannot read %q back: %v", planted, err)
+			continue
+		}
+		if want := filepath.ToSlash(planted); got != want {
+			t.Errorf("git reads %q back as %q, want %q", planted, got, want)
+		}
 
-	raw := filepath.Join(home, "raw")
-	if err := os.WriteFile(raw, []byte("[init]\n\ttemplateDir = "+planted+"\n"), 0o600); err != nil {
-		t.Fatalf("write the control: %v", err)
-	}
-	control, err := g.run(home, "config", "--file", raw, "--get", "init.templateDir")
-	if err == nil && control == filepath.ToSlash(planted) {
-		t.Errorf("the raw value round-trips too, so the assertion above does not hold the format: %q",
-			control)
+		raw := filepath.Join(home, fmt.Sprintf("raw-%d", i))
+		if err := os.WriteFile(raw, []byte("[init]\n\ttemplateDir = "+planted+"\n"), 0o600); err != nil {
+			t.Fatalf("write the control: %v", err)
+		}
+		control, err := g.run(home, "config", "--file", raw, "--get", "init.templateDir")
+		if err == nil && control == filepath.ToSlash(planted) {
+			t.Errorf("%q round-trips raw too, so the assertion beside it does not hold the format: %q",
+				planted, control)
+		}
 	}
 }
 

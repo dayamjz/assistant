@@ -12,7 +12,7 @@ func buildBase(b *builder) (*Scenario, []Condition, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := b.initSubject(s, "go test ./..."); err != nil {
+	if err := b.initSubject(s); err != nil {
 		return nil, nil, err
 	}
 	if err := b.startBranch(s); err != nil {
@@ -311,16 +311,18 @@ func plantFindingsWithoutAction(b *builder, s *Scenario) ([]Condition, error) {
 // for a head with no check registered, and leaves the configuration without a
 // no-CI declaration. The empty list is the answer; what it means is the
 // condition.
+//
+// The answer names a head, and the head it names is the one pushBranch records
+// as Commits["branch-head"], because the write is registered here and made
+// there from that value. Reading the head here instead would agree only while
+// nothing committed between this plant and the push, and the catalog tells a
+// harness to look for the recorded head in these bytes.
 func plantEmptyCheckList(b *builder, s *Scenario) ([]Condition, error) {
-	head, err := b.git.run(s.WorkingCopy, "rev-parse", "HEAD")
-	if err != nil {
-		return nil, err
-	}
-	body := `{"headRefOid":"` + head + `","statusCheckRollup":[]}` + "\n"
 	const file = "checks-empty.json"
-	if err := writeFile(s.Root, "provider-responses/"+file, 0o644, body); err != nil {
-		return nil, err
-	}
+	b.afterBranchHead(s, "the empty check list's answer", func(head string) error {
+		return writeFile(s.Root, "provider-responses/"+file, 0o644,
+			`{"headRefOid":"`+head+`","statusCheckRollup":[]}`+"\n")
+	})
 	s.ProviderResponses["checks-empty"] = filepath.Join(s.Root, "provider-responses", file)
 
 	return []Condition{{

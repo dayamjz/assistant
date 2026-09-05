@@ -18,7 +18,7 @@ func buildRemoteAdvanced(b *builder) (*Scenario, []Condition, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := b.initSubject(s, "go test ./..."); err != nil {
+	if err := b.initSubject(s); err != nil {
 		return nil, nil, err
 	}
 	if err := b.startBranch(s); err != nil {
@@ -93,7 +93,7 @@ func buildEmptyAfterRebase(b *builder) (*Scenario, []Condition, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := b.initSubject(s, "go test ./..."); err != nil {
+	if err := b.initSubject(s); err != nil {
 		return nil, nil, err
 	}
 	if err := b.startBranch(s); err != nil {
@@ -158,7 +158,7 @@ func buildUnparseableTrustedConfig(b *builder) (*Scenario, []Condition, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := b.initSubject(s, "go test ./..."); err != nil {
+	if err := b.initSubject(s); err != nil {
 		return nil, nil, err
 	}
 	// A trailing comma: valid to a reader, refused by a JSON decoder, and the
@@ -248,14 +248,14 @@ func buildUnreadableTrustedConfig(b *builder) (*Scenario, []Condition, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := b.initSubject(s, "go test ./..."); err != nil {
+	if err := b.initSubject(s); err != nil {
 		return nil, nil, err
 	}
 	if err := os.Remove(filepath.Join(s.WorkingCopy, ConfigPath)); err != nil {
 		return nil, nil, fmt.Errorf("fixture: removing the configuration document before replacing it "+
 			"with a directory: %w", err)
 	}
-	if err := writeFile(s.WorkingCopy, ConfigPath+"/settings.json", 0o644, subjectConfig("go test ./...")); err != nil {
+	if err := writeFile(s.WorkingCopy, ConfigPath+"/settings.json", 0o644, subjectConfig); err != nil {
 		return nil, nil, err
 	}
 	commit, err := b.git.commitAll(s.WorkingCopy, "make the configuration path a directory")
@@ -336,7 +336,7 @@ func buildHostileTemplate(b *builder) (*Scenario, []Condition, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := b.initSubject(s, "go test ./..."); err != nil {
+	if err := b.initSubject(s); err != nil {
 		return nil, nil, err
 	}
 	if err := b.startBranch(s); err != nil {
@@ -561,7 +561,7 @@ func buildCopiedWorkingCopy(b *builder) (*Scenario, []Condition, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := b.initSubject(s, "go test ./..."); err != nil {
+	if err := b.initSubject(s); err != nil {
 		return nil, nil, err
 	}
 	if err := b.startBranch(s); err != nil {

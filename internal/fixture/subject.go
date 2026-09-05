@@ -161,10 +161,9 @@ func Watch(parent context.Context) context.Context {
 // branch. It is the trusted copy: the commands and the agent a run is supposed
 // to use come from here and from nowhere else, which is what the pushed-branch
 // condition is measured against.
-func subjectConfig(testCommand string) string {
-	return `{
+const subjectConfig = `{
   "commands": {
-    "test": ` + quoteJSON(testCommand) + `,
+    "test": "go test ./...",
     "lint": "go vet ./..."
   },
   "agent": "fixture-trusted-agent",
@@ -173,7 +172,6 @@ func subjectConfig(testCommand string) string {
   }
 }
 `
-}
 
 // pushedAgentName is the agent a branch's own configuration document names. It
 // differs from the trusted document's on purpose, so which layer a run read is
@@ -200,21 +198,3 @@ const subjectPushedConfig = `{
   "ignore_patterns": ["vendor/**"]
 }
 `
-
-// quoteJSON renders s as a JSON string. The documents here are written as text
-// rather than marshalled, because one of them has to be malformed and a
-// marshaller cannot produce that.
-func quoteJSON(s string) string {
-	out := []rune{'"'}
-	for _, r := range s {
-		switch r {
-		case '"', '\\':
-			out = append(out, '\\', r)
-		case '\n':
-			out = append(out, '\\', 'n')
-		default:
-			out = append(out, r)
-		}
-	}
-	return string(append(out, '"'))
-}
