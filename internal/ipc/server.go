@@ -107,6 +107,14 @@ type ServerConfig struct {
 	// MaxInFlight bounds how many requests one connection may have being
 	// served at once. Zero means DefaultMaxInFlight, and a negative value is
 	// refused.
+	//
+	// A request holds its slot until its answer is written, and the slot is
+	// released after that write rather than before it. A caller therefore
+	// cannot read an answer and conclude the slot behind it is free: sending
+	// the next request the instant the answer arrives races that release and
+	// can be refused with ErrConnectionBusy while nothing is being served.
+	// Retrying such a refusal is what a caller does about it; a slot that
+	// leaked keeps refusing instead.
 	MaxInFlight int
 	// ReportPanic records a panic a handler did not survive, with the value it
 	// panicked with and the stack at the panic. It is called from the goroutine
