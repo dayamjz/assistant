@@ -111,48 +111,57 @@
 // not the length of its edge list. It also refuses a traversal count already
 // past the bound on the edge sitting at that index.
 //
-// That check is a length comparison and nothing more. internal/graph compares
-// the length of the per-edge traversal and fingerprint vectors against its
-// number of edges, and nothing compares edge identity. So a configuration
-// change that alters the edge count is refused, and a change that preserves it
-// is not.
+// A checkpoint also carries a digest of the edge vector its counters were
+// accrued against, and internal/graph refuses one whose digest is not this
+// graph's. That is what a fix round limit changing between a checkpoint and a
+// resume now meets, and it is a refusal rather than an adjustment: nothing
+// here reinterprets the counts, and the run is left exactly as it stood. There
+// is no in-place way past it. What is left is resuming the run under the fix
+// round limits it recorded, or starting a new run from the state it reached,
+// which internal/graph takes without the hold answers that state carries,
+// because a run may not begin already holding an answer. Forking is not the
+// way out: a fork copies a checkpoint's counters and the digest with them, and
+// the run's first checkpoint already carries the old digest, so a fork from
+// any point meets the same refusal.
 //
-// The gap that leaves is reachable. Lowering fix_rounds.review from 1 to 0
-// while raising fix_rounds.lint from 0 to 1 removes one back edge and adds
-// another, so the edge count is unchanged and a checkpoint standing at a node
-// that still exists validates cleanly. The stages are wired in table order, so
-// review's block losing an edge shifts every edge between review and lint down
-// one index, and the persisted counters are then read against different edges
-// than the ones that produced them, so a fix loop that has not finished can
-// start from another edge's traversal count and its round limit fires early or
-// late.
+// The refusal is load-bearing rather than defensive, because the gap it closes
+// was reachable. Lowering fix_rounds.review from 1 to 0 while raising
+// fix_rounds.lint from 0 to 1 removes one back edge and adds another, so the
+// edge count is unchanged and a length comparison sees nothing. The stages are
+// wired in table order, so review's block losing an edge shifts every edge
+// between review and lint down one index, and counters read at those indices
+// belong to other edges than the ones that produced them.
 //
 // Take the checkpoint written once document's hold is answered, which stands
 // at lint with the traversal into lint already counted at one. The segment has
 // to end on that checkpoint, either because lint's body returns an error and
-// no further checkpoint is written or because the process is interrupted. On
-// resume under the new configuration the counter vectors are still the same
-// length, and validation admits the checkpoint because one is not greater than
-// one. Lint runs, reports fix-eligible findings, and takes its entry edge,
-// which under the new indices carries a count of zero. The fixer runs. The
-// back edge, which under the new indices is the slot already holding one, then
-// reads its bound as reached and parks the run rounds-exhausted.
+// no further checkpoint is written or because the process is interrupted. Lint
+// then runs under the new configuration, reports fix-eligible findings, and
+// takes its entry edge, which under the new indices carries a count of zero.
+// The fixer runs. The back edge, which under the new indices is the slot
+// already holding one, reads its bound as reached and parks the run
+// rounds-exhausted: the fix is applied and never re-reviewed, the round taken
+// and never completed, leaving a commit the pipeline authored on the branch
+// that no stage looked at. That is the run the digest now refuses, and
+// TestAResumeUnderCompensatingFixRoundLimitsIsRefused is that exact resume.
+// Reaching it needs a configuration change between a checkpoint and a resume,
+// which P7 makes reachable, because configuration is re-read from the default
+// branch rather than carried forward from the run that checkpointed.
 //
-// So the run parks with the fix applied and never re-reviewed: the bound stops
-// the loop after the fix but before the re-run that would verify it, so the
-// round is taken and never completed, leaving a commit the pipeline authored
-// on the branch that no stage looked at, and a person's fork deciding what
-// happens to it. Reaching this needs a configuration change between a
-// checkpoint and a resume, which P7 makes reachable, because configuration is
-// re-read from the default branch rather than carried forward from the run
-// that checkpointed.
+// The run-wide budget is settled in the same package and on the same terms. It
+// is recorded on the checkpoint when the run starts, an executor configured
+// with another one is refused, and graph.Executor.AdoptBudget is how a run is
+// moved onto a new budget on purpose. So a fix round limit that changes under
+// a running pipeline stops the run rather than misapplying its counts, and a
+// run budget that changes stops it unless someone says to change it.
 //
-// The shift does not reach convergence, and the reasoning is short enough to
-// check rather than take on trust. internal/graph writes and reads a
-// fingerprint only on a back edge and skips the comparison when the slot is
-// empty. The only back edges here are the fix nodes' returns, one per stage
-// taking rounds. What the conclusion rests on is that an index which is a back
-// edge under two different configurations belongs to the same stage in both:
+// The shift never reached convergence, even before it was refused, and the
+// reasoning is short enough to check rather than take on trust. internal/graph
+// writes and reads a fingerprint only on a back edge and skips the comparison
+// when the slot is empty. The only back edges here are the fix nodes' returns,
+// one per stage taking rounds. What the conclusion rests on is that an index
+// which is a back edge under two different configurations belongs to the same
+// stage in both:
 // a fingerprint that is read is never another edge's, and a slot the new graph
 // reads but the old one never wrote is empty and skipped.
 //
@@ -185,9 +194,10 @@
 // chasing a bound that is not broken, and teaches them to discount the next
 // one.
 //
-// The fix is not here. internal/graph would have to carry a topology identity
-// in the checkpoint and check it on read; this package hands the graph a
-// topology and never sees a checkpoint.
+// The fix was not here. internal/graph carries the edge digest in the
+// checkpoint and checks it on read, which is where it belongs: this package
+// hands the graph a topology and never sees a checkpoint. What stays true here
+// is the arithmetic above, which is why a swap shifts indices at all.
 //
 // The rows the table marks as run inputs are the ones no node may write: what
 // the run was started with, including whether the intent was supplied. That
@@ -221,18 +231,18 @@
 //
 //   - Per-stage rounds. Each stage's limit bounds the one cycle it sits on.
 //     Both of that cycle's edges carry the limit, because the graph requires a
-//     bound on the back edge, and within one configuration the edge that
-//     reaches that bound first is the one into the fixer, because that is
-//     where a round is decided: a stage still reporting fix-eligible findings
-//     after its last round parks in front of the fixer rather than taking a
-//     round nothing would verify. Across a resume under changed limits the
-//     back edge can be the one that reaches it, which the
-//     counter-misattribution paragraph above traces. It catches one stage
+//     bound on the back edge, and the edge that reaches that bound first is
+//     the one into the fixer, because that is where a round is decided: a
+//     stage still reporting fix-eligible findings after its last round parks
+//     in front of the fixer rather than taking a round nothing would verify.
+//     A resume under changed limits could once make the back edge the one that
+//     reaches it, which the counter-misattribution paragraphs above trace;
+//     internal/graph now refuses that resume instead. It catches one stage
 //     oscillating between two wrong fixes.
-//   - The run-wide step budget. It is carried to the executor and counts every
-//     node execution however they are distributed. It catches several stages
-//     each staying under their own limit while the run as a whole never
-//     finishes.
+//   - The run-wide step budget. It is carried to the executor, which records it
+//     on the run, and counts every node execution however they are
+//     distributed. It catches several stages each staying under their own
+//     limit while the run as a whole never finishes.
 //   - Convergence. internal/graph fingerprints state at every back edge, and a
 //     round that leaves state identical ends the loop. It catches a fixer that
 //     reports success each round without changing anything, which neither
@@ -334,9 +344,11 @@
 // fire is worse than no bound, because it reads as a bound.
 //
 // A bound that stops a run parks it, and internal/graph parks a run rather
-// than halting it for a decision: a parked run is resumed by forking it, not
-// by answering it. PRD section 5's hold offers four actions, and only three of
-// them are reachable here. Approve, skip, and cancel are hold answers. A
+// than halting it for a decision: no park is answered. A run its own budget
+// parked is moved onto a new one with graph.Executor.AdoptBudget, and a run a
+// round limit or convergence parked is taken further by forking it. PRD
+// section 5's hold offers four actions, and only three of them are reachable
+// here. Approve, skip, and cancel are hold answers. A
 // requested fix round is not offered at all: it would be a second entry into
 // the same bounded cycle, and the bound it would need could never fire before
 // the bound on the round the loop already counts, which is a guard that exists

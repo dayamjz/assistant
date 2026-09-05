@@ -156,11 +156,26 @@ var (
 	// to go on and its run-wide step budget leaves no step for that halt
 	// point's node. Nothing is written and the run is left exactly as it
 	// stands, so a decision still open stays open and an answer already
-	// recorded stays recorded: continue the run with an executor configured with a
-	// budget it can afford, or fork it and give the fork more room. The budget
-	// is executor configuration rather than checkpoint state, so a run halted
-	// under a large budget can meet this under a smaller one.
+	// recorded stays recorded: give the run more room with
+	// Executor.AdoptBudget, or fork it from a checkpoint written before the
+	// budget was lowered, which still records the budget in force then and the
+	// steps spent by then. A run this executor produced is here only after its
+	// budget was deliberately lowered below what it had already spent, because
+	// a run reaching a halt point with nothing left is parked in front of it
+	// rather than halted at it; a checkpoint that arrives from a store already
+	// standing at such a halt point meets it too.
 	ErrBudgetSpent = errors.New("graph: the run-wide step budget leaves no step for the halted node")
+	// ErrBudgetChanged is returned when a run is advanced by an executor
+	// configured with a run-wide step budget other than the one the run
+	// recorded. The run is bounded by what it recorded, so the difference
+	// would otherwise be a configured budget quietly ignored: resume under the
+	// budget the run started with, or move the run onto this executor's budget
+	// with Executor.AdoptBudget, which records the change in the run's
+	// history.
+	ErrBudgetChanged = errors.New("graph: the run recorded a different run-wide step budget")
+	// ErrRunCompleted is returned when an operation that only means something
+	// for a run with work left is asked for on one that finished.
+	ErrRunCompleted = errors.New("graph: run has completed")
 	// ErrNoSuchRun is returned when a run has no checkpoints.
 	ErrNoSuchRun = errors.New("graph: no such run")
 	// ErrNoSuchCheckpoint is returned when a checkpoint identifier names

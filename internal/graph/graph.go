@@ -17,6 +17,7 @@ type Graph struct {
 	edges    []Edge
 	outgoing [][]int
 	back     []bool
+	digest   string
 	keys     []Key
 	keyIndex map[string]Key
 	answers  map[string]string
@@ -228,9 +229,26 @@ func (g *Graph) validateDecision(c Checkpoint) error {
 	return nil
 }
 
+// validateCounters checks the bound accounting a checkpoint carries. It
+// refuses counts that could not have been produced by a run of this graph, and
+// it refuses accounting whose bounds are not the ones it accrued under: a
+// budget below one bounds nothing, and counters indexed against another edge
+// vector would be read against edges that did not produce them.
+//
+// Only the two length checks precede the digest comparison, because a wrongly
+// sized counter vector is a length mismatch, which names the vector, rather
+// than a digest mismatch, which names neither. Everything indexed by edge
+// comes after it: comparing a count against the bound on the edge sitting at
+// its index says something only once the edge vector is known to be the one
+// the count accrued against, so a changed edge is reported as the changed edge
+// it is rather than as a count past a bound it never ran under.
 func (g *Graph) validateCounters(c Counters) error {
 	if c.Steps < 0 {
 		return &CheckpointError{Field: "counters.steps", Detail: fmt.Sprintf("is negative: %d", c.Steps)}
+	}
+	if c.Budget < 1 {
+		return &CheckpointError{Field: "counters.budget", Detail: fmt.Sprintf(
+			"is %d, and a run-wide step budget of at least 1 is required", c.Budget)}
 	}
 	if len(c.Traversals) != len(g.edges) {
 		return &CheckpointError{Field: "counters.traversals", Detail: fmt.Sprintf(
@@ -239,6 +257,12 @@ func (g *Graph) validateCounters(c Counters) error {
 	if len(c.Fingerprints) != len(g.edges) {
 		return &CheckpointError{Field: "counters.fingerprints", Detail: fmt.Sprintf(
 			"holds %d entries, the graph has %d edges", len(c.Fingerprints), len(g.edges))}
+	}
+	if c.EdgeDigest != g.digest {
+		return &CheckpointError{Field: "counters.edge_digest", Detail: fmt.Sprintf(
+			"was accrued against edges digesting %s and this graph's edges digest %s, so its "+
+				"per-edge counts and fingerprints would be read against edges that did not produce them",
+			shortDigest(c.EdgeDigest), shortDigest(g.digest))}
 	}
 	for i, n := range c.Traversals {
 		if n < 0 {
@@ -251,6 +275,19 @@ func (g *Graph) validateCounters(c Counters) error {
 		}
 	}
 	return nil
+}
+
+// shortDigest renders a digest for a diagnostic. A refusal names both of them,
+// so a reader can tell a mismatch from a checkpoint that carried none, and a
+// prefix is as much of either as that takes.
+func shortDigest(digest string) string {
+	if digest == "" {
+		return "nothing"
+	}
+	if len(digest) <= 12 {
+		return digest
+	}
+	return digest[:12]
 }
 
 // haltAnswered reports whether s holds an answer the halt point on n accepts.

@@ -726,6 +726,27 @@ func subscribeOnceFreed(ctx context.Context, t *testing.T, c *ipc.Client) (*ipc.
 	}
 }
 
+// callOnceFreed makes a call, retrying while the connection is still at its
+// limit, and gives up when a slot has not come free in time. The slot a request
+// holds is released after its answer is written rather than before, so a caller
+// that sends its next request the moment the answer arrives races that release
+// and can be refused while nothing is being served. A refusal that keeps
+// repeating is returned as it stands, so a slot that never frees fails the
+// caller with the reason rather than with a timeout; the window is shorter than
+// callCtx allows so that the refusal, and not the expired call, is what a
+// caller sees.
+func callOnceFreed(ctx context.Context, t *testing.T, c *ipc.Client, method ipc.Method, result any) error {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		err := c.Call(ctx, method, nil, result)
+		if !errors.Is(err, ipc.ErrConnectionBusy) || time.Now().After(deadline) {
+			return err
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 // TestConnectionRefusesMoreRequestsThanItMayServeAtOnce covers the same bound
 // for work in a handler. The refusal must come back while the connection keeps
 // serving, because the goroutine that would wait for a slot is the one reading
@@ -760,7 +781,7 @@ func TestConnectionRefusesMoreRequestsThanItMayServeAtOnce(t *testing.T) {
 	if err := <-held; err != nil {
 		t.Fatalf("the held call = %v, want it served", err)
 	}
-	if err := c.Call(ctx, "health", nil, nil); err != nil {
+	if err := callOnceFreed(ctx, t, c, "health", nil); err != nil {
 		t.Fatalf("Call after the held one finished = %v, want the slot freed", err)
 	}
 }
@@ -1272,7 +1293,7 @@ func TestAPanickingHandlerCostsOneRequest(t *testing.T) {
 	var served struct {
 		Served bool `json:"served"`
 	}
-	if err := c.Call(ctx, "health", nil, &served); err != nil {
+	if err := callOnceFreed(ctx, t, c, "health", &served); err != nil {
 		t.Fatalf("a later Call = %v, want the connection and its in-flight slot intact", err)
 	}
 	if !served.Served {
@@ -1474,7 +1495,7 @@ func TestAPanickingAncestryCostsOneRequest(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("the panic was contained without being reported")
 	}
-	if err := c.Call(ctx, "health", nil, nil); err != nil {
+	if err := callOnceFreed(ctx, t, c, "health", nil); err != nil {
 		t.Fatalf("a later Call = %v, want the connection and its in-flight slot intact", err)
 	}
 }

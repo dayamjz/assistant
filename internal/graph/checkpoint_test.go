@@ -538,14 +538,19 @@ func TestAnsweringIsRefusedWhenNoStepIsLeftForTheHaltedNode(t *testing.T) {
 	if held.Status != graph.StatusHalted {
 		t.Fatalf("the run ended %s, want halted at its decision", held.Status)
 	}
+
+	// The budget travels with the run, so reaching a halt point the run
+	// cannot afford takes a deliberate lowering. Adopting one below what the
+	// run has already spent is that act, and it leaves the decision open.
+	lean := mustExecutor(t, g, store, 1)
+	if _, err := lean.AdoptBudget(ctx, "run"); err != nil {
+		t.Fatalf("AdoptBudget: %v", err)
+	}
 	before, err := store.History(ctx, "run")
 	if err != nil {
 		t.Fatalf("History: %v", err)
 	}
-
-	// The budget is executor configuration, not checkpoint state, so the same
-	// run can be answered by an executor that cannot afford the halted node.
-	_, err = mustExecutor(t, g, store, 1).Answer(ctx, "run", "approve")
+	_, err = lean.Answer(ctx, "run", "approve")
 	if !errors.Is(err, graph.ErrBudgetSpent) {
 		t.Fatalf("answering with no step left = %v, want ErrBudgetSpent", err)
 	}
@@ -571,7 +576,11 @@ func TestAnsweringIsRefusedWhenNoStepIsLeftForTheHaltedNode(t *testing.T) {
 	if rec.count("gate") != 0 {
 		t.Error("the halt point's body ran under a budget that could not afford it")
 	}
-	done, err := mustExecutor(t, g, store, 20).Answer(ctx, "run", "approve")
+	roomy := mustExecutor(t, g, store, 20)
+	if _, err := roomy.AdoptBudget(ctx, "run"); err != nil {
+		t.Fatalf("AdoptBudget back to a budget the run can afford: %v", err)
+	}
+	done, err := roomy.Answer(ctx, "run", "approve")
 	if err != nil {
 		t.Fatalf("Answer once the run can afford the node: %v", err)
 	}
@@ -596,16 +605,21 @@ func TestResumingIsRefusedWhenNoStepIsLeftForTheClaimedHaltedNode(t *testing.T) 
 	if _, err := mustExecutor(t, crashing, store, 20).Answer(ctx, "run", "approve"); !errors.Is(err, graph.ErrNodeFailed) {
 		t.Fatalf("Answer = %v, want the halt node's failure", err)
 	}
+
+	// Lowering the budget below what the run has spent and then resuming is
+	// refused rather than claimed and parked, which would discard the answer
+	// the claim carries.
+	rec := &recorder{}
+	g := mustBuild(t, haltingBuilder(rec))
+	lean := mustExecutor(t, g, store, 1)
+	if _, err := lean.AdoptBudget(ctx, "run"); err != nil {
+		t.Fatalf("AdoptBudget: %v", err)
+	}
 	before, err := store.History(ctx, "run")
 	if err != nil {
 		t.Fatalf("History: %v", err)
 	}
-
-	// Resuming it under a budget that cannot afford the gate is refused rather
-	// than claimed and parked, which would discard the answer it carries.
-	rec := &recorder{}
-	g := mustBuild(t, haltingBuilder(rec))
-	if _, err := mustExecutor(t, g, store, 1).Resume(ctx, "run"); !errors.Is(err, graph.ErrBudgetSpent) {
+	if _, err := lean.Resume(ctx, "run"); !errors.Is(err, graph.ErrBudgetSpent) {
 		t.Fatalf("resuming with no step left = %v, want ErrBudgetSpent", err)
 	}
 	after, err := store.History(ctx, "run")
@@ -636,14 +650,18 @@ func TestResumingAHaltedRunIsRefusedWhenItsBudgetCannotAffordTheHaltNode(t *test
 	if held.Status != graph.StatusHalted || held.Decision == nil {
 		t.Fatalf("the run ended %s carrying %v, want halted at its decision", held.Status, held.Decision)
 	}
+
+	// Restoring the run once its budget leaves no step for the gate must not
+	// put the decision to a caller who could never act on it.
+	lean := mustExecutor(t, g, store, 1)
+	if _, err := lean.AdoptBudget(ctx, "run"); err != nil {
+		t.Fatalf("AdoptBudget: %v", err)
+	}
 	before, err := store.History(ctx, "run")
 	if err != nil {
 		t.Fatalf("History: %v", err)
 	}
-
-	// Restoring the run under a budget that leaves no step for the gate must
-	// not put the decision to a caller who could never act on it.
-	got, err := mustExecutor(t, g, store, 1).Resume(ctx, "run")
+	got, err := lean.Resume(ctx, "run")
 	if !errors.Is(err, graph.ErrBudgetSpent) {
 		t.Fatalf("resuming a halted run with no step left = %v, want ErrBudgetSpent", err)
 	}
@@ -663,7 +681,15 @@ func TestResumingAHaltedRunIsRefusedWhenItsBudgetCannotAffordTheHaltNode(t *test
 
 	// The decision is untouched, so a caller with room for the gate still gets
 	// it back and Resume still writes nothing.
-	again, err := mustExecutor(t, g, store, 20).Resume(ctx, "run")
+	roomy := mustExecutor(t, g, store, 20)
+	if _, err := roomy.AdoptBudget(ctx, "run"); err != nil {
+		t.Fatalf("AdoptBudget back to a budget that affords the gate: %v", err)
+	}
+	before, err = store.History(ctx, "run")
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	again, err := roomy.Resume(ctx, "run")
 	if err != nil {
 		t.Fatalf("Resume under a budget that affords the gate: %v", err)
 	}
@@ -1016,7 +1042,8 @@ func TestValidateRefusesACheckpointThatDoesNotMatchTheGraph(t *testing.T) {
 		},
 		"counters sized for another graph": {
 			tamper: func(c *graph.Checkpoint) {
-				c.Counters = graph.Counters{Traversals: []int{0}, Fingerprints: []string{""}}
+				c.Counters.Traversals = []int{0}
+				c.Counters.Fingerprints = []string{""}
 			},
 			field: "counters.traversals",
 		},
@@ -1028,16 +1055,26 @@ func TestValidateRefusesACheckpointThatDoesNotMatchTheGraph(t *testing.T) {
 			tamper: func(c *graph.Checkpoint) { c.Counters.Traversals[0] = -1 },
 			field:  "counters.traversals",
 		},
+		"no run-wide budget": {
+			tamper: func(c *graph.Checkpoint) { c.Counters.Budget = 0 },
+			field:  "counters.budget",
+		},
+		"counters accrued against other edges": {
+			tamper: func(c *graph.Checkpoint) { c.Counters.EdgeDigest = "not this graph's edges" },
+			field:  "counters.edge_digest",
+		},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
 			cp := sound
 			cp.State = sound.State.Clone()
-			cp.Counters = graph.Counters{
-				Steps:        sound.Counters.Steps,
-				Traversals:   append([]int(nil), sound.Counters.Traversals...),
-				Fingerprints: append([]string(nil), sound.Counters.Fingerprints...),
-			}
+			// Copied whole and then detached, so a field added to Counters
+			// later is carried here rather than silently arriving zeroed and
+			// refused for a reason no case in this table asked about.
+			counters := sound.Counters
+			counters.Traversals = append([]int(nil), sound.Counters.Traversals...)
+			counters.Fingerprints = append([]string(nil), sound.Counters.Fingerprints...)
+			cp.Counters = counters
 			decision := *sound.Decision
 			decision.Options = append([]string(nil), sound.Decision.Options...)
 			cp.Decision = &decision
@@ -1084,6 +1121,10 @@ func TestValidateRefusesTraversalsPastAnEdgeBound(t *testing.T) {
 	var ce *graph.CheckpointError
 	if !errors.As(err, &ce) {
 		t.Fatalf("Validate error = %T %v, want a *graph.CheckpointError", err, err)
+	}
+	if ce.Field != "counters.traversals" {
+		t.Fatalf("Validate blamed %q (%s), want the count named: these are this graph's own edges",
+			ce.Field, ce.Detail)
 	}
 }
 

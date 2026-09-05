@@ -81,6 +81,16 @@ Each has cost this repository more than one round of review.
   `internal/config/key.go`. A key's default, trust class, decoding, and where it
   lands in a `Config` are one row. Add a key by adding a row, never by adding a
   second list of keys somewhere else.
+- `internal/graph` owns execution and all three loop bounds. A bound only
+  survives a resume with the thing it is compared against, so `Counters` carries
+  the run's step budget and a digest of the edge vector its per-edge counts are
+  indexed against, and a graph whose edges differ is refused rather than
+  resumed. Add a bound by adding it there, never beside the counter that reads
+  it. The budget is the one bound a caller may change on a live run, and only
+  through `Executor.AdoptBudget`, which writes the change into the run's
+  history; a difference nobody asked for is `ErrBudgetChanged`. Read its
+  `doc.go` before changing any of that, and `identity.go` for what the digest
+  covers and what it deliberately leaves out.
 - `internal/vcs` is the only package that invokes git. Do not shell out to git
   anywhere else; add a typed operation there instead. Its package comment states
   the two rules it applies to every invocation and the residual gaps in them.

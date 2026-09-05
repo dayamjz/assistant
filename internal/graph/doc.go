@@ -84,6 +84,37 @@
 // no change at all, which catches work that reports success without doing
 // anything; neither counter would notice that before exhausting itself.
 //
+// All three have to survive a resume intact, and intact means more than the
+// counts. A count is meaningless without the bound it is compared against and
+// the edge it accrued on, so a checkpoint's Counters carry those too: the
+// run-wide budget the run is being held to, and a digest of the edge vector
+// its per-edge counts and fingerprints are indexed against. A graph whose
+// edges differ is refused rather than resumed, because its counters would be
+// read against edges that did not produce them, and comparing how many entries
+// they hold does not catch a change that drops one edge and adds another. That
+// refusal has no in-place remedy, deliberately: counts accrued against another
+// edge vector are not reinterpretable, forking copies both the counters and
+// the digest they were accrued under, and a run's first checkpoint already
+// carries that digest. Such a run is resumed under the edges it recorded, or
+// left behind for a new run started from the state it reached, which NewState
+// takes on its own terms: a halt point's answer key may not be preseeded, so
+// what a fresh run begins from is that state without those keys.
+//
+// The budget is settled differently, because raising one on a resume is a
+// legitimate thing to want and refusing it outright would only push a caller
+// into forking to work around it. The bound in force is the one the run
+// recorded, an executor configured with any other is refused with
+// ErrBudgetChanged rather than quietly applying either number, and
+// Executor.AdoptBudget moves a run onto a new budget by writing a checkpoint
+// that says what it became. So a budget may change, and a change is a line in
+// the run's history rather than a difference between two executors.
+//
+// Integrity checking leaves the three bounds three. It decides whether a
+// checkpoint may be resumed at all, and past that each bound still parks runs
+// the other two would not: AdoptBudget releases a run its own budget parked
+// and leaves one parked by a round limit or by convergence exactly where it
+// stands.
+//
 // # Trust
 //
 // Checkpoints are resumed with the user's credentials, so a tampered checkpoint
@@ -116,6 +147,8 @@
 // and the open decision. The counters have to survive a resume: a resume that
 // restarted them would leave the run with bounds that no longer bound
 // anything, and each of the three would then be one restart away from useless.
+// They travel with the budget they are spent against and the edge digest they
+// are indexed against, for the reason given under Bounding cycles above.
 //
 // Fan-out is declared, not inferred. A node names the fan-out it opens or
 // closes, and the cycle-through-a-join rule is checked against those

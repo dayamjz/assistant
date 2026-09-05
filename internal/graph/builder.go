@@ -522,6 +522,7 @@ func (c *checker) graph() *Graph {
 	}
 	copy(g.keys, c.b.keys)
 	sort.Slice(g.keys, func(i, j int) bool { return g.keys[i].Name < g.keys[j].Name })
+	g.digest = edgeDigest(g.edges, g.back)
 	return g
 }
 

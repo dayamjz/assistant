@@ -53,8 +53,8 @@ type Options struct {
 	Rounds config.FixRounds
 	// Budget is the run-wide step budget, the second bound: the total number
 	// of node executions one run may spend however they are distributed. It is
-	// checked by the graph when an executor is built, which is where it takes
-	// effect.
+	// checked by the graph when an executor is built, and recorded on a run
+	// when it starts, which is what holds the run to it across a resume.
 	Budget int
 }
 
@@ -150,14 +150,13 @@ func wire(b *graph.Builder, stage Stage, impl Implementation, fixer Fixer, round
 		b.Node(fixNode(stage, fixer))
 		// The back edge, which closes the one cycle in the pipeline. The graph
 		// requires a bound on it and the stage's round limit is that bound. It
-		// is the same limit the edge into the fixer carries below. Within one
-		// configuration it cannot be the first to reach its round bound,
-		// because every return through here follows an entry that edge already
-		// counted, so that edge reaches the bound first. Across a resume under
-		// changed fix round limits that does not hold, because they can inherit
-		// counts from different edges: the counter-misattribution paragraph in
-		// doc.go traces a run this edge stops on an inherited count while the
-		// entry edge passed on an inherited zero.
+		// is the same limit the edge into the fixer carries below, and it
+		// cannot be the first to reach its round bound, because every return
+		// through here follows an entry that edge already counted, so that
+		// edge reaches the bound first. That once failed across a resume under
+		// changed fix round limits, where the two edges could inherit counts
+		// from different edges; internal/graph now refuses such a resume,
+		// which the counter-misattribution paragraphs in doc.go trace.
 		b.Edge(graph.Edge{From: stage.FixNode(), To: stage.Node(), Rounds: rounds})
 	}
 	b.Edge(guarded(stage.Node(), stage, OutcomeHeld, stage.HoldNode()))
@@ -214,6 +213,12 @@ func (p *Pipeline) Graph() *graph.Graph { return p.graph }
 // run-wide step budget the pipeline was built with. The graph refuses a budget
 // below one, because an executor with no run-wide bound is not the same as one
 // with a generous bound.
+//
+// A run records the budget it starts under, so a pipeline rebuilt with a
+// different one does not resume an existing run: the graph refuses it with
+// graph.ErrBudgetChanged, and graph.Executor.AdoptBudget is how a run is moved
+// onto the new budget on purpose. The same applies to the fix round limits,
+// which the graph refuses on the edge digest a checkpoint carries.
 func (p *Pipeline) Executor(store graph.CheckpointStore) (*graph.Executor, error) {
 	return graph.NewExecutor(p.graph, graph.Config{Store: store, Budget: p.budget})
 }
