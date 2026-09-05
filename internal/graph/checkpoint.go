@@ -164,16 +164,38 @@ func (d *Decision) clone() *Decision {
 // Counters is the bound accounting a run must not lose across a resume. It
 // travels in the checkpoint because a resume that restarted the counters would
 // leave the run with bounds that no longer bound anything.
+//
+// Carrying a count is only half of it. A count means nothing without the bound
+// it is compared against and without the edge it accrued on, so both of those
+// travel here too: Budget is the run-wide bound Steps is spent against, and
+// EdgeDigest says which edge vector Traversals and Fingerprints are indexed
+// against. A resume that read either of them from somewhere else would leave
+// the run with bounds that still count but no longer bound what they were
+// counting.
 type Counters struct {
 	// Steps is how many node executions the run has spent against its
 	// run-wide budget.
 	Steps int `json:"steps"`
+	// Budget is the run-wide step budget this run is held to. It is recorded
+	// when the run starts and is the bound Steps is measured against for the
+	// rest of the run, so a resume is bounded by what the run began under
+	// rather than by whatever the resuming executor was configured with.
+	// Executor.AdoptBudget is the one way it changes, and it changes by
+	// writing a checkpoint that says so.
+	Budget int `json:"budget"`
 	// Traversals counts, per edge index, how many times the edge was taken.
 	Traversals []int `json:"traversals"`
 	// Fingerprints holds, per edge index, the state fingerprint recorded the
 	// last time the edge was traversed. The convergence check compares against
 	// it. An empty entry means the edge has not been traversed.
 	Fingerprints []string `json:"fingerprints"`
+	// EdgeDigest fingerprints the edge vector the two vectors above are
+	// indexed against. Both are positional, so a graph whose edges differ
+	// would read them against edges that did not produce them; the digest is
+	// what makes that refusable rather than invisible. Comparing lengths does
+	// not settle it, because a change that drops one edge and adds another
+	// leaves the length alone.
+	EdgeDigest string `json:"edge_digest"`
 }
 
 // clone returns counters whose slices are independent of these, so a value
@@ -186,9 +208,16 @@ func (c Counters) clone() Counters {
 	return out
 }
 
-// newCounters returns zeroed counters sized for a graph with n edges.
-func newCounters(n int) Counters {
-	return Counters{Traversals: make([]int, n), Fingerprints: make([]string, n)}
+// newCounters returns the accounting a run of g starts with under the given
+// run-wide step budget: no steps spent, no edge traversed, and both the bound
+// and the edge vector this run's counters will be read against recorded.
+func (g *Graph) newCounters(budget int) Counters {
+	return Counters{
+		Budget:       budget,
+		Traversals:   make([]int, len(g.edges)),
+		Fingerprints: make([]string, len(g.edges)),
+		EdgeDigest:   g.digest,
+	}
 }
 
 // Checkpoint is state, position, and any open decision, written after every
