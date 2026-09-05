@@ -161,6 +161,94 @@ func TestAPathSurvivesBeingWrittenAsAGitConfigurationValue(t *testing.T) {
 	}
 }
 
+// TestTheEnvironmentCarriesThePlatformThroughAndDropsWhatRedirects holds both
+// halves of what gitEnvironment now does. It has to carry the caller's own
+// environment through, because git and the processes it starts need what the
+// platform put there, and it has to drop the variables that would let whatever
+// ran the build decide which repository an invocation resolves to or what a
+// repository it creates is born with.
+//
+// The redirect half is asserted through git rather than by reading the slice
+// back: a GIT_DIR that survived would make git answer about another repository,
+// which is the failure, and a list comparison would pass on a variable git
+// stopped honouring.
+func TestTheEnvironmentCarriesThePlatformThroughAndDropsWhatRedirects(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skipf("git is not on PATH: %v", err)
+	}
+	elsewhere := filepath.Join(t.TempDir(), "elsewhere.git")
+	carried := filepath.Join(t.TempDir(), "carried")
+	t.Setenv("GIT_DIR", elsewhere)
+	t.Setenv("GIT_TEMPLATE_DIR", filepath.Join(t.TempDir(), "template"))
+	t.Setenv("GIT_CONFIG_COUNT", "1")
+	t.Setenv("GIT_CONFIG_KEY_0", "core.hooksPath")
+	t.Setenv("GIT_CONFIG_VALUE_0", filepath.Join(t.TempDir(), "hooks"))
+	t.Setenv("FIXTURE_PLATFORM_VARIABLE", carried)
+
+	g, err := newGitRunner("", t.TempDir())
+	if err != nil {
+		t.Fatalf("build the runner: %v", err)
+	}
+	// What the platform put there is carried through. Standing in for
+	// SystemRoot and its neighbours, which exist only where this test does not
+	// run.
+	if !containsEntry(g.env, "FIXTURE_PLATFORM_VARIABLE="+carried) {
+		t.Errorf("the caller's own environment does not reach git, so a platform that needs its own "+
+			"variables would not work: %v", g.env)
+	}
+	// And what redirects does not. git resolving the working copy rather than
+	// the GIT_DIR in the environment is the observable form of that.
+	work := filepath.Join(t.TempDir(), "work")
+	if err := os.MkdirAll(work, 0o755); err != nil {
+		t.Fatalf("create the working copy: %v", err)
+	}
+	if _, err := g.run(work, "init", "--quiet", "."); err != nil {
+		t.Fatalf("initialize the working copy: %v", err)
+	}
+	top, err := g.run(work, "rev-parse", "--show-toplevel")
+	if err != nil {
+		t.Fatalf("ask git which working copy it resolved: %v", err)
+	}
+	if _, statErr := os.Stat(elsewhere); statErr == nil {
+		t.Errorf("git created %s, so GIT_DIR reached it", elsewhere)
+	}
+	if !sameDir(t, top, work) {
+		t.Errorf("git resolved %s, want %s: the GIT_DIR in the environment reached it", top, work)
+	}
+	hooks, err := g.run(work, "rev-parse", "--git-path", "hooks")
+	if err != nil {
+		t.Fatalf("ask git where it looks for hooks: %v", err)
+	}
+	if filepath.IsAbs(hooks) {
+		t.Errorf("git looks for hooks in %s, so the GIT_CONFIG_COUNT pair in the environment reached it",
+			hooks)
+	}
+}
+
+func containsEntry(env []string, want string) bool {
+	for _, entry := range env {
+		if entry == want {
+			return true
+		}
+	}
+	return false
+}
+
+// sameDir compares two directory paths through the filesystem, so a symlinked
+// temporary directory does not read as a different one.
+func sameDir(t *testing.T, a, b string) bool {
+	t.Helper()
+	ai, err := os.Stat(a)
+	if err != nil {
+		t.Fatalf("stat %s: %v", a, err)
+	}
+	bi, err := os.Stat(b)
+	if err != nil {
+		t.Fatalf("stat %s: %v", b, err)
+	}
+	return os.SameFile(ai, bi)
+}
+
 // committedMode reads the mode a path is committed with at HEAD.
 func committedMode(t *testing.T, g *gitRunner, work, rel string) string {
 	t.Helper()

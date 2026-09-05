@@ -21,10 +21,12 @@ type gitRunner struct {
 	// configuration file inside it every invocation reads.
 	home   string
 	config string
-	// env is the whole environment every invocation runs with. It is built
-	// rather than inherited, so nothing an ancestor process left behind
-	// reaches git: a GIT_DIR or a GIT_TEMPLATE_DIR in the environment of
-	// whatever ran the build would otherwise decide what a scenario holds.
+	// env is the whole environment every invocation runs with. It is the
+	// caller's environment with the variables that would let an ancestor
+	// process decide what a scenario holds taken out, and this package's own
+	// settings written over the top. What reaches git is therefore everything
+	// else the platform put there, which is what git and the processes it
+	// starts need on Windows, and nothing that redirects it.
 	env []string
 	// executables are the planted executables written but not yet committed,
 	// each with the working copy it belongs to. The commit that stages one
@@ -84,22 +86,117 @@ func newGitRunner(binary, home string) (*gitRunner, error) {
 	}, nil
 }
 
-// gitEnvironment is the whole environment an invocation runs with, built from
-// the home and configuration file this package wrote.
+// redirectingVars are the environment variables taken out of the inherited
+// environment before git is invoked here. They are the ones that would let
+// whatever ran the build decide what a scenario holds: which repository an
+// invocation resolves to, where its configuration comes from, and what a
+// repository this package creates is born with.
+//
+// The approach is internal/vcs's rather than a fresh environment, and for the
+// reason that package gives: an environment built from nothing drops the
+// variables the platform itself needs, and on Windows git and the processes it
+// starts do not work without SystemRoot, ComSpec, TEMP and their neighbours.
+// This list is written by hand, so it covers what is on it and nothing else.
+//
+// Where it departs from internal/vcs is the configuration file location.
+// internal/vcs deliberately keeps GIT_CONFIG_GLOBAL and GIT_CONFIG_SYSTEM,
+// because a configuration file reached through them is the channel this fixture
+// plants against. Here they are this package's to state, so they are taken out
+// and written back from the file newGitRunner wrote.
+var redirectingVars = []string{
+	"GIT_DIR",
+	"GIT_WORK_TREE",
+	"GIT_INDEX_FILE",
+	"GIT_OBJECT_DIRECTORY",
+	"GIT_ALTERNATE_OBJECT_DIRECTORIES",
+	"GIT_COMMON_DIR",
+	"GIT_NAMESPACE",
+	"GIT_PREFIX",
+	"GIT_CEILING_DIRECTORIES",
+	"GIT_DISCOVERY_ACROSS_FILESYSTEM",
+	"GIT_CONFIG",
+	"GIT_CONFIG_PARAMETERS",
+	"GIT_CONFIG_COUNT",
+	"GIT_CONFIG_SYSTEM",
+	"XDG_CONFIG_HOME",
+	"GIT_TEMPLATE_DIR",
+	"GIT_EXEC_PATH",
+	"GIT_EXTERNAL_DIFF",
+	"GIT_EXTERNAL_DIFF_TRUST_EXIT_CODE",
+	"GIT_SSH",
+	"GIT_SSH_COMMAND",
+	"GIT_SSH_VARIANT",
+	"GIT_PROXY_COMMAND",
+	"GIT_ALLOW_PROTOCOL",
+	"GIT_REDIRECT_STDIN",
+	"GIT_REDIRECT_STDOUT",
+	"GIT_REDIRECT_STDERR",
+}
+
+// redirectingPrefixes are variable name prefixes taken out for the same reason
+// as redirectingVars. GIT_CONFIG_KEY_n and GIT_CONFIG_VALUE_n are the numbered
+// halves of the GIT_CONFIG_COUNT mechanism.
+var redirectingPrefixes = []string{"GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_"}
+
+// gitEnvironment is the whole environment an invocation runs with: the caller's
+// own, with redirectingVars and redirectingPrefixes removed and the settings
+// this package states written over the top.
+//
+// The stated settings are the isolation doc.go claims. GIT_CONFIG_GLOBAL and
+// GIT_CONFIG_NOSYSTEM point git at the file this package wrote and at no other,
+// so a developer's own git configuration cannot change what a scenario holds,
+// and the identity and dates are fixed, so two builds of one scenario differ
+// only where their absolute paths differ.
 func gitEnvironment(home, config string) []string {
-	return []string{
-		"PATH=" + os.Getenv("PATH"),
-		"HOME=" + home,
-		"GIT_CONFIG_GLOBAL=" + config,
-		"GIT_CONFIG_NOSYSTEM=1",
-		"GIT_TERMINAL_PROMPT=0",
-		"GIT_AUTHOR_NAME=" + fixtureName,
-		"GIT_AUTHOR_EMAIL=" + fixtureEmail,
-		"GIT_AUTHOR_DATE=" + fixtureDate,
-		"GIT_COMMITTER_NAME=" + fixtureName,
-		"GIT_COMMITTER_EMAIL=" + fixtureEmail,
-		"GIT_COMMITTER_DATE=" + fixtureDate,
+	stated := [][2]string{
+		{"HOME", home},
+		{"GIT_CONFIG_GLOBAL", config},
+		{"GIT_CONFIG_NOSYSTEM", "1"},
+		{"GIT_TERMINAL_PROMPT", "0"},
+		{"GIT_AUTHOR_NAME", fixtureName},
+		{"GIT_AUTHOR_EMAIL", fixtureEmail},
+		{"GIT_AUTHOR_DATE", fixtureDate},
+		{"GIT_COMMITTER_NAME", fixtureName},
+		{"GIT_COMMITTER_EMAIL", fixtureEmail},
+		{"GIT_COMMITTER_DATE", fixtureDate},
 	}
+	drop := make(map[string]struct{}, len(redirectingVars)+len(stated))
+	for _, name := range redirectingVars {
+		drop[name] = struct{}{}
+	}
+	for _, kv := range stated {
+		drop[kv[0]] = struct{}{}
+	}
+
+	base := os.Environ()
+	out := make([]string, 0, len(base)+len(stated))
+	for _, entry := range base {
+		name, _, ok := strings.Cut(entry, "=")
+		if !ok {
+			continue
+		}
+		if _, skip := drop[name]; skip {
+			continue
+		}
+		if hasAnyPrefix(name, redirectingPrefixes) {
+			continue
+		}
+		out = append(out, entry)
+	}
+	for _, kv := range stated {
+		out = append(out, kv[0]+"="+kv[1])
+	}
+	return out
+}
+
+// hasAnyPrefix reports whether s starts with any of the prefixes.
+func hasAnyPrefix(s string, prefixes []string) bool {
+	for _, p := range prefixes {
+		if strings.HasPrefix(s, p) {
+			return true
+		}
+	}
+	return false
 }
 
 // GitInvocation returns the git binary the scenario was built with and the

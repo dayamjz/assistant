@@ -41,6 +41,15 @@
 // committer identity and dates stated, so two builds of one scenario differ
 // only where their absolute paths differ.
 //
+// Those settings are written over an inherited environment rather than into a
+// fresh one, which is internal/vcs's approach and is taken for the reason that
+// package gives. The variables that would let whatever ran the build redirect
+// an invocation are removed by name, and everything else the platform put there
+// is carried through, because an environment built from nothing drops what git
+// and the processes it starts need on Windows. What the isolation covers is
+// therefore the named list and the stated settings; a variable outside both
+// reaches git, and PATH in particular is the caller's.
+//
 // A scenario records how it was built rather than leaving it to be guessed:
 // the resolved git binary, the home, and that configuration file are in
 // Scenario.Paths, and GitInvocation hands back the pair a caller needs to run

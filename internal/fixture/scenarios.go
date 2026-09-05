@@ -223,10 +223,16 @@ func buildUnparseableTrustedConfig(b *builder) (*Scenario, []Condition, error) {
 				"Falling back to defaults is the wrong answer, because the defaults are not what this " +
 				"repository asked for and nothing establishes that they are safe here. A run that completed, " +
 				"or that launched " + pushedAgentName + ", read the pushed copy as trusted.",
-			Sentinel:        "config.ErrMalformed",
-			MessageContains: []string{"config: ", ConfigPath},
-			NamesAction: "The refusal names the document that could not be parsed and the decoding failure " +
-				"underneath it, so the operator can find the line.",
+			Sentinel: "config.ErrMalformed",
+			// config.Parse is handed bytes, not a path, and *config.DocumentError
+			// renders "config: " plus a fixed detail plus the decoder's own
+			// error. It cannot name the document, so nothing here claims it
+			// does; a substring the named mechanism cannot emit would fail a
+			// harness on the expectation rather than on the product.
+			MessageContains: []string{"config: "},
+			NamesAction: "The refusal names the decoding failure underneath it, so the operator can find the " +
+				"line. Which document it was is the caller's to add, and no caller reads this document out " +
+				"of git today, so it is not expected of config.Parse.",
 			ActionSucceeds: "Fixing the document on the default branch and running again: the trusted copy is " +
 				"read from the default branch on every run, so no state carries the refusal forward.",
 		},

@@ -120,7 +120,12 @@ func gitInUnder(t *testing.T, s fixture.Scenario, dir string, override []string,
 		t.Fatalf("%v", err)
 	}
 	for _, kv := range override {
-		key := kv[:strings.IndexByte(kv, '=')+1]
+		eq := strings.IndexByte(kv, '=')
+		if eq <= 0 {
+			t.Fatalf("the override %q is not KEY=VALUE, and applying it would replace whichever entry "+
+				"happened to come first rather than the one it names", kv)
+		}
+		key := kv[:eq+1]
 		replaced := false
 		for i, existing := range env {
 			if strings.HasPrefix(existing, key) {
@@ -281,8 +286,11 @@ func TestTheDefaultBranchIsGreenAndTheBranchIsNot(t *testing.T) {
 func TestTheDocumentationIsStaleAgainstTheBranch(t *testing.T) {
 	f := readOnly(t)
 	s := scenario(t, f, fixture.ScenarioBase)
-	doc := readFile(t, filepath.Join(s.WorkingCopy, "docs", "behavior.md"))
-	code := readFile(t, filepath.Join(s.WorkingCopy, "total.go"))
+	// Read out of the committed tree: the condition is about what the branch
+	// carries, and this scenario's build touches the working copy after its
+	// last commit, so the two are not the same thing.
+	doc := showFile(t, s, f.Branch+":docs/behavior.md")
+	code := showFile(t, s, f.Branch+":total.go")
 	if !strings.Contains(doc, "`bytes`") {
 		t.Errorf("docs/behavior.md no longer documents the old default, so nothing is stale:\n%s", doc)
 	}
@@ -725,15 +733,6 @@ func TestBuildingOverSomethingIsRefused(t *testing.T) {
 	if _, err := fixture.Build(root); err == nil {
 		t.Fatal("building into a directory that already holds something succeeded")
 	}
-}
-
-func readFile(t *testing.T, path string) string {
-	t.Helper()
-	body, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read %s: %v", path, err)
-	}
-	return string(body)
 }
 
 // showFile reads a path out of a commit in the scenario's working copy, which

@@ -35,7 +35,12 @@ func OpenQuestions() []OpenQuestion {
 			Owner: "assistant-journey-harness",
 			Provisional: "The answer is written as the exact bytes the provider command prints, and its " +
 				"path is in Scenario.ProviderResponses. internal/forge invokes a provider command whose " +
-				"path a caller supplies, so a harness has a seam; choosing it is not this package's.",
+				"path a caller supplies, so a harness has a seam; choosing it is not this package's.\n\n" +
+				"Whatever the seam is, it has to substitute the head. The checks answer carries " +
+				"Commits[\"branch-head\"] as the build left it, and the run rebases and may add fix " +
+				"commits, so the commit it pushed is not that one. An answer naming a commit the run did " +
+				"not push is a stale check list, which internal/forge distinguishes from an empty one, so " +
+				"serving these bytes unchanged reports something other than the planted condition.",
 		},
 		{
 			ID:       "question-deferred-plant-timing",

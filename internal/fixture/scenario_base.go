@@ -329,12 +329,22 @@ func plantEmptyCheckList(b *builder, s *Scenario) ([]Condition, error) {
 		Kind:     KindRefusal,
 		Planted: "The provider answers the checks read with an empty rollup on a named head, which is what a " +
 			"repository with nothing registered looks like on the wire. Neither the trusted document nor " +
-			"the branch's sets no_ci, so nothing declares that this repository has no checks.",
+			"the branch's sets no_ci, so nothing declares that this repository has no checks.\n\n" +
+			"The head in the answer is a placeholder. It is Commits[\"branch-head\"] as the build left it, " +
+			"and the harness has to replace it with the commit the run actually pushed before serving the " +
+			"answer: the run rebases the branch and, with fix_rounds.review set in the trusted document, " +
+			"may add fix commits, so by the checks stage the head has moved. Served unchanged, the answer " +
+			"names a commit that is not the one under test, and forge.PullRequest.HeadCommit exists so a " +
+			"caller can tell exactly that apart from an empty list, so the run would be reading a stale " +
+			"check list rather than the condition planted here. How the substitution is made is the " +
+			"harness's; see question-provider-response-delivery.",
 		Mechanism: "forge.ChecksReport.Evaluate with forge.DeclaredNoCI over the resolved configuration",
 		Expect: Outcome{
 			Summary: "The verdict is no-checks, which is not green and not a failure: the run waits, bounded " +
 				"by checks_timeout, and never reports the checks as passed. An empty list means " +
-				"unregistered, and only the no_ci declaration turns it into a pass.",
+				"unregistered, and only the no_ci declaration turns it into a pass. This holds only if the " +
+				"answer names the head the run pushed; a harness that served the build-time head has " +
+				"observed a stale check list and has not reached this condition.",
 			Value:           "forge.VerdictNoChecks",
 			MessageContains: []string{"no-checks"},
 		},
