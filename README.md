@@ -10,7 +10,7 @@ until it has been independently reviewed, tested, documented, and linted.
 ## Status
 
 Early. The product requirements are settled and checked in at
-[`docs/prd.html`](docs/prd.html). Twelve pieces exist so far. The execution
+[`docs/prd.html`](docs/prd.html). Thirteen pieces exist so far. The execution
 engine in `internal/graph` is the first: the graph builder with its
 construction-time checks, an executor with halt points and bounded cycles, and
 checkpoints behind a four-operation store. The second is `internal/findings`,
@@ -47,10 +47,14 @@ and executes nothing. The twelfth is `internal/scope`, the review stage's scope
 lens rather than a tenth stage: the guidance that asks a reviewer to trace every
 path a change touched back to the recorded intent, and the notes an untraced
 path becomes. It ships on and no configuration key turns it off, and what it
-produces is always a note that informs and blocks nothing. The nine stage bodies
-are separate work against that contract and do not exist yet, including the
-review stage that puts the scope lens in front of a reviewer, and neither does
-the binary, so there is still nothing to run.
+produces is always a note that informs and blocks nothing. The thirteenth is
+`internal/fixture`, the adversarial subject repository the end-to-end harness
+validates against: seven scenarios built from nothing on demand, each planting
+conditions a stage or a refusal has to answer, with the answer each one must
+produce recorded beside it. The nine stage bodies are separate work against that
+contract and do not exist yet, including the review stage that puts the scope
+lens in front of a reviewer, and neither the harness nor the `assistant` binary
+exists either, so the only thing in here you can run is the fixture builder.
 
 ## The two promises
 
@@ -75,10 +79,12 @@ working as it always did.
 | Path | Contents |
 | --- | --- |
 | `cmd/assistant` | The binary. Not written yet, so `make build` has nothing to build. |
+| `cmd/fixture` | Builds the fixture repository into a directory you name. `scripts/build-fixture.sh DIR` runs it. |
 | `internal/agents` | The only package that starts an agent process: the run and fix roles, the Claude Code adapter, fallback resolution, and invocation records. |
 | `internal/agents/standin` | The scripted agent the tests outside `internal/agents` run against: the test binary re-executed as the agent process, read by the production adapter. |
 | `internal/config` | The configuration schema: layers, defaults, merge, validation, path matcher. |
 | `internal/findings` | The stage vocabulary: findings, actions, reports, and parsing of agent output. |
+| `internal/fixture` | The adversarial subject repository the end-to-end harness validates against: the seven scenarios, the conditions planted in them, and what each one is expected to produce. |
 | `internal/forge` | The only package that talks to a code host: the provider interface over pull requests, mergeability, and checks, and the GitHub adapter over the `gh` command line. |
 | `internal/gate` | The local bare repository a push is validated through: where it lives, its two hooks, its identity across a move or a copy, and the ownership question every operation asks before it adopts or deletes one. |
 | `internal/graph` | The execution engine: nodes, edges, bounds, halt points, checkpoints. |
@@ -99,9 +105,19 @@ make lint      # vet and golangci-lint
 make check     # lint and test, what CI runs
 ```
 
-`make test` exercises `internal/vcs` and `internal/gate` against a real git, so
-it needs a git binary on `PATH`; `internal/vcs`'s package comment states the
-minimum version it needs.
+```sh
+scripts/build-fixture.sh DIR   # build the fixture repository into DIR
+```
+
+`DIR` must not exist or must be empty, and the manifest describing what was
+planted is written to `DIR/manifest.json`, whose path the script prints. The
+fixture is built from nothing every time, so none of it is checked in.
+
+`make test` exercises `internal/vcs`, `internal/gate`, and `internal/fixture`
+against a real git, so it needs a git binary on `PATH`; `internal/vcs`'s
+package comment states the minimum version it needs. An `internal/fixture`
+test skips itself when git is not on `PATH`, and the ones that drive the
+planted toolchain conditions skip when `go` is not either.
 
 `make lint` requires golangci-lint from the v2 series, the line that can read
 this module's `.golangci.yml`. It refuses when the linter is missing or comes

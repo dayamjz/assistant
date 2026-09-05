@@ -1,8 +1,10 @@
-// Package vcs is the only place in this product that invokes git. PRD section
-// 8 gives it that ownership, and the point of the ownership is that two rules
-// which are easy to forget at a call site are applied here once, on every
-// invocation, and cannot be forgotten by a caller that never builds a command
-// line.
+// Package vcs is the only place in this product that invokes git, apart from
+// internal/fixture, which states in its own package comment why a fixture
+// built with the code under validation could not show that code wrong. PRD
+// section 8 gives this package that ownership, and the point of it is that two
+// rules which are easy to forget at a call site are applied here once, on
+// every invocation, and cannot be forgotten by a caller that never builds a
+// command line.
 //
 // The surface is operations rather than command strings. A caller asks for a
 // diff between two commits, not for an argument vector.
