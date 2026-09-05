@@ -149,6 +149,10 @@ func TestAgentReportingItsOwnFailure(t *testing.T) {
 	if got := failureOf(t, err); got != agents.FailureAgent {
 		t.Errorf("failure is %q, want %q", got, agents.FailureAgent)
 	}
+	var refusal *agents.InvocationError
+	if errors.As(err, &refusal) && refusal.Message != "I ran out of context" {
+		t.Errorf("the refusal says %q, want what the agent said about its own failure", refusal.Message)
+	}
 }
 
 // A non-zero exit paired with a result envelope is one invocation, not two
@@ -239,6 +243,26 @@ func TestAdapterReadsBackEveryStatedField(t *testing.T) {
 	}
 	if fixer.Reference() != "session-abc" {
 		t.Errorf("the fixer holds %q, want the session the envelope stated", fixer.Reference())
+	}
+	// The subtype is the one key left, and the adapter reads it in one place:
+	// it is what a failure the agent reported no result for says about itself.
+	// It takes an invocation of its own, because an envelope that reaches it
+	// is one the adapter refuses.
+	subtyped := New(t, oneStep(Reply{Envelope: &Envelope{
+		IsError: true,
+		Subtype: "error_max_turns",
+		Usage:   DefaultUsage(),
+	}}))
+	_, err = subtyped.Runner().Run(t.Context(), agents.PurposeReview, invocation(t, agents.ShapeText))
+	var refusal *agents.InvocationError
+	if !errors.As(err, &refusal) {
+		t.Fatalf("expected an *agents.InvocationError, got %v", err)
+	}
+	if refusal.Failure != agents.FailureAgent {
+		t.Errorf("failure is %q, want %q", refusal.Failure, agents.FailureAgent)
+	}
+	if refusal.Message != "error_max_turns" {
+		t.Errorf("the refusal says %q, want the subtype the envelope stated", refusal.Message)
 	}
 }
 

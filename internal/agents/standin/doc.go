@@ -33,7 +33,8 @@
 // The envelope this package writes and the envelope internal/agents reads are
 // two spellings of one wire contract, and Go checks neither against the other.
 // A test stands in for that check: TestAdapterReadsBackEveryStatedField
-// declares a result, a session, a model, and all five counts, and asserts the
+// declares a result, a session, a model, all five counts, and the subtype an
+// agent-reported failure carrying no result says about itself, and asserts the
 // adapter reports each one back, so a key renamed on one side and not the
 // other fails there rather than quietly reading as unreported.
 //
