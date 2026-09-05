@@ -11,18 +11,20 @@
 //
 // It delivers two things. Build constructs the scenarios on disk from nothing,
 // so no git object graph is checked in and a test never depends on one nobody
-// can regenerate. Conditions returns the catalog: for each planted condition,
-// what was planted, which mechanism is expected to answer, and what the answer
-// has to say, down to the substrings the message has to carry.
+// can regenerate. It fills in Fixture.Conditions, which is the catalog: for
+// each planted condition, what was planted, which mechanism is expected to
+// answer, and what the answer has to say, down to the substrings the message
+// has to carry.
 //
 // It does not drive anything. Which run reaches which scenario, how a fake
 // agent is pointed at a canned response, and when a stage is invoked are the
 // harness's decisions, and this package records the ones it ran into as
-// OpenQuestions rather than answering them. Two conditions cannot be planted
-// at build time at all, because the state they need only exists partway
-// through a run; those carry a Deferred plant naming the exported function the
-// harness calls and the moment it has to be called at. Building the state some
-// other way would be building a state the real mechanism never produces.
+// OpenQuestions rather than answering them. Two states cannot be planted at
+// build time at all, because they only exist partway through a run; every
+// condition resting on one carries a Deferred plant naming the exported
+// function the harness calls and the moment it has to be called at. Building
+// the state some other way would be building a state the real mechanism never
+// produces.
 //
 // # Why the plants go through raw git
 //

@@ -215,11 +215,15 @@ func plantPushedCommandsAndAgent(b *builder, s *Scenario) ([]Condition, error) {
 			"which copy was read is observable rather than inferred. ignore_patterns is set alongside them " +
 			"and is a key a pushed branch may set, so a run that dropped the whole document rather than the " +
 			"three keys is distinguishable from one that applied the trust classes.",
-		Mechanism: "config.Resolve over a trusted layer and a pushed layer",
+		Mechanism: "config.Resolve over the operator's global layer and the pushed layer",
 		Expect: Outcome{
-			Summary: "The resolved commands and agent are the default branch's, the resolved ignore_patterns " +
-				"are the branch's, and each dropped key is reported as a config.Rejection rather than " +
-				"silently ignored. Nothing the branch named is executed.",
+			Summary: "Each of the three keys is dropped and reported as a config.Rejection rather than " +
+				"silently ignored, and the resolved ignore_patterns are the branch's, because that is a " +
+				"key a pushed branch may set. Nothing the branch named is executed.\n\n" +
+				"What the resolved commands and agent then are is not this call's answer. Resolve takes " +
+				"one repository layer, so a call handed the pushed document has not read the trusted one, " +
+				"and the trusted values the default branch carries are recorded against whoever composes " +
+				"the two; see question-trusted-and-pushed-composition.",
 			MessageContains: []string{
 				"commands.test is trusted-unless-opted-out and was set from the pushed layer",
 				"commands.lint is trusted-unless-opted-out and was set from the pushed layer",
@@ -342,11 +346,12 @@ func plantEmptyCheckList(b *builder, s *Scenario) ([]Condition, error) {
 			"harness's; see question-provider-response-delivery.",
 		Mechanism: "forge.ChecksReport.Evaluate with forge.DeclaredNoCI over the resolved configuration",
 		Expect: Outcome{
-			Summary: "The verdict is no-checks, which is not green and not a failure: the run waits, bounded " +
-				"by checks_timeout, and never reports the checks as passed. An empty list means " +
-				"unregistered, and only the no_ci declaration turns it into a pass. This holds only if the " +
-				"answer names the head the run pushed; a harness that served the build-time head has " +
-				"observed a stale check list and has not reached this condition.",
+			Summary: "Evaluate returns VerdictNoChecks, which is not green and not a failure. An empty " +
+				"list means unregistered, and only the no_ci declaration turns it into a pass. What the " +
+				"run then does with that verdict is the caller's, and internal/forge says what it owes: " +
+				"the caller waits, bounded by checks_timeout, and never reports the checks as passed. " +
+				"This holds only if the answer names the head the run pushed; a harness that served the " +
+				"build-time head has observed a stale check list and has not reached this condition.",
 			Value:           "forge.VerdictNoChecks",
 			MessageContains: []string{"no-checks"},
 		},

@@ -218,8 +218,10 @@ func buildUnparseableTrustedConfig(b *builder) (*Scenario, []Condition, error) {
 			"parses it, launches, and does not abort at all.",
 		Mechanism: "config.Parse over the trusted layer, which is the default branch's copy",
 		Expect: Outcome{
-			Summary: "Parsing returns a *config.DocumentError and nothing in the document is applied. The run " +
-				"aborts before launching anything: no agent process starts and no configured command runs. " +
+			Summary: "Parsing returns a *config.DocumentError and nothing in the document is applied. " +
+				"Stopping there is the caller's, and PRD section 10 and internal/config/doc.go both say " +
+				"it is owed: the run aborts before launching anything, so no agent process starts and no " +
+				"configured command runs. " +
 				"Falling back to defaults is the wrong answer, because the defaults are not what this " +
 				"repository asked for and nothing establishes that they are safe here. A run that completed, " +
 				"or that launched " + pushedAgentName + ", read the pushed copy as trusted.",
@@ -306,10 +308,11 @@ func buildUnreadableTrustedConfig(b *builder) (*Scenario, []Condition, error) {
 		Mechanism: "vcs.Repository.FileAt against the trusted commit, which is the default branch's",
 		Expect: Outcome{
 			Summary: "The read fails with a *vcs.CommandError carrying git's own message, not with " +
-				"vcs.ErrPathNotFound: the path exists and is not a file whose bytes can be read. The run " +
-				"aborts before launching anything rather than treating an unreadable trusted document as an " +
-				"absent one and falling back to defaults. A run that completed, or that launched " +
-				pushedAgentName + ", read the pushed copy as trusted.",
+				"vcs.ErrPathNotFound: the path exists and is not a file whose bytes can be read. What " +
+				"follows is the caller's, and PRD section 10 says it is owed: the run aborts before " +
+				"launching anything rather than treating an unreadable trusted document as an absent one " +
+				"and falling back to defaults. A run that completed, or that launched " + pushedAgentName +
+				", read the pushed copy as trusted.",
 			MessageContains: []string{"vcs: file-at failed in", "git exited 128", "bad file"},
 			NamesAction: "The refusal carries git's message and the operation, so the operator is told which " +
 				"read failed rather than being told the repository is misconfigured.",

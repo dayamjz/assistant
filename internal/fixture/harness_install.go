@@ -148,7 +148,9 @@ Report every finding with the action ` + "`fix`" + `, and never ask the operator
 				"That includes the two .githooks scripts, which core.hooksPath has made live in the " +
 				"working copy: a run that invokes git there without disabling them fires them.",
 			Value: "the resolved config.Config.Agent is [\"fixture-trusted-agent\"] and " +
-				"config.Config.Commands are the default branch's",
+				"config.Config.Commands are the default branch's. Which component resolves that, and how " +
+				"it composes the trusted document with the pushed one, is not settled in this product " +
+				"yet; see question-trusted-and-pushed-composition.",
 			TripwiresQuiet: quiet,
 		},
 	}}, nil

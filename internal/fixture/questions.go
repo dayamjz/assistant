@@ -70,6 +70,29 @@ func OpenQuestions() []OpenQuestion {
 				"a scenario this package will add once the harness says it wants one.",
 		},
 		{
+			ID: "question-trusted-and-pushed-composition",
+			Question: "Which component reads the trusted document from the default branch, resolves it, and " +
+				"combines that resolution with the pushed one, so a run has the trusted commands and agent " +
+				"together with the keys a pushed branch may set?",
+			Owner: "the gate, most likely: PRD section 10 puts reading the trusted document at a freshly " +
+				"fetched commit there, and internal/config/doc.go says enforcing where the bytes came from " +
+				"needs git and belongs to the gate",
+			Provisional: "Two facts about internal/config decide the shape of the answer, and both are " +
+				"checkable there. config.Resolve takes one global layer and one repository layer, so a " +
+				"single call is handed either the trusted document or the pushed one, never both. And the " +
+				"allow_pushed_commands opt-out is only honored from a repository layer whose origin is " +
+				"trusted, while it only changes an outcome for a repository layer whose origin is pushed, " +
+				"so the two sides cannot be one call by construction. None of that is a shortfall in " +
+				"internal/config, which is complete for the merge it defines; the composition above it is " +
+				"simply not owned by any package yet.\n\n" +
+				"What refusal-pushed-commands-and-agent records is therefore scoped to the one call it " +
+				"names: the three rejections and the pushed ignore_patterns winning. The other half of " +
+				"that condition belongs to whoever answers this question, and is the values the trusted " +
+				"document carries: commands.test \"go test ./...\", commands.lint \"go vet ./...\", and " +
+				"agent [\"fixture-trusted-agent\"]. A run whose resolved commands or agent are the " +
+				"branch's has taken the pushed document as trusted, whatever composed it.",
+		},
+		{
 			ID: "question-hookspath-redirect-observation",
 			Question: "Which process is given the configuration file that redirects core.hooksPath, and " +
 				"is a push driven through the gate under it?",
