@@ -71,6 +71,7 @@ working as it always did.
 | --- | --- |
 | `cmd/assistant` | The binary. Not written yet, so `make build` has nothing to build. |
 | `internal/agents` | The only package that starts an agent process: the run and fix roles, the Claude Code adapter, fallback resolution, and invocation records. |
+| `internal/agents/standin` | The scripted agent the tests outside `internal/agents` run against: the test binary re-executed as the agent process, read by the production adapter. |
 | `internal/config` | The configuration schema: layers, defaults, merge, validation, path matcher. |
 | `internal/findings` | The stage vocabulary: findings, actions, reports, and parsing of agent output. |
 | `internal/forge` | The only package that talks to a code host: the provider interface over pull requests, mergeability, and checks, and the GitHub adapter over the `gh` command line. |
