@@ -176,6 +176,11 @@ func options(t *testing.T, h *home.Home) service.Options {
 		NewFixer: stages.PendingFixer,
 		Build:    build,
 		Catalog:  scriptedAgent(t),
+		// Ask for the home's lock once and refuse rather than waiting. A test
+		// that opens a second service while the first is still holding the
+		// home is a test whose restart did not happen, and a bounded wait
+		// would let it pass a little later instead of failing.
+		LockWait: -1,
 	}
 }
 
@@ -245,8 +250,15 @@ type serviceUnderTest struct {
 //
 // Closing rather than leaving it to the test's cleanup is the point: a test
 // that calls this twice has the first service gone before the second opens, so
-// the second holds the home's lock and reads the run's position out of the
-// database rather than out of anything the first left in memory.
+// the second reads the run's position out of the database rather than out of
+// anything the first left in memory.
+//
+// Two things make that a mechanism rather than a hope. Service.Close releases
+// the home's lock last, after the database is closed, and the options here ask
+// for that lock once and refuse, so a second service opened while the first
+// still held the home fails to open at all rather than waiting for it. And
+// homeIsFree asserts the same fact directly between the phases of the restart
+// test, so the claim is checked where it is being relied on.
 func withService(t *testing.T, h *home.Home, body func(serviceUnderTest)) {
 	t.Helper()
 	running, err := service.Open(t.Context(), options(t, h))
@@ -321,4 +333,22 @@ func startRunErr(t *testing.T, client *ipc.Client, workingPath string) (machine.
 		Working: machine.Working{WorkingPath: workingPath},
 	}, &run)
 	return run, err
+}
+
+// homeIsFree asserts that no service holds this home, which is what makes a
+// restart a restart.
+//
+// It takes the lock and gives it straight back. Service.Close releases that
+// lock last, after it has closed the database, so a home this can lock is a
+// home whose previous service ran Close to the end: the lock being free is
+// evidence about the database as well as about the lock.
+func homeIsFree(t *testing.T, h *home.Home) {
+	t.Helper()
+	held, err := h.Acquire(t.Context(), 0)
+	if err != nil {
+		t.Fatalf("the home is still held, so the previous service did not close: %v", err)
+	}
+	if err := held.Release(); err != nil {
+		t.Fatalf("releasing the home lock: %v", err)
+	}
 }

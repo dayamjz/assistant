@@ -37,6 +37,10 @@ func TestARunSurvivesTheProcessThatStartedItAndIsAnsweredByAnother(t *testing.T)
 			t.Fatalf("a run holding for a decision is recorded as %s", run.Record.Status)
 		}
 	})
+	// The restart is the claim everything below rests on, so it is checked
+	// rather than assumed: nothing holds the home, which means the service
+	// that started the run closed its database and let the home go.
+	homeIsFree(t, h)
 
 	// A second process reports on it, and reports the same decision, without
 	// ever having executed anything.
@@ -50,6 +54,8 @@ func TestARunSurvivesTheProcessThatStartedItAndIsAnsweredByAnother(t *testing.T)
 			t.Fatal("the run reports no steps spent, so its position did not survive")
 		}
 	})
+
+	homeIsFree(t, h)
 
 	// A third answers it, and the run carries on from where the first left it
 	// rather than from the beginning.
@@ -366,6 +372,7 @@ func TestTheReportedPositionComesFromTheDurableCheckpoint(t *testing.T) {
 	withService(t, h, func(running serviceUnderTest) {
 		before = startRun(t, running.client, subject)
 	})
+	homeIsFree(t, h)
 	withService(t, h, func(running serviceUnderTest) {
 		var after machine.Run
 		if err := running.client.Call(t.Context(), ipc.MethodRunGet, machine.RunRequest{Run: before.Record.ID}, &after); err != nil {
