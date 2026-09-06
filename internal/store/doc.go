@@ -26,9 +26,16 @@
 // is what makes the highest sequence the run's own continuation rather than
 // wherever a second caller's write happened to land, and it is decided under
 // the same serialization that assigns that sequence. A run's position is this
-// history and nothing else, which is why Checkpoint is not in either list
-// above: PRD section 8 does not name that record, nothing writes or reads it
-// outside tests, and its own comment says what that leaves it.
+// history and nothing else.
+//
+// PRD section 8 says there may not be a second record holding the same
+// position, and migration 1's checkpoint table was it. It has no accessor: no
+// type, no read, no write, and none may be added. The table is still declared
+// because a migration may not remove one, so migration 6 empties it and seals
+// it with a trigger that refuses an insert instead, which is why a database
+// upgraded from a build that wrote the row does not carry it forward. That
+// refusal is what a caller adding new SQL for it would meet, and it is not a
+// guarantee against a later migration that dropped the trigger.
 //
 // # The gate ownership index
 //
@@ -181,11 +188,11 @@
 // Every other column holds exactly what the caller passed. A push binding, a
 // pull request reference, a run's intent, a run's fixer session reference, a
 // task's session reference, a hold's subject and detail, a stage's log path,
-// and the round, checkpoint, and graph checkpoint payloads are all bound
-// verbatim, so a caller that puts a credential in one of them has stored a
-// credential, and nothing in this package will notice or remove it. That is the
-// caller's responsibility, and this package does not claim otherwise: it is not
-// a scrubber that everything written to it passes through.
+// and the round and graph checkpoint payloads are all bound verbatim, so a
+// caller that puts a credential in one of them has stored a credential, and
+// nothing in this package will notice or remove it. That is the caller's
+// responsibility, and this package does not claim otherwise: it is not a
+// scrubber that everything written to it passes through.
 //
 // Requiring a redactor leaves a gap that requiring cannot close, which is a
 // redactor wired up to something inert. That failure is invisible from the
@@ -215,11 +222,11 @@
 // rather than contending for the database lock, and a read-modify-write done
 // inside one transaction cannot interleave with another writer's. That is what
 // makes the sequence AppendTaskEvent assigns dense with no duplicates, and the
-// revisions SetTaskState and WriteCheckpoint assign strictly increasing, under
-// any number of concurrent callers. It is also what makes
-// AppendGraphCheckpoint's anchor decision and the sequence it assigns one step
-// rather than two, which is the whole of what that accessor is for. The reader
-// pool is unbounded and carries queries only.
+// revisions SetTaskState assigns strictly increasing, under any number of
+// concurrent callers. It is also what makes AppendGraphCheckpoint's anchor
+// decision and the sequence it assigns one step rather than two, which is the
+// whole of what that accessor is for. The reader pool is unbounded and carries
+// queries only.
 //
 // The cost is that writes across the whole store serialize, including writes to
 // unrelated runs. That is deliberate at this scale: one service owns one home,

@@ -64,7 +64,6 @@ func TestAccessorsRefuseAfterClose(t *testing.T) {
 		"CreateRun":   func() error { _, err := s.CreateRun(ctx, completeRun()); return err },
 		"StageResult": func() error { _, err := s.StageResult(ctx, "run-1", "review"); return err },
 		"Rounds":      func() error { _, err := s.Rounds(ctx, "run-1"); return err },
-		"Checkpoint":  func() error { _, err := s.Checkpoint(ctx, "run-1"); return err },
 		"TaskState":   func() error { _, err := s.TaskState(ctx, "task-1"); return err },
 		"TaskEvents":  func() error { _, err := s.TaskEvents(ctx, "task-1", 0, 0); return err },
 		"OpenHolds":   func() error { _, err := s.OpenHolds(ctx); return err },

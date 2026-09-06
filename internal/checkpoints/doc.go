@@ -15,12 +15,12 @@
 // serializes a checkpoint and reads one back, and internal/store holds the
 // bytes, orders them, and assigns the sequence.
 //
-// The record it holds them in is new alongside internal/store's Checkpoint
-// rather than an extension of it, because that record is one row per run
-// rewritten in place with a revision, and two of the four operations here are
-// a run's whole history and a fork from a point in it, which such a row cannot
-// answer. PRD section 8 names this history as the one record of where a run
-// stands, and lists no row-per-run checkpoint beside it.
+// The record it holds them in is the appended history PRD section 8 names as
+// the one record of where a run stands: an entry per position, ordered by a
+// sequence internal/store assigns and never revised once written. Two of the
+// four operations here are a run's whole history and a fork from a point in
+// it, and both are read off those entries, so the shape this layer needs and
+// the shape PRD section 8 names are the same one.
 //
 // # Where the anchor is decided
 //
@@ -95,12 +95,11 @@
 // that point yet, and the fork is refused with graph.ErrNoSuchCheckpoint, which
 // is what the in-memory store answers at the same moment.
 //
-// A run's position has one owner, and it is this history. store.WriteCheckpoint
-// is still there and still writes the one-row record PRD section 8 does not
-// name, and nothing stops a caller from writing both for one run and ending up
-// with two answers. Nothing in this repository writes or reads it outside
-// tests, which is an absence rather than a mechanism, and dropping the table is
-// a migration that has not been made.
+// A run's position has one owner, and it is this history. The one-row record
+// PRD section 8 does not name has no accessor left in internal/store, so there
+// is no longer a second thing a caller could write for the same run, and the
+// table it used to live in refuses a row. What that leaves is a caller writing
+// its own position somewhere else entirely, which no mechanism here can see.
 //
 // Nothing prunes. A run's history grows by a row for every node it executes and
 // one more for every segment that claims it, and the three bounds
