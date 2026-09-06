@@ -413,7 +413,7 @@ func (e *Executor) advance(ctx context.Context, cp Checkpoint) (Result, error) {
 
 		if spent(cp.Counters) {
 			parkOnBudget(&cp, node.Name)
-			return e.park(ctx, cp)
+			return e.finish(ctx, cp)
 		}
 
 		if err := e.holdsClaim(ctx, cp); err != nil {
@@ -441,7 +441,7 @@ func (e *Executor) advance(ctx context.Context, cp Checkpoint) (Result, error) {
 				cp.Position = to
 				cp.Status = parked
 				cp.Reason = reason
-				return e.park(ctx, cp)
+				return e.finish(ctx, cp)
 			}
 		}
 
@@ -449,11 +449,11 @@ func (e *Executor) advance(ctx context.Context, cp Checkpoint) (Result, error) {
 		cp.Decision = nil
 		if to == "" {
 			cp.Status = StatusCompleted
-			return e.park(ctx, cp)
+			return e.finish(ctx, cp)
 		}
 		if next := e.graph.nodes[e.graph.index[to]]; next.Halt != nil {
 			e.haltBefore(&cp, next)
-			return e.park(ctx, cp)
+			return e.finish(ctx, cp)
 		}
 		cp.Status = StatusRunning
 		if err := e.persist(ctx, &cp); err != nil {
@@ -462,7 +462,7 @@ func (e *Executor) advance(ctx context.Context, cp Checkpoint) (Result, error) {
 	}
 }
 
-// haltBefore parks cp in front of n, which declares a halt point. It emits the
+// haltBefore holds cp in front of n, which declares a halt point. It emits the
 // decision n asks, unless the run has no step left to spend on n, in which case
 // it parks the run budget-exhausted there and asks nothing: a decision that
 // cannot be acted on must not be put to a person, because consent that cannot
@@ -470,7 +470,7 @@ func (e *Executor) advance(ctx context.Context, cp Checkpoint) (Result, error) {
 // cleared by persist, which owns that for every checkpoint the executor writes
 // at a halt point however the run got there, not only for this one.
 //
-// This is the one place the executor parks a run in front of a halt point, so
+// This is the one place the executor stops a run in front of a halt point, so
 // the two rules hold for every route that gets there: the run that halts at
 // the start node and the run that reaches one mid-flight.
 func (e *Executor) haltBefore(cp *Checkpoint, n Node) {
@@ -612,8 +612,8 @@ func (e *Executor) accessFor(n Node, work State) *access {
 	}
 }
 
-// park writes a final checkpoint and returns the result it describes.
-func (e *Executor) park(ctx context.Context, cp Checkpoint) (Result, error) {
+// finish writes a final checkpoint and returns the result it describes.
+func (e *Executor) finish(ctx context.Context, cp Checkpoint) (Result, error) {
 	if err := e.persist(ctx, &cp); err != nil {
 		return Result{}, err
 	}
