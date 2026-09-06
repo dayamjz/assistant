@@ -2,38 +2,33 @@ package checkpoints_test
 
 import (
 	"context"
-	"errors"
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/checkpoints"
 	"github.com/dayamjz/assistant/internal/graph"
-	"github.com/dayamjz/assistant/internal/store"
 )
 
-// TestARunsPositionHasOneRecordAndTheOneRowCheckpointIsNotIt walks a whole run
-// through the durable store and shows that the only record it left its position
-// in is the checkpoint history.
+// TestARunsPositionHasOneRecordAndItIsTheHistory walks a whole run through the
+// durable store and shows that the record it left its position in is the
+// checkpoint history: every position it stood in, in the order it stood in
+// them, with the highest sequence being where it ended up.
 //
-// This is the claim PRD section 8 now makes: the history is where a run's
-// position is written and read, and no other record holds a copy of it. The
-// one-row checkpoint the store still ships is the record that would be that
-// copy, and the run below is driven under a run the store has a row for, so
-// that record is writable for this run and is left empty anyway.
-//
-// An assertion that a read comes back empty is worth nothing on its own, so
-// what the empty read is about is pinned down around it: the identifier names a
-// run the store answers for, the same handle answers that run's whole position
-// history, and internal/store's own tests hold the other side, that this record
-// reads back when something writes it. What is missing is the record, not the
-// run, the handle, or the read.
-func TestARunsPositionHasOneRecordAndTheOneRowCheckpointIsNotIt(t *testing.T) {
+// This is the claim PRD section 8 makes. Its other half, that no second record
+// holds a copy of the same position, used to be shown here by reading the
+// one-row checkpoint of a run the store had a row for and finding it empty.
+// That read is gone with the accessor it went through, and the half it covered
+// is now held in two places that can still fail. This package has no way to
+// address a second record, because internal/store offers none. And the table
+// that used to be one refuses a row, which is checked in internal/store by
+// TestTheOneRowCheckpointTableTakesNoRows, against the database rather than
+// against the absence of a caller.
+func TestARunsPositionHasOneRecordAndItIsTheHistory(t *testing.T) {
 	ctx := context.Background()
-	records := openRecords(t)
-	run := seedRunRow(t, records)
+	durable := checkpoints.New(openRecords(t))
+	const run = "run-1"
 
 	rec := &recorder{}
 	g := fixLoopGraph(t, rec)
-	durable := checkpoints.New(records)
 	exec := mustExecutor(t, g, durable, 20)
 
 	halted, err := exec.Run(ctx, run, mustState(t, g, nil))
@@ -79,53 +74,5 @@ func TestARunsPositionHasOneRecordAndTheOneRowCheckpointIsNotIt(t *testing.T) {
 			stood.ID(), len(history), done.Checkpoint)
 	}
 
-	// Nothing the run did wrote the one-row record, and the run, the handle
-	// and the history it is being compared against are all right here.
-	if _, err := records.Run(ctx, run); err != nil {
-		t.Fatalf("the run the graph was driven under is not in the store, so an empty"+
-			" checkpoint read below would say nothing: %v", err)
-	}
-	if len(history) == 0 {
-		t.Fatal("the store answered no history for the run it just walked")
-	}
-	if _, err := records.Checkpoint(ctx, run); !errors.Is(err, store.ErrNotFound) {
-		t.Fatalf("the one-row checkpoint of %s reads %v, want ErrNotFound: a run's position"+
-			" must be in the history and nowhere else", run, err)
-	}
-	t.Logf("run %s: %d history entries, standing at %s; the one-row checkpoint record: %v",
-		run, len(history), stood.ID(), store.ErrNotFound)
-}
-
-// seedRunRow creates a repository and a run on it, and returns the run's
-// identifier. The one-row checkpoint references run(id), so a run driven under
-// a name with no row could not be given that record at all, and finding it
-// empty would say nothing.
-func seedRunRow(t *testing.T, records *store.Store) string {
-	t.Helper()
-	ctx := context.Background()
-	if _, err := records.UpsertRepository(ctx, store.Repository{
-		ID:            "repo-1",
-		WorkingPath:   "/checkouts/one",
-		UpstreamURL:   "https://example.test/one.git",
-		DefaultBranch: "main",
-	}); err != nil {
-		t.Fatalf("UpsertRepository: %v", err)
-	}
-	run, err := records.CreateRun(ctx, store.Run{
-		ID:            "run-1",
-		RepositoryID:  "repo-1",
-		Branch:        "topic",
-		SubmittedHead: "aaaa",
-		Base:          "bbbb",
-		Intent:        "validate",
-		IntentSource:  "push",
-		Build: store.Build{
-			Version: "v0.1.0", Revision: "0123456789abcdef", Modified: false, Go: "go1.25.0",
-		},
-		ConfigDigest: "cfg-1",
-	})
-	if err != nil {
-		t.Fatalf("CreateRun: %v", err)
-	}
-	return run.ID
+	t.Logf("run %s: %d history entries, standing at %s", run, len(history), stood.ID())
 }

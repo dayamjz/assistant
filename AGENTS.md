@@ -125,11 +125,14 @@ Each has cost this repository more than one round of review.
   understates who decided rather than overstating it. It records and does not
   gate, so nothing may branch on the value to decide whether a resolution may
   proceed. It also holds the run checkpoint history the durability layer needs,
-  which is a different record from the one-row `checkpoint`: opaque payloads
-  indexed by run and sequence, with the anchor a property of the request that no
-  column holds. That history is a run's position; the one-row `checkpoint` is
-  not, the PRD does not name it, and nothing writes or reads it outside tests,
-  so do not wire it back in. Read its `doc.go` before changing any of that.
+  which is the only record of a run's position: opaque payloads indexed by run
+  and sequence, with the anchor a property of the request that no column holds.
+  The one-row `checkpoint` migration 1 created was the second record the PRD
+  forbids, and it now has no accessor at all. Do not give it one. Its table is
+  still declared because a migration may not remove a table, so migration 6
+  seals it with a trigger instead; a drop would mean weakening `verifyAdditive`,
+  which is what protects every other table's rows. Read its `doc.go` before
+  changing any of that.
 - `internal/safety` owns whether a branch update may proceed and on what anchor.
   `internal/vcs` stays mechanism only, so a lease, an incorporation check, or a
   force decision belongs in `internal/safety` even when it would be shorter to
@@ -266,9 +269,8 @@ Each has cost this repository more than one round of review.
   against this one and `graph.MemoryStore` both, and a behaviour checked
   against only one is not checked. Read its `doc.go` before changing any of
   that, and for the residual gaps: the encoder is `encoding/json` over the
-  exported type rather than `internal/graph`'s own, a fork reads its source
-  outside the transaction that claims its destination, and nothing stops a
-  caller from also writing `store.WriteCheckpoint` for the same run.
+  exported type rather than `internal/graph`'s own, and a fork reads its source
+  outside the transaction that claims its destination.
 - `internal/scope` is the review stage's scope lens, not a tenth stage: every
   changed line should trace to the recorded intent, and P2 fixes the list at
   nine. It ships on and has no off switch, which is why it is shipped guidance

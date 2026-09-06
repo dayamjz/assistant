@@ -96,9 +96,14 @@ var schema = []migration{
 			) STRICT`,
 			`CREATE INDEX round_run ON round(run_id, id)`,
 
-			// One row per run, rewritten in place. It is not a run's
-			// position; migration 5 below adds the record that is. What this
-			// table is and is not for is on the Checkpoint type.
+			// One row per run, rewritten in place. It was never a run's
+			// position; migration 5 below adds the record that is, and
+			// migration 6 seals this one. It has no Go surface: no accessor
+			// selects from it or inserts into it, and none may be added.
+			//
+			// The table itself stays because a migration may not remove one,
+			// which verifyAdditive enforces and TestMigrationRefusesNonAdditiveChanges
+			// holds. Migration 6 is the removal this schema can express.
 			`CREATE TABLE checkpoint (
 				run_id        TEXT PRIMARY KEY REFERENCES run(id),
 				state         BLOB NOT NULL,
@@ -249,6 +254,42 @@ var schema = []migration{
 				written_at TEXT NOT NULL,
 				PRIMARY KEY (run, seq)
 			) STRICT`,
+		},
+	},
+	{
+		version: 6,
+		name:    "seal the one-row checkpoint",
+		statements: []string{
+			// PRD section 8 names one record for where a run stands, the
+			// history migration 5 added, and says there may not be a second:
+			// no row per run rewritten in place holding the same state,
+			// position, and open decision beside it. The checkpoint table
+			// migration 1 created is that second record, and this is where it
+			// stops being one.
+			//
+			// The removal is a seal rather than a DROP because a migration may
+			// not remove a table. That rule is PRD section 8's other schema
+			// rule, verifyAdditive enforces it against the catalog, and
+			// TestMigrationRefusesNonAdditiveChanges holds it, so a drop here
+			// would have to weaken the guard that protects every other table's
+			// rows to retire one that has none.
+			//
+			// What the trigger buys is that the row cannot come back by
+			// accident. The Go surface that read and wrote this table is gone,
+			// so a caller would have to add new SQL to write one, and this
+			// makes that write fail loudly at the database rather than quietly
+			// give a run a second answer to a question that has an owner. It
+			// is not a guarantee against a later migration: one that dropped
+			// this trigger would unseal the table, which is a deliberate act
+			// and visible in the migration list as one.
+			//
+			// Only INSERT is refused. The table is empty and no row can be
+			// created, so UPDATE and DELETE have nothing to act on.
+			`CREATE TRIGGER checkpoint_is_not_a_record
+				BEFORE INSERT ON checkpoint
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a run''s position is the checkpoint history, and the checkpoint table is not a record');
+				END`,
 		},
 	},
 }

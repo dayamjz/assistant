@@ -26,9 +26,15 @@
 // is what makes the highest sequence the run's own continuation rather than
 // wherever a second caller's write happened to land, and it is decided under
 // the same serialization that assigns that sequence. A run's position is this
-// history and nothing else, which is why Checkpoint is not in either list
-// above: PRD section 8 does not name that record, nothing writes or reads it
-// outside tests, and its own comment says what that leaves it.
+// history and nothing else.
+//
+// PRD section 8 says there may not be a second record holding the same
+// position, and migration 1's checkpoint table was it. It has no accessor: no
+// type, no read, no write, and none may be added. The table is still declared
+// because a migration may not remove one, so migration 6 seals it with a
+// trigger that refuses an insert instead. That refusal is what a caller adding
+// new SQL for it would meet, and it is not a guarantee against a later
+// migration that dropped the trigger.
 //
 // # The gate ownership index
 //
@@ -215,8 +221,8 @@
 // rather than contending for the database lock, and a read-modify-write done
 // inside one transaction cannot interleave with another writer's. That is what
 // makes the sequence AppendTaskEvent assigns dense with no duplicates, and the
-// revisions SetTaskState and WriteCheckpoint assign strictly increasing, under
-// any number of concurrent callers. It is also what makes
+// revisions SetTaskState assigns strictly increasing, under any number of
+// concurrent callers. It is also what makes
 // AppendGraphCheckpoint's anchor decision and the sequence it assigns one step
 // rather than two, which is the whole of what that accessor is for. The reader
 // pool is unbounded and carries queries only.

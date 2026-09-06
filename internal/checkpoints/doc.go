@@ -95,12 +95,11 @@
 // that point yet, and the fork is refused with graph.ErrNoSuchCheckpoint, which
 // is what the in-memory store answers at the same moment.
 //
-// A run's position has one owner, and it is this history. store.WriteCheckpoint
-// is still there and still writes the one-row record PRD section 8 does not
-// name, and nothing stops a caller from writing both for one run and ending up
-// with two answers. Nothing in this repository writes or reads it outside
-// tests, which is an absence rather than a mechanism, and dropping the table is
-// a migration that has not been made.
+// A run's position has one owner, and it is this history. The one-row record
+// PRD section 8 does not name has no accessor left in internal/store, so there
+// is no longer a second thing a caller could write for the same run, and the
+// table it used to live in refuses a row. What that leaves is a caller writing
+// its own position somewhere else entirely, which no mechanism here can see.
 //
 // Nothing prunes. A run's history grows by a row for every node it executes and
 // one more for every segment that claims it, and the three bounds
