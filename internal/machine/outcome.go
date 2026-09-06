@@ -8,6 +8,24 @@ import (
 
 // Outcome is what a driving agent reads to decide what to do next. The set is
 // closed, and every member is one row of the table below.
+//
+// PRD section 9's machine interface names four: checks-passed, passed, and
+// failure and cancellation, which it requires to be terminal and to carry a
+// next action. This set has six, and the two additions are here for one
+// reason: that list describes what a BLOCKING call answers with, and a
+// blocking call cannot return while the run is still moving or before it has
+// been asked anything.
+//
+// OutcomeDecision is the first addition. The section makes a start or a
+// response block "until the next decision point or a terminal outcome", so a
+// decision point is an answer it names without naming an outcome for.
+// OutcomeExecuting is the second, and it exists for the reads the section's
+// contract does not cover: reporting one run, a status, and attaching to a run
+// this service is already advancing, none of which wait.
+//
+// That is a deviation from the specification, and it is recorded here rather
+// than closed quietly: it is a finding to raise against section 9's outcome
+// list, not a licence this comment grants. Nothing here edits the PRD.
 type Outcome string
 
 const (
@@ -47,11 +65,25 @@ const (
 	// OutcomeCancelled is a run a person ended at a hold. It is terminal, and
 	// the work is not undone: the run stopped.
 	OutcomeCancelled Outcome = "cancelled"
+	// OutcomeExecuting is a run that is advancing right now. It is not a
+	// failure and not terminal, and no decision is open: the run is between
+	// two of them, in a stage body that has not finished.
+	//
+	// Only a read reaches it, because a blocking call does not return until
+	// the run has stopped. Attaching to a run another call is already
+	// advancing is the one that reaches it deliberately - asking where a run
+	// stands is answered by saying that it is moving - and reporting one run
+	// or a branch's status reaches it whenever a segment is in flight.
+	//
+	// A caller does not answer it. There is nothing to answer, and an agent
+	// that read it as a decision would try.
+	OutcomeExecuting Outcome = "executing"
 )
 
 // outcomes is the closed set in the order the table above declares them.
 var outcomes = []Outcome{
 	OutcomeDecision, OutcomeChecksPassed, OutcomePassed, OutcomeFailed, OutcomeCancelled,
+	OutcomeExecuting,
 }
 
 // Outcomes returns the closed set. The result is a copy, so a caller cannot
@@ -69,7 +101,7 @@ func (o Outcome) Terminal() bool {
 	switch o {
 	case OutcomeChecksPassed, OutcomePassed, OutcomeFailed, OutcomeCancelled:
 		return true
-	case OutcomeDecision:
+	case OutcomeDecision, OutcomeExecuting:
 		return false
 	default:
 		return false
@@ -138,7 +170,13 @@ func outcomeOfExecution(status graph.Status, state graph.State) Outcome {
 		return OutcomeChecksPassed
 	case graph.StatusRoundsExhausted, graph.StatusBudgetExhausted, graph.StatusConverged:
 		return OutcomeFailed
-	case graph.StatusRunning, graph.StatusInvalid:
+	case graph.StatusRunning:
+		// internal/graph writes this after every node that neither halts nor
+		// ends the run, so it is what a checkpoint carries for the whole of a
+		// segment. A read that finds one has found a run in flight, which is
+		// the opposite of a run that ended without a verdict.
+		return OutcomeExecuting
+	case graph.StatusInvalid:
 		return OutcomeFailed
 	default:
 		return OutcomeFailed
@@ -154,6 +192,7 @@ var nextActions = map[Outcome]string{
 	OutcomePassed:       "Nothing. The change is merged or closed.",
 	OutcomeFailed:       "Read the reason. A run a bound parked is taken further by forking it or by giving it more budget; a run that could not proceed needs the failure fixed and a fresh run.",
 	OutcomeCancelled:    "Nothing was undone. Start a fresh run when the change is ready again.",
+	OutcomeExecuting:    "Nothing yet. Attach to the run to wait for its next decision, or read it again in a moment.",
 }
 
 // NextAction is what to do about a run that stopped with this outcome. Every

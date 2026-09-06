@@ -15,6 +15,7 @@ import (
 	"github.com/dayamjz/assistant/internal/cli"
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/machine"
+	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/service"
 	"github.com/dayamjz/assistant/internal/stages"
 	"github.com/dayamjz/assistant/internal/store"
@@ -178,3 +179,14 @@ type fixedFactory struct{ runner agents.Runner }
 func (f fixedFactory) Name() string { return f.runner.Name() }
 
 func (f fixedFactory) New(context.Context, []string) (agents.Runner, error) { return f.runner, nil }
+
+// openStore opens a home's database directly, for a test that has to put a
+// record where only the service would otherwise write one.
+func openStore(t *testing.T, h *home.Home) *store.Store {
+	t.Helper()
+	records, err := store.Open(t.Context(), h.Database(), store.WithRedactor(redact.New()))
+	if err != nil {
+		t.Fatalf("opening the store: %v", err)
+	}
+	return records
+}

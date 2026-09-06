@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"strings"
 
@@ -43,6 +44,13 @@ func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 	if answer != "" && cancel {
 		return nil, usagef("--answer and --cancel are two different things to do with one run; pass one")
 	}
+	if acting := actingOnTheRunInFlight(answer, cancel); acting != "" {
+		for _, name := range []string{"intent", "intent-supplied", "skip"} {
+			if flagWasSet(in.flags, name) {
+				return nil, usagef("%s acts on the run this branch already has, and --%s is for starting one; pass one", acting, name)
+			}
+		}
+	}
 	// An intent given with nothing said about its standing is acceptance
 	// criteria, because an intent somebody stated is one somebody stated and
 	// defaulting the other way would leave a run holding a contract nobody was
@@ -72,6 +80,24 @@ func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 		Skip:           splitList(skip),
 	}, &run)
 	return run, err
+}
+
+// actingOnTheRunInFlight names the flag that acts on a run this branch already
+// has, empty when the command is starting or attaching to one.
+//
+// It is what tells the flags that start a run apart from the two that act on
+// one already running. A caller who writes both has asked for two different
+// things at once, and taking one and discarding the other with nothing said is
+// the failure this refuses: explicit input is either acted on or refused.
+func actingOnTheRunInFlight(answer string, cancel bool) string {
+	switch {
+	case cancel:
+		return "--cancel"
+	case answer != "":
+		return "--answer"
+	default:
+		return ""
+	}
 }
 
 // answerDecision answers the branch's active run. The run is found the same
@@ -126,8 +152,13 @@ func (in *invocation) activeRun(ctx context.Context, working, verb string) (stri
 //
 // It is one of the two verbs that answer when the service is down, because
 // that is exactly when a person asks. What the service knows comes from the
-// service, and a service that does not answer leaves its own field saying so
-// rather than failing the report.
+// service, and a service that could not be reached leaves its own field saying
+// so rather than failing the report.
+//
+// Not reaching the service and being refused by it are different answers. A
+// refusal came from a service that is running, so it is reported as a failure
+// rather than as an absence; only a socket that could not be dialled is the
+// service being down.
 func reportStatus(ctx context.Context, in *invocation) (any, error) {
 	if err := in.parseFlags("status", func(*flag.FlagSet) {}); err != nil {
 		return nil, err
@@ -140,6 +171,13 @@ func reportStatus(ctx context.Context, in *invocation) (any, error) {
 	if err := in.callService(ctx, ipc.MethodStatus, machine.StatusRequest{
 		Working: machine.Working{WorkingPath: working},
 	}, &status); err != nil {
+		if !errors.Is(err, errNoService) {
+			// The service answered, and what it answered was a refusal. It is
+			// reported as one: saying the service is not running would be this
+			// command asserting the opposite of the one fact it was asked
+			// for, and about the only thing that could have told it.
+			return nil, err
+		}
 		return in.localStatus(working, err), nil
 	}
 	return status, nil

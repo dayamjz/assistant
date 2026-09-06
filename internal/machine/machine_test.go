@@ -75,12 +75,38 @@ func TestEveryOutcomeSaysWhatToDoNext(t *testing.T) {
 	}
 }
 
-func TestOnlyADecisionIsNotTerminal(t *testing.T) {
+// The two outcomes a run can be answered or read past are the two that are not
+// terminal: a decision waits for an answer, and an executing run is between
+// two of them. Everything else has ended.
+func TestOnlyADecisionAndAnExecutingRunAreNotTerminal(t *testing.T) {
 	t.Parallel()
+	moving := map[machine.Outcome]bool{
+		machine.OutcomeDecision:  true,
+		machine.OutcomeExecuting: true,
+	}
 	for _, outcome := range machine.Outcomes() {
-		terminal := outcome != machine.OutcomeDecision
-		if outcome.Terminal() != terminal {
+		if outcome.Terminal() == moving[outcome] {
 			t.Fatalf("%s reports Terminal %v", outcome, outcome.Terminal())
+		}
+	}
+}
+
+// A checkpoint that says a run is running is a run in flight, not one that
+// ended without a verdict. internal/graph writes that status after every node
+// that neither halts nor ends the run, so it is what a read of a run mid
+// segment finds.
+func TestARunInFlightIsReportedAsExecutingRatherThanFailed(t *testing.T) {
+	t.Parallel()
+	for _, record := range []store.RunStatus{store.RunPending, store.RunRunning, store.RunHeld} {
+		got := machine.OutcomeOf(record, graph.StatusRunning, graph.State{})
+		if got != machine.OutcomeExecuting {
+			t.Fatalf("a %s run standing at a running checkpoint reports %s, want executing", record, got)
+		}
+		if got.Terminal() {
+			t.Fatalf("%s reports that the run has ended", got)
+		}
+		if got.NextAction() == "" {
+			t.Fatalf("%s says nothing about what to do next", got)
 		}
 	}
 }

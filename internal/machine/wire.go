@@ -7,6 +7,27 @@ import (
 	"github.com/dayamjz/assistant/internal/store"
 )
 
+// Version is what --version answers. It is a shape of its own so that the
+// machine interface's one-document-per-invocation contract holds for it too: a
+// caller decoding standard output gets a document whatever it asked for.
+type Version struct {
+	// Version is the build this binary reports, exactly as the process was
+	// given it. It says nothing about a service, which may be a different
+	// build; Health carries that one.
+	Version string `json:"version"`
+}
+
+// Help is what --help answers: the command list, or one verb's own flags. It
+// travels as a document for the same reason Version does.
+//
+// The text is what a person reads, carried as written. Nothing here models the
+// commands as data: the verb table is internal/cli's, and a second shape for
+// it here would be a second owner of the surface.
+type Help struct {
+	// Usage is the text, with its line breaks as they were written.
+	Usage string `json:"usage"`
+}
+
 // Health is the answer to a readiness check. PRD section 8 makes launch and
 // readiness different states and says only a real answer to this proves the
 // second, so a caller that wants to know whether the service is up asks for

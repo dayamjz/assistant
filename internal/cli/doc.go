@@ -53,7 +53,9 @@
 // normal decision points, operational failure, and incorrect usage. A run that
 // stopped to ask something is a success, because the answer goes back through
 // the same surface and an agent that read a decision as a failure would stop
-// driving exactly when it should carry on.
+// driving exactly when it should carry on. A run that is still advancing is a
+// success for the same reason, and internal/machine's outcome table says why
+// that is a member of its own rather than one of the four PRD section 9 names.
 //
 // The structured answer goes to standard output and progress goes to standard
 // error, so a caller redirecting standard output gets documents and nothing
@@ -62,7 +64,9 @@
 //
 // Asking for the version or for the help is answered rather than refused: both
 // go to standard output and exit successfully, because incorrect usage is what
-// the third code means and neither of those is that.
+// the third code means and neither of those is that. Both honour --json too,
+// as machine.Version and machine.Help, so the one-document-per-invocation
+// contract above holds for them rather than having two exceptions in it.
 //
 // --json and --home apply to every verb and are accepted before it or after
 // it. They are declared on each verb's own flag set as well as read ahead of

@@ -97,6 +97,18 @@ func TestARunAdvancesInOnePlaceAtATime(t *testing.T) {
 	if attached.Record.Status != store.RunRunning {
 		t.Fatalf("the attached run is recorded as %s, want running", attached.Record.Status)
 	}
+	// And it is reported as what it is. A run advancing normally is not a run
+	// that ended without a verdict, and telling the caller it failed would be
+	// the surface asserting the opposite of the truth about a healthy run.
+	if attached.Outcome != machine.OutcomeExecuting {
+		t.Fatalf("a run inside a stage body reports %s, want executing", attached.Outcome)
+	}
+	if attached.Outcome.Terminal() {
+		t.Fatalf("%s reports that a run still inside a stage body has ended", attached.Outcome)
+	}
+	if attached.Decision != nil {
+		t.Fatalf("a run with no decision open offers one to answer: %+v", attached.Decision)
+	}
 
 	let()
 	select {

@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"io"
 	"strings"
 	"testing"
 
@@ -107,4 +108,30 @@ func TestAControlCharacterInAFixSummaryDoesNotReachTheTerminal(t *testing.T) {
 			t.Fatalf("a line break in the summary broke the line it is part of:\n%s", rendered)
 		}
 	}
+}
+
+// A run that is advancing is reported as advancing. Telling a caller that a
+// healthy run failed is the surface asserting the opposite of the truth, and
+// the exit code follows the answer.
+func TestARunInFlightIsNotReportedAsAFailure(t *testing.T) {
+	t.Parallel()
+	var out bytes.Buffer
+	answer := machine.Run{
+		Record:     store.Run{ID: "abc", Branch: "work", Status: store.RunRunning},
+		Outcome:    machine.OutcomeExecuting,
+		NextAction: machine.OutcomeExecuting.NextAction(),
+	}
+	if code := renderFor(&out, answer); code != machine.ExitOK {
+		t.Fatalf("a run in flight exits %s, want ok", code)
+	}
+	if !strings.Contains(out.String(), string(machine.OutcomeExecuting)) {
+		t.Fatalf("the rendering does not say the run is executing:\n%s", out.String())
+	}
+}
+
+// renderFor drives the rendering an answer gets and returns the exit code, so
+// a test asserts what a caller sees rather than a value on its way there.
+func renderFor(w *bytes.Buffer, answer any) machine.Code {
+	in := &invocation{env: Environment{Stdout: w, Stderr: io.Discard}}
+	return render(in, answer, nil)
 }

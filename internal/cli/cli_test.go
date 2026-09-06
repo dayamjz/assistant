@@ -689,3 +689,135 @@ func TestAVerbThatTakesNoArgumentRefusesOne(t *testing.T) {
 		}
 	}
 }
+
+// The machine interface is one document per invocation on standard output,
+// whatever the caller asked about. Version and help are answers rather than
+// failures, so they honour it too: an agent that decodes standard output every
+// time must not get a decode error from the two commands it tries first.
+func TestVersionAndHelpAnswerAsDocumentsUnderJSON(t *testing.T) {
+	t.Parallel()
+	h := newHome(t)
+	subject := newSubject(t)
+
+	got := run(t, h, subject, "--json", "--version")
+	if got.code != machine.ExitOK {
+		t.Fatalf("--json --version exited %s:\n%s%s", got.code, got.stdout, got.stderr)
+	}
+	var version machine.Version
+	if err := json.Unmarshal([]byte(got.stdout), &version); err != nil {
+		t.Fatalf("--json --version did not write a document: %v\n%s", err, got.stdout)
+	}
+	if version.Version == "" {
+		t.Fatalf("--json --version wrote a document naming no build: %s", got.stdout)
+	}
+
+	for _, args := range [][]string{{"--json", "--help"}, {"--json", "-h"}, {"runs", "-h", "--json"}} {
+		got := run(t, h, subject, args...)
+		if got.code != machine.ExitOK {
+			t.Fatalf("assistant %s exited %s:\n%s%s", strings.Join(args, " "), got.code, got.stdout, got.stderr)
+		}
+		var help machine.Help
+		if err := json.Unmarshal([]byte(got.stdout), &help); err != nil {
+			t.Fatalf("assistant %s did not write a document: %v\n%s", strings.Join(args, " "), err, got.stdout)
+		}
+		if help.Usage == "" {
+			t.Fatalf("assistant %s wrote a document with no usage in it: %s", strings.Join(args, " "), got.stdout)
+		}
+	}
+
+	// The rendering a person reads is unchanged: still the text, on standard
+	// output, exiting successfully.
+	plain := run(t, h, subject, "--help")
+	if plain.code != machine.ExitOK || !strings.Contains(plain.stdout, "Commands:") {
+		t.Fatalf("assistant --help exited %s:\n%s", plain.code, plain.stdout)
+	}
+}
+
+// A refusal the service answered is proof the service is up. Reporting it as a
+// service that is not running inverts the one fact the command was asked for,
+// and it is the verb whose job is to say what is wrong.
+func TestStatusReportsARefusalRatherThanAServiceThatIsNotRunning(t *testing.T) {
+	requiresIdentifiedPeer(t)
+	h := newHome(t)
+	subject := newSubject(t)
+	serve(t, h)
+
+	if got := run(t, h, subject, "init"); got.code != machine.ExitOK {
+		t.Fatalf("assistant init exited %s:\n%s%s", got.code, got.stdout, got.stderr)
+	}
+	started := run(t, h, subject, "--json", "--intent", "a change held at its first stage")
+	if started.code != machine.ExitOK {
+		t.Fatalf("starting a run exited %s:\n%s", started.code, started.stdout)
+	}
+	runID := decodeRun(t, started.stdout).Record.ID
+
+	// Make the run's position unreadable, which is a refusal the service
+	// raises while it is running and answering.
+	records := openStore(t, h)
+	latest, err := records.LatestGraphCheckpoint(t.Context(), runID)
+	if err != nil {
+		t.Fatalf("reading the run's tip: %v", err)
+	}
+	if _, err := records.AppendGraphCheckpoint(t.Context(), runID, runID, latest.Seq, []byte("not a checkpoint")); err != nil {
+		t.Fatalf("appending an undecodable checkpoint: %v", err)
+	}
+	if err := records.Close(); err != nil {
+		t.Fatalf("closing the store: %v", err)
+	}
+
+	// The service is up, and says so.
+	if got := run(t, h, subject, "--json", "service", "status"); got.code != machine.ExitOK {
+		t.Fatalf("service status exited %s:\n%s", got.code, got.stdout)
+	}
+
+	got := run(t, h, subject, "--json", "status")
+	if got.code != machine.ExitFailure {
+		t.Fatalf("status exited %s for a refusal the service answered, want failure:\n%s%s",
+			got.code, got.stdout, got.stderr)
+	}
+	var failure machine.Failure
+	if err := json.Unmarshal([]byte(got.stdout), &failure); err != nil {
+		t.Fatalf("status did not write a document: %v\n%s", err, got.stdout)
+	}
+	if !strings.Contains(failure.Error, runID) {
+		t.Fatalf("the refusal does not name the run whose position could not be read: %s", failure.Error)
+	}
+	if strings.Contains(failure.Error, "not running") {
+		t.Fatalf("status reports a running service as not running: %s", failure.Error)
+	}
+}
+
+// A flag that starts a run and a flag that acts on the run already in flight
+// are two different things to ask for. Taking one and discarding the other
+// with nothing said is what this refuses.
+func TestAnsweringOrEndingARunRefusesTheFlagsThatStartOne(t *testing.T) {
+	t.Parallel()
+	h := newHome(t)
+	subject := newSubject(t)
+
+	for _, args := range [][]string{
+		{"--answer", "approved", "--intent", "a change with acceptance criteria"},
+		{"--answer", "approved", "--intent-supplied=false"},
+		{"--answer", "approved", "--skip", "test,lint"},
+		{"--cancel", "--intent", "a change with acceptance criteria"},
+		{"--cancel", "--skip", "test,lint"},
+	} {
+		got := run(t, h, subject, args...)
+		if got.code != machine.ExitUsage {
+			t.Errorf("assistant %s exited %s, want incorrect usage:\n%s%s",
+				strings.Join(args, " "), got.code, got.stdout, got.stderr)
+		}
+	}
+
+	// Each of them on its own is still accepted, so what was refused is the
+	// combination and not the flag.
+	for _, args := range [][]string{
+		{"--answer", "approved"},
+		{"--cancel"},
+		{"--intent", "a change with acceptance criteria"},
+	} {
+		if got := run(t, h, subject, args...); got.code == machine.ExitUsage {
+			t.Errorf("assistant %s is refused as incorrect usage:\n%s", strings.Join(args, " "), got.stderr)
+		}
+	}
+}

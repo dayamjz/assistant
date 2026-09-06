@@ -439,13 +439,11 @@ func render(in *invocation, answer any, err error) machine.Code {
 	env := in.env
 	var version versionAnswer
 	if errors.As(err, &version) {
-		writeln(env.Stdout, version.version)
-		return machine.ExitOK
+		return in.answer(machine.Version{Version: version.version}, version.version)
 	}
 	var help helpAnswer
 	if errors.As(err, &help) {
-		writeln(env.Stdout, help.text)
-		return machine.ExitOK
+		return in.answer(machine.Help{Usage: help.text}, help.text)
 	}
 	encoder := machine.NewEncoder(env.Stdout)
 	if err != nil {
@@ -480,6 +478,25 @@ func render(in *invocation, answer any, err error) machine.Code {
 	}
 	readOut(env.Stdout, answer)
 	return exitFor(answer)
+}
+
+// answer writes something that is neither a failure nor a verb's result: the
+// version and the help, which are asked for rather than produced by a verb.
+//
+// Both go to standard output and exit successfully, and both honour --json,
+// because the contract is one document per invocation whatever the caller
+// asked about. A caller decoding standard output would otherwise get a decode
+// error from the two commands it is most likely to try first.
+func (in *invocation) answer(document any, text string) machine.Code {
+	if in.json {
+		if err := machine.NewEncoder(in.env.Stdout).Encode(document); err != nil {
+			writeln(in.env.Stderr, err)
+			return machine.ExitFailure
+		}
+		return machine.ExitOK
+	}
+	writeln(in.env.Stdout, text)
+	return machine.ExitOK
 }
 
 // exitFor is the code an answer ends with. A run that stopped for a decision
