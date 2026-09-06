@@ -18,11 +18,10 @@ import (
 // durability layer declares are a run's whole history and a fork from a point
 // in it, and a row rewritten in place answers neither.
 //
-// Nothing in this repository writes or reads this record outside this package's
-// own tests. It is still here because dropping a shipped table is a migration
-// rather than an edit, and that removal is its own change; until it lands, a
-// caller that writes one gives its run a second answer to a question that has
-// an owner.
+// Nothing in this repository writes or reads this record outside tests. It is
+// still here because dropping a shipped table is a migration rather than an
+// edit, and that removal is its own change; until it lands, a caller that
+// writes one gives its run a second answer to a question that has an owner.
 type Checkpoint struct {
 	// RunID names the run.
 	RunID string

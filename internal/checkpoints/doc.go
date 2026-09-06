@@ -99,8 +99,8 @@
 // is still there and still writes the one-row record PRD section 8 does not
 // name, and nothing stops a caller from writing both for one run and ending up
 // with two answers. Nothing in this repository writes or reads it outside
-// internal/store's own tests, which is an absence rather than a mechanism, and
-// dropping the table is a migration that has not been made.
+// tests, which is an absence rather than a mechanism, and dropping the table is
+// a migration that has not been made.
 //
 // Nothing prunes. A run's history grows by a row for every node it executes and
 // one more for every segment that claims it, and the three bounds

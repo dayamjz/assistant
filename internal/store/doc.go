@@ -27,9 +27,8 @@
 // wherever a second caller's write happened to land, and it is decided under
 // the same serialization that assigns that sequence. A run's position is this
 // history and nothing else, which is why Checkpoint is not in either list
-// above: PRD section 8 does not name that record, nothing here writes or
-// reads it outside this package's tests, and its own comment says what that
-// leaves it.
+// above: PRD section 8 does not name that record, nothing writes or reads it
+// outside tests, and its own comment says what that leaves it.
 //
 // # The gate ownership index
 //

@@ -110,9 +110,8 @@ Each has cost this repository more than one round of review.
   which is a different record from the one-row `checkpoint`: opaque payloads
   indexed by run and sequence, with the anchor a property of the request that no
   column holds. That history is a run's position; the one-row `checkpoint` is
-  not, the PRD does not name it, and nothing writes or reads it outside this
-  package's tests, so do not wire it back in. Read its `doc.go` before changing
-  any of that.
+  not, the PRD does not name it, and nothing writes or reads it outside tests,
+  so do not wire it back in. Read its `doc.go` before changing any of that.
 - `internal/safety` owns whether a branch update may proceed and on what anchor.
   `internal/vcs` stays mechanism only, so a lease, an incorporation check, or a
   force decision belongs in `internal/safety` even when it would be shorter to
