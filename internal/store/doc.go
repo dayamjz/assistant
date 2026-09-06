@@ -217,8 +217,8 @@
 // revisions SetTaskState and WriteCheckpoint assign strictly increasing, under
 // any number of concurrent callers. It is also what makes
 // AppendGraphCheckpoint's anchor decision and the sequence it assigns one step
-// rather than two, which is the whole of what that accessor is for. The reader pool is unbounded and carries
-// queries only.
+// rather than two, which is the whole of what that accessor is for. The reader
+// pool is unbounded and carries queries only.
 //
 // The cost is that writes across the whole store serialize, including writes to
 // unrelated runs. That is deliberate at this scale: one service owns one home,
@@ -261,10 +261,12 @@
 //
 // # What this package does not do
 //
-// It does not interpret what it stores. A finding set, a graph state, and a
-// fixer payload are opaque bytes, because internal/findings and internal/graph
-// own those vocabularies and a store that also understood them would be a
-// second owner of the same contract.
+// It does not interpret what it stores. A finding set, a graph state, a graph
+// checkpoint, and a fixer payload are opaque bytes, because internal/findings
+// and internal/graph own those vocabularies and a store that also understood
+// them would be a second owner of the same contract. What serializes a
+// checkpoint into one of those payloads is internal/checkpoints, which is
+// neither of those packages for that reason.
 //
 // It does not create the home directory layout, run git, or decide what a run
 // or a stage is allowed to do next. It records what happened and refuses what

@@ -236,10 +236,10 @@ Each has cost this repository more than one round of review.
   this package's: that is `internal/checkpoints`.
 - `internal/checkpoints` is the durable `graph.CheckpointStore`, and the only
   place outside `internal/graph` that serializes a `graph.Checkpoint`. It
-  exists as its own package because `internal/store` must not learn what a checkpoint means and
-  `internal/graph` must not learn about a database, so the adapter belongs to
-  neither. The anchor is never decided here: `Write` hands it to
-  `store.AppendGraphCheckpoint`, which decides it in the transaction that
+  exists as its own package because `internal/store` must not learn what a
+  checkpoint means and `internal/graph` must not learn about a database, so the
+  adapter belongs to neither. The anchor is never decided here: `Write` hands
+  it to `store.AppendGraphCheckpoint`, which decides it in the transaction that
   assigns the sequence, because a check made here and a write made there is
   exactly the interleaving P6 exists to stop. Honouring the anchor is required
   of every implementation, so the behavioural suite in `store_test.go` runs

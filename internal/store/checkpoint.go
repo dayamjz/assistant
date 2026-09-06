@@ -8,10 +8,14 @@ import (
 	"time"
 )
 
-// Checkpoint is the authoritative position of a run's graph, written after
-// every node. There is one per run, and writing a new one replaces the old:
-// a checkpoint answers where the run is now, and a history of where it has been
-// is what the rounds and the events are for.
+// Checkpoint is PRD section 8's authoritative checkpoint record: state,
+// position, and any open decision. There is one per run, and writing a new one
+// replaces the old, so it carries no history of where the run has been.
+//
+// It is not what a graph-driven run's position is read from. That is the
+// checkpoint history GraphCheckpoint indexes, which PRD section 7's durability
+// layer needs and a row rewritten in place cannot answer; the package comment
+// says which record owns that position.
 type Checkpoint struct {
 	// RunID names the run.
 	RunID string

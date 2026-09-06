@@ -142,9 +142,8 @@
 //
 // It does not own three of the records PRD section 8 lists beside the run
 // lifecycle in the same module row. Stage results, rounds, and holds are
-// store.UpsertStageResult, store.AppendRound, and store.RegisterHold today,
-// and a
-// hold in particular is a record with rules of its own - keyed, idempotent to
+// store.UpsertStageResult, store.AppendRound, and store.RegisterHold today, and
+// a hold in particular is a record with rules of its own - keyed, idempotent to
 // register, and closed only by an explicit resolution - which a run's status
 // cannot answer for. Service.Hold records that a run is waiting and nothing
 // about what is being decided.
