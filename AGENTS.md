@@ -70,6 +70,13 @@ Each has cost this repository more than one round of review.
 
 - Go, formatted with `gofmt`. `make check` is what CI runs and what the gate
   runs; keep it green.
+- `.no-mistakes.yaml` carries the gate's own review instructions, and it is
+  executable configuration the gate reads from the default branch under P7, so
+  a line there steers every future run in this repository. An instruction may
+  claim only what the mechanism enforces, and where a guarantee is partial it
+  says what it does not cover: one that overstates manufactures confident wrong
+  findings for as long as it stands. Change it on a branch of its own, never at
+  a document gate, where review is already past and no reviewer would see it.
 - Every exported symbol carries a contract, so give it a doc comment that states
   the contract rather than restating the name.
 - Prefer a small, testable pure core with the side effects at the edges. The

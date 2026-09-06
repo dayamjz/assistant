@@ -33,8 +33,8 @@ type Report struct {
 	// Revision is the commit the stage read, in the stage's own words. A
 	// review report has to carry the commit it reviewed, and
 	// ParseReviewReport refuses one that is not the commit the run asked
-	// about; Validate requires nothing of it, because the other eight stages
-	// answer to no such rule.
+	// about; Validate requires nothing of it, because no other stage answers
+	// to such a rule.
 	Revision string `json:"revision,omitempty"`
 	// Read is the evidence set: the repository-relative paths the stage
 	// actually read. It is what ParseReviewReport binds a review's findings
