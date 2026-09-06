@@ -127,7 +127,8 @@
 //
 // The containment question itself is not answered here. Ancestry is the seam,
 // and resolving a process tree and knowing which runs are active are both state
-// this package does not own, so nothing in this repository implements it yet.
+// this package does not own, so the answer belongs to whoever holds it:
+// internal/service implements it from the process groups it started stages in.
 // A server cannot be built without one: a default would serve restricted
 // methods to a validating agent, which is the failure the rule exists to
 // prevent. Where a fact cannot be established, the request is refused. An

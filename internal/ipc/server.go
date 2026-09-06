@@ -118,9 +118,10 @@ type Containment struct {
 
 // Ancestry answers whether the process holding a connection descends from an
 // active validation stage. It is the seam PRD section 9's containment rule
-// needs, and nothing in this repository implements it yet: resolving a process
-// tree and knowing which runs are still active are both state this package
-// does not own.
+// needs, and it is a seam rather than an implementation because resolving a
+// process tree and knowing which runs are still active are both state this
+// package does not own. internal/service implements it, from the process
+// groups it started stages in.
 //
 // It takes Credentials rather than a marker or a claimed identifier, because
 // authority comes from what the kernel attributes to the connection. An

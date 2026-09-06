@@ -209,8 +209,8 @@
 // question P14 gives to one.
 //
 // The redactor is supplied rather than taken from internal/vcs because that
-// package's own implementation is unexported today. When the redact module PRD
-// section 8 names exists, it is what callers pass.
+// package's own implementation is unexported. The redact module PRD section 8
+// names is internal/redact, and that is what callers pass.
 //
 // # Concurrency
 //

@@ -100,10 +100,10 @@
 //
 // # Credentials
 //
-// PRD section 8 gives credential removal to a redact module, which does not
-// exist yet. This package writes no redactor of its own, per P14: NewGitHub
-// requires a vcs.Redactor, the seam internal/vcs already declares, and every
-// piece of provider text that reaches a Refusal passes through it.
+// PRD section 8 gives credential removal to a redact module, which is
+// internal/redact. This package writes no redactor of its own, per P14:
+// NewGitHub requires a vcs.Redactor, the seam internal/vcs already declares,
+// and every piece of provider text that reaches a Refusal passes through it.
 //
 // Two structural measures sit under that, because a redactor is a filter and a
 // filter is a thing that can be handed the wrong pattern. A repository is

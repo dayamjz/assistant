@@ -5,10 +5,11 @@ import (
 )
 
 // WorkingCopy is the part of a working copy this package writes to and reads
-// from. It is an interface rather than a *vcs.Repository so that Remove can
-// name the operation internal/vcs does not carry yet without this package
-// growing a git invocation of its own; *vcs.Repository is the implementation
-// this product uses, and it satisfies this interface today.
+// from. It is an interface rather than a *vcs.Repository so that Remove could
+// name what it needed while internal/vcs did not carry it yet, without this
+// package growing a git invocation of its own; internal/vcs carries all of it
+// now, and *vcs.Repository is the implementation this product uses. See
+// Detacher for what the seam still buys.
 //
 // The surface is deliberately two methods wide. PRD principle P1 makes an
 // untouched origin the consent boundary, and an interface that cannot express
