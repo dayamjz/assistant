@@ -100,6 +100,19 @@
 // that a claim is refused unless the reviewer's own account of what it read
 // supports it, and that the account is on the record to be read across runs.
 //
+// The other limit is on how far the discriminator reaches, and it is PRD
+// section 5's own design rather than a shortfall against it: the PRD puts the
+// duty to cite on the reviewer, so citing is voluntary. The wholesale
+// declaration therefore forfeits only a finding that volunteers its reach,
+// through a Location naming a path or through Cites. A reviewer that declares
+// exactly the touched paths and reports a fix-eligible finding located inside
+// the change, whose reasoning rests on a caller it never read and never names,
+// is refused nothing, reports an empty Beyond, and is indistinguishable here
+// from one that read the diff and reasoned about nothing else. Refusing it
+// would mean judging what a finding's reasoning rests on, which is not in the
+// text this package reads, and would hold reviewers to a stricter rule than
+// the PRD states.
+//
 // # What this package does not promise
 //
 // The object extraction in ParseReport is a brace scan that tracks JSON string

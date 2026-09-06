@@ -229,8 +229,10 @@ func (r *claudeRunner) Fixer(ctx context.Context, resume string) (Fixer, error) 
 // only where this fixer holds the reference.
 //
 // None of this reaches P4. Runner.Run still passes no session in and keeps
-// none out, so a review invocation records SessionNone whatever it does; the
-// paragraphs here are about which fix rounds share one conversation.
+// none out, so a review invocation records SessionNone whatever it does, and
+// an invocation asking for a review shape is refused here rather than answered
+// from this conversation; the paragraphs here are about which fix rounds share
+// one conversation.
 type claudeFixer struct {
 	runner *claudeRunner
 
@@ -239,7 +241,9 @@ type claudeFixer struct {
 }
 
 // Apply runs one fix round in this session, opening it on the first round and
-// resuming it afterwards.
+// resuming it afterwards. An invocation asking for a review shape is refused
+// with ErrReviewInFixerSession before anything starts, so this session never
+// answers a review.
 func (f *claudeFixer) Apply(ctx context.Context, inv Invocation) (Result, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -268,7 +272,15 @@ func (f *claudeFixer) Reference() string {
 // then produced: one place decides what a round did with its session, and both
 // the record and the Fixer read that one decision.
 func (r *claudeRunner) invoke(ctx context.Context, purpose Purpose, inv Invocation, resume string, keep bool) (Result, string, error) {
-	if err := inv.Validate(); err != nil {
+	// keep is exactly the fact P4 turns on: this invocation's session outlives
+	// it. ValidateForFixer is Validate plus the refusal of a review shape
+	// there, so every session-carrying invocation passes through the rule
+	// rather than only the one exported entry point that makes them today.
+	validate := inv.Validate
+	if keep {
+		validate = inv.ValidateForFixer
+	}
+	if err := validate(); err != nil {
 		// Nothing started, so nothing cost anything and there is no record to
 		// write.
 		return Result{}, "", err

@@ -458,6 +458,36 @@ func TestADemandThatCannotBeAnsweredIsRefusedBeforeTheReviewer(t *testing.T) {
 	}
 }
 
+// TestEmptyIsTrueOnlyForADemandCarryingNothing pins the question a caller
+// outside this package asks instead of reading Demand's fields: whether a
+// demand was supplied at all. It is narrower than Validate, so a demand half
+// filled in answers false and is refused where none belongs rather than read
+// as absent.
+func TestEmptyIsTrueOnlyForADemandCarryingNothing(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		d    findings.Demand
+		want bool
+	}{
+		{"the zero demand", findings.Demand{}, true},
+		{"an empty touched list", findings.Demand{Touched: []string{}}, true},
+		{"a revision alone", findings.Demand{Revision: reviewedRevision}, false},
+		{"a blank revision alone", findings.Demand{Revision: "  "}, false},
+		{"touched paths alone", findings.Demand{Touched: []string{touchedPath}}, false},
+		{"only blank touched paths", findings.Demand{Touched: []string{"  "}}, false},
+		{"a demand that validates",
+			findings.Demand{Revision: reviewedRevision, Touched: []string{touchedPath}}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := tc.d.Empty(); got != tc.want {
+				t.Errorf("Demand.Empty is %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 // TestGuidanceNamesTheRevisionAndEveryTouchedPath checks that the reviewer is
 // told the things it will be held to, since a rule nobody stated is a trap
 // rather than a check.

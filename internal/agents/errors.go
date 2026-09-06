@@ -17,6 +17,14 @@ var (
 	// recorded, because a record whose purpose means nothing cannot answer the
 	// P4 question asked of invocation records.
 	ErrUnrecognizedPurpose = errors.New("agents: unrecognized invocation purpose")
+	// ErrReviewInFixerSession is returned when an invocation asking for
+	// ShapeReview reaches a fixer. P4 keeps reviewing and fixing in separate
+	// memory, and a Fixer is the only route to memory that survives a round,
+	// so a review answered there would be answered by the agent that just
+	// prescribed the fix it is checking. The invocation is refused before any
+	// process starts, never downgraded to another shape and never run with its
+	// result discarded.
+	ErrReviewInFixerSession = errors.New("agents: a review may not be answered in a fixer session")
 	// ErrNoAgent is returned by Resolve when no entry in the ordered list
 	// resolved to a runnable agent. It is a refusal before a run starts, not a
 	// degraded run: PRD section 10 requires the run to fail before its first

@@ -159,7 +159,7 @@ func (inv Invocation) Validate() error {
 	}
 	switch inv.Shape {
 	case ShapeText, ShapeReport:
-		if inv.Review.Revision != "" || len(inv.Review.Touched) != 0 {
+		if !inv.Review.Empty() {
 			return &invocationFieldError{
 				field:  "Review",
 				reason: "a review demand is only read for shape review, not for " + inv.Shape.String(),
@@ -192,4 +192,25 @@ func (inv Invocation) Validate() error {
 		}
 	}
 	return nil
+}
+
+// ValidateForFixer reports whether the invocation can be run as a fix round in
+// a session that outlives it. It is Validate and one rule more: ShapeReview
+// says the invocation is a review, and P4 keeps a review out of the memory a
+// fix round holds, so a review shape reaching a fixer is refused with
+// ErrReviewInFixerSession. The refusal is the shape's, whatever else about the
+// invocation is also wrong, and it happens before any process starts.
+//
+// The rule needs an entry point of its own because Validate cannot make it.
+// Both entry points ask Validate the same question and it cannot see which one
+// it is on, so ShapeReview on the shared Invocation type would otherwise be a
+// second way to say review that the split between Runner.Run and Fixer.Apply
+// does not reach. An adapter's fixer path asks this instead of Validate;
+// nothing else does.
+func (inv Invocation) ValidateForFixer() error {
+	if inv.Shape == ShapeReview {
+		return fmt.Errorf("%w: a %s invocation reached the fixer, which is the one "+
+			"invocation whose session survives the round", ErrReviewInFixerSession, inv.Shape)
+	}
+	return inv.Validate()
 }

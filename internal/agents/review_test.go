@@ -235,6 +235,79 @@ func TestAReviewDemandBelongsToTheReviewShapeAlone(t *testing.T) {
 	}
 }
 
+// TestAReviewShapeIsRefusedByTheFixer is P4 on the one path the type split
+// does not cover by itself. Fixer.Apply takes the same Invocation Runner.Run
+// takes, so a review spelled as a shape rather than as a purpose can be handed
+// to the entry point whose memory survives the round, which would seat the
+// agent that prescribed a fix as the reviewer checking it.
+//
+// The control is the same Invocation value: one thing differs, the entry point
+// it is given to, and through Runner.Run it is answered and bound as usual. So
+// the refusal is this rule firing rather than anything else about the
+// invocation or the reviewer's report.
+func TestAReviewShapeIsRefusedByTheFixer(t *testing.T) {
+	t.Parallel()
+	agent := standin.New(t, standin.Script{Steps: []standin.Step{{
+		Times: standin.Always,
+		Reply: standin.Report(crossFileReview(reviewedPath, unreviewedCaller)),
+	}}})
+	fixer, err := agents.OpenFixer(t.Context(), agent.Runner(), "a-session-an-earlier-fix-round-opened")
+	if err != nil {
+		t.Fatalf("opening the fixer session: %v", err)
+	}
+	inv := reviewInvocation(t)
+
+	if _, err := fixer.Apply(t.Context(), inv); !errors.Is(err, agents.ErrReviewInFixerSession) {
+		t.Fatalf("Fixer.Apply is %v, want ErrReviewInFixerSession", err)
+	}
+	if calls := agent.Calls(); len(calls) != 0 {
+		t.Fatalf("an agent was started for a review handed to the fixer, so the refusal "+
+			"came after the process rather than before it: %+v", calls)
+	}
+
+	result, err := agent.Runner().Run(t.Context(), agents.PurposeReview, inv)
+	if err != nil {
+		t.Fatalf("the same invocation should still be answerable session-free: %v", err)
+	}
+	if got := result.Report.Fixable(); len(got) != 1 {
+		t.Fatalf("the session-free review should have produced its finding, got %+v", got)
+	}
+	if len(agent.Calls()) != 1 {
+		t.Errorf("expected exactly the one agent the session-free review started, got %+v",
+			agent.Calls())
+	}
+}
+
+// TestTheFixerStillRunsAnOrdinaryFixRound is the other half of the guard's
+// discrimination: refusing the review shape does not refuse the shapes a fix
+// round is made of, and the round still opens the session it is for.
+func TestTheFixerStillRunsAnOrdinaryFixRound(t *testing.T) {
+	t.Parallel()
+	agent := standin.New(t, standin.Script{Steps: []standin.Step{{
+		Times: standin.Always,
+		Reply: standin.Text("applied the finding"),
+	}}})
+	fixer, err := agents.OpenFixer(t.Context(), agent.Runner(), "")
+	if err != nil {
+		t.Fatalf("opening the fixer session: %v", err)
+	}
+
+	result, err := fixer.Apply(t.Context(), agents.Invocation{
+		Prompt: "apply the review's findings",
+		Shape:  agents.ShapeText,
+		Dir:    t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("an ordinary fix round was refused: %v", err)
+	}
+	if result.Text != "applied the finding" {
+		t.Errorf("the fix round's text is %q, want what the agent printed", result.Text)
+	}
+	if fixer.Reference() == "" {
+		t.Error("the fix round should have opened the session it reported")
+	}
+}
+
 // equalStrings compares two path lists element by element.
 func equalStrings(got, want []string) bool {
 	if len(got) != len(want) {

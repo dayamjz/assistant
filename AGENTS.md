@@ -140,8 +140,10 @@ Each has cost this repository more than one round of review.
   keeps demoting an unsupported finding from reaching P3; and it is reachable
   only through that one entry point, so a report already normalized, stored, or
   built by hand cannot be bound. Read its `doc.go` before changing any of that,
-  and for the residual gap: the evidence set is the reviewer's own claim and no
-  path is resolved against a filesystem.
+  and for the residual gaps: the evidence set is the reviewer's own claim and no
+  path is resolved against a filesystem, and citing is voluntary by the PRD's
+  own design, so the wholesale-declaration forfeit bites only a finding that
+  volunteers its reach through a location or a citation.
 - `internal/agents` is the only package that starts an agent process. It owns
   the process tree, the per-invocation environment, and what is recorded about
   a call. P4 lives in its type split rather than in a rule callers follow:
@@ -157,12 +159,16 @@ Each has cost this repository more than one round of review.
   conformance probe in `capability_test.go`; a capability an adapter declares
   and no probe checks fails the conformance suite, which is what keeps a
   declaration from being a comment. `Resolve` refuses an adapter whose
-  declaration and type disagree in either direction. Reading agent output is
-  `internal/findings`' job and never a second parser here; the one choice this
-  package makes is `Shape`, and `ShapeReview` is the only one carrying a
-  `findings.Demand`, which `Invocation.Validate` requires there and refuses
-  everywhere else. Read its `doc.go` for the residual gap: a capability whose
-  row has no probe is taken at its word.
+  declaration and type disagree in either direction. `Shape` rides on the shared
+  `Invocation` and so sits outside the P4 split, which is why
+  `Invocation.ValidateForFixer` refuses `ShapeReview` at the fixer with
+  `ErrReviewInFixerSession` before anything starts; put a new shape on one side
+  of the line the same way. Reading agent output is `internal/findings`' job and
+  never a second parser here; the one choice this package makes is `Shape`, and
+  `ShapeReview` is the only one carrying a `findings.Demand`, which
+  `Invocation.Validate` requires there and refuses everywhere else. Read its
+  `doc.go` for the residual gap: a capability whose row has no probe is taken at
+  its word.
 - `internal/agents/standin` is the scripted agent the tests outside
   `internal/agents` run against. It implements no `agents` interface and builds
   no `agents.Result`: it prints bytes and exits with a status, and the real

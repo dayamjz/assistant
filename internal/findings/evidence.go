@@ -25,6 +25,20 @@ type Demand struct {
 	Touched []string
 }
 
+// Empty reports whether this demand carries nothing at all. It exists so a
+// caller can ask whether a demand was supplied without enumerating the fields
+// of a type this package owns, and so that a field added here later is covered
+// by changing this method rather than every caller that asks the question.
+//
+// It is a narrower question than Validate answers, and deliberately: a demand
+// carrying anything at all is not empty, including a revision that is only
+// spaces and paths that are all empty once trimmed. A caller refusing a demand
+// where none belongs therefore refuses a half-filled one rather than reading
+// it as absent, and a caller that needs a demand it can act on asks Validate.
+func (d Demand) Empty() bool {
+	return d.Revision == "" && len(d.Touched) == 0
+}
+
 // Validate reports whether this demand can be answered at all. A caller checks
 // it before it spends an invocation, because a demand this refuses would
 // refuse the reviewer's answer after the fact.

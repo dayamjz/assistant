@@ -7,9 +7,10 @@ import "context"
 // split between the two is where P4 lives.
 //
 // Run is session-free and has no parameter a session could be named in.
-// SessionRunner is the only route to memory that survives a round, and
-// everything it starts is a fix. A review invocation therefore cannot carry a
-// session, and that holds without a caller remembering anything.
+// SessionRunner is the only route to memory that survives a round, everything
+// it starts is a fix, and the Fixer it opens refuses an invocation that asks
+// for a review shape. A review invocation therefore cannot carry a session
+// however it is spelled, and that holds without a caller remembering anything.
 //
 // A Runner has no Fixer method. That is what makes an adapter without
 // resumable sessions unable to satisfy the fixer path rather than merely
@@ -135,6 +136,13 @@ func OpenFixer(ctx context.Context, r Runner, resume string) (Fixer, error) {
 type Fixer interface {
 	// Apply runs one fix round. The purpose is PurposeFix and cannot be
 	// anything else.
+	//
+	// An invocation asking for ShapeReview is refused with
+	// ErrReviewInFixerSession before any process starts, because the shape is
+	// the one thing a caller can put on an Invocation that says "this is a
+	// review" and this is the one entry point that keeps memory across rounds.
+	// Invocation.ValidateForFixer is that rule, and an implementation asks it
+	// rather than Validate.
 	Apply(ctx context.Context, inv Invocation) (Result, error)
 
 	// Reference is the agent's opaque handle for this session, empty before
