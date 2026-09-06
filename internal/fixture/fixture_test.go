@@ -883,7 +883,7 @@ func TestTheP3ResponsesProduceAnAskOnTheEntryPointEachNames(t *testing.T) {
 				t.Errorf("%s: the review declared reading every path the change touched, and the "+
 					"condition states it left some undeclared", c.ID)
 			}
-			requireAskOnTheLoopBound(t, c.ID, report)
+			requireTheRecordedActionOnTheLoopBound(t, c, report)
 			requireTheEvidenceNote(t, c, report)
 		case strings.Contains(c.Mechanism, ordinaryEntryPoint):
 			ordinary++
@@ -892,7 +892,7 @@ func TestTheP3ResponsesProduceAnAskOnTheEntryPointEachNames(t *testing.T) {
 				t.Errorf("%s: the ordinary path refused the bytes planted for it: %v", c.ID, err)
 				continue
 			}
-			requireAskOnTheLoopBound(t, c.ID, report)
+			requireTheRecordedActionOnTheLoopBound(t, c, report)
 
 			if _, _, err := findings.ParseReviewReport(raw, demand); !errors.Is(err, findings.ErrWrongRevision) {
 				t.Errorf("%s: driven through the review path these bytes gave %v, and the condition "+
@@ -974,21 +974,41 @@ func requireTheEvidenceNote(t *testing.T, c fixture.Condition, report findings.R
 // from the informational ones the review path adds.
 const loopBoundFindingID = "total-loop-bound"
 
-// requireAskOnTheLoopBound asserts the reviewer's own finding survived the
-// parse as an ask. It is looked up by the identifier the reviewer wrote, so
-// the informational findings the review path adds are not mistaken for it.
-func requireAskOnTheLoopBound(t *testing.T, id fixture.ID, report findings.Report) {
+// recordedActions maps a condition's recorded Expect.Value onto the action it
+// names. A value with no row here is one this test cannot hold to behavior,
+// which is a failure rather than a skip: a recorded answer nothing produces is
+// the claim these conditions exist to rule out, and a lookup that passed on an
+// unrecognized string would be that same claim one level down.
+var recordedActions = map[string]findings.Action{
+	"findings.ActionFix":  findings.ActionFix,
+	"findings.ActionAsk":  findings.ActionAsk,
+	"findings.ActionNote": findings.ActionNote,
+}
+
+// requireTheRecordedActionOnTheLoopBound asserts the reviewer's own finding
+// survived the parse carrying the action the condition records. The recorded
+// value is what a harness reports against, so it is what the parsed finding is
+// compared to rather than a value restated here. The finding is looked up by
+// the identifier the reviewer wrote, so the informational findings the review
+// path adds are not mistaken for it.
+func requireTheRecordedActionOnTheLoopBound(t *testing.T, c fixture.Condition, report findings.Report) {
 	t.Helper()
+	want, ok := recordedActions[c.Expect.Value]
+	if !ok {
+		t.Errorf("%s: the condition records the value %q, which names no action the parsed finding "+
+			"can be held to", c.ID, c.Expect.Value)
+		return
+	}
 	for _, finding := range report.Findings {
 		if finding.ID != loopBoundFindingID {
 			continue
 		}
-		if finding.Action != findings.ActionAsk {
-			t.Errorf("%s: the finding's action is %q and P3 fixes it at %q",
-				id, finding.Action, findings.ActionAsk)
+		if finding.Action != want {
+			t.Errorf("%s: the finding's action is %q and the condition records %s",
+				c.ID, finding.Action, c.Expect.Value)
 		}
 		return
 	}
-	t.Errorf("%s: the parsed report carries no finding identified as total-loop-bound, so the "+
-		"finding did not survive", id)
+	t.Errorf("%s: the parsed report carries no finding identified as %s, so the finding did not "+
+		"survive", c.ID, loopBoundFindingID)
 }

@@ -343,14 +343,15 @@ func plantFindingsWithoutAction(b *builder, s *Scenario) ([]Condition, error) {
 		out := expect(missing)
 		out.Summary += " The bound report carries one finding more than the reviewer wrote: " +
 			"the review path appends an informational note to every report it binds, stating " +
-			"what the review declared reading against what the change touched. Here it reports " +
-			"a read set holding nothing beyond the change and paths the change touched that the " +
-			"review did not declare, both of which the binding permits and neither of which is " +
-			"the condition under test. Two findings is the answer, not a mismatch. The recorded " +
-			"substrings are carried by that appended note and not by the reviewer's finding, " +
-			"which is the one this answer's value is about; whether the note also reports paths " +
-			"left undeclared is decided by the demand the run makes and not by these bytes, so " +
-			"it is not recorded as a substring. This holds only if the report names the revision " +
+			"what the review declared reading against what the change touched. Here, for a demand " +
+			"naming more than the one path declared, it reports a read set holding nothing beyond " +
+			"the change and paths the change touched that the review did not declare, both of " +
+			"which the binding permits and neither of which is the condition under test. Two " +
+			"findings is the answer, not a mismatch. The recorded substrings are carried by that " +
+			"appended note and not by the reviewer's finding, which is the one this answer's " +
+			"value is about, and they are the part the note carries whatever the demand names; " +
+			"the demand-dependent half is stated above rather than pinned as a substring. This " +
+			"holds only if the report names the revision " +
 			"the run asked the review stage about; a harness that served the build-time revision " +
 			"has met findings.ErrWrongRevision and has not reached this condition."
 		out.MessageContains = []string{
