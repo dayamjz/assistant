@@ -281,8 +281,7 @@ const findingsLocationPath = "total.go"
 // run's to decide, so a harness substitutes it before serving the bytes rather
 // than relying on the two coinciding, and a report naming any other commit is
 // refused whole with ErrWrongRevision before a finding is reached. How the
-// substitution is made is the
-// harness's; see question-agent-response-delivery.
+// substitution is made is the harness's; see question-agent-response-delivery.
 func plantFindingsWithoutAction(b *builder, s *Scenario) ([]Condition, error) {
 	responses := []struct {
 		id      ID
