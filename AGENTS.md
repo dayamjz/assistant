@@ -106,7 +106,10 @@ Each has cost this repository more than one round of review.
   repository on purpose, because no surface here witnesses a person; the record
   understates who decided rather than overstating it. It records and does not
   gate, so nothing may branch on the value to decide whether a resolution may
-  proceed. Read its `doc.go` before changing any of that.
+  proceed. It also holds the run checkpoint history the durability layer needs,
+  which is a different record from the one-row `checkpoint`: opaque payloads
+  indexed by run and sequence, with the anchor a property of the request that no
+  column holds. Read its `doc.go` before changing any of that.
 - `internal/safety` owns whether a branch update may proceed and on what anchor.
   `internal/vcs` stays mechanism only, so a lease, an incorporation check, or a
   force decision belongs in `internal/safety` even when it would be shorter to
@@ -228,9 +231,24 @@ Each has cost this repository more than one round of review.
   `agents.Fixer`, so no entry point here takes a purpose, and the session-free
   mode asks `Invocation.ValidateForFixer` itself so a review shape is refused in
   both modes. Read its `doc.go` before changing any of that, and for the
-  residual gaps: one fixer per run is bounded by one service, a handle already
-  handed out is not revoked, and no durable `graph.CheckpointStore` exists yet,
-  so a run survives a restart as a record and not as a position.
+  residual gaps: one fixer per run is bounded by one service, and a handle
+  already handed out is not revoked. A run's position across a restart is not
+  this package's: that is `internal/checkpoints`.
+- `internal/checkpoints` is the durable `graph.CheckpointStore`, and the only
+  place outside `internal/graph` that serializes a `graph.Checkpoint`. It
+  exists as its own package because `internal/store` must not learn what a
+  checkpoint means and `internal/graph` must not learn about a database, so the
+  adapter belongs to neither. The anchor is never decided here: `Write` hands
+  it to `store.AppendGraphCheckpoint`, which decides it in the transaction that
+  assigns the sequence, because a check made here and a write made there is
+  exactly the interleaving P6 exists to stop. Honouring the anchor is required
+  of every implementation, so the behavioural suite in `store_test.go` runs
+  against this one and `graph.MemoryStore` both, and a behaviour checked
+  against only one is not checked. Read its `doc.go` before changing any of
+  that, and for the residual gaps: the encoder is `encoding/json` over the
+  exported type rather than `internal/graph`'s own, a fork reads its source
+  outside the transaction that claims its destination, and nothing stops a
+  caller from also writing `store.WriteCheckpoint` for the same run.
 - `internal/scope` is the review stage's scope lens, not a tenth stage: every
   changed line should trace to the recorded intent, and P2 fixes the list at
   nine. It ships on and has no off switch, which is why it is shipped guidance

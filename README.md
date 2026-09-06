@@ -10,7 +10,7 @@ until it has been independently reviewed, tested, documented, and linted.
 ## Status
 
 Early. The product requirements are settled and checked in at
-[`docs/prd.html`](docs/prd.html). Fourteen pieces exist so far. The execution
+[`docs/prd.html`](docs/prd.html). Fifteen pieces exist so far. The execution
 engine in `internal/graph` is the first: the graph builder with its
 construction-time checks, an executor with halt points and bounded cycles, and
 checkpoints behind a four-operation store. The second is `internal/findings`,
@@ -69,12 +69,17 @@ owns a run: its status changes as a table of anchored moves, each read and
 written in one transaction against the statuses the move is legal out of, and
 the one durable fixer session a run keeps, recorded on the run itself rather
 than in pipeline state, so a run's fixer resumes the same conversation across a
-segment boundary and across a restart of the service. The nine stage bodies are
-separate work against that contract and do not exist yet, including the review
-stage that puts the scope lens in front of a reviewer and binds what comes back
-to what the reviewer declared reading, and neither the harness nor the
-`assistant` binary exists either, so the only thing in here you can run is the
-fixture builder.
+segment boundary and across a restart of the service. The fifteenth is
+`internal/checkpoints`, the durable form of the four-operation store the
+execution engine writes through: a run's whole checkpoint history in the
+embedded database, where every write is anchored to the checkpoint the caller
+observed and one that anchors to a run that has moved is refused rather than
+appended, so a run survives a restart as a position and not only as a record.
+The nine stage bodies are separate work against that contract and do not exist
+yet, including the review stage that puts the scope lens in front of a reviewer
+and binds what comes back to what the reviewer declared reading, and neither the
+harness nor the `assistant` binary exists either, so the only thing in here you
+can run is the fixture builder.
 
 ## The two promises
 
@@ -102,6 +107,7 @@ working as it always did.
 | `cmd/fixture` | Builds the fixture repository into a directory you name. `scripts/build-fixture.sh DIR` runs it. |
 | `internal/agents` | The only package that starts an agent process: the run and fix roles, the capability declaration every adapter is held to, the Claude Code adapter, fallback resolution, the review shape and the evidence demand it carries, and invocation records. |
 | `internal/agents/standin` | The scripted agent the tests outside `internal/agents` run against: the test binary re-executed as the agent process, read by the production adapter. |
+| `internal/checkpoints` | The durable `graph.CheckpointStore` over `internal/store`: a run's checkpoint history, appends anchored to what the caller observed, and the fork that copies a run's history up to a point into a new run. |
 | `internal/config` | The configuration schema: layers, defaults, merge, validation, path matcher. |
 | `internal/findings` | The stage vocabulary: findings, actions, reports, parsing of agent output, and the evidence a review report's findings are bound to. |
 | `internal/fixture` | The adversarial subject repository the end-to-end harness validates against: the seven scenarios, the conditions planted in them, and what each one is expected to produce. |
@@ -113,7 +119,7 @@ working as it always did.
 | `internal/runs` | The run service: the anchored table of a run's status changes, and the one durable fixer session a run keeps, recorded on the run so a restarted service resumes the same conversation. |
 | `internal/safety` | The data-loss policy over git: whether a branch update may proceed, on what anchor, and when to refuse. |
 | `internal/scope` | The review stage's scope lens, not a tenth stage: the guidance a reviewer traces each touched path against, and the note an untraced path becomes. |
-| `internal/store` | The only package that opens the database: the schema, its additive migrations, and typed accessors for repositories, runs, stages, rounds, checkpoints, tasks, task state and events, holds and the closed set of who resolved each one, and the gate ownership index. |
+| `internal/store` | The only package that opens the database: the schema, its additive migrations, and typed accessors for repositories, runs, stages, rounds, checkpoints and a run's anchored checkpoint history, tasks, task state and events, holds and the closed set of who resolved each one, and the gate ownership index. |
 | `internal/vcs` | The only package that invokes git: typed operations over repositories, worktrees, refs, diffs, and remotes. |
 | `docs/prd.html` | The product requirements. The specification this code answers to. |
 

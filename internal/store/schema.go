@@ -96,8 +96,9 @@ var schema = []migration{
 			) STRICT`,
 			`CREATE INDEX round_run ON round(run_id, id)`,
 
-			// A checkpoint is authoritative: one row per run, rewritten after
-			// every node.
+			// A checkpoint is authoritative: one row per run, rewritten in
+			// place. What it is and is not the position of is on the
+			// Checkpoint type.
 			`CREATE TABLE checkpoint (
 				run_id        TEXT PRIMARY KEY REFERENCES run(id),
 				state         BLOB NOT NULL,
@@ -212,6 +213,42 @@ var schema = []migration{
 			// this column existed reads back as unknown rather than as a
 			// fabricated empty session.
 			`ALTER TABLE run ADD COLUMN fixer_session TEXT`,
+		},
+	},
+	{
+		version: 5,
+		name:    "graph checkpoint history",
+		statements: []string{
+			// A run's checkpoint history: one row per position the run has
+			// stood in, appended and never revised. It is what PRD section 7's
+			// durability layer needs and the checkpoint table above cannot
+			// give it, because two of that layer's four operations are a
+			// history and a fork from a point in one.
+			//
+			// The columns are an index over an opaque payload. internal/graph
+			// owns what a checkpoint means, so nothing here reads inside the
+			// blob; run is what a read selects on and seq is what orders the
+			// history and what an append's anchor is decided against. The
+			// anchor itself has no column, because it is a property of the
+			// request rather than of the record.
+			//
+			// The primary key is the pair, so two appends that computed the
+			// same sequence cannot both land. That is a second line behind the
+			// serialized read-and-write in AppendGraphCheckpoint rather than
+			// the mechanism itself: it turns a defect in that reasoning into a
+			// failed write instead of a silently duplicated position.
+			//
+			// run does not reference run(id), and that is deliberate rather
+			// than an omission. A fork names a destination run that has no row
+			// of its own and cannot be given one here, so a foreign key would
+			// refuse an operation the durability contract requires to work.
+			`CREATE TABLE graph_checkpoint (
+				run        TEXT NOT NULL,
+				seq        INTEGER NOT NULL,
+				payload    BLOB NOT NULL,
+				written_at TEXT NOT NULL,
+				PRIMARY KEY (run, seq)
+			) STRICT`,
 		},
 	},
 }

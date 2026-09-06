@@ -19,6 +19,16 @@
 // place. A round and a task event are history: appended, never revised, and no
 // answer to any present-tense question.
 //
+// A run's graph checkpoint history is the one record here that is appended,
+// never revised, and still answers one. What P8 forbids is inferring what is
+// true now from a log of things that happened, and there is nothing here to
+// infer from: every entry is a whole position, complete on its own. The anchor
+// is what makes the highest sequence the run's own continuation rather than
+// wherever a second caller's write happened to land, and it is decided under
+// the same serialization that assigns that sequence. The record this must not
+// end up overlapping with is Checkpoint above; what owns a graph-driven run's
+// position is this history.
+//
 // # The gate ownership index
 //
 // GateBinding is the one record here that exists to answer a question another
@@ -170,11 +180,11 @@
 // Every other column holds exactly what the caller passed. A push binding, a
 // pull request reference, a run's intent, a run's fixer session reference, a
 // task's session reference, a hold's subject and detail, a stage's log path,
-// and the round and checkpoint payloads are all bound verbatim, so a caller
-// that puts a credential in one of them has stored a credential, and nothing
-// in this package will notice or remove it.
-// That is the caller's responsibility, and this package does not claim
-// otherwise: it is not a scrubber that everything written to it passes through.
+// and the round, checkpoint, and graph checkpoint payloads are all bound
+// verbatim, so a caller that puts a credential in one of them has stored a
+// credential, and nothing in this package will notice or remove it. That is the
+// caller's responsibility, and this package does not claim otherwise: it is not
+// a scrubber that everything written to it passes through.
 //
 // Requiring a redactor leaves a gap that requiring cannot close, which is a
 // redactor wired up to something inert. That failure is invisible from the
@@ -205,8 +215,10 @@
 // inside one transaction cannot interleave with another writer's. That is what
 // makes the sequence AppendTaskEvent assigns dense with no duplicates, and the
 // revisions SetTaskState and WriteCheckpoint assign strictly increasing, under
-// any number of concurrent callers. The reader pool is unbounded and carries
-// queries only.
+// any number of concurrent callers. It is also what makes
+// AppendGraphCheckpoint's anchor decision and the sequence it assigns one step
+// rather than two, which is the whole of what that accessor is for. The reader
+// pool is unbounded and carries queries only.
 //
 // The cost is that writes across the whole store serialize, including writes to
 // unrelated runs. That is deliberate at this scale: one service owns one home,
@@ -249,10 +261,12 @@
 //
 // # What this package does not do
 //
-// It does not interpret what it stores. A finding set, a graph state, and a
-// fixer payload are opaque bytes, because internal/findings and internal/graph
-// own those vocabularies and a store that also understood them would be a
-// second owner of the same contract.
+// It does not interpret what it stores. A finding set, a graph state, a graph
+// checkpoint, and a fixer payload are opaque bytes, because internal/findings
+// and internal/graph own those vocabularies and a store that also understood
+// them would be a second owner of the same contract. What serializes a
+// checkpoint into one of those payloads is internal/checkpoints, which is
+// neither of those packages for that reason.
 //
 // It does not create the home directory layout, run git, or decide what a run
 // or a stage is allowed to do next. It records what happened and refuses what
