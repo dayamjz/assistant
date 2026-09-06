@@ -41,12 +41,6 @@ func (s *Service) start(ctx context.Context, req machine.StartRequest) (machine.
 	if err != nil {
 		return machine.Run{}, fmt.Errorf("service: reading the branch to validate: %w", err)
 	}
-	if active, found, err := s.activeRun(ctx, repository.ID, branch); err != nil {
-		return machine.Run{}, err
-	} else if found {
-		return s.attach(ctx, active.ID)
-	}
-
 	head, err := working.ResolveCommit(ctx, "HEAD")
 	if err != nil {
 		return machine.Run{}, fmt.Errorf("service: reading the commit to validate: %w", err)
@@ -55,7 +49,10 @@ func (s *Service) start(ctx context.Context, req machine.StartRequest) (machine.
 	if err != nil {
 		return machine.Run{}, err
 	}
-	record, err := s.create(ctx, run{
+	// Everything the record is built from is read before the branch is
+	// claimed, so what the claim holds is the decision and the write and not
+	// two git invocations between them.
+	record, created, err := s.claimBranch(ctx, branchKey{repository: repository.ID, branch: branch}, run{
 		repository: repository.ID,
 		branch:     branch,
 		head:       head,
@@ -66,6 +63,9 @@ func (s *Service) start(ctx context.Context, req machine.StartRequest) (machine.
 	})
 	if err != nil {
 		return machine.Run{}, err
+	}
+	if !created {
+		return s.attach(ctx, record.ID)
 	}
 	return s.begin(ctx, record, pipeline.Start{
 		Branch:         branch,
@@ -192,6 +192,13 @@ func (s *Service) attach(ctx context.Context, runID string) (machine.Run, error)
 		return s.view(ctx, settled.ID)
 	}
 	if _, err := s.checkpoints.Latest(ctx, settled.ID); err != nil {
+		if !errors.Is(err, graph.ErrNoSuchRun) {
+			// The run has a position and it could not be read. Reporting it as
+			// a run that never executed would offer a caller the answer for
+			// one, which is to end it and start again, and that answer would
+			// throw away work the checkpoint history still holds.
+			return machine.Run{}, fmt.Errorf("service: reading the position of run %s: %w", settled.ID, err)
+		}
 		// A run with no checkpoint never executed a node, so there is no
 		// position to resume from. Its inputs are on its record, but the
 		// stages it was told to skip are not, and starting it again from the
@@ -385,6 +392,14 @@ func (s *Service) reconcile(ctx context.Context, runID string) (store.Run, error
 	}
 	latest, err := s.checkpoints.Latest(ctx, runID)
 	if err != nil {
+		if !errors.Is(err, graph.ErrNoSuchRun) {
+			// Reconciling is what makes a run answerable, so a position that
+			// cannot be read is refused rather than read as an absent one: the
+			// record would otherwise be left saying running against a
+			// checkpoint nobody looked at, which is the state this exists to
+			// remove.
+			return store.Run{}, fmt.Errorf("service: reading the position of run %s: %w", runID, err)
+		}
 		// A run with no checkpoint has not executed, which is exactly what a
 		// pending run is. There is nothing to reconcile against.
 		return record, nil
@@ -461,6 +476,89 @@ func (s *Service) release(runID string) {
 	s.mu.Lock()
 	delete(s.advancing, runID)
 	s.mu.Unlock()
+}
+
+// branchKey is the branch of one repository, which is what a run is started
+// for and what PRD section 8 has runs serialize on.
+type branchKey struct {
+	repository string
+	branch     string
+}
+
+// branchGate is the exclusion one branch's starts take in turn. waiting counts
+// the callers that hold or are queued for it, so the gate is forgotten once
+// nobody is using it and a service that has seen many branches does not keep
+// one per branch it ever saw.
+type branchGate struct {
+	held    chan struct{}
+	waiting int
+}
+
+// claimBranch decides whether a branch already has a run and creates one when
+// it does not, with the decision and the write under one exclusion. It reports
+// the run and whether this call is the one that created it.
+//
+// The check and the create are one step because they are one decision: a check
+// another caller can win the race to is what leaves a branch with two runs, of
+// which the older is unreachable through every branch-scoped verb and blocks
+// an eject for as long as it stands. Nothing slow runs under the claim - the
+// record's inputs are read before it - so branches do not queue behind each
+// other's git.
+//
+// The residual gap is the same one internal/runs names for a run's fixer: this
+// is exclusion within one service, and PRD section 8 gives a home one service,
+// so it holds for the arrangement that produces. Two services over one store
+// would not see each other's claims, and nothing in the schema refuses the
+// second run they could then create between them.
+func (s *Service) claimBranch(ctx context.Context, key branchKey, spec run) (store.Run, bool, error) {
+	release, err := s.holdBranch(ctx, key)
+	if err != nil {
+		return store.Run{}, false, err
+	}
+	defer release()
+
+	active, found, err := s.activeRun(ctx, key.repository, key.branch)
+	if err != nil {
+		return store.Run{}, false, err
+	}
+	if found {
+		return active, false, nil
+	}
+	record, err := s.create(ctx, spec)
+	if err != nil {
+		return store.Run{}, false, err
+	}
+	return record, true, nil
+}
+
+// holdBranch takes one branch's gate and returns the function that gives it
+// back. A caller whose context ends while queued gives up rather than holding
+// up the branch behind it.
+func (s *Service) holdBranch(ctx context.Context, key branchKey) (func(), error) {
+	s.mu.Lock()
+	gate, ok := s.starting[key]
+	if !ok {
+		gate = &branchGate{held: make(chan struct{}, 1)}
+		s.starting[key] = gate
+	}
+	gate.waiting++
+	s.mu.Unlock()
+
+	forget := func() {
+		s.mu.Lock()
+		gate.waiting--
+		if gate.waiting == 0 {
+			delete(s.starting, key)
+		}
+		s.mu.Unlock()
+	}
+	select {
+	case gate.held <- struct{}{}:
+		return func() { <-gate.held; forget() }, nil
+	case <-ctx.Done():
+		forget()
+		return nil, ctx.Err()
+	}
 }
 
 // activeRuns returns every run this home has that has not finished.
@@ -549,6 +647,13 @@ func (s *Service) report(ctx context.Context, runID string, result *graph.Result
 	if result == nil {
 		latest, err := s.checkpoints.Latest(ctx, runID)
 		if err != nil {
+			if !errors.Is(err, graph.ErrNoSuchRun) {
+				// A position that is there and cannot be read is a failure to
+				// report, not a run with no position. The two answers differ
+				// in what they tell a caller to do, and the wrong one here
+				// tells them to end a run whose history is intact.
+				return machine.Run{}, fmt.Errorf("service: reading the position of run %s: %w", runID, err)
+			}
 			// A run with no checkpoint has not executed. Its record is the
 			// whole of what is known, and saying so is better than reporting a
 			// position it never reached.

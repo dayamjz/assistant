@@ -58,7 +58,13 @@ func usagef(format string, a ...any) error {
 type verb struct {
 	// name is what a caller types, empty for the command with no verb.
 	name string
-	// summary is the one line the PRD's table gives it.
+	// summary is PRD section 9's line for the verb, narrowed where this build
+	// does something narrower or more precise than the table describes. A
+	// reader comparing the two finds a summary that says what the verb does
+	// rather than one that repeats a line the verb does not answer to: rerun
+	// says it acts on the branch you are standing on, which the table leaves
+	// open and this build settles, and sync leaves out the table's plan and
+	// confirmation, which this build has no custody module to carry out.
 	summary string
 	// run does the work and returns the answer to render.
 	run func(context.Context, *invocation) (any, error)

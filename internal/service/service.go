@@ -121,11 +121,15 @@ type Service struct {
 	catalog  *agents.Catalog
 	registry *registry
 
-	// mu guards the lazily built driver and the set of runs being advanced.
-	// It is never held across a run's execution.
+	// mu guards the lazily built driver, the set of runs being advanced, and
+	// the branch gates. It is never held across a run's execution.
 	mu        sync.Mutex
 	built     *driver
 	advancing map[string]context.CancelFunc
+	// starting holds one gate per branch a start is being decided for, so the
+	// check that a branch has no run and the creation of one are a single
+	// decision rather than a check a second caller can win the race to.
+	starting map[branchKey]*branchGate
 
 	revision atomic.Uint64
 	restart  atomic.Bool
@@ -197,6 +201,7 @@ func Open(ctx context.Context, o Options) (*Service, error) {
 		newFixer:  o.NewFixer,
 		registry:  newRegistry(),
 		advancing: make(map[string]context.CancelFunc),
+		starting:  make(map[branchKey]*branchGate),
 		stopping:  make(chan struct{}),
 	}
 	s.stopCtx, s.stopCancel = context.WithCancel(context.WithoutCancel(ctx))
