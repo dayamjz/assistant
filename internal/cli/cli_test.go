@@ -889,3 +889,139 @@ func TestAttachingSaysWhichStartingInputsWereNotApplied(t *testing.T) {
 		t.Fatalf("the rendering a person reads does not say the intent was not applied:\n%s", plain.stdout)
 	}
 }
+
+// An init that cannot complete creates nothing. internal/gate's invariant is
+// that a refusal leaves the working copy as it was, and the repository record
+// a run needs is established from the working copy before anything is built,
+// so a repository with no origin and no --upstream is refused whole rather
+// than left with a gate and no record.
+func TestAnInitThatCannotCompleteCreatesNothing(t *testing.T) {
+	t.Parallel()
+	h := newHome(t)
+	subject := newSubjectWithoutOrigin(t)
+
+	refused := run(t, h, subject, "init")
+	if refused.code != machine.ExitFailure {
+		t.Fatalf("init with no origin and no --upstream exited %s, want failure:\n%s%s",
+			refused.code, refused.stdout, refused.stderr)
+	}
+
+	// The working copy is as it was: no gate remote was added to it.
+	if remotes := git(t, subject, "remote"); strings.Contains(remotes, "assistant") {
+		t.Fatalf("the refused init left an assistant remote behind: %q", remotes)
+	}
+	// And the home holds no gate for it.
+	records := openStore(t, h)
+	defer func() { _ = records.Close() }()
+	if binding, err := records.GateBinding(t.Context(), subject); err == nil {
+		t.Fatalf("the refused init left the working copy bound to gate %s", binding.GateID)
+	}
+
+	// So the surface that decides whether a run can start says it cannot.
+	report := decodeDoctor(t, run(t, h, subject, "--json", "doctor").stdout)
+	if report.CanStartRun {
+		t.Fatal("doctor says a run can start after an init that refused")
+	}
+}
+
+// doctor asks the question it claims to answer. A run needs the gate binding
+// and the repository record the service resolves, so a half-state with one and
+// not the other is reported as a run that cannot start, however it was reached.
+func TestDoctorSaysARunCannotStartWithNoRepositoryRecord(t *testing.T) {
+	requiresIdentifiedPeer(t)
+	h := newHome(t)
+	subject := newSubject(t)
+	serve(t, h)
+
+	if got := run(t, h, subject, "init"); got.code != machine.ExitOK {
+		t.Fatalf("assistant init exited %s:\n%s%s", got.code, got.stdout, got.stderr)
+	}
+	// Reach the half-state the other way: the gate stands, and the repository
+	// record a run resolves is gone.
+	records := openStore(t, h)
+	binding, err := records.GateBinding(t.Context(), subject)
+	if err != nil {
+		t.Fatalf("reading the gate binding: %v", err)
+	}
+	if _, err := records.ForgetRepository(t.Context(), binding.GateID); err != nil {
+		t.Fatalf("forgetting the repository record: %v", err)
+	}
+	if err := records.Close(); err != nil {
+		t.Fatalf("closing the store: %v", err)
+	}
+
+	report := decodeDoctor(t, run(t, h, subject, "--json", "doctor").stdout)
+	if report.CanStartRun {
+		t.Fatal("doctor says a run can start with no repository record")
+	}
+
+	// And the refusal a start produces names what is actually missing rather
+	// than the gate, which is standing.
+	started := run(t, h, subject, "--intent", "a change")
+	if started.code == machine.ExitOK {
+		t.Fatalf("a run started with no repository record:\n%s", started.stdout)
+	}
+	said := started.stdout + started.stderr
+	if !strings.Contains(said, "repository record") {
+		t.Fatalf("the refusal does not name the missing repository record:\n%s", said)
+	}
+	if !strings.Contains(said, "assistant init") {
+		t.Fatalf("the refusal does not name the command that repairs it:\n%s", said)
+	}
+}
+
+// A run that has ended is not offered as answerable. The record decides before
+// the checkpoint does, so a terminated run carries no decision on either
+// surface and neither invites an answer the surface would refuse.
+func TestARunThatHasEndedIsNotOfferedAsAnswerable(t *testing.T) {
+	requiresIdentifiedPeer(t)
+	h := newHome(t)
+	subject := newSubject(t)
+	serve(t, h)
+
+	if got := run(t, h, subject, "init"); got.code != machine.ExitOK {
+		t.Fatalf("assistant init exited %s:\n%s%s", got.code, got.stdout, got.stderr)
+	}
+	started := decodeRun(t, run(t, h, subject, "--json", "--intent", "a change").stdout)
+	if started.Decision == nil {
+		t.Fatal("the run did not stop at a decision, so there is nothing to end at a hold")
+	}
+
+	ended := run(t, h, subject, "--cancel")
+	if ended.code != machine.ExitOK {
+		t.Fatalf("ending the run exited %s:\n%s%s", ended.code, ended.stdout, ended.stderr)
+	}
+	if strings.Contains(ended.stdout, "Waiting on you") || strings.Contains(ended.stdout, "--answer") {
+		t.Fatalf("ending the run offered an answer to a run that is over:\n%s", ended.stdout)
+	}
+
+	// And a later read of the same run says the same thing, on both surfaces.
+	read := run(t, h, subject, "--json", "runs", started.Record.ID)
+	over := decodeRun(t, read.stdout)
+	if over.Record.Status != store.RunTerminated {
+		t.Fatalf("the run is recorded as %s, want terminated", over.Record.Status)
+	}
+	if over.Decision != nil {
+		t.Fatalf("the wire shape offers an answer to a run that has ended: %+v", over.Decision)
+	}
+	plain := run(t, h, subject, "runs", started.Record.ID)
+	if strings.Contains(plain.stdout, "Waiting on you") || strings.Contains(plain.stdout, "--answer") {
+		t.Fatalf("reading the ended run offered an answer to it:\n%s", plain.stdout)
+	}
+
+	// The stage reports are still there: what goes is the invitation, not the
+	// record of what each stage found.
+	if len(over.Stages) == 0 {
+		t.Fatal("the ended run reports no stages, so dropping the decision lost the reports")
+	}
+}
+
+// decodeDoctor reads a doctor report out of one structured answer.
+func decodeDoctor(t *testing.T, document string) machine.Doctor {
+	t.Helper()
+	var report machine.Doctor
+	if err := json.Unmarshal([]byte(document), &report); err != nil {
+		t.Fatalf("a doctor report does not decode: %v\n%s", err, document)
+	}
+	return report
+}

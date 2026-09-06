@@ -190,3 +190,25 @@ func openStore(t *testing.T, h *home.Home) *store.Store {
 	}
 	return records
 }
+
+// newSubjectWithoutOrigin returns a working copy with no origin, which is the
+// state an init cannot complete from unless the caller names the upstream.
+func newSubjectWithoutOrigin(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "s")
+	if err != nil {
+		t.Fatalf("making a subject repository: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	git(t, dir, "init", "--quiet", "-b", "main", ".")
+	if err := os.WriteFile(filepath.Join(dir, "file.txt"), []byte("hello\n"), 0o600); err != nil {
+		t.Fatalf("writing a file: %v", err)
+	}
+	git(t, dir, "add", "-A")
+	git(t, dir, "commit", "--quiet", "-m", "first")
+	resolved, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatalf("resolving the subject path: %v", err)
+	}
+	return resolved
+}

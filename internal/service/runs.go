@@ -747,7 +747,13 @@ func (s *Service) report(ctx context.Context, runID string, result *graph.Result
 	answer.Outcome = machine.OutcomeOf(record.Status, result.Status, result.State)
 	answer.NextAction = answer.Outcome.NextAction()
 	answer.Stages = stageViews(result.State)
-	if result.Decision != nil {
+	// The record decides before the checkpoint does, which is machine.OutcomeOf's
+	// rule applied to the decision as well as to the outcome: a run ended from
+	// outside its own execution has a terminal record and a checkpoint that
+	// still stands at a hold, and carrying that decision on would invite an
+	// answer this surface then refuses. The stage reports are untouched, so
+	// what each stage found is still there; what goes is the invitation.
+	if result.Decision != nil && unfinished(record.Status) {
 		answer.Decision = decisionView(*result.Decision, result.State)
 	}
 	return answer, nil
@@ -817,21 +823,21 @@ func (s *Service) publishRunState(ctx context.Context, runID string) {
 	}
 }
 
-// repositoryAt returns the repository record for a working copy.
+// repositoryAt returns the repository record for a working copy. The lookup is
+// internal/store's, so a surface that reports whether a run could start asks
+// the same question this does rather than a second one shaped like it.
 func (s *Service) repositoryAt(ctx context.Context, workingPath string) (store.Repository, error) {
 	if !filepath.IsAbs(workingPath) {
 		return store.Repository{}, fmt.Errorf("service: %q is not an absolute working copy path", workingPath)
 	}
-	repositories, err := s.store.Repositories(ctx)
+	repository, err := s.store.RepositoryAt(ctx, workingPath)
 	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return store.Repository{}, fmt.Errorf("%w: %s", ErrNoRepository, workingPath)
+		}
 		return store.Repository{}, err
 	}
-	for _, repository := range repositories {
-		if repository.WorkingPath == workingPath {
-			return repository, nil
-		}
-	}
-	return store.Repository{}, fmt.Errorf("%w: %s", ErrNoRepository, workingPath)
+	return repository, nil
 }
 
 // parseStages reads the stage names a run asks to skip, refusing a name that

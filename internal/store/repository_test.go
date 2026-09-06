@@ -211,3 +211,46 @@ func TestUpsertRepositoryRefusesATakenWorkingPath(t *testing.T) {
 		t.Fatalf("UpsertRepository refused a repository with a checkout of its own: %v", err)
 	}
 }
+
+// The lookup by working path is the one every caller asks, so it has to answer
+// the record for that path, tell a path it does not hold apart from a failure,
+// and give back the same redacted form every other accessor does.
+func TestRepositoryAtAnswersByWorkingPath(t *testing.T) {
+	ctx := context.Background()
+	s := openStore(t)
+
+	stored, err := s.UpsertRepository(ctx, Repository{
+		ID:            "repo-1",
+		WorkingPath:   "/checkouts/one",
+		UpstreamURL:   credentialed,
+		DefaultBranch: "main",
+	})
+	if err != nil {
+		t.Fatalf("UpsertRepository: %v", err)
+	}
+	if _, err := s.UpsertRepository(ctx, Repository{
+		ID:            "repo-2",
+		WorkingPath:   "/checkouts/two",
+		UpstreamURL:   "https://example.test/two.git",
+		DefaultBranch: "trunk",
+	}); err != nil {
+		t.Fatalf("UpsertRepository: %v", err)
+	}
+
+	found, err := s.RepositoryAt(ctx, "/checkouts/one")
+	if err != nil {
+		t.Fatalf("RepositoryAt: %v", err)
+	}
+	if found.ID != stored.ID || found.DefaultBranch != "main" {
+		t.Fatalf("RepositoryAt(/checkouts/one) answered %+v, want repo-1 on main", found)
+	}
+	if found.UpstreamURL != stored.UpstreamURL {
+		t.Fatalf("RepositoryAt gave %q, want the stored redacted form %q", found.UpstreamURL, stored.UpstreamURL)
+	}
+
+	// A path no record holds is not there rather than a failure to read, which
+	// is the difference a caller branches on.
+	if _, err := s.RepositoryAt(ctx, "/checkouts/three"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("RepositoryAt for a path with no record gave %v, want ErrNotFound", err)
+	}
+}

@@ -50,7 +50,12 @@ var ErrRunsActive = errors.New("service: runs are active")
 // ErrNoRepository reports that the working copy a request named has no
 // repository record, which is what a working copy that was never initialized
 // looks like.
-var ErrNoRepository = errors.New("service: this working copy has no gate")
+//
+// It names the record rather than the gate, because the two are separate
+// things and a gate can be standing when this fires. Saying the gate is
+// missing sends a reader to look at something that is there, so the message
+// says what is actually absent and which command writes it.
+var ErrNoRepository = errors.New("service: this working copy has no repository record; run assistant init")
 
 // DefaultLockWait is how long Open waits for the home's lock before refusing.
 // It is not zero so that a service replacing one that is shutting down does

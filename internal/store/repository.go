@@ -132,6 +132,28 @@ func (s *Store) Repository(ctx context.Context, id string) (Repository, error) {
 	return r, nil
 }
 
+// RepositoryAt returns the repository whose primary checkout is workingPath,
+// or ErrNotFound. The column is unique, so at most one record can answer.
+//
+// It is the one place "which repository is this working copy" is asked, so the
+// service that resolves a run's repository and any surface that reports
+// whether a run could start cannot answer differently. The path is matched as
+// it was stored: this package resolves nothing, and a caller that has two
+// spellings of one directory settles that before it asks.
+func (s *Store) RepositoryAt(ctx context.Context, workingPath string) (Repository, error) {
+	if err := s.live(); err != nil {
+		return Repository{}, err
+	}
+	row := s.read.QueryRowContext(ctx, `
+		SELECT id, working_path, upstream_url, fork_url, default_branch, created_at, updated_at
+		FROM repository WHERE working_path = ?`, workingPath)
+	r, err := scanRepository(row)
+	if err != nil {
+		return Repository{}, fmt.Errorf("store: reading the repository at %s: %w", workingPath, errNoRows(err))
+	}
+	return r, nil
+}
+
 // Repositories returns every repository, ordered by working path.
 func (s *Store) Repositories(ctx context.Context) ([]Repository, error) {
 	if err := s.live(); err != nil {

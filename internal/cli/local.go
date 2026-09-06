@@ -24,6 +24,14 @@ import (
 // asks before adopting or replacing one. Nothing here repeats any of that.
 // What this adds is the repository record, because a run needs one and a gate
 // is not one.
+//
+// Everything that record is read from - the upstream and the default branch -
+// is established before anything is created, which is internal/gate's own
+// invariant applied to the pair: nothing is created unless the whole operation
+// can complete, so a working copy this command refuses is one it leaves as it
+// was. Ordering it the other way is what left a gate standing beside no
+// repository record, a half-state a run cannot start from and no verb here
+// repairs.
 func initGate(ctx context.Context, in *invocation) (any, error) {
 	var upstream, defaultBranch string
 	if err := in.parseFlags("init", func(set *flag.FlagSet) {
@@ -42,6 +50,10 @@ func initGate(ctx context.Context, in *invocation) (any, error) {
 	}
 	defer func() { _ = records.Close() }()
 
+	intended, err := intendedRepository(ctx, working, upstream, defaultBranch)
+	if err != nil {
+		return nil, err
+	}
 	built, err := gate.Initialize(ctx, gate.Spec{
 		Home:        in.home.Root(),
 		WorkingPath: working,
@@ -50,7 +62,8 @@ func initGate(ctx context.Context, in *invocation) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	repository, err := recordRepository(ctx, records, built, working, upstream, defaultBranch)
+	intended.ID = built.ID()
+	repository, err := records.UpsertRepository(ctx, intended)
 	if err != nil {
 		return nil, err
 	}
@@ -61,9 +74,14 @@ func initGate(ctx context.Context, in *invocation) (any, error) {
 	}, nil
 }
 
-// recordRepository writes the repository record the gate validates, filling in
-// from the working copy what the caller did not name.
-func recordRepository(ctx context.Context, records *store.Store, built *gate.Gate, working, upstream, defaultBranch string) (store.Repository, error) {
+// intendedRepository is the repository record the gate will validate, filling
+// in from the working copy what the caller did not name. It reads and writes
+// nothing, so a working copy that cannot answer is refused before the gate it
+// would have been recorded against exists.
+//
+// The record's identifier is the gate's, which is not known until the gate is
+// built, so it is the one field the caller fills in afterwards.
+func intendedRepository(ctx context.Context, working, upstream, defaultBranch string) (store.Repository, error) {
 	repo, err := vcs.OpenWorktree(ctx, working, vcs.WithRedactor(redact.New()))
 	if err != nil {
 		return store.Repository{}, err
@@ -78,12 +96,11 @@ func recordRepository(ctx context.Context, records *store.Store, built *gate.Gat
 			return store.Repository{}, err
 		}
 	}
-	return records.UpsertRepository(ctx, store.Repository{
-		ID:            built.ID(),
+	return store.Repository{
 		WorkingPath:   working,
 		UpstreamURL:   upstream,
 		DefaultBranch: defaultBranch,
-	})
+	}, nil
 }
 
 // defaultBranchOf is the branch PRD principle P7 reads trusted configuration
@@ -221,11 +238,7 @@ func doctor(ctx context.Context, in *invocation) (any, error) {
 	}
 
 	if records != nil && workErr == nil {
-		if binding, err := records.GateBinding(ctx, working); err == nil {
-			add(machine.Check{Name: "gate", OK: true, Blocking: true, Detail: "bound to " + binding.GateID})
-		} else {
-			add(machine.Check{Name: "gate", Blocking: true, Detail: "this working copy is not bound to a gate; run assistant init"})
-		}
+		add(gateCheck(ctx, records, working))
 	}
 
 	service := in.serviceState(ctx)
@@ -257,6 +270,30 @@ func doctor(ctx context.Context, in *invocation) (any, error) {
 		report.Detail = "a run cannot start: " + strings.Join(blocking, ", ")
 	}
 	return report, nil
+}
+
+// gateCheck establishes what a run needs of this working copy: the gate it is
+// validated through, and the repository record the service resolves the run
+// against. Both, because either alone is a half-state a run cannot start from,
+// and this is the check whose whole contract is deciding whether one can.
+//
+// The record is read through internal/store's own lookup, which is what the
+// service asks, so this reports the answer starting a run would give rather
+// than a second question shaped like it.
+func gateCheck(ctx context.Context, records *store.Store, working string) machine.Check {
+	binding, err := records.GateBinding(ctx, working)
+	if err != nil {
+		return machine.Check{Name: "gate", Blocking: true, Detail: "this working copy is not bound to a gate; run assistant init"}
+	}
+	if _, err := records.RepositoryAt(ctx, working); err != nil {
+		return machine.Check{
+			Name:     "gate",
+			Blocking: true,
+			Detail: fmt.Sprintf("bound to %s, and this working copy has no repository record, which a run is resolved against; run assistant init",
+				binding.GateID),
+		}
+	}
+	return machine.Check{Name: "gate", OK: true, Blocking: true, Detail: "bound to " + binding.GateID}
 }
 
 // stageBodies reports how much of the gate this build actually implements. It
