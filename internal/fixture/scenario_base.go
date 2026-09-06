@@ -277,12 +277,15 @@ const findingsLocationPath = "total.go"
 // The review-path bytes name a revision, and the one they name is
 // Commits["branch-head"] as the build left it, registered here and written by
 // pushBranch from that value for the same reason the empty check list's answer
-// is. It is a placeholder on the same terms: the run rebases the branch and
-// may add fix commits, so by the review stage the commit the run asks about is
-// not the one recorded here, and a harness has to substitute it before serving
-// the bytes. Serving them unchanged reaches ErrWrongRevision, which is the
-// review path's own rule firing and not the condition planted here. How the
-// substitution is made is the harness's; see question-agent-response-delivery.
+// is. It is a placeholder: what the review stage is asked about is the run's
+// to decide, so a harness has to substitute the commit the run named before
+// serving the bytes, and a report naming any other commit is refused whole
+// with ErrWrongRevision before a finding is reached. From the second review
+// round the recorded value is certainly wrong, because this scenario's review
+// produces a fix-eligible finding and the fix commits move the head; on the
+// first round the head may not have moved, so a report that parsed is not
+// evidence the substitution was made. How the substitution is made is the
+// harness's; see question-agent-response-delivery.
 func plantFindingsWithoutAction(b *builder, s *Scenario) ([]Condition, error) {
 	responses := []struct {
 		id      ID
@@ -413,12 +416,15 @@ func plantFindingsWithoutAction(b *builder, s *Scenario) ([]Condition, error) {
 				"the review path's rule satisfied rather than avoided.\n\n" +
 				"The revision is a placeholder. It is Commits[\"branch-head\"] as the build left it, " +
 				"and a harness has to replace it with the commit the run asked the review stage " +
-				"about: the run rebases the branch and, with fix_rounds.review set in the trusted " +
-				"document, may add fix commits, so by the review stage the head has moved. Served " +
-				"unchanged, the report names a commit the run did not ask about and " +
-				"findings.ParseReviewReport refuses it whole with ErrWrongRevision, which is that " +
-				"path's own rule firing and not this condition. How the substitution is made is the " +
-				"harness's; see question-agent-response-delivery.",
+				"about, because findings.ParseReviewReport refuses a report naming any other " +
+				"commit whole with ErrWrongRevision before a finding is reached, which is that " +
+				"path's own rule firing and not this condition. From the second review round the " +
+				"recorded value is certainly the wrong one: this scenario's review produces a " +
+				"fix-eligible finding, and with fix_rounds.review set in the trusted document the " +
+				"fix commits move the head. On the first round the head may still be the one " +
+				"recorded here, so a report that parsed is not evidence the substitution was " +
+				"made. How the substitution is made is the harness's; see " +
+				"question-agent-response-delivery.",
 			Mechanism: "findings.ParseReviewReport, then Report.Normalize",
 			Expect:    expectOnTheReviewPath(r.missing),
 		})
