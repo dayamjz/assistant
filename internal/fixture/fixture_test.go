@@ -822,11 +822,11 @@ func decodeConfig(t *testing.T, body string) map[string]any {
 // binding decides first. A recorded expectation nothing ever produced is a
 // claim, so it is produced here.
 //
-// It also drives each variant through the other variant's entry point, because
-// the reason there are two is that the entry points differ: the review path
-// refuses bytes stating no revision before any finding is reached, which is
-// what the findings.ParseReport conditions say about themselves and is exactly
-// the gap the review-path variants exist to close.
+// It also drives the findings.ParseReport bytes through the review path,
+// because the reason there are two variants is that the entry points differ:
+// the review path refuses bytes stating no revision before any finding is
+// reached, which is what the findings.ParseReport conditions say about
+// themselves and is exactly the gap the review-path variants exist to close.
 func TestTheP3ResponsesProduceAnAskOnTheEntryPointEachNames(t *testing.T) {
 	f := readOnly(t)
 	s := scenario(t, f, fixture.ScenarioBase)
@@ -880,8 +880,8 @@ func TestTheP3ResponsesProduceAnAskOnTheEntryPointEachNames(t *testing.T) {
 					c.ID, binding.Beyond)
 			}
 			if len(binding.Undeclared) == 0 {
-				t.Errorf("%s: the review declared reading every path the change touched, and the "+
-					"condition states it left some undeclared", c.ID)
+				t.Errorf("%s: the review declared reading every path the change touched, and this "+
+					"scenario's change touches more than the one path the review declares", c.ID)
 			}
 			requireTheRecordedActionOnTheLoopBound(t, c, report)
 			requireTheEvidenceNote(t, c, report)

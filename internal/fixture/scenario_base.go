@@ -402,11 +402,11 @@ func plantFindingsWithoutAction(b *builder, s *Scenario) ([]Condition, error) {
 				"route a review stage's output actually takes. The report states a revision and " +
 				"declares reading " + findingsLocationPath + ", which is the one path the finding " +
 				"locates itself in and a path this scenario's change touches, so PRD section 5's " +
-				"evidence binding refuses nothing: the revision matches what the run asked about, the " +
-				"finding names a path the evidence set holds, and the binding's demotion to a note " +
+				"evidence binding has nothing in the evidence set to hold against the finding: it " +
+				"names a path the declared read set holds, and the binding's demotion to a note " +
 				"does not reach it on either half of its test, since that demotion asks whether a " +
 				"finding named no path and whether the reviewer stated an action, and this finding " +
-				"named one and stated none. Nothing but the action is " +
+				"named one and stated none. Within the evidence set the action is all that is " +
 				"left to decide the outcome, which is the same condition as " + string(r.id) + " with " +
 				"the review path's rule satisfied rather than avoided.\n\n" +
 				"The revision is a placeholder. It is Commits[\"branch-head\"] as the build left it, " +
