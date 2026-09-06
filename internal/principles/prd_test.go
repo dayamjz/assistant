@@ -3,7 +3,9 @@ package principles
 import (
 	"errors"
 	"fmt"
+	"runtime"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -52,6 +54,10 @@ func TestFromPRDRefusesAListItCannotTrust(t *testing.T) {
 // tb records what Cite does to the test it is given, because what Cite does
 // when it is asked to record a principle that does not exist is the only part
 // of it that has to hold.
+//
+// Its Fatalf ends the call the way testing's does, by calling runtime.Goexit,
+// so Cite cannot run on past a refusal here in a way it never could against a
+// real *testing.T. That is why cite drives it on a goroutine of its own.
 type tb struct {
 	testing.TB
 	fatal []string
@@ -62,19 +68,44 @@ func (r *tb) Helper()                         {}
 func (r *tb) Logf(format string, args ...any) { r.logs = append(r.logs, fmt.Sprintf(format, args...)) }
 func (r *tb) Fatalf(format string, args ...any) {
 	r.fatal = append(r.fatal, fmt.Sprintf(format, args...))
+	runtime.Goexit()
+}
+
+// cite calls Cite against a recorder and returns once the call is over,
+// however it ended.
+func cite(rec *tb, p Principle, more ...Principle) {
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		Cite(rec, p, more...)
+	}()
+	wg.Wait()
 }
 
 // TestCiteRefusesAPrincipleThisPackageDoesNotHave keeps a citation from naming
-// a value that is not a principle at all.
+// a value that is not a principle at all, and pins that the refusal ends the
+// call: a real Fatalf does not return, so the first bad value is the last
+// thing Cite reports.
 func TestCiteRefusesAPrincipleThisPackageDoesNotHave(t *testing.T) {
 	rec := &tb{}
-	Cite(rec, Principle(0), Principle(len(All())+1))
-	if len(rec.fatal) != 2 {
-		t.Fatalf("Cite failed the test %d times, want once for each value: %v", len(rec.fatal), rec.fatal)
+	first, second := Principle(0), Principle(len(All())+1)
+	cite(rec, first, second)
+	if len(rec.fatal) != 1 {
+		t.Fatalf("Cite failed the test %d times, want once, on the first bad value: %v", len(rec.fatal), rec.fatal)
+	}
+	if !strings.Contains(rec.fatal[0], first.String()) {
+		t.Fatalf("Cite failed with %q, want it to name %s", rec.fatal[0], first)
+	}
+	if strings.Contains(rec.fatal[0], second.String()) {
+		t.Fatalf("Cite failed with %q, want it to stop at %s rather than reach %s", rec.fatal[0], first, second)
+	}
+	if len(rec.logs) != 0 {
+		t.Fatalf("Cite logged %v after refusing %s, want the refusal to end the call", rec.logs, first)
 	}
 
 	ok := &tb{}
-	Cite(ok, P1)
+	cite(ok, P1)
 	if len(ok.fatal) != 0 {
 		t.Fatalf("Cite failed the test on a principle it has: %v", ok.fatal)
 	}

@@ -6,7 +6,7 @@ assistant
 # Go
 *.test
 *.out
-coverage.*
+/coverage.out
 
 # Local operational state, never tracked
 .no-mistakes/
