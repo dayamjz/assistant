@@ -1,6 +1,9 @@
 package fixture
 
-import "path/filepath"
+import (
+	"path/filepath"
+	"strings"
+)
 
 // buildBase builds the scenario carrying every condition a run can meet while
 // still reaching the end of the pipeline: the four stage plants, the two
@@ -234,23 +237,51 @@ func plantPushedCommandsAndAgent(b *builder, s *Scenario) ([]Condition, error) {
 	}}, nil
 }
 
+// findingsLocationPath is the path the P3 findings locate themselves in, and
+// the whole of the evidence set the review-path variants declare. It is a path
+// this scenario's change touches, so a run's own demand names it too, which is
+// what keeps the evidence binding from deciding anything about these
+// conditions.
+const findingsLocationPath = "total.go"
+
 // plantFindingsWithoutAction writes the agent output P3 is about. It is the
 // bytes an agent prints, not a constructed report: the path P3 lives on runs
-// from the agent's text through findings.ParseReport, and a fixture that
+// from the agent's text through a parser in findings, and a fixture that
 // handed a caller an assembled Finding would skip every step of it.
 //
 // Three shapes are planted because P3 has three ways in, and the one most
 // likely to be handled and the two most likely to be forgotten are not the
-// same shape.
+// same shape. Each is planted twice, because the two entry points a report can
+// arrive through are different rules and P3 has to hold under both:
 //
-// Which entry point they are read through is stated in each condition, because
-// it is a choice rather than the only door. findings.ParseReviewReport, which
-// is what a review stage's output goes through, applies PRD section 5's
-// evidence binding first and refuses a report stating no revision with
-// ErrWrongRevision before any finding is reached. These bytes state none, so
-// they exercise P3 on the findings.ParseReport path and not on that one.
-// Whether the review path wants a P3 condition of its own is
-// question-p3-through-the-review-path.
+//   - findings.ParseReport, the entry point that holds a report to no evidence
+//     rule. Those bytes state no revision and no read set, which is what a
+//     stage that is not a review prints.
+//   - findings.ParseReviewReport, which a review stage's output goes through.
+//     It applies PRD section 5's evidence binding first, and the binding is
+//     what decides whether the action is reached at all: a report stating a
+//     revision the run did not ask about is refused whole with
+//     ErrWrongRevision, and a finding naming a path the declared evidence set
+//     does not hold is refused for want of evidence and becomes a note. The
+//     review-path bytes therefore carry a revision and a read set chosen so
+//     that neither refusal fires and the action is the only thing left to
+//     decide the outcome.
+//
+// The review path is where P3 earns its keep, because it is the path that
+// carries findings in a real run. The findings.ParseReport variants are kept
+// because a stage that is not the review reports through the entry point that
+// holds a report to no evidence rule, and a report it prints states no
+// revision by design.
+//
+// The review-path bytes name a revision, and the one they name is
+// Commits["branch-head"] as the build left it, registered here and written by
+// pushBranch from that value for the same reason the empty check list's answer
+// is. It is a placeholder on the same terms: the run rebases the branch and
+// may add fix commits, so by the review stage the commit the run asks about is
+// not the one recorded here, and a harness has to substitute it before serving
+// the bytes. Serving them unchanged reaches ErrWrongRevision, which is the
+// review path's own rule firing and not the condition planted here. How the
+// substitution is made is the harness's; see question-agent-response-delivery.
 func plantFindingsWithoutAction(b *builder, s *Scenario) ([]Condition, error) {
 	responses := []struct {
 		id      ID
@@ -261,44 +292,44 @@ func plantFindingsWithoutAction(b *builder, s *Scenario) ([]Condition, error) {
 	}{
 		{
 			id:      "refusal-finding-action-missing",
-			file:    "review-action-missing.txt",
+			file:    "review-action-missing",
 			missing: "no action field at all",
-			body:    `{"id": "total-loop-bound", "severity": "error", "location": {"path": "total.go", "line": 10}, "description": "The loop stops one element short."}`,
+			body:    `{"id": "total-loop-bound", "severity": "error", "location": {"path": "` + findingsLocationPath + `", "line": 10}, "description": "The loop stops one element short."}`,
 			planted: "a finding object carrying no action field",
 		},
 		{
 			id:      "refusal-finding-action-empty",
-			file:    "review-action-empty.txt",
+			file:    "review-action-empty",
 			missing: "an empty action",
-			body:    `{"id": "total-loop-bound", "severity": "error", "action": "", "location": {"path": "total.go", "line": 10}, "description": "The loop stops one element short."}`,
+			body:    `{"id": "total-loop-bound", "severity": "error", "action": "", "location": {"path": "` + findingsLocationPath + `", "line": 10}, "description": "The loop stops one element short."}`,
 			planted: "a finding whose action is the empty string",
 		},
 		{
 			id:      "refusal-finding-action-unrecognized",
-			file:    "review-action-unrecognized.txt",
+			file:    "review-action-unrecognized",
 			missing: "an unrecognized action",
-			body:    `{"id": "total-loop-bound", "severity": "error", "action": "autofix", "location": {"path": "total.go", "line": 10}, "description": "The loop stops one element short."}`,
+			body:    `{"id": "total-loop-bound", "severity": "error", "action": "autofix", "location": {"path": "` + findingsLocationPath + `", "line": 10}, "description": "The loop stops one element short."}`,
 			planted: "a finding whose action is a word this product does not define",
 		},
 	}
 
+	expect := func(missing string) Outcome {
+		return Outcome{
+			Summary: "The report parses, the finding survives, and its action is ask. It is not " +
+				"fix-eligible and never enters the automatic fix loop; it holds for a person. " +
+				"A run that reported " + missing + " as an error, or dropped the finding, has the " +
+				"wrong answer: this is defined behavior, not an error path.",
+			Value: "findings.ActionAsk",
+		}
+	}
+
 	var conditions []Condition
 	for _, r := range responses {
-		raw := "I read the diff against the intent and found one thing.\n\n" +
-			"```json\n" +
-			"{\n" +
-			`  "summary": "One finding on the change to Total.",` + "\n" +
-			`  "risk": "medium",` + "\n" +
-			`  "findings": [` + "\n" +
-			"    " + r.body + "\n" +
-			"  ]\n" +
-			"}\n" +
-			"```\n"
-		path := filepath.Join(s.Root, "agent-responses", r.file)
-		if err := writeFile(s.Root, "agent-responses/"+r.file, 0o644, raw); err != nil {
+		file := r.file + ".txt"
+		if err := writeFile(s.Root, "agent-responses/"+file, 0o644, findingsReport(r.body, "", nil)); err != nil {
 			return nil, err
 		}
-		s.AgentResponses[string(r.id)] = path
+		s.AgentResponses[string(r.id)] = filepath.Join(s.Root, "agent-responses", file)
 		conditions = append(conditions, Condition{
 			ID:        r.id,
 			Scenario:  s.Name,
@@ -307,23 +338,74 @@ func plantFindingsWithoutAction(b *builder, s *Scenario) ([]Condition, error) {
 			Planted: "The exact bytes an agent prints, carrying " + r.planted + ". The report is " +
 				"otherwise well formed and the finding is otherwise complete, so nothing but the action " +
 				"decides the outcome. The route is findings.ParseReport, the entry point that holds a " +
-				"report to no evidence rule. These bytes state no revision and no read set, and " +
-				"findings.ParseReviewReport refuses a report stating no revision with ErrWrongRevision " +
-				"before any finding is reached, so a run driving these same bytes through the review " +
-				"stage meets that refusal instead and never reaches the action. That is the review " +
-				"path's own rule firing, not this condition; P3 along that route is " +
-				"question-p3-through-the-review-path.",
+				"report to no evidence rule, which is what the stages that are not a review report " +
+				"through. These bytes state no revision and no read set, so they are not the review " +
+				"path's condition and cannot be served to it: findings.ParseReviewReport refuses a " +
+				"report stating no revision with ErrWrongRevision before any finding is reached. The " +
+				"same shape for that path is " + string(r.id) + "-review-path.",
 			Mechanism: "findings.ParseReport, then Report.Normalize",
-			Expect: Outcome{
-				Summary: "The report parses, the finding survives, and its action is ask. It is not " +
-					"fix-eligible and never enters the automatic fix loop; it holds for a person. " +
-					"A run that reported " + r.missing + " as an error, or dropped the finding, has the " +
-					"wrong answer: this is defined behavior, not an error path.",
-				Value: "findings.ActionAsk",
-			},
+			Expect:    expect(r.missing),
+		})
+
+		reviewID := r.id + "-review-path"
+		reviewFile := r.file + "-review-path.txt"
+		body := r.body
+		b.afterBranchHead(s, "the review-path bytes for "+string(reviewID), func(head string) error {
+			return writeFile(s.Root, "agent-responses/"+reviewFile, 0o644,
+				findingsReport(body, head, []string{findingsLocationPath}))
+		})
+		s.AgentResponses[string(reviewID)] = filepath.Join(s.Root, "agent-responses", reviewFile)
+		conditions = append(conditions, Condition{
+			ID:        reviewID,
+			Scenario:  s.Name,
+			Kind:      KindRefusal,
+			Principle: "P3",
+			Planted: "The exact bytes a reviewing agent prints, carrying " + r.planted + ", on the " +
+				"route a review stage's output actually takes. The report states a revision and " +
+				"declares reading " + findingsLocationPath + ", which is the one path the finding " +
+				"locates itself in and a path this scenario's change touches, so PRD section 5's " +
+				"evidence binding refuses nothing: the revision matches what the run asked about, the " +
+				"finding names a path the evidence set holds, and the binding's demotion to a note " +
+				"does not reach it on either half of its test, since that demotion asks whether a " +
+				"finding named no path and whether the reviewer stated an action, and this finding " +
+				"named one and stated none. Nothing but the action is " +
+				"left to decide the outcome, which is the same condition as " + string(r.id) + " with " +
+				"the review path's rule satisfied rather than avoided.\n\n" +
+				"The revision is a placeholder. It is Commits[\"branch-head\"] as the build left it, " +
+				"and a harness has to replace it with the commit the run asked the review stage " +
+				"about: the run rebases the branch and, with fix_rounds.review set in the trusted " +
+				"document, may add fix commits, so by the review stage the head has moved. Served " +
+				"unchanged, the report names a commit the run did not ask about and " +
+				"findings.ParseReviewReport refuses it whole with ErrWrongRevision, which is that " +
+				"path's own rule firing and not this condition. How the substitution is made is the " +
+				"harness's; see question-agent-response-delivery.",
+			Mechanism: "findings.ParseReviewReport, then Report.Normalize",
+			Expect:    expect(r.missing),
 		})
 	}
 	return conditions, nil
+}
+
+// findingsReport renders the exact bytes an agent prints around one finding:
+// the prose an agent writes before the report and the fenced JSON object the
+// parser scans for. revision and read are omitted when empty, which is what a
+// report answering to no evidence rule states.
+func findingsReport(finding, revision string, read []string) string {
+	var b strings.Builder
+	b.WriteString("I read the diff against the intent and found one thing.\n\n")
+	b.WriteString("```json\n{\n")
+	b.WriteString(`  "summary": "One finding on the change to Total.",` + "\n")
+	b.WriteString(`  "risk": "medium",` + "\n")
+	if revision != "" {
+		b.WriteString(`  "revision": "` + revision + `",` + "\n")
+	}
+	if len(read) > 0 {
+		b.WriteString(`  "read": ["` + strings.Join(read, `", "`) + `"],` + "\n")
+	}
+	b.WriteString(`  "findings": [` + "\n")
+	b.WriteString("    " + finding + "\n")
+	b.WriteString("  ]\n}\n```\n")
+	return b.String()
 }
 
 // plantEmptyCheckList writes the bytes the code host's provider command prints

@@ -2,12 +2,14 @@ package fixture_test
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/dayamjz/assistant/internal/findings"
 	"github.com/dayamjz/assistant/internal/fixture"
 	"github.com/dayamjz/assistant/internal/gate"
 )
@@ -810,4 +812,99 @@ func decodeConfig(t *testing.T, body string) map[string]any {
 		t.Fatalf("decode the configuration document: %v\n%s", err, body)
 	}
 	return into
+}
+
+// TestTheP3ResponsesProduceAnAskOnTheEntryPointEachNames drives the planted
+// bytes through the real parser each condition names. The catalog records that
+// a report carrying no action, an empty one, or an unreadable one parses and
+// the finding survives as an ask, and the review-path variants record the same
+// outcome through findings.ParseReviewReport, where PRD section 5's evidence
+// binding decides first. A recorded expectation nothing ever produced is a
+// claim, so it is produced here.
+//
+// It also drives each variant through the other variant's entry point, because
+// the reason there are two is that the entry points differ: the review path
+// refuses bytes stating no revision before any finding is reached, which is
+// what the findings.ParseReport conditions say about themselves and is exactly
+// the gap the review-path variants exist to close.
+func TestTheP3ResponsesProduceAnAskOnTheEntryPointEachNames(t *testing.T) {
+	f := readOnly(t)
+	s := scenario(t, f, fixture.ScenarioBase)
+
+	demand := findings.Demand{
+		Revision: s.Commits["branch-head"],
+		Touched:  []string{"total.go", "docs/behavior.md"},
+	}
+	if demand.Revision == "" {
+		t.Fatal("the scenario records no branch head for a review demand to name")
+	}
+
+	var seen int
+	for _, c := range f.Conditions {
+		if c.Principle != "P3" || c.Scenario != fixture.ScenarioBase {
+			continue
+		}
+		seen++
+		path := s.AgentResponses[string(c.ID)]
+		if path == "" {
+			t.Errorf("%s: the scenario names no agent response", c.ID)
+			continue
+		}
+		body, err := os.ReadFile(path)
+		if err != nil {
+			t.Errorf("%s: read the response: %v", c.ID, err)
+			continue
+		}
+		raw := string(body)
+
+		if strings.HasSuffix(string(c.ID), "-review-path") {
+			report, binding, err := findings.ParseReviewReport(raw, demand)
+			if err != nil {
+				t.Errorf("%s: the review path refused the bytes planted for it: %v", c.ID, err)
+				continue
+			}
+			if len(binding.Refused) != 0 || len(binding.Demoted) != 0 {
+				t.Errorf("%s: the binding refused %d finding(s) and demoted %d, and the condition is "+
+					"that nothing but the action decides the outcome",
+					c.ID, len(binding.Refused), len(binding.Demoted))
+			}
+			requireAskOnTheLoopBound(t, c.ID, report)
+			continue
+		}
+
+		report, err := findings.ParseReport(raw)
+		if err != nil {
+			t.Errorf("%s: the ordinary path refused the bytes planted for it: %v", c.ID, err)
+			continue
+		}
+		requireAskOnTheLoopBound(t, c.ID, report)
+
+		if _, _, err := findings.ParseReviewReport(raw, demand); !errors.Is(err, findings.ErrWrongRevision) {
+			t.Errorf("%s: driven through the review path these bytes gave %v, and the condition "+
+				"states they meet findings.ErrWrongRevision there", c.ID, err)
+		}
+	}
+	if seen != 6 {
+		t.Errorf("the catalog carries %d P3 conditions in the base scenario, and there are three "+
+			"shapes on each of two entry points", seen)
+	}
+}
+
+// requireAskOnTheLoopBound asserts the reviewer's own finding survived the
+// parse as an ask. It is looked up by the identifier the reviewer wrote, so
+// the informational findings the review path adds are not mistaken for it.
+func requireAskOnTheLoopBound(t *testing.T, id fixture.ID, report findings.Report) {
+	t.Helper()
+	for _, finding := range report.Findings {
+		if finding.ID != "total-loop-bound" {
+			continue
+		}
+		if finding.Action != findings.ActionAsk {
+			t.Errorf("%s: the finding's action is %q and P3 fixes it at %q",
+				id, finding.Action, findings.ActionAsk)
+		}
+		return
+	}
+	t.Errorf("%s: the parsed report carries no finding identified as total-loop-bound, so the "+
+		"finding did not survive", id)
 }
