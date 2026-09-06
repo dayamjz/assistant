@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"unicode"
 
 	"github.com/dayamjz/assistant/internal/findings"
 	"github.com/dayamjz/assistant/internal/gate"
@@ -127,20 +128,52 @@ func readOutRun(w io.Writer, r machine.Run) {
 // its full text, unsummarized and unjudged. Nothing here truncates a
 // description, drops a finding, or reorders them.
 func readOutDecision(w io.Writer, d machine.Decision) {
-	writef(w, "\nWaiting on you: %s\n", d.Question)
+	writef(w, "\nWaiting on you: %s\n", printable(d.Question))
 	if len(d.Options) > 0 {
-		writef(w, "Options: %s\n", strings.Join(d.Options, ", "))
-		writef(w, "Answer with: assistant --answer %s\n", d.Options[0])
+		options := make([]string, len(d.Options))
+		for i, option := range d.Options {
+			options[i] = printable(option)
+		}
+		writef(w, "Options: %s\n", strings.Join(options, ", "))
+		writef(w, "Answer with: assistant --answer %s\n", options[0])
 	}
 	for _, finding := range d.Findings {
-		writef(w, "\n  [%s] %s %s\n", finding.Action, finding.Severity, finding.ID)
+		writef(w, "\n  [%s] %s %s\n", printable(string(finding.Action)), printable(string(finding.Severity)), printable(finding.ID))
 		if where := locationOf(finding); where != "" {
-			writef(w, "  %s\n", where)
+			writef(w, "  %s\n", printable(where))
 		}
 		for _, line := range strings.Split(finding.Description, "\n") {
-			writef(w, "  %s\n", line)
+			writef(w, "  %s\n", printable(line))
 		}
 	}
+}
+
+// printable renders text a stage's agent wrote so that a terminal displays it
+// rather than acts on it.
+//
+// A finding's text is whatever an agent put there, and a terminal reads an
+// escape sequence in it as an instruction: clearing the screen, rewriting the
+// lines above, or setting the clipboard. The structured rendering already
+// escapes every control character on its way through machine.Encoder, and this
+// is the same protection for the rendering a person reads.
+//
+// Line breaks are not control characters here because the caller has already
+// split on them, so what reaches this is one line and every control character
+// in it is one that does not belong.
+func printable(text string) string {
+	if !strings.ContainsFunc(text, unicode.IsControl) {
+		return text
+	}
+	var b strings.Builder
+	b.Grow(len(text))
+	for _, r := range text {
+		if unicode.IsControl(r) {
+			fmt.Fprintf(&b, "\\x%02x", r)
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
 }
 
 func readOutRuns(w io.Writer, runs machine.Runs) {

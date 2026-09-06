@@ -21,6 +21,16 @@ type Health struct {
 	// Build is the software answering, which PRD section 8 requires every run
 	// to be traceable to.
 	Build store.Build `json:"build"`
+	// Instance identifies the serving process, so a caller that asked one
+	// service to make way for another can tell the successor from the service
+	// it replaced. Two answers carrying the same value came from one process;
+	// two carrying different values came from two.
+	//
+	// It says nothing else. It is minted when a service opens and is not
+	// derived from the machine, the user, the build, or the operating system's
+	// identifier for the process, so it names nothing outside the home it is
+	// serving and does not survive that process.
+	Instance string `json:"instance"`
 }
 
 // Service is what is known about the background service. It is reported by a

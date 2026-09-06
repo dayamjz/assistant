@@ -56,13 +56,20 @@ type invocation struct {
 // the product rather than a rearrangement of it.
 func run(t *testing.T, h *home.Home, workingDir string, args ...string) invocation {
 	t.Helper()
+	return runArgs(t, workingDir, append([]string{"--home", h.Root()}, args...)...)
+}
+
+// runArgs drives the surface with the command line exactly as given, for a
+// test whose subject is where on that line an argument may appear.
+func runArgs(t *testing.T, workingDir string, args ...string) invocation {
+	t.Helper()
 	var out, errs bytes.Buffer
 	executable, err := os.Executable()
 	if err != nil {
 		t.Fatalf("resolving this binary: %v", err)
 	}
 	code := cli.Run(t.Context(), cli.Environment{
-		Args:       append([]string{"--home", h.Root()}, args...),
+		Args:       args,
 		Stdout:     &out,
 		Stderr:     &errs,
 		Getenv:     func(string) string { return "" },
@@ -91,7 +98,7 @@ func newHome(t *testing.T) *home.Home {
 // git runs a git command, for building the working copy a command surface is
 // exercised in. It shells out on the same terms internal/vcs's and
 // internal/gate's own tests do.
-func git(t *testing.T, dir string, args ...string) {
+func git(t *testing.T, dir string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
@@ -101,9 +108,11 @@ func git(t *testing.T, dir string, args ...string) {
 		"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@example.invalid",
 		"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@example.invalid",
 	)
-	if out, err := cmd.CombinedOutput(); err != nil {
+	out, err := cmd.CombinedOutput()
+	if err != nil {
 		t.Fatalf("git %s in %s: %v\n%s", strings.Join(args, " "), dir, err, out)
 	}
+	return strings.TrimSpace(string(out))
 }
 
 // newSubject returns a working copy with one commit and an origin, which is

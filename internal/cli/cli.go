@@ -72,7 +72,7 @@ var verbs = []verb{
 	{"init", "Create or repair the gate for this repository.", initGate},
 	{"status", "Repository, gate, service, active run, and local branch state.", reportStatus},
 	{"runs", "Recent runs, newest first.", listRuns},
-	{"rerun", "Start a fresh run from the last known head, inheriting the recorded intent.", rerun},
+	{"rerun", "Start a fresh run of this branch from its last known head, inheriting the recorded intent.", rerun},
 	{"sync", "Reconcile your local branch with what the pipeline pushed, or recover work it holds.", syncBranch},
 	{"tasks", "List fleet work with its resolved current state.", listTasks},
 	{"watch", "Fleet view: everything in flight, everything waiting on you.", watch},
@@ -89,9 +89,17 @@ type invocation struct {
 	args []string
 	// json says the answer is written as a document rather than read out. It
 	// is settled by parseGlobal before any verb is reached, so a command line
-	// that is wrong is still answered in the shape the caller asked for.
+	// that is wrong is still answered in the shape the caller asked for, and
+	// it is settled again by the verb's own flag set so that the same flag
+	// after the verb reaches the same field.
 	json bool
-	// home is the home root this command acts on.
+	// root is the home root --home named, empty when the environment settles
+	// it. It is the string rather than an open home because --home is accepted
+	// after the verb as well as before it, so which home a command acts on is
+	// not settled until the verb's flags have been parsed.
+	root string
+	// home is the home root this command acts on. It is opened by parseFlags,
+	// so a verb reads it after it has parsed its own flags and not before.
 	home *home.Home
 	// flags is the verb's own flag set, built by the verb.
 	flags *flag.FlagSet
@@ -127,12 +135,12 @@ func dispatch(ctx context.Context, in *invocation) (any, error) {
 	return nil, usagef("%q is not a command. %s", name, usageText())
 }
 
-// parseGlobal reads the flags that apply to every verb and returns what is
-// left. It stops at the first argument that is not one of them, so a verb's
-// own flags are the verb's to parse.
+// parseGlobal reads the flags that apply to every verb where they may appear
+// before one, and returns what is left. It stops at the first argument that is
+// not one of them, so a verb's own flags are the verb's to parse; the same
+// flags after the verb are declared on the verb's own set by parseFlags.
 func (in *invocation) parseGlobal() ([]string, error) {
 	args := in.env.Args
-	root := ""
 	for len(args) > 0 {
 		switch {
 		case args[0] == "--json":
@@ -141,34 +149,34 @@ func (in *invocation) parseGlobal() ([]string, error) {
 		case args[0] == "--version":
 			return nil, versionAnswer{version: in.env.Version}
 		case args[0] == "-h", args[0] == "--help":
-			return nil, usagef("%s", usageText())
+			return nil, helpAnswer{text: usageText()}
 		case args[0] == "--home":
 			if len(args) < 2 {
 				return nil, usagef("--home needs a path")
 			}
-			root, args = args[1], args[2:]
+			in.root, args = args[1], args[2:]
 		case strings.HasPrefix(args[0], "--home="):
-			root, args = strings.TrimPrefix(args[0], "--home="), args[1:]
+			in.root, args = strings.TrimPrefix(args[0], "--home="), args[1:]
 		default:
-			return in.resolveHome(root, args)
+			return args, nil
 		}
 	}
-	return in.resolveHome(root, args)
+	return args, nil
 }
 
-// resolveHome settles which home this command acts on: the one --home names,
-// or the one internal/home resolves from the environment.
-func (in *invocation) resolveHome(root string, args []string) ([]string, error) {
+// resolveHome settles which home this command acts on: the one --home named,
+// wherever on the command line it was, or the one internal/home resolves from
+// the environment.
+func (in *invocation) resolveHome() error {
+	root := in.root
 	var err error
 	if root == "" {
 		if root, err = home.Resolve(in.env.Getenv); err != nil {
-			return nil, err
+			return err
 		}
 	}
-	if in.home, err = home.Open(root); err != nil {
-		return nil, err
-	}
-	return args, nil
+	in.home, err = home.Open(root)
+	return err
 }
 
 // versionAnswer is what --version reports. It is an error value so that the
@@ -180,18 +188,67 @@ type versionAnswer struct{ version string }
 // would print.
 func (v versionAnswer) Error() string { return v.version }
 
-// parseFlags gives the verb its own flag set, with usage written to the
-// command's own error stream rather than to the process's.
+// helpAnswer is the command list, or one verb's flags, asked for rather than
+// stumbled into. It travels the same way versionAnswer does and for the same
+// reason, and it is answered rather than refused: PRD section 9 gives
+// machine.ExitUsage the meaning "incorrect usage", and asking what the
+// commands are is not that.
+type helpAnswer struct{ text string }
+
+// Error renders the help, which is what a caller reading this as an error
+// would print.
+func (h helpAnswer) Error() string { return h.text }
+
+// parseFlags gives the verb its own flag set.
+//
+// The two global flags are declared on every verb's set as well as read before
+// the verb, so --json and --home mean the same thing wherever they appear.
+// They are read back into the invocation rather than left on the set, because
+// the output shape is decided from that field and a --json the verb parsed
+// would otherwise be a flag that was accepted and ignored.
+//
+// Nothing here writes to a stream. The flag package's own reports would land
+// on standard error beside the one render writes, and an explicit request for
+// help would land there rather than on standard output, so the set is silent
+// and what it refuses is returned.
 func (in *invocation) parseFlags(name string, declare func(*flag.FlagSet)) error {
-	set := flag.NewFlagSet("assistant "+name, flag.ContinueOnError)
-	set.SetOutput(in.env.Stderr)
+	set := flag.NewFlagSet(commandName(name), flag.ContinueOnError)
+	set.SetOutput(io.Discard)
+	set.Usage = func() {}
+	asJSON := in.json
+	root := in.root
+	set.BoolVar(&asJSON, "json", asJSON, "write the answer as one document rather than reading it out")
+	set.StringVar(&root, "home", root, "the home root this command acts on")
 	declare(set)
 	if err := set.Parse(in.args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return helpAnswer{text: verbUsage(name, set)}
+		}
 		return usageError{err: err}
 	}
+	in.json, in.root = asJSON, root
 	in.flags = set
 	in.args = set.Args()
-	return nil
+	return in.resolveHome()
+}
+
+// commandName is how a command names itself, which for the command with no
+// verb is the program.
+func commandName(verb string) string {
+	if verb == "" {
+		return "assistant"
+	}
+	return "assistant " + verb
+}
+
+// verbUsage is one verb's own flags, read off the set that would have parsed
+// them so it cannot drift from what the verb accepts.
+func verbUsage(name string, set *flag.FlagSet) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Usage: %s [flags]\n\nFlags:\n", commandName(name))
+	set.SetOutput(&b)
+	set.PrintDefaults()
+	return strings.TrimRight(b.String(), "\n")
 }
 
 // workingCopy resolves the working copy the command was run in, and returns
@@ -238,7 +295,10 @@ func usageText() string {
 		}
 		fmt.Fprintf(&b, "  %-9s %s\n", name, v.summary)
 	}
-	b.WriteString("\n  --version   Report the build.")
+	b.WriteString("\n  --json      Write the answer as one document. It is accepted before or after the command.\n")
+	b.WriteString("  --home PATH The home root to act on. It is accepted before or after the command.\n")
+	b.WriteString("  --version   Report the build.\n")
+	b.WriteString("  --help      Print this.")
 	return b.String()
 }
 
@@ -252,6 +312,11 @@ func render(in *invocation, answer any, err error) machine.Code {
 	var version versionAnswer
 	if errors.As(err, &version) {
 		writeln(env.Stdout, version.version)
+		return machine.ExitOK
+	}
+	var help helpAnswer
+	if errors.As(err, &help) {
+		writeln(env.Stdout, help.text)
 		return machine.ExitOK
 	}
 	encoder := machine.NewEncoder(env.Stdout)
@@ -273,6 +338,12 @@ func render(in *invocation, answer any, err error) machine.Code {
 		return code
 	}
 	if in.json {
+		// A verb that answers nothing writes nothing. assistant watch is the
+		// one that does, and a consumer reading one document per line must not
+		// be handed a trailing document that decodes to nothing.
+		if answer == nil {
+			return exitFor(answer)
+		}
 		if err := encoder.Encode(answer); err != nil {
 			writeln(env.Stderr, err)
 			return machine.ExitFailure

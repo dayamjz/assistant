@@ -80,7 +80,7 @@ func startService(ctx context.Context, in *invocation) (any, error) {
 		return nil, err
 	}
 	in.progressf("waiting for the service to answer a readiness check")
-	state, err := in.waitReady(ctx)
+	state, err := in.waitReady(ctx, "")
 	if err != nil {
 		return nil, err
 	}
@@ -106,12 +106,20 @@ func (in *invocation) launch() error {
 
 // waitReady polls the readiness method until the service answers or the wait
 // runs out.
-func (in *invocation) waitReady(ctx context.Context) (machine.Service, error) {
+//
+// replacing is the instance a readiness answer may not come from, which is how
+// a restart waits for the successor rather than for the service on its way
+// out: the outgoing service is still bound to the socket when it accepts a
+// restart, so the first answer would otherwise be its. It is empty when
+// nothing is being replaced.
+func (in *invocation) waitReady(ctx context.Context, replacing string) (machine.Service, error) {
 	deadline := time.Now().Add(readyTimeout)
 	for {
-		state := in.serviceState(ctx)
-		if state.Running {
-			return state, nil
+		health, err := in.serviceHealth(ctx)
+		switch {
+		case err != nil:
+		case replacing == "" || health.Instance != replacing:
+			return in.serviceStateFrom(health), nil
 		}
 		if !time.Now().Before(deadline) {
 			return machine.Service{}, fmt.Errorf("the service did not become ready within %s; its log is at %s", readyTimeout, in.home.ServiceLog())
@@ -140,6 +148,13 @@ func stopService(ctx context.Context, in *invocation, method ipc.Method) (any, e
 	}); err != nil {
 		return nil, err
 	}
+	// Which service is answering now is read before the request, because after
+	// it there is no way to ask: the outgoing service answers the socket until
+	// it lets go of it, and the successor answers the same socket afterwards.
+	outgoing, err := in.serviceHealth(ctx)
+	if err != nil {
+		return nil, err
+	}
 	var answer machine.Lifecycle
 	if err := in.callService(ctx, method, machine.LifecycleRequest{Force: force}, &answer); err != nil {
 		return nil, err
@@ -149,7 +164,7 @@ func stopService(ctx context.Context, in *invocation, method ipc.Method) (any, e
 	}
 	if method == ipc.MethodServiceRestart {
 		in.progressf("waiting for the replacement service to answer a readiness check")
-		if _, err := in.waitReady(ctx); err != nil {
+		if _, err := in.waitReady(ctx, outgoing.Instance); err != nil {
 			return nil, err
 		}
 	}

@@ -190,8 +190,12 @@ func listRuns(ctx context.Context, in *invocation) (any, error) {
 	return runs, err
 }
 
-// rerun starts a fresh run from the last known head, inheriting the recorded
-// intent, and blocks on the same terms as attaching does.
+// rerun starts a fresh run of the branch this working copy is standing on,
+// from that branch's last known head, inheriting the intent recorded there,
+// and blocks on the same terms as attaching does.
+//
+// The branch is the working copy's, the same way attaching and status read it,
+// so a caller never restarts a branch they are not on.
 func rerun(ctx context.Context, in *invocation) (any, error) {
 	if err := in.parseFlags("rerun", func(*flag.FlagSet) {}); err != nil {
 		return nil, err
@@ -200,7 +204,7 @@ func rerun(ctx context.Context, in *invocation) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	in.progressf("starting a fresh run from the last known head; this blocks until it needs a decision")
+	in.progressf("starting a fresh run of this branch from its last known head; this blocks until it needs a decision")
 	var run machine.Run
 	err = in.callService(ctx, ipc.MethodRunRerun, machine.RerunRequest{
 		Working: machine.Working{WorkingPath: working},

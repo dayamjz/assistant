@@ -22,6 +22,63 @@ type Request struct {
 	// Peer is who is on the other end. Reading an identity out of it means
 	// handling the refusal when there is none.
 	Peer Peer
+	// answered carries the work a handler asked to have run once this
+	// request's answer has been written. It is a pointer so that registering
+	// on a copy of the request still reaches the connection serving it, and it
+	// is nil in a Request nothing here built.
+	answered *answered
+}
+
+// AfterAnswer registers f to run once this request's answer has been written
+// to the connection, on the goroutine that wrote it.
+//
+// It exists for the one thing a handler cannot do for itself: act on the
+// connection it is answering on. A handler that stops the process serving it
+// has to let its answer reach the caller first, and returning is not enough,
+// because the answer is written after the handler returns.
+//
+// f runs whether the write succeeded or the connection had already failed: a
+// handler that has decided to stop must stop either way. It runs before the
+// request's in-flight slot is released, so it should not block. Registering
+// twice runs both, in the order they were registered.
+//
+// A Request this package did not build carries nowhere to defer to, so f runs
+// at once. That is the honest answer for a handler called directly by a test:
+// the ordering this buys exists only on a served connection.
+func (r Request) AfterAnswer(f func()) {
+	if f == nil {
+		return
+	}
+	if r.answered == nil {
+		f()
+		return
+	}
+	r.answered.add(f)
+}
+
+// answered is the work one request asked to have run after its answer went out.
+type answered struct {
+	mu    sync.Mutex
+	after []func()
+}
+
+// add records work to run after the answer.
+func (a *answered) add(f func()) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.after = append(a.after, f)
+}
+
+// run carries out the registered work, in the order it was registered. It is
+// called once, from the goroutine that wrote the answer.
+func (a *answered) run() {
+	a.mu.Lock()
+	work := a.after
+	a.after = nil
+	a.mu.Unlock()
+	for _, f := range work {
+		f()
+	}
 }
 
 // Handler serves requests. A refusal is a returned error, and one that matches
@@ -409,12 +466,18 @@ func (c *conn) dispatch(f frame) {
 		// blocked write and one encoded answer per request, which is the
 		// unbounded resource the cap exists to refuse.
 		defer c.endRequest()
-		result, err := c.serveRequest(f, spec, peer)
+		// The hook is what orders a handler's own follow-on work behind the
+		// write below. Nothing else in this package waits on an answer, and a
+		// handler that closes the connection it is answering on has no other
+		// way to be sure the answer went out first.
+		hooks := &answered{}
+		result, err := c.serveRequest(f, spec, peer, hooks)
 		if err != nil {
 			c.answer(f.ID, frame{ID: f.ID, Error: newError(f.Method, err)})
-			return
+		} else {
+			c.answer(f.ID, frame{ID: f.ID, Result: nullIfEmpty(result)})
 		}
-		c.answer(f.ID, frame{ID: f.ID, Result: nullIfEmpty(result)})
+		hooks.run()
 	}()
 }
 
@@ -431,7 +494,7 @@ func (c *conn) dispatch(f frame) {
 // takes down every other connection, every open stream, and the supervision of
 // every run that was going fine. The panic is reported before this returns, so
 // what it costs is one refused call rather than the evidence of the bug.
-func (c *conn) serveRequest(f frame, spec Spec, peer Peer) (result json.RawMessage, err error) {
+func (c *conn) serveRequest(f frame, spec Spec, peer Peer, hooks *answered) (result json.RawMessage, err error) {
 	defer func() {
 		value := recover()
 		if value == nil {
@@ -443,7 +506,7 @@ func (c *conn) serveRequest(f frame, spec Spec, peer Peer) (result json.RawMessa
 	if err := c.authorize(spec, peer); err != nil {
 		return nil, err
 	}
-	return c.srv.cfg.Handler.Serve(c.ctx, Request{Method: f.Method, Params: f.Params, Peer: peer})
+	return c.srv.cfg.Handler.Serve(c.ctx, Request{Method: f.Method, Params: f.Params, Peer: peer, answered: hooks})
 }
 
 // beginRequest takes one of this connection's in-flight slots, or reports the

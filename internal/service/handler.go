@@ -28,7 +28,7 @@ import (
 func (s *Service) handle(ctx context.Context, req ipc.Request) (json.RawMessage, error) {
 	switch req.Method {
 	case ipc.MethodHealth:
-		return answer(machine.Health{Ready: true, Home: s.home.Root(), Build: s.build})
+		return answer(machine.Health{Ready: true, Home: s.home.Root(), Build: s.build, Instance: s.instance})
 	case ipc.MethodStatus:
 		return call(ctx, req, s.status)
 	case ipc.MethodRunsList:
@@ -263,9 +263,12 @@ func (s *Service) lifecycle(ctx context.Context, req ipc.Request, params machine
 		}, nil
 	}
 	s.log.Printf("%s accepted", verb)
-	// The answer has to reach the caller before the connection goes, so the
-	// stop happens once this handler has returned.
-	go s.Stop(restarting)
+	// The answer has to reach the caller before the connection goes, and this
+	// is what orders it: internal/ipc runs the hook on the goroutine that
+	// wrote the answer, after it wrote it. Stopping concurrently with the
+	// handler's return would race a stop that closes this connection against
+	// the write of the answer explaining why.
+	req.AfterAnswer(func() { s.Stop(restarting) })
 	return machine.Lifecycle{Accepted: true, Restarting: restarting}, nil
 }
 

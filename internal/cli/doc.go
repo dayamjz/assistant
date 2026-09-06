@@ -57,7 +57,26 @@
 //
 // The structured answer goes to standard output and progress goes to standard
 // error, so a caller redirecting standard output gets documents and nothing
-// else.
+// else. A verb that answers nothing writes nothing, so a consumer reading one
+// document per line is never handed one that decodes to nothing.
+//
+// Asking for the version or for the help is answered rather than refused: both
+// go to standard output and exit successfully, because incorrect usage is what
+// the third code means and neither of those is that.
+//
+// --json and --home apply to every verb and are accepted before it or after
+// it. They are declared on each verb's own flag set as well as read ahead of
+// the verb, so which home a command acts on is settled once the verb's flags
+// have been parsed and not before.
+//
+// # Text a stage's agent wrote
+//
+// A finding's text is whatever an agent put there. The structured rendering
+// escapes every control character through internal/machine's encoder, and the
+// rendering a person reads escapes them too, so a description carrying an
+// escape sequence is shown rather than acted on by the terminal. What that
+// covers is the findings a decision carries, which is the text this surface
+// takes from an agent.
 //
 // # What this package does not do
 //

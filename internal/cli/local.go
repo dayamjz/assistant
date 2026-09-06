@@ -117,9 +117,18 @@ func defaultBranchOf(ctx context.Context, repo *vcs.Repository) (string, error) 
 // it, and a command that destroys work on its first invocation is one that
 // destroys work by accident.
 //
+// Nothing is destroyed until the whole removal is established as possible:
 // internal/store refuses to forget a repository whose runs have not finished,
-// or one a task still names, so what is left after this is never a record
-// pointing at something that is gone.
+// or one a task still names, and that refusal is asked for before the gate is
+// touched rather than after. A refused eject therefore leaves the working
+// copy, its assistant remote, and the gate exactly as they were.
+//
+// The window between asking and acting is not closed. A run started in that
+// window is refused by the removal itself, which leaves the records whole and
+// the gate gone, and this command reports the refusal. What the ordering buys
+// is that the ordinary refusal - a run already in flight when eject was typed
+// - destroys nothing; it is not a guarantee that nothing can be removed out
+// from under a run that starts in the meantime.
 func eject(ctx context.Context, in *invocation) (any, error) {
 	var confirm bool
 	if err := in.parseFlags("eject", func(set *flag.FlagSet) {
@@ -143,6 +152,9 @@ func eject(ctx context.Context, in *invocation) (any, error) {
 	}
 	if !confirm {
 		return nil, ejectPlan(binding.GateID, working)
+	}
+	if err := records.RepositoryRemovable(ctx, binding.GateID); err != nil {
+		return nil, err
 	}
 	if err := gate.Remove(ctx, gate.Spec{Home: in.home.Root(), WorkingPath: working}, gate.WithIndex(records)); err != nil {
 		return nil, err

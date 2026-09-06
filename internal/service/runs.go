@@ -77,8 +77,15 @@ func (s *Service) start(ctx context.Context, req machine.StartRequest) (machine.
 	})
 }
 
-// rerun starts a fresh run from the repository's last known head, inheriting
-// the recorded intent, and blocks on the same terms as start.
+// rerun starts a fresh run of the branch the caller is standing on, from that
+// branch's last known head and inheriting the intent recorded there, and
+// blocks on the same terms as start.
+//
+// The branch is read from the working copy, exactly as start reads it. A verb
+// that reached for the repository's newest run instead would restart a branch
+// the caller did not name and is not standing on, and would answer with a
+// branch they never mentioned. A branch that has never been run says so about
+// that branch rather than borrowing another's.
 //
 // It refuses while a run of that branch is still active, because a rerun is a
 // second run of the same branch and PRD section 8 has runs of one branch
@@ -88,19 +95,27 @@ func (s *Service) rerun(ctx context.Context, req machine.RerunRequest) (machine.
 	if err != nil {
 		return machine.Run{}, err
 	}
-	previous, err := s.latestRun(ctx, repository.ID)
+	working, err := vcs.OpenWorktree(ctx, req.WorkingPath, vcs.WithRedactor(redact.New()))
 	if err != nil {
 		return machine.Run{}, err
 	}
-	if _, active, err := s.activeRun(ctx, repository.ID, previous.Branch); err != nil {
+	branch, err := working.HeadBranch(ctx)
+	if err != nil {
+		return machine.Run{}, fmt.Errorf("service: reading the branch to run again: %w", err)
+	}
+	previous, err := s.latestRunOnBranch(ctx, repository.ID, branch)
+	if err != nil {
+		return machine.Run{}, err
+	}
+	if _, active, err := s.activeRun(ctx, repository.ID, branch); err != nil {
 		return machine.Run{}, err
 	} else if active {
-		return machine.Run{}, fmt.Errorf("service: %s already has a run in flight; end it before starting another", previous.Branch)
+		return machine.Run{}, fmt.Errorf("service: %s already has a run in flight; end it before starting another", branch)
 	}
 	head := previous.CurrentHead.Or(previous.SubmittedHead)
 	record, err := s.create(ctx, run{
 		repository: repository.ID,
-		branch:     previous.Branch,
+		branch:     branch,
 		head:       head,
 		base:       previous.Base,
 		intent:     previous.Intent,
@@ -111,7 +126,7 @@ func (s *Service) rerun(ctx context.Context, req machine.RerunRequest) (machine.
 		return machine.Run{}, err
 	}
 	return s.begin(ctx, record, pipeline.Start{
-		Branch:         previous.Branch,
+		Branch:         branch,
 		Base:           repository.DefaultBranch,
 		Submitted:      head,
 		Intent:         previous.Intent,
@@ -483,16 +498,21 @@ func (s *Service) activeRun(ctx context.Context, repositoryID, branch string) (s
 	return store.Run{}, false, nil
 }
 
-// latestRun returns the newest run of a repository.
-func (s *Service) latestRun(ctx context.Context, repositoryID string) (store.Run, error) {
+// latestRunOnBranch returns the newest run of one branch, which is what a
+// rerun of that branch carries forward. A branch with no run is refused by
+// name, so a caller is told about the branch they are standing on rather than
+// handed another branch's run.
+func (s *Service) latestRunOnBranch(ctx context.Context, repositoryID, branch string) (store.Run, error) {
 	records, err := s.store.RunsForRepository(ctx, repositoryID)
 	if err != nil {
 		return store.Run{}, err
 	}
-	if len(records) == 0 {
-		return store.Run{}, fmt.Errorf("service: repository %s has no run to start again from", repositoryID)
+	for _, record := range records {
+		if record.Branch == branch {
+			return record, nil
+		}
 	}
-	return records[0], nil
+	return store.Run{}, fmt.Errorf("service: %s has no run to start again from", branch)
 }
 
 // unfinished reports whether a run in this status may still move.
@@ -672,17 +692,30 @@ func stageNames() []string {
 const (
 	// intentSourceSupplied is an intent a person or a driving agent stated.
 	intentSourceSupplied = "supplied"
+	// intentSourceOffered is an intent a caller gave without making it
+	// acceptance criteria, which is a hint the intent stage weighs rather than
+	// a contract it holds the change to.
+	intentSourceOffered = "offered"
 	// intentSourceAbsent is a run started with no intent at all, which leaves
 	// the intent stage to infer one.
 	intentSourceAbsent = "absent"
 )
 
 // intentSource says where a run's intent came from.
+//
+// The three are distinct facts about the request, not two facts and a default.
+// A request carrying intent text without the supplied flag is one the wire
+// shape permits, and recording it as absent would have a run whose Intent
+// column holds text also record that nothing was given.
 func intentSource(req machine.StartRequest) string {
-	if req.IntentSupplied {
+	switch {
+	case req.IntentSupplied:
 		return intentSourceSupplied
+	case strings.TrimSpace(req.Intent) != "":
+		return intentSourceOffered
+	default:
+		return intentSourceAbsent
 	}
-	return intentSourceAbsent
 }
 
 // newRunID returns an identifier for a new run. It is random rather than

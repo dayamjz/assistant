@@ -60,16 +60,18 @@ func (in *invocation) serviceHealth(ctx context.Context) (machine.Health, error)
 // reports everything else, and reporting that it is down is most of what a
 // person asked for.
 func (in *invocation) serviceState(ctx context.Context) machine.Service {
-	state := machine.Service{Socket: in.home.Socket()}
 	health, err := in.serviceHealth(ctx)
 	if err != nil {
-		state.Detail = err.Error()
-		return state
+		return machine.Service{Socket: in.home.Socket(), Detail: err.Error()}
 	}
+	return in.serviceStateFrom(health)
+}
+
+// serviceStateFrom is what a readiness answer says about the service, so the
+// two callers that have one report it the same way.
+func (in *invocation) serviceStateFrom(health machine.Health) machine.Service {
 	build := health.Build
-	state.Running = true
-	state.Build = &build
-	return state
+	return machine.Service{Running: true, Socket: in.home.Socket(), Build: &build}
 }
 
 // openRecords opens a home's database with the credential remover PRD

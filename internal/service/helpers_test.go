@@ -121,6 +121,11 @@ func newSubject(t *testing.T) string {
 	return resolved
 }
 
+// writeFile writes a file in the subject repository.
+func writeFile(path, content string) error {
+	return os.WriteFile(path, []byte(content), 0o600)
+}
+
 // recordRepository writes the repository record a run needs, which assistant
 // init writes in the product.
 func recordRepository(t *testing.T, h *home.Home, workingPath string) store.Repository {

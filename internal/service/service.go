@@ -2,6 +2,8 @@ package service
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net"
@@ -110,8 +112,12 @@ type Service struct {
 	// digest identifies the configuration document a run resolved, which PRD
 	// section 8 requires on every run so a surprising verdict traces to the
 	// settings that reached it as well as to the code.
-	digest   string
-	build    store.Build
+	digest string
+	build  store.Build
+	// instance identifies this serving process, so a caller that asked one
+	// service to make way for another can tell the successor from the service
+	// it replaced. It is minted here and nowhere else.
+	instance string
 	catalog  *agents.Catalog
 	registry *registry
 
@@ -176,9 +182,15 @@ func Open(ctx context.Context, o Options) (*Service, error) {
 	if err != nil {
 		return nil, err
 	}
+	instance, err := newInstanceID()
+	if err != nil {
+		_ = lock.Release()
+		return nil, err
+	}
 	s := &Service{
 		home:      o.Home,
 		lock:      lock,
+		instance:  instance,
 		stages:    o.Stages,
 		build:     o.Build,
 		catalog:   o.Catalog,
@@ -392,4 +404,16 @@ func (s *Service) driverFor(ctx context.Context) (*driver, error) {
 	s.built = &driver{agent: resolution, runs: runService, pipeline: built, executor: executor}
 	s.log.Printf("resolved agent %s for runs of this service", resolution.Name)
 	return s.built, nil
+}
+
+// newInstanceID mints the identifier one serving process is known by. It is
+// random rather than the operating system's process identifier, which is
+// reused, and it carries no meaning: what it is for is telling two services of
+// one home apart.
+func newInstanceID() (string, error) {
+	var raw [8]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", fmt.Errorf("service: generating a service identifier: %w", err)
+	}
+	return hex.EncodeToString(raw[:]), nil
 }

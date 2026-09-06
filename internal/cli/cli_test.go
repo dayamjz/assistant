@@ -2,9 +2,11 @@ package cli_test
 
 import (
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 
+	"github.com/dayamjz/assistant/internal/gate"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/store"
@@ -370,5 +372,134 @@ func TestARunCanBeReadAndEndedThroughTheSurface(t *testing.T) {
 	// failure: there is nothing to end.
 	if got := run(t, h, subject, "--cancel"); got.code != machine.ExitUsage {
 		t.Fatalf("ending a run that is not there exited %s, want usage", got.code)
+	}
+}
+
+// The two global flags mean the same thing wherever they appear on the command
+// line. README.md tells the reader to add --json to any command, and a flag
+// that is only accepted before the verb makes that untrue for every form a
+// person would naturally type.
+func TestTheGlobalFlagsAreAcceptedAfterTheCommandAsWellAsBeforeIt(t *testing.T) {
+	t.Parallel()
+	h := newHome(t)
+	subject := newSubject(t)
+
+	got := run(t, h, subject, "status", "--json")
+	if got.code != machine.ExitOK {
+		t.Fatalf("assistant status --json exited %s:\n%s%s", got.code, got.stdout, got.stderr)
+	}
+	var status machine.Status
+	if err := json.Unmarshal([]byte(got.stdout), &status); err != nil {
+		t.Fatalf("status --json did not write a document: %v\n%s", err, got.stdout)
+	}
+
+	// And after a flag of the verb's own, which is where a naive scan of the
+	// command line would take the value for the flag.
+	got = run(t, h, subject, "runs", "--limit", "5", "--json")
+	var failure machine.Failure
+	if err := json.Unmarshal([]byte(got.stdout), &failure); err != nil {
+		t.Fatalf("runs --limit 5 --json did not write a document: %v\n%s", err, got.stdout)
+	}
+
+	// --home settles which home the command acts on wherever it appears, so
+	// the answer has to be about the home it named.
+	got = runArgs(t, subject, "status", "--home", h.Root(), "--json")
+	if got.code != machine.ExitOK {
+		t.Fatalf("assistant status --home ... --json exited %s:\n%s%s", got.code, got.stdout, got.stderr)
+	}
+	if err := json.Unmarshal([]byte(got.stdout), &status); err != nil {
+		t.Fatalf("the answer does not decode: %v\n%s", err, got.stdout)
+	}
+	if status.Home != h.Root() {
+		t.Fatalf("the command acted on %s, want the home named after the verb %s", status.Home, h.Root())
+	}
+}
+
+// Asking what the commands are is not incorrect usage. PRD section 9 gives
+// machine.ExitUsage that meaning, and a driving agent that read exit 2 as "my
+// arguments were wrong" would be told the wrong thing.
+func TestHelpIsAnsweredRatherThanRefused(t *testing.T) {
+	t.Parallel()
+	h := newHome(t)
+	subject := newSubject(t)
+
+	for _, c := range []struct {
+		args []string
+		says string
+	}{
+		{[]string{"-h"}, "Commands:"},
+		{[]string{"--help"}, "Commands:"},
+		{[]string{"runs", "-h"}, "-limit"},
+		{[]string{"runs", "--help"}, "-limit"},
+	} {
+		got := run(t, h, subject, c.args...)
+		if got.code != machine.ExitOK {
+			t.Fatalf("assistant %s exited %s, want ok", strings.Join(c.args, " "), got.code)
+		}
+		if !strings.Contains(got.stdout, c.says) {
+			t.Fatalf("assistant %s does not answer with %q on standard output:\n%s",
+				strings.Join(c.args, " "), c.says, got.stdout)
+		}
+		if got.stderr != "" {
+			t.Fatalf("assistant %s wrote a failure to standard error:\n%s",
+				strings.Join(c.args, " "), got.stderr)
+		}
+	}
+}
+
+// Nothing is destroyed unless the whole removal can complete. The refusal that
+// stops a repository being forgotten while a run has not finished is asked for
+// before the gate is touched, so an eject that is refused leaves the gate and
+// the assistant remote exactly as they were.
+func TestEjectRefusedByAnActiveRunRemovesNothing(t *testing.T) {
+	requiresIdentifiedPeer(t)
+	h := newHome(t)
+	subject := newSubject(t)
+	serve(t, h)
+
+	created := run(t, h, subject, "--json", "init")
+	if created.code != machine.ExitOK {
+		t.Fatalf("assistant init exited %s:\n%s%s", created.code, created.stdout, created.stderr)
+	}
+	var built machine.Init
+	if err := json.Unmarshal([]byte(created.stdout), &built); err != nil {
+		t.Fatalf("init does not decode: %v\n%s", err, created.stdout)
+	}
+
+	started := run(t, h, subject, "--json", "--intent", "a change held at its first stage")
+	if started.code != machine.ExitOK {
+		t.Fatalf("starting a run exited %s:\n%s", started.code, started.stdout)
+	}
+	held := decodeRun(t, started.stdout)
+	if held.Outcome != machine.OutcomeDecision {
+		t.Fatalf("the run reports %s, want a run waiting on a decision", held.Outcome)
+	}
+
+	ejected := run(t, h, subject, "eject", "--confirm")
+	if ejected.code != machine.ExitFailure {
+		t.Fatalf("eject --confirm exited %s while a run was in flight, want failure:\n%s%s",
+			ejected.code, ejected.stdout, ejected.stderr)
+	}
+
+	// The gate it refused to remove is still on disk.
+	if _, err := os.Stat(built.Gate.Repository); err != nil {
+		t.Fatalf("the refused eject removed the gate at %s: %v", built.Gate.Repository, err)
+	}
+	// So is the remote a push is validated through.
+	if remotes := git(t, subject, "remote"); !strings.Contains(remotes, gate.RemoteName) {
+		t.Fatalf("the refused eject removed the %s remote; the working copy has %q", gate.RemoteName, remotes)
+	}
+	// And the records are whole, so the working copy is still bound.
+	if got := run(t, h, subject, "--json", "status"); !strings.Contains(got.stdout, `"present":true`) {
+		t.Fatalf("the refused eject unbound the working copy:\n%s", got.stdout)
+	}
+
+	// Once the run is over the same command carries the removal out, so what
+	// was refused was the removal and not the command.
+	if got := run(t, h, subject, "--json", "--cancel"); got.code != machine.ExitOK {
+		t.Fatalf("ending the run exited %s:\n%s", got.code, got.stdout)
+	}
+	if got := run(t, h, subject, "eject", "--confirm"); got.code != machine.ExitOK {
+		t.Fatalf("eject --confirm exited %s once the run was over:\n%s%s", got.code, got.stdout, got.stderr)
 	}
 }

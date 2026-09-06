@@ -209,13 +209,8 @@ func (s *Store) ForgetRepository(ctx context.Context, id string) (int, error) {
 		if err != nil {
 			return err
 		}
-		for _, runID := range runIDs {
-			if err := refuseIfRunIsHeldByATask(ctx, tx, id, runID); err != nil {
-				return err
-			}
-			if err := refuseIfRunIsActive(ctx, tx, id, runID); err != nil {
-				return err
-			}
+		if err := refuseUnlessForgettable(ctx, tx, id, runIDs); err != nil {
+			return err
 		}
 		// The order is the reference order reversed: every table that names a
 		// run goes before the runs, and the runs go before the repository, so
@@ -245,6 +240,42 @@ func (s *Store) ForgetRepository(ctx context.Context, id string) (int, error) {
 		return 0, err
 	}
 	return removed, nil
+}
+
+// RepositoryRemovable reports what would stop ForgetRepository, and removes
+// nothing. It returns the same ErrRepositoryInUse and ErrRunActive refusals,
+// against the same rows, so a caller with something of its own to destroy can
+// find out first rather than destroy it and then be refused.
+//
+// It is a question and not a reservation. Nothing is held between the answer
+// and a later ForgetRepository, so a run started in between is refused there,
+// which is where the refusal is authoritative: this reports what is true now.
+//
+// A repository that is not there is removable, on the same terms
+// ForgetRepository takes it: there is nothing left to do.
+func (s *Store) RepositoryRemovable(ctx context.Context, id string) error {
+	return s.inTx(ctx, func(tx *sql.Tx) error {
+		runIDs, err := repositoryRunIDs(ctx, tx, id)
+		if err != nil {
+			return err
+		}
+		return refuseUnlessForgettable(ctx, tx, id, runIDs)
+	})
+}
+
+// refuseUnlessForgettable is the whole of what stops a repository being
+// forgotten. It is one function so that the question asked before a removal
+// and the check made inside it cannot answer differently.
+func refuseUnlessForgettable(ctx context.Context, tx *sql.Tx, id string, runIDs []string) error {
+	for _, runID := range runIDs {
+		if err := refuseIfRunIsHeldByATask(ctx, tx, id, runID); err != nil {
+			return err
+		}
+		if err := refuseIfRunIsActive(ctx, tx, id, runID); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // repositoryRunIDs returns the identifiers of every run of one repository.
