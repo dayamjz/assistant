@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"path/filepath"
@@ -137,7 +138,7 @@ func TestNoCallOnThisProtocolCanRecordThatAPersonDecided(t *testing.T) {
 	}
 	// The replies above are what the handler said; this is what the database
 	// holds after every one of those calls.
-	assertNoPersonInTheStore(t, rec.store)
+	assertNoPersonInTheStore(t, rec)
 }
 
 // The frame is where a caller would put a resolver if the protocol had a field
@@ -184,7 +185,7 @@ func TestAFrameThatNamesAResolverDoesNotRecordOne(t *testing.T) {
 	}
 	// Every hold the frames above resolved is in the store, and none of them
 	// says a person decided.
-	assertNoPersonInTheStore(t, rec.store)
+	assertNoPersonInTheStore(t, rec)
 }
 
 // The absence above has to be a property of this path rather than of a build
@@ -228,18 +229,27 @@ func TestHoldResolverAnswersTheSameForEveryRequest(t *testing.T) {
 }
 
 // assertNoPersonInTheStore reads every hold the handler wrote and fails on one
-// that says a person decided.
-func assertNoPersonInTheStore(t *testing.T, s *store.Store) {
+// that says a person decided. The sweep is bounded by the recorder's own count
+// rather than by the first read that fails, so a read that fails for any other
+// reason - a row outside the closed set, a closed store - fails this test
+// instead of ending it early as if the list had run out.
+func assertNoPersonInTheStore(t *testing.T, rec *holdRecorder) {
 	t.Helper()
 	ctx := context.Background()
 	person := store.ResolvedByPerson()
-	for i := 1; ; i++ {
-		held, err := s.Hold(ctx, fmt.Sprintf("hold-%d", i))
+
+	rec.mu.Lock()
+	n := rec.n
+	rec.mu.Unlock()
+	if n == 0 {
+		t.Fatal("no hold was recorded at all, so this test checked nothing")
+	}
+
+	for i := 1; i <= n; i++ {
+		key := fmt.Sprintf("hold-%d", i)
+		held, err := rec.store.Hold(ctx, key)
 		if err != nil {
-			if i == 1 {
-				t.Fatal("no hold was recorded at all, so this test checked nothing")
-			}
-			return
+			t.Fatalf("reading %s: %v", key, err)
 		}
 		by, known := held.ResolvedBy.Get()
 		if !known {
@@ -248,5 +258,10 @@ func assertNoPersonInTheStore(t *testing.T, s *store.Store) {
 		if by == person {
 			t.Fatalf("hold %s records that a person decided", held.Key)
 		}
+	}
+	// The sweep covered every hold the recorder wrote, which the store agrees
+	// with by not finding the one past the last.
+	if _, err := rec.store.Hold(ctx, fmt.Sprintf("hold-%d", n+1)); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("reading past the last hold answered %v, want ErrNotFound", err)
 	}
 }
