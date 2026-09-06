@@ -192,11 +192,12 @@ func (d Demand) Guidance() (string, error) {
 	b.WriteString(`  - A finding that asserts something about code outside this change - a caller, ` +
 		`an interface, a test that covers it - names that code in "cites", a list of ` +
 		`repository-relative paths, and is refused unless "read" names it too.` + "\n")
-	b.WriteString("  - A finding that names no path and cites none is recorded as informational " +
-		"and will not stop the run, where you stated an action this system recognizes. One " +
-		"whose action is missing, empty, or a word this system cannot read still goes to a " +
-		"person, whatever it names, because deciding who resolves it is not this rule's to " +
-		"make.\n\n")
+	b.WriteString("  - Those two are asked first and decide on their own, whatever action you " +
+		"gave a finding and whether or not you gave it one. A finding that survives them and " +
+		"names no path at all is recorded as informational and will not stop the run, where " +
+		"you stated an action this system recognizes; where its action is missing, empty, or " +
+		"a word this system cannot read, it is not recorded that way and still goes to a " +
+		"person.\n\n")
 	b.WriteString("Listing the paths below and reading nothing else buys you nothing. It is a " +
 		"permitted answer and it is reported as one, but it forfeits every finding that reaches " +
 		"past the change, which is most of what an independent review is for. Listing a path you " +

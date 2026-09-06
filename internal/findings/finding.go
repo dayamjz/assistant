@@ -139,18 +139,28 @@ type Paths []string
 //   - A single JSON string yields a one-element list. An agent asked for the
 //     paths one finding rests on writes the single path often enough that
 //     refusing it would cost the report for a shape everyone understands.
-//   - JSON null yields no paths, as does a list with no elements.
-//   - Any other value, a number or an object among them, and any element of a
-//     list that is not a string, is kept as one entry holding the JSON as it
-//     was written.
+//   - The whole value written as JSON null yields no paths, as does a list
+//     with no elements. Null there is how JSON says the field is absent, which
+//     is a readable answer meaning nothing was named.
+//   - Every other value, a number or an object among them, and every element
+//     of a list that is not a JSON string, null included, is kept as one entry
+//     holding the JSON as it was written. Null inside a list is not the case
+//     above: the list says here is a path and the element is not one.
 //
 // The last rule is the one that decides rather than reports, and it is chosen
 // to fail toward refusing a finding. An entry holding JSON text names
 // something no evidence set of real paths holds, so a finding resting on it is
 // refused for want of evidence and the refusal quotes what was written, rather
 // than the finding being admitted because the thing it rests on could not be
-// read. Nothing here can make a finding supported that was not: an evidence
-// set that read as nothing supports nothing.
+// read. What decides is what the value is rather than whether some decode of
+// it reported an error, because unmarshalling null into a string reports none
+// and would drop the entry the rule exists to keep.
+//
+// It is one rule for both fields because it is one type, and an evidence set
+// is the safe side of it too: an entry no real path equals supports nothing,
+// so a reviewer whose declaration could not be read admits nothing by it, and
+// the entry stands in the reported comparison where the unreadable declaration
+// is a person's to see rather than something silently dropped.
 func (p *Paths) UnmarshalJSON(b []byte) error {
 	if strings.TrimSpace(string(b)) == "null" {
 		*p = nil
@@ -169,15 +179,24 @@ func (p *Paths) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// pathText is one entry as a path: the string it holds, or, for a value that
-// is not a string, the JSON as it was written, so a path this package could
+// pathText is one entry as a path: the string a JSON string holds, or, for
+// every other value, the JSON as it was written, so a path this package could
 // not read stays quotable in the refusal it causes.
+//
+// Which of the two it is is decided by what the value is, a JSON string or
+// not, rather than by whether decoding it into a string returned an error.
+// Null is why: encoding/json unmarshals it into a string without complaint and
+// without writing anything, so an error is not the question that separates a
+// path from a value that is not one.
 func pathText(raw json.RawMessage) string {
-	var path string
-	if json.Unmarshal(raw, &path) == nil {
-		return path
+	text := strings.TrimSpace(string(raw))
+	if strings.HasPrefix(text, `"`) {
+		var path string
+		if json.Unmarshal(raw, &path) == nil {
+			return path
+		}
 	}
-	return strings.TrimSpace(string(raw))
+	return text
 }
 
 // Finding is one thing a stage found. Its Action decides who resolves it, and

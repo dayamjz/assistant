@@ -284,6 +284,90 @@ func TestAPathThisPackageCannotReadRefusesTheFindingRatherThanTheReport(t *testi
 	}
 }
 
+// TestAPathElementNobodyCouldReadRefusesTheFinding covers the element shape
+// that reports no error when it is decoded into a string, which is why the
+// rule is written on what the value is rather than on how the decode went. A
+// null citation is not a citation the reviewer dropped: the list said here is
+// a path and the element is not one, so the finding rests on something nothing
+// read supports and is refused.
+//
+// The control is the same report with the null element gone, which is the one
+// thing that differs and which keeps the identical finding fix-eligible, so
+// what refuses it is this rule rather than anything else about the report.
+func TestAPathElementNobodyCouldReadRefusesTheFinding(t *testing.T) {
+	t.Parallel()
+	report := func(cites string) string {
+		return reviewerPrinted(
+			`{"summary":"One pass over the change.","revision":"` + reviewedRevision + `",` +
+				`"read":["` + touchedPath + `"],"findings":[` +
+				`{"id":"breaks-the-caller","severity":"error","action":"fix",` +
+				`"location":"` + touchedPath + `:8","cites":` + cites + `,` +
+				`"description":"Returning a sum here breaks the one caller."}]}`)
+	}
+
+	t.Run("a null among the citations", func(t *testing.T) {
+		t.Parallel()
+		bound, binding, err := findings.ParseReviewReport(
+			report(`["`+touchedPath+`",null]`), demand())
+		if err != nil {
+			t.Fatalf("a null citation lost the whole report: %v", err)
+		}
+		if len(binding.Refused) != 1 || binding.Refused[0].Path != "null" {
+			t.Fatalf("expected the finding refused for the citation nobody could read, got %+v",
+				binding.Refused)
+		}
+		if got := bound.Fixable(); len(got) != 0 {
+			t.Fatalf("a finding citing something nobody could read was admitted: %+v", got)
+		}
+	})
+
+	t.Run("the same citations without it", func(t *testing.T) {
+		t.Parallel()
+		bound, binding, err := findings.ParseReviewReport(report(`["`+touchedPath+`"]`), demand())
+		if err != nil {
+			t.Fatalf("parsing the review: %v", err)
+		}
+		if len(binding.Refused) != 0 {
+			t.Fatalf("nothing should have been refused, got %+v", binding.Refused)
+		}
+		if got := bound.Fixable(); len(got) != 1 {
+			t.Fatalf("the supported finding should be fix-eligible, got %+v", got)
+		}
+	})
+}
+
+// TestAnEvidenceSetEntryNobodyCouldReadIsDeclaredRatherThanDropped is the same
+// rule on the other field it governs, and the reason it is one type. The
+// entry equals no real path, so it supports nothing and admits nothing on its
+// own; what it must not do is disappear, because a declaration nobody could
+// read is a person's to see.
+func TestAnEvidenceSetEntryNobodyCouldReadIsDeclaredRatherThanDropped(t *testing.T) {
+	t.Parallel()
+	raw := reviewerPrinted(
+		`{"summary":"One pass over the change.","revision":"` + reviewedRevision + `",` +
+			`"read":["` + touchedPath + `",null],"findings":[` +
+			`{"id":"breaks-the-caller","severity":"error","action":"fix",` +
+			`"location":"` + touchedPath + `:8",` +
+			`"description":"Returning a sum here breaks the one caller."}]}`)
+
+	bound, binding, err := findings.ParseReviewReport(raw, demand())
+	if err != nil {
+		t.Fatalf("a null in the evidence set lost the whole report: %v", err)
+	}
+	if !equalPaths(binding.Read, []string{touchedPath, "null"}) {
+		t.Fatalf("the evidence set is %q, want the unreadable entry declared rather than dropped",
+			binding.Read)
+	}
+	if !equalPaths(binding.Beyond, []string{"null"}) {
+		t.Errorf("Beyond is %q, want the unreadable entry, which no path this change touched equals",
+			binding.Beyond)
+	}
+	if got := bound.Fixable(); len(got) != 1 {
+		t.Errorf("a finding inside the readable part of the evidence set should still be "+
+			"fix-eligible, got %+v", got)
+	}
+}
+
 // TestTheEvidenceNoteTellsPartOfTheChangeFromAllOfIt is the case that read as
 // an endorsement: a reviewer declaring one of two touched paths reaches the
 // same branch as one that declared both, and "what a small change needs" is
