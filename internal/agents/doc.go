@@ -72,9 +72,11 @@
 // CapabilitySuppressProjectInstructions today, is a declaration this package
 // takes at its word: nothing here can tell an adapter that suppresses a
 // repository's instruction files from one that says it does. What holds today
-// is narrower. No adapter this build ships declares it, so every path needing
-// it is refused, and the conformance test fails on the first adapter that
-// declares it without a probe to hold it to.
+// is narrower. No adapter this build ships declares it, and internal/pipeline
+// refuses a run that asks for it when it builds the topology, which is where
+// that refusal happens and not here: this package has nothing a suppression
+// request could arrive in and so nothing to refuse at. The conformance test
+// fails on the first adapter that declares it without a probe to hold it to.
 //
 // SessionRunner is exported, so calling Fixer on it is expressible without
 // going through OpenFixer, and a caller that built a Runner itself and asserts
@@ -158,9 +160,11 @@
 // It does not decide what an agent may be told. Suppressing a repository's own
 // instruction files, which PRD section 10 makes a configuration key, needs a
 // mechanism per adapter and is not implemented here. What is here is the name
-// for it, CapabilitySuppressProjectInstructions, which no adapter declares, so
-// a run configured to suppress instructions is refused rather than run with
-// them still in force.
+// for it, CapabilitySuppressProjectInstructions, which no adapter declares.
+// The refusal that keeps a run configured to suppress instructions from
+// running with them still in force is internal/pipeline's, taken when it
+// builds the topology; nothing here would refuse such a run, because nothing
+// here is asked to suppress anything.
 //
 // It does not retry. PRD section 8 lists retries alongside fallback ordering
 // for this module, and a run's own fix rounds and bounds are the only

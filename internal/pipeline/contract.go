@@ -38,10 +38,12 @@ type Implementation struct {
 	// by many runs. A stage in the topology is a stage some run will take.
 	//
 	// Declaring nothing is the common case and means the stage needs nothing
-	// beyond an agent that runs. A stage that needed something and did not
-	// declare it is not thereby served: internal/agents refuses at the call
-	// instead, so what the declaration buys is the refusal arriving before the
-	// run rather than partway through it.
+	// beyond an agent that runs. A stage that needed a session and did not
+	// declare it is not thereby served: agents.OpenFixer refuses at the call
+	// instead, so what the declaration buys there is the refusal arriving
+	// before the run rather than partway through it. That backstop is per
+	// capability rather than general, and capability.go says which
+	// requirements have one.
 	Requires []agents.Capability
 	// NewBody constructs the implementation for one execution of the stage.
 	// The pipeline calls it each time the stage runs and never reuses a body,

@@ -118,13 +118,27 @@
 // which is checked whenever a Fixer is supplied because what it asks is
 // whether the declaration is legal at all.
 //
-// This is the early half of the rule and not the load-bearing half. A path
-// that needs a capability and forgot to declare it is refused late rather than
-// served: internal/agents has no Fixer method on Runner at all, so an adapter
-// without sessions has nothing a fix body could open one through, and
-// agents.OpenFixer reads the adapter's own declaration and not the one here.
-// What the declaration here buys is a refusal that arrives before the run and
-// names the path, instead of one that arrives partway through it.
+// Whether this is the early half of the rule or the whole of it depends on the
+// capability, and the two rows of the table differ.
+//
+// For resumable sessions it is the early half and not the load-bearing one. A
+// fix path that needs a session and forgot to declare it is refused late
+// rather than served: internal/agents has no Fixer method on Runner at all, so
+// an adapter without sessions has nothing a fix body could open one through,
+// and agents.OpenFixer reads the adapter's own declaration and not the one
+// here. What the declaration here buys for that capability is a refusal that
+// arrives before the run and names the path, instead of one that arrives
+// partway through it.
+//
+// For instruction suppression there is no second half. internal/agents
+// implements no suppression, an Invocation has no field one could be asked for
+// in, and so there is nothing there for a forgotten declaration to be refused
+// at. New's check on Options.SuppressProjectInstructions is the only place in
+// this repository PRD section 10's rule is enforced, that a run configured to
+// suppress instructions fails before an agent with no verified mechanism is
+// launched. A caller that builds Options without carrying that configuration
+// key across is caught nowhere else, and removing the check here does not move
+// the refusal later, it removes it.
 //
 // # The state schema has one owner
 //

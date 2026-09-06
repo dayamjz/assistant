@@ -27,9 +27,11 @@ const (
 	// CapabilitySuppressProjectInstructions is an adapter with a mechanism for
 	// ignoring the repository's own instruction files, which PRD section 10
 	// makes config.KeySuppressProjectInstructions. No adapter this build ships
-	// declares it, because no adapter implements it, so a run configured to
-	// suppress instructions is refused rather than run with the instructions
-	// still in force.
+	// declares it, because no adapter implements it, so internal/pipeline
+	// refuses a run configured to suppress instructions rather than let it run
+	// with the instructions still in force. That refusal is the only one this
+	// capability has: nothing in this package is asked to suppress anything,
+	// so there is nothing here for a second one to sit at.
 	CapabilitySuppressProjectInstructions Capability = "suppress_project_instructions"
 )
 

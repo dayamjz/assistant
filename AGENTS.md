@@ -175,8 +175,12 @@ Each has cost this repository more than one round of review.
   anything else fails to build. It also refuses a path the resolved adapter has
   not declared: `Options.Adapter` is the declaration, an `Implementation` and a
   `Fixer` name what they need in `Requires`, and `capability.go` gathers every
-  requirement in one place. That is the early half of the rule; the half that
-  cannot be forgotten is `internal/agents`. Read its `doc.go` before changing
+  requirement in one place. For `resumable_sessions` that is the early half of
+  the rule and the half that cannot be forgotten is `internal/agents`; for
+  `suppress_project_instructions` there is no second half, because
+  `internal/agents` implements no suppression and so has nothing to refuse at,
+  which leaves `New`'s check the only enforcement of PRD section 10's refusal
+  before launch. Read its `doc.go` before changing
   the loop or the holds, and for the residual gaps: the requested fix round PRD
   section 5's hold offers is not wired, and convergence is over the whole
   state.

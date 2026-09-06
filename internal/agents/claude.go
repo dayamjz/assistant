@@ -182,8 +182,9 @@ func (r *claudeRunner) Name() string { return ClaudeName }
 // This adapter carries a configured entry's own flags and the four the run
 // manages, and none of those tells Claude Code to ignore a repository's
 // instruction files. Declaring it would buy a run that suppresses nothing
-// while reporting that it did, which is the substitution PRD section 8 refuses,
-// so a run that asks for suppression is refused against this adapter instead.
+// while reporting that it did, which is the substitution PRD section 8 refuses.
+// Leaving it undeclared is what lets internal/pipeline refuse a run that asks
+// for suppression against this adapter before it launches one.
 func (r *claudeRunner) Capabilities() Capabilities {
 	return Declare(CapabilityResumableSessions)
 }

@@ -80,15 +80,22 @@ func fixerRequirements(o Options, fixing bool) []requirement {
 // checkRequirements refuses the pipeline when the adapter has not declared
 // something a path it would build needs.
 //
-// It is the pipeline's half of PRD section 8's rule, and it is the early half.
-// The refusal happens while the topology is being built, before a run starts
-// and so before any adapter is launched, and it names the path and the
-// capability. The other half is internal/agents, which refuses at the call:
-// OpenFixer will not hand a session to an adapter that has not declared one
-// whatever any declaration here said. So a path that needs a capability and
-// forgot to declare it is refused late and by name rather than served by a
-// weaker path, and what this buys is that the refusal arrives before the run
-// instead of partway through it.
+// It is the pipeline's half of PRD section 8's rule. The refusal happens while
+// the topology is being built, before a run starts and so before any adapter
+// is launched, and it names the path and the capability.
+//
+// Whether a second half stands underneath it differs by capability, and a
+// reader should not take the resumable-sessions story for the general one.
+// For agents.CapabilityResumableSessions there is one: agents.OpenFixer will
+// not hand a session to an adapter that has not declared one whatever any
+// declaration here said, so a fix path that forgot to declare it is refused
+// late and by name rather than served by a weaker path, and what this check
+// buys is that the refusal arrives before the run instead of partway through
+// it. For agents.CapabilitySuppressProjectInstructions there is none:
+// internal/agents implements no suppression and so has nothing to refuse at,
+// which makes this check on Options.SuppressProjectInstructions the only
+// enforcement of PRD section 10's rule that such a run fails before an agent
+// is launched.
 func checkRequirements(o Options, fixing bool) error {
 	needed := append(requirements(o), fixerRequirements(o, fixing)...)
 	for _, need := range needed {

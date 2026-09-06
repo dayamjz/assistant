@@ -96,7 +96,11 @@ type SessionRunner interface {
 // refusing an adapter whose declaration and type disagree before any caller
 // holds it.
 //
-// The refusal is a *CapabilityError naming CapabilityResumableSessions.
+// A refusal comes in one of two shapes. An adapter that has not declared
+// resumable sessions is refused with a *CapabilityError naming that
+// capability. One that declared them and is no SessionRunner is refused with
+// an *AdapterError wrapping ErrAdapterDeclaration, which is the adapter defect
+// Resolve would already have caught for an adapter it returned.
 func OpenFixer(ctx context.Context, r Runner, resume string) (Fixer, error) {
 	if !r.Capabilities().Has(CapabilityResumableSessions) {
 		return nil, &CapabilityError{
