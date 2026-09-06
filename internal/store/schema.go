@@ -15,6 +15,13 @@ type migration struct {
 	statements []string
 }
 
+// sealCheckpointTableMigration names the migration that empties and seals the
+// one-row checkpoint table. It is a constant so the name has one owner: a
+// caller that needs to find that entry in schema looks it up by this rather
+// than by a position in the list, which stops meaning the same thing the day
+// the list grows.
+const sealCheckpointTableMigration = "seal the one-row checkpoint"
+
 // schema is the migration list this package applies. Adding a column means
 // appending a migration whose ALTER TABLE names a nullable column with no
 // default, so rows written before it reads back unknown; migrate refuses
@@ -258,7 +265,7 @@ var schema = []migration{
 	},
 	{
 		version: 6,
-		name:    "seal the one-row checkpoint",
+		name:    sealCheckpointTableMigration,
 		statements: []string{
 			// PRD section 8 names one record for where a run stands, the
 			// history migration 5 added, and says there may not be a second:

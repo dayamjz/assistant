@@ -61,12 +61,32 @@ func TestTheCheckpointSealIsWhatRefusesTheRow(t *testing.T) {
 	}
 }
 
-// An INSERT-only trigger says nothing about rows that are already there, so
-// migration 6 empties the table before it seals it. A database migrated forward
-// from a build that wrote this record arrives at 6 holding one, and this drives
-// that case with the shipped migration rather than a copy of it: the seal is
-// removed, the row is written, migration 6's record is forgotten, and migrate
-// replays it against exactly the state such a database is in.
+// sealMigrationVersion is the version of the migration that empties and seals
+// the checkpoint table, found by name in the shipped list.
+//
+// It is looked up rather than assumed to be the last entry, because the day the
+// schema grows a migration past it, a test anchored to the end of the list would
+// forget and replay that one instead: the seal would stay recorded, never re-run,
+// and the failure would name the seal for a defect somewhere else entirely.
+func sealMigrationVersion(t *testing.T) int {
+	t.Helper()
+	for _, m := range schema {
+		if m.name == sealCheckpointTableMigration {
+			return m.version
+		}
+	}
+	t.Fatalf("the shipped schema has no migration named %q, so the seal cannot be replayed",
+		sealCheckpointTableMigration)
+	return 0
+}
+
+// An INSERT-only trigger says nothing about rows that are already there, so the
+// seal migration empties the table before it seals it. A database migrated
+// forward from a build that wrote this record arrives at the seal holding one,
+// and this drives that case with the shipped migration rather than a copy of it:
+// the seal is removed, the row is written, the seal migration's record is
+// forgotten, and migrate replays it against exactly the state such a database
+// is in.
 //
 // migrate returning no error is also what shows the DELETE keeps the migration
 // additive, since applyMigration runs verifyAdditive inside the same
@@ -83,7 +103,7 @@ func TestTheSealEmptiesACheckpointTableThatAlreadyHasARow(t *testing.T) {
 		t.Fatalf("writing the row a forward-migrated database would carry: %v", err)
 	}
 	if _, err := s.write.ExecContext(ctx,
-		`DELETE FROM schema_migration WHERE version = ?`, lastVersion(schema)); err != nil {
+		`DELETE FROM schema_migration WHERE version = ?`, sealMigrationVersion(t)); err != nil {
 		t.Fatalf("forgetting the seal migration: %v", err)
 	}
 
