@@ -11,12 +11,12 @@ import (
 // GraphCheckpoint is one entry of a run's checkpoint history: the payload a
 // caller handed over and the sequence this package assigned it.
 //
-// This is a different record from Checkpoint, which is PRD section 8's
-// authoritative one-row-per-run position with a revision and no history. The
-// two are kept apart rather than merged because PRD section 7's durability
-// layer asks for a run's whole history and a fork from a point in it, neither
-// of which a row rewritten in place can answer. Where a run's position has one
-// owner is stated in the package comment.
+// This is PRD section 8's checkpoint history, and it is where a run's position
+// is. It is a different record from Checkpoint, which is one row per run
+// rewritten in place with a revision and no history; the two were never merged
+// because PRD section 7's durability layer asks for a run's whole history and a
+// fork from a point in it, neither of which such a row can answer. What that
+// leaves that record is on its own type.
 //
 // The payload is opaque bytes. internal/graph owns what a checkpoint means,
 // and a store that also understood it would be a second owner of the same

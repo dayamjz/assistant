@@ -96,9 +96,9 @@ var schema = []migration{
 			) STRICT`,
 			`CREATE INDEX round_run ON round(run_id, id)`,
 
-			// A checkpoint is authoritative: one row per run, rewritten in
-			// place. What it is and is not the position of is on the
-			// Checkpoint type.
+			// One row per run, rewritten in place. It is not a run's
+			// position; migration 5 below adds the record that is. What this
+			// table is and is not for is on the Checkpoint type.
 			`CREATE TABLE checkpoint (
 				run_id        TEXT PRIMARY KEY REFERENCES run(id),
 				state         BLOB NOT NULL,

@@ -14,10 +14,10 @@
 //
 // The important part of the data model is not the field list; it is which
 // records answer what is true now and which record what happened. A repository,
-// a run, a stage result, a checkpoint, a task, a task state, a hold, and a gate
-// binding are authoritative: each has one owner and one row, rewritten in
-// place. A round and a task event are history: appended, never revised, and no
-// answer to any present-tense question.
+// a run, a stage result, a task, a task state, a hold, and a gate binding are
+// authoritative: each has one owner and one row, rewritten in place. A round
+// and a task event are history: appended, never revised, and no answer to any
+// present-tense question.
 //
 // A run's graph checkpoint history is the one record here that is appended,
 // never revised, and still answers one. What P8 forbids is inferring what is
@@ -25,9 +25,10 @@
 // infer from: every entry is a whole position, complete on its own. The anchor
 // is what makes the highest sequence the run's own continuation rather than
 // wherever a second caller's write happened to land, and it is decided under
-// the same serialization that assigns that sequence. The record this must not
-// end up overlapping with is Checkpoint above; what owns a graph-driven run's
-// position is this history.
+// the same serialization that assigns that sequence. A run's position is this
+// history and nothing else, which is why Checkpoint is not in either list
+// above: PRD section 8 does not name that record, nothing writes or reads it
+// outside tests, and its own comment says what that leaves it.
 //
 // # The gate ownership index
 //

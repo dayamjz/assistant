@@ -8,14 +8,20 @@ import (
 	"time"
 )
 
-// Checkpoint is PRD section 8's authoritative checkpoint record: state,
-// position, and any open decision. There is one per run, and writing a new one
-// replaces the old, so it carries no history of where the run has been.
+// Checkpoint is one row per run holding state, a position, and any open
+// decision, rewritten in place with a revision, so it carries no history of
+// where the run has been.
 //
-// It is not what a graph-driven run's position is read from. That is the
-// checkpoint history GraphCheckpoint indexes, which PRD section 7's durability
-// layer needs and a row rewritten in place cannot answer; the package comment
-// says which record owns that position.
+// It is not a run's position, and PRD section 8 does not list it. That
+// section names one record for where a run stands, the checkpoint history
+// GraphCheckpoint indexes, because two of the four operations PRD section 7's
+// durability layer declares are a run's whole history and a fork from a point
+// in it, and a row rewritten in place answers neither.
+//
+// Nothing in this repository writes or reads this record outside tests. It is
+// still here because dropping a shipped table is a migration rather than an
+// edit, and that removal is its own change; until it lands, a caller that
+// writes one gives its run a second answer to a question that has an owner.
 type Checkpoint struct {
 	// RunID names the run.
 	RunID string
