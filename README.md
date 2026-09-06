@@ -15,11 +15,14 @@ engine in `internal/graph` is the first: the graph builder with its
 construction-time checks, an executor with halt points and bounded cycles, and
 checkpoints behind a four-operation store. The second is `internal/findings`,
 the vocabulary every pipeline stage speaks: a finding with its severity and its
-action, the report a stage returns, and the defensive parsing that turns
-untrusted agent output into a validated report. The third is
-`internal/config`, the configuration schema: the two-layer merge, the defaults,
-the parse-time validation, and the path matcher. The fourth is `internal/vcs`,
-the only package that invokes git. The fifth is `internal/safety`, the policy
+action, the report a stage returns, the defensive parsing that turns untrusted
+agent output into a validated report, and the one rule a review report answers
+for beyond that: it carries the revision it read and the paths it actually
+read, and a finding reaching past that evidence is refused and reported as
+refused rather than believed. The third is `internal/config`, the
+configuration schema: the two-layer merge, the defaults, the parse-time
+validation, and the path matcher. The fourth is `internal/vcs`, the only
+package that invokes git. The fifth is `internal/safety`, the policy
 layer over it: it decides whether a branch update may proceed and on what
 anchor, and refuses rather than guessing when a fact the decision rests on
 cannot be verified. The sixth is `internal/store`, the durable record of what
@@ -27,8 +30,9 @@ the gate did: an embedded sqlite database behind typed accessors, with additive
 migrations checked against the database's own catalog. The seventh is
 `internal/agents`, the only package that starts an agent process: the separate
 reviewing and fixing roles, the capabilities an adapter declares and is held
-to, the Claude Code adapter, ordered fallback resolution, and a record of what
-each invocation cost. The eighth is
+to, the Claude Code adapter, the review shape that carries the evidence its
+answer is bound to and that the fixer refuses, ordered fallback resolution, and
+a record of what each invocation cost. The eighth is
 `internal/forge`, the only package that talks to a code host: the provider
 interface over pull requests, mergeability, and checks, a GitHub adapter over
 the `gh` command line, and a checks model in which an empty check list is not a
@@ -55,8 +59,9 @@ validates against: seven scenarios built from nothing on demand, each planting
 conditions a stage or a refusal has to answer, with the answer each one must
 produce recorded beside it. The nine stage bodies are separate work against that
 contract and do not exist yet, including the review stage that puts the scope
-lens in front of a reviewer, and neither the harness nor the `assistant` binary
-exists either, so the only thing in here you can run is the fixture builder.
+lens in front of a reviewer and binds what comes back to what the reviewer
+declared reading, and neither the harness nor the `assistant` binary exists
+either, so the only thing in here you can run is the fixture builder.
 
 ## The two promises
 
@@ -82,10 +87,10 @@ working as it always did.
 | --- | --- |
 | `cmd/assistant` | The binary. Not written yet, so `make build` has nothing to build. |
 | `cmd/fixture` | Builds the fixture repository into a directory you name. `scripts/build-fixture.sh DIR` runs it. |
-| `internal/agents` | The only package that starts an agent process: the run and fix roles, the capability declaration every adapter is held to, the Claude Code adapter, fallback resolution, and invocation records. |
+| `internal/agents` | The only package that starts an agent process: the run and fix roles, the capability declaration every adapter is held to, the Claude Code adapter, fallback resolution, the review shape and the evidence demand it carries, and invocation records. |
 | `internal/agents/standin` | The scripted agent the tests outside `internal/agents` run against: the test binary re-executed as the agent process, read by the production adapter. |
 | `internal/config` | The configuration schema: layers, defaults, merge, validation, path matcher. |
-| `internal/findings` | The stage vocabulary: findings, actions, reports, and parsing of agent output. |
+| `internal/findings` | The stage vocabulary: findings, actions, reports, parsing of agent output, and the evidence a review report's findings are bound to. |
 | `internal/fixture` | The adversarial subject repository the end-to-end harness validates against: the seven scenarios, the conditions planted in them, and what each one is expected to produce. |
 | `internal/forge` | The only package that talks to a code host: the provider interface over pull requests, mergeability, and checks, and the GitHub adapter over the `gh` command line. |
 | `internal/gate` | The local bare repository a push is validated through: where it lives, its two hooks, its identity across a move or a copy, and the ownership question every operation asks before it adopts or deletes one. |

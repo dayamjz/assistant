@@ -158,13 +158,22 @@ type Recorder interface {
 
 // Result is what an invocation produced.
 type Result struct {
-	// Text is the agent's final message. It is present for both shapes; for
-	// ShapeReport it is the text the report was read out of.
+	// Text is the agent's final message. It is present for every shape; for
+	// ShapeReport and ShapeReview it is the text the report was read out of.
 	Text string
-	// Report is the validated stage report, present only for ShapeReport. It
-	// is never a zero Report accompanied by a nil error: output that did not
-	// yield a valid report is an *InvocationError with FailureOutput.
+	// Report is the validated stage report, present for ShapeReport and for
+	// ShapeReview. It is never a zero Report accompanied by a nil error:
+	// output that did not yield a valid report is an *InvocationError with
+	// FailureOutput. For ShapeReview it is the bound report, so a finding the
+	// evidence set did not support is already an informational one here and
+	// never reaches a caller as fix-eligible.
 	Report findings.Report
+	// Binding is what the review's evidence came to, present only for
+	// ShapeReview. It carries the comparison between what the reviewer
+	// declared reading and what the change touched, which
+	// findings.ParseReviewReport reports whether or not it found anything, and
+	// what that comparison cost the reviewer's findings.
+	Binding findings.Binding
 	// Record is what was recorded about this invocation, identical to what a
 	// Recorder was given. A refusal returns no Result at all, so this is the
 	// record of an invocation that produced something; the record of one that

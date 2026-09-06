@@ -198,8 +198,8 @@ func Prose(intro string, r findings.Report) Reply {
 }
 
 // Text replies with a well-formed envelope carrying result. It is the answer
-// to a ShapeText invocation, and under ShapeReport it is also how output that
-// arrived intact and is not a report is scripted.
+// to a ShapeText invocation, and under ShapeReport and ShapeReview it is also
+// how output that arrived intact and is not a report is scripted.
 func Text(result string) Reply {
 	return Reply{Envelope: &Envelope{Result: result, Usage: DefaultUsage()}}
 }
@@ -245,8 +245,8 @@ type Envelope struct {
 	// one place only: it is what a failure the agent reported no result for
 	// says about itself.
 	Subtype string `json:"subtype,omitempty"`
-	// Result is the agent's final text, which for a ShapeReport invocation is
-	// what internal/findings is given.
+	// Result is the agent's final text, which for a ShapeReport or a
+	// ShapeReview invocation is what internal/findings is given.
 	Result string `json:"result"`
 	// Session is the session identifier the envelope reports. A nil Session
 	// reports back the session the invocation asked to resume, or a fresh

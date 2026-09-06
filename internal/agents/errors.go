@@ -17,6 +17,19 @@ var (
 	// recorded, because a record whose purpose means nothing cannot answer the
 	// P4 question asked of invocation records.
 	ErrUnrecognizedPurpose = errors.New("agents: unrecognized invocation purpose")
+	// ErrReviewInFixerSession is returned when an invocation asking for
+	// ShapeReview reaches a fixer. P4 keeps reviewing and fixing in separate
+	// memory, and a Fixer is the only route to memory that survives a round,
+	// so a review answered there would be answered by the agent that just
+	// prescribed the fix it is checking. The invocation is refused before any
+	// process starts, never downgraded to another shape and never run with its
+	// result discarded.
+	//
+	// It names one refusal within a class rather than a class of its own: the
+	// refusal it reports also matches ErrInvalidInvocation, because it is an
+	// invocation that cannot be run as written. A caller may therefore handle
+	// every pre-start refusal alike and still recognize this one.
+	ErrReviewInFixerSession = errors.New("agents: a review may not be answered in a fixer session")
 	// ErrNoAgent is returned by Resolve when no entry in the ordered list
 	// resolved to a runnable agent. It is a refusal before a run starts, not a
 	// degraded run: PRD section 10 requires the run to fail before its first
@@ -102,18 +115,32 @@ func (e *AdapterError) Error() string {
 func (e *AdapterError) Unwrap() error { return ErrAdapterDeclaration }
 
 // invocationFieldError reports one field of an Invocation that cannot be run
-// as written. It wraps ErrInvalidInvocation and names the field.
+// as written. It wraps ErrInvalidInvocation and names the field. It is how
+// every pre-start refusal of an Invocation is built, so a caller matching the
+// class catches all of them.
 type invocationFieldError struct {
 	field  string
 	reason string
+	// also is a further class this refusal belongs to, nil where
+	// ErrInvalidInvocation is the whole of what it is. It exists so a refusal
+	// with a name of its own, such as the P4 refusal of a review shape at the
+	// fixer, does not have to leave the class to carry that name.
+	also error
 }
 
 func (e *invocationFieldError) Error() string {
 	return "agents: invalid invocation: " + e.field + ": " + e.reason
 }
 
-// Unwrap makes every field refusal match ErrInvalidInvocation.
-func (e *invocationFieldError) Unwrap() error { return ErrInvalidInvocation }
+// Unwrap makes every field refusal match ErrInvalidInvocation, and one that
+// names a further class match that too, so a caller can catch every pre-start
+// refusal generically and still single one out by name.
+func (e *invocationFieldError) Unwrap() []error {
+	if e.also == nil {
+		return []error{ErrInvalidInvocation}
+	}
+	return []error{ErrInvalidInvocation, e.also}
+}
 
 // Failure classifies why an invocation did not produce a usable result. It is
 // the one thing about a failure that is recorded; the message explaining it is
@@ -153,8 +180,16 @@ const (
 	// report read as a whole one is worse than no report.
 	FailureOversize Failure = "oversize"
 	// FailureOutput is output that did not have the shape the invocation asked
-	// for: not a result envelope, an envelope with no result in it, or, for
-	// ShapeReport, text internal/findings refused to read as a report.
+	// for: not a result envelope, an envelope with no result in it, or text
+	// internal/findings refused. That last covers both shapes that are read as
+	// a report. For ShapeReport it is text refused as a report; for ShapeReview
+	// it is that and the binding refusal as well, so a review of a revision the
+	// run did not ask about, and one whose findings this package could not bind
+	// to the invocation's demand, are this category too.
+	//
+	// The refusal internal/findings raised travels on the *InvocationError, so
+	// which of them it was is matchable with errors.Is rather than only
+	// readable.
 	FailureOutput Failure = "output"
 )
 

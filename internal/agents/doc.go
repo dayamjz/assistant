@@ -29,6 +29,18 @@
 // What it has instead is Run with PurposeFix, which is a fix round that keeps
 // no memory of the round before it.
 //
+// The split covers Purpose because Purpose is a parameter of one entry point.
+// Shape is not: it rides on the Invocation both entry points take, so
+// ShapeReview is a second way to say "this is a review" that the split does
+// not reach on its own, and Invocation.Validate cannot close it because it is
+// asked the same question on both sides and cannot see which one it is on.
+// Invocation.ValidateForFixer is that one rule, and the fixer path asks it
+// instead: a review shape reaching a session that outlives the round is
+// refused with ErrReviewInFixerSession before any process starts. So a review
+// stays out of the fixer's memory whether it is spelled as a purpose or as a
+// shape, and a Shape added later belongs on one side of that line the same
+// way an entry point does.
+//
 // The same fact is visible in what is recorded. Record.Session says what an
 // invocation did with the run's durable session, and Run passes nothing that
 // could make it anything but SessionNone. That is what PRD section 13 asks
@@ -94,6 +106,15 @@
 // valid report is an *InvocationError carrying FailureOutput and wrapping the
 // refusal internal/findings raised, never a zero Report returned with a nil
 // error.
+//
+// ShapeReview is the same arrangement with one more rule that also belongs to
+// internal/findings: a review report carries the revision it read and the
+// paths it actually read, and its findings are bound to them. The Demand that
+// binding answers to travels on the Invocation, and Invocation.Validate
+// requires it for ShapeReview and refuses it for every other shape, so review
+// output cannot be read unbound and a demand cannot be attached to output
+// nobody binds. A report of another revision, and one this package could not
+// bind, are refused here exactly as an unreadable report is.
 //
 // # An invocation owns its process tree
 //

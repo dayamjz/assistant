@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/dayamjz/assistant/internal/agents"
+	"github.com/dayamjz/assistant/internal/agents/standin"
 )
 
 // The tests drive a stand-in agent rather than a real Claude Code
@@ -57,10 +58,17 @@ func helperModeFromArgs() string {
 	return ""
 }
 
-// TestMain turns this binary into the stand-in agent when a mode is named,
-// either in the environment or on the command line, and runs the tests
-// otherwise.
+// TestMain turns this binary into one of two stand-in agents and runs the
+// tests when it is neither.
+//
+// standin.Main answers first and returns unless this process was started as
+// the scripted stand-in, which it decides from flags of its own. The helper
+// modes below are this package's own, older, and narrower: they exist to drive
+// the adapter's failure paths, which are shapes a script does not describe,
+// and they take their mode from the environment or from a differently spelled
+// flag, so the two cannot claim the same process.
 func TestMain(m *testing.M) {
+	standin.Main()
 	mode := os.Getenv(helperModeVar)
 	if mode == "" {
 		mode = helperModeFromArgs()

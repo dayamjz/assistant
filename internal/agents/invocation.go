@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+
+	"github.com/dayamjz/assistant/internal/findings"
 )
 
 // Purpose names the role an invocation plays in a run. Every invocation
@@ -71,6 +73,16 @@ const (
 	// default; output that does not yield a valid report is a refusal, never a
 	// zero Report returned with a nil error.
 	ShapeReport
+	// ShapeReview asks for a review stage's report, which answers for more
+	// than a stage report does: it carries the revision it read and the paths
+	// it actually read, and its findings are bound to them by
+	// findings.ParseReviewReport. It is a shape of its own rather than a flag
+	// on ShapeReport so that the two cannot be confused in either direction.
+	// An invocation asking for it carries the Demand its answer is bound to,
+	// and one asking for anything else may not carry a Demand at all, so
+	// review output is never read unbound and a Demand is never attached to
+	// output nobody binds.
+	ShapeReview
 )
 
 // String renders the shape for a diagnostic.
@@ -80,6 +92,8 @@ func (s Shape) String() string {
 		return "text"
 	case ShapeReport:
 		return "report"
+	case ShapeReview:
+		return "review"
 	default:
 		return "shape(" + fmt.Sprint(uint8(s)) + ")"
 	}
@@ -108,6 +122,16 @@ type Invocation struct {
 	Prompt string
 	// Shape is what the agent must return.
 	Shape Shape
+	// Review is what a ShapeReview answer is bound to: the commit the run
+	// asked about and the paths the change touched, both as the run knows
+	// them. It is required for ShapeReview and refused for every other shape.
+	//
+	// It is content the prompt is expected to have told the agent about, and
+	// findings.Demand.Guidance is what says it: what that text asks the reviewer for
+	// is what this binds. Nothing here assembles the prompt, so an invocation
+	// carrying a Demand its prompt never mentioned still binds against it, and
+	// a reviewer that was never told will simply be refused.
+	Review findings.Demand
 	// Dir is the absolute working directory the agent runs in, normally the
 	// isolated copy for the run. It is required, and it is the identity the
 	// sweep seam is given, so an invocation that ran nowhere in particular
@@ -133,7 +157,19 @@ func (inv Invocation) Validate() error {
 			reason: fmt.Sprintf("%d bytes exceeds the limit of %d", len(inv.Prompt), MaxPromptBytes),
 		}
 	}
-	if inv.Shape != ShapeText && inv.Shape != ShapeReport {
+	switch inv.Shape {
+	case ShapeText, ShapeReport:
+		if !inv.Review.Empty() {
+			return &invocationFieldError{
+				field:  "Review",
+				reason: "a review demand is only read for shape review, not for " + inv.Shape.String(),
+			}
+		}
+	case ShapeReview:
+		if err := inv.Review.Validate(); err != nil {
+			return &invocationFieldError{field: "Review", reason: err.Error()}
+		}
+	default:
 		return &invocationFieldError{field: "Shape", reason: "unrecognized shape " + inv.Shape.String()}
 	}
 	if inv.Dir == "" {
@@ -156,4 +192,33 @@ func (inv Invocation) Validate() error {
 		}
 	}
 	return nil
+}
+
+// ValidateForFixer reports whether the invocation can be run as a fix round in
+// a session that outlives it. It is Validate and one rule more: ShapeReview
+// says the invocation is a review, and P4 keeps a review out of the memory a
+// fix round holds, so a review shape reaching a fixer is refused with
+// ErrReviewInFixerSession. The refusal is the shape's, whatever else about the
+// invocation is also wrong, and it happens before any process starts.
+//
+// It is the same class of answer Validate gives as well as the same shape of
+// one: every refusal from either matches ErrInvalidInvocation, and this one
+// matches ErrReviewInFixerSession besides.
+//
+// The rule needs an entry point of its own because Validate cannot make it.
+// Both entry points ask Validate the same question and it cannot see which one
+// it is on, so ShapeReview on the shared Invocation type would otherwise be a
+// second way to say review that the split between Runner.Run and Fixer.Apply
+// does not reach. An adapter's fixer path asks this instead of Validate;
+// nothing else does.
+func (inv Invocation) ValidateForFixer() error {
+	if inv.Shape == ShapeReview {
+		return &invocationFieldError{
+			field: "Shape",
+			reason: "a " + inv.Shape.String() + " invocation reached the fixer, which is the " +
+				"one invocation whose session survives the round",
+			also: ErrReviewInFixerSession,
+		}
+	}
+	return inv.Validate()
 }

@@ -57,6 +57,71 @@
 // would discard findings the person needs to see. Warning rather than info,
 // because an unreadable severity must not read as harmless.
 //
+// # A review report is bound to what the reviewer read
+//
+// One stage answers for more than the above. PRD section 5, "What a review
+// report has to carry", makes a review report carry the revision it read and
+// the set of paths it actually read, and binds its findings to them.
+// ParseReviewReport is that rule and Demand.Guidance is what the reviewer is
+// told about it; the other eight stages go on using ParseReport and answer to none
+// of it.
+//
+// The part worth knowing before reading either is why it is a comparison
+// rather than a field. A reviewer satisfies a rule that merely asks for an
+// evidence set by naming every changed file and then reading nothing but the
+// diff, and the run can derive that list without asking, so on its own it
+// proves nothing. So the evidence set and the paths the change touched are
+// reported separately and compared, and a finding reaching past the change
+// has to cite the code it reaches to and is refused unless the evidence set
+// names it. Declaring the diff wholesale therefore forfeits every finding
+// that reaches past the diff rather than buying a free pass, and an evidence
+// set equal to the touched paths stays a permitted answer, reported rather
+// than invisible.
+//
+// Two ordering facts hold that together, and both are structural here rather
+// than remembered by a caller:
+//
+//   - The binding runs before Normalize, on the action the reviewer stated.
+//     That is what keeps the demotion of an unsupported finding from reaching
+//     P3: an action that was missing, empty, or unreadable is still the ask P3
+//     makes of it, because Action.Stated is false for all three, and only an
+//     action this package recognized is demoted to a note.
+//   - The binding is reachable only through ParseReviewReport. There is no
+//     exported way to bind a report that has been through Normalize, through
+//     storage, or through a caller's own struct literal, in each of which the
+//     stated action is already gone and the demotion would take a hold P3
+//     fixed and turn it into a note.
+//
+// The rule is added to what a report already answers for and takes nothing
+// away from it. A report ParseReport refuses is refused by ParseReviewReport
+// with the same defects named, because the reviewer's own report is put to
+// Validate before the binding rewrites any finding: the binding writes a note
+// over a refused finding and appends to a demoted one, and a note it wrote
+// must not stand in for a description the reviewer never wrote. So the review
+// path refuses everything the other eight stages' path refuses, and its extra
+// rule can only refuse more.
+//
+// What the binding is not is a check that the reviewer read anything. The
+// evidence set is the reviewer's claim about itself, and this package resolves
+// no path against a filesystem: a reviewer that declares a path it never
+// opened is believed, and one that declares nothing and reports nothing passes
+// with an evidence note saying it declared nothing. What the binding buys is
+// that a claim is refused unless the reviewer's own account of what it read
+// supports it, and that the account is on the record to be read across runs.
+//
+// The other limit is on how far the discriminator reaches, and it is PRD
+// section 5's own design rather than a shortfall against it: the PRD puts the
+// duty to cite on the reviewer, so citing is voluntary. The wholesale
+// declaration therefore forfeits only a finding that volunteers its reach,
+// through a Location naming a path or through Cites. A reviewer that declares
+// exactly the touched paths and reports a fix-eligible finding located inside
+// the change, whose reasoning rests on a caller it never read and never names,
+// is refused nothing, reports an empty Beyond, and is indistinguishable here
+// from one that read the diff and reasoned about nothing else. Refusing it
+// would mean judging what a finding's reasoning rests on, which is not in the
+// text this package reads, and would hold reviewers to a stricter rule than
+// the PRD states.
+//
 // # What this package does not promise
 //
 // The object extraction in ParseReport is a brace scan that tracks JSON string

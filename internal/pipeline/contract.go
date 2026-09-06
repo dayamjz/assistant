@@ -98,6 +98,15 @@ type Output struct {
 	// Normalizing is where P3's fail-closed default lands: a finding with a
 	// missing, empty, or unrecognized action becomes ask, and an ask finding
 	// holds the stage for a person.
+	//
+	// The review stage's report answers for more than this, and this package
+	// does not check it. PRD section 5 binds a review's findings to the paths
+	// it declared reading, findings.ParseReviewReport is that rule, and
+	// agents.ShapeReview is how a review implementation reaches its agent's
+	// answer through it. A review implementation that read its agent's output
+	// as an ordinary stage report would return an unbound one and nothing here
+	// would say so; what it would also not have is a demand to bind against,
+	// because agents.Invocation.Validate refuses one on any other shape.
 	Report findings.Report
 	// Writes are the state writes the stage asks for, at most one per key.
 	// Every key must be one the implementation declared.

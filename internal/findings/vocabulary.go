@@ -51,6 +51,20 @@ func (a Action) Recognized() bool {
 	return a == ActionFix || a == ActionAsk || a == ActionNote
 }
 
+// Stated reports whether ParseAction would read this value rather than fall
+// back to P3's default. It folds exactly as ParseAction folds, so " Fix " is
+// stated and "autofix", "", and a value that was not a string are not.
+//
+// It is the discriminator between the two ways a finding ends up an ActionAsk:
+// the stage said "ask", or the stage said something this package could not
+// read and P3 resolved it. Recognized asks a different question, of a value as
+// it stands after normalizing, and answers true for both. Nothing may use this
+// to make a finding fix-eligible; Finding.FixEligible is equality with
+// ActionFix and is the only predicate the fix loop is built on.
+func (a Action) Stated() bool {
+	return Action(strings.ToLower(strings.TrimSpace(string(a)))).Recognized()
+}
+
 // String returns the action as stored, which for a recognized action is its
 // wire name. An unrecognized action renders as whatever it holds, so a
 // diagnostic can quote what the agent actually said.

@@ -359,6 +359,18 @@
 // entry, and a risk that is a recognized word or left unstated, since
 // normalizing does not resolve an unrecognized one.
 //
+// One stage owes more, and it is owed to internal/findings rather than to this
+// package. PRD section 5 has a review report carry the revision it read and
+// the paths it actually read, with its findings bound to them, and
+// findings.ParseReviewReport is that rule; agents.ShapeReview is how a review
+// implementation reaches its agent's answer through it. Nothing here checks
+// that a review did so, on the same terms as the intent stage's obligation
+// below: this package hands the graph a topology and treats all nine stages
+// alike. What it does know is that the binding happens before this adapter
+// sees anything, so a finding the reviewer's evidence did not support is
+// already a note by the time Fixable is asked, and the fix loop cannot be
+// entered by one.
+//
 // # What this package does not promise
 //
 // The intent stage never blocking a run is owed by the intent stage
