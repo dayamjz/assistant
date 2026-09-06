@@ -2,7 +2,9 @@ package agents_test
 
 import (
 	"errors"
+	"fmt"
 	"reflect"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -26,13 +28,13 @@ import (
 // applies.
 type probe struct {
 	capability agents.Capability
-	declared   func(t *testing.T, r agents.Runner)
-	undeclared func(t *testing.T, r agents.Runner)
+	declared   func(t testing.TB, r agents.Runner)
+	undeclared func(t testing.TB, r agents.Runner)
 }
 
 var probes = []probe{{
 	capability: agents.CapabilityResumableSessions,
-	declared: func(t *testing.T, r agents.Runner) {
+	declared: func(t testing.TB, r agents.Runner) {
 		t.Helper()
 		if _, ok := r.(agents.SessionRunner); !ok {
 			t.Errorf("%s declares %s and is no SessionRunner, so nothing can open a session on it",
@@ -46,7 +48,7 @@ var probes = []probe{{
 				r.Name(), agents.CapabilityResumableSessions, err)
 		}
 	},
-	undeclared: func(t *testing.T, r agents.Runner) {
+	undeclared: func(t testing.TB, r agents.Runner) {
 		t.Helper()
 		// The type is the load-bearing half: an adapter with no session
 		// mechanism has no method a caller could reach one through, so running
@@ -87,7 +89,7 @@ func probeFor(capability agents.Capability) (probe, bool) {
 // may be declared only where something checks it, so the day an adapter claims
 // instruction suppression, whoever wrote it owes a probe before the claim
 // counts for anything.
-func conform(t *testing.T, r agents.Runner) {
+func conform(t testing.TB, r agents.Runner) {
 	t.Helper()
 	declared := r.Capabilities()
 	for _, capability := range agents.AllCapabilities() {
@@ -104,6 +106,74 @@ func conform(t *testing.T, r agents.Runner) {
 		if ok && p.undeclared != nil {
 			p.undeclared(t, r)
 		}
+	}
+}
+
+// recordingTB records a failure instead of ending the test with it, so a test
+// can assert that the conformance suite refused something. Everything it does
+// not override is the real testing.TB, which is what keeps Context working for
+// the probes that need one.
+type recordingTB struct {
+	testing.TB
+	failed  bool
+	message string
+}
+
+// Fatalf records the failure and ends the goroutine, which is what the real
+// Fatalf does and what the code under test is entitled to expect.
+func (r *recordingTB) Fatalf(format string, args ...any) {
+	r.failed = true
+	r.message = fmt.Sprintf(format, args...)
+	runtime.Goexit()
+}
+
+// Errorf records the failure without ending the goroutine.
+func (r *recordingTB) Errorf(format string, args ...any) {
+	r.failed = true
+	r.message = fmt.Sprintf(format, args...)
+}
+
+// onItsOwnGoroutine calls fn on a goroutine of its own and waits for it, so a
+// Fatalf that ends its goroutine does not end the test.
+func onItsOwnGoroutine(fn func()) {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		fn()
+	}()
+	<-done
+}
+
+// The suite's refusal of a declaration nothing probes is what the rule above
+// rests on, and no adapter this build ships makes it fire: the shipped adapter
+// declares only resumable sessions, which has a probe, and the sessionless
+// stub declares nothing. So the refusal is exercised here against an adapter
+// that declares instruction suppression, whose table row carries no probe,
+// which is the shape the first adapter to claim suppression would have.
+//
+// Such an adapter is legal to build, which is why the suite is the only thing
+// that catches it: internal/agents skips a row with no probe when it holds an
+// adapter to its declaration, so Resolve hands this one back.
+func TestTheSuiteRefusesADeclarationNothingProbes(t *testing.T) {
+	factory := &stubFactory{
+		name:      "claims-suppression",
+		available: true,
+		declares:  []agents.Capability{agents.CapabilitySuppressProjectInstructions},
+	}
+	if _, err := agents.Resolve(t.Context(), []string{factory.name}, agents.NewCatalog(factory)); err != nil {
+		t.Fatalf("resolving an adapter that declares a capability with no probe: %v", err)
+	}
+
+	recorder := &recordingTB{TB: t}
+	onItsOwnGoroutine(func() { conform(recorder, factory.runner()) })
+
+	if !recorder.failed {
+		t.Fatalf("the suite accepted %s declaring %s, which nothing here checks",
+			factory.name, agents.CapabilitySuppressProjectInstructions)
+	}
+	if !strings.Contains(recorder.message, string(agents.CapabilitySuppressProjectInstructions)) {
+		t.Errorf("the suite refused with %q, want it to name %s",
+			recorder.message, agents.CapabilitySuppressProjectInstructions)
 	}
 }
 

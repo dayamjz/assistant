@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/dayamjz/assistant/internal/agents"
 )
@@ -50,24 +51,15 @@ func requirements(o Options) []requirement {
 	return out
 }
 
-// fixerRequirements is what the fixer needs, read only when a fix node is
-// actually built.
+// fixerRequirements is what the fixer declares it needs, and nothing when no
+// Fixer was supplied at all.
 //
-// This is the one declaration whose reading depends on the fix round limits,
-// and the reason is that a capability answers for a path rather than for a
-// shape. A pipeline whose every limit is zero builds no fix node, so no fixer
-// body runs and nothing it declared is ever needed; refusing then would refuse
-// a path the run cannot take. That is the opposite of ErrUnmergeableFixerWrite,
-// which is checked whenever a Fixer is supplied, because what that one asks is
-// whether the declaration is legal at all and the answer must not vary with
-// configuration.
-//
-// It leaves a fixer's requirement unread under limits that build no fixer, and
-// that is correct rather than a gap: PRD section 8 has an adapter without
-// resumable sessions keep no memory across rounds, and a pipeline that takes
-// no rounds has none to keep.
-func fixerRequirements(o Options, fixing bool) []requirement {
-	if !fixing {
+// Whether the fix round limits gate this depends on which question is being
+// asked of it, and checkRequirements asks both. It is returned whole here so
+// that the gating lives in one place rather than in this function and again at
+// the caller.
+func fixerRequirements(o Options) []requirement {
+	if o.Fixer.NewBody == nil {
 		return nil
 	}
 	out := make([]requirement, 0, len(o.Fixer.Requires))
@@ -96,12 +88,35 @@ func fixerRequirements(o Options, fixing bool) []requirement {
 // which makes this check on Options.SuppressProjectInstructions the only
 // enforcement of PRD section 10's rule that such a run fails before an agent
 // is launched.
+// Two questions are asked of every requirement and they are not gated alike.
+//
+// Whether a capability is a word internal/agents defines is a question about
+// the declaration itself, so it is asked of every declaration this pipeline
+// holds, whatever the fix round limits are. A typo is a typo under limits of
+// zero, and P7 re-reads those limits from the default branch, so an answer
+// that varied with them would vary under a running service. That is the same
+// stance ErrUnmergeableFixerWrite takes on the fixer's writes.
+//
+// Whether the adapter declared it is a question about a path, so it is asked
+// only of paths this pipeline builds. A pipeline whose every limit is zero
+// builds no fix node, so nothing the fixer declared is ever needed and
+// refusing then would refuse a path the run cannot take. That leaves a
+// fixer's availability requirement unread under limits that build no fixer,
+// which is correct rather than a gap: PRD section 8 has an adapter without
+// resumable sessions keep no memory across rounds, and a pipeline that takes
+// no rounds has none to keep.
 func checkRequirements(o Options, fixing bool) error {
-	needed := append(requirements(o), fixerRequirements(o, fixing)...)
-	for _, need := range needed {
+	run, fixer := requirements(o), fixerRequirements(o)
+	for _, need := range slices.Concat(run, fixer) {
 		if !need.capability.Recognized() {
 			return fmt.Errorf("%w: %s names %q", ErrUnknownCapability, need.path, need.capability)
 		}
+	}
+	built := run
+	if fixing {
+		built = slices.Concat(run, fixer)
+	}
+	for _, need := range built {
 		if !o.Adapter.Has(need.capability) {
 			return &agents.CapabilityError{Capability: need.capability, Path: need.path}
 		}

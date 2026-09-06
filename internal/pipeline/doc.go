@@ -108,15 +108,20 @@
 // per PRD section 10, so Options.SuppressProjectInstructions is read there and
 // no stage may decline it.
 //
-// One asymmetry in that file is worth knowing before changing it. A stage's
-// Requires is read for all nine whatever a run then skips, because a skip is a
-// per-run choice on Start and a pipeline is built once for many runs. The
-// fixer's is read only where some round limit is above zero, because a
-// pipeline that builds no fix node has no fix path to refuse; PRD section 8
-// leaves an adapter without resumable sessions a run with no memory across
-// rounds, and that is the run. It is the opposite of ErrUnmergeableFixerWrite,
-// which is checked whenever a Fixer is supplied because what it asks is
-// whether the declaration is legal at all.
+// One asymmetry in that file is worth knowing before changing it, and it is
+// between two questions rather than between a stage and the fixer. Whether a
+// requirement names a capability internal/agents defines is asked of every
+// declaration the pipeline holds, whatever the fix round limits are, so a typo
+// in the fixer's Requires is refused under limits of zero on the same terms as
+// ErrUnmergeableFixerWrite; P7 re-reads those limits from the default branch,
+// so an answer that varied with them would vary under a running service.
+// Whether the adapter declared it is asked only of paths the pipeline builds.
+// A stage's Requires is read for all nine whatever a run then skips, because a
+// skip is a per-run choice on Start and a pipeline is built once for many
+// runs, while the fixer's is read only where some round limit is above zero,
+// because a pipeline that builds no fix node has no fix path to refuse; PRD
+// section 8 leaves an adapter without resumable sessions a run with no memory
+// across rounds, and that is the run.
 //
 // Whether this is the early half of the rule or the whole of it depends on the
 // capability, and the two rows of the table differ.

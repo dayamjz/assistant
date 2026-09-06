@@ -129,10 +129,13 @@ type Fixer struct {
 	// asks for, and a pipeline built against an adapter that has not declared
 	// it is refused.
 	//
-	// Unlike a stage's, this is read only when some stage's fix round limit is
-	// above zero, because a pipeline that builds no fix node takes no fix path.
-	// capability.go states why that differs from ErrUnmergeableFixerWrite,
-	// which is checked whenever a Fixer is supplied.
+	// Two questions are asked of this and only one is gated. Whether a
+	// capability named here is one internal/agents defines is asked whenever a
+	// Fixer is supplied, so a typo is refused with ErrUnknownCapability under
+	// fix round limits of zero, on the same terms as ErrUnmergeableFixerWrite.
+	// Whether the adapter declared it is asked only when some stage's fix
+	// round limit is above zero, because a pipeline that builds no fix node
+	// takes no fix path. capability.go states why the two differ.
 	//
 	// A fixer that declares nothing keeps no memory across rounds, which is
 	// what PRD section 8 leaves an adapter without resumable sessions: either

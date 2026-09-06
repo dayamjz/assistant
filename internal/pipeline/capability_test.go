@@ -118,14 +118,16 @@ func TestAFixerNeedingSessionsIsRefusedAgainstAnAdapterWithoutThem(t *testing.T)
 	})
 }
 
-// A fixer's requirement is read only where a fix node is built. PRD section 8
-// leaves an adapter without resumable sessions a run with no memory across
-// rounds, and a pipeline whose every round limit is zero has no rounds to keep
-// memory across, so refusing it would refuse a path the run cannot take.
+// A fixer's availability requirement is read only where a fix node is built.
+// PRD section 8 leaves an adapter without resumable sessions a run with no
+// memory across rounds, and a pipeline whose every round limit is zero has no
+// rounds to keep memory across, so refusing it would refuse a path the run
+// cannot take.
 //
-// This is the one declaration whose reading depends on configuration, and the
+// This is the one question whose answer depends on configuration, and the
 // asymmetry with the stage check above is deliberate rather than an oversight:
-// a stage is in the topology whatever the limits are.
+// a stage is in the topology whatever the limits are. Whether the capability
+// is a word at all is not gated this way, which the test below pins.
 func TestAFixerRequirementIsUnreadWhereNoFixNodeIsBuilt(t *testing.T) {
 	c := newCalls()
 	fixer := recordingFixer(c, nil, nil, nil)
@@ -148,6 +150,47 @@ func TestAFixerRequirementIsUnreadWhereNoFixNodeIsBuilt(t *testing.T) {
 	})
 	if !errors.Is(err, agents.ErrUndeclaredCapability) {
 		t.Errorf("New answered %v with one stage taking a round, want the fixer path refused", err)
+	}
+}
+
+// Whether a requirement names a capability that exists is a question about the
+// declaration and not about a path, so it is answered the same way whatever
+// the fix round limits are. A typo in the fixer's Requires is refused under
+// limits of zero, where no fix node is built and the availability half of the
+// same declaration goes unread.
+//
+// The limits are why this must not be gated. P7 re-reads them from the default
+// branch, so a pipeline built under zero rounds is built again under nonzero
+// ones by a service already running, and a declaration that was legal on the
+// first build and not the second is a defect that surfaces as a difference
+// between two builds rather than as itself.
+func TestAFixerRequirementOnAnUnknownCapabilityIsRefusedWhateverTheLimits(t *testing.T) {
+	c := newCalls()
+	fixer := recordingFixer(c, nil, nil, nil)
+	fixer.Requires = []agents.Capability{"resumable_session"}
+
+	for _, limits := range []struct {
+		name   string
+		rounds config.FixRounds
+	}{
+		{name: "no stage takes a round", rounds: rounds(0)},
+		{name: "one stage takes a round", rounds: config.FixRounds{Lint: 1}},
+	} {
+		t.Run(limits.name, func(t *testing.T) {
+			_, err := New(Options{
+				Stages:  recordingStages(c),
+				Fixer:   fixer,
+				Rounds:  limits.rounds,
+				Budget:  100,
+				Adapter: agents.Declare(agents.CapabilityResumableSessions),
+			})
+			if !errors.Is(err, ErrUnknownCapability) {
+				t.Fatalf("New answered %v, want ErrUnknownCapability", err)
+			}
+			if !strings.Contains(err.Error(), "resumable_session") {
+				t.Errorf("the refusal reads %q, want it to name the capability", err)
+			}
+		})
 	}
 }
 
