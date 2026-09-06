@@ -41,10 +41,14 @@ func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 	}); err != nil {
 		return nil, err
 	}
-	if answer != "" && cancel {
+	answered := flagWasSet(in.flags, "answer")
+	if answered && strings.TrimSpace(answer) == "" {
+		return nil, usagef("--answer was given an empty answer; it takes one of the options the decision offered")
+	}
+	if answered && cancel {
 		return nil, usagef("--answer and --cancel are two different things to do with one run; pass one")
 	}
-	if acting := actingOnTheRunInFlight(answer, cancel); acting != "" {
+	if acting := actingOnTheRunInFlight(answered, cancel); acting != "" {
 		for _, name := range []string{"intent", "intent-supplied", "skip"} {
 			if flagWasSet(in.flags, name) {
 				return nil, usagef("%s acts on the run this branch already has, and --%s is for starting one; pass one", acting, name)
@@ -68,7 +72,7 @@ func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 	if cancel {
 		return in.endRun(ctx, working)
 	}
-	if answer != "" {
+	if answered {
 		return in.answerDecision(ctx, working, answer)
 	}
 	in.progressf("starting or attaching to the run for this branch; this blocks until it needs a decision")
@@ -89,11 +93,19 @@ func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 // one already running. A caller who writes both has asked for two different
 // things at once, and taking one and discarding the other with nothing said is
 // the failure this refuses: explicit input is either acted on or refused.
-func actingOnTheRunInFlight(answer string, cancel bool) string {
+//
+// answering is whether --answer was written rather than what it holds, because
+// the two are different questions and reading the value for the second answers
+// the first wrong: a caller who writes an empty answer has asked to answer a
+// decision, and routing that to a start would create a run they did not ask
+// for. --cancel is read from its value instead, because for a boolean the
+// value is the instruction: writing it false says do not cancel, and honouring
+// that is the same rule rather than an exception to it.
+func actingOnTheRunInFlight(answering, cancel bool) string {
 	switch {
 	case cancel:
 		return "--cancel"
-	case answer != "":
+	case answering:
 		return "--answer"
 	default:
 		return ""

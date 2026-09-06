@@ -376,10 +376,10 @@ func TestARunCanBeReadAndEndedThroughTheSurface(t *testing.T) {
 	}
 }
 
-// The two global flags mean the same thing wherever they appear on the command
-// line. README.md tells the reader to add --json to any command, and a flag
-// that is only accepted before the verb makes that untrue for every form a
-// person would naturally type.
+// The two global flags mean the same thing wherever they appear around a verb.
+// README.md tells the reader to add --json to any command, and a flag that is
+// only accepted before the verb makes that untrue for every form a person
+// would naturally type.
 func TestTheGlobalFlagsAreAcceptedAfterTheCommandAsWellAsBeforeIt(t *testing.T) {
 	t.Parallel()
 	h := newHome(t)
@@ -691,10 +691,12 @@ func TestAVerbThatTakesNoArgumentRefusesOne(t *testing.T) {
 	}
 }
 
-// The machine interface is one document per invocation on standard output,
-// whatever the caller asked about. Version and help are answers rather than
-// failures, so they honour it too: an agent that decodes standard output every
-// time must not get a decode error from the two commands it tries first.
+// The machine interface is one document per invocation on standard output.
+// Version and help are answers rather than failures, so they write one too
+// when --json was read before them: an agent that decodes standard output
+// every time must not get a decode error from the two commands it tries first.
+// The other order is the gap internal/cli/doc.go records, and nothing here
+// pins it either way.
 func TestVersionAndHelpAnswerAsDocumentsUnderJSON(t *testing.T) {
 	t.Parallel()
 	h := newHome(t)
@@ -807,6 +809,20 @@ func TestAnsweringOrEndingARunRefusesTheFlagsThatStartOne(t *testing.T) {
 		if got.code != machine.ExitUsage {
 			t.Errorf("assistant %s exited %s, want incorrect usage:\n%s%s",
 				strings.Join(args, " "), got.code, got.stdout, got.stderr)
+		}
+	}
+
+	// An answer the caller wrote and left empty is refused for being empty. It
+	// is not a request to start a run: routing it there would create a run
+	// nobody asked for and throw the flag away with nothing said.
+	for _, args := range [][]string{{"--answer="}, {"--answer", ""}, {"--answer", "   "}} {
+		got := run(t, h, subject, args...)
+		if got.code != machine.ExitUsage {
+			t.Errorf("assistant --answer with an empty answer exited %s, want incorrect usage:\n%s%s",
+				got.code, got.stdout, got.stderr)
+		}
+		if !strings.Contains(got.stderr, "empty") {
+			t.Errorf("the refusal does not say the answer was empty:\n%s", got.stderr)
 		}
 	}
 

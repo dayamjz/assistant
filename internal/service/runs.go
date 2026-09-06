@@ -210,9 +210,23 @@ func (s *Service) respond(ctx context.Context, req machine.RespondRequest) (mach
 	})
 }
 
-// cancel ends a run. It ends the segment executing it first, because a run
-// whose record says terminated while a segment of it is still running a node
-// is a run this service reported as over and is still driving.
+// cancel ends a run. It cancels the context of the segment executing it before
+// it moves the record, so a segment that is between cancellation points stops
+// rather than carrying on past a run that is over.
+//
+// That is a signal and not a join. Nothing here waits for the advancing
+// goroutine to leave the node it is in and give its slot back, so the record
+// can reach terminated while a node body is still returning, and the wider it
+// is between cancellation points the longer that window is. It is not
+// observable while every stage body returns at once, and it becomes real with
+// the first body that does work - an agent process, per PRD section 8's
+// process lifetime rule.
+//
+// What the window cannot do is rewrite the run's position: internal/graph
+// anchors every checkpoint to the one the segment read, and the record's own
+// move is what a later reader reconciles against. Making the sentence a join
+// is a change to what cancel costs a caller, which is its own decision rather
+// than this one.
 func (s *Service) cancel(ctx context.Context, req machine.CancelRequest) (machine.Run, error) {
 	built, err := s.driverFor(ctx)
 	if err != nil {

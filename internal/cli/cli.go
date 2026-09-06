@@ -216,7 +216,10 @@ const (
 // parseFlags gives the verb its own flag set.
 //
 // The two global flags are declared on every verb's set as well as read before
-// the verb, so --json and --home mean the same thing wherever they appear.
+// the verb, so --json and --home mean the same thing wherever they appear
+// around a verb. They are honoured when written before --version, -h or --help
+// and not after, which is the gap internal/cli/doc.go records and the parser
+// rework owns.
 // They are read back into the invocation rather than left on the set, because
 // the output shape is decided from that field and a --json the verb parsed
 // would otherwise be a flag that was accepted and ignored. They are read back
@@ -484,10 +487,11 @@ func render(in *invocation, answer any, err error) machine.Code {
 // answer writes something that is neither a failure nor a verb's result: the
 // version and the help, which are asked for rather than produced by a verb.
 //
-// Both go to standard output and exit successfully, and both honour --json,
-// because the contract is one document per invocation whatever the caller
-// asked about. A caller decoding standard output would otherwise get a decode
-// error from the two commands it is most likely to try first.
+// Both go to standard output and exit successfully, and both write a document
+// when --json was already read - which is when it was written before
+// --version, -h or --help and not after, the gap internal/cli/doc.go records
+// and the parser rework owns. This writes what that field says; it is not the
+// place the field is settled.
 func (in *invocation) answer(document any, text string) machine.Code {
 	if in.json {
 		if err := machine.NewEncoder(in.env.Stdout).Encode(document); err != nil {
