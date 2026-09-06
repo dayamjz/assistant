@@ -90,7 +90,9 @@ var _ agents.Fixer = (*Fixer)(nil)
 // being a role in the index. What decides is the run's own record, so a run
 // ended by something that did not go through this service is refused here too,
 // rather than served on the strength of this service having handed a role out
-// earlier.
+// earlier. Such a run's index entry is dropped here, at the refusal, which is
+// the only occasion this service has to notice an ending it did not make; a
+// run ended through this service was already dropped by the move itself.
 func (s *Service) Fixer(ctx context.Context, id string) (*Fixer, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -99,6 +101,7 @@ func (s *Service) Fixer(ctx context.Context, id string) (*Fixer, error) {
 		return nil, err
 	}
 	if finished(r.Status) {
+		delete(s.fixers, id)
 		return nil, fmt.Errorf("%w: run %s is %s", ErrRunEnded, id, r.Status)
 	}
 	if existing, ok := s.fixers[id]; ok {
@@ -128,9 +131,12 @@ func (s *Service) Fixer(ctx context.Context, id string) (*Fixer, error) {
 // A round whose result this returns has had the session reference it reported
 // recorded on the run. There is no window in which a caller holds a fix
 // round's result and a restart would resume something else. When the record
-// cannot be written the round fails, carrying both what the round did and why
-// the reference could not be kept, and the fix that round may already have
-// made to the working copy stands.
+// cannot be written the round fails: the error always names why the reference
+// could not be kept, and names the round's own failure as well when the round
+// itself failed. No result is returned either way, so a round that otherwise
+// succeeded is readable only from the agents.Recorder's invocation record and
+// not from anything returned here. The fix that round may already have made to
+// the working copy stands.
 //
 // That is a harder answer than internal/agents gives to a round that reports
 // no reference at all, and the difference is what can be said about the loss.

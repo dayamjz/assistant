@@ -1,6 +1,7 @@
 package runs
 
 import (
+	"errors"
 	"path/filepath"
 	"regexp"
 	"testing"
@@ -39,6 +40,41 @@ func TestEndingARunDropsItsFixerRoleFromTheIndex(t *testing.T) {
 	svc.mu.Unlock()
 	if held != 0 {
 		t.Fatalf("the index still holds %d fixer roles after the run ended", held)
+	}
+}
+
+// A run ended by something that did not go through this service is refused the
+// next time its role is asked for, and that refusal is also where the index
+// stops holding it. The refusal alone would pass without the drop, because the
+// status is read on every hand-out; the index is what this asserts.
+func TestARunEndedOutOfBandDropsItsFixerRoleOnTheNextHandOut(t *testing.T) {
+	ctx := t.Context()
+	svc, db := internalService(t)
+	run := internalRun(t, db, svc, "run-1")
+
+	if _, err := svc.Fixer(ctx, run.ID); err != nil {
+		t.Fatalf("Fixer: %v", err)
+	}
+	// Ending the run without the service, which is the bypass its documented
+	// ownership leaves open, so nothing here evicts on the move.
+	if _, err := db.TransitionRun(ctx, run.ID, []store.RunStatus{store.RunPending}, store.RunTerminated); err != nil {
+		t.Fatalf("TransitionRun: %v", err)
+	}
+	svc.mu.Lock()
+	held := len(svc.fixers)
+	svc.mu.Unlock()
+	if held != 1 {
+		t.Fatalf("the index holds %d fixer roles after an out-of-band ending, want the 1 handed out", held)
+	}
+
+	if _, err := svc.Fixer(ctx, run.ID); !errors.Is(err, ErrRunEnded) {
+		t.Fatalf("Fixer answered %v, want ErrRunEnded", err)
+	}
+	svc.mu.Lock()
+	held = len(svc.fixers)
+	svc.mu.Unlock()
+	if held != 0 {
+		t.Fatalf("the index still holds %d fixer roles after refusing the ended run", held)
 	}
 }
 

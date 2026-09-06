@@ -84,12 +84,17 @@
 // bounded to one round's memory, and the round itself is replayed by whatever
 // resumes the run.
 //
-// A round whose reference cannot be recorded fails, carrying both what the
-// round did and why. That is harder than internal/agents is on a round whose
-// agent reported no reference, where the result stands because the loss is
-// visible in the invocation record; here the thing that could not be written
-// is the record, so nothing is left to make it visible with. The fix that
-// round may already have made to the working copy stands, and Apply says so.
+// A round whose reference cannot be recorded fails, and the failure names why
+// the reference could not be kept, together with the round's own error when
+// the round itself failed. It carries no result, so a round that otherwise
+// succeeded is readable from the agents.Recorder's invocation record rather
+// than from what Apply returns; handing back a result whose session the run
+// does not know about would let a caller read that round as successful. That
+// is harder than internal/agents is on a round whose agent reported no
+// reference, where the result stands because the loss is visible in the
+// invocation record; here the thing that could not be written is the record,
+// so nothing is left to make it visible with. The fix that round may already
+// have made to the working copy stands, and Apply says so.
 //
 // # P4 is not loosened here, and could not be from here
 //
@@ -163,9 +168,13 @@
 // A Fixer already handed out is not revoked when its run ends. Ending a run's
 // agent work is the cancellation of the context its rounds run on, which is
 // what internal/agents ties a process tree to; a status check per round would
-// be a second and slower one that a round already in flight would be past. The
-// service drops its own reference, so nothing new reaches a finished run's
-// session.
+// be a second and slower one that a round already in flight would be past.
+// What holds unconditionally is that a role is never handed out for a finished
+// run, because the status is read on every hand-out. When the service's own
+// reference is dropped is weaker than that and depends on how the run ended: a
+// run ended through this service loses its index entry at the move, and a run
+// ended out of band loses it on the next hand-out attempt, which may never
+// come.
 //
 // store.SetRunFixerSession is exported, so a caller that has the store can
 // write a run's session reference without going through the Fixer that owns
