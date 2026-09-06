@@ -432,3 +432,55 @@ func waitFor(t *testing.T, holds func() bool, what string) {
 		time.Sleep(5 * time.Millisecond)
 	}
 }
+
+// A run that was recorded and never executed has no position to carry on
+// from, and attaching to it says so rather than resuming something that is not
+// there. The run's inputs are on its record, but the stages it was told to
+// skip are not, so starting it again from the record would silently drop that
+// choice.
+func TestARunThatNeverExecutedIsReportedRatherThanResumed(t *testing.T) {
+	requiresIdentifiedPeer(t)
+	h := newHome(t)
+	subject := newSubject(t)
+	repository := recordRepository(t, h, subject)
+
+	// A record with no checkpoint is what a service that died between
+	// recording a run and walking its first node leaves behind.
+	records := openRecords(t, h)
+	build, err := store.CurrentBuild()
+	if err != nil {
+		t.Fatalf("reading this build's identity: %v", err)
+	}
+	created, err := records.CreateRun(t.Context(), store.Run{
+		ID:            "never-executed",
+		RepositoryID:  repository.ID,
+		Branch:        "main",
+		SubmittedHead: "0000000000000000000000000000000000000000",
+		Intent:        "recorded and then nothing",
+		IntentSource:  "supplied",
+		Build:         build,
+		ConfigDigest:  "digest",
+	})
+	if err != nil {
+		t.Fatalf("recording a run: %v", err)
+	}
+	if err := records.Close(); err != nil {
+		t.Fatalf("closing the store: %v", err)
+	}
+
+	withService(t, h, func(running serviceUnderTest) {
+		attached := startRun(t, running.client, subject)
+		if attached.Record.ID != created.ID {
+			t.Fatalf("attaching started a new run %s rather than reporting %s", attached.Record.ID, created.ID)
+		}
+		if attached.Progress != nil {
+			t.Fatalf("a run that never executed reports progress %v", attached.Progress)
+		}
+		if attached.Outcome != machine.OutcomeFailed {
+			t.Fatalf("a run that never executed reports %s, want failed", attached.Outcome)
+		}
+		if attached.NextAction == "" {
+			t.Fatal("a run that cannot be carried on says nothing about what to do")
+		}
+	})
+}

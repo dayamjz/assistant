@@ -176,6 +176,14 @@ func (s *Service) attach(ctx context.Context, runID string) (machine.Run, error)
 	if settled.Status != store.RunRunning && settled.Status != store.RunPending {
 		return s.view(ctx, settled.ID)
 	}
+	if _, err := s.checkpoints.Latest(ctx, settled.ID); err != nil {
+		// A run with no checkpoint never executed a node, so there is no
+		// position to resume from. Its inputs are on its record, but the
+		// stages it was told to skip are not, and starting it again from the
+		// record would silently drop that choice. It is reported instead, and
+		// the report says what to do about it.
+		return s.view(ctx, settled.ID)
+	}
 	built, err := s.driverFor(ctx)
 	if err != nil {
 		return machine.Run{}, err
@@ -524,8 +532,8 @@ func (s *Service) report(ctx context.Context, runID string, result *graph.Result
 			// A run with no checkpoint has not executed. Its record is the
 			// whole of what is known, and saying so is better than reporting a
 			// position it never reached.
-			answer.Outcome = machine.OutcomeDecision
-			answer.NextAction = "The run has not started executing yet. Attach to it to carry it on."
+			answer.Outcome = machine.OutcomeOf(record.Status, graph.StatusInvalid, graph.State{})
+			answer.NextAction = "This run never began executing, so there is no position to carry it on from. End it and start a fresh run."
 			return answer, nil
 		}
 		result = &graph.Result{
