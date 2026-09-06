@@ -57,21 +57,33 @@
 // success for the same reason, and internal/machine's outcome table says why
 // that is a member of its own rather than one of the four PRD section 9 names.
 //
-// The structured answer goes to standard output and progress goes to standard
-// error, so a caller redirecting standard output gets documents and nothing
-// else. A verb that answers nothing writes nothing, so a consumer reading one
-// document per line is never handed one that decodes to nothing.
+// A verb's answer goes to standard output as a document under --json, and
+// progress goes to standard error, so a caller redirecting standard output
+// gets documents from the verbs and nothing else. A verb that answers nothing
+// writes nothing, so a consumer reading one document per line is never handed
+// one that decodes to nothing.
 //
 // Asking for the version or for the help is answered rather than refused: both
 // go to standard output and exit successfully, because incorrect usage is what
-// the third code means and neither of those is that. Both honour --json too,
-// as machine.Version and machine.Help, so the one-document-per-invocation
-// contract above holds for them rather than having two exceptions in it.
+// the third code means and neither of those is that. Both have a document
+// shape, machine.Version and machine.Help, and write it when --json was read
+// before them.
+//
+// That last clause is a gap and not a nicety, so it is written down rather
+// than rounded off: "assistant --json --version" writes a document, and
+// "assistant --version --json" writes the plain line, because the scan of the
+// flags that come before a verb returns at --version, -h or --help the moment
+// it recognizes one and never reaches a --json behind it. The same is true of
+// --home there. So the one-document-per-invocation contract holds for every
+// verb and for these two only in that order. Closing it means reworking that
+// scan, which is its own task and deliberately not done here; nothing in this
+// package works around it in the meantime.
 //
 // --json and --home apply to every verb and are accepted before it or after
 // it. They are declared on each verb's own flag set as well as read ahead of
 // the verb, so which home a command acts on is settled once the verb's flags
-// have been parsed and not before.
+// have been parsed and not before. --version and --help are not verbs and do
+// not get that second reading, which is the gap above.
 //
 // # Text a stage's agent wrote
 //
@@ -82,12 +94,13 @@
 // A description carrying an escape sequence is therefore shown rather than
 // acted on by the terminal reading either of them.
 //
-// Two things a stage's agent wrote reach that rendering, and both go through
-// it: the findings a decision carries, and the summary a fix round wrote. What
-// is not escaped is everything that is not an agent's words - a stage name, an
-// outcome, a park's reason, a run's record - because those are this build's own
-// vocabulary or a record git or the store holds rather than text an agent
-// composed.
+// Three things reach that rendering carrying text this build did not write,
+// and all three go through it: the findings a decision carries, the summary a
+// fix round wrote, and the payload an event on assistant watch carries, which
+// is a record holding the intent a person or a driving agent supplied. What is
+// not escaped is everything else a line is built from - a stage name, an
+// outcome, a park's reason - because those are this build's own vocabulary
+// rather than text that came from outside it.
 //
 // # What this package does not do
 //

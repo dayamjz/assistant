@@ -9,6 +9,7 @@ import (
 
 	"github.com/dayamjz/assistant/internal/findings"
 	"github.com/dayamjz/assistant/internal/graph"
+	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/store"
 )
@@ -45,6 +46,18 @@ func TestNeitherRenderingEmitsAControlCharacterRaw(t *testing.T) {
 		readOut(&human, answer)
 		if strings.ContainsRune(human.String(), c.rune) {
 			t.Errorf("the rendering a person reads emits %s (U+%04X) raw:\n%q", c.name, c.rune, human.String())
+		}
+
+		// The event stream is the third path text this build did not write
+		// reaches a terminal on, and it carries a run's intent.
+		var event bytes.Buffer
+		readOut(&event, ipc.Event{
+			Type:     ipc.TypeRunState,
+			Revision: 1,
+			Payload:  payloadCarrying(t, string(c.rune)),
+		})
+		if strings.ContainsRune(event.String(), c.rune) {
+			t.Errorf("an event's payload emits %s (U+%04X) raw:\n%q", c.name, c.rune, event.String())
 		}
 
 		var document bytes.Buffer
@@ -95,4 +108,16 @@ func runCarrying(control string) machine.Run {
 			}},
 		},
 	}
+}
+
+// payloadCarrying is the record an event on the run stream carries, encoded
+// the way internal/service encodes it, with the rune under test in the intent
+// a caller supplied.
+func payloadCarrying(t *testing.T, control string) json.RawMessage {
+	t.Helper()
+	payload, err := json.Marshal(store.Run{ID: "abc", Branch: "work", Intent: carrying(control)})
+	if err != nil {
+		t.Fatalf("encoding the record an event carries: %v", err)
+	}
+	return payload
 }

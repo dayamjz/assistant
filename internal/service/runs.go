@@ -65,7 +65,17 @@ func (s *Service) start(ctx context.Context, req machine.StartRequest) (machine.
 		return machine.Run{}, err
 	}
 	if !created {
-		return s.attach(ctx, record.ID)
+		view, err := s.attach(ctx, record.ID)
+		if err != nil {
+			return machine.Run{}, err
+		}
+		// The branch already had a run, so this call is an attach and the
+		// inputs a start would have built a record from went nowhere. The
+		// attach is still the right answer - it is what the bare command is
+		// for, and it is worth repeating - so they are reported rather than
+		// refused or dropped without a word.
+		view.NotApplied = startInputs(req)
+		return view, nil
 	}
 	return s.begin(ctx, record, pipeline.Start{
 		Branch:         branch,
@@ -75,6 +85,27 @@ func (s *Service) start(ctx context.Context, req machine.StartRequest) (machine.
 		IntentSupplied: req.IntentSupplied,
 		Skip:           skip,
 	})
+}
+
+// startInputs names the run-starting inputs a request carried, by the field of
+// machine.StartRequest each arrived on.
+//
+// It reads what the request holds rather than what a caller says it wrote: the
+// wire shape has no way to tell a field that was set from one left at its zero
+// value, and the two are the same thing for these three. An intent of
+// whitespace is nothing given, which is the reading create already takes of it.
+func startInputs(req machine.StartRequest) []string {
+	var named []string
+	if strings.TrimSpace(req.Intent) != "" {
+		named = append(named, "intent")
+	}
+	if req.IntentSupplied {
+		named = append(named, "intent_supplied")
+	}
+	if len(req.Skip) > 0 {
+		named = append(named, "skip")
+	}
+	return named
 }
 
 // rerun starts a fresh run of the branch the caller is standing on, from that

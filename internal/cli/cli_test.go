@@ -3,6 +3,7 @@ package cli_test
 import (
 	"encoding/json"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -819,5 +820,56 @@ func TestAnsweringOrEndingARunRefusesTheFlagsThatStartOne(t *testing.T) {
 		if got := run(t, h, subject, args...); got.code == machine.ExitUsage {
 			t.Errorf("assistant %s is refused as incorrect usage:\n%s", strings.Join(args, " "), got.stderr)
 		}
+	}
+}
+
+// The bare command is attach-or-start, so a second call carrying an intent is
+// answered rather than refused - and it says the intent was not applied to the
+// run it answered with, in both renderings. Explicit input is never taken and
+// thrown away in silence.
+func TestAttachingSaysWhichStartingInputsWereNotApplied(t *testing.T) {
+	requiresIdentifiedPeer(t)
+	h := newHome(t)
+	subject := newSubject(t)
+	serve(t, h)
+
+	if got := run(t, h, subject, "init"); got.code != machine.ExitOK {
+		t.Fatalf("assistant init exited %s:\n%s%s", got.code, got.stdout, got.stderr)
+	}
+	started := run(t, h, subject, "--json", "--intent", "the intent the run was built from")
+	if started.code != machine.ExitOK {
+		t.Fatalf("starting a run exited %s:\n%s", started.code, started.stdout)
+	}
+	first := decodeRun(t, started.stdout)
+	if len(first.NotApplied) != 0 {
+		t.Fatalf("the call that created the run reports %v as not applied", first.NotApplied)
+	}
+
+	// A second call on the same branch attaches. It succeeds, answers about
+	// the same run, and names what it could not apply to it.
+	again := run(t, h, subject, "--json", "--intent", "a different intent", "--skip", "test,lint")
+	if again.code != machine.ExitOK {
+		t.Fatalf("attaching with an intent exited %s:\n%s%s", again.code, again.stdout, again.stderr)
+	}
+	attached := decodeRun(t, again.stdout)
+	if attached.Record.ID != first.Record.ID {
+		t.Fatalf("the second call answered about run %s, want %s", attached.Record.ID, first.Record.ID)
+	}
+	if attached.Record.Intent != first.Record.Intent {
+		t.Fatalf("the attach rewrote the run's intent to %q", attached.Record.Intent)
+	}
+	for _, want := range []string{"intent", "skip"} {
+		if !slices.Contains(attached.NotApplied, want) {
+			t.Fatalf("the attach does not report %q as not applied: %v", want, attached.NotApplied)
+		}
+	}
+
+	// And the person reading the terminal is told the same thing.
+	plain := run(t, h, subject, "--intent", "a third intent")
+	if plain.code != machine.ExitOK {
+		t.Fatalf("attaching exited %s:\n%s%s", plain.code, plain.stdout, plain.stderr)
+	}
+	if !strings.Contains(plain.stdout, "Not applied") || !strings.Contains(plain.stdout, "intent") {
+		t.Fatalf("the rendering a person reads does not say the intent was not applied:\n%s", plain.stdout)
 	}
 }

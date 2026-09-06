@@ -71,10 +71,17 @@ func (in *invocation) report(v any) {
 
 // eventLine renders one event for a person. The payload is another package's
 // record travelling as written, so what is printed is its type, its revision,
-// and the payload as it stands rather than this package's account of it.
+// and the payload rather than this package's account of it.
+//
+// It goes through the same escaping every other line a person reads does. The
+// payload is a record encoded by encoding/json, which carries a run's intent -
+// text a person or a driving agent supplied - and which escapes U+0000 through
+// U+001F and leaves U+007F and the C1 range as they stand, so this is the pass
+// that keeps the last of them off a terminal that would act on them.
 func eventLine(event ipc.Event) string {
 	if len(event.Payload) == 0 {
-		return fmt.Sprintf("%s (revision %d)", event.Type, event.Revision)
+		return fmt.Sprintf("%s (revision %d)", printable(string(event.Type)), event.Revision)
 	}
-	return fmt.Sprintf("%s (revision %d) %s", event.Type, event.Revision, event.Payload)
+	return fmt.Sprintf("%s (revision %d) %s",
+		printable(string(event.Type)), event.Revision, printable(string(event.Payload)))
 }

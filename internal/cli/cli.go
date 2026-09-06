@@ -423,8 +423,9 @@ func usageText() string {
 		}
 		fmt.Fprintf(&b, "  %-9s %s\n", name, v.summary)
 	}
-	b.WriteString("\n  --json      Write the answer as one document. It is accepted before or after the command.\n")
-	b.WriteString("  --home PATH The home root to act on. It is accepted before or after the command.\n")
+	b.WriteString("\n  --json      Write the answer as one document. It is accepted before or after the command,\n")
+	b.WriteString("              and before --version or --help rather than after one of them.\n")
+	b.WriteString("  --home PATH The home root to act on, on the same terms as --json.\n")
 	b.WriteString("  --version   Report the build.\n")
 	b.WriteString("  --help      Print this.")
 	return b.String()

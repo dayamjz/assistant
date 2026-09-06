@@ -117,6 +117,10 @@ func readOutRun(w io.Writer, r machine.Run) {
 	if r.Decision != nil {
 		readOutDecision(w, *r.Decision)
 	}
+	if len(r.NotApplied) > 0 {
+		writef(w, "Not applied %s - this branch already had a run, and these start one\n",
+			strings.Join(r.NotApplied, ", "))
+	}
 	if r.NextAction != "" {
 		writef(w, "\nNext: %s\n", r.NextAction)
 	}

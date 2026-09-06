@@ -183,6 +183,21 @@ type Run struct {
 	// Stages is what became of each of the nine, in the order a run takes
 	// them.
 	Stages []Stage `json:"stages,omitempty"`
+	// NotApplied names the run-starting inputs a request carried that this
+	// run was not built from, by the field of StartRequest each came in on.
+	//
+	// It is how the bare command stays attach-or-start without discarding
+	// what a caller wrote. A start that finds the branch already has a run
+	// answers with that run, which is the point of the command and is worth
+	// doing twice; the intent and the skip list belong to the run a start
+	// creates, and a run that already exists was built from neither. Naming
+	// them here is the difference between input that was not applied and
+	// input that was thrown away in silence.
+	//
+	// It is empty when nothing was dropped, which is every answer to a call
+	// that created the run it reports and every answer to a call that carried
+	// none of those inputs.
+	NotApplied []string `json:"not_applied,omitempty"`
 }
 
 // Runs is the answer to a request for recent runs, newest first.
