@@ -74,9 +74,14 @@
 // A finding's text is whatever an agent put there. The structured rendering
 // escapes every control character through internal/machine's encoder, and the
 // rendering a person reads escapes them too, so a description carrying an
-// escape sequence is shown rather than acted on by the terminal. What that
-// covers is the findings a decision carries, which is the text this surface
-// takes from an agent.
+// escape sequence is shown rather than acted on by the terminal.
+//
+// Two things a stage's agent wrote reach that rendering, and both go through
+// it: the findings a decision carries, and the summary a fix round wrote. What
+// is not escaped is everything that is not an agent's words - a stage name, an
+// outcome, a park's reason, a run's record - because those are this build's own
+// vocabulary or a record git or the store holds rather than text an agent
+// composed.
 //
 // # What this package does not do
 //

@@ -503,3 +503,147 @@ func TestEjectRefusedByAnActiveRunRemovesNothing(t *testing.T) {
 		t.Fatalf("eject --confirm exited %s once the run was over:\n%s%s", got.code, got.stdout, got.stderr)
 	}
 }
+
+// The global flags mean the same thing after an argument that is not a flag as
+// they do anywhere else. This is the form a driving agent hits: reading one run
+// by name and asking for a document, which flag.FlagSet.Parse stopping at the
+// first non-flag argument would otherwise turn into a refusal in prose.
+func TestTheGlobalFlagsAreAcceptedAfterAnArgumentThatIsNotAFlag(t *testing.T) {
+	t.Parallel()
+	h := newHome(t)
+	subject := newSubject(t)
+
+	for _, args := range [][]string{
+		{"runs", "abc123", "--json"},
+		{"tasks", "abc123", "--json"},
+		{"runs", "--limit", "5", "abc123", "--json"},
+	} {
+		got := run(t, h, subject, args...)
+		if got.code == machine.ExitUsage {
+			t.Fatalf("assistant %s was refused as incorrect usage:\n%s", strings.Join(args, " "), got.stderr)
+		}
+		var failure machine.Failure
+		if err := json.Unmarshal([]byte(got.stdout), &failure); err != nil {
+			t.Fatalf("assistant %s did not write a document: %v\n%s", strings.Join(args, " "), err, got.stdout)
+		}
+		if failure.Error == "" {
+			t.Fatalf("assistant %s wrote a document with nothing in it: %s", strings.Join(args, " "), got.stdout)
+		}
+	}
+
+	// The name is still the verb's argument rather than something the
+	// reordering swallowed, so a second one is still refused.
+	if got := run(t, h, subject, "runs", "abc123", "def456", "--json"); got.code != machine.ExitUsage {
+		t.Fatalf("naming two runs exited %s, want incorrect usage", got.code)
+	}
+}
+
+// The service verb's subcommand is a word wherever it stands, so a global flag
+// written between the verb and it is read as a flag rather than mistaken for a
+// subcommand nobody recognizes.
+func TestTheServiceSubcommandIsFoundWhereverItStands(t *testing.T) {
+	t.Parallel()
+	h := newHome(t)
+	subject := newSubject(t)
+
+	for _, args := range [][]string{
+		{"service", "status", "--json"},
+		{"service", "--json", "status"},
+	} {
+		got := run(t, h, subject, args...)
+		if got.code != machine.ExitOK {
+			t.Fatalf("assistant %s exited %s:\n%s%s", strings.Join(args, " "), got.code, got.stdout, got.stderr)
+		}
+		var state machine.Service
+		if err := json.Unmarshal([]byte(got.stdout), &state); err != nil {
+			t.Fatalf("assistant %s did not write a document: %v\n%s", strings.Join(args, " "), err, got.stdout)
+		}
+		if state.Socket == "" {
+			t.Fatalf("assistant %s reported no socket: %s", strings.Join(args, " "), got.stdout)
+		}
+	}
+
+	if got := run(t, h, subject, "service", "nonsense"); got.code != machine.ExitUsage {
+		t.Fatalf("a subcommand the service does not have exited %s, want incorrect usage", got.code)
+	}
+	if got := run(t, h, subject, "service"); got.code != machine.ExitUsage {
+		t.Fatalf("assistant service with no subcommand exited %s, want incorrect usage", got.code)
+	}
+}
+
+// A command line that is wrong is answered in the shape the caller asked for,
+// whichever side of the verb they asked on.
+func TestAUsageFailureIsStructuredWhicheverSideOfTheVerbJSONWasAskedOn(t *testing.T) {
+	t.Parallel()
+	h := newHome(t)
+	subject := newSubject(t)
+
+	for _, args := range [][]string{
+		{"--json", "status", "--bogus"},
+		{"status", "--json", "--bogus"},
+		{"status", "--bogus", "--json"},
+	} {
+		got := run(t, h, subject, args...)
+		if got.code != machine.ExitUsage {
+			t.Fatalf("assistant %s exited %s, want incorrect usage", strings.Join(args, " "), got.code)
+		}
+		var failure machine.Failure
+		if err := json.Unmarshal([]byte(got.stdout), &failure); err != nil {
+			t.Fatalf("assistant %s answered in prose: %v\nout: %q\nerr: %q",
+				strings.Join(args, " "), err, got.stdout, got.stderr)
+		}
+	}
+}
+
+// An intent given with nothing said about its standing is acceptance criteria,
+// and a caller who says otherwise is taken at their word rather than having it
+// silently overridden.
+func TestTheIntentSuppliedFlagIsHonouredWhenTheCallerWritesIt(t *testing.T) {
+	requiresIdentifiedPeer(t)
+	h := newHome(t)
+	subject := newSubject(t)
+	serve(t, h)
+
+	if got := run(t, h, subject, "init"); got.code != machine.ExitOK {
+		t.Fatalf("assistant init exited %s:\n%s%s", got.code, got.stdout, got.stderr)
+	}
+
+	sources := map[string]string{}
+	for _, c := range []struct {
+		branch string
+		args   []string
+	}{
+		{"criteria", []string{"--intent", "acceptance criteria stated up front"}},
+		{"hint", []string{"--intent", "a hint about what this is for", "--intent-supplied=false"}},
+	} {
+		git(t, subject, "checkout", "--quiet", "-b", c.branch)
+		started := run(t, h, subject, append([]string{"--json"}, c.args...)...)
+		if started.code != machine.ExitOK {
+			t.Fatalf("starting the run for %s exited %s:\n%s", c.branch, started.code, started.stdout)
+		}
+		record := decodeRun(t, started.stdout).Record
+		if record.Intent == "" {
+			t.Fatalf("the run for %s recorded no intent", c.branch)
+		}
+		sources[c.branch] = record.IntentSource
+		if ended := run(t, h, subject, "--json", "--cancel"); ended.code != machine.ExitOK {
+			t.Fatalf("ending the run for %s exited %s:\n%s", c.branch, ended.code, ended.stdout)
+		}
+	}
+
+	if sources["hint"] == sources["criteria"] {
+		t.Fatalf("--intent-supplied=false was discarded: both runs record %q", sources["hint"])
+	}
+	// And neither says nothing was given, because both were given something.
+	git(t, subject, "checkout", "--quiet", "-b", "nothing")
+	started := run(t, h, subject, "--json")
+	if started.code != machine.ExitOK {
+		t.Fatalf("starting a run with no intent exited %s:\n%s", started.code, started.stdout)
+	}
+	absent := decodeRun(t, started.stdout).Record.IntentSource
+	for branch, source := range sources {
+		if source == absent {
+			t.Fatalf("the run for %s carries intent text and records %q, the same as a run given none", branch, source)
+		}
+	}
+}

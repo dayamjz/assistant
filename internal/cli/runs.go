@@ -25,15 +25,15 @@ import (
 // command rather than through a verb the specification does not describe.
 func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 	var (
-		intent   string
-		supplied bool
-		answer   string
-		skip     string
-		cancel   bool
+		intent       string
+		suppliedFlag bool
+		answer       string
+		skip         string
+		cancel       bool
 	)
 	if err := in.parseFlags("", func(set *flag.FlagSet) {
 		set.StringVar(&intent, "intent", "", "what this change sets out to do, in your own terms")
-		set.BoolVar(&supplied, "intent-supplied", false, "treat the intent as authoritative acceptance criteria rather than a hint")
+		set.BoolVar(&suppliedFlag, "intent-supplied", false, "treat the intent as authoritative acceptance criteria rather than a hint")
 		set.StringVar(&answer, "answer", "", "answer the decision the run is holding on")
 		set.BoolVar(&cancel, "cancel", false, "end this branch's run, wherever it stands")
 		set.StringVar(&skip, "skip", "", "comma-separated stages this one run does not take")
@@ -46,11 +46,15 @@ func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 	if len(in.args) > 0 {
 		return nil, usagef("this command takes no arguments, and was given %q", in.args[0])
 	}
-	if intent != "" && !supplied {
-		// An intent that is stated is one somebody stated. The flag exists so
-		// that a caller can say the opposite is not true of it, and defaulting
-		// the other way would have a run claim acceptance criteria nobody gave.
-		supplied = true
+	// An intent given with nothing said about its standing is acceptance
+	// criteria, because an intent somebody stated is one somebody stated and
+	// defaulting the other way would leave a run holding a contract nobody was
+	// held to. A caller who says otherwise is taken at their word rather than
+	// overridden: --intent-supplied=false records the intent as offered, which
+	// is the record saying a hint was given and not a contract.
+	supplied := intent != ""
+	if flagWasSet(in.flags, "intent-supplied") {
+		supplied = suppliedFlag
 	}
 	working, err := in.workingCopy(ctx)
 	if err != nil {

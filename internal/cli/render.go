@@ -157,9 +157,10 @@ func readOutDecision(w io.Writer, d machine.Decision) {
 // escapes every control character on its way through machine.Encoder, and this
 // is the same protection for the rendering a person reads.
 //
-// Line breaks are not control characters here because the caller has already
-// split on them, so what reaches this is one line and every control character
-// in it is one that does not belong.
+// A line break is a control character like any other, so a caller that wants
+// the text's own line breaks to survive splits on them first and passes each
+// line: what reaches this is then one line, and every control character in it
+// is one that does not belong.
 func printable(text string) string {
 	if !strings.ContainsFunc(text, unicode.IsControl) {
 		return text
@@ -278,11 +279,16 @@ func outcomeWord(stage machine.Stage) string {
 }
 
 // fixNote reports the last fix round's summary for a stage that had one.
+//
+// The summary is what a fixer agent wrote, so it goes through the same
+// escaping a finding's text does. It is written on one line, and printable
+// escapes a line break like any other control character, so a summary that
+// carries one cannot break the line it is part of either.
 func fixNote(stage machine.Stage) string {
 	if stage.Fix == "" {
 		return ""
 	}
-	return " - fixed: " + stage.Fix
+	return " - fixed: " + printable(stage.Fix)
 }
 
 // locationOf renders where a finding is, empty when it names nowhere.

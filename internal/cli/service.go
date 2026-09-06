@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -26,26 +27,54 @@ const readyTimeout = 10 * time.Second
 // readyPoll is how often the wait re-asks.
 const readyPoll = 25 * time.Millisecond
 
-// serviceVerb is start, stop, restart, and status. The four are subcommands of
-// one verb because PRD section 9's table gives them one row.
-func serviceVerb(ctx context.Context, in *invocation) (any, error) {
-	if len(in.args) == 0 {
-		return nil, usagef("assistant service needs one of: start, stop, restart, status")
-	}
-	action := in.args[0]
-	in.args = in.args[1:]
-	switch action {
-	case "start":
-		return startService(ctx, in)
-	case "stop":
+// serviceActions are the four subcommands of the service verb, which PRD
+// section 9's table gives one row. The list is the one owner of which four
+// there are: it names the subcommand a command line holds and it runs the one
+// that was named.
+var serviceActions = []struct {
+	name string
+	run  func(context.Context, *invocation) (any, error)
+}{
+	{"start", startService},
+	{"stop", func(ctx context.Context, in *invocation) (any, error) {
 		return stopService(ctx, in, ipc.MethodServiceStop)
-	case "restart":
+	}},
+	{"restart", func(ctx context.Context, in *invocation) (any, error) {
 		return stopService(ctx, in, ipc.MethodServiceRestart)
-	case "status":
-		return serviceStatus(ctx, in)
-	default:
-		return nil, usagef("%q is not one of: start, stop, restart, status", action)
+	}},
+	{"status", serviceStatus},
+}
+
+// serviceVerb runs the subcommand the command line names.
+//
+// The subcommand is taken from wherever it stands rather than from the first
+// argument, so a global flag written between the verb and it is a flag and not
+// a subcommand nobody recognizes. What is left is the subcommand's to parse,
+// with the flags around it still in the order they were written.
+func serviceVerb(ctx context.Context, in *invocation) (any, error) {
+	for _, action := range serviceActions {
+		for i, arg := range in.args {
+			if arg != action.name {
+				continue
+			}
+			in.args = append(append([]string{}, in.args[:i]...), in.args[i+1:]...)
+			return action.run(ctx, in)
+		}
 	}
+	if len(in.args) == 0 {
+		return nil, usagef("assistant service needs one of: %s", strings.Join(serviceActionNames(), ", "))
+	}
+	return nil, usagef("assistant service names none of: %s", strings.Join(serviceActionNames(), ", "))
+}
+
+// serviceActionNames is the four read out, for a refusal that says what was
+// expected.
+func serviceActionNames() []string {
+	names := make([]string, 0, len(serviceActions))
+	for _, action := range serviceActions {
+		names = append(names, action.name)
+	}
+	return names
 }
 
 // serviceStatus reports whether the service is running, which is a real answer

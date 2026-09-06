@@ -199,13 +199,23 @@ type helpAnswer struct{ text string }
 // would print.
 func (h helpAnswer) Error() string { return h.text }
 
+// The two flags every verb accepts, named so that the declaration below and
+// the reordering that hoists them read the same two names rather than two
+// lists that could drift apart.
+const (
+	jsonFlagName = "json"
+	homeFlagName = "home"
+)
+
 // parseFlags gives the verb its own flag set.
 //
 // The two global flags are declared on every verb's set as well as read before
 // the verb, so --json and --home mean the same thing wherever they appear.
 // They are read back into the invocation rather than left on the set, because
 // the output shape is decided from that field and a --json the verb parsed
-// would otherwise be a flag that was accepted and ignored.
+// would otherwise be a flag that was accepted and ignored. They are read back
+// before a parse failure is returned, so a command line that is wrong is still
+// answered in the shape the caller asked for.
 //
 // Nothing here writes to a stream. The flag package's own reports would land
 // on standard error beside the one render writes, and an explicit request for
@@ -217,19 +227,102 @@ func (in *invocation) parseFlags(name string, declare func(*flag.FlagSet)) error
 	set.Usage = func() {}
 	asJSON := in.json
 	root := in.root
-	set.BoolVar(&asJSON, "json", asJSON, "write the answer as one document rather than reading it out")
-	set.StringVar(&root, "home", root, "the home root this command acts on")
+	set.BoolVar(&asJSON, jsonFlagName, asJSON, "write the answer as one document rather than reading it out")
+	set.StringVar(&root, homeFlagName, root, "the home root this command acts on")
 	declare(set)
-	if err := set.Parse(in.args); err != nil {
+	err := set.Parse(reorder(set, in.args))
+	in.json, in.root = asJSON, root
+	if err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return helpAnswer{text: verbUsage(name, set)}
 		}
 		return usageError{err: err}
 	}
-	in.json, in.root = asJSON, root
 	in.flags = set
 	in.args = set.Args()
 	return in.resolveHome()
+}
+
+// reorder puts a verb's arguments in the order flag.FlagSet.Parse needs.
+//
+// Parse stops at the first argument that is not a flag, so a flag written
+// after one that is not would be left in the arguments rather than parsed:
+// assistant runs <id> --json would refuse for having been given two names
+// instead of answering with a document. This moves every flag ahead of every
+// argument that is not one, so where a flag stands on the command line stops
+// deciding whether it is read at all, for every verb rather than for the two
+// that take a name today.
+//
+// The two global flags go first among the flags. They decide how an answer is
+// rendered and which home it is about, so a refusal raised over one of the
+// verb's own flags must not come before them.
+//
+// set is the authority for which flags take the argument behind them, so
+// nothing here holds a second list of what a verb accepts. A flag the set does
+// not declare is moved as it stands and refused by Parse. Everything after a
+// bare "--" is left alone, which is what that terminator means.
+func reorder(set *flag.FlagSet, args []string) []string {
+	var global, flags, rest []string
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
+		if arg == "--" {
+			rest = append(rest, args[i:]...)
+			break
+		}
+		if len(arg) < 2 || arg[0] != '-' {
+			rest = append(rest, arg)
+			continue
+		}
+		name, _, hasValue := strings.Cut(strings.TrimLeft(arg, "-"), "=")
+		written := []string{arg}
+		if !hasValue && takesValue(set, name) && i+1 < len(args) {
+			i++
+			written = append(written, args[i])
+		}
+		if name == jsonFlagName || name == homeFlagName {
+			global = append(global, written...)
+			continue
+		}
+		flags = append(flags, written...)
+	}
+	ordered := make([]string, 0, len(args))
+	ordered = append(ordered, global...)
+	ordered = append(ordered, flags...)
+	return append(ordered, rest...)
+}
+
+// takesValue reports whether a flag the set declares reads the argument behind
+// it as its value.
+//
+// A boolean flag does not, which is the distinction the flag package itself
+// makes and which is read off the declared value rather than restated here. A
+// flag the set does not declare is reported as taking nothing, so Parse
+// refuses the flag rather than this quietly swallowing whatever followed it.
+func takesValue(set *flag.FlagSet, name string) bool {
+	declared := set.Lookup(name)
+	if declared == nil {
+		return false
+	}
+	boolean, ok := declared.Value.(interface{ IsBoolFlag() bool })
+	return !ok || !boolean.IsBoolFlag()
+}
+
+// flagWasSet reports whether a caller wrote a flag, as opposed to it standing
+// at its default.
+//
+// Reading the value cannot answer that: a flag written with the text its
+// default already holds is indistinguishable from one nobody wrote. Visit
+// reports the flags that were actually set and nothing else, which is what
+// lets a verb take a caller at their word when they contradict a default it
+// would otherwise infer.
+func flagWasSet(set *flag.FlagSet, name string) bool {
+	written := false
+	set.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			written = true
+		}
+	})
+	return written
 }
 
 // commandName is how a command names itself, which for the command with no

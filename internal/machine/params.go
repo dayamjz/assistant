@@ -59,8 +59,14 @@ type StartRequest struct {
 	Skip []string `json:"skip,omitempty"`
 }
 
-// RerunRequest starts a fresh run from a repository's last known head,
-// inheriting the recorded intent, and blocks on the same terms as a start.
+// RerunRequest starts a fresh run of the branch the working copy is standing
+// on, from that branch's last known head, inheriting the intent recorded
+// there, and blocks on the same terms as a start.
+//
+// The branch is read from the working copy this names, the same way a start
+// reads it, so a rerun never acts on a branch the caller is not on. A branch
+// with no run of its own is refused by that branch's name rather than answered
+// with another branch's run.
 type RerunRequest struct {
 	Working
 }

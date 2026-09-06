@@ -689,12 +689,27 @@ func stageNames() []string {
 // The intent sources a run records. PRD section 8 has the run carry its intent
 // and where the intent came from, so a report can say who asked rather than
 // only what was asked.
+//
+// What reads the value, and what it changes: rerun reads it off the previous
+// run to decide pipeline.Start.IntentSupplied, and it crosses the wire as
+// store.Run's intent_source, which is what a driving agent reads off a
+// reported run. The distinction that is acted on is supplied against not
+// supplied, and that is the whole of it.
+//
+// The residual gap is that offered and absent drive nothing different. Both
+// give IntentSupplied false, so the graph state a run begins from is identical
+// for the two, and the only other difference between them is that the Intent
+// column holds text, which a reader gets from that column rather than from
+// this one. The stage that would weigh a hint differently from a contract is
+// the intent stage, and it has no body, so nothing will act on the difference
+// until it does. The three are kept apart anyway because the record must not
+// say that a run holds intent text and that nothing was given.
 const (
-	// intentSourceSupplied is an intent a person or a driving agent stated.
+	// intentSourceSupplied is an intent a person or a driving agent stated as
+	// acceptance criteria.
 	intentSourceSupplied = "supplied"
-	// intentSourceOffered is an intent a caller gave without making it
-	// acceptance criteria, which is a hint the intent stage weighs rather than
-	// a contract it holds the change to.
+	// intentSourceOffered is an intent a caller gave as a hint, having
+	// declined to claim it as acceptance criteria.
 	intentSourceOffered = "offered"
 	// intentSourceAbsent is a run started with no intent at all, which leaves
 	// the intent stage to infer one.
