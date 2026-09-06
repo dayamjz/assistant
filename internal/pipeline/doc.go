@@ -68,14 +68,16 @@
 // of one. A round whose body errors, or a run interrupted mid-loop, leaves the
 // latest checkpoint standing inside the loop still running, and the graph's
 // Resume continues it in a new segment with a newly built fix body. That is
-// the residual gap, and it is why agents.Fixer.Reference exists. Nothing in
-// this repository writes the reference down, so nothing here makes a session
-// survive a break, and what the new body has behind it differs by case. Within
+// the residual gap here, and it is why agents.Fixer.Reference exists. Nothing
+// in this package writes the reference down, so nothing here makes a session
+// survive a break, and what the new body has behind it is the caller's. Within
 // one process the graph rebuilds it from the caller's own NewBody closure, so
 // whatever that closure holds survives - a Fixer constructed outside it, for
 // one - which this package neither requires nor refuses. Across a process
-// restart the Go value is gone and no reference was written down, so there is
-// nothing left to rebuild the session from.
+// restart the Go value is gone, and what is left is whatever wrote the
+// reference down: internal/runs records it on the run and hands a body the
+// run's fixer role, so a closure that asks that service for one resumes the
+// same session, and a closure that captured a Go value does not.
 //
 // The split is a narrowing, not P4 itself, and the difference matters. NewBody
 // is a caller-supplied closure on both sides, so it may capture anything that
@@ -396,13 +398,12 @@
 // The fixer's agent session reference is not pipeline state, and the schema
 // declares no key for it on purpose. agents.Fixer.Reference exists so that a
 // fixer's session can be written down and resumed by a restarted service, and
-// the service that owns runs is where it would live, alongside the run records
-// PRD section 8 puts in internal/store. Nothing in this repository writes it
-// down today: there is no such service, and the one session reference
-// internal/store holds is the task table's, which points at a fleet task's
-// terminal session rather than a fixer's. Naming the owner anyway is the point
-// of saying this, because a fact that belongs to nobody in particular is how
-// it ends up back in this package's schema.
+// internal/runs is the service that owns it: it records the reference on the
+// run's own row, alongside the run records PRD section 8 puts in
+// internal/store, and hands a fix body the run's fixer role rather than a
+// session this package would have to carry. Saying who owns it is still the
+// point of this paragraph, because a fact that belongs to nobody in particular
+// is how it ends up back in this package's schema.
 //
 // The reason is not layering taste. Graph state is what internal/graph
 // fingerprints for the convergence bound, and a session reference that changes

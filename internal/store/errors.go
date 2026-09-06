@@ -3,6 +3,7 @@ package store
 import (
 	"errors"
 	"fmt"
+	"strings"
 )
 
 // ErrNotFound is returned by every accessor that reads one record by its
@@ -58,6 +59,40 @@ var ErrNoResolver = errors.New("store: a hold resolution records who made it")
 // reporting it as "nobody was recorded" would turn a row nobody can account for
 // into a fact about the resolution.
 var ErrUnknownResolver = errors.New("store: hold resolver is outside the closed set")
+
+// ErrRunStatus is the class every *RunStatusError belongs to. It is returned
+// by TransitionRun when the run was not in any of the statuses the caller said
+// the move was legal out of, which is the answer a caller acts on rather than
+// a failure of the write.
+var ErrRunStatus = errors.New("store: run is not in a status this transition may be made from")
+
+// RunStatusError reports a refused transition and names what the run was
+// actually in, so a caller reports the state it found rather than only that it
+// was surprised by one.
+type RunStatusError struct {
+	// Run is the run's identifier.
+	Run string
+	// Expected is every status the caller said the move was legal out of.
+	Expected []RunStatus
+	// Actual is the status the run was in.
+	Actual RunStatus
+	// To is the status the move was to.
+	To RunStatus
+}
+
+// Error names the run, where it stands, where it was to go, and what would
+// have allowed the move.
+func (e *RunStatusError) Error() string {
+	expected := make([]string, len(e.Expected))
+	for i, status := range e.Expected {
+		expected[i] = string(status)
+	}
+	return fmt.Sprintf("store: run %s is %s, so it cannot move to %s, which is legal only from %s",
+		e.Run, e.Actual, e.To, strings.Join(expected, ", "))
+}
+
+// Unwrap makes every refused transition match ErrRunStatus.
+func (e *RunStatusError) Unwrap() error { return ErrRunStatus }
 
 // ErrClosed is returned by every accessor called after Close.
 var ErrClosed = errors.New("store: database is closed")

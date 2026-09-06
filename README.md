@@ -10,7 +10,7 @@ until it has been independently reviewed, tested, documented, and linted.
 ## Status
 
 Early. The product requirements are settled and checked in at
-[`docs/prd.html`](docs/prd.html). Thirteen pieces exist so far. The execution
+[`docs/prd.html`](docs/prd.html). Fourteen pieces exist so far. The execution
 engine in `internal/graph` is the first: the graph builder with its
 construction-time checks, an executor with halt points and bounded cycles, and
 checkpoints behind a four-operation store. The second is `internal/findings`,
@@ -64,11 +64,17 @@ produces is always a note that informs and blocks nothing. The thirteenth is
 `internal/fixture`, the adversarial subject repository the end-to-end harness
 validates against: seven scenarios built from nothing on demand, each planting
 conditions a stage or a refusal has to answer, with the answer each one must
-produce recorded beside it. The nine stage bodies are separate work against that
-contract and do not exist yet, including the review stage that puts the scope
-lens in front of a reviewer and binds what comes back to what the reviewer
-declared reading, and neither the harness nor the `assistant` binary exists
-either, so the only thing in here you can run is the fixture builder.
+produce recorded beside it. The fourteenth is `internal/runs`, the service that
+owns a run: its status changes as a table of anchored moves, each read and
+written in one transaction against the statuses the move is legal out of, and
+the one durable fixer session a run keeps, recorded on the run itself rather
+than in pipeline state, so a run's fixer resumes the same conversation across a
+segment boundary and across a restart of the service. The nine stage bodies are
+separate work against that contract and do not exist yet, including the review
+stage that puts the scope lens in front of a reviewer and binds what comes back
+to what the reviewer declared reading, and neither the harness nor the
+`assistant` binary exists either, so the only thing in here you can run is the
+fixture builder.
 
 ## The two promises
 
@@ -104,6 +110,7 @@ working as it always did.
 | `internal/graph` | The execution engine: nodes, edges, bounds, halt points, checkpoints. |
 | `internal/ipc` | The local protocol between the command line and the background service: the method table, the event taxonomy, the bounded stream, the client and the server, peer identification, and the one resolver it derives for an answer that arrives here. |
 | `internal/pipeline` | The nine stages as a graph definition over `internal/graph`: the stage contract, the fixed order, the state key table, the capabilities a path needs of the adapter, the fix loop, and its halt points and bounds. |
+| `internal/runs` | The run service: the anchored table of a run's status changes, and the one durable fixer session a run keeps, recorded on the run so a restarted service resumes the same conversation. |
 | `internal/safety` | The data-loss policy over git: whether a branch update may proceed, on what anchor, and when to refuse. |
 | `internal/scope` | The review stage's scope lens, not a tenth stage: the guidance a reviewer traces each touched path against, and the note an untraced path becomes. |
 | `internal/store` | The only package that opens the database: the schema, its additive migrations, and typed accessors for repositories, runs, stages, rounds, checkpoints, tasks, task state and events, holds and the closed set of who resolved each one, and the gate ownership index. |

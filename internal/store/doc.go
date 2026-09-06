@@ -168,10 +168,11 @@
 // redactor, and it runs it on both of them on the way in.
 //
 // Every other column holds exactly what the caller passed. A push binding, a
-// pull request reference, a run's intent, a task's session reference, a hold's
-// subject and detail, a stage's log path, and the round and checkpoint payloads
-// are all bound verbatim, so a caller that puts a credential in one of them has
-// stored a credential, and nothing in this package will notice or remove it.
+// pull request reference, a run's intent, a run's fixer session reference, a
+// task's session reference, a hold's subject and detail, a stage's log path,
+// and the round and checkpoint payloads are all bound verbatim, so a caller
+// that puts a credential in one of them has stored a credential, and nothing
+// in this package will notice or remove it.
 // That is the caller's responsibility, and this package does not claim
 // otherwise: it is not a scrubber that everything written to it passes through.
 //
@@ -256,6 +257,18 @@
 // It does not create the home directory layout, run git, or decide what a run
 // or a stage is allowed to do next. It records what happened and refuses what
 // it cannot record honestly.
+//
+// TransitionRun is where that line is easiest to misread. It refuses a move
+// out of a status the caller did not expect to find the run in, which looks
+// like a lifecycle rule and is not one: the set of statuses a move is legal
+// out of arrives with the move, so what this package supplies is the anchored
+// read-and-write those rules need and never the rules. Where they live is
+// internal/runs.
+//
+// It does not open, resume, or reason about an agent session. Run.FixerSession
+// is a reference the caller was handed, stored so a restarted service can find
+// it again; what it means is the agent adapter's, and which invocations may
+// carry one is internal/agents' type split.
 //
 // It does not yet carry every record PRD section 8 lists. The agent invocation
 // record has no table and no accessor here; adding it is a later migration, and

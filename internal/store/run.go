@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 )
@@ -23,6 +24,24 @@ const (
 	RunFailed     RunStatus = "failed"
 	RunTerminated RunStatus = "terminated"
 )
+
+// runStatuses is the closed set Recognized answers from, in the order
+// RunStatuses reports. A status outside it is one no reader can interpret, so
+// it is refused where a run would be moved to it rather than stored and read
+// back later as a word nobody defined.
+var runStatuses = []RunStatus{
+	RunPending, RunRunning, RunHeld, RunPassed, RunFailed, RunTerminated,
+}
+
+// RunStatuses returns the closed set in the order above. The result is a copy,
+// so a caller cannot add to the set by writing to it.
+func RunStatuses() []RunStatus { return slices.Clone(runStatuses) }
+
+// Recognized reports whether s is one of the statuses this package defines.
+func (s RunStatus) Recognized() bool { return slices.Contains(runStatuses, s) }
+
+// String renders the status as it is stored.
+func (s RunStatus) String() string { return string(s) }
 
 // Run is the authoritative record of one validation of one branch.
 //
@@ -60,6 +79,16 @@ type Run struct {
 	// PullRequest is the pull request the run opened, in the caller's own
 	// notation. It is unknown until one exists.
 	PullRequest Optional[string]
+	// FixerSession is the agent's opaque handle for the one durable fixer
+	// session this run keeps across its fix rounds. It is unknown until a fix
+	// round has reported one, and a run whose configuration asks for no
+	// session reuse never acquires one.
+	//
+	// It is a reference rather than content: what it names lives with the
+	// agent, and this column is what lets a restarted service continue the
+	// same conversation instead of starting the run's fixer blind. It is
+	// stored exactly as given, like every column but the repository URLs.
+	FixerSession Optional[string]
 	// Intent is what the run was for.
 	Intent string
 	// IntentSource says where that intent came from, so a report can say who
@@ -110,12 +139,12 @@ func (s *Store) CreateRun(ctx context.Context, r Run) (Run, error) {
 		_, err := tx.ExecContext(ctx, `
 			INSERT INTO run (
 				id, repository_id, branch, submitted_head, base, current_head, status,
-				approved_commit, push_binding, pull_request, intent, intent_source,
+				approved_commit, push_binding, pull_request, fixer_session, intent, intent_source,
 				build_version, build_revision, build_modified, build_go, config_digest,
 				created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			r.ID, r.RepositoryID, r.Branch, r.SubmittedHead, r.Base, r.CurrentHead, string(r.Status),
-			r.ApprovedCommit, r.PushBinding, r.PullRequest, r.Intent, r.IntentSource,
+			r.ApprovedCommit, r.PushBinding, r.PullRequest, r.FixerSession, r.Intent, r.IntentSource,
 			r.Build.Version, r.Build.Revision, boolToInt(r.Build.Modified), r.Build.Go, r.ConfigDigest,
 			encodeTime(now), encodeTime(now))
 		return err
@@ -165,12 +194,82 @@ func (s *Store) RunsForRepository(ctx context.Context, repositoryID string) ([]R
 	return out, nil
 }
 
-// SetRunStatus moves a run to status.
-func (s *Store) SetRunStatus(ctx context.Context, id string, status RunStatus) error {
-	if status == "" {
-		return fmt.Errorf("store: run %s: no status given", id)
+// TransitionRun moves a run to a status, and does it anchored to what the
+// caller believed the run's status was: from names every status the move is
+// legal out of, and the move is refused when the run is in none of them.
+//
+// Reading the status and writing the new one happen in one transaction on the
+// single writer connection, so two callers moving one run cannot both find it
+// where they expected it and both write. That is what makes this the mechanism
+// a lifecycle rule can be built on: a caller that read the status first and
+// then wrote would be deciding against a status that may already have changed.
+// Which moves are legal is not decided here. This package records what a run
+// is and does not decide what a run may do next, so the set of statuses a move
+// may be made out of comes from the caller with the move.
+//
+// A run already in the status it is being moved to is left exactly as it
+// stands: nothing is written, updated_at does not move, and the run comes back
+// unchanged with no error. So a transition retried after a failure that had
+// already committed reports the state it established rather than a refusal,
+// and from never has to name the destination to say so.
+//
+// It refuses an unknown run with ErrNotFound, a destination that is not one of
+// the statuses above, an empty from, and a run in a status from does not name.
+// That last refusal is a *RunStatusError naming what the run was actually in,
+// so a caller can report the state it found rather than only that it was
+// surprised.
+func (s *Store) TransitionRun(ctx context.Context, id string, from []RunStatus, to RunStatus) (Run, error) {
+	if !to.Recognized() {
+		return Run{}, fmt.Errorf("store: run %s: %q is not a run status", id, to)
 	}
-	return s.updateRun(ctx, id, "status", string(status))
+	if len(from) == 0 {
+		return Run{}, fmt.Errorf("store: run %s: a transition to %s names no status it may be made from", id, to)
+	}
+	var moved Run
+	// Every refusal below says what it is on its own, so nothing wraps this
+	// call as a whole: a *RunStatusError already names the run, where it
+	// stands, and where it was to go, and wrapping it would print all three
+	// twice.
+	err := s.inTx(ctx, func(tx *sql.Tx) error {
+		current, err := scanRun(tx.QueryRowContext(ctx, runColumns+` FROM run WHERE id = ?`, id))
+		if err != nil {
+			return fmt.Errorf("store: reading run %s: %w", id, errNoRows(err))
+		}
+		if current.Status == to {
+			moved = current
+			return nil
+		}
+		if !slices.Contains(from, current.Status) {
+			return &RunStatusError{Run: id, Expected: slices.Clone(from), Actual: current.Status, To: to}
+		}
+		if _, err := tx.ExecContext(ctx,
+			`UPDATE run SET status = ?, updated_at = ? WHERE id = ?`,
+			string(to), encodeTime(nowUTC()), id); err != nil {
+			return fmt.Errorf("store: moving run %s to %s: %w", id, to, err)
+		}
+		// Read back rather than assembling the answer, so what a caller is
+		// handed is the row as it now stands and not this function's account
+		// of what it should be.
+		if moved, err = scanRun(tx.QueryRowContext(ctx, runColumns+` FROM run WHERE id = ?`, id)); err != nil {
+			return fmt.Errorf("store: reading run %s after moving it to %s: %w", id, to, err)
+		}
+		return nil
+	})
+	if err != nil {
+		return Run{}, err
+	}
+	return moved, nil
+}
+
+// SetRunFixerSession records the agent's handle for the run's durable fixer
+// session, which is what lets a later fix round of the same run continue the
+// same conversation after the process that opened it is gone.
+//
+// It records a reference the caller was given. Nothing here opens, validates,
+// or reasons about a session: what the handle means is the agent adapter's,
+// and which invocations may carry one is internal/agents' type split.
+func (s *Store) SetRunFixerSession(ctx context.Context, id, reference string) error {
+	return s.updateRun(ctx, id, "fixer_session", reference)
 }
 
 // SetRunHead records the branch tip the run has observed.
@@ -220,7 +319,7 @@ func (s *Store) updateRun(ctx context.Context, id, column, value string) error {
 
 const runColumns = `SELECT
 	id, repository_id, branch, submitted_head, base, current_head, status,
-	approved_commit, push_binding, pull_request, intent, intent_source,
+	approved_commit, push_binding, pull_request, fixer_session, intent, intent_source,
 	build_version, build_revision, build_modified, build_go, config_digest,
 	created_at, updated_at`
 
@@ -230,7 +329,7 @@ func scanRun(sc scanner) (Run, error) {
 	var modified int
 	if err := sc.Scan(
 		&r.ID, &r.RepositoryID, &r.Branch, &r.SubmittedHead, &r.Base, &r.CurrentHead, &status,
-		&r.ApprovedCommit, &r.PushBinding, &r.PullRequest, &r.Intent, &r.IntentSource,
+		&r.ApprovedCommit, &r.PushBinding, &r.PullRequest, &r.FixerSession, &r.Intent, &r.IntentSource,
 		&r.Build.Version, &r.Build.Revision, &modified, &r.Build.Go, &r.ConfigDigest,
 		&created, &updated,
 	); err != nil {
