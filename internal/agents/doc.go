@@ -21,11 +21,55 @@
 // cannot carry a session, and adding a field or a parameter that would break
 // that is a change to this package rather than a mistake at a call site.
 //
+// The same split answers the adapter that has no sessions at all. Runner has
+// no Fixer method: only SessionRunner does, and an adapter that implements
+// none offers nothing a caller could reach a session through. So the
+// substitution PRD section 8 refuses, running review and fix in one session
+// and calling it equivalent, is not a thing such an adapter can express here.
+// What it has instead is Run with PurposeFix, which is a fix round that keeps
+// no memory of the round before it.
+//
 // The same fact is visible in what is recorded. Record.Session says what an
 // invocation did with the run's durable session, and Run passes nothing that
 // could make it anything but SessionNone. That is what PRD section 13 asks
 // for: a structural assertion over invocation records rather than a
 // behavioral one.
+//
+// # An adapter declares what it supports, and undeclared means unavailable
+//
+// Adapters differ, and PRD section 8 makes that difference a declaration the
+// program reads before it commits to a path rather than something a stage
+// discovers halfway through one. Runner.Capabilities is that declaration, the
+// set is the capability table in capability.go, and a path needing something
+// absent from it is refused rather than served by a weaker path that would
+// still be reported as a pass.
+//
+// Three things keep the declaration from being a comment.
+//
+// Resolve holds an adapter to it. A capability whose row carries a probe is
+// checked against the Runner's type in both directions, so an adapter that
+// declares a mechanism it does not carry and one that carries a mechanism it
+// did not declare are both refused, and the whole resolution ends rather than
+// passing over the entry. What a caller holds after Resolve therefore agrees
+// with itself.
+//
+// OpenFixer reads it on the way to every session. Nothing else here returns a
+// Fixer, so an adapter that has not declared resumable sessions has no route
+// to one whatever its type turns out to be.
+//
+// The tests read it. A conformance case chooses what to assert from what the
+// adapter declared, so an adapter that declares nothing is tested as having
+// nothing, and a declaration of a capability no row can probe is refused by
+// the tests rather than accepted on trust.
+//
+// That last point is where the residual gap is. A capability whose row has no
+// probe, which is CapabilitySuppressProjectInstructions today, is a
+// declaration this package takes at its word: nothing here can tell an adapter
+// that suppresses a repository's instruction files from one that says it does.
+// What holds today is narrower and worth stating plainly. No adapter this
+// build ships declares it, so every path needing it is refused, and the
+// conformance test fails on the first adapter that declares it without a probe
+// to hold it to.
 //
 // # Agent output is untrusted, and one package parses it
 //
@@ -101,7 +145,10 @@
 //
 // It does not decide what an agent may be told. Suppressing a repository's own
 // instruction files, which PRD section 10 makes a configuration key, needs a
-// mechanism per adapter and is not implemented here.
+// mechanism per adapter and is not implemented here. What is here is the name
+// for it, CapabilitySuppressProjectInstructions, which no adapter declares, so
+// a run configured to suppress instructions is refused rather than run with
+// them still in force.
 //
 // It does not retry. PRD section 8 lists retries alongside fallback ordering
 // for this module, and a run's own fix rounds and bounds are the only

@@ -56,13 +56,15 @@ func ExampleRunner_Run() {
 }
 
 // The fixer is the one role with memory across rounds. It is a separate type
-// from the Runner, so a round of fixing cannot be pointed at a review.
-func ExampleRunner_Fixer() {
+// from the Runner, so a round of fixing cannot be pointed at a review, and
+// OpenFixer is the only route to one: an adapter that has not declared
+// resumable sessions is refused here rather than served by a weaker path.
+func ExampleOpenFixer() {
 	var runner agents.Runner // from Resolve.
 	if runner == nil {
 		return
 	}
-	fixer, err := runner.Fixer(context.Background(), "")
+	fixer, err := agents.OpenFixer(context.Background(), runner, "")
 	if err != nil {
 		return
 	}

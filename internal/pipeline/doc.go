@@ -9,7 +9,9 @@
 // the executor, the checkpoints, the halt mechanism, and all three bounds, and
 // this package hands it a graph. It runs no agent, invokes no git, and opens
 // no database. The nine stage implementations do that, behind the contract
-// below, and each of them is written and tested separately from this one.
+// below, and each of them is written and tested separately from this one. It
+// reads internal/agents for the capability vocabulary and for nothing else: it
+// holds a declaration, never a Runner, so it still starts no agent.
 //
 // # The order is fixed, and that is the mechanism rather than a rule
 //
@@ -89,6 +91,40 @@
 // as claims, and a stage that wants them declares a read of its own FixKey and
 // ReportKey, which the schema permits: it bounds what a declaration may write
 // and never what it may read.
+//
+// # A path the adapter has not declared is refused rather than degraded
+//
+// Adapters differ in what they can do, and PRD section 8 makes that difference
+// a declaration read before the program commits to a path. Options.Adapter is
+// what the resolved adapter declared, an Implementation and a Fixer each name
+// what they need in Requires, and a path needing something the adapter has not
+// declared refuses New. That is before a run starts and so before any adapter
+// is launched, which is what the PRD asks for: the topology is not built, so
+// no run can reach the path and nothing weaker stands in for it.
+//
+// The requirements are gathered in capability.go and nowhere else. Two come
+// from a caller's declaration on the path that needs it, and one does not:
+// instruction suppression is a property of the run rather than of any stage,
+// per PRD section 10, so Options.SuppressProjectInstructions is read there and
+// no stage may decline it.
+//
+// One asymmetry in that file is worth knowing before changing it. A stage's
+// Requires is read for all nine whatever a run then skips, because a skip is a
+// per-run choice on Start and a pipeline is built once for many runs. The
+// fixer's is read only where some round limit is above zero, because a
+// pipeline that builds no fix node has no fix path to refuse; PRD section 8
+// leaves an adapter without resumable sessions a run with no memory across
+// rounds, and that is the run. It is the opposite of ErrUnmergeableFixerWrite,
+// which is checked whenever a Fixer is supplied because what it asks is
+// whether the declaration is legal at all.
+//
+// This is the early half of the rule and not the load-bearing half. A path
+// that needs a capability and forgot to declare it is refused late rather than
+// served: internal/agents has no Fixer method on Runner at all, so an adapter
+// without sessions has nothing a fix body could open one through, and
+// agents.OpenFixer reads the adapter's own declaration and not the one here.
+// What the declaration here buys is a refusal that arrives before the run and
+// names the path, instead of one that arrives partway through it.
 //
 // # The state schema has one owner
 //

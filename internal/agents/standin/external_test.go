@@ -52,7 +52,7 @@ func TestAReviewFixReviewLoopKeepsItsSessionsApart(t *testing.T) {
 		t.Fatalf("the first review reported %d fixable findings, want one", len(first.Fixable()))
 	}
 
-	fixer, err := runner.Fixer(t.Context(), "")
+	fixer, err := agents.OpenFixer(t.Context(), runner, "")
 	if err != nil {
 		t.Fatalf("opening the fixer: %v", err)
 	}

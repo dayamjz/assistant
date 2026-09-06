@@ -161,9 +161,11 @@ func handshakeWith(tb testing.TB, self, probeFlag string) string {
 }
 
 // Runner returns the adapter's Runner over the stand-in. It is the production
-// agents.Runner, so a caller reaches a Fixer, a purpose, and every rule
-// internal/agents applies through it, and nothing this package defines sits
-// between the two.
+// agents.Runner, so a caller reaches a Fixer through agents.OpenFixer, a
+// purpose, and every rule internal/agents applies, and nothing this package
+// defines sits between the two. Its capability declaration is the adapter's
+// own, so a test asking what it supports gets the shipped answer rather than
+// one this package chose.
 func (a *Agent) Runner() agents.Runner { return a.runner }
 
 // Calls returns what the stand-in processes recorded, in arrival order.

@@ -9,11 +9,24 @@ import (
 	"github.com/dayamjz/assistant/internal/agents"
 )
 
+// The stubs below model a second agent adapter, which is what the capability
+// declaration exists for and what this build does not yet have. They state a
+// declaration and a shape and nothing else: neither returns an agents.Result,
+// an agents.Fixer, or an *agents.InvocationError, so nothing here can hand a
+// test a value the real adapter could not have built. What they are asked is
+// only what an adapter says about itself and what its type carries, which is
+// exactly the pair internal/agents checks.
+
 // stubFactory is an adapter that is available or not, on demand, and remembers
-// the flags the configuration entry carried.
+// the flags the configuration entry carried. declares is what its runner
+// declares, and sessions says whether that runner carries the session
+// mechanism, so a test can build an adapter whose declaration and type agree
+// and one whose do not.
 type stubFactory struct {
 	name      string
 	available bool
+	declares  []agents.Capability
+	sessions  bool
 	args      []string
 }
 
@@ -24,20 +37,50 @@ func (f *stubFactory) New(_ context.Context, args []string) (agents.Runner, erro
 		return nil, errors.New(f.name + " is not installed here")
 	}
 	f.args = args
-	return &stubRunner{name: f.name}, nil
+	return f.runner(), nil
 }
 
-type stubRunner struct{ name string }
+// runner builds the adapter's runner without going through availability, for a
+// test asking about a declaration rather than about resolution.
+func (f *stubFactory) runner() agents.Runner {
+	base := &stubRunner{name: f.name, declared: agents.Declare(f.declares...)}
+	if f.sessions {
+		return &sessionStubRunner{stubRunner: base}
+	}
+	return base
+}
+
+// stubRunner is an adapter with no session mechanism: it has no Fixer method,
+// which is the shape an agent that cannot reopen a conversation has, and it is
+// why such an adapter has nothing to satisfy the fixer path with.
+type stubRunner struct {
+	name     string
+	declared agents.Capabilities
+}
 
 func (r *stubRunner) Name() string { return r.name }
+
+func (r *stubRunner) Capabilities() agents.Capabilities { return r.declared }
 
 func (r *stubRunner) Run(context.Context, agents.Purpose, agents.Invocation) (agents.Result, error) {
 	return agents.Result{}, errors.New("the stub runner runs nothing")
 }
 
-func (r *stubRunner) Fixer(context.Context, string) (agents.Fixer, error) {
-	return nil, errors.New("the stub runner opens nothing")
+// sessionStubRunner carries the session mechanism. Its Fixer refuses rather
+// than returning a session, because a stub session would have to produce
+// agents.Result values the real adapter builds out of a process's output. What
+// a test reads from this refusal is that OpenFixer got past the declaration
+// and reached the mechanism, which is the only thing it is asked.
+type sessionStubRunner struct{ *stubRunner }
+
+func (r *sessionStubRunner) Fixer(context.Context, string) (agents.Fixer, error) {
+	return nil, errStubSessionReached
 }
+
+// errStubSessionReached is what a stub adapter's session mechanism answers
+// with. It is a sentinel so a test asserts on reaching the mechanism rather
+// than on the wording of a message.
+var errStubSessionReached = errors.New("the stub adapter opens no session")
 
 func TestResolvePicksTheFirstAvailableAndReportsWhichOneItWas(t *testing.T) {
 	first := &stubFactory{name: "first", available: false}

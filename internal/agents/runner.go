@@ -6,10 +6,16 @@ import "context"
 // product reaches an agent through this interface and through Fixer, and the
 // split between the two is where P4 lives.
 //
-// Run is session-free and has no parameter a session could be named in. Fixer
-// is the only route to memory that survives a round, and everything it starts
-// is a fix. A review invocation therefore cannot carry a session, and that
-// holds without a caller remembering anything.
+// Run is session-free and has no parameter a session could be named in.
+// SessionRunner is the only route to memory that survives a round, and
+// everything it starts is a fix. A review invocation therefore cannot carry a
+// session, and that holds without a caller remembering anything.
+//
+// A Runner has no Fixer method. That is what makes an adapter without
+// resumable sessions unable to satisfy the fixer path rather than merely
+// forbidden from it: there is nothing on this interface to call, so the
+// session-free path is all such an adapter can offer and running both roles in
+// one session is not something it can fall back to.
 //
 // An implementation must be safe for concurrent use: one background service
 // runs concurrent validation runs, and a Runner resolved once is used by all
@@ -18,6 +24,16 @@ type Runner interface {
 	// Name is the agent's name as configuration spells it, such as "claude".
 	Name() string
 
+	// Capabilities is what this adapter declares it supports. It is read
+	// before a run commits to a path, and undeclared means unavailable: a path
+	// needing something absent from it is refused rather than degraded.
+	//
+	// The declaration is the answer, not a hint about one. An adapter carrying
+	// a mechanism it did not declare is refused by Resolve exactly as one
+	// declaring a mechanism it does not carry is, so nothing is had by
+	// accident.
+	Capabilities() Capabilities
+
 	// Run executes one invocation with no session. The agent is given no
 	// memory of any earlier invocation, and a session it opens for itself is
 	// discarded when the invocation ends.
@@ -25,13 +41,28 @@ type Runner interface {
 	// purpose must be recognized; an unrecognized one is refused with
 	// ErrUnrecognizedPurpose before anything starts. PurposeFix is allowed
 	// here and means a fix round that keeps no session, which is what
-	// configuration asks for when session reuse is off.
+	// configuration asks for when session reuse is off. That is the mode an
+	// adapter without CapabilityResumableSessions has, and it is a mode rather
+	// than a degradation: it keeps no memory across rounds instead of faking
+	// one.
 	//
 	// The invocation owns its process tree: on completion, on failure, and on
 	// cancellation the tree is terminated, politely first and forcefully after
 	// a grace period. Run does not return while a process it started is still
 	// being terminated.
 	Run(ctx context.Context, purpose Purpose, inv Invocation) (Result, error)
+}
+
+// SessionRunner is a Runner that can reopen a conversation it held earlier,
+// which is what CapabilityResumableSessions names. An adapter implements it
+// exactly when it declares that capability; Resolve refuses one where the two
+// disagree, in either direction.
+//
+// A caller holding a Runner reaches this through OpenFixer rather than by
+// asserting on it, so the declaration is consulted on every route to a
+// session.
+type SessionRunner interface {
+	Runner
 
 	// Fixer opens the one durable session a run's fixer role keeps across
 	// rounds. resume is empty for a new session, or the reference a previous
@@ -40,6 +71,35 @@ type Runner interface {
 	// A Fixer is scoped to one run. Two runs must not share one, because they
 	// would then share the agent's memory of each other's changes.
 	Fixer(ctx context.Context, resume string) (Fixer, error)
+}
+
+// OpenFixer opens the run's durable fixer session on r. It is the route a
+// caller holding a Runner takes to one, and the only route this package
+// offers.
+//
+// The two halves of the arrangement do different work and both are needed.
+// Runner has no Fixer method, so an adapter that implements no SessionRunner
+// has nothing here that could be called: the fixer path is closed to it by its
+// type. What this adds is the other direction, an adapter that carries the
+// mechanism and has not declared it, which is refused here rather than served.
+// The declaration decides, so a capability nobody declared is a capability
+// nobody has, which is what lets a conformance test read the declaration and
+// hold the adapter to it.
+//
+// The refusal is a *CapabilityError naming CapabilityResumableSessions.
+func OpenFixer(ctx context.Context, r Runner, resume string) (Fixer, error) {
+	if !r.Capabilities().Has(CapabilityResumableSessions) {
+		return nil, &CapabilityError{
+			Agent:      r.Name(),
+			Capability: CapabilityResumableSessions,
+			Path:       "the fixer session",
+		}
+	}
+	sessions, ok := r.(SessionRunner)
+	if !ok {
+		return nil, declaredWithoutMechanism(r.Name(), CapabilityResumableSessions)
+	}
+	return sessions.Fixer(ctx, resume)
 }
 
 // Fixer is the fixer role's durable session. It exists as a separate type so

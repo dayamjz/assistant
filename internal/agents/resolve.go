@@ -91,6 +91,10 @@ type Resolution struct {
 	Runner Runner
 	// Name is its name, such as "claude".
 	Name string
+	// Capabilities is what the resolved adapter declared it supports. It is
+	// the Runner's own declaration, carried here so a caller can refuse a path
+	// before it builds one without holding the Runner.
+	Capabilities Capabilities
 	// Entry is the configuration entry that resolved, as written. For an entry
 	// that "auto" expanded, it is the expansion rather than the word "auto".
 	Entry string
@@ -120,6 +124,15 @@ type Resolution struct {
 // failed. PRD section 10 requires a run to fail before its first stage rather
 // than report command-only validation as a pass, and this is where that
 // happens.
+//
+// An adapter that resolves is held to its own declaration before it is
+// returned, and an adapter whose declaration and type disagree ends the whole
+// resolution with an *AdapterError rather than being passed over. That is the
+// one refusal here that is not about availability: passing over a defective
+// adapter would leave whichever one came next answering for it, and the defect
+// would show up as a difference between two machines rather than as itself.
+// What a caller therefore holds after Resolve is a Runner whose declaration
+// and mechanisms agree for every capability this package can see.
 func Resolve(ctx context.Context, entries []string, catalog *Catalog) (Resolution, error) {
 	if catalog == nil {
 		catalog = DefaultCatalog()
@@ -151,12 +164,16 @@ func Resolve(ctx context.Context, entries []string, catalog *Catalog) (Resolutio
 			skipped = append(skipped, Unavailability{Entry: entry, Name: name, Err: err})
 			continue
 		}
+		if err := verifyDeclaration(name, runner); err != nil {
+			return Resolution{}, err
+		}
 		return Resolution{
-			Runner:  runner,
-			Name:    name,
-			Entry:   entry,
-			Index:   i,
-			Skipped: skipped,
+			Runner:       runner,
+			Name:         name,
+			Capabilities: runner.Capabilities(),
+			Entry:        entry,
+			Index:        i,
+			Skipped:      skipped,
 		}, nil
 	}
 	return Resolution{}, &ResolutionError{Tried: skipped}
