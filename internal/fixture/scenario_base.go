@@ -331,6 +331,14 @@ func plantFindingsWithoutAction(b *builder, s *Scenario) ([]Condition, error) {
 	// review path reports about the evidence set rather than a judgement of it,
 	// and it is recorded here because this package records what a condition
 	// must produce, not only the part of it the condition is about.
+	//
+	// The recorded substrings are held to what the planted bytes settle for
+	// every demand a run here can put to them, which is that the review
+	// declared reading and that everything it declared is touched by the
+	// change. What the note says about paths left undeclared turns on the
+	// demand rather than on these bytes, so recording it would be a substring
+	// that fails on a correct run, and the answer states the dependency instead
+	// of pinning it.
 	expectOnTheReviewPath := func(missing string) Outcome {
 		out := expect(missing)
 		out.Summary += " The bound report carries one finding more than the reviewer wrote: " +
@@ -338,8 +346,17 @@ func plantFindingsWithoutAction(b *builder, s *Scenario) ([]Condition, error) {
 			"what the review declared reading against what the change touched. Here it reports " +
 			"a read set holding nothing beyond the change and paths the change touched that the " +
 			"review did not declare, both of which the binding permits and neither of which is " +
-			"the condition under test. Two findings is the answer, not a mismatch."
-		out.MessageContains = []string{"Evidence: the review declared reading"}
+			"the condition under test. Two findings is the answer, not a mismatch. The recorded " +
+			"substrings are carried by that appended note and not by the reviewer's finding, " +
+			"which is the one this answer's value is about; whether the note also reports paths " +
+			"left undeclared is decided by the demand the run makes and not by these bytes, so " +
+			"it is not recorded as a substring. This holds only if the report names the revision " +
+			"the run asked the review stage about; a harness that served the build-time revision " +
+			"has met findings.ErrWrongRevision and has not reached this condition."
+		out.MessageContains = []string{
+			"Evidence: the review declared reading",
+			"all of them touched by this change",
+		}
 		return out
 	}
 
