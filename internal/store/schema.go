@@ -283,8 +283,20 @@ var schema = []migration{
 			// this trigger would unseal the table, which is a deliberate act
 			// and visible in the migration list as one.
 			//
-			// Only INSERT is refused. The table is empty and no row can be
-			// created, so UPDATE and DELETE have nothing to act on.
+			// The table is emptied first, because a database migrated forward
+			// from a build that wrote this record arrives here with rows in
+			// it. A row here is by PRD section 8 a second answer to a question
+			// the checkpoint history owns, so removing it is the removal this
+			// migration is for rather than data loss; the run row it hangs off
+			// is untouched. Deleting rows disturbs nothing verifyAdditive
+			// checks, which compares the column catalog and never counts rows.
+			`DELETE FROM checkpoint`,
+			// Only INSERT is refused, and the DELETE above is what makes that
+			// a complete seal rather than a partial one: with the table empty,
+			// UPDATE and DELETE have nothing left to act on. Extending the
+			// trigger to those two verbs instead would freeze a row written
+			// before the seal in place, unremovable, which is a worse answer
+			// than removing it.
 			`CREATE TRIGGER checkpoint_is_not_a_record
 				BEFORE INSERT ON checkpoint
 				BEGIN

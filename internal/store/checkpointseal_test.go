@@ -60,3 +60,46 @@ func TestTheCheckpointSealIsWhatRefusesTheRow(t *testing.T) {
 			" did not demonstrate the seal: %v", err)
 	}
 }
+
+// An INSERT-only trigger says nothing about rows that are already there, so
+// migration 6 empties the table before it seals it. A database migrated forward
+// from a build that wrote this record arrives at 6 holding one, and this drives
+// that case with the shipped migration rather than a copy of it: the seal is
+// removed, the row is written, migration 6's record is forgotten, and migrate
+// replays it against exactly the state such a database is in.
+//
+// migrate returning no error is also what shows the DELETE keeps the migration
+// additive, since applyMigration runs verifyAdditive inside the same
+// transaction as the statements.
+func TestTheSealEmptiesACheckpointTableThatAlreadyHasARow(t *testing.T) {
+	ctx := context.Background()
+	s := openStore(t)
+	run := seedRun(t, s)
+
+	if _, err := s.write.ExecContext(ctx, `DROP TRIGGER checkpoint_is_not_a_record`); err != nil {
+		t.Fatalf("dropping the seal: %v", err)
+	}
+	if err := insertCheckpointRow(ctx, s.write, run.ID); err != nil {
+		t.Fatalf("writing the row a forward-migrated database would carry: %v", err)
+	}
+	if _, err := s.write.ExecContext(ctx,
+		`DELETE FROM schema_migration WHERE version = ?`, lastVersion(schema)); err != nil {
+		t.Fatalf("forgetting the seal migration: %v", err)
+	}
+
+	if err := migrate(ctx, s.write, schema); err != nil {
+		t.Fatalf("replaying the seal over a table that already had a row: %v", err)
+	}
+
+	var rows int
+	if err := s.read.QueryRowContext(ctx, `SELECT count(*) FROM checkpoint`).Scan(&rows); err != nil {
+		t.Fatalf("counting checkpoint rows: %v", err)
+	}
+	if rows != 0 {
+		t.Fatalf("the seal left %d row(s) in the checkpoint table, so a run migrated"+
+			" forward still carries a second position record", rows)
+	}
+	if err := insertCheckpointRow(ctx, s.write, run.ID); err == nil {
+		t.Fatal("the replayed migration emptied the table but did not seal it")
+	}
+}

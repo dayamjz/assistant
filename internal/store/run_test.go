@@ -319,6 +319,8 @@ func TestRoundPayloadsAreNeverNull(t *testing.T) {
 	}
 }
 
+// The fixer session is one of the fields a run does not have when it is
+// created, and it comes back the way every other one does.
 func TestRunFixerSessionIsUnknownUntilItIsRecorded(t *testing.T) {
 	ctx := context.Background()
 	s := openStore(t)
