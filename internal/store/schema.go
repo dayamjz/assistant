@@ -183,4 +183,17 @@ var schema = []migration{
 			`CREATE INDEX gate_binding_gate ON gate_binding(gate_id, working_path)`,
 		},
 	},
+	{
+		version: 3,
+		name:    "hold resolver",
+		statements: []string{
+			// PRD section 8 requires every hold resolution to record who made
+			// it. The column is nullable and carries no default, so a hold
+			// resolved before this migration reads back unknown rather than as
+			// a resolver nobody chose. What may be written into it is the
+			// closed set in resolver.go, and ResolveHold is the only accessor
+			// that writes it.
+			`ALTER TABLE hold ADD COLUMN resolved_by TEXT`,
+		},
+	},
 }

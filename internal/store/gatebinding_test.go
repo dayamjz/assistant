@@ -187,6 +187,35 @@ func TestGateBindingAccessorsFailAfterClose(t *testing.T) {
 	}
 }
 
+// gateOwnershipIndexVersion is the shipped migration the test below is named
+// for. A shipped version never moves, so pinning to it holds the test's subject
+// still as the list grows, which a slice taken relative to the end does not.
+const gateOwnershipIndexVersion = 2
+
+// schemaBefore returns the shipped migrations that precede version v. It fails
+// when v names no shipped migration, or when nothing precedes it, so a caller
+// cannot pin to a version that has drifted out of the list.
+func schemaBefore(t *testing.T, v int) []migration {
+	t.Helper()
+	var before []migration
+	named := false
+	for _, m := range schema {
+		switch {
+		case m.version == v:
+			named = true
+		case m.version < v:
+			before = append(before, m)
+		}
+	}
+	if !named {
+		t.Fatalf("version %d names no shipped migration", v)
+	}
+	if len(before) == 0 {
+		t.Fatalf("version %d has no shipped migration before it", v)
+	}
+	return before
+}
+
 // A database that predates the ownership index has rows in it, and the
 // migration that adds it has to reach that database rather than only a fresh
 // one. This builds a database at the schema an older build left, with a row in
@@ -201,8 +230,16 @@ func TestTheOwnershipIndexMigrationReachesAnOlderDatabase(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open the older database: %v", err)
 	}
-	if err := migrate(ctx, older, schema[:len(schema)-1]); err != nil {
+	if err := migrate(ctx, older, schemaBefore(t, gateOwnershipIndexVersion)); err != nil {
 		t.Fatalf("migrate to the older schema: %v", err)
+	}
+	var present int
+	if err := older.QueryRowContext(ctx,
+		`SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'gate_binding'`).Scan(&present); err != nil {
+		t.Fatalf("look for the ownership index in the older schema: %v", err)
+	}
+	if present != 0 {
+		t.Fatal("the older database already has the ownership index, so the migration this test is named for would not run")
 	}
 	now := encodeTime(nowUTC())
 	if _, err := older.ExecContext(ctx, `

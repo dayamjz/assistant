@@ -133,6 +133,35 @@
 // prevent. Where a fact cannot be established, the request is refused. An
 // unidentified peer, and an ancestry that could not answer, both refuse.
 //
+// # What a resolution arriving here may say about who made it
+//
+// PRD section 8 requires every hold resolution to record who resolved it, from
+// a closed set internal/store owns, and requires the value meaning a person
+// decided to be unreachable from any path an agent reaches. This protocol is
+// such a path. MethodRunRespond is restricted, so the code under validation
+// cannot reach it, but a coordinator under the authority PRD section 9 gives it
+// can, and that is intended: the rule is about what a call may say, not about
+// who may call.
+//
+// Request.HoldResolver is the whole of this package's part in that. No frame
+// defined here has a field for a resolver, exactly as none has a field for a
+// process identifier, so there is nothing to write one into; and the answer is
+// derived from the surface rather than read out of the request, so no method,
+// marker, or parameter body reaches it. Every resolution this package answers
+// for is store.ResolvedByMachineInterface. What that answer is worth once a
+// handler has it is below, under what this package does not do.
+//
+// A person answering through a client of this protocol is recorded that way
+// too. That is deliberate: a person's client and an agent's client reach the
+// same socket as the same user, so no fact the kernel attributes to a
+// connection separates them, and a client that declared which it was would be
+// authorizing itself out of the rule. The record understates who decided rather
+// than overstating it.
+//
+// It records and does not gate. Nothing here reads the value to decide whether
+// a call is served: the access class in the method table is the whole of that
+// decision, and it is unchanged by this.
+//
 // # What one connection may hold at once
 //
 // A connection holds a bounded number of open streams and a bounded number of
@@ -160,6 +189,18 @@
 // It does not open the socket, hold the home's lock, or decide when the service
 // is ready. Serve takes a listener that a caller made, and readiness is a real
 // answer to MethodHealth from a handler, per PRD section 8.
+//
+// It does not record a hold resolution, and so does not enforce what one says
+// about who made it. Request.HoldResolver is an answer a handler may take, not
+// a value any write is checked against: store.ResolvedByPerson is exported, so
+// a handler serving MethodRunRespond could name it in source and the record
+// would then say a person decided for a call that arrived over the machine
+// interface. Nothing here obliges a handler to derive the resolver from the
+// request instead, and today the protocol-side property holds because no
+// production code in this repository resolves a hold at all. This is placement
+// rather than a mechanism, and it is the same limit internal/store names for
+// the person value itself. What is mechanical is unaffected: no frame defined
+// here carries a resolver, and the derivation reads nothing out of the request.
 //
 // It does not own any payload's shape. An event body and a method's parameters
 // and result travel as written, so nothing here becomes a second owner of a

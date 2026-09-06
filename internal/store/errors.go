@@ -46,6 +46,19 @@ var ErrWorkingPathTaken = errors.New("store: working path already belongs to ano
 // empty one is not explicit.
 var ErrNoResolution = errors.New("store: a hold is closed only by an explicit resolution")
 
+// ErrNoResolver is returned by ResolveHold when the resolution names nobody,
+// which is the zero Resolver. PRD section 8 requires every hold resolution to
+// record who made it, so a resolution with nobody attached is refused rather
+// than stored as one nobody can account for afterwards.
+var ErrNoResolver = errors.New("store: a hold resolution records who made it")
+
+// ErrUnknownResolver is what a read of a hold returns when its resolved_by
+// column holds a value outside the closed set Resolver defines. The set is
+// closed, so a row outside it was not written by this package's accessors, and
+// reporting it as "nobody was recorded" would turn a row nobody can account for
+// into a fact about the resolution.
+var ErrUnknownResolver = errors.New("store: hold resolver is outside the closed set")
+
 // ErrClosed is returned by every accessor called after Close.
 var ErrClosed = errors.New("store: database is closed")
 

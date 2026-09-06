@@ -27,7 +27,10 @@ layer over it: it decides whether a branch update may proceed and on what
 anchor, and refuses rather than guessing when a fact the decision rests on
 cannot be verified. The sixth is `internal/store`, the durable record of what
 the gate did: an embedded sqlite database behind typed accessors, with additive
-migrations checked against the database's own catalog. The seventh is
+migrations checked against the database's own catalog, and every hold
+resolution recorded with who made it, from a closed set that is the type
+itself rather than a check, so no text a caller was handed decodes into one.
+The seventh is
 `internal/agents`, the only package that starts an agent process: the separate
 reviewing and fixing roles, the capabilities an adapter declares and is held
 to, the Claude Code adapter, the review shape that carries the evidence its
@@ -39,7 +42,11 @@ the `gh` command line, and a checks model in which an empty check list is not a
 pass. The ninth is `internal/ipc`, the local protocol between the command line
 and the background service: the method table, the event taxonomy and its
 bounded stream, a client, a server, and peer identification the kernel answers
-for. The tenth is `internal/gate`, which owns the local bare repository a push
+for. Who resolved a held decision that arrives here is derived from the
+surface rather than read out of the request, so the answer is the machine
+interface and never a person, including when a person typed it, because
+nothing the kernel tells this protocol separates the two. The tenth is
+`internal/gate`, which owns the local bare repository a push
 is validated through: where it lives, the admission and notification hooks that
 make a push mean something, its identity across a move or a copy, and one seam
 every operation obtains its gate from, so no operation can skip the ownership
@@ -95,11 +102,11 @@ working as it always did.
 | `internal/forge` | The only package that talks to a code host: the provider interface over pull requests, mergeability, and checks, and the GitHub adapter over the `gh` command line. |
 | `internal/gate` | The local bare repository a push is validated through: where it lives, its two hooks, its identity across a move or a copy, and the ownership question every operation asks before it adopts or deletes one. |
 | `internal/graph` | The execution engine: nodes, edges, bounds, halt points, checkpoints. |
-| `internal/ipc` | The local protocol between the command line and the background service: the method table, the event taxonomy, the bounded stream, the client and the server, and peer identification. |
+| `internal/ipc` | The local protocol between the command line and the background service: the method table, the event taxonomy, the bounded stream, the client and the server, peer identification, and the one resolver it derives for an answer that arrives here. |
 | `internal/pipeline` | The nine stages as a graph definition over `internal/graph`: the stage contract, the fixed order, the state key table, the capabilities a path needs of the adapter, the fix loop, and its halt points and bounds. |
 | `internal/safety` | The data-loss policy over git: whether a branch update may proceed, on what anchor, and when to refuse. |
 | `internal/scope` | The review stage's scope lens, not a tenth stage: the guidance a reviewer traces each touched path against, and the note an untraced path becomes. |
-| `internal/store` | The only package that opens the database: the schema, its additive migrations, and typed accessors for repositories, runs, stages, rounds, checkpoints, tasks, task state and events, holds, and the gate ownership index. |
+| `internal/store` | The only package that opens the database: the schema, its additive migrations, and typed accessors for repositories, runs, stages, rounds, checkpoints, tasks, task state and events, holds and the closed set of who resolved each one, and the gate ownership index. |
 | `internal/vcs` | The only package that invokes git: typed operations over repositories, worktrees, refs, diffs, and remotes. |
 | `docs/prd.html` | The product requirements. The specification this code answers to. |
 

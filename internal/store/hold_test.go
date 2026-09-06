@@ -21,7 +21,7 @@ func TestRegisterHoldIsIdempotent(t *testing.T) {
 	if !first.Open() {
 		t.Fatal("a newly registered hold is not open")
 	}
-	if first.Resolution.IsKnown() || first.ResolvedAt.IsKnown() {
+	if first.Resolution.IsKnown() || first.ResolvedAt.IsKnown() || first.ResolvedBy.IsKnown() {
 		t.Fatalf("a newly registered hold carries a resolution: %+v", first)
 	}
 
@@ -54,7 +54,7 @@ func TestResolveHoldRequiresAnExplicitResolution(t *testing.T) {
 		t.Fatalf("RegisterHold: %v", err)
 	}
 	for _, empty := range []string{"", "   ", "\t\n"} {
-		if _, err := s.ResolveHold(ctx, "k", empty); !errors.Is(err, ErrNoResolution) {
+		if _, err := s.ResolveHold(ctx, "k", empty, ResolvedByPerson()); !errors.Is(err, ErrNoResolution) {
 			t.Fatalf("ResolveHold accepted %q as a resolution: %v", empty, err)
 		}
 	}
@@ -66,7 +66,7 @@ func TestResolveHoldRequiresAnExplicitResolution(t *testing.T) {
 		t.Fatal("a refused resolution closed the hold anyway")
 	}
 
-	resolved, err := s.ResolveHold(ctx, "k", "ship it")
+	resolved, err := s.ResolveHold(ctx, "k", "ship it", ResolvedByPerson())
 	if err != nil {
 		t.Fatalf("ResolveHold: %v", err)
 	}
@@ -94,10 +94,10 @@ func TestResolveHoldRefusesASecondAnswer(t *testing.T) {
 	if _, err := s.RegisterHold(ctx, Hold{Key: "k", Subject: "a decision"}); err != nil {
 		t.Fatalf("RegisterHold: %v", err)
 	}
-	if _, err := s.ResolveHold(ctx, "k", "ship it"); err != nil {
+	if _, err := s.ResolveHold(ctx, "k", "ship it", ResolvedByPerson()); err != nil {
 		t.Fatalf("ResolveHold: %v", err)
 	}
-	_, err := s.ResolveHold(ctx, "k", "actually, do not")
+	_, err := s.ResolveHold(ctx, "k", "actually, do not", ResolvedByMachineInterface())
 	if err == nil {
 		t.Fatal("ResolveHold overwrote a resolution that was already there")
 	}
@@ -112,7 +112,7 @@ func TestResolveHoldRefusesASecondAnswer(t *testing.T) {
 		t.Fatalf("the first resolution was replaced by %q", answer)
 	}
 
-	if _, err := s.ResolveHold(ctx, "no-such-hold", "anything"); !errors.Is(err, ErrNotFound) {
+	if _, err := s.ResolveHold(ctx, "no-such-hold", "anything", ResolvedByPerson()); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("ResolveHold on a missing hold: %v", err)
 	}
 }
