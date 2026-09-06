@@ -22,9 +22,10 @@ on a person; a **park** is a bound stopping the run. `internal/findings` owns
 the hold predicate (`Holds`, `Held`, `HasHeld`) and counts no bounds, so
 nothing there parks. `internal/graph` owns the three parks, and
 `graph.Status.Stopped` is named after neither because it is the union of both.
-Section 5's prose still says "parks" for an `ask` finding in four places that
-predate the amendment at `ec8b4af`; that is an open finding against the PRD,
-not a licence to name code after it.
+The PRD's prose still says "parks" for a wait on a person in seven places
+spread across sections 3, 4, 5, 7 and 10, all predating the amendment at
+`ec8b4af`; that is an open finding against the PRD, not a licence to name code
+after it.
 
 ## The principles that most often get violated by accident
 

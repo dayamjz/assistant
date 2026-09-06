@@ -246,7 +246,11 @@ type Checkpoint struct {
 	Position string `json:"position"`
 	// Status is where the run stood when the checkpoint was written.
 	Status Status `json:"status"`
-	// Reason explains a parked status. It is empty otherwise.
+	// Reason explains a run that stopped short. The executor sets one only
+	// when a bound parks the run, and clears it on any status the run can
+	// advance out of on its own. Validation asks the wider question of
+	// Status.Stopped, so a checkpoint built by hand or read out of a store may
+	// carry one on a halted run; see Graph.validateReason.
 	Reason string `json:"reason,omitempty"`
 	// State is the typed record as of this point.
 	State State `json:"state"`

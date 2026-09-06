@@ -97,7 +97,10 @@ type Result struct {
 	// the one it recorded rather than the one any executor was configured
 	// with.
 	Budget int
-	// Reason explains a parked status, and is empty otherwise.
+	// Reason explains a run that stopped short, on the terms
+	// Checkpoint.Reason states: this executor sets one only when a bound parks
+	// the run, but a reason a checkpoint arrived carrying is reported here as
+	// it stands.
 	Reason string
 }
 
