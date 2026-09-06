@@ -13,11 +13,17 @@ import (
 
 func TestTheEnvironmentRelocatesTheRoot(t *testing.T) {
 	t.Parallel()
-	root, err := home.Resolve(func(string) string { return filepath.Join(string(filepath.Separator), "somewhere", "else") })
+	// A leading separator is not an absolute path everywhere: Windows wants a
+	// volume too, so a hand-composed one is refused there and this test would
+	// be checking the platform rather than the relocation. A temporary
+	// directory is absolute on every platform the module builds for, and the
+	// named root does not have to exist for Resolve to answer with it.
+	want := filepath.Join(t.TempDir(), "somewhere", "else")
+	root, err := home.Resolve(func(string) string { return want })
 	if err != nil {
 		t.Fatalf("resolving a named root: %v", err)
 	}
-	if want := filepath.Join(string(filepath.Separator), "somewhere", "else"); root != want {
+	if root != want {
 		t.Fatalf("Resolve = %q, want %q", root, want)
 	}
 }
