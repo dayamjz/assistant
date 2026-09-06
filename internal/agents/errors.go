@@ -161,8 +161,16 @@ const (
 	// report read as a whole one is worse than no report.
 	FailureOversize Failure = "oversize"
 	// FailureOutput is output that did not have the shape the invocation asked
-	// for: not a result envelope, an envelope with no result in it, or, for
-	// ShapeReport, text internal/findings refused to read as a report.
+	// for: not a result envelope, an envelope with no result in it, or text
+	// internal/findings refused. That last covers both shapes that are read as
+	// a report. For ShapeReport it is text refused as a report; for ShapeReview
+	// it is that and the binding refusal as well, so a review of a revision the
+	// run did not ask about, and one whose findings this package could not bind
+	// to the invocation's demand, are this category too.
+	//
+	// The refusal internal/findings raised travels on the *InvocationError, so
+	// which of them it was is matchable with errors.Is rather than only
+	// readable.
 	FailureOutput Failure = "output"
 )
 

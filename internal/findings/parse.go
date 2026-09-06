@@ -123,6 +123,15 @@ func ParseReport(raw string) (Report, error) {
 // half: what it tells the reviewer is what this binds, and the two are written
 // together for that reason.
 //
+// The rule is only ever added to the ones ParseReport applies. A report this
+// returns would also have been accepted by ParseReport, and a report
+// ParseReport refuses is refused here with the same *ValidationError naming
+// the same defects: the report is put to Validate as the reviewer wrote it,
+// before the binding rewrites any finding, so binding cannot make an otherwise
+// invalid report valid. A reviewer that prints a finding with no description
+// is therefore refused here exactly as it is anywhere else, rather than
+// clearing the stage on the strength of a note the binding wrote for it.
+//
 // One thing ParseReport documents is narrower here rather than gone. An object
 // earlier in the output that validates as a report, such as a schema example
 // quoted in prose, is returned by ParseReport with no error; here it has to
@@ -149,6 +158,14 @@ func ParseReviewReport(raw string, d Demand) (Report, Binding, error) {
 // object carrying a report field is the report the agent meant, so its refusal
 // is returned and no earlier candidate is tried, and an object carrying none
 // is not a report at all, so the scan continues past it.
+//
+// The candidate is validated on both sides of the binding, and the first of
+// those is what makes the review path refuse exactly what the ordinary path
+// refuses. Validate owns what a valid report is and stays the only thing
+// asked, here as everywhere; what the two calls differ in is the value put to
+// it, the reviewer's report and then the bound one, so neither a defect the
+// reviewer wrote nor one the binding would introduce can reach a caller as an
+// accepted report.
 func parse(raw string, demand *Demand) (Report, Binding, error) {
 	if len(raw) > MaxRawBytes {
 		return Report{}, Binding{}, fmt.Errorf("%w: %d bytes, limit %d",
@@ -170,6 +187,23 @@ func parse(raw string, demand *Demand) (Report, Binding, error) {
 		}
 		var binding Binding
 		if demand != nil {
+			// The report is put to the one owner of what a valid report is,
+			// as the reviewer wrote it and on exactly the terms the ordinary
+			// path below puts it there, before the binding rewrites anything.
+			// The binding replaces a refused finding with a note of its own
+			// and annotates a demoted one, so a defect the reviewer wrote can
+			// stop being visible in the text that reaches Validate afterwards;
+			// asking first is what keeps a report ParseReport would refuse
+			// from being made valid by having gone through the binding.
+			// Normalize runs on a copy, so what bindEvidence is handed is
+			// still the report as the reviewer wrote it, stated actions and
+			// all.
+			if err := report.Normalize().Validate(); err != nil {
+				if carriesReportField(fields) {
+					return Report{}, Binding{}, err
+				}
+				continue
+			}
 			bound, made, err := bindEvidence(report, *demand)
 			if err != nil {
 				if carriesReportField(fields) {

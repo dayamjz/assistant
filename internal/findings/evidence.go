@@ -240,7 +240,7 @@ func bindEvidence(r Report, d Demand) (Report, Binding, error) {
 		// refused rather than dropped, so the person still sees it.
 		if outside, ok := firstOutside(named, read); ok {
 			binding.Refused = append(binding.Refused, Refusal{Finding: f, Path: outside})
-			bound = append(bound, refusedNote(f, outside, len(binding.Read)))
+			bound = append(bound, refusedNote(f, outside, read))
 			continue
 		}
 		// A finding that named nothing rests on nothing, so it informs and
@@ -293,23 +293,43 @@ func firstOutside(paths []string, set map[string]struct{}) (string, bool) {
 // refusedNote is what a refused finding becomes in the bound report. It is a
 // note, so it blocks nothing and enters no fix loop, and it quotes the claim
 // rather than replacing it, so the refusal is something a person can read and
-// disagree with. It names no location of its own: the path it is about is the
-// one the evidence set does not hold, and repeating it as a location would
-// make this note the thing it is reporting.
+// disagree with. Why it was refused, and the path the evidence set does not
+// hold, are in the description.
+//
+// It carries the refused finding's location when that location's path is in
+// the evidence set, and carries none when it is not. The question is asked of
+// the location at hand and of nothing else: is this path supported, as things
+// stand. It is deliberately not asked of how the refusal came about, which of
+// the paths the finding named was the one outside the set or in what order
+// they were scanned, because that is a fact about the refusal standing in for
+// a fact about the value, and it stops being true as soon as another refusal
+// path is added, while the present-tense question stays true however those
+// grow. So a finding sitting in code the reviewer did read, refused for
+// something it cites, still tells a person where to look, and a finding
+// refused for its own location names no place, because the only place it named
+// is the one nothing supports.
+//
+// A location cannot make this note read as a live finding: it is ActionNote by
+// construction and there is no input that makes it anything else, so nothing
+// deciding on the action sees a location here at all.
 //
 // It keeps the refused finding's identifier when it had one, so a person
 // holding the reviewer's own numbering can find it.
-func refusedNote(f Finding, path string, read int) Finding {
-	return Finding{
+func refusedNote(f Finding, path string, read map[string]struct{}) Finding {
+	note := Finding{
 		ID:       f.ID,
 		Severity: SeverityInfo,
 		Action:   ActionNote,
 		Description: "Refused for want of evidence: this finding names " + path +
-			", which is not among the " + strconv.Itoa(read) + " " + pathWord(read) +
+			", which is not among the " + strconv.Itoa(len(read)) + " " + pathWord(len(read)) +
 			" the review declared reading, so nothing it read supports the claim. " +
 			"It is recorded here and blocks nothing. The review said: " +
 			strings.TrimSpace(f.Description),
 	}
+	if _, supported := read[strings.TrimSpace(f.Location.Path)]; supported {
+		note.Location = f.Location
+	}
+	return note
 }
 
 // demotedNote is what a finding resting on nothing becomes. It keeps

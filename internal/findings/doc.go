@@ -92,6 +92,15 @@
 //     stated action is already gone and the demotion would take a hold P3
 //     fixed and turn it into a note.
 //
+// The rule is added to what a report already answers for and takes nothing
+// away from it. A report ParseReport refuses is refused by ParseReviewReport
+// with the same defects named, because the reviewer's own report is put to
+// Validate before the binding rewrites any finding: the binding writes a note
+// over a refused finding and appends to a demoted one, and a note it wrote
+// must not stand in for a description the reviewer never wrote. So the review
+// path refuses everything the other eight stages' path refuses, and its extra
+// rule can only refuse more.
+//
 // What the binding is not is a check that the reviewer read anything. The
 // evidence set is the reviewer's claim about itself, and this package resolves
 // no path against a filesystem: a reviewer that declares a path it never

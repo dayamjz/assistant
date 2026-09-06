@@ -169,6 +169,121 @@ func TestACitationOutsideTheEvidenceSetRefusesTheFinding(t *testing.T) {
 	}
 }
 
+// TestTheBindingCannotMakeAnInvalidReportValid is the invariant the extra rule
+// may only add to: the review path refuses exactly what the ordinary path
+// refuses. Both shapes the binding rewrites a finding into are covered,
+// because both write text of their own where the reviewer wrote none, and
+// either could otherwise stand in for a description that was never there.
+//
+// The same bytes are put to ParseReport in each case, so what is asserted is
+// the two paths agreeing rather than the review path merely failing somehow.
+func TestTheBindingCannotMakeAnInvalidReportValid(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name string
+		f    findings.Finding
+	}{
+		{"a finding the binding would demote", findings.Finding{
+			ID:          "says-nothing",
+			Severity:    findings.SeverityError,
+			Action:      findings.ActionFix,
+			Description: "  ",
+		}},
+		{"a finding the binding would refuse", findings.Finding{
+			ID:          "says-nothing",
+			Severity:    findings.SeverityError,
+			Action:      findings.ActionFix,
+			Location:    findings.Location{Path: callerPath, Line: 42},
+			Description: "  ",
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			raw := printed(t, review([]string{touchedPath}, tc.f))
+
+			report, _, err := findings.ParseReviewReport(raw, demand())
+			var bound *findings.ValidationError
+			if !errors.As(err, &bound) {
+				t.Fatalf("ParseReviewReport returned (%+v, %v), want a *ValidationError", report, err)
+			}
+			if !bound.HasDefect(findings.DefectMissingDescription) {
+				t.Fatalf("the review path reports %v, want the description the reviewer never wrote",
+					bound.Flaws)
+			}
+			var ordinary *findings.ValidationError
+			if _, err := findings.ParseReport(raw); !errors.As(err, &ordinary) ||
+				!ordinary.HasDefect(findings.DefectMissingDescription) {
+				t.Fatalf("ParseReport is %v, want the same refusal the review path made", err)
+			}
+		})
+	}
+}
+
+// TestARefusedNoteKeepsALocationTheEvidenceSetHolds pins what the refused note
+// is allowed to carry. The two cases differ in the one thing the rule asks
+// about, whether the location's own path is in the evidence set, and they are
+// answered differently, so neither keeping every location nor dropping every
+// one passes both. The first is the case worth having: a finding sitting in
+// code the reviewer did read, refused for the caller it reaches to, still
+// tells a person where to look.
+//
+// What this cannot separate is the value predicate from a predicate on which
+// path decided the refusal, because firstOutside scans the location first and
+// so the two agree on every input reachable today. That is the reason the rule
+// is written on the value rather than tested into it; refusedNote says why.
+func TestARefusedNoteKeepsALocationTheEvidenceSetHolds(t *testing.T) {
+	t.Parallel()
+	const thirdPath = "internal/total/helper.go"
+	for _, tc := range []struct {
+		name     string
+		located  findings.Location
+		read     []string
+		want     findings.Location
+		refusing string
+	}{
+		{
+			name:     "located in code the reviewer read",
+			located:  findings.Location{Path: touchedPath, Line: 8},
+			read:     []string{touchedPath},
+			want:     findings.Location{Path: touchedPath, Line: 8},
+			refusing: callerPath,
+		},
+		{
+			name:     "located in code the reviewer did not read",
+			located:  findings.Location{Path: thirdPath, Line: 8},
+			read:     []string{touchedPath},
+			want:     findings.Location{},
+			refusing: thirdPath,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			f := findings.Finding{
+				ID:          "breaks-the-caller",
+				Severity:    findings.SeverityError,
+				Action:      findings.ActionFix,
+				Location:    tc.located,
+				Cites:       []string{callerPath},
+				Description: "Returning a sum here breaks the one caller, which adds it again.",
+			}
+			report, binding, err := findings.ParseReviewReport(printed(t, review(tc.read, f)), demand())
+			if err != nil {
+				t.Fatalf("parsing the review: %v", err)
+			}
+			if len(binding.Refused) != 1 || binding.Refused[0].Path != tc.refusing {
+				t.Fatalf("expected one refusal naming %q, got %+v", tc.refusing, binding.Refused)
+			}
+			note := findingByID(t, report, "breaks-the-caller")
+			if note.Location != tc.want {
+				t.Errorf("the refused note is located at %+v, want %+v", note.Location, tc.want)
+			}
+			if note.Action != findings.ActionNote {
+				t.Errorf("a refused note is %q, want %q", note.Action, findings.ActionNote)
+			}
+		})
+	}
+}
+
 // TestACitationInsideTheEvidenceSetKeepsTheFinding is that case's control.
 func TestACitationInsideTheEvidenceSetKeepsTheFinding(t *testing.T) {
 	t.Parallel()
