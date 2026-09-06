@@ -2,12 +2,14 @@ package fixture_test
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/dayamjz/assistant/internal/findings"
 	"github.com/dayamjz/assistant/internal/fixture"
 	"github.com/dayamjz/assistant/internal/gate"
 )
@@ -810,4 +812,223 @@ func decodeConfig(t *testing.T, body string) map[string]any {
 		t.Fatalf("decode the configuration document: %v\n%s", err, body)
 	}
 	return into
+}
+
+// TestTheP3ResponsesProduceAnAskOnTheEntryPointEachNames drives the planted
+// bytes through the real parser each condition names. The catalog records that
+// a report carrying no action, an empty one, or an unreadable one parses and
+// the finding survives as an ask, and the review-path variants record the same
+// outcome through findings.ParseReviewReport, where PRD section 5's evidence
+// binding decides first. A recorded expectation nothing ever produced is a
+// claim, so it is produced here.
+//
+// It also drives the findings.ParseReport bytes through the review path,
+// because the reason there are two variants is that the entry points differ:
+// the review path refuses bytes stating no revision before any finding is
+// reached, which is what the findings.ParseReport conditions say about
+// themselves and is exactly the gap the review-path variants exist to close.
+func TestTheP3ResponsesProduceAnAskOnTheEntryPointEachNames(t *testing.T) {
+	f := readOnly(t)
+	s := scenario(t, f, fixture.ScenarioBase)
+
+	demand := findings.Demand{
+		Revision: s.Commits["branch-head"],
+		Touched:  touchedByTheChange(t, f, s),
+	}
+	if demand.Revision == "" {
+		t.Fatal("the scenario records no branch head for a review demand to name")
+	}
+
+	const (
+		ordinaryEntryPoint = "findings.ParseReport"
+		reviewEntryPoint   = "findings.ParseReviewReport"
+	)
+	var seen, ordinary, review int
+	for _, c := range f.Conditions {
+		if c.Principle != "P3" || c.Scenario != fixture.ScenarioBase {
+			continue
+		}
+		seen++
+		path := s.AgentResponses[string(c.ID)]
+		if path == "" {
+			t.Errorf("%s: the scenario names no agent response", c.ID)
+			continue
+		}
+		body, err := os.ReadFile(path)
+		if err != nil {
+			t.Errorf("%s: read the response: %v", c.ID, err)
+			continue
+		}
+		raw := string(body)
+
+		switch {
+		case strings.Contains(c.Mechanism, reviewEntryPoint):
+			review++
+			report, binding, err := findings.ParseReviewReport(raw, demand)
+			if err != nil {
+				t.Errorf("%s: the review path refused the bytes planted for it: %v", c.ID, err)
+				continue
+			}
+			if len(binding.Refused) != 0 || len(binding.Demoted) != 0 {
+				t.Errorf("%s: the binding refused %d finding(s) and demoted %d, and the condition is "+
+					"that nothing but the action decides the outcome",
+					c.ID, len(binding.Refused), len(binding.Demoted))
+			}
+			if len(binding.Beyond) != 0 {
+				t.Errorf("%s: the review declared reading %v, which the change does not touch, and the "+
+					"condition states the read set reaches nothing past the change",
+					c.ID, binding.Beyond)
+			}
+			if len(binding.Undeclared) == 0 {
+				t.Errorf("%s: the review declared reading every path the change touched, and this "+
+					"scenario's change touches more than the one path the review declares", c.ID)
+			}
+			if len(report.Findings) != reviewPathFindings {
+				t.Errorf("%s: the bound report carries %d finding(s), and the condition records the "+
+					"reviewer's finding and the one note the review path appends to every report it "+
+					"binds", c.ID, len(report.Findings))
+			}
+			requireTheRecordedActionOnTheLoopBound(t, c, report)
+			requireTheEvidenceNote(t, c, report)
+		case strings.Contains(c.Mechanism, ordinaryEntryPoint):
+			ordinary++
+			report, err := findings.ParseReport(raw)
+			if err != nil {
+				t.Errorf("%s: the ordinary path refused the bytes planted for it: %v", c.ID, err)
+				continue
+			}
+			if len(report.Findings) != ordinaryPathFindings {
+				t.Errorf("%s: the parsed report carries %d finding(s), and the condition records the "+
+					"reviewer's finding alone, with no note the ordinary path could have added",
+					c.ID, len(report.Findings))
+			}
+			requireTheRecordedActionOnTheLoopBound(t, c, report)
+
+			if _, _, err := findings.ParseReviewReport(raw, demand); !errors.Is(err, findings.ErrWrongRevision) {
+				t.Errorf("%s: driven through the review path these bytes gave %v, and the condition "+
+					"states they meet findings.ErrWrongRevision there", c.ID, err)
+			}
+		default:
+			t.Errorf("%s: the recorded mechanism is %q, which names neither entry point a report "+
+				"arrives through, so there is nothing to drive the planted bytes into", c.ID, c.Mechanism)
+		}
+	}
+	if seen != 6 {
+		t.Errorf("the catalog carries %d P3 conditions in the base scenario, and there are three "+
+			"shapes on each of two entry points", seen)
+	}
+	if ordinary != 3 || review != 3 {
+		t.Errorf("the P3 conditions name %s %d time(s) and %s %d, and there are three shapes on "+
+			"each of the two entry points", ordinaryEntryPoint, ordinary, reviewEntryPoint, review)
+	}
+}
+
+// touchedByTheChange returns the paths the scenario's branch changes against
+// the default branch, which is what a run's review demand carries. Deriving it
+// is what keeps this test from asserting the claim it is meant to check: the
+// review-path conditions declare reading a path on the ground that the change
+// touches it, and a demand naming that path because this test said so would
+// hold whether or not the plant still touched it.
+func touchedByTheChange(t *testing.T, f *fixture.Fixture, s fixture.Scenario) []string {
+	t.Helper()
+	out, ok := gitIn(t, s, s.WorkingCopy, "diff", "--name-only", f.DefaultBranch+"..."+f.Branch)
+	if !ok {
+		t.Fatalf("diff %s against %s: %s", f.Branch, f.DefaultBranch, out)
+	}
+	var touched []string
+	for _, line := range strings.Split(out, "\n") {
+		if path := strings.TrimSpace(line); path != "" {
+			touched = append(touched, path)
+		}
+	}
+	if len(touched) == 0 {
+		t.Fatalf("%s changes nothing against %s, so there is no review demand to build",
+			f.Branch, f.DefaultBranch)
+	}
+	return touched
+}
+
+// requireTheEvidenceNote asserts the bound report carries the informational
+// finding the review path appends to every report it binds, which the
+// review-path conditions record as part of what that path produces. A harness
+// held to an expectation omitting it would read the correct answer, two
+// findings, as a mismatch.
+func requireTheEvidenceNote(t *testing.T, c fixture.Condition, report findings.Report) {
+	t.Helper()
+	if len(c.Expect.MessageContains) == 0 {
+		t.Errorf("%s: the condition records no substring for the note the review path appends to "+
+			"every report it binds", c.ID)
+		return
+	}
+	for _, want := range c.Expect.MessageContains {
+		found := false
+		for _, finding := range report.Findings {
+			if finding.ID == loopBoundFindingID {
+				continue
+			}
+			if finding.Severity == findings.SeverityInfo && finding.Action == findings.ActionNote &&
+				strings.Contains(finding.Description, want) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("%s: no informational note in the bound report carries %q, which the condition "+
+				"records as part of what the review path produces", c.ID, want)
+		}
+	}
+}
+
+// The two entry points differ by exactly one finding, which is the countable
+// half of what the P3 conditions record. A report through findings.ParseReport
+// carries the reviewer's own finding and nothing else; the review path binds
+// evidence and appends one note to every report it binds. Counting is what
+// keeps a third finding, or a second note, from leaving that record false.
+const (
+	ordinaryPathFindings = 1
+	reviewPathFindings   = 2
+)
+
+// loopBoundFindingID is the identifier the reviewer wrote on the finding the
+// P3 responses plant, which is how the reviewer's own finding is told apart
+// from the informational ones the review path adds.
+const loopBoundFindingID = "total-loop-bound"
+
+// recordedActions maps a condition's recorded Expect.Value onto the action it
+// names. A value with no row here is one this test cannot hold to behavior,
+// which is a failure rather than a skip: a recorded answer nothing produces is
+// the claim these conditions exist to rule out, and a lookup that passed on an
+// unrecognized string would be that same claim one level down.
+var recordedActions = map[string]findings.Action{
+	"findings.ActionFix":  findings.ActionFix,
+	"findings.ActionAsk":  findings.ActionAsk,
+	"findings.ActionNote": findings.ActionNote,
+}
+
+// requireTheRecordedActionOnTheLoopBound asserts the reviewer's own finding
+// survived the parse carrying the action the condition records. The recorded
+// value is what a harness reports against, so it is what the parsed finding is
+// compared to rather than a value restated here. The finding is looked up by
+// the identifier the reviewer wrote, so the informational findings the review
+// path adds are not mistaken for it.
+func requireTheRecordedActionOnTheLoopBound(t *testing.T, c fixture.Condition, report findings.Report) {
+	t.Helper()
+	want, ok := recordedActions[c.Expect.Value]
+	if !ok {
+		t.Errorf("%s: the condition records the value %q, which names no action the parsed finding "+
+			"can be held to", c.ID, c.Expect.Value)
+		return
+	}
+	for _, finding := range report.Findings {
+		if finding.ID != loopBoundFindingID {
+			continue
+		}
+		if finding.Action != want {
+			t.Errorf("%s: the finding's action is %q and the condition records %s",
+				c.ID, finding.Action, c.Expect.Value)
+		}
+		return
+	}
+	t.Errorf("%s: the parsed report carries no finding identified as %s, so the finding did not "+
+		"survive", c.ID, loopBoundFindingID)
 }

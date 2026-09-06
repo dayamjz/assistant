@@ -26,25 +26,15 @@ func OpenQuestions() []OpenQuestion {
 			Owner: "assistant-fake-agent and assistant-journey-harness",
 			Provisional: "The responses are written as the exact bytes an agent prints, one file per " +
 				"condition, and their paths are in Scenario.AgentResponses. Nothing here decides how they " +
-				"are served.",
-		},
-		{
-			ID: "question-p3-through-the-review-path",
-			Question: "How is P3 exercised through the review path, where a report has to carry the " +
-				"revision it read and the set of paths it read before any finding is reached, and does " +
-				"that want a condition of its own?",
-			Owner: "whoever plants this package's conditions, which is a change of its own rather than " +
-				"the one that recorded this",
-			Provisional: "The three conditions this package plants for P3 target findings.ParseReport, " +
-				"and each says so. A review stage's output goes through findings.ParseReviewReport, " +
-				"which refuses a report stating no revision with ErrWrongRevision before any finding is " +
-				"reached, so the bytes planted here reach the action on the one path and not on the " +
-				"other. Nothing about them became false and none of them was changed.\n\n" +
-				"What a review-path condition's bytes would be is the open part, and one constraint on " +
-				"them is already known: the revision has to be the commit the run asked about, which is " +
-				"not the head this build records, because the run rebases and may add fix commits. That " +
-				"is the same substitution question-provider-response-delivery records for the checks " +
-				"answer, so whoever plants it inherits that problem rather than meeting a new one.",
+				"are served.\n\n" +
+				"One of them constrains the serving rather than only the selection. The three P3 " +
+				"conditions whose identifiers end in -review-path state the revision the report read, " +
+				"because findings.ParseReviewReport refuses a report naming any other commit before a " +
+				"finding is reached. The revision they state is Commits[\"branch-head\"] as the build " +
+				"left it, and the commit the review stage is asked about is the run's to decide, so " +
+				"a harness has to substitute it rather than relying on the two coinciding. That is " +
+				"the same substitution question-provider-response-delivery records for the checks " +
+				"answer.",
 		},
 		{
 			ID: "question-provider-response-delivery",
