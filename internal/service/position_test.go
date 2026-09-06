@@ -134,3 +134,127 @@ func branchesOf(records []store.Run) string {
 	}
 	return strings.Join(out, ", ")
 }
+
+// A rerun is the other way a run of a branch is created, so it takes the same
+// exclusion. Two reruns at once, and a start racing a rerun, are both the
+// interleaving that leaves a branch with two runs of which only the newer is
+// ever reachable.
+func TestARerunRacingAStartOnOneBranchLeavesOneRun(t *testing.T) {
+	requiresIdentifiedPeer(t)
+	h := newHome(t)
+	subject := newSubject(t)
+	repository := recordRepository(t, h, subject)
+
+	withService(t, h, func(running serviceUnderTest) {
+		// A finished run, so the branch has one to carry forward.
+		runAndEnd(t, running.client, subject)
+
+		second := dial(t, running.service)
+		var wg sync.WaitGroup
+		begin := make(chan struct{})
+		answers := make([]machine.Run, 2)
+		failures := make([]error, 2)
+
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-begin
+			failures[0] = running.client.Call(t.Context(), ipc.MethodRunRerun, machine.RerunRequest{
+				Working: machine.Working{WorkingPath: subject},
+			}, &answers[0])
+		}()
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-begin
+			failures[1] = second.Call(t.Context(), ipc.MethodRunStart, machine.StartRequest{
+				Working: machine.Working{WorkingPath: subject},
+				Intent:  "a change with acceptance criteria stated up front",
+			}, &answers[1])
+		}()
+		close(begin)
+		wg.Wait()
+
+		// Either may refuse - a rerun refuses while a run is in flight - but
+		// between them they may leave only one run that has not finished.
+		for i, err := range failures {
+			if err != nil {
+				t.Logf("call %d was refused: %v", i, err)
+			}
+		}
+		records := openRecords(t, h)
+		defer func() { _ = records.Close() }()
+		recorded, err := records.RunsForRepository(t.Context(), repository.ID)
+		if err != nil {
+			t.Fatalf("listing the repository's runs: %v", err)
+		}
+		unfinished := make([]store.Run, 0, len(recorded))
+		for _, record := range recorded {
+			switch record.Status {
+			case store.RunPending, store.RunRunning, store.RunHeld:
+				unfinished = append(unfinished, record)
+			}
+		}
+		if len(unfinished) > 1 {
+			t.Fatalf("a rerun racing a start left %d runs in flight on one branch: %s",
+				len(unfinished), branchesOf(unfinished))
+		}
+	})
+}
+
+// Two reruns that arrive at once leave one run for the same reason.
+func TestTwoRerunsOnOneBranchLeaveOneRun(t *testing.T) {
+	requiresIdentifiedPeer(t)
+	h := newHome(t)
+	subject := newSubject(t)
+	repository := recordRepository(t, h, subject)
+
+	withService(t, h, func(running serviceUnderTest) {
+		runAndEnd(t, running.client, subject)
+
+		clients := []*ipc.Client{running.client, dial(t, running.service)}
+		var wg sync.WaitGroup
+		begin := make(chan struct{})
+		answers := make([]machine.Run, len(clients))
+		failures := make([]error, len(clients))
+		for i, client := range clients {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-begin
+				failures[i] = client.Call(t.Context(), ipc.MethodRunRerun, machine.RerunRequest{
+					Working: machine.Working{WorkingPath: subject},
+				}, &answers[i])
+			}()
+		}
+		close(begin)
+		wg.Wait()
+
+		refused := 0
+		for _, err := range failures {
+			if err != nil {
+				refused++
+			}
+		}
+		if refused != 1 {
+			t.Fatalf("%d of two concurrent reruns were refused, want exactly one", refused)
+		}
+
+		records := openRecords(t, h)
+		defer func() { _ = records.Close() }()
+		recorded, err := records.RunsForRepository(t.Context(), repository.ID)
+		if err != nil {
+			t.Fatalf("listing the repository's runs: %v", err)
+		}
+		unfinished := make([]store.Run, 0, len(recorded))
+		for _, record := range recorded {
+			switch record.Status {
+			case store.RunPending, store.RunRunning, store.RunHeld:
+				unfinished = append(unfinished, record)
+			}
+		}
+		if len(unfinished) != 1 {
+			t.Fatalf("two concurrent reruns left %d runs in flight: %s", len(unfinished), branchesOf(unfinished))
+		}
+	})
+}

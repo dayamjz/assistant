@@ -71,10 +71,12 @@
 //
 // # Text a stage's agent wrote
 //
-// A finding's text is whatever an agent put there. The structured rendering
-// escapes every control character through internal/machine's encoder, and the
-// rendering a person reads escapes them too, so a description carrying an
-// escape sequence is shown rather than acted on by the terminal.
+// A finding's text is whatever an agent put there. Both renderings escape
+// every control character, on the same predicate: the structured one through
+// internal/machine's encoder, which makes that pass itself rather than leaving
+// it to encoding/json, and the one a person reads through this package's own.
+// A description carrying an escape sequence is therefore shown rather than
+// acted on by the terminal reading either of them.
 //
 // Two things a stage's agent wrote reach that rendering, and both go through
 // it: the findings a decision carries, and the summary a fix round wrote. What

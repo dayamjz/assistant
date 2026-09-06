@@ -228,6 +228,18 @@ const (
 // help would land there rather than on standard output, so the set is silent
 // and what it refuses is returned.
 func (in *invocation) parseFlags(name string, declare func(*flag.FlagSet)) error {
+	return in.parseArgs(name, 0, declare)
+}
+
+// parseArgs is parseFlags for a verb that takes arguments of its own, at most
+// limit of them.
+//
+// Refusing what is left over is here rather than in each verb because a verb
+// that forgot the check accepted a mistyped word and acted anyway, which on a
+// surface whose third exit code means "your arguments were wrong" is the one
+// answer a driving agent cannot recover from. A verb that takes an argument
+// says so by coming through here; every other verb takes none by default.
+func (in *invocation) parseArgs(name string, limit int, declare func(*flag.FlagSet)) error {
 	set := flag.NewFlagSet(commandName(name), flag.ContinueOnError)
 	set.SetOutput(io.Discard)
 	set.Usage = func() {}
@@ -246,7 +258,24 @@ func (in *invocation) parseFlags(name string, declare func(*flag.FlagSet)) error
 	}
 	in.flags = set
 	in.args = set.Args()
+	if len(in.args) > limit {
+		return usagef("%s takes %s, and was given %d: %s",
+			commandName(name), arguments(limit), len(in.args), strings.Join(in.args, " "))
+	}
 	return in.resolveHome()
+}
+
+// arguments says how many arguments a verb takes, for a refusal that says what
+// was expected rather than only that what arrived was wrong.
+func arguments(limit int) string {
+	switch limit {
+	case 0:
+		return "no arguments"
+	case 1:
+		return "at most one argument"
+	default:
+		return fmt.Sprintf("at most %d arguments", limit)
+	}
 }
 
 // reorder puts a verb's arguments in the order flag.FlagSet.Parse needs.

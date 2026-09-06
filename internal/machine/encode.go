@@ -1,9 +1,12 @@
 package machine
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
+	"unicode"
+	"unicode/utf8"
 )
 
 // Code is the exit status one invocation ends with. PRD section 9 gives the
@@ -61,38 +64,78 @@ type Failure struct {
 
 // Encoder writes structured answers to standard output, one document per line.
 //
-// The encoding is JSON, whose string form escapes every control character, so
-// text an agent wrote arrives as characters a reader can see rather than as an
-// instruction to the terminal reading it. That is PRD section 9's requirement
-// that control characters are escaped visibly rather than emitted raw, and it
-// is a property of the encoding rather than a pass this package makes over the
-// text.
+// The encoding is JSON, and every control character in it is written as its
+// \uXXXX escape, so text an agent wrote arrives as characters a reader can see
+// rather than as an instruction to the terminal reading it. That is PRD
+// section 9's requirement that control characters are escaped visibly rather
+// than emitted raw.
+//
+// It is a pass this package makes rather than a property of the encoding.
+// encoding/json escapes U+0000 through U+001F and writes U+007F and the C1
+// range U+0080 through U+009F as they stand, and U+009B is the single-byte
+// control sequence introducer, so a document it wrote unaided can carry an
+// escape sequence to a consumer that pipes it to a terminal. The predicate
+// here is unicode.IsControl, which is the one the human rendering uses, so the
+// two surfaces are safe by one rule rather than by two that can drift.
 //
 // One document per line is what makes a stream of them readable: a consumer of
 // assistant watch reads one event per line without needing an incremental
 // parser.
 type Encoder struct {
-	enc *json.Encoder
+	w io.Writer
 }
 
 // NewEncoder writes to w, which is standard output for a command line.
 // Progress belongs on standard error and is not this encoder's.
-func NewEncoder(w io.Writer) *Encoder {
-	enc := json.NewEncoder(w)
-	// HTML escaping would rewrite three ordinary characters into escape
-	// sequences that a reader then has to undo. Control characters are escaped
-	// either way, which is the requirement; these three are not control
-	// characters and reading a diff or a finding with them rewritten is worse.
-	enc.SetEscapeHTML(false)
-	return &Encoder{enc: enc}
-}
+func NewEncoder(w io.Writer) *Encoder { return &Encoder{w: w} }
 
 // Encode writes one answer. A value that cannot be encoded is an error rather
 // than a partial line, because a consumer reading one document per line cannot
-// recover from half of one.
+// recover from half of one, and the document is built whole before any of it
+// is written for the same reason.
 func (e *Encoder) Encode(v any) error {
-	if err := e.enc.Encode(v); err != nil {
+	var document bytes.Buffer
+	enc := json.NewEncoder(&document)
+	// HTML escaping would rewrite three ordinary characters into escape
+	// sequences that a reader then has to undo. They are not control
+	// characters, so nothing about the escaping below rests on them, and
+	// reading a diff or a finding with them rewritten is worse.
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		return fmt.Errorf("machine: writing the answer: %w", err)
+	}
+	line := append(escapeControls(bytes.TrimSuffix(document.Bytes(), []byte("\n"))), '\n')
+	if _, err := e.w.Write(line); err != nil {
 		return fmt.Errorf("machine: writing the answer: %w", err)
 	}
 	return nil
+}
+
+// escapeControls rewrites every control character in an encoded document as
+// its \uXXXX escape, which is what makes the claim above true of the whole of
+// unicode.IsControl rather than only of what encoding/json escapes.
+//
+// It runs over the encoded document rather than over the values that went into
+// it, which is what lets one pass cover every string in every shape this
+// package writes. That is safe because encoding/json emits no raw control
+// character outside a string: the structural tokens are ASCII punctuation, and
+// what it did escape is already a backslash sequence rather than the character
+// itself, so nothing here is escaped twice. The line ending this package adds
+// is added after this runs.
+//
+// A \uXXXX escape is ordinary JSON, so a consumer decodes the identical string
+// it would have decoded from the unescaped document.
+func escapeControls(document []byte) []byte {
+	if !bytes.ContainsFunc(document, unicode.IsControl) {
+		return document
+	}
+	out := make([]byte, 0, len(document))
+	for _, r := range string(document) {
+		if unicode.IsControl(r) {
+			out = append(out, fmt.Sprintf(`\u%04x`, r)...)
+			continue
+		}
+		out = utf8.AppendRune(out, r)
+	}
+	return out
 }

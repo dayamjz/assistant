@@ -647,3 +647,45 @@ func TestTheIntentSuppliedFlagIsHonouredWhenTheCallerWritesIt(t *testing.T) {
 		}
 	}
 }
+
+// takesAnArgument names the commands PRD section 9's table gives an argument
+// to. Every other verb takes none, and a word it does not recognize is
+// incorrect usage rather than something it acts past: a mistyped subcommand
+// that starts the service and exits 0 is the one answer a driving agent
+// cannot recover from.
+var takesAnArgument = map[string]bool{"runs": true, "tasks": true}
+
+func TestAVerbThatTakesNoArgumentRefusesOne(t *testing.T) {
+	t.Parallel()
+	h := newHome(t)
+	subject := newSubject(t)
+
+	for _, name := range specified {
+		if takesAnArgument[name] {
+			continue
+		}
+		args := []string{name, "nonsense"}
+		if name == "service" {
+			// Its subcommand is the word it does recognize; the other one is
+			// still an argument it does not take.
+			args = []string{name, "nonsense", "status"}
+		}
+		if got := run(t, h, subject, args...); got.code != machine.ExitUsage {
+			t.Errorf("assistant %s exited %s, want incorrect usage:\n%s%s",
+				strings.Join(args, " "), got.code, got.stdout, got.stderr)
+		}
+	}
+
+	// The bare command takes none either, and it is not in the table above
+	// because it has no name to type.
+	if got := run(t, h, subject, "nonsense-argument"); got.code != machine.ExitUsage {
+		t.Errorf("the command with no verb exited %s for an argument it does not take", got.code)
+	}
+
+	// And the two that do take one still take it.
+	for _, name := range []string{"runs", "tasks"} {
+		if got := run(t, h, subject, name, "abc123"); got.code == machine.ExitUsage {
+			t.Errorf("assistant %s abc123 is refused as incorrect usage:\n%s", name, got.stderr)
+		}
+	}
+}

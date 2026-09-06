@@ -43,9 +43,6 @@ func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 	if answer != "" && cancel {
 		return nil, usagef("--answer and --cancel are two different things to do with one run; pass one")
 	}
-	if len(in.args) > 0 {
-		return nil, usagef("this command takes no arguments, and was given %q", in.args[0])
-	}
 	// An intent given with nothing said about its standing is acceptance
 	// criteria, because an intent somebody stated is one somebody stated and
 	// defaulting the other way would leave a run holding a contract nobody was
@@ -169,13 +166,10 @@ func (in *invocation) localStatus(working string, cause error) machine.Status {
 // PRD section 9's table has one row for runs.
 func listRuns(ctx context.Context, in *invocation) (any, error) {
 	var limit int
-	if err := in.parseFlags("runs", func(set *flag.FlagSet) {
+	if err := in.parseArgs("runs", 1, func(set *flag.FlagSet) {
 		set.IntVar(&limit, "limit", 0, "how many runs to report, newest first; zero means all of them")
 	}); err != nil {
 		return nil, err
-	}
-	if len(in.args) > 1 {
-		return nil, usagef("assistant runs reports every run, or one run you name, and was given %d names", len(in.args))
 	}
 	if len(in.args) == 1 {
 		var run machine.Run
@@ -219,11 +213,8 @@ func rerun(ctx context.Context, in *invocation) (any, error) {
 // listTasks reports fleet work with its resolved current state, or one task
 // when it is named, on the same terms as runs.
 func listTasks(ctx context.Context, in *invocation) (any, error) {
-	if err := in.parseFlags("tasks", func(*flag.FlagSet) {}); err != nil {
+	if err := in.parseArgs("tasks", 1, func(*flag.FlagSet) {}); err != nil {
 		return nil, err
-	}
-	if len(in.args) > 1 {
-		return nil, usagef("assistant tasks reports every task, or one task you name, and was given %d names", len(in.args))
 	}
 	if len(in.args) == 1 {
 		var task machine.Task

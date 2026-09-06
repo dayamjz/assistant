@@ -153,9 +153,10 @@ func readOutDecision(w io.Writer, d machine.Decision) {
 //
 // A finding's text is whatever an agent put there, and a terminal reads an
 // escape sequence in it as an instruction: clearing the screen, rewriting the
-// lines above, or setting the clipboard. The structured rendering already
-// escapes every control character on its way through machine.Encoder, and this
-// is the same protection for the rendering a person reads.
+// lines above, or setting the clipboard. machine.Encoder makes the same pass
+// over the structured rendering on the same predicate, unicode.IsControl, so
+// the two surfaces are safe by one rule; what differs is the form each writes,
+// a readable escape here and a \uXXXX escape there.
 //
 // A line break is a control character like any other, so a caller that wants
 // the text's own line breaks to survive splits on them first and passes each

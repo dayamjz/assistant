@@ -103,34 +103,52 @@ func (s *Service) rerun(ctx context.Context, req machine.RerunRequest) (machine.
 	if err != nil {
 		return machine.Run{}, fmt.Errorf("service: reading the branch to run again: %w", err)
 	}
-	previous, err := s.latestRunOnBranch(ctx, repository.ID, branch)
-	if err != nil {
-		return machine.Run{}, err
-	}
-	if _, active, err := s.activeRun(ctx, repository.ID, branch); err != nil {
-		return machine.Run{}, err
-	} else if active {
-		return machine.Run{}, fmt.Errorf("service: %s already has a run in flight; end it before starting another", branch)
-	}
-	head := previous.CurrentHead.Or(previous.SubmittedHead)
-	record, err := s.create(ctx, run{
-		repository: repository.ID,
-		branch:     branch,
-		head:       head,
-		base:       previous.Base,
-		intent:     previous.Intent,
-		source:     previous.IntentSource,
-		supplied:   previous.IntentSource == intentSourceSupplied,
-	})
+	record, err := s.claimRerun(ctx, branchKey{repository: repository.ID, branch: branch})
 	if err != nil {
 		return machine.Run{}, err
 	}
 	return s.begin(ctx, record, pipeline.Start{
-		Branch:         branch,
+		Branch:         record.Branch,
 		Base:           repository.DefaultBranch,
-		Submitted:      head,
-		Intent:         previous.Intent,
-		IntentSupplied: previous.IntentSource == intentSourceSupplied,
+		Submitted:      record.SubmittedHead,
+		Intent:         record.Intent,
+		IntentSupplied: record.IntentSource == intentSourceSupplied,
+	})
+}
+
+// claimRerun establishes, under the branch's exclusion, that the branch has no
+// run in flight, and creates the fresh one that carries its last run forward.
+//
+// It takes the same gate a start takes, so the branch's decision that it has
+// no run has one owner rather than one per verb: two reruns at once, and a
+// start racing a rerun, are both the interleaving that would otherwise leave
+// the branch with two runs. Reading the run being carried forward is inside
+// the claim too, because the head and the intent the new record is built from
+// have to be the ones that were there when the decision was made.
+func (s *Service) claimRerun(ctx context.Context, key branchKey) (store.Run, error) {
+	release, err := s.holdBranch(ctx, key)
+	if err != nil {
+		return store.Run{}, err
+	}
+	defer release()
+
+	previous, err := s.latestRunOnBranch(ctx, key.repository, key.branch)
+	if err != nil {
+		return store.Run{}, err
+	}
+	if _, active, err := s.activeRun(ctx, key.repository, key.branch); err != nil {
+		return store.Run{}, err
+	} else if active {
+		return store.Run{}, fmt.Errorf("service: %s already has a run in flight; end it before starting another", key.branch)
+	}
+	return s.create(ctx, run{
+		repository: key.repository,
+		branch:     key.branch,
+		head:       previous.CurrentHead.Or(previous.SubmittedHead),
+		base:       previous.Base,
+		intent:     previous.Intent,
+		source:     previous.IntentSource,
+		supplied:   previous.IntentSource == intentSourceSupplied,
 	})
 }
 
@@ -497,6 +515,10 @@ type branchGate struct {
 // claimBranch decides whether a branch already has a run and creates one when
 // it does not, with the decision and the write under one exclusion. It reports
 // the run and whether this call is the one that created it.
+//
+// It is the start path's use of the branch gate; claimRerun is the other, and
+// they are the only two places a run is created, so every decision that a
+// branch has no run is made holding the same gate.
 //
 // The check and the create are one step because they are one decision: a check
 // another caller can win the race to is what leaves a branch with two runs, of
