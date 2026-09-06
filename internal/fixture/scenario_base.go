@@ -405,8 +405,9 @@ func plantFindingsWithoutAction(b *builder, s *Scenario) ([]Condition, error) {
 				"evidence binding has nothing in the evidence set to hold against the finding: it " +
 				"names a path the declared read set holds, and the binding's demotion to a note " +
 				"does not reach it on either half of its test, since that demotion asks whether a " +
-				"finding named no path and whether the reviewer stated an action, and this finding " +
-				"named one and stated none. Within the evidence set the action is all that is " +
+				"finding named no path and whether the reviewer stated an action this product " +
+				"recognizes, and this finding named a path and stated no action it can read. " +
+				"Within the evidence set the action is all that is " +
 				"left to decide the outcome, which is the same condition as " + string(r.id) + " with " +
 				"the review path's rule satisfied rather than avoided.\n\n" +
 				"The revision is a placeholder. It is Commits[\"branch-head\"] as the build left it, " +
