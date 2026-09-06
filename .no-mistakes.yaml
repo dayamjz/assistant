@@ -49,8 +49,8 @@ review:
         never decides who resolves a finding.
         The review stage answers for one rule more, and only through
         ParseReviewReport: a review report is bound to the revision it reports
-        and the paths it declared reading. The other eight stages use
-        ParseReport and answer to none of it.
+        and the paths it declared reading. No other stage answers to any of
+        it, and a report read through ParseReport is untouched by it.
         A report whose revision is not the one the run asked about is refused
         whole, and that is the only whole-report refusal the binding adds. A
         finding naming a path the evidence set does not hold is refused for

@@ -63,8 +63,8 @@
 // report has to carry", makes a review report carry the revision it read and
 // the set of paths it actually read, and binds its findings to them.
 // ParseReviewReport is that rule and Demand.Guidance is what the reviewer is
-// told about it; the other eight stages go on using ParseReport and answer to none
-// of it.
+// told about it; no other stage answers to any of it, and a report read
+// through ParseReport is untouched by it.
 //
 // The part worth knowing before reading either is why it is a comparison
 // rather than a field. A reviewer satisfies a rule that merely asks for an
@@ -98,8 +98,8 @@
 // Validate before the binding rewrites any finding: the binding writes a note
 // over a refused finding and appends to a demoted one, and a note it wrote
 // must not stand in for a description the reviewer never wrote. So the review
-// path refuses everything the other eight stages' path refuses, and its extra
-// rule can only refuse more.
+// path refuses everything the ParseReport path refuses, and its extra rule can
+// only refuse more.
 //
 // What the binding is not is a check that the reviewer read anything. The
 // evidence set is the reviewer's claim about itself, and this package resolves
