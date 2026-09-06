@@ -242,6 +242,15 @@ func plantPushedCommandsAndAgent(b *builder, s *Scenario) ([]Condition, error) {
 // Three shapes are planted because P3 has three ways in, and the one most
 // likely to be handled and the two most likely to be forgotten are not the
 // same shape.
+//
+// Which entry point they are read through is stated in each condition, because
+// it is a choice rather than the only door. findings.ParseReviewReport, which
+// is what a review stage's output goes through, applies PRD section 5's
+// evidence binding first and refuses a report stating no revision with
+// ErrWrongRevision before any finding is reached. These bytes state none, so
+// they exercise P3 on the findings.ParseReport path and not on that one.
+// Whether the review path wants a P3 condition of its own is
+// question-p3-through-the-review-path.
 func plantFindingsWithoutAction(b *builder, s *Scenario) ([]Condition, error) {
 	responses := []struct {
 		id      ID
@@ -295,9 +304,15 @@ func plantFindingsWithoutAction(b *builder, s *Scenario) ([]Condition, error) {
 			Scenario:  s.Name,
 			Kind:      KindRefusal,
 			Principle: "P3",
-			Planted: "The exact bytes a review agent prints, carrying " + r.planted + ". The report is " +
+			Planted: "The exact bytes an agent prints, carrying " + r.planted + ". The report is " +
 				"otherwise well formed and the finding is otherwise complete, so nothing but the action " +
-				"decides the outcome.",
+				"decides the outcome. The route is findings.ParseReport, the entry point that holds a " +
+				"report to no evidence rule. These bytes state no revision and no read set, and " +
+				"findings.ParseReviewReport refuses a report stating no revision with ErrWrongRevision " +
+				"before any finding is reached, so a run driving these same bytes through the review " +
+				"stage meets that refusal instead and never reaches the action. That is the review " +
+				"path's own rule firing, not this condition; P3 along that route is " +
+				"question-p3-through-the-review-path.",
 			Mechanism: "findings.ParseReport, then Report.Normalize",
 			Expect: Outcome{
 				Summary: "The report parses, the finding survives, and its action is ask. It is not " +
