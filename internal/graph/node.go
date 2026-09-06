@@ -60,7 +60,7 @@ type Halt struct {
 	// may write it, no second halt point may ask into it, it declares no merge
 	// rule, and a caller cannot pre-seed it in a run's initial state. Building
 	// a graph that breaks any of those is refused. The key holds what a person
-	// said to this decision, and the executor clears it whenever it parks the
+	// said to this decision, and the executor clears it whenever it stops the
 	// run at this halt point, so an answer never outlives the decision it
 	// answered.
 	Into string

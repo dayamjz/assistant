@@ -95,18 +95,18 @@ func TestReportSelectorsAndPredicates(t *testing.T) {
 	if got := report.Fixable(); len(got) != 1 || got[0].ID != "a" {
 		t.Errorf("Fixable = %+v, want just the fix finding", got)
 	}
-	if got := report.Parked(); len(got) != 1 || got[0].ID != "b" {
-		t.Errorf("Parked = %+v, want just the ask finding", got)
+	if got := report.Held(); len(got) != 1 || got[0].ID != "b" {
+		t.Errorf("Held = %+v, want just the ask finding", got)
 	}
-	if !report.HasParked() {
-		t.Error("HasParked = false with an ask finding present")
+	if !report.HasHeld() {
+		t.Error("HasHeld = false with an ask finding present")
 	}
 	if report.AllNotes() {
 		t.Error("AllNotes = true with a fix and an ask present")
 	}
 }
 
-func TestAllNotesAndHasParkedOnTheApprovingCases(t *testing.T) {
+func TestAllNotesAndHasHeldOnTheApprovingCases(t *testing.T) {
 	notes := findings.Report{Summary: "s", Findings: []findings.Finding{
 		{ID: "a", Action: findings.ActionNote, Description: "d"},
 		{ID: "b", Action: findings.ActionNote, Description: "d"},
@@ -114,11 +114,11 @@ func TestAllNotesAndHasParkedOnTheApprovingCases(t *testing.T) {
 	if !notes.AllNotes() {
 		t.Error("a report of only notes must report AllNotes")
 	}
-	if notes.HasParked() {
-		t.Error("a report of only notes must not report HasParked")
+	if notes.HasHeld() {
+		t.Error("a report of only notes must not report HasHeld")
 	}
 	empty := findings.Report{Summary: "s"}
-	if !empty.AllNotes() || empty.HasParked() {
+	if !empty.AllNotes() || empty.HasHeld() {
 		t.Error("a report with no findings is approved as it stands")
 	}
 	// An unclassified finding is not a note, so it cannot approve a stage.

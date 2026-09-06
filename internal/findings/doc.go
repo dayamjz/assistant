@@ -11,7 +11,7 @@
 //
 // ActionFix is objectively wrong and mechanically fixable, so it is eligible
 // for the automatic fix loop. ActionAsk touches the user's intent or judgment,
-// so it parks for a decision and never enters that loop. ActionNote is
+// so it holds for a decision and never enters that loop. ActionNote is
 // informational and blocks nothing; a report whose findings are all notes is
 // approved as it stands.
 //
@@ -30,7 +30,7 @@
 //     recognizes, is therefore still not fix-eligible. Fixable and
 //     Report.Fixable are the only selectors that feed the fix loop, and both
 //     are built on that one predicate, so neither can return an ask or a note.
-//     Parked and Report.Parked select the other way, on ActionAsk.
+//     Held and Report.Held select the other way, on ActionAsk.
 //
 // # Agent output is untrusted input
 //

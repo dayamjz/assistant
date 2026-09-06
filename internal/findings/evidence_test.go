@@ -638,8 +638,8 @@ func TestAFindingRestingOnNothingBecomesANote(t *testing.T) {
 	if got := findingByID(t, report, "vague"); got.Action != findings.ActionNote {
 		t.Fatalf("an unsupported finding is %q, want note", got.Action)
 	}
-	if report.HasParked() {
-		t.Errorf("a demoted finding must not hold the stage: %+v", report.Parked())
+	if report.HasHeld() {
+		t.Errorf("a demoted finding must not hold the stage: %+v", report.Held())
 	}
 }
 
@@ -677,7 +677,7 @@ func TestP3OutranksTheDemotion(t *testing.T) {
 			if got.Action != findings.ActionAsk {
 				t.Fatalf("action is %q, want ask: P3 outranks the evidence demotion", got.Action)
 			}
-			if !report.HasParked() {
+			if !report.HasHeld() {
 				t.Errorf("an unclassified finding must still hold the stage for a person")
 			}
 		})
@@ -705,8 +705,8 @@ func TestARefusalAppliesWhateverTheActionWas(t *testing.T) {
 	if got := findingByID(t, report, "caller-sums-twice"); got.Action != findings.ActionNote {
 		t.Fatalf("a refused finding is %q, want it reported as a note", got.Action)
 	}
-	if report.HasParked() {
-		t.Errorf("a refused finding must not hold the stage: %+v", report.Parked())
+	if report.HasHeld() {
+		t.Errorf("a refused finding must not hold the stage: %+v", report.Held())
 	}
 }
 

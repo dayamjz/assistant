@@ -60,8 +60,8 @@ func TestParseReportAcceptsTheShapesAgentsProduce(t *testing.T) {
 			if len(got.Fixable()) != 1 || got.Fixable()[0].Description != "the error is dropped" {
 				t.Errorf("Fixable = %+v", got.Fixable())
 			}
-			if !got.HasParked() {
-				t.Error("HasParked = false, but the report holds an ask")
+			if !got.HasHeld() {
+				t.Error("HasHeld = false, but the report holds an ask")
 			}
 			for i, f := range got.Findings {
 				if f.ID == "" {
@@ -109,8 +109,8 @@ func TestParseReportSendsUnclassifiedFindingsToAsk(t *testing.T) {
 	if len(got.Fixable()) != 0 {
 		t.Fatalf("Fixable returned %+v, want nothing", got.Fixable())
 	}
-	if len(got.Parked()) != 7 {
-		t.Fatalf("Parked returned %d findings, want all 7", len(got.Parked()))
+	if len(got.Held()) != 7 {
+		t.Fatalf("Held returned %d findings, want all 7", len(got.Held()))
 	}
 }
 

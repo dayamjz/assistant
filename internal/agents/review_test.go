@@ -167,7 +167,7 @@ func TestP3SurvivesTheReviewBindingOnTheWire(t *testing.T) {
 	}
 	result := runReview(t, standin.Report(unclassified))
 
-	if !result.Report.HasParked() {
+	if !result.Report.HasHeld() {
 		t.Fatalf("an unclassified finding must still hold the stage for a person: %+v",
 			result.Report.Findings)
 	}

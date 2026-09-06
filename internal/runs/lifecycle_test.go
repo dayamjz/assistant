@@ -47,7 +47,7 @@ func TestEveryMoveAgainstEveryStatus(t *testing.T) {
 				s, _ := openStore(t)
 				svc := service(t, s, agent, false)
 				run := seedRun(t, s, svc, "run-1")
-				park(t, svc, run.ID, from)
+				place(t, svc, run.ID, from)
 
 				after, err := move.call(svc, ctx, run.ID)
 				legal := from == move.to || contains(move.from, from)
@@ -180,9 +180,9 @@ func TestCreateRefusesARunThatIsAlreadyUnderway(t *testing.T) {
 	}
 }
 
-// park moves a run from pending to the status a case needs it in, using the
+// place moves a run from pending to the status a case needs it in, using the
 // service's own moves, so no test reaches around the table to set one up.
-func park(t *testing.T, svc *runs.Service, id string, status store.RunStatus) {
+func place(t *testing.T, svc *runs.Service, id string, status store.RunStatus) {
 	t.Helper()
 	ctx := t.Context()
 	var err error
@@ -206,10 +206,10 @@ func park(t *testing.T, svc *runs.Service, id string, status store.RunStatus) {
 	case store.RunTerminated:
 		_, err = svc.Terminate(ctx, id)
 	default:
-		t.Fatalf("no way to park a run in %q", status)
+		t.Fatalf("no way to place a run in %q", status)
 	}
 	if err != nil {
-		t.Fatalf("parking run %s in %s: %v", id, status, err)
+		t.Fatalf("placing run %s in %s: %v", id, status, err)
 	}
 }
 

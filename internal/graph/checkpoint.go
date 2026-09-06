@@ -53,14 +53,18 @@ func (s Status) String() string {
 	}
 }
 
-// Parked reports whether the status is one a run does not advance out of on
-// its own. A halted run needs a decision. A run parked by a bound needs
-// something other than an answer, because Answer takes only a halted run:
-// Executor.AdoptBudget moves a budget-exhausted one onto more room where it
-// stands, and any of the three is taken further by forking the run from an
-// earlier checkpoint and resuming that, which runs on the counters that
-// checkpoint recorded rather than the ones the park is standing on.
-func (s Status) Parked() bool {
+// Stopped reports whether the status is one a run does not advance out of on
+// its own. It covers both of the ways PRD section 5 distinguishes, which is
+// why it is not named after either: StatusHalted is a hold, waiting on a
+// person's decision, and the other three are parks, a bound stopping the run.
+//
+// A halted run needs a decision. A parked run needs something other than an
+// answer, because Answer takes only a halted run: Executor.AdoptBudget moves a
+// budget-exhausted one onto more room where it stands, and any of the three is
+// taken further by forking the run from an earlier checkpoint and resuming
+// that, which runs on the counters that checkpoint recorded rather than the
+// ones the park is standing on.
+func (s Status) Stopped() bool {
 	switch s {
 	case StatusHalted, StatusRoundsExhausted, StatusBudgetExhausted, StatusConverged:
 		return true
@@ -242,7 +246,11 @@ type Checkpoint struct {
 	Position string `json:"position"`
 	// Status is where the run stood when the checkpoint was written.
 	Status Status `json:"status"`
-	// Reason explains a parked status. It is empty otherwise.
+	// Reason explains a run that stopped short. The executor sets one only
+	// when a bound parks the run, and clears it on any status the run can
+	// advance out of on its own. Validation asks the wider question of
+	// Status.Stopped, so a checkpoint built by hand or read out of a store may
+	// carry one on a halted run; see Graph.validateReason.
 	Reason string `json:"reason,omitempty"`
 	// State is the typed record as of this point.
 	State State `json:"state"`

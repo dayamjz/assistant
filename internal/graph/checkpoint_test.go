@@ -247,7 +247,7 @@ func TestAnswerRefusesARunWithNoOpenDecision(t *testing.T) {
 
 func TestBoundAccountingSurvivesAHaltAndResume(t *testing.T) {
 	rec := &recorder{}
-	// A loop with a decision in it: every round parks, so the round counter
+	// A loop with a decision in it: every round holds, so the round counter
 	// only survives if the checkpoint carries it.
 	g := mustBuild(t, haltLoopBuilder(rec))
 
@@ -770,7 +770,7 @@ func TestARunStartingAtAHaltPointStopsBeforeItsFirstNode(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
-	// Run hands back whatever the first checkpoint parked as rather than
+	// Run hands back whatever the first checkpoint stopped as rather than
 	// walking on from it, so the node it stands in front of never starts.
 	if got.Status != graph.StatusHalted || got.Position != "gate" {
 		t.Fatalf("the run ended %s at %q, want halted standing at gate", got.Status, got.Position)
@@ -1002,7 +1002,7 @@ func TestValidateRefusesACheckpointThatDoesNotMatchTheGraph(t *testing.T) {
 			},
 			field: "status",
 		},
-		"reason on a run that is not parked": {
+		"reason on a run that is still running": {
 			tamper: func(c *graph.Checkpoint) {
 				c.Status = graph.StatusRunning
 				c.Position = "prep"

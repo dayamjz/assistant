@@ -127,16 +127,16 @@ func normalizeEvidence(evidence []Evidence) []Evidence {
 // fix loop, in their original order. It can never return an ask or a note.
 func (r Report) Fixable() []Finding { return Fixable(r.Findings) }
 
-// Parked returns the report's findings that hold for a person's decision, in
-// their original order. On the name, see Finding.Parks.
-func (r Report) Parked() []Finding { return Parked(r.Findings) }
+// Held returns the report's findings that hold for a person's decision, in
+// their original order. On the name, see Finding.Holds.
+func (r Report) Held() []Finding { return Held(r.Findings) }
 
-// HasParked reports whether any finding holds for a person's decision. A stage
+// HasHeld reports whether any finding holds for a person's decision. A stage
 // with one holds regardless of how many fix rounds its configuration allows.
-// On the name, see Finding.Parks.
-func (r Report) HasParked() bool {
+// On the name, see Finding.Holds.
+func (r Report) HasHeld() bool {
 	for _, f := range r.Findings {
-		if f.Parks() {
+		if f.Holds() {
 			return true
 		}
 	}

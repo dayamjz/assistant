@@ -19,7 +19,7 @@ const (
 	// fixable. It is the only action eligible for the automatic fix loop.
 	ActionFix Action = "fix"
 	// ActionAsk marks a finding that touches the user's intent or judgment. It
-	// parks for a decision and never enters the automatic fix loop. It is also
+	// holds for a decision and never enters the automatic fix loop. It is also
 	// the value every unrecognized action normalizes to.
 	ActionAsk Action = "ask"
 	// ActionNote marks an informational finding. It needs no fix and blocks

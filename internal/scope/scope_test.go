@@ -137,14 +137,14 @@ func TestObserveProducesOnlyNotes(t *testing.T) {
 			if f.FixEligible() {
 				t.Errorf("supplied=%v: %q is fix-eligible", supplied, f.Location.Path)
 			}
-			if f.Parks() {
-				t.Errorf("supplied=%v: %q parks the run", supplied, f.Location.Path)
+			if f.Holds() {
+				t.Errorf("supplied=%v: %q holds the run for a decision", supplied, f.Location.Path)
 			}
 		}
 		if n := len(findings.Fixable(got)); n != 0 {
 			t.Errorf("supplied=%v: %d of the lens's findings feed the fix loop", supplied, n)
 		}
-		if n := len(findings.Parked(got)); n != 0 {
+		if n := len(findings.Held(got)); n != 0 {
 			t.Errorf("supplied=%v: %d of the lens's findings hold for a decision", supplied, n)
 		}
 	}
@@ -166,8 +166,8 @@ func TestObserveFindingsAreUsableInAReport(t *testing.T) {
 	if !report.AllNotes() {
 		t.Error("a report holding only scope observations is not all notes")
 	}
-	if report.HasParked() {
-		t.Error("scope observations park the report")
+	if report.HasHeld() {
+		t.Error("scope observations hold the report")
 	}
 	seen := make(map[string]struct{}, len(report.Findings))
 	for _, f := range report.Findings {

@@ -299,19 +299,19 @@ func TestARunTakesTheFallbackEdgeWhenNoGuardMatches(t *testing.T) {
 	}
 }
 
-func TestStatusParkedNamesTheStatusesThatNeedAPerson(t *testing.T) {
-	parked := []graph.Status{
+func TestStatusStoppedCoversTheHoldAndTheThreeParks(t *testing.T) {
+	stopped := []graph.Status{
 		graph.StatusHalted, graph.StatusRoundsExhausted,
 		graph.StatusBudgetExhausted, graph.StatusConverged,
 	}
-	for _, s := range parked {
-		if !s.Parked() {
-			t.Errorf("%s.Parked() = false", s)
+	for _, s := range stopped {
+		if !s.Stopped() {
+			t.Errorf("%s.Stopped() = false", s)
 		}
 	}
 	for _, s := range []graph.Status{graph.StatusRunning, graph.StatusCompleted} {
-		if s.Parked() {
-			t.Errorf("%s.Parked() = true", s)
+		if s.Stopped() {
+			t.Errorf("%s.Stopped() = true", s)
 		}
 	}
 }

@@ -97,7 +97,7 @@ func Guidance(c Change) (string, error) {
 // whose paths were asked about and answered.
 //
 // Every finding it returns carries findings.ActionNote, so none is fix-eligible
-// and none parks the run. That is by construction here rather than by a cap
+// and none holds the run. That is by construction here rather than by a cap
 // applied afterwards, which is why no path through this function can produce a
 // fix or an ask.
 //
