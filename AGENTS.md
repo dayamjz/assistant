@@ -134,7 +134,19 @@ Each has cost this repository more than one round of review.
   the process tree, the per-invocation environment, and what is recorded about
   a call. P4 lives in its type split rather than in a rule callers follow:
   `Runner.Run` cannot be given a session and `Fixer.Apply` cannot be given a
-  purpose, so keep any new entry point on one side of that line.
+  purpose, so keep any new entry point on one side of that line. The same split
+  answers the adapter that has no sessions at all: `Runner` has no `Fixer`
+  method, only `SessionRunner` does, and `OpenFixer` is the only route to one
+  this package offers a caller holding a `Runner`. `SessionRunner` is exported,
+  so `Resolve` rather than the type is what keeps an assertion on it from
+  finding an undeclared session mechanism. An adapter declares what it supports
+  through `Runner.Capabilities`, the set is the table in `capability.go`, and
+  undeclared means unavailable. Add a capability by adding a row there and a
+  conformance probe in `capability_test.go`; a capability an adapter declares
+  and no probe checks fails the conformance suite, which is what keeps a
+  declaration from being a comment. `Resolve` refuses an adapter whose
+  declaration and type disagree in either direction. Read its `doc.go` for the
+  residual gap: a capability whose row has no probe is taken at its word.
 - `internal/agents/standin` is the scripted agent the tests outside
   `internal/agents` run against. It implements no `agents` interface and builds
   no `agents.Result`: it prints bytes and exits with a status, and the real
@@ -159,9 +171,17 @@ Each has cost this repository more than one round of review.
   five stages may take fix rounds. The state schema is the key table in
   `key.go`, on the same terms as `internal/config`: a key's kind, its merge
   rule, and whether a stage may write it are one row, and a stage that names
-  anything else fails to build. Read its `doc.go` before changing the loop or
-  the holds, and for the residual gaps: the requested fix round PRD section 5's
-  hold offers is not wired, and convergence is over the whole state.
+  anything else fails to build. It also refuses a path the resolved adapter has
+  not declared: `Options.Adapter` is the declaration, an `Implementation` and a
+  `Fixer` name what they need in `Requires`, and `capability.go` gathers every
+  requirement in one place. For `resumable_sessions` that is the early half of
+  the rule and the half that cannot be forgotten is `internal/agents`; for
+  `suppress_project_instructions` there is no second half, because
+  `internal/agents` implements no suppression and so has nothing to refuse at,
+  which leaves `New`'s check the only enforcement of PRD section 10's refusal
+  before launch. Read its `doc.go` before changing the loop or the holds, and
+  for the residual gaps: the requested fix round PRD section 5's hold offers is
+  not wired, and convergence is over the whole state.
 - `internal/scope` is the review stage's scope lens, not a tenth stage: every
   changed line should trace to the recorded intent, and P2 fixes the list at
   nine. It ships on and has no off switch, which is why it is shipped guidance

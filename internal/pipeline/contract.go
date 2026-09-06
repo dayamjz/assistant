@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/findings"
 	"github.com/dayamjz/assistant/internal/graph"
 )
@@ -26,6 +27,24 @@ type Implementation struct {
 	// is refused when the pipeline is built, with the sentinel errors.go names
 	// for that case.
 	Writes []Key
+	// Requires lists every agent capability this stage's body needs. A
+	// capability the adapter has not declared refuses the pipeline when it is
+	// built, naming the stage and the capability, which is PRD section 8's
+	// rule that a path the adapter has not declared is refused before that
+	// adapter is launched.
+	//
+	// It is checked for all nine stages whatever a run then skips, because a
+	// skip is a per-run choice on Start and a pipeline is built once and used
+	// by many runs. A stage in the topology is a stage some run will take.
+	//
+	// Declaring nothing is the common case and means the stage needs nothing
+	// beyond an agent that runs. A stage that needed a session and did not
+	// declare it is not thereby served: agents.OpenFixer refuses at the call
+	// instead, so what the declaration buys there is the refusal arriving
+	// before the run rather than partway through it. That backstop is per
+	// capability rather than general, and capability.go says which
+	// requirements have one.
+	Requires []agents.Capability
 	// NewBody constructs the implementation for one execution of the stage.
 	// The pipeline calls it each time the stage runs and never reuses a body,
 	// so a stage that takes fix rounds is built again for every round: this
@@ -104,6 +123,27 @@ type Fixer struct {
 	// schema admits today. It is also what makes the graph's convergence bound
 	// meaningful: a round that changed nothing leaves state as it was.
 	Writes []Key
+	// Requires lists every agent capability a fix body needs. A fixer that
+	// keeps one durable agent session across the rounds of a stage declares
+	// agents.CapabilityResumableSessions here, which is what config.SessionReuse
+	// asks for, and a pipeline built against an adapter that has not declared
+	// it is refused.
+	//
+	// Two questions are asked of this and only one is gated. Whether a
+	// capability named here is one internal/agents defines is asked whenever a
+	// Fixer is supplied, so a typo is refused with ErrUnknownCapability under
+	// fix round limits of zero, on the same terms as ErrUnmergeableFixerWrite.
+	// Whether the adapter declared it is asked only when some stage's fix
+	// round limit is above zero, because a pipeline that builds no fix node
+	// takes no fix path. capability.go states why the two differ.
+	//
+	// A fixer that declares nothing keeps no memory across rounds, which is
+	// what PRD section 8 leaves an adapter without resumable sessions: either
+	// the run has a declared session or it has no memory across rounds. The
+	// declaration is what tells those two apart, and a fixer that forgot it
+	// gets no session anyway, since agents.OpenFixer reads the adapter's
+	// declaration and not this one.
+	Requires []agents.Capability
 	// NewBody constructs the fixer for one fix node per advance segment, not
 	// for one round: a run with rounds on several stages builds one fix body
 	// per fix node it executes. A fix body spans the rounds of the one stage's

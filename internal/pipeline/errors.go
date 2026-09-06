@@ -52,6 +52,13 @@ var (
 	// refuses it, so the refusal arrives as a graph.BuildError carrying
 	// RuleSingleWriter rather than as a sentinel here.
 	ErrUnmergeableFixerWrite = errors.New("pipeline: the fixer writes a state key that declares no merge rule")
+	// ErrUnknownCapability is returned when a stage or the fixer declares a
+	// requirement on an agent capability internal/agents does not define. It
+	// is refused rather than treated as unmet, because the two say different
+	// things: unmet names a real capability the adapter lacks, and this names
+	// a word nothing can ever declare, so leaving it as unmet would report a
+	// typo as a missing adapter feature and send a reader looking for one.
+	ErrUnknownCapability = errors.New("pipeline: capability is not one internal/agents defines")
 	// ErrUndeclaredRead is returned when a stage or fixer body reads a key its
 	// implementation did not declare. The step fails.
 	ErrUndeclaredRead = errors.New("pipeline: body read a state key its implementation did not declare")

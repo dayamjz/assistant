@@ -130,7 +130,7 @@ func TestEveryRunInvocationIsRecognizedAndSessionFree(t *testing.T) {
 func TestOnlyTheFixerCarriesASessionAcrossRounds(t *testing.T) {
 	rec := &recorder{}
 	runner := newRunner(t, agents.WithRecorder(rec))
-	fixer, err := runner.Fixer(t.Context(), "")
+	fixer, err := agents.OpenFixer(t.Context(), runner, "")
 	if err != nil {
 		t.Fatalf("opening a fixer session: %v", err)
 	}
@@ -174,7 +174,7 @@ func TestOnlyTheFixerCarriesASessionAcrossRounds(t *testing.T) {
 func TestAFixerSessionCanBeResumedFromItsReference(t *testing.T) {
 	rec := &recorder{}
 	runner := newRunner(t, agents.WithRecorder(rec))
-	fixer, err := runner.Fixer(t.Context(), "session-from-an-earlier-service")
+	fixer, err := agents.OpenFixer(t.Context(), runner, "session-from-an-earlier-service")
 	if err != nil {
 		t.Fatalf("resuming a fixer session: %v", err)
 	}
@@ -197,7 +197,7 @@ func TestAFixerSessionCanBeResumedFromItsReference(t *testing.T) {
 func TestAFixRoundWithNoSessionReferenceIsRecordedAsSessionFree(t *testing.T) {
 	rec := &recorder{}
 	runner := newRunner(t, agents.WithRecorder(rec))
-	fixer, err := runner.Fixer(t.Context(), "")
+	fixer, err := agents.OpenFixer(t.Context(), runner, "")
 	if err != nil {
 		t.Fatalf("opening a fixer session: %v", err)
 	}
@@ -232,7 +232,7 @@ func TestAFixRoundWithNoSessionReferenceIsRecordedAsSessionFree(t *testing.T) {
 func TestAFailedFixRoundKeepsTheSessionItOpened(t *testing.T) {
 	rec := &recorder{}
 	runner := newRunner(t, agents.WithRecorder(rec))
-	fixer, err := runner.Fixer(t.Context(), "")
+	fixer, err := agents.OpenFixer(t.Context(), runner, "")
 	if err != nil {
 		t.Fatalf("opening a fixer session: %v", err)
 	}

@@ -26,7 +26,80 @@ var (
 	// caller that only needs to know that the agent did not deliver can match
 	// on one error.
 	ErrInvocationFailed = errors.New("agents: invocation did not produce a usable result")
+	// ErrUndeclaredCapability is returned when a path needs a capability the
+	// adapter has not declared. PRD section 8 makes that a refusal before the
+	// adapter is launched, naming what is missing, and never a weaker path
+	// that would still be reported as a pass.
+	//
+	// It is this package's sentinel and not only this package's refusal. A
+	// caller that holds a Capabilities and knows which paths it is about to
+	// build refuses earlier than any call here can, and it says so by wrapping
+	// this, so one errors.Is answers the question wherever it was asked. P14
+	// puts the vocabulary with the package that owns adapters.
+	ErrUndeclaredCapability = errors.New("agents: the adapter has not declared a capability this path needs")
+	// ErrAdapterDeclaration is returned when an adapter's declaration and its
+	// type disagree, or when it declares a capability this build does not
+	// define. It is a defect in the adapter rather than a reason to prefer
+	// another one, so Resolve refuses the list rather than passing over the
+	// entry: an adapter that lies about itself is not something to route
+	// around quietly.
+	ErrAdapterDeclaration = errors.New("agents: an adapter's capability declaration does not match what it is")
 )
+
+// CapabilityError reports a path refused because the adapter has not declared
+// the capability that path needs. It names the capability rather than
+// describing the shortfall, so a caller can act on it without reading prose.
+type CapabilityError struct {
+	// Agent is the adapter's name. It is empty when the refusal was raised by
+	// a caller holding a declaration rather than an adapter, which is what
+	// building a topology against a Capabilities is.
+	Agent string
+	// Capability is the one that was needed and not declared.
+	Capability Capability
+	// Path names what was refused, in the refusing package's own words, such
+	// as a stage name or "the fixer session".
+	Path string
+}
+
+// Error names the path, the capability, and the adapter where one is known.
+func (e *CapabilityError) Error() string {
+	var b strings.Builder
+	b.WriteString("agents: ")
+	if e.Path != "" {
+		b.WriteString(e.Path + " needs ")
+	} else {
+		b.WriteString("a path needs ")
+	}
+	b.WriteString(string(e.Capability))
+	if e.Agent != "" {
+		b.WriteString(", which " + e.Agent + " has not declared")
+	} else {
+		b.WriteString(", which the adapter has not declared")
+	}
+	return b.String()
+}
+
+// Unwrap makes every capability refusal match ErrUndeclaredCapability.
+func (e *CapabilityError) Unwrap() error { return ErrUndeclaredCapability }
+
+// AdapterError reports an adapter whose capability declaration does not match
+// what it is. It is a build defect in this repository rather than something a
+// run can be configured around, and it is reported rather than worked past for
+// the reason ErrAdapterDeclaration states.
+type AdapterError struct {
+	// Agent is the adapter's name.
+	Agent string
+	// Reason says what disagrees, naming the capability.
+	Reason string
+}
+
+// Error names the adapter and what disagrees.
+func (e *AdapterError) Error() string {
+	return "agents: the " + e.Agent + " adapter " + e.Reason
+}
+
+// Unwrap makes every declaration refusal match ErrAdapterDeclaration.
+func (e *AdapterError) Unwrap() error { return ErrAdapterDeclaration }
 
 // invocationFieldError reports one field of an Invocation that cannot be run
 // as written. It wraps ErrInvalidInvocation and names the field.

@@ -94,9 +94,9 @@
 //
 // It is not a second executor and it holds no state of a run. It also puts no
 // interface of its own between a caller and agents.Runner: Agent.Runner hands
-// back the adapter's own Runner, so whatever that interface later declares
-// about itself, a capability set among it, reaches callers through this
-// package unchanged.
+// back the adapter's own Runner, so whatever that interface declares about
+// itself, its capability set among that, reaches callers through this package
+// unchanged.
 //
 // It is not a model of any agent's behavior. It answers what it was scripted
 // to answer and nothing else; an invocation no step matches exits with

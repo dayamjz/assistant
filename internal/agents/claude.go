@@ -169,6 +169,26 @@ type claudeRunner struct {
 // Name returns "claude".
 func (r *claudeRunner) Name() string { return ClaudeName }
 
+// Capabilities is what this adapter declares.
+//
+// Resumable sessions are declared because the mechanism is here: a fixer's
+// rounds after the first carry --resume with the session identifier the
+// envelope reported, which arguments and invoke build, and the Fixer method
+// below is what makes that reachable. PRD section 12 chose this adapter for
+// phase one partly for it, so the fixer-session path is real rather than
+// stubbed.
+//
+// Instruction suppression is not declared, because nothing here implements it.
+// This adapter carries a configured entry's own flags and the four the run
+// manages, and none of those tells Claude Code to ignore a repository's
+// instruction files. Declaring it would buy a run that suppresses nothing
+// while reporting that it did, which is the substitution PRD section 8 refuses.
+// Leaving it undeclared is what lets internal/pipeline refuse a run that asks
+// for suppression against this adapter before it launches one.
+func (r *claudeRunner) Capabilities() Capabilities {
+	return Declare(CapabilityResumableSessions)
+}
+
 // Run executes one invocation with no session. It resumes nothing, and the
 // session the agent opens for itself is not kept, so a record it produces
 // always reads SessionNone whatever its purpose.
@@ -182,6 +202,10 @@ func (r *claudeRunner) Run(ctx context.Context, purpose Purpose, inv Invocation)
 
 // Fixer opens the run's durable fixer session. resume is empty for a new one,
 // or the reference a previous Fixer reported.
+//
+// Having this method is what makes this adapter a SessionRunner, and
+// Capabilities declares the same fact. Resolve refuses an adapter where the
+// two disagree, so the pair cannot drift apart unnoticed.
 func (r *claudeRunner) Fixer(ctx context.Context, resume string) (Fixer, error) {
 	_ = ctx
 	return &claudeFixer{runner: r, reference: resume}, nil

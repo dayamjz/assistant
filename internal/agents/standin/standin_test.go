@@ -234,7 +234,7 @@ func TestAdapterReadsBackEveryStatedField(t *testing.T) {
 	}
 	// The session the envelope states reaches the adapter too, and a Fixer is
 	// where that is observable.
-	fixer, err := agent.Runner().Fixer(t.Context(), "")
+	fixer, err := agents.OpenFixer(t.Context(), agent.Runner(), "")
 	if err != nil {
 		t.Fatalf("opening a fixer: %v", err)
 	}
@@ -295,7 +295,7 @@ func TestReviewCarriesNoSessionAndAFixerRoundDoes(t *testing.T) {
 	if _, err := runner.Run(t.Context(), agents.PurposeReview, invocation(t, agents.ShapeText)); err != nil {
 		t.Fatalf("running a review: %v", err)
 	}
-	fixer, err := runner.Fixer(t.Context(), "")
+	fixer, err := agents.OpenFixer(t.Context(), runner, "")
 	if err != nil {
 		t.Fatalf("opening a fixer: %v", err)
 	}
@@ -329,7 +329,7 @@ func TestAnEnvelopeReportingNoSessionLeavesTheFixerNothing(t *testing.T) {
 	reply.Envelope.Session = NoSession()
 	agent := New(t, oneStep(reply))
 
-	fixer, err := agent.Runner().Fixer(t.Context(), "")
+	fixer, err := agents.OpenFixer(t.Context(), agent.Runner(), "")
 	if err != nil {
 		t.Fatalf("opening a fixer: %v", err)
 	}
@@ -460,7 +460,7 @@ func TestMatchSelectsByPromptAndBySession(t *testing.T) {
 		t.Errorf("the review invocation was answered %q, want %q", result.Text, "anything else")
 	}
 
-	fixer, err := runner.Fixer(t.Context(), "an-earlier-session")
+	fixer, err := agents.OpenFixer(t.Context(), runner, "an-earlier-session")
 	if err != nil {
 		t.Fatalf("opening a fixer: %v", err)
 	}

@@ -32,8 +32,10 @@ type Config struct {
 	// unique across the list.
 	DocumentOwnership []Ownership
 	// SuppressProjectInstructions asks every agent to ignore the repository's
-	// own instruction files. Whether an agent has a verified mechanism for
-	// that is checked by the caller that launches it, not here.
+	// own instruction files. Whether the resolved agent has a mechanism for
+	// that is not decided here: internal/pipeline refuses to build a run that
+	// asks for it against an adapter that has not declared the capability,
+	// which is before any agent is launched.
 	SuppressProjectInstructions bool
 	// NoCI is a positive declaration that the repository has no checks. Only
 	// this makes an empty check list count as green.

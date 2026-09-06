@@ -26,8 +26,9 @@ cannot be verified. The sixth is `internal/store`, the durable record of what
 the gate did: an embedded sqlite database behind typed accessors, with additive
 migrations checked against the database's own catalog. The seventh is
 `internal/agents`, the only package that starts an agent process: the separate
-reviewing and fixing roles, the Claude Code adapter, ordered fallback
-resolution, and a record of what each invocation cost. The eighth is
+reviewing and fixing roles, the capabilities an adapter declares and is held
+to, the Claude Code adapter, ordered fallback resolution, and a record of what
+each invocation cost. The eighth is
 `internal/forge`, the only package that talks to a code host: the provider
 interface over pull requests, mergeability, and checks, a GitHub adapter over
 the `gh` command line, and a checks model in which an empty check list is not a
@@ -41,9 +42,10 @@ every operation obtains its gate from, so no operation can skip the ownership
 question that an index in `internal/store` answers. The eleventh is
 `internal/pipeline`, the nine delivery-gate stages as a graph over the
 execution engine: the contract one stage implements, the fixed order carried as
-nine named fields rather than a list, the state schema as one key table, and
-the fix loop with its halt points and its three bounds. It defines a topology
-and executes nothing. The twelfth is `internal/scope`, the review stage's scope
+nine named fields rather than a list, the state schema as one key table, the
+refusal of a path the resolved adapter has not declared, and the fix loop with
+its halt points and its three bounds. It defines a topology and executes
+nothing. The twelfth is `internal/scope`, the review stage's scope
 lens rather than a tenth stage: the guidance that asks a reviewer to trace every
 path a change touched back to the recorded intent, and the notes an untraced
 path becomes. It ships on and no configuration key turns it off, and what it
@@ -80,7 +82,7 @@ working as it always did.
 | --- | --- |
 | `cmd/assistant` | The binary. Not written yet, so `make build` has nothing to build. |
 | `cmd/fixture` | Builds the fixture repository into a directory you name. `scripts/build-fixture.sh DIR` runs it. |
-| `internal/agents` | The only package that starts an agent process: the run and fix roles, the Claude Code adapter, fallback resolution, and invocation records. |
+| `internal/agents` | The only package that starts an agent process: the run and fix roles, the capability declaration every adapter is held to, the Claude Code adapter, fallback resolution, and invocation records. |
 | `internal/agents/standin` | The scripted agent the tests outside `internal/agents` run against: the test binary re-executed as the agent process, read by the production adapter. |
 | `internal/config` | The configuration schema: layers, defaults, merge, validation, path matcher. |
 | `internal/findings` | The stage vocabulary: findings, actions, reports, and parsing of agent output. |
@@ -89,7 +91,7 @@ working as it always did.
 | `internal/gate` | The local bare repository a push is validated through: where it lives, its two hooks, its identity across a move or a copy, and the ownership question every operation asks before it adopts or deletes one. |
 | `internal/graph` | The execution engine: nodes, edges, bounds, halt points, checkpoints. |
 | `internal/ipc` | The local protocol between the command line and the background service: the method table, the event taxonomy, the bounded stream, the client and the server, and peer identification. |
-| `internal/pipeline` | The nine stages as a graph definition over `internal/graph`: the stage contract, the fixed order, the state key table, the fix loop, and its halt points and bounds. |
+| `internal/pipeline` | The nine stages as a graph definition over `internal/graph`: the stage contract, the fixed order, the state key table, the capabilities a path needs of the adapter, the fix loop, and its halt points and bounds. |
 | `internal/safety` | The data-loss policy over git: whether a branch update may proceed, on what anchor, and when to refuse. |
 | `internal/scope` | The review stage's scope lens, not a tenth stage: the guidance a reviewer traces each touched path against, and the note an untraced path becomes. |
 | `internal/store` | The only package that opens the database: the schema, its additive migrations, and typed accessors for repositories, runs, stages, rounds, checkpoints, tasks, task state and events, holds, and the gate ownership index. |

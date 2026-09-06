@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/graph"
 )
@@ -56,6 +57,24 @@ type Options struct {
 	// checked by the graph when an executor is built, and recorded on a run
 	// when it starts, which is what holds the run to it across a resume.
 	Budget int
+	// Adapter is what the resolved agent adapter declared it supports, which
+	// is agents.Resolution.Capabilities. A path this pipeline would build that
+	// needs a capability absent from it refuses New, naming the path and the
+	// capability, per PRD section 8.
+	//
+	// The zero value declares nothing, which is the same answer an adapter
+	// that says nothing gets: undeclared means unavailable. A pipeline whose
+	// paths need nothing therefore builds against it, and one whose paths need
+	// anything does not.
+	Adapter agents.Capabilities
+	// SuppressProjectInstructions is config.Config.SuppressProjectInstructions:
+	// every agent is to ignore the repository's own instruction files. It is
+	// here rather than left to a stage's own Requires because PRD section 10
+	// makes it a property of the run - if any resolved agent lacks a verified
+	// suppression mechanism the run fails before launching it - so no stage may
+	// decline to need it, and no adapter this build ships declares the
+	// capability today.
+	SuppressProjectInstructions bool
 }
 
 // Pipeline is the built topology: the nine stages, their halt points, their
@@ -100,6 +119,14 @@ func New(o Options) (*Pipeline, error) {
 		if err := checkDeclared("the fixer", "writes", o.Fixer.Writes, declaredFixerWrites); err != nil {
 			return nil, err
 		}
+	}
+	// What the adapter can do is settled before a node is built, which is what
+	// PRD section 8 means by refusing a path before that adapter is launched.
+	// A pipeline that would build a path the adapter has not declared is not
+	// built at all, so there is no run that could reach one and no weaker path
+	// standing in for it.
+	if err := checkRequirements(o, fixing); err != nil {
+		return nil, err
 	}
 
 	b := graph.NewBuilder().Start(StageIntent.Node())
