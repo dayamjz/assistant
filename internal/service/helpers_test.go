@@ -1,0 +1,324 @@
+package service_test
+
+import (
+	"context"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/dayamjz/assistant/internal/agents"
+	"github.com/dayamjz/assistant/internal/agents/standin"
+	"github.com/dayamjz/assistant/internal/home"
+	"github.com/dayamjz/assistant/internal/ipc"
+	"github.com/dayamjz/assistant/internal/machine"
+	"github.com/dayamjz/assistant/internal/pipeline"
+	"github.com/dayamjz/assistant/internal/redact"
+	"github.com/dayamjz/assistant/internal/service"
+	"github.com/dayamjz/assistant/internal/stages"
+	"github.com/dayamjz/assistant/internal/store"
+)
+
+// TestMain lets this binary act as the stand-in agent. The service resolves an
+// agent before it can start a run, and a test that reached the operator's real
+// agent would be running whatever happens to be installed.
+func TestMain(m *testing.M) {
+	standin.Main()
+	os.Exit(m.Run())
+}
+
+// platformIdentifiesPeers reports whether internal/ipc has a read for local
+// socket peer credentials here. It is written down rather than derived,
+// exactly as that package's own tests write it down, so a skip cannot hide a
+// regression on a platform that does identify peers.
+func platformIdentifiesPeers() bool {
+	return runtime.GOOS == "linux" || runtime.GOOS == "darwin"
+}
+
+// requiresLocalSocket skips a test whose service could not bind its socket on
+// a platform that has no local socket transport to serve this protocol over.
+// It is the same answer internal/ipc's own tests give, and it is bounded the
+// same way: a platform that does identify peers is one where a failure to
+// bind is a failure.
+func requiresLocalSocket(t *testing.T, cause error) {
+	t.Helper()
+	if !platformIdentifiesPeers() {
+		t.Skipf("%s has no local socket transport to serve this protocol over: %v", runtime.GOOS, cause)
+	}
+}
+
+// requiresIdentifiedPeer skips a test that drives a run. Starting, answering,
+// cancelling and stopping are restricted methods, and internal/ipc refuses
+// every one of them when the kernel cannot say who is calling.
+func requiresIdentifiedPeer(t *testing.T) {
+	t.Helper()
+	if !platformIdentifiesPeers() {
+		t.Skipf("%s reports no local socket peer credentials, so every method that drives a run is refused", runtime.GOOS)
+	}
+}
+
+// newHome returns a home root short enough to hold a local socket path. The
+// operating system bounds that path well below what a temporary directory
+// named after a test would produce, so this does not use t.TempDir.
+func newHome(t *testing.T) *home.Home {
+	t.Helper()
+	root, err := os.MkdirTemp("", "h")
+	if err != nil {
+		t.Fatalf("making a home root: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(root) })
+	h, err := home.Open(root)
+	if err != nil {
+		t.Fatalf("opening the home: %v", err)
+	}
+	return h
+}
+
+// git runs a git command in a directory, for building the subject repository a
+// run validates. It shells out on the same terms internal/vcs's and
+// internal/gate's own tests do: a working copy assembled with the code under
+// test could not show that code wrong.
+func git(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(),
+		"GIT_CONFIG_GLOBAL="+filepath.Join(dir, ".gitconfig-absent"),
+		"GIT_CONFIG_SYSTEM="+filepath.Join(dir, ".gitconfig-absent"),
+		"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@example.invalid",
+		"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@example.invalid",
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s in %s: %v\n%s", strings.Join(args, " "), dir, err, out)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// newSubject returns a working copy with one commit on its default branch.
+func newSubject(t *testing.T) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "s")
+	if err != nil {
+		t.Fatalf("making a subject repository: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	git(t, dir, "init", "--quiet", "-b", "main", ".")
+	if err := os.WriteFile(filepath.Join(dir, "file.txt"), []byte("hello\n"), 0o600); err != nil {
+		t.Fatalf("writing a file: %v", err)
+	}
+	git(t, dir, "add", "-A")
+	git(t, dir, "commit", "--quiet", "-m", "first")
+	// The path a repository record is filed under is the resolved one, which
+	// is what the service compares against.
+	resolved, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatalf("resolving the subject path: %v", err)
+	}
+	return resolved
+}
+
+// recordRepository writes the repository record a run needs, which assistant
+// init writes in the product.
+func recordRepository(t *testing.T, h *home.Home, workingPath string) store.Repository {
+	t.Helper()
+	if err := h.Create(); err != nil {
+		t.Fatalf("creating the home: %v", err)
+	}
+	records, err := store.Open(t.Context(), h.Database(), store.WithRedactor(redact.New()))
+	if err != nil {
+		t.Fatalf("opening the store: %v", err)
+	}
+	defer func() { _ = records.Close() }()
+	repository, err := records.UpsertRepository(t.Context(), store.Repository{
+		ID:            "subject",
+		WorkingPath:   workingPath,
+		UpstreamURL:   "https://example.invalid/o/r.git",
+		DefaultBranch: "main",
+	})
+	if err != nil {
+		t.Fatalf("recording the repository: %v", err)
+	}
+	return repository
+}
+
+// scriptedAgent is a catalog holding the scripted stand-in under the name the
+// production adapter carries, so a service resolving "auto" reaches it.
+func scriptedAgent(t *testing.T) *agents.Catalog {
+	t.Helper()
+	runner := standin.New(t, standin.Script{}).Runner()
+	return agents.NewCatalog(fixedFactory{runner: runner})
+}
+
+// fixedFactory hands back a Runner somebody else built. It builds no Runner of
+// its own, so nothing here can produce an adapter the production path could
+// not.
+type fixedFactory struct{ runner agents.Runner }
+
+func (f fixedFactory) Name() string { return f.runner.Name() }
+
+func (f fixedFactory) New(context.Context, []string) (agents.Runner, error) { return f.runner, nil }
+
+// options is what a test opens a service with: the pending stages the product
+// wires, the scripted agent, and this build's identity.
+func options(t *testing.T, h *home.Home) service.Options {
+	t.Helper()
+	build, err := store.CurrentBuild()
+	if err != nil {
+		t.Fatalf("reading this build's identity: %v", err)
+	}
+	return service.Options{
+		Home:     h,
+		Stages:   stages.All(),
+		NewFixer: stages.PendingFixer,
+		Build:    build,
+		Catalog:  scriptedAgent(t),
+	}
+}
+
+// dial connects to a service's socket.
+func dial(t *testing.T, running *service.Service) *ipc.Client {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	client, err := ipc.Dial(ctx, running.Socket(), ipc.ClientConfig{})
+	if err != nil {
+		t.Fatalf("dialing %s: %v", running.Socket(), err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	return client
+}
+
+// startRun starts or attaches to the run for a working copy and returns where
+// it stopped.
+func startRun(t *testing.T, client *ipc.Client, workingPath string) machine.Run {
+	t.Helper()
+	var run machine.Run
+	err := client.Call(t.Context(), ipc.MethodRunStart, machine.StartRequest{
+		Working: machine.Working{WorkingPath: workingPath},
+		Intent:  "a change with acceptance criteria stated up front",
+	}, &run)
+	if err != nil {
+		t.Fatalf("starting a run: %v", err)
+	}
+	return run
+}
+
+// answer answers the decision a run is holding on.
+func answer(t *testing.T, client *ipc.Client, runID, with string) machine.Run {
+	t.Helper()
+	var run machine.Run
+	err := client.Call(t.Context(), ipc.MethodRunRespond, machine.RespondRequest{Run: runID, Answer: with}, &run)
+	if err != nil {
+		t.Fatalf("answering run %s with %q: %v", runID, with, err)
+	}
+	return run
+}
+
+// holdingAt asserts that a run is waiting for a decision at one stage's hold,
+// and returns the decision.
+func holdingAt(t *testing.T, run machine.Run, stage pipeline.Stage) machine.Decision {
+	t.Helper()
+	if run.Outcome != machine.OutcomeDecision {
+		t.Fatalf("the run reports %s, want a decision", run.Outcome)
+	}
+	if run.Decision == nil {
+		t.Fatal("the run reports a decision and carries none")
+	}
+	if run.Decision.Stage != stage.String() {
+		t.Fatalf("the run is holding at %s, want %s", run.Decision.Stage, stage)
+	}
+	return *run.Decision
+}
+
+// serviceUnderTest is a running service and a connection to it.
+type serviceUnderTest struct {
+	service *service.Service
+	client  *ipc.Client
+}
+
+// withService opens a service, hands it to the body with a connection, and
+// closes it before returning.
+//
+// Closing rather than leaving it to the test's cleanup is the point: a test
+// that calls this twice has the first service gone before the second opens, so
+// the second holds the home's lock and reads the run's position out of the
+// database rather than out of anything the first left in memory.
+func withService(t *testing.T, h *home.Home, body func(serviceUnderTest)) {
+	t.Helper()
+	running, err := service.Open(t.Context(), options(t, h))
+	if err != nil {
+		requiresLocalSocket(t, err)
+		t.Fatalf("opening the service: %v", err)
+	}
+	served := make(chan error, 1)
+	go func() { served <- running.Serve(context.Background()) }()
+
+	client, dialErr := ipc.Dial(t.Context(), running.Socket(), ipc.ClientConfig{})
+	if dialErr != nil {
+		_ = running.Close()
+		<-served
+		t.Fatalf("dialing %s: %v", running.Socket(), dialErr)
+	}
+	func() {
+		defer func() {
+			_ = client.Close()
+			if err := running.Close(); err != nil {
+				t.Errorf("closing the service: %v", err)
+			}
+			if err := <-served; err != nil {
+				t.Errorf("serving: %v", err)
+			}
+		}()
+		body(serviceUnderTest{service: running, client: client})
+	}()
+}
+
+// serviceWithClient opens a service the test closes itself, for a test whose
+// subject is the stopping.
+func serviceWithClient(t *testing.T, h *home.Home) (serviceUnderTest, error) {
+	t.Helper()
+	running, err := service.Open(t.Context(), options(t, h))
+	if err != nil {
+		return serviceUnderTest{}, err
+	}
+	served := make(chan error, 1)
+	go func() { served <- running.Serve(context.Background()) }()
+	t.Cleanup(func() {
+		_ = running.Close()
+		if err := <-served; err != nil {
+			t.Errorf("serving: %v", err)
+		}
+	})
+	client, err := ipc.Dial(t.Context(), running.Socket(), ipc.ClientConfig{})
+	if err != nil {
+		return serviceUnderTest{}, err
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	return serviceUnderTest{service: running, client: client}, nil
+}
+
+// openRecords opens a home's database directly, for a test that has to put a
+// record where a service that died would have left it.
+func openRecords(t *testing.T, h *home.Home) *store.Store {
+	t.Helper()
+	records, err := store.Open(t.Context(), h.Database(), store.WithRedactor(redact.New()))
+	if err != nil {
+		t.Fatalf("opening the store: %v", err)
+	}
+	return records
+}
+
+// startRunErr starts a run and returns whatever happened, for a test whose
+// subject is whether it was refused.
+func startRunErr(t *testing.T, client *ipc.Client, workingPath string) (machine.Run, error) {
+	t.Helper()
+	var run machine.Run
+	err := client.Call(t.Context(), ipc.MethodRunStart, machine.StartRequest{
+		Working: machine.Working{WorkingPath: workingPath},
+	}, &run)
+	return run, err
+}

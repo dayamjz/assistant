@@ -544,7 +544,7 @@ func TestAGateWhoseRepositoryIsGoneIsNotReportedAsReattached(t *testing.T) {
 	if got, want := refs(t, again.Repository()), []string{"refs/heads/main " + head}; !equal(got, want) {
 		t.Fatalf("the new gate holds %v, want %v", got, want)
 	}
-	if err := gate.Remove(ctx(t), gate.Spec{Home: home, WorkingPath: moved.path}, opts(gate.WithOpener(detachingOpener))...); err != nil {
+	if err := gate.Remove(ctx(t), gate.Spec{Home: home, WorkingPath: moved.path}, opts()...); err != nil {
 		t.Fatalf("Remove a gate this package created from nothing: %v", err)
 	}
 }
@@ -599,7 +599,7 @@ func TestAWorkingCopyThatMovesAwayAndBackKeepsItsGate(t *testing.T) {
 		t.Fatalf("the gate holds %v, want its history %v", got, want)
 	}
 
-	if err := gate.Remove(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path}, opts(gate.WithOpener(detachingOpener))...); err != nil {
+	if err := gate.Remove(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path}, opts()...); err != nil {
 		t.Fatalf("Remove from the working copy the gate is named for: %v", err)
 	}
 	if _, err := os.Stat(original.Repository()); !os.IsNotExist(err) {
@@ -664,7 +664,7 @@ func TestAProjectOnAFreedPathTakesTheGateThatPathHashesTo(t *testing.T) {
 				t.Fatalf("the project got %q, not the gate its path hashes to at %q",
 					took.Repository(), original.Repository())
 			}
-			if err := gate.Remove(ctx(t), gate.Spec{Home: home, WorkingPath: fresh}, opts(gate.WithOpener(detachingOpener))...); err != nil {
+			if err := gate.Remove(ctx(t), gate.Spec{Home: home, WorkingPath: fresh}, opts()...); err != nil {
 				t.Fatalf("Remove from the project on the freed path: %v", err)
 			}
 		})

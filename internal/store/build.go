@@ -17,15 +17,15 @@ import (
 type Build struct {
 	// Version is the module version, such as a tag, or "(devel)" for a build
 	// from a working copy.
-	Version string
+	Version string `json:"version"`
 	// Revision is the source control revision the binary was built from.
-	Revision string
+	Revision string `json:"revision"`
 	// Modified reports that the working copy had uncommitted changes at build
 	// time, so Revision names the commit the build started from rather than
 	// what it contains.
-	Modified bool
+	Modified bool `json:"modified"`
 	// Go is the Go toolchain version.
-	Go string
+	Go string `json:"go"`
 }
 
 // ErrBuildUnidentified is returned by CurrentBuild when the running binary

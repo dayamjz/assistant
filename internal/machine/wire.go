@@ -1,0 +1,261 @@
+package machine
+
+import (
+	"github.com/dayamjz/assistant/internal/findings"
+	"github.com/dayamjz/assistant/internal/graph"
+	"github.com/dayamjz/assistant/internal/pipeline"
+	"github.com/dayamjz/assistant/internal/store"
+)
+
+// Health is the answer to a readiness check. PRD section 8 makes launch and
+// readiness different states and says only a real answer to this proves the
+// second, so a caller that wants to know whether the service is up asks for
+// one of these rather than looking for a process.
+type Health struct {
+	// Ready is true in every Health a service returns. It is a field rather
+	// than an implied true so that a caller decoding an answer into a zero
+	// value does not read the zero as ready.
+	Ready bool `json:"ready"`
+	// Home is the home root the service owns.
+	Home string `json:"home"`
+	// Build is the software answering, which PRD section 8 requires every run
+	// to be traceable to.
+	Build store.Build `json:"build"`
+}
+
+// Service is what is known about the background service. It is reported by a
+// command that ran whether or not the service answered, so the failure to
+// reach one is a field rather than an error that replaces the whole report.
+type Service struct {
+	// Running is whether the service answered a readiness check.
+	Running bool `json:"running"`
+	// Socket is the endpoint that was tried.
+	Socket string `json:"socket"`
+	// Detail says why the service did not answer, and is empty when it did.
+	Detail string `json:"detail,omitempty"`
+	// Build is the software the service is running, known only when it
+	// answered.
+	Build *store.Build `json:"build,omitempty"`
+}
+
+// Gate is what is known about a working copy's gate: the local bare repository
+// a push is validated through. internal/gate owns whether one exists and what
+// it is; this carries that answer.
+type Gate struct {
+	// Present is whether the working copy is bound to a gate this home knows.
+	Present bool `json:"present"`
+	// ID is the gate's identifier, empty when there is none.
+	ID string `json:"id,omitempty"`
+	// Repository is the path of the bare repository, empty when there is none.
+	Repository string `json:"repository,omitempty"`
+	// Detail says what is wrong when a gate was expected and not found.
+	Detail string `json:"detail,omitempty"`
+}
+
+// Branch is the state of the working copy the command was run in.
+type Branch struct {
+	// WorkingPath is the root of the working copy.
+	WorkingPath string `json:"working_path"`
+	// Name is the branch checked out there, empty on a detached head.
+	Name string `json:"name,omitempty"`
+	// Head is the commit that branch stands at.
+	Head string `json:"head,omitempty"`
+	// Detail says why the branch could not be read, and is empty when it was.
+	Detail string `json:"detail,omitempty"`
+}
+
+// Status is what assistant status reports: repository, gate, service, active
+// run, and local branch state, which is PRD section 9's list for that command.
+//
+// Every part of it is a pointer or carries its own detail, because a status
+// that cannot report one part still reports the rest. A status that failed
+// wholesale is an error rather than one of these.
+type Status struct {
+	// Home is the home root this command is acting on.
+	Home string `json:"home"`
+	// Service is what is known about the background service.
+	Service Service `json:"service"`
+	// Repository is the repository record, absent when this working copy has
+	// none because it was never initialized.
+	Repository *store.Repository `json:"repository,omitempty"`
+	// Gate is what is known about this working copy's gate.
+	Gate *Gate `json:"gate,omitempty"`
+	// Branch is the local branch state.
+	Branch *Branch `json:"branch,omitempty"`
+	// ActiveRun is the run this branch has in flight, absent when it has none.
+	ActiveRun *Run `json:"active_run,omitempty"`
+	// Detail names what could not be reported and why, and is empty when
+	// everything was.
+	Detail string `json:"detail,omitempty"`
+}
+
+// Decision is a halted run's open question, with the findings that produced it
+// carried verbatim.
+//
+// PRD section 9 requires a finding that needs a decision to be relayed with its
+// full text, unsummarized and unjudged, so Findings holds what the stage
+// reported and nothing here trims, ranks, or rewrites it.
+type Decision struct {
+	// Decision is the halt point's own declaration: the node, the question,
+	// the options, and the state key the answer is written to.
+	graph.Decision
+	// Stage is the stage holding, when the halt point is one of the nine
+	// stages' holds. It is empty for a halt point that is not a stage's.
+	Stage string `json:"stage,omitempty"`
+	// Findings is what that stage reported, exactly as it reported it.
+	Findings []findings.Finding `json:"findings,omitempty"`
+}
+
+// Stage is what became of one stage of one run.
+type Stage struct {
+	// Stage is the stage's name.
+	Stage string `json:"stage"`
+	// Outcome is what became of it, which is pipeline's vocabulary.
+	Outcome pipeline.Outcome `json:"outcome"`
+	// Ran is whether the stage's body ran, which its outcome alone cannot say:
+	// a skipped stage and one a person skipped past at its hold share an
+	// outcome and differ here.
+	Ran bool `json:"ran"`
+	// Report is what the stage reported, absent for a stage that never ran.
+	Report *findings.Report `json:"report,omitempty"`
+	// Fix is the summary the last fix round of this stage wrote, empty when
+	// there was none.
+	Fix string `json:"fix,omitempty"`
+}
+
+// Run is one run as a surface reports it: the record, where its execution
+// stands, and what to do about it.
+type Run struct {
+	// Record is the authoritative run record, which internal/store owns.
+	Record store.Run `json:"record"`
+	// Outcome is what a driving agent reads to decide what to do next.
+	Outcome Outcome `json:"outcome"`
+	// NextAction is what to do about that outcome, which PRD section 9
+	// requires a terminal one to carry.
+	NextAction string `json:"next_action"`
+	// Progress is where the run's execution stood at its last checkpoint. It
+	// is absent for a run that has not been executed yet, which is a different
+	// state from a run that has and is standing still.
+	Progress *graph.Status `json:"progress,omitempty"`
+	// Position is the node that has not run, empty exactly when the run
+	// completed.
+	Position string `json:"position,omitempty"`
+	// Reason explains a parked run, and is empty otherwise.
+	Reason string `json:"reason,omitempty"`
+	// Steps is how many node executions the run has spent.
+	Steps int `json:"steps"`
+	// Budget is the run-wide step budget it is being held to.
+	Budget int `json:"budget"`
+	// Decision is the open question, present exactly when the run is waiting
+	// on an answer.
+	Decision *Decision `json:"decision,omitempty"`
+	// Stages is what became of each of the nine, in the order a run takes
+	// them.
+	Stages []Stage `json:"stages,omitempty"`
+}
+
+// Runs is the answer to a request for recent runs, newest first.
+type Runs struct {
+	// Runs are the records, newest first.
+	Runs []store.Run `json:"runs"`
+}
+
+// Task is one piece of fleet work with its resolved current state. PRD
+// section 8 makes the resolved state a record of its own, distinct from the
+// append-only event log, per P8; this carries both records rather than
+// deriving one from the other.
+type Task struct {
+	// Record is the task record.
+	Record store.Task `json:"record"`
+	// State is the authoritative resolved current state.
+	State store.TaskState `json:"state"`
+}
+
+// Tasks is the answer to a request for fleet work.
+type Tasks struct {
+	// Tasks are the records with their resolved states.
+	Tasks []Task `json:"tasks"`
+}
+
+// Lifecycle is the answer to a request that stops or restarts the service.
+//
+// PRD section 9 makes both refuse while runs are active, listing the affected
+// runs and requiring an explicit force flag, so a refusal is one of these with
+// Accepted false and Active naming them rather than an error with a sentence
+// in it.
+type Lifecycle struct {
+	// Accepted is whether the service is acting on the request.
+	Accepted bool `json:"accepted"`
+	// Restarting is whether it will come back.
+	Restarting bool `json:"restarting"`
+	// Active are the runs that made this refuse, empty when it was accepted.
+	Active []store.Run `json:"active,omitempty"`
+	// Detail says why it refused, and is empty when it did not.
+	Detail string `json:"detail,omitempty"`
+}
+
+// Init is the answer to creating or repairing a gate.
+type Init struct {
+	// Gate is the gate as it now stands.
+	Gate Gate `json:"gate"`
+	// Reattached is whether an existing gate was adopted rather than created,
+	// which internal/gate answers and which a person wants to know because it
+	// says whether the run history under this working copy carried over.
+	Reattached bool `json:"reattached"`
+	// Repository is the repository record as it now stands.
+	Repository store.Repository `json:"repository"`
+}
+
+// Eject is the answer to removing a gate and its records.
+type Eject struct {
+	// Removed is whether the gate and the records were removed.
+	Removed bool `json:"removed"`
+	// Repository is the identifier of the repository that was forgotten.
+	Repository string `json:"repository,omitempty"`
+	// Runs is how many run records were removed with it.
+	Runs int `json:"runs"`
+}
+
+// Check is one thing assistant doctor looked at.
+type Check struct {
+	// Name is what was checked.
+	Name string `json:"name"`
+	// OK is whether it is in a state a run could proceed from.
+	OK bool `json:"ok"`
+	// Detail is what was found, present whether or not it is in that state, so
+	// a passing check still says what it found rather than only that it
+	// passed.
+	Detail string `json:"detail,omitempty"`
+	// Blocking is whether this check being not OK is on its own enough to stop
+	// a run from starting. A check that is not blocking is reported and does
+	// not decide.
+	Blocking bool `json:"blocking"`
+}
+
+// Doctor is what assistant doctor reports. PRD section 9 asks it to check
+// every dependency and decide whether a run can start at all, so the decision
+// is a field rather than something a reader infers from the list.
+type Doctor struct {
+	// Checks is everything that was looked at, in the order it was looked at.
+	Checks []Check `json:"checks"`
+	// CanStartRun is the decision: whether a run can start at all.
+	CanStartRun bool `json:"can_start_run"`
+	// Detail says what stops one, and is empty when nothing does.
+	Detail string `json:"detail,omitempty"`
+}
+
+// Plan is what a command that changes the working copy will do, printed before
+// it does any of it.
+//
+// PRD section 9 makes assistant sync print the exact plan and require
+// confirmation, which is what this is for: the plan is produced, shown, and
+// only then carried out.
+type Plan struct {
+	// Steps are what would happen, in order.
+	Steps []string `json:"steps"`
+	// Applied is whether they were carried out, which is false for a plan that
+	// was printed and not confirmed.
+	Applied bool `json:"applied"`
+	// Detail says why nothing was done, and is empty when something was.
+	Detail string `json:"detail,omitempty"`
+}

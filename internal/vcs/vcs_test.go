@@ -897,3 +897,88 @@ func TestInitBareOverAnOccupiedPathSaysWhyItRefused(t *testing.T) {
 		t.Errorf("InitBare on a free path = %v; want it to succeed", err)
 	}
 }
+
+func TestWorkingRootIsTheRootWhicheverDirectoryTheHandleAddresses(t *testing.T) {
+	gitEnvironment(t)
+	c := ctx(t)
+	source, _, _ := sourceRepo(t)
+
+	nested := filepath.Join(source, "nested", "deeper")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatalf("making a subdirectory: %v", err)
+	}
+	repo, err := vcs.OpenWorktree(c, nested)
+	if err != nil {
+		t.Fatalf("OpenWorktree on a subdirectory: %v", err)
+	}
+	if repo.Path() == source {
+		t.Fatalf("the handle already addresses the root, so this proves nothing")
+	}
+	root, err := repo.WorkingRoot(c)
+	if err != nil {
+		t.Fatalf("WorkingRoot: %v", err)
+	}
+	if !sameFile(root, source) {
+		t.Fatalf("WorkingRoot = %q, want the working copy root %q", root, source)
+	}
+}
+
+func TestWorkingRootRefusesABareRepository(t *testing.T) {
+	gitEnvironment(t)
+	c := ctx(t)
+	bare, err := vcs.InitBare(c, filepath.Join(t.TempDir(), "gate.git"))
+	if err != nil {
+		t.Fatalf("InitBare: %v", err)
+	}
+	if _, err := bare.WorkingRoot(c); !errors.Is(err, vcs.ErrNotARepository) {
+		t.Fatalf("WorkingRoot on a bare repository = %v, want ErrNotARepository", err)
+	}
+}
+
+func TestRemoveRemoteTakesOnlyTheRemoteItNames(t *testing.T) {
+	gitEnvironment(t)
+	c := ctx(t)
+	source, _, _ := sourceRepo(t)
+	repo, err := vcs.OpenWorktree(c, source)
+	if err != nil {
+		t.Fatalf("OpenWorktree: %v", err)
+	}
+	if err := repo.SetRemote(c, "origin", "https://example.invalid/origin.git"); err != nil {
+		t.Fatalf("SetRemote origin: %v", err)
+	}
+	if err := repo.SetRemote(c, "assistant", "https://example.invalid/gate.git"); err != nil {
+		t.Fatalf("SetRemote assistant: %v", err)
+	}
+	if err := repo.RemoveRemote(c, "assistant"); err != nil {
+		t.Fatalf("RemoveRemote: %v", err)
+	}
+	if _, err := repo.RemoteURL(c, "assistant"); !errors.Is(err, vcs.ErrRemoteNotFound) {
+		t.Fatalf("the removed remote reads back as %v, want ErrRemoteNotFound", err)
+	}
+	// PRD principle P1 makes an untouched origin the consent boundary, so a
+	// removal that reached it would be the failure this operation exists not
+	// to cause.
+	url, err := repo.RemoteURL(c, "origin")
+	if err != nil || url != "https://example.invalid/origin.git" {
+		t.Fatalf("origin is now (%q, %v), want the URL it was set to", url, err)
+	}
+	// git keeps a remote's fetch refspec beside its URL, and a removal that
+	// left one behind would leave a remote git still half knows about.
+	config, _ := tryRawGit(source, "config", "--local", "--list")
+	if strings.Contains(config, "remote.assistant.") {
+		t.Fatalf("configuration for the removed remote survived:\n%s", config)
+	}
+}
+
+func TestRemovingARemoteThatIsNotThereIsReportedRatherThanCountedAsSuccess(t *testing.T) {
+	gitEnvironment(t)
+	c := ctx(t)
+	source, _, _ := sourceRepo(t)
+	repo, err := vcs.OpenWorktree(c, source)
+	if err != nil {
+		t.Fatalf("OpenWorktree: %v", err)
+	}
+	if err := repo.RemoveRemote(c, "never-existed"); !errors.Is(err, vcs.ErrRemoteNotFound) {
+		t.Fatalf("RemoveRemote of an absent remote = %v, want ErrRemoteNotFound", err)
+	}
+}

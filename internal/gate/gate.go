@@ -78,9 +78,9 @@ type settings struct {
 }
 
 // WithOpener replaces how a working copy is opened. The default opens it with
-// internal/vcs, which is what this product uses. Remove needs an opener whose
-// result satisfies Detacher; see that interface for why the default does not.
-// A nil opener leaves the default in place.
+// internal/vcs, which is what this product uses and whose handle satisfies
+// Detacher, so Remove works through the default. A nil opener leaves the
+// default in place.
 func WithOpener(open Opener) Option {
 	return func(s *settings) {
 		if open != nil {

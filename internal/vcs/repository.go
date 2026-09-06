@@ -3,6 +3,7 @@ package vcs
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -166,6 +167,32 @@ func OpenWorktree(ctx context.Context, path string, opts ...Option) (*Repository
 		return nil, &openError{path: abs, kind: KindWorktree}
 	}
 	return r, nil
+}
+
+// WorkingRoot returns the root of the working copy this handle addresses,
+// which is the directory holding the checked-out tree.
+//
+// A handle opened on a subdirectory addresses that subdirectory, because every
+// other operation here takes revisions and repository-relative paths and so
+// does not care. A caller that has to name the working copy itself does care:
+// PRD section 8 files a gate under a hash of the working copy's path, so a
+// command run from a subdirectory would otherwise ask about a different gate
+// than the same command run from the root.
+//
+// It refuses on a bare repository, which has no working copy to have a root.
+func (r *Repository) WorkingRoot(ctx context.Context) (string, error) {
+	if r.kind != KindWorktree {
+		return "", fmt.Errorf("%w: %s is a bare repository and has no working copy", ErrNotARepository, r.path)
+	}
+	out, err := r.run(ctx, "working-root", "rev-parse", "--show-toplevel")
+	if err != nil {
+		return "", err
+	}
+	root := strings.TrimSpace(string(out))
+	if root == "" {
+		return "", fmt.Errorf("%w: %s reported no working copy root", ErrNotARepository, r.path)
+	}
+	return absolutePath(root)
 }
 
 // isOccupiedByOtherThanABareRepo reports whether path already holds something

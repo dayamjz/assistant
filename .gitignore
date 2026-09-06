@@ -1,7 +1,9 @@
-# Build output
+# Build output. The bare binary is anchored to the repository root: an
+# unanchored "assistant" matches any path component of that name, which is the
+# name of the binary's own source directory.
 /bin/
 /dist/
-assistant
+/assistant
 
 # Go
 *.test

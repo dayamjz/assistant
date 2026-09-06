@@ -10,7 +10,8 @@ until it has been independently reviewed, tested, documented, and linted.
 ## Status
 
 Early. The product requirements are settled and checked in at
-[`docs/prd.html`](docs/prd.html). Sixteen pieces exist so far. The execution
+[`docs/prd.html`](docs/prd.html). Twenty-one pieces exist so far, and the
+binary can be driven. The execution
 engine in `internal/graph` is the first: the graph builder with its
 construction-time checks, an executor with halt points and bounded cycles, and
 checkpoints behind a four-operation store. The second is `internal/findings`,
@@ -82,11 +83,29 @@ both directions, and a test cites by calling `principles.Cite` inside its own
 body, so a comment naming a principle does not count. What it establishes is
 only that no principle goes silently unclaimed; a citation says a test claims to
 check a principle, never that the principle is covered or that it holds. The
-nine stage bodies are separate work against that contract and do not exist yet,
-including the review stage that puts the scope lens in front of a reviewer and
-binds what comes back to what the reviewer declared reading, and neither the
-harness nor the `assistant` binary exists either, so the only thing in here you
-can run is the fixture builder.
+seventeenth is `internal/redact`, the one owner of credential removal. The
+eighteenth is `internal/home`, the one owner of the on-disk layout and of the
+exclusive lock that gives a home exactly one service. The nineteenth is
+`internal/machine`, the shapes a structured answer takes, the three exit codes,
+and the outcome vocabulary a driving agent reads. The twentieth is
+`internal/service`, the background service that holds the home's lock, binds
+the local socket, owns every run that is executing, and answers the protocol.
+The twenty-first is `internal/cli`, the command surface itself: the verbs PRD
+section 9 specifies and no others, rendered for a person or as one structured
+document per invocation.
+
+So `assistant` builds and runs. A run can be started, reported on, answered and
+carried on across separate invocations, with the service restarted in between,
+because the position comes back out of the checkpoint history rather than out
+of the process that reached it.
+
+The nine stage bodies are separate work against the stage contract and do not
+exist yet, including the review stage that puts the scope lens in front of a
+reviewer and binds what comes back to what the reviewer declared reading. Until
+they land, `internal/stages` fills each of the nine with a placeholder that
+validates nothing and holds for a decision, so a run stops at every stage and
+says so rather than reporting a pass it did not establish. The end-to-end
+harness is separate work too.
 
 ## The two promises
 
@@ -110,23 +129,29 @@ working as it always did.
 
 | Path | Contents |
 | --- | --- |
-| `cmd/assistant` | The binary. Not written yet, so `make build` has nothing to build. |
+| `cmd/assistant` | The binary. The process boundary and nothing else: it hands the command surface what it needs and exits with the code that comes back. |
 | `cmd/fixture` | Builds the fixture repository into a directory you name. `scripts/build-fixture.sh DIR` runs it. |
 | `internal/agents` | The only package that starts an agent process: the run and fix roles, the capability declaration every adapter is held to, the Claude Code adapter, fallback resolution, the review shape and the evidence demand it carries, and invocation records. |
 | `internal/agents/standin` | The scripted agent the tests outside `internal/agents` run against: the test binary re-executed as the agent process, read by the production adapter. |
 | `internal/checkpoints` | The durable `graph.CheckpointStore` over `internal/store`: a run's checkpoint history, appends anchored to what the caller observed, and the fork that copies a run's history up to a point into a new run. |
+| `internal/cli` | The command surface: the verbs PRD section 9 specifies, their flags, and the two renderings of one answer. It holds no validation logic. |
 | `internal/config` | The configuration schema: layers, defaults, merge, validation, path matcher. |
 | `internal/findings` | The stage vocabulary: findings, actions, reports, parsing of agent output, and the evidence a review report's findings are bound to. |
 | `internal/fixture` | The adversarial subject repository the end-to-end harness validates against: the seven scenarios, the conditions planted in them, and what each one is expected to produce. |
 | `internal/forge` | The only package that talks to a code host: the provider interface over pull requests, mergeability, and checks, and the GitHub adapter over the `gh` command line. |
 | `internal/gate` | The local bare repository a push is validated through: where it lives, its two hooks, its identity across a move or a copy, and the ownership question every operation asks before it adopts or deletes one. |
 | `internal/graph` | The execution engine: nodes, edges, bounds, halt points, checkpoints. |
+| `internal/home` | The one root everything lives under: where the database, the socket, the lock, the gates, the isolated copies and the logs go, and the exclusive lock that gives a home one service. |
 | `internal/ipc` | The local protocol between the command line and the background service: the method table, the event taxonomy, the bounded stream, the client and the server, peer identification, and the one resolver it derives for an answer that arrives here. |
+| `internal/machine` | The agent-facing half of the surface: the shapes an answer takes, the three exit codes, and the outcome vocabulary. |
 | `internal/pipeline` | The nine stages as a graph definition over `internal/graph`: the stage contract, the fixed order, the state key table, the capabilities a path needs of the adapter, the fix loop, and its halt points and bounds. |
 | `internal/principles` | The build-time check that no principle the PRD lists goes unclaimed: the constants pinned to that list, the `Cite` call a test claims a principle with, the scan that finds those calls, and the written table of what nothing claims. |
+| `internal/redact` | The one owner of credential removal, called wherever text is persisted or reported. |
 | `internal/runs` | The run service: the anchored table of a run's status changes, and the one durable fixer session a run keeps, recorded on the run so a restarted service resumes the same conversation. |
 | `internal/safety` | The data-loss policy over git: whether a branch update may proceed, on what anchor, and when to refuse. |
 | `internal/scope` | The review stage's scope lens, not a tenth stage: the guidance a reviewer traces each touched path against, and the note an untraced path becomes. |
+| `internal/service` | The background service: it holds the home's lock, binds the socket, recovers the runs it finds, and owns every run that is executing. |
+| `internal/stages` | Where the nine stage bodies will live. Today it holds nine placeholders that validate nothing and hold for a decision. |
 | `internal/store` | The only package that opens the database: the schema, its additive migrations, and typed accessors for repositories, runs, stages, rounds, a run's anchored checkpoint history, tasks, task state and events, holds and the closed set of who resolved each one, and the gate ownership index. |
 | `internal/vcs` | The only package that invokes git: typed operations over repositories, worktrees, refs, diffs, and remotes. |
 | `docs/prd.html` | The product requirements. The specification this code answers to. |
@@ -141,6 +166,26 @@ make check     # lint and test, what CI runs
 ```
 
 ```sh
+assistant init                 # create or repair this repository's gate
+assistant service start        # start the background service for this home
+assistant                      # attach to this branch's run, or start one
+assistant --answer approved    # answer the decision it is holding on
+assistant status               # repository, gate, service, run, branch
+assistant --json status        # the same answer as one structured document
+assistant doctor               # can a run start at all, and what stops one
+```
+
+The home is `~/.assistant` unless `ASSISTANT_HOME` names another root. Add
+`--json` to any command for the machine interface: one document on standard
+output, progress on standard error, and three exit codes that mean success or
+a normal decision point, an operational failure, and incorrect usage.
+
+`--version` and `--help` answer as documents too, but only when `--json` comes
+before them: `assistant --json --version` writes one and `assistant --version
+--json` writes the plain line, because the scan of the flags ahead of a command
+stops at the one it recognizes. Reworking that scan is a separate change.
+
+```sh
 scripts/build-fixture.sh DIR   # build the fixture repository into DIR
 ```
 
@@ -148,11 +193,15 @@ scripts/build-fixture.sh DIR   # build the fixture repository into DIR
 planted is written to `DIR/manifest.json`, whose path the script prints. The
 fixture is built from nothing every time, so none of it is checked in.
 
-`make test` exercises `internal/vcs`, `internal/gate`, and `internal/fixture`
-against a real git, so it needs a git binary on `PATH`; `internal/vcs`'s
-package comment states the minimum version it needs. An `internal/fixture`
-test skips itself when git is not on `PATH`, and the ones that drive the
-planted toolchain conditions skip when `go` is not either.
+`make test` exercises `internal/vcs`, `internal/gate`, `internal/cli`,
+`internal/service`, and `internal/fixture` against a real git, so it needs a
+git binary on `PATH`; `internal/vcs`'s package comment states the minimum
+version it needs. An `internal/fixture` test skips itself when git is not on
+`PATH`, and the ones that drive the planted toolchain conditions skip when `go`
+is not either. The `internal/cli` and `internal/service` tests that drive a run
+skip on any platform but linux and darwin, because `internal/ipc` reads no
+local socket peer credentials there and so refuses every method that drives
+one.
 
 `make lint` requires golangci-lint from the v2 series, the line that can read
 this module's `.golangci.yml`. It refuses when the linter is missing or comes

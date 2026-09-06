@@ -33,7 +33,7 @@ func TestEveryOperationRefusesWithoutAnOwnershipIndex(t *testing.T) {
 	if _, err := gate.Initialize(ctx(t), spec); !errors.Is(err, gate.ErrNoIndex) {
 		t.Fatalf("Initialize without an index = %v, want ErrNoIndex", err)
 	}
-	if err := gate.Remove(ctx(t), spec, gate.WithOpener(detachingOpener)); !errors.Is(err, gate.ErrNoIndex) {
+	if err := gate.Remove(ctx(t), spec); !errors.Is(err, gate.ErrNoIndex) {
 		t.Fatalf("Remove without an index = %v, want ErrNoIndex", err)
 	}
 	if _, err := os.Stat(filepath.Join(home, "repos")); !os.IsNotExist(err) {
@@ -48,7 +48,7 @@ func TestEveryOperationRefusesWithoutAnOwnershipIndex(t *testing.T) {
 	if _, err := gate.Initialize(ctx(t), spec, opts()...); err != nil {
 		t.Fatalf("Initialize with an index: %v", err)
 	}
-	if err := gate.Remove(ctx(t), spec, opts(gate.WithOpener(detachingOpener))...); err != nil {
+	if err := gate.Remove(ctx(t), spec, opts()...); err != nil {
 		t.Fatalf("Remove with an index: %v", err)
 	}
 }
@@ -85,7 +85,7 @@ func TestInitializeRecordsTheBindingAndRemoveGivesItUp(t *testing.T) {
 		t.Fatalf("a repeated initialization left %v bound, want %v", got, want)
 	}
 
-	if err := gate.Remove(ctx(t), spec, opts(gate.WithOpener(detachingOpener))...); err != nil {
+	if err := gate.Remove(ctx(t), spec, opts()...); err != nil {
 		t.Fatalf("Remove: %v", err)
 	}
 	if got := boundWorkingPaths(t, index, g.ID()); len(got) != 0 {
@@ -190,7 +190,7 @@ func TestAFailedUnbindLeavesAReattachedGateFindable(t *testing.T) {
 		t.Fatalf("close the second index: %v", err)
 	}
 	broken := unbindableIndex{Store: index, shut: shut}
-	if err := gate.Remove(ctx(t), spec, gate.WithIndex(broken), gate.WithOpener(detachingOpener)); err == nil {
+	if err := gate.Remove(ctx(t), spec, gate.WithIndex(broken)); err == nil {
 		t.Fatal("Remove reported success over an index that cannot unbind")
 	}
 

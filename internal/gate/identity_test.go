@@ -191,7 +191,7 @@ func TestARecordThisBuildCannotReadNamesAWayOut(t *testing.T) {
 	if _, err := gate.Initialize(ctx(t), spec, opts()...); !errors.Is(err, gate.ErrMalformedRecord) {
 		t.Fatalf("Initialize error = %v, want ErrMalformedRecord", err)
 	}
-	refused := gate.Remove(ctx(t), spec, opts(gate.WithOpener(detachingOpener))...)
+	refused := gate.Remove(ctx(t), spec, opts()...)
 	if !errors.Is(refused, gate.ErrMalformedRecord) {
 		t.Fatalf("Remove error = %v, want ErrMalformedRecord", refused)
 	}
@@ -214,7 +214,7 @@ func TestARecordThisBuildCannotReadNamesAWayOut(t *testing.T) {
 	if got, want := refs(t, g.Repository()), []string{"refs/heads/main " + wc.commit}; !equal(got, want) {
 		t.Fatalf("the repaired gate holds %v, want its history %v", got, want)
 	}
-	if err := gate.Remove(ctx(t), spec, opts(gate.WithOpener(detachingOpener))...); err != nil {
+	if err := gate.Remove(ctx(t), spec, opts()...); err != nil {
 		t.Fatalf("Remove after the repair the refusal named: %v", err)
 	}
 }
@@ -250,7 +250,7 @@ func TestARecordFiledUnderTheWrongIdentifierNamesAWayOut(t *testing.T) {
 		_, err := gate.Initialize(ctx(t), spec, opts()...)
 		return err
 	}()
-	refusedRemove := gate.Remove(ctx(t), spec, opts(gate.WithOpener(detachingOpener))...)
+	refusedRemove := gate.Remove(ctx(t), spec, opts()...)
 	for name, refused := range map[string]error{"Initialize": refusedInit, "Remove": refusedRemove} {
 		if !errors.Is(refused, gate.ErrMalformedRecord) {
 			t.Fatalf("%s error = %v, want ErrMalformedRecord", name, refused)
@@ -377,7 +377,7 @@ func TestAHomeThatDoesNotExistYetIsSpelledTheSameOnceItDoes(t *testing.T) {
 	if url, ok := remoteURL(t, wc.path, gate.RemoteName); !ok || url != first.Repository() {
 		t.Fatalf("the %s remote is %q, want %q", gate.RemoteName, url, first.Repository())
 	}
-	if err := gate.Remove(ctx(t), spec, opts(gate.WithOpener(detachingOpener))...); err != nil {
+	if err := gate.Remove(ctx(t), spec, opts()...); err != nil {
 		t.Fatalf("Remove a gate this package created in a home it created: %v", err)
 	}
 }

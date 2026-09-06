@@ -50,35 +50,35 @@ func (s RunStatus) String() string { return string(s) }
 // binding, and that is not the same fact as a push binding of the empty string.
 type Run struct {
 	// ID is the caller's identifier for this run.
-	ID string
+	ID string `json:"id"`
 	// RepositoryID names the repository the run validates.
-	RepositoryID string
+	RepositoryID string `json:"repository_id"`
 	// Branch is the branch that was pushed.
-	Branch string
+	Branch string `json:"branch"`
 	// SubmittedHead is the commit the push carried, which is what P1 makes the
 	// consent boundary.
-	SubmittedHead string
+	SubmittedHead string `json:"submitted_head"`
 	// Base is the commit the branch is measured against.
-	Base string
+	Base string `json:"base"`
 	// CurrentHead is the branch tip as the run last observed it. It is unknown
 	// until the run has observed one.
-	CurrentHead Optional[string]
+	CurrentHead Optional[string] `json:"current_head"`
 	// Status is where the run stands.
-	Status RunStatus
+	Status RunStatus `json:"status"`
 	// ApprovedCommit is the commit a completed review approved. It is unknown
 	// until a review completes, and it is deliberately a separate fact from the
 	// current head, because approving one commit says nothing about a later
 	// one.
-	ApprovedCommit Optional[string]
+	ApprovedCommit Optional[string] `json:"approved_commit"`
 	// PushBinding is what the run pushed and where, in the caller's own
 	// notation. It is unknown until the run pushes. It is stored exactly as
 	// given: the redactor runs on the repository URL columns and on nothing
 	// else, so a caller that writes a credentialed remote here has stored the
 	// credential.
-	PushBinding Optional[string]
+	PushBinding Optional[string] `json:"push_binding"`
 	// PullRequest is the pull request the run opened, in the caller's own
 	// notation. It is unknown until one exists.
-	PullRequest Optional[string]
+	PullRequest Optional[string] `json:"pull_request"`
 	// FixerSession is the agent's opaque handle for the one durable fixer
 	// session this run keeps across its fix rounds. It is unknown until a fix
 	// round has reported one, and a run whose configuration asks for no
@@ -88,23 +88,23 @@ type Run struct {
 	// agent, and this column is what lets a restarted service continue the
 	// same conversation instead of starting the run's fixer blind. It is
 	// stored exactly as given, like every column but the repository URLs.
-	FixerSession Optional[string]
+	FixerSession Optional[string] `json:"fixer_session"`
 	// Intent is what the run was for.
-	Intent string
+	Intent string `json:"intent"`
 	// IntentSource says where that intent came from, so a report can say who
 	// asked rather than only what was asked.
-	IntentSource string
+	IntentSource string `json:"intent_source"`
 	// Build is the software that produced this run.
-	Build Build
+	Build Build `json:"build"`
 	// ConfigDigest identifies the configuration the run resolved, so a
 	// surprising verdict can be traced to the settings that reached it as well
 	// as to the code.
-	ConfigDigest string
+	ConfigDigest string `json:"config_digest"`
 	// CreatedAt is when the run was recorded, which PRD section 8 requires to
 	// precede the creation of its directory.
-	CreatedAt time.Time
+	CreatedAt time.Time `json:"created_at"`
 	// UpdatedAt is when the record last changed.
-	UpdatedAt time.Time
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // CreateRun records a new run and returns it as stored.
