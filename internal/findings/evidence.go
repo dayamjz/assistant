@@ -113,9 +113,15 @@ type Binding struct {
 }
 
 // ReadBeyondChange reports whether the reviewer declared reading anything the
-// change did not touch. It is false for a review that read exactly the change
-// and nothing else, which is permitted and is the case worth being able to
-// count across runs.
+// change did not touch. That is what Beyond holds and the whole of what this
+// answers.
+//
+// It is false for three reviews that are not the same: one that declared
+// exactly the paths the change touched, one that declared some of them, and
+// one that declared nothing at all. Undeclared is the half that tells them
+// apart, so the review that declared exactly the change is the one this
+// reports false for and whose Undeclared is empty, and a caller counting that
+// case across runs asks both rather than this alone.
 func (b Binding) ReadBeyondChange() bool { return len(b.Beyond) > 0 }
 
 // Errors a caller is expected to handle. Each is a typed result, never a

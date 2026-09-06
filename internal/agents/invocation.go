@@ -201,6 +201,10 @@ func (inv Invocation) Validate() error {
 // ErrReviewInFixerSession. The refusal is the shape's, whatever else about the
 // invocation is also wrong, and it happens before any process starts.
 //
+// It is the same class of answer Validate gives as well as the same shape of
+// one: every refusal from either matches ErrInvalidInvocation, and this one
+// matches ErrReviewInFixerSession besides.
+//
 // The rule needs an entry point of its own because Validate cannot make it.
 // Both entry points ask Validate the same question and it cannot see which one
 // it is on, so ShapeReview on the shared Invocation type would otherwise be a
@@ -209,8 +213,12 @@ func (inv Invocation) Validate() error {
 // nothing else does.
 func (inv Invocation) ValidateForFixer() error {
 	if inv.Shape == ShapeReview {
-		return fmt.Errorf("%w: a %s invocation reached the fixer, which is the one "+
-			"invocation whose session survives the round", ErrReviewInFixerSession, inv.Shape)
+		return &invocationFieldError{
+			field: "Shape",
+			reason: "a " + inv.Shape.String() + " invocation reached the fixer, which is the " +
+				"one invocation whose session survives the round",
+			also: ErrReviewInFixerSession,
+		}
 	}
 	return inv.Validate()
 }

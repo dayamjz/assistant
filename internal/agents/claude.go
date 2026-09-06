@@ -196,7 +196,7 @@ func (r *claudeRunner) Run(ctx context.Context, purpose Purpose, inv Invocation)
 	if !purpose.Recognized() {
 		return Result{}, fmt.Errorf("%w: %q", ErrUnrecognizedPurpose, string(purpose))
 	}
-	res, _, err := r.invoke(ctx, purpose, inv, "", false)
+	res, _, err := r.invoke(ctx, purpose, inv, session{})
 	return res, err
 }
 
@@ -247,7 +247,7 @@ type claudeFixer struct {
 func (f *claudeFixer) Apply(ctx context.Context, inv Invocation) (Result, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	res, reference, err := f.runner.invoke(ctx, PurposeFix, inv, f.reference, true)
+	res, reference, err := f.runner.invoke(ctx, PurposeFix, inv, session{resume: f.reference, keep: true})
 	if reference != "" {
 		f.reference = reference
 	}
@@ -262,27 +262,69 @@ func (f *claudeFixer) Reference() string {
 	return f.reference
 }
 
-// invoke runs one agent process and turns what it printed into a Result or a
-// refusal. resume names a session to continue, and keep says whether the
-// caller retains the session this invocation reports; only a Fixer passes
-// either, which is what makes SessionNone structural for everything else.
+// session is what one invocation does with the run's durable agent session:
+// the conversation it is answered inside, and whether the caller retains the
+// reference it reports. Only a Fixer supplies either, which is what makes
+// SessionNone structural for everything else.
 //
-// It returns the session reference the agent reported when keep is set, so the
-// Fixer can carry it to the next round. That happens whatever the invocation
-// then produced: one place decides what a round did with its session, and both
-// the record and the Fixer read that one decision.
-func (r *claudeRunner) invoke(ctx context.Context, purpose Purpose, inv Invocation, resume string, keep bool) (Result, string, error) {
-	// An invocation carries a session on either of two facts: resume says it
-	// is answered inside a conversation that already exists, and keep says the
-	// session it reports outlives it. Either one is the memory P4 keeps a
-	// review out of, so either sends the invocation through ValidateForFixer,
-	// which is Validate plus the refusal of a review shape there. Asking both
-	// is what makes this cover every session-carrying invocation rather than
-	// the ones a particular caller happens to make: a Fixer passes both at
-	// once today, so resuming without keeping is unreachable until a second
-	// caller exists, and it is inside the rule when it arrives.
+// The two facts travel together and every question about them is answered
+// here, so the P4 guard and the SessionUse written to the record cannot come
+// to different views of one invocation, and a fact added to this type is
+// answered in one place rather than at each reader.
+type session struct {
+	// resume is the conversation this invocation is answered inside, empty for
+	// one that starts fresh.
+	resume string
+	// keep says the caller retains the session this invocation reports, which
+	// is what makes a session the run's rather than one discarded when the
+	// invocation ends.
+	keep bool
+}
+
+// resumed reports whether this invocation is answered inside a conversation
+// that already exists.
+func (s session) resumed() bool { return s.resume != "" }
+
+// carried reports whether this invocation has memory at all: it continues a
+// conversation, or it hands one back for the next round to continue, or both.
+// It is the question P4 turns on, so it decides whether the invocation is put
+// to Invocation.ValidateForFixer rather than to Invocation.Validate, and
+// widening what makes an invocation session-carrying is a change here rather
+// than at that guard. A Fixer supplies both facts at once today, so carrying
+// one without the other is unreachable until a second caller exists, and it is
+// inside the rule when it arrives.
+func (s session) carried() bool { return s.keep || s.resumed() }
+
+// use is what the record says this invocation did with the session, before it
+// runs. Resuming is a fact about the invocation itself, so it is recorded
+// whether or not the caller keeps the reference afterwards: the agent answered
+// inside an existing conversation either way, and SessionNone's account of an
+// invocation that resumed nothing would be false for it. The three SessionUse
+// values carry that without a fourth.
+//
+// Opening is not decided here, because until the agent reports a reference
+// there is nothing that was opened. That is written afterwards and only where
+// the caller comes away holding it.
+func (s session) use() SessionUse {
+	if s.resumed() {
+		return SessionResumed
+	}
+	return SessionNone
+}
+
+// invoke runs one agent process and turns what it printed into a Result or a
+// refusal.
+//
+// It returns the session reference the agent reported when the caller keeps
+// it, so the Fixer can carry it to the next round. That happens whatever the
+// invocation then produced: one place decides what a round did with its
+// session, and both the record and the Fixer read that one decision.
+func (r *claudeRunner) invoke(ctx context.Context, purpose Purpose, inv Invocation, s session) (Result, string, error) {
+	// A session-carrying invocation is the memory P4 keeps a review out of, so
+	// it is put to ValidateForFixer, which is Validate plus the refusal of a
+	// review shape there.
 	validate := inv.Validate
-	if keep || resume != "" {
+	if s.carried() {
 		validate = inv.ValidateForFixer
 	}
 	if err := validate(); err != nil {
@@ -291,19 +333,15 @@ func (r *claudeRunner) invoke(ctx context.Context, purpose Purpose, inv Invocati
 		return Result{}, "", err
 	}
 
+	// What the invocation carried in is recorded before the agent runs,
+	// because carrying a session is a fact about the invocation whatever
+	// becomes of it.
 	record := Record{
 		Purpose: purpose,
 		Agent:   ClaudeName,
 		Model:   inv.Model,
-		Session: SessionNone,
+		Session: s.use(),
 		Started: time.Now(),
-	}
-	// A resumed session is recorded before the agent runs, because carrying
-	// one in is a fact about the invocation whatever becomes of it. Opening
-	// one is recorded afterwards, because until the agent reports a reference
-	// there is nothing that was opened.
-	if keep && resume != "" {
-		record.Session = SessionResumed
 	}
 	// reference is what this invocation hands back to the Fixer. It is set
 	// once, from the envelope, and every exit below returns it, so the record
@@ -332,7 +370,7 @@ func (r *claudeRunner) invoke(ctx context.Context, purpose Purpose, inv Invocati
 
 	proc := runProcess(ctx, procSpec{
 		bin:    r.resolved,
-		args:   r.arguments(inv, resume),
+		args:   r.arguments(inv, s.resume),
 		stdin:  inv.Prompt,
 		dir:    inv.Dir,
 		env:    environment(r.settings.base, inv.Env),
@@ -362,9 +400,9 @@ func (r *claudeRunner) invoke(ctx context.Context, purpose Purpose, inv Invocati
 	// back whatever category it then failed in, so the next round continues
 	// the conversation it may already have edited files in, and SessionOpened
 	// is recorded only where the Fixer really holds the reference.
-	if keep && decodeErr == nil && envelope.SessionID != "" {
+	if s.keep && decodeErr == nil && envelope.SessionID != "" {
 		reference = envelope.SessionID
-		if resume == "" {
+		if !s.resumed() {
 			record.Session = SessionOpened
 		}
 	}

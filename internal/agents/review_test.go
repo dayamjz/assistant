@@ -251,18 +251,34 @@ func TestAReviewShapeIsRefusedByTheFixer(t *testing.T) {
 		Times: standin.Always,
 		Reply: standin.Report(crossFileReview(reviewedPath, unreviewedCaller)),
 	}}})
-	fixer, err := agents.OpenFixer(t.Context(), agent.Runner(), "a-session-an-earlier-fix-round-opened")
-	if err != nil {
-		t.Fatalf("opening the fixer session: %v", err)
-	}
 	inv := reviewInvocation(t)
 
-	if _, err := fixer.Apply(t.Context(), inv); !errors.Is(err, agents.ErrReviewInFixerSession) {
-		t.Fatalf("Fixer.Apply is %v, want ErrReviewInFixerSession", err)
-	}
-	if calls := agent.Calls(); len(calls) != 0 {
-		t.Fatalf("an agent was started for a review handed to the fixer, so the refusal "+
-			"came after the process rather than before it: %+v", calls)
+	// Both fixer states, because they carry the session differently and each
+	// has to refuse. A fixer resuming an earlier round is answered inside a
+	// conversation that already exists; a fresh one carries no conversation
+	// yet and keeps the one this round reports. Only the second tells apart a
+	// rule that asks whether an invocation carries a session at all from one
+	// that asks for both facts at once.
+	for _, opened := range []string{"a-session-an-earlier-fix-round-opened", ""} {
+		fixer, err := agents.OpenFixer(t.Context(), agent.Runner(), opened)
+		if err != nil {
+			t.Fatalf("opening the fixer session: %v", err)
+		}
+		_, refusal := fixer.Apply(t.Context(), inv)
+		if !errors.Is(refusal, agents.ErrReviewInFixerSession) {
+			t.Fatalf("Fixer.Apply resuming %q is %v, want ErrReviewInFixerSession", opened, refusal)
+		}
+		// The same refusal answers to the class every pre-start refusal
+		// belongs to, so a caller handling "we built an invocation that cannot
+		// be run" is not silently missing this one for having a name of its
+		// own.
+		if !errors.Is(refusal, agents.ErrInvalidInvocation) {
+			t.Errorf("the refusal is %v, want it in the ErrInvalidInvocation class as well", refusal)
+		}
+		if calls := agent.Calls(); len(calls) != 0 {
+			t.Fatalf("an agent was started for a review handed to the fixer, so the refusal "+
+				"came after the process rather than before it: %+v", calls)
+		}
 	}
 
 	result, err := agent.Runner().Run(t.Context(), agents.PurposeReview, inv)

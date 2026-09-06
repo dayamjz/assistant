@@ -24,6 +24,11 @@ var (
 	// prescribed the fix it is checking. The invocation is refused before any
 	// process starts, never downgraded to another shape and never run with its
 	// result discarded.
+	//
+	// It names one refusal within a class rather than a class of its own: the
+	// refusal it reports also matches ErrInvalidInvocation, because it is an
+	// invocation that cannot be run as written. A caller may therefore handle
+	// every pre-start refusal alike and still recognize this one.
 	ErrReviewInFixerSession = errors.New("agents: a review may not be answered in a fixer session")
 	// ErrNoAgent is returned by Resolve when no entry in the ordered list
 	// resolved to a runnable agent. It is a refusal before a run starts, not a
@@ -110,18 +115,32 @@ func (e *AdapterError) Error() string {
 func (e *AdapterError) Unwrap() error { return ErrAdapterDeclaration }
 
 // invocationFieldError reports one field of an Invocation that cannot be run
-// as written. It wraps ErrInvalidInvocation and names the field.
+// as written. It wraps ErrInvalidInvocation and names the field. It is how
+// every pre-start refusal of an Invocation is built, so a caller matching the
+// class catches all of them.
 type invocationFieldError struct {
 	field  string
 	reason string
+	// also is a further class this refusal belongs to, nil where
+	// ErrInvalidInvocation is the whole of what it is. It exists so a refusal
+	// with a name of its own, such as the P4 refusal of a review shape at the
+	// fixer, does not have to leave the class to carry that name.
+	also error
 }
 
 func (e *invocationFieldError) Error() string {
 	return "agents: invalid invocation: " + e.field + ": " + e.reason
 }
 
-// Unwrap makes every field refusal match ErrInvalidInvocation.
-func (e *invocationFieldError) Unwrap() error { return ErrInvalidInvocation }
+// Unwrap makes every field refusal match ErrInvalidInvocation, and one that
+// names a further class match that too, so a caller can catch every pre-start
+// refusal generically and still single one out by name.
+func (e *invocationFieldError) Unwrap() []error {
+	if e.also == nil {
+		return []error{ErrInvalidInvocation}
+	}
+	return []error{ErrInvalidInvocation, e.also}
+}
 
 // Failure classifies why an invocation did not produce a usable result. It is
 // the one thing about a failure that is recorded; the message explaining it is
