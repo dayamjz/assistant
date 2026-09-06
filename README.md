@@ -75,11 +75,15 @@ execution engine writes through: a run's whole checkpoint history in the
 embedded database, where every write is anchored to the checkpoint the caller
 observed and one that anchors to a run that has moved is refused rather than
 appended, so a run survives a restart as a position and not only as a record.
-The nine stage bodies are separate work against that contract and do not exist
-yet, including the review stage that puts the scope lens in front of a reviewer
-and binds what comes back to what the reviewer declared reading, and neither the
-harness nor the `assistant` binary exists either, so the only thing in here you
-can run is the fixture builder.
+`internal/principles` is in the tree as well and is not one of those pieces,
+because it ships no product behavior: it fails the build when a principle the
+PRD lists is neither cited by a test nor written down as a declared gap, and a
+citation says a test claims to check that principle, never that the principle
+holds. The nine stage bodies are separate work against that contract and do not
+exist yet, including the review stage that puts the scope lens in front of a
+reviewer and binds what comes back to what the reviewer declared reading, and
+neither the harness nor the `assistant` binary exists either, so the only thing
+in here you can run is the fixture builder.
 
 ## The two promises
 
@@ -116,6 +120,7 @@ working as it always did.
 | `internal/graph` | The execution engine: nodes, edges, bounds, halt points, checkpoints. |
 | `internal/ipc` | The local protocol between the command line and the background service: the method table, the event taxonomy, the bounded stream, the client and the server, peer identification, and the one resolver it derives for an answer that arrives here. |
 | `internal/pipeline` | The nine stages as a graph definition over `internal/graph`: the stage contract, the fixed order, the state key table, the capabilities a path needs of the adapter, the fix loop, and its halt points and bounds. |
+| `internal/principles` | The build-time check that no principle the PRD lists goes unclaimed: the constants pinned to that list, the `Cite` call a test claims a principle with, the scan that finds those calls, and the written table of what nothing claims. |
 | `internal/runs` | The run service: the anchored table of a run's status changes, and the one durable fixer session a run keeps, recorded on the run so a restarted service resumes the same conversation. |
 | `internal/safety` | The data-loss policy over git: whether a branch update may proceed, on what anchor, and when to refuse. |
 | `internal/scope` | The review stage's scope lens, not a tenth stage: the guidance a reviewer traces each touched path against, and the note an untraced path becomes. |

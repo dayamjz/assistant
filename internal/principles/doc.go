@@ -52,10 +52,11 @@
 //
 // Some principles are claimed by no test here, mostly because the subsystem
 // the principle governs is not built yet. unclaimed.go is that list, one row
-// per principle, and Check treats a row as accounting for the gap. A row is a declaration that the gap is known; it is not a judgement
-// that the gap is fine, and the sentence beside it is prose nobody verified.
-// A row whose principle a test turns out to cite is a failure, so a
-// declaration cannot outlive the gap it describes.
+// per principle, and Check treats a row as accounting for the gap. A row is a
+// declaration that the gap is known; it is not a judgement that the gap is
+// fine, and the sentence beside it is prose nobody verified. A row whose
+// principle a test turns out to cite is a failure, so a declaration cannot
+// outlive the gap it describes.
 //
 // # How it runs
 //
