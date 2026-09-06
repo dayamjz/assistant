@@ -10,7 +10,7 @@ until it has been independently reviewed, tested, documented, and linted.
 ## Status
 
 Early. The product requirements are settled and checked in at
-[`docs/prd.html`](docs/prd.html). Fifteen pieces exist so far. The execution
+[`docs/prd.html`](docs/prd.html). Sixteen pieces exist so far. The execution
 engine in `internal/graph` is the first: the graph builder with its
 construction-time checks, an executor with halt points and bounded cycles, and
 checkpoints behind a four-operation store. The second is `internal/findings`,
@@ -75,15 +75,18 @@ execution engine writes through: a run's whole checkpoint history in the
 embedded database, where every write is anchored to the checkpoint the caller
 observed and one that anchors to a run that has moved is refused rather than
 appended, so a run survives a restart as a position and not only as a record.
-`internal/principles` is in the tree as well and is not one of those pieces,
-because it ships no product behavior: it fails the build when a principle the
-PRD lists is neither cited by a test nor written down as a declared gap, and a
-citation says a test claims to check that principle, never that the principle
-holds. The nine stage bodies are separate work against that contract and do not
-exist yet, including the review stage that puts the scope lens in front of a
-reviewer and binds what comes back to what the reviewer declared reading, and
-neither the harness nor the `assistant` binary exists either, so the only thing
-in here you can run is the fixture builder.
+The sixteenth is `internal/principles`, the build-time check that fails when a
+principle the PRD lists is neither cited by a test nor written down as a
+declared gap: the PRD owns that list and the constants here are pinned to it in
+both directions, and a test cites by calling `principles.Cite` inside its own
+body, so a comment naming a principle does not count. What it establishes is
+only that no principle goes silently unclaimed; a citation says a test claims to
+check a principle, never that the principle is covered or that it holds. The
+nine stage bodies are separate work against that contract and do not exist yet,
+including the review stage that puts the scope lens in front of a reviewer and
+binds what comes back to what the reviewer declared reading, and neither the
+harness nor the `assistant` binary exists either, so the only thing in here you
+can run is the fixture builder.
 
 ## The two promises
 
