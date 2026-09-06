@@ -58,9 +58,13 @@ type Runner interface {
 // exactly when it declares that capability; Resolve refuses one where the two
 // disagree, in either direction.
 //
-// A caller holding a Runner reaches this through OpenFixer rather than by
-// asserting on it, so the declaration is consulted on every route to a
-// session.
+// A caller holding a Runner reaches this through OpenFixer, which reads the
+// declaration first, rather than by asserting on it. The assertion is still
+// expressible, since this interface is exported, so a caller that built a
+// Runner outside Resolve can call Fixer directly and read no declaration at
+// all. What makes that harmless for a run is Resolve: a Runner it returned
+// carries no session mechanism it did not declare, because one that did would
+// have ended the resolution.
 type SessionRunner interface {
 	Runner
 
@@ -73,9 +77,9 @@ type SessionRunner interface {
 	Fixer(ctx context.Context, resume string) (Fixer, error)
 }
 
-// OpenFixer opens the run's durable fixer session on r. It is the route a
-// caller holding a Runner takes to one, and the only route this package
-// offers.
+// OpenFixer opens the run's durable fixer session on r. It is the only route
+// to one this package offers a caller holding a Runner, and it reads the
+// declaration before it looks at the type.
 //
 // The two halves of the arrangement do different work and both are needed.
 // Runner has no Fixer method, so an adapter that implements no SessionRunner
@@ -85,6 +89,12 @@ type SessionRunner interface {
 // The declaration decides, so a capability nobody declared is a capability
 // nobody has, which is what lets a conformance test read the declaration and
 // hold the adapter to it.
+//
+// That second direction is not closed by this function alone. SessionRunner is
+// exported, so a caller that built a Runner itself can assert on it and call
+// Fixer without passing through here. Resolve is what closes it for a run, by
+// refusing an adapter whose declaration and type disagree before any caller
+// holds it.
 //
 // The refusal is a *CapabilityError naming CapabilityResumableSessions.
 func OpenFixer(ctx context.Context, r Runner, resume string) (Fixer, error) {

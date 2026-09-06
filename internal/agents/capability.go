@@ -140,20 +140,6 @@ func (c Capabilities) List() []Capability {
 	return append(out, unrecognized...)
 }
 
-// Missing returns those of want this declaration does not carry, in the order
-// they were given and without repeats. An empty result means every one of them
-// is declared.
-func (c Capabilities) Missing(want ...Capability) []Capability {
-	var out []Capability
-	for _, capability := range want {
-		if c.Has(capability) || slices.Contains(out, capability) {
-			continue
-		}
-		out = append(out, capability)
-	}
-	return out
-}
-
 // String renders the declaration for a diagnostic. An adapter that declared
 // nothing renders as "none" rather than as an empty string, so a message
 // quoting it does not read as a missing value.
@@ -170,7 +156,12 @@ func (c Capabilities) String() string {
 }
 
 // verifyDeclaration reports whether an adapter's declaration and its type say
-// the same thing, for every capability whose mechanism this package can see.
+// the same thing, for every capability whose mechanism this package can see,
+// and returns the declaration it checked.
+//
+// It reads Runner.Capabilities once and hands that value back rather than
+// leaving a caller to read it again, so what a caller carries away is the
+// value that was verified and not a second answer from the same method.
 //
 // It is checked where a run obtains a Runner rather than left to the path that
 // needs the capability, because both directions of disagreement are adapter
@@ -183,11 +174,11 @@ func (c Capabilities) String() string {
 //
 // A capability whose row carries no probe is taken at its word here. That is a
 // residual gap and doc.go names it.
-func verifyDeclaration(name string, r Runner) error {
+func verifyDeclaration(name string, r Runner) (Capabilities, error) {
 	declared := r.Capabilities()
 	for _, capability := range declared.List() {
 		if !capability.Recognized() {
-			return &AdapterError{
+			return Capabilities{}, &AdapterError{
 				Agent:  name,
 				Reason: "declares " + string(capability) + ", which is not a capability this build defines",
 			}
@@ -200,15 +191,15 @@ func verifyDeclaration(name string, r Runner) error {
 		says, carries := declared.Has(row.capability), row.carried(r)
 		switch {
 		case says && !carries:
-			return declaredWithoutMechanism(name, row.capability)
+			return Capabilities{}, declaredWithoutMechanism(name, row.capability)
 		case carries && !says:
-			return &AdapterError{
+			return Capabilities{}, &AdapterError{
 				Agent:  name,
 				Reason: "carries the mechanism for " + string(row.capability) + " and does not declare it",
 			}
 		}
 	}
-	return nil
+	return declared, nil
 }
 
 // declaredWithoutMechanism is the defect an adapter has when it declares a

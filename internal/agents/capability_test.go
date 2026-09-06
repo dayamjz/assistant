@@ -306,8 +306,8 @@ func TestAnUnrecognizedCapabilityIsNeverHad(t *testing.T) {
 	if !declared.Has(agents.CapabilityResumableSessions) {
 		t.Error("an unrecognized capability alongside a recognized one lost the recognized one")
 	}
-	if got := declared.Missing("resumable_session"); len(got) != 1 {
-		t.Errorf("Missing reported %v for an unrecognized capability, want it missing", got)
+	if agents.Capability("resumable_session").Recognized() {
+		t.Error("a capability this build does not define reported itself recognized")
 	}
 }
 
@@ -320,25 +320,11 @@ func TestTheZeroDeclarationHasNothing(t *testing.T) {
 			t.Errorf("the zero Capabilities has %s", capability)
 		}
 	}
-	if got := none.Missing(agents.AllCapabilities()...); len(got) != len(agents.AllCapabilities()) {
-		t.Errorf("the zero Capabilities is missing %v, want every capability", got)
+	if got := none.List(); len(got) != 0 {
+		t.Errorf("the zero Capabilities lists %v, want nothing declared", got)
 	}
 	if none.String() != "none" {
 		t.Errorf("the zero Capabilities renders as %q, want %q", none.String(), "none")
-	}
-}
-
-// Missing reports what is absent, in the order asked, without repeats.
-func TestMissingReportsWhatIsAbsentInTheOrderAsked(t *testing.T) {
-	declared := agents.Declare(agents.CapabilityResumableSessions)
-	got := declared.Missing(
-		agents.CapabilitySuppressProjectInstructions,
-		agents.CapabilityResumableSessions,
-		agents.CapabilitySuppressProjectInstructions,
-	)
-	want := []agents.Capability{agents.CapabilitySuppressProjectInstructions}
-	if !slices.Equal(got, want) {
-		t.Errorf("Missing returned %v, want %v", got, want)
 	}
 }
 

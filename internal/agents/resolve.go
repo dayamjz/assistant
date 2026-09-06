@@ -93,7 +93,9 @@ type Resolution struct {
 	Name string
 	// Capabilities is what the resolved adapter declared it supports. It is
 	// the Runner's own declaration, carried here so a caller can refuse a path
-	// before it builds one without holding the Runner.
+	// before it builds one without holding the Runner. It is the same value
+	// Resolve verified against the Runner's type, read once, so a caller does
+	// not have to depend on Runner.Capabilities answering the same way twice.
 	Capabilities Capabilities
 	// Entry is the configuration entry that resolved, as written. For an entry
 	// that "auto" expanded, it is the expansion rather than the word "auto".
@@ -164,13 +166,14 @@ func Resolve(ctx context.Context, entries []string, catalog *Catalog) (Resolutio
 			skipped = append(skipped, Unavailability{Entry: entry, Name: name, Err: err})
 			continue
 		}
-		if err := verifyDeclaration(name, runner); err != nil {
+		declared, err := verifyDeclaration(name, runner)
+		if err != nil {
 			return Resolution{}, err
 		}
 		return Resolution{
 			Runner:       runner,
 			Name:         name,
-			Capabilities: runner.Capabilities(),
+			Capabilities: declared,
 			Entry:        entry,
 			Index:        i,
 			Skipped:      skipped,

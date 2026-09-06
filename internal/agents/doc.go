@@ -53,23 +53,35 @@
 // passing over the entry. What a caller holds after Resolve therefore agrees
 // with itself.
 //
-// OpenFixer reads it on the way to every session. Nothing else here returns a
-// Fixer, so an adapter that has not declared resumable sessions has no route
-// to one whatever its type turns out to be.
+// OpenFixer reads it. It is the only route to a session this package offers a
+// caller holding a Runner, and it consults the declaration before the type, so
+// an adapter carrying the mechanism without declaring it is refused there
+// rather than served. Together with Resolve that covers the Runner a run
+// actually holds: one Resolve returned has already been held to its
+// declaration in both directions, so there is no undeclared session mechanism
+// on it for anything to reach.
 //
 // The tests read it. A conformance case chooses what to assert from what the
 // adapter declared, so an adapter that declares nothing is tested as having
 // nothing, and a declaration of a capability no row can probe is refused by
 // the tests rather than accepted on trust.
 //
-// That last point is where the residual gap is. A capability whose row has no
-// probe, which is CapabilitySuppressProjectInstructions today, is a
-// declaration this package takes at its word: nothing here can tell an adapter
-// that suppresses a repository's instruction files from one that says it does.
-// What holds today is narrower and worth stating plainly. No adapter this
-// build ships declares it, so every path needing it is refused, and the
-// conformance test fails on the first adapter that declares it without a probe
-// to hold it to.
+// Two residual gaps are left, and both are worth stating plainly.
+//
+// A capability whose row has no probe, which is
+// CapabilitySuppressProjectInstructions today, is a declaration this package
+// takes at its word: nothing here can tell an adapter that suppresses a
+// repository's instruction files from one that says it does. What holds today
+// is narrower. No adapter this build ships declares it, so every path needing
+// it is refused, and the conformance test fails on the first adapter that
+// declares it without a probe to hold it to.
+//
+// SessionRunner is exported, so calling Fixer on it is expressible without
+// going through OpenFixer, and a caller that built a Runner itself and asserts
+// on it reaches a session with no declaration read at all. The runners in
+// internal/agents/standin and in this package's own tests are built that way.
+// Resolve is what closes this for a run rather than the type, and only for a
+// Runner that came out of Resolve.
 //
 // # Agent output is untrusted, and one package parses it
 //

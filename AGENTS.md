@@ -136,7 +136,10 @@ Each has cost this repository more than one round of review.
   `Runner.Run` cannot be given a session and `Fixer.Apply` cannot be given a
   purpose, so keep any new entry point on one side of that line. The same split
   answers the adapter that has no sessions at all: `Runner` has no `Fixer`
-  method, only `SessionRunner` does, and `OpenFixer` is the only route to one.
+  method, only `SessionRunner` does, and `OpenFixer` is the only route to one
+  this package offers a caller holding a `Runner`. `SessionRunner` is exported,
+  so `Resolve` rather than the type is what keeps an assertion on it from
+  finding an undeclared session mechanism.
   An adapter declares what it supports through `Runner.Capabilities`, the set
   is the table in `capability.go`, and undeclared means unavailable. Add a
   capability by adding a row there and a conformance probe in
