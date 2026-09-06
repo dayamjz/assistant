@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/dayamjz/assistant/internal/principles"
 )
 
 func resolve(t *testing.T, global, repo Layer) Resolution {
@@ -120,6 +122,7 @@ func TestResolveEmptyValueOverridesAndAbsentKeyInherits(t *testing.T) {
 // A pushed layer sets what it may and is refused what it may not, and the
 // refusals are reported rather than being silent.
 func TestResolveAdmitsAndRefusesByTrustClass(t *testing.T) {
+	principles.Cite(t, principles.P7)
 	global := mustParse(t, OriginGlobal, `{"commands": {"test": "global test"}, "no_ci": false, "run_budget": 20}`)
 	repo := mustParse(t, OriginPushed, `{
 		"fix_rounds": {"review": 0},

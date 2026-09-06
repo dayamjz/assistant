@@ -7,6 +7,7 @@ import (
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/agents/standin"
 	"github.com/dayamjz/assistant/internal/findings"
+	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/runs"
 	"github.com/dayamjz/assistant/internal/store"
 )
@@ -211,6 +212,7 @@ func TestWithoutSessionReuseEveryRoundIsSessionFree(t *testing.T) {
 // the role rather than about whether the round happens to keep memory. So it
 // holds in both modes, and in both it is refused before any process starts.
 func TestAReviewShapeIsRefusedAtTheFixerInEitherMode(t *testing.T) {
+	principles.Cite(t, principles.P4)
 	for _, reuse := range []bool{true, false} {
 		t.Run(map[bool]string{true: "with session reuse", false: "without session reuse"}[reuse], func(t *testing.T) {
 			ctx := t.Context()

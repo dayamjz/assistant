@@ -7,6 +7,7 @@ import (
 
 	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/graph"
+	"github.com/dayamjz/assistant/internal/principles"
 )
 
 // theNineStages is the order PRD section 5 fixes, written out here rather than
@@ -53,6 +54,7 @@ func chain(t *testing.T, g *graph.Graph) []string {
 }
 
 func TestTheNineStagesRunInTheFixedOrder(t *testing.T) {
+	principles.Cite(t, principles.P2)
 	p := build(t, Options{Stages: ConstantStages(passingSummary), Budget: 100})
 	walked := chain(t, p.Graph())
 	if len(walked) != len(theNineStages) {
@@ -86,6 +88,7 @@ func TestEveryStageMustHaveAnImplementation(t *testing.T) {
 // and nothing else. The chain of stages, and the state schema, are the same
 // under every configuration.
 func TestConfigurationCannotChangeWhichStagesRun(t *testing.T) {
+	principles.Cite(t, principles.P2)
 	baseline := build(t, Options{Stages: ConstantStages(passingSummary), Budget: 100})
 	want := chain(t, baseline.Graph())
 	wantKeys := Keys()

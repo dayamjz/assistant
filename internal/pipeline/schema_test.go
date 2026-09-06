@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/graph"
+	"github.com/dayamjz/assistant/internal/principles"
 )
 
 func TestOrderIsNineStagesAndACallerCannotChangeIt(t *testing.T) {
@@ -71,6 +72,7 @@ func TestEveryStageHasItsOwnKeys(t *testing.T) {
 // TestTheGraphDeclaresExactlyTheSchema is what keeps the schema the one owner
 // of the state shape: the built graph holds these keys and no others.
 func TestTheGraphDeclaresExactlyTheSchema(t *testing.T) {
+	principles.Cite(t, principles.P14)
 	p := build(t, Options{Stages: ConstantStages(passingSummary), Budget: 100})
 	got := p.Graph().Keys()
 	want := Keys()

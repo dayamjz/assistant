@@ -10,7 +10,7 @@ until it has been independently reviewed, tested, documented, and linted.
 ## Status
 
 Early. The product requirements are settled and checked in at
-[`docs/prd.html`](docs/prd.html). Fifteen pieces exist so far. The execution
+[`docs/prd.html`](docs/prd.html). Sixteen pieces exist so far. The execution
 engine in `internal/graph` is the first: the graph builder with its
 construction-time checks, an executor with halt points and bounded cycles, and
 checkpoints behind a four-operation store. The second is `internal/findings`,
@@ -75,9 +75,16 @@ execution engine writes through: a run's whole checkpoint history in the
 embedded database, where every write is anchored to the checkpoint the caller
 observed and one that anchors to a run that has moved is refused rather than
 appended, so a run survives a restart as a position and not only as a record.
-The nine stage bodies are separate work against that contract and do not exist
-yet, including the review stage that puts the scope lens in front of a reviewer
-and binds what comes back to what the reviewer declared reading, and neither the
+The sixteenth is `internal/principles`, the build-time check that fails when a
+principle the PRD lists is neither cited by a test nor written down as a
+declared gap: the PRD owns that list and the constants here are pinned to it in
+both directions, and a test cites by calling `principles.Cite` inside its own
+body, so a comment naming a principle does not count. What it establishes is
+only that no principle goes silently unclaimed; a citation says a test claims to
+check a principle, never that the principle is covered or that it holds. The
+nine stage bodies are separate work against that contract and do not exist yet,
+including the review stage that puts the scope lens in front of a reviewer and
+binds what comes back to what the reviewer declared reading, and neither the
 harness nor the `assistant` binary exists either, so the only thing in here you
 can run is the fixture builder.
 
@@ -116,6 +123,7 @@ working as it always did.
 | `internal/graph` | The execution engine: nodes, edges, bounds, halt points, checkpoints. |
 | `internal/ipc` | The local protocol between the command line and the background service: the method table, the event taxonomy, the bounded stream, the client and the server, peer identification, and the one resolver it derives for an answer that arrives here. |
 | `internal/pipeline` | The nine stages as a graph definition over `internal/graph`: the stage contract, the fixed order, the state key table, the capabilities a path needs of the adapter, the fix loop, and its halt points and bounds. |
+| `internal/principles` | The build-time check that no principle the PRD lists goes unclaimed: the constants pinned to that list, the `Cite` call a test claims a principle with, the scan that finds those calls, and the written table of what nothing claims. |
 | `internal/runs` | The run service: the anchored table of a run's status changes, and the one durable fixer session a run keeps, recorded on the run so a restarted service resumes the same conversation. |
 | `internal/safety` | The data-loss policy over git: whether a branch update may proceed, on what anchor, and when to refuse. |
 | `internal/scope` | The review stage's scope lens, not a tenth stage: the guidance a reviewer traces each touched path against, and the note an untraced path becomes. |

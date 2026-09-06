@@ -6,6 +6,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/safety"
 )
 
@@ -15,6 +16,7 @@ import (
 // has to be rather than about what a commit identifier says.
 
 func TestDecideRefusesAnAnchorThatIsNotAnObservation(t *testing.T) {
+	principles.Cite(t, principles.P6)
 	t.Parallel()
 	git := &fakeGit{
 		parents:    linear("c1", "c2"),

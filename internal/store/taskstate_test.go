@@ -6,11 +6,14 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+
+	"github.com/dayamjz/assistant/internal/principles"
 )
 
 // P8: the event log is not current state. Appending events changes nothing
 // about what is true now, and the two records answer different questions.
 func TestAppendingEventsDoesNotChangeState(t *testing.T) {
+	principles.Cite(t, principles.P8)
 	ctx := context.Background()
 	s := openStore(t)
 	task := seedTask(t, s, "task-1")

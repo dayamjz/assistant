@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/findings"
+	"github.com/dayamjz/assistant/internal/principles"
 )
 
 func TestParseActionRecognizesTheThreeActions(t *testing.T) {
@@ -28,6 +29,7 @@ func TestParseActionRecognizesTheThreeActions(t *testing.T) {
 // P3: no action, an empty action, and an action the system does not recognize
 // all become ask.
 func TestParseActionFailsClosedToAsk(t *testing.T) {
+	principles.Cite(t, principles.P3)
 	for _, in := range []string{
 		"", "   ", "unknown", "fixme", "fix it", "FIX_ME", "auto", "resolve",
 		"none", "null", "note.", "fix-it", "ﬁx",

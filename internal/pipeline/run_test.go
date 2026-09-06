@@ -8,6 +8,7 @@ import (
 	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/findings"
 	"github.com/dayamjz/assistant/internal/graph"
+	"github.com/dayamjz/assistant/internal/principles"
 )
 
 func TestARunWhereEveryStagePassesCompletes(t *testing.T) {
@@ -127,6 +128,7 @@ func TestAnAskFindingHoldsAReportThatAlsoHasFixableFindings(t *testing.T) {
 // action is not fix-eligible and is not a note, so the stage holds for a
 // person rather than advancing.
 func TestAnUnclassifiedFindingHolds(t *testing.T) {
+	principles.Cite(t, principles.P3)
 	for _, action := range []findings.Action{findings.ActionUnset, findings.Action("resolve-it")} {
 		t.Run(string(action)+"/", func(t *testing.T) {
 			c := newCalls()
