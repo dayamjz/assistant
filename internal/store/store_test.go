@@ -69,6 +69,19 @@ func TestAccessorsRefuseAfterClose(t *testing.T) {
 		"TaskEvents":  func() error { _, err := s.TaskEvents(ctx, "task-1", 0, 0); return err },
 		"OpenHolds":   func() error { _, err := s.OpenHolds(ctx); return err },
 		"AppendEvent": func() error { _, err := s.AppendTaskEvent(ctx, "task-1", "kind", ""); return err },
+		"AppendGraphCheckpoint": func() error {
+			_, err := s.AppendGraphCheckpoint(ctx, "run-1", "", 0, []byte("cp"))
+			return err
+		},
+		"CopyGraphCheckpoints": func() error {
+			_, err := s.CopyGraphCheckpoints(ctx, "fork-1", [][]byte{[]byte("cp")})
+			return err
+		},
+		"LatestGraphCheckpoint": func() error { _, err := s.LatestGraphCheckpoint(ctx, "run-1"); return err },
+		"GraphCheckpointHistory": func() error {
+			_, err := s.GraphCheckpointHistory(ctx, "run-1")
+			return err
+		},
 	}
 	for name, check := range checks {
 		if err := check(); !errors.Is(err, ErrClosed) {

@@ -94,6 +94,46 @@ func (e *RunStatusError) Error() string {
 // Unwrap makes every refused transition match ErrRunStatus.
 func (e *RunStatusError) Unwrap() error { return ErrRunStatus }
 
+// ErrGraphRunExists is returned by AppendGraphCheckpoint when an append that
+// claims a run as new finds the run already has a checkpoint history, and by
+// CopyGraphCheckpoints when its destination does. Writing over either would
+// discard positions a run actually stood in, so it is a typed result a caller
+// branches on rather than a failed write.
+var ErrGraphRunExists = errors.New("store: run already has a checkpoint history")
+
+// ErrGraphAnchor is the class every *GraphAnchorError belongs to. It is
+// returned by AppendGraphCheckpoint when the run moved after the caller read
+// it, so the append was decided against a position the run no longer stands
+// in. Read the run again and decide again from what it says now; retrying the
+// same append would record a decision made against a run that has moved on.
+var ErrGraphAnchor = errors.New("store: the run moved since the checkpoint this append is anchored to")
+
+// GraphAnchorError reports a refused append and names where the run actually
+// stands, so a caller reports the position it found rather than only that it
+// was surprised by one.
+type GraphAnchorError struct {
+	// Run is the run the append was for.
+	Run string
+	// AnchorRun is the run the anchor named, which is some other run when that
+	// is what was wrong with it.
+	AnchorRun string
+	// AnchorSeq is the sequence the anchor named.
+	AnchorSeq int
+	// Stands is the sequence the run's history actually reaches, and is zero
+	// when the run has none.
+	Stands int
+}
+
+// Error names the run, the anchor the append was decided against, and the
+// position the run is actually at.
+func (e *GraphAnchorError) Error() string {
+	return fmt.Sprintf("store: run %s stands at checkpoint %d, so an append anchored to %s#%d is refused",
+		e.Run, e.Stands, e.AnchorRun, e.AnchorSeq)
+}
+
+// Unwrap makes every refused append match ErrGraphAnchor.
+func (e *GraphAnchorError) Unwrap() error { return ErrGraphAnchor }
+
 // ErrClosed is returned by every accessor called after Close.
 var ErrClosed = errors.New("store: database is closed")
 

@@ -149,13 +149,12 @@
 // cannot answer for. Service.Hold records that a run is waiting and nothing
 // about what is being decided.
 //
-// It does not make a run's checkpoints durable. internal/graph's
-// CheckpointStore needs a run's whole checkpoint history with anchored writes
-// and a fork, and internal/store's checkpoint record is one row per run
-// rewritten in place, so nothing in this repository implements that interface
-// against a database. A run therefore survives a process restart here as a
-// record and not yet as a position, and closing that is not this package's to
-// decide alone.
+// It does not make a run's checkpoints durable. That is internal/checkpoints,
+// which implements internal/graph's CheckpointStore over internal/store, so a
+// run's position outlives the process that reached it. What this package's
+// record answers is what a run is and where it stands in its lifecycle; where
+// it stands in its graph is that history's, and the two are not the same
+// question.
 //
 // # Residual gaps
 //
