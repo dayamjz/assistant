@@ -17,6 +17,15 @@ violates one is wrong even when it works and even when its tests pass.
 When the code and the PRD disagree, that is a finding to raise, not a
 documentation gap to close. Do not edit the PRD to match the code.
 
+Section 5 reserves two words that used to be interchangeable. A **hold** waits
+on a person; a **park** is a bound stopping the run. `internal/findings` owns
+the hold predicate (`Holds`, `Held`, `HasHeld`) and counts no bounds, so
+nothing there parks. `internal/graph` owns the three parks, and
+`graph.Status.Stopped` is named after neither because it is the union of both.
+Section 5's prose still says "parks" for an `ask` finding in four places that
+predate the amendment at `ec8b4af`; that is an open finding against the PRD,
+not a licence to name code after it.
+
 ## The principles that most often get violated by accident
 
 - **P3.** A finding with a missing, empty, or unrecognized action becomes `ask`.

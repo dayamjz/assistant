@@ -622,8 +622,9 @@ func (e *Executor) park(ctx context.Context, cp Checkpoint) (Result, error) {
 // and a checkpoint the executor produced was copied from nothing, so carrying
 // the field forward off a resumed fork would give that fact a second owner.
 // It clears the reason on the same grounds whenever the status it is writing
-// is not a parked one, because a reason explains a park and nothing else, and
-// a run that moved on from a park has left that explanation behind.
+// is one the run advances out of on its own, because a reason explains a run
+// that stopped short, and a run that moved on has left that explanation
+// behind.
 //
 // It clears a halt point's answer key on every checkpoint it writes that
 // stands at that halt point without running it, whichever route left the run
@@ -657,7 +658,7 @@ func (e *Executor) park(ctx context.Context, cp Checkpoint) (Result, error) {
 // comparison covers both halves of the Write contract.
 func (e *Executor) persist(ctx context.Context, cp *Checkpoint) error {
 	cp.ForkedFrom = nil
-	if !cp.Status.Parked() {
+	if !cp.Status.Stopped() {
 		cp.Reason = ""
 	}
 	if idx, ok := e.graph.index[cp.Position]; ok && cp.Status != StatusRunning {

@@ -234,18 +234,16 @@ type Finding struct {
 // on this predicate.
 func (f Finding) FixEligible() bool { return f.Action == ActionFix }
 
-// Parks reports whether this finding holds the stage for a person's decision.
+// Holds reports whether this finding holds the stage for a person's decision.
 // It is true for exactly ActionAsk after normalization; on an un-normalized
 // finding an unrecognized action reports false here while still reporting
 // false from FixEligible, so nothing is ever both.
 //
-// The name predates the PRD section 5 amendment on this branch and reads
-// against the vocabulary that amendment settled: what Parks, Parked, and
-// Report.HasParked mean is a hold, a stage waiting on a person's decision, and
-// not a park, which now names a bound stopping the run and is the sense
-// internal/graph uses the word in. Renaming the three is a queued follow-up,
-// not an oversight.
-func (f Finding) Parks() bool { return f.Action == ActionAsk }
+// The name is the word PRD section 5 reserves for this: a hold waits on a
+// person, and a park is a bound stopping the run, which is the sense
+// internal/graph uses. Nothing in this package parks, because no bound is
+// counted here.
+func (f Finding) Holds() bool { return f.Action == ActionAsk }
 
 // normalized returns the finding with its text trimmed, its action and
 // severity resolved to recognized values, and a negative line replaced by
@@ -269,9 +267,9 @@ func (f Finding) normalized() Finding {
 // ask or a note. The result is a new slice and shares no backing array with fs.
 func Fixable(fs []Finding) []Finding { return selectBy(fs, Finding.FixEligible) }
 
-// Parked returns the findings holding for a person's decision, in their
-// original order, as a new slice. On the name, see Finding.Parks.
-func Parked(fs []Finding) []Finding { return selectBy(fs, Finding.Parks) }
+// Held returns the findings holding for a person's decision, in their
+// original order, as a new slice. On the name, see Finding.Holds.
+func Held(fs []Finding) []Finding { return selectBy(fs, Finding.Holds) }
 
 // selectBy returns the findings satisfying keep, in order, as a new slice.
 func selectBy(fs []Finding, keep func(Finding) bool) []Finding {

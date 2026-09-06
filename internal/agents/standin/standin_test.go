@@ -85,8 +85,8 @@ func TestUnrecognizedAndMissingActionsBecomeAsks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("running the unclassified report: %v", err)
 	}
-	if parked := result.Report.Parked(); len(parked) != 2 {
-		t.Errorf("parked findings are %v, want both of them", parked)
+	if held := result.Report.Held(); len(held) != 2 {
+		t.Errorf("held findings are %v, want both of them", held)
 	}
 	if fixable := result.Report.Fixable(); len(fixable) != 0 {
 		t.Errorf("fixable findings are %v, want none: an unclassified finding is never fixable", fixable)

@@ -30,7 +30,7 @@ func TestFixEligibleIsTrueForFixAndNothingElse(t *testing.T) {
 	}
 }
 
-func TestParksIsTrueForAskOnly(t *testing.T) {
+func TestHoldsIsTrueForAskOnly(t *testing.T) {
 	for _, tc := range []struct {
 		action findings.Action
 		want   bool
@@ -42,8 +42,8 @@ func TestParksIsTrueForAskOnly(t *testing.T) {
 		{findings.Action("ASK"), false},
 	} {
 		f := findings.Finding{Action: tc.action, Description: "d"}
-		if got := f.Parks(); got != tc.want {
-			t.Errorf("Finding{Action: %q}.Parks() = %v, want %v", tc.action, got, tc.want)
+		if got := f.Holds(); got != tc.want {
+			t.Errorf("Finding{Action: %q}.Holds() = %v, want %v", tc.action, got, tc.want)
 		}
 	}
 }
@@ -90,15 +90,15 @@ func TestFixableDoesNotAliasItsInput(t *testing.T) {
 	}
 }
 
-func TestParkedReturnsOnlyAsks(t *testing.T) {
+func TestHeldReturnsOnlyAsks(t *testing.T) {
 	in := []findings.Finding{
 		{ID: "1", Action: findings.ActionFix, Description: "typo"},
 		{ID: "2", Action: findings.ActionAsk, Description: "judgment"},
 		{ID: "3", Action: findings.ActionNote, Description: "noted"},
 	}
-	got := findings.Parked(in)
+	got := findings.Held(in)
 	if len(got) != 1 || got[0].ID != "2" {
-		t.Fatalf("Parked = %+v, want just the ask", got)
+		t.Fatalf("Held = %+v, want just the ask", got)
 	}
 }
 

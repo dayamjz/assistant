@@ -316,7 +316,7 @@ func plantFindingsWithoutAction(b *builder, s *Scenario) ([]Condition, error) {
 			Mechanism: "findings.ParseReport, then Report.Normalize",
 			Expect: Outcome{
 				Summary: "The report parses, the finding survives, and its action is ask. It is not " +
-					"fix-eligible and never enters the automatic fix loop; it parks for a person. " +
+					"fix-eligible and never enters the automatic fix loop; it holds for a person. " +
 					"A run that reported " + r.missing + " as an error, or dropped the finding, has the " +
 					"wrong answer: this is defined behavior, not an error path.",
 				Value: "findings.ActionAsk",

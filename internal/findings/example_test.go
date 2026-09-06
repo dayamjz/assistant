@@ -31,7 +31,7 @@ func ExampleParseReport() {
 		fmt.Printf("%s %s %s: %s\n", f.Severity, f.Action, f.Location, f.Description)
 	}
 	fmt.Println("fix rounds may touch:", len(report.Fixable()))
-	fmt.Println("waiting on a person:", report.HasParked())
+	fmt.Println("waiting on a person:", report.HasHeld())
 
 	// Output:
 	// risk: medium

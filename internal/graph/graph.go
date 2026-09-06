@@ -310,13 +310,17 @@ func haltAnswered(n Node, s State) bool {
 	return answerAllowed(n.Halt.Options, answer)
 }
 
-// validateReason refuses a reason on a checkpoint that is not parked. A reason
-// explains why a run stopped short, so carrying one on a run that is still
-// going or that finished would report a park that never happened.
+// validateReason refuses a reason on a checkpoint the run can still advance
+// out of on its own. A reason explains why a run stopped short, so carrying
+// one on a run that is still going or that finished would report a stop that
+// never happened. It is Status.Stopped that is read here rather than the
+// narrower question of a park, so a hand-built halted checkpoint carrying a
+// reason passes: the executor sets a reason only when a bound parks the run,
+// and nothing here holds a caller to that.
 func (g *Graph) validateReason(c Checkpoint) error {
-	if c.Reason != "" && !c.Status.Parked() {
+	if c.Reason != "" && !c.Status.Stopped() {
 		return &CheckpointError{Field: "reason", Detail: fmt.Sprintf(
-			"is set on a run that is %s, and a reason explains a parked run and nothing else", c.Status)}
+			"is set on a run that is %s, and a reason explains a run that stopped short and nothing else", c.Status)}
 	}
 	return nil
 }

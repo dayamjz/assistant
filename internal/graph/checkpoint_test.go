@@ -1002,7 +1002,7 @@ func TestValidateRefusesACheckpointThatDoesNotMatchTheGraph(t *testing.T) {
 			},
 			field: "status",
 		},
-		"reason on a run that is not parked": {
+		"reason on a run that is still running": {
 			tamper: func(c *graph.Checkpoint) {
 				c.Status = graph.StatusRunning
 				c.Position = "prep"

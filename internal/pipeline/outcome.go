@@ -69,7 +69,7 @@ func holdAnswers() []string {
 // round limit allows.
 func classify(r findings.Report) Outcome {
 	switch {
-	case r.HasParked():
+	case r.HasHeld():
 		return OutcomeHeld
 	case len(r.Fixable()) > 0:
 		return OutcomeFixable

@@ -28,7 +28,7 @@
 //
 // Observe builds its findings itself and builds them with findings.ActionNote,
 // so a scope observation informs and blocks nothing: it never enters the
-// automatic fix loop and never parks a run for a decision. A line being
+// automatic fix loop and never holds a run for a decision. A line being
 // unexplained is not the bar for fix or ask. When a change nobody asked for is
 // also wrong, the wrongness is an ordinary review finding reported on its own
 // merits, by the reviewer, through the ordinary path; it does not come from
