@@ -47,6 +47,41 @@ review:
         a clean pass, and an unrecognized risk word is not mapped to a neighbor.
         Severity is a deliberate exception, defaulting to warning because it
         never decides who resolves a finding.
+        The review stage answers for one rule more, and only through
+        ParseReviewReport: a review report is bound to the revision it reports
+        and the paths it declared reading. The other eight stages use
+        ParseReport and answer to none of it.
+        A report whose revision is not the one the run asked about is refused
+        whole, and that is the only whole-report refusal the binding adds. A
+        finding naming a path the evidence set does not hold is refused for
+        want of evidence and recorded as a note quoting the claim, never
+        dropped and never an error. That refusal is decided by what the finding
+        names and not by what it asks for, so it applies to an action P3 would
+        have defaulted exactly as it applies to a stated one.
+        The demotion runs the other way: a finding that names no path is
+        recorded as a note only where the reviewer stated an action this
+        package recognizes, because P3 outranks it. That is why the binding
+        runs before Normalize and is reachable only through ParseReviewReport,
+        and a path that binds a report already normalized, stored, or built by
+        hand turns a hold P3 fixed into a note.
+        Declaring the whole diff is a permitted answer rather than an error,
+        and it forfeits every finding that reaches past the diff. Both halves
+        of the comparison, what was read beyond the change and what the change
+        touched and nobody declared, are reported every time, empty or not:
+        that visibility is the discriminator, so reporting them only when they
+        are non-empty removes it.
+        A bound review report therefore never comes back with an empty findings
+        list, and a review that found nothing is one whose findings are all
+        notes.
+        What the binding does not do is establish that the reviewer read
+        anything. The evidence set is the reviewer's own claim, no path here is
+        resolved against a filesystem, and citing is voluntary by the PRD's own
+        design, so the forfeit bites only a finding that volunteers its reach
+        through a location or a citation. Asking for more is asking this
+        package to judge what a finding's reasoning rests on.
+        Demand.Guidance is the text the reviewer is held to, so it and the
+        binding change together; a reviewer held to a rule nobody stated is a
+        trap rather than a check.
 
     - path: "internal/vcs/**"
       instructions: |
@@ -88,6 +123,29 @@ review:
         A column added later reads back as unknown for old rows. A caller may
         substitute a zero on purpose, but nothing here may hand one out.
         No SQL outside this package: the answer to a needed query is an accessor.
+        Who resolved a hold records and does not gate. Nothing may read a
+        Resolver to decide whether a resolution may proceed: ResolveHold treats
+        every member identically and the value changes only what the record
+        says afterwards, so a resolution that became refused because of what
+        its record would say would be this column deciding something. Reading
+        it as an authorization check is how a review comes to file confident
+        wrong findings about decisions standing authority permits.
+        The closed set is the type rather than a check at the write: one
+        unexported field, no conversion into it, and members that are functions
+        because a variable is assignable, so nothing decoded from a wire, a
+        configuration file, or an agent's output is a Resolver. Giving it the
+        defined string type every other vocabulary here uses would open it. The
+        write and the read run off one table, so the column cannot come to hold
+        a value a read would refuse, and the zero Resolver names nobody and is
+        refused rather than stored.
+        What keeps the person value out of a record is where it may be written
+        rather than anything checked at the write: ResolveHold records the
+        Resolver its caller names and weighs nothing about the surface that
+        caller speaks for. The absent check is not the gap to report; the rule
+        is that only a surface which witnessed a person may name that value,
+        and this repository has none. ResolvedBy is unknown for an open hold
+        and for one resolved before the column existed, which is a different
+        fact from a resolution nobody is recorded for.
 
     - path: "internal/agents/**"
       instructions: |
@@ -101,6 +159,35 @@ review:
         invocation error instead.
         Agent output is parsed by internal/findings only, per P14, and output
         that yields no valid report is an error, never a zero report with nil.
+        Shape rides on the shared Invocation, so ShapeReview is a second way to
+        say review that the split between the two entry points does not reach.
+        Invocation.ValidateForFixer is the one rule that closes it: a review
+        shape reaching a session that outlives the round is refused with
+        ErrReviewInFixerSession before any process starts, and a fixer path
+        asks it instead of Validate. A Shape added later belongs on one side of
+        that line the same way an entry point does. Invocation.Validate
+        requires Invocation.Review, the findings.Demand, for ShapeReview and
+        refuses it for every other shape, so review output cannot be read
+        unbound and a demand cannot be attached to output nobody binds. This
+        package assembles no prompt, so an invocation whose prompt never stated
+        the demand still binds against it; telling the reviewer is the stage's
+        job and not a gap here.
+        An adapter declares what it supports through Runner.Capabilities, the
+        set is the table in capability.go, and undeclared means unavailable: an
+        unrecognized capability satisfies nothing, so naming one can only
+        refuse a path and never open one. The declaration is read rather than
+        derived from the type. Where a capability's row carries a probe,
+        Resolve holds declaration and type to each other in both directions and
+        ends the whole resolution when they disagree, and OpenFixer consults
+        the declaration before the type.
+        Two gaps that leaves are worth knowing before reporting one. A row with
+        no probe is a declaration taken at its word here, and nothing in this
+        package refuses a suppression request because nothing here is asked to
+        suppress anything; that refusal is internal/pipeline's, taken when it
+        builds the topology. And SessionRunner is exported, so a caller that
+        built a Runner itself and asserted on it reaches a session with no
+        declaration read at all, which Resolve closes only for a Runner it
+        returned.
 
     - path: "internal/safety/**"
       instructions: |
