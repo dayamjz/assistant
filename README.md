@@ -10,7 +10,7 @@ until it has been independently reviewed, tested, documented, and linted.
 ## Status
 
 Early. The product requirements are settled and checked in at
-[`docs/prd.html`](docs/prd.html). Thirteen pieces exist so far. The execution
+[`docs/prd.html`](docs/prd.html). Fourteen pieces exist so far. The execution
 engine in `internal/graph` is the first: the graph builder with its
 construction-time checks, an executor with halt points and bounded cycles, and
 checkpoints behind a four-operation store. The second is `internal/findings`,
@@ -64,11 +64,17 @@ produces is always a note that informs and blocks nothing. The thirteenth is
 `internal/fixture`, the adversarial subject repository the end-to-end harness
 validates against: seven scenarios built from nothing on demand, each planting
 conditions a stage or a refusal has to answer, with the answer each one must
-produce recorded beside it. The nine stage bodies are separate work against that
-contract and do not exist yet, including the review stage that puts the scope
-lens in front of a reviewer and binds what comes back to what the reviewer
-declared reading, and neither the harness nor the `assistant` binary exists
-either, so the only thing in here you can run is the fixture builder.
+produce recorded beside it. The fourteenth is `internal/runs`, the service that
+owns a run: its status changes as a table of anchored moves, each read and
+written in one transaction against the statuses the move is legal out of, and
+the one durable fixer session a run keeps, recorded on the run itself rather
+than in pipeline state, so a run's fixer resumes the same conversation across a
+segment boundary and across a restart of the service. The nine stage bodies are
+separate work against that contract and do not exist yet, including the review
+stage that puts the scope lens in front of a reviewer and binds what comes back
+to what the reviewer declared reading, and neither the harness nor the
+`assistant` binary exists either, so the only thing in here you can run is the
+fixture builder.
 
 ## The two promises
 

@@ -170,8 +170,8 @@ type Fixer struct {
 	// internal/runs records it on the run and hands a body the run's fixer
 	// role, so a closure that asks that service for one gets a session that
 	// survives the break. Within one process the new body comes from this same
-	// closure whatever it captures, which this package neither requires nor
-	// refuses.
+	// closure, so whatever it captures survives, which this package neither
+	// requires nor refuses.
 	//
 	// The asymmetry with Implementation.NewBody, which is built per execution,
 	// is the point: only the fixer keeps a session across rounds.
