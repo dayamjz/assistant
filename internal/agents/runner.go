@@ -140,7 +140,7 @@ type Fixer interface {
 	// Reference is the agent's opaque handle for this session, empty before
 	// the first round has produced one. It is a reference, not content: a
 	// caller persists it so a restarted service can resume the same fixer
-	// session, and passes it back to Runner.Fixer.
+	// session, and passes it back through OpenFixer.
 	Reference() string
 }
 
