@@ -133,6 +133,34 @@
 // prevent. Where a fact cannot be established, the request is refused. An
 // unidentified peer, and an ancestry that could not answer, both refuse.
 //
+// # What a resolution arriving here may say about who made it
+//
+// PRD section 8 requires every hold resolution to record who resolved it, from
+// a closed set internal/store owns, and requires the value meaning a person
+// decided to be unreachable from any path an agent reaches. This protocol is
+// such a path. MethodRunRespond is restricted, so the code under validation
+// cannot reach it, but a coordinator under the authority PRD section 9 gives it
+// can, and that is intended: the rule is about what a call may say, not about
+// who may call.
+//
+// Request.HoldResolver is the whole of this package's part in that. No frame
+// defined here has a field for a resolver, exactly as none has a field for a
+// process identifier, so there is nothing to write one into; and the answer is
+// derived from the surface rather than read out of the request, so no method,
+// marker, or parameter body reaches it. Every resolution that arrives here is
+// store.ResolvedByMachineInterface.
+//
+// A person answering through a client of this protocol is recorded that way
+// too. That is deliberate: a person's client and an agent's client reach the
+// same socket as the same user, so no fact the kernel attributes to a
+// connection separates them, and a client that declared which it was would be
+// authorizing itself out of the rule. The record understates who decided rather
+// than overstating it.
+//
+// It records and does not gate. Nothing here reads the value to decide whether
+// a call is served: the access class in the method table is the whole of that
+// decision, and it is unchanged by this.
+//
 // # What one connection may hold at once
 //
 // A connection holds a bounded number of open streams and a bounded number of

@@ -49,6 +49,36 @@
 // makes the correct call the easy one, not an enforcement, and no package that
 // hands back history can be more than that.
 //
+// # Who resolved a hold
+//
+// PRD section 8 requires every hold resolution to record who made it, from a
+// closed set, and requires that the value meaning a person decided cannot be
+// produced by any path an agent reaches. ResolveHold therefore takes a Resolver
+// as well as an answer, and refuses one that names nobody.
+//
+// The closed set is the Resolver type rather than a check the accessor runs.
+// Every other vocabulary here is a defined string type, which a caller can
+// build out of text it was handed; a Resolver has one unexported field and no
+// conversion into it, so nothing decoded from a wire, a file, or an agent's
+// output is one. What a surface may record is decided in source at that
+// surface, and this package holds the set both ends of the column agree on.
+//
+// The value meaning a person decided has no producer in this repository, and
+// that is the design rather than an omission. It belongs to a surface that
+// witnessed the person, and the local protocol is not one: a person's client
+// and an agent's client reach the same socket as the same user, so nothing the
+// kernel attributes to a connection separates them and everything that would
+// is a claim the caller writes about itself. internal/ipc answers
+// ResolvedByMachineInterface for every resolution that arrives there. The
+// record therefore understates who decided rather than overstating it, which
+// is the direction that keeps it worth reading.
+//
+// This records and does not gate, which PRD section 8 states as a requirement
+// rather than an aside. Nothing here reads a resolver to decide whether a
+// resolution may proceed: every member closes a hold on the same terms, and a
+// resolution that became refused because of what its record would say would be
+// this column deciding something.
+//
 // # Schema changes are additive, and the check is against the database
 //
 // PRD section 8 fixes the rule: schema changes are additive, and a column added

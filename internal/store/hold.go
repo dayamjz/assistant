@@ -15,6 +15,11 @@ import (
 // by the surrounding work finishing. This package keeps that literally: the
 // only accessor that writes a resolution is ResolveHold, and it refuses an
 // empty one. Nothing about a run's status touches a hold.
+//
+// The same section requires the resolution to record who made it, so
+// ResolveHold takes a Resolver as well as an answer and refuses a resolution
+// that names nobody. See Resolver for what the set is and for why the value
+// meaning a person decided cannot arrive from a wire.
 type Hold struct {
 	// Key is the stable identifier of the decision. Registering the same key
 	// again is a no-op.
@@ -35,6 +40,11 @@ type Hold struct {
 	Resolution Optional[string]
 	// ResolvedAt is when it was decided, unknown while the hold is open.
 	ResolvedAt Optional[time.Time]
+	// ResolvedBy is who decided, from the closed set Resolver defines. It is
+	// unknown while the hold is open, and unknown for a hold resolved before
+	// the column existed, which is a different fact from a resolution nobody
+	// is recorded for: ResolveHold refuses to create one of those.
+	ResolvedBy Optional[Resolver]
 }
 
 // Open reports whether the hold is still waiting on a person.
@@ -55,8 +65,8 @@ func (s *Store) RegisterHold(ctx context.Context, h Hold) (Hold, error) {
 	now := nowUTC()
 	err := s.inTx(ctx, func(tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `
-			INSERT INTO hold (key, run_id, task_id, subject, detail, opened_at, resolution, resolved_at)
-			VALUES (?, ?, ?, ?, ?, ?, NULL, NULL)
+			INSERT INTO hold (key, run_id, task_id, subject, detail, opened_at, resolution, resolved_at, resolved_by)
+			VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, NULL)
 			ON CONFLICT(key) DO NOTHING`,
 			h.Key, h.RunID, h.TaskID, h.Subject, h.Detail, encodeTime(now))
 		return err
@@ -67,19 +77,31 @@ func (s *Store) RegisterHold(ctx context.Context, h Hold) (Hold, error) {
 	return s.Hold(ctx, h.Key)
 }
 
-// ResolveHold closes a hold with an explicit resolution and returns it as
-// stored. It refuses an empty resolution with ErrNoResolution, and it refuses
-// with ErrHoldResolved to overwrite a resolution that is already there: the
-// second decision on a closed hold is a new decision and belongs to a new key.
-// A hold that does not exist is ErrNotFound.
-func (s *Store) ResolveHold(ctx context.Context, key, resolution string) (Hold, error) {
+// ResolveHold closes a hold with an explicit resolution, recorded as made by
+// by, and returns the hold as stored. It refuses an empty resolution with
+// ErrNoResolution and a resolution that names nobody with ErrNoResolver, and it
+// refuses with ErrHoldResolved to overwrite a resolution that is already there:
+// the second decision on a closed hold is a new decision and belongs to a new
+// key. A hold that does not exist is ErrNotFound.
+//
+// Who resolved is recorded and is not consulted. Every member of the set closes
+// a hold on the same terms, this accessor has no branch on the value, and a
+// resolution one member may make is a resolution every member may make. PRD
+// section 8 requires that: the record exists so a history can say who made each
+// call, and a resolution that became refused because of what it would say would
+// be this record gating rather than recording.
+func (s *Store) ResolveHold(ctx context.Context, key, resolution string, by Resolver) (Hold, error) {
 	if strings.TrimSpace(resolution) == "" {
 		return Hold{}, fmt.Errorf("%w: hold %s", ErrNoResolution, key)
 	}
-	err := s.inTx(ctx, func(tx *sql.Tx) error {
+	resolver, err := resolverText(by)
+	if err != nil {
+		return Hold{}, fmt.Errorf("store: resolving hold %s: %w", key, err)
+	}
+	err = s.inTx(ctx, func(tx *sql.Tx) error {
 		result, err := tx.ExecContext(ctx,
-			`UPDATE hold SET resolution = ?, resolved_at = ? WHERE key = ? AND resolution IS NULL`,
-			resolution, encodeTime(nowUTC()), key)
+			`UPDATE hold SET resolution = ?, resolved_at = ?, resolved_by = ? WHERE key = ? AND resolution IS NULL`,
+			resolution, encodeTime(nowUTC()), resolver, key)
 		if err != nil {
 			return err
 		}
@@ -144,13 +166,13 @@ func (s *Store) OpenHolds(ctx context.Context) ([]Hold, error) {
 	return out, nil
 }
 
-const holdColumns = `SELECT key, run_id, task_id, subject, detail, opened_at, resolution, resolved_at`
+const holdColumns = `SELECT key, run_id, task_id, subject, detail, opened_at, resolution, resolved_at, resolved_by`
 
 func scanHold(sc scanner) (Hold, error) {
 	var h Hold
 	var opened string
-	var resolvedAt Optional[string]
-	if err := sc.Scan(&h.Key, &h.RunID, &h.TaskID, &h.Subject, &h.Detail, &opened, &h.Resolution, &resolvedAt); err != nil {
+	var resolvedAt, resolvedBy Optional[string]
+	if err := sc.Scan(&h.Key, &h.RunID, &h.TaskID, &h.Subject, &h.Detail, &opened, &h.Resolution, &resolvedAt, &resolvedBy); err != nil {
 		return Hold{}, err
 	}
 	var err error
@@ -158,6 +180,9 @@ func scanHold(sc scanner) (Hold, error) {
 		return Hold{}, err
 	}
 	if h.ResolvedAt, err = optionalTimeValue(resolvedAt, "resolved_at"); err != nil {
+		return Hold{}, err
+	}
+	if h.ResolvedBy, err = resolverValue(resolvedBy, "resolved_by"); err != nil {
 		return Hold{}, err
 	}
 	return h, nil

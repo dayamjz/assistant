@@ -99,7 +99,14 @@ Each has cost this repository more than one round of review.
   driver is pure Go on purpose, so `make check` needs no cgo on any platform.
   A schema change is a new migration appended to `schema.go`, never an edit to
   one that has shipped; the tests number what they append from the shipped list
-  rather than spelling a version out.
+  rather than spelling a version out. It also owns who resolved a hold:
+  `Resolver` is a closed set, and it is a struct with an unexported field rather
+  than the defined string type every other vocabulary here uses, so no text a
+  caller was handed decodes into one. `ResolvedByPerson` has no producer in this
+  repository on purpose, because no surface here witnesses a person; the record
+  understates who decided rather than overstating it. It records and does not
+  gate, so nothing may branch on the value to decide whether a resolution may
+  proceed. Read its `doc.go` before changing any of that.
 - `internal/safety` owns whether a branch update may proceed and on what anchor.
   `internal/vcs` stays mechanism only, so a lease, an incorporation check, or a
   force decision belongs in `internal/safety` even when it would be shorter to
@@ -183,8 +190,11 @@ Each has cost this repository more than one round of review.
   unrecognized type is state, so a type added later is retained; adding a type
   means adding a row to the class table in `event.go`. Authority over a request
   comes from `Credentials`, read off the socket, and never from `Marker`, which
-  a caller writes for itself. Read its `doc.go` for where state may still be
-  collapsed into a gap marker and why that is not the strict rule relaxed.
+  a caller writes for itself. A third follows from the second: no frame here has
+  a field for who resolved a hold, and `Request.HoldResolver` derives the answer
+  from the surface rather than reading it, so a caller cannot claim a person
+  decided. Read its `doc.go` for where state may still be collapsed into a gap
+  marker and why that is not the strict rule relaxed.
 - `internal/pipeline` is the nine stages as a graph definition, not a second
   executor: `internal/graph` owns execution, halting, and all three bounds. P2
   is structural there rather than checked. A `Stages` is nine named fields, so
