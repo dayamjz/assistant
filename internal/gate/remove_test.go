@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/gate"
+	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/vcs"
 )
 
@@ -204,6 +205,7 @@ func TestRemoveRefusesAPathOutsideTheHomesRepositories(t *testing.T) {
 // path that is in the right place but cannot be identified as a gate. The
 // record is what says a directory is one, per PRD principle P14.
 func TestRemoveRefusesARepositoryCarryingNoGateRecord(t *testing.T) {
+	principles.Cite(t, principles.P14)
 	gitEnvironment(t)
 	wc := newWorkingCopy(t)
 	home, opts := newHome(t)

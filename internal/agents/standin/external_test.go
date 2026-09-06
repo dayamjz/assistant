@@ -6,6 +6,7 @@ import (
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/agents/standin"
 	"github.com/dayamjz/assistant/internal/findings"
+	"github.com/dayamjz/assistant/internal/principles"
 )
 
 // This is the shape a stage's own tests and the end-to-end harness use the
@@ -18,6 +19,7 @@ import (
 // thing the type split in internal/agents is arranged to make impossible and
 // this is the evidence for.
 func TestAReviewFixReviewLoopKeepsItsSessionsApart(t *testing.T) {
+	principles.Cite(t, principles.P4)
 	found := findings.Report{
 		Summary: "one thing needs fixing",
 		Findings: []findings.Finding{{

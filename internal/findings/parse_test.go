@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/findings"
+	"github.com/dayamjz/assistant/internal/principles"
 )
 
 const bareObject = `{
@@ -85,6 +86,7 @@ func TestParseReportIsDeterministic(t *testing.T) {
 // P3 through the parser: the four ways an action can fail to classify a
 // finding, and none of them may reach the fix loop.
 func TestParseReportSendsUnclassifiedFindingsToAsk(t *testing.T) {
+	principles.Cite(t, principles.P3)
 	raw := `{"summary": "reviewed", "findings": [
 	  {"severity": "error", "description": "no action field at all"},
 	  {"severity": "error", "action": "", "description": "empty action"},

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/dayamjz/assistant/internal/gate"
+	"github.com/dayamjz/assistant/internal/principles"
 )
 
 // TestOrdinaryPushToOriginIsUnaffected is PRD principle P1 as a test rather
@@ -24,6 +25,7 @@ import (
 // firing for a push to the gate. Without that pairing, a recorder that could
 // never fire would pass this test.
 func TestOrdinaryPushToOriginIsUnaffected(t *testing.T) {
+	principles.Cite(t, principles.P1)
 	gitEnvironment(t)
 	wc := newWorkingCopy(t)
 	home, opts := newHome(t)

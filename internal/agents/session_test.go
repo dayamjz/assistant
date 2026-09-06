@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/agents"
+	"github.com/dayamjz/assistant/internal/principles"
 )
 
 // P4 says reviewing and fixing are separate roles with separate memory. The
@@ -20,6 +21,7 @@ import (
 // which is what makes them a guard rather than a description.
 
 func TestInvocationHasNoSessionField(t *testing.T) {
+	principles.Cite(t, principles.P4)
 	typ := reflect.TypeFor[agents.Invocation]()
 	for i := range typ.NumField() {
 		field := typ.Field(i)
@@ -33,6 +35,7 @@ func TestInvocationHasNoSessionField(t *testing.T) {
 }
 
 func TestTheSessionFreeAndSessionCarryingRoutesAreDifferentMethods(t *testing.T) {
+	principles.Cite(t, principles.P4)
 	runner := reflect.TypeFor[agents.Runner]()
 
 	run, ok := runner.MethodByName("Run")
@@ -99,6 +102,7 @@ func methodOut(t reflect.Type) []reflect.Type {
 // every invocation, so a record reading SessionNone is evidence that this
 // package discarded it rather than evidence that there was nothing to discard.
 func TestEveryRunInvocationIsRecognizedAndSessionFree(t *testing.T) {
+	principles.Cite(t, principles.P4)
 	rec := &recorder{}
 	runner := newRunner(t, agents.WithRecorder(rec))
 	inv := invocation(t, agents.ShapeText, map[string]string{
@@ -128,6 +132,7 @@ func TestEveryRunInvocationIsRecognizedAndSessionFree(t *testing.T) {
 }
 
 func TestOnlyTheFixerCarriesASessionAcrossRounds(t *testing.T) {
+	principles.Cite(t, principles.P4)
 	rec := &recorder{}
 	runner := newRunner(t, agents.WithRecorder(rec))
 	fixer, err := agents.OpenFixer(t.Context(), runner, "")

@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/gate"
+	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/store"
 )
 
@@ -157,6 +158,7 @@ var _ gate.Index = unbindableIndex{}
 // scans the home for a gate nobody names, so the history in it would be
 // unreachable.
 func TestAFailedUnbindLeavesAReattachedGateFindable(t *testing.T) {
+	principles.Cite(t, principles.P6)
 	gitEnvironment(t)
 	wc := newWorkingCopy(t)
 	home, index, opts := homeWithIndex(t)

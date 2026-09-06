@@ -292,6 +292,17 @@ Each has cost this repository more than one round of review.
   tests run one to prove the tripwire fires. Nothing here decides how a harness
   drives a condition; what it ran into is in `OpenQuestions`. Build it with
   `scripts/build-fixture.sh DIR`, and read `doc.go` first.
+- `internal/principles` fails the build when a principle the PRD lists has no
+  test claiming it, and claiming is all a citation is: it says a test says it
+  checks that principle, never that it does. Nothing built on it may describe
+  it as coverage. A test cites with `principles.Cite(t, principles.P6)` inside
+  its own body and only that counts, so a comment naming a principle is not a
+  citation, which is the rule's point rather than a limitation of it. The PRD
+  owns the list, the constants are pinned to it in both directions, and where
+  nothing claims a principle the gap is a row in `unclaimed.go` rather than an
+  absence nobody can see. Read its `doc.go` before changing the rule, and for
+  the residual gaps: a citing test may check nothing, and the scan reads source
+  rather than a built test binary.
 
 ## Tests
 
@@ -302,6 +313,10 @@ Each has cost this repository more than one round of review.
   fail to build, and an undeclared shared state key must fail to build.
 - Concurrency rules need the race detector, so `make test` runs it and CI runs
   it on every platform.
+- A test that establishes a PRD principle cites it with `principles.Cite` as
+  well as saying so in its doc comment. The comment is what a reader learns
+  from; the call is what `internal/principles` can count, and a principle no
+  test cites fails `make check`.
 - A test that needs a coding agent scripts `internal/agents/standin` rather
   than writing its own `Runner`. A double that states typed values directly is
   how this repository shipped a dead guard once; one that answers over the wire

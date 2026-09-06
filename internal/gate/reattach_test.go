@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/gate"
+	"github.com/dayamjz/assistant/internal/principles"
 )
 
 // TestAMovedWorkingCopyKeepsItsGate is the reattachment PRD section 5
@@ -439,6 +440,7 @@ func TestATemplateCannotDisplaceTheAdmissionHookDuringARepair(t *testing.T) {
 // the gate gives the configuration a vote on admission, which is what PRD
 // principle P7 takes away from the pushed-from side.
 func TestAnUnmanagedTemplateHookArrivingDuringARepairIsRefused(t *testing.T) {
+	principles.Cite(t, principles.P7)
 	cfg := gitEnvironment(t)
 	wc := newWorkingCopy(t)
 	home, opts := newHome(t)

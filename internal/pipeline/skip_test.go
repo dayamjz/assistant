@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/graph"
+	"github.com/dayamjz/assistant/internal/principles"
 )
 
 // TestAnEmptyDiffAfterRebaseCompletesTheRunAndSkipsTheRest is PRD section 5's
@@ -47,6 +48,7 @@ func TestAnEmptyDiffAfterRebaseCompletesTheRunAndSkipsTheRest(t *testing.T) {
 // is TestConfigurationCannotChangeWhichStagesRun: Options has no way to say
 // this, and Start is the only place that does.
 func TestARunMaySkipAStageOnPurpose(t *testing.T) {
+	principles.Cite(t, principles.P2)
 	c := newCalls()
 	p := build(t, Options{Stages: recordingStages(c), Budget: 100})
 	begin := complete()

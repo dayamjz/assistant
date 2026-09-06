@@ -8,6 +8,7 @@ import (
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/agents/standin"
 	"github.com/dayamjz/assistant/internal/findings"
+	"github.com/dayamjz/assistant/internal/principles"
 )
 
 // The change these reviews are about: one commit, one path the change touched,
@@ -154,6 +155,7 @@ func TestAReviewOfAnotherRevisionIsRefusedByTheAdapter(t *testing.T) {
 // reviewer prints a finding with no action and no location: the evidence rule
 // would demote an unsupported finding to a note, and P3 outranks it.
 func TestP3SurvivesTheReviewBindingOnTheWire(t *testing.T) {
+	principles.Cite(t, principles.P3)
 	t.Parallel()
 	unclassified := findings.Report{
 		Summary:  "One pass over the change.",
@@ -246,6 +248,7 @@ func TestAReviewDemandBelongsToTheReviewShapeAlone(t *testing.T) {
 // the refusal is this rule firing rather than anything else about the
 // invocation or the reviewer's report.
 func TestAReviewShapeIsRefusedByTheFixer(t *testing.T) {
+	principles.Cite(t, principles.P4)
 	t.Parallel()
 	agent := standin.New(t, standin.Script{Steps: []standin.Step{{
 		Times: standin.Always,
