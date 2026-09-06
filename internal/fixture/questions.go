@@ -31,13 +31,10 @@ func OpenQuestions() []OpenQuestion {
 				"conditions whose identifiers end in -review-path state the revision the report read, " +
 				"because findings.ParseReviewReport refuses a report naming any other commit before a " +
 				"finding is reached. The revision they state is Commits[\"branch-head\"] as the build " +
-				"left it, and what the review stage is asked about is the run's to decide, so a " +
-				"harness has to substitute the commit the run named. That is the same substitution " +
-				"question-provider-response-delivery records for the checks answer. From the second " +
-				"review round the recorded value is certainly wrong, because the base scenario's " +
-				"review produces a fix-eligible finding and the fix commits move the head; on the " +
-				"first round it may still be the head, so a report that parsed does not show the " +
-				"substitution happened.",
+				"left it, and the commit the review stage is asked about is the run's to decide, so " +
+				"a harness has to substitute it rather than relying on the two coinciding. That is " +
+				"the same substitution question-provider-response-delivery records for the checks " +
+				"answer.",
 		},
 		{
 			ID: "question-provider-response-delivery",

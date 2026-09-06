@@ -277,14 +277,11 @@ const findingsLocationPath = "total.go"
 // The review-path bytes name a revision, and the one they name is
 // Commits["branch-head"] as the build left it, registered here and written by
 // pushBranch from that value for the same reason the empty check list's answer
-// is. It is a placeholder: what the review stage is asked about is the run's
-// to decide, so a harness has to substitute the commit the run named before
-// serving the bytes, and a report naming any other commit is refused whole
-// with ErrWrongRevision before a finding is reached. From the second review
-// round the recorded value is certainly wrong, because this scenario's review
-// produces a fix-eligible finding and the fix commits move the head; on the
-// first round the head may not have moved, so a report that parsed is not
-// evidence the substitution was made. How the substitution is made is the
+// is. It is a placeholder: the commit the review stage is asked about is the
+// run's to decide, so a harness substitutes it before serving the bytes rather
+// than relying on the two coinciding, and a report naming any other commit is
+// refused whole with ErrWrongRevision before a finding is reached. How the
+// substitution is made is the
 // harness's; see question-agent-response-delivery.
 func plantFindingsWithoutAction(b *builder, s *Scenario) ([]Condition, error) {
 	responses := []struct {
@@ -356,8 +353,10 @@ func plantFindingsWithoutAction(b *builder, s *Scenario) ([]Condition, error) {
 			"not declare turns on what else that demand names, so it is stated here rather than " +
 			"recorded as a substring; the binding permits it either way and it is not the " +
 			"condition under test. All of this holds only if the report names the revision " +
-			"the run asked the review stage about; a harness that served the build-time revision " +
-			"has met findings.ErrWrongRevision and has not reached this condition."
+			"the run asked the review stage about; the recorded value is the build-time head " +
+			"and the commit the run asks about is the run's, so a harness substitutes rather " +
+			"than relying on the two coinciding, and a harness that met " +
+			"findings.ErrWrongRevision has not reached this condition."
 		out.MessageContains = []string{
 			"Evidence: the review declared reading",
 			"all of them touched by this change",
@@ -415,16 +414,12 @@ func plantFindingsWithoutAction(b *builder, s *Scenario) ([]Condition, error) {
 				"left to decide the outcome, which is the same condition as " + string(r.id) + " with " +
 				"the review path's rule satisfied rather than avoided.\n\n" +
 				"The revision is a placeholder. It is Commits[\"branch-head\"] as the build left it, " +
-				"and a harness has to replace it with the commit the run asked the review stage " +
-				"about, because findings.ParseReviewReport refuses a report naming any other " +
-				"commit whole with ErrWrongRevision before a finding is reached, which is that " +
-				"path's own rule firing and not this condition. From the second review round the " +
-				"recorded value is certainly the wrong one: this scenario's review produces a " +
-				"fix-eligible finding, and with fix_rounds.review set in the trusted document the " +
-				"fix commits move the head. On the first round the head may still be the one " +
-				"recorded here, so a report that parsed is not evidence the substitution was " +
-				"made. How the substitution is made is the harness's; see " +
-				"question-agent-response-delivery.",
+				"and the commit the review stage is asked about is the run's to decide, so a " +
+				"harness has to substitute it rather than relying on the two coinciding: " +
+				"findings.ParseReviewReport refuses a report naming any other commit whole with " +
+				"ErrWrongRevision before a finding is reached, which is that path's own rule " +
+				"firing and not this condition. How the substitution is made is the harness's; " +
+				"see question-agent-response-delivery.",
 			Mechanism: "findings.ParseReviewReport, then Report.Normalize",
 			Expect:    expectOnTheReviewPath(r.missing),
 		})
