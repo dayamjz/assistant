@@ -137,6 +137,13 @@ type Finding struct {
 	Action Action `json:"action,omitempty"`
 	// Location is where the finding is, and may name nothing.
 	Location Location `json:"location,omitzero"`
+	// Cites are the repository-relative paths this finding relies on beyond
+	// its own location: the caller, the interface, or the test that makes the
+	// claim true. A review's finding is bound to them, so a citation the
+	// review did not read refuses the finding rather than supporting it; see
+	// ParseReviewReport. Like Location, they are carried here and never
+	// resolved against a filesystem.
+	Cites []string `json:"cites,omitempty"`
 	// Description says what was found, in the stage's own words. Validate
 	// refuses a finding whose description is empty, since it tells a person
 	// nothing they can act on.
@@ -172,6 +179,7 @@ func (f Finding) normalized() Finding {
 	f.Action = ParseAction(string(f.Action))
 	f.Severity = ParseSeverity(string(f.Severity))
 	f.Description = strings.TrimSpace(f.Description)
+	f.Cites = trimmedEntries(f.Cites)
 	f.Location.Path = strings.TrimSpace(f.Location.Path)
 	if f.Location.Line < 0 {
 		f.Location.Line = 0

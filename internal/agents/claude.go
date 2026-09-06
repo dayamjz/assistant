@@ -393,13 +393,26 @@ func (r *claudeRunner) invoke(ctx context.Context, purpose Purpose, inv Invocati
 			errors.New("agent's result envelope carried no result"), "")
 	}
 	result := Result{Text: envelope.Result}
-	if inv.Shape == ShapeReport {
+	switch inv.Shape {
+	case ShapeReport:
 		report, err := findings.ParseReport(envelope.Result)
 		if err != nil {
 			return fail(&proc, FailureOutput,
 				fmt.Errorf("agent's result is not a stage report: %w", err), "")
 		}
 		result.Report = report
+	case ShapeReview:
+		// The demand travels with the invocation, so the only way to read a
+		// review's output here is bound to it. A report of another revision,
+		// and one whose findings reach past what it declared reading, are
+		// refused on the terms findings.ParseReviewReport states rather than
+		// reported and left for a caller to check.
+		report, binding, err := findings.ParseReviewReport(envelope.Result, inv.Review)
+		if err != nil {
+			return fail(&proc, FailureOutput,
+				fmt.Errorf("agent's result is not a bindable review report: %w", err), "")
+		}
+		result.Report, result.Binding = report, binding
 	}
 
 	record.Duration = time.Since(record.Started)

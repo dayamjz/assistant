@@ -32,9 +32,10 @@ const (
 // identifiers, and an identifier a finding already carries is never rewritten.
 //
 // A derived identifier is a function of two things and of nothing else: the
-// finding's own normalized severity, action, location, and description, and the
-// identifiers already taken in that same set. It does not otherwise depend on
-// where the finding sits, so reordering a set does not move one.
+// finding's own normalized severity, action, location, citations, and
+// description, and the identifiers already taken in that same set. It does not
+// otherwise depend on where the finding sits, so reordering a set does not
+// move one.
 //
 // The second half of that is load-bearing, because it means a finding's
 // identifier can move when the set around it changes. It moves in exactly two
@@ -98,6 +99,13 @@ func deriveID(f Finding, taken map[string]struct{}) string {
 		hashField(sum, string(f.Action))
 		hashField(sum, f.Location.Path)
 		hashField(sum, strconv.Itoa(f.Location.Line))
+		// The count precedes the entries so that a list's boundary cannot be
+		// imitated by its contents, on the same grounds each field is
+		// length-prefixed.
+		hashField(sum, strconv.Itoa(len(f.Cites)))
+		for _, cite := range f.Cites {
+			hashField(sum, cite)
+		}
 		hashField(sum, f.Description)
 		hashField(sum, strconv.Itoa(occurrence))
 		candidate = idPrefix + hex.EncodeToString(sum.Sum(nil))[:idDigits]

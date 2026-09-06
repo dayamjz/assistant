@@ -95,6 +95,15 @@
 // refusal internal/findings raised, never a zero Report returned with a nil
 // error.
 //
+// ShapeReview is the same arrangement with one more rule that also belongs to
+// internal/findings: a review report carries the revision it read and the
+// paths it actually read, and its findings are bound to them. The Demand that
+// binding answers to travels on the Invocation, and Invocation.Validate
+// requires it for ShapeReview and refuses it for every other shape, so review
+// output cannot be read unbound and a demand cannot be attached to output
+// nobody binds. A report of another revision, and one this package could not
+// bind, are refused here exactly as an unreadable report is.
+//
 // # An invocation owns its process tree
 //
 // Every agent runs in a process group of its own, and the group is terminated

@@ -255,3 +255,36 @@ func TestIdenticalFindingsAreSeparatedByOrder(t *testing.T) {
 			otherAlone[0].ID, mixed[1].ID)
 	}
 }
+
+// TestWhatAFindingCitesIsPartOfItsIdentity checks that citations are among the
+// fields the digest covers rather than among the ones it ignores. Two findings
+// alike in every other field are told apart by content, so neither depends on
+// the other being in the set: the same finding derives the same identifier
+// alone and beside its near-twin.
+//
+// Asserting only that the two differ would prove nothing, since the occurrence
+// number separates findings the digest cannot tell apart and would produce two
+// identifiers either way.
+func TestWhatAFindingCitesIsPartOfItsIdentity(t *testing.T) {
+	cites := func(path string) findings.Finding {
+		return findings.Finding{
+			Severity:    findings.SeverityError,
+			Action:      findings.ActionFix,
+			Location:    findings.Location{Path: "internal/total/total.go", Line: 8},
+			Cites:       []string{path},
+			Description: "this breaks its caller",
+		}
+	}
+	alone := findings.NormalizeFindings([]findings.Finding{cites("a/caller.go")})
+	beside := findings.NormalizeFindings([]findings.Finding{
+		cites("b/other.go"), cites("a/caller.go"),
+	})
+	if alone[0].ID != beside[1].ID {
+		t.Errorf("a finding citing %q derives %q alone and %q beside one citing %q; "+
+			"the citation is not in the digest, so the two are separated by position instead",
+			"a/caller.go", alone[0].ID, beside[1].ID, "b/other.go")
+	}
+	if beside[0].ID == beside[1].ID {
+		t.Errorf("both findings derived %q", beside[0].ID)
+	}
+}

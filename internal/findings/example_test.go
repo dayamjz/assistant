@@ -59,3 +59,45 @@ func ExampleReport_Normalize() {
 	// severity: warning
 	// fix eligible: false
 }
+
+// A reviewer that declares the whole diff and nothing else keeps its finding
+// about the diff and forfeits the one about a caller it never said it read.
+func ExampleParseReviewReport() {
+	raw := "I reviewed the change against the stated intent.\n\n" +
+		"```json\n" +
+		`{
+		  "summary": "one problem in the change and one in its caller",
+		  "revision": "c0ffeeb4be",
+		  "read": ["internal/total/total.go"],
+		  "findings": [
+		    {"id": "loop-bound", "severity": "error", "action": "fix",
+		     "location": "internal/total/total.go:10",
+		     "description": "the loop stops one element short"},
+		    {"id": "caller-sums-twice", "severity": "error", "action": "fix",
+		     "location": "internal/report/render.go:42",
+		     "description": "the caller adds the same slice again"}
+		  ]
+		}` + "\n```\n"
+
+	demand := findings.Demand{
+		Revision: "c0ffeeb4be",
+		Touched:  []string{"internal/total/total.go"},
+	}
+	report, binding, err := findings.ParseReviewReport(raw, demand)
+	if err != nil {
+		fmt.Println("refused:", err)
+		return
+	}
+	for _, f := range report.Fixable() {
+		fmt.Println("fixable:", f.ID)
+	}
+	for _, r := range binding.Refused {
+		fmt.Println("refused:", r.Finding.ID, "names", r.Path)
+	}
+	fmt.Println("read beyond the change:", binding.ReadBeyondChange())
+
+	// Output:
+	// fixable: loop-bound
+	// refused: caller-sums-twice names internal/report/render.go
+	// read beyond the change: false
+}

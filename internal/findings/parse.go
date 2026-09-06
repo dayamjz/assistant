@@ -75,8 +75,84 @@ var reportFields = [...]string{"summary", "findings", "risk"}
 // with no error when one does. That is the one outcome here that is not a
 // refusal, and the package doc lists the ways to reach it.
 func ParseReport(raw string) (Report, error) {
+	report, _, err := parse(raw, nil)
+	return report, err
+}
+
+// ParseReviewReport reads a review stage's report out of whatever the reviewer
+// printed and binds every finding in it to the evidence the reviewer declared.
+// It is ParseReport with one more rule applied, so everything ParseReport
+// documents about which object in the output is the report holds here
+// unchanged, and the Report it returns is normalized and validated on exactly
+// the same terms.
+//
+// The rule is PRD section 5, "What a review report has to carry". A claim is
+// worth what a reader can check, so a review report carries the revision it
+// read and the set of paths it actually read, and its findings are bound to
+// them:
+//
+//   - A report whose revision is not the commit the run asked about is refused
+//     with ErrWrongRevision, findings and all. A reading of some other commit
+//     is not a review of this change, and a report stating no revision states
+//     no commit and is refused the same way.
+//   - A finding naming a path the evidence set does not hold is refused. It
+//     names a path through its location, through what it cites, or through
+//     both, and every one of them has to be in the evidence set. The refusal
+//     is in the returned Binding and is also in the returned report, as an
+//     informational finding quoting what was claimed, so a reviewer asserting
+//     past what it read is visible rather than quietly trimmed.
+//   - A finding naming no path at all becomes a note, because nothing supports
+//     it. That rule does not reach P3: it is applied to the action the
+//     reviewer stated, before Normalize resolves anything, so a finding whose
+//     action was missing, empty, or unrecognized is still the ask P3 makes of
+//     it and still holds the stage. Only a finding whose action the reviewer
+//     stated and this package recognized is demoted. The carve-out is on this
+//     rule alone: the refusal above is decided by the path a finding names and
+//     applies whatever its action was, so an unclassified claim about unread
+//     code is refused and reported as refused rather than held.
+//   - The evidence set and the paths the change touched are compared, and the
+//     comparison is reported as a finding whether or not it found anything.
+//     Binding says why that is the discriminator rather than a decoration. One
+//     consequence is worth stating rather than discovering: a review report is
+//     therefore never returned with an empty findings list, and a review that
+//     found nothing is a report whose findings are all notes, which
+//     Report.AllNotes still answers true for.
+//
+// The Demand is checked first, so a caller that would be refused after
+// spending an invocation is refused before it. Demand.Guidance is the other
+// half: what it tells the reviewer is what this binds, and the two are written
+// together for that reason.
+//
+// One thing ParseReport documents is narrower here rather than gone. An object
+// earlier in the output that validates as a report, such as a schema example
+// quoted in prose, is returned by ParseReport with no error; here it has to
+// carry the run's own revision to be returned at all, which an example
+// generally does not. That makes the case rarer, not impossible: it is still
+// the output deciding which object is read, and an example carrying the right
+// revision is read as the report exactly as before.
+func ParseReviewReport(raw string, d Demand) (Report, Binding, error) {
+	if err := d.Validate(); err != nil {
+		return Report{}, Binding{}, err
+	}
+	return parse(raw, &d)
+}
+
+// parse is the candidate scan both entry points run. demand is nil for a
+// report answering to no evidence rule, and the binding it returns is then the
+// zero Binding.
+//
+// Where the binding sits in the sequence is load-bearing rather than
+// incidental: it runs on the decoded report, after the shape is known to be
+// readable and before Normalize, because Normalize is what makes a stated ask
+// and a defaulted one the same value. A binding that refuses is treated as a
+// defect in the candidate, on the same terms as a validation failure: an
+// object carrying a report field is the report the agent meant, so its refusal
+// is returned and no earlier candidate is tried, and an object carrying none
+// is not a report at all, so the scan continues past it.
+func parse(raw string, demand *Demand) (Report, Binding, error) {
 	if len(raw) > MaxRawBytes {
-		return Report{}, fmt.Errorf("%w: %d bytes, limit %d", ErrRawTooLarge, len(raw), MaxRawBytes)
+		return Report{}, Binding{}, fmt.Errorf("%w: %d bytes, limit %d",
+			ErrRawTooLarge, len(raw), MaxRawBytes)
 	}
 	spans := objectSpans(raw)
 	for i := len(spans) - 1; i >= 0; i-- {
@@ -88,20 +164,31 @@ func ParseReport(raw string) (Report, error) {
 		var report Report
 		if err := json.Unmarshal(object, &report); err != nil {
 			if carriesReportField(fields) {
-				return Report{}, fmt.Errorf("%w: %w", ErrUnreadableReport, err)
+				return Report{}, Binding{}, fmt.Errorf("%w: %w", ErrUnreadableReport, err)
 			}
 			continue
+		}
+		var binding Binding
+		if demand != nil {
+			bound, made, err := bindEvidence(report, *demand)
+			if err != nil {
+				if carriesReportField(fields) {
+					return Report{}, Binding{}, err
+				}
+				continue
+			}
+			report, binding = bound, made
 		}
 		report = report.Normalize()
 		if err := report.Validate(); err != nil {
 			if carriesReportField(fields) {
-				return Report{}, err
+				return Report{}, Binding{}, err
 			}
 			continue
 		}
-		return report, nil
+		return report, binding, nil
 	}
-	return Report{}, fmt.Errorf("%w: read %d bytes, %d candidate objects: %s",
+	return Report{}, Binding{}, fmt.Errorf("%w: read %d bytes, %d candidate objects: %s",
 		ErrNoReport, len(raw), len(spans), quoteForDiagnostic(raw))
 }
 
