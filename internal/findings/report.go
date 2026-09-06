@@ -39,8 +39,9 @@ type Report struct {
 	// Read is the evidence set: the repository-relative paths the stage
 	// actually read. It is what ParseReviewReport binds a review's findings
 	// to, and it is a claim the stage makes about itself, carried here and
-	// never resolved against a filesystem.
-	Read []string `json:"read,omitempty"`
+	// never resolved against a filesystem. Paths says what an agent may write
+	// here and what becomes of a value this package cannot read.
+	Read Paths `json:"read,omitempty"`
 	// Findings is what the stage found, in the order it reported them. Empty
 	// is valid and means the stage found nothing.
 	Findings []Finding `json:"findings,omitempty"`

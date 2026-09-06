@@ -61,6 +61,19 @@ func review(read []string, found ...findings.Finding) findings.Report {
 	}
 }
 
+// equalPaths compares two path lists element by element.
+func equalPaths(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
+}
+
 // findingByID returns the finding carrying id, and fails when the report holds
 // no such finding.
 func findingByID(t *testing.T, r findings.Report, id string) findings.Finding {
@@ -166,6 +179,173 @@ func TestACitationOutsideTheEvidenceSetRefusesTheFinding(t *testing.T) {
 	}
 	if got := report.Fixable(); len(got) != 0 {
 		t.Fatalf("a finding resting on unread code reached the fix loop: %+v", got)
+	}
+}
+
+// reviewerPrinted wraps raw report JSON the way a reviewer prints it. It takes
+// the object as text rather than as a Report so a test can describe a shape
+// this package's own encoder would never produce, which is exactly what an
+// agent writing a single path where a list belongs is.
+func reviewerPrinted(object string) string {
+	return "I read the change and here is what I found.\n\n```json\n" + object + "\n```\n"
+}
+
+// TestAPathListWrittenAsOneStringIsReadAsThatPath covers the shapes an agent
+// writes "read" and "cites" in. The report is one object of raw bytes, because
+// the point is a shape the wire carries and the encoder here does not.
+//
+// What each case asserts is the path that was read, not merely that the report
+// survived: the whole report is lost if the field refuses to decode, so a
+// weaker assertion would pass on a decoder that read the scalar as nothing.
+func TestAPathListWrittenAsOneStringIsReadAsThatPath(t *testing.T) {
+	t.Parallel()
+	finding := func(cites string) string {
+		return `{"id":"breaks-the-caller","severity":"error","action":"fix",` +
+			`"location":"` + touchedPath + `:8","cites":` + cites + `,` +
+			`"description":"Returning a sum here breaks the one caller."}`
+	}
+	report := func(read, cites string) string {
+		return `{"summary":"One pass over the change.","revision":"` + reviewedRevision + `",` +
+			`"read":` + read + `,"findings":[` + finding(cites) + `]}`
+	}
+
+	t.Run("a cited path written as one string", func(t *testing.T) {
+		t.Parallel()
+		raw := reviewerPrinted(report(`["`+touchedPath+`"]`, `"`+callerPath+`"`))
+
+		_, binding, err := findings.ParseReviewReport(raw, demand())
+		if err != nil {
+			t.Fatalf("a single cited path lost the whole report: %v", err)
+		}
+		if len(binding.Refused) != 1 || binding.Refused[0].Path != callerPath {
+			t.Fatalf("expected the citation refused by name, got %+v", binding.Refused)
+		}
+	})
+
+	t.Run("the same citation inside the evidence set", func(t *testing.T) {
+		t.Parallel()
+		raw := reviewerPrinted(report(
+			`["`+touchedPath+`","`+callerPath+`"]`, `"`+callerPath+`"`))
+
+		bound, binding, err := findings.ParseReviewReport(raw, demand())
+		if err != nil {
+			t.Fatalf("parsing the review: %v", err)
+		}
+		if len(binding.Refused) != 0 {
+			t.Fatalf("nothing should have been refused, got %+v", binding.Refused)
+		}
+		if got := bound.Fixable(); len(got) != 1 {
+			t.Fatalf("the cited finding should be fix-eligible, got %+v", got)
+		}
+	})
+
+	t.Run("an evidence set written as one string", func(t *testing.T) {
+		t.Parallel()
+		raw := reviewerPrinted(report(`"`+touchedPath+`"`, `[]`))
+
+		bound, binding, err := findings.ParseReviewReport(raw, demand())
+		if err != nil {
+			t.Fatalf("a single read path lost the whole report: %v", err)
+		}
+		if !equalPaths(binding.Read, []string{touchedPath}) {
+			t.Fatalf("the evidence set is %q, want the one path the reviewer wrote", binding.Read)
+		}
+		if got := bound.Fixable(); len(got) != 1 {
+			t.Fatalf("a finding inside that evidence set should be fix-eligible, got %+v", got)
+		}
+	})
+}
+
+// TestAPathThisPackageCannotReadRefusesTheFindingRatherThanTheReport pins the
+// decision the tolerant decoding had to make. A value that is neither a string
+// nor a list of them keeps the surrounding findings, which is the point, and
+// it may not buy the finding resting on it a pass: it names something the
+// evidence set does not hold, so that finding is refused and the refusal
+// quotes what was written.
+func TestAPathThisPackageCannotReadRefusesTheFindingRatherThanTheReport(t *testing.T) {
+	t.Parallel()
+	raw := reviewerPrinted(
+		`{"summary":"One pass over the change.","revision":"` + reviewedRevision + `",` +
+			`"read":["` + touchedPath + `"],"findings":[` +
+			`{"id":"breaks-the-caller","severity":"error","action":"fix",` +
+			`"location":"` + touchedPath + `:8","cites":7,` +
+			`"description":"Returning a sum here breaks the one caller."}]}`)
+
+	bound, binding, err := findings.ParseReviewReport(raw, demand())
+	if err != nil {
+		t.Fatalf("an unreadable citation lost the whole report: %v", err)
+	}
+	if len(binding.Refused) != 1 || binding.Refused[0].Path != "7" {
+		t.Fatalf("expected the finding refused for the citation nobody could read, got %+v",
+			binding.Refused)
+	}
+	if got := bound.Fixable(); len(got) != 0 {
+		t.Fatalf("a finding resting on evidence nobody could read was admitted: %+v", got)
+	}
+}
+
+// TestTheEvidenceNoteTellsPartOfTheChangeFromAllOfIt is the case that read as
+// an endorsement: a reviewer declaring one of two touched paths reaches the
+// same branch as one that declared both, and "what a small change needs" is
+// false for it. Both are permitted and neither is refused; what the note owes
+// the person is which of the two happened.
+func TestTheEvidenceNoteTellsPartOfTheChangeFromAllOfIt(t *testing.T) {
+	t.Parallel()
+	const alsoTouched = "internal/total/helper.go"
+	partial := findings.Demand{
+		Revision: reviewedRevision,
+		Touched:  []string{touchedPath, alsoTouched},
+	}
+
+	report, binding, err := findings.ParseReviewReport(printed(t, review([]string{touchedPath})), partial)
+	if err != nil {
+		t.Fatalf("parsing the review: %v", err)
+	}
+	if binding.ReadBeyondChange() {
+		t.Fatalf("the reviewer read nothing beyond the change, got %q", binding.Beyond)
+	}
+	if !equalPaths(binding.Undeclared, []string{alsoTouched}) {
+		t.Fatalf("Undeclared is %q, want the touched path the review never declared", binding.Undeclared)
+	}
+	if len(report.Findings) != 1 {
+		t.Fatalf("expected the evidence comparison reported as one finding, got %+v", report.Findings)
+	}
+	note := report.Findings[0].Description
+	if !strings.Contains(note, alsoTouched) {
+		t.Errorf("the evidence note should name the part of the change nobody declared reading, got %q", note)
+	}
+	if strings.Contains(note, "what a small change needs") {
+		t.Errorf("a review of part of the change was described as a whole reading of it: %q", note)
+	}
+}
+
+// TestTheEvidenceNoteStillReportsAWholeReadingAsPermitted is that case's
+// control, and the reason the assertion above is about a partial reading
+// rather than about the wording in general. One thing differs, whether the
+// reviewer declared the second touched path.
+func TestTheEvidenceNoteStillReportsAWholeReadingAsPermitted(t *testing.T) {
+	t.Parallel()
+	const alsoTouched = "internal/total/helper.go"
+	whole := findings.Demand{
+		Revision: reviewedRevision,
+		Touched:  []string{touchedPath, alsoTouched},
+	}
+
+	report, binding, err := findings.ParseReviewReport(
+		printed(t, review([]string{touchedPath, alsoTouched})), whole)
+	if err != nil {
+		t.Fatalf("parsing the review: %v", err)
+	}
+	if len(binding.Undeclared) != 0 {
+		t.Fatalf("Undeclared is %q, want nothing for a review that declared the whole change",
+			binding.Undeclared)
+	}
+	if len(report.Findings) != 1 {
+		t.Fatalf("expected the evidence comparison reported as one finding, got %+v", report.Findings)
+	}
+	if got := report.Findings[0].Description; !strings.Contains(got, "what a small change needs") {
+		t.Errorf("a review declaring the whole change should still read as the permitted "+
+			"outcome it is, got %q", got)
 	}
 }
 

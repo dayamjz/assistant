@@ -122,6 +122,64 @@ func parseLocationText(s string) Location {
 	return Location{Path: strings.TrimSpace(s[:last]), Line: trailing}
 }
 
+// Paths is a list of repository-relative paths an agent wrote: a finding's
+// Cites and a report's Read. Both are read from untrusted output, so both
+// decode on the terms Action, Severity, and Location already set here, which
+// is why they share a type rather than a slice each: a part of a report this
+// package cannot read must not discard the findings around it.
+//
+// The paths are carried and never resolved against a filesystem.
+type Paths []string
+
+// UnmarshalJSON reads the shapes an agent writes a list of paths in, and
+// cannot fail:
+//
+//   - A JSON list yields one entry per element, each element's own string
+//     where it is a string.
+//   - A single JSON string yields a one-element list. An agent asked for the
+//     paths one finding rests on writes the single path often enough that
+//     refusing it would cost the report for a shape everyone understands.
+//   - JSON null yields no paths, as does a list with no elements.
+//   - Any other value, a number or an object among them, and any element of a
+//     list that is not a string, is kept as one entry holding the JSON as it
+//     was written.
+//
+// The last rule is the one that decides rather than reports, and it is chosen
+// to fail toward refusing a finding. An entry holding JSON text names
+// something no evidence set of real paths holds, so a finding resting on it is
+// refused for want of evidence and the refusal quotes what was written, rather
+// than the finding being admitted because the thing it rests on could not be
+// read. Nothing here can make a finding supported that was not: an evidence
+// set that read as nothing supports nothing.
+func (p *Paths) UnmarshalJSON(b []byte) error {
+	if strings.TrimSpace(string(b)) == "null" {
+		*p = nil
+		return nil
+	}
+	var list []json.RawMessage
+	if json.Unmarshal(b, &list) == nil {
+		read := make(Paths, 0, len(list))
+		for _, entry := range list {
+			read = append(read, pathText(entry))
+		}
+		*p = read
+		return nil
+	}
+	*p = Paths{pathText(b)}
+	return nil
+}
+
+// pathText is one entry as a path: the string it holds, or, for a value that
+// is not a string, the JSON as it was written, so a path this package could
+// not read stays quotable in the refusal it causes.
+func pathText(raw json.RawMessage) string {
+	var path string
+	if json.Unmarshal(raw, &path) == nil {
+		return path
+	}
+	return strings.TrimSpace(string(raw))
+}
+
 // Finding is one thing a stage found. Its Action decides who resolves it, and
 // only ActionFix is eligible for the automatic fix loop.
 type Finding struct {
@@ -141,9 +199,9 @@ type Finding struct {
 	// its own location: the caller, the interface, or the test that makes the
 	// claim true. A review's finding is bound to them, so a citation the
 	// review did not read refuses the finding rather than supporting it; see
-	// ParseReviewReport. Like Location, they are carried here and never
-	// resolved against a filesystem.
-	Cites []string `json:"cites,omitempty"`
+	// ParseReviewReport. Paths says what an agent may write here and what
+	// becomes of a value this package cannot read.
+	Cites Paths `json:"cites,omitempty"`
 	// Description says what was found, in the stage's own words. Validate
 	// refuses a finding whose description is empty, since it tells a person
 	// nothing they can act on.

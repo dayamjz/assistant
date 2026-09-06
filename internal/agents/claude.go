@@ -272,12 +272,17 @@ func (f *claudeFixer) Reference() string {
 // then produced: one place decides what a round did with its session, and both
 // the record and the Fixer read that one decision.
 func (r *claudeRunner) invoke(ctx context.Context, purpose Purpose, inv Invocation, resume string, keep bool) (Result, string, error) {
-	// keep is exactly the fact P4 turns on: this invocation's session outlives
-	// it. ValidateForFixer is Validate plus the refusal of a review shape
-	// there, so every session-carrying invocation passes through the rule
-	// rather than only the one exported entry point that makes them today.
+	// An invocation carries a session on either of two facts: resume says it
+	// is answered inside a conversation that already exists, and keep says the
+	// session it reports outlives it. Either one is the memory P4 keeps a
+	// review out of, so either sends the invocation through ValidateForFixer,
+	// which is Validate plus the refusal of a review shape there. Asking both
+	// is what makes this cover every session-carrying invocation rather than
+	// the ones a particular caller happens to make: a Fixer passes both at
+	// once today, so resuming without keeping is unreachable until a second
+	// caller exists, and it is inside the rule when it arrives.
 	validate := inv.Validate
-	if keep {
+	if keep || resume != "" {
 		validate = inv.ValidateForFixer
 	}
 	if err := validate(); err != nil {

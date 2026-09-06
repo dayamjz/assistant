@@ -66,8 +66,8 @@ type Refusal struct {
 }
 
 // Binding is what ParseReviewReport made of the reviewer's evidence: the two
-// path sets it compared, the part of the evidence set that reaches past the
-// change, and what that cost the reviewer's findings.
+// path sets it compared, each one's part the other does not hold, and what
+// that cost the reviewer's findings.
 //
 // The comparison is reported whether or not it found anything, because that is
 // the whole discriminator. A reviewer satisfies a rule that only asks for an
@@ -75,6 +75,12 @@ type Refusal struct {
 // diff, and that declaration is derivable from the run without asking. Beyond
 // is what tells the two apart, and an empty Beyond is a permitted answer, not
 // an error: small changes need nothing else. What it may not be is invisible.
+//
+// The comparison runs both ways for the same reason. Undeclared is the part of
+// the change the reviewer did not say it read, and a reviewer that read some
+// of the change is as permitted as one that read all of it and as visible: an
+// empty Beyond alone does not say whether the review covered the change or a
+// corner of it, and the two read alike unless the other half is reported too.
 type Binding struct {
 	// Revision is the commit the report and the demand agreed on.
 	Revision string
@@ -88,6 +94,14 @@ type Binding struct {
 	// allowed to reach past the change, and a reviewer that never reads past
 	// the diff reports it empty every time rather than invisibly.
 	Beyond []string
+	// Undeclared is the paths the change touched that Read does not hold, in
+	// Touched's order. It is how much of the change the review did not say it
+	// read, so a review of one file out of twenty is a fact a person can see
+	// and a caller can count, rather than something an empty Beyond hides. It
+	// is permitted and refuses nothing by itself; what it costs the reviewer
+	// is that a finding naming any of these paths is refused for want of
+	// evidence like any other.
+	Undeclared []string
 	// Refused is every finding the evidence set did not support, in the order
 	// the report listed them. Each is reported in the bound report as an
 	// informational finding quoting what it claimed, so a refusal is visible
@@ -170,16 +184,19 @@ func (d Demand) Guidance() (string, error) {
 	b.WriteString(`  - "revision" is the commit you reviewed. It must be exactly ` + revision +
 		". A report of any other revision is refused whole, findings and all, because a " +
 		"reading of some other commit is not a review of this change.\n")
-	b.WriteString(`  - "read" is every repository-relative path you actually opened and read. ` +
-		"List all of them and list nothing else.\n\n")
+	b.WriteString(`  - "read" is a list of every repository-relative path you actually opened ` +
+		"and read. List all of them and list nothing else.\n\n")
 	b.WriteString("Your findings are then checked against that list.\n\n")
 	b.WriteString(`  - A finding whose "location" names a path outside the list is refused, ` +
 		"and the refusal is reported with the path it named.\n")
 	b.WriteString(`  - A finding that asserts something about code outside this change - a caller, ` +
-		`an interface, a test that covers it - names that code in "cites", and is refused ` +
-		`unless "read" names it too.` + "\n")
-	b.WriteString("  - A finding that names no path and cites none is recorded as informational, " +
-		"because nothing you read supports it. It will not stop the run.\n\n")
+		`an interface, a test that covers it - names that code in "cites", a list of ` +
+		`repository-relative paths, and is refused unless "read" names it too.` + "\n")
+	b.WriteString("  - A finding that names no path and cites none is recorded as informational " +
+		"and will not stop the run, where you stated an action this system recognizes. One " +
+		"whose action is missing, empty, or a word this system cannot read still goes to a " +
+		"person, whatever it names, because deciding who resolves it is not this rule's to " +
+		"make.\n\n")
 	b.WriteString("Listing the paths below and reading nothing else buys you nothing. It is a " +
 		"permitted answer and it is reported as one, but it forfeits every finding that reaches " +
 		"past the change, which is most of what an independent review is for. Listing a path you " +
@@ -225,6 +242,11 @@ func bindEvidence(r Report, d Demand) (Report, Binding, error) {
 	for _, path := range binding.Read {
 		if _, ok := touched[path]; !ok {
 			binding.Beyond = append(binding.Beyond, path)
+		}
+	}
+	for _, path := range binding.Touched {
+		if _, ok := read[path]; !ok {
+			binding.Undeclared = append(binding.Undeclared, path)
 		}
 	}
 
@@ -347,23 +369,44 @@ func demotedNote(f Finding) Finding {
 // rather than complaining; what it may not be is absent, because a reviewer
 // that never reads past the change is then a fact a person can see across runs
 // instead of a possibility they have to assume away.
+//
+// Reading part of the change is permitted on the same terms and is told apart
+// from reading all of it, because the two are different facts and only one of
+// them is the answer a whole-diff reading gives. The note says which, and what
+// each cost the reviewer's findings; neither is judged and neither refuses
+// anything by itself.
 func evidenceNote(b Binding) Finding {
+	read := strconv.Itoa(len(b.Read)) + " " + pathWord(len(b.Read))
 	var description string
 	switch {
 	case len(b.Read) == 0:
 		description = "Evidence: the review declared reading no path at all, so every finding " +
 			"it located anywhere was refused. Nothing here says the review read nothing; it " +
 			"says nothing it reported can be checked against what it read."
-	case len(b.Beyond) == 0:
-		description = "Evidence: the review declared reading " + strconv.Itoa(len(b.Read)) + " " +
-			pathWord(len(b.Read)) + ", all of them touched by this change, and nothing beyond " +
+	case len(b.Beyond) == 0 && len(b.Undeclared) == 0:
+		description = "Evidence: the review declared reading " + read +
+			", all of them touched by this change, and nothing beyond " +
 			"the change itself. That is permitted and is what a small change needs. It also " +
 			"means any finding reaching past the change was refused for want of evidence."
+	case len(b.Beyond) == 0:
+		description = "Evidence: the review declared reading " + read +
+			", all of them touched by this change and nothing beyond it, and did not declare " +
+			"reading " + strconv.Itoa(len(b.Undeclared)) + " of the " +
+			strconv.Itoa(len(b.Touched)) + " " + pathWord(len(b.Touched)) +
+			" this change touched: " + strings.Join(b.Undeclared, ", ") +
+			". That is permitted and is reported rather than judged. It means any finding " +
+			"about one of those paths, and any finding reaching past the change, was refused " +
+			"for want of evidence."
 	default:
-		description = "Evidence: the review declared reading " + strconv.Itoa(len(b.Read)) + " " +
-			pathWord(len(b.Read)) + ", of which " + strconv.Itoa(len(b.Beyond)) + " " +
+		description = "Evidence: the review declared reading " + read + ", of which " +
+			strconv.Itoa(len(b.Beyond)) + " " +
 			isAre(len(b.Beyond)) + " not touched by this change: " + strings.Join(b.Beyond, ", ") +
 			". A finding was allowed to reach that far past the change and no further."
+		if len(b.Undeclared) > 0 {
+			description += " It did not declare reading " + strconv.Itoa(len(b.Undeclared)) +
+				" of the " + strconv.Itoa(len(b.Touched)) + " " + pathWord(len(b.Touched)) +
+				" this change touched: " + strings.Join(b.Undeclared, ", ") + "."
+		}
 	}
 	return Finding{Severity: SeverityInfo, Action: ActionNote, Description: description}
 }
