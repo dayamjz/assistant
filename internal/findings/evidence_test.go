@@ -894,8 +894,8 @@ func TestGuidanceNamesTheRevisionAndEveryTouchedPath(t *testing.T) {
 }
 
 // TestParseReportIsUnchangedByTheEvidenceRule keeps the rule where the PRD
-// puts it. The other eight stages answer to none of it, so the same output
-// read as an ordinary stage report keeps its finding as written.
+// puts it. No other stage answers to any of it, so the same output read as an
+// ordinary stage report keeps its finding as written.
 func TestParseReportIsUnchangedByTheEvidenceRule(t *testing.T) {
 	t.Parallel()
 	raw := printed(t, review([]string{touchedPath}, crossFileFinding()))
