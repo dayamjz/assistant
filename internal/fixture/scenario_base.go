@@ -323,6 +323,26 @@ func plantFindingsWithoutAction(b *builder, s *Scenario) ([]Condition, error) {
 		}
 	}
 
+	// expectOnTheReviewPath is the same answer reached through the entry point
+	// that binds evidence, which produces one finding the other does not. The
+	// review path appends an informational note to every report it binds, so a
+	// harness holding these bytes to an expectation naming only the reviewer's
+	// finding would read the correct answer as a mismatch. The note is what the
+	// review path reports about the evidence set rather than a judgement of it,
+	// and it is recorded here because this package records what a condition
+	// must produce, not only the part of it the condition is about.
+	expectOnTheReviewPath := func(missing string) Outcome {
+		out := expect(missing)
+		out.Summary += " The bound report carries one finding more than the reviewer wrote: " +
+			"the review path appends an informational note to every report it binds, stating " +
+			"what the review declared reading against what the change touched. Here it reports " +
+			"a read set holding nothing beyond the change and paths the change touched that the " +
+			"review did not declare, both of which the binding permits and neither of which is " +
+			"the condition under test. Two findings is the answer, not a mismatch."
+		out.MessageContains = []string{"Evidence: the review declared reading"}
+		return out
+	}
+
 	var conditions []Condition
 	for _, r := range responses {
 		file := r.file + ".txt"
@@ -380,7 +400,7 @@ func plantFindingsWithoutAction(b *builder, s *Scenario) ([]Condition, error) {
 				"path's own rule firing and not this condition. How the substitution is made is the " +
 				"harness's; see question-agent-response-delivery.",
 			Mechanism: "findings.ParseReviewReport, then Report.Normalize",
-			Expect:    expect(r.missing),
+			Expect:    expectOnTheReviewPath(r.missing),
 		})
 	}
 	return conditions, nil

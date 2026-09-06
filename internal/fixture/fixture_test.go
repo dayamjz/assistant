@@ -833,13 +833,17 @@ func TestTheP3ResponsesProduceAnAskOnTheEntryPointEachNames(t *testing.T) {
 
 	demand := findings.Demand{
 		Revision: s.Commits["branch-head"],
-		Touched:  []string{"total.go", "docs/behavior.md"},
+		Touched:  touchedByTheChange(t, f, s),
 	}
 	if demand.Revision == "" {
 		t.Fatal("the scenario records no branch head for a review demand to name")
 	}
 
-	var seen int
+	const (
+		ordinaryEntryPoint = "findings.ParseReport"
+		reviewEntryPoint   = "findings.ParseReviewReport"
+	)
+	var seen, ordinary, review int
 	for _, c := range f.Conditions {
 		if c.Principle != "P3" || c.Scenario != fixture.ScenarioBase {
 			continue
@@ -857,7 +861,9 @@ func TestTheP3ResponsesProduceAnAskOnTheEntryPointEachNames(t *testing.T) {
 		}
 		raw := string(body)
 
-		if strings.HasSuffix(string(c.ID), "-review-path") {
+		switch {
+		case strings.Contains(c.Mechanism, reviewEntryPoint):
+			review++
 			report, binding, err := findings.ParseReviewReport(raw, demand)
 			if err != nil {
 				t.Errorf("%s: the review path refused the bytes planted for it: %v", c.ID, err)
@@ -868,27 +874,105 @@ func TestTheP3ResponsesProduceAnAskOnTheEntryPointEachNames(t *testing.T) {
 					"that nothing but the action decides the outcome",
 					c.ID, len(binding.Refused), len(binding.Demoted))
 			}
+			if len(binding.Beyond) != 0 {
+				t.Errorf("%s: the review declared reading %v, which the change does not touch, and the "+
+					"condition states the read set reaches nothing past the change",
+					c.ID, binding.Beyond)
+			}
+			if len(binding.Undeclared) == 0 {
+				t.Errorf("%s: the review declared reading every path the change touched, and the "+
+					"condition states it left some undeclared", c.ID)
+			}
 			requireAskOnTheLoopBound(t, c.ID, report)
-			continue
-		}
+			requireTheEvidenceNote(t, c, report)
+		case strings.Contains(c.Mechanism, ordinaryEntryPoint):
+			ordinary++
+			report, err := findings.ParseReport(raw)
+			if err != nil {
+				t.Errorf("%s: the ordinary path refused the bytes planted for it: %v", c.ID, err)
+				continue
+			}
+			requireAskOnTheLoopBound(t, c.ID, report)
 
-		report, err := findings.ParseReport(raw)
-		if err != nil {
-			t.Errorf("%s: the ordinary path refused the bytes planted for it: %v", c.ID, err)
-			continue
-		}
-		requireAskOnTheLoopBound(t, c.ID, report)
-
-		if _, _, err := findings.ParseReviewReport(raw, demand); !errors.Is(err, findings.ErrWrongRevision) {
-			t.Errorf("%s: driven through the review path these bytes gave %v, and the condition "+
-				"states they meet findings.ErrWrongRevision there", c.ID, err)
+			if _, _, err := findings.ParseReviewReport(raw, demand); !errors.Is(err, findings.ErrWrongRevision) {
+				t.Errorf("%s: driven through the review path these bytes gave %v, and the condition "+
+					"states they meet findings.ErrWrongRevision there", c.ID, err)
+			}
+		default:
+			t.Errorf("%s: the recorded mechanism is %q, which names neither entry point a report "+
+				"arrives through, so there is nothing to drive the planted bytes into", c.ID, c.Mechanism)
 		}
 	}
 	if seen != 6 {
 		t.Errorf("the catalog carries %d P3 conditions in the base scenario, and there are three "+
 			"shapes on each of two entry points", seen)
 	}
+	if ordinary != 3 || review != 3 {
+		t.Errorf("the P3 conditions name %s %d time(s) and %s %d, and there are three shapes on "+
+			"each of the two entry points", ordinaryEntryPoint, ordinary, reviewEntryPoint, review)
+	}
 }
+
+// touchedByTheChange returns the paths the scenario's branch changes against
+// the default branch, which is what a run's review demand carries. Deriving it
+// is what keeps this test from asserting the claim it is meant to check: the
+// review-path conditions declare reading a path on the ground that the change
+// touches it, and a demand naming that path because this test said so would
+// hold whether or not the plant still touched it.
+func touchedByTheChange(t *testing.T, f *fixture.Fixture, s fixture.Scenario) []string {
+	t.Helper()
+	out, ok := gitIn(t, s, s.WorkingCopy, "diff", "--name-only", f.DefaultBranch+"..."+f.Branch)
+	if !ok {
+		t.Fatalf("diff %s against %s: %s", f.Branch, f.DefaultBranch, out)
+	}
+	var touched []string
+	for _, line := range strings.Split(out, "\n") {
+		if path := strings.TrimSpace(line); path != "" {
+			touched = append(touched, path)
+		}
+	}
+	if len(touched) == 0 {
+		t.Fatalf("%s changes nothing against %s, so there is no review demand to build",
+			f.Branch, f.DefaultBranch)
+	}
+	return touched
+}
+
+// requireTheEvidenceNote asserts the bound report carries the informational
+// finding the review path appends to every report it binds, which the
+// review-path conditions record as part of what that path produces. A harness
+// held to an expectation omitting it would read the correct answer, two
+// findings, as a mismatch.
+func requireTheEvidenceNote(t *testing.T, c fixture.Condition, report findings.Report) {
+	t.Helper()
+	if len(c.Expect.MessageContains) == 0 {
+		t.Errorf("%s: the condition records no substring for the note the review path appends to "+
+			"every report it binds", c.ID)
+		return
+	}
+	for _, want := range c.Expect.MessageContains {
+		found := false
+		for _, finding := range report.Findings {
+			if finding.ID == loopBoundFindingID {
+				continue
+			}
+			if finding.Severity == findings.SeverityInfo && finding.Action == findings.ActionNote &&
+				strings.Contains(finding.Description, want) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("%s: no informational note in the bound report carries %q, which the condition "+
+				"records as part of what the review path produces", c.ID, want)
+		}
+	}
+}
+
+// loopBoundFindingID is the identifier the reviewer wrote on the finding the
+// P3 responses plant, which is how the reviewer's own finding is told apart
+// from the informational ones the review path adds.
+const loopBoundFindingID = "total-loop-bound"
 
 // requireAskOnTheLoopBound asserts the reviewer's own finding survived the
 // parse as an ask. It is looked up by the identifier the reviewer wrote, so
@@ -896,7 +980,7 @@ func TestTheP3ResponsesProduceAnAskOnTheEntryPointEachNames(t *testing.T) {
 func requireAskOnTheLoopBound(t *testing.T, id fixture.ID, report findings.Report) {
 	t.Helper()
 	for _, finding := range report.Findings {
-		if finding.ID != "total-loop-bound" {
+		if finding.ID != loopBoundFindingID {
 			continue
 		}
 		if finding.Action != findings.ActionAsk {
