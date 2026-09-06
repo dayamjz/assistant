@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -154,14 +155,14 @@ func TestRunOptionalFieldsStartUnknown(t *testing.T) {
 func TestRunUpdatesRefuseAMissingRun(t *testing.T) {
 	ctx := context.Background()
 	s := openStore(t)
-	if err := s.SetRunStatus(ctx, "no-such-run", RunPassed); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("SetRunStatus on a missing run: %v", err)
+	if _, err := s.TransitionRun(ctx, "no-such-run", []RunStatus{RunPending}, RunPassed); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("TransitionRun on a missing run: %v", err)
 	}
 	if err := s.SetRunHead(ctx, "no-such-run", "aaaa"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("SetRunHead on a missing run: %v", err)
 	}
-	if err := s.SetRunStatus(ctx, "no-such-run", ""); err == nil {
-		t.Fatal("SetRunStatus accepted an empty status")
+	if err := s.SetRunFixerSession(ctx, "no-such-run", "sess-1"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("SetRunFixerSession on a missing run: %v", err)
 	}
 }
 
@@ -381,5 +382,212 @@ func TestCheckpointWithNoStateReadsBackEmptyNotNil(t *testing.T) {
 	}
 	if len(got.State) != 0 {
 		t.Fatalf("the state read back as %q", got.State)
+	}
+}
+
+// The fixer session is one of the fields a run does not have when it is
+// created, and it comes back the way every other one does.
+func TestRunFixerSessionIsUnknownUntilItIsRecorded(t *testing.T) {
+	ctx := context.Background()
+	s := openStore(t)
+	seedRepository(t, s)
+
+	r, err := s.CreateRun(ctx, completeRun())
+	if err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	if r.FixerSession.IsKnown() {
+		t.Fatalf("a new run reports a known fixer session: %q", r.FixerSession)
+	}
+	if err := s.SetRunFixerSession(ctx, r.ID, "sess-1"); err != nil {
+		t.Fatalf("SetRunFixerSession: %v", err)
+	}
+	got, err := s.Run(ctx, r.ID)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if value, known := got.FixerSession.Get(); !known || value != "sess-1" {
+		t.Fatalf("the fixer session came back as %q (known=%v), want sess-1", value, known)
+	}
+	// A later round reports a different reference and it replaces the first,
+	// which is what makes the column answer where a restart would resume.
+	if err := s.SetRunFixerSession(ctx, r.ID, "sess-2"); err != nil {
+		t.Fatalf("SetRunFixerSession again: %v", err)
+	}
+	if got, err = s.Run(ctx, r.ID); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if value, _ := got.FixerSession.Get(); value != "sess-2" {
+		t.Fatalf("the fixer session came back as %q, want sess-2", value)
+	}
+	if err := s.SetRunFixerSession(ctx, r.ID, ""); err == nil {
+		t.Fatal("SetRunFixerSession accepted an empty reference")
+	}
+}
+
+// runFixerSessionVersion is the shipped migration the test below is named for.
+// A shipped version never moves, so pinning to it holds the test's subject
+// still as the list grows, which a slice taken relative to the end does not.
+const runFixerSessionVersion = 4
+
+// A run recorded before the column existed reads back unknown rather than as a
+// session of the empty string, which is the promise Optional exists to keep.
+func TestTheFixerSessionMigrationReachesAnOlderDatabase(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "state.db")
+
+	older, err := openPool(ctx, poolDSN(path, true), true)
+	if err != nil {
+		t.Fatalf("open the older database: %v", err)
+	}
+	if err := migrate(ctx, older, schemaBefore(t, runFixerSessionVersion)); err != nil {
+		t.Fatalf("migrate to the older schema: %v", err)
+	}
+	now := encodeTime(nowUTC())
+	if _, err := older.ExecContext(ctx, `
+		INSERT INTO repository (id, working_path, upstream_url, fork_url, default_branch, created_at, updated_at)
+		VALUES (?, ?, ?, NULL, ?, ?, ?)`,
+		"repo-1", "/checkouts/one", "https://example.test/one.git", "main", now, now); err != nil {
+		t.Fatalf("write a repository against the older schema: %v", err)
+	}
+	if _, err := older.ExecContext(ctx, `
+		INSERT INTO run (id, repository_id, branch, submitted_head, base, status,
+			intent, intent_source, build_version, build_revision, build_modified,
+			build_go, config_digest, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"run-1", "repo-1", "topic", "aaaa", "bbbb", string(RunPending),
+		"validate", "push", "v0.1.0", "0123456789abcdef", 0, "go1.25.0", "cfg-1",
+		now, now); err != nil {
+		t.Fatalf("write a run against the older schema: %v", err)
+	}
+	if err := older.Close(); err != nil {
+		t.Fatalf("close the older database: %v", err)
+	}
+
+	s := openStoreAt(t, path)
+	got, err := s.Run(ctx, "run-1")
+	if err != nil {
+		t.Fatalf("the run written against the older schema did not survive: %v", err)
+	}
+	if got.FixerSession.IsKnown() {
+		t.Fatalf("a run recorded before the column existed reports a fixer session: %q", got.FixerSession)
+	}
+	if err := s.SetRunFixerSession(ctx, "run-1", "sess-1"); err != nil {
+		t.Fatalf("SetRunFixerSession after the migration: %v", err)
+	}
+}
+
+// A transition is anchored to the status the caller expected, so a run that
+// has moved since is refused rather than written over.
+func TestTransitionRunHoldsTheRunToTheStatusTheCallerExpected(t *testing.T) {
+	ctx := context.Background()
+	s := openStore(t)
+	seedRepository(t, s)
+	r, err := s.CreateRun(ctx, completeRun())
+	if err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+
+	moved, err := s.TransitionRun(ctx, r.ID, []RunStatus{RunPending}, RunRunning)
+	if err != nil {
+		t.Fatalf("pending to running: %v", err)
+	}
+	if moved.Status != RunRunning {
+		t.Fatalf("the run came back %s, want running", moved.Status)
+	}
+
+	// The same move again, from a status the run has left.
+	_, err = s.TransitionRun(ctx, r.ID, []RunStatus{RunPending}, RunHeld)
+	var refused *RunStatusError
+	if !errors.As(err, &refused) {
+		t.Fatalf("moving a running run out of pending: %v", err)
+	}
+	if refused.Actual != RunRunning || refused.To != RunHeld {
+		t.Fatalf("the refusal reports %+v, want a run found running on the way to held", refused)
+	}
+	if !errors.Is(err, ErrRunStatus) {
+		t.Fatalf("the refusal does not match ErrRunStatus: %v", err)
+	}
+	after, err := s.Run(ctx, r.ID)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if after.Status != RunRunning || !after.UpdatedAt.Equal(moved.UpdatedAt) {
+		t.Fatalf("the refused transition changed the run: %+v", after)
+	}
+}
+
+// A run already in the status it is being moved to is left alone, so a
+// transition retried after a failure that had already committed reports the
+// state it established.
+func TestTransitionRunToTheStatusTheRunAlreadyHoldsWritesNothing(t *testing.T) {
+	ctx := context.Background()
+	s := openStore(t)
+	seedRepository(t, s)
+	r, err := s.CreateRun(ctx, completeRun())
+	if err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	first, err := s.TransitionRun(ctx, r.ID, []RunStatus{RunPending}, RunRunning)
+	if err != nil {
+		t.Fatalf("pending to running: %v", err)
+	}
+	// Nothing here names running as an origin, so only the destination rule
+	// can be what lets this through.
+	again, err := s.TransitionRun(ctx, r.ID, []RunStatus{RunPending}, RunRunning)
+	if err != nil {
+		t.Fatalf("running to running: %v", err)
+	}
+	if again.Status != RunRunning {
+		t.Fatalf("the run came back %s, want running", again.Status)
+	}
+	if !again.UpdatedAt.Equal(first.UpdatedAt) {
+		t.Fatalf("the repeated transition moved updated_at from %s to %s", first.UpdatedAt, again.UpdatedAt)
+	}
+}
+
+// The refusals that are about the request rather than about the run.
+func TestTransitionRunRefusesARequestItCannotActOn(t *testing.T) {
+	ctx := context.Background()
+	s := openStore(t)
+	seedRepository(t, s)
+	r, err := s.CreateRun(ctx, completeRun())
+	if err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	if _, err := s.TransitionRun(ctx, r.ID, []RunStatus{RunPending}, RunStatus("elsewhere")); err == nil {
+		t.Fatal("TransitionRun accepted a status this package does not define")
+	}
+	if _, err := s.TransitionRun(ctx, r.ID, []RunStatus{RunPending}, ""); err == nil {
+		t.Fatal("TransitionRun accepted an empty status")
+	}
+	if _, err := s.TransitionRun(ctx, r.ID, nil, RunRunning); err == nil {
+		t.Fatal("TransitionRun accepted a transition with no origin")
+	}
+	after, err := s.Run(ctx, r.ID)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if after.Status != RunPending {
+		t.Fatalf("a refused request moved the run to %s", after.Status)
+	}
+}
+
+// Every status this package defines is recognized, and nothing else is.
+func TestRunStatusesAreAClosedSet(t *testing.T) {
+	for _, status := range RunStatuses() {
+		if !status.Recognized() {
+			t.Fatalf("%q is in the set and not recognized", status)
+		}
+	}
+	for _, status := range []RunStatus{"", "running ", "Running", "cancelled"} {
+		if status.Recognized() {
+			t.Fatalf("%q is recognized and is not one of the statuses", status)
+		}
+	}
+	listed := RunStatuses()
+	listed[0] = "rewritten"
+	if RunStatuses()[0] == "rewritten" {
+		t.Fatal("writing to the returned slice changed the set")
 	}
 }

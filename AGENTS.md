@@ -214,6 +214,23 @@ Each has cost this repository more than one round of review.
   before launch. Read its `doc.go` before changing the loop or the holds, and
   for the residual gaps: the requested fix round PRD section 5's hold offers is
   not wired, and convergence is over the whole state.
+- `internal/runs` owns two things: the table of a run's status changes, and the
+  one durable fixer session a run keeps. Both are anchored rather than
+  convention. A status move is `store.TransitionRun`, which reads and writes in
+  one transaction against the origin set the caller names, and which statuses
+  are terminal is read off that table rather than listed beside it. The session
+  reference is on the run's own row and must never move into `internal/pipeline`
+  graph state: that state is the convergence fingerprint, and a reference that
+  changed across a resume would silently disable the bound.
+  `TestConvergenceFiresWithADurableSessionAndNotWithOneInGraphState` runs the
+  real loop both ways so the second half of that sentence is demonstrated
+  rather than asserted. P4 rides on `internal/agents`: `runs.Fixer` is an
+  `agents.Fixer`, so no entry point here takes a purpose, and the session-free
+  mode asks `Invocation.ValidateForFixer` itself so a review shape is refused in
+  both modes. Read its `doc.go` before changing any of that, and for the
+  residual gaps: one fixer per run is bounded by one service, a handle already
+  handed out is not revoked, and no durable `graph.CheckpointStore` exists yet,
+  so a run survives a restart as a record and not as a position.
 - `internal/scope` is the review stage's scope lens, not a tenth stage: every
   changed line should trace to the recorded intent, and P2 fixes the list at
   nine. It ships on and has no off switch, which is why it is shipped guidance

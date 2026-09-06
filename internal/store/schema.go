@@ -196,4 +196,22 @@ var schema = []migration{
 			`ALTER TABLE hold ADD COLUMN resolved_by TEXT`,
 		},
 	},
+	{
+		version: 4,
+		name:    "run fixer session",
+		statements: []string{
+			// The reference to the one durable fixer session a run keeps
+			// across its fix rounds. It lives on the run because the run is
+			// what it belongs to for exactly as long as the run lasts, and
+			// because the alternative that suggests itself, the graph state
+			// internal/graph fingerprints, is the one place it must not be:
+			// a reference that changes across a resume would make that state
+			// never repeat and the convergence bound never fire.
+			//
+			// It is nullable and carries no default, so a run recorded before
+			// this column existed reads back as unknown rather than as a
+			// fabricated empty session.
+			`ALTER TABLE run ADD COLUMN fixer_session TEXT`,
+		},
+	},
 }

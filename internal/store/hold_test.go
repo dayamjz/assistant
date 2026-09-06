@@ -137,8 +137,8 @@ func TestFinishingTheWorkDoesNotCloseAHold(t *testing.T) {
 	}
 
 	// Everything the surrounding work can do short of an explicit resolution.
-	if err := s.SetRunStatus(ctx, run.ID, RunTerminated); err != nil {
-		t.Fatalf("SetRunStatus: %v", err)
+	if _, err := s.TransitionRun(ctx, run.ID, []RunStatus{RunPending}, RunTerminated); err != nil {
+		t.Fatalf("TransitionRun: %v", err)
 	}
 	if _, err := s.SetTaskState(ctx, task.ID, "complete", "supervisor", Unknown[string]()); err != nil {
 		t.Fatalf("SetTaskState: %v", err)
