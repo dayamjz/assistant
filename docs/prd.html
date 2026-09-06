@@ -276,7 +276,7 @@ flowchart TB
     <div class="card card-border bg-base-200">
       <div class="card-body">
         <h3 class="card-title text-sm">One supervision loop</h3>
-        <p class="text-xs opacity-90">The watcher that notices a stalled worker is the watcher that notices a run parked at a decision. Neither can be running while the other is not.</p>
+        <p class="text-xs opacity-90">The watcher that notices a stalled worker is the watcher that notices a run held at a decision. Neither can be running while the other is not.</p>
       </div>
     </div>
   </div>
@@ -412,7 +412,7 @@ flowchart TB
       </div>
       <div class="collapse-content text-sm opacity-90 space-y-2">
         <p>Whenever a task is in flight, exactly one live supervision cycle exists. If the coordinator is about to stop while work is running and no healthy watcher holds this home's lock, it is either blocked from stopping or forced into one more turn.</p>
-        <p><b>Prevents:</b> the most expensive silent failure in the whole system. Work parks at a decision, nothing is watching, and you find out hours later. This warrants more than one mechanism.</p>
+        <p><b>Prevents:</b> the most expensive silent failure in the whole system. Work holds at a decision, nothing is watching, and you find out hours later. This warrants more than one mechanism.</p>
       </div>
     </div>
 
@@ -517,7 +517,7 @@ flowchart LR
       <tbody>
         <tr><td class="prd-num">1</td><td><b>Intent</b></td><td>Establishes what you set out to do. Supplied intent is authoritative acceptance criteria; inferred intent is a low-confidence hint, and the two are framed differently in every downstream prompt. This stage never blocks a run.</td><td class="opacity-60">none</td></tr>
         <tr><td class="prd-num">2</td><td><b>Rebase</b></td><td>Fetches fresh upstream and the branch target, then rebases onto them, so everything after runs against current code. Stops if the branch would quietly carry commits from your local default branch that were never pushed. If nothing remains to change, the run ends successfully and the rest is skipped.</td><td class="prd-num">3</td></tr>
-        <tr><td class="prd-num">3</td><td><b>Review</b></td><td>Independent review of the change against the diff and your intent. Runs before tests so it reads code the fixer has not touched. Gets one automatic fix round, restricted to <code>fix</code> findings. Any <code>ask</code> finding parks immediately and is never included in that round.</td><td class="prd-num">1</td></tr>
+        <tr><td class="prd-num">3</td><td><b>Review</b></td><td>Independent review of the change against the diff and your intent. Runs before tests so it reads code the fixer has not touched. Gets one automatic fix round, restricted to <code>fix</code> findings. Any <code>ask</code> finding holds immediately and is never included in that round.</td><td class="prd-num">1</td></tr>
         <tr><td class="prd-num">4</td><td><b>Test</b></td><td>Targeted validation of this change and this intent, not a full suite. If no targeted check can establish the intent, the stage must write one, verify manually with recorded evidence, or report that sufficient evidence is not possible.</td><td class="prd-num">3</td></tr>
         <tr><td class="prd-num">5</td><td><b>Document</b></td><td>Updates documentation the change made stale, then reports only what it could not resolve. Runs after tests so it documents code known to work. Scope is limited to what this change affected.</td><td class="opacity-60">in pass</td></tr>
         <tr><td class="prd-num">6</td><td><b>Lint</b></td><td>Static analysis. Last among local checks so it does not churn over code that may still change.</td><td class="prd-num">3</td></tr>
@@ -580,7 +580,7 @@ flowchart LR
     <div class="card card-border bg-base-200 border-warning/40">
       <div class="card-body">
         <h4 class="card-title text-sm"><span class="badge badge-warning badge-sm">ask</span></h4>
-        <p class="text-xs opacity-90 mb-2">Touches your intent or your judgment. Parks for a decision; never enters the automatic fix loop.</p>
+        <p class="text-xs opacity-90 mb-2">Touches your intent or your judgment. Holds for a decision; never enters the automatic fix loop.</p>
         <p class="text-xs opacity-70">Questioning a deliberate product choice, arguing an intentional removal should be undone, or reporting that a stage could not gather enough evidence.</p>
       </div>
     </div>
@@ -684,7 +684,7 @@ flowchart LR
     <li>It is never applied and never inferred into effect. The review rules in force for a run are
       exactly the resolved configuration, and path-scoped rules are read only from the trusted copy,
       so accepting a proposal means a person putting the rule on the default branch.</li>
-    <li>Being a <code>note</code>, it parks nothing and enters no fix round.</li>
+    <li>Being a <code>note</code>, it holds nothing and enters no fix round.</li>
   </ul>
 
   <h3 class="text-xl font-semibold mb-3">The fix loop and its three bounds</h3>
@@ -1192,7 +1192,7 @@ flowchart TD
     <div class="card card-border bg-base-200 border-success/30">
       <div class="card-body">
         <h4 class="card-title text-sm text-success">Halt before the node runs</h4>
-        <p class="text-xs opacity-90">The graph stops at the boundary. The node never starts, so there is nothing to make idempotent and nothing to replay. The decision is collected outside the graph and supplied as input on the next call. This is also exactly how both source systems already park work.</p>
+        <p class="text-xs opacity-90">The graph stops at the boundary. The node never starts, so there is nothing to make idempotent and nothing to replay. The decision is collected outside the graph and supplied as input on the next call. This is also exactly how both source systems already hold work.</p>
       </div>
     </div>
   </div>
@@ -1790,7 +1790,7 @@ flowchart TB
         <tr><td><code>commands.test</code></td><td>empty</td><td>A targeted check for this change, not a full suite. Deliberately empty by default.</td></tr>
         <tr><td><code>commands.lint</code></td><td>empty</td><td>Static analysis. When empty, the document stage performs a combined pass and routes its lint findings to the lint stage.</td></tr>
         <tr><td><code>commands.format</code></td><td>empty</td><td>Run immediately before pushing.</td></tr>
-        <tr><td><code>fix_rounds.review</code></td><td><code class="prd-num">1</code></td><td>One round, and only over <code>fix</code> findings. An <code>ask</code> finding is never eligible, so the presence of one parks the stage regardless of this value. Setting it to zero sends every review finding to you.</td></tr>
+        <tr><td><code>fix_rounds.review</code></td><td><code class="prd-num">1</code></td><td>One round, and only over <code>fix</code> findings. An <code>ask</code> finding is never eligible, so the presence of one holds the stage regardless of this value. Setting it to zero sends every review finding to you.</td></tr>
         <tr><td><code>fix_rounds.{rebase,test,lint,checks}</code></td><td><code class="prd-num">3</code></td><td>Per-stage attempt limits.</td></tr>
         <tr><td><code>run_budget</code></td><td><code class="prd-num">40</code></td><td>Total node executions per run. The second of the three loop bounds.</td></tr>
         <tr><td><code>ignore_patterns</code></td><td>empty</td><td>Paths excluded from review and documentation checks.</td></tr>
