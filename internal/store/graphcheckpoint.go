@@ -50,7 +50,12 @@ type GraphCheckpoint struct {
 //   - Any other anchor requires run's latest entry to be exactly that one.
 //     It is refused with a *GraphAnchorError, which wraps ErrGraphAnchor and
 //     names where the run actually stands, when the run has moved since or when
-//     anchorRun is some other run.
+//     anchorRun is some other run. A negative sequence names no entry this
+//     package ever assigned, so it is one more anchor the run does not stand at
+//     and is refused the same way. It has no refusal of its own: a second path
+//     out of the anchor decision would answer one condition two ways depending
+//     on which side of zero it fell on, and a caller checking for the anchor's
+//     refusal would miss it.
 //
 // The decision and the assignment happen in one transaction on the single
 // writer connection, so two callers that read the same tip cannot both find it
@@ -69,10 +74,6 @@ func (s *Store) AppendGraphCheckpoint(ctx context.Context, run, anchorRun string
 	if strings.TrimSpace(run) == "" {
 		return GraphCheckpoint{}, fmt.Errorf("store: checkpoint has no run")
 	}
-	if anchorSeq < 0 {
-		return GraphCheckpoint{}, fmt.Errorf(
-			"store: run %s: a checkpoint cannot be anchored to sequence %d", run, anchorSeq)
-	}
 
 	now := nowUTC()
 	var seq int
@@ -90,6 +91,8 @@ func (s *Store) AppendGraphCheckpoint(ctx context.Context, run, anchorRun string
 				return fmt.Errorf("%w: %q stands at checkpoint %d", ErrGraphRunExists, run, stands)
 			}
 		case anchorRun != run || anchorSeq != stands:
+			// A sequence this package never assigns, negative or beyond the
+			// tip, cannot equal stands and lands here with the rest.
 			return &GraphAnchorError{Run: run, AnchorRun: anchorRun, AnchorSeq: anchorSeq, Stands: stands}
 		}
 		seq = stands + 1

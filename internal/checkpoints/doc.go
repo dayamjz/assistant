@@ -44,10 +44,26 @@
 //
 // Honouring the anchor is required of every implementation of the interface,
 // not a description of any one of them, so this package is written to answer
-// what graph.MemoryStore answers, down to the refusals' wording and the order
-// they are checked in. The tests are the part that holds it: the behavioural
-// suite in store_test.go runs against both, so a divergence fails the suite
-// rather than waiting for a caller to find it.
+// what graph.MemoryStore answers, in the same wording, for every condition the
+// interface names. The tests are the part that holds it: the behavioural suite
+// in store_test.go runs against both, so a divergence fails the suite rather
+// than waiting for a caller to find it.
+//
+// Two differences remain, and neither is a condition the interface names. Both
+// are held where they are by a test rather than left to be found:
+//
+// A checkpoint that can neither be encoded nor anchored is refused by both and
+// writes nothing in either, but they report different halves of it. The payload
+// has to exist before the accessor that decides the anchor is called, so this
+// package reaches the encoding failure first where graph.MemoryStore checks the
+// anchor before it encodes. Reaching the anchor sooner would mean deciding it
+// outside the write, which is the one thing this boundary may not do.
+//
+// A run named only whitespace is held by graph.MemoryStore, which refuses only
+// the empty name, and refused by internal/store, which refuses a blank name
+// everywhere it takes one. Nothing here relaxes that, so such a run has no
+// durable history. graph.Executor admits the name, so it is reachable rather
+// than theoretical.
 //
 // # Serialization
 //

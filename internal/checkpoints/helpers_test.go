@@ -32,8 +32,8 @@ func openRecords(t *testing.T) *store.Store {
 }
 
 // openRecordsAt opens the database at path, creating it if it is not there, and
-// closes it when the test ends. A test that means to survive a restart closes
-// it itself and opens it again at the same path.
+// closes it when the test ends. A test that means to survive a restart goes
+// through beforeTheRestart rather than calling this and remembering to close.
 func openRecordsAt(t *testing.T, path string) *store.Store {
 	t.Helper()
 	s, err := store.Open(context.Background(), path, store.WithRedactor(workingRedactor()))
@@ -42,6 +42,33 @@ func openRecordsAt(t *testing.T, path string) *store.Store {
 	}
 	t.Cleanup(func() { _ = s.Close() })
 	return s
+}
+
+// beforeTheRestart opens the database at path, hands work a durable store over
+// it, and closes the store it opened before returning.
+//
+// The boundary is this helper rather than a rule each test remembers: the store
+// work was given answers ErrClosed once this returns, so a test that kept the
+// handle it wrote through and read back through it fails instead of reporting a
+// restart it never crossed. Only the file is left, which is what a second
+// process would be given.
+// TestTheRestartBoundaryClosesTheStoreItWasWrittenThrough is what holds that.
+func beforeTheRestart(t *testing.T, path string, work func(t *testing.T, s *checkpoints.Store)) {
+	t.Helper()
+	records := openRecordsAt(t, path)
+	defer func() {
+		if err := records.Close(); err != nil {
+			t.Errorf("closing the store the run was written through: %v", err)
+		}
+	}()
+	work(t, checkpoints.New(records))
+}
+
+// afterTheRestart opens the same database again, as a process handed nothing
+// but the file.
+func afterTheRestart(t *testing.T, path string) *checkpoints.Store {
+	t.Helper()
+	return checkpoints.New(openRecordsAt(t, path))
 }
 
 // durableStore returns the implementation this package provides.

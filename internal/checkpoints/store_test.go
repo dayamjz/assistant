@@ -97,6 +97,10 @@ func TestAnAnchorTheRunHasLeftIsRefusedAndNamesWhereItStands(t *testing.T) {
 			"a position the run has moved past":  {Run: "run", Seq: 1},
 			"a position the run has not reached": {Run: "run", Seq: 9},
 			"the same position in another run":   {Run: "other", Seq: 3},
+			// A negative sequence is no entry either store ever assigned, so
+			// it is one more position the run does not stand at rather than a
+			// refusal of its own that a caller checking for this one misses.
+			"a sequence no entry can have": {Run: "run", Seq: -1},
 		}
 		for name, stale := range cases {
 			t.Run(name, func(t *testing.T) {
@@ -246,6 +250,106 @@ func TestACheckpointThatCannotBeEncodedIsRefusedAndWritesNothing(t *testing.T) {
 			t.Errorf("the refused write left %d checkpoints, want none", len(history))
 		}
 	})
+}
+
+func TestAnUnencodableCheckpointAgainstAStaleAnchorIsRefusedAndWritesNothing(t *testing.T) {
+	eachStore(t, func(t *testing.T, s graph.CheckpointStore) {
+		ctx := context.Background()
+		g := linearGraph(t, &recorder{})
+		if _, err := s.Write(ctx, graph.CheckpointID{}, graph.Checkpoint{
+			Run: "run", Position: "a", Status: graph.StatusRunning, State: mustState(t, g, nil),
+		}); err != nil {
+			t.Fatalf("claiming the run: %v", err)
+		}
+
+		// Both things are wrong with this write at once. What the two stores
+		// report about it is the one difference between them doc.go names; that
+		// it is refused and leaves the run where it was is not a difference, and
+		// is what this holds.
+		_, err := s.Write(ctx, graph.CheckpointID{Run: "run", Seq: 9}, graph.Checkpoint{
+			Run: "run", Position: "a", Status: graph.StatusInvalid, State: mustState(t, g, nil),
+		})
+		if err == nil {
+			t.Fatal("a checkpoint that can neither be encoded nor anchored was accepted")
+		}
+		history, err := s.History(ctx, "run")
+		if err != nil {
+			t.Fatalf("History: %v", err)
+		}
+		if len(history) != 1 {
+			t.Errorf("the refused write left %d checkpoints, want 1", len(history))
+		}
+	})
+}
+
+// The payload has to exist before the accessor that decides the anchor is
+// called, so this store finds an encoding failure where graph.MemoryStore, which
+// decides the anchor first, finds a stale one. doc.go names that difference, and
+// this is what holds it where it is named rather than letting it widen or
+// disappear unnoticed. A store that started reading the run's tip to answer the
+// anchor sooner would be deciding it outside the write, which is the defect the
+// anchor exists to prevent.
+func TestTheDurableStoreFindsAnEncodingFailureWhereTheInMemoryOneFindsTheAnchor(t *testing.T) {
+	ctx := context.Background()
+	g := linearGraph(t, &recorder{})
+	claim := graph.Checkpoint{
+		Run: "run", Position: "a", Status: graph.StatusRunning, State: mustState(t, g, nil),
+	}
+	unencodable := graph.Checkpoint{
+		Run: "run", Position: "a", Status: graph.StatusInvalid, State: mustState(t, g, nil),
+	}
+	stale := graph.CheckpointID{Run: "run", Seq: 9}
+
+	memory := graph.NewMemoryStore()
+	if _, err := memory.Write(ctx, graph.CheckpointID{}, claim); err != nil {
+		t.Fatalf("claiming the run in memory: %v", err)
+	}
+	if _, err := memory.Write(ctx, stale, unencodable); !errors.Is(err, graph.ErrStaleAnchor) {
+		t.Errorf("the in-memory store = %v, want ErrStaleAnchor", err)
+	}
+
+	durable := durableStore(t)
+	if _, err := durable.Write(ctx, graph.CheckpointID{}, claim); err != nil {
+		t.Fatalf("claiming the run durably: %v", err)
+	}
+	switch _, err := durable.Write(ctx, stale, unencodable); {
+	case err == nil:
+		t.Error("the durable store accepted a checkpoint it cannot encode")
+	case errors.Is(err, graph.ErrStaleAnchor):
+		t.Errorf("the durable store = %v, want the encoding failure it reaches first", err)
+	case !strings.Contains(err.Error(), "encoding checkpoint"):
+		t.Errorf("the durable store = %v, want it to say what it could not encode", err)
+	}
+}
+
+// internal/store refuses a blank name everywhere it takes one, and nothing here
+// relaxes that, so a run graph.MemoryStore is willing to hold under a name that
+// is only whitespace has no durable history. graph.Executor admits the name, so
+// this is reachable rather than theoretical; doc.go names it, and this is what
+// holds it to a refusal that writes nothing rather than a partly claimed run.
+func TestTheDurableStoreRefusesARunNamedOnlyWhitespace(t *testing.T) {
+	ctx := context.Background()
+	g := linearGraph(t, &recorder{})
+	blank := " "
+	cp := graph.Checkpoint{
+		Run: blank, Position: "a", Status: graph.StatusRunning, State: mustState(t, g, nil),
+	}
+
+	if _, err := graph.NewMemoryStore().Write(ctx, graph.CheckpointID{}, cp); err != nil {
+		t.Fatalf("the in-memory store refused a run named %q: %v", blank, err)
+	}
+
+	durable := durableStore(t)
+	if _, err := durable.Write(ctx, graph.CheckpointID{}, cp); err == nil {
+		t.Fatal("the durable store accepted a run named only whitespace")
+	}
+	history, err := durable.History(ctx, blank)
+	if err != nil {
+		t.Fatalf("History: %v", err)
+	}
+	if len(history) != 0 {
+		t.Errorf("the refused write left %d checkpoints, want none", len(history))
+	}
 }
 
 func TestForkCopiesThePrefixAndRecordsItsLineage(t *testing.T) {

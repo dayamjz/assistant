@@ -93,6 +93,7 @@ func TestAnAppendAnchoredToAPositionTheRunHasLeftIsRefused(t *testing.T) {
 		"a position the run has moved past":  {anchorRun: "run", anchorSeq: 2},
 		"a position the run has not reached": {anchorRun: "run", anchorSeq: 9},
 		"the same position in another run":   {anchorRun: "other", anchorSeq: 3},
+		"a sequence no entry can have":       {anchorRun: "run", anchorSeq: -1},
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {

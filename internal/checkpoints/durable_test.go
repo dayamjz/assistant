@@ -8,45 +8,97 @@ import (
 
 	"github.com/dayamjz/assistant/internal/checkpoints"
 	"github.com/dayamjz/assistant/internal/graph"
+	"github.com/dayamjz/assistant/internal/store"
 )
+
+// TestTheRestartBoundaryClosesTheStoreItWasWrittenThrough holds the boundary
+// the three tests below cross.
+//
+// Each of them claims that the store a run was written through is gone, and a
+// claim like that is worth nothing unless reading through that store afterwards
+// fails. beforeTheRestart closes what it opened, so this walks a run, keeps the
+// handle it walked through, and shows that every operation on it is refused
+// once the boundary is behind it while the same database reopens and answers.
+func TestTheRestartBoundaryClosesTheStoreItWasWrittenThrough(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "state.db")
+
+	g := linearGraph(t, &recorder{})
+	var kept *checkpoints.Store
+	beforeTheRestart(t, path, func(t *testing.T, s *checkpoints.Store) {
+		kept = s
+		if _, err := mustExecutor(t, g, s, 20).Run(ctx, "run", mustState(t, g, nil)); err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		// It answers while the process is still holding it, so what is below
+		// is the boundary and not a store that never worked.
+		if _, err := s.Latest(ctx, "run"); err != nil {
+			t.Fatalf("Latest before the boundary: %v", err)
+		}
+	})
+
+	if _, err := kept.Latest(ctx, "run"); !errors.Is(err, store.ErrClosed) {
+		t.Errorf("Latest through the pre-restart store = %v, want ErrClosed", err)
+	}
+	if _, err := kept.History(ctx, "run"); !errors.Is(err, store.ErrClosed) {
+		t.Errorf("History through the pre-restart store = %v, want ErrClosed", err)
+	}
+	if _, err := kept.Write(ctx, graph.CheckpointID{Run: "run", Seq: 4}, graph.Checkpoint{
+		Run: "run", Position: "c", Status: graph.StatusRunning, State: mustState(t, g, nil),
+	}); !errors.Is(err, store.ErrClosed) {
+		t.Errorf("Write through the pre-restart store = %v, want ErrClosed", err)
+	}
+	if _, err := kept.Fork(ctx, graph.CheckpointID{Run: "run", Seq: 2}, "retry"); !errors.Is(err, store.ErrClosed) {
+		t.Errorf("Fork through the pre-restart store = %v, want ErrClosed", err)
+	}
+
+	// The file outlived the handle: what the boundary closed is the store the
+	// run was written through and not the run's history.
+	restarted, err := afterTheRestart(t, path).History(ctx, "run")
+	if err != nil {
+		t.Fatalf("History after the restart: %v", err)
+	}
+	if want := []string{"a", "b", "c", ""}; !equalStrings(positions(restarted), want) {
+		t.Errorf("the reopened store reads back %v, want %v", positions(restarted), want)
+	}
+}
 
 func TestARunSurvivesTheProcessThatReachedIt(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "state.db")
 
-	// Before: a run walks to its decision and stops there.
+	// Before: a run walks to its decision and stops there. The store it walks
+	// through is closed when beforeTheRestart returns, so what is left of it is
+	// the database file and the values read out below.
 	before := &recorder{}
 	g := fixLoopGraph(t, before)
-	beforeStore := checkpoints.New(openRecordsAt(t, path))
-	held, err := mustExecutor(t, g, beforeStore, 20).Run(ctx, "run", mustState(t, g, nil))
-	if err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	if held.Status != graph.StatusHalted || held.Position != "gate" {
-		t.Fatalf("the run ended %s at %q, want halted at gate", held.Status, held.Position)
-	}
-	// A halt point stops the run before its node, so the gate has not started.
-	if got := before.order(); !equalStrings(got, []string{"review"}) {
-		t.Fatalf("bodies ran %v before the restart, want only review", got)
-	}
-
-	stoodBefore, err := beforeStore.Latest(ctx, "run")
-	if err != nil {
-		t.Fatalf("Latest before the restart: %v", err)
-	}
-
-	// The store the run was written through is gone, along with everything the
-	// process held in memory. Only the database file is left.
-	records := openRecordsAt(t, path)
-	if err := records.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
+	var held graph.Result
+	var stoodBefore graph.Checkpoint
+	beforeTheRestart(t, path, func(t *testing.T, beforeStore *checkpoints.Store) {
+		var err error
+		held, err = mustExecutor(t, g, beforeStore, 20).Run(ctx, "run", mustState(t, g, nil))
+		if err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		if held.Status != graph.StatusHalted || held.Position != "gate" {
+			t.Fatalf("the run ended %s at %q, want halted at gate", held.Status, held.Position)
+		}
+		// A halt point stops the run before its node, so the gate has not
+		// started.
+		if got := before.order(); !equalStrings(got, []string{"review"}) {
+			t.Fatalf("bodies ran %v before the restart, want only review", got)
+		}
+		stoodBefore, err = beforeStore.Latest(ctx, "run")
+		if err != nil {
+			t.Fatalf("Latest before the restart: %v", err)
+		}
+	})
 
 	// After: nothing of the first executor, the first store, or the first set
 	// of node bodies survives into this one.
 	after := &recorder{}
 	restarted := fixLoopGraph(t, after)
-	s := checkpoints.New(openRecordsAt(t, path))
+	s := afterTheRestart(t, path)
 	exec := mustExecutor(t, restarted, s, 20)
 
 	stood, err := s.Latest(ctx, "run")
@@ -107,30 +159,28 @@ func TestARestartedRunIsStillAnchoredToWhatWasObservedBeforeIt(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.db")
 
 	g := linearGraph(t, &recorder{})
-	first := checkpoints.New(openRecordsAt(t, path))
-	if _, err := mustExecutor(t, g, first, 20).Run(ctx, "run", mustState(t, g, nil)); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	history, err := first.History(ctx, "run")
-	if err != nil {
-		t.Fatalf("History: %v", err)
-	}
+	var history []graph.Checkpoint
+	beforeTheRestart(t, path, func(t *testing.T, first *checkpoints.Store) {
+		if _, err := mustExecutor(t, g, first, 20).Run(ctx, "run", mustState(t, g, nil)); err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		var err error
+		history, err = first.History(ctx, "run")
+		if err != nil {
+			t.Fatalf("History: %v", err)
+		}
+	})
 	if len(history) < 2 {
 		t.Fatalf("the run has %d checkpoints, want enough for one of them to be stale", len(history))
 	}
 	stale := history[len(history)-2]
 	tip := history[len(history)-1]
 
-	records := openRecordsAt(t, path)
-	if err := records.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-
 	// A caller holding a position from before the restart is held to it. The
 	// anchor is decided against what the reopened store reads back, so a write
 	// carrying a position the run has left is refused rather than appended
 	// over the work that followed it.
-	s := checkpoints.New(openRecordsAt(t, path))
+	s := afterTheRestart(t, path)
 	if _, err := s.Write(ctx, stale.ID(), stale); !errors.Is(err, graph.ErrStaleAnchor) {
 		t.Fatalf("a write anchored to %s after the restart = %v, want ErrStaleAnchor", stale.ID(), err)
 	}
@@ -157,21 +207,18 @@ func TestAForkSurvivesTheProcessThatMadeIt(t *testing.T) {
 
 	rec := &recorder{}
 	g := linearGraph(t, rec)
-	first := checkpoints.New(openRecordsAt(t, path))
-	if _, err := mustExecutor(t, g, first, 20).Run(ctx, "run", mustState(t, g, nil)); err != nil {
-		t.Fatalf("Run: %v", err)
-	}
-	if _, err := first.Fork(ctx, graph.CheckpointID{Run: "run", Seq: 2}, "retry"); err != nil {
-		t.Fatalf("Fork: %v", err)
-	}
-	records := openRecordsAt(t, path)
-	if err := records.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
+	beforeTheRestart(t, path, func(t *testing.T, first *checkpoints.Store) {
+		if _, err := mustExecutor(t, g, first, 20).Run(ctx, "run", mustState(t, g, nil)); err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		if _, err := first.Fork(ctx, graph.CheckpointID{Run: "run", Seq: 2}, "retry"); err != nil {
+			t.Fatalf("Fork: %v", err)
+		}
+	})
 
 	after := &recorder{}
 	restarted := linearGraph(t, after)
-	s := checkpoints.New(openRecordsAt(t, path))
+	s := afterTheRestart(t, path)
 	forked, err := s.History(ctx, "retry")
 	if err != nil {
 		t.Fatalf("History: %v", err)
