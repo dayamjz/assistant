@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"path/filepath"
 	"testing"
 )
 
@@ -181,6 +182,81 @@ func TestAHoldResolvedBeforeTheColumnExistedReadsBackUnknown(t *testing.T) {
 	}
 	if held.ResolvedBy.String() != "unknown" {
 		t.Fatalf("an unrecorded resolver rendered as %q", held.ResolvedBy.String())
+	}
+}
+
+// holdResolverVersion is the shipped migration that adds hold.resolved_by. A
+// shipped version never moves, so pinning to it holds the test below to its
+// subject as the list grows.
+const holdResolverVersion = 3
+
+// The read path above is exercised against a table this build migrated. This is
+// the other half: migration 3 reaching a database that predates it with a
+// resolved hold already in it, which is the first time this package adds a
+// column to a populated table.
+func TestTheHoldResolverMigrationReachesAnOlderDatabase(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "state.db")
+
+	older, err := openPool(ctx, poolDSN(path, true), true)
+	if err != nil {
+		t.Fatalf("open the older database: %v", err)
+	}
+	if err := migrate(ctx, older, schemaBefore(t, holdResolverVersion)); err != nil {
+		t.Fatalf("migrate to the older schema: %v", err)
+	}
+	var present int
+	if err := older.QueryRowContext(ctx, `
+		SELECT count(*) FROM pragma_table_info('hold') WHERE name = 'resolved_by'`).Scan(&present); err != nil {
+		t.Fatalf("look for the resolver column in the older schema: %v", err)
+	}
+	if present != 0 {
+		t.Fatal("the older database already has hold.resolved_by, so the migration this test is named for would not run")
+	}
+
+	// The columns the build before migration 3 wrote, so what the migration
+	// finds is the row that build's ResolveHold left.
+	opened, resolved := encodeTime(nowUTC()), encodeTime(nowUTC())
+	if _, err := older.ExecContext(ctx, `
+		INSERT INTO hold (key, run_id, task_id, subject, detail, opened_at, resolution, resolved_at)
+		VALUES (?, NULL, NULL, ?, ?, ?, ?, ?)`,
+		"older", "a decision made before the column existed", "", opened, "ship it", resolved); err != nil {
+		t.Fatalf("write a resolved hold against the older schema: %v", err)
+	}
+	if err := older.Close(); err != nil {
+		t.Fatalf("close the older database: %v", err)
+	}
+
+	// Opening it with this build applies the migration.
+	s := openStoreAt(t, path)
+	held, err := s.Hold(ctx, "older")
+	if err != nil {
+		t.Fatalf("the hold written against the older schema did not survive: %v", err)
+	}
+	if held.Open() {
+		t.Fatal("the resolution written against the older schema was lost by the migration")
+	}
+	if answer, known := held.Resolution.Get(); !known || answer != "ship it" {
+		t.Fatalf("the resolution came back as %q (known=%v)", answer, known)
+	}
+	if held.ResolvedBy.IsKnown() {
+		t.Fatalf("the migration invented a resolver: it names %s", held.ResolvedBy)
+	}
+	if got := held.ResolvedBy.String(); got != "unknown" {
+		t.Fatalf("an unrecorded resolver rendered as %q", got)
+	}
+
+	// The column the migration added is writable afterwards, so what it left is
+	// a usable table rather than one that only reads.
+	if _, err := s.RegisterHold(ctx, Hold{Key: "newer", Subject: "a decision after the migration"}); err != nil {
+		t.Fatalf("RegisterHold after the migration: %v", err)
+	}
+	newer, err := s.ResolveHold(ctx, "newer", "ship it", ResolvedByMachineInterface())
+	if err != nil {
+		t.Fatalf("ResolveHold after the migration: %v", err)
+	}
+	if by, known := newer.ResolvedBy.Get(); !known || by != ResolvedByMachineInterface() {
+		t.Fatalf("a hold resolved after the migration recorded %s (known=%v)", by, known)
 	}
 }
 

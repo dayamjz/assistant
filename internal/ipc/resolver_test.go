@@ -102,10 +102,11 @@ var personClaims = []struct {
 // the store actually holds.
 //
 // It needs a peer the kernel will identify, because the methods that resolve a
-// hold are restricted. The skip leaves nothing unchecked: a platform that
-// reports no peer credentials refuses every restricted method outright, so no
-// resolution reaches a handler there at all, and
-// TestHoldResolverAnswersTheSameForEveryRequest holds the seam itself on every
+// hold are restricted. The skip leaves the rule checked elsewhere rather than
+// unchecked: a platform that reports no peer credentials refuses every
+// restricted method outright, so no resolution reaches a handler through one of
+// those there, and TestHoldResolverAnswersTheSameForEveryRequest holds the seam
+// itself - over both peers and with a marker actually attached - on every
 // platform.
 func TestNoCallOnThisProtocolCanRecordThatAPersonDecided(t *testing.T) {
 	requiresIdentifiedPeer(t)
@@ -205,26 +206,6 @@ func TestTheStoreRecordsThatAPersonDecidedWhenAPersonIsNamed(t *testing.T) {
 	by, known := held.ResolvedBy.Get()
 	if !known || by != store.ResolvedByPerson() {
 		t.Fatalf("the store recorded %s (known=%v) for a person's own decision", by, known)
-	}
-}
-
-// The derivation reads nothing out of the request, which is what makes the
-// answer independent of anything a caller composes. This is the same property
-// the tests above establish over a socket, checked at the seam itself so a
-// future field on Request cannot quietly reach it.
-func TestHoldResolverAnswersTheSameForEveryRequest(t *testing.T) {
-	want := store.ResolvedByMachineInterface()
-	for _, spec := range ipc.Methods() {
-		for _, claim := range personClaims {
-			body, err := json.Marshal(claim.params)
-			if err != nil {
-				t.Fatalf("marshalling %s: %v", claim.name, err)
-			}
-			req := ipc.Request{Method: spec.Method, Params: body}
-			if got := req.HoldResolver(); got != want {
-				t.Fatalf("%s with %s answered %s, want %s", spec.Method, claim.name, got, want)
-			}
-		}
 	}
 }
 

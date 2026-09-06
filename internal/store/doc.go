@@ -73,6 +73,14 @@
 // record therefore understates who decided rather than overstating it, which
 // is the direction that keeps it worth reading.
 //
+// What keeps the person value out of a record is where a resolver may be
+// written rather than anything checked at the write. ResolveHold records the
+// Resolver its caller names and weighs nothing about the surface the caller
+// speaks for, so a surface that derived ResolvedByMachineInterface and then
+// named ResolvedByPerson in source would be recorded as it asked. No caller
+// here does: the value has no producer in this repository outside the tests
+// that hold this rule, and nothing in production resolves a hold yet.
+//
 // This records and does not gate, which PRD section 8 states as a requirement
 // rather than an aside. Nothing here reads a resolver to decide whether a
 // resolution may proceed: every member closes a hold on the same terms, and a

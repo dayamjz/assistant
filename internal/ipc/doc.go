@@ -147,8 +147,9 @@
 // defined here has a field for a resolver, exactly as none has a field for a
 // process identifier, so there is nothing to write one into; and the answer is
 // derived from the surface rather than read out of the request, so no method,
-// marker, or parameter body reaches it. Every resolution that arrives here is
-// store.ResolvedByMachineInterface.
+// marker, or parameter body reaches it. Every resolution this package answers
+// for is store.ResolvedByMachineInterface. What that answer is worth once a
+// handler has it is below, under what this package does not do.
 //
 // A person answering through a client of this protocol is recorded that way
 // too. That is deliberate: a person's client and an agent's client reach the
@@ -188,6 +189,18 @@
 // It does not open the socket, hold the home's lock, or decide when the service
 // is ready. Serve takes a listener that a caller made, and readiness is a real
 // answer to MethodHealth from a handler, per PRD section 8.
+//
+// It does not record a hold resolution, and so does not enforce what one says
+// about who made it. Request.HoldResolver is an answer a handler may take, not
+// a value any write is checked against: store.ResolvedByPerson is exported, so
+// a handler serving MethodRunRespond could name it in source and the record
+// would then say a person decided for a call that arrived over the machine
+// interface. Nothing here obliges a handler to derive the resolver from the
+// request instead, and today the protocol-side property holds because no
+// production code in this repository resolves a hold at all. This is placement
+// rather than a mechanism, and it is the same limit internal/store names for
+// the person value itself. What is mechanical is unaffected: no frame defined
+// here carries a resolver, and the derivation reads nothing out of the request.
 //
 // It does not own any payload's shape. An event body and a method's parameters
 // and result travel as written, so nothing here becomes a second owner of a
