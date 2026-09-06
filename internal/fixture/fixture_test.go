@@ -883,6 +883,11 @@ func TestTheP3ResponsesProduceAnAskOnTheEntryPointEachNames(t *testing.T) {
 				t.Errorf("%s: the review declared reading every path the change touched, and this "+
 					"scenario's change touches more than the one path the review declares", c.ID)
 			}
+			if len(report.Findings) != reviewPathFindings {
+				t.Errorf("%s: the bound report carries %d finding(s), and the condition records the "+
+					"reviewer's finding and the one note the review path appends to every report it "+
+					"binds", c.ID, len(report.Findings))
+			}
 			requireTheRecordedActionOnTheLoopBound(t, c, report)
 			requireTheEvidenceNote(t, c, report)
 		case strings.Contains(c.Mechanism, ordinaryEntryPoint):
@@ -891,6 +896,11 @@ func TestTheP3ResponsesProduceAnAskOnTheEntryPointEachNames(t *testing.T) {
 			if err != nil {
 				t.Errorf("%s: the ordinary path refused the bytes planted for it: %v", c.ID, err)
 				continue
+			}
+			if len(report.Findings) != ordinaryPathFindings {
+				t.Errorf("%s: the parsed report carries %d finding(s), and the condition records the "+
+					"reviewer's finding alone, with no note the ordinary path could have added",
+					c.ID, len(report.Findings))
 			}
 			requireTheRecordedActionOnTheLoopBound(t, c, report)
 
@@ -968,6 +978,16 @@ func requireTheEvidenceNote(t *testing.T, c fixture.Condition, report findings.R
 		}
 	}
 }
+
+// The two entry points differ by exactly one finding, which is the countable
+// half of what the P3 conditions record. A report through findings.ParseReport
+// carries the reviewer's own finding and nothing else; the review path binds
+// evidence and appends one note to every report it binds. Counting is what
+// keeps a third finding, or a second note, from leaving that record false.
+const (
+	ordinaryPathFindings = 1
+	reviewPathFindings   = 2
+)
 
 // loopBoundFindingID is the identifier the reviewer wrote on the finding the
 // P3 responses plant, which is how the reviewer's own finding is told apart

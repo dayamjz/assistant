@@ -263,9 +263,10 @@ const findingsLocationPath = "total.go"
 //     revision the run did not ask about is refused whole with
 //     ErrWrongRevision, and a finding naming a path the declared evidence set
 //     does not hold is refused for want of evidence and becomes a note. The
-//     review-path bytes therefore carry a revision and a read set chosen so
-//     that neither refusal fires and the action is the only thing left to
-//     decide the outcome.
+//     review-path bytes therefore declare a read set holding the finding's
+//     only named path, so nothing there is refused for want of evidence and,
+//     within the evidence set, the action is all that is left to decide the
+//     outcome.
 //
 // The review path is where P3 earns its keep, because it is the path that
 // carries findings in a real run. The findings.ParseReport variants are kept
