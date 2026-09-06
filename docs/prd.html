@@ -1261,6 +1261,12 @@ flowchart TB
     require a server. Keeping the boundary narrow means the substrate can change later without the
     topology layer noticing.
   </p>
+  <p class="mb-4 opacity-90">
+    Two of those four operations are a run's whole history and a fork from a point in it, so the
+    record behind them is a history and not a row rewritten in place. That record is section 8's
+    <b>checkpoint history</b>, and a run's position is written to and read from there and nowhere
+    else. No other record may hold a copy of where a run stands.
+  </p>
   <div role="alert" class="alert alert-warning alert-soft mb-8 items-start">
     <div class="min-w-0">
       <p class="font-semibold mb-1">The checkpoint store is inside the trust boundary</p>
@@ -1470,7 +1476,7 @@ flowchart TB
   <h3 class="text-xl font-semibold mb-3">Data model</h3>
   <p class="mb-4 opacity-90">
     The important part is not the field list; it is which records are authoritative and which are
-    history.
+    history. One record is both, and it is called out below.
   </p>
   <div class="overflow-x-auto rounded-box border border-base-content/10 bg-base-100 mb-4">
     <table class="table table-sm">
@@ -1480,7 +1486,7 @@ flowchart TB
         <tr><td><b>run</b></td><td>Authoritative</td><td>Branch, submitted head, base, current head, status, the commit a completed review approved, the push binding, pull request state, intent and its source, and the exact build that produced this run.</td></tr>
         <tr><td><b>stage result</b></td><td>Authoritative</td><td>Per stage: status, findings, duration, log path, last activity, and the effective fix limit.</td></tr>
         <tr><td><b>round</b></td><td>History</td><td>One row per stage execution. Findings, which findings were selected and by whom, the exact payload sent to the fixer, and the one-line summary. This is what the pull request narrative is generated from.</td></tr>
-        <tr><td><b>checkpoint</b></td><td>Authoritative</td><td>State, position, and any open decision. Written after every node.</td></tr>
+        <tr><td><b>checkpoint history</b></td><td>Authoritative, appended</td><td>One entry per position a run has stood in: state, the node it has not yet run, the status it stood in, the decision it is halted on when it is halted, the bound accounting, and, on an entry a fork produced, the entry it was copied from. Appended after every node and never revised. The entry with the highest sequence is where the run stands, and it is the only record that answers that.</td></tr>
         <tr><td><b>task</b></td><td>Authoritative</td><td>Shape, project, mode, isolated copy path, session reference, linked run, linked pull request.</td></tr>
         <tr><td><b>task state</b></td><td>Authoritative</td><td>The current state, resolved. Distinct from the event log, per P8.</td></tr>
         <tr><td><b>task event</b></td><td>History</td><td>Append-only. Every append is a wake.</td></tr>
@@ -1489,6 +1495,28 @@ flowchart TB
       </tbody>
     </table>
   </div>
+  <div role="alert" class="alert alert-soft mb-8 items-start">
+    <div class="min-w-0">
+      <p class="font-semibold mb-1">A run's position has exactly one record, and it is appended</p>
+      <p class="text-sm opacity-90">
+        The checkpoint history is the one record here that is appended and never revised and still
+        answers a present-tense question. That is not the failure P8 names. P8 forbids inferring
+        what is true now from a log of things that happened, and there is nothing here to infer
+        from: every entry is a whole position, complete on its own. Which entry is the latest is
+        the sequence the store assigned it, decided under the same serialization that decided the
+        write's anchor, rather than whichever row was appended most recently.
+      </p>
+      <p class="text-sm opacity-90 mt-2">
+        There is one checkpoint record and there may not be a second: no row per run rewritten in
+        place holding the same state, position, and open decision alongside the history. Section
+        7's durability layer has to answer a run's whole history and a fork from a point in it,
+        which such a row cannot, so the history replaces it rather than sitting beside it. Two
+        records for one fact is the P14 failure whichever of the two a reader ends up believing,
+        and the rewritten summary is the one that would go stale unseen.
+      </p>
+    </div>
+  </div>
+
   <div role="alert" class="alert alert-soft mb-8 items-start">
     <div class="min-w-0">
       <p class="font-semibold mb-1">Two schema rules worth fixing now</p>
