@@ -62,6 +62,13 @@
 // instead: it puts one handshake invocation through the adapter, and a binary
 // that does not answer it is a fatal error naming the missing TestMain.
 //
+// That wiring serves a caller who can be handed a Runner. One in another
+// process cannot be: internal/agents resolves the configured agent by name off
+// PATH and builds the command line itself, so reaching the stand-in from there
+// means standing a copy of this binary at that name. Agent.Arguments is the
+// seam for that, and its doc comment states what those words carry and what
+// they deliberately do not.
+//
 // Every invocation is a process, so what a script costs is what starting this
 // binary costs, times the invocations in it.
 //

@@ -102,6 +102,11 @@ document is a refusal rather than a seventh outcome, and a set the rule cannot
 read is a refusal too rather than a short one. What it establishes is only that
 both sides name the same set; it does not say those six are the right six, or
 that an outcome means on the wire what the row's sentence about it says.
+The twenty-third is `internal/journey`, the end-to-end harness: the binary driven
+as a process against the fixture's subject, organized by PRD principle rather
+than by feature, with every check carrying the counterfeit observations it must
+reject so no assertion that cannot fail may ship, and three tables accounting
+for the principles, the planted conditions and the fixture's open questions.
 
 So `assistant` builds and runs. A run can be started, reported on, answered and
 carried on across separate invocations, with the service restarted in between,
@@ -120,8 +125,12 @@ what the reviewer declared reading. A stage without a body holds a placeholder
 that validates nothing and holds for a decision, so a run runs the stages that
 have one and stops at the first that does not, saying so rather than reporting a
 pass it did not establish. `stages.Implemented` is the authority on which stages
-those are, and `assistant doctor` reports it. The end-to-end harness is separate
-work too.
+those are, and `assistant doctor` reports it. Until they land, a run reaches no
+agent, no push and no code host, which is what bounds what the end-to-end
+harness can drive through the binary; `internal/journey/README.md` is the
+authority on what a green run there does and does not establish, starting with
+the limit that a scripted agent proves the machinery and not the review
+quality.
 
 ## The two promises
 

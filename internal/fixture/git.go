@@ -9,9 +9,10 @@ import (
 	"strings"
 )
 
-// gitRunner invokes git directly. This package is the documented exception to
-// the rule that internal/vcs is the only place git is invoked from; doc.go
-// says why, and the isolation the exception is granted on is applied here.
+// gitRunner invokes git directly. This package is one of the two documented
+// exceptions to the rule that internal/vcs is the only place git is invoked
+// from; doc.go says why, and the isolation the exception is granted on is
+// applied here.
 type gitRunner struct {
 	// binary is the resolved path of the git to run. It is resolved rather
 	// than kept as the name it was asked for, so a scenario can record which
