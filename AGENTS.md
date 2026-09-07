@@ -395,9 +395,11 @@ Each has cost this repository more than one round of review.
   a caller can obtain one, and that gap is where the guarantee goes:
   `agents.StageAgent` given a `Runner()` accessor hands a body a live `Runner`
   while every such assertion stays green and P4 is gone.
-  `internal/agents/route_test.go` walks what a caller outside the package can
-  reach instead, exported fields and the results of exported methods, so it
-  catches a route nobody enumerated. Test P4 that way.
+  `internal/agents/route` walks what a caller outside the package can reach
+  instead, exported fields and the results of exported methods, transitively,
+  so it catches a route nobody enumerated. It is a package rather than a helper
+  in one test because two packages ask it and two copies of a rule drift. Test
+  P4 that way.
 - A guard needs a positive control or it can pass by looking at nothing. That
   walk is also run against `agents.Resolution`, which really does expose a
   `Runner`, so a walk that stopped inspecting anything fails instead of

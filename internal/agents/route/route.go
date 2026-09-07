@@ -1,4 +1,4 @@
-package agents_test
+package route
 
 import (
 	"reflect"
@@ -7,14 +7,20 @@ import (
 	"github.com/dayamjz/assistant/internal/agents"
 )
 
-// This file is the general form of the P4 question, and it exists because the
-// specific form is not enough.
+// Package route answers one question about a type: can a caller holding it
+// reach a fixer session. It is the general form of the P4 check, and it is a
+// package rather than a helper in one test because two packages ask it -
+// internal/agents of its StageAgent and internal/stages of the dependencies it
+// hands a stage body - and two copies of a rule drift.
+//
+// It exists because the specific form of the check is not enough.
 //
 // Asserting that a value does not assert to agents.Runner answers "is this a
 // Runner", and the regression that matters is "can a body get one from this".
-// A StageAgent given a Runner() accessor is not a Runner and hands one over on
-// request, so every assertion in stage_test.go holds while P4 is gone. That
-// was checked by adding the accessor and watching those tests stay green.
+// An agents.StageAgent given a Runner() accessor is not a Runner and hands one
+// over on request, so every such assertion holds while P4 is entirely gone.
+// That is not a hypothetical: the accessor was added and those assertions were
+// watched passing.
 //
 // So the guarantee is asked of the type graph instead: from a root type, walk
 // what a caller in another package can actually reach - exported fields, and
@@ -24,6 +30,10 @@ import (
 //
 // It reads types rather than source text, so it is a typed model of the rule
 // and not a pattern match over the code.
+//
+// A caller must pair a "finds nothing" assertion with one over a type that
+// really does expose a route, or a walk that stopped inspecting anything would
+// report the guarantee forever. agents.Resolution is that control.
 
 // fixerRoutes are the three types a stage body must not be able to obtain, and
 // why each one is a session.
@@ -35,9 +45,13 @@ func fixerRoutes() map[reflect.Type]string {
 	}
 }
 
-// routesToAFixerSession reports every way a caller outside the declaring
-// package can reach a fixer session starting from root, each as a path a
-// reader can follow. An empty result means there is none.
+// ToFixerSession reports every way a caller outside the declaring package can
+// reach a fixer session starting from root, each as a path a reader can
+// follow. An empty result means there is none.
+//
+// A caller pairs it with a walk over a type that really does expose a route,
+// because a walk that stopped inspecting anything would report an empty result
+// and so report the guarantee forever.
 //
 // What it walks is what a caller can reach: exported fields, because a caller
 // can read one, and the results of exported methods, because a caller can call
@@ -49,7 +63,7 @@ func fixerRoutes() map[reflect.Type]string {
 //
 // Method parameters are not walked either. A method that takes a Runner is not
 // a way to obtain one: a caller would need it already.
-func routesToAFixerSession(root reflect.Type) []string {
+func ToFixerSession(root reflect.Type) []string {
 	forbidden := fixerRoutes()
 	var found []string
 	seen := map[reflect.Type]bool{}
