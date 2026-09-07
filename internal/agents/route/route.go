@@ -34,13 +34,33 @@ import (
 	"github.com/dayamjz/assistant/internal/agents"
 )
 
-// fixerRoutes are the three types a stage body must not be able to obtain, and
-// why each one is a session.
-func fixerRoutes() map[reflect.Type]string {
-	return map[reflect.Type]string{
-		reflect.TypeOf((*agents.Runner)(nil)).Elem():        "an agents.Runner, which agents.OpenFixer opens a fixer session from",
-		reflect.TypeOf((*agents.SessionRunner)(nil)).Elem(): "an agents.SessionRunner, whose Fixer method opens a session directly",
-		reflect.TypeOf((*agents.Fixer)(nil)).Elem():         "an agents.Fixer, which is the session itself",
+// fixerRoute is one type a stage body must not be able to obtain, and why
+// reaching it is reaching a session.
+type fixerRoute struct {
+	iface reflect.Type
+	why   string
+}
+
+// fixerRoutes are the three types a stage body must not be able to obtain.
+//
+// It is an ordered slice and not a map because a type can satisfy more than
+// one of them - agents.SessionRunner embeds agents.Runner, so anything typed
+// as the first satisfies the second - and both matching loops report the first
+// hit. Ranging a map would pick that reason by Go's randomized iteration, so
+// the same failing type would be explained differently from run to run.
+//
+// The order is closest to a session first: a Fixer is one, a SessionRunner
+// opens one directly, and a Runner needs agents.OpenFixer. That also reports
+// the narrower interface where a value satisfies two, which is the more useful
+// half of the answer to a reader chasing the failure.
+func fixerRoutes() []fixerRoute {
+	return []fixerRoute{
+		{reflect.TypeOf((*agents.Fixer)(nil)).Elem(),
+			"an agents.Fixer, which is the session itself"},
+		{reflect.TypeOf((*agents.SessionRunner)(nil)).Elem(),
+			"an agents.SessionRunner, whose Fixer method opens a session directly"},
+		{reflect.TypeOf((*agents.Runner)(nil)).Elem(),
+			"an agents.Runner, which agents.OpenFixer opens a fixer session from"},
 	}
 }
 
@@ -139,9 +159,9 @@ func ToFixerSession(root reflect.Type) []string {
 		}
 		seen[t] = true
 
-		for iface, why := range forbidden {
-			if t.Implements(iface) {
-				found = append(found, path+" is "+why)
+		for _, route := range forbidden {
+			if t.Implements(route.iface) {
+				found = append(found, path+" is "+route.why)
 				return
 			}
 		}
@@ -149,9 +169,9 @@ func ToFixerSession(root reflect.Type) []string {
 		// carried by the pointer is a method set the caller has. Asking this of
 		// an interface or a pointer would ask it of a type with no methods.
 		if t.Kind() != reflect.Interface && t.Kind() != reflect.Pointer {
-			for iface, why := range forbidden {
-				if reflect.PointerTo(t).Implements(iface) {
-					found = append(found, "a pointer to "+path+" is "+why)
+			for _, route := range forbidden {
+				if reflect.PointerTo(t).Implements(route.iface) {
+					found = append(found, "a pointer to "+path+" is "+route.why)
 					return
 				}
 			}

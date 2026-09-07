@@ -54,10 +54,15 @@
 //
 // No seam for it ships. An earlier draft of this package exported a transcript
 // source, a recorder, and an options struct that nothing constructed, and they
-// went for the reason Capabilities.Missing went: a declaration nothing reads
-// is a comment, and exported surface that exists so deferred work has
-// somewhere to plug in grows whether or not the work arrives. Whoever builds
-// inference adds the seams it actually uses.
+// went for the reason Capabilities.Missing went: they answered to no consumer.
+// Inference is deferred rather than specified, so nothing was queued to read
+// them and nothing would have broken had they never arrived, which is what
+// makes a declaration in that position a comment. Whoever builds inference
+// adds the seams it actually uses.
+//
+// Surface landed ahead of consumers it names is the other case, and StageDeps
+// is this package's one instance of it: deps.go names the bodies each of its
+// reader-less fields answers to.
 //
 // What that work inherits is stated here so it is not rediscovered. The intent
 // stage never blocks a run, and inference adds ways to fail that must not

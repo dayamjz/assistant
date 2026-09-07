@@ -119,11 +119,21 @@ func stateText(in pipeline.Input, key pipeline.Key) (string, error) {
 // the owner PRD section 8 gives credential removal to.
 //
 // So the secret disappearing is not the assertion - the fallback would do that
-// much. What separates the two is the marker each leaves behind, which is why
-// internal/redact exports Marker for a test to name. This drives the real
-// start path to get the deps the service built, opens a copy through it, and
-// reads the argument vector back off a failing invocation, where internal/vcs
-// documents the redactor as having run.
+// much. What separates the two is the text each leaves in place of the
+// credential, so the expected text is computed with the same redact.New the
+// service passes rather than named as a marker, and the two redactors are
+// asked the same question: this drives the real start path to get the deps the
+// service built, opens a copy through it, and reads the argument vector back
+// off a failing invocation, where internal/vcs documents the redactor as
+// having run.
+//
+// That assertion is only evidence while the two produce different text, and
+// nothing in this repository holds them apart - one marker is exported and the
+// other is unexported in internal/vcs. So the same copy is opened a second
+// time with no options and the same invocation driven through it, and the
+// control fails if the fallback's text would satisfy the assertion above.
+// Without it, a convergence of the two would leave this test green with
+// vcs.WithRedactor dropped from the seam entirely.
 func TestTheSeamTheServiceBuildsCarriesItsHomeAndTheRedactorItChose(t *testing.T) {
 	requiresIdentifiedPeer(t)
 
@@ -181,24 +191,52 @@ func TestTheSeamTheServiceBuildsCarriesItsHomeAndTheRedactorItChose(t *testing.T
 	}
 
 	const secret = "s3cr3tp4ss"
-	_, err = repository.AddWorktree(t.Context(), vcs.WorktreeSpec{
-		Path:   filepath.Join(t.TempDir(), "linked"),
-		Commit: "HEAD",
-		Branch: "https://user:" + secret + "@example.invalid/r.git",
-	})
-	var failed *vcs.CommandError
-	if !errors.As(err, &failed) {
-		t.Fatalf("git accepted a URL as a branch name, so nothing reported an argument "+
-			"vector to read the redactor off: %v", err)
+	const credentialed = "https://user:" + secret + "@example.invalid/r.git"
+
+	// A branch name git rejects is what puts the argument vector on an error,
+	// which is where internal/vcs documents the repository's redactor as
+	// having run.
+	report := func(r *vcs.Repository) string {
+		t.Helper()
+		_, err := r.AddWorktree(t.Context(), vcs.WorktreeSpec{
+			Path:   filepath.Join(t.TempDir(), "linked"),
+			Commit: "HEAD",
+			Branch: credentialed,
+		})
+		var failed *vcs.CommandError
+		if !errors.As(err, &failed) {
+			t.Fatalf("git accepted a URL as a branch name, so nothing reported an argument "+
+				"vector to read the redactor off: %v", err)
+		}
+		return strings.Join(failed.Args, " ")
 	}
 
-	reported := strings.Join(failed.Args, " ")
+	// The expected text is what internal/redact itself produces, so the
+	// assertion agrees with the package PRD section 8 gives credential removal
+	// to rather than with a marker two packages happen to spell differently.
+	want := redact.New().Redact(credentialed)
+
+	reported := report(repository)
 	if strings.Contains(reported, secret) {
 		t.Fatalf("a repository opened through the seam reported a credential: %s", reported)
 	}
-	if !strings.Contains(reported, redact.Marker) {
-		t.Errorf("a repository opened through the seam redacted with something other than "+
-			"internal/redact, whose marker is %q, so the owner PRD section 8 names is not the "+
-			"one wired here: %s", redact.Marker, reported)
+	if !strings.Contains(reported, want) {
+		t.Errorf("a repository opened through the seam reported %s, want it to carry %q, which "+
+			"is what internal/redact makes of that URL; something other than the owner PRD "+
+			"section 8 names is wired here", reported, want)
+	}
+
+	// The negative control. internal/vcs redacts a credentialed URL with or
+	// without the service's choice, so the assertion above is only evidence if
+	// the fallback produces something else. Opening the same copy with no
+	// options runs that fallback, and this failing means the two have
+	// converged and the assertion above can no longer tell them apart.
+	fallback, err := vcs.OpenWorktree(t.Context(), copyPath)
+	if err != nil {
+		t.Fatalf("opening the isolated copy with no options, to read the fallback redactor: %v", err)
+	}
+	if unconfigured := report(fallback); strings.Contains(unconfigured, want) {
+		t.Fatalf("a repository opened with no redactor also reported %q, so the assertion above "+
+			"passes whether or not the service wired internal/redact: %s", want, unconfigured)
 	}
 }
