@@ -91,52 +91,41 @@ Each has cost this repository more than one round of review.
   also the cheaper of the two: every block is charged a fixed frame on top of
   its text, so a copy per package pays that frame again each time.
   The gate caps the whole section by an upper bound it checks before a run
-  starts, and this section is at that cap with only bytes to spare: assume any
-  rule you add to any block in it fails config parsing, and measure with
-  `no-mistakes`' own `ReviewPathInstructionsBytes` before writing one. That
-  function is the accounting; a section over the cap fails parsing for every
-  later run in this repository rather than being truncated, so the failure is
-  not confined to the change that caused it.
-  `docs/upstream-review-instruction-bounds.md` is the outstanding ask that
-  would end this, and there is no local move left that changes it materially.
-  What the accounting charges is the configured entries and
-  not what a run renders: every entry is billed its frame, its full
-  matched-file allowance, and its text whether or not its glob matches the
-  change, so the refused number is the worst case over every possible diff
-  rather than the section any one review sees.
+  starts, and the section is close enough to that cap that a new block cannot
+  fit at all and an addition to an existing block has well under a rule's worth
+  of room. Measure with `no-mistakes`' own `ReviewPathInstructionsBytes` before
+  writing anything; that function is the accounting, and what it charges is the
+  configured entries rather than what a run renders: every entry is billed its
+  frame, its full matched-file allowance, and its text whether or not its glob
+  matches the change, so the refused number is the worst case over every
+  possible diff rather than the section any one review sees.
+  A section over the cap is refused rather than truncated, and the gate
+  validates the pushed copy too, so a branch that overfills it fails its own run
+  at start and cannot merge through the gate. Reaching later runs takes a commit
+  that lands on the default branch without a gate run.
   Do not make room by deleting a rule. The deleted rule's defect starts
   recurring, and a diff that removes one instruction and adds another reads as
   an edit rather than as the regression it is. A channel with no room left is a
-  decision to raise, not one to settle at the point of use.
-- This file is the second surface the gate reviewer reads, and no cap bounds it,
-  so a review rule reaches the reviewer from either place. One test decides
-  which, and it is not importance: **would this rule still need to apply if the
-  contributor were hostile?** Yes puts it in `.no-mistakes.yaml`, which is read
-  from the default branch and which the branch under review cannot touch. No
-  puts it here. A rule here is deletable by the branch it was written to review,
-  so against an adversarial case it is not weaker protection, it is none.
-  The rules in the `path: "*"` block are there because deleting one buys a
-  contributor something: an unmethodical absence claim lets a second caller
-  pass, and a finding that names a site rather than a class lets a fix land on
-  one of two planted copies. Neither catches a reviewer that traces badly - a
-  search can be named and still have been for the wrong thing, and a class can
-  be enumerated wrong - and what answers for that is the separation between
-  reviewing and fixing, not a further instruction there.
-- What this side of that split depends on: it reaches the gate reviewer only
-  while the gate's `disable_project_settings` is false. That is its default, and
-  neither this repository's `.no-mistakes.yaml` nor the global configuration
-  sets it. Setting it true suppresses project instructions wholesale, and every
-  review rule on this side stops applying with no error, no failed parse, and no
-  refused run. Do not confuse it with `suppress_project_instructions`, which is
-  this project's own key for the same idea and decides nothing about the gate.
-  The guard is a rule in the `path: "*"` block requiring a change that sets that
-  key, or that drops this file's review rules, to move them into
-  `.no-mistakes.yaml` in the same change. It is a review-time refusal and not a
-  build-time one: asserting it in `make check` would mean parsing
-  `.no-mistakes.yaml`, this repository carries no YAML decoder, and a text scan
-  for a key is the evidence-free test shape review here rejects. The guard sits
-  in the trusted channel because that is the one surface the change it guards
-  against cannot also edit; a reviewer who reads past it is the residual gap.
+  decision to raise, not one to settle at the point of use, and
+  `docs/upstream-review-instruction-bounds.md` is that ask; no local move
+  changes it materially.
+- This file is not an overflow channel for that section, and moving a review
+  rule here to make room is not a fix. It differs in trust, because the gate
+  reads `.no-mistakes.yaml` from the default branch and reads this file out of
+  the pushed working copy, so a rule moved here is deletable by the branch it
+  was written to review. Its reach is also adapter-dependent in a way nothing
+  here settles: no part of the gate reads this file, so delivery is entirely the
+  resolved agent CLI's own project-doc discovery, the global configuration
+  selects that agent automatically rather than pinning one, and `no-mistakes`
+  knows a project-instruction suppression knob for only three of its adapters -
+  one of which is a byte cap on this file itself, whose size is set outside this
+  repository. The gate's `disable_project_settings` suppresses this file
+  wholesale; it defaults false and nothing here sets it. Each of those ends a
+  rule's reach with no error, no failed parse, and no refused run, which is the
+  same silent stop-applying that moving the rule was supposed to avoid. Do not
+  confuse `disable_project_settings` with `suppress_project_instructions`, which
+  is this project's own key for the same idea and decides nothing about the
+  gate.
 - Every exported symbol carries a contract, so give it a doc comment that states
   the contract rather than restating the name.
 - Prefer a small, testable pure core with the side effects at the edges. The
