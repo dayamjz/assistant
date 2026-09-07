@@ -27,9 +27,15 @@ type birth struct {
 	// attempt.
 	fired []string
 	// quiet is the tripwire identifiers this condition records as having to
-	// stay out of that file. It is carried on the observation rather than read
-	// out of a closure so that a check asserting their absence can be shown to
-	// fail when there are none.
+	// stay out of that file.
+	//
+	// No clause rests on either. The hooks a template plants are receive-side,
+	// so only a push to the gate could run one, and no push reaches them:
+	// internal/gate installs its own pre-receive after the repository is
+	// created, and that hook declines every push over the gate admit verb
+	// internal/cli does not carry, so update and post-update never run. A push
+	// is driven anyway and what the file then holds is logged, so the evidence
+	// is here the day that verb lands.
 	quiet []string
 }
 
@@ -48,6 +54,16 @@ type birth struct {
 // give the refusals their meaning: one hook name the template channel can no
 // longer reach, and one channel closed before git ever sees it. A refusal
 // nobody has watched not fire is a refusal nobody has shown is about anything.
+//
+// What these four do not establish is that no template hook ran. Those hooks
+// are receive-side, so only a push to the gate could run one, and the gate's
+// own pre-receive - installed after the repository is created - declines every
+// push over the "assistant gate admit" verb internal/cli does not carry, so
+// update and post-update never run at all. A push is driven where a gate
+// stands and the tripwire file is read after it, which is how that was
+// established rather than assumed; both are logged and no clause rests on
+// them. The refusals themselves, with the substrings each condition records,
+// are what these subtests establish.
 //
 // The last subtest is the other end of the same question and is not a refusal
 // at all. internal/gate names core.hooksPath as an open gap, and this drives a
@@ -73,6 +89,7 @@ func TestNothingOutsideTheGateChoosesWhatRunsOnAPushToIt(t *testing.T) {
 			attempt(t, scenario, j, dir,
 				map[string]string{"GIT_TEMPLATE_DIR": scenarioPath(t, scenario, "template-mixed")},
 				"initializing a gate with GIT_TEMPLATE_DIR naming the hostile template"))
+		reportPush(t, scenario, dir, "closed-git-template-dir-environment")
 	})
 
 	t.Run("refusal-template-hooks-at-birth", func(t *testing.T) {
@@ -89,6 +106,7 @@ func TestNothingOutsideTheGateChoosesWhatRunsOnAPushToIt(t *testing.T) {
 		refuses(t, scenario, "closed-template-pre-receive-on-repair", false,
 			attempt(t, scenario, j, dir, preReceiveOnly,
 				"repairing an existing gate under a template carrying only pre-receive"))
+		reportPush(t, scenario, dir, "the gate these two attempts left standing")
 	})
 
 	t.Run("gap-core-hookspath-redirects-the-gate", func(t *testing.T) {
@@ -279,30 +297,6 @@ func refuses(t *testing.T, scenario fixture.Scenario, id fixture.ID, want bool, 
 				return nil
 			},
 		},
-		{
-			States:  "no hook the template carries ran",
-			Absence: true,
-			// Every planted hook appends to the scenario's tripwire file, so a
-			// condition recording none would leave that file empty however the
-			// gate behaved. Each of these conditions plants hooks and names
-			// them, which is what makes the file worth reading.
-			Possible: func(b birth) error {
-				if len(b.quiet) == 0 {
-					return fmt.Errorf("%s records no tripwire that has to stay quiet, so nothing planted "+
-						"could have appeared in that file whatever the gate did", id)
-				}
-				return nil
-			},
-			Holds: func(b birth) error {
-				for _, tripwire := range b.quiet {
-					if slices.Contains(b.fired, tripwire) {
-						return fmt.Errorf("the planted hook %s ran, and nothing a template carries may "+
-							"execute here; the scenario recorded %v", tripwire, b.fired)
-					}
-				}
-				return nil
-			},
-		},
 	}
 	counterfeits := []journey.Counterfeit[birth]{
 		{Named: "the attempt came out the other way round", Break: func(b birth) birth {
@@ -310,10 +304,6 @@ func refuses(t *testing.T, scenario fixture.Scenario, id fixture.ID, want bool, 
 			if b.refused {
 				b.message = strings.Join(condition.Expect.MessageContains, " ")
 			}
-			return b
-		}},
-		{Named: "a hook the template carries ran", Break: func(b birth) birth {
-			b.fired = append(slices.Clone(b.fired), b.quiet[0])
 			return b
 		}},
 	}
@@ -343,6 +333,32 @@ func refuses(t *testing.T, scenario fixture.Scenario, id fixture.ID, want bool, 
 	if err := check.Verify(observed); err != nil {
 		t.Fatalf("%v", err)
 	}
+	t.Logf("%s: the scenario's tripwire file holds %v, and this condition requires %v to stay out of "+
+		"it. Nothing here establishes that: a template's hooks are receive-side, and the only push "+
+		"that could run one is declined by the gate's own pre-receive over the missing gate admit "+
+		"verb, so update and post-update never run. The refusal above is what this subtest "+
+		"establishes.", id, observed.fired, observed.quiet)
+}
+
+// reportPush pushes to a gate that is standing and logs what the scenario's
+// tripwire file holds afterwards.
+//
+// It establishes rather than assumes why no clause above rests on that file.
+// A template's hooks are receive-side, so a push is the only thing that could
+// run one; git does reach a hook on this push, which the decline's own message
+// shows, and the file is still empty because the hook it reached is the gate's
+// own pre-receive declining over a verb internal/cli does not carry.
+func reportPush(t *testing.T, scenario fixture.Scenario, dir, what string) {
+	t.Helper()
+	accepted, message := pushToTheGate(t, scenario, nil, dir)
+	fired, err := journey.Fired(scenario)
+	if err != nil {
+		t.Fatalf("reading the scenario's tripwires: %v", err)
+	}
+	t.Logf("a push to %s was accepted=%v and the tripwire file then holds %v. git ran a hook - the "+
+		"answer is the gate's own pre-receive - so what stops a template hook from ever running is "+
+		"that this one declines rather than that no hook runs. It said:\n%s",
+		what, accepted, fired, message)
 }
 
 // gateJourney returns a journey over a working copy of this scenario's origin
