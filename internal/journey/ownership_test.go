@@ -12,8 +12,6 @@ import (
 	"github.com/dayamjz/assistant/internal/gate"
 	"github.com/dayamjz/assistant/internal/journey"
 	"github.com/dayamjz/assistant/internal/machine"
-	"github.com/dayamjz/assistant/internal/redact"
-	"github.com/dayamjz/assistant/internal/store"
 )
 
 // ownership is what the product did when it was asked about a project
@@ -81,12 +79,8 @@ func TestACopiedProjectDirectoryDoesNotOwnTheGateItInherited(t *testing.T) {
 	// The mechanism the condition names, driven directly. The binary's own
 	// removal refuses earlier and for another reason, which is checked below;
 	// this is the refusal the condition is about.
-	records, err := store.Open(t.Context(), filepath.Join(j.Root(), "state.db"), store.WithRedactor(redact.New()))
-	if err != nil {
-		t.Fatalf("opening the home's records: %v", err)
-	}
-	defer func() { _ = records.Close() }()
-	err = gate.Remove(t.Context(), gate.Spec{Home: j.Root(), WorkingPath: copied}, gate.WithIndex(records))
+	err = gate.Remove(t.Context(), gate.Spec{Home: j.Root(), WorkingPath: copied},
+		gate.WithIndex(records(t, j)))
 	observed.removalRefused = errors.Is(err, gate.ErrGateClaimed)
 	if err != nil {
 		observed.removalMessage = err.Error()
@@ -113,34 +107,81 @@ func TestACopiedProjectDirectoryDoesNotOwnTheGateItInherited(t *testing.T) {
 	holds := journey.Check[ownership]{
 		What: "removing the gate through a copy that inherited its remote refuses and removes nothing, " +
 			"and initializing through the same copy gives it a gate of its own rather than the original's",
-		Holds: func(o ownership) error {
-			if !o.removalRefused {
-				return fmt.Errorf("removing the gate through the copy was not refused with %s; it "+
-					"answered %q", "gate.ErrGateClaimed", o.removalMessage)
-			}
-			if missing := journey.Carries(o.removalMessage, removal.Expect.MessageContains); len(missing) > 0 {
-				return fmt.Errorf("the refusal does not say %q; it said:\n%s", missing, o.removalMessage)
-			}
-			if !o.ejectRefused {
-				return fmt.Errorf("the binary removed the gate through the copy: %s", o.ejectMessage)
-			}
-			if !o.gateStillThere {
-				return errors.New("the gate repository is gone, and a refused removal removes nothing")
-			}
-			if o.originalRemote == "" {
-				return errors.New("the original lost its own remote to a removal that was refused")
-			}
-			if o.copyRemoteAfterAll == "" {
-				return errors.New("the copy lost the remote it inherited to a removal that was refused")
-			}
-			if o.copy == "" {
-				return errors.New("initializing through the copy created no gate")
-			}
-			if o.copy == o.original {
-				return fmt.Errorf("the copy adopted the original's gate %s, and a remote it inherited is "+
-					"not evidence that it owns one", o.original)
-			}
-			return nil
+		Clauses: []journey.Clause[ownership]{
+			{
+				States: "the removal through the copy was refused with the error the condition names",
+				Holds: func(o ownership) error {
+					if !o.removalRefused {
+						return fmt.Errorf("removing the gate through the copy was not refused with %s; it "+
+							"answered %q", "gate.ErrGateClaimed", o.removalMessage)
+					}
+					return nil
+				},
+			},
+			{
+				States: "the refusal says what the condition requires it to say",
+				Holds: func(o ownership) error {
+					if missing := journey.Carries(o.removalMessage, removal.Expect.MessageContains); len(missing) > 0 {
+						return fmt.Errorf("the refusal does not say %q; it said:\n%s", missing, o.removalMessage)
+					}
+					return nil
+				},
+			},
+			{
+				States: "the binary's own removal through the copy was refused too",
+				Holds: func(o ownership) error {
+					if !o.ejectRefused {
+						return fmt.Errorf("the binary removed the gate through the copy: %s", o.ejectMessage)
+					}
+					return nil
+				},
+			},
+			{
+				States: "the gate repository is still standing",
+				Holds: func(o ownership) error {
+					if !o.gateStillThere {
+						return errors.New("the gate repository is gone, and a refused removal removes nothing")
+					}
+					return nil
+				},
+			},
+			{
+				States: "the original still reaches its gate",
+				Holds: func(o ownership) error {
+					if o.originalRemote == "" {
+						return errors.New("the original lost its own remote to a removal that was refused")
+					}
+					return nil
+				},
+			},
+			{
+				States: "the copy still carries the remote it inherited",
+				Holds: func(o ownership) error {
+					if o.copyRemoteAfterAll == "" {
+						return errors.New("the copy lost the remote it inherited to a removal that was refused")
+					}
+					return nil
+				},
+			},
+			{
+				States: "initializing through the copy created a gate",
+				Holds: func(o ownership) error {
+					if o.copy == "" {
+						return errors.New("initializing through the copy created no gate")
+					}
+					return nil
+				},
+			},
+			{
+				States: "the gate the copy was given is its own rather than the original's",
+				Holds: func(o ownership) error {
+					if o.copy == o.original {
+						return fmt.Errorf("the copy adopted the original's gate %s, and a remote it inherited is "+
+							"not evidence that it owns one", o.original)
+					}
+					return nil
+				},
+			},
 		},
 		Counterfeits: []journey.Counterfeit[ownership]{
 			{Named: "the removal through the copy went ahead", Break: func(o ownership) ownership {

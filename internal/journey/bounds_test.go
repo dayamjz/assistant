@@ -26,6 +26,11 @@ type bounded struct {
 	// answerable is whether the parked run still offered a decision to answer,
 	// which no park does.
 	answerable bool
+	// heldAtLeastOnce is whether any answer in the same walk offered a
+	// decision, which is what makes the parked run offering none worth
+	// reading: a gate that never offered one would report none whatever the
+	// budget did.
+	heldAtLeastOnce bool
 	// unbounded is what the same journey does with the budget left at its
 	// default, which is what says the bound rather than the gate stopped it.
 	unbounded machine.Outcome
@@ -55,6 +60,11 @@ func TestTheRunBudgetStopsARunTheGateWouldHaveFinished(t *testing.T) {
 	walk := answerHolds(t, j, startRun(t, j, "--intent", "a change held to a budget smaller than the gate"),
 		"approved")
 	stopped := last(walk)
+	for _, answer := range walk[:len(walk)-1] {
+		if answer.Decision != nil {
+			observed.heldAtLeastOnce = true
+		}
+	}
 	observed.spent = stopped.Steps
 	observed.outcome = stopped.Outcome
 	observed.reason = stopped.Reason
@@ -73,30 +83,77 @@ func TestTheRunBudgetStopsARunTheGateWouldHaveFinished(t *testing.T) {
 		What: "a run whose step budget is smaller than the gate is parked by that budget, is not offered " +
 			"as a decision anybody can answer, and the same subject reaches the end of the gate when " +
 			"nothing bounds it",
-		Holds: func(b bounded) error {
-			if b.unbounded != machine.OutcomeChecksPassed {
-				return fmt.Errorf("the same subject with no budget ended %s, so nothing here shows the "+
-					"budget is what stopped the other run", b.unbounded)
-			}
-			if b.progress != graph.StatusBudgetExhausted {
-				return fmt.Errorf("the run's execution stopped as %q, and the budget parks a run as %q",
-					b.progress, graph.StatusBudgetExhausted)
-			}
-			if b.spent < b.budget {
-				return fmt.Errorf("the run spent %d node executions against a budget of %d, so it did not "+
-					"reach the bound", b.spent, b.budget)
-			}
-			if b.answerable {
-				return errors.New("the parked run still offers a decision, and no park is answered")
-			}
-			if b.outcome.Terminal() != true {
-				return fmt.Errorf("the run came back %s, which is not terminal, so a driving agent would "+
-					"keep waiting on a run nothing will move", b.outcome)
-			}
-			if b.reason == "" {
-				return errors.New("the parked run says nothing about why it parked")
-			}
-			return nil
+		Clauses: []journey.Clause[bounded]{
+			{
+				States: "the same subject with nothing bounding it reaches the end of the gate",
+				Holds: func(b bounded) error {
+					if b.unbounded != machine.OutcomeChecksPassed {
+						return fmt.Errorf("the same subject with no budget ended %s, so nothing here shows the "+
+							"budget is what stopped the other run", b.unbounded)
+					}
+					return nil
+				},
+			},
+			{
+				States: "the run's execution stopped as the budget parks a run",
+				Holds: func(b bounded) error {
+					if b.progress != graph.StatusBudgetExhausted {
+						return fmt.Errorf("the run's execution stopped as %q, and the budget parks a run as %q",
+							b.progress, graph.StatusBudgetExhausted)
+					}
+					return nil
+				},
+			},
+			{
+				States: "the run reached the bound it was held to",
+				Holds: func(b bounded) error {
+					if b.spent < b.budget {
+						return fmt.Errorf("the run spent %d node executions against a budget of %d, so it did not "+
+							"reach the bound", b.spent, b.budget)
+					}
+					return nil
+				},
+			},
+			{
+				States:  "the parked run offers no decision anybody could answer",
+				Absence: true,
+				// A walk that never held would show a run offering no decision
+				// whatever the budget did. What makes the park's silence worth
+				// reading is that this same run was answerable at every stage
+				// it reached before the bound stopped it.
+				Possible: func(b bounded) error {
+					if !b.heldAtLeastOnce {
+						return errors.New("no answer before the park offered a decision either, so this " +
+							"run never offered one to lose and the park offering none says nothing")
+					}
+					return nil
+				},
+				Holds: func(b bounded) error {
+					if b.answerable {
+						return errors.New("the parked run still offers a decision, and no park is answered")
+					}
+					return nil
+				},
+			},
+			{
+				States: "the parked run is reported as one nothing will move",
+				Holds: func(b bounded) error {
+					if !b.outcome.Terminal() {
+						return fmt.Errorf("the run came back %s, which is not terminal, so a driving agent would "+
+							"keep waiting on a run nothing will move", b.outcome)
+					}
+					return nil
+				},
+			},
+			{
+				States: "the parked run says why it parked",
+				Holds: func(b bounded) error {
+					if b.reason == "" {
+						return errors.New("the parked run says nothing about why it parked")
+					}
+					return nil
+				},
+			},
 		},
 		Counterfeits: []journey.Counterfeit[bounded]{
 			{Named: "the run was stopped by something other than the budget", Break: func(b bounded) bounded {

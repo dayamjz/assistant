@@ -132,67 +132,116 @@ func TestATrustedConfigurationThatCannotBeReadIsNotFallenBackFrom(t *testing.T) 
 				}
 			}
 
-			aborts := journey.Check[trusted]{
-				What: string(planted.condition) + ": " + firstSentence(condition.Expect.Summary),
-				Holds: func(tr trusted) error {
-					if !tr.failed {
-						return errors.New("the trusted document was read and parsed, so nothing here " +
-							"stops a run from proceeding on what it said")
-					}
-					if tr.mistakenForAbsent {
-						return errors.New("the failure reads as the path not being there, which is the " +
-							"one answer that lets a caller fall back to defaults believing the " +
-							"repository set nothing")
-					}
-					if missing := journey.Carries(tr.message, condition.Expect.MessageContains); len(missing) > 0 {
-						return fmt.Errorf("the failure does not say %q; it said:\n%s", missing, tr.message)
-					}
-					if condition.Expect.Sentinel != "" && !tr.sentinel {
-						return fmt.Errorf("the failure does not match %s, which the condition says a "+
-							"caller matches on", condition.Expect.Sentinel)
-					}
-					if !tr.branchNamesAnotherAgent {
-						return errors.New("the branch's own copy names no agent of its own, so a run that " +
-							"read it as trusted would be indistinguishable from one that read the " +
-							"default branch's")
-					}
-					if !tr.branchAgentRejected {
-						return errors.New("resolving the branch's own copy kept the agent it named, and " +
-							"an agent is a key a pushed branch may not set")
-					}
-					if slices.Contains(tr.branchAgent, "fixture-pushed-agent") {
-						return fmt.Errorf("the branch's own copy resolved to the agent it named, %v", tr.branchAgent)
-					}
-					return nil
+			clauses := []journey.Clause[trusted]{
+				{
+					States: "reading or parsing the trusted document failed",
+					Holds: func(tr trusted) error {
+						if !tr.failed {
+							return errors.New("the trusted document was read and parsed, so nothing here " +
+								"stops a run from proceeding on what it said")
+						}
+						return nil
+					},
 				},
-				Counterfeits: []journey.Counterfeit[trusted]{
-					{Named: "the trusted document read and parsed after all", Break: func(tr trusted) trusted {
-						tr.failed = false
+				{
+					States: "the failure is not one a caller could read as the path simply being absent",
+					Holds: func(tr trusted) error {
+						if tr.mistakenForAbsent {
+							return errors.New("the failure reads as the path not being there, which is the " +
+								"one answer that lets a caller fall back to defaults believing the " +
+								"repository set nothing")
+						}
+						return nil
+					},
+				},
+				{
+					States: "the failure says what the condition requires it to say",
+					Holds: func(tr trusted) error {
+						if missing := journey.Carries(tr.message, condition.Expect.MessageContains); len(missing) > 0 {
+							return fmt.Errorf("the failure does not say %q; it said:\n%s", missing, tr.message)
+						}
+						return nil
+					},
+				},
+				{
+					States: "the branch's own copy names an agent of its own, so which layer was read is visible",
+					Holds: func(tr trusted) error {
+						if !tr.branchNamesAnotherAgent {
+							return errors.New("the branch's own copy names no agent of its own, so a run that " +
+								"read it as trusted would be indistinguishable from one that read the " +
+								"default branch's")
+						}
+						return nil
+					},
+				},
+				{
+					States: "resolving the branch's own copy dropped the agent it named",
+					Holds: func(tr trusted) error {
+						if !tr.branchAgentRejected {
+							return errors.New("resolving the branch's own copy kept the agent it named, and " +
+								"an agent is a key a pushed branch may not set")
+						}
+						return nil
+					},
+				},
+				{
+					States: "the branch's own copy did not resolve to the agent it named",
+					Holds: func(tr trusted) error {
+						if slices.Contains(tr.branchAgent, "fixture-pushed-agent") {
+							return fmt.Errorf("the branch's own copy resolved to the agent it named, %v", tr.branchAgent)
+						}
+						return nil
+					},
+				},
+			}
+			counterfeits := []journey.Counterfeit[trusted]{
+				{Named: "the trusted document read and parsed after all", Break: func(tr trusted) trusted {
+					tr.failed = false
+					return tr
+				}},
+				{Named: "the failure was the path simply being absent, which permits defaults",
+					Break: func(tr trusted) trusted {
+						tr.mistakenForAbsent = true
 						return tr
 					}},
-					{Named: "the failure was the path simply being absent, which permits defaults",
-						Break: func(tr trusted) trusted {
-							tr.mistakenForAbsent = true
-							return tr
-						}},
-					{Named: "the failure says none of what the condition requires",
-						Break: func(tr trusted) trusted {
-							tr.message = "something went wrong"
-							tr.sentinel = false
-							return tr
-						}},
-					{Named: "the branch's own copy names no agent, so which layer was read is invisible",
-						Break: func(tr trusted) trusted {
-							tr.branchNamesAnotherAgent = false
-							return tr
-						}},
-					{Named: "the agent the branch named was applied rather than dropped",
-						Break: func(tr trusted) trusted {
-							tr.branchAgentRejected = false
-							tr.branchAgent = []string{"fixture-pushed-agent"}
-							return tr
-						}},
-				},
+				{Named: "the failure says none of what the condition requires",
+					Break: func(tr trusted) trusted {
+						tr.message = "something went wrong"
+						tr.sentinel = false
+						return tr
+					}},
+				{Named: "the branch's own copy names no agent, so which layer was read is invisible",
+					Break: func(tr trusted) trusted {
+						tr.branchNamesAnotherAgent = false
+						return tr
+					}},
+				{Named: "the agent the branch named was applied rather than dropped",
+					Break: func(tr trusted) trusted {
+						tr.branchAgentRejected = false
+						tr.branchAgent = []string{"fixture-pushed-agent"}
+						return tr
+					}},
+			}
+			// Only one of the two conditions records an error a caller matches
+			// on. Asked of the other, this clause would hold over an
+			// observation nothing could make it report, and the counterfeit
+			// that clears the flag would reach nothing.
+			if condition.Expect.Sentinel != "" {
+				clauses = append(clauses, journey.Clause[trusted]{
+					States: "the failure matches the error the condition says a caller matches on",
+					Holds: func(tr trusted) error {
+						if !tr.sentinel {
+							return fmt.Errorf("the failure does not match %s, which the condition says a "+
+								"caller matches on", condition.Expect.Sentinel)
+						}
+						return nil
+					},
+				})
+			}
+			aborts := journey.Check[trusted]{
+				What:         string(planted.condition) + ": " + firstSentence(condition.Expect.Summary),
+				Clauses:      clauses,
+				Counterfeits: counterfeits,
 			}
 			if err := aborts.Verify(observed); err != nil {
 				t.Fatalf("%v", err)
@@ -205,39 +254,48 @@ func TestATrustedConfigurationThatCannotBeReadIsNotFallenBackFrom(t *testing.T) 
 		// here is a clone of the scenario whose default branch carries a
 		// document that will not parse, and PRD section 10 has a run over it
 		// stop before launching anything.
+		//
+		// What this cannot observe is execution. That scenario plants no
+		// executable at all - a malformed document, a paragraph of prose, and
+		// a well-formed document on the branch - so its tripwire file could
+		// not be written whatever the product did, and a clause reading it
+		// would hold over a world nothing could have made it report in. A run
+		// over a branch that does carry executables is
+		// TestTheBranchUnderValidationChoosesNothingThatRuns, where the
+		// tripwires are real and the same claim is established.
 		j := inClone(t)
 		answer := j.Command("--intent", "a run whose default branch carries a document that will not parse")
 		observed := resolvedRun{started: answer.Code == machine.ExitOK, message: answer.Message()}
 		if observed.started {
 			observed.outcome = decodeRun(t, answer).Outcome
 		}
-		var err error
-		if observed.fired, err = journey.Fired(scenarioNamed(t, fixture.ScenarioUnparseableTrustedConfig)); err != nil {
-			t.Fatalf("reading the scenario's tripwires: %v", err)
-		}
 
 		reads := journey.Check[resolvedRun]{
 			What: "a run whose default branch carries a trusted document that will not parse either stops " +
-				"before launching anything, or proceeds having read no repository document at all and " +
-				"executed nothing either document named",
-			Holds: func(r resolvedRun) error {
-				if len(r.fired) > 0 {
-					return fmt.Errorf("something one of the configuration documents named was executed: %v", r.fired)
-				}
-				if !r.started && !strings.Contains(r.message, "config") {
-					return fmt.Errorf("the run stopped for a reason that is not the configuration: %s", r.message)
-				}
-				if r.started && r.outcome == "" {
-					return errors.New("the run started and reported no outcome, so this observed neither " +
-						"the refusal nor the gap")
-				}
-				return nil
+				"before launching anything, or proceeds having read no repository document at all; " +
+				"nothing here says what executed, because this subject plants nothing that could",
+			Clauses: []journey.Clause[resolvedRun]{
+				{
+					States: "a run that did not start stopped for the configuration",
+					Holds: func(r resolvedRun) error {
+						if !r.started && !strings.Contains(r.message, "config") {
+							return fmt.Errorf("the run stopped for a reason that is not the configuration: %s", r.message)
+						}
+						return nil
+					},
+				},
+				{
+					States: "a run that started reported an outcome",
+					Holds: func(r resolvedRun) error {
+						if r.started && r.outcome == "" {
+							return errors.New("the run started and reported no outcome, so this observed neither " +
+								"the refusal nor the gap")
+						}
+						return nil
+					},
+				},
 			},
 			Counterfeits: []journey.Counterfeit[resolvedRun]{
-				{Named: "a command one of the documents named was executed", Break: func(r resolvedRun) resolvedRun {
-					r.fired = []string{"pushed-commands-test"}
-					return r
-				}},
 				{Named: "the run stopped for a reason that has nothing to do with configuration",
 					Break: func(r resolvedRun) resolvedRun {
 						r.started = false
@@ -259,8 +317,9 @@ func TestATrustedConfigurationThatCannotBeReadIsNotFallenBackFrom(t *testing.T) 
 				"trusted configuration document that does not parse. PRD section 10 has a run stop "+
 				"before launching anything when the trusted copy cannot be read and parsed. Nothing in "+
 				"this build reads a repository's own document from anywhere, which internal/service "+
-				"states, and nothing either document named executed, so this is a gap against section "+
-				"10 rather than a hole in P7.", observed.outcome)
+				"states, so this is a gap against section 10 rather than a hole in P7. That nothing a "+
+				"branch names is executed is established over a branch that plants executables, by "+
+				"TestTheBranchUnderValidationChoosesNothingThatRuns, and not here.", observed.outcome)
 		}
 	})
 }
@@ -274,8 +333,6 @@ type resolvedRun struct {
 	outcome machine.Outcome
 	// message is what the surface said about it.
 	message string
-	// fired is every tripwire the scenario recorded.
-	fired []string
 }
 
 // remoteDefaultBranch is the commit the default branch stands at on the

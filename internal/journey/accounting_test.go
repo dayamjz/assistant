@@ -69,39 +69,93 @@ func TestEveryQuestionTheFixtureLeftOpenIsSettledHere(t *testing.T) {
 // would make every check in this package report green while proving nothing,
 // which is the exact failure the whole design is against. This drives Verify
 // over a check that is wrong in each of the ways it is supposed to catch.
+//
+// Three of those ways are about one clause rather than about the check. A
+// clause no counterfeit reaches is invisible while its neighbours keep the
+// check honest, which is how this package shipped three clauses that
+// established nothing; an absence clause with no precondition is one nobody
+// could tell from a clause about a world where the thing could not have been
+// there; and a precondition on a clause that asserts no absence is a writer
+// who has not decided which kind of clause they are writing.
 func TestEveryCheckHereRefusesACheckThatCannotFail(t *testing.T) {
-	holds := func(int) error { return nil }
+	zero := journey.Clause[int]{States: "the number is zero", Holds: errFor}
+	anything := journey.Clause[int]{States: "anything at all", Holds: func(int) error { return nil }}
+	counts := func(n int) journey.Counterfeit[int] {
+		return journey.Counterfeit[int]{
+			Named: "the number came back wrong",
+			Break: func(int) int { return n },
+		}
+	}
 	for _, c := range []struct {
 		what  string
 		check journey.Check[int]
 	}{
 		{"a check that names no counterfeit", journey.Check[int]{
-			What:  "something",
-			Holds: holds,
+			What:    "something",
+			Clauses: []journey.Clause[int]{zero},
 		}},
-		{"a check whose counterfeit its own predicate accepts", journey.Check[int]{
-			What:  "something",
-			Holds: holds,
-			Counterfeits: []journey.Counterfeit[int]{
-				{Named: "the number came back wrong", Break: func(n int) int { return n + 1 }},
-			},
+		{"a check that asserts nothing at all", journey.Check[int]{
+			What:         "something",
+			Counterfeits: []journey.Counterfeit[int]{counts(1)},
+		}},
+		{"a check whose counterfeit every one of its clauses accepts", journey.Check[int]{
+			What:         "something",
+			Clauses:      []journey.Clause[int]{anything},
+			Counterfeits: []journey.Counterfeit[int]{counts(1)},
+		}},
+		{"a check carrying a clause no counterfeit reaches", journey.Check[int]{
+			What:         "something",
+			Clauses:      []journey.Clause[int]{zero, anything},
+			Counterfeits: []journey.Counterfeit[int]{counts(1)},
 		}},
 		{"a check that says nothing about what it establishes", journey.Check[int]{
-			Holds:        holds,
-			Counterfeits: []journey.Counterfeit[int]{{Named: "x", Break: func(n int) int { return n }}},
+			Clauses:      []journey.Clause[int]{zero},
+			Counterfeits: []journey.Counterfeit[int]{counts(1)},
 		}},
-		{"a check with no predicate at all", journey.Check[int]{
+		{"a clause that says nothing about what it asserts", journey.Check[int]{
 			What:         "something",
-			Counterfeits: []journey.Counterfeit[int]{{Named: "x", Break: func(n int) int { return n }}},
+			Clauses:      []journey.Clause[int]{{Holds: errFor}},
+			Counterfeits: []journey.Counterfeit[int]{counts(1)},
 		}},
+		{"a clause with no predicate at all", journey.Check[int]{
+			What:         "something",
+			Clauses:      []journey.Clause[int]{{States: "the number is zero"}},
+			Counterfeits: []journey.Counterfeit[int]{counts(1)},
+		}},
+		{"an absence clause that says nothing about how the thing could have been there",
+			journey.Check[int]{
+				What:         "something",
+				Clauses:      []journey.Clause[int]{{States: "the number is zero", Absence: true, Holds: errFor}},
+				Counterfeits: []journey.Counterfeit[int]{counts(1)},
+			}},
+		{"a clause carrying a precondition without declaring itself an absence", journey.Check[int]{
+			What: "something",
+			Clauses: []journey.Clause[int]{{
+				States:   "the number is zero",
+				Possible: func(int) error { return nil },
+				Holds:    errFor,
+			}},
+			Counterfeits: []journey.Counterfeit[int]{counts(1)},
+		}},
+		{"an absence clause over a world in which the thing could not have been there",
+			journey.Check[int]{
+				What: "something",
+				Clauses: []journey.Clause[int]{{
+					States:   "the number is zero",
+					Absence:  true,
+					Possible: func(int) error { return errNotZero },
+					Holds:    errFor,
+				}},
+				Counterfeits: []journey.Counterfeit[int]{counts(1)},
+			}},
 		{"a counterfeit that says nothing about what went wrong", journey.Check[int]{
 			What:         "something",
-			Holds:        func(n int) error { return errFor(n) },
+			Clauses:      []journey.Clause[int]{zero},
 			Counterfeits: []journey.Counterfeit[int]{{Break: func(n int) int { return n + 1 }}},
 		}},
 		{"a counterfeit that derives nothing", journey.Check[int]{
 			What:         "something",
-			Holds:        func(n int) error { return errFor(n) },
+			Clauses:      []journey.Clause[int]{zero},
 			Counterfeits: []journey.Counterfeit[int]{{Named: "x"}},
 		}},
 	} {
@@ -112,18 +166,34 @@ func TestEveryCheckHereRefusesACheckThatCannotFail(t *testing.T) {
 		})
 	}
 
-	// And the other direction: a check that does discriminate is accepted, so
-	// what is above is a refusal of the defective cases rather than of
-	// everything.
+	// And the other direction: a check whose every clause discriminates is
+	// accepted, so what is above is a refusal of the defective cases rather
+	// than of everything. The absence clause is here too, because a mechanism
+	// that refused every one of those would be refusing the shape half this
+	// package's checks are written in.
 	sound := journey.Check[int]{
-		What:  "the number is zero",
-		Holds: errFor,
+		What: "the number is zero and could have been something else",
+		Clauses: []journey.Clause[int]{
+			zero,
+			{
+				States:   "the number is not one",
+				Absence:  true,
+				Possible: func(int) error { return nil },
+				Holds: func(n int) error {
+					if n == 1 {
+						return errNotZero
+					}
+					return nil
+				},
+			},
+		},
 		Counterfeits: []journey.Counterfeit[int]{
-			{Named: "the number came back as something else", Break: func(n int) int { return n + 1 }},
+			{Named: "the number came back as one", Break: func(int) int { return 1 }},
+			{Named: "the number came back as something else again", Break: func(int) int { return 2 }},
 		},
 	}
 	if err := sound.Verify(0); err != nil {
-		t.Fatalf("a check that discriminates was refused: %v", err)
+		t.Fatalf("a check whose every clause discriminates was refused: %v", err)
 	}
 	if err := sound.Verify(1); err == nil {
 		t.Fatal("a check was given an observation its own predicate rejects and reported nothing")

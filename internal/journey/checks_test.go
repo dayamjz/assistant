@@ -92,9 +92,6 @@ func TestAnEmptyCheckListIsNotAPass(t *testing.T) {
 	observed.verdict = report.Evaluate(forge.DeclaredNoCI(config.Config{})).Verdict
 	observed.declared = report.Evaluate(forge.DeclaredNoCI(config.Config{NoCI: true})).Verdict
 
-	// A substitution that finds nothing to replace has to say so. Doing
-	// nothing quietly is the same failure as not substituting at all, with no
-	// symptom.
 	_, err = journey.SubstituteHead("a-commit-this-answer-does-not-name", observed.pushed, answerPath,
 		filepath.Join(t.TempDir(), "nothing.json"))
 	observed.substitutionRefused = errors.Is(err, journey.ErrNoRecordedHead)
@@ -103,28 +100,61 @@ func TestAnEmptyCheckListIsNotAPass(t *testing.T) {
 		What: "an empty check list on the commit the run pushed is not a pass, only a no-CI declaration " +
 			"makes it one, and an answer served without the run's own head substituted into it reports a " +
 			"different commit rather than the condition",
-		Holds: func(c checked) error {
-			if c.headServed != c.pushed {
-				return fmt.Errorf("the provider reported checks on %s and the run pushed %s",
-					c.headServed, c.pushed)
-			}
-			if c.headStale != c.recorded || c.headStale == c.pushed {
-				return fmt.Errorf("the answer served as the build left it reported %s, so nothing here "+
-					"shows what serving it unchanged would have cost", c.headStale)
-			}
-			if c.verdict != forge.VerdictNoChecks {
-				return fmt.Errorf("an empty check list came to %s, and an empty list means unregistered "+
-					"rather than passing", c.verdict)
-			}
-			if c.declared != forge.VerdictPassed {
-				return fmt.Errorf("an empty check list with no_ci declared came to %s, and the "+
-					"declaration is what turns it into a pass", c.declared)
-			}
-			if !c.substitutionRefused {
-				return errors.New("substituting into an answer that names no such head did nothing and " +
-					"reported success, so a substitution that stopped working would be invisible")
-			}
-			return nil
+		Clauses: []journey.Clause[checked]{
+			{
+				States: "the provider reported checks on the commit the run pushed",
+				Holds: func(c checked) error {
+					if c.headServed != c.pushed {
+						return fmt.Errorf("the provider reported checks on %s and the run pushed %s",
+							c.headServed, c.pushed)
+					}
+					return nil
+				},
+			},
+			{
+				States: "the answer served as the build left it reports the build's own head, so the " +
+					"substitution is doing something",
+				Holds: func(c checked) error {
+					if c.headStale != c.recorded || c.headStale == c.pushed {
+						return fmt.Errorf("the answer served as the build left it reported %s, so nothing here "+
+							"shows what serving it unchanged would have cost", c.headStale)
+					}
+					return nil
+				},
+			},
+			{
+				States: "an empty check list came to unregistered rather than to a pass or a failure",
+				Holds: func(c checked) error {
+					if c.verdict != forge.VerdictNoChecks {
+						return fmt.Errorf("an empty check list came to %s, and an empty list means unregistered "+
+							"rather than passing", c.verdict)
+					}
+					return nil
+				},
+			},
+			{
+				States: "a no-CI declaration is what turns the same empty list into a pass",
+				Holds: func(c checked) error {
+					if c.declared != forge.VerdictPassed {
+						return fmt.Errorf("an empty check list with no_ci declared came to %s, and the "+
+							"declaration is what turns it into a pass", c.declared)
+					}
+					return nil
+				},
+			},
+			{
+				// A substitution that finds nothing to replace has to say so.
+				// Doing nothing quietly is the same failure as not
+				// substituting at all, with no symptom.
+				States: "a substitution that found nothing to replace was refused rather than reporting success",
+				Holds: func(c checked) error {
+					if !c.substitutionRefused {
+						return errors.New("substituting into an answer that names no such head did nothing and " +
+							"reported success, so a substitution that stopped working would be invisible")
+					}
+					return nil
+				},
+			},
 		},
 		Counterfeits: []journey.Counterfeit[checked]{
 			{Named: "an empty check list was read as green", Break: func(c checked) checked {
