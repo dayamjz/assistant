@@ -131,7 +131,7 @@ type Service struct {
 	// the branch gates. It is never held across a run's execution.
 	mu        sync.Mutex
 	built     *driver
-	advancing map[string]context.CancelFunc
+	advancing map[string]*slot
 	// starting holds one gate per branch a start is being decided for, so the
 	// check that a branch has no run and the creation of one are a single
 	// decision rather than a check a second caller can win the race to.
@@ -206,7 +206,7 @@ func Open(ctx context.Context, o Options) (*Service, error) {
 		catalog:   o.Catalog,
 		newFixer:  o.NewFixer,
 		registry:  newRegistry(),
-		advancing: make(map[string]context.CancelFunc),
+		advancing: make(map[string]*slot),
 		starting:  make(map[branchKey]*branchGate),
 		stopping:  make(chan struct{}),
 	}
@@ -346,11 +346,16 @@ func (s *Service) Close() error {
 // cancelAdvancing ends every run this service is executing. A run's agent
 // processes are scoped to the context its round runs on, so cancelling is what
 // ends them, per PRD section 8's process lifetime rule.
+//
+// A slot standing for an ending rather than for a segment holds no segment to
+// end, so it is passed over: nothing is executing under it.
 func (s *Service) cancelAdvancing() {
 	s.mu.Lock()
 	cancels := make([]context.CancelFunc, 0, len(s.advancing))
-	for _, cancel := range s.advancing {
-		cancels = append(cancels, cancel)
+	for _, held := range s.advancing {
+		if held.cancel != nil {
+			cancels = append(cancels, held.cancel)
+		}
 	}
 	s.mu.Unlock()
 	for _, cancel := range cancels {
