@@ -1,5 +1,6 @@
 // Package cli is the command surface: the verbs PRD section 9 specifies, the
-// flags that parameterize them, and the two renderings of one answer.
+// flags that parameterize them, the two renderings of one answer, and the two
+// subcommands a gate's hooks invoke.
 //
 // A person at a terminal and an agent driving programmatically are both
 // first-class users of the same commands. They share the same decisions, the
@@ -11,10 +12,12 @@
 //
 // # The verb table is the PRD's, and nothing else is in it
 //
-// verbs in cli.go is the whole surface. Every row is a command PRD section 9's
-// table names, and a command that section does not name is not here: a verb
-// this product needs and that section does not describe is a finding to raise
-// against the specification, not a row to add quietly.
+// verbs in cli.go is the whole of what a caller drives. Every row is a command
+// PRD section 9's table names, and a command that section does not name is not
+// here: a verb this product needs and that section does not describe is a
+// finding to raise against the specification, not a row to add quietly. The one
+// thing this binary answers to that is not in that table is the gate hook
+// interface, which the section below is about.
 //
 // Four things the section leaves to a verb's parameters are flags or arguments
 // rather than verbs.

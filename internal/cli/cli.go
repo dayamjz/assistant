@@ -59,7 +59,8 @@ func usagef(format string, a ...any) error {
 }
 
 // verb is one command. Every row is a command PRD section 9's table names, and
-// the table below is the whole surface.
+// the table below is the whole of what a caller drives; the two subcommands
+// internal/gate's hooks invoke are gateHooks in gate.go rather than rows here.
 type verb struct {
 	// name is what a caller types, empty for the command with no verb.
 	name string
@@ -75,9 +76,10 @@ type verb struct {
 	run func(context.Context, *invocation) (any, error)
 }
 
-// verbs is the command surface. It is PRD section 9's table and nothing else:
-// a verb that section does not describe is a finding against the
-// specification rather than a row here.
+// verbs is the surface a caller drives. It is PRD section 9's table and nothing
+// else: a verb that section does not describe is a finding against the
+// specification rather than a row here, and the one command this binary answers
+// to that section does not name is dispatched beside it; see gateVerbName.
 var verbs = []verb{
 	{"", "Attach to this branch's active run. With no run, start one.", attachOrStart},
 	{"init", "Create or repair the gate for this repository.", initGate},
@@ -427,7 +429,9 @@ func (in *invocation) progressf(format string, a ...any) {
 	writef(in.env.Stderr, format+"\n", a...)
 }
 
-// usageText is the command list, which is the verb table read out.
+// usageText is the command list: the verb table read out, and then the gate
+// hook subcommands gateUsage reads out under a heading saying a push invokes
+// them rather than a person.
 func usageText() string {
 	var b strings.Builder
 	b.WriteString("Usage: assistant [--json] [--home PATH] [command]\n\nCommands:\n")
