@@ -236,10 +236,16 @@ func TestAnUpdateIsAnchoredToWhatTheRunObservedRatherThanToAFreshRead(t *testing
 				a.anchorCommit = a.advancedCommit
 				return a
 			}},
-			{Named: "the anchor names a commit the run never observed", Break: func(a anchored) anchored {
-				a.anchorCommit = strings.Repeat("0", len(a.anchorCommit))
-				return a
-			}},
+			// The empty commit is what the read behind this anchor answers with
+			// when the remote advertises no such ref, and it is the only value
+			// besides an advertised object that internal/safety can put here.
+			// A run of zeros would show the clause failing against something
+			// that read cannot produce.
+			{Named: "the anchor names no commit at all, as a read of an absent ref would leave it",
+				Break: func(a anchored) anchored {
+					a.anchorCommit = ""
+					return a
+				}},
 			{Named: "the update was allowed over the commit somebody else landed", Break: func(a anchored) anchored {
 				a.refused = false
 				return a

@@ -14,6 +14,7 @@ import (
 	"github.com/dayamjz/assistant/internal/fixture"
 	"github.com/dayamjz/assistant/internal/journey"
 	"github.com/dayamjz/assistant/internal/machine"
+	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/principles"
 )
 
@@ -329,8 +330,7 @@ func TestAFindingThatIsNotClassifiedStopsForAPerson(t *testing.T) {
 								return fmt.Errorf("the hold at %s carries no decision, so it offers no options",
 									run.Position)
 							}
-							if !slices.Contains(run.Decision.Options, string(machine.OutcomeCancelled)) &&
-								!slices.Contains(run.Decision.Options, "cancelled") {
+							if !slices.Contains(run.Decision.Options, string(pipeline.OutcomeCancelled)) {
 								return fmt.Errorf("the decision at %s offers %v, and ending the run is not "+
 									"among them", run.Position, run.Decision.Options)
 							}
