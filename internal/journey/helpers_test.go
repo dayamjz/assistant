@@ -46,6 +46,23 @@ func requiresIdentifiedPeer(t *testing.T) {
 	}
 }
 
+// requiresLocalSocket skips a test whose service did not come up, on a
+// platform that has no local socket transport to serve this protocol over.
+//
+// It is the sibling packages' second guard, on their terms: internal/service
+// and internal/cli both carry it, both bound it by the same written-down
+// platform predicate, and a platform that does identify peers is one where a
+// service that failed to come up is a failure rather than a skip. It is taken
+// wherever a service is expected to come up and wherever a test reads why one
+// did not, because on such a platform every service fails to come up for the
+// transport instead, and neither question can be answered there.
+func requiresLocalSocket(t *testing.T, cause error) {
+	t.Helper()
+	if !platformIdentifiesPeers() {
+		t.Skipf("%s has no local socket transport to serve this protocol over: %v", runtime.GOOS, cause)
+	}
+}
+
 // stagesWithoutABody is the stages this build has no implementation for, in
 // the order a run takes them.
 //
@@ -115,9 +132,14 @@ func open(t *testing.T, scenario fixture.Scenario, opts ...func(*journey.Options
 
 // serve starts the service in a process this test owns, so it can be killed
 // the way a crash kills it.
+//
+// A service that did not come up is a failure everywhere the transport it
+// binds exists, and a skip where it does not, which is the sibling packages'
+// answer and is why this is the one place every serving test goes through.
 func serve(t *testing.T, j *journey.Journey) {
 	t.Helper()
 	if err := j.Serve(); err != nil {
+		requiresLocalSocket(t, err)
 		t.Fatalf("serving: %v", err)
 	}
 }

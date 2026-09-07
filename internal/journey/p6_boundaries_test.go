@@ -43,9 +43,13 @@ type survival struct {
 // It is the third of section 13's tests for P6, and the PRD writes it as the
 // verification criterion rather than as an example: kill the service mid-run
 // at each stage boundary, and every time the work is recoverable and the
-// classification is correct. A stage boundary in this build is a hold, because
+// classification is correct. What the criterion turns on is every boundary,
+// not a count of them: a stage boundary in this build is a hold, because
 // internal/graph stops before a halt point runs, so that is where the kill
-// lands.
+// lands, and a stage that never holds offers none. The intent stage is that
+// stage - it has a body and PRD section 5 has it never block a run, so every
+// finding it reports is a note - and it is therefore not among the boundaries
+// here. Manufacturing one for it would be a kill with nothing under it.
 //
 // The kill is a kill and not a stop. A service asked to stop unwinds and
 // writes what it knows on the way out, and what P6 is about is the service
@@ -113,8 +117,10 @@ func TestARunSurvivesTheServiceBeingKilledAtEveryStageBoundary(t *testing.T) {
 	at := func(nth int) int { return nth % len(observed.boundaries) }
 
 	survived := journey.Check[survival]{
-		What: "a run killed at every stage boundary comes back standing exactly where it stood, " +
-			"classified as waiting on the same decision, and is driven to the end of the gate afterwards",
+		What: "a run killed at every stage boundary it reaches comes back standing exactly where it " +
+			"stood, classified as waiting on the same decision, and is driven to the end of the gate " +
+			"afterwards; a boundary is a hold, so a stage whose body never holds offers none and is " +
+			"not among them",
 		Clauses: []journey.Clause[survival]{
 			{
 				States: "the service was killed at every boundary this run stops at",
@@ -264,9 +270,20 @@ func TestARunSurvivesTheServiceBeingKilledAtEveryStageBoundary(t *testing.T) {
 					s.boundaries[at(0)].servedBy = 0
 					return s
 				}},
+			// The node this puts in its place is one this run actually stood
+			// at, taken off another boundary of the same walk. A position
+			// composed here could name a node no run reaches, and a clause
+			// shown failing against a shape the product cannot produce
+			// establishes nothing about the clause.
 			{Named: "the run came back standing at a different node", Break: func(s survival) survival {
 				s = cloneSurvival(s)
-				s.boundaries[at(3)].recovered.Position = "hold:" + stageOrder()[0]
+				target := at(3)
+				for _, other := range s.boundaries {
+					if other.standing.Position != s.boundaries[target].standing.Position {
+						s.boundaries[target].recovered.Position = other.standing.Position
+						break
+					}
+				}
 				return s
 			}},
 			{Named: "the run came back recorded as still running, which no answer reaches",
@@ -290,12 +307,25 @@ func TestARunSurvivesTheServiceBeingKilledAtEveryStageBoundary(t *testing.T) {
 				s.boundaries[at(7)].recovered.Steps = 0
 				return s
 			}},
+			// The stage this names is one this run actually held for, taken off
+			// another boundary, for the reason above. Reaching into
+			// internal/pipeline's order for a name instead would find the
+			// intent stage first, and no run in this build holds for that one.
 			{Named: "the run came back holding for a stage other than the one it was killed at",
 				Break: func(s survival) survival {
 					s = cloneSurvival(s)
-					decision := *s.boundaries[at(6)].recovered.Decision
-					decision.Stage = anotherStage(decision.Stage)
-					s.boundaries[at(6)].recovered.Decision = &decision
+					target := at(6)
+					stood := s.boundaries[target].standing.Decision
+					for _, other := range s.boundaries {
+						if stood == nil || other.standing.Decision == nil ||
+							other.standing.Decision.Stage == stood.Stage {
+							continue
+						}
+						decision := *s.boundaries[target].recovered.Decision
+						decision.Stage = other.standing.Decision.Stage
+						s.boundaries[target].recovered.Decision = &decision
+						break
+					}
 					return s
 				}},
 			{Named: "the recovered decision offers something nobody was offered before the kill",
@@ -343,18 +373,6 @@ func atEachBoundary(s survival, ask func(stage string, at boundary) error) error
 		}
 	}
 	return nil
-}
-
-// anotherStage is some stage of the gate that is not the one named, so a
-// counterfeit can say a run came back holding for a different stage without
-// naming one and without stating a name the product could not report.
-func anotherStage(than string) string {
-	for _, name := range stageOrder() {
-		if name != than {
-			return name
-		}
-	}
-	return than
 }
 
 // cloneSurvival copies a survival far enough that a counterfeit can change one
