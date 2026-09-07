@@ -21,15 +21,20 @@ document:
     README.md owns the introduction and the development commands.
     Package-level doc comments own each package's contract.
     AGENTS.md owns the working agreement for agents in this repository.
+    docs/upstream-review-instruction-bounds.md owns one outstanding ask against
+    the gate itself. It is closed by that ask landing or being declined, never
+    by editing it to match what this repository settled for meanwhile.
 
 review:
   path_instructions:
-    # Two rules that hold everywhere rather than in one package. This schema
-    # has no repository-wide review key, so the glob is how a shared rule is
-    # said: "*" matches every changed path by basename.
+    # The rules that hold everywhere rather than in one package, and that a
+    # branch under review must not be able to edit. This schema has no
+    # repository-wide review key, so the glob is how a shared rule is said:
+    # "*" matches every changed path by basename. AGENTS.md carries the rest;
+    # its bullet on this file has the test that decides which surface a rule
+    # goes on, and the accounting for the cap this section sits against.
     - path: "*"
       instructions: |
-        These two apply to every change here, not to one package.
         A finding that asserts absence - no other caller, nothing reads this,
         no other site does X - owes its method: what was searched, over what,
         and with what pattern. An empty result establishes nothing on its own,
@@ -44,10 +49,12 @@ review:
         finding's own reasoning already reaches belong in the finding, and a
         fix applied to the named site alone leaves the defect where that
         reasoning had put it.
-        Neither rule catches a reviewer that traces badly: a search can be
-        named and still have been for the wrong thing, and a class can be
-        enumerated wrong. What answers for that is the separation between
-        reviewing and fixing, not a further instruction here.
+        AGENTS.md carries the review rules that need not survive a hostile
+        branch. It reaches you out of the working copy, so this branch can edit
+        it, and the gate's disable_project_settings can stop it reaching you at
+        all. Either ends its reach with no error and no refused run, so a change
+        that does one must move those rules into this file in the same change,
+        and it is a finding when it does not.
 
     - path: "internal/graph/**"
       instructions: |

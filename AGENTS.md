@@ -103,11 +103,35 @@ Each has cost this repository more than one round of review.
   recurring, and a diff that removes one instruction and adds another reads as
   an edit rather than as the regression it is. A channel with no room left is a
   decision to raise, not one to settle at the point of use.
-  This file is the other surface the same reviewer reads, and no cap bounds it
-  while `disable_project_settings` stays unset here. So a rule reaches the
-  reviewer either way, and what only `.no-mistakes.yaml` buys is a rule the
-  branch under review cannot edit. That, and not importance, is what decides
-  which of the two a rule belongs in.
+- This file is the second surface the gate reviewer reads, and no cap bounds it,
+  so a review rule reaches the reviewer from either place. One test decides
+  which, and it is not importance: **would this rule still need to apply if the
+  contributor were hostile?** Yes puts it in `.no-mistakes.yaml`, which is read
+  from the default branch and which the branch under review cannot touch. No
+  puts it here. A rule here is deletable by the branch it was written to review,
+  so against an adversarial case it is not weaker protection, it is none.
+  The rules in the `path: "*"` block are there because deleting one buys a
+  contributor something: an unmethodical absence claim lets a second caller
+  pass, and a finding that names a site rather than a class lets a fix land on
+  one of two planted copies. Neither catches a reviewer that traces badly - a
+  search can be named and still have been for the wrong thing, and a class can
+  be enumerated wrong - and what answers for that is the separation between
+  reviewing and fixing, not a further instruction there.
+- What this side of that split depends on: it reaches the gate reviewer only
+  while the gate's `disable_project_settings` is false. That is its default, and
+  neither this repository's `.no-mistakes.yaml` nor the global configuration
+  sets it. Setting it true suppresses project instructions wholesale, and every
+  review rule on this side stops applying with no error, no failed parse, and no
+  refused run. Do not confuse it with `suppress_project_instructions`, which is
+  this project's own key for the same idea and decides nothing about the gate.
+  The guard is a rule in the `path: "*"` block requiring a change that sets that
+  key, or that drops this file's review rules, to move them into
+  `.no-mistakes.yaml` in the same change. It is a review-time refusal and not a
+  build-time one: asserting it in `make check` would mean parsing
+  `.no-mistakes.yaml`, this repository carries no YAML decoder, and a text scan
+  for a key is the evidence-free test shape review here rejects. The guard sits
+  in the trusted channel because that is the one surface the change it guards
+  against cannot also edit; a reviewer who reads past it is the residual gap.
 - Every exported symbol carries a contract, so give it a doc comment that states
   the contract rather than restating the name.
 - Prefer a small, testable pure core with the side effects at the edges. The
