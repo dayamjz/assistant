@@ -947,7 +947,12 @@ func (s *Service) report(ctx context.Context, runID string, result *graph.Result
 	// no other caller can be advancing it either. A read is the only answer
 	// that can find a segment in flight, and it is the only one that can find
 	// the run standing still with nothing moving it.
-	answer := machine.Run{Record: record, Advancing: result == nil && s.isAdvancing(runID)}
+	standing := machine.Standing{
+		Record:    record.Status,
+		Execution: machine.ExecutionUnrecorded(),
+		Advancing: result == nil && s.isAdvancing(runID),
+	}
+	answer := machine.Run{Record: record}
 	if result == nil {
 		latest, err := s.checkpoints.Latest(ctx, runID)
 		if err != nil {
@@ -958,12 +963,12 @@ func (s *Service) report(ctx context.Context, runID string, result *graph.Result
 				// tells them to end a run whose history is intact.
 				return machine.Run{}, fmt.Errorf("service: reading the position of run %s: %w", runID, err)
 			}
-			// A run with no checkpoint has not executed. Its record is the
-			// whole of what is known, and saying so is better than reporting a
-			// position it never reached.
-			answer.Outcome = machine.OutcomeOf(record.Status, graph.StatusInvalid, graph.State{})
-			answer.NextAction = "This run never began executing, so there is no position to carry it on from. End it and start a fresh run."
-			return answer, nil
+			// A run with no checkpoint has not executed. That is an absence
+			// rather than a place execution stopped, so it goes to the answer
+			// as one, and what separates a run between its start and its first
+			// checkpoint from one nothing is carrying on is the same fact that
+			// separates them everywhere else.
+			return answer.Decide(standing), nil
 		}
 		result = &graph.Result{
 			Status:   latest.Status,
@@ -981,13 +986,14 @@ func (s *Service) report(ctx context.Context, runID string, result *graph.Result
 	answer.Reason = result.Reason
 	answer.Steps = result.Steps
 	answer.Budget = result.Budget
-	answer.Outcome = machine.OutcomeOf(record.Status, result.Status, result.State)
+	standing.Execution = machine.ExecutionAt(result.Status, result.State)
 	// PRD section 9 makes a stall that looks alive worse than an error, and an
 	// executing run is the one answer that describes both a run in flight and
-	// a run nothing is carrying on. The action is the half that applies rather
-	// than a sentence covering both, so a reader is told either to wait or to
-	// attach, and never to wait on a run nothing is advancing.
-	answer.NextAction = answer.Outcome.NextActionFor(answer.Advancing)
+	// a run nothing is carrying on. Nothing here chooses between them: the
+	// three facts go to machine.Run.Decide together, which is the only writer
+	// of a next action there is, so this cannot hand back one that disagrees
+	// with the outcome beside it.
+	answer = answer.Decide(standing)
 	answer.Stages = stageViews(result.State)
 	// The record decides before the checkpoint does, which is machine.OutcomeOf's
 	// rule applied to the decision as well as to the outcome: a run ended from

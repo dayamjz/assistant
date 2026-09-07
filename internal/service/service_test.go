@@ -447,6 +447,14 @@ func waitFor(t *testing.T, holds func() bool, what string) {
 // there. The run's inputs are on its record, but the stages it was told to
 // skip are not, so starting it again from the record would silently drop that
 // choice.
+//
+// It has not failed, and the answer may not say it has. Nothing about this run
+// went wrong: it was recorded and nothing walked it, which is a run whose
+// execution has not finished rather than one that ended without a verdict. The
+// same read a moment after a start would find the same shape from a run a
+// segment is inside, and calling either failed is the surface asserting the
+// opposite of what is true. What tells them apart is whether anything is
+// advancing the run, and it is the action rather than the outcome that differs.
 func TestARunThatNeverExecutedIsReportedRatherThanResumed(t *testing.T) {
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
@@ -485,11 +493,23 @@ func TestARunThatNeverExecutedIsReportedRatherThanResumed(t *testing.T) {
 		if attached.Progress != nil {
 			t.Fatalf("a run that never executed reports progress %v", attached.Progress)
 		}
-		if attached.Outcome != machine.OutcomeFailed {
-			t.Fatalf("a run that never executed reports %s, want failed", attached.Outcome)
+		if attached.Outcome == machine.OutcomeFailed {
+			t.Fatal("a run that was recorded and never walked reports that it failed")
 		}
-		if attached.NextAction == "" {
+		if attached.Outcome != machine.OutcomeExecuting {
+			t.Fatalf("a run that never executed reports %s, want executing", attached.Outcome)
+		}
+		if attached.Advancing {
+			t.Fatal("a run nothing has started reports that a segment is inside it")
+		}
+		if attached.NextAction() == "" {
 			t.Fatal("a run that cannot be carried on says nothing about what to do")
+		}
+		if attached.NextAction() == machine.OutcomeExecuting.NextActionFor(true) {
+			t.Fatalf("a run nothing is advancing is told to wait: %s", attached.NextAction())
+		}
+		if attached.NextAction() == machine.OutcomeExecuting.NextActionFor(false) {
+			t.Fatalf("a run with no position is told to attach and carry it on: %s", attached.NextAction())
 		}
 	})
 }

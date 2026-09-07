@@ -10,14 +10,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dayamjz/assistant/internal/agents"
-	"github.com/dayamjz/assistant/internal/agents/standin"
 	"github.com/dayamjz/assistant/internal/cli"
 	"github.com/dayamjz/assistant/internal/findings"
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/pipeline"
-	"github.com/dayamjz/assistant/internal/service"
 	"github.com/dayamjz/assistant/internal/stages"
 	"github.com/dayamjz/assistant/internal/store"
 )
@@ -153,7 +150,7 @@ func assertExecuting(t *testing.T, view machine.Run, surface string) {
 	if view.Decision != nil {
 		t.Fatalf("%s offers a decision to answer on a run that has none: %+v", surface, view.Decision)
 	}
-	if strings.TrimSpace(view.NextAction) == "" {
+	if strings.TrimSpace(view.NextAction()) == "" {
 		t.Fatalf("%s says nothing about what to do next about a run that is executing", surface)
 	}
 	if view.Record.Status != store.RunRunning {
@@ -167,11 +164,11 @@ func assertExecuting(t *testing.T, view machine.Run, surface string) {
 	if !view.Advancing {
 		t.Fatalf("%s reports that nothing is advancing a run that is inside a stage body", surface)
 	}
-	if view.NextAction == machine.OutcomeExecuting.NextActionFor(false) {
-		t.Fatalf("%s tells a reader to attach a run that is already being advanced: %s", surface, view.NextAction)
+	if view.NextAction() == machine.OutcomeExecuting.NextActionFor(false) {
+		t.Fatalf("%s tells a reader to attach a run that is already being advanced: %s", surface, view.NextAction())
 	}
-	if view.NextAction != machine.OutcomeExecuting.NextActionFor(true) {
-		t.Fatalf("%s says %q about a run in flight, want the action for one being advanced", surface, view.NextAction)
+	if view.NextAction() != machine.OutcomeExecuting.NextActionFor(true) {
+		t.Fatalf("%s says %q about a run in flight, want the action for one being advanced", surface, view.NextAction())
 	}
 }
 
@@ -211,10 +208,6 @@ func startInBackground(t *testing.T, h *home.Home, workingDir string, args ...st
 // is about and held there rather than caught in it.
 func serveHeldAtIntent(t *testing.T, h *home.Home, inside chan struct{}, release chan struct{}, entered *sync.Once) {
 	t.Helper()
-	build, err := store.CurrentBuild()
-	if err != nil {
-		t.Fatalf("reading this build's identity: %v", err)
-	}
 	held := stages.All()
 	held.Intent = pipeline.Implementation{
 		NewBody: func() pipeline.Body {
@@ -232,25 +225,5 @@ func serveHeldAtIntent(t *testing.T, h *home.Home, inside chan struct{}, release
 			}
 		},
 	}
-	runner := standin.New(t, standin.Script{}).Runner()
-	running, err := service.Open(t.Context(), service.Options{
-		Home:     h,
-		Stages:   held,
-		NewFixer: stages.PendingFixer,
-		Build:    build,
-		Catalog:  agents.NewCatalog(fixedFactory{runner: runner}),
-	})
-	if err != nil {
-		t.Fatalf("opening the service: %v", err)
-	}
-	served := make(chan error, 1)
-	go func() { served <- running.Serve(context.Background()) }()
-	t.Cleanup(func() {
-		if err := running.Close(); err != nil {
-			t.Errorf("closing the service: %v", err)
-		}
-		if err := <-served; err != nil {
-			t.Errorf("serving: %v", err)
-		}
-	})
+	serveStages(t, h, held)
 }

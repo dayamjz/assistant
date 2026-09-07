@@ -67,12 +67,30 @@
 // killed mid-segment leaves behind.
 //
 // The two are told apart by the slot, which is the only owner of the fact and
-// holds it for the length of one segment and nowhere durable. Every answer
-// this service builds carries it as machine.Run.Advancing, and the run's next
-// action is machine.Outcome.NextActionFor of it, so a reader is told either to
-// wait or to attach rather than a sentence covering both. PRD section 9
-// requires that of the terminal interface, and says why: a stall that looks
-// alive is worse than an error.
+// holds it for the length of one segment and nowhere durable. It does not stay
+// here: report hands it to machine.Run.Decide with the run's record and where
+// its execution stands, and that one call decides the outcome, the advancing
+// fact and the next action together. Nothing in this package chooses an
+// action, and nothing here can: the field is unexported in internal/machine
+// and Decide is the only writer, so a branch added to report cannot hand back
+// an action that disagrees with the outcome beside it. PRD section 9 requires
+// that of the terminal interface, and says why: a stall that looks alive is
+// worse than an error.
+//
+// A run with no checkpoint goes through the same call and not a branch of its
+// own. It has no position, which is an absence rather than a place execution
+// stopped, so it travels as machine.ExecutionUnrecorded rather than as a
+// status standing in for one - which is how a run between its start and its
+// first checkpoint used to read as a run that failed while the same answer
+// said a segment was inside it.
+//
+// What to do about a run that is genuinely stranded there - recorded
+// unfinished, no position, nothing advancing it - is a separate question this
+// package does not answer yet. The answer says so and tells a reader to end it
+// and start again; deciding whether something should classify such a run at
+// startup is work of its own, and it inherits this vocabulary rather than
+// inventing a second one: machine.Standing is the three facts, and
+// machine.Execution is where the absence lives.
 //
 // Whether that state persists is decided by what ended the segment, and
 // carryOn is where. A context ended it means nothing about the run went wrong

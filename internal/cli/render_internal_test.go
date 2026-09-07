@@ -117,11 +117,12 @@ func TestARunInFlightIsNotReportedAsAFailure(t *testing.T) {
 	t.Parallel()
 	var out bytes.Buffer
 	answer := machine.Run{
-		Record:     store.Run{ID: "abc", Branch: "work", Status: store.RunRunning},
-		Outcome:    machine.OutcomeExecuting,
-		Advancing:  true,
-		NextAction: machine.OutcomeExecuting.NextActionFor(true),
-	}
+		Record: store.Run{ID: "abc", Branch: "work", Status: store.RunRunning},
+	}.Decide(machine.Standing{
+		Record:    store.RunRunning,
+		Execution: machine.ExecutionAt(graph.StatusRunning, graph.State{}),
+		Advancing: true,
+	})
 	if code := renderFor(&out, answer); code != machine.ExitOK {
 		t.Fatalf("a run in flight exits %s, want ok", code)
 	}
@@ -144,11 +145,12 @@ func TestAStalledRunAndARunInFlightDoNotRenderTheSame(t *testing.T) {
 	rendering := func(advancing bool) string {
 		var out bytes.Buffer
 		answer := machine.Run{
-			Record:     store.Run{ID: "abc", Branch: "work", Status: store.RunRunning},
-			Outcome:    machine.OutcomeExecuting,
-			Advancing:  advancing,
-			NextAction: machine.OutcomeExecuting.NextActionFor(advancing),
-		}
+			Record: store.Run{ID: "abc", Branch: "work", Status: store.RunRunning},
+		}.Decide(machine.Standing{
+			Record:    store.RunRunning,
+			Execution: machine.ExecutionAt(graph.StatusRunning, graph.State{}),
+			Advancing: advancing,
+		})
 		if code := renderFor(&out, answer); code != machine.ExitOK {
 			t.Fatalf("an executing run with advancing=%v exits %s, want ok", advancing, code)
 		}

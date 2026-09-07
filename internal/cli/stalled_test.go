@@ -10,15 +10,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dayamjz/assistant/internal/agents"
-	"github.com/dayamjz/assistant/internal/agents/standin"
 	"github.com/dayamjz/assistant/internal/findings"
 	"github.com/dayamjz/assistant/internal/graph"
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/principles"
-	"github.com/dayamjz/assistant/internal/service"
 	"github.com/dayamjz/assistant/internal/stages"
 	"github.com/dayamjz/assistant/internal/store"
 )
@@ -196,8 +193,8 @@ func TestARunWhoseCallerGaveUpIsCarriedOnRatherThanStranded(t *testing.T) {
 	if moving.Outcome != machine.OutcomeExecuting {
 		t.Fatalf("the run being carried on reports %s, want executing", moving.Outcome)
 	}
-	if moving.NextAction != machine.OutcomeExecuting.NextActionFor(true) {
-		t.Fatalf("the run being carried on says %q, want the action for one being advanced", moving.NextAction)
+	if moving.NextAction() != machine.OutcomeExecuting.NextActionFor(true) {
+		t.Fatalf("the run being carried on says %q, want the action for one being advanced", moving.NextAction())
 	}
 
 	// And it goes on to where it was going, which a read finds without asking
@@ -209,8 +206,8 @@ func TestARunWhoseCallerGaveUpIsCarriedOnRatherThanStranded(t *testing.T) {
 	view := runUntil(t, h, subject, func(v machine.Run) bool {
 		return v.Outcome == machine.OutcomeDecision && !v.Advancing
 	})
-	if view.NextAction != machine.OutcomeDecision.NextActionFor(false) {
-		t.Fatalf("the run says %q at its decision, want the action for one waiting on a person", view.NextAction)
+	if view.NextAction() != machine.OutcomeDecision.NextActionFor(false) {
+		t.Fatalf("the run says %q at its decision, want the action for one waiting on a person", view.NextAction())
 	}
 	if calls.Load() != 2 {
 		t.Fatalf("the stage body ran %d times, want the caller's and the continuation's", calls.Load())
@@ -279,11 +276,11 @@ func assertStalled(t *testing.T, view machine.Run, surface string) {
 	if view.Advancing {
 		t.Fatalf("%s reports that something is advancing a run whose segment has already returned", surface)
 	}
-	if view.NextAction == machine.OutcomeExecuting.NextActionFor(true) {
-		t.Fatalf("%s tells a reader to wait on a run nothing is advancing: %s", surface, view.NextAction)
+	if view.NextAction() == machine.OutcomeExecuting.NextActionFor(true) {
+		t.Fatalf("%s tells a reader to wait on a run nothing is advancing: %s", surface, view.NextAction())
 	}
-	if view.NextAction != machine.OutcomeExecuting.NextActionFor(false) {
-		t.Fatalf("%s says %q about a stalled run, want the action that carries it on", surface, view.NextAction)
+	if view.NextAction() != machine.OutcomeExecuting.NextActionFor(false) {
+		t.Fatalf("%s says %q about a stalled run, want the action that carries it on", surface, view.NextAction())
 	}
 	if view.Decision != nil {
 		t.Fatalf("%s offers a decision to answer on a run that has none: %+v", surface, view.Decision)
@@ -377,37 +374,6 @@ func heldReport() pipeline.Output {
 			{ID: "stand-in", Action: findings.ActionAsk, Description: "a decision"},
 		},
 	}}
-}
-
-// serveStages opens a service on a home with the given stages and serves it
-// for the length of the test.
-func serveStages(t *testing.T, h *home.Home, served pipeline.Stages) {
-	t.Helper()
-	build, err := store.CurrentBuild()
-	if err != nil {
-		t.Fatalf("reading this build's identity: %v", err)
-	}
-	runner := standin.New(t, standin.Script{}).Runner()
-	running, err := service.Open(t.Context(), service.Options{
-		Home:     h,
-		Stages:   served,
-		NewFixer: stages.PendingFixer,
-		Build:    build,
-		Catalog:  agents.NewCatalog(fixedFactory{runner: runner}),
-	})
-	if err != nil {
-		t.Fatalf("opening the service: %v", err)
-	}
-	serving := make(chan error, 1)
-	go func() { serving <- running.Serve(context.Background()) }()
-	t.Cleanup(func() {
-		if err := running.Close(); err != nil {
-			t.Errorf("closing the service: %v", err)
-		}
-		if err := <-serving; err != nil {
-			t.Errorf("serving: %v", err)
-		}
-	})
 }
 
 // errBodyCouldNotRun is a stage body reporting that it could not run at all,

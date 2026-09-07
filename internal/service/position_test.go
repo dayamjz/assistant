@@ -52,7 +52,7 @@ func TestAPositionThatCannotBeReadIsRefusedRatherThanReportedAsARunThatNeverRan(
 		var run machine.Run
 		err := running.client.Call(t.Context(), ipc.MethodRunGet, machine.RunRequest{Run: runID}, &run)
 		if err == nil {
-			t.Fatalf("reading a run whose position does not decode answered %s: %s", run.Outcome, run.NextAction)
+			t.Fatalf("reading a run whose position does not decode answered %s: %s", run.Outcome, run.NextAction())
 		}
 		if !strings.Contains(err.Error(), runID) {
 			t.Fatalf("the refusal does not name the run whose position could not be read: %v", err)
