@@ -150,6 +150,13 @@ Each has cost this repository more than one round of review.
   where it lives, what it is born with, its hooks, and its identity across a
   move or a copy. It composes `internal/vcs` and builds no command lines, and it
   composes `internal/store` for the ownership index without opening a database.
+  It also owns the hook protocol it defined, which is what makes a push start a
+  run: the installed hook writes this binary's absolute path, `--gate` and
+  `--home`, so the pushing environment chooses none of the three;
+  `ParseRefUpdates` reads the reference update lines the hook puts on that
+  command's standard input; and `WorkingCopyFor` answers the question a hook
+  arrives with, because a gate is filed under a hash of its working copy's path
+  and that hash cannot be inverted.
   Two things there are mechanism rather than rule, because this package wrote
   both rules down and then broke them. No exported operation takes a gate's
   path, only the working copy it is asked about: one unexported seam resolves
@@ -308,7 +315,11 @@ Each has cost this repository more than one round of review.
   checkpoint saying halted is a run nobody can answer. And containment is a
   process group this service registered through `StageStarted`, never anything
   a caller says about itself; nothing calls that yet, so the guard protects
-  nothing today, which `doc.go` states rather than implies. Read `doc.go` for
+  nothing today, which `doc.go` states rather than implies. A push is the one
+  caller that does not wait: `gate.notify` records the runs and walks each on a
+  goroutine of the service's, and a new push supersedes the branch's run in
+  flight. Both gate methods take an identifier and never a working copy, so a
+  caller cannot attach a push to another repository's runs. Read `doc.go` for
   that and for the repository configuration layer it does not read.
 - `internal/cli` is the command surface, and its verb table is PRD section 9's
   table and nothing else. A verb that section does not describe is a finding to
@@ -317,8 +328,15 @@ Each has cost this repository more than one round of review.
   Answering a hold and running the service in the foreground are flags on the
   commands that section does name. A verb that acts on a run calls the service;
   a verb whose job includes reporting that the service is down does not.
+  `assistant gate` is the one command outside that table, and it is not a
+  precedent for a second: it is the interface `internal/gate`'s installed hooks
+  require, so it is dispatched beside the table rather than added to it, and
+  its two subcommands are the `gateHooks` table in `gate.go`.
   `cmd/assistant` is the process boundary and holds no behaviour, so a test
-  drives `cli.Run` with its own streams rather than a subprocess.
+  drives `cli.Run` with its own streams rather than a subprocess. The push
+  tests reach the surface the way a push does: the test binary answers the
+  gate hook verbs from its own `TestMain`, so a real `git push` through the
+  hooks `internal/gate` wrote drives `cli.Run`.
 - `internal/stages` is where the nine stage bodies go. A stage with no body is
   `Pending`, which reads nothing and reports one `ask` finding, so P3 holds the
   stage for a person and no stage reports a pass it did not establish. The one

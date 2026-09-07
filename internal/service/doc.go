@@ -56,6 +56,36 @@
 // run still executing; responding meets the refusal, because answering a
 // decision is not a question about where a run stands.
 //
+// # A push is the one caller that does not wait
+//
+// The gate's hooks reach this service through gate.admit and gate.notify, and
+// they are the exception to the paragraph above. PRD section 8 has a push
+// return immediately, with the notification handing off and this service
+// owning everything long-running, so notify records the runs a push calls for
+// and walks each of them on a goroutine of this service's. It answers with
+// what it started; where a run then gets to is read from the run.
+//
+// Both are answers about a gate rather than about a working copy, and neither
+// takes a working copy from the caller. internal/gate resolves the identifier
+// a hook carries to the working copy the gate belongs to, and this service
+// pairs that with the repository record a run is created against - the same
+// pairing assistant init writes. A caller therefore names a gate and nothing
+// else, so nothing it writes can attach a push to another repository's runs.
+//
+// Admission establishes that the push has somewhere to go and does not judge
+// the change. That the gate resolves, that a repository record stands behind
+// it, and that the reference updates can be read are what it answers; whether
+// the branch should be shared is what the nine stages are for. A push admitted
+// without the first three is a push the gate takes and starts nothing for,
+// which is the failure a sealed gate exists to prevent arriving through the
+// front door.
+//
+// gate.admit is restricted, so containment is what refuses an agent inside an
+// active validation stage that pushes at the gate - before any reference in
+// the gate changes, which is PRD section 9's "push around a pipeline" landing
+// on the surface a push actually arrives on. Everything the next section says
+// about what containment covers today applies to it.
+//
 // # Containment is asked of the kernel, and answered from what this service
 // started
 //

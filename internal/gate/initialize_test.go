@@ -119,8 +119,8 @@ func TestAdmissionReceivesTheReferenceUpdatesAndThenNotificationRuns(t *testing.
 		t.Fatalf("invocations = %v, want a command and an input line for each of admission and notification", lines)
 	}
 	wantOrder := []string{
-		"command gate admit --gate " + g.ID(),
-		"command gate notify --gate " + g.ID(),
+		hookInvocation(g, "admit"),
+		hookInvocation(g, "notify"),
 	}
 	if lines[0] != wantOrder[0] {
 		t.Fatalf("first invocation = %q, want %q", lines[0], wantOrder[0])

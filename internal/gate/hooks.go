@@ -55,8 +55,9 @@ type managed struct {
 // The subcommands are the interface this package requires of the agent-facing
 // command surface, which PRD section 8 calls the machine module. That command
 // must accept "gate admit" and "gate notify", each taking --gate with a gate
-// identifier and reading git's reference update lines from standard input.
-// Admission's exit status decides whether the push is accepted.
+// identifier and --home with the home root that gate is filed in, and reading
+// git's reference update lines from standard input. Admission's exit status
+// decides whether the push is accepted.
 var managedHooks = []managed{
 	{name: AdmissionHook, subcommand: "admit"},
 	{name: NotificationHook, subcommand: "notify"},
@@ -76,7 +77,7 @@ func hooksDir(repo string) string {
 // It refuses with ErrCustomHookConflict before writing anything when a foreign
 // hook would have to be moved onto an existing file, so a repository is not
 // left with one hook installed and the other refused.
-func installHooks(repo, id, command string) error {
+func installHooks(repo, home, id, command string) error {
 	dir := hooksDir(repo)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("gate: creating %s: %w", dir, err)
@@ -90,7 +91,7 @@ func installHooks(repo, id, command string) error {
 		if err := preserveCustomHook(dir, hook.name); err != nil {
 			return err
 		}
-		script := hookScript(hook, id, command)
+		script := hookScript(hook, home, id, command)
 		if err := replaceFile(filepath.Join(dir, hook.name), []byte(script), hookMode); err != nil {
 			return err
 		}
@@ -261,12 +262,21 @@ func namesAdded(before, after []string) []string {
 
 // hookScript renders the hook installed at name.
 //
-// Three things about the script are load-bearing rather than stylistic. The
+// Four things about the script are load-bearing rather than stylistic. The
 // command is an absolute path written into the file, so the environment a push
-// happens in cannot choose what admission runs. Standard input is captured to
-// a file and given in full to both the command and any preserved hook. And
-// the preserved hook's exit status becomes the script's, so a custom
-// pre-receive can still reject a push after admission has accepted it.
+// happens in cannot choose what admission runs. The home is written in beside
+// the identifier, for the same reason and with the same reach: an identifier
+// names a gate only within a home, so a home left to the environment would let
+// the process doing the pushing choose which home admission acts on, and this
+// is the home the gate is actually filed in. Standard input is captured to a
+// file and given in full to both the command and any preserved hook. And the
+// preserved hook's exit status becomes the script's, so a custom pre-receive
+// can still reject a push after admission has accepted it.
+//
+// Writing the home closes what the environment could choose and not what a
+// person can. Both values are written into a file the gate's owner can edit,
+// and this package replaces the file on every initialization and repair rather
+// than watching it in between.
 //
 // The command is written with forward slashes, whatever the host's own
 // separator is. A shell searches PATH for a command word that contains no
@@ -293,7 +303,7 @@ func namesAdded(before, after []string) []string {
 // .local, so without a bound that arrangement is a push that never returns.
 // The environment variable set around the chained call is what a second
 // managed hook sees and declines to chain on.
-func hookScript(hook managed, id, command string) string {
+func hookScript(hook managed, home, id, command string) string {
 	name := hook.name
 	var b strings.Builder
 	fmt.Fprintf(&b, "#!/bin/sh\n")
@@ -312,8 +322,8 @@ func hookScript(hook managed, id, command string) string {
 	fmt.Fprintf(&b, "trap 'rm -f \"$refs\"' EXIT HUP INT TERM\n")
 	fmt.Fprintf(&b, "cat >\"$refs\" || exit 1\n")
 	fmt.Fprintf(&b, "\n")
-	fmt.Fprintf(&b, "%s gate %s --gate %s <\"$refs\" || exit $?\n",
-		shellQuote(filepath.ToSlash(command)), hook.subcommand, shellQuote(id))
+	fmt.Fprintf(&b, "%s gate %s --gate %s --home %s <\"$refs\" || exit $?\n",
+		shellQuote(filepath.ToSlash(command)), hook.subcommand, shellQuote(id), shellQuote(home))
 	fmt.Fprintf(&b, "\n")
 	fmt.Fprintf(&b, "custom=$hook_dir/%s%s\n", name, CustomHookSuffix)
 	fmt.Fprintf(&b, "if [ -x \"$custom\" ] && [ \"${%s:-}\" != %s ]; then\n", chainedVar, shellQuote(name))

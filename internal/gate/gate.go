@@ -187,7 +187,7 @@ func (h *held) initialize(ctx context.Context, command string) (*Gate, error) {
 	if err := ensureRepository(ctx, h.repository); err != nil {
 		return nil, err
 	}
-	if err := installHooks(h.repository, h.id, command); err != nil {
+	if err := installHooks(h.repository, h.home, h.id, command); err != nil {
 		return nil, err
 	}
 	// The gate's own record and the home's binding are both written before the
@@ -305,14 +305,10 @@ func recordlessRefusal(repo, workingPath string) error {
 // The hook command is validated separately by validateCommand, because an
 // initialization has a gate to seal before it may refuse over the command.
 func validatePaths(spec Spec) (home, workingPath string, err error) {
-	if spec.Home == "" {
-		return "", "", fmt.Errorf("%w: home is empty", ErrInvalidSpec)
+	home, err = validateHome(spec.Home)
+	if err != nil {
+		return "", "", err
 	}
-	if !filepath.IsAbs(spec.Home) {
-		return "", "", fmt.Errorf("%w: home %q is not absolute", ErrInvalidSpec, spec.Home)
-	}
-	home = resolveExisting(spec.Home)
-
 	if !filepath.IsAbs(spec.WorkingPath) {
 		return "", "", fmt.Errorf("%w: working path %q is not absolute", ErrInvalidSpec, spec.WorkingPath)
 	}

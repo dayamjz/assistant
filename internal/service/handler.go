@@ -48,6 +48,10 @@ func (s *Service) handle(ctx context.Context, req ipc.Request) (json.RawMessage,
 		return call(ctx, req, s.respond)
 	case ipc.MethodRunCancel:
 		return call(ctx, req, s.cancel)
+	case ipc.MethodGateAdmit:
+		return call(ctx, req, s.admit)
+	case ipc.MethodGateNotify:
+		return call(ctx, req, s.notify)
 	case ipc.MethodStageReport:
 		return call(ctx, req, s.stageReport)
 	case ipc.MethodTasksList:

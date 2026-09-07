@@ -29,6 +29,15 @@ const (
 	MethodRunRespond Method = "run.respond"
 	// MethodRunCancel ends a run.
 	MethodRunCancel Method = "run.cancel"
+	// MethodGateAdmit decides whether a push to a gate may proceed. It is
+	// called from the gate's admission hook, before any reference in the gate
+	// changes, and a refusal is what rejects the push.
+	MethodGateAdmit Method = "gate.admit"
+	// MethodGateNotify reports a push a gate accepted and starts the runs it
+	// calls for. It answers as soon as the runs are recorded rather than when
+	// they finish, because PRD section 8 has the notification hand off and
+	// exit while the service owns everything long-running.
+	MethodGateNotify Method = "gate.notify"
 	// MethodStageReport returns a stage's result from the agent running it.
 	// It is open to a contained caller, because returning its own stage is
 	// exactly what such a caller is there to do.
@@ -102,6 +111,8 @@ var specs = []Spec{
 	{MethodRunRerun, KindRequest, AccessRestricted, "Start a fresh run from the last known head."},
 	{MethodRunRespond, KindRequest, AccessRestricted, "Answer a decision a run is holding on."},
 	{MethodRunCancel, KindRequest, AccessRestricted, "End a run."},
+	{MethodGateAdmit, KindRequest, AccessRestricted, "Decide whether a push to a gate may proceed."},
+	{MethodGateNotify, KindRequest, AccessRestricted, "Start the runs a push a gate accepted calls for."},
 	{MethodStageReport, KindRequest, AccessOpen, "Return a stage result from the agent running it."},
 	{MethodTasksList, KindRequest, AccessOpen, "List fleet work with its resolved current state."},
 	{MethodTaskGet, KindRequest, AccessOpen, "Read one task and the revision it is current as of."},

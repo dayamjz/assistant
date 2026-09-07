@@ -3,6 +3,7 @@ package cli_test
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,10 +24,51 @@ import (
 
 // TestMain lets this binary act as the stand-in agent, which the service a
 // test opens resolves instead of whatever agent is installed on the machine
-// running the tests.
+// running the tests, and as the command a gate's hooks invoke.
 func TestMain(m *testing.M) {
 	standin.Main()
+	hookMain()
 	os.Exit(m.Run())
+}
+
+// hookMain lets this binary act as the command a gate's hooks invoke.
+//
+// internal/gate writes the absolute path of the binary that initialized the
+// gate into its hooks, and in a test that binary is this one. A push therefore
+// reaches this process, and this hands the arguments and the streams straight
+// to cli.Run, which is the product: cmd/assistant is the process boundary and
+// holds no behaviour, so what a push exercises here is the same command
+// surface every other test in this file drives, reached the way a push
+// reaches it.
+//
+// It is the arrangement internal/agents/standin already uses for the same
+// reason, and it recognizes the invocation the same way: by what the command
+// line says. A test binary is never run with "gate" as its first argument by
+// the testing package.
+func hookMain() {
+	if len(os.Args) < 2 || os.Args[1] != "gate" {
+		return
+	}
+	workingDir, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "the gate hook stand-in cannot resolve the working directory:", err)
+		os.Exit(1)
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "the gate hook stand-in cannot resolve its own path:", err)
+		os.Exit(1)
+	}
+	os.Exit(int(cli.Run(context.Background(), cli.Environment{
+		Args:       os.Args[1:],
+		Stdout:     os.Stdout,
+		Stderr:     os.Stderr,
+		Stdin:      os.Stdin,
+		Getenv:     os.Getenv,
+		WorkingDir: workingDir,
+		Executable: executable,
+		Version:    "assistant (test)",
+	})))
 }
 
 // platformIdentifiesPeers reports whether internal/ipc has a read for local

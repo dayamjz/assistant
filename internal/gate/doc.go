@@ -29,10 +29,18 @@
 // what a correct gate looks like.
 //
 // Nothing here decides what admission means. The hooks invoke a command whose
-// path a caller supplies, and hooks.go states the two subcommands and the one
-// option that command has to accept. That contract is this package's
+// path a caller supplies, and hooks.go states the two subcommands and the two
+// options that command has to accept. That contract is this package's
 // requirement of the agent-facing command surface, not an implementation of
 // it.
+//
+// What this package does answer for that command is the question a hook
+// arrives with and cannot answer for itself. A gate is filed under a hash of
+// its working copy's path, so a hook holding an identifier cannot invert it,
+// and everything a push has to be validated against hangs off the working
+// copy. WorkingCopyFor is that lookup, and ParseRefUpdates is the reading of
+// the reference update lines the hooks put on that command's standard input;
+// both are here because this package defined the protocol they belong to.
 //
 // # Your origin is never touched
 //
@@ -66,6 +74,15 @@
 // forward slashes for the same reason: a shell searches PATH for a command
 // word holding no slash, so on a host whose separator is a backslash the
 // native spelling would arrive as a bare word and be looked up after all.
+//
+// The home is written into the hook beside the gate's identifier, and that is
+// the same measure rather than a convenience. An identifier names a gate only
+// within a home, so a hook that left the home to be resolved from the
+// environment would let the pushing side choose which home admission acts on,
+// which is most of what writing the command's path takes away from it. What
+// it does not close is a person editing the hook: both values sit in a file
+// the gate's owner can write, and this package replaces that file on every
+// initialization and repair rather than watching it in between.
 //
 // No hook may enter a gate except from this package. Removing GIT_TEMPLATE_DIR
 // from the environment, which internal/vcs does on every invocation, closes

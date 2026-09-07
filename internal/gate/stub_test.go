@@ -37,6 +37,14 @@ const (
 	// stubLogName is the file, beside the stand-in, that it appends what it
 	// was invoked with to.
 	stubLogName = "invocations.log"
+	// stubInputName is the file, beside the stand-in, holding the standard
+	// input of the most recent invocation, written whole rather than rendered
+	// onto one line. It is what a test reads to parse exactly the bytes git
+	// put in front of the hook, instead of a value the test stated for itself.
+	// It is truncated rather than appended to, which loses nothing a test
+	// wants: the two hooks of one push are handed identical input and run one
+	// after the other.
+	stubInputName = "standard-input"
 	// stubStatusName is the file, beside the stand-in, holding the exit
 	// status it reports. Configuration travels beside the executable rather
 	// than in the environment so that two stand-ins running under one test,
@@ -66,11 +74,14 @@ func TestMain(m *testing.M) {
 
 // stubMain is the stand-in command a gate's hooks invoke. It appends one line
 // naming its arguments and one naming the standard input git handed the hook,
-// and exits with the status recorded beside it.
+// writes that input whole beside the log, and exits with the status recorded
+// beside it.
 //
-// Both lines are written with a single append so that a hook chaining to
+// Both log lines are written with a single append so that a hook chaining to
 // another, and a custom hook writing to the same log, cannot interleave with
-// half of a record.
+// half of a record. The whole input is a separate file because the log line
+// renders it onto one line, and a test that parses what git wrote has to read
+// the bytes rather than a rendering of them.
 func stubMain() int {
 	dir, err := stubDir()
 	if err != nil {
@@ -82,6 +93,10 @@ func stubMain() int {
 	}
 	record := "command " + strings.Join(os.Args[1:], " ") + "\n" +
 		"input " + strings.ReplaceAll(string(input), "\n", ";") + "\n"
+
+	if err := os.WriteFile(filepath.Join(dir, stubInputName), input, 0o600); err != nil {
+		return 3
+	}
 
 	f, err := os.OpenFile(filepath.Join(dir, stubLogName), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {

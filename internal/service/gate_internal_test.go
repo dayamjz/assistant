@@ -8,8 +8,8 @@ import (
 	"time"
 )
 
-// Both paths that create a run for a branch ask for that branch's gate before
-// they read or write anything, which is what makes the decision that a branch
+// Every path that creates a run for a branch asks for that branch's gate before
+// it reads or writes anything, which is what makes the decision that a branch
 // has no run a single decision rather than one per verb.
 //
 // It is asserted by holding the gate and giving each path a context that runs
@@ -32,6 +32,12 @@ func TestEveryPathThatCreatesARunAsksForTheBranchGateFirst(t *testing.T) {
 		}},
 		{"rerun", func(ctx context.Context, s *Service) error {
 			_, err := s.claimRerun(ctx, key)
+			return err
+		}},
+		{"push", func(ctx context.Context, s *Service) error {
+			// The driver a push's claim is handed is nil here, and that is the
+			// point: a path that did not wait for the gate would reach it.
+			_, _, err := s.claimPush(ctx, nil, key.repository, key.branch, "head", "base")
 			return err
 		}},
 	} {

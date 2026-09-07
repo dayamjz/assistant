@@ -25,6 +25,11 @@ type Environment struct {
 	Stdout io.Writer
 	// Stderr is where progress and human-facing failures go.
 	Stderr io.Writer
+	// Stdin is what a command reads input from. Only the gate hook verbs read
+	// it, because git puts a push's reference update lines there; a nil reader
+	// is no input rather than a failure, so every other verb is unaffected by
+	// what the process was given.
+	Stdin io.Reader
 	// Getenv reads the environment, which is where the home root comes from.
 	Getenv func(string) string
 	// WorkingDir is the directory the command was run in, which is what
@@ -137,6 +142,13 @@ func dispatch(ctx context.Context, in *invocation) (any, error) {
 			continue
 		}
 		return v.run(ctx, in)
+	}
+	// And then the one command internal/gate requires that PRD section 9 does
+	// not name. It is dispatched here rather than from the table above so that
+	// the specification's surface cannot grow a row through this door; see
+	// gateVerbName.
+	if name == gateVerbName {
+		return gateVerb(ctx, in)
 	}
 	return nil, usagef("%q is not a command. %s", name, usageText())
 }
@@ -430,7 +442,8 @@ func usageText() string {
 	b.WriteString("              and before --version or --help rather than after one of them.\n")
 	b.WriteString("  --home PATH The home root to act on, on the same terms as --json.\n")
 	b.WriteString("  --version   Report the build.\n")
-	b.WriteString("  --help      Print this.")
+	b.WriteString("  --help      Print this.\n")
+	b.WriteString(gateUsage())
 	return b.String()
 }
 

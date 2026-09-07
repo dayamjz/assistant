@@ -43,6 +43,10 @@ func readOut(w io.Writer, answer any) {
 		readOutLifecycle(w, v)
 	case machine.Init:
 		readOutInit(w, v)
+	case machine.Admission:
+		readOutAdmission(w, v)
+	case machine.Notification:
+		readOutNotification(w, v)
 	case machine.Eject:
 		writef(w, "Removed the gate %s and %d run record(s).\n", v.Repository, v.Runs)
 	case machine.Plan:
