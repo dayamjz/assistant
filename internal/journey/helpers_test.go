@@ -390,6 +390,30 @@ func firstDocument(stdout string, v any) error {
 	return nil
 }
 
+// runsRecorded is how many runs this home has recorded, across every
+// repository it knows.
+//
+// It reads the store rather than the surface because the surface's answer
+// comes from a service, and a check that only needs to know whether a run
+// exists should not have to start one to find out.
+func runsRecorded(t *testing.T, j *journey.Journey) int {
+	t.Helper()
+	opened := records(t, j)
+	repositories, err := opened.Repositories(t.Context())
+	if err != nil {
+		t.Fatalf("reading the repositories this home holds: %v", err)
+	}
+	total := 0
+	for _, repository := range repositories {
+		runs, err := opened.RunsForRepository(t.Context(), repository.ID)
+		if err != nil {
+			t.Fatalf("reading the runs of %s: %v", repository.ID, err)
+		}
+		total += len(runs)
+	}
+	return total
+}
+
 // records opens the home's database through the path internal/home owns.
 //
 // A test composing that path itself would open a fresh empty database the day
