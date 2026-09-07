@@ -88,7 +88,9 @@ func Coverage() []Established {
 				"because no stage body pushes."},
 		{principles.P7, ReachBinary,
 			"The git template that would choose what a gate is born with is refused by the binary, and " +
-				"the environment channel is shown closed. Over a branch carrying an agent harness " +
+				"the environment channel is shown closed; what those subtests establish is the refusal " +
+				"itself, because a template's hooks are receive-side and the only push that could run " +
+				"one is declined by the gate's own pre-receive. Over a branch carrying an agent harness " +
 				"installation, what a whole run establishes is that the keys the branch may not set are " +
 				"dropped and reported while the one it may set survives, and that a suppression the " +
 				"adapter does not implement is refused before anything launches. That nothing the " +

@@ -115,8 +115,14 @@ func GitWith(scenario fixture.Scenario, env map[string]string, dir string, args 
 	return text, nil
 }
 
-// Fired is the tripwire identifiers a scenario recorded, which is how "nothing
-// planted was executed" is checked as a fact rather than assumed.
+// Fired is the tripwire identifiers a scenario recorded.
+//
+// It reports what is in the file and nothing more. Whether an empty answer is
+// evidence of anything is the caller's question, not this one's: it means
+// "nothing planted was executed" only where the caller's subject gave a
+// planted executable a path to run, and this package has families where none
+// does. internal/journey's README says which, and a caller resting an absence
+// clause on this owes that path.
 //
 // It reports the empty list for a scenario nothing fired in, so a caller
 // comparing against what a condition says must stay quiet writes one
