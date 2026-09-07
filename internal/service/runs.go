@@ -391,23 +391,79 @@ func (s *Service) advance(ctx context.Context, runID string, step func(context.C
 		cancel()
 		return machine.Run{}, err
 	}
+	// Registered before the release below and so run after it: carrying the
+	// run on takes the same slot, and a slot this call had not given back yet
+	// would refuse it.
+	var stranded error
+	defer func() { s.carryOn(runID, stranded) }()
 	defer s.release(runID)
 	// The caller's context ends the segment as well as the service's, so a
-	// client that gave up does not leave a run walking nodes nobody is waiting
-	// for. It is derived rather than used directly so that a cancel through
-	// the protocol ends it too.
+	// node in flight stops rather than running on for a client that is gone.
+	// It bounds the segment and not the run: a run is durable and outlives the
+	// process that asked for it, and what happens to one whose caller left is
+	// carryOn's. It is derived rather than used directly so that a cancel
+	// through the protocol ends it too.
 	stop := context.AfterFunc(ctx, cancel)
 	defer stop()
 
 	result, err := step(segment)
 	if err != nil {
 		s.log.Printf("run %s stopped: %v", runID, err)
+		stranded = err
 		return machine.Run{}, err
 	}
 	if err := s.settle(ctx, runID, result); err != nil {
 		return machine.Run{}, err
 	}
 	return s.report(ctx, runID, &result)
+}
+
+// carryOn continues a run whose segment ended leaving nobody to answer for it.
+//
+// A segment that returns an error settles nothing, so the run is left recorded
+// running at the position its checkpoint holds - which is a run something can
+// resume, and a run nothing is resuming. Leaving one of those is the stall
+// that looks alive, and PRD section 9 makes that worse than an error. This is
+// the half of the answer that stops the state existing; report consults the
+// slot for the windows that remain, because a service killed mid-segment
+// leaves the same shape from a process that runs no more code.
+//
+// What it continues is decided by what ended the segment, and the two answers
+// are different because the runs are. A context ended it means nothing about
+// the run went wrong and the caller who would have been told is gone, so the
+// service picks it up. A step that failed is a failure the caller was told
+// about, in the error this call is returning, and repeating it is a loop
+// rather than progress: that run stands where it is, and the answer a read
+// gives it says what carries it on.
+//
+// The service stopping is a context ending too, and it is the one that carries
+// nothing: recovery reconciles and continues every unfinished run on the next
+// open, which is where a run interrupted by a shutdown is picked up. Starting
+// work here would be starting work the service is in the middle of giving up.
+//
+// A continuation cannot cause another. It runs under the service's own context
+// through continueRun, so the only context that can end it is the stop this
+// refuses to continue on, and its slot is taken and given back exactly like
+// any other segment's. That is a bound on the shape of the thing rather than a
+// counter somebody has to keep.
+func (s *Service) carryOn(runID string, stranded error) {
+	switch {
+	case stranded == nil:
+		// The segment settled the record, or never started because the slot
+		// was held. Neither leaves a run for anything to pick up.
+		return
+	case !errors.Is(stranded, context.Canceled) && !errors.Is(stranded, context.DeadlineExceeded):
+		return
+	case s.stopCtx.Err() != nil:
+		s.log.Printf("run %s was interrupted by this service stopping; recovery will classify it", runID)
+		return
+	}
+	// A run ended through the protocol reaches this too, because ending one
+	// cancels its segment. Nothing special is done about it: the record is
+	// already terminated, and attaching to a terminated run reports it rather
+	// than advancing it.
+	s.log.Printf("run %s lost the caller waiting on it; carrying it on", runID)
+	s.continueRun(runID)
 }
 
 // settle moves the run's record to match where its execution stopped.
@@ -513,17 +569,22 @@ func (s *Service) recover(ctx context.Context) {
 	}
 }
 
-// continueRun resumes an interrupted run in the background, so recovery does
-// not hold up serving.
+// continueRun resumes an interrupted run in the background, so neither
+// recovery nor a caller that walked away holds up serving.
+//
+// It runs under the service's own context rather than any caller's, which is
+// what makes it a continuation rather than a second attempt at somebody's
+// request: there is nobody to answer, and the only thing that ends it is the
+// service giving up the home.
 func (s *Service) continueRun(runID string) {
 	s.work.Add(1)
 	go func() {
 		defer s.work.Done()
 		ctx, cancel := context.WithCancel(s.stopCtx)
 		defer cancel()
-		s.log.Printf("recovery is resuming run %s", runID)
+		s.log.Printf("resuming run %s", runID)
 		if _, err := s.attach(ctx, runID); err != nil {
-			s.log.Printf("recovery could not resume run %s: %v", runID, err)
+			s.log.Printf("could not resume run %s: %v", runID, err)
 		}
 	}()
 }
@@ -544,6 +605,26 @@ func (s *Service) release(runID string) {
 	s.mu.Lock()
 	delete(s.advancing, runID)
 	s.mu.Unlock()
+}
+
+// isAdvancing reports whether the slot this run advances in is held here.
+//
+// It is the one owner of that fact, and it is the reason report asks it rather
+// than deriving it. A run's record says whether the run is unfinished and its
+// checkpoint says where its execution stopped; neither says whether anything
+// is moving it, and both read the same for a run being walked this instant and
+// a run whose segment stopped without settling. The slot is taken before a
+// segment starts and given back when it returns however it returns, so this
+// tracks a segment rather than an intention to run one.
+//
+// It holds nothing durable, which is not an omission: a service that died
+// mid-segment is not advancing anything, and a record of the claim it left
+// behind would say it was. That is what recover reconciles and continues.
+func (s *Service) isAdvancing(runID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, taken := s.advancing[runID]
+	return taken
 }
 
 // branchKey is the branch of one repository, which is what a run is started
@@ -715,7 +796,12 @@ func (s *Service) report(ctx context.Context, runID string, result *graph.Result
 	if err != nil {
 		return machine.Run{}, err
 	}
-	answer := machine.Run{Record: record}
+	// A caller that advanced the run is answering for a segment that has
+	// already stopped, and it still holds that run's slot until it returns, so
+	// no other caller can be advancing it either. A read is the only answer
+	// that can find a segment in flight, and it is the only one that can find
+	// the run standing still with nothing moving it.
+	answer := machine.Run{Record: record, Advancing: result == nil && s.isAdvancing(runID)}
 	if result == nil {
 		latest, err := s.checkpoints.Latest(ctx, runID)
 		if err != nil {
@@ -750,7 +836,12 @@ func (s *Service) report(ctx context.Context, runID string, result *graph.Result
 	answer.Steps = result.Steps
 	answer.Budget = result.Budget
 	answer.Outcome = machine.OutcomeOf(record.Status, result.Status, result.State)
-	answer.NextAction = answer.Outcome.NextAction()
+	// PRD section 9 makes a stall that looks alive worse than an error, and an
+	// executing run is the one answer that describes both a run in flight and
+	// a run nothing is carrying on. The action is the half that applies rather
+	// than a sentence covering both, so a reader is told either to wait or to
+	// attach, and never to wait on a run nothing is advancing.
+	answer.NextAction = answer.Outcome.NextActionFor(answer.Advancing)
 	answer.Stages = stageViews(result.State)
 	// The record decides before the checkpoint does, which is machine.OutcomeOf's
 	// rule applied to the decision as well as to the outcome: a run ended from

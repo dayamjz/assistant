@@ -56,10 +56,53 @@
 // run still executing; responding meets the refusal, because answering a
 // decision is not a question about where a run stands.
 //
+// # Whether anything is advancing a run is this service's fact, and is reported
+//
+// A segment can stop without settling the record: the step failed, or the
+// caller waiting on it gave up, which ends the segment on purpose so that a
+// client that walked away does not leave a run walking nodes nobody is waiting
+// for. What that leaves is a record saying running against a checkpoint saying
+// running, at a position something can resume from - which is also exactly
+// what a run being walked this instant looks like, and exactly what a service
+// killed mid-segment leaves behind.
+//
+// The two are told apart by the slot, which is the only owner of the fact and
+// holds it for the length of one segment and nowhere durable. Every answer
+// this service builds carries it as machine.Run.Advancing, and the run's next
+// action is machine.Outcome.NextActionFor of it, so a reader is told either to
+// wait or to attach rather than a sentence covering both. PRD section 9
+// requires that of the terminal interface, and says why: a stall that looks
+// alive is worse than an error.
+//
+// Whether that state persists is decided by what ended the segment, and
+// carryOn is where. A context ended it means nothing about the run went wrong
+// and the caller who would have been told is gone, so this service picks the
+// run up itself - the same thing recovery does for a run a restart
+// interrupted, done where the run would otherwise be stranded. A step that
+// failed is a failure the caller was told about, in the error the call
+// returned, and repeating it would be a loop rather than progress: that run
+// stands where it is and the read above says what carries it on. The service
+// stopping is the context ending that carries nothing, because recovery
+// continues every unfinished run on the next open and starting work here would
+// be starting work the service is giving up.
+//
+// No status is written over such a run, and that is deliberate rather than
+// unfinished. Its record is not wrong - the run is unfinished - and the two
+// statuses that would end it are answers to different questions:
+// internal/runs' Fail is a verdict on the change rather than a failure of the
+// service, and Terminate is what a cancellation or a supersession leaves. A
+// run standing at a resumable position is neither, and ending it would discard
+// work its checkpoint history still holds, which P6 forbids.
+//
+// A continuation cannot cause another, and that is structural. It runs under
+// this service's own context, so the only context that can end it is the stop
+// carryOn refuses to continue on. What is left is one continuation per caller
+// that walked away.
+//
 // # A push is the one caller that does not wait
 //
 // The gate's hooks reach this service through gate.admit and gate.notify, and
-// they are the exception to the paragraph above. PRD section 8 has a push
+// they are the exception to the blocking calls above. PRD section 8 has a push
 // return immediately, with the notification handing off and this service
 // owning everything long-running, so notify records the runs a push calls for
 // and walks each of them on a goroutine of this service's. It answers with

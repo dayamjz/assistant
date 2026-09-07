@@ -306,7 +306,16 @@ type serviceUnderTest struct {
 // test, so the claim is checked where it is being relied on.
 func withService(t *testing.T, h *home.Home, body func(serviceUnderTest)) {
 	t.Helper()
-	running, err := service.Open(t.Context(), options(t, h))
+	withServiceOptions(t, options(t, h), body)
+}
+
+// withServiceOptions is withService for a test that needs a service built
+// differently. The options are the caller's, so what withService's comment
+// says about the home's lock holds where those options keep it: build them
+// from options rather than from scratch.
+func withServiceOptions(t *testing.T, o service.Options, body func(serviceUnderTest)) {
+	t.Helper()
+	running, err := service.Open(t.Context(), o)
 	if err != nil {
 		requiresLocalSocket(t, err)
 		t.Fatalf("opening the service: %v", err)

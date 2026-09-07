@@ -210,3 +210,45 @@ func cancelledState(t *testing.T) graph.State {
 	}
 	return answered.State
 }
+
+// Executing is the one outcome that describes both a run in flight and a run
+// nothing is carrying on, and the two take opposite actions: pause, or attach.
+// Every other outcome describes a run whose position nothing is moving either
+// way, so knowing that nothing is moving it adds nothing to what to do about
+// it.
+//
+// It reads the closed set rather than naming the members, so an outcome added
+// later is held to the same rule instead of arriving outside it.
+func TestOnlyAnExecutingRunHasTwoNextActions(t *testing.T) {
+	t.Parallel()
+	for _, outcome := range machine.Outcomes() {
+		moving, still := outcome.NextActionFor(true), outcome.NextActionFor(false)
+		if strings.TrimSpace(moving) == "" || strings.TrimSpace(still) == "" {
+			t.Fatalf("%s carries no next action for one of the two: %q and %q", outcome, moving, still)
+		}
+		differs := moving != still
+		if differs != (outcome == machine.OutcomeExecuting) {
+			t.Fatalf("%s answers %v to whether the two differ, want %v",
+				outcome, differs, outcome == machine.OutcomeExecuting)
+		}
+		if !differs && moving != outcome.NextAction() {
+			t.Fatalf("%s answers %q here and %q from its own row", outcome, moving, outcome.NextAction())
+		}
+	}
+}
+
+// A run nothing is advancing is told to attach, and a run something is
+// advancing is not. Getting these the wrong way round is the failure the
+// distinction exists to prevent: it would have a reader wait on a run nothing
+// is carrying on.
+func TestTheActionForAStalledRunIsTheOneThatCarriesItOn(t *testing.T) {
+	t.Parallel()
+	stalled := machine.OutcomeExecuting.NextActionFor(false)
+	moving := machine.OutcomeExecuting.NextActionFor(true)
+	if !strings.Contains(strings.ToLower(stalled), "attach") {
+		t.Fatalf("a stalled run is not told to attach: %q", stalled)
+	}
+	if strings.Contains(strings.ToLower(moving), "attach to carry it on") {
+		t.Fatalf("a run already being advanced is told to attach to carry it on: %q", moving)
+	}
+}

@@ -119,13 +119,49 @@ func TestARunInFlightIsNotReportedAsAFailure(t *testing.T) {
 	answer := machine.Run{
 		Record:     store.Run{ID: "abc", Branch: "work", Status: store.RunRunning},
 		Outcome:    machine.OutcomeExecuting,
-		NextAction: machine.OutcomeExecuting.NextAction(),
+		Advancing:  true,
+		NextAction: machine.OutcomeExecuting.NextActionFor(true),
 	}
 	if code := renderFor(&out, answer); code != machine.ExitOK {
 		t.Fatalf("a run in flight exits %s, want ok", code)
 	}
 	if !strings.Contains(out.String(), string(machine.OutcomeExecuting)) {
 		t.Fatalf("the rendering does not say the run is executing:\n%s", out.String())
+	}
+}
+
+// Executing is the one outcome that describes a run in flight and a run
+// nothing is carrying on, and PRD section 9 requires this surface to keep them
+// visually distinct. This holds the renderer to that on the two answers that
+// differ only in the fact, so a rendering that stopped reading it would print
+// one line for both and fail here.
+//
+// Both are still a success. A stalled run has not failed; it stands at a
+// position something can resume, and a surface that exited failure would have
+// a driving agent stop driving a run that is fine.
+func TestAStalledRunAndARunInFlightDoNotRenderTheSame(t *testing.T) {
+	t.Parallel()
+	rendering := func(advancing bool) string {
+		var out bytes.Buffer
+		answer := machine.Run{
+			Record:     store.Run{ID: "abc", Branch: "work", Status: store.RunRunning},
+			Outcome:    machine.OutcomeExecuting,
+			Advancing:  advancing,
+			NextAction: machine.OutcomeExecuting.NextActionFor(advancing),
+		}
+		if code := renderFor(&out, answer); code != machine.ExitOK {
+			t.Fatalf("an executing run with advancing=%v exits %s, want ok", advancing, code)
+		}
+		return out.String()
+	}
+	moving, stalled := rendering(true), rendering(false)
+	if moving == stalled {
+		t.Fatalf("a run in flight and a run nothing is advancing render identically:\n%s", moving)
+	}
+	for _, line := range strings.Split(moving, "\n") {
+		if strings.HasPrefix(line, "Outcome") && strings.Contains(stalled, line) {
+			t.Fatalf("both renderings carry the same outcome line %q, so the two are told apart only elsewhere", line)
+		}
 	}
 }
 

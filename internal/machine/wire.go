@@ -168,6 +168,29 @@ type Run struct {
 	// is absent for a run that has not been executed yet, which is a different
 	// state from a run that has and is standing still.
 	Progress *graph.Status `json:"progress,omitempty"`
+	// Advancing is whether a segment of this run was executing when this
+	// answer was made.
+	//
+	// It is a fact about now, and the two records this answer is otherwise
+	// built from do not hold it: the run's status says the run is unfinished
+	// and its checkpoint says where its execution stopped, and both say the
+	// same thing about a run being walked this instant and a run whose segment
+	// stopped without settling and that nothing has picked up. Its owner is
+	// the service, for the length of one segment and nowhere durable, which is
+	// why a service that died mid-segment leaves a run this reports false for
+	// until something carries it on.
+	//
+	// It is the answering service's own answer about itself. A home has one
+	// service holding it, on the terms internal/home's lock states and with
+	// the gaps that package's documentation names, so false means nothing here
+	// is advancing the run rather than that nothing anywhere is.
+	//
+	// False on a run that has ended, or one waiting on an answer, says nothing
+	// a reader did not already have from the outcome. Where it is load-bearing
+	// is OutcomeExecuting, which covers both a run in flight and a run
+	// standing still, and NextActionFor is that outcome's action split at this
+	// fact.
+	Advancing bool `json:"advancing"`
 	// Position is the node that has not run, empty exactly when the run
 	// completed.
 	Position string `json:"position,omitempty"`

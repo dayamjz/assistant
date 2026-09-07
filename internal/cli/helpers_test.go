@@ -107,12 +107,19 @@ func run(t *testing.T, h *home.Home, workingDir string, args ...string) invocati
 // test whose subject is where on that line an argument may appear.
 func runArgs(t *testing.T, workingDir string, args ...string) invocation {
 	t.Helper()
-	var out, errs bytes.Buffer
 	executable, err := os.Executable()
 	if err != nil {
 		t.Fatalf("resolving this binary: %v", err)
 	}
-	code := cli.Run(t.Context(), cli.Environment{
+	return runArgsIn(t.Context(), executable, workingDir, args...)
+}
+
+// runArgsIn drives the surface under a context the caller owns, for the tests
+// whose subject is a caller that gives up on a call it is blocked in. It takes
+// nothing from testing.T, so it is safe to call from a goroutine.
+func runArgsIn(ctx context.Context, executable, workingDir string, args ...string) invocation {
+	var out, errs bytes.Buffer
+	code := cli.Run(ctx, cli.Environment{
 		Args:       args,
 		Stdout:     &out,
 		Stderr:     &errs,
