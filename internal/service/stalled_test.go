@@ -133,23 +133,26 @@ func onlyRun(t *testing.T, h *home.Home) store.Run {
 func optionsWithIntentFailingOnce(t *testing.T, h *home.Home, calls *atomic.Int64) service.Options {
 	t.Helper()
 	o := options(t, h)
-	served := stages.All()
-	served.Intent = pipeline.Implementation{
-		NewBody: func() pipeline.Body {
-			return func(context.Context, pipeline.Input) (pipeline.Output, error) {
-				if calls.Add(1) == 1 {
-					return pipeline.Output{}, errBodyCouldNotRun
+	served := func(deps stages.StageDeps) pipeline.Stages {
+		nine := stages.All(deps)
+		nine.Intent = pipeline.Implementation{
+			NewBody: func() pipeline.Body {
+				return func(context.Context, pipeline.Input) (pipeline.Output, error) {
+					if calls.Add(1) == 1 {
+						return pipeline.Output{}, errBodyCouldNotRun
+					}
+					return pipeline.Output{Report: findings.Report{
+						Summary: "the stage stood in for the one this test is not about",
+						Findings: []findings.Finding{
+							{ID: "stand-in", Action: findings.ActionAsk, Description: "a decision"},
+						},
+					}}, nil
 				}
-				return pipeline.Output{Report: findings.Report{
-					Summary: "the stage stood in for the one this test is not about",
-					Findings: []findings.Finding{
-						{ID: "stand-in", Action: findings.ActionAsk, Description: "a decision"},
-					},
-				}}, nil
-			}
-		},
+			},
+		}
+		return nine
 	}
-	o.Stages = served
+	o.NewStages = served
 	return o
 }
 

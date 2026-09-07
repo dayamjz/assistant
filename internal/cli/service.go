@@ -216,10 +216,10 @@ func (in *invocation) serveHere(parent context.Context) error {
 		return err
 	}
 	running, err := service.Open(ctx, service.Options{
-		Home:     in.home,
-		Stages:   stages.All(),
-		NewFixer: stages.PendingFixer,
-		Build:    build,
+		Home:      in.home,
+		NewStages: stages.All,
+		NewFixer:  stages.PendingFixer,
+		Build:     build,
 	})
 	if err != nil {
 		return err

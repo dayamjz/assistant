@@ -130,8 +130,12 @@ func Pending(name string) pipeline.Implementation {
 //
 // The value is a constructor rather than an Implementation so that a body
 // holding anything per-build is constructed when the pipeline is, on the same
-// terms as pipeline.Implementation.NewBody.
-var written = map[pipeline.Stage]func() pipeline.Implementation{
+// terms as pipeline.Implementation.NewBody. It takes the build-scoped
+// dependencies for the same reason: they are settled once, when the service
+// has resolved an agent, and one pipeline then serves every run. Anything that
+// varies per run is a declared state key instead, because a value captured
+// here would be the same value for every run of this service.
+var written = map[pipeline.Stage]func(StageDeps) pipeline.Implementation{
 	pipeline.StageIntent: Intent,
 }
 
@@ -142,25 +146,25 @@ var written = map[pipeline.Stage]func() pipeline.Implementation{
 // not a set assembled somewhere else. The nine fields are named here because
 // pipeline.Stages is nine named fields on purpose, per P2: there is no list to
 // index and no order to get wrong.
-func All() pipeline.Stages {
+func All(deps StageDeps) pipeline.Stages {
 	return pipeline.Stages{
-		Intent:   implementation(pipeline.StageIntent),
-		Rebase:   implementation(pipeline.StageRebase),
-		Review:   implementation(pipeline.StageReview),
-		Test:     implementation(pipeline.StageTest),
-		Document: implementation(pipeline.StageDocument),
-		Lint:     implementation(pipeline.StageLint),
-		Push:     implementation(pipeline.StagePush),
-		PR:       implementation(pipeline.StagePR),
-		CI:       implementation(pipeline.StageCI),
+		Intent:   implementation(pipeline.StageIntent, deps),
+		Rebase:   implementation(pipeline.StageRebase, deps),
+		Review:   implementation(pipeline.StageReview, deps),
+		Test:     implementation(pipeline.StageTest, deps),
+		Document: implementation(pipeline.StageDocument, deps),
+		Lint:     implementation(pipeline.StageLint, deps),
+		Push:     implementation(pipeline.StagePush, deps),
+		PR:       implementation(pipeline.StagePR, deps),
+		CI:       implementation(pipeline.StageCI, deps),
 	}
 }
 
 // implementation returns the body written for a stage, or Pending when this
 // build has none.
-func implementation(stage pipeline.Stage) pipeline.Implementation {
+func implementation(stage pipeline.Stage, deps StageDeps) pipeline.Implementation {
 	if newImplementation, ok := written[stage]; ok {
-		return newImplementation()
+		return newImplementation(deps)
 	}
 	return Pending(stage.String())
 }

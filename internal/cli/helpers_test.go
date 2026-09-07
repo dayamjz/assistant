@@ -191,13 +191,13 @@ func newSubject(t *testing.T) string {
 // scripted stand-in rather than whatever is installed.
 func serve(t *testing.T, h *home.Home) {
 	t.Helper()
-	serveStages(t, h, stages.All())
+	serveStages(t, h, stages.All)
 }
 
 // serveStages is serve for a test that varies which stages have bodies, since
 // that is what moves where a run first stops and what a body does when it is
 // reached.
-func serveStages(t *testing.T, h *home.Home, served pipeline.Stages) {
+func serveStages(t *testing.T, h *home.Home, served func(stages.StageDeps) pipeline.Stages) {
 	t.Helper()
 	runner := standin.New(t, standin.Script{}).Runner()
 	serveCatalog(t, h, served, agents.NewCatalog(fixedFactory{runner: runner}))
@@ -210,7 +210,7 @@ func serveStages(t *testing.T, h *home.Home, served pipeline.Stages) {
 func serveUntilStopped(t *testing.T, h *home.Home) func() {
 	t.Helper()
 	runner := standin.New(t, standin.Script{}).Runner()
-	return serveCatalog(t, h, stages.All(), agents.NewCatalog(fixedFactory{runner: runner}))
+	return serveCatalog(t, h, stages.All, agents.NewCatalog(fixedFactory{runner: runner}))
 }
 
 // serveWithNoRunnableAgent serves a home whose one configured adapter refuses
@@ -218,24 +218,24 @@ func serveUntilStopped(t *testing.T, h *home.Home) func() {
 // can run. Every other helper here serves a home that resolves.
 func serveWithNoRunnableAgent(t *testing.T, h *home.Home) func() {
 	t.Helper()
-	return serveCatalog(t, h, stages.All(), agents.NewCatalog(unrunnableFactory{}))
+	return serveCatalog(t, h, stages.All, agents.NewCatalog(unrunnableFactory{}))
 }
 
 // serveCatalog is the one owner of how these tests open and serve a service,
 // so the only things a caller varies are the stages it serves and which agents
 // it may resolve.
-func serveCatalog(t *testing.T, h *home.Home, served pipeline.Stages, catalog *agents.Catalog) func() {
+func serveCatalog(t *testing.T, h *home.Home, served func(stages.StageDeps) pipeline.Stages, catalog *agents.Catalog) func() {
 	t.Helper()
 	build, err := store.CurrentBuild()
 	if err != nil {
 		t.Fatalf("reading this build's identity: %v", err)
 	}
 	running, err := service.Open(t.Context(), service.Options{
-		Home:     h,
-		Stages:   served,
-		NewFixer: stages.PendingFixer,
-		Build:    build,
-		Catalog:  catalog,
+		Home:      h,
+		NewStages: served,
+		NewFixer:  stages.PendingFixer,
+		Build:     build,
+		Catalog:   catalog,
 	})
 	if err != nil {
 		t.Fatalf("opening the service: %v", err)

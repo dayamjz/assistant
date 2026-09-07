@@ -320,16 +320,19 @@ func startInContext(ctx context.Context, t *testing.T, h *home.Home, workingDir 
 // can say which of them it is talking about.
 func serveIntentFailingOnce(t *testing.T, h *home.Home, calls *atomic.Int64) {
 	t.Helper()
-	stagesToServe := stages.All()
-	stagesToServe.Intent = pipeline.Implementation{
-		NewBody: func() pipeline.Body {
-			return func(context.Context, pipeline.Input) (pipeline.Output, error) {
-				if calls.Add(1) == 1 {
-					return pipeline.Output{}, errBodyCouldNotRun
+	stagesToServe := func(deps stages.StageDeps) pipeline.Stages {
+		nine := stages.All(deps)
+		nine.Intent = pipeline.Implementation{
+			NewBody: func() pipeline.Body {
+				return func(context.Context, pipeline.Input) (pipeline.Output, error) {
+					if calls.Add(1) == 1 {
+						return pipeline.Output{}, errBodyCouldNotRun
+					}
+					return heldReport(), nil
 				}
-				return heldReport(), nil
-			}
-		},
+			},
+		}
+		return nine
 	}
 	serveStages(t, h, stagesToServe)
 }
@@ -342,24 +345,27 @@ func serveIntentFailingOnce(t *testing.T, h *home.Home, calls *atomic.Int64) {
 // rather than caught there.
 func serveIntentLosingItsCaller(t *testing.T, h *home.Home, inside, carried, release chan struct{}, entered, resumed *sync.Once, calls *atomic.Int64) {
 	t.Helper()
-	stagesToServe := stages.All()
-	stagesToServe.Intent = pipeline.Implementation{
-		NewBody: func() pipeline.Body {
-			return func(ctx context.Context, _ pipeline.Input) (pipeline.Output, error) {
-				if calls.Add(1) > 1 {
-					resumed.Do(func() { close(carried) })
-					select {
-					case <-release:
-					case <-ctx.Done():
-						return pipeline.Output{}, ctx.Err()
+	stagesToServe := func(deps stages.StageDeps) pipeline.Stages {
+		nine := stages.All(deps)
+		nine.Intent = pipeline.Implementation{
+			NewBody: func() pipeline.Body {
+				return func(ctx context.Context, _ pipeline.Input) (pipeline.Output, error) {
+					if calls.Add(1) > 1 {
+						resumed.Do(func() { close(carried) })
+						select {
+						case <-release:
+						case <-ctx.Done():
+							return pipeline.Output{}, ctx.Err()
+						}
+						return heldReport(), nil
 					}
-					return heldReport(), nil
+					entered.Do(func() { close(inside) })
+					<-ctx.Done()
+					return pipeline.Output{}, ctx.Err()
 				}
-				entered.Do(func() { close(inside) })
-				<-ctx.Done()
-				return pipeline.Output{}, ctx.Err()
-			}
-		},
+			},
+		}
+		return nine
 	}
 	serveStages(t, h, stagesToServe)
 }
