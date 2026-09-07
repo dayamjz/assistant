@@ -306,7 +306,15 @@ type serviceUnderTest struct {
 // test, so the claim is checked where it is being relied on.
 func withService(t *testing.T, h *home.Home, body func(serviceUnderTest)) {
 	t.Helper()
-	running, err := service.Open(t.Context(), options(t, h))
+	withServiceOptions(t, options(t, h), body)
+}
+
+// withServiceOptions is withService for a test that has to vary one option,
+// so the opening, serving and closing above has one owner rather than a copy
+// per test that wires something of its own.
+func withServiceOptions(t *testing.T, opts service.Options, body func(serviceUnderTest)) {
+	t.Helper()
+	running, err := service.Open(t.Context(), opts)
 	if err != nil {
 		requiresLocalSocket(t, err)
 		t.Fatalf("opening the service: %v", err)

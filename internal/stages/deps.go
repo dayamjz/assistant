@@ -91,8 +91,10 @@ type StageDeps struct {
 	// internal/service's documentation states.
 	Config config.Config
 	// Forge is the code host this run's pull request and checks stages talk
-	// to. It is nil when this build resolved none, and a body that needs one
-	// refuses rather than proceeding without it.
+	// to. Nothing in this build constructs one, so it is nil on every run:
+	// internal/service passes nil here unconditionally, and a provider arrives
+	// with the pull request and checks stages that need it. A body that needs
+	// one refuses rather than proceeding without it.
 	Forge forge.Provider
 	// git are the options every repository this seam opens is opened with, so
 	// a body cannot open one without the redactor the service configured. It
