@@ -56,10 +56,29 @@ type bounded struct {
 func TestTheRunBudgetStopsARunTheGateWouldHaveFinished(t *testing.T) {
 	requiresIdentifiedPeer(t)
 
-	const budget = 6
-	j := inCloneConfigured(t, map[string]any{"run_budget": budget})
-	observed := bounded{budget: budget}
+	// The same subject with nothing bounding it, driven first because the
+	// budget is derived from it: it is what says the bound rather than the
+	// gate stopped the other run, and it is also the only honest source for a
+	// budget that both reaches a hold and stops short of the end. What it
+	// costs to reach the first hold rises as stage bodies land, so a number
+	// written here would be safe only for as long as this build has the bodies
+	// it has today, and the day it stopped being enough the run would park
+	// before it ever held - which reads as an absence clause with nothing
+	// under it rather than as the stale number it was.
+	free := inClone(t)
+	freeWalk := answerHolds(t, free,
+		startRun(t, free, "--intent", "the same change with the budget left alone"), "approved")
+	observed := bounded{unbounded: last(freeWalk).Outcome}
 
+	budget := freeWalk[0].Steps + 1
+	if whole := last(freeWalk).Steps; budget >= whole {
+		t.Fatalf("this run reaches its first hold after %d node execution(s) and the whole gate costs %d, "+
+			"so no budget both reaches a hold and stops the run short of the end; this check needs "+
+			"rewriting against whatever the gate costs now", freeWalk[0].Steps, whole)
+	}
+	observed.budget = budget
+
+	j := inCloneConfigured(t, map[string]any{"run_budget": budget})
 	walk := answerHolds(t, j, startRun(t, j, "--intent", "a change held to a budget smaller than the gate"),
 		"approved")
 	stopped := last(walk)
@@ -75,12 +94,6 @@ func TestTheRunBudgetStopsARunTheGateWouldHaveFinished(t *testing.T) {
 	if stopped.Progress != nil {
 		observed.progress = *stopped.Progress
 	}
-
-	// The same subject with nothing bounding it, which is what says the budget
-	// stopped the run above rather than anything about the change.
-	free := inClone(t)
-	observed.unbounded = last(answerHolds(t, free,
-		startRun(t, free, "--intent", "the same change with the budget left alone"), "approved")).Outcome
 
 	stops := journey.Check[bounded]{
 		What: "a run whose step budget is smaller than the gate is parked by that budget, is not offered " +

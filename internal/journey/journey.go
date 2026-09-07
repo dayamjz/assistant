@@ -98,7 +98,8 @@ type Options struct {
 	Env map[string]string
 	// AgentArguments are the words the resolved agent entry carries after its
 	// name, which is the seam a stand-in is reached through. Empty leaves the
-	// home with no configuration document at all.
+	// home carrying an empty configuration document, so a run resolves whatever
+	// agent the machine has rather than the stand-in.
 	//
 	// Each element has to be one word. An agent entry is one string on the
 	// wire that both internal/config and internal/agents split on whitespace,
@@ -210,6 +211,11 @@ func oneWordEach(arguments []string) error {
 // It refuses to write a key the caller named that would replace the agent
 // entry, because a caller doing that has asked for two different agents at
 // once and taking one silently is the failure this refuses.
+//
+// A document that composes to nothing is written as an empty document rather
+// than skipped, so a caller clearing a key clears it. Returning early there
+// would leave whatever was written before standing, and the caller that asked
+// for nothing would go on running against the document it meant to remove.
 func (j *Journey) WriteConfiguration(document map[string]any) error {
 	whole := map[string]any{}
 	for name, value := range document {
@@ -221,9 +227,6 @@ func (j *Journey) WriteConfiguration(document map[string]any) error {
 				"written names %v; a journey has one agent", entry, named)
 		}
 		whole["agent"] = entry
-	}
-	if len(whole) == 0 {
-		return nil
 	}
 	body, err := json.Marshal(whole)
 	if err != nil {

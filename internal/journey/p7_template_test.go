@@ -1,7 +1,6 @@
 package journey_test
 
 import (
-	"errors"
 	"fmt"
 	"path/filepath"
 	"slices"
@@ -124,6 +123,7 @@ func TestNothingOutsideTheGateChoosesWhatRunsOnAPushToIt(t *testing.T) {
 		succeeds(t, plain.CommandIn(plainDir, "init", "--default-branch", fixture.DefaultBranch))
 		observed := admission{}
 		observed.ordinaryPush, observed.ordinaryMessage = pushToTheGate(t, scenario, nil, plainDir)
+		observed.ordinaryRuns = runsRecorded(t, plain)
 
 		under, underDir := gateJourney(t, scenario)
 		observed.initRefused = under.CommandWith(underDir, redirect,
@@ -136,12 +136,20 @@ func TestNothingOutsideTheGateChoosesWhatRunsOnAPushToIt(t *testing.T) {
 
 		clauses := []journey.Clause[admission]{
 			{
-				States: "a push through the gate with nothing redirected is declined",
+				// A disjunction for the reason the one below it is a
+				// disjunction, which Settlements states: a clause holding that
+				// this push is declined would assert that a gap persists, and
+				// would fail on the day the admit verb it is missing lands.
+				// What has to hold either way is that the gate does not admit
+				// a push with nothing checking it, and the run count is read
+				// out of the home's own records so both halves are observed.
+				States: "a push through the gate with nothing redirected is not accepted with nothing " +
+					"checking it: either it is declined, or it is accepted and a run started from it",
 				Holds: func(a admission) error {
-					if a.ordinaryPush {
-						return errors.New("a push through the gate with nothing redirected was accepted, and " +
-							"no run started from it; the gate would then be admitting pushes with nothing " +
-							"checking them")
+					if a.ordinaryPush && a.ordinaryRuns == 0 {
+						return fmt.Errorf("a push through the gate with nothing redirected was accepted and "+
+							"this home recorded no run, so the gate admitted a push with nothing checking "+
+							"it; git said:\n%s", a.ordinaryMessage)
 					}
 					return nil
 				},
@@ -212,10 +220,16 @@ func TestNothingOutsideTheGateChoosesWhatRunsOnAPushToIt(t *testing.T) {
 				"redirecting core.hooksPath, the push was accepted, and the hooks git ran were %v rather "+
 				"than the gate's own. %s", condition.ID, observed.fired, condition.Expect.Gap)
 		}
-		t.Logf("A push through the gate with nothing redirected was declined. What declined it is not an "+
-			"admission decision: internal/gate installs a hook invoking \"assistant gate admit\", "+
-			"internal/cli carries no such verb, and the push is declined by the command surface reporting "+
-			"incorrect usage. It said:\n%s", observed.ordinaryMessage)
+		if observed.ordinaryPush {
+			t.Logf("A push through the gate with nothing redirected was accepted and this home recorded "+
+				"%d run(s), so the admission boundary is answered by something now. git said:\n%s",
+				observed.ordinaryRuns, observed.ordinaryMessage)
+		} else {
+			t.Logf("A push through the gate with nothing redirected was declined. What declined it is not "+
+				"an admission decision: internal/gate installs a hook invoking \"assistant gate admit\", "+
+				"internal/cli carries no such verb, and the push is declined by the command surface "+
+				"reporting incorrect usage. It said:\n%s", observed.ordinaryMessage)
+		}
 	})
 }
 
@@ -231,6 +245,11 @@ type admission struct {
 	// nothing redirected, and ordinaryMessage is what git reported about it.
 	ordinaryPush    bool
 	ordinaryMessage string
+	// ordinaryRuns is how many runs this home had recorded once that push was
+	// over. It is what makes the accepted half of the clause observable rather
+	// than a claim, and it is read out of the home's records because reading it
+	// off the surface would need a service this check never starts.
+	ordinaryRuns int
 	// initRefused is whether creating the gate under the redirect was refused.
 	initRefused bool
 	// redirectedPush is whether the push under the redirect was accepted, and
