@@ -24,6 +24,31 @@ document:
 
 review:
   path_instructions:
+    # Two rules that hold everywhere rather than in one package. This schema
+    # has no repository-wide review key, so the glob is how a shared rule is
+    # said: "*" matches every changed path by basename.
+    - path: "*"
+      instructions: |
+        These two apply to every change here, not to one package.
+        A finding that asserts absence - no other caller, nothing reads this,
+        no other site does X - owes its method: what was searched, over what,
+        and with what pattern. An empty result establishes nothing on its own,
+        because what a search could not have found is decided by its pattern
+        rather than by what it returned. That limit is part of the rule and not
+        an excuse from it: a sweep is only as complete as its pattern, so
+        naming the pattern is what lets the next reader see the shape of what
+        it could not have reached. Reading rather than searching is a method
+        too, and is named the same way.
+        A finding names a site; ask whether it names a class. The twin of a
+        two-branch operation, the other member of a pair, and the sites the
+        finding's own reasoning already reaches belong in the finding, and a
+        fix applied to the named site alone leaves the defect where that
+        reasoning had put it.
+        Neither rule catches a reviewer that traces badly: a search can be
+        named and still have been for the wrong thing, and a class can be
+        enumerated wrong. What answers for that is the separation between
+        reviewing and fixing, not a further instruction here.
+
     - path: "internal/graph/**"
       instructions: |
         This package is the execution engine, and its correctness rules come from
