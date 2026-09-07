@@ -186,7 +186,7 @@ func cancelledState(t *testing.T) graph.State {
 	if err != nil {
 		t.Fatalf("building a pipeline: %v", err)
 	}
-	initial, err := p.NewState(pipeline.Start{Branch: "b", Base: "main", Submitted: "abc"})
+	initial, err := p.NewState(pipeline.Start{Repository: "repo", Run: "r1", Branch: "b", Base: "main", Submitted: "abc"})
 	if err != nil {
 		t.Fatalf("building the initial state: %v", err)
 	}

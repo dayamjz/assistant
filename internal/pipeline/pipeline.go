@@ -253,6 +253,11 @@ func (p *Pipeline) Executor(store graph.CheckpointStore) (*graph.Executor, error
 // Start is what a run begins with. Skip is the only way a caller may choose
 // that a stage does not run, and it is per run: nothing in Options can set it.
 type Start struct {
+	// Repository identifies the repository being validated, as
+	// internal/store records it.
+	Repository string
+	// Run identifies this run, as internal/store records it.
+	Run string
 	// Branch is the branch under validation.
 	Branch string
 	// Base is the branch target the change is rebased onto and pushed to.
@@ -274,9 +279,9 @@ type Start struct {
 // not say what is being validated, one that claims a supplied intent and
 // supplies none, and one naming a stage to skip that is not one of the nine.
 func (p *Pipeline) NewState(s Start) (graph.State, error) {
-	if s.Branch == "" || s.Base == "" || s.Submitted == "" {
-		return graph.State{}, fmt.Errorf("%w: branch %q, base %q, submitted %q",
-			ErrIncompleteRun, s.Branch, s.Base, s.Submitted)
+	if s.Repository == "" || s.Run == "" || s.Branch == "" || s.Base == "" || s.Submitted == "" {
+		return graph.State{}, fmt.Errorf("%w: repository %q, run %q, branch %q, base %q, submitted %q",
+			ErrIncompleteRun, s.Repository, s.Run, s.Branch, s.Base, s.Submitted)
 	}
 	if s.IntentSupplied && strings.TrimSpace(s.Intent) == "" {
 		return graph.State{}, fmt.Errorf("%w: intent %q", ErrEmptyIntent, s.Intent)
@@ -289,6 +294,8 @@ func (p *Pipeline) NewState(s Start) (graph.State, error) {
 		skip = append(skip, stage.String())
 	}
 	return p.graph.NewState(map[string]graph.Value{
+		string(KeyRepository):     graph.TextValue(s.Repository),
+		string(KeyRun):            graph.TextValue(s.Run),
 		string(KeyBranch):         graph.TextValue(s.Branch),
 		string(KeyBase):           graph.TextValue(s.Base),
 		string(KeySubmitted):      graph.TextValue(s.Submitted),

@@ -1,12 +1,17 @@
 package stages_test
 
 import (
+	"context"
 	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/agents/route"
+	"github.com/dayamjz/assistant/internal/config"
+	"github.com/dayamjz/assistant/internal/findings"
+	"github.com/dayamjz/assistant/internal/home"
+	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/stages"
 )
@@ -65,4 +70,85 @@ func TestTheStageAgentInStageDepsStillRuns(t *testing.T) {
 		t.Fatal("the agent on a zero StageDeps ran an invocation, so a body wired with no agent " +
 			"would report a stage it did not establish")
 	}
+}
+
+// TestACopyPathIsDerivedFromTheRunsOwnKeys is what holds the run-scoped half
+// of this seam to its shape.
+//
+// The isolated copy's path is not carried anywhere. PRD section 8's ordering
+// rule has the run's row written before its directory, so a directory with no
+// row is safe to remove, and a durable second copy of the path would give that
+// rule a second fact to stay consistent with. So the path is derived, from the
+// two run-input keys and internal/home's layout, every time it is needed.
+//
+// This drives a real stage body through a real pipeline and checks the
+// derivation end to end: the keys reach the body carrying what Start supplied,
+// and the path Copy resolves is the one internal/home names for them. A body
+// that read the path from somewhere else, or a Copy that composed it itself,
+// would resolve something the service does not know to reclaim, and that is
+// the failure this catches.
+//
+// Copy is asked for a copy nothing created, so it fails. That is the point
+// rather than a limitation: the failure names the path it tried, which is the
+// derivation this is about, and creating the copy is the service's job.
+func TestACopyPathIsDerivedFromTheRunsOwnKeys(t *testing.T) {
+	t.Parallel()
+
+	h, err := home.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("opening a home: %v", err)
+	}
+	deps := stages.NewStageDeps(agents.StageAgent{}, h, config.Config{}, nil)
+
+	const repository, run = "repo-under-test", "run-under-test"
+	var tried string
+	body := pipeline.Implementation{
+		Reads: []pipeline.Key{pipeline.KeyRepository, pipeline.KeyRun},
+		NewBody: func() pipeline.Body {
+			return func(ctx context.Context, in pipeline.Input) (pipeline.Output, error) {
+				gotRepository, err := text(in, pipeline.KeyRepository)
+				if err != nil {
+					return pipeline.Output{}, err
+				}
+				gotRun, err := text(in, pipeline.KeyRun)
+				if err != nil {
+					return pipeline.Output{}, err
+				}
+				if gotRepository != repository || gotRun != run {
+					t.Errorf("the body was given repository %q and run %q, want %q and %q",
+						gotRepository, gotRun, repository, run)
+				}
+				if _, err := deps.Copy(ctx, gotRepository, gotRun); err != nil {
+					tried = err.Error()
+				}
+				return pipeline.Output{Report: findings.Report{
+					Summary: "read the run's own keys",
+				}}, nil
+			}
+		},
+	}
+
+	runPipeline(t, body, pipeline.Start{
+		Repository: repository, Run: run,
+		Branch: "topic", Base: "main", Submitted: "9f2c1ab",
+	})
+
+	want := h.Worktree(repository, run)
+	if tried == "" {
+		t.Fatal("Copy resolved a copy nothing created, so what path it derived is unproven")
+	}
+	if !strings.Contains(tried, want) {
+		t.Errorf("Copy tried a path that is not the one internal/home names for this run.\n"+
+			" got: %s\nwant it to name: %s", tried, want)
+	}
+}
+
+// text reads one declared text key, so the body above states each read once.
+func text(in pipeline.Input, key pipeline.Key) (string, error) {
+	v, err := in.State.Get(key)
+	if err != nil {
+		return "", err
+	}
+	s, _ := v.Text()
+	return s, nil
 }

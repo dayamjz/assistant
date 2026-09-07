@@ -164,13 +164,24 @@ func TestABodyMayReachEveryKeyItDeclared(t *testing.T) {
 
 func TestARunNeedsToSayWhatItIsValidating(t *testing.T) {
 	p := build(t, Options{Stages: ConstantStages(passingSummary), Budget: 100})
-	for _, s := range []Start{
-		{Base: "main", Submitted: "c0"},
-		{Branch: "topic", Submitted: "c0"},
-		{Branch: "topic", Base: "main"},
+	// Each case is a complete start with one fact removed, rather than a
+	// literal listing the others, so a fact added to Start is refused here by
+	// adding one row and a case cannot quietly drift into naming something
+	// else.
+	for _, c := range []struct {
+		missing string
+		blank   func(*Start)
+	}{
+		{"repository", func(s *Start) { s.Repository = "" }},
+		{"run", func(s *Start) { s.Run = "" }},
+		{"branch", func(s *Start) { s.Branch = "" }},
+		{"base", func(s *Start) { s.Base = "" }},
+		{"submitted", func(s *Start) { s.Submitted = "" }},
 	} {
+		s := complete()
+		c.blank(&s)
 		if _, err := p.NewState(s); !errors.Is(err, ErrIncompleteRun) {
-			t.Errorf("NewState(%+v): %v, want ErrIncompleteRun", s, err)
+			t.Errorf("NewState with no %s: %v, want ErrIncompleteRun", c.missing, err)
 		}
 	}
 	if _, err := p.NewState(complete()); err != nil {

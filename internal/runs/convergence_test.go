@@ -128,7 +128,7 @@ func TestConvergenceFiresWithADurableSessionAndNotWithOneInGraphState(t *testing
 			if err != nil {
 				t.Fatalf("Executor: %v", err)
 			}
-			state, err := p.NewState(pipeline.Start{Branch: "topic", Base: "main", Submitted: "aaaa"})
+			state, err := p.NewState(pipeline.Start{Repository: "repo", Run: "run", Branch: "topic", Base: "main", Submitted: "aaaa"})
 			if err != nil {
 				t.Fatalf("NewState: %v", err)
 			}
