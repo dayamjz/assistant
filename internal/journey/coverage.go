@@ -59,8 +59,11 @@ func Coverage() []Established {
 		{principles.P2, ReachBinary,
 			"One run of the binary walks the nine stages in the specified order; a second skips two of " +
 				"them for that run only; and a home whose configuration document asks for a standing " +
-				"skip stops the service before it serves. The order being unsayable in any other shape " +
-				"is internal/pipeline's, which this does not repeat."},
+				"skip stops the service before it serves. What refuses that document is internal/config's " +
+				"key table admitting no key one could be asked for through, rather than a rule written " +
+				"against standing skips, so a second key of another name is driven beside it and held to " +
+				"the same answer; the property holds and this says which mechanism holds it. The order " +
+				"being unsayable in any other shape is internal/pipeline's, which this does not repeat."},
 		{principles.P3, ReachBinary,
 			"Every stage of a run through the binary reports a finding that is not classified and holds " +
 				"for a person rather than passing, and none of those findings is fix-eligible. The " +
