@@ -45,9 +45,39 @@ type Journey struct {
 	scenario   fixture.Scenario
 	dir        string
 	env        map[string]string
-	service    *exec.Cmd
-	log        *os.File
+	service    *serving
 	agentEntry string
+}
+
+// serving is the service process this harness started, together with the
+// goroutine that reaps it.
+//
+// The reaper is the whole of why this is not a bare exec.Cmd. An exec.Cmd
+// fills in its ProcessState inside Wait alone, so a harness that waited
+// nowhere until it killed the child could not tell a service that is still
+// starting from one that is already gone: a service that dies on startup, over
+// a home whose lock is held or a configuration it refuses, would be asked for
+// its readiness until the timeout ran out and then reported as silence rather
+// than as the exit it was.
+type serving struct {
+	cmd *exec.Cmd
+	log *os.File
+	// done is closed once Wait has returned, which is what makes err safe to
+	// read and ProcessState safe to look at.
+	done chan struct{}
+	// err is what Wait reported. It is written before done is closed and read
+	// only after, so the close is the whole of the ordering it needs.
+	err error
+}
+
+// exited reports whether the process has ended, and what Wait made of it.
+func (s *serving) exited() (bool, error) {
+	select {
+	case <-s.done:
+		return true, s.err
+	default:
+		return false, nil
+	}
 }
 
 // Options are the parts of a Journey a caller settles.
@@ -190,28 +220,7 @@ func (j *Journey) Dir() string { return j.dir }
 // is empty is removed rather than set to nothing, which is how a test closes a
 // channel rather than pointing it somewhere harmless.
 func (j *Journey) Environment() []string {
-	drop := make(map[string]struct{}, len(j.env))
-	for name := range j.env {
-		drop[name] = struct{}{}
-	}
-	out := make([]string, 0, len(os.Environ())+len(j.env))
-	for _, entry := range os.Environ() {
-		name, _, ok := strings.Cut(entry, "=")
-		if !ok {
-			continue
-		}
-		if _, replaced := drop[name]; replaced {
-			continue
-		}
-		out = append(out, entry)
-	}
-	for name, value := range j.env {
-		if value == "" {
-			continue
-		}
-		out = append(out, name+"="+value)
-	}
-	return out
+	return writeOver(os.Environ(), j.env)
 }
 
 // writeOver returns base with these settings written over it, removing the
@@ -456,7 +465,12 @@ func (j *Journey) Serve() error {
 		_ = log.Close()
 		return fmt.Errorf("journey: starting the service: %w", err)
 	}
-	j.service, j.log = cmd, log
+	reaped := &serving{cmd: cmd, log: log, done: make(chan struct{})}
+	go func() {
+		reaped.err = cmd.Wait()
+		close(reaped.done)
+	}()
+	j.service = reaped
 	if err := j.WaitReady(); err != nil {
 		return err
 	}
@@ -478,9 +492,11 @@ func (j *Journey) WaitReady() error {
 		if err := last.Decode(&state); err == nil && state.Running {
 			return nil
 		}
-		if j.service != nil && j.service.ProcessState != nil {
-			return fmt.Errorf("journey: the service exited before it was ready: %s\n%s",
-				j.service.ProcessState, j.ServiceLog())
+		if j.service != nil {
+			if ended, err := j.service.exited(); ended {
+				return fmt.Errorf("journey: the service exited before it was ready: %s\n%s",
+					describeExit(j.service.cmd, err), j.ServiceLog())
+			}
 		}
 		time.Sleep(readyPoll)
 	}
@@ -502,16 +518,27 @@ func (j *Journey) Kill() error {
 	// A service that has already gone - because something asked it to stop, or
 	// because it failed - is not an error to kill. What Kill promises is that
 	// nothing is serving afterwards, and that already holds.
-	if err := j.service.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+	if err := j.service.cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
 		return fmt.Errorf("journey: killing the service: %w", err)
 	}
-	_ = j.service.Wait()
-	j.service = nil
-	if j.log != nil {
-		_ = j.log.Close()
-		j.log = nil
+	<-j.service.done
+	if j.service.log != nil {
+		_ = j.service.log.Close()
 	}
+	j.service = nil
 	return nil
+}
+
+// describeExit renders how a serving process ended, for a failure that says
+// what happened rather than that nothing answered.
+func describeExit(cmd *exec.Cmd, waited error) string {
+	if cmd.ProcessState != nil {
+		return cmd.ProcessState.String()
+	}
+	if waited != nil {
+		return waited.Error()
+	}
+	return "for a reason the operating system did not report"
 }
 
 // ServicePID is the operating system's identifier for the process serving this
@@ -523,10 +550,10 @@ func (j *Journey) Kill() error {
 // recovered across a kill that never happened, which is the check proving
 // nothing while looking like it proved the most.
 func (j *Journey) ServicePID() int {
-	if j.service == nil || j.service.Process == nil {
+	if j.service == nil || j.service.cmd.Process == nil {
 		return 0
 	}
-	return j.service.Process.Pid
+	return j.service.cmd.Process.Pid
 }
 
 // ServiceLog is everything the serving processes of this home have printed,
