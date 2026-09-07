@@ -383,11 +383,11 @@
 // nothing here enforces that, and nothing here will.
 //
 // So the implementation written against this contract owes two things. It must
-// never return a finding whose action is anything but note, including when it
-// could not read its own output: P3 normalizes a missing, empty, or
+// never return a finding whose action is anything but note, on any path it has
+// including the ones it reaches by failing: P3 normalizes a missing, empty, or
 // unrecognized action to ask, and an ask finding holds. And it owes a test
-// proving both, the unparseable case included, because that is the one a stage
-// falls into by accident rather than by choice.
+// over every one of those paths, because a stage falls into this by accident
+// rather than by choice. internal/stages owns how the body discharges both.
 //
 // Not enforcing it here is deliberate. A row saying intent may not hold would
 // have to do something with an ask finding intent reported, and the only thing

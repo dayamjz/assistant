@@ -78,11 +78,12 @@ var (
 	// validating, this one says the run claimed authoritative acceptance
 	// criteria and gave none.
 	//
-	// An empty supplied intent is worse than an absent one. Absent falls back
-	// to inference, whereas supplied is framed as authoritative in every
-	// downstream prompt, so review would check the diff against nothing while
-	// being told that nothing was the contract. A run that supplied no intent
-	// says so with IntentSupplied false, which stays legal.
+	// An empty supplied intent is worse than an absent one. Absent stays
+	// absent, and what the intent stage makes of that is internal/stages';
+	// supplied is framed as authoritative in every downstream prompt, so
+	// review would check the diff against nothing while being told that
+	// nothing was the contract. A run that supplied no intent says so with
+	// IntentSupplied false, which stays legal.
 	ErrEmptyIntent = errors.New("pipeline: a run claims a supplied intent and supplies none")
 	// ErrUnusableReport is returned when a stage's report does not validate
 	// after normalization. The step fails, nothing is recorded, and the run
