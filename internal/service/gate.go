@@ -351,8 +351,15 @@ func (s *Service) claimPush(ctx context.Context, built *driver, repository, bran
 	return record, superseded, nil
 }
 
-// signalCancellation ends the segment a run is advancing, when this service is
-// holding that run's cancellation.
+// signalCancellation ends the segment a run is advancing and records that
+// ending in the run's slot, when this service is holding that run's
+// cancellation.
+//
+// It is endRun, which is what makes the ending outrank the segment: a
+// superseded run whose segment stops because this cancelled it is not one
+// carryOn picks up again. The record it leaves is given back at once rather
+// than held across a write, because the write this stands beside is
+// claimPush's and the branch's own exclusion is what orders that.
 //
 // A run this service holds nothing for is left alone rather than treated as
 // stopped: it may be one that has already finished, or one whose goroutine has
@@ -360,12 +367,8 @@ func (s *Service) claimPush(ctx context.Context, built *driver, repository, bran
 // Calling it more than once for one run is how claimPush looks twice, and
 // costs nothing, because the cancellation a segment registers is idempotent.
 func (s *Service) signalCancellation(runID string) {
-	s.mu.Lock()
-	stop := s.advancing[runID]
-	s.mu.Unlock()
-	if stop != nil {
-		stop()
-	}
+	forget := s.endRun(runID)
+	forget()
 }
 
 // baseOfPushedCommit is the commit the pushed change is measured against,

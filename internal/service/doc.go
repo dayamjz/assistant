@@ -56,10 +56,102 @@
 // run still executing; responding meets the refusal, because answering a
 // decision is not a question about where a run stands.
 //
+// # Whether anything is advancing a run is this service's fact, and is reported
+//
+// A segment can stop without settling the record: the step failed, or the
+// caller waiting on it gave up, which ends the segment on purpose so that a
+// client that walked away does not leave a run walking nodes nobody is waiting
+// for. What that leaves is a record saying running against a checkpoint saying
+// running, at a position something can resume from - which is also exactly
+// what a run being walked this instant looks like, and exactly what a service
+// killed mid-segment leaves behind.
+//
+// The two are told apart by the slot, which is the only owner of the fact and
+// holds it for the length of one segment and nowhere durable. It does not stay
+// here: report hands it to machine.Run.Decide with the run's record and where
+// its execution stands, and that one call decides the outcome, the advancing
+// fact and the next action together. Nothing in this package chooses an
+// action, and nothing here can: the field is unexported in internal/machine,
+// so no code here has an assignment site to reach, and a branch added to
+// report cannot hand back an action that disagrees with the outcome beside it.
+// PRD section 9 requires that of the terminal interface, and says why: a stall
+// that looks alive is worse than an error.
+//
+// A run with no checkpoint goes through the same call and not a branch of its
+// own. It has no position, which is an absence rather than a place execution
+// stopped, so it travels as machine.ExecutionUnrecorded rather than as a
+// status standing in for one - which is how a run between its start and its
+// first checkpoint used to read as a run that failed while the same answer
+// said a segment was inside it.
+//
+// What to do about a run that is genuinely stranded there - recorded
+// unfinished, no position, nothing advancing it - is a separate question this
+// package does not answer yet. The answer says so and tells a reader to end it
+// and start again; deciding whether something should classify such a run at
+// startup is work of its own, and it inherits this vocabulary rather than
+// inventing a second one: machine.Standing is the three facts, and
+// machine.Execution is where the absence lives.
+//
+// Whether that state persists is decided by what ended the segment, and
+// carryOn is where. A context ended it means nothing about the run went wrong
+// and the caller who would have been told is gone, so this service picks the
+// run up itself - the same thing recovery does for a run a restart
+// interrupted, done where the run would otherwise be stranded. A step that
+// failed is a failure the caller was told about, in the error the call
+// returned, and repeating it would be a loop rather than progress: that run
+// stands where it is and the read above says what carries it on. The service
+// stopping is a context ending that carries nothing, because recovery
+// continues every unfinished run on the next open and starting work here would
+// be starting work the service is giving up.
+//
+// No status is written over such a run, and that is deliberate rather than
+// unfinished. Its record is not wrong - the run is unfinished - and the two
+// statuses that would end it are answers to different questions:
+// internal/runs' Fail is a verdict on the change rather than a failure of the
+// service, and Terminate is what a cancellation or a supersession leaves. A
+// run standing at a resumable position is neither, and ending it would discard
+// work its checkpoint history still holds, which P6 forbids.
+//
+// # The record and the execution disagreeing, in both directions
+//
+// The stall above is a record saying running with nothing executing. Its
+// mirror is a record saying terminated with something executing still, which
+// is what a run ended through the protocol would leave if a continuation
+// picked it up behind the caller who was told it was over. Ending a run
+// cancels its segment, so that segment ends the way a lost caller's does and
+// would otherwise be carried on for the same reason.
+//
+// What is structural and what is not are named apart here, because describing
+// the second as the first is what let this ship. The segment an ending cancels
+// is never followed by a continuation: the ending is recorded in the run's
+// slot under the one mutex claim and release also take, so that segment's
+// release reports it, and a run with no segment under its slot has the ending
+// stand in that slot while it is written. That is a bound on the interleaving
+// rather than a read that could be stale, and it is what carryOn's refusal
+// rests on.
+//
+// It bounds that segment and no other, and what it leaves open is not nothing.
+// endRun writes that down and is the one owner of it, so nothing here or at
+// cancel restates any part of it: a reader who needs the list reads endRun.
+//
+// A continuation cannot cause another, and that is structural too. It runs
+// under this service's own context, so the only contexts that can end its
+// segment are the service stopping and an ending through the protocol, and
+// carryOn refuses both. What is left is one continuation per caller that
+// walked away.
+//
+// Whether a continuation begins at all is ordered against Close rather than
+// decided beside it. carryOn reads the stop to classify an ending, and that
+// read races nothing into place; the registration does, because startWork adds
+// to the set Close waits for under the same mutex stopWork closes that set
+// with. A continuation decided as a stop arrives either registers before Close
+// stops taking work, and is waited for, or is refused - never registered after
+// the wait, against a database Close has gone on to shut.
+//
 // # A push is the one caller that does not wait
 //
 // The gate's hooks reach this service through gate.admit and gate.notify, and
-// they are the exception to the paragraph above. PRD section 8 has a push
+// they are the exception to the blocking calls above. PRD section 8 has a push
 // return immediately, with the notification handing off and this service
 // owning everything long-running, so notify records the runs a push calls for
 // and walks each of them on a goroutine of this service's. It answers with

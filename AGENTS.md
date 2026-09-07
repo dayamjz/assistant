@@ -310,18 +310,22 @@ Each has cost this repository more than one round of review.
 - `internal/machine` owns the shapes a structured answer takes, the three exit
   codes, and the outcome vocabulary. It composes records rather than restating
   them: a run is a `store.Run`, a report is a `findings.Report`, so no wire
-  shape becomes a second owner of a record. `Outcome` is a closed set and
-  `OutcomeOf` is the one translation from where a run stopped; `OutcomePassed`
-  has no producer here, because nothing in this build records that a pull
-  request merged.
+  shape becomes a second owner of a record. `Outcome` is a closed set, and one
+  translation answers for a run: `Run.Decide` takes a `Standing`, which is the
+  record, where execution stopped, and whether a segment is advancing the run,
+  and writes the outcome, that fact and the next action together. The action is
+  unexported for that reason, so a surface elsewhere has no assignment site for
+  one that disagrees with the outcome beside it; build an answer through
+  `Decide` rather than filling the fields in. `OutcomePassed` has no producer
+  here, because nothing in this build records that a pull request merged.
 - `internal/service` is the background service PRD section 8's process model
   puts at the centre of a home. It decides nothing: `internal/graph` executes,
   `internal/pipeline` is the topology, `internal/runs` owns the record,
-  `internal/checkpoints` makes the position durable, and this wires them. Three
+  `internal/checkpoints` makes the position durable, and this wires them. Five
   things there are load-bearing. It takes the home's lock before recovery and
   before binding the socket, in that order. It reconciles every unfinished run
   against its checkpoint on open, because a record saying running against a
-  checkpoint saying halted is a run nobody can answer. And containment is a
+  checkpoint saying halted is a run nobody can answer. Containment is a
   process group this service registered through `StageStarted`, never anything
   a caller says about itself; nothing calls that yet, so the guard protects
   nothing today, which `doc.go` states rather than implies. A push is the one
@@ -330,8 +334,14 @@ Each has cost this repository more than one round of review.
   record, which is the whole of what that word buys: `doc.go` says nothing
   bounds how long the displaced run goes on executing. Both gate methods take an
   identifier and never a working copy, so a caller cannot attach a push to
-  another repository's runs. Read `doc.go` for that and for the repository
-  configuration layer it does not read.
+  another repository's runs. And whether anything is advancing a run is a third
+  fact neither the record nor the checkpoint holds: it lives in the slot a run
+  advances in, `report` reads it rather than inferring it, and it travels as
+  `machine.Run.Advancing`. A segment that ends without settling leaves a run
+  something can resume and nothing is resuming, which is the stall PRD section 9
+  calls worse than an error; `carryOn` is what stops that persisting, and it
+  decides from what ended the segment rather than from the run. Read `doc.go`
+  for that and for the repository configuration layer it does not read.
 - `internal/cli` is the command surface, and its verb table is PRD section 9's
   table and nothing else. A verb that section does not describe is a finding to
   raise against the specification, not a row to add: `cli_test.go` holds both

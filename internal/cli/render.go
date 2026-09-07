@@ -105,7 +105,7 @@ func readOutService(w io.Writer, s machine.Service) {
 
 func readOutRun(w io.Writer, r machine.Run) {
 	writef(w, "Run        %s on %s (%s)\n", r.Record.ID, r.Record.Branch, r.Record.Status)
-	writef(w, "Outcome    %s\n", r.Outcome)
+	writef(w, "Outcome    %s%s\n", r.Outcome, advancingNote(r))
 	if r.Progress != nil {
 		writef(w, "Position   %s after %d of %d steps\n", positionOf(r), r.Steps, r.Budget)
 	}
@@ -125,9 +125,31 @@ func readOutRun(w io.Writer, r machine.Run) {
 		writef(w, "Not applied %s - this branch already had a run, and these start one\n",
 			strings.Join(r.NotApplied, ", "))
 	}
-	if r.NextAction != "" {
-		writef(w, "\nNext: %s\n", r.NextAction)
+	if r.NextAction() != "" {
+		writef(w, "\nNext: %s\n", r.NextAction())
 	}
+}
+
+// advancingNote says whether a run reported as executing is moving or standing
+// still.
+//
+// PRD section 9 requires this surface to reflect run state honestly, and names
+// the reason: working and dead must be visually distinct, because a stall that
+// looks alive is worse than an error. Executing is the one outcome that reads
+// the same for both, so this is where the two are told apart, and the run's
+// next action below says what to do about whichever it is.
+//
+// The other outcomes are left alone. Each of them describes a run whose
+// position nothing is moving either way, so annotating them would add a word
+// that distinguishes nothing.
+func advancingNote(r machine.Run) string {
+	if r.Outcome != machine.OutcomeExecuting {
+		return ""
+	}
+	if r.Advancing {
+		return " (a segment is running)"
+	}
+	return " (stalled - nothing is advancing this run)"
 }
 
 // readOutDecision prints the decision and the findings behind it in full.

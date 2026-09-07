@@ -60,9 +60,23 @@ const (
 	OutcomeCancelled Outcome = "cancelled"
 	// OutcomeExecuting is a run whose execution has not finished. It is not a
 	// failure and not terminal, and no decision is open: the run is between
-	// two of them, in a stage body that has not finished. Usually a segment is
-	// in flight; a run whose segment stopped without settling stands there
-	// too, until a call carries it on.
+	// two of them, at a position its last checkpoint recorded and nothing has
+	// carried it past.
+	//
+	// It covers runs that differ in what a reader should do, and the outcome
+	// is the same for all of them because none is finished with. A segment may
+	// be in flight, walking nodes right now. Or a segment may have stopped
+	// without settling - it failed, or the caller waiting on it gave up - and
+	// left the run standing at a position it can be resumed from with nothing
+	// moving it. Or the run may have no recorded position at all, which is
+	// what a run between its start and its first checkpoint looks like and
+	// what a run recorded and never walked looks like.
+	//
+	// What tells them apart is not the outcome but the action, and the facts
+	// that decide it are Standing's: Run.Advancing, which is the fact itself
+	// rather than an inference from where the run stands, and whether a
+	// checkpoint recorded a position. NextActionFor splits this outcome at the
+	// first, and NextActionOf is where the second is spent.
 	//
 	// Only an answer that reported the run rather than advancing it carries
 	// it, because a call that advanced one returns where that run stopped.
@@ -107,9 +121,103 @@ func (o Outcome) Terminal() bool {
 // String renders the outcome as it travels.
 func (o Outcome) String() string { return string(o) }
 
-// OutcomeOf translates a run into the outcome a driving agent reads. It is the
-// one place that translation happens, so the command line and the service
-// cannot disagree about what a stopped run means.
+// Execution is where a run's execution stands when an answer is built from it.
+//
+// It is graph.Status plus the one case that is not a status: a run with no
+// checkpoint has not executed a node, so there is no place its execution
+// stopped. graph.Status has no member for that, and passing graph.StatusInvalid
+// for it folded an absence into the arm that means a run this build cannot
+// interpret, which is how a run mid-start came to read as one that ended.
+//
+// The zero value is the unrecorded case, which is the honest default: a
+// Standing nobody filled in describes a run nothing is known to have executed.
+type Execution struct {
+	// recorded is whether a checkpoint said where execution stopped.
+	recorded bool
+	status   graph.Status
+	state    graph.State
+}
+
+// ExecutionAt is where a run's checkpoint says its execution stopped.
+func ExecutionAt(status graph.Status, state graph.State) Execution {
+	return Execution{recorded: true, status: status, state: state}
+}
+
+// ExecutionUnrecorded is the execution of a run with no checkpoint, which has
+// not executed a node and so has no position to be carried on from.
+func ExecutionUnrecorded() Execution { return Execution{} }
+
+// Recorded reports whether a checkpoint said where this run's execution
+// stopped. A caller reads it to tell a run standing at a position from one
+// that has none.
+func (e Execution) Recorded() bool { return e.recorded }
+
+// parked reports whether execution stopped at a bound rather than at a hold,
+// which is what separates a terminated record a bound produced from one a
+// person did. A run with no checkpoint stopped at no bound.
+func (e Execution) parked() bool {
+	return e.recorded && e.status != graph.StatusHalted && e.status.Stopped()
+}
+
+// outcome translates where execution stands, for a run whose record says it
+// may still move.
+func (e Execution) outcome() Outcome {
+	if !e.recorded {
+		// Nothing has executed, and that is not a run that ended without a
+		// verdict: it is a run whose execution has not finished. Which of the
+		// two runs this describes - one between Start and its first
+		// checkpoint, or one nothing is carrying on - is Standing.Advancing,
+		// and the answer that differs is the next action rather than this.
+		return OutcomeExecuting
+	}
+	switch e.status {
+	case graph.StatusHalted:
+		return OutcomeDecision
+	case graph.StatusCompleted:
+		if pipeline.Cancelled(e.state) {
+			return OutcomeCancelled
+		}
+		return OutcomeChecksPassed
+	case graph.StatusRoundsExhausted, graph.StatusBudgetExhausted, graph.StatusConverged:
+		return OutcomeFailed
+	case graph.StatusRunning:
+		// internal/graph writes this after every node that neither halts nor
+		// ends the run, so it is what a checkpoint carries for the whole of a
+		// segment. A read that finds one has found a run in flight, which is
+		// the opposite of a run that ended without a verdict.
+		return OutcomeExecuting
+	case graph.StatusInvalid:
+		// A checkpoint carrying no status is one this build cannot read, which
+		// is a different thing from having no checkpoint at all.
+		return OutcomeFailed
+	default:
+		return OutcomeFailed
+	}
+}
+
+// Standing is what a run's answer is decided from: its recorded status, where
+// its execution stands, and whether anything is advancing it right now.
+//
+// The three travel together because an answer built from two of them can
+// describe a run the third contradicts, and every direction of that
+// disagreement found so far was one surface reading two facts and dropping the
+// one that resolved them. Handing the three to one translation is what makes
+// the outcome and the action agree by construction rather than by each caller
+// remembering to consult the same set.
+type Standing struct {
+	// Record is the run's recorded status, which is authoritative about
+	// whether the run is finished with.
+	Record store.RunStatus
+	// Execution is where the run's execution stands.
+	Execution Execution
+	// Advancing is whether a segment of the run was executing when the answer
+	// was made. Its contract is Run.Advancing's.
+	Advancing bool
+}
+
+// OutcomeOf translates a run's standing into the outcome a driving agent
+// reads. It is the one place that translation happens, so the command line and
+// the service cannot disagree about what a stopped run means.
 //
 // The record decides first, and that ordering is the point. A run's status is
 // the authoritative record of where it stands, and its last checkpoint is where
@@ -132,19 +240,23 @@ func (o Outcome) String() string { return string(o) }
 // A run reaches the end when every stage cleared, and the stage reports say how
 // each one did; translating those into a verdict about the change is not this
 // function's, and a caller that needs it reads them.
-func OutcomeOf(record store.RunStatus, status graph.Status, state graph.State) Outcome {
-	switch record {
+//
+// It does not read Standing.Advancing. Both runs a missing checkpoint can
+// describe are unfinished, so the fact separates what to do about them rather
+// than what they are, and NextActionOf is where it is spent.
+func OutcomeOf(s Standing) Outcome {
+	switch s.Record {
 	case store.RunPassed:
 		return OutcomeChecksPassed
 	case store.RunFailed:
 		return OutcomeFailed
 	case store.RunTerminated:
-		if status != graph.StatusHalted && status.Stopped() {
+		if s.Execution.parked() {
 			return OutcomeFailed
 		}
 		return OutcomeCancelled
 	case store.RunPending, store.RunRunning, store.RunHeld:
-		return outcomeOfExecution(status, state)
+		return s.Execution.outcome()
 	default:
 		// A status this build does not define is one nothing here can
 		// interpret, so it reports a run that ended without a verdict rather
@@ -153,30 +265,20 @@ func OutcomeOf(record store.RunStatus, status graph.Status, state graph.State) O
 	}
 }
 
-// outcomeOfExecution translates where a run's execution stopped, for a run
-// whose record says it may still move.
-func outcomeOfExecution(status graph.Status, state graph.State) Outcome {
-	switch status {
-	case graph.StatusHalted:
-		return OutcomeDecision
-	case graph.StatusCompleted:
-		if pipeline.Cancelled(state) {
-			return OutcomeCancelled
-		}
-		return OutcomeChecksPassed
-	case graph.StatusRoundsExhausted, graph.StatusBudgetExhausted, graph.StatusConverged:
-		return OutcomeFailed
-	case graph.StatusRunning:
-		// internal/graph writes this after every node that neither halts nor
-		// ends the run, so it is what a checkpoint carries for the whole of a
-		// segment. A read that finds one has found a run in flight, which is
-		// the opposite of a run that ended without a verdict.
-		return OutcomeExecuting
-	case graph.StatusInvalid:
-		return OutcomeFailed
-	default:
-		return OutcomeFailed
+// NextActionOf is what to do about a run in this standing. It is the whole of
+// the choice, and Run.Decide is its only caller inside this package.
+//
+// It sharpens Outcome.NextActionFor with the one fact an outcome and a flag
+// cannot carry between them: a run with no recorded position that nothing is
+// advancing cannot be attached to and carried on, because attaching to a run
+// with no checkpoint reports it rather than resuming it. Telling a reader to
+// attach would be telling them to make a call that answers with the same run.
+func NextActionOf(s Standing) string {
+	outcome := OutcomeOf(s)
+	if outcome == OutcomeExecuting && !s.Advancing && !s.Execution.Recorded() {
+		return unrecordedAction
 	}
+	return outcome.NextActionFor(s.Advancing)
 }
 
 // nextActions is what a caller does about each outcome. PRD section 9 requires
@@ -199,4 +301,54 @@ func (o Outcome) NextAction() string {
 		return action
 	}
 	return "This build does not recognize that outcome. Report it."
+}
+
+// advancingAction is what to do about a run a service is advancing right now,
+// and stalledAction is what to do about one nothing is advancing.
+//
+// They sharpen OutcomeExecuting's row above rather than replacing it. That row
+// is what an outcome answers with when nobody has said which of the two runs
+// it describes, so it is the weaker claim that holds for both, which is why it
+// carries an "unless" these do not. NextActionFor is the only reader of these
+// two and the only place the choice is made.
+const (
+	advancingAction = "Nothing yet. A service is advancing this run, so attaching answers at once " +
+		"rather than waiting. Pause before asking again."
+	stalledAction = "Attach to carry it on. Nothing is advancing this run: its last segment stopped " +
+		"without finishing, and it stands at the position that segment reached. Attaching resumes it " +
+		"from there and blocks until its next decision."
+	// unrecordedAction is the third answer OutcomeExecuting has, for the run
+	// neither of the two above describes: nothing is advancing it and it has
+	// no position to be resumed from. NextActionOf is its only reader, because
+	// an outcome and the advancing fact alone cannot tell it from a stalled
+	// run standing at a checkpoint.
+	unrecordedAction = "End it and start a fresh run. This run has no recorded position, so there is " +
+		"nothing to carry it on from: attaching to it reports it rather than resuming it."
+)
+
+// NextActionFor is what to do about a run this outcome describes, given
+// whether anything is advancing it. advancing is machine.Run.Advancing, and
+// that field's contract is what it means.
+//
+// It differs from NextAction for one outcome. Five of the six describe a run
+// whose position nothing is moving either way, so knowing that nothing is
+// moving it adds nothing to what to do about it. OutcomeExecuting is the one
+// that covers both a run in flight and a run standing still, and its two
+// actions are opposites: pause before asking again, or attach to carry it on.
+// PRD section 9 gives both halves in one sentence joined by an "unless this
+// service is already advancing the run" that a caller reading the answer had
+// no way to evaluate. This is that sentence split at the fact.
+//
+// It answers from an outcome and that one fact, which is all a caller holding
+// those two has. A run with no recorded position takes neither half - there is
+// nothing to attach to - and NextActionOf is what knows that, so an answer a
+// surface builds goes through Run.Decide rather than through here.
+func (o Outcome) NextActionFor(advancing bool) string {
+	if o != OutcomeExecuting {
+		return o.NextAction()
+	}
+	if advancing {
+		return advancingAction
+	}
+	return stalledAction
 }

@@ -42,6 +42,16 @@ var ErrIncomplete = errors.New("service: cannot be built as asked")
 // real. Retrying is what a caller does about it.
 var ErrRunAdvancing = errors.New("service: this run is already advancing")
 
+// ErrRunEnding reports that the run's slot is held by an ending being written
+// rather than by a segment. It is separate from ErrRunAdvancing because the
+// two describe opposite things about the same slot: nothing is executing under
+// an ending's, which is what isAdvancing answers about it, and a caller handed
+// the other message would be told a run is moving while it is being ended.
+//
+// A caller meeting it may ask again once the ending is written, and will then
+// be answered from the record rather than from the slot.
+var ErrRunEnding = errors.New("service: this run is being ended")
+
 // ErrRunsActive reports a stop or a restart refused because runs are active.
 // PRD section 9 makes both refuse by default and requires an explicit force
 // rather than a general yes-to-everything flag.
@@ -131,7 +141,12 @@ type Service struct {
 	// the branch gates. It is never held across a run's execution.
 	mu        sync.Mutex
 	built     *driver
-	advancing map[string]context.CancelFunc
+	advancing map[string]*slot
+	// givingUp is whether Close has stopped taking background work. It is
+	// read and written under mu with the registration itself, which is what
+	// orders a continuation started from a request-serving goroutine against
+	// the wait below.
+	givingUp bool
 	// starting holds one gate per branch a start is being decided for, so the
 	// check that a branch has no run and the creation of one are a single
 	// decision rather than a check a second caller can win the race to.
@@ -206,7 +221,7 @@ func Open(ctx context.Context, o Options) (*Service, error) {
 		catalog:   o.Catalog,
 		newFixer:  o.NewFixer,
 		registry:  newRegistry(),
-		advancing: make(map[string]context.CancelFunc),
+		advancing: make(map[string]*slot),
 		starting:  make(map[branchKey]*branchGate),
 		stopping:  make(chan struct{}),
 	}
@@ -313,6 +328,13 @@ func (s *Service) Stop(restarting bool) {
 //
 // The lock is released last, so nothing this service still holds outlives the
 // point at which another service may take the home.
+//
+// Background work is refused before it is waited for, and the two are that way
+// round on purpose. A continuation is started from whichever goroutine a
+// segment ended on, so nothing orders its decision against this; what is
+// ordered is its registration, which stopWork closes off under the mutex
+// startWork registers under. Waiting first and refusing after would leave the
+// interleaving where work is registered against a database this then closes.
 func (s *Service) Close() error {
 	s.closeOnce.Do(func() {
 		s.Stop(false)
@@ -324,6 +346,7 @@ func (s *Service) Close() error {
 			errs = append(errs, s.listener.Close())
 		}
 		s.cancelAdvancing()
+		s.stopWork()
 		s.work.Wait()
 		if s.events != nil {
 			errs = append(errs, s.events.Close())
@@ -346,11 +369,16 @@ func (s *Service) Close() error {
 // cancelAdvancing ends every run this service is executing. A run's agent
 // processes are scoped to the context its round runs on, so cancelling is what
 // ends them, per PRD section 8's process lifetime rule.
+//
+// A slot standing for an ending rather than for a segment holds no segment to
+// end, so it is passed over: nothing is executing under it.
 func (s *Service) cancelAdvancing() {
 	s.mu.Lock()
 	cancels := make([]context.CancelFunc, 0, len(s.advancing))
-	for _, cancel := range s.advancing {
-		cancels = append(cancels, cancel)
+	for _, held := range s.advancing {
+		if held.cancel != nil {
+			cancels = append(cancels, held.cancel)
+		}
 	}
 	s.mu.Unlock()
 	for _, cancel := range cancels {

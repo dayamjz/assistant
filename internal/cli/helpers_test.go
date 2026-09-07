@@ -17,6 +17,7 @@ import (
 	"github.com/dayamjz/assistant/internal/cli"
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/machine"
+	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/service"
 	"github.com/dayamjz/assistant/internal/stages"
@@ -107,12 +108,19 @@ func run(t *testing.T, h *home.Home, workingDir string, args ...string) invocati
 // test whose subject is where on that line an argument may appear.
 func runArgs(t *testing.T, workingDir string, args ...string) invocation {
 	t.Helper()
-	var out, errs bytes.Buffer
 	executable, err := os.Executable()
 	if err != nil {
 		t.Fatalf("resolving this binary: %v", err)
 	}
-	code := cli.Run(t.Context(), cli.Environment{
+	return runArgsIn(t.Context(), executable, workingDir, args...)
+}
+
+// runArgsIn drives the surface under a context the caller owns, for the tests
+// whose subject is a caller that gives up on a call it is blocked in. It takes
+// nothing from testing.T, so it is safe to call from a goroutine.
+func runArgsIn(ctx context.Context, executable, workingDir string, args ...string) invocation {
+	var out, errs bytes.Buffer
+	code := cli.Run(ctx, cli.Environment{
 		Args:       args,
 		Stdout:     &out,
 		Stderr:     &errs,
@@ -177,13 +185,22 @@ func newSubject(t *testing.T) string {
 	return resolved
 }
 
-// serve opens a service on a home and serves it for the length of the test.
-// The command surface launches one in a process of its own; a test opens it
-// here so that the agent it resolves is the scripted stand-in rather than
-// whatever is installed.
+// serve opens a service on a home with the stages the product wires and serves
+// it for the length of the test. The command surface launches one in a process
+// of its own; a test opens it here so that the agent it resolves is the
+// scripted stand-in rather than whatever is installed.
 func serve(t *testing.T, h *home.Home) {
 	t.Helper()
-	serveUntilStopped(t, h)
+	serveStages(t, h, stages.All())
+}
+
+// serveStages is serve for a test that varies which stages have bodies, since
+// that is what moves where a run first stops and what a body does when it is
+// reached.
+func serveStages(t *testing.T, h *home.Home, served pipeline.Stages) {
+	t.Helper()
+	runner := standin.New(t, standin.Script{}).Runner()
+	serveCatalog(t, h, served, agents.NewCatalog(fixedFactory{runner: runner}))
 }
 
 // serveUntilStopped is serve for a test whose subject is what happens with the
@@ -193,7 +210,7 @@ func serve(t *testing.T, h *home.Home) {
 func serveUntilStopped(t *testing.T, h *home.Home) func() {
 	t.Helper()
 	runner := standin.New(t, standin.Script{}).Runner()
-	return serveCatalog(t, h, agents.NewCatalog(fixedFactory{runner: runner}))
+	return serveCatalog(t, h, stages.All(), agents.NewCatalog(fixedFactory{runner: runner}))
 }
 
 // serveWithNoRunnableAgent serves a home whose one configured adapter refuses
@@ -201,12 +218,13 @@ func serveUntilStopped(t *testing.T, h *home.Home) func() {
 // can run. Every other helper here serves a home that resolves.
 func serveWithNoRunnableAgent(t *testing.T, h *home.Home) func() {
 	t.Helper()
-	return serveCatalog(t, h, agents.NewCatalog(unrunnableFactory{}))
+	return serveCatalog(t, h, stages.All(), agents.NewCatalog(unrunnableFactory{}))
 }
 
 // serveCatalog is the one owner of how these tests open and serve a service,
-// so the only thing a caller varies is which agents it may resolve.
-func serveCatalog(t *testing.T, h *home.Home, catalog *agents.Catalog) func() {
+// so the only things a caller varies are the stages it serves and which agents
+// it may resolve.
+func serveCatalog(t *testing.T, h *home.Home, served pipeline.Stages, catalog *agents.Catalog) func() {
 	t.Helper()
 	build, err := store.CurrentBuild()
 	if err != nil {
@@ -214,7 +232,7 @@ func serveCatalog(t *testing.T, h *home.Home, catalog *agents.Catalog) func() {
 	}
 	running, err := service.Open(t.Context(), service.Options{
 		Home:     h,
-		Stages:   stages.All(),
+		Stages:   served,
 		NewFixer: stages.PendingFixer,
 		Build:    build,
 		Catalog:  catalog,
@@ -222,15 +240,15 @@ func serveCatalog(t *testing.T, h *home.Home, catalog *agents.Catalog) func() {
 	if err != nil {
 		t.Fatalf("opening the service: %v", err)
 	}
-	served := make(chan error, 1)
-	go func() { served <- running.Serve(context.Background()) }()
+	serving := make(chan error, 1)
+	go func() { serving <- running.Serve(context.Background()) }()
 	var once sync.Once
 	stop := func() {
 		once.Do(func() {
 			if err := running.Close(); err != nil {
 				t.Errorf("closing the service: %v", err)
 			}
-			if err := <-served; err != nil {
+			if err := <-serving; err != nil {
 				t.Errorf("serving: %v", err)
 			}
 		})

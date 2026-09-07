@@ -1,6 +1,9 @@
 package machine
 
 import (
+	"bytes"
+	"encoding/json"
+
 	"github.com/dayamjz/assistant/internal/findings"
 	"github.com/dayamjz/assistant/internal/graph"
 	"github.com/dayamjz/assistant/internal/pipeline"
@@ -161,13 +164,51 @@ type Run struct {
 	Record store.Run `json:"record"`
 	// Outcome is what a driving agent reads to decide what to do next.
 	Outcome Outcome `json:"outcome"`
-	// NextAction is what to do about that outcome, which PRD section 9
-	// requires of every outcome, terminal or not.
-	NextAction string `json:"next_action"`
+	// nextAction is what to do about this run, which PRD section 9 requires
+	// of every outcome, terminal or not. It is read through NextAction, and
+	// this is where what may write it is written down.
+	//
+	// Two things do, and they answer different questions. Decide derives it
+	// from a standing, so a surface building an answer cannot hand back an
+	// action that disagrees with the outcome and the advancing fact beside it.
+	// UnmarshalJSON writes whatever next_action a document carried, because a
+	// decoded answer relays what the answering service decided rather than a
+	// decision made here; an answer that arrived that way is as consistent as
+	// the service that sent it and no more.
+	//
+	// What the field being unexported buys is a package boundary rather than a
+	// property of this package: no code outside internal/machine can assign
+	// it, so a surface like internal/service's report has no assignment site
+	// to forget.
+	nextAction string
 	// Progress is where the run's execution stood at its last checkpoint. It
 	// is absent for a run that has not been executed yet, which is a different
 	// state from a run that has and is standing still.
 	Progress *graph.Status `json:"progress,omitempty"`
+	// Advancing is whether a segment of this run was executing when this
+	// answer was made.
+	//
+	// It is a fact about now, and the two records this answer is otherwise
+	// built from do not hold it: the run's status says the run is unfinished
+	// and its checkpoint says where its execution stopped, and both say the
+	// same thing about a run being walked this instant and a run whose segment
+	// stopped without settling and that nothing has picked up. Its owner is
+	// the service, for the length of one segment and nowhere durable, which is
+	// why a service that died mid-segment leaves a run this reports false for
+	// until something carries it on.
+	//
+	// It is the answering service's own answer about itself. A home has one
+	// service holding it, on the terms internal/home's lock states and with
+	// the gaps that package's documentation names, so false means nothing here
+	// is advancing the run rather than that nothing anywhere is.
+	//
+	// False on a run that has ended, or one waiting on an answer, says nothing
+	// a reader did not already have from the outcome. Where it is load-bearing
+	// is OutcomeExecuting, which covers a run in flight, a run standing still
+	// at a position, and a run with no position at all; NextActionOf is where
+	// this fact chooses between them, and Decide is what puts it and the
+	// action into an answer together when a surface builds one.
+	Advancing bool `json:"advancing"`
 	// Position is the node that has not run, empty exactly when the run
 	// completed.
 	Position string `json:"position,omitempty"`
@@ -198,6 +239,70 @@ type Run struct {
 	// that created the run it reports and every answer to a call that carried
 	// none of those inputs.
 	NotApplied []string `json:"not_applied,omitempty"`
+}
+
+// NextAction is what to do about this run, which PRD section 9 requires of
+// every outcome, terminal or not.
+func (r Run) NextAction() string { return r.nextAction }
+
+// Decide fills in what this answer says about the run: the outcome, whether
+// anything is advancing it, and what to do next, all from one standing.
+//
+// It is how a surface that builds an answer gets a next action, and the three
+// come from one input, so an action cannot be put behind an outcome it
+// contradicts and a branch that forgot to derive one would leave the zero
+// value rather than a stale sentence. What else writes the field, and what the
+// unexported field does and does not buy, is on nextAction itself.
+//
+// What that does not make unrepresentable is the outcome and the advancing
+// fact themselves. Both are exported, so a caller may write them after this
+// returns; the action is the one it has no assignment site for.
+func (r Run) Decide(s Standing) Run {
+	r.Outcome = OutcomeOf(s)
+	r.Advancing = s.Advancing
+	r.nextAction = NextActionOf(s)
+	return r
+}
+
+// MarshalJSON writes the run with its next action, which is unexported and so
+// would not travel on its own. The shape is the exported fields plus that one,
+// so what travels is what a caller decodes.
+//
+// It encodes with HTML escaping off for the reason Encoder gives: a run's
+// answer carries the most agent-written text of any shape here - intents,
+// reasons, stage reports, findings relayed verbatim - and rewriting three
+// ordinary characters in them is worse than leaving them. Encoder's own
+// setting cannot reach inside a Marshaler, which writes its own bytes, so the
+// choice has to be made again here rather than inherited.
+func (r Run) MarshalJSON() ([]byte, error) {
+	type fields Run
+	var document bytes.Buffer
+	enc := json.NewEncoder(&document)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(struct {
+		fields
+		NextAction string `json:"next_action"`
+	}{fields(r), r.nextAction}); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(document.Bytes(), []byte("\n")), nil
+}
+
+// UnmarshalJSON reads a run back, including the next action the answering
+// service decided. A decoded answer reports what that service said rather than
+// a decision made here; nextAction says why that is deliberate.
+func (r *Run) UnmarshalJSON(data []byte) error {
+	type fields Run
+	var read struct {
+		fields
+		NextAction string `json:"next_action"`
+	}
+	if err := json.Unmarshal(data, &read); err != nil {
+		return err
+	}
+	*r = Run(read.fields)
+	r.nextAction = read.NextAction
+	return nil
 }
 
 // Runs is the answer to a request for recent runs, newest first.
