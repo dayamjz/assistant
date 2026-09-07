@@ -48,16 +48,13 @@ func Drives() []Drove {
 		ownership  = "TestACopiedProjectDirectoryDoesNotOwnTheGateItInherited"
 		checks     = "TestAnEmptyCheckListIsNotAPass"
 	)
-	// The four hostile-template conditions share one caveat, stated once. The
-	// hooks a template plants are receive-side, so only a push to the gate
-	// could run one, and the gate's own pre-receive - installed after the
-	// repository is created - declines every push over the "assistant gate
-	// admit" verb internal/cli does not carry, so update and post-update never
-	// run. A push is driven where a gate stands and the tripwire file read
-	// after it, and both are logged; no clause rests on them.
+	// The four hostile-template conditions share one caveat, stated once, and
+	// no clause anywhere rests on their tripwire file.
 	const noTemplateHookPath = "What the refusal establishes is the refusal itself, with the substrings " +
-		"the condition records. That no template hook ran is not established: a template's hooks are " +
-		"receive-side and the only push that could run one is declined by the gate's own pre-receive."
+		"the condition records. Its tripwire half has no producer: a template's hooks are receive-side, " +
+		"and internal/gate's own pre-receive runs \"assistant gate admit\" and exits on its status " +
+		"before chaining to a preserved hook, so with no gate verb in internal/cli every push is " +
+		"declined and neither a promoted pre-receive nor update nor post-update ever runs."
 
 	// Every stage condition is undriven for one reason, stated once. A stage
 	// with no body reports one ask finding and holds, so there is nothing for
@@ -94,21 +91,25 @@ func Drives() []Drove {
 			"Reported as the gap internal/gate names rather than as a pass: a push is driven through the " +
 				"gate under the redirect and the tripwire says which hook git ran."},
 
-		{"refusal-hostile-harness-installation", ReachPackage, branch,
-			"A whole run over the branch carrying the installation is driven through the binary, but " +
-				"nothing this condition records is established by it: its whole expectation is the " +
-				"tripwire half, and every executable it plants is reached only through a stage body. " +
-				"internal/stages holds none, so a run launches no agent, runs no configured command, " +
-				"and makes no commit or push, and the tripwire file stays empty whatever the product " +
-				"resolved. What is driven at package reach beside that run is config.Resolve over the " +
-				"branch's own document. The file is read and logged rather than asserted on, and the " +
-				"row becomes ReachBinary when a stage body lands."},
+		{"refusal-hostile-harness-installation", ReachNone, "",
+			"Neither half of what this condition records is established, at any reach. Its Value is the " +
+				"agent and commands a run resolves, and no shipped surface reports either: no " +
+				"internal/machine shape carries an agent, and the config.Resolve call this harness does " +
+				"drive is over the pushed layer with the trusted one absent, so it cannot resolve the " +
+				"default branch's fixture-trusted-agent at all. Its tripwire half has no producer " +
+				"either: every executable it plants is reached only through a stage body, internal/" +
+				"stages holds none, and a run therefore launches no agent, runs no configured command, " +
+				"and makes no commit or push. TestTheBranchUnderValidationChoosesNothingThatRuns does " +
+				"drive a whole run over this branch and reads the tripwire file at the end, and logs " +
+				"what it holds; what that test establishes is the row below and the suppression " +
+				"refusal. This becomes drivable with the stage body."},
 		{"refusal-pushed-commands-and-agent", ReachPackage, branch,
 			"The one call the condition names is config.Resolve over the operator's layer and the " +
 				"pushed one, driven in process: the three keys are dropped and reported as rejections " +
-				"and the one the branch may set survives. Its tripwire half is not established, for " +
-				"the reason above: executing the branch's commands.test needs a test stage and this " +
-				"build has no stage body. Nothing about this condition is met through the binary."},
+				"and the one the branch may set survives. That is the whole of what is established " +
+				"here. Its tripwire half is not, for the reason in the row above: executing the " +
+				"branch's commands.test needs a test stage and this build has no stage body. Nothing " +
+				"about this condition is met through the binary."},
 		{"refusal-unparseable-trusted-config", ReachPackage, trustedDoc,
 			"The document is read off the default branch through internal/vcs and parsed. No run reads a " +
 				"repository's own document in this build, which the same test observes on a run."},
