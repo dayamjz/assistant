@@ -15,14 +15,22 @@ import (
 
 // contended is what became of one run several callers answered at once.
 type contended struct {
-	// perStage is how many node executions one stage costs, measured on this
-	// same run by answering it once with nobody else driving it.
-	perStage int
+	// perHold is how many node executions carrying the run from one hold to
+	// the next costs, measured on this same run by answering one hold with
+	// nobody else driving it.
+	//
+	// It is a per-hold cost rather than a per-stage one, because
+	// internal/pipeline gives a stage that holds a hold node as well as a
+	// stage node and sends one that does not straight on. The two are the same
+	// number only while the stages a run holds at run consecutively, which is
+	// checked before this is measured rather than assumed.
+	perHold int
 	// before and after are where the run stood either side of the callers, and
-	// stagesAdvanced is how many stages it moved through.
-	before         machine.Run
-	after          machine.Run
-	stagesAdvanced int
+	// holdsAdvanced is how many holds it moved through, counted in the same
+	// unit perHold was measured in.
+	before        machine.Run
+	after         machine.Run
+	holdsAdvanced int
 	// answers is what each caller exited with, so a caller that crashed or
 	// wedged is visible rather than absorbed.
 	answers []machine.Code
@@ -41,18 +49,29 @@ type contended struct {
 // loses whatever the loser wrote or leaves the run standing somewhere neither
 // caller believes it is.
 //
-// Neither is asserted against a constant. What one stage costs is measured on
-// this same run first, by answering it once with nobody else driving, so the
-// arithmetic holds as the pipeline's own shape changes. Several callers may
-// legitimately carry a run through more than one stage between them, because a
+// Neither is asserted against a constant. What carrying the run from one hold
+// to the next costs is measured on this same run first, by answering one hold
+// with nobody else driving, and the advance is then counted in that same unit:
+// holds reached, not positions in the stage order. Counting positions would
+// make the arithmetic depend on which stages have bodies, because a stage that
+// holds costs a node more than one that does not. Several callers may
+// legitimately carry a run through more than one hold between them, because a
 // run that reaches its next hold is one the next caller may answer, so what is
-// checked is that the total spent is exactly what the stages it moved through
+// checked is that the total spent is exactly what the holds it moved through
 // cost.
 func TestSeveralCallersDrivingOneRunExecuteNoNodeTwice(t *testing.T) {
 	requiresIdentifiedPeer(t)
 	principles.Cite(t, principles.P6)
 
 	holding := stagesWithoutABody(t)
+	// One hold-to-hold transition costs what the next one does only while the
+	// stages a run holds at run consecutively: internal/pipeline gives a stage
+	// that holds a hold node as well as a stage node, and a stage that does
+	// not hold goes straight on, so a non-holding stage sitting between two
+	// holds adds a node to that transition and to no other. Refusing here is
+	// what keeps the day a middle stage gets a body from arriving as a
+	// contention failure rather than as the measurement no longer applying.
+	consecutiveHolds(t, holding)
 
 	j := inClone(t)
 	started := startRun(t, j, "--intent", "a change several callers answer at once")
@@ -61,7 +80,7 @@ func TestSeveralCallersDrivingOneRunExecuteNoNodeTwice(t *testing.T) {
 	// One answer with nobody else driving, which is the measurement everything
 	// below is compared against.
 	measured := decodeRun(t, succeeds(t, j.Command("--answer", "approved")))
-	observed.perStage = measured.Steps - started.Steps
+	observed.perHold = measured.Steps - started.Steps
 	observed.before = measured
 
 	// As many callers as the run has holds left to be carried through while
@@ -90,42 +109,42 @@ func TestSeveralCallersDrivingOneRunExecuteNoNodeTwice(t *testing.T) {
 	observed.answers = codes
 
 	observed.after = startRun(t, j)
-	observed.stagesAdvanced = stagePosition(observed.after) - stagePosition(observed.before)
+	observed.holdsAdvanced = holdPosition(t, holding, observed.after) - holdPosition(t, holding, observed.before)
 	observed.completed = last(answerHolds(t, j, observed.after, "approved")).Outcome == machine.OutcomeChecksPassed
 
 	sound := journey.Check[contended]{
-		What: "a run several callers answered at once spent exactly what the stages it moved through " +
+		What: "a run several callers answered at once spent exactly what the holds it moved through " +
 			"cost, moved forward rather than sideways, and was still drivable to the end of the gate " +
 			"afterwards",
 		Clauses: []journey.Clause[contended]{
 			{
-				States: "one stage was measured at a cost there is something to compare against",
+				States: "one hold was measured at a cost there is something to compare against",
 				Holds: func(c contended) error {
-					if c.perStage <= 0 {
-						return fmt.Errorf("one stage was measured at %d node executions, so there is nothing to "+
-							"compare the contended run against", c.perStage)
+					if c.perHold <= 0 {
+						return fmt.Errorf("carrying the run from one hold to the next was measured at %d node "+
+							"executions, so there is nothing to compare the contended run against", c.perHold)
 					}
 					return nil
 				},
 			},
 			{
-				States: "the run moved forward through at least one stage",
+				States: "the run moved forward through at least one hold",
 				Holds: func(c contended) error {
-					if c.stagesAdvanced < 1 {
-						return fmt.Errorf("%d callers answered and the run moved through %d stages",
-							len(c.answers), c.stagesAdvanced)
+					if c.holdsAdvanced < 1 {
+						return fmt.Errorf("%d callers answered and the run moved through %d hold(s)",
+							len(c.answers), c.holdsAdvanced)
 					}
 					return nil
 				},
 			},
 			{
-				States: "the run spent exactly what the stages it moved through cost",
+				States: "the run spent exactly what the holds it moved through cost",
 				Holds: func(c contended) error {
 					spent := c.after.Steps - c.before.Steps
-					if want := c.stagesAdvanced * c.perStage; spent != want {
-						return fmt.Errorf("the run moved through %d stage(s) and spent %d node executions, and "+
-							"one stage costs %d, so %d were expected; a node body ran more than once or a "+
-							"segment wrote over another's history", c.stagesAdvanced, spent, c.perStage, want)
+					if want := c.holdsAdvanced * c.perHold; spent != want {
+						return fmt.Errorf("the run moved through %d hold(s) and spent %d node executions, and "+
+							"one hold costs %d, so %d were expected; a node body ran more than once or a "+
+							"segment wrote over another's history", c.holdsAdvanced, spent, c.perHold, want)
 					}
 					return nil
 				},
@@ -164,20 +183,20 @@ func TestSeveralCallersDrivingOneRunExecuteNoNodeTwice(t *testing.T) {
 		},
 		Counterfeits: []journey.Counterfeit[contended]{
 			{Named: "a node body executed twice", Break: func(c contended) contended {
-				c.after.Steps += c.perStage
+				c.after.Steps += c.perHold
 				return c
 			}},
 			{Named: "a segment's node executions went unrecorded", Break: func(c contended) contended {
-				c.after.Steps -= c.perStage
+				c.after.Steps -= c.perHold
 				return c
 			}},
-			{Named: "one stage was measured at nothing, so there is no cost to compare against",
+			{Named: "one hold was measured at nothing, so there is no cost to compare against",
 				Break: func(c contended) contended {
-					c.perStage = 0
+					c.perHold = 0
 					return c
 				}},
 			{Named: "the run went backwards", Break: func(c contended) contended {
-				c.stagesAdvanced = 0
+				c.holdsAdvanced = 0
 				return c
 			}},
 			{Named: "every caller was refused, so nothing shows what one that is not does",
@@ -215,11 +234,50 @@ func TestSeveralCallersDrivingOneRunExecuteNoNodeTwice(t *testing.T) {
 // while telling a reader it rejects a caller that died.
 const signalled = machine.Code(-1)
 
-// stagePosition is how far through the gate a run stands, counted in stages,
-// with a run that has finished standing past the last of them.
-func stagePosition(run machine.Run) int {
+// holdPosition is how far through the gate a run stands, counted in the holds
+// it reaches rather than in positions in the stage order, with a run that has
+// finished standing past the last of them.
+//
+// The unit is what makes it right: the cost this test compares against is
+// measured from one hold to the next, so an advance measured in stage
+// positions would count a stage the run passed straight through as though it
+// had cost a hold.
+func holdPosition(t *testing.T, holding []pipeline.Stage, run machine.Run) int {
+	t.Helper()
 	if run.Decision == nil {
-		return len(pipeline.Order())
+		return len(holding)
 	}
-	return slices.Index(stageOrder(), run.Decision.Stage)
+	at := slices.IndexFunc(holding, func(stage pipeline.Stage) bool {
+		return stage.String() == run.Decision.Stage
+	})
+	if at < 0 {
+		t.Fatalf("the run is holding at %s, which is not one of the stages this build has no body for "+
+			"(%v), so a stage with a body is holding too and what one hold costs is no longer one "+
+			"number; this check needs rewriting against whatever holds a run now",
+			run.Decision.Stage, holding)
+	}
+	return at
+}
+
+// consecutiveHolds refuses unless the stages this build holds at run
+// consecutively in internal/pipeline's order.
+//
+// That is the property the per-hold cost rests on. internal/pipeline gives a
+// stage that holds both a stage node and a hold node and sends a stage that
+// does not hold straight to the next one, so a non-holding stage between two
+// holds makes that one transition cost a node more than its neighbours and
+// there is no single per-hold cost to measure. Refusing here says that
+// plainly, rather than letting the arithmetic below report it as a node body
+// having run twice.
+func consecutiveHolds(t *testing.T, holding []pipeline.Stage) {
+	t.Helper()
+	order := pipeline.Order()
+	first := slices.Index(order, holding[0])
+	for i, stage := range holding {
+		if order[first+i] != stage {
+			t.Fatalf("this build holds at %v, which are not consecutive in %v, so one hold does not cost "+
+				"what the next one does and there is no per-hold cost to measure; this check needs "+
+				"rewriting against whatever holds a run now", holding, order)
+		}
+	}
 }
