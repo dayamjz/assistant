@@ -162,7 +162,7 @@ type Run struct {
 	// Outcome is what a driving agent reads to decide what to do next.
 	Outcome Outcome `json:"outcome"`
 	// NextAction is what to do about that outcome, which PRD section 9
-	// requires a terminal one to carry.
+	// requires of every outcome, terminal or not.
 	NextAction string `json:"next_action"`
 	// Progress is where the run's execution stood at its last checkpoint. It
 	// is absent for a run that has not been executed yet, which is a different

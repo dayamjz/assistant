@@ -180,8 +180,8 @@ func outcomeOfExecution(status graph.Status, state graph.State) Outcome {
 }
 
 // nextActions is what a caller does about each outcome. PRD section 9 requires
-// a terminal outcome to carry one, so this is a row per member rather than a
-// sentence for the cases somebody remembered.
+// every outcome to carry one, terminal or not, so this is a row per member
+// rather than a sentence for the cases somebody remembered.
 var nextActions = map[Outcome]string{
 	OutcomeDecision:     "Answer the decision to carry the run on.",
 	OutcomeChecksPassed: "The gate is done with this change. Ask the person whether to merge it.",
@@ -191,8 +191,9 @@ var nextActions = map[Outcome]string{
 	OutcomeExecuting:    "Nothing yet. Attach to carry it on - that blocks until the next decision unless this service is already advancing the run, in which case it answers at once and you should pause before asking again.",
 }
 
-// NextAction is what to do about a run that stopped with this outcome. Every
-// member has one, so no outcome is answered with silence.
+// NextAction is what to do about a run this outcome describes, whether it has
+// ended or is still moving. Every member has one, so no outcome is answered
+// with silence.
 func (o Outcome) NextAction() string {
 	if action, ok := nextActions[o]; ok {
 		return action
