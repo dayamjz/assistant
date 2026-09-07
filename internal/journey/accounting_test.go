@@ -108,6 +108,12 @@ func TestEveryCheckHereRefusesACheckThatCannotFail(t *testing.T) {
 			Clauses:      []journey.Clause[int]{zero, anything},
 			Counterfeits: []journey.Counterfeit[int]{counts(1)},
 		}},
+		{"a check whose subject carries a claim rather than naming one", journey.Check[int]{
+			What: "the number is zero and was read off a real observation rather than stated, and " +
+				"nothing else about it was assumed",
+			Clauses:      []journey.Clause[int]{{States: "the number is zero", Holds: errFor}},
+			Counterfeits: []journey.Counterfeit[int]{{Named: "it came back as something else", Break: func(n int) int { return n + 1 }}},
+		}},
 		{"a check that says nothing about what it establishes", journey.Check[int]{
 			Clauses:      []journey.Clause[int]{zero},
 			Counterfeits: []journey.Counterfeit[int]{counts(1)},

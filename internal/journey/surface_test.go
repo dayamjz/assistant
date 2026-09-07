@@ -222,9 +222,7 @@ func TestTheWholeCommandSurfaceAnswersOneDocumentPerInvocation(t *testing.T) {
 	drive[machine.Eject](t, &observed, j, "eject", "--confirm")
 
 	answers := journey.Check[surface]{
-		What: "every verb the specification names answers exactly one document of its own shape on " +
-			"standard output, a run is driven across separate invocations of the binary and survives " +
-			"the service being replaced between two of them, and the three exit codes are told apart",
+		What: "the command surface, verb by verb",
 		Clauses: []journey.Clause[surface]{
 			{
 				States: "every verb PRD section 9's table names was driven",

@@ -103,8 +103,7 @@ func TestAnEventLogIsNotCurrentState(t *testing.T) {
 	}
 
 	authoritative := journey.Check[resolvedState]{
-		What: "the surface reports a task's authoritative current state and its source, not the newest " +
-			"entry of the append-only log, which says something else",
+		What: "P8: a task whose event log ends on a decision",
 		Clauses: []journey.Clause[resolvedState]{
 			{
 				States: "the log holds more than one entry",

@@ -79,6 +79,14 @@ something somebody once confirmed by hand:
   clause that is falsifiable in the model and vacuous in the subject is the one
   shape counterfeits alone never catch. A clause that is not an absence may not
   carry a precondition, so the writer has to decide which kind it is;
+- a check's `What` **names its subject and may not be its claim**. It is bounded
+  at 72 characters, and the sentence a reader sees is `Claim()`, composed from
+  the clauses rather than written beside them. A free-text claim next to a list
+  of assertions is two statements of the same thing that drift, and the prose is
+  the one nothing checks; several checks here promised more than they asserted
+  that way. The bound removes room for a paragraph of promises. It does **not**
+  make a short claim impossible - a subject that lies in eight words is still
+  writable, and only review catches that;
 - `TestEveryCheckHereRefusesACheckThatCannotFail` drives `Verify` itself over
   checks that are defective in each of those ways, because a `Verify` that
   quietly accepted anything would make every check here green.

@@ -26,8 +26,22 @@ import (
 // O is the observation: a typed model of what the product did, produced by
 // driving the product rather than by describing it.
 type Check[O any] struct {
-	// What states what this check establishes, in the terms a failure should
-	// be read in. It appears in every failure Verify reports.
+	// What names the subject this check is about, and may not be the claim it
+	// makes. It is a short label - "P2: a run through the binary" - and Verify
+	// refuses one longer than AboutMax.
+	//
+	// The bound is the construction. This package shipped several checks whose
+	// What promised more than their clauses asserted, because a free-text claim
+	// beside a list of assertions is two statements of the same thing that
+	// drift, and the prose is the one nothing checks. Claim renders what the
+	// check actually establishes by reading the clauses, so the sentence a
+	// reader sees is composed from the assertions rather than written beside
+	// them.
+	//
+	// What the bound does not do is make a short claim impossible, only a long
+	// one. A label with room for a paragraph of promises is what this removes;
+	// a label that lies in eight words is still writable, and only review
+	// catches that.
 	What string
 	// Clauses are the assertions this check makes, each answered on its own.
 	// A check declaring none is refused, and so is one carrying a clause no
@@ -103,6 +117,27 @@ type Counterfeit[O any] struct {
 	Break func(O) O
 }
 
+// AboutMax bounds Check.What. It is small enough that a multi-clause promise
+// does not fit and large enough for a subject a reader recognizes.
+const AboutMax = 72
+
+// Claim is what this check establishes, composed from its clauses rather than
+// written beside them, so the sentence cannot promise more than the assertions
+// deliver.
+func (c Check[O]) Claim() string {
+	var b strings.Builder
+	b.WriteString(c.What)
+	for i, clause := range c.Clauses {
+		if i == 0 {
+			b.WriteString(": ")
+		} else {
+			b.WriteString("; ")
+		}
+		b.WriteString(clause.States)
+	}
+	return b.String()
+}
+
 // Verify reports what is wrong, and nil when nothing is.
 //
 // It answers four questions in one call, and all four are failures of the same
@@ -154,14 +189,14 @@ func (c Check[O]) Verify(observed O) error {
 		if !caught {
 			return fmt.Errorf("%s: this check accepts an observation in which %s, so it would report the "+
 				"product correct while the product was wrong; the check proves nothing as written",
-				c.What, counterfeit.Named)
+				c.Claim(), counterfeit.Named)
 		}
 	}
 	for i, clause := range c.Clauses {
 		if !reached[i] {
 			return fmt.Errorf("%s: no counterfeit here makes the clause %q report anything, so nothing "+
 				"shows that clause can fail; the check as a whole discriminates and this part of it "+
-				"does not, which is how a clause that establishes nothing survives", c.What, clause.States)
+				"does not, which is how a clause that establishes nothing survives", c.Claim(), clause.States)
 		}
 	}
 	return nil
@@ -170,6 +205,12 @@ func (c Check[O]) Verify(observed O) error {
 // declared reports what is wrong with how the check is written, before any of
 // it is run against an observation.
 func (c Check[O]) declared() error {
+	if len(c.What) > AboutMax {
+		return fmt.Errorf("journey: %q is %d characters and a check's subject is bounded at %d; it names "+
+			"what the check is about and the clauses say what it establishes, so a claim written here "+
+			"would be a second statement of what they already say",
+			c.What, len(c.What), AboutMax)
+	}
 	if strings.TrimSpace(c.What) == "" {
 		return fmt.Errorf("journey: a check has to say what it establishes")
 	}
@@ -202,7 +243,7 @@ func (c Check[O]) declared() error {
 			return fmt.Errorf("journey: %s: a counterfeit has to say what went wrong in it", c.What)
 		}
 		if counterfeit.Break == nil {
-			return fmt.Errorf("journey: %s: the counterfeit %q derives nothing", c.What, counterfeit.Named)
+			return fmt.Errorf("journey: %s: the counterfeit %q derives nothing", c.Claim(), counterfeit.Named)
 		}
 	}
 	return nil

@@ -200,8 +200,7 @@ func TestAFindingThatIsNotClassifiedStopsForAPerson(t *testing.T) {
 				})
 			}
 			becomesAsk := journey.Check[classified]{
-				What: fmt.Sprintf("%s: the finding the product read out of the planted bytes carries the "+
-					"action ask and is never eligible for automatic fixing", id),
+				What:         "P3: " + string(id),
 				Clauses:      clauses,
 				Counterfeits: counterfeits,
 			}
@@ -232,9 +231,7 @@ func TestAFindingThatIsNotClassifiedStopsForAPerson(t *testing.T) {
 		lastHold := len(observed.holds) - 1
 
 		holds := journey.Check[stopped]{
-			What: "every stage of a run through the binary that established nothing reports a finding " +
-				"that holds the run for a person, relayed with the decision, and none of those findings " +
-				"is one a fixer may take",
+			What: "P3: a stage that established nothing",
 			Clauses: []journey.Clause[stopped]{
 				{
 					States: "the run held once for every stage this build has no body for",

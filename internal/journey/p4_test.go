@@ -141,9 +141,7 @@ func TestTheReviewerNeverCertifiesItsOwnPrescription(t *testing.T) {
 	observed.reviewRefusedAtTheFixer = errors.Is(err, agents.ErrReviewInFixerSession)
 
 	separated := journey.Check[roles]{
-		What: "every review invocation is session-free, only the fixer's rounds carry a session, the " +
-			"re-review does not resume the session that prescribed the fix, and a review shape offered " +
-			"to the fixer is refused before a process starts",
+		What: "P4: what a review and a fix round carry",
 		Clauses: []journey.Clause[roles]{
 			{
 				States:  "no review or re-review invocation carried a session",
