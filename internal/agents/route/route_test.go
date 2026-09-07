@@ -94,6 +94,24 @@ type addressableFixerDeps struct {
 	Session pointerOnlyFixer
 }
 
+// promotedRunnerDeps holds its Runner where a reader of the struct definition
+// would not look for it and where a caller reaches it anyway: Go promotes an
+// embedded type's exported fields, so a body writes deps.Runner even though
+// the embedded field's own name is unexported and even though the type
+// carrying it is not exported at all.
+//
+// The walk's rule that unexported fields are unreachable is what StageAgent's
+// mechanism rests on, so it stays. Embedding is what makes that rule not apply
+// here, and the difference is one bool on the field.
+type promotedRunnerDeps struct {
+	carriedRunner
+	Agent agents.StageAgent
+}
+
+type carriedRunner struct {
+	Runner agents.Runner
+}
+
 // pointerOnlyFixer is an agents.Fixer on its pointer and not on its value,
 // which is what a Go author writes by default. A caller holding one in a field
 // reaches the session by writing an ampersand.
@@ -125,6 +143,7 @@ func TestTheWalkFindsARouteHeldInAnyShape(t *testing.T) {
 		{"a channel field that carries one", reflect.TypeOf(deliveredFixerDeps{})},
 		{"a map keyed by one", reflect.TypeOf(keyedRunnerDeps{})},
 		{"a field whose pointer is one", reflect.TypeOf(addressableFixerDeps{})},
+		{"a field promoted from an unexported embedded type", reflect.TypeOf(promotedRunnerDeps{})},
 	} {
 		t.Run(c.shape, func(t *testing.T) {
 			t.Parallel()

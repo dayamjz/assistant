@@ -45,9 +45,18 @@ func fixerRoutes() map[reflect.Type]string {
 	}
 }
 
-// ToFixerSession reports every way a caller outside the declaring package can
-// reach a fixer session starting from root, each as a path a reader can
-// follow. An empty result means there is none.
+// ToFixerSession reports how a caller outside the declaring package can reach
+// a fixer session starting from root. An empty result means there is none, and
+// a non-empty one names at least one path a reader can follow.
+//
+// It is one path per type and not every path to it. A type already visited is
+// not walked again, which is what makes this terminate on a graph that refers
+// back to itself, so a type reachable two ways is reported at whichever way
+// was walked first and a caller that fixes the named path may find a second on
+// the next run. That costs nothing the guarantee needs: one route is already
+// enough for it to be gone, and the empty result is exact, because every
+// visited type's fields and results are walked once and reachability cannot be
+// lost by not walking them twice.
 //
 // A caller pairs it with a walk over a type that really does expose a route,
 // because a walk that stopped inspecting anything would report an empty result
@@ -60,6 +69,13 @@ func fixerRoutes() map[reflect.Type]string {
 // would make the check contradict the mechanism it is checking. That is also
 // why this bounds a caller in another package and not code inside the
 // declaring one, which agents.StageAgent's own documentation states.
+//
+// An embedded field is the exception and is walked whether or not its own name
+// is exported, because Go promotes the embedded type's exported fields into
+// the outer type's selectors: a Runner held in an exported field of an
+// unexported embedded struct is read from any package by naming the outer
+// value and the field. What the embedded type holds in its own unexported
+// fields stays unwalked, by this same rule one level down.
 //
 // A value that is not itself a session may still yield one, so every shape a
 // Go value can be held in is followed: a pointer, slice, array or channel
@@ -122,8 +138,11 @@ func ToFixerSession(root reflect.Type) []string {
 			}
 		case reflect.Struct:
 			for i := range t.NumField() {
-				if field := t.Field(i); field.IsExported() {
+				switch field := t.Field(i); {
+				case field.IsExported():
 					walk(field.Type, path+"."+field.Name)
+				case field.Anonymous:
+					walk(field.Type, path+" embedded "+field.Name)
 				}
 			}
 		}

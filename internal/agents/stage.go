@@ -13,8 +13,10 @@ import "context"
 // package exports. Handing it a StageAgent removes the value that call needs.
 // There is no Runner here to pass, and this is a struct rather than an
 // interface over one, so an assertion back to Runner or SessionRunner finds
-// nothing. Keeping the reviewer out of a fixer session is therefore something
-// a stage body cannot do rather than something it is asked not to.
+// nothing. What that buys is exact and it is worth stating exactly: the agent
+// the wiring hands a body is not a route to a session, so a body cannot reach
+// one through what it was given. It is not that a body cannot reach one at
+// all, which the gaps below name.
 //
 // It restricts the route to a session and nothing else. Run takes the same
 // purpose Runner.Run takes, including PurposeFix, which on a Runner means a
@@ -31,11 +33,29 @@ import "context"
 // which would put the guarantee back in a reviewer's hands. P14 agrees, since
 // this package already owns the P4 split.
 //
-// The residual gap is that package boundary and not a claim beyond it. Nothing
-// stops a caller that already holds a Runner from using it directly; what this
-// removes is a stage body's route to one, given wiring that hands bodies this
-// and never a Runner. TestStageDepsIsNoRouteToAFixerSession in internal/stages
-// is what holds that wiring to it.
+// # What this does not close
+//
+// Two gaps, and the second is wider than the package boundary.
+//
+// Nothing stops a caller that already holds a Runner from using it directly.
+// What this removes is a stage body's route to one, given wiring that hands
+// bodies this and never a Runner, and TestStageDepsIsNoRouteToAFixerSession in
+// internal/stages is what holds that wiring to it.
+//
+// And a body needs no Runner handed to it to obtain one. Resolve,
+// DefaultCatalog and OpenFixer are all exported from this package,
+// internal/stages imports it, and the ordered agent list Resolve takes is on
+// the configuration a body already holds, so resolving an adapter and opening
+// a session on it is two lines inside a stage body. A type-graph walk cannot
+// see that, because it is not a route out of any value the wiring passed.
+// Closing it rather than disclosing it would mean putting Runner, Resolve and
+// OpenFixer behind internal/agents/internal, which Go's import rule would make
+// unimportable from internal/stages: a redesign, and not something this type
+// can do.
+//
+// So the honest statement of the guarantee is the narrow one. A body is handed
+// no route to a fixer session and cannot manufacture one from what it was
+// given; a body that goes looking for its own adapter is asked not to.
 //
 // The zero StageAgent has no runner and refuses with ErrNoStageAgent, so a
 // value that was never given one fails as a typed result rather than panicking
