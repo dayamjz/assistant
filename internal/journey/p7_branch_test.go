@@ -172,7 +172,7 @@ func TestTheBranchUnderValidationChoosesNothingThatRuns(t *testing.T) {
 				Holds: func(i installed) error {
 					if i.agent != journey.AgentShimName {
 						return fmt.Errorf("the run resolved the agent %q, and the branch ships one called %q",
-							i.agent, "fixture-pushed-agent")
+							i.agent, pushedAgentName)
 					}
 					return nil
 				},
@@ -233,7 +233,7 @@ func TestTheBranchUnderValidationChoosesNothingThatRuns(t *testing.T) {
 				return i
 			}},
 			{Named: "the run selected the agent the branch ships", Break: func(i installed) installed {
-				i.agent = "fixture-pushed-agent"
+				i.agent = pushedAgentName
 				return i
 			}},
 			{Named: "the condition records no rejection, so looking for them proves nothing",

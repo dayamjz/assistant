@@ -210,6 +210,16 @@ func inCloneConfigured(t *testing.T, document map[string]any) *journey.Journey {
 	return j
 }
 
+// pushedAgentName is the agent the branch under validation names in its own
+// configuration document, in the scenarios whose branch carries one.
+//
+// internal/fixture's own constant is unexported, so this is a restatement of
+// what it plants; keeping one here rather than a literal at each site is what
+// stops four hand-copied spellings of a name whose owner is another package.
+// A run that resolved it had read a repository's document as trusted, which is
+// what makes it worth naming at all.
+const pushedAgentName = "fixture-pushed-agent"
+
 // shimSuffix is the executable suffix on this platform, which a shim's file
 // name carries.
 func shimSuffix() string {

@@ -381,15 +381,16 @@ Each has cost this repository more than one round of review.
   has not happened is a comment, and it is dropped in review.
 - `internal/fixture` builds the adversarial subject repository the end-to-end
   harness validates against, and records beside each planted condition what it
-  must produce, down to the substrings the message has to carry. It is the one
-  documented exception to the rule above that `internal/vcs` is the only package
-  invoking git: a fixture built with the code under validation cannot show that
-  code wrong, so it runs git directly the way `internal/vcs`'s own test helpers
-  do. Two rules there are load-bearing. A condition is reached by the path the
-  product takes to it, so the two states that only exist partway through a run
-  are deferred to `AdvanceRemoteOutOfBand` and `CopyGatedWorkingCopy` rather
-  than assembled. And "nothing executed" is checked, not assumed: every planted
-  executable appends to the scenario's tripwire file, and the package's own
+  must produce, down to the substrings the message has to carry. It is one of
+  the two documented exceptions to the rule above that `internal/vcs` is the
+  only package invoking git, `internal/journey` being the other: a fixture built
+  with the code under validation cannot show that code wrong, so it runs git
+  directly the way `internal/vcs`'s own test helpers do. Two rules there are
+  load-bearing. A condition is reached by the path the product takes to it, so
+  the two states that only exist partway through a run are deferred to
+  `AdvanceRemoteOutOfBand` and `CopyGatedWorkingCopy` rather than assembled.
+  And "nothing executed" is checked, not assumed: every planted executable
+  appends to the scenario's tripwire file, and the package's own
   tests run one to prove the tripwire fires. Nothing here decides how a harness
   drives a condition; what it ran into is in `OpenQuestions`. Build it with
   `scripts/build-fixture.sh DIR`, and read `doc.go` first.
@@ -409,8 +410,16 @@ Each has cost this repository more than one round of review.
   test and that is its structure. It drives the real binary as a process,
   against `internal/fixture`'s subject, with the binary taken from
   `ASSISTANT_BINARY` when that is set so a shipped artifact can be validated
-  rather than a checkout. Two things there are mechanism rather than rule.
-  A check is a `Check[O]`: a list of `Clause[O]` over a typed observation plus
+  rather than a checkout. It is the second documented exception to the rule
+  that `internal/vcs` is the only package invoking git: `Git` and `GitWith`
+  build git command lines and run them, under the isolation the fixture built
+  its subject with, for the reason `internal/fixture` takes the same exception.
+  A harness that confirmed the product's own git operation by asking the
+  package under validation would be reporting that package agreeing with
+  itself. The rule is not weakened by either: it has one owner and two named
+  exceptions, and a third is a finding rather than a precedent. Two things
+  there are mechanism rather than rule. A check is a `Check[O]`: a list of
+  `Clause[O]` over a typed observation plus
   the counterfeit observations it must reject, `Verify` runs both halves on
   every invocation, and a check naming no counterfeit is refused, as is one
   carrying a clause no counterfeit reaches, so neither a check nor a part of
@@ -423,10 +432,11 @@ Each has cost this repository more than one round of review.
   there in the subject, and that is the one gap counterfeits never close. And
   three tables account for everything in both directions: `Coverage` against
   the principles its own tests cite, `Drives` against the planted catalog, and
-  `Settlements` against the questions `internal/fixture` left open, which this package owns and
-  answers rather than editing that one. Read its `README.md` first: green there
-  says the machinery behaves on inputs we chose and says nothing about review
-  quality, and every row carries whether it was reached through the binary or
+  `Settlements` against the questions `internal/fixture` left open, which this
+  package owns and answers rather than editing that one. Read its `README.md`
+  first: green there says the machinery behaves on inputs we chose and says
+  nothing about review quality, and every row carries whether it was reached
+  through the binary or
   through the package that owns the mechanism, because no stage body exists and
   a run therefore reaches no agent, no push, and no code host.
 
