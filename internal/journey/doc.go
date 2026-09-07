@@ -93,11 +93,17 @@
 // the scenario's origin instead, which is what a person has and which nothing
 // else is holding.
 //
-// Reading the subject back goes through Git, which runs the fixture's own git
-// under the isolation that build used, rather than through internal/vcs. That
-// is the same exception internal/fixture takes for its plants and for the same
-// reason: a harness that confirmed a push landed by asking the package under
-// validation would be reporting that package agreeing with itself.
+// Reading the subject back goes through Git, which builds a git command line
+// and runs it under the isolation that build used, rather than through
+// internal/vcs. That makes this package the second documented exception to the
+// rule that internal/vcs is the only package invoking git, internal/fixture
+// being the first, and it is taken for the reason that package takes it: a
+// harness that confirmed the product's own git operation by asking the package
+// under validation would be reporting that package agreeing with itself.
+//
+// Neither exception weakens the rule. It has one owner and two named
+// exceptions, both named for a reason, and a third is a finding to raise
+// rather than a precedent to follow.
 //
 // # The two seams into a separate process
 //
