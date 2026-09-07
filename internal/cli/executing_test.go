@@ -102,7 +102,7 @@ func TestReadsOfARunInsideAStageBodyAnswerExecuting(t *testing.T) {
 		t.Fatalf("the human rendering exited %s:\n%s%s", human.code, human.stdout, human.stderr)
 	}
 	t.Logf("assistant, the same attach rendered for a person:\n%s\nprogress, on standard error:\n%s", human.stdout, human.stderr)
-	for _, want := range []string{string(machine.OutcomeExecuting), machine.OutcomeExecuting.NextAction()} {
+	for _, want := range []string{string(machine.OutcomeExecuting), machine.OutcomeExecuting.NextActionFor(true)} {
 		if !strings.Contains(human.stdout, want) {
 			t.Fatalf("the rendering does not say %q:\n%s", want, human.stdout)
 		}
@@ -158,6 +158,20 @@ func assertExecuting(t *testing.T, view machine.Run, surface string) {
 	}
 	if view.Record.Status != store.RunRunning {
 		t.Fatalf("%s reports the record as %s, want running", surface, view.Record.Status)
+	}
+	// Executing covers a run in flight and a run nothing is carrying on, and
+	// they take opposite actions. This is the in-flight half; the other is
+	// TestARunNothingIsAdvancingIsNotReportedAsOneInFlight, and each asserts
+	// the other's answer is not the one it got, so the two cannot collapse
+	// back onto one rendering without failing both.
+	if !view.Advancing {
+		t.Fatalf("%s reports that nothing is advancing a run that is inside a stage body", surface)
+	}
+	if view.NextAction == machine.OutcomeExecuting.NextActionFor(false) {
+		t.Fatalf("%s tells a reader to attach a run that is already being advanced: %s", surface, view.NextAction)
+	}
+	if view.NextAction != machine.OutcomeExecuting.NextActionFor(true) {
+		t.Fatalf("%s says %q about a run in flight, want the action for one being advanced", surface, view.NextAction)
 	}
 }
 

@@ -301,15 +301,22 @@ Each has cost this repository more than one round of review.
 - `internal/service` is the background service PRD section 8's process model
   puts at the centre of a home. It decides nothing: `internal/graph` executes,
   `internal/pipeline` is the topology, `internal/runs` owns the record,
-  `internal/checkpoints` makes the position durable, and this wires them. Three
+  `internal/checkpoints` makes the position durable, and this wires them. Four
   things there are load-bearing. It takes the home's lock before recovery and
   before binding the socket, in that order. It reconciles every unfinished run
   against its checkpoint on open, because a record saying running against a
-  checkpoint saying halted is a run nobody can answer. And containment is a
+  checkpoint saying halted is a run nobody can answer. Containment is a
   process group this service registered through `StageStarted`, never anything
   a caller says about itself; nothing calls that yet, so the guard protects
-  nothing today, which `doc.go` states rather than implies. Read `doc.go` for
-  that and for the repository configuration layer it does not read.
+  nothing today, which `doc.go` states rather than implies. And whether
+  anything is advancing a run is a third fact neither the record nor the
+  checkpoint holds: it lives in the slot a run advances in, `report` reads it
+  rather than inferring it, and it travels as `machine.Run.Advancing`. A
+  segment that ends without settling leaves a run something can resume and
+  nothing is resuming, which is the stall PRD section 9 calls worse than an
+  error; `carryOn` is what stops that persisting, and it decides from what
+  ended the segment rather than from the run. Read `doc.go` for that and for
+  the repository configuration layer it does not read.
 - `internal/cli` is the command surface, and its verb table is PRD section 9's
   table and nothing else. A verb that section does not describe is a finding to
   raise against the specification, not a row to add: `cli_test.go` holds both

@@ -60,9 +60,17 @@ const (
 	OutcomeCancelled Outcome = "cancelled"
 	// OutcomeExecuting is a run whose execution has not finished. It is not a
 	// failure and not terminal, and no decision is open: the run is between
-	// two of them, in a stage body that has not finished. Usually a segment is
-	// in flight; a run whose segment stopped without settling stands there
-	// too, until a call carries it on.
+	// two of them, at a position its last checkpoint recorded and nothing has
+	// carried it past.
+	//
+	// It covers two runs that differ in what a reader should do. A segment may
+	// be in flight, walking nodes right now. Or a segment may have stopped
+	// without settling - it failed, or the caller waiting on it gave up - and
+	// left the run standing at a position it can be resumed from with nothing
+	// moving it. The outcome is the same because where the run stands is the
+	// same; what tells them apart is Run.Advancing, which is the fact itself
+	// rather than an inference from where the run stands, and NextActionFor,
+	// which is this outcome's action split at that fact.
 	//
 	// Only an answer that reported the run rather than advancing it carries
 	// it, because a call that advanced one returns where that run stopped.
@@ -199,4 +207,42 @@ func (o Outcome) NextAction() string {
 		return action
 	}
 	return "This build does not recognize that outcome. Report it."
+}
+
+// advancingAction is what to do about a run a service is advancing right now,
+// and stalledAction is what to do about one nothing is advancing.
+//
+// They sharpen OutcomeExecuting's row above rather than replacing it. That row
+// is what an outcome answers with when nobody has said which of the two runs
+// it describes, so it is the weaker claim that holds for both, which is why it
+// carries an "unless" these do not. NextActionFor is the only reader of these
+// two and the only place the choice is made.
+const (
+	advancingAction = "Nothing yet. A service is advancing this run, so attaching answers at once " +
+		"rather than waiting. Pause before asking again."
+	stalledAction = "Attach to carry it on. Nothing is advancing this run: its last segment stopped " +
+		"without finishing, and it stands at the position that segment reached. Attaching resumes it " +
+		"from there and blocks until its next decision."
+)
+
+// NextActionFor is what to do about a run this outcome describes, given
+// whether anything is advancing it. advancing is machine.Run.Advancing, and
+// that field's contract is what it means.
+//
+// It differs from NextAction for one outcome. Five of the six describe a run
+// whose position nothing is moving either way, so knowing that nothing is
+// moving it adds nothing to what to do about it. OutcomeExecuting is the one
+// that covers both a run in flight and a run standing still, and its two
+// actions are opposites: pause before asking again, or attach to carry it on.
+// PRD section 9 gives both halves in one sentence joined by an "unless this
+// service is already advancing the run" that a caller reading the answer had
+// no way to evaluate. This is that sentence split at the fact.
+func (o Outcome) NextActionFor(advancing bool) string {
+	if o != OutcomeExecuting {
+		return o.NextAction()
+	}
+	if advancing {
+		return advancingAction
+	}
+	return stalledAction
 }
