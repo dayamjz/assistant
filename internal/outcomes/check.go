@@ -1,0 +1,162 @@
+package outcomes
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+
+	"github.com/dayamjz/assistant/internal/principles"
+)
+
+// PRDPath is where the PRD lives, relative to the module root, in slash form.
+// It is internal/principles' constant rather than a second copy of the path:
+// that package is the other document check in this repository and one of them
+// owns where the document is.
+const PRDPath = principles.PRDPath
+
+// Agreement is the answer to one question: do PRD section 9's machine
+// interface row and internal/machine's outcome set say the same thing.
+//
+// Its scope is the set and what the row says about the set. It says nothing
+// about whether the six are the right six, and nothing about whether an
+// outcome means on the wire what the row says it means. Both sides naming
+// checks-passed in the group that says a run is finished with is all this
+// establishes about checks-passed.
+type Agreement struct {
+	// Listed is what the PRD declares, in its order.
+	Listed []Listed
+	// Built is what internal/machine declares, in its order.
+	Built []Built
+
+	// Unbuilt is declared by the PRD and not by the build.
+	Unbuilt []string
+	// Unlisted is declared by the build and not by the PRD.
+	Unlisted []string
+	// Reordered is set when both sides declare the same values in different
+	// orders. It is empty when they do not, including when they disagree on
+	// membership, because an order is only comparable between two sets that
+	// have the same members.
+	Reordered []string
+	// Regrouped names every value both sides declare and put in different
+	// groups, with what each side says.
+	Regrouped []string
+	// Actionless names every value the build declares and answers with no
+	// next action, or with the answer it keeps for an outcome it does not
+	// recognize.
+	Actionless []string
+}
+
+// OK reports whether the two sides declare the same values, in the same order,
+// in the same groups, and every one of them carries a next action.
+func (a Agreement) OK() bool {
+	return len(a.Unbuilt) == 0 && len(a.Unlisted) == 0 &&
+		len(a.Reordered) == 0 && len(a.Regrouped) == 0 && len(a.Actionless) == 0
+}
+
+// Report describes everything OK is false for and says what closes each. It is
+// empty when OK is true.
+func (a Agreement) Report() string {
+	var b strings.Builder
+	for _, name := range a.Unbuilt {
+		fmt.Fprintf(&b, "%s: PRD section 9 declares it and internal/machine does not.\n", name)
+		b.WriteString("  Add it to the constant block and the set in internal/machine/outcome.go, or take its marker out of the PRD.\n")
+	}
+	for _, name := range a.Unlisted {
+		fmt.Fprintf(&b, "%s: internal/machine declares it and PRD section 9 does not.\n", name)
+		b.WriteString("  The PRD owns the set. Add the outcome to its row on a branch of its own, or take it out of the build.\n")
+	}
+	for _, line := range a.Reordered {
+		fmt.Fprintf(&b, "%s\n", line)
+		b.WriteString("  Put internal/machine's set in the order the PRD's row declares them.\n")
+	}
+	for _, line := range a.Regrouped {
+		fmt.Fprintf(&b, "%s\n", line)
+		b.WriteString("  One of the two changed which group the outcome is in. Reconcile with the PRD rather than around it.\n")
+	}
+	for _, name := range a.Actionless {
+		fmt.Fprintf(&b, "%s: it is declared and carries no next action, which PRD section 9 requires of every outcome, terminal or not.\n", name)
+		b.WriteString("  Add its row to nextActions in internal/machine/outcome.go.\n")
+	}
+	return b.String()
+}
+
+// Compare reports what the PRD's declarations and the build's do not account
+// for between them.
+//
+// Membership is compared first and order only after it, because two sets with
+// different members have no order to disagree about and reporting both would
+// bury the difference that matters under one that follows from it.
+func Compare(listed []Listed, built []Built) Agreement {
+	a := Agreement{Listed: listed, Built: built}
+
+	listedAt := make(map[string]Listed, len(listed))
+	var listedNames []string
+	for _, l := range listed {
+		listedAt[l.Name] = l
+		listedNames = append(listedNames, l.Name)
+	}
+	builtAt := make(map[string]Built, len(built))
+	var builtNames []string
+	for _, b := range built {
+		builtAt[b.Name] = b
+		builtNames = append(builtNames, b.Name)
+	}
+
+	for _, name := range listedNames {
+		if _, ok := builtAt[name]; !ok {
+			a.Unbuilt = append(a.Unbuilt, name)
+		}
+	}
+	for _, name := range builtNames {
+		if _, ok := listedAt[name]; !ok {
+			a.Unlisted = append(a.Unlisted, name)
+		}
+	}
+	if len(a.Unbuilt) == 0 && len(a.Unlisted) == 0 && !slices.Equal(listedNames, builtNames) {
+		a.Reordered = append(a.Reordered, fmt.Sprintf(
+			"the two declare the same outcomes in different orders: the PRD's row is [%s] and internal/machine's set is [%s]",
+			strings.Join(listedNames, " "), strings.Join(builtNames, " ")))
+	}
+	for _, name := range listedNames {
+		b, both := builtAt[name]
+		if !both || b.Terminal == listedAt[name].Terminal {
+			continue
+		}
+		a.Regrouped = append(a.Regrouped, fmt.Sprintf(
+			"%s: the PRD's row %s and internal/machine reports Terminal %v",
+			name, group(listedAt[name].Terminal), b.Terminal))
+	}
+
+	unrecognized := unrecognizedAction(built)
+	for _, b := range built {
+		if strings.TrimSpace(b.Action) == "" || b.Action == unrecognized {
+			a.Actionless = append(a.Actionless, b.Name)
+		}
+	}
+	return a
+}
+
+// group renders which of the row's two groups a value is in, in the row's own
+// words, so a failure reads as the document does.
+func group(terminal bool) string {
+	if terminal {
+		return "puts it in the group that says a run is finished with"
+	}
+	return "puts it in the group that says a run is not finished with"
+}
+
+// Check reads the PRD under root and compares its declarations against the
+// build's. Root is the module root: the PRD is read from PRDPath under it.
+func Check(root string) (Agreement, error) {
+	html, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(PRDPath)))
+	if err != nil {
+		return Agreement{}, fmt.Errorf("%w: %w", ErrPRD, err)
+	}
+	listed, err := FromPRD(html)
+	if err != nil {
+		return Agreement{}, err
+	}
+	return Compare(listed, FromBuild()), nil
+}
