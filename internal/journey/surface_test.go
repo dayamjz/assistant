@@ -96,7 +96,11 @@ type surface struct {
 	failureCode machine.Code
 	// versionAsDocument and versionAsLine are what --version answered with
 	// --json written before it and after it, which is the one ordering this
-	// build does not honour.
+	// build does not honour. versionAsLine is decided by what the output is
+	// rather than by what it begins with: something was written and it is not
+	// the document that verb answers. Anchoring it on a literal prefix would
+	// make the disclosure below disappear the day the line's wording changed,
+	// which is the limit going unreported rather than being closed.
 	versionAsDocument bool
 	versionAsLine     bool
 	// usageDocument is the document the surface answered a wrong command line
@@ -201,8 +205,8 @@ func TestTheWholeCommandSurfaceAnswersOneDocumentPerInvocation(t *testing.T) {
 	// build does not honour: --json is read before --version and not after.
 	observed.versionAsDocument = firstDocument(j.Command("--version").Stdout, &machine.Version{}) == nil
 	plain := j.CommandExactly(dir, "--version", "--json")
-	observed.versionAsLine = strings.HasPrefix(strings.TrimSpace(plain.Stdout), "assistant") &&
-		!strings.HasPrefix(strings.TrimSpace(plain.Stdout), "{")
+	observed.versionAsLine = strings.TrimSpace(plain.Stdout) != "" &&
+		firstDocument(plain.Stdout, &machine.Version{}) != nil
 	drive[machine.Help](t, &observed, j, "--help")
 
 	// The two failure codes, each from something that produces it for its own
