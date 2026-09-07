@@ -55,22 +55,27 @@ func (s *Service) gateSubject(ctx context.Context, id string) (subject, error) {
 // What it establishes is that the push has somewhere to go and something to
 // validate it: the gate resolves to exactly one working copy standing today,
 // that working copy has a repository record, the reference updates are ones
-// this build can read, and an agent resolves on this machine. A push admitted
-// without those is a push the gate accepts and starts nothing for, which is
-// the failure a sealed gate exists to prevent, arriving through the front door
-// instead.
+// this build can read, and a driver could be built for this home. A push
+// admitted without those is a push the gate accepts and starts nothing for,
+// which is the failure a sealed gate exists to prevent, arriving through the
+// front door instead.
 //
-// The agent is asked for here rather than left to the notification because of
+// The driver is asked for here rather than left to the notification because of
 // where the two hooks sit. This runs before any reference changes and its
 // refusal rejects the push; the notification runs after every reference has
-// moved, where a failure can be printed and cannot reject anything. A machine
-// with nothing runnable would otherwise take the push, hold the branch, and
-// start no run.
+// moved, where a failure can be printed and cannot reject anything. A home
+// nothing runnable can be built for would otherwise take the push, hold the
+// branch, and start no run.
+//
+// What it does not establish is why a driver could not be built. Building one
+// resolves an agent, opens the run service, assembles the pipeline and its
+// executor, and any of those can be what failed, so the refusal carries the
+// reason it was given rather than naming a cause of its own.
 //
 // What that does not cover is the gap between the two hooks. The notification
-// asks for the agent again and can still fail, so an agent that stops being
-// resolvable after this answered leaves a push accepted with no run started,
-// and no failure there can reject a push this already admitted.
+// asks for the driver again and can still fail, so a home that stops being
+// able to build one after this answered leaves a push accepted with no run
+// started, and no failure there can reject a push this already admitted.
 //
 // It does not judge the change. Whether the branch should be shared is what
 // the nine stages are for, and admission that reached for that answer would be
@@ -95,10 +100,11 @@ func (s *Service) admit(ctx context.Context, req machine.GateRequest) (machine.A
 		return machine.Admission{}, err
 	}
 	if _, err := s.driverFor(ctx); err != nil {
-		return machine.Admission{}, fmt.Errorf("service: the push to gate %s is refused because no agent "+
-			"this machine can run resolved, so nothing could validate it: %w; run assistant doctor to see "+
-			"every dependency and whether a run can start at all, then push again - nothing records this "+
-			"refusal, so the same push succeeds once an agent resolves", req.Gate, err)
+		return machine.Admission{}, fmt.Errorf("service: %w - so nothing that could validate a push can be "+
+			"built for this home, and the push to gate %s is refused rather than taken and left unvalidated; "+
+			"resolve what that reason names and push again, because nothing records this refusal. assistant "+
+			"doctor reports on the agent this home resolves, which is one of the things a run needs and not "+
+			"all of them", err, req.Gate)
 	}
 	refs := make([]string, 0, len(req.Updates))
 	for _, update := range req.Updates {

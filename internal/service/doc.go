@@ -75,19 +75,23 @@
 // Admission establishes that the push has somewhere to go and something to
 // validate it, and does not judge the change. That the gate resolves, that a
 // repository record stands behind it, that the reference updates can be read,
-// and that an agent resolves on this machine are what it answers; whether the
-// branch should be shared is what the nine stages are for. A push admitted
+// and that a driver could be built for this home are what it answers; whether
+// the branch should be shared is what the nine stages are for. A push admitted
 // without those four is a push the gate takes and starts nothing for, which is
 // the failure a sealed gate exists to prevent arriving through the front door.
 //
-// The agent is asked for during admission rather than when the run starts
+// The driver is asked for during admission rather than when the run starts
 // because of where the two hooks sit: admission runs before any reference
 // changes and its refusal rejects the push, while the notification runs after
-// every reference has moved and can only print. The gap that leaves is the
-// span between them. The notification asks for the agent again and can still
-// fail, so an agent that stops resolving after admission answered leaves a
-// push accepted with no run started, and no failure in the notification can
-// reject a push admission already took.
+// every reference has moved and can only print. What admission does not
+// establish is why a driver could not be built - resolving an agent, opening
+// the run service, and assembling the pipeline and its executor are all part
+// of building one - so its refusal carries the reason it was given rather than
+// naming a cause. The gap that leaves is the span between the two hooks. The
+// notification asks for the driver again and can still fail, so a home that
+// stops being able to build one after admission answered leaves a push
+// accepted with no run started, and no failure in the notification can reject
+// a push admission already took.
 //
 // A push to a branch that already has a run supersedes it, which PRD section 8
 // asks for, and the guarantee is over the record: the branch's newest

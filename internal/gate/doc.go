@@ -180,6 +180,7 @@
 // why it is confined to a read: a read leaves no gate in a state that needs
 // closing, and an operation that changed one would owe the seam and has to go
 // through it.
+//
 // This repository has solved this class twice the same way: internal/agents
 // puts P4 in a type split rather than in a rule callers follow, and
 // internal/safety makes an anchor's provenance a constructor rather than a

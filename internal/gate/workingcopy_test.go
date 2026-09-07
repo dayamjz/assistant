@@ -161,3 +161,77 @@ func TestWorkingCopyForFindsAGateThroughTheIndexWhenItsRecordIsGone(t *testing.T
 		t.Fatalf("WorkingCopyFor = %q, want %q", got, want)
 	}
 }
+
+// TestWorkingCopyForRefusesAGateSeveralWorkingCopiesStillName is the third
+// answer the operation has, and the one that stops a push being attached to a
+// repository nobody named. Which of several working copies a push was meant
+// for cannot be read out of the gate, so picking one would attach a run to the
+// wrong repository, and the refusal names both so an operator can say which.
+//
+// Reaching it takes more than copying a gated working copy, which is worth
+// stating because it is the obvious guess and it is wrong: a copy inherits the
+// assistant remote, so it does point at the gate, but nothing has ever
+// recorded it, and this operation asks only about working copies the index or
+// the gate's own record names. A copy nobody recorded is never a candidate and
+// so is never an answer.
+//
+// What does reach it is a move followed by a restore, and every step here is
+// an operation the product offers or a copy on disk. Initializing the moved
+// working copy carries the gate across the move rather than abandoning it,
+// which is what keeps a run history attached to a project somebody relocated,
+// and it binds the new path without unbinding the old one. Putting a working
+// copy back at the old path - restoring a backup, or a copy taken before the
+// move - makes that older binding name something standing again, and now two
+// working copies hold one gate.
+func TestWorkingCopyForRefusesAGateSeveralWorkingCopiesStillName(t *testing.T) {
+	gitEnvironment(t)
+	wc := newWorkingCopy(t)
+	home, opts := newHome(t)
+	command, _ := recorderCommand(t, 0)
+
+	g, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path, Command: command}, opts()...)
+	if err != nil {
+		t.Fatalf("Initialize: %v", err)
+	}
+	firstPath := g.WorkingPath()
+
+	moved := filepath.Join(filepath.Dir(wc.path), "moved")
+	if err := os.Rename(wc.path, moved); err != nil {
+		t.Fatalf("moving the working copy to %s: %v", moved, err)
+	}
+	carried, err := gate.Initialize(ctx(t), gate.Spec{Home: home, WorkingPath: moved, Command: command}, opts()...)
+	if err != nil {
+		t.Fatalf("Initialize after the move: %v", err)
+	}
+	if carried.ID() != g.ID() {
+		t.Fatalf("the move gave the working copy gate %s rather than carrying %s across; this test needs "+
+			"one gate that two working copies can end up naming", carried.ID(), g.ID())
+	}
+	secondPath := carried.WorkingPath()
+
+	// The old path stands again, still naming the gate the move left bound to
+	// it. Until this, the gate has exactly one holder.
+	if only, err := gate.WorkingCopyFor(ctx(t), home, g.ID(), opts()...); err != nil || only != secondPath {
+		t.Fatalf("before the restore the gate answers %q, %v; want %q and no error, without which the "+
+			"refusal below would not be about there being several", only, err, secondPath)
+	}
+	copyTree(t, moved, firstPath)
+	if url, ok := remoteURL(t, firstPath, gate.RemoteName); !ok || url != g.Repository() {
+		t.Fatalf("the working copy restored at %s names %q as its %s remote, want %q; without that it "+
+			"holds nothing and there is only one holder", firstPath, url, gate.RemoteName, g.Repository())
+	}
+
+	got, err := gate.WorkingCopyFor(ctx(t), home, g.ID(), opts()...)
+	if !errors.Is(err, gate.ErrGateUnbound) {
+		t.Fatalf("WorkingCopyFor over a gate two working copies name = %q, %v; want ErrGateUnbound", got, err)
+	}
+	for _, path := range []string{firstPath, secondPath} {
+		if !strings.Contains(err.Error(), path) {
+			t.Errorf("the refusal does not name %s, so an operator cannot tell which working copies to "+
+				"choose between: %v", path, err)
+		}
+	}
+	if !strings.Contains(err.Error(), gate.RemoteName) {
+		t.Errorf("the refusal does not name the remote whose removal would settle it: %v", err)
+	}
+}
