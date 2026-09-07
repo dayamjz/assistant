@@ -58,9 +58,16 @@ type survival struct {
 // and a caller looking at it is told to wait for something that will never
 // move.
 func TestARunSurvivesTheServiceBeingKilledAtEveryStageBoundary(t *testing.T) {
+	requiresIdentifiedPeer(t)
 	principles.Cite(t, principles.P6)
 
 	j := inClone(t)
+
+	// A run stops at every stage this build has no body for, which is read off
+	// internal/stages rather than counted to nine: a body that lands takes a
+	// boundary away, and a check written against the stage count would fail
+	// for a reason that is not P6.
+	holding := stagesWithoutABody(t)
 
 	observed := survival{}
 	current := startRun(t, j, "--intent", "narrow the Total loop bound on purpose")
@@ -69,7 +76,7 @@ func TestARunSurvivesTheServiceBeingKilledAtEveryStageBoundary(t *testing.T) {
 	// and the suite hanging to the test timeout says nothing about which stage
 	// the run stopped at. The bound is a multiple of the stage count because
 	// the check below compares the boundaries reached against exactly that.
-	for range 2 * len(stageOrder()) {
+	for range 2 * len(holding) {
 		if current.Outcome != machine.OutcomeDecision {
 			break
 		}
@@ -89,21 +96,33 @@ func TestARunSurvivesTheServiceBeingKilledAtEveryStageBoundary(t *testing.T) {
 		current = decodeRun(t, succeeds(t, j.Command("--answer", "approved")))
 	}
 	if current.Outcome == machine.OutcomeDecision {
-		t.Fatalf("the run was killed and answered at %d boundaries and is still holding at %s; the gate "+
-			"has %d stages", len(observed.boundaries), current.Position, len(stageOrder()))
+		t.Fatalf("the run was killed and answered at %d boundaries and is still holding at %s; this build "+
+			"has %d stage(s) with no body", len(observed.boundaries), current.Position, len(holding))
 	}
 	observed.ended = current
+	if len(observed.boundaries) == 0 {
+		t.Fatalf("the run reached no stage boundary at all, so there was nothing to kill it at; it "+
+			"ended %s at %q", current.Outcome, current.Position)
+	}
+
+	// Which boundary a counterfeit changes is wrapped into the walk it was
+	// derived from. How many boundaries a run reaches is how many stages this
+	// build has no body for, so a literal position stops being in range the
+	// day a body lands, and a counterfeit that panicked would take the check
+	// down with something that is not a finding.
+	at := func(nth int) int { return nth % len(observed.boundaries) }
 
 	survived := journey.Check[survival]{
 		What: "a run killed at every stage boundary comes back standing exactly where it stood, " +
 			"classified as waiting on the same decision, and is driven to the end of the gate afterwards",
 		Clauses: []journey.Clause[survival]{
 			{
-				States: "the service was killed at every one of the gate's stage boundaries",
+				States: "the service was killed at every boundary this run stops at",
 				Holds: func(s survival) error {
-					if len(s.boundaries) != len(stageOrder()) {
-						return fmt.Errorf("the service was killed at %d boundaries and the gate has %d stages",
-							len(s.boundaries), len(stageOrder()))
+					if len(s.boundaries) != len(holding) {
+						return fmt.Errorf("the service was killed at %d boundaries and this build has %d "+
+							"stage(s) with no body, each of which is a boundary a run stops at",
+							len(s.boundaries), len(holding))
 					}
 					return nil
 				},
@@ -191,14 +210,16 @@ func TestARunSurvivesTheServiceBeingKilledAtEveryStageBoundary(t *testing.T) {
 				},
 			},
 			{
-				States: "the recovered decision is the one the boundary's own stage holds for",
+				States: "the run came back holding for the stage it was killed holding for",
 				Holds: func(s survival) error {
-					return atEachBoundary(s, func(stage string, at boundary) error {
-						if at.recovered.Decision == nil {
-							return fmt.Errorf("killed at %s: the run came back with no decision to read a stage off", stage)
+					return atEachBoundary(s, func(stage string, boundary boundary) error {
+						if boundary.recovered.Decision == nil || boundary.standing.Decision == nil {
+							return fmt.Errorf("killed at %s: a decision is missing either side of the kill, "+
+								"so there is no stage to compare", stage)
 						}
-						if got := at.recovered.Decision.Stage; got != stage {
-							return fmt.Errorf("the %s boundary came back holding for the %s stage", stage, got)
+						if got, want := boundary.recovered.Decision.Stage, boundary.standing.Decision.Stage; got != want {
+							return fmt.Errorf("the run was killed holding for the %s stage and came back "+
+								"holding for %s", want, got)
 						}
 						return nil
 					})
@@ -234,60 +255,60 @@ func TestARunSurvivesTheServiceBeingKilledAtEveryStageBoundary(t *testing.T) {
 			{Named: "the service that answered afterwards was the process that had been serving all along",
 				Break: func(s survival) survival {
 					s = cloneSurvival(s)
-					s.boundaries[1].recoveredBy = s.boundaries[1].servedBy
+					s.boundaries[at(1)].recoveredBy = s.boundaries[at(1)].servedBy
 					return s
 				}},
 			{Named: "no serving process was recorded at one of the boundaries",
 				Break: func(s survival) survival {
 					s = cloneSurvival(s)
-					s.boundaries[0].servedBy = 0
+					s.boundaries[at(0)].servedBy = 0
 					return s
 				}},
 			{Named: "the run came back standing at a different node", Break: func(s survival) survival {
 				s = cloneSurvival(s)
-				s.boundaries[3].recovered.Position = "hold:intent"
+				s.boundaries[at(3)].recovered.Position = "hold:" + stageOrder()[0]
 				return s
 			}},
 			{Named: "the run came back recorded as still running, which no answer reaches",
 				Break: func(s survival) survival {
 					s = cloneSurvival(s)
-					s.boundaries[0].recovered.Record.Status = store.RunRunning
+					s.boundaries[at(0)].recovered.Record.Status = store.RunRunning
 					return s
 				}},
 			{Named: "the run came back reported as having failed", Break: func(s survival) survival {
 				s = cloneSurvival(s)
-				s.boundaries[5].recovered.Outcome = machine.OutcomeFailed
+				s.boundaries[at(5)].recovered.Outcome = machine.OutcomeFailed
 				return s
 			}},
 			{Named: "the run came back with the decision gone", Break: func(s survival) survival {
 				s = cloneSurvival(s)
-				s.boundaries[2].recovered.Decision = nil
+				s.boundaries[at(2)].recovered.Decision = nil
 				return s
 			}},
 			{Named: "the run came back having lost the steps it had spent", Break: func(s survival) survival {
 				s = cloneSurvival(s)
-				s.boundaries[7].recovered.Steps = 0
+				s.boundaries[at(7)].recovered.Steps = 0
 				return s
 			}},
 			{Named: "the run came back holding for a stage other than the one it was killed at",
 				Break: func(s survival) survival {
 					s = cloneSurvival(s)
-					decision := *s.boundaries[6].recovered.Decision
-					decision.Stage = stageOrder()[0]
-					s.boundaries[6].recovered.Decision = &decision
+					decision := *s.boundaries[at(6)].recovered.Decision
+					decision.Stage = anotherStage(decision.Stage)
+					s.boundaries[at(6)].recovered.Decision = &decision
 					return s
 				}},
 			{Named: "the recovered decision offers something nobody was offered before the kill",
 				Break: func(s survival) survival {
 					s = cloneSurvival(s)
-					decision := *s.boundaries[4].recovered.Decision
+					decision := *s.boundaries[at(4)].recovered.Decision
 					decision.Options = append(slices.Clone(decision.Options), "publish")
-					s.boundaries[4].recovered.Decision = &decision
+					s.boundaries[at(4)].recovered.Decision = &decision
 					return s
 				}},
 			{Named: "the service was never killed at one of the boundaries", Break: func(s survival) survival {
 				s = cloneSurvival(s)
-				s.boundaries = slices.Delete(s.boundaries, 4, 5)
+				s.boundaries = slices.Delete(s.boundaries, at(4), at(4)+1)
 				return s
 			}},
 			{Named: "the run never reached the end of the gate after the kills",
@@ -304,23 +325,36 @@ func TestARunSurvivesTheServiceBeingKilledAtEveryStageBoundary(t *testing.T) {
 }
 
 // atEachBoundary answers a question about every boundary of a survival,
-// naming the stage the boundary belongs to, and reports the first boundary the
-// question fails at.
+// naming the stage the run itself said it stood at, and reports the first
+// boundary the question fails at.
 //
-// It pairs each boundary with a stage by position, so it says nothing when
-// there are more boundaries than stages; the clause that counts them is what
-// holds that, and this is deliberately not a second owner of it.
+// The name comes off the observation rather than off internal/pipeline's order
+// by position. Which stages a run stops at is the stages this build has no
+// body for, so pairing by position would label every boundary with a stage the
+// run never stood at the day a body lands.
 func atEachBoundary(s survival, ask func(stage string, at boundary) error) error {
-	order := stageOrder()
-	for i, at := range s.boundaries {
-		if i >= len(order) {
-			return nil
+	for _, at := range s.boundaries {
+		stage := at.standing.Position
+		if at.standing.Decision != nil {
+			stage = at.standing.Decision.Stage
 		}
-		if err := ask(order[i], at); err != nil {
+		if err := ask(stage, at); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// anotherStage is some stage of the gate that is not the one named, so a
+// counterfeit can say a run came back holding for a different stage without
+// naming one and without stating a name the product could not report.
+func anotherStage(than string) string {
+	for _, name := range stageOrder() {
+		if name != than {
+			return name
+		}
+	}
+	return than
 }
 
 // cloneSurvival copies a survival far enough that a counterfeit can change one

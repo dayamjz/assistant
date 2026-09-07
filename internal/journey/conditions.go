@@ -113,8 +113,9 @@ func Drives() []Drove {
 				"internal/machine shape carries an agent, and the config.Resolve call this harness does " +
 				"drive is over the pushed layer with the trusted one absent, so it cannot resolve the " +
 				"default branch's fixture-trusted-agent at all. Its tripwire half has no producer " +
-				"either: every executable it plants is reached only through a stage body, internal/" +
-				"stages holds none, and a run therefore launches no agent, runs no configured command, " +
+				"either: every executable it plants is reached only through a stage body that launches " +
+				"something, internal/stages has one body and it reads the supplied intent, and a run " +
+				"therefore launches no agent, runs no configured command, " +
 				"and makes no commit or push. TestTheBranchUnderValidationChoosesNothingThatRuns does " +
 				"drive a whole run over this branch and reads the tripwire file at the end, and logs " +
 				"what it holds; what that test establishes is the row below and the suppression " +
@@ -124,7 +125,7 @@ func Drives() []Drove {
 				"pushed one, driven in process: the three keys are dropped and reported as rejections " +
 				"and the one the branch may set survives. That is the whole of what is established " +
 				"here. Its tripwire half is not, for the reason in the row above: executing the " +
-				"branch's commands.test needs a test stage and this build has no stage body. Nothing " +
+				"branch's commands.test needs a test stage and this build has no body for one. Nothing " +
 				"about this condition is met through the binary."},
 		{"refusal-unparseable-trusted-config", ReachPackage, trustedDoc,
 			"The document is read off the default branch through internal/vcs and parsed. No run reads a " +

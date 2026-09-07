@@ -93,6 +93,7 @@ type installed struct {
 // cannot build a pipeline at all, which is PRD section 10's refusal before
 // launch arriving through the binary.
 func TestTheBranchUnderValidationChoosesNothingThatRuns(t *testing.T) {
+	requiresIdentifiedPeer(t)
 	principles.Cite(t, principles.P7)
 
 	scenario := claim(t, fixture.ScenarioBase)

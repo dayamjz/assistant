@@ -46,11 +46,13 @@ type classified struct {
 // all six as the bytes an agent prints rather than as reports built by hand.
 //
 // The binary half is separate and is what a run actually meets today. Every
-// stage of this build reports a finding with the action ask, so a run holds at
-// every one of them for a person rather than reporting a pass it did not
-// establish, and no such finding enters a fix round. That is driven over the
-// whole walk rather than over the first hold: a claim about nine stages that
-// rested on one would be a count nothing checked.
+// stage this build has no body for reports a finding with the action ask, so a
+// run holds at every one of them for a person rather than reporting a pass it
+// did not establish, and no such finding enters a fix round. Which stages
+// those are is read off internal/stages rather than counted to nine, because a
+// body that lands moves where a run stops. That is driven over the whole walk
+// rather than over the first hold: a claim about every such stage that rested
+// on one would be a count nothing checked.
 func TestAFindingThatIsNotClassifiedStopsForAPerson(t *testing.T) {
 	principles.Cite(t, principles.P3)
 
@@ -209,10 +211,24 @@ func TestAFindingThatIsNotClassifiedStopsForAPerson(t *testing.T) {
 	}
 
 	t.Run("through the binary", func(t *testing.T) {
+		requiresIdentifiedPeer(t)
+
 		j := inClone(t)
 		walk := answerHolds(t, j,
-			startRun(t, j, "--intent", "a change whose stages have no bodies in this build"), "approved")
-		observed := stopped{holds: walk[:len(walk)-1], stages: len(stageOrder())}
+			startRun(t, j, "--intent", "a change most of whose stages have no body in this build"), "approved")
+		observed := stopped{holds: walk[:len(walk)-1], stages: len(stagesWithoutABody(t))}
+		if len(observed.holds) == 0 {
+			t.Fatalf("the run reached no hold at all, so there is nothing here for any of this to be "+
+				"about; it ended %s at %q", last(walk).Outcome, last(walk).Position)
+		}
+
+		// Which hold a counterfeit changes is derived from the walk rather
+		// than named. How many holds a run reaches is how many stages this
+		// build has no body for, so a literal position stops being in range
+		// the day a body lands.
+		firstHold := 0
+		middleHold := len(observed.holds) / 2
+		lastHold := len(observed.holds) - 1
 
 		holds := journey.Check[stopped]{
 			What: "every stage of a run through the binary that established nothing reports a finding " +
@@ -220,12 +236,12 @@ func TestAFindingThatIsNotClassifiedStopsForAPerson(t *testing.T) {
 				"is one a fixer may take",
 			Clauses: []journey.Clause[stopped]{
 				{
-					States: "the run held once for every stage the gate has",
+					States: "the run held once for every stage this build has no body for",
 					Holds: func(s stopped) error {
 						if len(s.holds) != s.stages {
-							return fmt.Errorf("the run held %d time(s) and the gate has %d stages, so some "+
-								"stage reported a pass rather than holding for a person",
-								len(s.holds), s.stages)
+							return fmt.Errorf("the run held %d time(s) and this build has %d stage(s) with "+
+								"no body, so some stage that established nothing reported a pass rather "+
+								"than holding for a person", len(s.holds), s.stages)
 						}
 						return nil
 					},
@@ -327,34 +343,34 @@ func TestAFindingThatIsNotClassifiedStopsForAPerson(t *testing.T) {
 				{Named: "a stage reported a pass it did not establish rather than holding",
 					Break: func(s stopped) stopped {
 						s = cloneStopped(s)
-						s.holds = slices.Delete(s.holds, 3, 4)
+						s.holds = slices.Delete(s.holds, middleHold, middleHold+1)
 						return s
 					}},
 				{Named: "a waiting run came back with no decision at all", Break: func(s stopped) stopped {
 					s = cloneStopped(s)
-					s.holds[2].Decision = nil
+					s.holds[middleHold].Decision = nil
 					return s
 				}},
 				{Named: "a decision was relayed without the findings that produced it",
 					Break: func(s stopped) stopped {
-						return withDecision(s, 4, func(d *machine.Decision) { d.Findings = nil })
+						return withDecision(s, lastHold, func(d *machine.Decision) { d.Findings = nil })
 					}},
 				{Named: "a finding holding the run was classified as one a fixer may take",
 					Break: func(s stopped) stopped {
-						return withDecision(s, 0, func(d *machine.Decision) {
+						return withDecision(s, firstHold, func(d *machine.Decision) {
 							d.Findings = slices.Clone(d.Findings)
 							d.Findings[0].Action = findings.ActionFix
 						})
 					}},
 				{Named: "a finding holding the run came back as a note nobody has to answer",
 					Break: func(s stopped) stopped {
-						return withDecision(s, 6, func(d *machine.Decision) {
+						return withDecision(s, middleHold, func(d *machine.Decision) {
 							d.Findings = slices.Clone(d.Findings)
 							d.Findings[0].Action = findings.ActionNote
 						})
 					}},
 				{Named: "a decision offers no way to end the run", Break: func(s stopped) stopped {
-					return withDecision(s, 8, func(d *machine.Decision) { d.Options = nil })
+					return withDecision(s, lastHold, func(d *machine.Decision) { d.Options = nil })
 				}},
 			},
 		}
@@ -374,8 +390,9 @@ func TestAFindingThatIsNotClassifiedStopsForAPerson(t *testing.T) {
 type stopped struct {
 	// holds is the run as the surface reported it at each hold it reached.
 	holds []machine.Run
-	// stages is how many stages internal/pipeline fixes, which is how many
-	// holds a run whose every stage establishes nothing has to reach.
+	// stages is how many stages this build has no body for, which is how many
+	// holds a run has to reach: a stage with a body reports what it
+	// established and a stage without one holds for a person.
 	stages int
 }
 

@@ -126,7 +126,8 @@ func Settlements() []Settlement {
 				"under that key. The unsuppressed case is a whole run over the branch, but what it " +
 				"establishes is the pushed-configuration rejections rather than that nothing in the " +
 				"prose became an executed command: every planted executable is reached only through a " +
-				"stage body and this build has none, so the tripwire file is read and logged rather " +
+				"stage body that launches something and this build has none, so the tripwire file is " +
+				"read and logged rather " +
 				"than asserted on.",
 		},
 		{

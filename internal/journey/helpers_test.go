@@ -15,9 +15,70 @@ import (
 	"github.com/dayamjz/assistant/internal/fixture"
 	"github.com/dayamjz/assistant/internal/journey"
 	"github.com/dayamjz/assistant/internal/machine"
+	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/redact"
+	"github.com/dayamjz/assistant/internal/stages"
 	"github.com/dayamjz/assistant/internal/store"
 )
+
+// platformIdentifiesPeers reports whether internal/ipc has a read for local
+// socket peer credentials here, written down on the same terms that package's
+// own tests and internal/cli's write it down.
+func platformIdentifiesPeers() bool {
+	return runtime.GOOS == "linux" || runtime.GOOS == "darwin"
+}
+
+// requiresIdentifiedPeer skips a test that drives a run through the service.
+//
+// Identification is authority in internal/ipc, so on a platform with no read
+// for it every method that starts, answers, cancels or reruns a run is refused
+// and a check driving one would fail for the platform rather than for the
+// product. The skip is itself a claim, and the claim is narrow: what is
+// established on such a platform is only the checks that drive no run.
+// README.md's limits table and the Coverage note of every principle whose
+// binary reach passes through here both say so, because a skipped check that
+// reads as a pass is the same defect as a clause that cannot fail.
+func requiresIdentifiedPeer(t *testing.T) {
+	t.Helper()
+	if !platformIdentifiesPeers() {
+		t.Skipf("%s reports no local socket peer credentials, so every method that drives a run is "+
+			"refused and this check establishes nothing here", runtime.GOOS)
+	}
+}
+
+// stagesWithoutABody is the stages this build has no implementation for, in
+// the order a run takes them.
+//
+// Those are the stages a run holds at, so a check about where a run stops
+// derives its answer from here rather than naming a stage or counting to nine.
+// A body that lands moves where a run first stops, and internal/stages says as
+// much: internal/cli and internal/service read Implemented for the same
+// reason, and a check written against the count would fail the day a body
+// lands for a reason that has nothing to do with what it asserts.
+//
+// It reads the table compiled into this test binary. That is the same table
+// the binary under test carries unless BinaryVariable names an artifact built
+// from another tree, and one whose bodies differ makes the checks resting on
+// this fail loudly rather than quietly measure something else.
+func stagesWithoutABody(t *testing.T) []pipeline.Stage {
+	t.Helper()
+	implemented := map[pipeline.Stage]bool{}
+	for _, stage := range stages.Implemented() {
+		implemented[stage] = true
+	}
+	var pending []pipeline.Stage
+	for _, stage := range pipeline.Order() {
+		if !implemented[stage] {
+			pending = append(pending, stage)
+		}
+	}
+	if len(pending) < 2 {
+		t.Fatalf("this build has %d stage(s) without a body, so a run no longer walks from one hold to "+
+			"the next; the checks resting on this need rewriting against whatever now holds a run",
+			len(pending))
+	}
+	return pending
+}
 
 // claim takes a scenario for this test's exclusive use. A second test wanting
 // the same one is refused here rather than interfering in a way that reads as

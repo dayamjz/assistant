@@ -39,9 +39,19 @@ import (
 // means; internal/config's key table is its one owner, and nothing here can
 // enumerate it.
 func TestAPassMeansTheSameThingEverywhere(t *testing.T) {
+	requiresIdentifiedPeer(t)
 	principles.Cite(t, principles.P2)
 
 	j := inClone(t)
+
+	// Which stages a run holds at is derived rather than named, because a body
+	// that lands moves it: a stage with one reports what it established and
+	// never sees the answer this test gives, so a clause holding every stage
+	// to that answer would fail for a reason that is not P2.
+	held := map[string]bool{}
+	for _, stage := range stagesWithoutABody(t) {
+		held[stage.String()] = true
+	}
 
 	walked := journey.Check[machine.Run]{
 		What: "a run through the binary walks the nine stages in the order internal/pipeline fixes, " +
@@ -69,15 +79,36 @@ func TestAPassMeansTheSameThingEverywhere(t *testing.T) {
 			},
 			{
 				// Every hold in this run was answered with the same option, so
-				// every stage has to carry it. A stage reporting another
-				// outcome was answered by something other than the answer this
-				// test gave, which internal/machine says a stage's Ran flag
-				// alone cannot tell apart from being skipped past at its hold.
-				States: "every stage carries the outcome this run's holds were answered with",
+				// every stage that held has to carry it. A stage reporting
+				// another outcome was answered by something other than the
+				// answer this test gave, which internal/machine says a stage's
+				// Ran flag alone cannot tell apart from being skipped past at
+				// its hold.
+				States: "every stage this build has no body for carries the outcome this run's holds " +
+					"were answered with",
 				Holds: func(run machine.Run) error {
 					for _, stage := range run.Stages {
+						if !held[stage.Stage] {
+							continue
+						}
 						if stage.Outcome != pipeline.OutcomeApproved {
-							return fmt.Errorf("the %s stage came back %q, and every hold in this run was approved",
+							return fmt.Errorf("the %s stage has no body in this build and came back %q, "+
+								"and every hold in this run was approved", stage.Stage, stage.Outcome)
+						}
+					}
+					return nil
+				},
+			},
+			{
+				// The stages with a body report what their bodies established,
+				// which this cannot state in advance. What it can state is the
+				// one outcome no stage of this run may carry, which is the
+				// shape the clause above catches for the stages it covers.
+				States: "no stage of a run that skipped nothing came back skipped",
+				Holds: func(run machine.Run) error {
+					for _, stage := range run.Stages {
+						if stage.Outcome == pipeline.OutcomeSkipped {
+							return fmt.Errorf("the %s stage came back %q, and this run skipped nothing",
 								stage.Stage, stage.Outcome)
 						}
 					}
@@ -115,9 +146,17 @@ func TestAPassMeansTheSameThingEverywhere(t *testing.T) {
 				run.Stages[4].Ran = false
 				return run
 			}},
+			// The stage this one changes is found rather than counted to,
+			// because the clause it has to reach covers the stages this build
+			// has no body for and which those are moves as bodies land.
 			{Named: "a stage came back carrying an outcome nobody gave it", Break: func(run machine.Run) machine.Run {
 				run = cloneRun(run)
-				run.Stages[6].Outcome = pipeline.OutcomeSkipped
+				for i, stage := range run.Stages {
+					if held[stage.Stage] {
+						run.Stages[i].Outcome = pipeline.OutcomeSkipped
+						break
+					}
+				}
 				return run
 			}},
 			{Named: "the run stopped without reaching the end", Break: func(run machine.Run) machine.Run {
