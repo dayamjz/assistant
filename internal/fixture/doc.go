@@ -29,7 +29,8 @@
 // # Why the plants go through raw git
 //
 // internal/vcs is the only package in this product that invokes git, and this
-// package is the documented exception. It runs git directly, the way
+// package is the first of its two documented exceptions, internal/journey
+// being the second. It runs git directly, the way
 // internal/vcs's own test helpers do, and for the same reason: a fixture built
 // with the code under validation cannot show that code wrong. A subject
 // repository assembled through internal/vcs would inherit whatever

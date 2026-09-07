@@ -1,8 +1,13 @@
 // Package vcs is the only place in this product that invokes git, apart from
-// internal/fixture, which states in its own package comment why a fixture
-// built with the code under validation could not show that code wrong. PRD
-// section 8 gives this package that ownership, and the point of it is that two
-// rules which are easy to forget at a call site are applied here once, on
+// two packages that state in their own package comments why they may not ask
+// it: internal/fixture, because a subject repository built with the code under
+// validation could not show that code wrong, and internal/journey, because a
+// harness that read a push back through this package would be reporting it
+// agreeing with itself. Two named exceptions, and a third is a finding to
+// raise rather than a precedent to follow.
+//
+// PRD section 8 gives this package that ownership, and the point of it is that
+// two rules which are easy to forget at a call site are applied here once, on
 // every invocation, and cannot be forgotten by a caller that never builds a
 // command line.
 //
