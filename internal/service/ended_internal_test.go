@@ -267,3 +267,34 @@ type fixedRunner struct{ runner agents.Runner }
 func (f fixedRunner) Name() string { return f.runner.Name() }
 
 func (f fixedRunner) New(context.Context, []string) (agents.Runner, error) { return f.runner, nil }
+
+// A run a push supersedes is ended by the same seam a cancel is, so it is not
+// picked up again either.
+//
+// signalCancellation is what claimPush ends the displaced run with, and it is
+// driven here rather than a whole push. The record is what a push moves next,
+// and moving it would put attach's own reconcile in the way - the second line
+// of defence the test above describes, which passes whatever carryOn decided.
+// What this answers for is the window claimPush leaves open between signalling
+// the displaced run and committing its terminated record: a segment cancelled
+// there against a record that still says running is exactly what a
+// continuation would resume, and the run it would resume is one a newer push
+// has already taken the branch from.
+//
+// P6 is cited for the same reason as above: a continuation there executes
+// nodes past the position the run was displaced at, and writes them into a
+// checkpoint history nobody asked for.
+func TestARunSupersededByAPushIsNotCarriedOn(t *testing.T) {
+	principles.Cite(t, principles.P6)
+
+	held := newHeldService(t)
+	record := held.begin(t)
+
+	held.service.signalCancellation(record.ID)
+	held.awaitSegment(t)
+
+	if got := held.status(t, record.ID); got != store.RunRunning {
+		t.Fatalf("the record moved to %s; this case is about the window before a push moves it", got)
+	}
+	held.assertNotResumed(t, record.ID)
+}
