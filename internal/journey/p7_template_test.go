@@ -168,9 +168,18 @@ func TestNothingOutsideTheGateChoosesWhatRunsOnAPushToIt(t *testing.T) {
 			},
 		}
 		counterfeits := []journey.Counterfeit[admission]{
+			// Both fields, because the clause this reaches is a disjunction. A
+			// counterfeit that flipped one of them would break only the
+			// disjunct that happens to hold today, and would return the real
+			// observation unchanged once the other one does - which refuses
+			// the check for accepting a counterfeit rather than reporting
+			// anything about the product. Landing on the one shape the clause
+			// rejects, whichever disjunct held, is what keeps it live across
+			// that transition.
 			{Named: "the gate accepted an ordinary push with nothing checking it",
 				Break: func(a admission) admission {
 					a.ordinaryPush = true
+					a.ordinaryRuns = 0
 					return a
 				}},
 			{Named: "neither the initialization nor the push told us anything",
