@@ -69,9 +69,12 @@ var (
 	// ErrUnknownStage is returned when a run is started naming a stage to skip
 	// that is not one of the nine.
 	ErrUnknownStage = errors.New("pipeline: not one of the nine stages")
-	// ErrIncompleteRun is returned when a run is started without the branch,
-	// the base, or the submitted commit it is validating.
-	ErrIncompleteRun = errors.New("pipeline: a run needs a branch, a base, and a submitted commit")
+	// ErrIncompleteRun is returned when a run is started without saying what
+	// it is validating. Every field Start requires is one of those facts, and
+	// which of them was blank is in the wrapped message, so a fact added to
+	// Start widens this without the contract here having to be re-counted.
+	ErrIncompleteRun = errors.New("pipeline: a run needs the repository and run it belongs to " +
+		"and the branch, base and submitted commit it is validating")
 	// ErrEmptyIntent is returned when a run claims its intent was supplied and
 	// supplies none. It is separate from ErrIncompleteRun because the two mean
 	// different things: that one says the run did not say what it is
