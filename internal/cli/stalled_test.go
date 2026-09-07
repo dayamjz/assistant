@@ -140,9 +140,16 @@ func TestARunWhoseCallerGaveUpIsCarriedOnRatherThanStranded(t *testing.T) {
 
 	inside := make(chan struct{})
 	carried := make(chan struct{})
-	var entered, resumed sync.Once
+	release := make(chan struct{})
+	var entered, resumed, released sync.Once
+	let := func() { released.Do(func() { close(release) }) }
 	var calls atomic.Int64
-	serveIntentLosingItsCaller(t, h, inside, carried, &entered, &resumed, &calls)
+	serveIntentLosingItsCaller(t, h, inside, carried, release, &entered, &resumed, &calls)
+	// Registered after the service, so it runs before the service is closed. A
+	// test that fails while the continuation is still inside the body would
+	// otherwise leave the teardown waiting on a stage nothing is going to
+	// release.
+	t.Cleanup(let)
 
 	if got := run(t, h, subject, "init"); got.code != machine.ExitOK {
 		t.Fatalf("assistant init exited %s:\n%s%s", got.code, got.stdout, got.stderr)
@@ -176,16 +183,54 @@ func TestARunWhoseCallerGaveUpIsCarriedOnRatherThanStranded(t *testing.T) {
 		t.Fatalf("the run was left standing after its caller gave up; the stage body ran %d times", calls.Load())
 	}
 
+	// The continuation is inside the stage body and stays there until this
+	// test lets it out, so the run is being advanced for certain rather than
+	// by timing, and with nobody waiting on it. That is the in-flight half of
+	// the same distinction, reached here by the service's own doing, and it is
+	// what stops the wait below from being satisfied by an answer that never
+	// reports a segment at all.
+	moving := statusRun(t, h, subject)
+	if !moving.Advancing {
+		t.Fatalf("the run reports nothing advancing it while the continuation is inside the stage body:\n%+v", moving)
+	}
+	if moving.Outcome != machine.OutcomeExecuting {
+		t.Fatalf("the run being carried on reports %s, want executing", moving.Outcome)
+	}
+	if moving.NextAction != machine.OutcomeExecuting.NextActionFor(true) {
+		t.Fatalf("the run being carried on says %q, want the action for one being advanced", moving.NextAction)
+	}
+
 	// And it goes on to where it was going, which a read finds without asking
-	// for it. The read is repeated because the continuation is in flight when
-	// the body returns, not because the answer is uncertain.
-	view := runUntil(t, h, subject, func(v machine.Run) bool { return v.Outcome == machine.OutcomeDecision })
-	if view.Advancing {
-		t.Fatal("the run reports a segment still running after it reached its decision")
+	// for it. The wait is for the run to be settled and its slot given back,
+	// which the continuation does in that order: waiting on the decision alone
+	// would let a read land between the two and see a segment that has already
+	// stopped.
+	let()
+	view := runUntil(t, h, subject, func(v machine.Run) bool {
+		return v.Outcome == machine.OutcomeDecision && !v.Advancing
+	})
+	if view.NextAction != machine.OutcomeDecision.NextActionFor(false) {
+		t.Fatalf("the run says %q at its decision, want the action for one waiting on a person", view.NextAction)
 	}
 	if calls.Load() != 2 {
 		t.Fatalf("the stage body ran %d times, want the caller's and the continuation's", calls.Load())
 	}
+}
+
+// statusRun reads the branch's status and returns the run it reports, for a
+// read whose moment the test has already pinned.
+func statusRun(t *testing.T, h *home.Home, subject string) machine.Run {
+	t.Helper()
+	reported := mustOK(t, run(t, h, subject, "--json", "status"))
+	var status machine.Status
+	if err := json.Unmarshal([]byte(reported.stdout), &status); err != nil {
+		t.Fatalf("status does not decode: %v\n%s", err, reported.stdout)
+	}
+	if status.ActiveRun == nil {
+		t.Fatalf("status reports no active run:\n%s", reported.stdout)
+	}
+	t.Logf("assistant --json status:\n%s", reported.stdout)
+	return *status.ActiveRun
 }
 
 // runUntil reads the branch's status until the run satisfies want, and fails if
@@ -195,17 +240,8 @@ func runUntil(t *testing.T, h *home.Home, subject string, want func(machine.Run)
 	deadline := time.Now().Add(30 * time.Second)
 	var last machine.Run
 	for time.Now().Before(deadline) {
-		reported := mustOK(t, run(t, h, subject, "--json", "status"))
-		var status machine.Status
-		if err := json.Unmarshal([]byte(reported.stdout), &status); err != nil {
-			t.Fatalf("status does not decode: %v\n%s", err, reported.stdout)
-		}
-		if status.ActiveRun == nil {
-			t.Fatalf("status reports no active run:\n%s", reported.stdout)
-		}
-		last = *status.ActiveRun
+		last = statusRun(t, h, subject)
 		if want(last) {
-			t.Logf("assistant --json status, once the run got where it was going:\n%s", reported.stdout)
 			return last
 		}
 		time.Sleep(20 * time.Millisecond)
@@ -304,8 +340,10 @@ func serveIntentFailingOnce(t *testing.T, h *home.Home, calls *atomic.Int64) {
 // serveIntentLosingItsCaller serves a home whose first stage body waits for its
 // caller to give up and fails with that, and reports a decision the next time
 // it is entered. The second entry is what the service's own continuation
-// reaches, and it says so on carried.
-func serveIntentLosingItsCaller(t *testing.T, h *home.Home, inside, carried chan struct{}, entered, resumed *sync.Once, calls *atomic.Int64) {
+// reaches: it says so on carried and then stays inside the body until release
+// is closed, so the continuation can be read while it is certainly in flight
+// rather than caught there.
+func serveIntentLosingItsCaller(t *testing.T, h *home.Home, inside, carried, release chan struct{}, entered, resumed *sync.Once, calls *atomic.Int64) {
 	t.Helper()
 	stagesToServe := stages.All()
 	stagesToServe.Intent = pipeline.Implementation{
@@ -313,6 +351,11 @@ func serveIntentLosingItsCaller(t *testing.T, h *home.Home, inside, carried chan
 			return func(ctx context.Context, _ pipeline.Input) (pipeline.Output, error) {
 				if calls.Add(1) > 1 {
 					resumed.Do(func() { close(carried) })
+					select {
+					case <-release:
+					case <-ctx.Done():
+						return pipeline.Output{}, ctx.Err()
+					}
 					return heldReport(), nil
 				}
 				entered.Do(func() { close(inside) })

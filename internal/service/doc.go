@@ -82,7 +82,7 @@
 // failed is a failure the caller was told about, in the error the call
 // returned, and repeating it would be a loop rather than progress: that run
 // stands where it is and the read above says what carries it on. The service
-// stopping is the context ending that carries nothing, because recovery
+// stopping is a context ending that carries nothing, because recovery
 // continues every unfinished run on the next open and starting work here would
 // be starting work the service is giving up.
 //
@@ -94,10 +94,37 @@
 // run standing at a resumable position is neither, and ending it would discard
 // work its checkpoint history still holds, which P6 forbids.
 //
-// A continuation cannot cause another, and that is structural. It runs under
-// this service's own context, so the only context that can end it is the stop
-// carryOn refuses to continue on. What is left is one continuation per caller
-// that walked away.
+// # The record and the execution disagreeing, in both directions
+//
+// The stall above is a record saying running with nothing executing. Its
+// mirror is a record saying terminated with something executing still, which
+// is what a run ended through the protocol would leave if a continuation
+// picked it up behind the caller who was told it was over. Ending a run
+// cancels its segment, so that segment ends the way a lost caller's does and
+// would otherwise be carried on for the same reason.
+//
+// What is structural and what is not are named apart here, because describing
+// the second as the first is what let this ship. This service never picks such
+// a run up itself: the ending is recorded in the run's slot under the one
+// mutex claim and release also take, so a continuation either finds the ending
+// in the slot it is giving back or finds the slot itself held for the length
+// of the caller's move and is refused it. That is a bound on the interleaving
+// rather than a read that could be stale, and it is what carryOn's refusal
+// rests on.
+//
+// Two things it does not reach, and neither is closed. The segment already
+// inside a node when the ending is recorded still has to return: cancel
+// signals it and does not wait for it, which cancel's own documentation
+// states, so execution can outlast the answer by as long as that node takes to
+// notice. And a second caller that read the run's record before the ending was
+// written can still advance the run once that segment gives its slot back; its
+// read raced the ending, and nothing recorded after that read can order it.
+//
+// A continuation cannot cause another, and that is structural too. It runs
+// under this service's own context, so the only contexts that can end its
+// segment are the service stopping and an ending through the protocol, and
+// carryOn refuses both. What is left is one continuation per caller that
+// walked away.
 //
 // # Containment is asked of the kernel, and answered from what this service
 // started
