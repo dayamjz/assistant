@@ -259,10 +259,12 @@ func TestATrustedConfigurationThatCannotBeReadIsNotFallenBackFrom(t *testing.T) 
 		// executable at all - a malformed document, a paragraph of prose, and
 		// a well-formed document on the branch - so its tripwire file could
 		// not be written whatever the product did, and a clause reading it
-		// would hold over a world nothing could have made it report in. A run
-		// over a branch that does carry executables is
-		// TestTheBranchUnderValidationChoosesNothingThatRuns, where the
-		// tripwires are real and the same claim is established.
+		// would hold over a world nothing could have made it report in. No
+		// test here establishes it over a branch that does plant executables
+		// either: every one of those is reached only through a stage body and
+		// this build has none, which
+		// TestTheBranchUnderValidationChoosesNothingThatRuns says in its own
+		// terms.
 		j := inClone(t)
 		answer := j.Command("--intent", "a run whose default branch carries a document that will not parse")
 		observed := resolvedRun{started: answer.Code == machine.ExitOK, message: answer.Message()}
@@ -275,8 +277,8 @@ func TestATrustedConfigurationThatCannotBeReadIsNotFallenBackFrom(t *testing.T) 
 				"before launching anything, or starts and reports an outcome; which document it read, " +
 				"and which agent it resolved, are not established here, because no shipped surface " +
 				"reports either and this subject plants nothing whose execution could stand in for " +
-				"them. TestTheBranchUnderValidationChoosesNothingThatRuns establishes over a branch " +
-				"that does plant them that the agent binary a branch ships never runs",
+				"them. Nothing else here establishes it either: the branch-installation family's " +
+				"planted executables are reached only through a stage body and this build has none",
 			Clauses: []journey.Clause[resolvedRun]{
 				{
 					States: "a run that did not start stopped for the configuration",
@@ -321,8 +323,9 @@ func TestATrustedConfigurationThatCannotBeReadIsNotFallenBackFrom(t *testing.T) 
 				"before launching anything when the trusted copy cannot be read and parsed. Nothing in "+
 				"this build reads a repository's own document from anywhere, which internal/service "+
 				"states, so this is a gap against section 10 rather than a hole in P7. That nothing a "+
-				"branch names is executed is established over a branch that plants executables, by "+
-				"TestTheBranchUnderValidationChoosesNothingThatRuns, and not here.", observed.outcome)
+				"branch names is executed is established nowhere in this build: every planted "+
+				"executable of that family is reached only through a stage body, and internal/stages "+
+				"holds none.", observed.outcome)
 		}
 	})
 }
