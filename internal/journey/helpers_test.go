@@ -52,10 +52,11 @@ func requiresIdentifiedPeer(t *testing.T) {
 // It is the sibling packages' second guard, on their terms: internal/service
 // and internal/cli both carry it, both bound it by the same written-down
 // platform predicate, and a platform that does identify peers is one where a
-// service that failed to come up is a failure rather than a skip. It is taken
-// wherever a service is expected to come up and wherever a test reads why one
-// did not, because on such a platform every service fails to come up for the
-// transport instead, and neither question can be answered there.
+// service that failed to come up is a failure rather than a skip. Its one
+// caller is serving, which is where every service these tests start is started,
+// and it answers both questions a caller could be asking there: on such a
+// platform a service that had to come up did not, and a test whose subject is
+// why one did not is reading the transport rather than what it named.
 func requiresLocalSocket(t *testing.T, cause error) {
 	t.Helper()
 	if !platformIdentifiesPeers() {
@@ -130,16 +131,33 @@ func open(t *testing.T, scenario fixture.Scenario, opts ...func(*journey.Options
 	return j
 }
 
-// serve starts the service in a process this test owns, so it can be killed
-// the way a crash kills it.
+// serving starts the service in a process this test owns, so it can be killed
+// the way a crash kills it, and reports what starting it came to.
 //
-// A service that did not come up is a failure everywhere the transport it
-// binds exists, and a skip where it does not, which is the sibling packages'
-// answer and is why this is the one place every serving test goes through.
+// It is the one call to journey.Serve in this package's tests, and it is that
+// so the platform guard cannot be forgotten: a service that did not come up is
+// a failure everywhere the transport it binds exists and a skip where it does
+// not, which is the sibling packages' answer, and a test that reached past
+// this would take neither. The residual gap is that nothing enforces it. Go
+// has no way to close the door on an exported method, and a test asserting it
+// by reading this package's source would be proving a pattern rather than a
+// behaviour, which is the shape this repository rejects. So it is a rule a
+// reader keeps, and the one thing that makes it keepable is that both answers
+// a caller could want are here: serve for a service that has to come up, and
+// this for a test whose subject is one that did not.
+func serving(t *testing.T, j *journey.Journey) error {
+	t.Helper()
+	err := j.Serve()
+	if err != nil {
+		requiresLocalSocket(t, err)
+	}
+	return err
+}
+
+// serve starts the service and fails the test unless it came up.
 func serve(t *testing.T, j *journey.Journey) {
 	t.Helper()
-	if err := j.Serve(); err != nil {
-		requiresLocalSocket(t, err)
+	if err := serving(t, j); err != nil {
 		t.Fatalf("serving: %v", err)
 	}
 }

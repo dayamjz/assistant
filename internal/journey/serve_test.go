@@ -45,13 +45,12 @@ func TestServingAHomeTheServiceRefusesReportsTheExitRatherThanWaitingItOut(t *te
 	}
 
 	started := time.Now()
-	err := j.Serve()
+	err := serving(t, j)
 	took := time.Since(started)
 
 	if err == nil {
 		t.Fatal("this home carries a standing skip and the service reported itself ready over it")
 	}
-	requiresLocalSocket(t, err)
 	if !strings.Contains(err.Error(), "exited before it was ready") {
 		t.Fatalf("serving reported %v, and a child that has already exited is reported as one rather "+
 			"than as a readiness check nothing answered", err)
@@ -74,7 +73,7 @@ func TestServingAHomeTheServiceRefusesReportsTheExitRatherThanWaitingItOut(t *te
 	if err := j.WriteConfiguration(nil); err != nil {
 		t.Fatalf("rewriting the home's configuration without the standing skip: %v", err)
 	}
-	if err := j.Serve(); err != nil {
+	if err := serving(t, j); err != nil {
 		t.Fatalf("the same home, differing only in that its document no longer asks for a standing "+
 			"skip, did not come up either: %v\n\nso the exit above is not attributable to the "+
 			"document, and what this test read as a refusal was something about this home, this "+
