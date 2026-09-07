@@ -81,13 +81,19 @@ func fixerRoutes() map[reflect.Type]string {
 // element, a map's key as well as its value, and a function's results. The
 // function case is not decoration - a constructor-valued field is how a
 // service already hands a fixer over, so a deps struct is one field away from
-// it. A value's address is reachable too, so a method set only the pointer has
-// counts as the caller's.
+// it. A value held somewhere addressable can have its address taken too, so a
+// method set only the pointer has counts as the caller's.
 //
-// Two of those overstate slightly and do so on purpose. A send-only channel
-// cannot be received from and an unbuffered one may never carry a value, and
-// both are walked anyway: a guard that overstates fails loudly at the shape
-// that has to be argued about, while one that understates passes in silence.
+// Three of those overstate, and all three do so on purpose. A send-only
+// channel cannot be received from, and an unbuffered one may never carry a
+// value; both are walked anyway. And that pointer method set is asked of every
+// type this reaches without asking how the type was held, so a value that is
+// not addressable - a map value, a function result, a method result - is
+// credited with a method set no caller could call on it.
+//
+// Each over-reports a route nobody can take, which is the direction to err in
+// here: a guard that overstates fails loudly at the shape that has to be
+// argued about, while one that understates passes in silence.
 //
 // Method and function parameters are not walked. A method that takes a Runner
 // is not a way to obtain one: a caller would need it already.
