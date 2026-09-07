@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/agents"
@@ -187,6 +188,15 @@ func newSubject(t *testing.T) string {
 // whatever is installed.
 func serve(t *testing.T, h *home.Home) {
 	t.Helper()
+	serveUntilStopped(t, h)
+}
+
+// serveUntilStopped is serve for a test whose subject is what happens with the
+// service down after it has been up. The returned function stops it, is safe
+// to call more than once, and runs at the end of the test whether or not the
+// test called it.
+func serveUntilStopped(t *testing.T, h *home.Home) func() {
+	t.Helper()
 	build, err := store.CurrentBuild()
 	if err != nil {
 		t.Fatalf("reading this build's identity: %v", err)
@@ -204,14 +214,19 @@ func serve(t *testing.T, h *home.Home) {
 	}
 	served := make(chan error, 1)
 	go func() { served <- running.Serve(context.Background()) }()
-	t.Cleanup(func() {
-		if err := running.Close(); err != nil {
-			t.Errorf("closing the service: %v", err)
-		}
-		if err := <-served; err != nil {
-			t.Errorf("serving: %v", err)
-		}
-	})
+	var once sync.Once
+	stop := func() {
+		once.Do(func() {
+			if err := running.Close(); err != nil {
+				t.Errorf("closing the service: %v", err)
+			}
+			if err := <-served; err != nil {
+				t.Errorf("serving: %v", err)
+			}
+		})
+	}
+	t.Cleanup(stop)
+	return stop
 }
 
 // fixedFactory hands back a Runner somebody else built, so nothing here can

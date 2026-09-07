@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -249,6 +250,67 @@ func TestAPushIsRefusedAndChangesNothingWhenNothingCanValidateIt(t *testing.T) {
 	}
 	if refs := gateRefs(t, repository); len(refs) != 0 {
 		t.Fatalf("the refused push left %v in the gate; admission runs before any reference changes", refs)
+	}
+}
+
+// TestARefusedPushLeavesEveryReferenceInTheGateAsItWas is the ordering PRD
+// section 5 puts admission before mutation for: a refusal happens instead of a
+// change, not after one, and not after half of one.
+//
+// The gate here already holds a reference, and the push that gets refused
+// would both move that reference and create a second. Those are the two
+// mutations a partial application could leave behind, and neither is there
+// afterwards: the gate's references are read with git directly, before and
+// after, and compared whole.
+//
+// What that establishes is about references, which is what a gate's state is
+// for every question this product asks of it. It says nothing about what git
+// does with the objects a push transferred before the hook ran; that is git's
+// business, this does not look, and no claim here rests on it.
+func TestARefusedPushLeavesEveryReferenceInTheGateAsItWas(t *testing.T) {
+	requiresIdentifiedPeer(t)
+	h := newHome(t)
+	subject := newSubject(t)
+	stop := serveUntilStopped(t, h)
+	repository := initialize(t, h, subject)
+
+	// A first push that is accepted, so the gate has something to lose. Its
+	// run is let reach its hold before the service goes away, so nothing is
+	// mid-flight when it does.
+	git(t, subject, "checkout", "--quiet", "-b", "work")
+	commitOn(t, subject, "work", "work.txt", "the change that lands\n")
+	git(t, subject, "push", gate.RemoteName, "work")
+	awaitHold(t, h, subject, onlyRun(t, h, subject).ID)
+
+	before := gateRefs(t, repository)
+	if len(before) == 0 {
+		t.Fatal("the accepted push left the gate holding no reference, so a refusal could not lose one")
+	}
+
+	// Now nothing can validate a push, and the next one carries two changes:
+	// one that would move the reference already there, and one that would
+	// create another.
+	stop()
+	moved := commitOn(t, subject, "work", "work.txt", "the change that is refused\n")
+	git(t, subject, "branch", "second")
+
+	out, err := tryGit(subject, "push", gate.RemoteName, "work", "second")
+	if err == nil {
+		t.Fatalf("the push was accepted although nothing could validate it:\n%s", out)
+	}
+	t.Logf("git push %s work second, with no service running:\n%s", gate.RemoteName, out)
+
+	after := gateRefs(t, repository)
+	if !slices.Equal(before, after) {
+		t.Fatalf("the refused push changed the gate's references.\nbefore: %v\nafter:  %v", before, after)
+	}
+	for _, ref := range after {
+		if strings.Contains(ref, moved) {
+			t.Fatalf("the refused push moved a reference to the commit it carried: %s", ref)
+		}
+		if strings.HasPrefix(ref, "refs/heads/second ") {
+			t.Fatalf("the refused push created %s", ref)
+		}
 	}
 }
 
