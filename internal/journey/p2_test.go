@@ -29,13 +29,15 @@ import (
 // binary walks them.
 //
 // The third part is refused by internal/config's key table rather than by a
-// rule written against standing skips. That table is a closed set and has no
-// row a document could ask for one through, so the document names a key the
-// schema does not admit and the service stops before it binds a socket. The
-// property PRD section 13 asks for holds, and it holds for that reason, so the
-// check says so and drives a second key of another name alongside: a check
-// that only ever offered a key spelled "skip" would pass on the word rather
-// than on the table.
+// rule written against standing skips: the table admits no key named skip, so
+// a document asking for one that way names a key the schema does not admit and
+// the service stops before it binds a socket. Two facts are observable here
+// and both are narrow - that the table carries no such name, and that a key it
+// does not carry is refused at parse time - so a second key of another name is
+// driven alongside and the check claims only those two. Whether some row the
+// table does carry would apply a standing skip is a question about what a row
+// means; internal/config's key table is its one owner, and nothing here can
+// enumerate it.
 func TestAPassMeansTheSameThingEverywhere(t *testing.T) {
 	principles.Cite(t, principles.P2)
 
@@ -253,19 +255,19 @@ func TestAPassMeansTheSameThingEverywhere(t *testing.T) {
 	}
 
 	standing := journey.Check[standingSkip]{
-		What: "no configuration document can ask for a standing skip, because internal/config's key " +
-			"table admits no key one could be asked for through; the service refuses to serve over a " +
-			"document naming a key that table does not admit, and names the key it refused, and it " +
-			"answers a key of another name the same way, so what stops a standing skip is the closed " +
-			"table rather than the word skip",
+		What: "internal/config's key table admits no key named skip, and the service refuses to serve " +
+			"over a document naming a key that table does not admit, naming the key it refused; it " +
+			"answers a key of another name the same way, so the refusal is not read off one word. " +
+			"Whether some row the table does carry would apply a standing skip is what a row means " +
+			"rather than what its name is, and that table is its one owner",
 		Clauses: []journey.Clause[standingSkip]{
 			{
-				States: "the key table admits no key a standing skip could be asked for through",
+				States: "the key table admits no key named skip",
 				Holds: func(s standingSkip) error {
 					if slices.Contains(s.schemaKeys, standingSkipKey) {
-						return fmt.Errorf("the schema now admits %q, so a document can name it and what "+
-							"refuses a standing skip is no longer the table having no such row; whatever "+
-							"refuses one now has to be driven instead", standingSkipKey)
+						return fmt.Errorf("the schema now admits %q, so a document can name it and this no "+
+							"longer establishes that a document asking for a standing skip that way is "+
+							"refused; what that row does is internal/config's to say", standingSkipKey)
 					}
 					return nil
 				},
@@ -395,14 +397,15 @@ func TestAPassMeansTheSameThingEverywhere(t *testing.T) {
 	}
 }
 
-// standingSkipKey is the key a configuration document would have to name to
-// ask for a standing skip.
+// standingSkipKey is the name a configuration document asking for a standing
+// skip would use.
 //
 // PRD section 2 has such a document stop the service before it serves, and
 // what stops it is internal/config's key table having no row by this name
 // rather than a rule written against standing skips: config.Keys is the one
 // owner of what a document may say, and a key it does not list is refused
-// where the document is walked.
+// where the document is walked. That a row of some other name does not apply a
+// standing skip is not a fact about names and is not checked here.
 const standingSkipKey = "skip"
 
 // unadmittedKeyOfAnotherName is a second key that table does not admit,

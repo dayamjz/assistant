@@ -59,16 +59,20 @@ func Coverage() []Established {
 		{principles.P2, ReachBinary,
 			"One run of the binary walks the nine stages in the specified order; a second skips two of " +
 				"them for that run only; and a home whose configuration document asks for a standing " +
-				"skip stops the service before it serves. What refuses that document is internal/config's " +
-				"key table admitting no key one could be asked for through, rather than a rule written " +
-				"against standing skips, so a second key of another name is driven beside it and held to " +
-				"the same answer; the property holds and this says which mechanism holds it. The order " +
-				"being unsayable in any other shape is internal/pipeline's, which this does not repeat."},
+				"skip stops the service before it serves. Two narrow facts are what establish the third: " +
+				"internal/config's key table admits no key named skip, and a key it does not admit is " +
+				"refused where the document is walked, before the service binds. A second key of another " +
+				"name is driven beside it and held to the same answer, so the refusal is not read off one " +
+				"word. Whether some row that table does carry would apply a standing skip is what a row " +
+				"means rather than what it is called, and that table is its one owner; nothing here " +
+				"enumerates it. The order being unsayable in any other shape is internal/pipeline's, " +
+				"which this does not repeat."},
 		{principles.P3, ReachBinary,
-			"Every stage of a run through the binary reports a finding that is not classified and holds " +
-				"for a person rather than passing, and none of those findings is fix-eligible. The " +
-				"planted agent output is driven at package reach as well, because no stage body launches " +
-				"an agent in this build, so no report an agent wrote reaches a run."},
+			"A run through the binary is walked to its end and every hold it reaches is read: it holds " +
+				"once for each of the nine stages, every hold is relayed with the finding that produced " +
+				"it, every one of those findings reports itself as holding for a person, and none is one " +
+				"a fixer may take. The planted agent output is driven at package reach as well, because " +
+				"no stage body launches an agent in this build, so no report an agent wrote reaches a run."},
 		{principles.P4, ReachPackage,
 			"The binary cannot reach this: no stage body launches an agent, so a run makes no agent " +
 				"invocation to assert over. What is driven is the production adapter over the stand-in, " +
