@@ -3,6 +3,7 @@ package cli_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -191,17 +192,32 @@ func serve(t *testing.T, h *home.Home) {
 // test called it.
 func serveUntilStopped(t *testing.T, h *home.Home) func() {
 	t.Helper()
+	runner := standin.New(t, standin.Script{}).Runner()
+	return serveCatalog(t, h, agents.NewCatalog(fixedFactory{runner: runner}))
+}
+
+// serveWithNoRunnableAgent serves a home whose one configured adapter refuses
+// to build, which is what agents.Resolve meets on a machine with nothing it
+// can run. Every other helper here serves a home that resolves.
+func serveWithNoRunnableAgent(t *testing.T, h *home.Home) func() {
+	t.Helper()
+	return serveCatalog(t, h, agents.NewCatalog(unrunnableFactory{}))
+}
+
+// serveCatalog is the one owner of how these tests open and serve a service,
+// so the only thing a caller varies is which agents it may resolve.
+func serveCatalog(t *testing.T, h *home.Home, catalog *agents.Catalog) func() {
+	t.Helper()
 	build, err := store.CurrentBuild()
 	if err != nil {
 		t.Fatalf("reading this build's identity: %v", err)
 	}
-	runner := standin.New(t, standin.Script{}).Runner()
 	running, err := service.Open(t.Context(), service.Options{
 		Home:     h,
 		Stages:   stages.All(),
 		NewFixer: stages.PendingFixer,
 		Build:    build,
-		Catalog:  agents.NewCatalog(fixedFactory{runner: runner}),
+		Catalog:  catalog,
 	})
 	if err != nil {
 		t.Fatalf("opening the service: %v", err)
@@ -230,6 +246,18 @@ type fixedFactory struct{ runner agents.Runner }
 func (f fixedFactory) Name() string { return f.runner.Name() }
 
 func (f fixedFactory) New(context.Context, []string) (agents.Runner, error) { return f.runner, nil }
+
+// unrunnableFactory is an adapter this build has and this machine cannot run,
+// which is the shape agents.Resolve reports as no configured agent being
+// runnable. It refuses at New rather than being absent from the catalog, so
+// the refusal carries a reason an operator can act on.
+type unrunnableFactory struct{}
+
+func (unrunnableFactory) Name() string { return "unrunnable" }
+
+func (unrunnableFactory) New(context.Context, []string) (agents.Runner, error) {
+	return nil, errors.New("this adapter is not installed on this machine")
+}
 
 // openStore opens a home's database directly, for a test that has to put a
 // record where only the service would otherwise write one.

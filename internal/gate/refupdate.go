@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"unicode"
 )
 
 // branchRefPrefix is the reference namespace a branch lives in. It is here
@@ -59,14 +60,24 @@ func (u RefUpdate) Branch() string {
 func (u RefUpdate) String() string { return u.Old + " " + u.New + " " + u.Ref }
 
 // Validate reports what stops this from being an update git could have
-// written: an object name on either side that is not one, or no reference
-// name.
+// written: an object name on either side that is not one, no reference name,
+// or a reference name carrying a space, a tab, or another control character.
 //
 // It is exported because ParseRefUpdates is not the only way an update reaches
 // a decision. One travels to the background service as a value, and the rule
 // for what a well-formed update is has to be one rule asked twice rather than
-// a strict reading at the parser and a weaker one behind it. What it does not
-// check is the object names' width, for the reason ParseRefUpdates gives.
+// a strict reading at the parser and a weaker one behind it. The reference
+// name's whitespace is checked here for that reason: the parser splits a line
+// on single spaces and so cannot yield a name containing one, and a value
+// handed straight to the service would otherwise reach a decision by a weaker
+// rule than a parsed line does.
+//
+// This is not git's reference-name check and does not claim to be. It refuses
+// the characters that would make a line ambiguous and nothing else, so the
+// rules git applies beyond that - "..", a trailing ".lock", "@{", a leading
+// dot in a component, and the punctuation git reserves - are unchecked, and a
+// name passing this may still be one git would reject. The object names' width
+// is unchecked too, for the reason ParseRefUpdates gives.
 func (u RefUpdate) Validate() error {
 	for _, object := range []struct{ what, name string }{{"old", u.Old}, {"new", u.New}} {
 		if !isObjectName(object.name) {
@@ -76,6 +87,12 @@ func (u RefUpdate) Validate() error {
 	}
 	if u.Ref == "" {
 		return fmt.Errorf("%w: the update names no reference", ErrMalformedRefUpdate)
+	}
+	for _, r := range u.Ref {
+		if unicode.IsSpace(r) || unicode.IsControl(r) {
+			return fmt.Errorf("%w: the reference name %q carries %q, which git could not have written "+
+				"on an update line", ErrMalformedRefUpdate, u.Ref, r)
+		}
 	}
 	return nil
 }
@@ -91,11 +108,12 @@ func (u RefUpdate) Validate() error {
 // for rather than a malformed description.
 //
 // What it checks is the shape git writes: three fields separated by single
-// spaces, two object names that are lowercase hexadecimal, and a reference
-// name that is not empty. The object names' width is not checked, because
-// which width is right is the repository's hash algorithm and this package
-// does not read that; a name of the wrong width for the gate it arrived from
-// resolves to no object there, which is the gate's answer and not this one's.
+// spaces, and then whatever Validate asks of the three, which is the same rule
+// the service applies to an update handed to it as a value. The object names'
+// width is not checked, because which width is right is the repository's hash
+// algorithm and this package does not read that; a name of the wrong width for
+// the gate it arrived from resolves to no object there, which is the gate's
+// answer and not this one's.
 func ParseRefUpdates(r io.Reader) ([]RefUpdate, error) {
 	if r == nil {
 		return nil, nil

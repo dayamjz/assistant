@@ -138,6 +138,53 @@ func TestParseRefUpdatesRefusesALineGitWouldNotHaveWritten(t *testing.T) {
 	}
 }
 
+// TestValidateAndTheParserAgreeOnAReferenceName is the claim Validate's
+// documentation makes, checked rather than asserted: what a well-formed update
+// is has to be one rule asked twice, not a strict reading at the parser and a
+// weaker one behind it.
+//
+// The weaker one is what an update reaching the service as a value would be
+// read by, because nothing parses it there. A reference name carrying a space
+// is the case that separated them: the parser splits a line on single spaces
+// and so could never yield one, while Validate asked only that the name was
+// not empty, and a name git could not have written would have had a run
+// recorded for it.
+//
+// Each name is put to both, and what is checked is that they answer the same
+// way. A test of Validate alone would say nothing about the two agreeing.
+func TestValidateAndTheParserAgreeOnAReferenceName(t *testing.T) {
+	const object = "41aee5103622d689068e4316ecfa8e574292bd4c"
+	for _, c := range []struct {
+		name    string
+		ref     string
+		refused bool
+	}{
+		{"an ordinary branch", "refs/heads/work", false},
+		{"a branch with a slash in its name", "refs/heads/fm/gate-hooks", false},
+		{"a tag", "refs/tags/v1", false},
+		{"a name carrying a space", "refs/heads/a b", true},
+		{"a name carrying a tab", "refs/heads/a\tb", true},
+		{"a name carrying a newline", "refs/heads/a\nb", true},
+		{"a name that is only a space", " ", true},
+		{"an empty name", "", true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			update := gate.RefUpdate{Old: strings.Repeat("0", 40), New: object, Ref: c.ref}
+			valueErr := update.Validate()
+			if refused := errors.Is(valueErr, gate.ErrMalformedRefUpdate); refused != c.refused {
+				t.Fatalf("RefUpdate{Ref: %q}.Validate() = %v, so refused is %t; want %t",
+					c.ref, valueErr, refused, c.refused)
+			}
+			_, parseErr := gate.ParseRefUpdates(strings.NewReader(update.String() + "\n"))
+			parserRefused := errors.Is(parseErr, gate.ErrMalformedRefUpdate)
+			if parserRefused != c.refused {
+				t.Fatalf("the parser answered %v for the line %q, so refused is %t; want %t, the same "+
+					"answer Validate gives", parseErr, update.String(), parserRefused, c.refused)
+			}
+		})
+	}
+}
+
 // TestOneMalformedLineRefusesTheWholePush is the property the case above only
 // implies: a push whose other lines are perfectly good is still refused whole.
 // Returning the readable ones would let admission decide about part of a push.

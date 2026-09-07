@@ -52,12 +52,25 @@ func (s *Service) gateSubject(ctx context.Context, id string) (subject, error) {
 // ordering - a refusal instead of a change rather than after one - rests on
 // where the hook calls this from and not on anything here.
 //
-// What it establishes is that the push has somewhere to go: the gate resolves
-// to exactly one working copy standing today, that working copy has a
-// repository record, and the reference updates are ones this build can read.
-// A push admitted without those is a push the gate accepts and starts nothing
-// for, which is the failure a sealed gate exists to prevent, arriving through
-// the front door instead.
+// What it establishes is that the push has somewhere to go and something to
+// validate it: the gate resolves to exactly one working copy standing today,
+// that working copy has a repository record, the reference updates are ones
+// this build can read, and an agent resolves on this machine. A push admitted
+// without those is a push the gate accepts and starts nothing for, which is
+// the failure a sealed gate exists to prevent, arriving through the front door
+// instead.
+//
+// The agent is asked for here rather than left to the notification because of
+// where the two hooks sit. This runs before any reference changes and its
+// refusal rejects the push; the notification runs after every reference has
+// moved, where a failure can be printed and cannot reject anything. A machine
+// with nothing runnable would otherwise take the push, hold the branch, and
+// start no run.
+//
+// What that does not cover is the gap between the two hooks. The notification
+// asks for the agent again and can still fail, so an agent that stops being
+// resolvable after this answered leaves a push accepted with no run started,
+// and no failure there can reject a push this already admitted.
 //
 // It does not judge the change. Whether the branch should be shared is what
 // the nine stages are for, and admission that reached for that answer would be
@@ -80,6 +93,12 @@ func (s *Service) admit(ctx context.Context, req machine.GateRequest) (machine.A
 	}
 	if err := checkUpdates(req); err != nil {
 		return machine.Admission{}, err
+	}
+	if _, err := s.driverFor(ctx); err != nil {
+		return machine.Admission{}, fmt.Errorf("service: the push to gate %s is refused because no agent "+
+			"this machine can run resolved, so nothing could validate it: %w; run assistant doctor to see "+
+			"every dependency and whether a run can start at all, then push again - nothing records this "+
+			"refusal, so the same push succeeds once an agent resolves", req.Gate, err)
 	}
 	refs := make([]string, 0, len(req.Updates))
 	for _, update := range req.Updates {

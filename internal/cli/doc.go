@@ -40,7 +40,7 @@
 //
 // # The gate hook verbs are a second table on purpose
 //
-// hookVerbs in gate.go is the other one, and it holds "assistant gate admit"
+// gateHooks in gate.go is the other one, and it holds "assistant gate admit"
 // and "assistant gate notify". They are not commands PRD section 9's table
 // names and they are not candidates for it: they are the interface
 // internal/gate requires of this command surface, invoked by the hooks it

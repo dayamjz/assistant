@@ -313,9 +313,6 @@ func TestARefusedPushLeavesEveryReferenceInTheGateAsItWas(t *testing.T) {
 	t.Logf("git push %s work second, with no service running:\n%s", gate.RemoteName, out)
 
 	after := gateRefs(t, repository)
-	if !slices.Equal(before, after) {
-		t.Fatalf("the refused push changed the gate's references.\nbefore: %v\nafter:  %v", before, after)
-	}
 	for _, ref := range after {
 		if strings.Contains(ref, moved) {
 			t.Fatalf("the refused push moved a reference to the commit it carried: %s", ref)
@@ -323,6 +320,79 @@ func TestARefusedPushLeavesEveryReferenceInTheGateAsItWas(t *testing.T) {
 		if strings.HasPrefix(ref, "refs/heads/second ") {
 			t.Fatalf("the refused push created %s", ref)
 		}
+	}
+	if !slices.Equal(before, after) {
+		t.Fatalf("the refused push changed the gate's references.\nbefore: %v\nafter:  %v", before, after)
+	}
+}
+
+// TestAPushIsRefusedWhenNoAgentCanRunAndLeavesTheGateAsItWas is the same
+// ordering as the test above, for the refusal that establishes a run could
+// actually start.
+//
+// Admission asks for the agent because of where the two hooks sit. Without
+// that, a machine with nothing runnable takes the push, every reference moves,
+// and the failure lands in the notification, which runs after the mutation and
+// can only print: git reports success, the gate holds the branch, and no run
+// exists. Refused with a reason is the answer; accepted and inert is not.
+//
+// The gate already holds a reference when the refusal arrives, and the refused
+// push carries the two mutations a partial application could leave behind, so
+// what is checked is that a new refusal path meets PRD section 5's bar rather
+// than inheriting it. The references are read from the gate repository with
+// git, before and after, rather than stated here.
+func TestAPushIsRefusedWhenNoAgentCanRunAndLeavesTheGateAsItWas(t *testing.T) {
+	requiresIdentifiedPeer(t)
+	h := newHome(t)
+	subject := newSubject(t)
+
+	// A first push that lands, so the gate has something to lose. It needs a
+	// service that resolves an agent, and the run it starts is let reach its
+	// hold before that service goes away.
+	stop := serveUntilStopped(t, h)
+	repository := initialize(t, h, subject)
+	git(t, subject, "checkout", "--quiet", "-b", "work")
+	commitOn(t, subject, "work", "work.txt", "the change that lands\n")
+	git(t, subject, "push", gate.RemoteName, "work")
+	awaitHold(t, h, subject, onlyRun(t, h, subject).ID)
+
+	before := gateRefs(t, repository)
+	if len(before) == 0 {
+		t.Fatal("the accepted push left the gate holding no reference, so a refusal could not lose one")
+	}
+
+	// The same home, now served by a process that can resolve no agent. The
+	// service is replaced rather than reconfigured because a resolution that
+	// has already succeeded is cached for the life of the one that made it.
+	stop()
+	serveWithNoRunnableAgent(t, h)
+
+	moved := commitOn(t, subject, "work", "work.txt", "the change that is refused\n")
+	git(t, subject, "branch", "second")
+
+	out, err := tryGit(subject, "push", gate.RemoteName, "work", "second")
+	if err == nil {
+		t.Fatalf("the push was accepted although no agent could run, so nothing would validate it:\n%s", out)
+	}
+	t.Logf("git push %s work second, with no runnable agent:\n%s", gate.RemoteName, out)
+
+	// A refusal that only says what is missing is a dead end, so it has to
+	// name the command that reports whether a run can start at all.
+	if !strings.Contains(out, "assistant doctor") {
+		t.Errorf("the refusal names no action that would get the operator out of it:\n%s", out)
+	}
+
+	after := gateRefs(t, repository)
+	for _, ref := range after {
+		if strings.Contains(ref, moved) {
+			t.Fatalf("the refused push moved a reference to the commit it carried: %s", ref)
+		}
+		if strings.HasPrefix(ref, "refs/heads/second ") {
+			t.Fatalf("the refused push created %s", ref)
+		}
+	}
+	if !slices.Equal(before, after) {
+		t.Fatalf("the refused push changed the gate's references.\nbefore: %v\nafter:  %v", before, after)
 	}
 }
 

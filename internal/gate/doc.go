@@ -160,13 +160,26 @@
 //
 // It was written down as a rule and then violated twice more, which says the
 // rule was not what was missing. What was missing is a mechanism, so there is
-// one now. Every operation here obtains its gate from one unexported seam and
-// takes that handle rather than a path: no exported entry point takes a gate's
-// path, only the home and the working copy the gate is asked about, and the
-// seam is what resolves the repository, reads its contents once, asks and
+// one now. Every operation that changes a gate obtains it from one unexported
+// seam and takes that handle rather than a path: no such entry point takes a
+// gate's path, only the home and the working copy the gate is asked about, and
+// the seam is what resolves the repository, reads its contents once, asks and
 // refuses on the ownership question, and leaves no gate it looked at accepting
 // pushes with nothing checking them. An operation added later cannot skip any
 // of that, because it cannot obtain a gate without going through it.
+//
+// WorkingCopyFor is the one exported operation outside that, and it is named
+// here rather than left as an exception a reader has to find. It answers which
+// working copy a gate belongs to, which is the question a hook arrives with, so
+// it takes the home and an identifier instead of a working copy - a hook has
+// no working copy to name, since that is what it is asking for - and it
+// resolves the repository itself. What it does not skip is the ownership
+// question: it asks the same shared evidence rule the seam's own check asks,
+// so a second answer to who a gate belongs to is not what is being bought
+// here. What it costs is the sealing. It seals no gate it looks at, which is
+// why it is confined to a read: a read leaves no gate in a state that needs
+// closing, and an operation that changed one would owe the seam and has to go
+// through it.
 // This repository has solved this class twice the same way: internal/agents
 // puts P4 in a type split rather than in a rule callers follow, and
 // internal/safety makes an anchor's provenance a constructor rather than a
