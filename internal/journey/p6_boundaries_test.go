@@ -328,11 +328,19 @@ func TestARunSurvivesTheServiceBeingKilledAtEveryStageBoundary(t *testing.T) {
 					}
 					return s
 				}},
-			{Named: "the recovered decision offers something nobody was offered before the kill",
+			// What this drops is what a checkpoint round trip loses when it
+			// loses this field: the recovered decision is rebuilt out of the
+			// stored one, whose options are a serialized list, so coming back
+			// with none of them is a shape that path can produce. An option
+			// nobody was offered is not: internal/pipeline gives every hold
+			// node the same fixed rendering and internal/graph copies it
+			// through, so a clause shown failing against an added option would
+			// be shown failing against nothing the mechanism can reach.
+			{Named: "the recovered decision came back having lost the options it was offered with",
 				Break: func(s survival) survival {
 					s = cloneSurvival(s)
 					decision := *s.boundaries[at(4)].recovered.Decision
-					decision.Options = append(slices.Clone(decision.Options), "publish")
+					decision.Options = nil
 					s.boundaries[at(4)].recovered.Decision = &decision
 					return s
 				}},
