@@ -91,10 +91,15 @@ Each has cost this repository more than one round of review.
   also the cheaper of the two: every block is charged a fixed frame on top of
   its text, so a copy per package pays that frame again each time.
   The gate caps the whole section by an upper bound it checks before a run
-  starts, and this section is now at that cap. `no-mistakes`' own
-  `ReviewPathInstructionsBytes` is the accounting and the way to measure the
-  remaining room; a section over the cap fails config parsing for every later
-  run rather than being truncated. What it charges is the configured entries and
+  starts, and this section is at that cap with only bytes to spare: assume any
+  rule you add to any block in it fails config parsing, and measure with
+  `no-mistakes`' own `ReviewPathInstructionsBytes` before writing one. That
+  function is the accounting; a section over the cap fails parsing for every
+  later run in this repository rather than being truncated, so the failure is
+  not confined to the change that caused it.
+  `docs/upstream-review-instruction-bounds.md` is the outstanding ask that
+  would end this, and there is no local move left that changes it materially.
+  What the accounting charges is the configured entries and
   not what a run renders: every entry is billed its frame, its full
   matched-file allowance, and its text whether or not its glob matches the
   change, so the refused number is the worst case over every possible diff
