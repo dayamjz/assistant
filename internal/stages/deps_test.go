@@ -2,6 +2,7 @@ package stages_test
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -51,14 +52,21 @@ func TestStageDepsIsNoRouteToAFixerSession(t *testing.T) {
 	}
 }
 
-// TestTheStageAgentInStageDepsStillRuns keeps the guarantee above from holding
-// of a seam that hands a body an agent it cannot use.
+// TestTheAgentOnAZeroStageDepsRefusesAsATypedResult checks the narrow thing
+// its name says and is not the positive control for the guarantee above.
 //
-// Every assertion about routes would pass for a StageDeps whose agent was
-// inert, so this checks the other direction: the zero value refuses as a typed
-// result rather than panicking, which is what a body given no agent has to
-// meet.
-func TestTheStageAgentInStageDepsStillRuns(t *testing.T) {
+// Every assertion about routes would hold of a StageDeps whose agent was
+// inert, so something does have to establish that the agent this seam hands
+// over still works. That is TestAStageAgentRunsTheAgentItWraps in
+// internal/agents, which drives a real invocation through the production
+// adapter and reads the agent's own words back. A StageAgent that always
+// errored would pass everything here, so this may not be read as standing in
+// for it.
+//
+// What it does check is the zero value a caller can reach: a StageDeps nobody
+// wired refuses with ErrNoStageAgent rather than panicking at the first
+// invocation, so a body given no agent fails as a result its caller handles.
+func TestTheAgentOnAZeroStageDepsRefusesAsATypedResult(t *testing.T) {
 	t.Parallel()
 
 	_, err := stages.StageDeps{}.Agent.Run(t.Context(), agents.PurposeReview, agents.Invocation{
@@ -69,6 +77,9 @@ func TestTheStageAgentInStageDepsStillRuns(t *testing.T) {
 	if err == nil {
 		t.Fatal("the agent on a zero StageDeps ran an invocation, so a body wired with no agent " +
 			"would report a stage it did not establish")
+	}
+	if !errors.Is(err, agents.ErrNoStageAgent) {
+		t.Fatalf("the agent on a zero StageDeps refused with %v, want ErrNoStageAgent", err)
 	}
 }
 
