@@ -74,10 +74,11 @@
 // can see fire is worth nothing. It fires: TestACallerInsideAnActiveStageIsRefused
 // registers this test process's own group and then makes a restricted call,
 // which is refused with ipc.ErrContained. And it has no producer in this
-// build: no stage launches an agent, because the nine stage bodies do not
-// exist, so the registry is empty and nothing is contained today. What that
-// costs is stated rather than implied - until a stage launcher calls
-// StageStarted, containment protects nothing - and the alternative, refusing
+// build: nothing calls StageStarted, because no stage this build has a body
+// for launches an agent - the written ones are functions of the run's state
+// and start no process - so the registry is empty and nothing is contained
+// today. What that costs is stated rather than implied: until a stage launcher
+// calls StageStarted, containment protects nothing. The alternative, refusing
 // every restricted call until then, is a service nobody can drive.
 //
 // The residual gap is the same one internal/agents names for its own sweep: a
@@ -88,8 +89,8 @@
 // # What this package does not do
 //
 // It does not implement a stage. The nine bodies are internal/stages' and this
-// package takes them as a value, so a build with none of them written serves
-// runs that hold at the first stage rather than runs that pass.
+// package takes them as a value, so a build serves runs that hold at the first
+// stage without a body rather than runs that pass.
 //
 // It does not read a repository's own configuration. PRD section 10 has the
 // trusted layer read from the default branch at a freshly fetched commit, and

@@ -36,9 +36,9 @@ const (
 	// than that. Each stage cleared in one of the ways PRD section 5 allows -
 	// it passed, it was fixed and re-checked, this run skipped it, or a person
 	// approved what it found - and which of those happened is on the stage's
-	// own report rather than compressed into this word. A build whose stages
-	// have no bodies reaches it with every stage approved by a person, and
-	// says so stage by stage.
+	// own report rather than compressed into this word. A stage this build
+	// has no body for cannot have cleared by passing: it held, so a person
+	// approved or skipped it, and the report says which stage by stage.
 	OutcomeChecksPassed Outcome = "checks-passed"
 	// OutcomePassed is a change that merged or closed.
 	//

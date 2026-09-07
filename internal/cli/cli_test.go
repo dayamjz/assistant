@@ -10,6 +10,7 @@ import (
 	"github.com/dayamjz/assistant/internal/gate"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/pipeline"
+	"github.com/dayamjz/assistant/internal/stages"
 	"github.com/dayamjz/assistant/internal/store"
 )
 
@@ -141,8 +142,9 @@ func TestARunIsStartedReportedAndAnsweredThroughSeparateInvocations(t *testing.T
 	if first.Outcome != machine.OutcomeDecision {
 		t.Fatalf("a started run reports %s, want a decision", first.Outcome)
 	}
-	if first.Decision == nil || first.Decision.Stage != pipeline.StageIntent.String() {
-		t.Fatalf("the run is not holding at the first stage: %+v", first.Decision)
+	holds, next := firstPendingStages(t)
+	if first.Decision == nil || first.Decision.Stage != holds.String() {
+		t.Fatalf("the run is not holding at %s, the first stage with no body: %+v", holds, first.Decision)
 	}
 
 	// A separate invocation reports the same decision without advancing it.
@@ -170,8 +172,8 @@ func TestARunIsStartedReportedAndAnsweredThroughSeparateInvocations(t *testing.T
 	if second.Record.ID != first.Record.ID {
 		t.Fatalf("answering moved a different run: %s, want %s", second.Record.ID, first.Record.ID)
 	}
-	if second.Decision == nil || second.Decision.Stage != pipeline.StageRebase.String() {
-		t.Fatalf("the run did not advance past the first stage: %+v", second.Decision)
+	if second.Decision == nil || second.Decision.Stage != next.String() {
+		t.Fatalf("the run did not advance from %s to %s: %+v", holds, next, second.Decision)
 	}
 
 	// And the run is one run, not one per invocation.
@@ -1024,4 +1026,33 @@ func decodeDoctor(t *testing.T, document string) machine.Doctor {
 		t.Fatalf("a doctor report does not decode: %v\n%s", err, document)
 	}
 	return report
+}
+
+// firstPendingStages returns the first two stages this build has no body for,
+// which are the two holds a run walks into. It is derived from
+// stages.Implemented rather than written out, because a run advances through
+// every stage that has a body and stops at the first that does not, so naming
+// the stages here would make this test fail the day a body lands for a reason
+// that has nothing to do with what it checks.
+//
+// It needs two stages to be pending. A build with fewer has stopped being one
+// where answering a hold is what carries a run to the next one, and this test
+// says so rather than reporting a decision that did not arrive.
+func firstPendingStages(t *testing.T) (holds, next pipeline.Stage) {
+	t.Helper()
+	implemented := make(map[pipeline.Stage]bool)
+	for _, stage := range stages.Implemented() {
+		implemented[stage] = true
+	}
+	var pending []pipeline.Stage
+	for _, stage := range pipeline.Order() {
+		if !implemented[stage] {
+			pending = append(pending, stage)
+		}
+	}
+	if len(pending) < 2 {
+		t.Fatalf("this build has %d stages without a body, so no run walks from one hold to the next; "+
+			"this test needs rewriting against whatever now holds a run", len(pending))
+	}
+	return pending[0], pending[1]
 }

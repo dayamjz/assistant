@@ -68,7 +68,8 @@ type Options struct {
 	// Home is the root this service owns. It is created if it is not there.
 	Home *home.Home
 	// Stages are the nine stage implementations, which internal/stages
-	// supplies. A build with no bodies written supplies nine that hold.
+	// supplies. A stage it has no body for is a placeholder that holds, so a
+	// build short of all nine serves runs that stop at the first of those.
 	Stages pipeline.Stages
 	// NewFixer builds the fixer for the pipeline, given what the run's fixer
 	// path needs of the agent adapter. It is a constructor rather than a value

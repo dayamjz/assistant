@@ -264,9 +264,11 @@
 // stage that set it would have review check a diff against a guess while every
 // downstream prompt framed the guess as requirements, which is exactly the
 // distinction PRD section 5 draws between a supplied intent and an inferred
-// one. What a stage may still write is the intent itself, because recording
-// what it inferred is the intent stage's job; what it may not do is promote
-// that inference to authoritative.
+// one. What a stage may still write is the intent text itself, because
+// recording an intent is the intent stage's job; what it may not do is promote
+// the text it recorded to authoritative. The stage this build ships infers
+// nothing and writes neither key, so today the row narrows a stage that does
+// not exist yet, which is what a schema rule is for.
 //
 // NewState refuses a run claiming a supplied intent with none behind it. What
 // the schema row adds is narrower than that refusal: no stage can assert the
@@ -383,11 +385,11 @@
 // nothing here enforces that, and nothing here will.
 //
 // So the implementation written against this contract owes two things. It must
-// never return a finding whose action is anything but note, including when it
-// could not read its own output: P3 normalizes a missing, empty, or
+// never return a finding whose action is anything but note, on any path it has
+// including the ones it reaches by failing: P3 normalizes a missing, empty, or
 // unrecognized action to ask, and an ask finding holds. And it owes a test
-// proving both, the unparseable case included, because that is the one a stage
-// falls into by accident rather than by choice.
+// over every one of those paths, because a stage falls into this by accident
+// rather than by choice. internal/stages owns how the body discharges both.
 //
 // Not enforcing it here is deliberate. A row saying intent may not hold would
 // have to do something with an ask finding intent reported, and the only thing

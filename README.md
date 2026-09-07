@@ -99,13 +99,15 @@ carried on across separate invocations, with the service restarted in between,
 because the position comes back out of the checkpoint history rather than out
 of the process that reached it.
 
-The nine stage bodies are separate work against the stage contract and do not
-exist yet, including the review stage that puts the scope lens in front of a
-reviewer and binds what comes back to what the reviewer declared reading. Until
-they land, `internal/stages` fills each of the nine with a placeholder that
-validates nothing and holds for a decision, so a run stops at every stage and
-says so rather than reporting a pass it did not establish. The end-to-end
-harness is separate work too.
+The stage bodies are separate work against the stage contract, and they land one
+at a time. The intent stage is written; still outstanding is the review stage
+that puts the scope lens in front of a reviewer and binds what comes back to
+what the reviewer declared reading. A stage without a body holds a placeholder
+that validates nothing and holds for a decision, so a run runs the stages that
+have one and stops at the first that does not, saying so rather than reporting a
+pass it did not establish. `stages.Implemented` is the authority on which stages
+those are, and `assistant doctor` reports it. The end-to-end harness is separate
+work too.
 
 ## The two promises
 
@@ -151,7 +153,7 @@ working as it always did.
 | `internal/safety` | The data-loss policy over git: whether a branch update may proceed, on what anchor, and when to refuse. |
 | `internal/scope` | The review stage's scope lens, not a tenth stage: the guidance a reviewer traces each touched path against, and the note an untraced path becomes. |
 | `internal/service` | The background service: it holds the home's lock, binds the socket, recovers the runs it finds, and owns every run that is executing. |
-| `internal/stages` | Where the nine stage bodies will live. Today it holds nine placeholders that validate nothing and hold for a decision. |
+| `internal/stages` | Where the nine stage bodies live. A stage without one holds a placeholder that validates nothing and holds for a decision; `Implemented` says which stages have a body. |
 | `internal/store` | The only package that opens the database: the schema, its additive migrations, and typed accessors for repositories, runs, stages, rounds, a run's anchored checkpoint history, tasks, task state and events, holds and the closed set of who resolved each one, and the gate ownership index. |
 | `internal/vcs` | The only package that invokes git: typed operations over repositories, worktrees, refs, diffs, and remotes. |
 | `docs/prd.html` | The product requirements. The specification this code answers to. |

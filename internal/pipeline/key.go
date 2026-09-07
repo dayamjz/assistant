@@ -30,14 +30,14 @@ const (
 	KeyHead Key = "head"
 	// KeyIntent is what the change set out to do, in words.
 	KeyIntent Key = "intent"
-	// KeyIntentSupplied says whether the intent was supplied, and so is
-	// authoritative acceptance criteria, or inferred, and so is a
-	// low-confidence hint. The two are framed differently downstream.
+	// KeyIntentSupplied says whether the intent was supplied as authoritative
+	// acceptance criteria. An intent that was not is a low-confidence hint,
+	// and the two are framed differently downstream.
 	//
 	// It is a run input. The bit asserts that a person supplied the criteria,
-	// which no stage can make true, so no stage may write it. A stage records
-	// what it inferred in KeyIntent and cannot promote that inference to
-	// authoritative.
+	// which no stage can make true, so no stage may write it. A stage may
+	// still write intent text into KeyIntent; what it may not do is promote
+	// the text it recorded to authoritative.
 	KeyIntentSupplied Key = "intent.supplied"
 	// KeyDiffEmpty says that nothing remains to change. Every stage node reads
 	// it and does not run its body while it holds, which is PRD section 5's

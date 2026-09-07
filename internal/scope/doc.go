@@ -5,10 +5,15 @@
 // true.
 //
 // It is a lens and not a stage. P2 fixes the stage list at nine and this adds
-// none: the intent stage has already established what the change set out to
-// do, and the recorded intent plus the paths the change touched are the whole
-// input. Guidance is text the review stage puts in front of its reviewer, and
-// Observe is what the reviewer's answer becomes.
+// none: the intent stage has already recorded what the change set out to do,
+// and that intent plus the paths the change touched are the whole input.
+// Guidance is text the review stage puts in front of its reviewer, and Observe
+// is what the reviewer's answer becomes.
+//
+// What the intent stage records may be that the run carries no intent, which
+// it reports rather than filling in. A run started without one therefore
+// reaches the lens with nothing to trace to, and ErrNoIntent owns what that
+// costs and whose decision it is.
 //
 // # It ships on, and no key turns it off
 //

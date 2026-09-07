@@ -181,28 +181,29 @@ func TestObserveFindingsAreUsableInAReport(t *testing.T) {
 	}
 }
 
-// The intent's source does not decide whether the lens fires, only how the
-// observation reads. Both halves matter: an inferred intent must not silence
-// the lens, and it must not be described as acceptance criteria either.
-func TestObserveDescribesTheIntentsSource(t *testing.T) {
+// Whether the intent was supplied as acceptance criteria does not decide
+// whether the lens fires, only how the observation reads. Both halves matter:
+// an intent that was not supplied must not silence the lens, and it must not
+// be described as acceptance criteria either.
+func TestObserveDescribesWhetherTheIntentIsAcceptanceCriteria(t *testing.T) {
 	c := change("a.go")
 	supplied := observe(t, c)
 
 	c.Supplied = false
-	inferred := observe(t, c)
+	hint := observe(t, c)
 
-	if len(supplied) != 1 || len(inferred) != 1 {
-		t.Fatalf("the lens fired %d times on a supplied intent and %d on an inferred one, want 1 each",
-			len(supplied), len(inferred))
+	if len(supplied) != 1 || len(hint) != 1 {
+		t.Fatalf("the lens fired %d times on a supplied intent and %d on a hint, want 1 each",
+			len(supplied), len(hint))
 	}
-	if supplied[0].Description == inferred[0].Description {
-		t.Fatal("a supplied intent and an inferred one produce the same note")
+	if supplied[0].Description == hint[0].Description {
+		t.Fatal("a supplied intent and a hint produce the same note")
 	}
 	if !strings.Contains(supplied[0].Description, "supplied") {
 		t.Errorf("the supplied-intent note does not say so: %q", supplied[0].Description)
 	}
-	if !strings.Contains(inferred[0].Description, "inferred") {
-		t.Errorf("the inferred-intent note does not say so: %q", inferred[0].Description)
+	if !strings.Contains(hint[0].Description, "not supplied as acceptance criteria") {
+		t.Errorf("the hint note does not say the change is not held to it: %q", hint[0].Description)
 	}
 }
 
@@ -344,21 +345,21 @@ func TestATraceCopiedFromTheGuidanceSilencesItsPath(t *testing.T) {
 	}
 }
 
-func TestGuidanceFramesTheIntentBySource(t *testing.T) {
+func TestGuidanceFramesWhetherTheIntentIsAcceptanceCriteria(t *testing.T) {
 	c := change("a.go")
 	supplied, err := Guidance(c)
 	if err != nil {
 		t.Fatalf("Guidance: %v", err)
 	}
 	c.Supplied = false
-	inferred, err := Guidance(c)
+	hint, err := Guidance(c)
 	if err != nil {
 		t.Fatalf("Guidance: %v", err)
 	}
-	if supplied == inferred {
-		t.Fatal("guidance frames a supplied intent and an inferred one identically")
+	if supplied == hint {
+		t.Fatal("guidance frames a supplied intent and a hint identically")
 	}
-	if !strings.Contains(inferred, "low-confidence") {
-		t.Errorf("guidance for an inferred intent does not say it is a weak signal:\n%s", inferred)
+	if !strings.Contains(hint, "low-confidence") {
+		t.Errorf("guidance for an intent that was not supplied does not say it is a weak signal:\n%s", hint)
 	}
 }

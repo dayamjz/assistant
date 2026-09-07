@@ -1,5 +1,5 @@
-// Package stages is where the nine delivery-gate stage bodies live, and today
-// it holds none of them.
+// Package stages is where the nine delivery-gate stage bodies live. The intent
+// stage is written; the rest are not.
 //
 // PRD section 5 specifies the nine, internal/pipeline wires them into a graph
 // and owns their order, and each body is separate work against
@@ -7,7 +7,9 @@
 // to hold something, because pipeline.Stages is nine required fields and a
 // pipeline with a missing one does not build.
 //
-// What it holds instead is Pending: a stage that validates nothing and says so.
+// What an unwritten stage holds instead is Pending: a stage that validates
+// nothing and says so. Which stages have a body is the written table below,
+// and Implemented reports it, so no reader has to count.
 //
 // # Why a placeholder rather than a refusal to build the pipeline
 //
@@ -36,6 +38,59 @@
 // A body that lands is added to this package and named in the row below,
 // replacing that stage's call to Pending. Nothing else changes: the pipeline
 // is built from the same Stages value and the wiring is the same for all nine.
+//
+// A body that lands also changes where a run first stops, so a test that named
+// the stage it expected a run to hold at has to derive it instead. The ones in
+// internal/cli and internal/service read Implemented and take the first stage
+// without a body, which is what a run actually walks to.
+//
+// # Carried forward: the deferred half of the intent stage
+//
+// PRD section 5 gives the intent stage two sources of intent, and this build
+// implements one. Supplied intent is read and reported; inferred intent is
+// not, because the PRD's phase list defers transcript-based intent inference
+// to phase 2 on the grounds that supplying intent explicitly is the mechanism
+// that has to work first.
+//
+// No seam for it ships. An earlier draft of this package exported a transcript
+// source, a recorder, and an options struct that nothing constructed, and they
+// went for the reason Capabilities.Missing went: a declaration nothing reads
+// is a comment, and exported surface that exists so deferred work has
+// somewhere to plug in grows whether or not the work arrives. Whoever builds
+// inference adds the seams it actually uses.
+//
+// What that work inherits is stated here so it is not rediscovered. The intent
+// stage never blocks a run, and inference adds ways to fail that must not
+// change it: transcripts that are missing, a source that cannot read them,
+// material with nothing in it, a summarizer that fails or never answers, and a
+// durable record that cannot be written are all reported and stepped past, not
+// failed. Inferred intent is a low-confidence hint and never acceptance
+// criteria, and nothing may promote it - pipeline.KeyIntentSupplied is a run
+// input, so no stage may declare a write of it. Raw transcript text is never
+// stored; only the derived summary, its source, and its score. The
+// never-blocks tests in intent_test.go extend to cover each new path, and the
+// assertion they use is one another test holds to a report that does block, so
+// adding a path means adding a row rather than adding a second predicate.
+//
+// # Carried forward: who answers a hold
+//
+// internal/pipeline's outcome.go and doc.go describe every hold answer as
+// coming from "a person", in roughly twelve lines between them. That became
+// narrower than the truth when store.Resolver shipped: a hold may also be
+// answered over the machine interface, under the authority PRD section 9 gives
+// a caller of it, and store.Hold.ResolvedBy records which it was.
+//
+// The prose is not wrong yet, and this stage does not make it wrong. It is
+// true for as long as no stage body connects a graph halt to a stored hold,
+// and internal/store's own documentation says nothing in production resolves
+// one. The intent stage cannot be the body that changes that, because it never
+// holds: it reports notes and nothing else, so it has no halt to resolve.
+//
+// Whichever stage body first resolves a store hold owns correcting those lines
+// so the halt description says what actually answers it. This note is here
+// rather than in a task list because this is the file the next stage body is
+// added to, and a prose claim that was true when written and false after a
+// later change is how this repository has lost review rounds before.
 package stages
 
 import (
@@ -70,14 +125,15 @@ func Pending(name string) pipeline.Implementation {
 }
 
 // written is the one owner of which stages this build has a body for: a stage
-// with an entry uses it, and a stage without one gets Pending. It is empty
-// today, which is what makes every stage pending, and adding a body is adding
-// an entry rather than editing All.
+// with an entry uses it, and a stage without one gets Pending. Adding a body
+// is adding an entry rather than editing All.
 //
 // The value is a constructor rather than an Implementation so that a body
 // holding anything per-build is constructed when the pipeline is, on the same
 // terms as pipeline.Implementation.NewBody.
-var written = map[pipeline.Stage]func() pipeline.Implementation{}
+var written = map[pipeline.Stage]func() pipeline.Implementation{
+	pipeline.StageIntent: Intent,
+}
 
 // All returns the nine stages as this build has them: each stage's own body
 // where one is written, and Pending everywhere else.
@@ -110,12 +166,17 @@ func implementation(stage pipeline.Stage) pipeline.Implementation {
 }
 
 // Implemented returns the stages this build has a body for, in the order a run
-// takes them. It is empty today.
+// takes them. It reads the written table, so it reports what All places rather
+// than a count stated beside it, and it names no stage this build has not
+// written.
 //
 // assistant doctor reports it, which is what lets that command answer
-// decisively rather than by implication: a build with no stage bodies cannot
-// validate a change, and saying so is more use than reporting every dependency
-// as present.
+// decisively rather than by implication: how much of the gate a build can
+// actually validate is the set this returns, and saying which stages those are
+// is more use than reporting every dependency as present.
+//
+// Tests use it the same way, to derive the stage a run first stops at rather
+// than naming one, so a body that lands does not break them.
 func Implemented() []pipeline.Stage {
 	var out []pipeline.Stage
 	for _, stage := range pipeline.Order() {
@@ -138,10 +199,16 @@ func Implemented() []pipeline.Stage {
 // converging, and the run parked with a reason that named the bound rather
 // than the missing fixer.
 //
-// It is unreachable in this build, and reachable is what it is written for. A
-// stage with no body reports an ask finding, which never enters a fix loop, so
-// nothing today can reach a fix node. The first stage body that reports a
-// fix-eligible finding does, and it meets this rather than a silent pass.
+// It is unreachable while no stage has both halves of what reaching it takes,
+// and reachable is what it is written for. A fix node exists only for a stage
+// whose row in internal/pipeline's stage table declares a fix round limit
+// above zero, because the pipeline builds one for no other; and only a stage
+// with a body can report the fix-eligible finding that routes into one,
+// because a stage without a body reports an ask finding, which never enters a
+// fix loop. The intent stage has a body and no rounds - its row declares none,
+// so it has no fix node at all, and it reports only notes besides. The first
+// body to land on a row that does take rounds meets this rather than a silent
+// pass.
 //
 // requires is what the run's fixer path needs of the agent adapter, which
 // internal/runs answers with Service.FixerRequires. It is a parameter rather

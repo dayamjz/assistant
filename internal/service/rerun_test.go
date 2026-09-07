@@ -7,7 +7,6 @@ import (
 
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
-	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/store"
 )
 
@@ -39,7 +38,7 @@ func TestARerunIsOfTheBranchTheCallerIsStandingOnAndNotTheRepositorysNewest(t *t
 		if again.Record.SubmittedHead != standing {
 			t.Fatalf("the rerun stands at %s, want feature-b's head %s", again.Record.SubmittedHead, standing)
 		}
-		holdingAt(t, again, pipeline.StageIntent)
+		holdingAt(t, again, pendingStage(t, 0))
 	})
 }
 
