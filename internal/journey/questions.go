@@ -122,8 +122,12 @@ func Settlements() []Settlement {
 				"is that nothing in that prose becomes an executed command or a selected agent.\n\n" +
 				"internal/fixture therefore does not owe a second trusted document. The suppressed case " +
 				"needs no scenario, because no run reaches a scenario under it.",
-			Exercised: "Both halves are driven through the binary: the refusal is the answer to starting a " +
-				"run under that key, and the unsuppressed case is the whole-run tripwire check.",
+			Exercised: "The refusal is driven through the binary: it is the answer to starting a run " +
+				"under that key. The unsuppressed case is a whole run over the branch, but what it " +
+				"establishes is the pushed-configuration rejections rather than that nothing in the " +
+				"prose became an executed command: every planted executable is reached only through a " +
+				"stage body and this build has none, so the tripwire file is read and logged rather " +
+				"than asserted on.",
 		},
 		{
 			Question: "question-trusted-and-pushed-composition",
