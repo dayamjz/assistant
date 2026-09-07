@@ -89,9 +89,13 @@ func Coverage() []Established {
 		{principles.P7, ReachBinary,
 			"The git template that would choose what a gate is born with is refused by the binary, the " +
 				"environment channel is shown closed, and a whole run over the branch carrying an agent " +
-				"harness installation leaves every tripwire quiet. The trusted configuration document is " +
-				"driven at package reach: nothing in this build reads a repository's own configuration " +
-				"from anywhere, which internal/service states, so there is no composition to drive."},
+				"harness installation leaves every tripwire quiet - the agent binary that branch ships " +
+				"among them, so the branch's own agent is established never to have run. Which agent a " +
+				"run did resolve is not established: no shipped surface reports it, and the doctor's " +
+				"agent check answers what is runnable on the machine rather than what a run resolved. " +
+				"The trusted configuration document is driven at package reach: nothing in this build " +
+				"reads a repository's own configuration from anywhere, which internal/service states, " +
+				"so there is no composition to drive."},
 		{principles.P8, ReachBinary,
 			"A task whose event log ends on an open decision and whose resolved state has moved past it " +
 				"is reported by the binary as the resolved state."},
