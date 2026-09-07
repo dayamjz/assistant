@@ -75,10 +75,33 @@ the `.no-mistakes.yaml` bullet in `AGENTS.md`.
 That split is worth having on its own terms, and it did not free space. Triaging
 the shared `path: "*"` block released about 320 bytes and the guard protecting
 the split cost about 350, so the section is tighter after the pass than before
-it. Roughly 1.4 KB more sits in per-package limits disclaimers that fail the
-same test and are already duplicated in `AGENTS.md`; removing those is a
-separate decision about rules this pass did not write, not a consequence of this
-one.
+it: 16355 of 16384, against 16273 before.
+
+**The channel is 29 bytes from refusing.** The next rule added anywhere in it,
+in any block, fails config parsing - and a section over the cap fails it for
+every later run in this repository rather than being truncated. Measure with
+`ReviewPathInstructionsBytes` before adding anything. There is no local move
+left that changes this materially, which is what the ask above is for.
+
+A first pass suggested roughly 1.4 KB more sat in per-package limits
+disclaimers. That figure is a gross upper bound and the reasoning behind it was
+wrong: it treated a rule's presence in `AGENTS.md` as making it safe to drop
+from the trusted block. It does not. `AGENTS.md` is read from the pushed
+branch, so the copy a contributor deletes is exactly the copy the trusted block
+exists to outlive, and duplication says nothing about whether removal is safe.
+
+The test that gives the right answer is: if a contributor deleted this from
+`AGENTS.md` on their branch, would its absence from the review matter? Applied
+to the four spans that were sampled, it splits them unevenly. Text naming a
+mechanism's residual gaps stays, because a reviewer who does not know a gap
+exists cannot see a change that widens it - the evidence-set limits in
+`internal/findings`, and both holes named in `internal/agents`, the capability
+row with no probe and the `SessionRunner` assertion that reaches a session with
+no declaration read. What survives as removable is the narrower kind that only
+prevents a false finding or routes one to another package: about 405 bytes of
+the 1402 sampled, under a third. A full triage on that test across every block
+is outstanding and is not expected to change the shortfall's order of
+magnitude.
 
 Compaction and per-package placement were both considered and rejected.
 Compaction compresses hard-won prose toward a number that is not a measured
