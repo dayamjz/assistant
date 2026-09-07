@@ -150,10 +150,15 @@ func Settlements() []Settlement {
 				"is invisible until a push is made, and what distinguishes a gate with admission from " +
 				"one without is which hook git ran. The planted hooks are tripwires, so the answer is " +
 				"read off the tripwire file rather than out of a document.",
-			Exercised: "Driven through the binary. Under the redirect the push is accepted and the two " +
-				"planted hooks fire; under the ordinary environment the same push is declined. The " +
-				"contrast is the observation, and it is reported as the gap internal/gate/doc.go names " +
-				"rather than as a pass.",
+			Exercised: "Driven through the binary. Under the ordinary environment the push through the " +
+				"gate is declined, which is asserted every time. Under the redirect the harness holds " +
+				"the product to a disjunction and does not choose between its halves, because a check " +
+				"that asserted the gap persists would fail on the day it is closed: either creating the " +
+				"gate is refused, or the push is accepted, and in that second case the redirected " +
+				"pre-receive has to be among the tripwires that fired. post-receive is planted too and " +
+				"is not asserted, since only pre-receive has to run for git to accept a push. Today it " +
+				"is the second half that happens, and it is reported as the gap internal/gate/doc.go " +
+				"names rather than as a pass.",
 			Raise: "The decline in the unredirected case is not an admission decision. internal/gate " +
 				"installs a hook that invokes \"assistant gate admit --gate ID\", which internal/cli's " +
 				"verb table does not carry, so the push is declined by the command surface reporting " +
