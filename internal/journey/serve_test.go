@@ -19,19 +19,27 @@ import (
 // waited nowhere would ask a process that had already exited for its readiness
 // until the timeout ran out, and then report that nothing answered rather than
 // the exit that is the actual answer. TestARunSurvivesTheServiceBeingKilledAt
-// EveryStageBoundary serves nine times, so that mistake costs the whole
-// timeout nine times over and loses the diagnostic each time.
+// EveryStageBoundary serves once for every boundary a run reaches, so that
+// mistake costs the whole timeout that many times over and loses the
+// diagnostic each time.
 //
 // The service that dies is one the product already refuses to start: PRD
 // section 2 has a standing skip stop it before it serves, which
-// TestAPassMeansTheSameThingEverywhere drives as the refusal it is. Using it
-// here means the child really does exit, rather than exiting because this test
-// broke it.
+// TestAPassMeansTheSameThingEverywhere drives as the refusal it is.
+//
+// Why it exited is established rather than assumed, because a startup failure
+// of any other kind - a socket that will not bind, a home whose lock is held,
+// a database that will not open - would satisfy an assertion that only said
+// the child was gone, and the diagnostic this test exists for would then be
+// read off a child that died of something else. Two things establish it: the
+// refusal names the key this home's document asked for, and the same home with
+// that key taken back out comes up. The second is what rules out this home,
+// this harness and this machine, none of which the key changed.
 func TestServingAHomeTheServiceRefusesReportsTheExitRatherThanWaitingItOut(t *testing.T) {
 	scenario, dir := cloned(t)
 	j := open(t, scenario, func(o *journey.Options) { o.Dir = dir })
 	if err := j.WriteConfiguration(map[string]any{
-		"skip": []string{pipeline.StageReview.String()},
+		standingSkipKey: []string{pipeline.StageReview.String()},
 	}); err != nil {
 		t.Fatalf("writing a configuration the service refuses: %v", err)
 	}
@@ -43,13 +51,33 @@ func TestServingAHomeTheServiceRefusesReportsTheExitRatherThanWaitingItOut(t *te
 	if err == nil {
 		t.Fatal("this home carries a standing skip and the service reported itself ready over it")
 	}
+	requiresLocalSocket(t, err)
 	if !strings.Contains(err.Error(), "exited before it was ready") {
 		t.Fatalf("serving reported %v, and a child that has already exited is reported as one rather "+
 			"than as a readiness check nothing answered", err)
+	}
+	if !strings.Contains(err.Error(), standingSkipKey) {
+		t.Fatalf("serving reported %v, and nothing in it names %q, which is the only thing this "+
+			"home's document asked for that a service refuses; what the child exited for is "+
+			"unestablished, and any other startup failure would read the same",
+			err, standingSkipKey)
 	}
 	if took >= journey.ReadyTimeout {
 		t.Fatalf("serving spent %s noticing a child that had already exited, and the readiness timeout "+
 			"is %s, so the exit was found by the timeout running out rather than by the child being "+
 			"reaped", took, journey.ReadyTimeout)
+	}
+
+	if err := j.Kill(); err != nil {
+		t.Fatalf("reaping the refused child before serving the same home again: %v", err)
+	}
+	if err := j.WriteConfiguration(nil); err != nil {
+		t.Fatalf("rewriting the home's configuration without the standing skip: %v", err)
+	}
+	if err := j.Serve(); err != nil {
+		t.Fatalf("the same home, differing only in that its document no longer asks for a standing "+
+			"skip, did not come up either: %v\n\nso the exit above is not attributable to the "+
+			"document, and what this test read as a refusal was something about this home, this "+
+			"harness or this machine", err)
 	}
 }

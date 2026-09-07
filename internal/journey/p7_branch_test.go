@@ -25,11 +25,12 @@ type installed struct {
 	// mustStayQuiet is what the two conditions say may not appear there.
 	//
 	// No clause rests on either. Every executable those two conditions plant
-	// is downstream of a stage body, and internal/stages has none: the two
-	// .claude hooks and the agent binary need an agent process, the branch's
-	// commands.test needs a test stage, the two .githooks scripts need this
-	// product to commit or push, and .envrc needs a shell to enter the
-	// worktree. A run in this build does none of those, so the file stays
+	// is downstream of a stage body that launches something, and this build
+	// has none: the two .claude hooks and the agent binary need an agent
+	// process, the branch's commands.test needs a test stage, the two
+	// .githooks scripts need this product to commit or push, and .envrc needs
+	// a shell to enter the worktree. The one body this build does have reads
+	// the run's supplied intent and starts nothing, so the file stays
 	// empty however the product resolved the branch's document, and a clause
 	// asserting the absence would hold over a world nothing could make it
 	// report in. They are recorded and logged so the evidence is here the day
@@ -67,10 +68,12 @@ type installed struct {
 // files.
 //
 // What "nothing executed" can be established from is not this run. Every
-// executable those conditions plant is reached only through a stage body, and
-// internal/stages has none: the .claude hooks and the branch's agent binary
-// need an agent process, its commands.test needs a test stage, the .githooks
-// scripts need this product to commit or push, and .envrc needs a shell. So
+// executable those conditions plant is reached only through a stage body that
+// launches something, and this build has none: the .claude hooks and the
+// branch's agent binary need an agent process, its commands.test needs a test
+// stage, the .githooks scripts need this product to commit or push, and .envrc
+// needs a shell. The one body this build does have reads the run's supplied
+// intent and starts nothing, so
 // the scenario's tripwire file stays empty here whatever the product resolved,
 // and a clause reading it would be one nothing could make report. The file is
 // read and logged rather than asserted on, so the evidence is here the day a
@@ -153,8 +156,9 @@ func TestTheBranchUnderValidationChoosesNothingThatRuns(t *testing.T) {
 			"dropped and reported as a rejection while the one it was allowed to set survives, and a " +
 			"home asking for a suppression the resolved adapter does not implement is refused outright. " +
 			"That nothing the branch installed executed is not established here and no clause claims " +
-			"it: every planted executable is reached only through a stage body and this build has " +
-			"none, so the tripwire file is recorded and logged rather than asserted on",
+			"it: every planted executable is reached only through a stage body that launches " +
+			"something, and this build has none, so the tripwire file is recorded and logged rather " +
+			"than asserted on",
 		Clauses: []journey.Clause[installed]{
 			{
 				States: "the run reached the stages the installation was planted in front of",
@@ -253,9 +257,10 @@ func TestTheBranchUnderValidationChoosesNothingThatRuns(t *testing.T) {
 	}
 	t.Logf("KNOWN GAP: the scenario's tripwire file holds %v after this run, and the two conditions "+
 		"require %v to stay out of it. Nothing here establishes that: every one of those executables "+
-		"is reached only through a stage body, internal/stages holds none, and a run therefore "+
-		"launches no agent, runs no configured command, and makes no commit or push. The file is "+
-		"reported rather than asserted on until a stage body gives one of them a path to fire.",
+		"is reached only through a stage body that launches something, this build has none, and a "+
+		"run therefore launches no agent, runs no configured command, and makes no commit or push. "+
+		"The file is reported rather than asserted on until such a body gives one of them a path "+
+		"to fire.",
 		observed.fired, observed.mustStayQuiet)
 }
 

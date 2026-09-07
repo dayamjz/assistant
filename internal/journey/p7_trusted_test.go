@@ -269,8 +269,8 @@ func TestATrustedConfigurationThatCannotBeReadIsNotFallenBackFrom(t *testing.T) 
 		// not be written whatever the product did, and a clause reading it
 		// would hold over a world nothing could have made it report in. No
 		// test here establishes it over a branch that does plant executables
-		// either: every one of those is reached only through a stage body and
-		// this build has none, which
+		// either: every one of those is reached only through a stage body that
+		// launches something, and this build has none, which
 		// TestTheBranchUnderValidationChoosesNothingThatRuns says in its own
 		// terms.
 		j := inClone(t)
@@ -286,7 +286,8 @@ func TestATrustedConfigurationThatCannotBeReadIsNotFallenBackFrom(t *testing.T) 
 				"and which agent it resolved, are not established here, because no shipped surface " +
 				"reports either and this subject plants nothing whose execution could stand in for " +
 				"them. Nothing else here establishes it either: the branch-installation family's " +
-				"planted executables are reached only through a stage body and this build has none",
+				"planted executables are reached only through a stage body that launches something, " +
+				"and this build has none",
 			Clauses: []journey.Clause[resolvedRun]{
 				{
 					States: "a run that did not start stopped for the configuration",
@@ -332,8 +333,8 @@ func TestATrustedConfigurationThatCannotBeReadIsNotFallenBackFrom(t *testing.T) 
 				"this build reads a repository's own document from anywhere, which internal/service "+
 				"states, so this is a gap against section 10 rather than a hole in P7. That nothing a "+
 				"branch names is executed is established nowhere in this build: every planted "+
-				"executable of that family is reached only through a stage body, and internal/stages "+
-				"holds none.", observed.outcome)
+				"executable of that family is reached only through a stage body that launches "+
+				"something, and this build has none.", observed.outcome)
 		}
 	})
 }
