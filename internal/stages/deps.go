@@ -73,17 +73,15 @@ import (
 // # Fields nothing in this build reads yet
 //
 // Forge and Config have no reader here, because this seam lands before the
-// stage bodies that need them and deliberately so: three of them are written
-// against it next, and a seam that arrived missing what they need would force
+// stage bodies that need them and deliberately so. The bodies queued behind
+// this file are rebase, review and pull request, each specified work with a
+// task of its own, and a seam that arrived missing what they need would force
 // a second breaking change to the same file, which is the collision landing it
 // alone exists to prevent.
 //
-// That is a considered exception to this repository's rule against exported
-// surface whose only caller is work that has not happened, not an oversight of
-// it. The rule guards against surface that grows whether or not the work
-// arrives; here the work is queued behind this file. If a field below still
-// has no reader when those bodies have landed, it is the field that was wrong
-// and it should go.
+// Forge answers to the pull request and checks bodies, and Config to the
+// review and test bodies. If a field below still has no reader once those have
+// landed, it is the field that was wrong and it should go.
 type StageDeps struct {
 	// Agent runs one invocation at a time with no session. It is a
 	// StageAgent rather than a Runner so that a body cannot open a fixer
@@ -93,10 +91,12 @@ type StageDeps struct {
 	// that copy through Copy rather than by composing a path, so
 	// internal/home stays the one owner of the layout.
 	Home *home.Home
-	// Config is the run's resolved configuration. It is the operator's global
-	// layer and the schema defaults as this build resolves them; PRD section
-	// 10's trusted repository layer is not read anywhere yet, which
-	// internal/service's documentation states.
+	// Config is the run's resolved configuration, and the review and test
+	// bodies are the consumers it is here for: ReviewPathRules is the extra
+	// guidance a review is held to, and Commands is what a test run executes.
+	// It is the operator's global layer and the schema defaults as this build
+	// resolves them; PRD section 10's trusted repository layer is not read
+	// anywhere yet, which internal/service's documentation states.
 	Config config.Config
 	// Forge is the code host this run's pull request and checks stages talk
 	// to. Nothing in this build constructs one, so it is nil on every run:
