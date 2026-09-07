@@ -97,9 +97,7 @@ func TestAnEmptyCheckListIsNotAPass(t *testing.T) {
 	observed.substitutionRefused = errors.Is(err, journey.ErrNoRecordedHead)
 
 	unregistered := journey.Check[checked]{
-		What: "an empty check list on the commit the run pushed is not a pass, only a no-CI declaration " +
-			"makes it one, and an answer served without the run's own head substituted into it reports a " +
-			"different commit rather than the condition",
+		What: "the code host's answer about a pushed commit",
 		Clauses: []journey.Clause[checked]{
 			{
 				States: "the provider reported checks on the commit the run pushed",

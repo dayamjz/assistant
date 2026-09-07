@@ -108,8 +108,7 @@ func TestACopiedProjectDirectoryDoesNotOwnTheGateItInherited(t *testing.T) {
 	observed.copy = adopted.Gate.ID
 
 	holds := journey.Check[ownership]{
-		What: "removing the gate through a copy that inherited its remote refuses and removes nothing, " +
-			"and initializing through the same copy gives it a gate of its own rather than the original's",
+		What: "a project directory copied after it was gated",
 		Clauses: []journey.Clause[ownership]{
 			{
 				States: "the removal through the copy was refused with the error the condition names",

@@ -57,13 +57,7 @@ func TestAPassMeansTheSameThingEverywhere(t *testing.T) {
 	}
 
 	walked := journey.Check[machine.Run]{
-		What: "a run through the binary comes back carrying a report for every stage of the gate, every " +
-			"one of them ran, each stage this build has no body for carries the answer its hold was " +
-			"given, none was skipped, and the run reached the end. The order they come back in is not " +
-			"established here and no clause claims it: internal/service builds this list by iterating " +
-			"internal/pipeline's fixed order and appending one view per stage, so another order is " +
-			"unsayable on this wire and a clause over it could not fail. internal/pipeline owns that, " +
-			"and its nine named fields are what make another order unsayable in the first place",
+		What: "P2: a run through the binary over every stage",
 		Clauses: []journey.Clause[machine.Run]{
 			{
 				// The list's length is the one thing about its shape that is
@@ -185,7 +179,7 @@ func TestAPassMeansTheSameThingEverywhere(t *testing.T) {
 
 	asked := []string{pipeline.StageReview.String(), pipeline.StageLint.String()}
 	skipped := journey.Check[machine.Run]{
-		What: "a per-run skip takes exactly the stages it named out of that one run, and no others",
+		What: "P2: a skip asked for one run",
 		Clauses: []journey.Clause[machine.Run]{
 			{
 				// The same clause the check above carries, for the same
@@ -328,11 +322,7 @@ func TestAPassMeansTheSameThingEverywhere(t *testing.T) {
 	}
 
 	standing := journey.Check[standingSkip]{
-		What: "internal/config's key table admits no key named skip, and the service refuses to serve " +
-			"over a document naming a key that table does not admit, naming the key it refused; it " +
-			"answers a key of another name the same way, so the refusal is not read off one word. " +
-			"Whether some row the table does carry would apply a standing skip is what a row means " +
-			"rather than what its name is, and that table is its one owner",
+		What: "P2: a standing skip asked for in configuration",
 		Clauses: []journey.Clause[standingSkip]{
 			{
 				States: "the key table admits no key named skip",

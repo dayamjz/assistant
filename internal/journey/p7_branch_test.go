@@ -151,14 +151,7 @@ func TestTheBranchUnderValidationChoosesNothingThatRuns(t *testing.T) {
 	observed.suppressionMessage = answer.Message()
 
 	governs := journey.Check[installed]{
-		What: "a run over a branch carrying an agent harness installation reaches the stages that " +
-			"installation was planted in front of, every key the branch was not allowed to set is " +
-			"dropped and reported as a rejection while the one it was allowed to set survives, and a " +
-			"home asking for a suppression the resolved adapter does not implement is refused outright. " +
-			"That nothing the branch installed executed is not established here and no clause claims " +
-			"it: every planted executable is reached only through a stage body that launches " +
-			"something, and this build has none, so the tripwire file is recorded and logged rather " +
-			"than asserted on",
+		What: "P7: a branch carrying a harness installation",
 		Clauses: []journey.Clause[installed]{
 			{
 				States: "the run reached the stages the installation was planted in front of",

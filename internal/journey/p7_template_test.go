@@ -215,9 +215,7 @@ func TestNothingOutsideTheGateChoosesWhatRunsOnAPushToIt(t *testing.T) {
 			})
 		}
 		reaches := journey.Check[admission]{
-			What: "a push through the gate under a configuration file that redirects core.hooksPath is " +
-				"observed rather than assumed: either the product refuses the redirect, or it accepts " +
-				"the push and the hooks that ran are the redirected ones rather than the gate's own",
+			What:         "P7: a push under a redirected core.hooksPath",
 			Clauses:      clauses,
 			Counterfeits: counterfeits,
 		}
@@ -355,34 +353,13 @@ func refuses(t *testing.T, id fixture.ID, want bool, observed birth) {
 		})
 	}
 	check := journey.Check[birth]{
-		What:         string(id) + ": " + whatRefusesEstablishes(want),
+		What:         "P7: " + string(id),
 		Clauses:      clauses,
 		Counterfeits: counterfeits,
 	}
 	if err := check.Verify(observed); err != nil {
 		t.Fatalf("%v", err)
 	}
-}
-
-// whatRefusesEstablishes says what the clauses refuses builds actually assert,
-// in the terms a failure should be read in.
-//
-// It is written here rather than taken from the condition's recorded Summary.
-// The catalog records what the condition must produce, which is more than this
-// build can observe: those summaries speak of the hooks a template did or did
-// not bring, and no clause here looks at a hook at all. Pasting the summary
-// would put a claim in the text of every failure that nothing under it
-// establishes, so the identifier cites the condition and this says what was
-// checked.
-func whatRefusesEstablishes(want bool) string {
-	const unobserved = " Whether any hook the template carries arrived in the gate, or ran, is not " +
-		"established here: no clause looks, and the test's own doc comment says why."
-	if want {
-		return "creating or repairing a gate under this condition is refused, and the refusal says what " +
-			"the condition records it has to say." + unobserved
-	}
-	return "creating or repairing a gate under this condition is not refused, which is what shows the " +
-		"channel closed rather than caught." + unobserved
 }
 
 // gateJourney returns a journey over a working copy of this scenario's origin

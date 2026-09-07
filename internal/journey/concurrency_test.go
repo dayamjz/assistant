@@ -113,9 +113,7 @@ func TestSeveralCallersDrivingOneRunExecuteNoNodeTwice(t *testing.T) {
 	observed.completed = last(answerHolds(t, j, observed.after, "approved")).Outcome == machine.OutcomeChecksPassed
 
 	sound := journey.Check[contended]{
-		What: "a run several callers answered at once spent exactly what the holds it moved through " +
-			"cost, moved forward rather than sideways, and was still drivable to the end of the gate " +
-			"afterwards",
+		What: "P6: one run several callers answer at once",
 		Clauses: []journey.Clause[contended]{
 			{
 				States: "one hold was measured at a cost there is something to compare against",

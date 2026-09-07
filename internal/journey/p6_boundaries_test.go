@@ -117,10 +117,7 @@ func TestARunSurvivesTheServiceBeingKilledAtEveryStageBoundary(t *testing.T) {
 	at := func(nth int) int { return nth % len(observed.boundaries) }
 
 	survived := journey.Check[survival]{
-		What: "a run killed at every stage boundary it reaches comes back standing exactly where it " +
-			"stood, classified as waiting on the same decision, and is driven to the end of the gate " +
-			"afterwards; a boundary is a hold, so a stage whose body never holds offers none and is " +
-			"not among them",
+		What: "P6: a run killed at every stage boundary",
 		Clauses: []journey.Clause[survival]{
 			{
 				States: "the service was killed at every boundary this run stops at",

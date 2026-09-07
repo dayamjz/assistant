@@ -71,8 +71,7 @@ func TestAPushToTheGateByNameAuthorizesTheRun(t *testing.T) {
 	}
 
 	authorizes := journey.Check[consented]{
-		What: "a push to the gate by name is admitted and authorizes a run of the branch and the commit " +
-			"that were pushed",
+		What: "P1: a push to the gate by name",
 		Clauses: []journey.Clause[consented]{
 			{
 				States: "the gate admitted the push",

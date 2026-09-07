@@ -65,6 +65,13 @@
 // Possible, which answers that from the real observation; a clause that is not
 // an absence may not carry one.
 //
+// A check's What names its subject rather than making its claim, and is
+// bounded so a paragraph of promises does not fit; Claim composes the sentence
+// a reader sees out of the clauses. A free-text claim beside a list of
+// assertions is two statements of one thing that drift, and the prose is the
+// one nothing checks. What the bound does not do is make a short claim
+// impossible, which is left to review and said here rather than implied.
+//
 // What all of that establishes is that every assertion discriminates. That the
 // observation is real is established separately, by producing it from a real
 // process against a real repository, which is what everything else in this
