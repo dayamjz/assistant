@@ -42,6 +42,17 @@ var ErrConfigDigestMissing = errors.New("store: run has no configuration digest"
 // from any other. The error names the path and the identifier that holds it.
 var ErrWorkingPathTaken = errors.New("store: working path already belongs to another repository")
 
+// ErrRepositoryInUse is returned by ForgetRepository when a task still names
+// one of the repository's runs. Removing it would leave that task pointing at
+// a run that no longer exists, and which of the two goes is not this package's
+// call.
+var ErrRepositoryInUse = errors.New("store: a task still names a run of this repository")
+
+// ErrRunActive is returned by ForgetRepository when a run has not finished. A
+// run that may still move is one a service may still be driving, and the
+// records it is about to write would land against rows that had been removed.
+var ErrRunActive = errors.New("store: run has not finished")
+
 // ErrNoResolution is returned by ResolveHold when no resolution text was given.
 // PRD section 8 says a hold is closed only by an explicit resolution, and an
 // empty one is not explicit.

@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"database/sql/driver"
+	"encoding/json"
 	"fmt"
 	"time"
 )
@@ -79,6 +80,38 @@ func (o *Optional[T]) Scan(src any) error {
 		return err
 	}
 	*o = Optional[T]{value: n.V, known: n.Valid}
+	return nil
+}
+
+// MarshalJSON writes a known value as the value itself and an unknown one as
+// null.
+//
+// This type exists because a recorded zero and a value nobody recorded are
+// different facts, so the encoding it crosses a boundary through has to keep
+// them apart. Without this an Optional encodes as an empty object, because its
+// fields are unexported, which loses both the value and the fact that there was
+// one - the same defect agents.Count names for a count an agent did not report.
+func (o Optional[T]) MarshalJSON() ([]byte, error) {
+	if !o.known {
+		return []byte("null"), nil
+	}
+	return json.Marshal(o.value)
+}
+
+// UnmarshalJSON reads back what MarshalJSON wrote: null is unknown, and
+// anything else is a known value of the underlying type. A value that does not
+// decode is an error rather than an unknown, because a field that could not be
+// read is not the same fact as a field nothing was recorded for.
+func (o *Optional[T]) UnmarshalJSON(b []byte) error {
+	if string(b) == "null" {
+		*o = Optional[T]{}
+		return nil
+	}
+	var v T
+	if err := json.Unmarshal(b, &v); err != nil {
+		return err
+	}
+	*o = Optional[T]{value: v, known: true}
 	return nil
 }
 

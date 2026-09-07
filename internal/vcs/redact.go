@@ -7,9 +7,11 @@ import (
 
 // Redactor removes credentials from text on its way into an error or a log.
 //
-// PRD section 8 makes a redact module the single owner of this, so when that
-// module exists a caller passes its implementation with WithRedactor and this
-// package stops being a second opinion on the question.
+// PRD section 8 makes a redact module the single owner of this, and that
+// module is internal/redact: a caller passes its implementation with
+// WithRedactor. What this package implements is the fallback for a caller that
+// passes none, so it is not a second opinion for a caller that wired the owner
+// up.
 type Redactor interface {
 	// Redact returns s with any credential it recognizes replaced. It must be
 	// safe to call on text that holds no credential, and on text that is not a

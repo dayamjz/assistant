@@ -1,0 +1,102 @@
+// Package service is the background service PRD section 8's process model puts
+// at the centre of a home: the one process that holds the home's exclusive
+// lock, binds the local socket, owns every run that is executing, and answers
+// the protocol internal/ipc defines.
+//
+// It is the wiring between packages that already own everything it does.
+// internal/graph executes and bounds, internal/pipeline is the topology,
+// internal/checkpoints makes a run's position durable, internal/runs owns the
+// run's record and its fixer session, internal/store owns every record,
+// internal/ipc owns the protocol, internal/machine owns the shapes an answer
+// takes, and internal/home owns the layout and the lock. Nothing here decides
+// whether a change is good, whether a branch may move, or what a finding
+// means; a decision made here would be a second opinion on a question one of
+// those packages already answers.
+//
+// # One service owns a home, and the lock is what makes that true
+//
+// Open takes the home's lock before it opens the database and before it binds
+// the socket, per PRD section 8, so a second service on one home refuses
+// rather than serving a second view of the same runs. The lock is released by
+// the operating system when the process ends however it ends, so there is no
+// stale state to reason about after a hard kill; internal/home says why that
+// matters.
+//
+// A socket file left behind by a service that was killed is removed before
+// binding. That is safe only because the lock is already held: nothing else
+// can be serving on it, so the file names nothing.
+//
+// # Recovery is what a restart owes a run
+//
+// A run's position is durable, so a service that comes back has runs standing
+// where the last one left them. Open reconciles every unfinished run's record
+// against its latest checkpoint, and then continues the ones that were
+// executing. Reconciling is not optional: a run whose record says running and
+// whose checkpoint says halted is a run waiting on an answer nobody can give,
+// because responding is refused for a run that is not held.
+//
+// # Blocking calls, and the one slot per run that makes them safe
+//
+// PRD section 9 has starting and responding block until the run reaches its
+// next decision point or a terminal outcome. They do, and the answer is the
+// run as it then stands.
+//
+// One run advances at a time here. A second request to advance a run already
+// advancing is refused naming the first rather than queued, because
+// internal/graph's anchor would refuse the loser's write anyway and refusing
+// early is a better answer than a segment that ran a node before finding out.
+// That is a bound on this service and not a distributed one: internal/graph's
+// anchoring is what holds when two processes drive one run, and the home lock
+// is what makes that not happen.
+//
+// # Containment is asked of the kernel, and answered from what this service
+// started
+//
+// PRD section 9 contains an agent running inside a validation stage: it may
+// inspect, fix, and return its own stage, and nothing else. internal/ipc reads
+// the peer's credentials off the socket and asks an Ancestry, which is the
+// seam this package fills.
+//
+// The relation it uses is the process group. internal/agents starts every
+// agent as the leader of a new process group, so everything a stage's agent
+// starts is in that group unless it deliberately leaves it, and a group this
+// service started for a stage is a fact this service holds rather than one a
+// caller states. StageStarted is how a stage launcher records one.
+//
+// Two things about that are worth being exact about, because a guard nobody
+// can see fire is worth nothing. It fires: TestACallerInsideAnActiveStageIsRefused
+// registers this test process's own group and then makes a restricted call,
+// which is refused with ipc.ErrContained. And it has no producer in this
+// build: no stage launches an agent, because the nine stage bodies do not
+// exist, so the registry is empty and nothing is contained today. What that
+// costs is stated rather than implied - until a stage launcher calls
+// StageStarted, containment protects nothing - and the alternative, refusing
+// every restricted call until then, is a service nobody can drive.
+//
+// The residual gap is the same one internal/agents names for its own sweep: a
+// descendant that leaves its process group escapes the relation. Closing that
+// needs a process-tree walk per platform, and the group is what this service
+// already establishes.
+//
+// # What this package does not do
+//
+// It does not implement a stage. The nine bodies are internal/stages' and this
+// package takes them as a value, so a build with none of them written serves
+// runs that hold at the first stage rather than runs that pass.
+//
+// It does not read a repository's own configuration. PRD section 10 has the
+// trusted layer read from the default branch at a freshly fetched commit, and
+// nothing here fetches. What a run resolves is the operator's global layer and
+// the schema defaults, so a repository's own settings are ignored rather than
+// read from the wrong place. That is a gap against section 10 and not a hole
+// in P7: the failure P7 exists to prevent is configuration that executes code
+// being read from a pushed branch, and no branch's configuration is read here
+// at all.
+//
+// It does not push, open a pull request, or move any reference. Those are
+// stage bodies' work, behind internal/vcs, internal/safety and internal/forge.
+//
+// It does not decide who resolved a hold. internal/ipc derives that from the
+// surface, and every resolution arriving over this protocol is
+// store.ResolvedByMachineInterface, including one a person typed.
+package service

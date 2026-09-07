@@ -17,9 +17,11 @@ var unclaimed = map[Principle]string{
 	P5: "The review stage that would re-review a fix round's work is not built. " +
 		"internal/pipeline checks the loop that re-runs a stage over the fixer's writes; " +
 		"what is unclaimed is that a change the pipeline authored is reviewed as author code.",
-	P9:  "There is no wake classifier in this repository. Supervision is the orchestrator's, and nothing here supervises.",
-	P10: "There is no coordinator and no watcher here, so no turn ends and nothing holds a home's lock.",
+	P9: "There is no wake classifier in this repository. Supervision is the orchestrator's, and nothing here supervises.",
+	P10: "There is no coordinator and no watcher here, so no turn ends. " +
+		"internal/home's lock gives a home one service, which is a different question from whether a healthy watcher holds it.",
 	P11: "Nothing here launches a worker into an isolated copy. internal/gate asks who a working copy belongs to, which is a different question.",
 	P12: "Nothing here removes an isolated copy. internal/gate's removal is about a gate repository, not about proving a worker's work landed.",
-	P13: "There is no surface that talks to a person yet. internal/ipc carries the local protocol between programs, and cmd holds a fixture builder.",
+	P13: "internal/cli renders for a person, and no test claims what it prints names the outcome rather than the mechanics: " +
+		"run identifiers, stage names and home paths are on that surface today.",
 }

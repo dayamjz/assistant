@@ -57,7 +57,7 @@ var _ Provider = (*GitHub)(nil)
 // NewGitHub returns an adapter that talks to GitHub through gh.
 //
 // redact is required. PRD section 8 gives credential removal to a redact
-// module that does not exist yet, and this package writes no second
+// module, which is internal/redact, and this package writes no second
 // implementation of it, per P14; every piece of provider text that reaches a
 // Refusal passes through what is supplied here. A nil Redactor panics, because
 // no state of the world produces one and an adapter that silently reported

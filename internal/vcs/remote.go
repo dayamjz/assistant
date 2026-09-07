@@ -79,6 +79,33 @@ func (r *Repository) RemoteURL(ctx context.Context, name string) (string, error)
 	return url, nil
 }
 
+// RemoveRemote removes a remote and every configuration entry git keeps for
+// it, and reports ErrRemoteNotFound when there was no such remote.
+//
+// A remote that is not there is reported rather than treated as success,
+// because "it was already gone" and "it has just been removed" are different
+// facts and a caller that cannot tell them apart cannot report what it did.
+//
+// It removes only the named remote. Nothing else in the working copy's
+// configuration is touched, which is what keeps PRD principle P1 true here as
+// it does for SetRemote: giving up the gate's remote leaves a person's own
+// origin exactly as it was.
+func (r *Repository) RemoveRemote(ctx context.Context, name string) error {
+	if err := checkArg("remote", name); err != nil {
+		return err
+	}
+	// Exit status 2 is what git remote reports for a remote it does not have,
+	// which is the same status RemoteURL reads that fact from.
+	_, code, err := r.runExpecting(ctx, "remote-remove", []int{2}, "remote", "remove", name)
+	if err != nil {
+		return err
+	}
+	if code != 0 {
+		return ErrRemoteNotFound
+	}
+	return nil
+}
+
 // SetRemote points a remote at a URL, adding it when it does not exist and
 // changing its URL when it does. Running it again with the same arguments
 // changes nothing, so an initialization repeated to repair a home does not

@@ -139,10 +139,10 @@
 // repository, the exit status, and git's own message. Both the arguments and
 // the message pass through a Redactor first, so a URL carrying a password does
 // not reach a log. PRD section 8 gives credential removal to a redact module,
-// which does not exist yet; until it does, defaultRedactor is the
-// implementation, and it covers exactly one shape: the userinfo of a
-// URL with a scheme. A caller with a better redactor injects it with
-// WithRedactor.
+// which is internal/redact, and a caller injects it with WithRedactor. A
+// caller that injects nothing gets defaultRedactor, which covers exactly one
+// shape, the userinfo of a URL with a scheme, and is what keeps this package
+// usable on its own rather than the implementation a wired-up caller reaches.
 //
 // RemoteURL is the one function that returns a credentialed URL to its caller
 // unredacted, because recovering that URL is what it is for.

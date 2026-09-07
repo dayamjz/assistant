@@ -16,19 +16,19 @@ import (
 // source is unrecorded is indistinguishable from one somebody guessed.
 type TaskState struct {
 	// TaskID names the task.
-	TaskID string
+	TaskID string `json:"task_id"`
 	// State is what is true now.
-	State string
+	State string `json:"state"`
 	// Source says what resolved it.
-	Source string
+	Source string `json:"source"`
 	// Detail is anything the source wants to add. It is unknown when the
 	// source had nothing to add.
-	Detail Optional[string]
+	Detail Optional[string] `json:"detail"`
 	// Revision increases by one on every write, so a reader can tell whether
 	// the state it holds has been superseded.
-	Revision int64
+	Revision int64 `json:"revision"`
 	// ResolvedAt is when this state was written.
-	ResolvedAt time.Time
+	ResolvedAt time.Time `json:"resolved_at"`
 }
 
 // TaskEvent is one entry of a task's append-only history.

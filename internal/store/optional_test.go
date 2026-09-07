@@ -2,6 +2,7 @@ package store
 
 import (
 	"database/sql/driver"
+	"encoding/json"
 	"testing"
 	"time"
 )
@@ -94,5 +95,67 @@ func TestOptionalTimeConversionsRefuseCorruptText(t *testing.T) {
 	// value was recorded" would be exactly the fabrication this type prevents.
 	if _, err := optionalTimeValue(Known("not a timestamp"), "column"); err == nil {
 		t.Fatal("optionalTimeValue accepted unparsable text as an absent value")
+	}
+}
+
+// A record that crosses a boundary as JSON has to carry the difference between
+// a recorded value and nothing recorded, which is the whole reason this type
+// exists. An Optional whose fields are unexported would otherwise encode as an
+// empty object and lose both.
+func TestAnOptionalKeepsTheDifferenceAcrossJSON(t *testing.T) {
+	t.Parallel()
+	known, err := json.Marshal(Known("a value"))
+	if err != nil {
+		t.Fatalf("encoding a known value: %v", err)
+	}
+	if string(known) != `"a value"` {
+		t.Fatalf("a known value encoded as %s", known)
+	}
+	unknown, err := json.Marshal(Unknown[string]())
+	if err != nil {
+		t.Fatalf("encoding an unknown value: %v", err)
+	}
+	if string(unknown) != "null" {
+		t.Fatalf("an unknown value encoded as %s", unknown)
+	}
+
+	var back Optional[string]
+	if err := json.Unmarshal(known, &back); err != nil {
+		t.Fatalf("decoding a known value: %v", err)
+	}
+	if v, ok := back.Get(); !ok || v != "a value" {
+		t.Fatalf("a known value decoded as (%q, %v)", v, ok)
+	}
+	if err := json.Unmarshal(unknown, &back); err != nil {
+		t.Fatalf("decoding an unknown value: %v", err)
+	}
+	if _, ok := back.Get(); ok {
+		t.Fatal("an unknown value decoded as known")
+	}
+}
+
+// A recorded zero is a value, and it must not come back as unknown.
+func TestARecordedZeroIsNotAnUnknown(t *testing.T) {
+	t.Parallel()
+	encoded, err := json.Marshal(Known(0))
+	if err != nil {
+		t.Fatalf("encoding a recorded zero: %v", err)
+	}
+	var back Optional[int]
+	if err := json.Unmarshal(encoded, &back); err != nil {
+		t.Fatalf("decoding a recorded zero: %v", err)
+	}
+	if v, ok := back.Get(); !ok || v != 0 {
+		t.Fatalf("a recorded zero decoded as (%d, %v)", v, ok)
+	}
+}
+
+// A value that is present but does not decode is a failure rather than an
+// unknown, on the same terms as a stored time this package cannot parse.
+func TestAValueThatDoesNotDecodeIsRefusedRatherThanReadAsUnknown(t *testing.T) {
+	t.Parallel()
+	var back Optional[time.Time]
+	if err := json.Unmarshal([]byte(`"not a time"`), &back); err == nil {
+		t.Fatal("a value that does not decode was accepted")
 	}
 }

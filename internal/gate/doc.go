@@ -9,9 +9,10 @@
 // and a notification that runs after.
 //
 // This package composes internal/vcs rather than invoking git. It builds no
-// command lines, and the one operation it needs that internal/vcs does not
-// carry yet is declared as an interface here rather than added there; see
-// git.go.
+// command lines, and what it needs of a working copy is declared as an
+// interface here rather than as a dependency on a concrete type; internal/vcs
+// carries every operation so declared. See git.go, and the core.hooksPath gap
+// below for the one operation it needs that cannot be declared there at all.
 //
 // # What this package does and does not do
 //
@@ -179,9 +180,9 @@
 // while initialization reports success. This package cannot currently see
 // that: reading a git configuration value is a git invocation, internal/vcs is
 // the only package that makes those, and it exposes no such operation. The
-// operation it needs is named in git.go along with the other one, and nothing
-// here pretends to check in the meantime, because a check that cannot fail is
-// worse than an admitted gap.
+// operation it needs is named in git.go, and nothing here pretends to check in
+// the meantime, because a check that cannot fail is worse than an admitted
+// gap.
 //
 // # Identity, moving, and copying
 //

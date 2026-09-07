@@ -127,7 +127,8 @@
 //
 // The containment question itself is not answered here. Ancestry is the seam,
 // and resolving a process tree and knowing which runs are active are both state
-// this package does not own, so nothing in this repository implements it yet.
+// this package does not own, so the answer belongs to whoever holds it:
+// internal/service implements it from the process groups it started stages in.
 // A server cannot be built without one: a default would serve restricted
 // methods to a validating agent, which is the failure the rule exists to
 // prevent. Where a fact cannot be established, the request is refused. An
@@ -183,6 +184,24 @@
 // that can reach the socket multiplies both bounds by the number of connections
 // it opens, so this reduces the hazard rather than closing it. What closes it
 // is who can reach the socket file at all, which this package does not own.
+//
+// # Work a handler defers until its answer has gone out
+//
+// A request's answer is written after its handler returns, so a handler that
+// acts on the connection it is answering on cannot order that act behind its
+// own answer by returning. Stopping the process that serves the connection is
+// the case this exists for: the stop drops the connection, and started
+// alongside the return it races the write of the answer explaining why.
+// Request.AfterAnswer is the ordering. The work runs on the goroutine that
+// wrote the answer, after that write and before the request's in-flight slot
+// is released, so it should not block.
+//
+// What it establishes is the order of the write against the deferred work, and
+// nothing about the peer. The answer is on the connection when the work runs;
+// a peer that had already gone is not thereby reached, and a handler that
+// registers work runs it whether the write succeeded or the connection had
+// already failed, because a handler that has decided to stop must stop either
+// way.
 //
 // # What this package does not do
 //

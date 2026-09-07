@@ -20,45 +20,42 @@ import (
 // than rot into a claim nobody checks.
 var _ gate.WorkingCopy = (*vcs.Repository)(nil)
 
-// detachable is *vcs.Repository plus the one operation internal/vcs does not
-// carry yet. It runs the git command that operation will run, so it models
-// what the real mechanism will put on the wire rather than a shape the real
-// mechanism could not produce: a remote that is not there fails, exactly as
-// gate.Detacher requires and as git reports it.
-type detachable struct {
-	*vcs.Repository
+// attached is a working copy that cannot give a remote up: internal/vcs's
+// handle with the detaching operation hidden behind an interface that does not
+// declare it. It exists so the fail-closed half of removal is still reachable
+// now that the product's own working copy can detach.
+type attached struct {
+	remoteURL func(ctx context.Context, name string) (string, error)
+	setRemote func(ctx context.Context, name, url string) error
 }
 
-func (d detachable) RemoveRemote(_ context.Context, name string) error {
-	if _, err := tryRawGit(d.Path(), "remote", "get-url", name); err != nil {
-		return vcs.ErrRemoteNotFound
-	}
-	if out, err := tryRawGit(d.Path(), "remote", "remove", name); err != nil {
-		return errors.New("git remote remove: " + out)
-	}
-	return nil
+func (a attached) RemoteURL(ctx context.Context, name string) (string, error) {
+	return a.remoteURL(ctx, name)
 }
 
-var _ gate.Detacher = detachable{}
+func (a attached) SetRemote(ctx context.Context, name, url string) error {
+	return a.setRemote(ctx, name, url)
+}
 
-func detachingOpener(ctx context.Context, path string) (gate.WorkingCopy, error) {
+var _ gate.WorkingCopy = attached{}
+
+// attachedOpener opens a working copy that cannot detach.
+func attachedOpener(ctx context.Context, path string) (gate.WorkingCopy, error) {
 	repository, err := vcs.OpenWorktree(ctx, path)
 	if err != nil {
 		return nil, err
 	}
-	return detachable{Repository: repository}, nil
+	return attached{remoteURL: repository.RemoteURL, setRemote: repository.SetRemote}, nil
 }
 
-// TestRemoveRemoteIsStillTheNamedFollowUp fails on the day internal/vcs grows
-// the operation gate.Detacher declares, because on that day the paragraph in
-// git.go calling it a pending follow-up stops being true. The compile-time
-// assertion above cannot notice, since the shim's own method shadows a
-// promoted one.
-func TestRemoveRemoteIsStillTheNamedFollowUp(t *testing.T) {
+// TestTheProductWorkingCopyCanDetach fails if *vcs.Repository stops satisfying
+// gate.Detacher, which is the day the paragraph in git.go stops being true and
+// the day the default opener stops being enough for a removal.
+func TestTheProductWorkingCopyCanDetach(t *testing.T) {
 	t.Parallel()
 	var repository any = (*vcs.Repository)(nil)
-	if _, ok := repository.(gate.Detacher); ok {
-		t.Fatal("*vcs.Repository now satisfies gate.Detacher, so RemoveRemote has landed in internal/vcs: git.go still calls it a pending follow-up and has to be corrected")
+	if _, ok := repository.(gate.Detacher); !ok {
+		t.Fatal("*vcs.Repository no longer satisfies gate.Detacher, so the default opener cannot remove a gate and git.go has to be corrected")
 	}
 }
 
@@ -78,8 +75,9 @@ func TestRemoveRefusesBeforeDeletingAnythingWhenItCannotDetach(t *testing.T) {
 		t.Fatalf("Initialize: %v", err)
 	}
 
-	// The default opener is *vcs.Repository, which cannot remove a remote.
-	if err := gate.Remove(ctx(t), spec, opts()...); !errors.Is(err, gate.ErrDetachUnsupported) {
+	// A working copy that cannot give the remote up leaves the gate half
+	// removed, so nothing is removed at all.
+	if err := gate.Remove(ctx(t), spec, opts(gate.WithOpener(attachedOpener))...); !errors.Is(err, gate.ErrDetachUnsupported) {
 		t.Fatalf("Remove error = %v, want ErrDetachUnsupported", err)
 	}
 	if _, err := os.Stat(g.Repository()); err != nil {
@@ -105,7 +103,7 @@ func TestRemoveLeavesTheWorkingCopyUsableAndOriginIntact(t *testing.T) {
 	}
 	originURL, _ := remoteURL(t, wc.path, "origin")
 
-	if err := gate.Remove(ctx(t), spec, opts(gate.WithOpener(detachingOpener))...); err != nil {
+	if err := gate.Remove(ctx(t), spec, opts()...); err != nil {
 		t.Fatalf("Remove: %v", err)
 	}
 
@@ -143,10 +141,10 @@ func TestRemoveIsSafeToRepeat(t *testing.T) {
 	if _, err := gate.Initialize(ctx(t), spec, opts()...); err != nil {
 		t.Fatalf("Initialize: %v", err)
 	}
-	if err := gate.Remove(ctx(t), spec, opts(gate.WithOpener(detachingOpener))...); err != nil {
+	if err := gate.Remove(ctx(t), spec, opts()...); err != nil {
 		t.Fatalf("Remove: %v", err)
 	}
-	if err := gate.Remove(ctx(t), spec, opts(gate.WithOpener(detachingOpener))...); !errors.Is(err, gate.ErrNoGate) {
+	if err := gate.Remove(ctx(t), spec, opts()...); !errors.Is(err, gate.ErrNoGate) {
 		t.Fatalf("Remove again = %v, want ErrNoGate", err)
 	}
 }
@@ -165,7 +163,7 @@ func TestRemoveRefusesAPathOutsideTheHomesRepositories(t *testing.T) {
 	}
 	rawGit(t, wc.path, "remote", "set-url", gate.RemoteName, wc.origin)
 
-	if err := gate.Remove(ctx(t), spec, opts(gate.WithOpener(detachingOpener))...); !errors.Is(err, gate.ErrNotAGate) {
+	if err := gate.Remove(ctx(t), spec, opts()...); !errors.Is(err, gate.ErrNotAGate) {
 		t.Fatalf("Remove error = %v, want ErrNotAGate", err)
 	}
 	if _, err := os.Stat(wc.origin); err != nil {
@@ -179,7 +177,7 @@ func TestRemoveRefusesAPathOutsideTheHomesRepositories(t *testing.T) {
 	// stand, and this is the one state where an initialization is not it: the
 	// path the remote names is not a gate of this home, so there is no binding
 	// to rebuild over it.
-	err := gate.Remove(ctx(t), spec, opts(gate.WithOpener(detachingOpener))...)
+	err := gate.Remove(ctx(t), spec, opts()...)
 	if !namesDetaching(err) {
 		t.Fatalf("the refusal names no step the reader can take: %v", err)
 	}
@@ -190,7 +188,7 @@ func TestRemoveRefusesAPathOutsideTheHomesRepositories(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the step the refusal names did not complete: %v", err)
 	}
-	if err := gate.Remove(ctx(t), spec, opts(gate.WithOpener(detachingOpener))...); err != nil {
+	if err := gate.Remove(ctx(t), spec, opts()...); err != nil {
 		t.Fatalf("the gate that step gave it cannot be removed: %v", err)
 	}
 	if _, err := os.Stat(own.Repository()); !os.IsNotExist(err) {
@@ -218,7 +216,7 @@ func TestRemoveRefusesARepositoryCarryingNoGateRecord(t *testing.T) {
 	}
 	removeRecord(t, g.Repository())
 
-	if err := gate.Remove(ctx(t), spec, opts(gate.WithOpener(detachingOpener))...); !errors.Is(err, gate.ErrNotAGate) {
+	if err := gate.Remove(ctx(t), spec, opts()...); !errors.Is(err, gate.ErrNotAGate) {
 		t.Fatalf("Remove error = %v, want ErrNotAGate", err)
 	}
 	if _, err := os.Stat(g.Repository()); err != nil {
@@ -254,7 +252,7 @@ func TestRemoveFromACopyRefusesAndLeavesTheOriginalsGate(t *testing.T) {
 			gate.RemoteName, url, original.Repository())
 	}
 
-	err = gate.Remove(ctx(t), gate.Spec{Home: home, WorkingPath: duplicate}, opts(gate.WithOpener(detachingOpener))...)
+	err = gate.Remove(ctx(t), gate.Spec{Home: home, WorkingPath: duplicate}, opts()...)
 	if !errors.Is(err, gate.ErrGateClaimed) {
 		t.Fatalf("Remove from the copy = %v, want ErrGateClaimed", err)
 	}
@@ -282,7 +280,7 @@ func TestRemoveFromACopyRefusesAndLeavesTheOriginalsGate(t *testing.T) {
 
 	// The original can still remove its own gate, so the guard refuses the
 	// copy rather than removal in general.
-	if err := gate.Remove(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path}, opts(gate.WithOpener(detachingOpener))...); err != nil {
+	if err := gate.Remove(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path}, opts()...); err != nil {
 		t.Fatalf("Remove from the working copy the gate belongs to: %v", err)
 	}
 	if _, statErr := os.Stat(original.Repository()); !os.IsNotExist(statErr) {
@@ -356,7 +354,7 @@ func TestACopyDoesNotAdoptARecordlessGate(t *testing.T) {
 	if back.Repository() != original.Repository() {
 		t.Fatalf("the original got %q, want its own gate at %q", back.Repository(), original.Repository())
 	}
-	if err := gate.Remove(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path}, opts(gate.WithOpener(detachingOpener))...); err != nil {
+	if err := gate.Remove(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path}, opts()...); err != nil {
 		t.Fatalf("the original cannot remove its own gate: %v", err)
 	}
 }
@@ -381,7 +379,7 @@ func TestACopyCannotRemoveTheOriginalsRecordlessGate(t *testing.T) {
 	copyTree(t, wc.path, duplicate)
 	removeRecord(t, original.Repository())
 
-	err = gate.Remove(ctx(t), gate.Spec{Home: home, WorkingPath: duplicate}, opts(gate.WithOpener(detachingOpener))...)
+	err = gate.Remove(ctx(t), gate.Spec{Home: home, WorkingPath: duplicate}, opts()...)
 	if !errors.Is(err, gate.ErrGateClaimed) {
 		t.Fatalf("Remove from the copy = %v, want ErrGateClaimed", err)
 	}
@@ -423,7 +421,7 @@ func TestAGateWhoseRecordWasLostAndRebuiltIsRemovable(t *testing.T) {
 		t.Fatalf("Initialize to rebuild the record: %v", err)
 	}
 
-	if err := gate.Remove(ctx(t), spec, opts(gate.WithOpener(detachingOpener))...); err != nil {
+	if err := gate.Remove(ctx(t), spec, opts()...); err != nil {
 		t.Fatalf("Remove a gate the working copy's own path hashes to: %v", err)
 	}
 	if _, err := os.Stat(g.Repository()); !os.IsNotExist(err) {
@@ -456,7 +454,7 @@ func TestTheRemedyEachRefusalNamesActuallyCompletes(t *testing.T) {
 	// not its own and is refused.
 	duplicate := filepath.Join(filepath.Dir(wc.path), "copy")
 	copyTree(t, wc.path, duplicate)
-	refused := gate.Remove(ctx(t), gate.Spec{Home: home, WorkingPath: duplicate}, opts(gate.WithOpener(detachingOpener))...)
+	refused := gate.Remove(ctx(t), gate.Spec{Home: home, WorkingPath: duplicate}, opts()...)
 	if !errors.Is(refused, gate.ErrGateClaimed) {
 		t.Fatalf("Remove from the copy = %v, want ErrGateClaimed", refused)
 	}
@@ -474,14 +472,14 @@ func TestTheRemedyEachRefusalNamesActuallyCompletes(t *testing.T) {
 	if own.Repository() == original.Repository() {
 		t.Fatalf("the detached copy took the original's gate at %q", own.Repository())
 	}
-	if err := gate.Remove(ctx(t), gate.Spec{Home: home, WorkingPath: duplicate}, opts(gate.WithOpener(detachingOpener))...); err != nil {
+	if err := gate.Remove(ctx(t), gate.Spec{Home: home, WorkingPath: duplicate}, opts()...); err != nil {
 		t.Fatalf("the copy cannot remove the gate it was given: %v", err)
 	}
 
 	// The other refusal: the original's gate loses its record, so a removal
 	// there refuses too, and the initialization it names completes.
 	removeRecord(t, original.Repository())
-	recordless := gate.Remove(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path}, opts(gate.WithOpener(detachingOpener))...)
+	recordless := gate.Remove(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path}, opts()...)
 	if !errors.Is(recordless, gate.ErrNotAGate) {
 		t.Fatalf("Remove with the record gone = %v, want ErrNotAGate", recordless)
 	}
@@ -494,7 +492,7 @@ func TestTheRemedyEachRefusalNamesActuallyCompletes(t *testing.T) {
 	if got, want := refs(t, original.Repository()), []string{"refs/heads/main " + wc.commit}; !equal(got, want) {
 		t.Fatalf("the repair lost the gate's history: %v, want %v", got, want)
 	}
-	if err := gate.Remove(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path}, opts(gate.WithOpener(detachingOpener))...); err != nil {
+	if err := gate.Remove(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path}, opts()...); err != nil {
 		t.Fatalf("the original still cannot remove its own gate: %v", err)
 	}
 	if _, err := os.Stat(original.Repository()); !os.IsNotExist(err) {
@@ -521,7 +519,7 @@ func TestRemoveTellsAWorkingCopyWhoseGateIsGoneWhatToDo(t *testing.T) {
 		t.Fatalf("delete the gate: %v", err)
 	}
 
-	err = gate.Remove(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path}, opts(gate.WithOpener(detachingOpener))...)
+	err = gate.Remove(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path}, opts()...)
 	if !errors.Is(err, gate.ErrNotAGate) {
 		t.Fatalf("Remove with the gate deleted = %v, want ErrNotAGate", err)
 	}
@@ -533,7 +531,7 @@ func TestRemoveTellsAWorkingCopyWhoseGateIsGoneWhatToDo(t *testing.T) {
 	if _, err := gate.Initialize(ctx(t), spec, opts()...); err != nil {
 		t.Fatalf("the remedy ErrNotAGate names did not complete: %v", err)
 	}
-	if err := gate.Remove(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path}, opts(gate.WithOpener(detachingOpener))...); err != nil {
+	if err := gate.Remove(ctx(t), gate.Spec{Home: home, WorkingPath: wc.path}, opts()...); err != nil {
 		t.Fatalf("Remove after the initialization the refusal named: %v", err)
 	}
 }
@@ -586,7 +584,7 @@ func TestARecordlessGateNamesAnInitializationThatCompletes(t *testing.T) {
 			removeRecord(t, g.Repository())
 			asking := c.move(t, wc)
 
-			refused := gate.Remove(ctx(t), gate.Spec{Home: home, WorkingPath: asking}, opts(gate.WithOpener(detachingOpener))...)
+			refused := gate.Remove(ctx(t), gate.Spec{Home: home, WorkingPath: asking}, opts()...)
 			if !errors.Is(refused, gate.ErrNotAGate) {
 				t.Fatalf("Remove with the record gone = %v, want ErrNotAGate", refused)
 			}
@@ -620,7 +618,7 @@ func TestARecordlessGateNamesAnInitializationThatCompletes(t *testing.T) {
 			if got, want := refs(t, repaired.Repository()), []string{"refs/heads/main " + wc.commit}; !equal(got, want) {
 				t.Fatalf("the repair lost the gate's history: %v, want %v", got, want)
 			}
-			if err := gate.Remove(ctx(t), gate.Spec{Home: home, WorkingPath: asking}, opts(gate.WithOpener(detachingOpener))...); err != nil {
+			if err := gate.Remove(ctx(t), gate.Spec{Home: home, WorkingPath: asking}, opts()...); err != nil {
 				t.Fatalf("the removal after the initialization the refusal named: %v", err)
 			}
 			if _, err := os.Stat(g.Repository()); !os.IsNotExist(err) {
@@ -655,9 +653,10 @@ func TestEveryRemovalRefusalLeavesTheGateRefusingPushes(t *testing.T) {
 			name: "the working copy cannot detach",
 			refuse: func(_ *testing.T, _ string, _ workingCopy, _ *gate.Gate,
 				opts func(...gate.Option) []gate.Option) ([]gate.Option, error) {
-				// The default opener cannot remove a remote, which is refused
-				// after the gate has been obtained.
-				return opts(), gate.ErrDetachUnsupported
+				// A working copy that cannot give the remote up is refused
+				// after the gate has been obtained. The product's own working
+				// copy can, so this is the one case that needs an opener.
+				return opts(gate.WithOpener(attachedOpener)), gate.ErrDetachUnsupported
 			},
 		},
 		{
@@ -665,7 +664,7 @@ func TestEveryRemovalRefusalLeavesTheGateRefusingPushes(t *testing.T) {
 			refuse: func(t *testing.T, _ string, _ workingCopy, g *gate.Gate,
 				opts func(...gate.Option) []gate.Option) ([]gate.Option, error) {
 				removeRecord(t, g.Repository())
-				return opts(gate.WithOpener(detachingOpener)), gate.ErrNotAGate
+				return opts(), gate.ErrNotAGate
 			},
 		},
 		{
@@ -674,7 +673,7 @@ func TestEveryRemovalRefusalLeavesTheGateRefusingPushes(t *testing.T) {
 				opts func(...gate.Option) []gate.Option) ([]gate.Option, error) {
 				writeFile(t, filepath.Join(g.Repository(), recordName),
 					fmt.Sprintf(`{"version":99,"id":%q,"workingPath":%q}`, g.ID(), g.WorkingPath()))
-				return opts(gate.WithOpener(detachingOpener)), gate.ErrMalformedRecord
+				return opts(), gate.ErrMalformedRecord
 			},
 		},
 		{
@@ -685,7 +684,7 @@ func TestEveryRemovalRefusalLeavesTheGateRefusingPushes(t *testing.T) {
 				copyTree(t, wc.path, duplicate)
 				writeFile(t, filepath.Join(g.Repository(), recordName),
 					fmt.Sprintf(`{"version":1,"id":%q,"workingPath":%q}`, g.ID(), resolved(t, duplicate)))
-				return opts(gate.WithOpener(detachingOpener)), gate.ErrGateClaimed
+				return opts(), gate.ErrGateClaimed
 			},
 		},
 	}
@@ -852,7 +851,7 @@ func TestASealThatFailsIsReportedEvenBehindARefusal(t *testing.T) {
 				fmt.Sprintf(`{"version":1,"id":%q,"workingPath":%q}`, g.ID(), resolved(t, duplicate)))
 			c.damage(t, g.Repository())
 
-			err = gate.Remove(ctx(t), spec, opts(gate.WithOpener(detachingOpener))...)
+			err = gate.Remove(ctx(t), spec, opts()...)
 			if !errors.Is(err, gate.ErrGateClaimed) {
 				t.Fatalf("Remove error = %v, want ErrGateClaimed", err)
 			}

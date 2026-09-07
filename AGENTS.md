@@ -278,6 +278,54 @@ Each has cost this repository more than one round of review.
   reported for being wrong through the ordinary review path. Read its `doc.go`
   before changing what fires, and for the residual gaps: the granularity is the
   path rather than the line, and a trace's reason is recorded, not verified.
+- `internal/home` owns the on-disk layout PRD section 8 gives one root, and the
+  exclusive lock that makes a home have exactly one service. No other package
+  spells a path under the root, with one deliberate exception: `internal/gate`
+  composes `<home>/repos/<id>.git` itself, so this package does not. The lock is
+  an operating-system lock rather than a file naming a process, because the
+  property PRD section 8 asks for is that it cannot go stale after a hard kill.
+  Read its `doc.go` for the residual gaps: an advisory lock binds only the
+  processes that ask for it, and two roots naming one directory are two homes.
+- `internal/redact` is the one owner of credential removal, which
+  `internal/store` refuses to open without and `internal/vcs` and
+  `internal/forge` take. It recognizes a credential in a URL's userinfo and
+  nothing else, and says so; adding a shape means adding it there, never a
+  second remover at a call site.
+- `internal/machine` owns the shapes a structured answer takes, the three exit
+  codes, and the outcome vocabulary. It composes records rather than restating
+  them: a run is a `store.Run`, a report is a `findings.Report`, so no wire
+  shape becomes a second owner of a record. `Outcome` is a closed set and
+  `OutcomeOf` is the one translation from where a run stopped; `OutcomePassed`
+  has no producer here, because nothing in this build records that a pull
+  request merged.
+- `internal/service` is the background service PRD section 8's process model
+  puts at the centre of a home. It decides nothing: `internal/graph` executes,
+  `internal/pipeline` is the topology, `internal/runs` owns the record,
+  `internal/checkpoints` makes the position durable, and this wires them. Three
+  things there are load-bearing. It takes the home's lock before recovery and
+  before binding the socket, in that order. It reconciles every unfinished run
+  against its checkpoint on open, because a record saying running against a
+  checkpoint saying halted is a run nobody can answer. And containment is a
+  process group this service registered through `StageStarted`, never anything
+  a caller says about itself; nothing calls that yet, so the guard protects
+  nothing today, which `doc.go` states rather than implies. Read `doc.go` for
+  that and for the repository configuration layer it does not read.
+- `internal/cli` is the command surface, and its verb table is PRD section 9's
+  table and nothing else. A verb that section does not describe is a finding to
+  raise against the specification, not a row to add: `cli_test.go` holds both
+  halves of that, the commands it names and the plausible ones it does not.
+  Answering a hold and running the service in the foreground are flags on the
+  commands that section does name. A verb that acts on a run calls the service;
+  a verb whose job includes reporting that the service is down does not.
+  `cmd/assistant` is the process boundary and holds no behaviour, so a test
+  drives `cli.Run` with its own streams rather than a subprocess.
+- `internal/stages` is where the nine stage bodies go, and it holds none of
+  them. Each field is `Pending`, which reads nothing and reports one `ask`
+  finding, so P3 holds the stage for a person and no stage reports a pass it
+  did not establish. The one owner of which stages exist is the `written` table
+  there: `All` places implementations from it and `Implemented` reports it, so
+  adding a body is adding an entry. `PendingFixer` is the same answer for the
+  fix path, and it fails rather than summarizing.
 - `internal/fixture` builds the adversarial subject repository the end-to-end
   harness validates against, and records beside each planted condition what it
   must produce, down to the substrings the message has to carry. It is the one

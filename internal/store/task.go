@@ -21,27 +21,27 @@ const (
 // Task is the authoritative record of one worker's assignment.
 type Task struct {
 	// ID is the caller's identifier for the task.
-	ID string
+	ID string `json:"id"`
 	// Shape is which of the two shapes this task is.
-	Shape TaskShape
+	Shape TaskShape `json:"shape"`
 	// Project is what the task is for.
-	Project string
+	Project string `json:"project"`
 	// Mode is how the worker was launched, in the caller's own notation.
-	Mode string
+	Mode string `json:"mode"`
 	// WorktreePath is the isolated copy the worker was given. PRD principle
 	// P11 says isolation is asserted at launch rather than inferred from this
 	// field; recording it is what lets a cleanup proof name what it refused to
 	// remove.
-	WorktreePath string
+	WorktreePath string `json:"worktree_path"`
 	// SessionRef points at the terminal session, if one exists yet.
-	SessionRef Optional[string]
+	SessionRef Optional[string] `json:"session_ref"`
 	// RunID names the validation run the task produced, if it has produced
 	// one.
-	RunID Optional[string]
+	RunID Optional[string] `json:"run_id"`
 	// PullRequest names the pull request the task produced, if any.
-	PullRequest Optional[string]
+	PullRequest Optional[string] `json:"pull_request"`
 	// CreatedAt is when the task was recorded.
-	CreatedAt time.Time
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // CreateTask records a new task and its opening state, in one transaction. A
@@ -107,6 +107,42 @@ func (s *Store) Task(ctx context.Context, id string) (Task, error) {
 		return Task{}, fmt.Errorf("store: reading task %s: %w", id, err)
 	}
 	return t, nil
+}
+
+// Tasks returns every task, newest first. PRD section 9's fleet view lists
+// them with their resolved current state, which is TaskState's to answer for
+// each one: this returns the records and says nothing about where any of them
+// stands, per P8.
+func (s *Store) Tasks(ctx context.Context) ([]Task, error) {
+	if err := s.live(); err != nil {
+		return nil, err
+	}
+	rows, err := s.read.QueryContext(ctx, `
+		SELECT id, shape, project, mode, worktree_path, session_ref, run_id, pull_request, created_at
+		FROM task ORDER BY created_at DESC, id DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("store: listing tasks: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []Task
+	for rows.Next() {
+		var t Task
+		var shape, created string
+		if err := rows.Scan(&t.ID, &shape, &t.Project, &t.Mode, &t.WorktreePath,
+			&t.SessionRef, &t.RunID, &t.PullRequest, &created); err != nil {
+			return nil, fmt.Errorf("store: listing tasks: %w", err)
+		}
+		t.Shape = TaskShape(shape)
+		if t.CreatedAt, err = decodeTime(created); err != nil {
+			return nil, fmt.Errorf("store: listing tasks: %w", err)
+		}
+		out = append(out, t)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: listing tasks: %w", err)
+	}
+	return out, nil
 }
 
 // SetTaskSession records the terminal session the task is attached to.
