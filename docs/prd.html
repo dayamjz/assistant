@@ -1715,8 +1715,9 @@ flowchart TB
         advanced is reported rather than advanced a second time, and that report can be
         <code>executing</code>: attaching asks where a run stands, and that it is moving is an answer
         to that. A caller never answers <code>executing</code>, because there is nothing to answer.
-        Its next action is to read the run again after a pause, since no call waits for it to reach
-        its next decision.
+        Its next action is to attach, which carries the run on and blocks until its next decision -
+        unless the service is already advancing it, where the answer comes at once and the caller
+        pauses before asking again.
       </p>
     </div>
   </div>

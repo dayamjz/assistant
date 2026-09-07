@@ -58,9 +58,11 @@ const (
 	// OutcomeCancelled is a run a person ended at a hold. It is terminal, and
 	// the work is not undone: the run stopped.
 	OutcomeCancelled Outcome = "cancelled"
-	// OutcomeExecuting is a run that is advancing right now. It is not a
+	// OutcomeExecuting is a run whose execution has not finished. It is not a
 	// failure and not terminal, and no decision is open: the run is between
-	// two of them, in a stage body that has not finished.
+	// two of them, in a stage body that has not finished. Usually a segment is
+	// in flight; a run whose segment stopped without settling stands there
+	// too, until a call carries it on.
 	//
 	// Only an answer that reported the run rather than advancing it carries
 	// it, because a call that advanced one returns where that run stopped.
@@ -186,7 +188,7 @@ var nextActions = map[Outcome]string{
 	OutcomePassed:       "Nothing. The change is merged or closed.",
 	OutcomeFailed:       "Read the reason. A run a bound parked is taken further by forking it or by giving it more budget; a run that could not proceed needs the failure fixed and a fresh run.",
 	OutcomeCancelled:    "Nothing was undone. Start a fresh run when the change is ready again.",
-	OutcomeExecuting:    "Nothing yet. Read the run again after a pause; no call here waits for it to reach its next decision.",
+	OutcomeExecuting:    "Nothing yet. Attach to carry it on - that blocks until the next decision unless this service is already advancing the run, in which case it answers at once and you should pause before asking again.",
 }
 
 // NextAction is what to do about a run that stopped with this outcome. Every
