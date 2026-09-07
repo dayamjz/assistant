@@ -188,6 +188,23 @@ func TestAPassMeansTheSameThingEverywhere(t *testing.T) {
 		What: "a per-run skip takes exactly the stages it named out of that one run, and no others",
 		Clauses: []journey.Clause[machine.Run]{
 			{
+				// The same clause the check above carries, for the same
+				// reason: internal/service answers a run it has no checkpoint
+				// for before it builds any stage view, and a run recorded
+				// passed comes back reporting that whether or not it has one.
+				// Over an empty list every clause below passes having looked
+				// at nothing, and this check would report a per-run skip it
+				// never saw.
+				States: "the answer carries a report for every stage the gate has",
+				Holds: func(run machine.Run) error {
+					if got, want := len(run.Stages), len(stageOrder()); got != want {
+						return fmt.Errorf("the run reported %d stage report(s) and the gate has %d stages, "+
+							"so the clauses below have nothing to be about", got, want)
+					}
+					return nil
+				},
+			},
+			{
 				States: "no stage this run was told to skip ran",
 				Holds: func(run machine.Run) error {
 					for _, stage := range run.Stages {
@@ -232,6 +249,12 @@ func TestAPassMeansTheSameThingEverywhere(t *testing.T) {
 			},
 		},
 		Counterfeits: []journey.Counterfeit[machine.Run]{
+			{Named: "the run carrying the skip came back with no stage reports at all",
+				Break: func(run machine.Run) machine.Run {
+					run = cloneRun(run)
+					run.Stages = nil
+					return run
+				}},
 			{Named: "a stage the run skipped ran anyway", Break: func(run machine.Run) machine.Run {
 				run = cloneRun(run)
 				for i, stage := range run.Stages {
