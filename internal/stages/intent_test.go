@@ -123,7 +123,7 @@ func TestARunWalksPastTheIntentStage(t *testing.T) {
 
 	for _, c := range intentPaths() {
 		if c.start == nil {
-			continue // Only reachable with a reader that fails; see intentPaths.
+			continue // pipeline.NewState refuses this start; see intentPaths.
 		}
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -266,9 +266,11 @@ func TestTheSuppliedBitOverNoTextIsNotAnAuthoritativeIntent(t *testing.T) {
 type intentPath struct {
 	name  string
 	state map[pipeline.Key]graph.Value
-	// start is the run that reaches this path, or nil for a path no run can
-	// reach. The pipeline-level test skips those; the report-level one does
-	// not, because they are exactly the paths nothing else exercises.
+	// start is the run that reaches this path, or nil for a state
+	// pipeline.NewState refuses to start a run from, which is the only way a
+	// path here can be one no run reaches. The pipeline-level test skips
+	// those; the report-level one does not, because they are exactly the
+	// paths nothing else exercises.
 	start *pipeline.Start
 }
 
