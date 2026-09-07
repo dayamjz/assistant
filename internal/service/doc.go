@@ -71,11 +71,11 @@
 // here: report hands it to machine.Run.Decide with the run's record and where
 // its execution stands, and that one call decides the outcome, the advancing
 // fact and the next action together. Nothing in this package chooses an
-// action, and nothing here can: the field is unexported in internal/machine
-// and Decide is the only writer, so a branch added to report cannot hand back
-// an action that disagrees with the outcome beside it. PRD section 9 requires
-// that of the terminal interface, and says why: a stall that looks alive is
-// worse than an error.
+// action, and nothing here can: the field is unexported in internal/machine,
+// so no code here has an assignment site to reach, and a branch added to
+// report cannot hand back an action that disagrees with the outcome beside it.
+// PRD section 9 requires that of the terminal interface, and says why: a stall
+// that looks alive is worse than an error.
 //
 // A run with no checkpoint goes through the same call and not a branch of its
 // own. It has no position, which is an absence rather than a place execution

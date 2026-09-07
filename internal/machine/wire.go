@@ -165,11 +165,21 @@ type Run struct {
 	// Outcome is what a driving agent reads to decide what to do next.
 	Outcome Outcome `json:"outcome"`
 	// nextAction is what to do about this run, which PRD section 9 requires
-	// of every outcome, terminal or not. It is read through NextAction and
-	// written only by Decide, so no surface building an answer can hand back
-	// an action that disagrees with the outcome and the advancing fact it was
-	// decided from. UnmarshalJSON writes it too, because a decoded answer
-	// carries what the peer said rather than a decision made here.
+	// of every outcome, terminal or not. It is read through NextAction, and
+	// this is where what may write it is written down.
+	//
+	// Two things do, and they answer different questions. Decide derives it
+	// from a standing, so a surface building an answer cannot hand back an
+	// action that disagrees with the outcome and the advancing fact beside it.
+	// UnmarshalJSON writes whatever next_action a document carried, because a
+	// decoded answer relays what the answering service decided rather than a
+	// decision made here; an answer that arrived that way is as consistent as
+	// the service that sent it and no more.
+	//
+	// What the field being unexported buys is a package boundary rather than a
+	// property of this package: no code outside internal/machine can assign
+	// it, so a surface like internal/service's report has no assignment site
+	// to forget.
 	nextAction string
 	// Progress is where the run's execution stood at its last checkpoint. It
 	// is absent for a run that has not been executed yet, which is a different
@@ -196,8 +206,8 @@ type Run struct {
 	// a reader did not already have from the outcome. Where it is load-bearing
 	// is OutcomeExecuting, which covers a run in flight, a run standing still
 	// at a position, and a run with no position at all; NextActionOf is where
-	// this fact chooses between them, and Decide is the only way it and the
-	// action reach an answer together.
+	// this fact chooses between them, and Decide is what puts it and the
+	// action into an answer together when a surface builds one.
 	Advancing bool `json:"advancing"`
 	// Position is the node that has not run, empty exactly when the run
 	// completed.
@@ -238,15 +248,15 @@ func (r Run) NextAction() string { return r.nextAction }
 // Decide fills in what this answer says about the run: the outcome, whether
 // anything is advancing it, and what to do next, all from one standing.
 //
-// It is the only writer of the next action a surface has, because the field is
-// unexported and this package exports no other way to set it. A surface cannot
-// hardcode an action beside an outcome it contradicts, or add a branch that
-// forgets to set one, because there is no assignment site to reach: the answer
-// either went through here or carries the zero value.
+// It is how a surface that builds an answer gets a next action, and the three
+// come from one input, so an action cannot be put behind an outcome it
+// contradicts and a branch that forgot to derive one would leave the zero
+// value rather than a stale sentence. What else writes the field, and what the
+// unexported field does and does not buy, is on nextAction itself.
 //
 // What that does not make unrepresentable is the outcome and the advancing
 // fact themselves. Both are exported, so a caller may write them after this
-// returns; what it cannot do is put an action behind them.
+// returns; the action is the one it has no assignment site for.
 func (r Run) Decide(s Standing) Run {
 	r.Outcome = OutcomeOf(s)
 	r.Advancing = s.Advancing
@@ -254,9 +264,9 @@ func (r Run) Decide(s Standing) Run {
 	return r
 }
 
-// MarshalJSON writes the run with its next action, which is unexported so that
-// only Decide can put one there. The shape is the exported fields plus that
-// one, so what travels is what a caller decodes.
+// MarshalJSON writes the run with its next action, which is unexported and so
+// would not travel on its own. The shape is the exported fields plus that one,
+// so what travels is what a caller decodes.
 //
 // It encodes with HTML escaping off for the reason Encoder gives: a run's
 // answer carries the most agent-written text of any shape here - intents,
@@ -280,8 +290,7 @@ func (r Run) MarshalJSON() ([]byte, error) {
 
 // UnmarshalJSON reads a run back, including the next action the answering
 // service decided. A decoded answer reports what that service said rather than
-// a decision made here, so this is the one place a next action arrives without
-// going through Decide.
+// a decision made here; nextAction says why that is deliberate.
 func (r *Run) UnmarshalJSON(data []byte) error {
 	type fields Run
 	var read struct {
