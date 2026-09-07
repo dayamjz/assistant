@@ -242,7 +242,10 @@ func listRuns(ctx context.Context, in *invocation) (any, error) {
 
 // rerun starts a fresh run of the branch this working copy is standing on,
 // from that branch's last known head, inheriting the intent recorded there,
-// and blocks on the same terms as attaching does.
+// and blocks while it advances that run, answering at its next decision point
+// or a terminal outcome. Attaching's exception is not one a rerun reaches: a
+// branch whose run is still in flight is refused rather than reported, so this
+// never answers with a run still executing.
 //
 // The branch is the working copy's, the same way attaching and status read it,
 // so a caller never restarts a branch they are not on.

@@ -186,7 +186,7 @@ var nextActions = map[Outcome]string{
 	OutcomePassed:       "Nothing. The change is merged or closed.",
 	OutcomeFailed:       "Read the reason. A run a bound parked is taken further by forking it or by giving it more budget; a run that could not proceed needs the failure fixed and a fresh run.",
 	OutcomeCancelled:    "Nothing was undone. Start a fresh run when the change is ready again.",
-	OutcomeExecuting:    "Nothing yet. Attach to the run to wait for its next decision, or read it again in a moment.",
+	OutcomeExecuting:    "Nothing yet. Read the run again after a pause; no call here waits for it to reach its next decision.",
 }
 
 // NextAction is what to do about a run that stopped with this outcome. Every

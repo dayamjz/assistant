@@ -113,7 +113,9 @@ func startInputs(req machine.StartRequest) []string {
 
 // rerun starts a fresh run of the branch the caller is standing on, from that
 // branch's last known head and inheriting the intent recorded there, and
-// blocks on the same terms as start.
+// blocks while it advances that run, answering at its next decision point or a
+// terminal outcome. It never answers with a run still executing, because the
+// branch it would report one for is the branch it refuses.
 //
 // The branch is read from the working copy, exactly as start reads it. A verb
 // that reached for the repository's newest run instead would restart a branch
