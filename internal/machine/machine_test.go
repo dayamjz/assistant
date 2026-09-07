@@ -320,35 +320,51 @@ func TestARunWithNoRecordedPositionHasNotFailed(t *testing.T) {
 // both answers to whether anything is advancing the run, so a branch that
 // decided from two of the three fails here rather than in a fourth direction.
 //
-// A sweep is only worth what it swept, so this one is held to a positive
-// control. A sweep that walked nothing, or that only ever reached standings
-// with one answer between them, would pass every assertion below without
-// checking anything, and its green would be indistinguishable from its being
-// broken. The control names the three answers OutcomeExecuting has and the
-// count of standings that must be reached, and it fails when any of them is
-// missing.
+// A sweep is only worth what it swept, so the control below is derived from
+// the sets the owning packages define rather than from the slices this test
+// builds. Comparing what was reached against the lengths of those slices would
+// be circular: truncating an input shrinks both sides and the check still
+// passes. store.RunStatuses is internal/store's own closed set, definedStatuses
+// reads internal/graph's own naming, and the two standings a checkpointless
+// run has are named outright, so a sweep that walked nothing, walked a
+// truncated axis, or held an axis constant fails rather than passes.
 func TestNoAnswerContradictsWhatIsAdvancingTheRun(t *testing.T) {
 	t.Parallel()
-	executions := []machine.Execution{machine.ExecutionUnrecorded()}
-	for _, status := range []graph.Status{
-		graph.StatusInvalid, graph.StatusRunning, graph.StatusCompleted, graph.StatusHalted,
-		graph.StatusRoundsExhausted, graph.StatusBudgetExhausted, graph.StatusConverged,
-	} {
-		executions = append(executions, machine.ExecutionAt(status, graph.State{}))
+	type place struct {
+		status    graph.Status
+		recorded  bool
+		execution machine.Execution
+	}
+	places := []place{{execution: machine.ExecutionUnrecorded()}}
+	for _, status := range definedStatuses(t) {
+		places = append(places, place{
+			status:    status,
+			recorded:  true,
+			execution: machine.ExecutionAt(status, graph.State{}),
+		})
 	}
 	records := append(store.RunStatuses(), store.RunStatus("invented"))
-	swept := 0
+
+	reachedRecord := map[store.RunStatus]bool{}
+	reachedStatus := map[graph.Status]bool{}
+	reachedUnrecorded := map[bool]bool{}
 	actions := map[string]int{}
 	for _, record := range records {
-		for _, execution := range executions {
+		for _, where := range places {
 			for _, advancing := range []bool{true, false} {
-				standing := machine.Standing{Record: record, Execution: execution, Advancing: advancing}
+				standing := machine.Standing{Record: record, Execution: where.execution, Advancing: advancing}
 				answer := machine.Run{}.Decide(standing)
-				swept++
+				reachedRecord[record] = true
+				if where.recorded {
+					reachedStatus[where.status] = true
+				} else {
+					reachedUnrecorded[advancing] = true
+				}
 				actions[answer.NextAction()]++
+
 				if strings.TrimSpace(answer.NextAction()) == "" {
 					t.Fatalf("a %s run, recorded position %v, advancing=%v says nothing about what to do",
-						record, execution.Recorded(), advancing)
+						record, where.recorded, advancing)
 				}
 				if answer.Advancing != advancing {
 					t.Fatalf("the answer reports advancing=%v for a run standing advancing=%v",
@@ -365,14 +381,28 @@ func TestNoAnswerContradictsWhatIsAdvancingTheRun(t *testing.T) {
 		}
 	}
 
-	// The positive control. Every standing the loops describe was reached, and
-	// the three answers an executing run has were each produced by one of them:
-	// wait, attach and carry it on, and end it because there is nothing to
-	// carry on from. A sweep that reached fewer would be asserting over a
-	// domain narrower than the one it claims.
-	if want := len(records) * len(executions) * 2; swept != want {
-		t.Fatalf("the sweep reached %d standings, want the %d the domain has", swept, want)
+	// The control. Its expectations come from internal/store and internal/graph
+	// rather than from the slices above, so an axis that was truncated, held
+	// constant, or never walked leaves something here unreached.
+	for _, record := range store.RunStatuses() {
+		if !reachedRecord[record] {
+			t.Fatalf("the sweep never reached a %s run, so nothing here checked one", record)
+		}
 	}
+	for _, status := range definedStatuses(t) {
+		if !reachedStatus[status] {
+			t.Fatalf("the sweep never reached a run standing at a %s checkpoint", status)
+		}
+	}
+	for _, advancing := range []bool{true, false} {
+		if !reachedUnrecorded[advancing] {
+			t.Fatalf("the sweep never reached a run with no recorded position and advancing=%v", advancing)
+		}
+	}
+
+	// And the three answers an executing run has were each produced by one of
+	// the standings: wait, attach and carry it on, and end it because there is
+	// nothing to carry on from.
 	unrecordedAndStill := machine.NextActionOf(machine.Standing{
 		Record:    store.RunRunning,
 		Execution: machine.ExecutionUnrecorded(),
@@ -389,6 +419,30 @@ func TestNoAnswerContradictsWhatIsAdvancingTheRun(t *testing.T) {
 	if unrecordedAndStill == machine.OutcomeExecuting.NextActionFor(false) {
 		t.Fatal("a run with no position and a run standing at one are told the same thing")
 	}
+}
+
+// definedStatuses is every graph.Status this build defines, read off that
+// package's own naming rather than listed here.
+//
+// internal/graph exports no set of its statuses, and a list written in this
+// file would be one more thing to keep in step - and would make the control
+// above circular again, since the sweep would range over the same list it is
+// checked against. Status.String names the ones the package defines and falls
+// back to a numbered form for the rest, so the fallback is what bounds this.
+func definedStatuses(t *testing.T) []graph.Status {
+	t.Helper()
+	var defined []graph.Status
+	for n := range 32 {
+		status := graph.Status(n)
+		if strings.HasPrefix(status.String(), "status(") {
+			continue
+		}
+		defined = append(defined, status)
+	}
+	if len(defined) == 0 {
+		t.Fatal("internal/graph names no statuses, so this test would sweep nothing")
+	}
+	return defined
 }
 
 // A run's answer carries the most agent-written text of any shape here, and it

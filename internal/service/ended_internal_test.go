@@ -231,14 +231,14 @@ func newHeldService(t *testing.T) *heldService {
 		t.Fatalf("opening the service: %v", err)
 	}
 	held.service = running
-	// Registered before the close below and so run before it: a failure while
-	// the body is still held would otherwise leave the teardown waiting on a
-	// stage nothing is going to release.
 	t.Cleanup(func() {
 		if err := running.Close(); err != nil {
 			t.Errorf("closing the service: %v", err)
 		}
 	})
+	// Registered after the service, so it runs before the service is closed. A
+	// test that fails while the body is still held would otherwise leave the
+	// teardown waiting on a stage nothing is going to release.
 	t.Cleanup(held.let)
 
 	if _, err := running.store.UpsertRepository(t.Context(), store.Repository{

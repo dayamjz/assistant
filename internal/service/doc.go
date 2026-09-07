@@ -130,18 +130,14 @@
 // rather than a read that could be stale, and it is what carryOn's refusal
 // rests on.
 //
-// It bounds that segment and no other, and what it leaves open is disclosed
-// rather than implied. The segment already inside a node when the ending is
-// recorded still has to return: cancel signals it and does not wait for it,
-// which cancel's own documentation states, so execution can outlast the answer
-// by as long as that node takes to notice. And a caller whose read of the run's
-// record predates the ending reaching that record can still advance the run
-// once the slot is given back; the bound is that commit rather than the moment
-// the ending was recorded in the slot, because cancel does the first and then
-// the second. A continuation this service started is one of those readers and
-// not only a producer of segments: it reads the record through attach, and a
-// segment it starts is not one the ending marked, so carryOn may carry that
-// one on. endRun holds the full list.
+// It bounds that segment and no other. What it leaves open is a segment
+// already inside a node when the ending is recorded, and a claim made from a
+// record read that predates the ending reaching the record - which is a later
+// moment than the ending being recorded in the slot, because cancel records in
+// the slot first and moves the record second. A continuation this service
+// started is one of those readers and not only a producer of segments, because
+// it reads the record through attach. endRun writes that residual down in
+// full, and is the one owner of it; nothing here restates it.
 //
 // A continuation cannot cause another, and that is structural too. It runs
 // under this service's own context, so the only contexts that can end its

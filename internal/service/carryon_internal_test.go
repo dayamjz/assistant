@@ -102,6 +102,9 @@ func TestAnEndingThroughTheProtocolIsOrderedAgainstTheSegmentItEnds(t *testing.T
 		if !s.isAdvancing("run") {
 			t.Fatal("a run whose slot a segment holds is not reported as advancing")
 		}
+		if err := s.claim("run", func() {}); !errors.Is(err, ErrRunAdvancing) {
+			t.Fatalf("a second segment was refused the slot with %v, want the run being advanced", err)
+		}
 
 		forget := s.endRun("run")
 		defer forget()
@@ -121,8 +124,16 @@ func TestAnEndingThroughTheProtocolIsOrderedAgainstTheSegmentItEnds(t *testing.T
 		if s.isAdvancing("run") {
 			t.Fatal("a slot standing for an ending reports a segment executing under it")
 		}
-		if err := s.claim("run", func() {}); !errors.Is(err, ErrRunAdvancing) {
-			t.Fatalf("a segment took the slot of a run whose ending was being written: %v", err)
+		// The refusal says what the slot holds. An ending is not a run being
+		// advanced, and isAdvancing answers false for this same slot, so
+		// borrowing that message would hand a caller the opposite of what the
+		// other surface reports about it.
+		refused := s.claim("run", func() {})
+		if !errors.Is(refused, ErrRunEnding) {
+			t.Fatalf("a segment took the slot of a run whose ending was being written: %v", refused)
+		}
+		if errors.Is(refused, ErrRunAdvancing) {
+			t.Fatalf("a run being ended is refused as one that is advancing: %v", refused)
 		}
 
 		// A second caller ending the same run finds no segment under that
