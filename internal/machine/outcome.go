@@ -9,23 +9,16 @@ import (
 // Outcome is what a driving agent reads to decide what to do next. The set is
 // closed, and every member is one row of the table below.
 //
-// PRD section 9's machine interface names four: checks-passed, passed, and
-// failure and cancellation, which it requires to be terminal and to carry a
-// next action. This set has six, and the two additions are here for one
-// reason: that list describes what a BLOCKING call answers with, and a
-// blocking call cannot return while the run is still moving or before it has
-// been asked anything.
-//
-// OutcomeDecision is the first addition. The section makes a start or a
-// response block "until the next decision point or a terminal outcome", so a
-// decision point is an answer it names without naming an outcome for.
-// OutcomeExecuting is the second, and it exists for the reads the section's
-// contract does not cover: reporting one run, a status, and attaching to a run
-// this service is already advancing, none of which wait.
-//
-// That is a deviation from the specification, and it is recorded here rather
-// than closed quietly: it is a finding to raise against section 9's outcome
-// list, not a licence this comment grants. Nothing here edits the PRD.
+// PRD section 9's machine interface names these six, in the two groups it
+// divides them into by whether a run is finished with. Four say it is -
+// checks-passed, passed, failure and cancellation - which the section requires
+// to be terminal and to carry a next action, and they are the whole answer to
+// how a run ended rather than the whole set a call can return. No call that
+// advanced a run answers with one still moving, because internal/graph returns
+// at a halt, a completion or a bound. Two say a run is not finished with.
+// OutcomeDecision is the decision point that section has a blocking call
+// return at. OutcomeExecuting is a run still advancing, and only an answer
+// that reported the run without advancing it can carry it.
 type Outcome string
 
 const (
@@ -65,15 +58,18 @@ const (
 	// OutcomeCancelled is a run a person ended at a hold. It is terminal, and
 	// the work is not undone: the run stopped.
 	OutcomeCancelled Outcome = "cancelled"
-	// OutcomeExecuting is a run that is advancing right now. It is not a
+	// OutcomeExecuting is a run whose execution has not finished. It is not a
 	// failure and not terminal, and no decision is open: the run is between
-	// two of them, in a stage body that has not finished.
+	// two of them, in a stage body that has not finished. Usually a segment is
+	// in flight; a run whose segment stopped without settling stands there
+	// too, until a call carries it on.
 	//
-	// Only a read reaches it, because a blocking call does not return until
-	// the run has stopped. Attaching to a run another call is already
-	// advancing is the one that reaches it deliberately - asking where a run
-	// stands is answered by saying that it is moving - and reporting one run
-	// or a branch's status reaches it whenever a segment is in flight.
+	// Only an answer that reported the run rather than advancing it carries
+	// it, because a call that advanced one returns where that run stopped.
+	// Reporting one run or a branch's status reaches it whenever a segment is
+	// in flight, and so does attaching to a run another call is already
+	// advancing, which is the one that reaches it deliberately: asking where a
+	// run stands is answered by saying that it is moving.
 	//
 	// A caller does not answer it. There is nothing to answer, and an agent
 	// that read it as a decision would try.
@@ -184,19 +180,20 @@ func outcomeOfExecution(status graph.Status, state graph.State) Outcome {
 }
 
 // nextActions is what a caller does about each outcome. PRD section 9 requires
-// a terminal outcome to carry one, so this is a row per member rather than a
-// sentence for the cases somebody remembered.
+// every outcome to carry one, terminal or not, so this is a row per member
+// rather than a sentence for the cases somebody remembered.
 var nextActions = map[Outcome]string{
 	OutcomeDecision:     "Answer the decision to carry the run on.",
 	OutcomeChecksPassed: "The gate is done with this change. Ask the person whether to merge it.",
 	OutcomePassed:       "Nothing. The change is merged or closed.",
 	OutcomeFailed:       "Read the reason. A run a bound parked is taken further by forking it or by giving it more budget; a run that could not proceed needs the failure fixed and a fresh run.",
 	OutcomeCancelled:    "Nothing was undone. Start a fresh run when the change is ready again.",
-	OutcomeExecuting:    "Nothing yet. Attach to the run to wait for its next decision, or read it again in a moment.",
+	OutcomeExecuting:    "Nothing yet. Attach to carry it on - that blocks until the next decision unless this service is already advancing the run, in which case it answers at once and you should pause before asking again.",
 }
 
-// NextAction is what to do about a run that stopped with this outcome. Every
-// member has one, so no outcome is answered with silence.
+// NextAction is what to do about a run this outcome describes, whether it has
+// ended or is still moving. Every member has one, so no outcome is answered
+// with silence.
 func (o Outcome) NextAction() string {
 	if action, ok := nextActions[o]; ok {
 		return action

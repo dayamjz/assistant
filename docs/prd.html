@@ -1685,14 +1685,43 @@ flowchart TB
     <table class="table table-sm table-zebra">
       <thead><tr><th class="w-40">Element</th><th>Contract</th></tr></thead>
       <tbody>
-        <tr><td><b>Blocking calls</b></td><td>Starting or responding blocks until the next decision point or a terminal outcome. A long call is working, not stalled, and a run never advances past a decision on its own.</td></tr>
+        <tr><td><b>Blocking calls</b></td><td>Starting or responding blocks until the next decision point or a terminal outcome. A long call is working, not stalled, and a run never advances past a decision on its own. The bare start attaches, so a run already being advanced is reported where it stands rather than advanced twice, and that one call returns <code>executing</code> instead.</td></tr>
         <tr><td><b>Structured output</b></td><td>Machine-readable on standard output, progress on standard error. Control characters are escaped visibly rather than emitted raw.</td></tr>
         <tr><td><b>Stable exit codes</b></td><td>Success and normal decision points; operational failure; incorrect usage. Three meanings, never overloaded.</td></tr>
-        <tr><td><b>Outcomes</b></td><td><code>checks-passed</code> means validated and green but not merged, and it means stop driving and ask the person. <code>passed</code> means merged or closed. Failure and cancellation are terminal and require a next action, never silence.</td></tr>
+        <tr><td><b>Outcomes</b></td><td>Six, in two groups. Four say a run is finished with. <code>checks-passed</code> means validated and green but not merged, and it means stop driving and ask the person. <code>passed</code> means merged or closed. Failure and cancellation are terminal and require a next action, never silence. Two say it is not. <code>decision</code> is the decision point a blocking call returns at, and <code>executing</code> is a run still advancing, which only an answer that reported the run without advancing it can carry. Every outcome carries a next action, terminal or not.</td></tr>
         <tr><td><b>Relay verbatim</b></td><td>A finding that needs a decision is relayed with its full text, unsummarized and unjudged, unless standing consent to resolve unattended was given.</td></tr>
       </tbody>
     </table>
   </div>
+  <div role="alert" class="alert alert-soft mb-6 items-start">
+    <div class="min-w-0">
+      <p class="font-semibold mb-1">Why the terminal four are the whole answer to how a run ended</p>
+      <p class="text-sm opacity-90">
+        The four terminal outcomes answer one question: how did this run end. That is the question a
+        blocking call asks, since starting or responding does not return while the run is still
+        moving, and every way a run can be finished with is one of the four. They were not an
+        incomplete list of run states; they were the complete answer to that question.
+      </p>
+      <p class="text-sm opacity-90 mt-2">
+        A read asks a different one: where does this run stand right now. Reporting status, and
+        reporting one run by identifier, answer without advancing anything, and a run part way
+        through a stage has no terminal answer to give. Reaching for one of the four there says
+        something false about it. <code>executing</code> is the answer that was missing, and it
+        relaxes nothing above it: a call that did advance the run still returns at a decision point
+        or with a terminal outcome.
+      </p>
+      <p class="text-sm opacity-90 mt-2">
+        Attaching straddles the two. It blocks while it advances the run, but a run already being
+        advanced is reported rather than advanced a second time, and that report can be
+        <code>executing</code>: attaching asks where a run stands, and that it is moving is an answer
+        to that. A caller never answers <code>executing</code>, because there is nothing to answer.
+        Its next action is to attach, which carries the run on and blocks until its next decision -
+        unless the service is already advancing it, where the answer comes at once and the caller
+        pauses before asking again.
+      </p>
+    </div>
+  </div>
+
   <div role="alert" class="alert alert-soft mb-6 items-start">
     <div class="min-w-0">
       <p class="font-semibold mb-1">Rich intent is required, not optional</p>

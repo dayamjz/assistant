@@ -20,7 +20,10 @@ import (
 )
 
 // start attaches to the branch's run, or begins one when it has none, and
-// blocks until that run reaches its next decision point or a terminal outcome.
+// blocks while it advances that run, answering at its next decision point or a
+// terminal outcome. A run this service is already advancing is reported where
+// it stands rather than advanced twice, so this is also the call that answers
+// with a run still executing.
 //
 // Attaching rather than creating a second run is what PRD section 9's bare
 // command means by "attach to this branch's active run; with no run, start
@@ -110,7 +113,9 @@ func startInputs(req machine.StartRequest) []string {
 
 // rerun starts a fresh run of the branch the caller is standing on, from that
 // branch's last known head and inheriting the intent recorded there, and
-// blocks on the same terms as start.
+// blocks while it advances that run, answering at its next decision point or a
+// terminal outcome. It never answers with a run still executing, because the
+// branch it would report one for is the branch it refuses.
 //
 // The branch is read from the working copy, exactly as start reads it. A verb
 // that reached for the repository's newest run instead would restart a branch

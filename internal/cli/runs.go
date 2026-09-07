@@ -15,8 +15,10 @@ import (
 //
 // The service decides which of those it is, in one call, because the answer
 // depends on records only it should be reading and writing while it holds the
-// home. That call blocks until the run reaches its next decision point or a
-// terminal outcome, per PRD section 9.
+// home. That call blocks while it advances the run and returns at its next
+// decision point or a terminal outcome, per PRD section 9. A run the service
+// is already advancing is reported as it stands instead, so the answer can be
+// a run still executing.
 //
 // --answer is how a decision is answered without a terminal to answer in. PRD
 // section 9's table gives this command no verb of its own for answering, and
@@ -75,7 +77,7 @@ func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 	if answered {
 		return in.answerDecision(ctx, working, answer)
 	}
-	in.progressf("starting or attaching to the run for this branch; this blocks until it needs a decision")
+	in.progressf("starting or attaching to the run for this branch; this blocks while the run advances")
 	var run machine.Run
 	err = in.callService(ctx, ipc.MethodRunStart, machine.StartRequest{
 		Working:        machine.Working{WorkingPath: working},
@@ -240,7 +242,10 @@ func listRuns(ctx context.Context, in *invocation) (any, error) {
 
 // rerun starts a fresh run of the branch this working copy is standing on,
 // from that branch's last known head, inheriting the intent recorded there,
-// and blocks on the same terms as attaching does.
+// and blocks while it advances that run, answering at its next decision point
+// or a terminal outcome. Attaching's exception is not one a rerun reaches: a
+// branch whose run is still in flight is refused rather than reported, so this
+// never answers with a run still executing.
 //
 // The branch is the working copy's, the same way attaching and status read it,
 // so a caller never restarts a branch they are not on.

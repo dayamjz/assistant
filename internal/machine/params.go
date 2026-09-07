@@ -39,7 +39,9 @@ type RunRequest struct {
 }
 
 // StartRequest starts a run for the branch checked out in a working copy, and
-// blocks until that run reaches its next decision point or a terminal outcome.
+// blocks while it advances that run, answering at its next decision point or a
+// terminal outcome. A run the service is already advancing is reported where
+// it stands rather than advanced twice, so the answer can be OutcomeExecuting.
 type StartRequest struct {
 	Working
 	// Intent is what the change sets out to do, in the caller's own terms.
@@ -61,7 +63,10 @@ type StartRequest struct {
 
 // RerunRequest starts a fresh run of the branch the working copy is standing
 // on, from that branch's last known head, inheriting the intent recorded
-// there, and blocks on the same terms as a start.
+// there, and blocks while it advances that run, answering at its next decision
+// point or a terminal outcome. It has no attach to fall back on: a branch
+// whose run is still in flight is refused rather than reported, so a rerun
+// never answers with a run still executing.
 //
 // The branch is read from the working copy this names, the same way a start
 // reads it, so a rerun never acts on a branch the caller is not on. A branch
