@@ -47,25 +47,41 @@ func requiresIdentifiedPeer(t *testing.T) {
 	}
 }
 
-// requiresLocalSocket skips a check that needs a service, on a platform that
-// has no local socket transport to serve this protocol over.
+// requiresLocalSocket skips a check whose service did not come up, on a
+// platform that has no local socket transport to serve this protocol over.
 //
-// It is the sibling packages' second guard, on their terms: internal/service
-// and internal/cli both carry it, and all three bound it by the same
-// written-down platform predicate, so a failure to serve anywhere the
-// transport does exist stays a failure.
-//
-// It is taken before the service is started rather than after it fails,
-// because a check whose subject is a service that did not come up cannot tell
-// the transport from what it was testing, and because waiting out a readiness
-// timeout to learn what the platform already said is time spent on an answer
-// nobody reads. Skipping first reaches exactly the same set: the predicate is
-// the platform and nothing else.
-func requiresLocalSocket(t *testing.T) {
+// It is the sibling packages' second guard on their terms, and their terms are
+// the whole point: internal/service and internal/cli both take the cause and
+// skip only where a service actually failed, bounded by the same written-down
+// platform predicate, so a failure anywhere the transport does exist stays a
+// failure. Skipping on what happened rather than up front is what keeps this
+// from resting on a platform fact nothing here checks. Go offers a local
+// socket on more platforms than internal/ipc can identify a peer on, and
+// whether one binds here is answered by trying.
+func requiresLocalSocket(t *testing.T, cause error) {
 	t.Helper()
 	if !platformIdentifiesPeers() {
-		t.Skipf("%s has no local socket transport to serve this protocol over, so no check here that "+
-			"needs a service establishes anything", runtime.GOOS)
+		t.Skipf("%s has no local socket transport to serve this protocol over: %v", runtime.GOOS, cause)
+	}
+}
+
+// requiresLocalSocketByPlatform skips a check that starts a service through
+// the command surface, on the platform predicate alone.
+//
+// It is the weaker of the two forms, and it has one caller because that path
+// gets a document back rather than an error: a service refused for its
+// configuration and a service that could not bind both come back as an answer
+// that did not exit successfully, and telling them apart would mean reading
+// the text of one. So this rests on the predicate rather than on what
+// happened, and the platform fact under it - that a service does not come up
+// outside linux and darwin - is not established anywhere in this repository.
+// The consequence is named rather than hidden: where that fact is false, this
+// skips a check that would have run.
+func requiresLocalSocketByPlatform(t *testing.T) {
+	t.Helper()
+	if !platformIdentifiesPeers() {
+		t.Skipf("%s is a platform this harness does not start a service on, because it cannot tell a "+
+			"configuration a service refused from a socket it could not bind", runtime.GOOS)
 	}
 }
 
@@ -140,11 +156,13 @@ func open(t *testing.T, scenario fixture.Scenario, opts ...func(*journey.Options
 // the way a crash kills it, and reports what starting it came to.
 //
 // This and startsService are the two ways a service is started here, and both
-// take the platform guard first, which is what keeps a check from failing for
-// the transport rather than for the product. There are two because a service
-// this harness owns as a child and a service the command surface starts are
-// different things: only the first can be killed at a stage boundary, and only
-// the second answers as a document.
+// take a platform guard, which is what keeps a check from failing for the
+// transport rather than for the product. There are two because a service this
+// harness owns as a child and a service the command surface starts are
+// different things: only the first can be killed at a stage boundary, only the
+// second answers as a document, and only the first hands back an error the
+// guard can be conditioned on. So this one skips on what happened and that one
+// skips on the platform, and their comments say which.
 //
 // The rule they exist for is that no test starts a service another way, and
 // the residual gap is that nothing enforces it. Go cannot close the door on an
@@ -156,8 +174,11 @@ func open(t *testing.T, scenario fixture.Scenario, opts ...func(*journey.Options
 // not, and startsService for one asked for over the surface.
 func serving(t *testing.T, j *journey.Journey) error {
 	t.Helper()
-	requiresLocalSocket(t)
-	return j.Serve()
+	err := j.Serve()
+	if err != nil {
+		requiresLocalSocket(t, err)
+	}
+	return err
 }
 
 // serve starts the service and fails the test unless it came up.
@@ -177,7 +198,7 @@ func serve(t *testing.T, j *journey.Journey) {
 // whole subject is a refusal would hang instead of reporting.
 func startsService(t *testing.T, j *journey.Journey, within time.Duration, args ...string) journey.Answer {
 	t.Helper()
-	requiresLocalSocket(t)
+	requiresLocalSocketByPlatform(t)
 	return j.CommandBounded(j.Dir(), within, args...)
 }
 

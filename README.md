@@ -222,8 +222,10 @@ version it needs. An `internal/fixture` test skips itself when git is not on
 is not either. The `internal/cli`, `internal/service` and `internal/journey`
 tests that drive a run skip on any platform but linux and darwin, because
 `internal/ipc` reads no local socket peer credentials there and so refuses
-every method that drives one. `internal/journey/README.md` records what that
-leaves a green run of the harness establishing on such a platform.
+every method that drives one; all three also skip a test whose service did not
+come up there, because the protocol needs a local socket to be served over.
+`internal/journey/README.md` records what those two leave a green run of the
+harness establishing on such a platform.
 
 `make lint` requires golangci-lint from the v2 series, the line that can read
 this module's `.golangci.yml`. It refuses when the linter is missing or comes
