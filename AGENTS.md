@@ -326,16 +326,20 @@ Each has cost this repository more than one round of review.
   implementations from it and `Implemented` reports it, so adding a body is
   adding an entry. `PendingFixer` is the same answer for the fix path, and it
   fails rather than summarizing. The intent stage is the body that exists, and
-  two things about it generalize. PRD section 5's "this stage never blocks a
+  three things about it generalize. PRD section 5's "this stage never blocks a
   run" is owed by the implementation and not by `internal/pipeline`, which
   refuses to enforce it structurally because a stage that could not hold would
   have to drop an ask finding; every finding it reports is a note, and the test
   runs every path it has and is itself checked against a report that blocks, so
-  the assertion cannot pass vacuously. And a body landing moves where a run
-  first stops, so a test may not name the stage it expects a hold at: the ones
-  in `internal/cli` and `internal/service` read `Implemented` and take the
-  first stage without a body. Its inference seams are unwired on purpose, which
-  its own doc comments give the reason for.
+  the assertion cannot pass vacuously. A body landing moves where a run first
+  stops, so a test may not name the stage it expects a hold at: the ones in
+  `internal/cli` and `internal/service` read `Implemented` and take the first
+  stage without a body. And a stage implements the part of its PRD section the
+  phase list has reached and ships no seam for the rest: the intent stage reads
+  supplied intent and does not infer, because inference is deferred, and what
+  that deferred work inherits is a note in the package documentation rather
+  than an unwired interface. Exported surface whose only caller is work that
+  has not happened is a comment, and it is dropped in review.
 - `internal/fixture` builds the adversarial subject repository the end-to-end
   harness validates against, and records beside each planted condition what it
   must produce, down to the substrings the message has to carry. It is the one

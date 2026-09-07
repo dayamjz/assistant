@@ -44,6 +44,34 @@
 // internal/cli and internal/service read Implemented and take the first stage
 // without a body, which is what a run actually walks to.
 //
+// # Carried forward: the deferred half of the intent stage
+//
+// PRD section 5 gives the intent stage two sources of intent, and this build
+// implements one. Supplied intent is read and reported; inferred intent is
+// not, because the PRD's phase list defers transcript-based intent inference
+// to phase 2 on the grounds that supplying intent explicitly is the mechanism
+// that has to work first.
+//
+// No seam for it ships. An earlier draft of this package exported a transcript
+// source, a recorder, and an options struct that nothing constructed, and they
+// went for the reason Capabilities.Missing went: a declaration nothing reads
+// is a comment, and exported surface that exists so deferred work has
+// somewhere to plug in grows whether or not the work arrives. Whoever builds
+// inference adds the seams it actually uses.
+//
+// What that work inherits is stated here so it is not rediscovered. The intent
+// stage never blocks a run, and inference adds ways to fail that must not
+// change it: transcripts that are missing, a source that cannot read them,
+// material with nothing in it, a summarizer that fails or never answers, and a
+// durable record that cannot be written are all reported and stepped past, not
+// failed. Inferred intent is a low-confidence hint and never acceptance
+// criteria, and nothing may promote it - pipeline.KeyIntentSupplied is a run
+// input, so no stage may declare a write of it. Raw transcript text is never
+// stored; only the derived summary, its source, and its score. The
+// never-blocks tests in intent_test.go extend to cover each new path, and the
+// assertion they use is one another test holds to a report that does block, so
+// adding a path means adding a row rather than adding a second predicate.
+//
 // # Carried forward: who answers a hold
 //
 // internal/pipeline's outcome.go and doc.go describe every hold answer as
@@ -103,13 +131,8 @@ func Pending(name string) pipeline.Implementation {
 // The value is a constructor rather than an Implementation so that a body
 // holding anything per-build is constructed when the pipeline is, on the same
 // terms as pipeline.Implementation.NewBody.
-//
-// The intent stage is built from the zero IntentOptions, which records a
-// supplied intent and infers nothing. Its seams are per-build values and this
-// build supplies none; IntentTranscripts says why that is the deliberate
-// answer today rather than a wiring oversight.
 var written = map[pipeline.Stage]func() pipeline.Implementation{
-	pipeline.StageIntent: func() pipeline.Implementation { return Intent(IntentOptions{}) },
+	pipeline.StageIntent: Intent,
 }
 
 // All returns the nine stages as this build has them: each stage's own body
