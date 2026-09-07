@@ -168,6 +168,22 @@ func handshakeWith(tb testing.TB, self, probeFlag string) string {
 // one this package chose.
 func (a *Agent) Runner() agents.Runner { return a.runner }
 
+// Arguments are what a process has to be given to act as this stand-in, which
+// is what Main reads. Runner already passes them, so a caller that reaches the
+// stand-in through Runner never needs these.
+//
+// They exist for the caller that cannot: a separate process resolves its agent
+// by name off PATH and builds the command line itself, so the only way to
+// reach this stand-in from there is to put a copy of this binary on that PATH
+// and let the resolved entry carry these arguments. internal/agents passes a
+// configured entry's own words to the agent ahead of the flags it manages,
+// which is the seam they travel on.
+//
+// What they do not carry is which binary to run. That is this process's own
+// executable, and a caller wiring the seam above is the one deciding where a
+// copy of it stands, so nothing here states a path it cannot check.
+func (a *Agent) Arguments() []string { return []string{controlFlag + a.control} }
+
 // Calls returns what the stand-in processes recorded, in arrival order.
 //
 // A stand-in records what it was asked before it replies and before it holds,
