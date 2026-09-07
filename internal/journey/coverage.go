@@ -88,16 +88,19 @@ func Coverage() []Established {
 				"because no stage body pushes."},
 		{principles.P7, ReachBinary,
 			"The git template that would choose what a gate is born with is refused by the binary, and " +
-				"the environment channel is shown closed; the refusal itself is what those subtests " +
-				"establish. A whole run is driven over a branch carrying an agent harness installation, " +
+				"the environment channel is shown closed. How the initialization came out is the whole " +
+				"of what those four subtests establish: the refusals refuse with the substrings their " +
+				"conditions record, and the closed channels are not refused. Whether a template hook " +
+				"arrived in the gate is not among it, because no clause there looks at a hook. A whole " +
+				"run is driven over a branch carrying an agent harness installation, and " +
 				"and what that run establishes is that a suppression the adapter does not implement is " +
 				"refused before anything launches. The keys the branch may not set are dropped and " +
 				"reported while the one it may set survives, but that is config.Resolve driven in " +
 				"process beside the run rather than anything the run does. Two things are not " +
 				"established at any reach and no clause claims them: that nothing the branch or the " +
-				"template installed executed, because every planted executable is reached only through " +
-				"a stage body or a push admission declines and this build has neither; and which agent " +
-				"a run resolved, because no shipped surface reports it. The trusted configuration " +
+				"template installed arrived or executed, because every planted executable is reached " +
+				"only through a stage body or a push admission declines and this build has neither; " +
+				"and which agent a run resolved, because no shipped surface reports it. The trusted configuration " +
 				"document is driven at package reach: nothing in this build reads a repository's own " +
 				"configuration from anywhere, which internal/service states, so there is no composition " +
 				"to drive."},

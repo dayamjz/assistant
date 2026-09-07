@@ -48,13 +48,27 @@ func Drives() []Drove {
 		ownership  = "TestACopiedProjectDirectoryDoesNotOwnTheGateItInherited"
 		checks     = "TestAnEmptyCheckListIsNotAPass"
 	)
-	// The four hostile-template conditions share one caveat, stated once, and
-	// no clause anywhere rests on their tripwire file.
-	const noTemplateHookPath = "What the refusal establishes is the refusal itself, with the substrings " +
-		"the condition records. Its tripwire half has no producer: a template's hooks are receive-side, " +
-		"and internal/gate's own pre-receive runs \"assistant gate admit\" and exits on its status " +
-		"before chaining to a preserved hook, so with no gate verb in internal/cli every push is " +
-		"declined and neither a promoted pre-receive nor update nor post-update ever runs."
+	// The four hostile-template conditions share one caveat and split into two
+	// pairs. No clause anywhere rests on their tripwire file, and none of the
+	// four observes a hook at all, so what each establishes is only how the
+	// initialization came out.
+	const noTemplateHookPath = " Whether a hook the template carries arrived in the gate is not " +
+		"established, and neither is whether one ran. No clause looks at the gate's hooks, and the " +
+		"tripwire file has no producer here: a template's hooks are receive-side, and internal/gate's " +
+		"own pre-receive runs \"assistant gate admit\" and exits on its status before chaining to a " +
+		"preserved hook, so with no gate verb in internal/cli every push is declined and neither a " +
+		"promoted pre-receive nor update nor post-update ever runs."
+	// The two refusals: what is established is that the binary refused, and
+	// that the refusal carries the substrings the condition records.
+	const templateRefusalDriven = "What is established is the refusal itself, with the substrings the " +
+		"condition records." + noTemplateHookPath
+	// The two closed channels: neither is a refusal and neither records a
+	// substring, so what is established is that the initialization was not
+	// refused, which is what shows the channel closed rather than caught.
+	const templateChannelClosed = "What is established is that the initialization was not refused, " +
+		"which is what shows this channel closed rather than caught. The condition records no " +
+		"substring and no sentinel, so there is nothing else here to hold a message to." +
+		noTemplateHookPath
 
 	// Every stage condition is undriven for one reason, stated once. A stage
 	// with no body reports one ask finding and holds, so there is nothing for
@@ -78,15 +92,17 @@ func Drives() []Drove {
 		{"refusal-finding-action-unrecognized-review-path", ReachPackage, findings, "As above."},
 
 		{"refusal-template-hooks-at-birth", ReachBinary, gateBirth,
-			"The binary is asked to create a gate under a configuration file naming the hostile template, " +
-				"and refuses with what the condition records. " + noTemplateHookPath},
+			"The binary is asked to create a gate under a configuration file naming the hostile " +
+				"template. " + templateRefusalDriven},
 		{"refusal-template-hooks-on-repair", ReachBinary, gateBirth,
-			"The same file over a gate the binary already created. " + noTemplateHookPath},
+			"The same file over a gate the binary already created. " + templateRefusalDriven},
 		{"closed-template-pre-receive-on-repair", ReachBinary, gateBirth,
-			"The negative case that gives the two refusals their meaning. " + noTemplateHookPath},
+			"The negative case that gives the two refusals their meaning. " + templateChannelClosed +
+				" That the template's pre-receive is neither installed nor preserved at the .local " +
+				"name, which this condition also records, is part of what is not established."},
 		{"closed-git-template-dir-environment", ReachBinary, gateBirth,
-			"The variable is exported into the process that initializes the gate, and the channel is " +
-				"closed before git sees it. " + noTemplateHookPath},
+			"The variable is exported into the process that initializes the gate. " +
+				templateChannelClosed},
 		{"gap-core-hookspath-redirects-the-gate", ReachBinary, gateBirth,
 			"Reported as the gap internal/gate names rather than as a pass: a push is driven through the " +
 				"gate under the redirect and the tripwire says which hook git ran."},

@@ -54,8 +54,14 @@ type birth struct {
 // post-update runs. A clause on the tripwire file would hold whatever a
 // template had installed, so these four subtests carry no such clause and read
 // that file not at all; README.md records the gap among the limits of the
-// binary being driven. The refusals themselves, with the substrings each
-// condition records, are what these subtests establish.
+// binary being driven. Nor does any clause look at the gate's hooks directory,
+// so whether a hook arrived is unestablished as well as whether one ran.
+//
+// What each subtest does establish is how the initialization came out: the two
+// refusals refuse, carrying the substrings their conditions record, and the
+// two closed channels are not refused, which is what shows the channel closed
+// rather than caught. Those two record no substring and no sentinel, so there
+// is nothing else there to hold a message to.
 //
 // The last subtest is the other end of the same question and is not a refusal
 // at all. internal/gate names core.hooksPath as an open gap, and this drives a
@@ -64,9 +70,9 @@ type birth struct {
 //
 // Every attempt gets a working copy and a home of its own, so the sequence one
 // condition needs cannot decide what another one meets. The redirect subtest
-// runs last because it is the one that does make planted hooks fire, and a
-// tripwire file already carrying them would make its own reading of that file
-// say less than it does.
+// runs last because it is the only one that writes to the scenario's shared
+// tripwire file, so a later subtest that read that file would want to run
+// before it rather than after.
 func TestNothingOutsideTheGateChoosesWhatRunsOnAPushToIt(t *testing.T) {
 	principles.Cite(t, principles.P7)
 
@@ -316,13 +322,34 @@ func refuses(t *testing.T, id fixture.ID, want bool, observed birth) {
 		})
 	}
 	check := journey.Check[birth]{
-		What:         string(id) + ": " + firstSentence(condition.Expect.Summary),
+		What:         string(id) + ": " + whatRefusesEstablishes(want),
 		Clauses:      clauses,
 		Counterfeits: counterfeits,
 	}
 	if err := check.Verify(observed); err != nil {
 		t.Fatalf("%v", err)
 	}
+}
+
+// whatRefusesEstablishes says what the clauses refuses builds actually assert,
+// in the terms a failure should be read in.
+//
+// It is written here rather than taken from the condition's recorded Summary.
+// The catalog records what the condition must produce, which is more than this
+// build can observe: those summaries speak of the hooks a template did or did
+// not bring, and no clause here looks at a hook at all. Pasting the summary
+// would put a claim in the text of every failure that nothing under it
+// establishes, so the identifier cites the condition and this says what was
+// checked.
+func whatRefusesEstablishes(want bool) string {
+	const unobserved = " Whether any hook the template carries arrived in the gate, or ran, is not " +
+		"established here: no clause looks, and the test's own doc comment says why."
+	if want {
+		return "creating or repairing a gate under this condition is refused, and the refusal says what " +
+			"the condition records it has to say." + unobserved
+	}
+	return "creating or repairing a gate under this condition is not refused, which is what shows the " +
+		"channel closed rather than caught." + unobserved
 }
 
 // gateJourney returns a journey over a working copy of this scenario's origin
@@ -362,14 +389,4 @@ func scenarioPath(t *testing.T, scenario fixture.Scenario, key string) string {
 		t.Fatalf("scenario %s carries no path named %q", scenario.Name, key)
 	}
 	return path
-}
-
-// firstSentence is the opening sentence of a recorded expectation, for a check
-// that says what it establishes in the catalog's own words without carrying a
-// paragraph.
-func firstSentence(summary string) string {
-	if at := strings.Index(summary, ". "); at > 0 {
-		return summary[:at+1]
-	}
-	return summary
 }
