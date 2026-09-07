@@ -14,8 +14,11 @@ import (
 	"github.com/dayamjz/assistant/internal/principles"
 )
 
-// birth is what one attempt to create or repair a gate answered, and what the
-// planted hooks did about it.
+// birth is what one attempt to create or repair a gate answered.
+//
+// It carries nothing about the planted hooks: no clause built on it could rest
+// on the scenario's tripwire file, for the reason the test's own doc comment
+// gives, so nothing here reads that file.
 type birth struct {
 	// what names the attempt, for a failure that says which one.
 	what string
@@ -23,18 +26,6 @@ type birth struct {
 	refused bool
 	// message is what it was refused with, or what it reported on succeeding.
 	message string
-	// fired is every tripwire the scenario had recorded by the end of the
-	// attempt.
-	fired []string
-	// quiet is the tripwire identifiers this condition records as having to
-	// stay out of that file.
-	//
-	// No clause rests on either, and the test's own doc comment says why: no
-	// push in this build reaches a template's hooks, so an absence clause over
-	// this file would hold whatever a template had installed. They are carried
-	// so that a failure of the clauses that do assert something prints what
-	// the scenario recorded beside it.
-	quiet []string
 }
 
 // TestNothingOutsideTheGateChoosesWhatRunsOnAPushToIt drives the trust anchor
@@ -61,9 +52,10 @@ type birth struct {
 // and internal/cli carries no gate verb. So admission fails, the push is
 // declined, and neither a promoted template pre-receive nor update nor
 // post-update runs. A clause on the tripwire file would hold whatever a
-// template had installed, which is why there is none. The refusals themselves,
-// with the substrings each condition records, are what these subtests
-// establish.
+// template had installed, so these four subtests carry no such clause and read
+// that file not at all; README.md records the gap among the limits of the
+// binary being driven. The refusals themselves, with the substrings each
+// condition records, are what these subtests establish.
 //
 // The last subtest is the other end of the same question and is not a refusal
 // at all. internal/gate names core.hooksPath as an open gap, and this drives a
@@ -86,25 +78,25 @@ func TestNothingOutsideTheGateChoosesWhatRunsOnAPushToIt(t *testing.T) {
 
 	t.Run("closed-git-template-dir-environment", func(t *testing.T) {
 		j, dir := gateJourney(t, scenario)
-		refuses(t, scenario, "closed-git-template-dir-environment", false,
-			attempt(t, scenario, j, dir,
+		refuses(t, "closed-git-template-dir-environment", false,
+			attempt(j, dir,
 				map[string]string{"GIT_TEMPLATE_DIR": scenarioPath(t, scenario, "template-mixed")},
 				"initializing a gate with GIT_TEMPLATE_DIR naming the hostile template"))
 	})
 
 	t.Run("refusal-template-hooks-at-birth", func(t *testing.T) {
 		j, dir := gateJourney(t, scenario)
-		refuses(t, scenario, "refusal-template-hooks-at-birth", true,
-			attempt(t, scenario, j, dir, mixed, "creating a gate under init.templateDir"))
+		refuses(t, "refusal-template-hooks-at-birth", true,
+			attempt(j, dir, mixed, "creating a gate under init.templateDir"))
 	})
 
 	t.Run("on an existing gate", func(t *testing.T) {
 		j, dir := gateJourney(t, scenario)
 		succeeds(t, j.CommandIn(dir, "init", "--default-branch", fixture.DefaultBranch))
-		refuses(t, scenario, "refusal-template-hooks-on-repair", true,
-			attempt(t, scenario, j, dir, mixed, "repairing an existing gate under init.templateDir"))
-		refuses(t, scenario, "closed-template-pre-receive-on-repair", false,
-			attempt(t, scenario, j, dir, preReceiveOnly,
+		refuses(t, "refusal-template-hooks-on-repair", true,
+			attempt(j, dir, mixed, "repairing an existing gate under init.templateDir"))
+		refuses(t, "closed-template-pre-receive-on-repair", false,
+			attempt(j, dir, preReceiveOnly,
 				"repairing an existing gate under a template carrying only pre-receive"))
 	})
 
@@ -276,13 +268,12 @@ const gateRemote = "assistant"
 
 // refuses holds one attempt to the condition internal/fixture recorded for it,
 // with want saying whether the condition is a refusal at all.
-func refuses(t *testing.T, scenario fixture.Scenario, id fixture.ID, want bool, observed birth) {
+func refuses(t *testing.T, id fixture.ID, want bool, observed birth) {
 	t.Helper()
 	condition, err := journey.Condition(id)
 	if err != nil {
 		t.Fatalf("%v", err)
 	}
-	observed.quiet = condition.Expect.TripwiresQuiet
 	clauses := []journey.Clause[birth]{
 		{
 			States: "the attempt came out the way the condition records",
@@ -348,19 +339,17 @@ func gateJourney(t *testing.T, scenario fixture.Scenario) (*journey.Journey, str
 
 // attempt initializes a gate through the binary under an environment of its
 // own and records what happened.
-func attempt(t *testing.T, scenario fixture.Scenario, j *journey.Journey, dir string,
-	env map[string]string, what string) birth {
-	t.Helper()
+//
+// It does not read the scenario's tripwire file. No clause built on what it
+// returns could rest on that file, for the reason the test's own doc comment
+// gives, and reading it anyway would fail these subtests over a value none of
+// them uses.
+func attempt(j *journey.Journey, dir string, env map[string]string, what string) birth {
 	answer := j.CommandWith(dir, env, "init", "--default-branch", fixture.DefaultBranch)
-	fired, err := journey.Fired(scenario)
-	if err != nil {
-		t.Fatalf("reading the scenario's tripwires: %v", err)
-	}
 	return birth{
 		what:    what,
 		refused: answer.Code != machine.ExitOK,
 		message: answer.Message(),
-		fired:   fired,
 	}
 }
 
