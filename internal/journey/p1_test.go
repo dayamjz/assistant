@@ -95,6 +95,14 @@ func TestTheGateDoesNotTouchAnOrdinaryPushToOrigin(t *testing.T) {
 	}
 	observed.canStartRun = report.CanStartRun
 
+	// A commit this subject really carries and the push did not land: the
+	// default branch's tip on the same origin, which the scenario keeps apart
+	// from the branch under validation. The counterfeit that says origin ended
+	// up somewhere nobody pushed puts this there, because rev-parse answers
+	// only with an object it has and a value composed here would show that
+	// clause failing against something git cannot report.
+	elsewhere := gitIn(t, scenario, scenario.Origin, "rev-parse", "refs/heads/"+fixture.DefaultBranch)
+
 	unchanged := journey.Check[consent]{
 		What: "after the product has created a gate for this working copy, an ordinary push to origin " +
 			"reaches the same remote, moves the reference it was asked to move, and starts no run",
@@ -180,7 +188,7 @@ func TestTheGateDoesNotTouchAnOrdinaryPushToOrigin(t *testing.T) {
 				return c
 			}},
 			{Named: "origin ended up at a commit nobody pushed", Break: func(c consent) consent {
-				c.refAfter = strings.Repeat("0", len(c.refAfter))
+				c.refAfter = elsewhere
 				return c
 			}},
 			{Named: "the push to origin started a run", Break: func(c consent) consent {
