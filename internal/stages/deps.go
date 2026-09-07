@@ -37,11 +37,18 @@ import (
 // # The agent is not a Runner, and that is P4
 //
 // Agent is an agents.StageAgent rather than an agents.Runner, and the
-// difference is the whole of P4 at this seam. agents.OpenFixer opens a fixer
-// session from any Runner it is handed, so a body given one reaches the memory
-// P4 keeps the reviewer out of by calling an exported function. A StageAgent
-// carries its runner unexported and offers only Run, so there is nothing here
-// to hand to OpenFixer.
+// difference is what closes P4's route through this struct. agents.OpenFixer
+// opens a fixer session from any Runner it is handed, so a body given one
+// reaches the memory P4 keeps the reviewer out of by calling an exported
+// function. A StageAgent carries its runner unexported and offers only Run, so
+// there is nothing here to hand to OpenFixer.
+//
+// That closes the route and not the question. agents.Resolve and
+// agents.DefaultCatalog are exported too, and Config below carries the ordered
+// agent list Resolve takes, so a body that resolves its own adapter reaches a
+// session without this struct handing it anything. agents.StageAgent's
+// documentation names that gap; nothing here removes it, and no test can see
+// it, because it is not a route out of a value.
 //
 // Nothing on this struct may be, or yield, a route to a fixer session.
 // TestStageDepsIsNoRouteToAFixerSession asks that of the type graph rather

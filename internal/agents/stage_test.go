@@ -41,16 +41,18 @@ func stageAgentRunner(t *testing.T, reply standin.Reply) agents.Runner {
 // asserted over a wrapper that still does its job.
 func TestAStageAgentRunsTheAgentItWraps(t *testing.T) {
 	t.Parallel()
-	runner := stageAgentRunner(t, standin.Text("it narrows the loop bound in Total"))
+	const said = "it narrows the loop bound in Total"
+	runner := stageAgentRunner(t, standin.Text(said))
 
 	result, err := agents.NewStageAgent(runner).Run(
 		t.Context(), agents.PurposeReview, stageAgentInvocation(t))
 	if err != nil {
 		t.Fatalf("the stage agent refused an invocation the runner it wraps accepts: %v", err)
 	}
-	if result.Text == "" {
-		t.Fatal("the stage agent produced no text, so the P4 assertions would be holding " +
-			"of a wrapper that runs nothing")
+	if result.Text != said {
+		t.Fatalf("the stage agent reported %q rather than what the agent said, %q, so the P4 "+
+			"assertions would be holding of a wrapper that does not carry the agent's words back",
+			result.Text, said)
 	}
 }
 
