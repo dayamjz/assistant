@@ -13,8 +13,9 @@ import (
 // divides them into by the question a call asks. Four say a run is finished
 // with - checks-passed, passed, failure and cancellation - which the section
 // requires to be terminal and to carry a next action, and they are the whole
-// answer a blocking call can give, because starting or responding does not
-// return while the run is still moving. Two say a run is not finished with.
+// answer to how a run ended rather than the whole set a call can return. What
+// starting or responding cannot report is a run still moving, because neither
+// returns while the run is still moving. Two say a run is not finished with.
 // OutcomeDecision is the decision point that section has a blocking call
 // return at. OutcomeExecuting is a run still advancing, and only an answer
 // that reported the run without advancing it can carry it.
