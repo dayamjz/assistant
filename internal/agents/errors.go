@@ -30,6 +30,12 @@ var (
 	// invocation that cannot be run as written. A caller may therefore handle
 	// every pre-start refusal alike and still recognize this one.
 	ErrReviewInFixerSession = errors.New("agents: a review may not be answered in a fixer session")
+	// ErrNoStageAgent is returned when a StageAgent that was never given a
+	// runner is asked to run one. The zero value is reachable, because a
+	// StageAgent is a field on a struct a caller builds, and a refusal is what
+	// it owes: a body that silently ran nothing would report a stage that
+	// established something it did not.
+	ErrNoStageAgent = errors.New("agents: this stage agent was never given a runner")
 	// ErrNoAgent is returned by Resolve when no entry in the ordered list
 	// resolved to a runnable agent. It is a refusal before a run starts, not a
 	// degraded run: PRD section 10 requires the run to fail before its first
