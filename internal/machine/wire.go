@@ -1,6 +1,8 @@
 package machine
 
 import (
+	"encoding/json"
+
 	"github.com/dayamjz/assistant/internal/findings"
 	"github.com/dayamjz/assistant/internal/graph"
 	"github.com/dayamjz/assistant/internal/pipeline"
@@ -161,9 +163,13 @@ type Run struct {
 	Record store.Run `json:"record"`
 	// Outcome is what a driving agent reads to decide what to do next.
 	Outcome Outcome `json:"outcome"`
-	// NextAction is what to do about that outcome, which PRD section 9
-	// requires of every outcome, terminal or not.
-	NextAction string `json:"next_action"`
+	// nextAction is what to do about this run, which PRD section 9 requires
+	// of every outcome, terminal or not. It is read through NextAction and
+	// written only by Decide, so no surface building an answer can hand back
+	// an action that disagrees with the outcome and the advancing fact it was
+	// decided from. UnmarshalJSON writes it too, because a decoded answer
+	// carries what the peer said rather than a decision made here.
+	nextAction string
 	// Progress is where the run's execution stood at its last checkpoint. It
 	// is absent for a run that has not been executed yet, which is a different
 	// state from a run that has and is standing still.
@@ -187,9 +193,10 @@ type Run struct {
 	//
 	// False on a run that has ended, or one waiting on an answer, says nothing
 	// a reader did not already have from the outcome. Where it is load-bearing
-	// is OutcomeExecuting, which covers both a run in flight and a run
-	// standing still, and NextActionFor is that outcome's action split at this
-	// fact.
+	// is OutcomeExecuting, which covers a run in flight, a run standing still
+	// at a position, and a run with no position at all; NextActionOf is where
+	// this fact chooses between them, and Decide is the only way it and the
+	// action reach an answer together.
 	Advancing bool `json:"advancing"`
 	// Position is the node that has not run, empty exactly when the run
 	// completed.
@@ -221,6 +228,58 @@ type Run struct {
 	// that created the run it reports and every answer to a call that carried
 	// none of those inputs.
 	NotApplied []string `json:"not_applied,omitempty"`
+}
+
+// NextAction is what to do about this run, which PRD section 9 requires of
+// every outcome, terminal or not.
+func (r Run) NextAction() string { return r.nextAction }
+
+// Decide fills in what this answer says about the run: the outcome, whether
+// anything is advancing it, and what to do next, all from one standing.
+//
+// It is the only writer of the next action a surface has, because the field is
+// unexported and this package exports no other way to set it. A surface cannot
+// hardcode an action beside an outcome it contradicts, or add a branch that
+// forgets to set one, because there is no assignment site to reach: the answer
+// either went through here or carries the zero value.
+//
+// What that does not make unrepresentable is the outcome and the advancing
+// fact themselves. Both are exported, so a caller may write them after this
+// returns; what it cannot do is put an action behind them.
+func (r Run) Decide(s Standing) Run {
+	r.Outcome = OutcomeOf(s)
+	r.Advancing = s.Advancing
+	r.nextAction = NextActionOf(s)
+	return r
+}
+
+// MarshalJSON writes the run with its next action, which is unexported so that
+// only Decide can put one there. The shape is the exported fields plus that
+// one, so what travels is what a caller decodes.
+func (r Run) MarshalJSON() ([]byte, error) {
+	type fields Run
+	return json.Marshal(struct {
+		fields
+		NextAction string `json:"next_action"`
+	}{fields(r), r.nextAction})
+}
+
+// UnmarshalJSON reads a run back, including the next action the answering
+// service decided. A decoded answer reports what that service said rather than
+// a decision made here, so this is the one place a next action arrives without
+// going through Decide.
+func (r *Run) UnmarshalJSON(data []byte) error {
+	type fields Run
+	var read struct {
+		fields
+		NextAction string `json:"next_action"`
+	}
+	if err := json.Unmarshal(data, &read); err != nil {
+		return err
+	}
+	*r = Run(read.fields)
+	r.nextAction = read.NextAction
+	return nil
 }
 
 // Runs is the answer to a request for recent runs, newest first.

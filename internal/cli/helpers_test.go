@@ -16,7 +16,6 @@ import (
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/redact"
-	"github.com/dayamjz/assistant/internal/service"
 	"github.com/dayamjz/assistant/internal/stages"
 	"github.com/dayamjz/assistant/internal/store"
 )
@@ -146,37 +145,13 @@ func newSubject(t *testing.T) string {
 	return resolved
 }
 
-// serve opens a service on a home and serves it for the length of the test.
-// The command surface launches one in a process of its own; a test opens it
-// here so that the agent it resolves is the scripted stand-in rather than
-// whatever is installed.
+// serve opens a service on a home with the stages the product wires and serves
+// it for the length of the test. The command surface launches one in a process
+// of its own; a test opens it here so that the agent it resolves is the
+// scripted stand-in rather than whatever is installed.
 func serve(t *testing.T, h *home.Home) {
 	t.Helper()
-	build, err := store.CurrentBuild()
-	if err != nil {
-		t.Fatalf("reading this build's identity: %v", err)
-	}
-	runner := standin.New(t, standin.Script{}).Runner()
-	running, err := service.Open(t.Context(), service.Options{
-		Home:     h,
-		Stages:   stages.All(),
-		NewFixer: stages.PendingFixer,
-		Build:    build,
-		Catalog:  agents.NewCatalog(fixedFactory{runner: runner}),
-	})
-	if err != nil {
-		t.Fatalf("opening the service: %v", err)
-	}
-	served := make(chan error, 1)
-	go func() { served <- running.Serve(context.Background()) }()
-	t.Cleanup(func() {
-		if err := running.Close(); err != nil {
-			t.Errorf("closing the service: %v", err)
-		}
-		if err := <-served; err != nil {
-			t.Errorf("serving: %v", err)
-		}
-	})
+	serveStages(t, h, stages.All())
 }
 
 // fixedFactory hands back a Runner somebody else built, so nothing here can

@@ -68,8 +68,8 @@ func TestAReadSaysWhetherAnythingIsAdvancingTheRun(t *testing.T) {
 		if stalled.Advancing {
 			t.Fatal("reading the run says something is advancing it, after the segment returned")
 		}
-		if stalled.NextAction != machine.OutcomeExecuting.NextActionFor(false) {
-			t.Fatalf("reading the stalled run says %q, want the action that carries it on", stalled.NextAction)
+		if stalled.NextAction() != machine.OutcomeExecuting.NextActionFor(false) {
+			t.Fatalf("reading the stalled run says %q, want the action that carries it on", stalled.NextAction())
 		}
 
 		// Attaching carries it on, and the call that did the advancing answers

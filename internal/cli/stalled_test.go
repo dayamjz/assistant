@@ -196,8 +196,8 @@ func TestARunWhoseCallerGaveUpIsCarriedOnRatherThanStranded(t *testing.T) {
 	if moving.Outcome != machine.OutcomeExecuting {
 		t.Fatalf("the run being carried on reports %s, want executing", moving.Outcome)
 	}
-	if moving.NextAction != machine.OutcomeExecuting.NextActionFor(true) {
-		t.Fatalf("the run being carried on says %q, want the action for one being advanced", moving.NextAction)
+	if moving.NextAction() != machine.OutcomeExecuting.NextActionFor(true) {
+		t.Fatalf("the run being carried on says %q, want the action for one being advanced", moving.NextAction())
 	}
 
 	// And it goes on to where it was going, which a read finds without asking
@@ -209,8 +209,8 @@ func TestARunWhoseCallerGaveUpIsCarriedOnRatherThanStranded(t *testing.T) {
 	view := runUntil(t, h, subject, func(v machine.Run) bool {
 		return v.Outcome == machine.OutcomeDecision && !v.Advancing
 	})
-	if view.NextAction != machine.OutcomeDecision.NextActionFor(false) {
-		t.Fatalf("the run says %q at its decision, want the action for one waiting on a person", view.NextAction)
+	if view.NextAction() != machine.OutcomeDecision.NextActionFor(false) {
+		t.Fatalf("the run says %q at its decision, want the action for one waiting on a person", view.NextAction())
 	}
 	if calls.Load() != 2 {
 		t.Fatalf("the stage body ran %d times, want the caller's and the continuation's", calls.Load())
@@ -279,11 +279,11 @@ func assertStalled(t *testing.T, view machine.Run, surface string) {
 	if view.Advancing {
 		t.Fatalf("%s reports that something is advancing a run whose segment has already returned", surface)
 	}
-	if view.NextAction == machine.OutcomeExecuting.NextActionFor(true) {
-		t.Fatalf("%s tells a reader to wait on a run nothing is advancing: %s", surface, view.NextAction)
+	if view.NextAction() == machine.OutcomeExecuting.NextActionFor(true) {
+		t.Fatalf("%s tells a reader to wait on a run nothing is advancing: %s", surface, view.NextAction())
 	}
-	if view.NextAction != machine.OutcomeExecuting.NextActionFor(false) {
-		t.Fatalf("%s says %q about a stalled run, want the action that carries it on", surface, view.NextAction)
+	if view.NextAction() != machine.OutcomeExecuting.NextActionFor(false) {
+		t.Fatalf("%s says %q about a stalled run, want the action that carries it on", surface, view.NextAction())
 	}
 	if view.Decision != nil {
 		t.Fatalf("%s offers a decision to answer on a run that has none: %+v", surface, view.Decision)
