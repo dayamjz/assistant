@@ -49,8 +49,30 @@ type Index interface {
 // than at the one call site that happens to be compiled first.
 var _ Index = (*store.Store)(nil)
 
-// claimants is the working copies other than this one that are still bound to
-// this gate. An empty answer is what makes a gate this operation's to act on.
+// ownership is a gate as the question "who does this belong to" needs it: the
+// identifier the index is asked under, the path a candidate's assistant remote
+// has to name, and the record read off the gate itself.
+//
+// It exists so that every operation asking that question asks one mechanism
+// rather than gathering candidates of its own. held.claimants and
+// WorkingCopyFor are the two askers, and each keeps its own question - who
+// else holds this gate, and which single working copy holds it - while what
+// counts as evidence is here, which is what P14 asks of a fact with two
+// readers.
+type ownership struct {
+	set settings
+	// id is what the gate is filed under, which is how the index is asked.
+	id string
+	// repository is the gate's absolute path.
+	repository string
+	// holds is what that path holds, and record is the gate's record, valid
+	// when holds is repositoryWithRecord.
+	holds  contents
+	record record
+}
+
+// holders is the working copies other than exclude that are still bound to
+// this gate.
 //
 // The candidates come from two places, and neither is believed on its own. The
 // index names every working copy the home recorded as bound, which is the
@@ -64,37 +86,61 @@ var _ Index = (*store.Store)(nil)
 // Checking rather than believing is what keeps the two sources from becoming
 // two owners of one fact. Neither decides anything. What they contribute is the
 // list of working copies worth asking about, and the answer comes from asking.
-func (h *held) claimants(ctx context.Context) ([]string, error) {
-	bindings, err := h.set.index.GateBindings(ctx, h.id)
+//
+// exclude is the working copy asking, which is never its own holder. A caller
+// asking on nobody's behalf passes the empty string, which excludes nothing a
+// candidate could be: stillBound answers not bound for a path that is not a
+// directory, and the empty path is not one.
+func (o ownership) holders(ctx context.Context, exclude string) ([]string, error) {
+	bindings, err := o.set.index.GateBindings(ctx, o.id)
 	if err != nil {
-		return nil, fmt.Errorf("gate: reading which working copies are bound to gate %s: %w", h.id, err)
+		return nil, fmt.Errorf("gate: reading which working copies are bound to gate %s: %w", o.id, err)
 	}
 	candidates := make([]string, 0, len(bindings)+1)
 	for _, binding := range bindings {
 		candidates = append(candidates, binding.WorkingPath)
 	}
-	if h.holds == repositoryWithRecord {
-		candidates = append(candidates, h.record.WorkingPath)
+	if o.holds == repositoryWithRecord {
+		candidates = append(candidates, o.record.WorkingPath)
 	}
 
-	// The working copy asking is never its own claimant, and a candidate named
-	// by both sources is asked about once.
-	seen := map[string]struct{}{h.workingPath: {}}
+	// A candidate named by both sources is asked about once.
+	seen := map[string]struct{}{exclude: {}}
 	var holders []string
 	for _, candidate := range candidates {
 		if _, asked := seen[candidate]; asked {
 			continue
 		}
 		seen[candidate] = struct{}{}
-		held, err := stillBound(ctx, h.set, candidate, h.repository)
+		bound, err := stillBound(ctx, o.set, candidate, o.repository)
 		if err != nil {
 			return nil, err
 		}
-		if held {
+		if bound {
 			holders = append(holders, candidate)
 		}
 	}
 	return holders, nil
+}
+
+// claimants is the working copies other than this one that are still bound to
+// this gate. An empty answer is what makes a gate this operation's to act on.
+//
+// What counts as evidence is ownership.holders' and not this operation's, so
+// the working copy asking is the whole of what this adds.
+func (h *held) claimants(ctx context.Context) ([]string, error) {
+	return h.ownership().holders(ctx, h.workingPath)
+}
+
+// ownership is this gate as the shared evidence rule needs it.
+func (h *held) ownership() ownership {
+	return ownership{
+		set:        h.set,
+		id:         h.id,
+		repository: h.repository,
+		holds:      h.holds,
+		record:     h.record,
+	}
 }
 
 // ensureUnclaimed refuses with ErrGateClaimed when another working copy is

@@ -68,6 +68,14 @@ func TestAPushToTheGateStartsARunForThePushedCommit(t *testing.T) {
 		t.Fatalf("the run validates %q, want the commit the push moved work to, %q",
 			started.SubmittedHead, head)
 	}
+	// A push carries no intent text, and the record has to say which of the
+	// three ways that happened. The column is NOT NULL with no CHECK, so a
+	// creator that named none writes the empty string and nothing refuses it.
+	if started.IntentSource == "" {
+		t.Fatalf("the run the push started records an empty intent source; the field is a closed "+
+			"vocabulary and the empty string is outside it, so the record says its intent came from "+
+			"a source that does not exist:\n%+v", started)
+	}
 
 	// And it is a run the service is advancing, not a record nobody picked up.
 	// It walks the stages that have a body and stops at the first that does
@@ -86,9 +94,13 @@ func TestAPushToTheGateStartsARunForThePushedCommit(t *testing.T) {
 //
 // The first push's run is still in flight when the second arrives, so what is
 // checked is a replacement rather than a second run started after the first
-// finished on its own. Leaving the first running would spend a budget
-// validating a commit that is no longer the branch's head while the person who
-// pushed waited on a run nothing would attach them to.
+// finished on its own. Without it the second push would attach the person who
+// pushed to nothing while the record still showed a run of an older commit.
+//
+// What is checked is the record, which is the whole of what supersession
+// guarantees today: the first run's status and the second run's head. The
+// displaced run's execution is signalled to cancel and not awaited, so nothing
+// here observes it stopping and nothing here could.
 func TestASecondPushSupersedesTheRunTheFirstStarted(t *testing.T) {
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
@@ -386,9 +398,10 @@ func gitWithin(ctx context.Context, within time.Duration, dir string, args ...st
 	return out, err
 }
 
-// gitCommand runs git in the environment these tests give it, on the same
-// terms the helper that fails the test does, so a bounded call and an
-// unbounded one cannot differ in what git reads.
+// gitCommand runs git in the environment these tests give it, and owns that
+// environment: the git helper that fails the test calls this rather than
+// assembling its own, so a bounded call and an unbounded one cannot differ in
+// what git reads.
 func gitCommand(ctx context.Context, dir string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir

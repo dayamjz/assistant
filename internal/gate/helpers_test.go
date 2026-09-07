@@ -328,8 +328,6 @@ func shellQuoteForTest(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-// invocations returns the lines the recorder wrote, or nothing when it was
-// never invoked.
 // standardInput is the bytes git put in front of the hook on the most recent
 // invocation of a stand-in, read from beside the log the stand-in appends to.
 func standardInput(t *testing.T, log string) []byte {
@@ -341,6 +339,8 @@ func standardInput(t *testing.T, log string) []byte {
 	return data
 }
 
+// invocations returns the lines the recorder wrote, or nothing when it was
+// never invoked.
 func invocations(t *testing.T, log string) []string {
 	t.Helper()
 	data, err := os.ReadFile(log)

@@ -80,6 +80,18 @@
 // which is the failure a sealed gate exists to prevent arriving through the
 // front door.
 //
+// A push to a branch that already has a run supersedes it, which PRD section 8
+// asks for, and the guarantee is over the record: the branch's newest
+// unfinished run is moved to terminated before the new one is created, both
+// under the branch's own exclusion, so the record never shows two live runs
+// for one branch. Execution is not covered. The displaced run is signalled to
+// cancel and is not awaited, so nothing bounds how long two runs of one branch
+// may execute at once - a missing wait rather than an interleaving. The
+// mechanism that would bound it, a per-branch predecessor set with the wait as
+// the arriving run's own first step, is specified outside this tree in
+// internal/daemon's package documentation at tag
+// pre-rebase-2-observation-edges, and is deliberately not implemented here.
+//
 // gate.admit is restricted, so containment is what refuses an agent inside an
 // active validation stage that pushes at the gate - before any reference in
 // the gate changes, which is PRD section 9's "push around a pipeline" landing

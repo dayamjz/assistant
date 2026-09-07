@@ -16,13 +16,11 @@ import (
 // path back; what a hook carries is the identifier, and everything a push has
 // to be validated against hangs off the working copy.
 //
-// The answer comes from the two sources held.claimants uses and on the same
-// terms, so this is not a second owner of who a gate belongs to. The home's
-// ownership index names every working copy recorded as bound, which is the
-// enumerable answer. The gate's own record names the working copy the gate
-// last belonged to, which survives the home's database being lost. Neither is
-// believed on its own: a candidate counts only if it is still there and its
-// own assistant remote still names this gate.
+// The answer comes from ownership.holders, which is the same call held.claimants
+// makes, so this is not a second owner of who a gate belongs to. What that
+// gathers and what it refuses to believe is stated there. This operation's own
+// question is the whole of what it adds: it excludes no working copy, because
+// a hook carries an identifier and stands nowhere, and it wants exactly one.
 //
 // It refuses rather than choosing. ErrNoGate says nothing under this
 // identifier is a gate of this home. ErrGateUnbound says the gate is there and
@@ -62,32 +60,12 @@ func WorkingCopyFor(ctx context.Context, home, id string, opts ...Option) (strin
 			"belongs to, which creates it", ErrNoGate, repo)
 	}
 
-	candidates := make([]string, 0, 2)
-	if holds == repositoryWithRecord {
-		candidates = append(candidates, rec.WorkingPath)
-	}
-	bindings, err := set.index.GateBindings(ctx, id)
+	// No working copy is asking here: a hook carries an identifier and nothing
+	// else, so every candidate the evidence rule gathers is one this may
+	// answer with.
+	holders, err := ownership{set: set, id: id, repository: repo, holds: holds, record: rec}.holders(ctx, "")
 	if err != nil {
-		return "", fmt.Errorf("gate: reading which working copies are bound to gate %s: %w", id, err)
-	}
-	for _, binding := range bindings {
-		candidates = append(candidates, binding.WorkingPath)
-	}
-
-	seen := make(map[string]struct{}, len(candidates))
-	var holders []string
-	for _, candidate := range candidates {
-		if _, asked := seen[candidate]; asked {
-			continue
-		}
-		seen[candidate] = struct{}{}
-		bound, err := stillBound(ctx, set, candidate, repo)
-		if err != nil {
-			return "", err
-		}
-		if bound {
-			holders = append(holders, candidate)
-		}
+		return "", err
 	}
 	switch len(holders) {
 	case 1:

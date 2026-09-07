@@ -121,6 +121,11 @@ func checkUpdates(req machine.GateRequest) error {
 // as ignored rather than passed over in silence: a push of five references
 // that started two runs has to read as that rather than as a push that was
 // fully acted on.
+//
+// A deletion also ends nothing. The PRD is silent on what deleting a branch
+// should do to a run of it, so that branch's run keeps advancing and its
+// ignored reason says so and names the command that ends it, rather than
+// leaving an operator reading "nothing to validate" as "nothing outstanding".
 func (s *Service) notify(ctx context.Context, req machine.GateRequest) (machine.Notification, error) {
 	found, err := s.gateSubject(ctx, req.Gate)
 	if err != nil {
@@ -139,7 +144,8 @@ func (s *Service) notify(ctx context.Context, req machine.GateRequest) (machine.
 			continue
 		case update.Deleted():
 			out.Ignored = append(out.Ignored, machine.Ignored{Ref: update.Ref,
-				Reason: "the push deletes this branch, so there is no change to validate"})
+				Reason: "the push deletes this branch, so it starts no run, and this branch's existing " +
+					"run if it has one is still advancing; assistant --cancel on that branch ends it"})
 			continue
 		}
 		started, err := s.startPushedBranch(ctx, found, branch, update.New)
@@ -210,17 +216,24 @@ func (s *Service) startPushedBranch(ctx context.Context, found subject, branch, 
 // own exclusion.
 //
 // PRD section 8 has pushes to one branch serialize and a new push supersede the
-// run in progress. Superseding is what makes that true rather than aspirational:
-// the branch's earlier run is about a commit that is no longer the branch's
-// head, and leaving it running would spend a budget on validating code nobody
-// is asking about while the new push attached to nothing.
+// run in progress. It takes the same gate a start and a rerun take, so the
+// decision that a branch has one run is made in one place for all three.
 //
-// It takes the same gate a start and a rerun take, so the decision that a
-// branch has one run is made in one place for all three. The segment the
-// superseded run was advancing is cancelled the way ending a run cancels it,
-// and its record is moved to terminated; a move refused because the run has
-// already finished is not an error here, because the record is authoritative
-// and this is reconciliation rather than a decision about what that run may do.
+// What is guaranteed is the record: the branch's newest unfinished run is moved
+// to terminated before the new one is created, both under the branch's own
+// exclusion, so the record never shows two live runs for one branch. A move
+// refused because that run has already finished is not an error here, because
+// the record is authoritative and this is reconciliation rather than a decision
+// about what that run may do.
+//
+// What is not guaranteed is that the displaced run has stopped executing. This
+// signals cancellation with stop() and does not await the displaced run leaving
+// supervision, so nothing bounds how long two runs of one branch may execute at
+// once. That is a missing wait rather than an interleaving. The mechanism that
+// would bound it - a per-branch predecessor set, with the wait as the arriving
+// run's own first step - is specified outside this tree, in internal/daemon's
+// package documentation at tag pre-rebase-2-observation-edges, and is
+// deliberately not implemented here.
 func (s *Service) claimPush(ctx context.Context, built *driver, repository, branch, head, base string) (store.Run, string, error) {
 	key := branchKey{repository: repository, branch: branch}
 	release, err := s.holdBranch(ctx, key)
@@ -259,6 +272,7 @@ func (s *Service) claimPush(ctx context.Context, built *driver, repository, bran
 		branch:     key.branch,
 		head:       head,
 		base:       base,
+		source:     intentSourceAbsent,
 	})
 	if err != nil {
 		return store.Run{}, "", err

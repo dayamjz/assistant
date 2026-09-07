@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -139,24 +138,19 @@ func newHome(t *testing.T) *home.Home {
 	return h
 }
 
-// git runs a git command, for building the working copy a command surface is
-// exercised in. It shells out on the same terms internal/vcs's and
-// internal/gate's own tests do.
+// git runs a git command and fails the test when it fails, for building the
+// working copy a command surface is exercised in.
+//
+// What git reads is gitCommand's and not this helper's, so a bounded call and
+// an unbounded one cannot differ in it. Failing the test is the whole of what
+// this adds.
 func git(t *testing.T, dir string, args ...string) string {
 	t.Helper()
-	cmd := exec.Command("git", args...)
-	cmd.Dir = dir
-	cmd.Env = append(os.Environ(),
-		"GIT_CONFIG_GLOBAL="+filepath.Join(dir, ".gitconfig-absent"),
-		"GIT_CONFIG_SYSTEM="+filepath.Join(dir, ".gitconfig-absent"),
-		"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@example.invalid",
-		"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@example.invalid",
-	)
-	out, err := cmd.CombinedOutput()
+	out, err := gitCommand(context.Background(), dir, args...)
 	if err != nil {
 		t.Fatalf("git %s in %s: %v\n%s", strings.Join(args, " "), dir, err, out)
 	}
-	return strings.TrimSpace(string(out))
+	return strings.TrimSpace(out)
 }
 
 // newSubject returns a working copy with one commit and an origin, which is

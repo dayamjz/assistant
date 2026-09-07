@@ -294,10 +294,15 @@ type Started struct {
 	Head string `json:"head"`
 	// Run is the run's identifier.
 	Run string `json:"run"`
-	// Superseded is the run of the same branch this one replaced, empty when
-	// the branch had none. PRD section 8 has a new push supersede the run in
-	// progress, and naming it is the difference between a run that was
-	// replaced and one that was ended without a word.
+	// Superseded is the run of the same branch this one displaced in the
+	// record, empty when the branch had none. PRD section 8 has a new push
+	// supersede the run in progress, and naming it is the difference between a
+	// run that was displaced and one that was moved aside without a word.
+	//
+	// It says the named run's record was moved to terminated, and no more than
+	// that. The service signals that run's cancellation and does not await its
+	// leaving supervision, so a caller reading this may not take it as the run
+	// having stopped executing.
 	Superseded string `json:"superseded,omitempty"`
 }
 
