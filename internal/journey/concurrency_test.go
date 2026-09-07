@@ -52,6 +52,8 @@ func TestSeveralCallersDrivingOneRunExecuteNoNodeTwice(t *testing.T) {
 	requiresIdentifiedPeer(t)
 	principles.Cite(t, principles.P6)
 
+	holding := stagesWithoutABody(t)
+
 	j := inClone(t)
 	started := startRun(t, j, "--intent", "a change several callers answer at once")
 	observed := contended{}
@@ -62,7 +64,19 @@ func TestSeveralCallersDrivingOneRunExecuteNoNodeTwice(t *testing.T) {
 	observed.perStage = measured.Steps - started.Steps
 	observed.before = measured
 
-	const callers = 5
+	// As many callers as the run has holds left to be carried through while
+	// still holding at the end of them, which is what the reads below need:
+	// one hold is spent on the measurement above, and one has to survive so
+	// the run this reads back is the same run, still waiting. A count written
+	// here instead would be safe only for as long as this build has the number
+	// of stage bodies it has today, and would then fail as a contention
+	// failure rather than as the stale number it was.
+	callers := len(holding) - 2
+	if callers < 2 {
+		t.Fatalf("this build leaves %d hold(s) after the measurement, so there is no room for several "+
+			"callers to answer one run; this check needs rewriting against whatever holds a run now",
+			len(holding)-1)
+	}
 	var wait sync.WaitGroup
 	codes := make([]machine.Code, callers)
 	for i := range callers {

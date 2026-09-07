@@ -155,8 +155,14 @@ func Settlements() []Settlement {
 				"is invisible until a push is made, and what distinguishes a gate with admission from " +
 				"one without is which hook git ran. The planted hooks are tripwires, so the answer is " +
 				"read off the tripwire file rather than out of a document.",
-			Exercised: "Driven through the binary. Under the ordinary environment the push through the " +
-				"gate is declined, which is asserted every time. Under the redirect the harness holds " +
+			Exercised: "Driven through the binary. Both halves are held to a disjunction rather than to " +
+				"the answer this build happens to give, because a check that asserted a gap persists " +
+				"would fail on the day it is closed. Under the ordinary environment what is asserted is " +
+				"that the push is not accepted with nothing checking it: either it is declined, or it " +
+				"is accepted and this home recorded a run from it, read out of the store because the " +
+				"surface's answer would need a service this check never starts. Today it is declined, " +
+				"and by the command surface reporting incorrect usage rather than by an admission " +
+				"decision, which is logged rather than asserted. Under the redirect the harness holds " +
 				"the product to a disjunction and does not choose between its halves, because a check " +
 				"that asserted the gap persists would fail on the day it is closed: either creating the " +
 				"gate is refused, or the push is accepted, and in that second case the redirected " +
