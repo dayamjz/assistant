@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/fixture"
@@ -29,6 +28,11 @@ type ownership struct {
 	// and ejectMessage is what it said.
 	ejectRefused bool
 	ejectMessage string
+	// gateRepository is where the initialization said it put the gate, taken
+	// off its own answer rather than composed from the home root: where a gate
+	// lives under that root is internal/gate's, and this package is not the
+	// documented exception to that.
+	gateRepository string
 	// stillThere is what a refused removal has to have left standing: the gate
 	// repository, the original's remote, and the copy's.
 	gateStillThere     bool
@@ -66,7 +70,7 @@ func TestACopiedProjectDirectoryDoesNotOwnTheGateItInherited(t *testing.T) {
 	if err := succeeds(t, j.Command("init", "--default-branch", fixture.DefaultBranch)).Decode(&created); err != nil {
 		t.Fatalf("reading what the initialization created: %v", err)
 	}
-	observed := ownership{original: created.Gate.ID}
+	observed := ownership{original: created.Gate.ID, gateRepository: created.Gate.Repository}
 
 	// The copy is taken here and nowhere else: after a gate exists to inherit
 	// a remote from, and before anything is asked of the copy.
@@ -91,7 +95,7 @@ func TestACopiedProjectDirectoryDoesNotOwnTheGateItInherited(t *testing.T) {
 	observed.ejectRefused = answer.Code != machine.ExitOK
 	observed.ejectMessage = answer.Message()
 
-	observed.gateStillThere = isDirectory(filepath.Join(j.Root(), "repos", observed.original+".git"))
+	observed.gateStillThere = isDirectory(observed.gateRepository)
 	observed.originalRemote = remoteURL(t, scenario, scenario.WorkingCopy)
 	observed.copyRemoteAfterAll = remoteURL(t, scenario, copied)
 
@@ -139,7 +143,8 @@ func TestACopiedProjectDirectoryDoesNotOwnTheGateItInherited(t *testing.T) {
 				States: "the gate repository is still standing",
 				Holds: func(o ownership) error {
 					if !o.gateStillThere {
-						return errors.New("the gate repository is gone, and a refused removal removes nothing")
+						return fmt.Errorf("the gate repository the initialization reported, %q, is not "+
+							"there, and a refused removal removes nothing", o.gateRepository)
 					}
 					return nil
 				},

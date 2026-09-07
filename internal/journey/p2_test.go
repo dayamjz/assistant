@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/journey"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/pipeline"
@@ -26,6 +27,15 @@ import (
 // rather than checked, so this points at that owner rather than restating the
 // nine names. What it establishes that the owner cannot is that the shipped
 // binary walks them.
+//
+// The third part is refused by internal/config's key table rather than by a
+// rule written against standing skips. That table is a closed set and has no
+// row a document could ask for one through, so the document names a key the
+// schema does not admit and the service stops before it binds a socket. The
+// property PRD section 13 asks for holds, and it holds for that reason, so the
+// check says so and drives a second key of another name alongside: a check
+// that only ever offered a key spelled "skip" would pass on the word rather
+// than on the table.
 func TestAPassMeansTheSameThingEverywhere(t *testing.T) {
 	principles.Cite(t, principles.P2)
 
@@ -217,91 +227,228 @@ func TestAPassMeansTheSameThingEverywhere(t *testing.T) {
 	// the home's own configuration document, and the service is then started
 	// in the foreground so that its refusal is this command's answer rather
 	// than a line in a log of a process nobody is holding.
+	//
+	// A second document is offered alongside it, differing only in what its
+	// key is called. What refuses both is the same thing, and naming it is the
+	// point: internal/config's key table is a closed set with no row a
+	// standing skip could be asked for through, so the refusal answers a key
+	// outside the table rather than this one word.
 	if err := j.Kill(); err != nil {
 		t.Fatalf("ending the service before changing its configuration: %v", err)
 	}
-	if err := j.WriteConfiguration(map[string]any{"skip": []string{pipeline.StageReview.String()}}); err != nil {
-		t.Fatalf("writing a configuration asking for a standing skip: %v", err)
+	offered := standingSkip{}
+	for _, key := range []string{standingSkipKey, unadmittedKeyOfAnotherName} {
+		if err := j.WriteConfiguration(map[string]any{
+			key: []string{pipeline.StageReview.String()},
+		}); err != nil {
+			t.Fatalf("writing a configuration naming %s: %v", key, err)
+		}
+		offered.attempts = append(offered.attempts, unserved{
+			key:    key,
+			answer: j.CommandBounded(j.Dir(), standingSkipBound, "service", "start", "--foreground"),
+		})
 	}
-	standing := journey.Check[journey.Answer]{
-		What: "a configuration document asking for a standing skip stops the service before it serves",
-		Clauses: []journey.Clause[journey.Answer]{
+	for _, key := range config.Keys() {
+		offered.schemaKeys = append(offered.schemaKeys, string(key))
+	}
+
+	standing := journey.Check[standingSkip]{
+		What: "no configuration document can ask for a standing skip, because internal/config's key " +
+			"table admits no key one could be asked for through; the service refuses to serve over a " +
+			"document naming a key that table does not admit, and names the key it refused, and it " +
+			"answers a key of another name the same way, so what stops a standing skip is the closed " +
+			"table rather than the word skip",
+		Clauses: []journey.Clause[standingSkip]{
+			{
+				States: "the key table admits no key a standing skip could be asked for through",
+				Holds: func(s standingSkip) error {
+					if slices.Contains(s.schemaKeys, standingSkipKey) {
+						return fmt.Errorf("the schema now admits %q, so a document can name it and what "+
+							"refuses a standing skip is no longer the table having no such row; whatever "+
+							"refuses one now has to be driven instead", standingSkipKey)
+					}
+					return nil
+				},
+			},
+			{
+				States: "the second key offered is one the table does not admit either",
+				Holds: func(s standingSkip) error {
+					if slices.Contains(s.schemaKeys, unadmittedKeyOfAnotherName) {
+						return fmt.Errorf("the schema now admits %q, so offering it establishes nothing "+
+							"about a key outside the table", unadmittedKeyOfAnotherName)
+					}
+					return nil
+				},
+			},
+			{
+				States: "both documents were offered, so what follows is not answered over one key alone",
+				Holds: func(s standingSkip) error {
+					if len(s.attempts) < 2 {
+						return fmt.Errorf("%d document(s) were offered, and a refusal seen against one key "+
+							"says nothing about whether that key's name is what produced it", len(s.attempts))
+					}
+					return nil
+				},
+			},
 			{
 				// The command is bounded rather than left to run, because the
 				// failure this exists to catch is the service accepting the
-				// standing skip and serving. Unbounded, that failure never
-				// returns and the suite hangs to the test timeout instead of
-				// reporting it, so the one check here whose whole subject is a
-				// refusal would be the one that cannot fail.
-				States: "the command ended on its own rather than serving until this harness stopped it",
-				Holds: func(answer journey.Answer) error {
-					if answer.Ended {
-						return fmt.Errorf("the service was still serving when this harness stopped it, "+
-							"so it accepted a standing skip: %s", answer)
-					}
-					return nil
+				// document and serving. Unbounded, that failure never returns
+				// and the suite hangs to the test timeout instead of reporting
+				// it, so the one check here whose whole subject is a refusal
+				// would be the one that cannot fail.
+				States: "every document offered ended the command on its own rather than serving until " +
+					"this harness stopped it",
+				Holds: func(s standingSkip) error {
+					return eachOffered(s, func(key string, answer journey.Answer) error {
+						if answer.Ended {
+							return fmt.Errorf("the service was still serving over the document naming %q "+
+								"when this harness stopped it: %s", key, answer)
+						}
+						return nil
+					})
 				},
 			},
 			{
-				States: "the command refused rather than exiting successfully",
-				Holds: func(answer journey.Answer) error {
-					if answer.Code == machine.ExitOK {
-						return fmt.Errorf("the service accepted a standing skip: %s", answer)
-					}
-					return nil
+				States: "every document offered was refused rather than exiting successfully",
+				Holds: func(s standingSkip) error {
+					return eachOffered(s, func(key string, answer journey.Answer) error {
+						if answer.Code == machine.ExitOK {
+							return fmt.Errorf("the service accepted the document naming %q: %s", key, answer)
+						}
+						return nil
+					})
 				},
 			},
 			{
-				States: "the refusal was reported as a document a driving agent can read",
-				Holds: func(answer journey.Answer) error {
-					if _, ok := answer.Failure(); !ok {
-						return fmt.Errorf("the refusal was not reported as a document: %s", answer)
-					}
-					return nil
+				States: "every refusal was reported as a document a driving agent can read",
+				Holds: func(s standingSkip) error {
+					return eachOffered(s, func(key string, answer journey.Answer) error {
+						if _, ok := answer.Failure(); !ok {
+							return fmt.Errorf("the refusal of the document naming %q was not reported as "+
+								"a document: %s", key, answer)
+						}
+						return nil
+					})
 				},
 			},
 			{
-				States: "the refusal names the key it refused",
-				Holds: func(answer journey.Answer) error {
-					failure, ok := answer.Failure()
-					if !ok {
-						return fmt.Errorf("the refusal was not reported as a document: %s", answer)
-					}
-					if !strings.Contains(failure.Error, "skip") {
-						return fmt.Errorf("the refusal does not name the key it refused: %q", failure.Error)
-					}
-					return nil
+				States: "every refusal names the key it refused",
+				Holds: func(s standingSkip) error {
+					return eachOffered(s, func(key string, answer journey.Answer) error {
+						failure, ok := answer.Failure()
+						if !ok {
+							return fmt.Errorf("the refusal of the document naming %q was not reported as "+
+								"a document: %s", key, answer)
+						}
+						if !strings.Contains(failure.Error, key) {
+							return fmt.Errorf("the refusal does not name the key it refused, %q: %q",
+								key, failure.Error)
+						}
+						return nil
+					})
 				},
 			},
 		},
-		Counterfeits: []journey.Counterfeit[journey.Answer]{
-			{Named: "the service served with the standing skip in place and had to be stopped",
-				Break: func(a journey.Answer) journey.Answer {
-					a.Ended = true
-					return a
+		Counterfeits: []journey.Counterfeit[standingSkip]{
+			{Named: "the key table gained a key a standing skip could be asked for through",
+				Break: func(s standingSkip) standingSkip {
+					s.schemaKeys = append(slices.Clone(s.schemaKeys), standingSkipKey)
+					return s
 				}},
-			{Named: "the service started with the standing skip in place", Break: func(a journey.Answer) journey.Answer {
-				a.Code = machine.ExitOK
-				return a
+			{Named: "the key table gained the second key, so offering it shows nothing about the table",
+				Break: func(s standingSkip) standingSkip {
+					s.schemaKeys = append(slices.Clone(s.schemaKeys), unadmittedKeyOfAnotherName)
+					return s
+				}},
+			{Named: "only the document asking for a standing skip was offered",
+				Break: func(s standingSkip) standingSkip {
+					s.attempts = slices.Clone(s.attempts)[:1]
+					return s
+				}},
+			{Named: "the service served over one of the documents and had to be stopped",
+				Break: func(s standingSkip) standingSkip {
+					s.attempts = slices.Clone(s.attempts)
+					s.attempts[0].answer.Ended = true
+					return s
+				}},
+			{Named: "the service started over one of the documents", Break: func(s standingSkip) standingSkip {
+				s.attempts = slices.Clone(s.attempts)
+				s.attempts[1].answer.Code = machine.ExitOK
+				return s
 			}},
-			{Named: "the refusal reached standard error alone, where a driving agent would not find it",
-				Break: func(a journey.Answer) journey.Answer {
-					a.Stdout = ""
-					return a
+			{Named: "a refusal reached standard error alone, where a driving agent would not find it",
+				Break: func(s standingSkip) standingSkip {
+					s.attempts = slices.Clone(s.attempts)
+					s.attempts[0].answer.Stdout = ""
+					return s
 				}},
-			{Named: "the refusal never says which key it refused", Break: func(a journey.Answer) journey.Answer {
-				a.Stdout = `{"error":"something went wrong","code":"internal"}`
-				return a
+			{Named: "a refusal never says which key it refused", Break: func(s standingSkip) standingSkip {
+				s.attempts = slices.Clone(s.attempts)
+				s.attempts[1].answer.Stdout = `{"error":"something went wrong","code":"internal"}`
+				return s
 			}},
 		},
 	}
-	if err := standing.Verify(j.CommandBounded(j.Dir(), standingSkipBound, "service", "start", "--foreground")); err != nil {
+	if err := standing.Verify(offered); err != nil {
 		t.Fatalf("%v", err)
 	}
 }
 
-// standingSkipBound is how long a service refusing a standing skip is given to
-// answer before this harness stops it and reports that it served.
+// standingSkipKey is the key a configuration document would have to name to
+// ask for a standing skip.
+//
+// PRD section 2 has such a document stop the service before it serves, and
+// what stops it is internal/config's key table having no row by this name
+// rather than a rule written against standing skips: config.Keys is the one
+// owner of what a document may say, and a key it does not list is refused
+// where the document is walked.
+const standingSkipKey = "skip"
+
+// unadmittedKeyOfAnotherName is a second key that table does not admit,
+// sharing no part of its name with standingSkipKey.
+//
+// It is offered beside the standing skip so that the refusal is held to a key
+// outside the table rather than to one word. Without it, a check would pass
+// over a document that happens to spell its key "skip" and would say nothing
+// about what a document asking for a standing skip runs into.
+const unadmittedKeyOfAnotherName = "parallelism"
+
+// unserved is one configuration document the service was offered, and what
+// starting it in the foreground over that document produced.
+type unserved struct {
+	// key is the key the document named, which is the only thing that differs
+	// between the documents offered.
+	key string
+	// answer is what the command produced.
+	answer journey.Answer
+}
+
+// standingSkip is what the service did with the documents it cannot accept,
+// together with the schema that decides which those are.
+type standingSkip struct {
+	// attempts are the documents offered, the one asking for a standing skip
+	// first.
+	attempts []unserved
+	// schemaKeys is every key internal/config's table admits, asked of that
+	// package rather than restated here: a key added there is a key a document
+	// could then name, and this is what notices.
+	schemaKeys []string
+}
+
+// eachOffered answers a question about every document offered and reports the
+// first it fails on, naming the key that document carried.
+func eachOffered(s standingSkip, ask func(key string, answer journey.Answer) error) error {
+	for _, attempt := range s.attempts {
+		if err := ask(attempt.key, attempt.answer); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// standingSkipBound is how long a service refusing a document it cannot accept
+// is given to answer before this harness stops it and reports that it served.
 //
 // It is generous for a process that reads one configuration document and
 // refuses, and it is what turns the regression the standing-skip check exists
