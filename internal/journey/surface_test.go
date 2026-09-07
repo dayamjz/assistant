@@ -13,11 +13,55 @@ import (
 	"github.com/dayamjz/assistant/internal/machine"
 )
 
+// attachOrStart stands for the row of PRD section 9's table that has no word
+// of its own: attach to this branch's active run, and start one when there is
+// none. A command line of flags alone drives it.
+const attachOrStart = "(no verb: attach or start)"
+
+// notAVerb stands for a command line that drives no row of that table. The
+// section has the surface answer --help and --version, which are answers it
+// gives rather than verbs it dispatches.
+const notAVerb = "(not a verb)"
+
+// section9Verbs is the eleven rows of PRD section 9's command table.
+//
+// The owner of the list is the specification, so it is restated here rather
+// than asked of internal/cli: that package's verbs table is unexported, and a
+// harness that read the table off the package under validation would be
+// reporting that package agreeing with itself, which is the reason this one
+// reads the subject through the fixture's git rather than through internal/vcs.
+// internal/cli/cli_test.go holds the same eleven against the same section from
+// the other side.
+var section9Verbs = []string{
+	attachOrStart, "init", "status", "runs", "rerun", "sync",
+	"tasks", "watch", "doctor", "service", "eject",
+}
+
+// asked is the row of section 9's table a command line drove.
+func asked(args []string) string {
+	if len(args) == 0 {
+		return attachOrStart
+	}
+	if !strings.HasPrefix(args[0], "-") {
+		return args[0]
+	}
+	if args[0] == "--help" || args[0] == "--version" {
+		return notAVerb
+	}
+	return attachOrStart
+}
+
 // spoken is one verb driven as a process: what it exited with, and whether the
 // document it wrote decoded into the shape that verb answers.
 type spoken struct {
 	// verb names the command line, for a failure that says which one.
 	verb string
+	// drove is the row of PRD section 9's table this invocation drove, which
+	// is what makes the set of rows reached readable. Counting invocations
+	// would not: one run is attached to three times and the doctor is asked
+	// twice, so a count of eleven is reached with three of the table's rows
+	// never driven at all.
+	drove string
 	// code is what the process exited with.
 	code machine.Code
 	// decoded is whether the first document on standard output decoded into
@@ -131,6 +175,7 @@ func TestTheWholeCommandSurfaceAnswersOneDocumentPerInvocation(t *testing.T) {
 	var fleet machine.Tasks
 	watched := spoken{
 		verb:    "assistant watch",
+		drove:   "watch",
 		code:    watching.Code,
 		decoded: firstDocument(watching.Stdout, &fleet) == nil,
 		shaped:  func(stdout string) error { return firstDocument(stdout, &machine.Tasks{}) },
@@ -176,11 +221,21 @@ func TestTheWholeCommandSurfaceAnswersOneDocumentPerInvocation(t *testing.T) {
 			"the service being replaced between two of them, and the three exit codes are told apart",
 		Clauses: []journey.Clause[surface]{
 			{
-				States: "every verb the specification's table names was driven",
+				States: "every verb PRD section 9's table names was driven",
 				Holds: func(s surface) error {
-					if len(s.spoke) < 11 {
-						return fmt.Errorf("only %d verbs were driven, and the specification's table names eleven",
-							len(s.spoke))
+					drove := map[string]bool{}
+					for _, verb := range s.spoke {
+						drove[verb.drove] = true
+					}
+					var missing []string
+					for _, want := range section9Verbs {
+						if !drove[want] {
+							missing = append(missing, want)
+						}
+					}
+					if len(missing) > 0 {
+						return fmt.Errorf("%d of the %d verbs the specification's table names were not "+
+							"driven: %v", len(missing), len(section9Verbs), missing)
 					}
 					return nil
 				},
@@ -360,8 +415,9 @@ func TestTheWholeCommandSurfaceAnswersOneDocumentPerInvocation(t *testing.T) {
 				s.spoke[3].stderr += `{"error":"over here"}`
 				return s
 			}},
-			{Named: "fewer verbs were driven than the specification names", Break: func(s surface) surface {
-				s.spoke = slices.Clone(s.spoke)[:4]
+			{Named: "a verb the specification names was never driven", Break: func(s surface) surface {
+				s.spoke = slices.DeleteFunc(slices.Clone(s.spoke),
+					func(verb spoken) bool { return verb.drove == "eject" })
 				return s
 			}},
 			{Named: "the run did not survive being driven a command at a time", Break: func(s surface) surface {
@@ -417,6 +473,7 @@ func drive[T any](t *testing.T, s *surface, j *journey.Journey, args ...string) 
 	}
 	spoke := spoken{
 		verb:      "assistant " + strings.Join(args, " "),
+		drove:     asked(args),
 		code:      answer.Code,
 		decoded:   firstDocument(answer.Stdout, &into) == nil,
 		shaped:    func(stdout string) error { var of T; return firstDocument(stdout, &of) },

@@ -173,11 +173,12 @@ func TestSeveralCallersDrivingOneRunExecuteNoNodeTwice(t *testing.T) {
 					}
 					return c
 				}},
-			{Named: "a caller crashed rather than being answered or refused", Break: func(c contended) contended {
-				c.answers = slices.Clone(c.answers)
-				c.answers[0] = machine.Code(2)
-				return c
-			}},
+			{Named: "a caller was killed by a signal rather than being answered or refused",
+				Break: func(c contended) contended {
+					c.answers = slices.Clone(c.answers)
+					c.answers[0] = signalled
+					return c
+				}},
 			{Named: "the run could not be driven to the end afterwards", Break: func(c contended) contended {
 				c.completed = false
 				return c
@@ -188,6 +189,16 @@ func TestSeveralCallersDrivingOneRunExecuteNoNodeTwice(t *testing.T) {
 		t.Fatalf("%v\n\n%s", err, j.ServiceLog())
 	}
 }
+
+// signalled is the status this harness records for a caller the operating
+// system killed, which is what exec reports through ProcessState.ExitCode for
+// a process that ended on a signal rather than by exiting.
+//
+// It is deliberately not a number from internal/machine's own vocabulary. Two
+// is ExitUsage, which the surface produces on purpose, so a counterfeit
+// carrying it would be showing that this clause rejects a wrong command line
+// while telling a reader it rejects a caller that died.
+const signalled = machine.Code(-1)
 
 // stagePosition is how far through the gate a run stands, counted in stages,
 // with a run that has finished standing past the last of them.
