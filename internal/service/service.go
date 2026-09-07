@@ -42,6 +42,16 @@ var ErrIncomplete = errors.New("service: cannot be built as asked")
 // real. Retrying is what a caller does about it.
 var ErrRunAdvancing = errors.New("service: this run is already advancing")
 
+// ErrRunEnding reports that the run's slot is held by an ending being written
+// rather than by a segment. It is separate from ErrRunAdvancing because the
+// two describe opposite things about the same slot: nothing is executing under
+// an ending's, which is what isAdvancing answers about it, and a caller handed
+// the other message would be told a run is moving while it is being ended.
+//
+// A caller meeting it may ask again once the ending is written, and will then
+// be answered from the record rather than from the slot.
+var ErrRunEnding = errors.New("service: this run is being ended")
+
 // ErrRunsActive reports a stop or a restart refused because runs are active.
 // PRD section 9 makes both refuse by default and requires an explicit force
 // rather than a general yes-to-everything flag.

@@ -298,7 +298,7 @@ func (s *Service) attach(ctx context.Context, runID string) (machine.Run, error)
 	view, err := s.advance(ctx, settled.ID, func(ctx context.Context) (graph.Result, error) {
 		return built.executor.Resume(ctx, settled.ID)
 	})
-	if errors.Is(err, ErrRunAdvancing) {
+	if errors.Is(err, ErrRunAdvancing) || errors.Is(err, ErrRunEnding) {
 		return s.view(ctx, settled.ID)
 	}
 	return view, err
@@ -723,11 +723,19 @@ type slot struct {
 // claim takes the one slot a run advances in.
 //
 // A slot endRun is holding refuses it, which is what keeps a segment from
-// beginning on a run whose ending is being written.
+// beginning on a run whose ending is being written. That refusal answers with
+// ErrRunEnding rather than ErrRunAdvancing, because the two slots hold
+// different things and a caller told the wrong one is told the opposite of
+// what isAdvancing reports about the same slot: nothing is executing under an
+// ending's, and saying a run is advancing when it is being ended is the
+// disagreement this package exists to keep out of its answers.
 func (s *Service) claim(runID string, cancel context.CancelFunc) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, taken := s.advancing[runID]; taken {
+	if held, taken := s.advancing[runID]; taken {
+		if held.cancel == nil {
+			return fmt.Errorf("%w: %s", ErrRunEnding, runID)
+		}
 		return fmt.Errorf("%w: %s", ErrRunAdvancing, runID)
 	}
 	s.advancing[runID] = &slot{cancel: cancel}
@@ -756,17 +764,25 @@ func (s *Service) release(runID string) bool {
 // still in flight.
 //
 // Those two sentences are the whole of what it buys, and neither reaches back
-// past the call. Three things it does not close, disclosed rather than
-// implied. A segment already inside a node still has to return, which is the
-// window cancel's own documentation describes. A caller that read the run's
-// record before this ran can still take the slot once it is given back, on
-// either branch and whether the ending is written by then or not, because that
-// read was made before there was anything here to order it against; a segment
-// it starts and strands is not one this ending marked, so carryOn may carry
-// that one on. And a second ending of the same run in flight at the same time
-// takes the marked branch and gets a forget that does nothing, so the first
-// caller's forget gives the slot back while the second caller's move is still
-// unfinished.
+// past the call. This is the one place the residual is written down; doc.go
+// points here rather than restating it.
+//
+// A segment already inside a node still has to return, which is the window
+// cancel's own documentation describes.
+//
+// A record read that predates the ending reaching the run's record can still
+// lead to a claim, on either branch, once the slot is given back. The bound is
+// that commit and not this call, and the two are not the same moment: cancel
+// records the ending in the slot here and moves the record afterwards, so a
+// read made entirely after this returned can still find the run unfinished and
+// go on to claim a slot this has already let go. One of the readers that
+// covers is this package's own continuation, which reads the record through
+// attach; a segment such a reader starts is not one this ending marked, so its
+// own carryOn may carry it on again.
+//
+// A second ending of the same run in flight at the same time takes the marked
+// branch and gets a forget that does nothing, so the first caller's forget
+// gives the slot back while the second caller's move is still unfinished.
 func (s *Service) endRun(runID string) func() {
 	s.mu.Lock()
 	held, taken := s.advancing[runID]
@@ -797,7 +813,9 @@ func (s *Service) endRun(runID string) func() {
 // tracks a segment rather than an intention to run one.
 //
 // A slot standing for an ending rather than for a segment answers false, which
-// is the honest answer: nothing is executing under it.
+// is the honest answer: nothing is executing under it. claim tells the two
+// apart the same way, so a caller refused that slot is told the run is ending
+// rather than that it is advancing.
 //
 // It holds nothing durable, which is not an omission: a service that died
 // mid-segment is not advancing anything, and a record of the claim it left
