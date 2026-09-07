@@ -1,6 +1,8 @@
 package route_test
 
 import (
+	"context"
+	"errors"
 	"reflect"
 	"testing"
 
@@ -63,6 +65,86 @@ func TestTheWalkFollowsARouteMoreThanOneHopDeep(t *testing.T) {
 	if len(found) == 0 {
 		t.Fatal("the walk misses a Runner two hops down, so it catches only what a plain " +
 			"assertion would and buys nothing")
+	}
+}
+
+// constructedRunnerDeps, deliveredFixerDeps, keyedRunnerDeps and
+// addressableFixerDeps are the four shapes a value can be held in that a walk
+// over fields and method results alone reads straight past.
+//
+// None of them is contrived. A constructor-valued field is what
+// service.Options already uses to hand a fixer over, so it is the next thing a
+// deps struct grows; a channel is how a value gets delivered to a body that
+// did not build it; a map keyed by an adapter is how a caller names several;
+// and a method set on the pointer is the default a Go author gets without
+// asking, since a value in a struct field is addressable.
+type constructedRunnerDeps struct {
+	NewRunner func() agents.Runner
+}
+
+type deliveredFixerDeps struct {
+	Sessions chan agents.Fixer
+}
+
+type keyedRunnerDeps struct {
+	Named map[agents.Runner]string
+}
+
+type addressableFixerDeps struct {
+	Session pointerOnlyFixer
+}
+
+// pointerOnlyFixer is an agents.Fixer on its pointer and not on its value,
+// which is what a Go author writes by default. A caller holding one in a field
+// reaches the session by writing an ampersand.
+type pointerOnlyFixer struct{}
+
+func (*pointerOnlyFixer) Apply(context.Context, agents.Invocation) (agents.Result, error) {
+	return agents.Result{}, errors.New("route: this fixer exists to be reachable, not to run")
+}
+
+func (*pointerOnlyFixer) Reference() string { return "" }
+
+// TestTheWalkFindsARouteHeldInAnyShape is the rest of the positive control,
+// one case per shape the walk has to follow.
+//
+// The control over agents.Resolution establishes that the walk inspects
+// something, and a walk that inspected only plain fields would pass it while
+// missing every case here. Each of these types hands a body a fixer session
+// and none of them is one, so a walk that reports nothing for them reports the
+// guarantee for a deps struct that has already lost it.
+func TestTheWalkFindsARouteHeldInAnyShape(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P4)
+
+	for _, c := range []struct {
+		shape string
+		root  reflect.Type
+	}{
+		{"a func field that returns one", reflect.TypeOf(constructedRunnerDeps{})},
+		{"a channel field that carries one", reflect.TypeOf(deliveredFixerDeps{})},
+		{"a map keyed by one", reflect.TypeOf(keyedRunnerDeps{})},
+		{"a field whose pointer is one", reflect.TypeOf(addressableFixerDeps{})},
+	} {
+		t.Run(c.shape, func(t *testing.T) {
+			t.Parallel()
+
+			for _, iface := range []reflect.Type{
+				reflect.TypeOf((*agents.Runner)(nil)).Elem(),
+				reflect.TypeOf((*agents.SessionRunner)(nil)).Elem(),
+				reflect.TypeOf((*agents.Fixer)(nil)).Elem(),
+			} {
+				if c.root.Implements(iface) || reflect.PointerTo(c.root).Implements(iface) {
+					t.Fatalf("%s is itself %s, so this checks the shallow case a plain "+
+						"assertion already catches rather than %s", c.root, iface, c.shape)
+				}
+			}
+			if found := route.ToFixerSession(c.root); len(found) == 0 {
+				t.Fatalf("the walk reports no route out of %s, which holds a fixer session in %s, "+
+					"so a deps struct written that way is reported safe while handing a body one",
+					c.root, c.shape)
+			}
+		})
 	}
 }
 

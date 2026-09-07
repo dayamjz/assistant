@@ -100,8 +100,7 @@ func NewStageDeps(agent agents.StageAgent, h *home.Home, cfg config.Config, prov
 }
 
 // Copy opens the isolated copy this run works in, which PRD section 8 places
-// at worktrees/<repository>/<run> and which the service creates before the run
-// executes.
+// at worktrees/<repository>/<run>.
 //
 // The path is derived here rather than carried in state. That is deliberate
 // and it is what keeps the run's row the only record of the run: PRD section
@@ -109,9 +108,11 @@ func NewStageDeps(agent agents.StageAgent, h *home.Home, cfg config.Config, prov
 // with no row is safe to remove, and a second durable copy of the path would
 // give that rule a second fact to stay consistent with.
 //
-// It opens and never creates. A copy that is not there is an error naming the
-// path, because a body that created its own would be working somewhere the
-// service does not know to reclaim.
+// It opens and never creates, because a body that created its own would be
+// working somewhere the service does not know to reclaim. Nothing else in this
+// build creates one either, so every call here fails today with an error
+// naming the path it tried: creation and reclaim is the work queued next, and
+// this is the path it has to produce.
 func (d StageDeps) Copy(ctx context.Context, repositoryID, runID string) (*vcs.Repository, error) {
 	if d.Home == nil {
 		return nil, fmt.Errorf("stages: no home, so the isolated copy for run %s cannot be located", runID)

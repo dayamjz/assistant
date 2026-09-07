@@ -34,8 +34,8 @@ import "context"
 // The residual gap is that package boundary and not a claim beyond it. Nothing
 // stops a caller that already holds a Runner from using it directly; what this
 // removes is a stage body's route to one, given wiring that hands bodies this
-// and never a Runner. TestStageDepsExposesNoRouteToAFixerSession in
-// internal/stages is what holds that wiring to it.
+// and never a Runner. TestStageDepsIsNoRouteToAFixerSession in internal/stages
+// is what holds that wiring to it.
 //
 // The zero StageAgent has no runner and refuses with ErrNoStageAgent, so a
 // value that was never given one fails as a typed result rather than panicking

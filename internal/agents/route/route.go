@@ -61,8 +61,21 @@ func fixerRoutes() map[reflect.Type]string {
 // why this bounds a caller in another package and not code inside the
 // declaring one, which agents.StageAgent's own documentation states.
 //
-// Method parameters are not walked either. A method that takes a Runner is not
-// a way to obtain one: a caller would need it already.
+// A value that is not itself a session may still yield one, so every shape a
+// Go value can be held in is followed: a pointer, slice, array or channel
+// element, a map's key as well as its value, and a function's results. The
+// function case is not decoration - a constructor-valued field is how a
+// service already hands a fixer over, so a deps struct is one field away from
+// it. A value's address is reachable too, so a method set only the pointer has
+// counts as the caller's.
+//
+// Two of those overstate slightly and do so on purpose. A send-only channel
+// cannot be received from and an unbuffered one may never carry a value, and
+// both are walked anyway: a guard that overstates fails loudly at the shape
+// that has to be argued about, while one that understates passes in silence.
+//
+// Method and function parameters are not walked. A method that takes a Runner
+// is not a way to obtain one: a caller would need it already.
 func ToFixerSession(root reflect.Type) []string {
 	forbidden := fixerRoutes()
 	var found []string
@@ -81,16 +94,32 @@ func ToFixerSession(root reflect.Type) []string {
 				return
 			}
 		}
+		// A caller can take the address of anything it holds, so a method set
+		// carried by the pointer is a method set the caller has. Asking this of
+		// an interface or a pointer would ask it of a type with no methods.
+		if t.Kind() != reflect.Interface && t.Kind() != reflect.Pointer {
+			for iface, why := range forbidden {
+				if reflect.PointerTo(t).Implements(iface) {
+					found = append(found, "a pointer to "+path+" is "+why)
+					return
+				}
+			}
+		}
 		if t.Kind() == reflect.Interface && t.NumMethod() == 0 {
 			found = append(found, path+" is an empty interface, so it can carry any of them")
 			return
 		}
 
 		switch t.Kind() {
-		case reflect.Pointer, reflect.Slice, reflect.Array:
+		case reflect.Pointer, reflect.Slice, reflect.Array, reflect.Chan:
 			walk(t.Elem(), path+" element")
 		case reflect.Map:
+			walk(t.Key(), path+" key")
 			walk(t.Elem(), path+" value")
+		case reflect.Func:
+			for out := range t.NumOut() {
+				walk(t.Out(out), path+"()")
+			}
 		case reflect.Struct:
 			for i := range t.NumField() {
 				if field := t.Field(i); field.IsExported() {
