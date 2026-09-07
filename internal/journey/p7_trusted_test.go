@@ -239,7 +239,13 @@ func TestATrustedConfigurationThatCannotBeReadIsNotFallenBackFrom(t *testing.T) 
 				})
 			}
 			aborts := journey.Check[trusted]{
-				What:         string(planted.condition) + ": " + firstSentence(condition.Expect.Summary),
+				What: string(planted.condition) + ": reading or parsing the default branch's own " +
+					"configuration document failed, the failure is not one a caller could read as the " +
+					"path simply being absent, and it says what the condition records it has to say; " +
+					"the branch's own copy names an agent of its own and resolving that copy drops it, " +
+					"so which layer a reader was handed is visible in the outcome. What the run then " +
+					"does with the failure is not established here, because nothing in this build reads " +
+					"a repository's document at all",
 				Clauses:      clauses,
 				Counterfeits: counterfeits,
 			}
