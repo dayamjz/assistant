@@ -31,7 +31,7 @@ func TestARunSurvivesTheProcessThatStartedItAndIsAnsweredByAnother(t *testing.T)
 	var runID string
 	withService(t, h, func(running serviceUnderTest) {
 		run := startRun(t, running.client, subject)
-		holdingAt(t, run, pipeline.StageIntent)
+		holdingAt(t, run, pendingStage(t, 0))
 		runID = run.Record.ID
 		if run.Record.Status != store.RunHeld {
 			t.Fatalf("a run holding for a decision is recorded as %s", run.Record.Status)
@@ -49,7 +49,7 @@ func TestARunSurvivesTheProcessThatStartedItAndIsAnsweredByAnother(t *testing.T)
 		if err := running.client.Call(t.Context(), ipc.MethodRunGet, machine.RunRequest{Run: runID}, &run); err != nil {
 			t.Fatalf("reading the run: %v", err)
 		}
-		holdingAt(t, run, pipeline.StageIntent)
+		holdingAt(t, run, pendingStage(t, 0))
 		if run.Steps == 0 {
 			t.Fatal("the run reports no steps spent, so its position did not survive")
 		}
@@ -60,10 +60,11 @@ func TestARunSurvivesTheProcessThatStartedItAndIsAnsweredByAnother(t *testing.T)
 	// A third answers it, and the run carries on from where the first left it
 	// rather than from the beginning.
 	withService(t, h, func(running serviceUnderTest) {
+		answered := pendingStage(t, 0)
 		run := answer(t, running.client, runID, string(pipeline.OutcomeApproved))
-		holdingAt(t, run, pipeline.StageRebase)
-		if got := run.Stages[0]; got.Outcome != pipeline.OutcomeApproved {
-			t.Fatalf("the intent stage reports %s after being approved", got.Outcome)
+		holdingAt(t, run, pendingStage(t, 1))
+		if got := stageView(t, run, answered); got.Outcome != pipeline.OutcomeApproved {
+			t.Fatalf("the %s stage reports %s after being approved", answered, got.Outcome)
 		}
 	})
 }
@@ -104,7 +105,7 @@ func TestARunEndedWhileHoldingReportsThatItEnded(t *testing.T) {
 
 	withService(t, h, func(running serviceUnderTest) {
 		started := startRun(t, running.client, subject)
-		holdingAt(t, started, pipeline.StageIntent)
+		holdingAt(t, started, pendingStage(t, 0))
 
 		var ended machine.Run
 		if err := running.client.Call(t.Context(), ipc.MethodRunCancel,
@@ -356,7 +357,7 @@ func TestRecoveryReconcilesARecordAgainstItsCheckpoint(t *testing.T) {
 		}, "recovery to put the run back where its checkpoint says it stands")
 		// And it is answerable, which is the point of reconciling at all.
 		run := answer(t, running.client, runID, string(pipeline.OutcomeApproved))
-		holdingAt(t, run, pipeline.StageRebase)
+		holdingAt(t, run, pendingStage(t, 1))
 	})
 }
 
@@ -400,14 +401,15 @@ func TestADecisionCarriesTheFindingsVerbatim(t *testing.T) {
 
 	withService(t, h, func(running serviceUnderTest) {
 		run := startRun(t, running.client, subject)
-		decision := holdingAt(t, run, pipeline.StageIntent)
+		held := pendingStage(t, 0)
+		decision := holdingAt(t, run, held)
 		if len(decision.Findings) == 0 {
 			t.Fatal("the decision carries no findings")
 		}
 		if len(decision.Options) == 0 {
 			t.Fatal("the decision offers no options")
 		}
-		reported := run.Stages[0].Report
+		reported := stageView(t, run, held).Report
 		if reported == nil {
 			t.Fatal("the stage that held recorded no report")
 		}

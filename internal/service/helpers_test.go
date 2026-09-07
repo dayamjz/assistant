@@ -244,6 +244,46 @@ func holdingAt(t *testing.T, run machine.Run, stage pipeline.Stage) machine.Deci
 	return *run.Decision
 }
 
+// pendingStage returns the nth stage this build has no body for, counting from
+// zero in the order a run takes them. Those are the stages a run holds at, so
+// a test that walks a run from one hold to the next names them this way rather
+// than by stage: a run advances through every stage that has a body, so naming
+// one would make these tests fail the day a body lands for a reason unrelated
+// to what they check.
+func pendingStage(t *testing.T, n int) pipeline.Stage {
+	t.Helper()
+	implemented := make(map[pipeline.Stage]bool)
+	for _, stage := range stages.Implemented() {
+		implemented[stage] = true
+	}
+	var pending []pipeline.Stage
+	for _, stage := range pipeline.Order() {
+		if !implemented[stage] {
+			pending = append(pending, stage)
+		}
+	}
+	if n >= len(pending) {
+		t.Fatalf("this build has %d stages without a body and this test walks a run to hold %d; "+
+			"it needs rewriting against whatever now holds a run", len(pending), n)
+	}
+	return pending[n]
+}
+
+// stageView returns the run's view of one named stage. A test asks by stage
+// rather than by position because where a stage sits in the answer moves as
+// bodies land, and a fixed index quietly starts reading a different stage
+// instead of failing.
+func stageView(t *testing.T, run machine.Run, stage pipeline.Stage) machine.Stage {
+	t.Helper()
+	for _, view := range run.Stages {
+		if view.Stage == stage.String() {
+			return view
+		}
+	}
+	t.Fatalf("the run reports no %s stage: %+v", stage, run.Stages)
+	return machine.Stage{}
+}
+
 // serviceUnderTest is a running service and a connection to it.
 type serviceUnderTest struct {
 	service *service.Service

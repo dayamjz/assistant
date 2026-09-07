@@ -319,13 +319,23 @@ Each has cost this repository more than one round of review.
   a verb whose job includes reporting that the service is down does not.
   `cmd/assistant` is the process boundary and holds no behaviour, so a test
   drives `cli.Run` with its own streams rather than a subprocess.
-- `internal/stages` is where the nine stage bodies go, and it holds none of
-  them. Each field is `Pending`, which reads nothing and reports one `ask`
-  finding, so P3 holds the stage for a person and no stage reports a pass it
-  did not establish. The one owner of which stages exist is the `written` table
-  there: `All` places implementations from it and `Implemented` reports it, so
-  adding a body is adding an entry. `PendingFixer` is the same answer for the
-  fix path, and it fails rather than summarizing.
+- `internal/stages` is where the nine stage bodies go. A stage with no body is
+  `Pending`, which reads nothing and reports one `ask` finding, so P3 holds the
+  stage for a person and no stage reports a pass it did not establish. The one
+  owner of which stages have a body is the `written` table there: `All` places
+  implementations from it and `Implemented` reports it, so adding a body is
+  adding an entry. `PendingFixer` is the same answer for the fix path, and it
+  fails rather than summarizing. The intent stage is the body that exists, and
+  two things about it generalize. PRD section 5's "this stage never blocks a
+  run" is owed by the implementation and not by `internal/pipeline`, which
+  refuses to enforce it structurally because a stage that could not hold would
+  have to drop an ask finding; every finding it reports is a note, and the test
+  runs every path it has and is itself checked against a report that blocks, so
+  the assertion cannot pass vacuously. And a body landing moves where a run
+  first stops, so a test may not name the stage it expects a hold at: the ones
+  in `internal/cli` and `internal/service` read `Implemented` and take the
+  first stage without a body. Its inference seams are unwired on purpose, which
+  its own doc comments give the reason for.
 - `internal/fixture` builds the adversarial subject repository the end-to-end
   harness validates against, and records beside each planted condition what it
   must produce, down to the substrings the message has to carry. It is the one

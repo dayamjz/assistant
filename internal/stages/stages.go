@@ -1,5 +1,5 @@
-// Package stages is where the nine delivery-gate stage bodies live, and today
-// it holds none of them.
+// Package stages is where the nine delivery-gate stage bodies live. The intent
+// stage is written; the rest are not.
 //
 // PRD section 5 specifies the nine, internal/pipeline wires them into a graph
 // and owns their order, and each body is separate work against
@@ -7,7 +7,9 @@
 // to hold something, because pipeline.Stages is nine required fields and a
 // pipeline with a missing one does not build.
 //
-// What it holds instead is Pending: a stage that validates nothing and says so.
+// What an unwritten stage holds instead is Pending: a stage that validates
+// nothing and says so. Which stages have a body is the written table below,
+// and Implemented reports it, so no reader has to count.
 //
 // # Why a placeholder rather than a refusal to build the pipeline
 //
@@ -36,6 +38,31 @@
 // A body that lands is added to this package and named in the row below,
 // replacing that stage's call to Pending. Nothing else changes: the pipeline
 // is built from the same Stages value and the wiring is the same for all nine.
+//
+// A body that lands also changes where a run first stops, so a test that named
+// the stage it expected a run to hold at has to derive it instead. The ones in
+// internal/cli and internal/service read Implemented and take the first stage
+// without a body, which is what a run actually walks to.
+//
+// # Carried forward: who answers a hold
+//
+// internal/pipeline's outcome.go and doc.go describe every hold answer as
+// coming from "a person", in roughly twelve lines between them. That became
+// narrower than the truth when store.Resolver shipped: a hold may also be
+// answered over the machine interface, under the authority PRD section 9 gives
+// a caller of it, and store.Hold.ResolvedBy records which it was.
+//
+// The prose is not wrong yet, and this stage does not make it wrong. It is
+// true for as long as no stage body connects a graph halt to a stored hold,
+// and internal/store's own documentation says nothing in production resolves
+// one. The intent stage cannot be the body that changes that, because it never
+// holds: it reports notes and nothing else, so it has no halt to resolve.
+//
+// Whichever stage body first resolves a store hold owns correcting those lines
+// so the halt description says what actually answers it. This note is here
+// rather than in a task list because this is the file the next stage body is
+// added to, and a prose claim that was true when written and false after a
+// later change is how this repository has lost review rounds before.
 package stages
 
 import (
@@ -70,14 +97,20 @@ func Pending(name string) pipeline.Implementation {
 }
 
 // written is the one owner of which stages this build has a body for: a stage
-// with an entry uses it, and a stage without one gets Pending. It is empty
-// today, which is what makes every stage pending, and adding a body is adding
-// an entry rather than editing All.
+// with an entry uses it, and a stage without one gets Pending. Adding a body
+// is adding an entry rather than editing All.
 //
 // The value is a constructor rather than an Implementation so that a body
 // holding anything per-build is constructed when the pipeline is, on the same
 // terms as pipeline.Implementation.NewBody.
-var written = map[pipeline.Stage]func() pipeline.Implementation{}
+//
+// The intent stage is built from the zero IntentOptions, which records a
+// supplied intent and infers nothing. Its seams are per-build values and this
+// build supplies none; IntentTranscripts says why that is the deliberate
+// answer today rather than a wiring oversight.
+var written = map[pipeline.Stage]func() pipeline.Implementation{
+	pipeline.StageIntent: func() pipeline.Implementation { return Intent(IntentOptions{}) },
+}
 
 // All returns the nine stages as this build has them: each stage's own body
 // where one is written, and Pending everywhere else.
