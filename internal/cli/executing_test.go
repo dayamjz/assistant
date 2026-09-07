@@ -201,30 +201,33 @@ func serveHeldAtIntent(t *testing.T, h *home.Home, inside chan struct{}, release
 	if err != nil {
 		t.Fatalf("reading this build's identity: %v", err)
 	}
-	held := stages.All()
-	held.Intent = pipeline.Implementation{
-		NewBody: func() pipeline.Body {
-			return func(ctx context.Context, _ pipeline.Input) (pipeline.Output, error) {
-				entered.Do(func() { close(inside) })
-				select {
-				case <-release:
-				case <-ctx.Done():
-					return pipeline.Output{}, ctx.Err()
+	held := func(deps stages.StageDeps) pipeline.Stages {
+		nine := stages.All(deps)
+		nine.Intent = pipeline.Implementation{
+			NewBody: func() pipeline.Body {
+				return func(ctx context.Context, _ pipeline.Input) (pipeline.Output, error) {
+					entered.Do(func() { close(inside) })
+					select {
+					case <-release:
+					case <-ctx.Done():
+						return pipeline.Output{}, ctx.Err()
+					}
+					return pipeline.Output{Report: findings.Report{
+						Summary:  "the stage was held open for the length of the reads",
+						Findings: []findings.Finding{{ID: "held", Action: findings.ActionAsk, Description: "a decision"}},
+					}}, nil
 				}
-				return pipeline.Output{Report: findings.Report{
-					Summary:  "the stage was held open for the length of the reads",
-					Findings: []findings.Finding{{ID: "held", Action: findings.ActionAsk, Description: "a decision"}},
-				}}, nil
-			}
-		},
+			},
+		}
+		return nine
 	}
 	runner := standin.New(t, standin.Script{}).Runner()
 	running, err := service.Open(t.Context(), service.Options{
-		Home:     h,
-		Stages:   held,
-		NewFixer: stages.PendingFixer,
-		Build:    build,
-		Catalog:  agents.NewCatalog(fixedFactory{runner: runner}),
+		Home:      h,
+		NewStages: held,
+		NewFixer:  stages.PendingFixer,
+		Build:     build,
+		Catalog:   agents.NewCatalog(fixedFactory{runner: runner}),
 	})
 	if err != nil {
 		t.Fatalf("opening the service: %v", err)

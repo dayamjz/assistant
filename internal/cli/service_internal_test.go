@@ -102,10 +102,10 @@ func serveForTest(t *testing.T, h *home.Home) *service.Service {
 		t.Fatalf("reading this build's identity: %v", err)
 	}
 	running, err := service.Open(t.Context(), service.Options{
-		Home:     h,
-		Stages:   stages.All(),
-		NewFixer: stages.PendingFixer,
-		Build:    build,
+		Home:      h,
+		NewStages: stages.All,
+		NewFixer:  stages.PendingFixer,
+		Build:     build,
 	})
 	if err != nil {
 		requiresLocalSocketHere(t, err)

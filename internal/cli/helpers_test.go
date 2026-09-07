@@ -151,11 +151,11 @@ func serve(t *testing.T, h *home.Home) {
 	}
 	runner := standin.New(t, standin.Script{}).Runner()
 	running, err := service.Open(t.Context(), service.Options{
-		Home:     h,
-		Stages:   stages.All(),
-		NewFixer: stages.PendingFixer,
-		Build:    build,
-		Catalog:  agents.NewCatalog(fixedFactory{runner: runner}),
+		Home:      h,
+		NewStages: stages.All,
+		NewFixer:  stages.PendingFixer,
+		Build:     build,
+		Catalog:   agents.NewCatalog(fixedFactory{runner: runner}),
 	})
 	if err != nil {
 		t.Fatalf("opening the service: %v", err)
