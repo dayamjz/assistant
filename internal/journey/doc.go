@@ -24,7 +24,8 @@
 //
 // # Reach is part of every claim
 //
-// internal/stages holds no stage body, so a run holds at every stage and large
+// internal/stages has a body for the intent stage and none for the other
+// eight, so a run holds at every stage but that one and large
 // parts of this product are unreachable from one: no agent is launched, no
 // reference is moved, no code host is asked anything, and no repository
 // configuration is read. Where a mechanism cannot be reached through the
@@ -41,9 +42,14 @@
 // they are structural rather than a habit: a check is a list of clauses over a
 // typed observation together with the counterfeit observations it must reject,
 // and Verify runs both halves every time. A counterfeit is a mutation of the
-// real observation rather than one written from nothing, so it cannot state a
-// shape the product could not produce. A check declaring no counterfeit is
-// refused.
+// real observation rather than one written from nothing, so it starts from a
+// shape the product did produce. That much Verify enforces; that the mutation
+// stays inside a shape the product could still have produced is the writer's
+// discipline, because Break is an unconstrained func(O) O. The discipline is a
+// rule rather than a preference - a counterfeit stating an impossible shape
+// shows a clause failing against a failure the mechanism cannot reach - and
+// the residual gap is that nothing here can tell such a counterfeit from a
+// faithful one. A check declaring no counterfeit is refused.
 //
 // The predicate is a list rather than one function because a check answered as
 // a whole hides the part of itself that discriminates nothing: the other

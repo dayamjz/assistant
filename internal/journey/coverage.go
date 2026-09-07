@@ -21,7 +21,8 @@ const (
 	// ReachPackage is driven through the package that owns the mechanism, in
 	// this process, against the fixture. It is what is left where the binary
 	// cannot reach a mechanism at all, which today is every mechanism a stage
-	// body would have used, because no stage body exists.
+	// body would have used: internal/stages has a body for the intent stage
+	// alone, and that one reads the supplied intent and launches nothing.
 	ReachPackage Reach = "package"
 	// ReachNone is not driven here. The reason beside it says why, and it is
 	// prose nobody checks; what the row buys is that the gap is enumerable
@@ -66,13 +67,21 @@ func Coverage() []Established {
 				"word. Whether some row that table does carry would apply a standing skip is what a row " +
 				"means rather than what it is called, and that table is its one owner; nothing here " +
 				"enumerates it. The order being unsayable in any other shape is internal/pipeline's, " +
-				"which this does not repeat."},
+				"which this does not repeat. All three parts are one test, and it starts a run through a " +
+				"method internal/ipc restricts, so on a platform where that package reads no local socket " +
+				"peer credentials the test is skipped rather than passing and nothing about P2 is " +
+				"established there."},
 		{principles.P3, ReachBinary,
 			"A run through the binary is walked to its end and every hold it reaches is read: it holds " +
-				"once for each of the nine stages, every hold is relayed with the finding that produced " +
+				"once for each stage this build has no body for, which is read off internal/stages rather " +
+				"than counted, every hold is relayed with the finding that produced " +
 				"it, every one of those findings reports itself as holding for a person, and none is one " +
 				"a fixer may take. The planted agent output is driven at package reach as well, because " +
-				"no stage body launches an agent in this build, so no report an agent wrote reaches a run."},
+				"no stage body launches an agent in this build, so no report an agent wrote reaches a run. " +
+				"The run half starts a run through a method internal/ipc restricts, so on a platform where " +
+				"that package reads no local socket peer credentials it is skipped rather than passing, and " +
+				"the package-reach half over the planted agent output is the whole of what is established " +
+				"there."},
 		{principles.P4, ReachPackage,
 			"The binary cannot reach this: no stage body launches an agent, so a run makes no agent " +
 				"invocation to assert over. What is driven is the production adapter over the stand-in, " +
@@ -82,10 +91,15 @@ func Coverage() []Established {
 			"There is no review stage, so no run reviews a change a fix round wrote. " +
 				"internal/principles declares this gap and this harness adds nothing to it."},
 		{principles.P6, ReachBinary,
-			"The service is killed at every stage boundary of a real run and the run is driven to its " +
-				"end afterwards, which is P6's own stated verification criterion. The lease anchor and " +
+			"The service is killed at every boundary a real run stops at and the run is driven to its " +
+				"end afterwards, which is P6's own stated verification criterion. A boundary is a hold, " +
+				"so the boundaries are the stages this build has no body for and the intent stage is not " +
+				"among them. The lease anchor and " +
 				"the refusal against a remote that advanced out of band are driven at package reach, " +
-				"because no stage body pushes."},
+				"because no stage body pushes. The killed run, and the contention check beside it, are " +
+				"driven through methods internal/ipc restricts, so on a platform where that package reads " +
+				"no local socket peer credentials both are skipped rather than passing, and the two " +
+				"package-reach observations are the whole of what is established there."},
 		{principles.P7, ReachBinary,
 			"The git template that would choose what a gate is born with is refused by the binary, and " +
 				"the environment channel is shown closed. How the initialization came out is the whole " +
@@ -93,17 +107,22 @@ func Coverage() []Established {
 				"conditions record, and the closed channels are not refused. Whether a template hook " +
 				"arrived in the gate is not among it, because no clause there looks at a hook. A whole " +
 				"run is driven over a branch carrying an agent harness installation, and " +
-				"and what that run establishes is that a suppression the adapter does not implement is " +
+				"what that run establishes is that a suppression the adapter does not implement is " +
 				"refused before anything launches. The keys the branch may not set are dropped and " +
 				"reported while the one it may set survives, but that is config.Resolve driven in " +
 				"process beside the run rather than anything the run does. Two things are not " +
 				"established at any reach and no clause claims them: that nothing the branch or the " +
 				"template installed arrived or executed, because every planted executable is reached " +
-				"only through a stage body or a push admission declines and this build has neither; " +
+				"only through a stage body that launches something or a push admission declines, and this " +
+				"build has neither: its one stage body reads the supplied intent and no push is admitted; " +
 				"and which agent a run resolved, because no shipped surface reports it. The trusted configuration " +
 				"document is driven at package reach: nothing in this build reads a repository's own " +
 				"configuration from anywhere, which internal/service states, so there is no composition " +
-				"to drive."},
+				"to drive. The branch run, and the one subtest that starts a run over the unparseable " +
+				"trusted document, go through methods internal/ipc restricts, so on a platform where that " +
+				"package reads no local socket peer credentials both are skipped rather than passing; what " +
+				"is established there is the template initialization, which needs no service, and the " +
+				"package-reach reads of the planted documents."},
 		{principles.P8, ReachBinary,
 			"A task whose event log ends on an open decision and whose resolved state has moved past it " +
 				"is reported by the binary as the resolved state."},

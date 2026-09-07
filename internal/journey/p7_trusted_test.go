@@ -256,6 +256,8 @@ func TestATrustedConfigurationThatCannotBeReadIsNotFallenBackFrom(t *testing.T) 
 	}
 
 	t.Run("what a run actually resolves", func(t *testing.T) {
+		requiresIdentifiedPeer(t)
+
 		// The gap, observed rather than taken from a document. The subject
 		// here is a clone of the scenario whose default branch carries a
 		// document that will not parse, and PRD section 10 has a run over it

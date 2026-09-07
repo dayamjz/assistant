@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/dayamjz/assistant/internal/fixture"
 	"github.com/dayamjz/assistant/internal/home"
@@ -98,6 +99,12 @@ type Options struct {
 	// AgentArguments are the words the resolved agent entry carries after its
 	// name, which is the seam a stand-in is reached through. Empty leaves the
 	// home with no configuration document at all.
+	//
+	// Each element has to be one word. An agent entry is one string on the
+	// wire that both internal/config and internal/agents split on whitespace,
+	// so an element carrying any would arrive as several arguments and an
+	// empty one would vanish, and Open refuses either rather than handing the
+	// run a command line nobody asked for.
 	AgentArguments []string
 }
 
@@ -115,6 +122,9 @@ func Open(opts Options) (*Journey, error) {
 	}
 	if opts.Scenario.Name == "" {
 		return nil, errors.New("journey: a journey needs a scenario to point the product at")
+	}
+	if err := oneWordEach(opts.AgentArguments); err != nil {
+		return nil, err
 	}
 	root, err := os.MkdirTemp("", "h")
 	if err != nil {
@@ -158,6 +168,32 @@ func Open(opts Options) (*Journey, error) {
 		return nil, err
 	}
 	return j, nil
+}
+
+// oneWordEach reports why an agent argument cannot survive the entry it is
+// written into, and nil when every one of them can.
+//
+// The entry is a single configuration string, and both readers of it split on
+// whitespace: internal/config walks the words to find a reserved flag, and
+// internal/agents takes the first as the agent's name and the rest as its
+// arguments. So an element carrying a space arrives as two arguments and an
+// empty one arrives as none, and in this build no stage body launches an agent
+// through this seam, which means neither would produce a symptom. Refusing is
+// what keeps that from being a silently truncated path on a machine whose
+// temporary directory happens to have a space in it.
+func oneWordEach(arguments []string) error {
+	for i, argument := range arguments {
+		if argument == "" {
+			return fmt.Errorf("journey: agent argument %d is empty, and an agent entry is one string "+
+				"its readers split on whitespace, so an empty word is dropped rather than passed", i)
+		}
+		if at := strings.IndexFunc(argument, unicode.IsSpace); at >= 0 {
+			return fmt.Errorf("journey: agent argument %d, %q, carries whitespace at byte %d, and an "+
+				"agent entry is one string its readers split on whitespace, so it would reach the "+
+				"agent as several arguments rather than as this one", i, argument, at)
+		}
+	}
+	return nil
 }
 
 // WriteConfiguration writes the home's own configuration document, which is

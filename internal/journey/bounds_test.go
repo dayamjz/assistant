@@ -53,6 +53,8 @@ type bounded struct {
 // bounded run is the budget and not the subject, and a run a bound stopped is
 // parked rather than held: no answer reaches it.
 func TestTheRunBudgetStopsARunTheGateWouldHaveFinished(t *testing.T) {
+	requiresIdentifiedPeer(t)
+
 	const budget = 6
 	j := inCloneConfigured(t, map[string]any{"run_budget": budget})
 	observed := bounded{budget: budget}

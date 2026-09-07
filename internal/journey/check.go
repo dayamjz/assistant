@@ -81,8 +81,18 @@ type Clause[O any] struct {
 // stated from nothing can state a shape the product could not produce, and a
 // guard against such a shape looks alive while being dead; this repository has
 // shipped that once already. A counterfeit derived from what the product
-// actually produced changes one fact about a real shape, so a clause that
-// accepts it is a clause that would accept the product failing in that way.
+// actually produced starts from a real shape, so a clause that accepts a
+// faithful mutation of it is a clause that would accept the product failing in
+// that way.
+//
+// Starting from a real observation is the whole of what Verify enforces. Break
+// is an unconstrained func(O) O, so whether the mutation lands on a shape the
+// product could still have produced is the writer's discipline, and the rule
+// is that it must: a counterfeit stating an impossible shape shows a clause
+// failing against a failure the mechanism cannot reach, which establishes
+// nothing about the clause. The residual gap is that nothing here can tell the
+// two apart, because only the mechanism under the observation knows which
+// shapes it can produce.
 type Counterfeit[O any] struct {
 	// Named says what went wrong in the counterfeit, in the terms a reader
 	// asking "could this check have caught that?" would use.

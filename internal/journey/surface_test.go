@@ -133,6 +133,8 @@ type surface struct {
 // invocation, so a verb writing two, or writing a failure only a person can
 // read, is the failure that makes the machine interface unusable.
 func TestTheWholeCommandSurfaceAnswersOneDocumentPerInvocation(t *testing.T) {
+	requiresIdentifiedPeer(t)
+
 	scenario, dir := cloned(t)
 	j := open(t, scenario, func(o *journey.Options) { o.Dir = dir })
 	observed := surface{}

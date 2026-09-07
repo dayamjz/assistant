@@ -49,6 +49,7 @@ type contended struct {
 // checked is that the total spent is exactly what the stages it moved through
 // cost.
 func TestSeveralCallersDrivingOneRunExecuteNoNodeTwice(t *testing.T) {
+	requiresIdentifiedPeer(t)
 	principles.Cite(t, principles.P6)
 
 	j := inClone(t)
