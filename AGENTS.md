@@ -426,7 +426,11 @@ Each has cost this repository more than one round of review.
   one that nobody has shown can fail may ship. The predicate is a list because
   a check answered as a whole hides the assertion that discriminates nothing.
   A counterfeit is a mutation of the real observation rather than one written
-  from nothing, for the reason `internal/agents/standin` gives about fakes; a
+  from nothing, for the reason `internal/agents/standin` gives about fakes.
+  Starting from a real observation is all `Verify` enforces, since `Break` is
+  an unconstrained `func(O) O`; keeping the mutation inside a shape the product
+  could have produced is a rule the writer keeps, and the residual gap is that
+  nothing there can tell a counterfeit that broke it from one that did not. A
   clause asserting an absence declares itself one and carries `Possible`,
   because a mutation of the model cannot say whether the thing could have been
   there in the subject, and that is the one gap counterfeits never close. And
@@ -437,8 +441,14 @@ Each has cost this repository more than one round of review.
   first: green there says the machinery behaves on inputs we chose and says
   nothing about review quality, and every row carries whether it was reached
   through the binary or
-  through the package that owns the mechanism, because no stage body exists and
-  a run therefore reaches no agent, no push, and no code host.
+  through the package that owns the mechanism, because the one stage body this
+  build has reads the supplied intent and launches nothing, so a run reaches no
+  agent, no push, and no code host. Its tests that
+  drive a run skip where `internal/ipc` reads no local socket peer credentials,
+  on the same terms `internal/cli` and `internal/service` do, and the skip is
+  recorded as a limit in that `README.md` and in the `Coverage` note of every
+  principle it takes down with it, because a skipped check that reads as a pass
+  is what this package exists to refuse.
 
 ## Tests
 

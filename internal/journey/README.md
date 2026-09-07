@@ -21,12 +21,13 @@ does not stand in for it. A green run of this package says the mechanisms
 behave as specified on inputs we chose. It says nothing about review quality,
 and no report built on this may claim otherwise.
 
-## The second limit: no stage has a body
+## The second limit: eight of the nine stages have no body
 
-`internal/stages` holds no stage implementation. Every stage of a run reports
-one unclassified finding and holds for a person, which is P3 working as
-specified and is also the reason large parts of the product are not reachable
-from a run today:
+`internal/stages` has an implementation for the intent stage and none for the
+other eight, and that one reads the intent it was supplied and launches
+nothing. Every stage without a body reports one unclassified finding and holds
+for a person, which is P3 working as specified and is also the reason large
+parts of the product are not reachable from a run today:
 
 - no stage launches an agent, so no run parses agent output, keeps a fixer
   session, or takes a fix round;
@@ -54,8 +55,14 @@ something somebody once confirmed by hand:
   observation of what the product actually did, plus the **counterfeit**
   observations it must reject;
 - a counterfeit is a *mutation of the real observation*, never an observation
-  written from nothing, so it cannot state a shape the product could not
-  produce;
+  written from nothing, so it starts from something the product did produce.
+  What `Verify` enforces is that and nothing more: `Break` is an unconstrained
+  `func(O) O`, so keeping the mutation inside a shape the product could still
+  have produced is the writer's discipline rather than a checked property. The
+  discipline holds - a counterfeit that states an impossible shape shows a
+  clause failing against a failure the mechanism cannot reach, which is the
+  dead guard `internal/agents/standin` exists against - and the residual gap is
+  that nothing here can tell one from a faithful mutation;
 - `Verify` runs both halves on every invocation. A clause that stopped
   discriminating fails where it is used, immediately, with a message naming the
   counterfeit it accepted;
@@ -117,13 +124,14 @@ works around them.
 
 | Limit | What this harness does |
 | --- | --- |
+| `internal/ipc` reads no local socket peer credentials outside linux and darwin, and identification is authority there, so every method that starts, answers, cancels or reruns a run is refused on any other platform. `internal/ipc/peer_unsupported.go` states it, and the `internal/cli` and `internal/service` tests that drive a run already skip for it. | Skips every check that drives a run, rather than passing it. A green run of this package on such a platform establishes only the checks that drive no run - the template initialization, the ownership refusals, the package-reach checks, and the three accounting tables - and the `Coverage` note of every principle whose binary reach passes through a run says so. A skipped check that reads as a pass is the same defect as a clause that cannot fail, so this row is the one place a reader has to be able to find that. |
 | `assistant --version --json` writes a plain line where `assistant --json --version` writes a document. `internal/cli/doc.go` records it and the parser rework owns it. | Writes `--json` before the verb everywhere, which every verb honours, and reports the `--version` ordering it observed. |
 | `internal/gate` installs a hook invoking `assistant gate admit`, and `internal/cli`'s verb table carries no `gate` verb. No push can cross the consent boundary P1 draws; every push to a gate is declined by the command surface reporting incorrect usage. | Drives the push, checks that it is not accepted with nothing checking it, and reports what actually declined it. |
 | `core.hooksPath` in a git configuration file redirects a gate's own hooks. `internal/gate/doc.go` names it as an open gap. | Drives a push under the redirect and reports which hook ran, off the fixture's tripwire file. Reported as a known gap, never as a pass. |
 | Nothing reads a repository's configuration document from the default branch, so PRD section 10's abort before launch has no owner. | Drives `config.Parse` and `vcs.Repository.FileAt` against the planted documents directly, and observes on a run that it starts anyway. Reported as a gap against section 10. That nothing a branch names is executed is established nowhere in this build; the row below says why. |
-| Two of `internal/graph`'s three loop bounds sit on the back edge into a fixer, and no stage can produce a fix-eligible finding without a stage body. | Drives the run-wide step budget, which is reachable, and says the other two are not. |
+| Two of `internal/graph`'s three loop bounds sit on the back edge into a fixer, and no stage here can produce a fix-eligible finding: a stage without a body reports an ask finding, which never enters a fix round, and the one stage with a body declares no fix rounds and reports only notes. | Drives the run-wide step budget, which is reachable, and says the other two are not. |
 | No shipped surface reports which agent a run resolved. No `internal/machine` shape carries one, and `doctor`'s `agent` check resolves the constant `auto` against the default catalog, so it answers what is runnable on this machine rather than what any run resolved; `internal/cli` says so itself. | Does not claim it. The P7 branch test establishes the pushed-configuration rejections and the suppression refusal instead, both of which observe something. |
-| `internal/fixture`'s nothing-executed evidence has no producer for the branch-installation family. Every executable those conditions plant - the `.claude` hooks, the branch's agent binary, its `commands.test`, the `.githooks` scripts, `.envrc` - is reached only through a stage body, and `internal/stages` holds none, so a run launches no agent, runs no configured command, and makes no commit or push. | Rests no clause on the tripwire file: one asserting that absence would hold whatever the product resolved. The P7 branch test reads it and logs what it holds, so the evidence is in place the day a stage body lands, and the `Drives` row for that condition says nothing about it is established. |
+| `internal/fixture`'s nothing-executed evidence has no producer for the branch-installation family. Every executable those conditions plant - the `.claude` hooks, the branch's agent binary, its `commands.test`, the `.githooks` scripts, `.envrc` - is reached only through a stage body that launches something, and the one body `internal/stages` has reads the supplied intent, so a run launches no agent, runs no configured command, and makes no commit or push. | Rests no clause on the tripwire file: one asserting that absence would hold whatever the product resolved. The P7 branch test reads it and logs what it holds, so the evidence is in place the day a stage body lands, and the `Drives` row for that condition says nothing about it is established. |
 | It has no producer for the hostile-template family either, for a different reason. Those hooks are receive-side, so only a push to the gate could run them, and no push reaches them: `internal/gate`'s own `pre-receive` runs `assistant gate admit` and exits on its status before chaining to a preserved hook at the `.local` name, and the row above says there is no such verb. So admission fails, the push is declined, and neither a promoted template `pre-receive` nor `update` nor `post-update` runs. | Rests no clause on the tripwire file, for the same reason as the row above, and none on the gate's hooks directory either - so whether a hook arrived is unestablished as well as whether one ran. What those four subtests establish is how the initialization came out: the two refusals refuse with the substrings their conditions record, and the two closed channels are not refused. |
 
 ## What accounts for what
@@ -131,15 +139,15 @@ works around them.
 Three tables, each checked in both directions so a row cannot outlive the thing
 it describes:
 
-- `Coverage()` — one row per PRD principle, saying whether this harness reaches
+- `Coverage()` - one row per PRD principle, saying whether this harness reaches
   it and at what reach. `TestEveryPrincipleIsDrivenHereOrDeclaredNotToBe`
   fails when a row and the `principles.Cite` calls in this package disagree.
-- `Drives()` — one row per condition `internal/fixture` plants, naming the test
+- `Drives()` - one row per condition `internal/fixture` plants, naming the test
   that drives it or saying why nothing does.
   `TestEveryPlantedConditionIsDrivenOrDeclaredUndriven` fails when a planted
   condition has no row, a row names a condition that is not planted, or a row
   names a test this package does not have.
-- `Settlements()` — this harness's answer to each of the eight decisions
+- `Settlements()` - this harness's answer to each of the eight decisions
   `internal/fixture` recorded and declined to make.
   `TestEveryQuestionTheFixtureLeftOpenIsSettledHere` fails when a question has
   no settlement or a settlement has no question.

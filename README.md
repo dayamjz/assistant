@@ -151,6 +151,7 @@ working as it always did.
 | `internal/graph` | The execution engine: nodes, edges, bounds, halt points, checkpoints. |
 | `internal/home` | The one root everything lives under: where the database, the socket, the lock, the gates, the isolated copies and the logs go, and the exclusive lock that gives a home one service. |
 | `internal/ipc` | The local protocol between the command line and the background service: the method table, the event taxonomy, the bounded stream, the client and the server, peer identification, and the one resolver it derives for an answer that arrives here. |
+| `internal/journey` | The end-to-end harness: the `assistant` binary driven as a process against `internal/fixture`'s subject, organized by PRD principle, with every check carrying the counterfeit observations it must reject, and the three tables that account for principles, planted conditions and the fixture's open questions. |
 | `internal/machine` | The agent-facing half of the surface: the shapes an answer takes, the three exit codes, and the outcome vocabulary. |
 | `internal/pipeline` | The nine stages as a graph definition over `internal/graph`: the stage contract, the fixed order, the state key table, the capabilities a path needs of the adapter, the fix loop, and its halt points and bounds. |
 | `internal/principles` | The build-time check that no principle the PRD lists goes unclaimed: the constants pinned to that list, the `Cite` call a test claims a principle with, the scan that finds those calls, and the written table of what nothing claims. |
@@ -203,14 +204,16 @@ planted is written to `DIR/manifest.json`, whose path the script prints. The
 fixture is built from nothing every time, so none of it is checked in.
 
 `make test` exercises `internal/vcs`, `internal/gate`, `internal/cli`,
-`internal/service`, and `internal/fixture` against a real git, so it needs a
+`internal/service`, `internal/journey`, and `internal/fixture` against a real
+git, so it needs a
 git binary on `PATH`; `internal/vcs`'s package comment states the minimum
 version it needs. An `internal/fixture` test skips itself when git is not on
 `PATH`, and the ones that drive the planted toolchain conditions skip when `go`
-is not either. The `internal/cli` and `internal/service` tests that drive a run
-skip on any platform but linux and darwin, because `internal/ipc` reads no
-local socket peer credentials there and so refuses every method that drives
-one.
+is not either. The `internal/cli`, `internal/service` and `internal/journey`
+tests that drive a run skip on any platform but linux and darwin, because
+`internal/ipc` reads no local socket peer credentials there and so refuses
+every method that drives one. `internal/journey/README.md` records what that
+leaves a green run of the harness establishing on such a platform.
 
 `make lint` requires golangci-lint from the v2 series, the line that can read
 this module's `.golangci.yml`. It refuses when the linter is missing or comes
