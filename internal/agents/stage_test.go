@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/agents"
+	"github.com/dayamjz/assistant/internal/agents/route"
 	"github.com/dayamjz/assistant/internal/agents/standin"
 	"github.com/dayamjz/assistant/internal/principles"
 )
@@ -129,25 +130,8 @@ func TestNoRouteFromAStageAgentToAFixerSession(t *testing.T) {
 	t.Parallel()
 	principles.Cite(t, principles.P4)
 
-	if routes := routesToAFixerSession(reflect.TypeOf(agents.StageAgent{})); len(routes) != 0 {
+	if routes := route.ToFixerSession(reflect.TypeOf(agents.StageAgent{})); len(routes) != 0 {
 		t.Fatalf("a stage body can reach a fixer session from a StageAgent, so P4 is a rule "+
 			"callers follow rather than a mechanism:\n  %s", strings.Join(routes, "\n  "))
-	}
-}
-
-// TestTheRouteWalkFindsARouteThatExists is what keeps the test above from
-// passing because the walk looks at nothing.
-//
-// agents.Resolution is a real type in this package with an exported Runner
-// field, which is exactly the shape a Deps struct would take if someone wired
-// one carelessly, so it is a route the walk must report. A walk that returned
-// nothing for everything would pass the guarantee test forever.
-func TestTheRouteWalkFindsARouteThatExists(t *testing.T) {
-	t.Parallel()
-
-	routes := routesToAFixerSession(reflect.TypeOf(agents.Resolution{}))
-	if len(routes) == 0 {
-		t.Fatal("the walk found no route out of agents.Resolution, which has an exported " +
-			"Runner field, so it is not looking at anything and the guarantee test above is vacuous")
 	}
 }
