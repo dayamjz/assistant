@@ -104,21 +104,23 @@
 // would otherwise be carried on for the same reason.
 //
 // What is structural and what is not are named apart here, because describing
-// the second as the first is what let this ship. This service never picks such
-// a run up itself: the ending is recorded in the run's slot under the one
-// mutex claim and release also take, so a continuation either finds the ending
-// in the slot it is giving back or finds the slot itself held for the length
-// of the caller's move and is refused it. That is a bound on the interleaving
+// the second as the first is what let this ship. The segment an ending cancels
+// is never followed by a continuation: the ending is recorded in the run's
+// slot under the one mutex claim and release also take, so that segment's
+// release reports it, and a run with no segment under its slot has the ending
+// stand in that slot while it is written. That is a bound on the interleaving
 // rather than a read that could be stale, and it is what carryOn's refusal
 // rests on.
 //
-// Two things it does not reach, and neither is closed. The segment already
-// inside a node when the ending is recorded still has to return: cancel
-// signals it and does not wait for it, which cancel's own documentation
-// states, so execution can outlast the answer by as long as that node takes to
-// notice. And a second caller that read the run's record before the ending was
-// written can still advance the run once that segment gives its slot back; its
-// read raced the ending, and nothing recorded after that read can order it.
+// It bounds that segment and no other, and what it leaves open is disclosed
+// rather than implied. The segment already inside a node when the ending is
+// recorded still has to return: cancel signals it and does not wait for it,
+// which cancel's own documentation states, so execution can outlast the answer
+// by as long as that node takes to notice. And a caller that read the run's
+// record before the ending was recorded can still advance the run once the
+// slot is given back; its read was made before there was anything to order it
+// against, and a segment it strands is not one the ending marked, so carryOn
+// may carry that one on. endRun holds the full list.
 //
 // A continuation cannot cause another, and that is structural too. It runs
 // under this service's own context, so the only contexts that can end its

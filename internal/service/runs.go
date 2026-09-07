@@ -218,7 +218,8 @@ func (s *Service) respond(ctx context.Context, req machine.RespondRequest) (mach
 // cancel ends a run. It records the ending in the run's slot and cancels the
 // context of the segment executing it before it moves the record, so a segment
 // that is between cancellation points stops rather than carrying on past a run
-// that is over, and nothing picks the run up behind it.
+// that is over, and this service does not follow that segment with a
+// continuation of its own.
 //
 // That is a signal and not a join. Nothing here waits for the advancing
 // goroutine to leave the node it is in and give its slot back, so the record
@@ -234,13 +235,15 @@ func (s *Service) respond(ctx context.Context, req machine.RespondRequest) (mach
 // is a change to what cancel costs a caller, which is its own decision rather
 // than this one.
 //
-// What the slot does close is the other half: this service does not pick the
-// run up behind the caller. endRun records the ending where carryOn reads it,
-// under the mutex the slot is taken and given back under, so the segment this
-// cancels is never followed by a continuation. What it does not close is a
-// second caller already part way through a call of its own, whose read of the
-// record predates the move below; that caller raced the ending, and the record
-// it settles on is what decides it.
+// What the slot does close is the other half: the segment this cancels is
+// never followed by a continuation. endRun records the ending where carryOn
+// reads it, under the mutex the slot is taken and given back under, and it
+// stands in the slot itself when no segment holds one, so nothing begins
+// advancing the run while the move below is being made. What that does not
+// reach is a caller already part way through a call of its own, whose read of
+// the record predates this: it can take the slot once endRun gives it back and
+// go on to advance a run this call has ended. endRun names that residual and
+// the others with it.
 func (s *Service) cancel(ctx context.Context, req machine.CancelRequest) (machine.Run, error) {
 	built, err := s.driverFor(ctx)
 	if err != nil {
@@ -712,16 +715,22 @@ func (s *Service) release(runID string) bool {
 // case for each side of the segment's release because the ending can arrive on
 // either. A slot that is taken is marked and whatever segment stands under it
 // is ended, so the release that segment makes reports the ending and no
-// continuation follows it. A run whose slot is free has this stand in it for
-// the whole of the caller's move, so nothing takes the slot while the ending
-// is unwritten and every later claim reads the ended record instead.
+// continuation follows it. A run whose slot is free has this stand in it while
+// the caller writes the ending, so no segment begins under an ending that is
+// still in flight.
 //
-// Two things it does not close, both disclosed rather than implied. A segment
-// already inside a node still has to return, which is the window cancel's own
-// documentation describes. And a second caller that read the run's record
-// before the ending was written can still take the slot once the marked
-// segment gives it back: that read raced the ending and no ordering here
-// reaches it, because it was made before this was called.
+// Those two sentences are the whole of what it buys, and neither reaches back
+// past the call. Three things it does not close, disclosed rather than
+// implied. A segment already inside a node still has to return, which is the
+// window cancel's own documentation describes. A caller that read the run's
+// record before this ran can still take the slot once it is given back, on
+// either branch and whether the ending is written by then or not, because that
+// read was made before there was anything here to order it against; a segment
+// it starts and strands is not one this ending marked, so carryOn may carry
+// that one on. And a second ending of the same run in flight at the same time
+// takes the marked branch and gets a forget that does nothing, so the first
+// caller's forget gives the slot back while the second caller's move is still
+// unfinished.
 func (s *Service) endRun(runID string) func() {
 	s.mu.Lock()
 	held, taken := s.advancing[runID]

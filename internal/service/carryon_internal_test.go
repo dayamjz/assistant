@@ -132,9 +132,9 @@ func TestAnEndingThroughTheProtocolIsOrderedAgainstTheSegmentItEnds(t *testing.T
 			t.Fatal("a second ending of the same run reports a segment executing under its slot")
 		}
 
-		// The ending is written, so the slot is free again and a later caller
-		// may advance the run. What it then finds is the terminated record,
-		// which is a question for the record rather than for the slot.
+		// The ending is written, so the slot is free again and a caller may
+		// take it. Whether that caller then advances the run is a question for
+		// the record it read, which the slot no longer answers.
 		forget()
 		if err := s.claim("run", func() {}); err != nil {
 			t.Fatalf("the slot was not given back once the ending was written: %v", err)
