@@ -83,10 +83,17 @@ func Drives() []Drove {
 				"gate under the redirect and the tripwire says which hook git ran."},
 
 		{"refusal-hostile-harness-installation", ReachBinary, branch,
-			"A whole run over the branch carrying the installation, with the tripwire file read at the end."},
+			"A whole run over the branch carrying the installation. The tripwire half of this condition " +
+				"is not established: every executable it plants is reached only through a stage body, " +
+				"internal/stages holds none, and a run therefore launches no agent, runs no configured " +
+				"command, and makes no commit or push, so the tripwire file stays empty whatever the " +
+				"product resolved. The file is read and logged rather than asserted on, and becomes " +
+				"discriminating when a stage body lands."},
 		{"refusal-pushed-commands-and-agent", ReachBinary, branch,
-			"The one call the condition names is driven at package reach; the run alongside it is what " +
-				"establishes that nothing the branch named executed."},
+			"The one call the condition names is driven at package reach: the three keys are dropped and " +
+				"reported as rejections and the one the branch may set survives. Its tripwire half is " +
+				"not established either, for the reason above: executing the branch's commands.test " +
+				"needs a test stage and this build has no stage body."},
 		{"refusal-unparseable-trusted-config", ReachPackage, trustedDoc,
 			"The document is read off the default branch through internal/vcs and parsed. No run reads a " +
 				"repository's own document in this build, which the same test observes on a run."},
