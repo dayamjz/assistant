@@ -243,8 +243,8 @@ func TestTheThreeIntentStatesAreReportedApart(t *testing.T) {
 }
 
 // A supplied-intent bit standing over no text is not a supplied intent.
-// pipeline.NewState refuses to start such a run, so this is the shape a resume
-// or a hand-built state could present, and reporting it as authoritative
+// pipeline.NewState refuses to start such a run, so this is a state built by
+// hand rather than one a run presents, and reporting it as authoritative
 // acceptance criteria would be reporting criteria that say nothing.
 func TestTheSuppliedBitOverNoTextIsNotAnAuthoritativeIntent(t *testing.T) {
 	t.Parallel()

@@ -120,7 +120,7 @@ func establishIntent(in pipeline.Input) (pipeline.Output, error) {
 	default:
 		return intentReport(
 			"No intent text was recorded for this run, so it carries none.",
-			intentNote("intent-not-supplied", findings.SeverityWarning,
+			intentNote("intent-absent", findings.SeverityWarning,
 				"No intent was recorded for this run, so nothing after this stage has criteria "+
 					"to measure the change against and each judges it on what it does. "+
 					"Supplying an intent, with the decisions and tradeoffs behind it, is what "+
@@ -158,6 +158,11 @@ func readIntent(state pipeline.Reader) (intent string, stated bool, err error) {
 // package: a path that wanted to hold would have to stop using this
 // constructor. The name is the stage's because this package is where all nine
 // bodies go and a bare one would be claimed by the first of them.
+//
+// An id crosses the wire to a driving agent under PRD section 9's relay, so it
+// is vocabulary rather than a label: the three this stage reports name the
+// three intent states its documentation names, and one naming a condition two
+// of them share would tell a machine consumer less than the report does.
 func intentNote(id string, severity findings.Severity, description string) findings.Finding {
 	return findings.Finding{
 		ID:          id,

@@ -885,10 +885,9 @@ func stageNames() []string {
 // intent as authoritative acceptance criteria, an offered one as a hint the
 // change is not held to and not a defect to depart from, and no intent text at
 // all as absent. It decides that from the same two facts this function reads,
-// so what it reports matches what was recorded here, with one corner: a
-// supplied bit standing over blank text is recorded as supplied and reported
-// as no intent, and no run reaches the stage that way because
-// pipeline.NewState refuses that start.
+// so what it reports matches what was recorded here. There is no corner where
+// the two disagree: create refuses a supplied claim with nothing behind it
+// before a row exists, so a supplied source always stands over text.
 //
 // The three are kept apart here anyway because the record must not say that a
 // run holds intent text and that nothing was given.
