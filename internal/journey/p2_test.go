@@ -74,7 +74,7 @@ func TestAPassMeansTheSameThingEverywhere(t *testing.T) {
 				// looked at nothing.
 				States: "the answer carries a report for every stage the gate has",
 				Holds: func(run machine.Run) error {
-					if got, want := len(run.Stages), len(stageOrder()); got != want {
+					if got, want := len(run.Stages), len(stageOrder(t)); got != want {
 						return fmt.Errorf("the run reported %d stage report(s) and the gate has %d stages, "+
 							"so the clauses below have nothing to be about", got, want)
 					}
@@ -197,7 +197,7 @@ func TestAPassMeansTheSameThingEverywhere(t *testing.T) {
 				// never saw.
 				States: "the answer carries a report for every stage the gate has",
 				Holds: func(run machine.Run) error {
-					if got, want := len(run.Stages), len(stageOrder()); got != want {
+					if got, want := len(run.Stages), len(stageOrder(t)); got != want {
 						return fmt.Errorf("the run reported %d stage report(s) and the gate has %d stages, "+
 							"so the clauses below have nothing to be about", got, want)
 					}
@@ -531,9 +531,17 @@ func eachOffered(s standingSkip, ask func(key string, answer journey.Answer) err
 // for into an assertion failure rather than a suite that hangs.
 const standingSkipBound = 15 * time.Second
 
-// stageOrder is the nine stage names in the order internal/pipeline fixes,
-// which is the one owner of that order.
-func stageOrder() []string {
+// stageOrder is the stage names PRD section 5 names, in its order, spelled the
+// way internal/pipeline spells them.
+//
+// It comes from the PRD rather than from pipeline.Order() so that a check
+// comparing against it fails when the product's table and the specification
+// disagree, instead of agreeing with whatever the product says. journey's own
+// mapping is what carries the two spellings the PRD and the code differ on, and
+// requireStageListMatchesThePRD is what holds the two lists together.
+func stageOrder(t *testing.T) []string {
+	t.Helper()
+	requireStageListMatchesThePRD(t)
 	order := pipeline.Order()
 	names := make([]string, 0, len(order))
 	for _, stage := range order {

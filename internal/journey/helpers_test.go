@@ -18,7 +18,6 @@ import (
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/redact"
-	"github.com/dayamjz/assistant/internal/stages"
 	"github.com/dayamjz/assistant/internal/store"
 )
 
@@ -65,38 +64,51 @@ func requiresLocalSocket(t *testing.T, cause error) {
 	}
 }
 
-// stagesWithoutABody is the stages this build has no implementation for, in
-// the order a run takes them.
+// stagesWithoutABody is the stages this harness DECLARES this build has no
+// implementation for, in the order a run takes them.
 //
-// Those are the stages a run holds at, so a check about where a run stops
-// derives its answer from here rather than naming a stage or counting to nine.
-// A body that lands moves where a run first stops, and internal/stages says as
-// much: internal/cli and internal/service read Implemented for the same
-// reason, and a check written against the count would fail the day a body
-// lands for a reason that has nothing to do with what it asserts.
+// It is a declaration read back, never a measurement. Subtracting what the
+// build implements from the stage list is what let this harness quietly become
+// an eight-boundary harness mid-run and report success: a harness that derives
+// its expectations from the build can only fail when the build disagrees with
+// itself. journey.StagesWithoutABody is the named list, and
+// journey.DeclaresEveryStage goes red when those names and the build stop
+// accounting for each other in either direction, so a body that lands or
+// disappears is a change somebody has to write down here.
 //
-// It reads the table compiled into this test binary. That is the same table
-// the binary under test carries unless BinaryVariable names an artifact built
-// from another tree, and one whose bodies differ makes the checks resting on
-// this fail loudly rather than quietly measure something else.
+// requireStageListMatchesThePRD is asked first, so a check resting on this is
+// resting on a stage list the PRD owns rather than one the product supplied.
 func stagesWithoutABody(t *testing.T) []pipeline.Stage {
 	t.Helper()
-	implemented := map[pipeline.Stage]bool{}
-	for _, stage := range stages.Implemented() {
-		implemented[stage] = true
-	}
-	var pending []pipeline.Stage
-	for _, stage := range pipeline.Order() {
-		if !implemented[stage] {
-			pending = append(pending, stage)
-		}
-	}
+	requireStageListMatchesThePRD(t)
+	pending := journey.StagesWithoutABody()
 	if len(pending) < 2 {
-		t.Fatalf("this build has %d stage(s) without a body, so a run no longer walks from one hold to "+
-			"the next; the checks resting on this need rewriting against whatever now holds a run",
+		t.Fatalf("this harness declares %d stage(s) without a body, so a run no longer walks from one "+
+			"hold to the next; the checks resting on this need rewriting against whatever now holds a run",
 			len(pending))
 	}
 	return pending
+}
+
+// requireStageListMatchesThePRD fails the test unless PRD section 5's stage
+// table, internal/pipeline's order and this harness's body-less declaration all
+// account for each other.
+//
+// Every check that names a stage rests on this, so it is asked wherever such a
+// check begins rather than once in a test of its own that a filtered run might
+// skip.
+func requireStageListMatchesThePRD(t *testing.T) {
+	t.Helper()
+	prd, err := journey.PRDStages(moduleRoot(t))
+	if err != nil {
+		t.Fatalf("reading the stage list out of the PRD: %v", err)
+	}
+	if err := journey.AgreesWithPRD(prd, pipeline.Order()); err != nil {
+		t.Fatalf("the product's stage order and the PRD's list disagree: %v", err)
+	}
+	if err := journey.DeclaresEveryStage(journey.Implemented()); err != nil {
+		t.Fatalf("%v", err)
+	}
 }
 
 // claim takes a scenario for this test's exclusive use. A second test wanting
