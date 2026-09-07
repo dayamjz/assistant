@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 )
 
 // What becomes of a run whose segment ended, for every ending that can end
@@ -142,5 +143,61 @@ func TestAnEndingThroughTheProtocolIsOrderedAgainstTheSegmentItEnds(t *testing.T
 		if s.release("run") {
 			t.Fatal("a segment that ran after the ending was written was told the run had been ended")
 		}
+	})
+}
+
+// Background work a continuation registers is ordered against the wait Close
+// makes for it, rather than decided beside that wait.
+//
+// carryOn reaches continueRun from whichever goroutine a segment ended on, so
+// nothing orders its reading of the stop against Close. What is ordered is the
+// registration: startWork and stopWork take one mutex, so either the work is
+// registered before Close stops taking any and Close waits for it, or Close
+// ran first and the work is refused. The interleaving neither allows is work
+// registered after Close has waited, which is a WaitGroup misuse at best and a
+// continuation reading a closed database at worst.
+//
+// Both halves are driven, because a startWork that refused everything would
+// satisfy the second on its own and register nothing at all.
+func TestBackgroundWorkIsEitherWaitedForOrRefused(t *testing.T) {
+	t.Parallel()
+
+	t.Run("work registered before the refusal is waited for", func(t *testing.T) {
+		t.Parallel()
+		s := &Service{}
+		if !s.startWork() {
+			t.Fatal("a service that has not begun giving up refused background work")
+		}
+
+		waited := make(chan struct{})
+		go func() {
+			s.stopWork()
+			s.work.Wait()
+			close(waited)
+		}()
+		select {
+		case <-waited:
+			t.Fatal("the wait finished while work it had taken was still registered")
+		case <-time.After(50 * time.Millisecond):
+		}
+
+		s.work.Done()
+		select {
+		case <-waited:
+		case <-time.After(30 * time.Second):
+			t.Fatal("the wait never finished after the work it took was done")
+		}
+	})
+
+	t.Run("work is refused once the refusal is in place", func(t *testing.T) {
+		t.Parallel()
+		s := &Service{}
+		s.stopWork()
+		if s.startWork() {
+			t.Fatal("a service that has stopped taking background work took some")
+		}
+		// Nothing was registered, so this returns rather than waiting on a
+		// counter the refusal left behind.
+		s.work.Wait()
 	})
 }

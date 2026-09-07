@@ -319,6 +319,14 @@ func TestARunWithNoRecordedPositionHasNotFailed(t *testing.T) {
 // this build defines, every place execution can stand including nowhere, and
 // both answers to whether anything is advancing the run, so a branch that
 // decided from two of the three fails here rather than in a fourth direction.
+//
+// A sweep is only worth what it swept, so this one is held to a positive
+// control. A sweep that walked nothing, or that only ever reached standings
+// with one answer between them, would pass every assertion below without
+// checking anything, and its green would be indistinguishable from its being
+// broken. The control names the three answers OutcomeExecuting has and the
+// count of standings that must be reached, and it fails when any of them is
+// missing.
 func TestNoAnswerContradictsWhatIsAdvancingTheRun(t *testing.T) {
 	t.Parallel()
 	executions := []machine.Execution{machine.ExecutionUnrecorded()}
@@ -329,11 +337,15 @@ func TestNoAnswerContradictsWhatIsAdvancingTheRun(t *testing.T) {
 		executions = append(executions, machine.ExecutionAt(status, graph.State{}))
 	}
 	records := append(store.RunStatuses(), store.RunStatus("invented"))
+	swept := 0
+	actions := map[string]int{}
 	for _, record := range records {
 		for _, execution := range executions {
 			for _, advancing := range []bool{true, false} {
 				standing := machine.Standing{Record: record, Execution: execution, Advancing: advancing}
 				answer := machine.Run{}.Decide(standing)
+				swept++
+				actions[answer.NextAction()]++
 				if strings.TrimSpace(answer.NextAction()) == "" {
 					t.Fatalf("a %s run, recorded position %v, advancing=%v says nothing about what to do",
 						record, execution.Recorded(), advancing)
@@ -351,6 +363,84 @@ func TestNoAnswerContradictsWhatIsAdvancingTheRun(t *testing.T) {
 				}
 			}
 		}
+	}
+
+	// The positive control. Every standing the loops describe was reached, and
+	// the three answers an executing run has were each produced by one of them:
+	// wait, attach and carry it on, and end it because there is nothing to
+	// carry on from. A sweep that reached fewer would be asserting over a
+	// domain narrower than the one it claims.
+	if want := len(records) * len(executions) * 2; swept != want {
+		t.Fatalf("the sweep reached %d standings, want the %d the domain has", swept, want)
+	}
+	unrecordedAndStill := machine.NextActionOf(machine.Standing{
+		Record:    store.RunRunning,
+		Execution: machine.ExecutionUnrecorded(),
+	})
+	for _, want := range []string{
+		machine.OutcomeExecuting.NextActionFor(true),
+		machine.OutcomeExecuting.NextActionFor(false),
+		unrecordedAndStill,
+	} {
+		if actions[want] == 0 {
+			t.Fatalf("no standing in the sweep produced %q, so nothing here checked it", want)
+		}
+	}
+	if unrecordedAndStill == machine.OutcomeExecuting.NextActionFor(false) {
+		t.Fatal("a run with no position and a run standing at one are told the same thing")
+	}
+}
+
+// A run's answer carries the most agent-written text of any shape here, and it
+// travels with angle brackets and ampersands as they were written.
+//
+// machine.Encoder turns HTML escaping off and says why: those three characters
+// are not control characters, and a reader who has to undo the escaping to
+// read a diff or a finding is worse off. That setting cannot reach inside a
+// Marshaler, which writes its own bytes, so Run has to make the same choice
+// again - and did not, which is what this pins. The escaping of control
+// characters is a separate pass over the finished document and is unaffected.
+func TestARunTravelsWithItsTextUnescaped(t *testing.T) {
+	t.Parallel()
+	const written = "use <T> & fix a>b"
+	answer := machine.Run{
+		Record: store.Run{ID: "abc", Intent: written},
+		Stages: []machine.Stage{{
+			Stage: "review",
+			Report: &findings.Report{Summary: written, Findings: []findings.Finding{
+				{ID: "one", Action: findings.ActionNote, Description: written},
+			}},
+		}},
+	}.Decide(machine.Standing{
+		Record:    store.RunRunning,
+		Execution: machine.ExecutionAt(graph.StatusRunning, graph.State{}),
+		Advancing: true,
+	})
+
+	var out bytes.Buffer
+	if err := machine.NewEncoder(&out).Encode(answer); err != nil {
+		t.Fatalf("encoding: %v", err)
+	}
+	line := out.String()
+	for _, escaped := range []string{`\u003c`, `\u003e`, `\u0026`} {
+		if strings.Contains(line, escaped) {
+			t.Fatalf("the answer rewrites %s into an escape a reader has to undo:\n%s", escaped, line)
+		}
+	}
+	if strings.Count(line, written) < 3 {
+		t.Fatalf("the answer does not carry the text as it was written:\n%s", line)
+	}
+
+	// It is still one document a consumer can decode back to what was said.
+	var back machine.Run
+	if err := json.Unmarshal([]byte(line), &back); err != nil {
+		t.Fatalf("decoding what was written: %v\n%s", err, line)
+	}
+	if back.Record.Intent != written {
+		t.Fatalf("the round trip changed the intent: %q", back.Record.Intent)
+	}
+	if back.NextAction() != answer.NextAction() {
+		t.Fatalf("the round trip answered %q, want %q", back.NextAction(), answer.NextAction())
 	}
 }
 

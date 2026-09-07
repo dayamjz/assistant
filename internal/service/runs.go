@@ -654,8 +654,18 @@ func (s *Service) recover(ctx context.Context) {
 // what makes it a continuation rather than a second attempt at somebody's
 // request: there is nobody to answer, and the only thing that ends it is the
 // service giving up the home.
+//
+// Whether it begins at all is startWork's, and that is where the ordering
+// against Close lives rather than in the disposition that got here. carryOn
+// reads the stop to classify an ending, and a read is not an ordering: a
+// continuation decided the instant a stop arrives would otherwise register
+// itself after Close had already waited for everything registered, and run its
+// store reads against a database Close had gone on to shut.
 func (s *Service) continueRun(runID string) {
-	s.work.Add(1)
+	if !s.startWork() {
+		s.log.Printf("run %s was not carried on because this service is giving up the home; recovery continues it on the next open", runID)
+		return
+	}
 	go func() {
 		defer s.work.Done()
 		ctx, cancel := context.WithCancel(s.stopCtx)
@@ -665,6 +675,32 @@ func (s *Service) continueRun(runID string) {
 			s.log.Printf("could not resume run %s: %v", runID, err)
 		}
 	}()
+}
+
+// startWork registers one piece of background work and reports whether it may
+// begin, which is no once Close has stopped taking any.
+//
+// It is the one place work this service will wait for is registered, and it
+// takes the same mutex stopWork does, so the registration and the decision
+// that no more will be registered cannot interleave. Either this runs first
+// and Close waits for what it registered, or Close ran first and this refuses;
+// there is no order in which work is registered after Close has waited.
+func (s *Service) startWork() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.givingUp {
+		return false
+	}
+	s.work.Add(1)
+	return true
+}
+
+// stopWork refuses every further piece of background work, so that what Close
+// waits for is a set that cannot grow while it waits.
+func (s *Service) stopWork() {
+	s.mu.Lock()
+	s.givingUp = true
+	s.mu.Unlock()
 }
 
 // slot is the one place a run advances in, and the one place an ending of that

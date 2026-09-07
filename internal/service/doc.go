@@ -134,17 +134,28 @@
 // rather than implied. The segment already inside a node when the ending is
 // recorded still has to return: cancel signals it and does not wait for it,
 // which cancel's own documentation states, so execution can outlast the answer
-// by as long as that node takes to notice. And a caller that read the run's
-// record before the ending was recorded can still advance the run once the
-// slot is given back; its read was made before there was anything to order it
-// against, and a segment it strands is not one the ending marked, so carryOn
-// may carry that one on. endRun holds the full list.
+// by as long as that node takes to notice. And a caller whose read of the run's
+// record predates the ending reaching that record can still advance the run
+// once the slot is given back; the bound is that commit rather than the moment
+// the ending was recorded in the slot, because cancel does the first and then
+// the second. A continuation this service started is one of those readers and
+// not only a producer of segments: it reads the record through attach, and a
+// segment it starts is not one the ending marked, so carryOn may carry that
+// one on. endRun holds the full list.
 //
 // A continuation cannot cause another, and that is structural too. It runs
 // under this service's own context, so the only contexts that can end its
 // segment are the service stopping and an ending through the protocol, and
 // carryOn refuses both. What is left is one continuation per caller that
 // walked away.
+//
+// Whether a continuation begins at all is ordered against Close rather than
+// decided beside it. carryOn reads the stop to classify an ending, and that
+// read races nothing into place; the registration does, because startWork adds
+// to the set Close waits for under the same mutex stopWork closes that set
+// with. A continuation decided as a stop arrives either registers before Close
+// stops taking work, and is waited for, or is refused - never registered after
+// the wait, against a database Close has gone on to shut.
 //
 // # A push is the one caller that does not wait
 //
