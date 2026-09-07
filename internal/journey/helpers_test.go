@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dayamjz/assistant/internal/agents/standin"
 	"github.com/dayamjz/assistant/internal/fixture"
@@ -46,21 +47,25 @@ func requiresIdentifiedPeer(t *testing.T) {
 	}
 }
 
-// requiresLocalSocket skips a test whose service did not come up, on a
-// platform that has no local socket transport to serve this protocol over.
+// requiresLocalSocket skips a check that needs a service, on a platform that
+// has no local socket transport to serve this protocol over.
 //
 // It is the sibling packages' second guard, on their terms: internal/service
-// and internal/cli both carry it, both bound it by the same written-down
-// platform predicate, and a platform that does identify peers is one where a
-// service that failed to come up is a failure rather than a skip. Its one
-// caller is serving, which is where every service these tests start is started,
-// and it answers both questions a caller could be asking there: on such a
-// platform a service that had to come up did not, and a test whose subject is
-// why one did not is reading the transport rather than what it named.
-func requiresLocalSocket(t *testing.T, cause error) {
+// and internal/cli both carry it, and all three bound it by the same
+// written-down platform predicate, so a failure to serve anywhere the
+// transport does exist stays a failure.
+//
+// It is taken before the service is started rather than after it fails,
+// because a check whose subject is a service that did not come up cannot tell
+// the transport from what it was testing, and because waiting out a readiness
+// timeout to learn what the platform already said is time spent on an answer
+// nobody reads. Skipping first reaches exactly the same set: the predicate is
+// the platform and nothing else.
+func requiresLocalSocket(t *testing.T) {
 	t.Helper()
 	if !platformIdentifiesPeers() {
-		t.Skipf("%s has no local socket transport to serve this protocol over: %v", runtime.GOOS, cause)
+		t.Skipf("%s has no local socket transport to serve this protocol over, so no check here that "+
+			"needs a service establishes anything", runtime.GOOS)
 	}
 }
 
@@ -134,24 +139,25 @@ func open(t *testing.T, scenario fixture.Scenario, opts ...func(*journey.Options
 // serving starts the service in a process this test owns, so it can be killed
 // the way a crash kills it, and reports what starting it came to.
 //
-// It is the one call to journey.Serve in this package's tests, and it is that
-// so the platform guard cannot be forgotten: a service that did not come up is
-// a failure everywhere the transport it binds exists and a skip where it does
-// not, which is the sibling packages' answer, and a test that reached past
-// this would take neither. The residual gap is that nothing enforces it. Go
-// has no way to close the door on an exported method, and a test asserting it
-// by reading this package's source would be proving a pattern rather than a
-// behaviour, which is the shape this repository rejects. So it is a rule a
-// reader keeps, and the one thing that makes it keepable is that both answers
-// a caller could want are here: serve for a service that has to come up, and
-// this for a test whose subject is one that did not.
+// This and startsService are the two ways a service is started here, and both
+// take the platform guard first, which is what keeps a check from failing for
+// the transport rather than for the product. There are two because a service
+// this harness owns as a child and a service the command surface starts are
+// different things: only the first can be killed at a stage boundary, and only
+// the second answers as a document.
+//
+// The rule they exist for is that no test starts a service another way, and
+// the residual gap is that nothing enforces it. Go cannot close the door on an
+// exported method, and a test asserting it by reading this package's source
+// would prove a pattern rather than a behaviour, which is the shape this
+// repository rejects. So it is a rule a reader keeps, and what makes it
+// keepable is that every answer a caller could want is here: serve for a
+// service that has to come up, this for a test whose subject is one that did
+// not, and startsService for one asked for over the surface.
 func serving(t *testing.T, j *journey.Journey) error {
 	t.Helper()
-	err := j.Serve()
-	if err != nil {
-		requiresLocalSocket(t, err)
-	}
-	return err
+	requiresLocalSocket(t)
+	return j.Serve()
 }
 
 // serve starts the service and fails the test unless it came up.
@@ -160,6 +166,19 @@ func serve(t *testing.T, j *journey.Journey) {
 	if err := serving(t, j); err != nil {
 		t.Fatalf("serving: %v", err)
 	}
+}
+
+// startsService runs a command of the surface that serves in the foreground,
+// bounded, and returns the document it answered.
+//
+// A caller uses it for a service that is expected to refuse rather than serve,
+// which is why the bound is its own argument: unbounded, a service that
+// accepted what it should have refused never returns, and the check whose
+// whole subject is a refusal would hang instead of reporting.
+func startsService(t *testing.T, j *journey.Journey, within time.Duration, args ...string) journey.Answer {
+	t.Helper()
+	requiresLocalSocket(t)
+	return j.CommandBounded(j.Dir(), within, args...)
 }
 
 // succeeds fails the test unless the command answered successfully, and

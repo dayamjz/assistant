@@ -286,7 +286,7 @@ func TestAPassMeansTheSameThingEverywhere(t *testing.T) {
 		}
 		offered.attempts = append(offered.attempts, unserved{
 			key:    key,
-			answer: j.CommandBounded(j.Dir(), standingSkipBound, "service", "start", "--foreground"),
+			answer: startsService(t, j, standingSkipBound, "service", "start", "--foreground"),
 		})
 	}
 	for _, key := range config.Keys() {

@@ -476,14 +476,16 @@ Each has cost this repository more than one round of review.
   through the package that owns the mechanism, because the one stage body this
   build has reads the supplied intent and launches nothing, so a run reaches no
   agent, no push, and no code host. It takes both of the platform guards
-  `internal/cli` and `internal/service` carry, on their terms: a test that
+  `internal/cli` and `internal/service` carry, on their terms: a check that
   drives a run skips where `internal/ipc` reads no local socket peer
-  credentials, and a test that starts a service skips where there is no local
+  credentials, and a check that needs a service skips where there is no local
   socket transport to serve the protocol over, which is the wider of the two
   because a check needs a service before it can drive anything. Either skip is
   recorded as a limit in that `README.md` and in the `Coverage` note of every
   principle it takes down with it, because a skipped check that reads as a pass
-  is what this package exists to refuse.
+  is what this package exists to refuse. Neither limit is recorded as a list of
+  the checks it takes down: an enumeration goes stale the next time one is
+  added, so both say what a green run there establishes instead.
 
 ## Tests
 
