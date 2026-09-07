@@ -30,9 +30,15 @@ import (
 // be the same value for every run of this service. That second argument is the
 // decisive one, since it holds whether or not a process ever restarts.
 //
-// So the adapters are here, and the run's own facts - which repository, which
-// run, where its target stood when it was observed - are declared state keys
-// in internal/pipeline. Lifetime decides the owner, which is what P14 asks.
+// So the adapters are here, and the run's own facts are declared state keys in
+// internal/pipeline. This build declares two of them, KeyRepository and
+// KeyRun, which are what Copy below derives its path from. Lifetime decides
+// the owner, which is what P14 asks.
+//
+// Where the run's target stood when it was observed is not one of them here.
+// Only the rebase and push stages need it, and declaring a key is one row in
+// internal/pipeline/key.go, so the rebase stage adds that row when it lands
+// rather than this seam declaring a key nothing reads.
 //
 // # The agent is not a Runner, and that is P4
 //
