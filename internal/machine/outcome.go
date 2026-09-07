@@ -96,8 +96,8 @@ const (
 )
 
 // outcomes is the closed set in the order the table above declares them,
-// which is the order PRD section 9's row declares them in: the four that say a
-// run is finished with, then the two that say it is not. internal/outcomes
+// which is the order the PRD's outcome row declares them in: the four that say
+// a run is finished with, then the two that say it is not. internal/outcomes
 // fails the build when the two orders come apart.
 var outcomes = []Outcome{
 	OutcomeChecksPassed, OutcomePassed, OutcomeFailed, OutcomeCancelled,

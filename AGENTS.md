@@ -318,7 +318,7 @@ Each has cost this repository more than one round of review.
   one that disagrees with the outcome beside it; build an answer through
   `Decide` rather than filling the fields in. `OutcomePassed` has no producer
   here, because nothing in this build records that a pull request merged. It
-  does not own the outcome set: PRD section 9's row does, and
+  does not own the outcome set: the PRD's outcome row does, and
   `internal/outcomes` fails the build when the two come apart, so the constant
   block's order is that row's order rather than a free choice.
 - `internal/service` is the background service PRD section 8's process model
@@ -408,13 +408,15 @@ Each has cost this repository more than one round of review.
   the residual gaps: a citing test may check nothing, and the scan reads source
   rather than a built test binary.
 - `internal/outcomes` is that package's sibling and not a generalization of it:
-  it fails the build when PRD section 9's outcome row and `internal/machine`'s
-  set stop declaring the same six values, in the same order, in the same two
+  it fails the build when the PRD's outcome row and `internal/machine`'s set
+  stop declaring the same six values, in the same order, in the same two
   groups. The row is the owner in the mechanism and not only in the prose: the
   whole extraction rule is a `data-outcome` attribute on a `<code>` inside
   `<tr id="outcome-set">`, and a marker anywhere else in the document is a
-  refusal rather than a seventh outcome. A set the rule cannot read is a
-  refusal too, never a short list. Agreement is not correctness, and the gaps are worth knowing
+  refusal rather than a seventh outcome. Where the row lives is the separate
+  question: it has to sit inside `<section id="surfaces">`, named by that id
+  because a section inserted earlier renumbers the section and not the id. A
+  set the rule cannot read is a refusal too, never a short list. Agreement is not correctness, and the gaps are worth knowing
   before relying on it: nothing here reads what the row says an outcome
   *means*, nothing pins `machine.OutcomeOf`'s translation from a run's state,
   a set both sides get wrong agrees, and a field or a second next action added

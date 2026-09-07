@@ -1,4 +1,4 @@
-// Package outcomes fails the build when PRD section 9's outcome row and
+// Package outcomes fails the build when the PRD's outcome row and
 // internal/machine's outcome set stop saying the same thing.
 //
 // What that proves is narrow, and the narrowness is the first thing to say
@@ -21,15 +21,16 @@
 //
 // # What counts as a declaration
 //
-// The PRD declares an outcome by marking it inside one row of section 9's
-// contract table, the row anchored <tr id="outcome-set">:
+// The PRD declares an outcome by marking it inside one row of the contract
+// table in its Surfaces section: the section anchored <section id="surfaces">,
+// and inside it the row anchored <tr id="outcome-set">:
 //
 //	<code data-outcome="finished">checks-passed</code>
 //	<code data-outcome="unfinished">executing</code>
 //
 // The element's text is the value that travels and the attribute is the group
 // the row puts it in. The marker and not the word is what is read, because
-// section 9 discusses these values in prose as well as declaring them: the
+// that section discusses these values in prose as well as declaring them: the
 // word executing is set in a code element there more than once and declares an
 // outcome once. The row and not the section is what is read for the same
 // reason one step further out, and because that row says it is where the set
@@ -37,6 +38,16 @@
 // seventh outcome, so the sentence in the row stays true of the mechanism. The
 // rule is one a reader can apply by eye, and it is not tied to the classes on
 // the element, which are styling.
+//
+// Where the row itself lives is the other half, and it is a separate question
+// from where the markers are read. The row has to sit inside that one section,
+// so a row moved elsewhere is a refusal rather than a pin that stays green
+// while the section this package is documented against no longer states the
+// set. What that establishes is that the row is inside <section id="surfaces">,
+// by that section's id; it does not establish the section's number, which is
+// why these comments name the section rather than its position in the
+// document, and why a section inserted earlier in the PRD leaves every one of
+// them true.
 //
 // The build declares an outcome by having a member in machine.Outcomes, whose
 // group is machine.Outcome.Terminal and whose action is

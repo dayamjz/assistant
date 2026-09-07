@@ -16,8 +16,8 @@ import (
 // owns where the document is.
 const PRDPath = principles.PRDPath
 
-// Agreement is the answer to one question: do PRD section 9's machine
-// interface row and internal/machine's outcome set say the same thing.
+// Agreement is the answer to one question: do the PRD's outcome row and
+// internal/machine's outcome set say the same thing.
 //
 // Its scope is the set and what the row says about the set. It says nothing
 // about whether the six are the right six, and nothing about whether an
@@ -50,15 +50,30 @@ type Agreement struct {
 
 // OK reports whether the two sides declare the same values, in the same order,
 // in the same groups, and every one of them carries a next action.
+//
+// A value that compared nothing is not agreement. An Agreement with an empty
+// Listed or an empty Built reports false, which is what the zero value this
+// package hands back beside every refusal is, so a caller that dropped that
+// error cannot read the result as two sides that agree. Only Compare produces
+// a value with both sides filled in.
 func (a Agreement) OK() bool {
-	return len(a.Unbuilt) == 0 && len(a.Unlisted) == 0 &&
+	return a.compared() && len(a.Unbuilt) == 0 && len(a.Unlisted) == 0 &&
 		len(a.Reordered) == 0 && len(a.Regrouped) == 0 && len(a.Actionless) == 0
+}
+
+// compared reports whether both sides were read at all.
+func (a Agreement) compared() bool {
+	return len(a.Listed) > 0 && len(a.Built) > 0
 }
 
 // Report describes everything OK is false for and says what closes each. It is
 // empty when OK is true.
 func (a Agreement) Report() string {
 	var b strings.Builder
+	if !a.compared() {
+		fmt.Fprintf(&b, "the comparison was over %d declared outcomes and %d built ones, so it compared nothing.\n", len(a.Listed), len(a.Built))
+		b.WriteString("  This is the value Check returns beside a refusal. Read the error it came with rather than this.\n")
+	}
 	for _, name := range a.Unbuilt {
 		fmt.Fprintf(&b, "%s: PRD section 9 declares it and internal/machine does not.\n", name)
 		b.WriteString("  Add it to the constant block and the set in internal/machine/outcome.go, or take its marker out of the PRD.\n")

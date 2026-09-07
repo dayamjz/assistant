@@ -32,6 +32,54 @@ func prdHTML() string {
 </body></html>`
 }
 
+// wantSet is what the fixture declares, in the order it declares it.
+func wantSet() []Listed {
+	return []Listed{
+		{"checks-passed", true}, {"passed", true}, {"failed", true}, {"cancelled", true},
+		{"decision", false}, {"executing", false},
+	}
+}
+
+// movedRow returns two documents that differ in one thing only: which section
+// the outcome row sits in.
+//
+// In outside, the row is lifted out of the surfaces section and put into the
+// section before it, whole and carrying every marker it had. In inside, that
+// same document has the two sections' ids exchanged, so the row's new home is
+// the one the rule looks in. Reading inside is what makes outside a control:
+// without it a refusal could come from the move having broken the document,
+// and the case would pass for the wrong reason.
+func movedRow(t *testing.T) (outside, inside string) {
+	t.Helper()
+	full := prdHTML()
+	const host = `<section id="execution" class="prd-anchor">`
+	if strings.Count(full, host) != 1 {
+		t.Fatalf("the fixture does not hold exactly one %s to move the row into", host)
+	}
+	from := strings.Index(full, rowAnchor)
+	if from < 0 {
+		t.Fatalf("the fixture holds no %s", rowAnchor)
+	}
+	width := strings.Index(full[from:], "</tr>")
+	if width < 0 {
+		t.Fatal("the fixture's outcome row is never closed")
+	}
+	row := full[from : from+width+len("</tr>")]
+
+	outside = strings.Replace(full[:from]+full[from+width+len("</tr>"):],
+		host, host+"<table><tbody>"+row+"</tbody></table>", 1)
+	if !strings.Contains(outside, host+"<table><tbody>"+rowAnchor) {
+		t.Fatalf("the row was not moved into %s, so the document is unchanged in the way that matters", host)
+	}
+
+	inside = strings.Replace(outside, sectionAnchor, `<section id="machine"`, 1)
+	inside = strings.Replace(inside, `<section id="execution"`, `<section id="surfaces"`, 1)
+	if strings.Count(inside, sectionAnchor) != 1 {
+		t.Fatalf("exchanging the two ids left %d %s in the document", strings.Count(inside, sectionAnchor), sectionAnchor)
+	}
+	return outside, inside
+}
+
 // names renders a read set the way a failure reads best.
 func names(set []Listed) string {
 	var b strings.Builder
@@ -50,14 +98,18 @@ func names(set []Listed) string {
 // a document shaped like the real one, including the code elements elsewhere
 // in the same section that hold an outcome's value without declaring one.
 func TestFromPRDReadsTheMarkersInTheRowAndNothingElse(t *testing.T) {
-	got, err := FromPRD([]byte(prdHTML()))
+	assertReads(t, prdHTML())
+}
+
+// assertReads fails unless FromPRD reads the fixture's six declarations back
+// in the fixture's order and groups.
+func assertReads(t *testing.T, html string) {
+	t.Helper()
+	got, err := FromPRD([]byte(html))
 	if err != nil {
 		t.Fatalf("FromPRD: %v", err)
 	}
-	want := []Listed{
-		{"checks-passed", true}, {"passed", true}, {"failed", true}, {"cancelled", true},
-		{"decision", false}, {"executing", false},
-	}
+	want := wantSet()
 	if len(got) != len(want) {
 		t.Fatalf("FromPRD = %s, want %s", names(got), names(want))
 	}
@@ -68,15 +120,37 @@ func TestFromPRDReadsTheMarkersInTheRowAndNothingElse(t *testing.T) {
 	}
 }
 
+// TestFromPRDPinsTheRowToTheSectionThatOwnsIt is the pair the containment rule
+// rests on. The two documents differ in nothing but which section the row is
+// inside: the one where it sits outside is refused, and the one where the same
+// move lands it inside the section the rule looks in reads back the whole set.
+// Without the second half, the first would pass for a document the move had
+// simply broken.
+func TestFromPRDPinsTheRowToTheSectionThatOwnsIt(t *testing.T) {
+	outside, inside := movedRow(t)
+	if got, err := FromPRD([]byte(outside)); !errors.Is(err, ErrPRD) {
+		t.Fatalf("a row outside the section that owns it reads as %s, %v, want an ErrPRD", names(got), err)
+	}
+	assertReads(t, inside)
+}
+
 // TestFromPRDRefusesASetItCannotTrust is why a short set is never an answer:
 // each of these is a document the rule reads differently from a reader, and a
 // silent short set would quietly shrink what the comparison is over.
 func TestFromPRDRefusesASetItCannotTrust(t *testing.T) {
 	full := prdHTML()
+	outsideTheSection, _ := movedRow(t)
 	cases := []struct {
 		name string
 		html string
 	}{
+		{"the row is outside the section that owns it", outsideTheSection},
+		{"no section that owns the row", strings.Replace(full, sectionAnchor, `<section id="elsewhere"`, 1)},
+		{"two sections that own the row", strings.Replace(full, sectionAnchor, `<section id="surfaces"></section>`+sectionAnchor, 1)},
+		{"the section is never closed", strings.Replace(full, "</section>\n</body>", "\n</body>", 1)},
+		{"a section nested in it", strings.Replace(full,
+			`<section id="surfaces" class="prd-anchor">`,
+			`<section id="surfaces" class="prd-anchor"><section id="inner"><p>x</p></section>`, 1)},
 		{"no outcome row", strings.Replace(full, `<tr id="outcome-set"`, `<tr id="other"`, 1)},
 		{"the row is never closed", strings.Replace(full, "</td></tr>\n  </tbody>", "\n  </tbody>", 1)},
 		{"two outcome rows", strings.Replace(full, `<tr id="outcome-set"`, `<tr id="outcome-set"></tr><tr id="outcome-set"`, 1)},
@@ -102,6 +176,9 @@ func TestFromPRDRefusesASetItCannotTrust(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			if c.html == full {
+				t.Fatal("this case did not change the fixture, so it is the readable document under another name and would pass without the rule it is named for")
+			}
 			got, err := FromPRD([]byte(c.html))
 			if !errors.Is(err, ErrPRD) {
 				t.Fatalf("FromPRD = %s, %v, want an ErrPRD", names(got), err)

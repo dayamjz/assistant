@@ -33,6 +33,33 @@ func TestTwoSidesThatSayTheSameThingAgree(t *testing.T) {
 	}
 }
 
+// TestAValueThatComparedNothingIsNotAgreement holds the emptiness invariant
+// where a caller cannot step around it. Check hands back a zero Agreement
+// beside every refusal, and .golangci.yml excludes errcheck from _test.go,
+// which is where this check runs: a test that dropped that error would print
+// a pass having compared nothing if OK did not answer for this.
+func TestAValueThatComparedNothingIsNotAgreement(t *testing.T) {
+	listed, built := agreed()
+	cases := []struct {
+		name string
+		a    Agreement
+	}{
+		{"the zero value Check returns beside a refusal", Agreement{}},
+		{"nothing read from the PRD", Compare(nil, built)},
+		{"nothing read from the build", Compare(listed, nil)},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if c.a.OK() {
+				t.Fatal("a value that compared nothing reports the two sides agree")
+			}
+			if report := c.a.Report(); !strings.Contains(report, "compared nothing") {
+				t.Fatalf("the report does not say it compared nothing:\n%s", report)
+			}
+		})
+	}
+}
+
 // TestCompareFindsEveryWayTheTwoCanDisagree drives one difference at a time,
 // and checks that the report names the outcome the difference is about. A
 // pinning check that cannot fire is worse than none, because the tick it

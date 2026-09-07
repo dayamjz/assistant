@@ -14,12 +14,24 @@ import (
 // comparing against less than the document says.
 var ErrPRD = errors.New("the PRD's outcome set could not be read")
 
-// rowAnchor is the opening tag of the row that states the set. PRD section 9
-// says that row is where the set is stated, so the row and not the section is
-// what is read: the section discusses these values in prose as well, and a
-// rule that took the section would let the set grow somewhere the document
-// says the set is not.
+// rowAnchor is the opening tag of the row that states the set. The row says
+// it is where the set is stated, so the row and not the section is what is
+// read: the section discusses these values in prose as well, and a rule that
+// took the section would let the set grow somewhere the document says the set
+// is not.
 const rowAnchor = `<tr id="outcome-set"`
+
+// sectionAnchor is the opening tag of the section the row has to sit inside.
+// The section is named by its id and never by its number, because a section
+// inserted earlier in the document renumbers it while leaving the id, the row
+// and the set exactly where they were.
+//
+// This is a different question from where the markers are read. The markers
+// are read from the row and refused everywhere else in the document; this is
+// only about where the row itself lives, so that a row moved into another
+// section is a refusal rather than a pin that stays green while the section
+// the mechanism is documented against no longer states the set.
+const sectionAnchor = `<section id="surfaces"`
 
 // declaration matches the marker the PRD puts an outcome behind: a code
 // element carrying a data-outcome attribute, whose text is the value that
@@ -69,12 +81,13 @@ type Listed struct {
 // FromPRD returns the outcomes the PRD declares, in the order it declares
 // them.
 //
-// It refuses rather than returning what it could read. The set must be two
-// contiguous groups, each non-empty, with no repeated value and no group word
-// this package does not know, and no marker anywhere in the document outside
-// the row, so a marker that is not an outcome and an outcome the PRD stops
-// declaring both fail loudly here instead of quietly changing what is being
-// compared.
+// It refuses rather than returning what it could read. The row must sit inside
+// the document's one section that carries sectionAnchor, and the set must be
+// two contiguous groups, each non-empty, with no repeated value and no group
+// word this package does not know, and no marker anywhere in the document
+// outside the row, so a marker that is not an outcome and an outcome the PRD
+// stops declaring both fail loudly here instead of quietly changing what is
+// being compared.
 func FromPRD(html []byte) ([]Listed, error) {
 	row, err := outcomeRow(html)
 	if err != nil {
@@ -120,8 +133,13 @@ func FromPRD(html []byte) ([]Listed, error) {
 
 // outcomeRow returns the body of the row that states the set, refusing every
 // document where the boundaries of that row are not the ones a reader would
-// draw.
+// draw, and every document where the row does not sit inside the section that
+// owns it.
 func outcomeRow(html []byte) ([]byte, error) {
+	sectionFrom, sectionTo, err := ownerSection(html)
+	if err != nil {
+		return nil, err
+	}
 	start := bytes.Index(html, []byte(rowAnchor))
 	if start < 0 {
 		return nil, fmt.Errorf("%w: no %s in the document", ErrPRD, rowAnchor)
@@ -138,7 +156,33 @@ func outcomeRow(html []byte) ([]byte, error) {
 	if bytes.Contains(row, []byte("<tr")) {
 		return nil, fmt.Errorf("%w: the outcome row has a row nested in it, so its end cannot be found by the first closing tag", ErrPRD)
 	}
+	if start < sectionFrom || start+len(rowAnchor)+end+len("</tr>") > sectionTo {
+		return nil, fmt.Errorf("%w: %s is not inside the %s section, which is where this rule and everything documented against it say the set is stated", ErrPRD, rowAnchor, sectionAnchor)
+	}
 	return row, nil
+}
+
+// ownerSection returns the bounds of the body of the section the row has to
+// sit inside, refusing every document where those bounds are not the ones a
+// reader would draw. A document whose section this rule cannot delimit is a
+// refusal and never a containment check quietly skipped.
+func ownerSection(html []byte) (from, to int, err error) {
+	start := bytes.Index(html, []byte(sectionAnchor))
+	if start < 0 {
+		return 0, 0, fmt.Errorf("%w: no %s in the document", ErrPRD, sectionAnchor)
+	}
+	rest := html[start+len(sectionAnchor):]
+	if bytes.Contains(rest, []byte(sectionAnchor)) {
+		return 0, 0, fmt.Errorf("%w: %s appears more than once", ErrPRD, sectionAnchor)
+	}
+	end := bytes.Index(rest, []byte("</section>"))
+	if end < 0 {
+		return 0, 0, fmt.Errorf("%w: the %s section is never closed", ErrPRD, sectionAnchor)
+	}
+	if bytes.Contains(rest[:end], []byte("<section")) {
+		return 0, 0, fmt.Errorf("%w: the %s section has a section nested in it, so its end cannot be found by the first closing tag", ErrPRD, sectionAnchor)
+	}
+	return start + len(sectionAnchor), start + len(sectionAnchor) + end, nil
 }
 
 // contiguous refuses a set that is not the two groups the row says it is. The
