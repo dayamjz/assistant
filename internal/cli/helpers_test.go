@@ -3,11 +3,13 @@ package cli_test
 import (
 	"bytes"
 	"context"
+	"errors"
+	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/agents"
@@ -23,10 +25,51 @@ import (
 
 // TestMain lets this binary act as the stand-in agent, which the service a
 // test opens resolves instead of whatever agent is installed on the machine
-// running the tests.
+// running the tests, and as the command a gate's hooks invoke.
 func TestMain(m *testing.M) {
 	standin.Main()
+	hookMain()
 	os.Exit(m.Run())
+}
+
+// hookMain lets this binary act as the command a gate's hooks invoke.
+//
+// internal/gate writes the absolute path of the binary that initialized the
+// gate into its hooks, and in a test that binary is this one. A push therefore
+// reaches this process, and this hands the arguments and the streams straight
+// to cli.Run, which is the product: cmd/assistant is the process boundary and
+// holds no behaviour, so what a push exercises here is the same command
+// surface every other test in this file drives, reached the way a push
+// reaches it.
+//
+// It is the arrangement internal/agents/standin already uses for the same
+// reason, and it recognizes the invocation the same way: by what the command
+// line says. A test binary is never run with "gate" as its first argument by
+// the testing package.
+func hookMain() {
+	if len(os.Args) < 2 || os.Args[1] != "gate" {
+		return
+	}
+	workingDir, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "the gate hook stand-in cannot resolve the working directory:", err)
+		os.Exit(1)
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "the gate hook stand-in cannot resolve its own path:", err)
+		os.Exit(1)
+	}
+	os.Exit(int(cli.Run(context.Background(), cli.Environment{
+		Args:       os.Args[1:],
+		Stdout:     os.Stdout,
+		Stderr:     os.Stderr,
+		Stdin:      os.Stdin,
+		Getenv:     os.Getenv,
+		WorkingDir: workingDir,
+		Executable: executable,
+		Version:    "assistant (test)",
+	})))
 }
 
 // platformIdentifiesPeers reports whether internal/ipc has a read for local
@@ -96,24 +139,19 @@ func newHome(t *testing.T) *home.Home {
 	return h
 }
 
-// git runs a git command, for building the working copy a command surface is
-// exercised in. It shells out on the same terms internal/vcs's and
-// internal/gate's own tests do.
+// git runs a git command and fails the test when it fails, for building the
+// working copy a command surface is exercised in.
+//
+// What git reads is gitCommand's and not this helper's, so a bounded call and
+// an unbounded one cannot differ in it. Failing the test is the whole of what
+// this adds.
 func git(t *testing.T, dir string, args ...string) string {
 	t.Helper()
-	cmd := exec.Command("git", args...)
-	cmd.Dir = dir
-	cmd.Env = append(os.Environ(),
-		"GIT_CONFIG_GLOBAL="+filepath.Join(dir, ".gitconfig-absent"),
-		"GIT_CONFIG_SYSTEM="+filepath.Join(dir, ".gitconfig-absent"),
-		"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@example.invalid",
-		"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@example.invalid",
-	)
-	out, err := cmd.CombinedOutput()
+	out, err := gitCommand(context.Background(), dir, args...)
 	if err != nil {
 		t.Fatalf("git %s in %s: %v\n%s", strings.Join(args, " "), dir, err, out)
 	}
-	return strings.TrimSpace(string(out))
+	return strings.TrimSpace(out)
 }
 
 // newSubject returns a working copy with one commit and an origin, which is
@@ -145,31 +183,60 @@ func newSubject(t *testing.T) string {
 // whatever is installed.
 func serve(t *testing.T, h *home.Home) {
 	t.Helper()
+	serveUntilStopped(t, h)
+}
+
+// serveUntilStopped is serve for a test whose subject is what happens with the
+// service down after it has been up. The returned function stops it, is safe
+// to call more than once, and runs at the end of the test whether or not the
+// test called it.
+func serveUntilStopped(t *testing.T, h *home.Home) func() {
+	t.Helper()
+	runner := standin.New(t, standin.Script{}).Runner()
+	return serveCatalog(t, h, agents.NewCatalog(fixedFactory{runner: runner}))
+}
+
+// serveWithNoRunnableAgent serves a home whose one configured adapter refuses
+// to build, which is what agents.Resolve meets on a machine with nothing it
+// can run. Every other helper here serves a home that resolves.
+func serveWithNoRunnableAgent(t *testing.T, h *home.Home) func() {
+	t.Helper()
+	return serveCatalog(t, h, agents.NewCatalog(unrunnableFactory{}))
+}
+
+// serveCatalog is the one owner of how these tests open and serve a service,
+// so the only thing a caller varies is which agents it may resolve.
+func serveCatalog(t *testing.T, h *home.Home, catalog *agents.Catalog) func() {
+	t.Helper()
 	build, err := store.CurrentBuild()
 	if err != nil {
 		t.Fatalf("reading this build's identity: %v", err)
 	}
-	runner := standin.New(t, standin.Script{}).Runner()
 	running, err := service.Open(t.Context(), service.Options{
 		Home:     h,
 		Stages:   stages.All(),
 		NewFixer: stages.PendingFixer,
 		Build:    build,
-		Catalog:  agents.NewCatalog(fixedFactory{runner: runner}),
+		Catalog:  catalog,
 	})
 	if err != nil {
 		t.Fatalf("opening the service: %v", err)
 	}
 	served := make(chan error, 1)
 	go func() { served <- running.Serve(context.Background()) }()
-	t.Cleanup(func() {
-		if err := running.Close(); err != nil {
-			t.Errorf("closing the service: %v", err)
-		}
-		if err := <-served; err != nil {
-			t.Errorf("serving: %v", err)
-		}
-	})
+	var once sync.Once
+	stop := func() {
+		once.Do(func() {
+			if err := running.Close(); err != nil {
+				t.Errorf("closing the service: %v", err)
+			}
+			if err := <-served; err != nil {
+				t.Errorf("serving: %v", err)
+			}
+		})
+	}
+	t.Cleanup(stop)
+	return stop
 }
 
 // fixedFactory hands back a Runner somebody else built, so nothing here can
@@ -179,6 +246,18 @@ type fixedFactory struct{ runner agents.Runner }
 func (f fixedFactory) Name() string { return f.runner.Name() }
 
 func (f fixedFactory) New(context.Context, []string) (agents.Runner, error) { return f.runner, nil }
+
+// unrunnableFactory is an adapter this build has and this machine cannot run,
+// which is the shape agents.Resolve reports as no configured agent being
+// runnable. It refuses at New rather than being absent from the catalog, so
+// the refusal carries a reason an operator can act on.
+type unrunnableFactory struct{}
+
+func (unrunnableFactory) Name() string { return "unrunnable" }
+
+func (unrunnableFactory) New(context.Context, []string) (agents.Runner, error) {
+	return nil, errors.New("this adapter is not installed on this machine")
+}
 
 // openStore opens a home's database directly, for a test that has to put a
 // record where only the service would otherwise write one.

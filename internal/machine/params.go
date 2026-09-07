@@ -1,5 +1,7 @@
 package machine
 
+import "github.com/dayamjz/assistant/internal/gate"
+
 // The request bodies. internal/ipc carries a method's parameters as written
 // and owns no part of their shape, so they are owned here alongside the
 // answers they ask for: one package holds both halves of the surface, and a
@@ -111,6 +113,38 @@ type LifecycleRequest struct {
 // SubscribeRequest opens the event stream. It carries nothing today and is a
 // struct so that it can carry something later without a peer having to change.
 type SubscribeRequest struct{}
+
+// GateRequest is what a gate's hooks carry: which gate the push is arriving
+// at, and the reference updates git is about to make or has just made.
+//
+// Both hooks carry the same two things, so they carry one shape. Which of them
+// is asking is the method, and what that decides is on the service's side
+// rather than in a field a caller writes.
+//
+// The updates are the caller's account of the push, and nothing establishes
+// them. Admission runs before any reference in the gate changes, so at the
+// moment the decision is made there is nothing in the gate to check them
+// against, and after it there is no reading that would say what the push
+// described rather than what it did.
+//
+// What that costs is bounded rather than closed, and the bound is worth
+// stating exactly. The socket is one home's, so a caller reaching this is a
+// caller that can already start a run through StartRequest; an invented
+// account buys it a run it could have asked for. Both gate methods are
+// declared restricted, which is where containment would refuse a caller inside
+// an active validation stage, but internal/service/doc.go says that registry
+// has no producer in this build, so today that declaration refuses nobody.
+type GateRequest struct {
+	// Gate is the gate's identifier, which is what a hook is given and all it
+	// knows. Which working copy it belongs to is the service's to resolve,
+	// through internal/gate, so that a caller cannot name a repository.
+	Gate string `json:"gate"`
+	// Updates are the reference updates the push carries, as
+	// [gate.ParseRefUpdates] read them. They are that package's shape rather
+	// than a second one here, because it owns the hook protocol they arrive
+	// on.
+	Updates []gate.RefUpdate `json:"updates,omitempty"`
+}
 
 // StageReportRequest returns a stage's result from the agent running it. It is
 // the one request a caller contained by an active validation stage may make,

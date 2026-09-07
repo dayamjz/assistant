@@ -126,7 +126,7 @@ func TestHookCommandSurvivesAPathThatNeedsQuoting(t *testing.T) {
 	rawGit(t, wc.path, "push", "--quiet", gate.RemoteName, "main")
 
 	got := invocations(t, log)
-	want := "command gate admit --gate " + g.ID()
+	want := hookInvocation(g, "admit")
 	if len(got) == 0 || got[0] != want {
 		t.Fatalf("invocations = %v, want the first to be %q", got, want)
 	}

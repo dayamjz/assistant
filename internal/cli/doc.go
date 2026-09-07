@@ -1,5 +1,6 @@
 // Package cli is the command surface: the verbs PRD section 9 specifies, the
-// flags that parameterize them, and the two renderings of one answer.
+// flags that parameterize them, the two renderings of one answer, and the two
+// subcommands a gate's hooks invoke.
 //
 // A person at a terminal and an agent driving programmatically are both
 // first-class users of the same commands. They share the same decisions, the
@@ -11,10 +12,12 @@
 //
 // # The verb table is the PRD's, and nothing else is in it
 //
-// verbs in cli.go is the whole surface. Every row is a command PRD section 9's
-// table names, and a command that section does not name is not here: a verb
-// this product needs and that section does not describe is a finding to raise
-// against the specification, not a row to add quietly.
+// verbs in cli.go is the whole of what a caller drives. Every row is a command
+// PRD section 9's table names, and a command that section does not name is not
+// here: a verb this product needs and that section does not describe is a
+// finding to raise against the specification, not a row to add quietly. The one
+// thing this binary answers to that is not in that table is the gate hook
+// interface, which the section below is about.
 //
 // Four things the section leaves to a verb's parameters are flags or arguments
 // rather than verbs.
@@ -37,6 +40,31 @@
 // result, which internal/ipc leaves open to a caller contained by an active
 // validation stage. Section 9's table names no command for it, and no stage in
 // this build launches an agent that would need one, so none is invented here.
+//
+// # The gate hook verbs are a second table on purpose
+//
+// gateHooks in gate.go is the other one, and it holds "assistant gate admit"
+// and "assistant gate notify". They are not commands PRD section 9's table
+// names and they are not candidates for it: they are the interface
+// internal/gate requires of this command surface, invoked by the hooks it
+// installs in a gate repository and never typed. A gate whose hooks call a
+// command that is not served installs executable files that fail, which is a
+// push refused before anything starts and every other verb answering about a
+// product nobody can reach.
+//
+// They are two tables rather than one row added to the first, because the
+// first is a claim - that the surface is the specification's and nothing else
+// - and a row added there would quietly weaken it. They are in the usage text
+// under a heading saying what they are for, because a command this binary
+// answers to and does not mention is worse than either.
+//
+// Neither decides anything about the push, on the same terms as everything
+// else here. The reference update lines come off standard input and are read
+// by internal/gate, which owns the hook protocol; which working copy a gate
+// belongs to and whether the push may proceed are the service's answers.
+// Admission's exit status is what git reads, so everything that is not a
+// definite admission - a refusal, a failure, a service that did not answer -
+// is a non-zero status and a rejected push.
 //
 // # Which verbs need the service, and which cannot
 //

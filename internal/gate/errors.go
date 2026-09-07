@@ -73,6 +73,18 @@ var (
 	// gate, the working copy holding it, the working copy asking, and what has
 	// to change.
 	ErrGateClaimed = errors.New("gate: another working copy is bound to this gate")
+	// ErrGateUnbound is returned by WorkingCopyFor when a gate that is there
+	// does not resolve to exactly one working copy: none standing today names
+	// it, or several do. The two are one refusal because the caller's answer
+	// is the same for both - it does not know which repository a push to that
+	// gate is about, so it has nothing to validate the push against - and the
+	// message says which of the two happened and what changes it.
+	ErrGateUnbound = errors.New("gate: gate does not belong to exactly one working copy")
+	// ErrMalformedRefUpdate is returned by ParseRefUpdates when a line is not
+	// a reference update git would have written. No updates come back with it:
+	// admission decides whether a push proceeds, and deciding over the lines
+	// that happened to parse is deciding about a push nobody described.
+	ErrMalformedRefUpdate = errors.New("gate: reference update line is malformed")
 	// ErrMalformedRecord is returned when a gate's record file exists but
 	// cannot be read as one. A record that cannot be read is a fact that
 	// cannot be established rather than one to guess at. Both operations

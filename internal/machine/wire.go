@@ -262,6 +262,80 @@ type Eject struct {
 	Runs int `json:"runs"`
 }
 
+// Admission is the answer to an admission check on a push to a gate: the push
+// may proceed.
+//
+// There is no field saying so. Admission's answer reaches git as an exit
+// status, and PRD section 5 puts the check before any reference changes so
+// that a refusal happens instead of a change; everything that is not this
+// answer - a refusal, a failure, a service that did not respond - is an error
+// and a non-zero status. A boolean here would be a second way to say the same
+// thing, and the one that could be read as permission while the call failed.
+//
+// The repository the push's runs will belong to is deliberately not a field.
+// It is the gate's own identifier in every gate this build creates, and a
+// field that always repeats another on the same shape is a second owner of one
+// fact; a run names its own repository.
+type Admission struct {
+	// Gate is the gate the push was admitted to.
+	Gate string `json:"gate"`
+	// Refs are the reference names the push updates, in the order they
+	// arrived.
+	Refs []string `json:"refs,omitempty"`
+}
+
+// Started is one run a push started: which branch, at which commit, under
+// which identifier.
+type Started struct {
+	// Branch is the branch that was pushed.
+	Branch string `json:"branch"`
+	// Head is the commit the push moved it to, which is the commit the run
+	// validates.
+	Head string `json:"head"`
+	// Run is the run's identifier.
+	Run string `json:"run"`
+	// Superseded is the run of the same branch this one displaced in the
+	// record, empty when the branch had none. PRD section 8 has a new push
+	// supersede the run in progress, and naming it is the difference between a
+	// run that was displaced and one that was moved aside without a word.
+	//
+	// It says the named run's record was moved to terminated, and no more than
+	// that. The service signals that run's cancellation and does not await its
+	// leaving supervision, so a caller reading this may not take it as the run
+	// having stopped executing.
+	Superseded string `json:"superseded,omitempty"`
+}
+
+// Ignored is one reference a push carried that started no run, and why.
+//
+// It is reported rather than dropped. A push of five references that started
+// two runs and said nothing about the other three reads as a push that was
+// fully acted on, which is the silent narrowing this repository keeps finding.
+type Ignored struct {
+	// Ref is the reference's full name.
+	Ref string `json:"ref"`
+	// Reason says why no run was started for it.
+	Reason string `json:"reason"`
+}
+
+// Notification is the answer to a notification that a gate accepted a push:
+// what it started and what it did not.
+//
+// It answers once the runs are recorded and their execution is handed to the
+// service, not once they finish. PRD section 8 has a push return immediately
+// and the notification hand off and exit, so a run named here is a run that
+// exists and is the service's to advance; where it stands is read from the run
+// itself.
+type Notification struct {
+	// Gate is the gate the push arrived at.
+	Gate string `json:"gate"`
+	// Started are the runs this push began, one per branch it updated.
+	Started []Started `json:"started,omitempty"`
+	// Ignored are the references it started nothing for, with the reason for
+	// each.
+	Ignored []Ignored `json:"ignored,omitempty"`
+}
+
 // Check is one thing assistant doctor looked at.
 type Check struct {
 	// Name is what was checked.

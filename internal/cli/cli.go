@@ -25,6 +25,11 @@ type Environment struct {
 	Stdout io.Writer
 	// Stderr is where progress and human-facing failures go.
 	Stderr io.Writer
+	// Stdin is what a command reads input from. Only the gate hook verbs read
+	// it, because git puts a push's reference update lines there; a nil reader
+	// is no input rather than a failure, so every other verb is unaffected by
+	// what the process was given.
+	Stdin io.Reader
 	// Getenv reads the environment, which is where the home root comes from.
 	Getenv func(string) string
 	// WorkingDir is the directory the command was run in, which is what
@@ -54,7 +59,8 @@ func usagef(format string, a ...any) error {
 }
 
 // verb is one command. Every row is a command PRD section 9's table names, and
-// the table below is the whole surface.
+// the table below is the whole of what a caller drives; the two subcommands
+// internal/gate's hooks invoke are gateHooks in gate.go rather than rows here.
 type verb struct {
 	// name is what a caller types, empty for the command with no verb.
 	name string
@@ -70,9 +76,10 @@ type verb struct {
 	run func(context.Context, *invocation) (any, error)
 }
 
-// verbs is the command surface. It is PRD section 9's table and nothing else:
-// a verb that section does not describe is a finding against the
-// specification rather than a row here.
+// verbs is the surface a caller drives. It is PRD section 9's table and nothing
+// else: a verb that section does not describe is a finding against the
+// specification rather than a row here, and the one command this binary answers
+// to that section does not name is dispatched beside it; see gateVerbName.
 var verbs = []verb{
 	{"", "Attach to this branch's active run. With no run, start one.", attachOrStart},
 	{"init", "Create or repair the gate for this repository.", initGate},
@@ -137,6 +144,13 @@ func dispatch(ctx context.Context, in *invocation) (any, error) {
 			continue
 		}
 		return v.run(ctx, in)
+	}
+	// And then the one command internal/gate requires that PRD section 9 does
+	// not name. It is dispatched here rather than from the table above so that
+	// the specification's surface cannot grow a row through this door; see
+	// gateVerbName.
+	if name == gateVerbName {
+		return gateVerb(ctx, in)
 	}
 	return nil, usagef("%q is not a command. %s", name, usageText())
 }
@@ -415,7 +429,9 @@ func (in *invocation) progressf(format string, a ...any) {
 	writef(in.env.Stderr, format+"\n", a...)
 }
 
-// usageText is the command list, which is the verb table read out.
+// usageText is the command list: the verb table read out, and then the gate
+// hook subcommands gateUsage reads out under a heading saying a push invokes
+// them rather than a person.
 func usageText() string {
 	var b strings.Builder
 	b.WriteString("Usage: assistant [--json] [--home PATH] [command]\n\nCommands:\n")
@@ -430,7 +446,8 @@ func usageText() string {
 	b.WriteString("              and before --version or --help rather than after one of them.\n")
 	b.WriteString("  --home PATH The home root to act on, on the same terms as --json.\n")
 	b.WriteString("  --version   Report the build.\n")
-	b.WriteString("  --help      Print this.")
+	b.WriteString("  --help      Print this.\n")
+	b.WriteString(gateUsage())
 	return b.String()
 }
 

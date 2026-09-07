@@ -56,6 +56,71 @@
 // run still executing; responding meets the refusal, because answering a
 // decision is not a question about where a run stands.
 //
+// # A push is the one caller that does not wait
+//
+// The gate's hooks reach this service through gate.admit and gate.notify, and
+// they are the exception to the paragraph above. PRD section 8 has a push
+// return immediately, with the notification handing off and this service
+// owning everything long-running, so notify records the runs a push calls for
+// and walks each of them on a goroutine of this service's. It answers with
+// what it started; where a run then gets to is read from the run.
+//
+// Both are answers about a gate rather than about a working copy, and neither
+// takes a working copy from the caller. internal/gate resolves the identifier
+// a hook carries to the working copy the gate belongs to, and this service
+// pairs that with the repository record a run is created against - the same
+// pairing assistant init writes. A caller therefore names a gate and nothing
+// else, so nothing it writes can attach a push to another repository's runs.
+//
+// Admission establishes that the push has somewhere to go, and does not judge
+// the change. That the gate resolves, that a repository record stands behind
+// it, and that the reference updates can be read are what it answers of every
+// push; whether the branch should be shared is what the nine stages are for. A
+// push admitted without those is a push the gate takes and starts nothing for,
+// which is the failure a sealed gate exists to prevent arriving through the
+// front door.
+//
+// Of a push that would start a run it establishes one thing more: that a
+// driver could be built for this home. That is asked during admission rather
+// than when the run starts because of where the two hooks sit - admission runs
+// before any reference changes and its refusal rejects the push, while the
+// notification runs after every reference has moved and can only print - and
+// it is asked only of a push carrying a branch update that is not a deletion,
+// by the same predicate the notification starts runs by. A push of tags or
+// deletions alone is admitted without one, because the gate is a repository
+// git can push to normally and those start no run to need a driver for.
+//
+// What admission does not establish is why a driver could not be built -
+// resolving an agent, opening the run service, and assembling the pipeline and
+// its executor are all part of building one - so its refusal carries the reason
+// it was given rather than naming a cause. The gap that leaves is the span
+// between the two hooks. The notification asks for the driver again and can
+// still fail, so a home that stops being able to build one after admission
+// answered leaves a push accepted with no run started, and no failure in the
+// notification can reject a push admission already took.
+//
+// A push to a branch that already has a run supersedes it, which PRD section 8
+// asks for, and the guarantee is over the record: the branch's newest
+// unfinished run is moved to terminated before the new one is created, both
+// under the branch's own exclusion, so the record never shows two live runs
+// for one branch. Execution is not covered. A run registers its cancellation
+// with this service only once its own goroutine reaches the point that claims
+// it, which is after its record already reads running, so a displaced run this
+// service holds no cancellation for is signalled nothing; that is looked for
+// twice and a run registering after the second look is signalled nothing at
+// all. Nor is a displaced run that was signalled awaited, so nothing bounds how
+// long two runs of one branch may execute at once - a missing wait rather than
+// an interleaving. The mechanism that would bound it, a per-branch predecessor
+// set with the wait as the arriving run's own first step, is specified outside
+// this tree in internal/daemon's package documentation at tag
+// pre-rebase-2-observation-edges, and is deliberately not implemented here.
+//
+// gate.admit is restricted, so containment is what refuses an agent inside an
+// active validation stage that pushes at the gate - before any reference in
+// the gate changes, which is PRD section 9's "push around a pipeline" landing
+// on the surface a push actually arrives on. Everything the next section says
+// about what containment covers today applies to it.
+//
 // # Containment is asked of the kernel, and answered from what this service
 // started
 //

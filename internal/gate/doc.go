@@ -29,10 +29,18 @@
 // what a correct gate looks like.
 //
 // Nothing here decides what admission means. The hooks invoke a command whose
-// path a caller supplies, and hooks.go states the two subcommands and the one
-// option that command has to accept. That contract is this package's
+// path a caller supplies, and hooks.go states the two subcommands and the two
+// options that command has to accept. That contract is this package's
 // requirement of the agent-facing command surface, not an implementation of
 // it.
+//
+// What this package does answer for that command is the question a hook
+// arrives with and cannot answer for itself. A gate is filed under a hash of
+// its working copy's path, so a hook holding an identifier cannot invert it,
+// and everything a push has to be validated against hangs off the working
+// copy. WorkingCopyFor is that lookup, and ParseRefUpdates is the reading of
+// the reference update lines the hooks put on that command's standard input;
+// both are here because this package defined the protocol they belong to.
 //
 // # Your origin is never touched
 //
@@ -66,6 +74,15 @@
 // forward slashes for the same reason: a shell searches PATH for a command
 // word holding no slash, so on a host whose separator is a backslash the
 // native spelling would arrive as a bare word and be looked up after all.
+//
+// The home is written into the hook beside the gate's identifier, and that is
+// the same measure rather than a convenience. An identifier names a gate only
+// within a home, so a hook that left the home to be resolved from the
+// environment would let the pushing side choose which home admission acts on,
+// which is most of what writing the command's path takes away from it. What
+// it does not close is a person editing the hook: both values sit in a file
+// the gate's owner can write, and this package replaces that file on every
+// initialization and repair rather than watching it in between.
 //
 // No hook may enter a gate except from this package. Removing GIT_TEMPLATE_DIR
 // from the environment, which internal/vcs does on every invocation, closes
@@ -143,13 +160,27 @@
 //
 // It was written down as a rule and then violated twice more, which says the
 // rule was not what was missing. What was missing is a mechanism, so there is
-// one now. Every operation here obtains its gate from one unexported seam and
-// takes that handle rather than a path: no exported entry point takes a gate's
-// path, only the home and the working copy the gate is asked about, and the
-// seam is what resolves the repository, reads its contents once, asks and
+// one now. Every operation that changes a gate obtains it from one unexported
+// seam and takes that handle rather than a path: no such entry point takes a
+// gate's path, only the home and the working copy the gate is asked about, and
+// the seam is what resolves the repository, reads its contents once, asks and
 // refuses on the ownership question, and leaves no gate it looked at accepting
 // pushes with nothing checking them. An operation added later cannot skip any
 // of that, because it cannot obtain a gate without going through it.
+//
+// WorkingCopyFor is the one exported operation outside that, and it is named
+// here rather than left as an exception a reader has to find. It answers which
+// working copy a gate belongs to, which is the question a hook arrives with, so
+// it takes the home and an identifier instead of a working copy - a hook has
+// no working copy to name, since that is what it is asking for - and it
+// resolves the repository itself. What it does not skip is the ownership
+// question: it asks the same shared evidence rule the seam's own check asks,
+// so a second answer to who a gate belongs to is not what is being bought
+// here. What it costs is the sealing. It seals no gate it looks at, which is
+// why it is confined to a read: a read leaves no gate in a state that needs
+// closing, and an operation that changed one would owe the seam and has to go
+// through it.
+//
 // This repository has solved this class twice the same way: internal/agents
 // puts P4 in a type split rather than in a rule callers follow, and
 // internal/safety makes an anchor's provenance a constructor rather than a

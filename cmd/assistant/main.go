@@ -38,6 +38,7 @@ func main() {
 		Args:       os.Args[1:],
 		Stdout:     os.Stdout,
 		Stderr:     os.Stderr,
+		Stdin:      os.Stdin,
 		Getenv:     os.Getenv,
 		WorkingDir: workingDir,
 		Executable: executable,

@@ -28,6 +28,11 @@ var specified = []string{"init", "status", "runs", "rerun", "sync", "tasks", "wa
 // section 9 does not describe. A verb this surface needs and that section does
 // not name is a finding to raise against the specification rather than a row
 // to add quietly, so each of these has to be refused as incorrect usage.
+//
+// "gate" is deliberately not among them. It is not a command a person types
+// and not a candidate for that table: it is the interface internal/gate
+// requires of this surface, invoked by the hooks it installs, and
+// TestTheGateVerbServesTheHooksAndNothingElse is what holds what it may be.
 var unspecified = []string{
 	"start", "attach", "respond", "answer", "cancel", "stop", "restart",
 	"machine", "agent", "push", "version", "help", "config", "logs", "stage",
@@ -57,6 +62,55 @@ func TestACommandTheSpecificationDoesNotNameIsRefused(t *testing.T) {
 	for _, name := range unspecified {
 		if got := run(t, h, subject, name); got.code != machine.ExitUsage {
 			t.Fatalf("assistant %s exited %s, want incorrect usage; it is not a command PRD section 9 describes", name, got.code)
+		}
+	}
+}
+
+// TestTheGateVerbServesTheHooksAndNothingElse is the boundary around the one
+// command this surface answers to that PRD section 9 does not name.
+//
+// Both halves matter. The two subcommands internal/gate's hooks invoke reach a
+// verb rather than being refused, which is what a gate's installed hooks need
+// of this binary and what nineteen merged changes went without. And nothing
+// else under that verb does, so "gate" is not a door the specification's
+// surface can grow through.
+//
+// What it does not establish is that these are the subcommands internal/gate
+// actually writes; a list here would be a second statement of that. The push
+// tests establish it structurally, by pushing through hooks that package wrote
+// and requiring a run to start.
+func TestTheGateVerbServesTheHooksAndNothingElse(t *testing.T) {
+	t.Parallel()
+	h := newHome(t)
+	subject := newSubject(t)
+
+	for _, hook := range []string{"admit", "notify"} {
+		// With --gate, so what is checked is the subcommand reaching a verb
+		// rather than the refusal that a missing identifier produces.
+		got := run(t, h, subject, "gate", hook, "--gate", "0123456789abcdef")
+		if got.code == machine.ExitUsage {
+			t.Fatalf("assistant gate %s is refused as incorrect usage, and internal/gate's hooks "+
+				"invoke it:\n%s", hook, got.stderr)
+		}
+	}
+	for _, args := range [][]string{
+		{"gate"},
+		{"gate", "start"},
+		{"gate", "admit", "--gate", "0123456789abcdef", "notify"},
+		// The subcommand comes first after the verb. A scan that took it from
+		// wherever it stood would read these two as naming one.
+		{"gate", "--gate", "0123456789abcdef", "admit"},
+		{"gate", "--gate", "notify"},
+	} {
+		if got := run(t, h, subject, args...); got.code != machine.ExitUsage {
+			t.Fatalf("assistant %s exited %s, want incorrect usage", strings.Join(args, " "), got.code)
+		}
+	}
+	// The identifier is required rather than defaulted: a hook always writes
+	// one, and a default would mean acting on a gate nobody named.
+	for _, hook := range []string{"admit", "notify"} {
+		if got := run(t, h, subject, "gate", hook); got.code != machine.ExitUsage {
+			t.Fatalf("assistant gate %s with no --gate exited %s, want incorrect usage", hook, got.code)
 		}
 	}
 }

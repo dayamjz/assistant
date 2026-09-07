@@ -40,6 +40,16 @@ func homeWithIndex(t *testing.T) (home string, index *store.Store, opts func(...
 	}
 }
 
+// hookInvocation is the command line a gate's hooks invoke for one subcommand,
+// as a recorder writes it down. The home comes off the gate rather than out of
+// the test's own variable, because the hook is supposed to name the home the
+// gate is actually filed in and a test stating its own would pass while the
+// hook named something else.
+func hookInvocation(g *gate.Gate, subcommand string) string {
+	home := filepath.Dir(filepath.Dir(g.Repository()))
+	return "command gate " + subcommand + " --gate " + g.ID() + " --home " + home
+}
+
 // boundWorkingPaths is the working copies the index records as bound to a gate,
 // read back through internal/store's own accessor.
 func boundWorkingPaths(t *testing.T, index *store.Store, gateID string) []string {
@@ -316,6 +326,17 @@ func copyExecutable(t *testing.T, from, to string) {
 
 func shellQuoteForTest(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// standardInput is the bytes git put in front of the hook on the most recent
+// invocation of a stand-in, read from beside the log the stand-in appends to.
+func standardInput(t *testing.T, log string) []byte {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(filepath.Dir(log), stubInputName))
+	if err != nil {
+		t.Fatalf("read the recorded standard input beside %s: %v", log, err)
+	}
+	return data
 }
 
 // invocations returns the lines the recorder wrote, or nothing when it was
