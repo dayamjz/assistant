@@ -21,7 +21,9 @@ import (
 	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/runs"
+	"github.com/dayamjz/assistant/internal/stages"
 	"github.com/dayamjz/assistant/internal/store"
+	"github.com/dayamjz/assistant/internal/vcs"
 )
 
 // ErrIncomplete reports that the service was asked for without something it
@@ -67,10 +69,21 @@ const DefaultLockWait = 3 * time.Second
 type Options struct {
 	// Home is the root this service owns. It is created if it is not there.
 	Home *home.Home
-	// Stages are the nine stage implementations, which internal/stages
-	// supplies. A stage it has no body for is a placeholder that holds, so a
-	// build short of all nine serves runs that stop at the first of those.
-	Stages pipeline.Stages
+	// NewStages builds the nine stage implementations, given the build-scoped
+	// dependencies a stage body reaches the world through. A stage
+	// internal/stages has no body for is a placeholder that holds, so a build
+	// short of all nine serves runs that stop at the first of those.
+	//
+	// It is a constructor rather than a value for the reason NewFixer is one:
+	// a stage body's dependencies include the resolved agent, and which agent
+	// resolves is not known until a run needs one. It is called once, when
+	// this service resolves an agent, so anything varying per run is a
+	// declared state key rather than something captured here.
+	//
+	// It is required. A service with no stages has no pipeline to run, and
+	// defaulting to the nine internal/stages ships would make this package the
+	// second place that decides what a run validates.
+	NewStages func(stages.StageDeps) pipeline.Stages
 	// NewFixer builds the fixer for the pipeline, given what the run's fixer
 	// path needs of the agent adapter. It is a constructor rather than a value
 	// because that requirement is internal/runs' answer and is not known until
@@ -112,7 +125,7 @@ type Service struct {
 	server   *ipc.Server
 
 	checkpoints *checkpoints.Store
-	stages      pipeline.Stages
+	newStages   func(stages.StageDeps) pipeline.Stages
 	newFixer    func(requires []agents.Capability) pipeline.Fixer
 	cfg         config.Config
 	// digest identifies the configuration document a run resolved, which PRD
@@ -176,6 +189,8 @@ func Open(ctx context.Context, o Options) (*Service, error) {
 	switch {
 	case o.Home == nil:
 		return nil, fmt.Errorf("%w: no home", ErrIncomplete)
+	case o.NewStages == nil:
+		return nil, fmt.Errorf("%w: no stages constructor", ErrIncomplete)
 	case o.NewFixer == nil:
 		return nil, fmt.Errorf("%w: no fixer constructor", ErrIncomplete)
 	case o.Build.Validate() != nil:
@@ -201,7 +216,7 @@ func Open(ctx context.Context, o Options) (*Service, error) {
 		home:      o.Home,
 		lock:      lock,
 		instance:  instance,
-		stages:    o.Stages,
+		newStages: o.NewStages,
 		build:     o.Build,
 		catalog:   o.Catalog,
 		newFixer:  o.NewFixer,
@@ -397,8 +412,25 @@ func (s *Service) driverFor(ctx context.Context) (*driver, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The stage seam is built here rather than at Open because a stage body's
+	// dependencies include the resolved agent. The agent is wrapped as an
+	// agents.StageAgent, which is what keeps P4 structural at this seam: a
+	// body handed the Runner itself could open a fixer session on it through
+	// agents.OpenFixer, and a StageAgent has no Runner to hand over.
+	//
+	// No forge provider is supplied because nothing in this build constructs
+	// one. A stage body that needs one refuses rather than proceeding, which
+	// is the same answer PRD section 8 gives for any adapter a path needs and
+	// this build has not resolved.
+	deps := stages.NewStageDeps(
+		agents.NewStageAgent(resolution.Runner),
+		s.home,
+		s.cfg,
+		nil,
+		vcs.WithRedactor(redact.New()),
+	)
 	built, err := pipeline.New(pipeline.Options{
-		Stages:                      s.stages,
+		Stages:                      s.newStages(deps),
 		Fixer:                       s.newFixer(runService.FixerRequires()),
 		Rounds:                      s.cfg.FixRounds,
 		Budget:                      s.cfg.RunBudget,

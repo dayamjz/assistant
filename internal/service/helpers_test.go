@@ -176,11 +176,11 @@ func options(t *testing.T, h *home.Home) service.Options {
 		t.Fatalf("reading this build's identity: %v", err)
 	}
 	return service.Options{
-		Home:     h,
-		Stages:   stages.All(),
-		NewFixer: stages.PendingFixer,
-		Build:    build,
-		Catalog:  scriptedAgent(t),
+		Home:      h,
+		NewStages: stages.All,
+		NewFixer:  stages.PendingFixer,
+		Build:     build,
+		Catalog:   scriptedAgent(t),
 		// Ask for the home's lock once and refuse rather than waiting. A test
 		// that opens a second service while the first is still holding the
 		// home is a test whose restart did not happen, and a bounded wait

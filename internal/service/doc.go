@@ -88,9 +88,19 @@
 //
 // # What this package does not do
 //
-// It does not implement a stage. The nine bodies are internal/stages' and this
-// package takes them as a value, so a build serves runs that hold at the first
-// stage without a body rather than runs that pass.
+// It does not implement a stage. The nine bodies are internal/stages', and
+// this package takes a constructor for them rather than a value because a
+// stage body's dependencies include the resolved agent and which agent
+// resolves is not known until a run needs one. A build serves runs that hold
+// at the first stage without a body rather than runs that pass.
+//
+// What it does decide about them is which dependencies they get, since it is
+// the one place holding the home, the resolved configuration, and the resolved
+// agent at once. That agent is wrapped as an agents.StageAgent before it
+// reaches a body, which is where P4 sits at this seam: agents.OpenFixer opens
+// a fixer session from any Runner, so a body handed the Runner itself could
+// reach the memory P4 keeps a reviewer out of, and a StageAgent has no Runner
+// to hand it.
 //
 // It does not read a repository's own configuration. PRD section 10 has the
 // trusted layer read from the default branch at a freshly fetched commit, and

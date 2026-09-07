@@ -127,7 +127,7 @@ func TestARunWalksPastTheIntentStage(t *testing.T) {
 		}
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			result := runPipeline(t, stages.Intent(), *c.start)
+			result := runPipeline(t, stages.Intent(stages.StageDeps{}), *c.start)
 			if got := pipeline.StageOutcome(result.State, pipeline.StageIntent); got != pipeline.OutcomePassed {
 				t.Fatalf("the intent stage came to %s, want passed: a run does not walk past it", got)
 			}
@@ -327,7 +327,7 @@ func runIntent(t *testing.T, state map[pipeline.Key]graph.Value) (pipeline.Outpu
 // runIntentWith runs the intent stage's body over one path.
 func runIntentWith(t *testing.T, path intentPath) (pipeline.Output, error) {
 	t.Helper()
-	impl := stages.Intent()
+	impl := stages.Intent(stages.StageDeps{})
 	allowed := make(map[pipeline.Key]bool, len(impl.Reads))
 	for _, key := range impl.Reads {
 		allowed[key] = true

@@ -77,7 +77,7 @@ import (
 // TestTheIntentStageNeverBlocksARun drives every path this stage has, and it
 // uses an assertion that TestTheNeverBlocksAssertionRejectsAReportThatBlocks
 // holds to a report that does block, so it cannot pass by checking nothing.
-func Intent() pipeline.Implementation {
+func Intent(StageDeps) pipeline.Implementation {
 	return pipeline.Implementation{
 		Reads: []pipeline.Key{pipeline.KeyIntent, pipeline.KeyIntentSupplied},
 		NewBody: func() pipeline.Body {
