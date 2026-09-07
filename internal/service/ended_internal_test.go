@@ -52,7 +52,6 @@ func TestARunEndedThroughTheProtocolIsNotCarriedOn(t *testing.T) {
 		if _, err := held.service.cancel(t.Context(), machine.CancelRequest{Run: record.ID}); err != nil {
 			t.Fatalf("ending the run: %v", err)
 		}
-		held.let()
 		held.awaitSegment(t)
 
 		if got := held.status(t, record.ID); got != store.RunTerminated {
@@ -70,7 +69,6 @@ func TestARunEndedThroughTheProtocolIsNotCarriedOn(t *testing.T) {
 		// The ending is written here and never finished, so the record stays
 		// where it is for the whole of the check below.
 		held.service.endRun(record.ID)
-		held.let()
 		held.awaitSegment(t)
 
 		if got := held.status(t, record.ID); got != store.RunRunning {
@@ -81,8 +79,9 @@ func TestARunEndedThroughTheProtocolIsNotCarriedOn(t *testing.T) {
 }
 
 // heldService is a service whose first stage body stays inside itself until
-// the test lets it out, so a segment certainly holds the run's slot when the
-// ending arrives rather than being caught there.
+// the ending under test cancels it, so a segment certainly holds the run's
+// slot when that ending arrives rather than being caught there. let is the
+// teardown's way out for a body no ending cancelled.
 type heldService struct {
 	service *Service
 	inside  chan struct{}
@@ -155,8 +154,9 @@ func (h *heldService) status(t *testing.T, runID string) store.RunStatus {
 
 // assertNotResumed fails if anything picked the run up after its segment
 // ended. A continuation takes the run's slot and walks the graph from where it
-// stood, so it reaches the stage body a second time; the body is released, so
-// nothing holds one up, and the wait is what turns "not yet" into "not at all".
+// stood, so it reaches the stage body a second time and is counted on the way
+// in rather than on the way out; the wait is what turns "not yet" into "not at
+// all".
 func (h *heldService) assertNotResumed(t *testing.T, runID string) {
 	t.Helper()
 	for range 25 {
@@ -204,7 +204,15 @@ func newHeldService(t *testing.T) *heldService {
 				select {
 				case <-held.release:
 				case <-ctx.Done():
-					return pipeline.Output{}, ctx.Err()
+				}
+				// The context decides, not the select. Both channels are ready
+				// once an ending cancels the segment and the teardown lets the
+				// body out, and a select over two ready cases picks between
+				// them at random - which would have the body report a decision
+				// on a run that was ended, at whatever rate the scheduler
+				// happens to produce.
+				if err := ctx.Err(); err != nil {
+					return pipeline.Output{}, err
 				}
 				return pipeline.Output{Report: findings.Report{
 					Summary: "the stage was held open for the length of the ending",

@@ -130,14 +130,9 @@
 // rather than a read that could be stale, and it is what carryOn's refusal
 // rests on.
 //
-// It bounds that segment and no other. What it leaves open is a segment
-// already inside a node when the ending is recorded, and a claim made from a
-// record read that predates the ending reaching the record - which is a later
-// moment than the ending being recorded in the slot, because cancel records in
-// the slot first and moves the record second. A continuation this service
-// started is one of those readers and not only a producer of segments, because
-// it reads the record through attach. endRun writes that residual down in
-// full, and is the one owner of it; nothing here restates it.
+// It bounds that segment and no other, and what it leaves open is not nothing.
+// endRun writes that down and is the one owner of it, so nothing here or at
+// cancel restates any part of it: a reader who needs the list reads endRun.
 //
 // A continuation cannot cause another, and that is structural too. It runs
 // under this service's own context, so the only contexts that can end its
