@@ -404,6 +404,26 @@ Each has cost this repository more than one round of review.
   absence nobody can see. Read its `doc.go` before changing the rule, and for
   the residual gaps: a citing test may check nothing, and the scan reads source
   rather than a built test binary.
+- `internal/journey` is the end-to-end harness, and it is organized by PRD
+  principle rather than by feature: PRD section 13 turns each principle into a
+  test and that is its structure. It drives the real binary as a process,
+  against `internal/fixture`'s subject, with the binary taken from
+  `ASSISTANT_BINARY` when that is set so a shipped artifact can be validated
+  rather than a checkout. Two things there are mechanism rather than rule.
+  A check is a `Check[O]`: a predicate over a typed observation plus the
+  counterfeit observations it must reject, `Verify` runs both halves on every
+  invocation, and a check naming no counterfeit is refused, so a check nobody
+  has shown can fail cannot ship. A counterfeit is a mutation of the real
+  observation rather than one written from nothing, for the reason
+  `internal/agents/standin` gives about fakes. And three tables account for
+  everything in both directions: `Coverage` against the principles its own
+  tests cite, `Drives` against the planted catalog, and `Settlements` against
+  the questions `internal/fixture` left open, which this package owns and
+  answers rather than editing that one. Read its `README.md` first: green there
+  says the machinery behaves on inputs we chose and says nothing about review
+  quality, and every row carries whether it was reached through the binary or
+  through the package that owns the mechanism, because no stage body exists and
+  a run therefore reaches no agent, no push, and no code host.
 
 ## Tests
 
