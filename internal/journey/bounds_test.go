@@ -42,11 +42,12 @@ type bounded struct {
 // PRD section 13 asks for each of the three bounds to stop a run the other two
 // would not. Only this one is reachable here. The per-stage round limit and the
 // convergence bound both sit on the back edge into a fixer, and a fix round
-// needs a stage that reports a fix-eligible finding; internal/stages holds no
-// stage body, so every stage reports one unclassified finding and holds for a
-// person, which P3 keeps out of a fix round by construction. Drives records
-// that the same way it records every other condition the missing bodies put
-// out of reach.
+// needs a stage that reports a fix-eligible finding; no stage of this build
+// reports one. A stage with no body reports one unclassified finding and holds
+// for a person, which P3 keeps out of a fix round by construction, and the one
+// stage that has a body declares no fix rounds and reports only notes. Drives
+// records that the same way it records every other condition the missing
+// bodies put out of reach.
 //
 // What makes this a bound rather than a failure is the pair. The same journey
 // with the budget left alone reaches the end of the gate, so what stopped the

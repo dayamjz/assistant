@@ -88,13 +88,16 @@ func Coverage() []Established {
 				"which is where the type split lives and where an invocation record can be read off the " +
 				"wire."},
 		{principles.P5, ReachNone,
-			"There is no review stage, so no run reviews a change a fix round wrote. " +
-				"internal/principles declares this gap and this harness adds nothing to it."},
+			"The review stage has no body, so no run reviews anything and no fix round is taken for " +
+				"one to re-review. internal/principles declares this gap and this harness adds nothing " +
+				"to it."},
 		{principles.P6, ReachBinary,
-			"The service is killed at every boundary a real run stops at and the run is driven to its " +
-				"end afterwards, which is P6's own stated verification criterion. A boundary is a hold, " +
-				"so the boundaries are the stages this build has no body for and the intent stage is not " +
-				"among them. The lease anchor and " +
+			"The service is killed at every boundary a real run reaches and the run is driven to its " +
+				"end afterwards, which is P6's own stated verification criterion; the criterion is every " +
+				"boundary rather than a count of them. A boundary is a hold, so the boundaries are the " +
+				"stages this build has no body for. The intent stage is not among them and no kill is " +
+				"manufactured for it: it has a body, PRD section 5 has it never block a run, and a stage " +
+				"that never holds offers nothing to kill at. The lease anchor and " +
 				"the refusal against a remote that advanced out of band are driven at package reach, " +
 				"because no stage body pushes. The killed run, and the contention check beside it, are " +
 				"driven through methods internal/ipc restricts, so on a platform where that package reads " +
