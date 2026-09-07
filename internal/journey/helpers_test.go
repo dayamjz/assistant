@@ -65,26 +65,6 @@ func requiresLocalSocket(t *testing.T, cause error) {
 	}
 }
 
-// requiresLocalSocketByPlatform skips a check that starts a service through
-// the command surface, on the platform predicate alone.
-//
-// It is the weaker of the two forms, and it has one caller because that path
-// gets a document back rather than an error: a service refused for its
-// configuration and a service that could not bind both come back as an answer
-// that did not exit successfully, and telling them apart would mean reading
-// the text of one. So this rests on the predicate rather than on what
-// happened, and the platform fact under it - that a service does not come up
-// outside linux and darwin - is not established anywhere in this repository.
-// The consequence is named rather than hidden: where that fact is false, this
-// skips a check that would have run.
-func requiresLocalSocketByPlatform(t *testing.T) {
-	t.Helper()
-	if !platformIdentifiesPeers() {
-		t.Skipf("%s is a platform this harness does not start a service on, because it cannot tell a "+
-			"configuration a service refused from a socket it could not bind", runtime.GOOS)
-	}
-}
-
 // stagesWithoutABody is the stages this build has no implementation for, in
 // the order a run takes them.
 //
@@ -155,14 +135,16 @@ func open(t *testing.T, scenario fixture.Scenario, opts ...func(*journey.Options
 // serving starts the service in a process this test owns, so it can be killed
 // the way a crash kills it, and reports what starting it came to.
 //
-// This and startsService are the two ways a service is started here, and both
-// take a platform guard, which is what keeps a check from failing for the
-// transport rather than for the product. There are two because a service this
-// harness owns as a child and a service the command surface starts are
-// different things: only the first can be killed at a stage boundary, only the
-// second answers as a document, and only the first hands back an error the
-// guard can be conditioned on. So this one skips on what happened and that one
-// skips on the platform, and their comments say which.
+// This is where the platform guard is taken, on the failure the sibling
+// packages take it on, which is what keeps a check from failing for the
+// transport rather than for the product.
+//
+// It and startsService are the two ways a service is started here, because a
+// service this harness owns as a child and a service the command surface
+// starts are different things: only the first can be killed at a stage
+// boundary, only the second answers as a document, and only the first hands
+// back an error a guard can be conditioned on. That last difference is why the
+// guard lives here rather than in both.
 //
 // The rule they exist for is that no test starts a service another way, and
 // the residual gap is that nothing enforces it. Go cannot close the door on an
@@ -196,9 +178,17 @@ func serve(t *testing.T, j *journey.Journey) {
 // which is why the bound is its own argument: unbounded, a service that
 // accepted what it should have refused never returns, and the check whose
 // whole subject is a refusal would hang instead of reporting.
+//
+// It takes no platform guard of its own, and there is nothing here it could
+// take: what comes back is a document, so a configuration the service refused
+// and a socket it could not bind both read as an answer that did not exit
+// successfully, and a guard conditioned on that would skip the refusal this
+// exists to observe. Its caller carries one instead. The one it has drives a
+// run and so already skips through requiresIdentifiedPeer, on the same
+// predicate a transport guard would use, and a caller added later that drives
+// no run has to carry a guard itself.
 func startsService(t *testing.T, j *journey.Journey, within time.Duration, args ...string) journey.Answer {
 	t.Helper()
-	requiresLocalSocketByPlatform(t)
 	return j.CommandBounded(j.Dir(), within, args...)
 }
 
