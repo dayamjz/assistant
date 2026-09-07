@@ -43,29 +43,41 @@ row of `Coverage` and of `Drives` carries that distinction as `binary` or
 `package` reach, so a package-reach pass can never be read as an end-to-end
 one.
 
-## Every check is watched failing, on every run
+## Every assertion is watched failing, on every run
 
 A harness of checks that cannot fail reports green while proving nothing, which
 is the exact false confidence this product exists to prevent, built into the
 thing meant to verify it. So falsifiability is structural here rather than
 something somebody once confirmed by hand:
 
-- a principle check is a `Check[O]`: a predicate over a typed observation of
-  what the product actually did, plus the **counterfeit** observations it must
-  reject;
+- a principle check is a `Check[O]`: a list of `Clause[O]` over a typed
+  observation of what the product actually did, plus the **counterfeit**
+  observations it must reject;
 - a counterfeit is a *mutation of the real observation*, never an observation
   written from nothing, so it cannot state a shape the product could not
   produce;
-- `Verify` runs both halves on every invocation. A predicate that stopped
+- `Verify` runs both halves on every invocation. A clause that stopped
   discriminating fails where it is used, immediately, with a message naming the
   counterfeit it accepted;
-- a check declaring no counterfeit is refused rather than run;
+- a check declaring no counterfeit is refused rather than run, **and so is one
+  carrying a clause no counterfeit reaches**. The predicate is a list rather
+  than one function for exactly that reason: answered as a whole, a check hides
+  the part of itself that discriminates nothing, because its other assertions
+  reject every counterfeit anyway. Three clauses here survived that way and
+  were found in review;
+- a clause asserting an **absence** - nothing fired, nothing was rejected, no
+  run started, no session was carried - says so and carries `Possible`, which
+  reports from the real observation whether the thing could have been there at
+  all. A counterfeit mutates the model and cannot answer that, so an absence
+  clause that is falsifiable in the model and vacuous in the subject is the one
+  shape counterfeits alone never catch. A clause that is not an absence may not
+  carry a precondition, so the writer has to decide which kind it is;
 - `TestEveryCheckHereRefusesACheckThatCannotFail` drives `Verify` itself over
   checks that are defective in each of those ways, because a `Verify` that
   quietly accepted anything would make every check here green.
 
 This is not a substitute for a person watching a test fail; it is the durable
-form of it. It establishes that the predicate discriminates. That the
+form of it. It establishes that every assertion discriminates. That the
 observation is real is established separately, by producing it from a real
 process against a real repository.
 
@@ -98,7 +110,7 @@ works around them.
 | `assistant --version --json` writes a plain line where `assistant --json --version` writes a document. `internal/cli/doc.go` records it and the parser rework owns it. | Writes `--json` before the verb everywhere, which every verb honours, and reports the `--version` ordering it observed. |
 | `internal/gate` installs a hook invoking `assistant gate admit`, and `internal/cli`'s verb table carries no `gate` verb. No push can cross the consent boundary P1 draws; every push to a gate is declined by the command surface reporting incorrect usage. | Drives the push, checks that it is not accepted with nothing checking it, and reports what actually declined it. |
 | `core.hooksPath` in a git configuration file redirects a gate's own hooks. `internal/gate/doc.go` names it as an open gap. | Drives a push under the redirect and reports which hook ran, off the fixture's tripwire file. Reported as a known gap, never as a pass. |
-| Nothing reads a repository's configuration document from the default branch, so PRD section 10's abort before launch has no owner. | Drives `config.Parse` and `vcs.Repository.FileAt` against the planted documents directly, and observes on a run that nothing the branch named executed. Reported as a gap against section 10. |
+| Nothing reads a repository's configuration document from the default branch, so PRD section 10's abort before launch has no owner. | Drives `config.Parse` and `vcs.Repository.FileAt` against the planted documents directly, and observes on a run that it starts anyway. Reported as a gap against section 10. That nothing a branch names is executed is established over a branch that plants executables, by the P7 branch test, not there. |
 | Two of `internal/graph`'s three loop bounds sit on the back edge into a fixer, and no stage can produce a fix-eligible finding without a stage body. | Drives the run-wide step budget, which is reachable, and says the other two are not. |
 
 ## What accounts for what

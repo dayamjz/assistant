@@ -144,30 +144,58 @@ func TestTheReviewerNeverCertifiesItsOwnPrescription(t *testing.T) {
 		What: "every review invocation is session-free, only the fixer's rounds carry a session, the " +
 			"re-review does not resume the session that prescribed the fix, and a review shape offered " +
 			"to the fixer is refused before a process starts",
-		Holds: func(r roles) error {
-			var resumed int
-			for _, call := range r.calls {
-				switch call.role {
-				case "review", "re-review":
-					if call.session != "" {
-						return fmt.Errorf("the %s invocation carried the session %q, and a review runs in "+
-							"a fresh context", call.role, call.session)
+		Clauses: []journey.Clause[roles]{
+			{
+				States:  "no review or re-review invocation carried a session",
+				Absence: true,
+				// A wire on which no invocation ever carries a session would
+				// show reviews carrying none whatever the roles did, so what
+				// makes the reviews worth reading is that a session is
+				// something this wire does carry, which the fix rounds show.
+				Possible: func(r roles) error {
+					for _, call := range r.calls {
+						if call.role == "fix" && call.session != "" {
+							return nil
+						}
 					}
-				case "fix":
-					if call.session != "" {
-						resumed++
+					return errors.New("no fix round carried a session either, so nothing here shows a " +
+						"session reaches the wire at all and the reviews carrying none says nothing")
+				},
+				Holds: func(r roles) error {
+					for _, call := range r.calls {
+						switch call.role {
+						case "review", "re-review":
+							if call.session != "" {
+								return fmt.Errorf("the %s invocation carried the session %q, and a review runs in "+
+									"a fresh context", call.role, call.session)
+							}
+						}
 					}
-				}
-			}
-			if resumed == 0 {
-				return errors.New("no fix round carried a session, so nothing here shows the fixer keeps " +
-					"one and the review being session-free says nothing")
-			}
-			if !r.reviewRefusedAtTheFixer {
-				return errors.New("the fixer accepted a review shape, so the session that prescribed a " +
-					"fix can be seated as the certifier of it")
-			}
-			return nil
+					return nil
+				},
+			},
+			{
+				States: "the fixer's rounds carry a session, so the two roles are distinguishable at all",
+				Holds: func(r roles) error {
+					for _, call := range r.calls {
+						if call.role == "fix" && call.session != "" {
+							return nil
+						}
+					}
+					return errors.New("no fix round carried a session, so nothing here shows the fixer keeps " +
+						"one and the review being session-free says nothing")
+				},
+			},
+			{
+				States: "a review shape offered to the fixer is refused before a process starts",
+				Holds: func(r roles) error {
+					if !r.reviewRefusedAtTheFixer {
+						return errors.New("the fixer accepted a review shape, so the session that prescribed a " +
+							"fix can be seated as the certifier of it")
+					}
+					return nil
+				},
+			},
 		},
 		Counterfeits: []journey.Counterfeit[roles]{
 			{Named: "the re-review resumed the session the fix rounds were made in",

@@ -120,52 +120,85 @@ func TestAFindingThatIsNotClassifiedStopsForAPerson(t *testing.T) {
 				observed.wrongRevision = errors.Is(err, findings.ErrWrongRevision)
 			}
 
+			clauses := []journey.Clause[classified]{
+				{
+					States: "the finding carries the action ask",
+					Holds: func(c classified) error {
+						if c.action != findings.ActionAsk {
+							return fmt.Errorf("the finding carries the action %q, and an action the product "+
+								"cannot read has to become %q", c.action, findings.ActionAsk)
+						}
+						return nil
+					},
+				},
+				{
+					States:  "no finding in the report is eligible for automatic fixing",
+					Absence: true,
+					// A report carrying no finding at all would have nothing
+					// that could have been fix-eligible, so a count of none
+					// would hold however the product classified what it read.
+					Possible: func(c classified) error {
+						if c.findings == 0 {
+							return errors.New("the report the product read carries no finding, so nothing " +
+								"in it could have been eligible and a count of none says nothing")
+						}
+						return nil
+					},
+					Holds: func(c classified) error {
+						if c.fixable != 0 {
+							return fmt.Errorf("%d finding(s) in this report are fix-eligible, and an "+
+								"unclassified finding may never enter a fix round", c.fixable)
+						}
+						return nil
+					},
+				},
+			}
+			counterfeits := []journey.Counterfeit[classified]{
+				{Named: "the unreadable action was dropped and the finding came back as a note",
+					Break: func(c classified) classified {
+						c.action = findings.ActionNote
+						return c
+					}},
+				{Named: "the unreadable action was read as a request to fix",
+					Break: func(c classified) classified {
+						c.action = findings.ActionFix
+						return c
+					}},
+				{Named: "the finding was eligible for a fix round anyway",
+					Break: func(c classified) classified {
+						c.fixable = 1
+						return c
+					}},
+			}
+			if review {
+				// There is nothing to substitute on the other path, so neither
+				// the clause about the substitution nor the counterfeit that
+				// reaches it belongs to a report that arrived through it.
+				clauses = append(clauses, journey.Clause[classified]{
+					States: "the same bytes carrying the head the build recorded were refused for naming " +
+						"the wrong revision",
+					Holds: func(c classified) error {
+						if !c.wrongRevision {
+							return errors.New("the same bytes carrying the head the build recorded were " +
+								"not refused for naming the wrong revision, so nothing here shows the " +
+								"substitution was needed")
+						}
+						return nil
+					},
+				})
+				counterfeits = append(counterfeits, journey.Counterfeit[classified]{
+					Named: "the bytes naming the build's own head were accepted rather than refused",
+					Break: func(c classified) classified {
+						c.wrongRevision = false
+						return c
+					},
+				})
+			}
 			becomesAsk := journey.Check[classified]{
 				What: fmt.Sprintf("%s: the finding the product read out of the planted bytes carries the "+
 					"action ask and is never eligible for automatic fixing", id),
-				Holds: func(c classified) error {
-					if c.action != findings.ActionAsk {
-						return fmt.Errorf("the finding carries the action %q, and an action the product "+
-							"cannot read has to become %q", c.action, findings.ActionAsk)
-					}
-					if c.fixable != 0 {
-						return fmt.Errorf("%d finding(s) in this report are fix-eligible, and an "+
-							"unclassified finding may never enter a fix round", c.fixable)
-					}
-					if review && !c.wrongRevision {
-						return fmt.Errorf("the same bytes carrying the head the build recorded were not " +
-							"refused for naming the wrong revision, so nothing here shows the " +
-							"substitution was needed")
-					}
-					return nil
-				},
-				Counterfeits: []journey.Counterfeit[classified]{
-					{Named: "the unreadable action was dropped and the finding came back as a note",
-						Break: func(c classified) classified {
-							c.action = findings.ActionNote
-							return c
-						}},
-					{Named: "the unreadable action was read as a request to fix",
-						Break: func(c classified) classified {
-							c.action = findings.ActionFix
-							return c
-						}},
-					{Named: "the finding was eligible for a fix round anyway",
-						Break: func(c classified) classified {
-							c.fixable = 1
-							return c
-						}},
-					{Named: "the bytes naming the build's own head were accepted rather than refused",
-						Break: func(c classified) classified {
-							c.wrongRevision = false
-							return c
-						}},
-				},
-			}
-			if !review {
-				// There is nothing to substitute on this path, so the
-				// counterfeit about the substitution has nothing to break.
-				becomesAsk.Counterfeits = becomesAsk.Counterfeits[:3]
+				Clauses:      clauses,
+				Counterfeits: counterfeits,
 			}
 			if err := becomesAsk.Verify(observed); err != nil {
 				t.Fatalf("%v", err)
@@ -180,29 +213,64 @@ func TestAFindingThatIsNotClassifiedStopsForAPerson(t *testing.T) {
 		holds := journey.Check[machine.Run]{
 			What: "a stage of a run through the binary that established nothing reports an unclassified " +
 				"finding, holds the run for a person, and offers no automatic fix",
-			Holds: func(run machine.Run) error {
-				if run.Outcome != machine.OutcomeDecision {
-					return fmt.Errorf("the run came back %s rather than waiting on a person", run.Outcome)
-				}
-				if run.Decision == nil {
-					return errors.New("the run is waiting and carries no decision to answer")
-				}
-				if len(run.Decision.Findings) == 0 {
-					return errors.New("the decision carries none of the findings that produced it, and " +
-						"PRD section 9 relays a finding that needs a decision with its full text")
-				}
-				for _, finding := range run.Decision.Findings {
-					if finding.Action != findings.ActionAsk {
-						return fmt.Errorf("the finding %q holding this run carries the action %q",
-							finding.ID, finding.Action)
-					}
-				}
-				if !slices.Contains(run.Decision.Options, string(machine.OutcomeCancelled)) &&
-					!slices.Contains(run.Decision.Options, "cancelled") {
-					return fmt.Errorf("the decision offers %v, and ending the run is not among them",
-						run.Decision.Options)
-				}
-				return nil
+			Clauses: []journey.Clause[machine.Run]{
+				{
+					States: "the run is waiting on a person rather than reporting a pass",
+					Holds: func(run machine.Run) error {
+						if run.Outcome != machine.OutcomeDecision {
+							return fmt.Errorf("the run came back %s rather than waiting on a person", run.Outcome)
+						}
+						return nil
+					},
+				},
+				{
+					States: "the waiting run carries a decision to answer",
+					Holds: func(run machine.Run) error {
+						if run.Decision == nil {
+							return errors.New("the run is waiting and carries no decision to answer")
+						}
+						return nil
+					},
+				},
+				{
+					States: "the decision is relayed with the findings that produced it",
+					Holds: func(run machine.Run) error {
+						if run.Decision == nil || len(run.Decision.Findings) == 0 {
+							return errors.New("the decision carries none of the findings that produced it, and " +
+								"PRD section 9 relays a finding that needs a decision with its full text")
+						}
+						return nil
+					},
+				},
+				{
+					States: "every finding holding the run carries the action ask",
+					Holds: func(run machine.Run) error {
+						if run.Decision == nil {
+							return errors.New("the run carries no decision, so no finding of one could be read")
+						}
+						for _, finding := range run.Decision.Findings {
+							if finding.Action != findings.ActionAsk {
+								return fmt.Errorf("the finding %q holding this run carries the action %q",
+									finding.ID, finding.Action)
+							}
+						}
+						return nil
+					},
+				},
+				{
+					States: "the decision offers ending the run among its options",
+					Holds: func(run machine.Run) error {
+						if run.Decision == nil {
+							return errors.New("the run carries no decision, so it offers no options")
+						}
+						if !slices.Contains(run.Decision.Options, string(machine.OutcomeCancelled)) &&
+							!slices.Contains(run.Decision.Options, "cancelled") {
+							return fmt.Errorf("the decision offers %v, and ending the run is not among them",
+								run.Decision.Options)
+						}
+						return nil
+					},
+				},
 			},
 			Counterfeits: []journey.Counterfeit[machine.Run]{
 				{Named: "the stage reported a pass it did not establish", Break: func(run machine.Run) machine.Run {
@@ -210,6 +278,12 @@ func TestAFindingThatIsNotClassifiedStopsForAPerson(t *testing.T) {
 					run.Outcome = machine.OutcomeChecksPassed
 					return run
 				}},
+				{Named: "the waiting run came back with no decision at all",
+					Break: func(run machine.Run) machine.Run {
+						run = cloneRun(run)
+						run.Decision = nil
+						return run
+					}},
 				{Named: "the finding holding the run was classified as one a fixer may take",
 					Break: func(run machine.Run) machine.Run {
 						run = cloneRun(run)
@@ -224,6 +298,14 @@ func TestAFindingThatIsNotClassifiedStopsForAPerson(t *testing.T) {
 						run = cloneRun(run)
 						decision := *run.Decision
 						decision.Findings = nil
+						run.Decision = &decision
+						return run
+					}},
+				{Named: "the decision offers no way to end the run",
+					Break: func(run machine.Run) machine.Run {
+						run = cloneRun(run)
+						decision := *run.Decision
+						decision.Options = nil
 						run.Decision = &decision
 						return run
 					}},

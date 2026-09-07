@@ -442,15 +442,20 @@ Each has cost this repository more than one round of review.
   against `internal/fixture`'s subject, with the binary taken from
   `ASSISTANT_BINARY` when that is set so a shipped artifact can be validated
   rather than a checkout. Two things there are mechanism rather than rule.
-  A check is a `Check[O]`: a predicate over a typed observation plus the
-  counterfeit observations it must reject, `Verify` runs both halves on every
-  invocation, and a check naming no counterfeit is refused, so a check nobody
-  has shown can fail cannot ship. A counterfeit is a mutation of the real
-  observation rather than one written from nothing, for the reason
-  `internal/agents/standin` gives about fakes. And three tables account for
-  everything in both directions: `Coverage` against the principles its own
-  tests cite, `Drives` against the planted catalog, and `Settlements` against
-  the questions `internal/fixture` left open, which this package owns and
+  A check is a `Check[O]`: a list of `Clause[O]` over a typed observation plus
+  the counterfeit observations it must reject, `Verify` runs both halves on
+  every invocation, and a check naming no counterfeit is refused, as is one
+  carrying a clause no counterfeit reaches, so neither a check nor a part of
+  one that nobody has shown can fail may ship. The predicate is a list because
+  a check answered as a whole hides the assertion that discriminates nothing.
+  A counterfeit is a mutation of the real observation rather than one written
+  from nothing, for the reason `internal/agents/standin` gives about fakes; a
+  clause asserting an absence declares itself one and carries `Possible`,
+  because a mutation of the model cannot say whether the thing could have been
+  there in the subject, and that is the one gap counterfeits never close. And
+  three tables account for everything in both directions: `Coverage` against
+  the principles its own tests cite, `Drives` against the planted catalog, and
+  `Settlements` against the questions `internal/fixture` left open, which this package owns and
   answers rather than editing that one. Read its `README.md` first: green there
   says the machinery behaves on inputs we chose and says nothing about review
   quality, and every row carries whether it was reached through the binary or
