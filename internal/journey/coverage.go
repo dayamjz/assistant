@@ -56,7 +56,11 @@ func Coverage() []Established {
 		{principles.P1, ReachBinary,
 			"An ordinary push to origin after the binary has created a gate is driven as a process and " +
 				"read back off the remote. What is checked is that origin's own configuration is " +
-				"untouched, that the push lands, and that no run exists afterwards."},
+				"untouched, that the push lands, and that no run exists afterwards. It reaches no method " +
+				"internal/ipc restricts, so no platform refuses it for want of peer credentials, but it " +
+				"does need a service, so on a platform with no local socket transport to serve this " +
+				"protocol over the test is skipped rather than passing and nothing about P1 is " +
+				"established there."},
 		{principles.P2, ReachBinary,
 			"One run of the binary walks the nine stages in the specified order; a second skips two of " +
 				"them for that run only; and a home whose configuration document asks for a standing " +
@@ -128,7 +132,11 @@ func Coverage() []Established {
 				"package-reach reads of the planted documents."},
 		{principles.P8, ReachBinary,
 			"A task whose event log ends on an open decision and whose resolved state has moved past it " +
-				"is reported by the binary as the resolved state."},
+				"is reported by the binary as the resolved state. Reading it reaches no method " +
+				"internal/ipc restricts, so no platform refuses it for want of peer credentials, but it " +
+				"is asked of a service, so on a platform with no local socket transport to serve this " +
+				"protocol over the test is skipped rather than passing and nothing about P8 is " +
+				"established there."},
 		{principles.P9, ReachNone,
 			"Nothing in this repository supervises, so there is no wake to classify. " +
 				"internal/principles declares this gap."},

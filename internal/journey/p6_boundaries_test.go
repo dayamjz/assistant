@@ -88,7 +88,7 @@ func TestARunSurvivesTheServiceBeingKilledAtEveryStageBoundary(t *testing.T) {
 		if err := j.Kill(); err != nil {
 			t.Fatalf("killing the service while the run stood at %s: %v", current.Position, err)
 		}
-		if err := j.Serve(); err != nil {
+		if err := serving(t, j); err != nil {
 			t.Fatalf("serving the home again after the kill at %s: %v", current.Position, err)
 		}
 		observed.boundaries = append(observed.boundaries, boundary{
