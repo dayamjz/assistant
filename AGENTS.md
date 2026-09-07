@@ -87,12 +87,27 @@ Each has cost this repository more than one round of review.
   findings for as long as it stands. Change it on a branch of its own, never at
   a document gate, where review is already past and no reviewer would see it.
   Its schema has no repository-wide review key, so a rule that holds everywhere
-  is the `path: "*"` block rather than a copy in each package block. The gate
-  caps the whole section by an upper bound it checks before a run starts, and
-  this file now sits close to that cap, so a new rule means making room rather
-  than appending; `no-mistakes`' own `ReviewPathInstructionsBytes` is the
-  accounting, and a section over the cap fails config parsing for every later
-  run rather than being truncated.
+  is the `path: "*"` block rather than a copy in each package block, which is
+  also the cheaper of the two: every block is charged a fixed frame on top of
+  its text, so a copy per package pays that frame again each time.
+  The gate caps the whole section by an upper bound it checks before a run
+  starts, and this section is now at that cap. `no-mistakes`' own
+  `ReviewPathInstructionsBytes` is the accounting and the way to measure the
+  remaining room; a section over the cap fails config parsing for every later
+  run rather than being truncated. What it charges is the configured entries and
+  not what a run renders: every entry is billed its frame, its full
+  matched-file allowance, and its text whether or not its glob matches the
+  change, so the refused number is the worst case over every possible diff
+  rather than the section any one review sees.
+  Do not make room by deleting a rule. The deleted rule's defect starts
+  recurring, and a diff that removes one instruction and adds another reads as
+  an edit rather than as the regression it is. A channel with no room left is a
+  decision to raise, not one to settle at the point of use.
+  This file is the other surface the same reviewer reads, and no cap bounds it
+  while `disable_project_settings` stays unset here. So a rule reaches the
+  reviewer either way, and what only `.no-mistakes.yaml` buys is a rule the
+  branch under review cannot edit. That, and not importance, is what decides
+  which of the two a rule belongs in.
 - Every exported symbol carries a contract, so give it a doc comment that states
   the contract rather than restating the name.
 - Prefer a small, testable pure core with the side effects at the edges. The
