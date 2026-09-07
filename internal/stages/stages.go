@@ -199,10 +199,16 @@ func Implemented() []pipeline.Stage {
 // converging, and the run parked with a reason that named the bound rather
 // than the missing fixer.
 //
-// It is unreachable in this build, and reachable is what it is written for. A
-// stage with no body reports an ask finding, which never enters a fix loop, so
-// nothing today can reach a fix node. The first stage body that reports a
-// fix-eligible finding does, and it meets this rather than a silent pass.
+// It is unreachable while no stage has both halves of what reaching it takes,
+// and reachable is what it is written for. A fix node exists only for a stage
+// whose row in internal/pipeline's stage table declares a fix round limit
+// above zero, because the pipeline builds one for no other; and only a stage
+// with a body can report the fix-eligible finding that routes into one,
+// because a stage without a body reports an ask finding, which never enters a
+// fix loop. The intent stage has a body and no rounds - its row declares none,
+// so it has no fix node at all, and it reports only notes besides. The first
+// body to land on a row that does take rounds meets this rather than a silent
+// pass.
 //
 // requires is what the run's fixer path needs of the agent adapter, which
 // internal/runs answers with Service.FixerRequires. It is a parameter rather

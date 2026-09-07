@@ -10,8 +10,15 @@ var (
 	// nothing for a change to trace to: Guidance would ask the reviewer to
 	// compare a diff against nothing, and Observe would report every path as
 	// unexplained, which is a lens that fires on everything and so tells a
-	// person nothing. The intent stage runs first precisely so this cannot
-	// happen, and a caller that reaches here has skipped it.
+	// person nothing.
+	//
+	// An ordinary run arrives this way, so it is not only a caller's mistake.
+	// The intent stage records that a run carries no intent rather than
+	// filling one in: it never blocks a run, and this build infers nothing
+	// when none was supplied. So a run started without an intent reaches a
+	// review stage with the intent empty, having skipped no stage. What a
+	// review does then is the review stage's to decide, on the same terms as
+	// ErrNoTouched below - a refusal to handle, not a defect to fail over.
 	ErrNoIntent = errors.New("scope: the lens needs a recorded intent to trace a change to")
 
 	// ErrNoTouched is returned when the lens is asked about no path: a
