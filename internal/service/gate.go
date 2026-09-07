@@ -52,13 +52,13 @@ func (s *Service) gateSubject(ctx context.Context, id string) (subject, error) {
 // ordering - a refusal instead of a change rather than after one - rests on
 // where the hook calls this from and not on anything here.
 //
-// What it establishes is that the push has somewhere to go and something to
-// validate it: the gate resolves to exactly one working copy standing today,
-// that working copy has a repository record, the reference updates are ones
-// this build can read, and a driver could be built for this home. A push
-// admitted without those is a push the gate accepts and starts nothing for,
-// which is the failure a sealed gate exists to prevent, arriving through the
-// front door instead.
+// What it establishes is that the push has somewhere to go: the gate resolves
+// to exactly one working copy standing today, that working copy has a
+// repository record, and the reference updates are ones this build can read.
+// For a push that would start a run it establishes one thing more, that a
+// driver could be built for this home. A push admitted without those is a push
+// the gate accepts and starts nothing for, which is the failure a sealed gate
+// exists to prevent, arriving through the front door instead.
 //
 // The driver is asked for here rather than left to the notification because of
 // where the two hooks sit. This runs before any reference changes and its
@@ -66,6 +66,14 @@ func (s *Service) gateSubject(ctx context.Context, id string) (subject, error) {
 // moved, where a failure can be printed and cannot reject anything. A home
 // nothing runnable can be built for would otherwise take the push, hold the
 // branch, and start no run.
+//
+// It is asked for only when startsARun says some update in the push would
+// start one, which is the same predicate the notification starts runs by. A
+// push carrying only tags, only deletions, or no updates is admitted without
+// one, because the gate is a repository git can push to normally and refusing
+// a tag or the deletion of a stale branch would make it something else. That
+// is a narrower check rather than a weaker one: no push that would start a run
+// escapes it.
 //
 // What it does not establish is why a driver could not be built. Building one
 // resolves an agent, opens the run service, assembles the pipeline and its
@@ -99,12 +107,14 @@ func (s *Service) admit(ctx context.Context, req machine.GateRequest) (machine.A
 	if err := checkUpdates(req); err != nil {
 		return machine.Admission{}, err
 	}
-	if _, err := s.driverFor(ctx); err != nil {
-		return machine.Admission{}, fmt.Errorf("service: %w - so nothing that could validate a push can be "+
-			"built for this home, and the push to gate %s is refused rather than taken and left unvalidated; "+
-			"resolve what that reason names and push again, because nothing records this refusal. assistant "+
-			"doctor reports on the agent this home resolves, which is one of the things a run needs and not "+
-			"all of them", err, req.Gate)
+	if pushNeedsADriver(req) {
+		if _, err := s.driverFor(ctx); err != nil {
+			return machine.Admission{}, fmt.Errorf("service: %w - so nothing that could validate a push can "+
+				"be built for this home, and the push to gate %s is refused rather than taken and left "+
+				"unvalidated; resolve what that reason names and push again, because nothing records this "+
+				"refusal. assistant doctor reports on the agent this home resolves, which is one of the "+
+				"things a run needs and not all of them", err, req.Gate)
+		}
 	}
 	refs := make([]string, 0, len(req.Updates))
 	for _, update := range req.Updates {
@@ -161,25 +171,55 @@ func (s *Service) notify(ctx context.Context, req machine.GateRequest) (machine.
 	}
 	out := machine.Notification{Gate: req.Gate}
 	for _, update := range req.Updates {
-		branch := update.Branch()
-		switch {
-		case branch == "":
-			out.Ignored = append(out.Ignored, machine.Ignored{Ref: update.Ref,
-				Reason: "not a branch, and the gate validates branches"})
-			continue
-		case update.Deleted():
-			out.Ignored = append(out.Ignored, machine.Ignored{Ref: update.Ref,
-				Reason: "the push deletes this branch, so it starts no run, and this branch's existing " +
-					"run if it has one is still advancing; assistant --cancel on that branch ends it"})
+		if !startsARun(update) {
+			out.Ignored = append(out.Ignored, machine.Ignored{Ref: update.Ref, Reason: ignoredReason(update)})
 			continue
 		}
-		started, err := s.startPushedBranch(ctx, found, branch, update.New)
+		started, err := s.startPushedBranch(ctx, found, update.Branch(), update.New)
 		if err != nil {
 			return machine.Notification{}, pushPartlyStarted(req.Gate, out.Started, update.Ref, err)
 		}
 		out.Started = append(out.Started, started)
 	}
 	return out, nil
+}
+
+// startsARun reports whether a push carrying this update starts a run for it,
+// which is true of a branch the push moved and of nothing else.
+//
+// It is one predicate rather than one per caller because two callers ask it:
+// the notification, to decide what to start, and admission, to decide whether
+// this push needs a driver at all. A second spelling of the rule would let
+// admission refuse a push for want of something the notification would never
+// have used.
+func startsARun(u gate.RefUpdate) bool {
+	return u.Branch() != "" && !u.Deleted()
+}
+
+// ignoredReason says why a push started no run for this update, and answers
+// only for one startsARun rejects.
+//
+// Both answers are reported rather than dropped, and neither may read as
+// nothing being outstanding: the gate is a repository git can push to
+// normally, so a tag and a deletion are accepted, and a deletion leaves that
+// branch's run advancing.
+func ignoredReason(u gate.RefUpdate) string {
+	if u.Branch() == "" {
+		return "not a branch, and the gate validates branches"
+	}
+	return "the push deletes this branch, so it starts no run, and this branch's existing run if it " +
+		"has one is still advancing; assistant --cancel on that branch ends it"
+}
+
+// pushNeedsADriver reports whether any update in this push is one a run would
+// be started for, which is what makes a driver something the push depends on.
+func pushNeedsADriver(req machine.GateRequest) bool {
+	for _, update := range req.Updates {
+		if startsARun(update) {
+			return true
+		}
+	}
+	return false
 }
 
 // pushPartlyStarted reports a push whose branches did not all get a run, and
@@ -251,14 +291,24 @@ func (s *Service) startPushedBranch(ctx context.Context, found subject, branch, 
 // the record is authoritative and this is reconciliation rather than a decision
 // about what that run may do.
 //
-// What is not guaranteed is that the displaced run has stopped executing. This
-// signals cancellation with stop() and does not await the displaced run leaving
-// supervision, so nothing bounds how long two runs of one branch may execute at
-// once. That is a missing wait rather than an interleaving. The mechanism that
-// would bound it - a per-branch predecessor set, with the wait as the arriving
-// run's own first step - is specified outside this tree, in internal/daemon's
-// package documentation at tag pre-rebase-2-observation-edges, and is
-// deliberately not implemented here.
+// What is not guaranteed is that the displaced run has stopped executing, and
+// not even that it was told to. A run registers its cancellation with this
+// service only once its own goroutine reaches the point that claims it, which
+// is after its record already reads running, so a displaced run this service
+// holds no cancellation for is signalled nothing. That is looked for twice,
+// before the record is moved and again after, and the run is signalled if this
+// service held one by the time either read looked; a run that registers after
+// the second read is signalled nothing at all and executes its whole pipeline
+// against a commit nobody is asking about, and only its own halting stops it.
+//
+// In no case is the displaced run's departure awaited, so nothing bounds how
+// long two runs of one branch may execute at once. That is a missing wait
+// rather than an interleaving. The mechanism that would bound it - a per-branch
+// predecessor set, with the wait as the arriving run's own first step - is
+// specified outside this tree, in internal/daemon's package documentation at
+// tag pre-rebase-2-observation-edges, and is deliberately not implemented here;
+// the second read above shortens the reach of the unsignalled state and closes
+// none of it.
 func (s *Service) claimPush(ctx context.Context, built *driver, repository, branch, head, base string) (store.Run, string, error) {
 	key := branchKey{repository: repository, branch: branch}
 	release, err := s.holdBranch(ctx, key)
@@ -271,12 +321,7 @@ func (s *Service) claimPush(ctx context.Context, built *driver, repository, bran
 	if active, found, err := s.activeRun(ctx, key.repository, key.branch); err != nil {
 		return store.Run{}, "", err
 	} else if found {
-		s.mu.Lock()
-		stop := s.advancing[active.ID]
-		s.mu.Unlock()
-		if stop != nil {
-			stop()
-		}
+		s.signalCancellation(active.ID)
 		if _, err := built.runs.Terminate(ctx, active.ID); err != nil {
 			var wrong *store.RunStatusError
 			if !errors.As(err, &wrong) {
@@ -289,6 +334,7 @@ func (s *Service) claimPush(ctx context.Context, built *driver, repository, bran
 				active.ID, wrong.Actual, branch)
 		} else {
 			superseded = active.ID
+			s.signalCancellation(active.ID)
 			s.publishRunState(ctx, active.ID)
 		}
 	}
@@ -303,6 +349,23 @@ func (s *Service) claimPush(ctx context.Context, built *driver, repository, bran
 		return store.Run{}, "", err
 	}
 	return record, superseded, nil
+}
+
+// signalCancellation ends the segment a run is advancing, when this service is
+// holding that run's cancellation.
+//
+// A run this service holds nothing for is left alone rather than treated as
+// stopped: it may be one that has already finished, or one whose goroutine has
+// not yet registered its cancellation, and this cannot tell those apart.
+// Calling it more than once for one run is how claimPush looks twice, and
+// costs nothing, because the cancellation a segment registers is idempotent.
+func (s *Service) signalCancellation(runID string) {
+	s.mu.Lock()
+	stop := s.advancing[runID]
+	s.mu.Unlock()
+	if stop != nil {
+		stop()
+	}
 }
 
 // baseOfPushedCommit is the commit the pushed change is measured against,

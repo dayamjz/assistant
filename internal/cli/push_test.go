@@ -396,6 +396,76 @@ func TestAPushIsRefusedWhenNoAgentCanRunAndLeavesTheGateAsItWas(t *testing.T) {
 	}
 }
 
+// TestAPushThatWouldStartNoRunIsAdmittedWithNoAgent is the other half of the
+// refusal above, and the half that keeps it from becoming a wider one.
+//
+// A driver is what validates a change, so a push with no change to validate
+// must not need one. A tag and the deletion of a branch both start no run, and
+// the gate is a repository git can push to normally, so an operator whose
+// agent has stopped resolving can still push a tag and still clear a stale
+// branch. Refusing those would be this measure spreading past what it was
+// added for, and the operator would be told the push was refused to avoid
+// leaving it unvalidated, which is untrue of both.
+//
+// The branch update at the end is what stops this passing for the wrong
+// reason. Without it, an admission that had stopped asking for a driver
+// entirely would satisfy every check above.
+func TestAPushThatWouldStartNoRunIsAdmittedWithNoAgent(t *testing.T) {
+	requiresIdentifiedPeer(t)
+	h := newHome(t)
+	subject := newSubject(t)
+
+	stop := serveUntilStopped(t, h)
+	repository := initialize(t, h, subject)
+	git(t, subject, "checkout", "--quiet", "-b", "work")
+	commitOn(t, subject, "work", "work.txt", "the change that lands\n")
+	git(t, subject, "push", gate.RemoteName, "work")
+	awaitHold(t, h, subject, onlyRun(t, h, subject).ID)
+
+	stop()
+	serveWithNoRunnableAgent(t, h)
+	git(t, subject, "tag", "v1")
+
+	// A tag names no branch, so no run would be started for it and no driver
+	// is needed to take it.
+	if out, err := tryGit(subject, "push", gate.RemoteName, "v1"); err != nil {
+		t.Fatalf("pushing a tag with no runnable agent was refused, although a tag starts no run:\n%s", out)
+	}
+	if !slices.ContainsFunc(gateRefs(t, repository), func(ref string) bool {
+		return strings.HasPrefix(ref, "refs/tags/v1 ")
+	}) {
+		t.Fatalf("git reported the tag push as accepted and the gate does not hold it:\n%v",
+			gateRefs(t, repository))
+	}
+
+	// A deletion starts no run either, so a stale branch can still be cleared.
+	git(t, subject, "checkout", "--quiet", "main")
+	if out, err := tryGit(subject, "push", gate.RemoteName, ":work"); err != nil {
+		t.Fatalf("deleting a branch with no runnable agent was refused, although a deletion starts no "+
+			"run:\n%s", out)
+	}
+	if slices.ContainsFunc(gateRefs(t, repository), func(ref string) bool {
+		return strings.HasPrefix(ref, "refs/heads/work ")
+	}) {
+		t.Fatalf("git reported the deletion as accepted and the gate still holds the branch:\n%v",
+			gateRefs(t, repository))
+	}
+
+	// And the push that would start a run is still refused, so what changed is
+	// which pushes need a driver rather than whether any does.
+	git(t, subject, "checkout", "--quiet", "-b", "later")
+	commitOn(t, subject, "later", "later.txt", "a change that needs validating\n")
+	before := gateRefs(t, repository)
+	out, err := tryGit(subject, "push", gate.RemoteName, "later")
+	if err == nil {
+		t.Fatalf("a branch update was accepted with no runnable agent, so a change reached the gate "+
+			"with nothing to validate it:\n%s", out)
+	}
+	if got := gateRefs(t, repository); !slices.Equal(before, got) {
+		t.Fatalf("the refused branch push changed the gate's references.\nbefore: %v\nafter:  %v", before, got)
+	}
+}
+
 // initialize creates the gate for a subject and returns its bare repository's
 // path, which is what a test reads references out of.
 func initialize(t *testing.T, h *home.Home, subject string) string {
