@@ -56,11 +56,19 @@ import (
 // documentation names that gap; nothing here removes it, and no test can see
 // it, because it is not a route out of a value.
 //
-// Nothing on this struct may be, or yield, a route to a fixer session.
-// TestStageDepsIsNoRouteToAFixerSession asks that of the type graph rather
-// than of a list of assertions, because an assertion answers whether a value
-// is a Runner and the question is whether a body can obtain one. Adding a
-// field of a type that exposes one fails that test.
+// Nothing on this struct may be, or yield, a route to a fixer session. That
+// is the rule a field added here is held to.
+// TestStageDepsIsNoRouteToAFixerSession asks it of the type graph rather than
+// of a list of assertions, because an assertion answers whether a value is a
+// Runner and the question is whether a body can obtain one.
+//
+// It enforces the rule over concrete types: a field, or a method result, whose
+// type is or yields one fails that test. What an interface-typed field holds
+// is outside it, because a dynamic value satisfying agents.Runner is not in
+// the static type the walk reads. internal/agents/route states that gap and
+// pins it, so read it there rather than here. Forge below is a field of that
+// shape today, which makes what is put in one a question review has to ask
+// rather than one the test answers.
 //
 // # Fields nothing in this build reads yet
 //
@@ -129,10 +137,11 @@ func NewStageDeps(agent agents.StageAgent, h *home.Home, cfg config.Config, prov
 // give that rule a second fact to stay consistent with.
 //
 // It opens and never creates, because a body that created its own would be
-// working somewhere the service does not know to reclaim. Nothing else in this
-// build creates one either, so every call here fails today with an error
-// naming the path it tried: creation and reclaim is the work queued next, and
-// this is the path it has to produce.
+// working somewhere the service does not know to reclaim. Nothing in this
+// build's production code creates one either, so a run reaching this today
+// finds nothing to open and gets back an error naming the path it tried:
+// creation and reclaim is the work queued next, and this is the path it has to
+// produce.
 func (d StageDeps) Copy(ctx context.Context, repositoryID, runID string) (*vcs.Repository, error) {
 	if d.Home == nil {
 		return nil, fmt.Errorf("stages: no home, so the isolated copy for run %s cannot be located", runID)

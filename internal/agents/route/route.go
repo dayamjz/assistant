@@ -47,8 +47,8 @@ func fixerRoutes() map[reflect.Type]string {
 // ToFixerSession reports how a caller outside the declaring package can reach
 // a fixer session starting from root. An empty result means the static type
 // graph holds no route, and a non-empty one names at least one path a reader
-// can follow. What a static type does not carry is the dynamic value behind an
-// interface, which is the one gap stated below.
+// can follow. A route a static type does not carry is outside that answer, and
+// the known cases are stated below.
 //
 // It is one path per type and not every path to it. A type already visited is
 // not walked again, which is what makes this terminate on a graph that refers
@@ -87,35 +87,46 @@ func fixerRoutes() map[reflect.Type]string {
 // it. A value held somewhere addressable can have its address taken too, so a
 // method set only the pointer has counts as the caller's.
 //
-// Four things here overstate, and all four do so on purpose. A send-only
-// channel cannot be received from, and an unbuffered one may never carry a
-// value; both are walked anyway. That pointer method set is asked of every
-// type this reaches without asking how the type was held, so a value that is
-// not addressable - a map value, a function result, a method result - is
-// credited with a method set no caller could call on it. And reflect's
-// NumMethod counts an interface's unexported methods alongside its exported
-// ones, so when this reaches an interface it walks the results of methods a
-// caller in another package cannot call, crediting a route nobody can take.
+// Some of what it walks overstates, deliberately. A send-only channel cannot
+// be received from, and an unbuffered one may never carry a value; both are
+// walked anyway. That pointer method set is asked of every type this reaches
+// without asking how the type was held, so a value that is not addressable -
+// a map value, a function result, a method result - is credited with a method
+// set no caller could call on it. And reflect's NumMethod counts an
+// interface's unexported methods alongside its exported ones, so when this
+// reaches an interface it walks the results of methods a caller in another
+// package cannot call.
 //
 // Each over-reports a route nobody can take, which is the direction to err in
 // here: a guard that overstates fails loudly at the shape that has to be
 // argued about, while one that understates passes in silence.
 //
-// One thing understates, and it is the gap this cannot close. An interface
-// with methods is asked what it implements and then walked through its own
-// methods' results; the dynamic value stored in it is not part of its static
-// type, so a value that also implements one of the three forbidden interfaces
-// is invisible here and a caller reaches it by writing a type assertion.
-// stages.StageDeps.Forge is that shape today. The only static answer would be
-// to flag every non-empty interface, which reports every such field as a route
-// and leaves no type able to hold an interface at all, so the gap is left open
-// and pinned: TestTheWalkCannotSeeThroughAnInterfaceField holds what this
-// returns for that shape against a control holding the same value concretely,
-// so widening or closing the interface case fails there rather than changing
-// what a guarantee means without saying so.
+// What understates is one class: a route that is not in the static type of
+// anything walked. The cases below are the known ones and not an enumeration
+// of the class, so a case found later belongs on this list rather than in a
+// recount of it.
 //
-// Method and function parameters are not walked. A method that takes a Runner
-// is not a way to obtain one: a caller would need it already.
+// The dynamic value behind an interface is the case that cannot be closed. An
+// interface with methods is asked what it implements and then walked through
+// its own methods' results; a value stored in it that also implements one of
+// the three forbidden interfaces is invisible here, and a caller reaches it by
+// writing a type assertion. stages.StageDeps.Forge is that shape today. The
+// only static answer would be to flag every non-empty interface, which reports
+// every such field as a route and leaves no type able to hold an interface at
+// all, so the gap is left open and pinned:
+// TestTheWalkCannotSeeThroughAnInterfaceField holds what this returns for that
+// shape against a control holding the same value concretely, so widening or
+// closing the interface case fails there rather than changing what a guarantee
+// means without saying so.
+//
+// A parameter is a case that could be closed and is not. Neither a function's
+// nor a method's parameters are walked, because a parameter a caller passes is
+// not a way to obtain a value: it would need one already. That reasoning
+// covers a parameter passed by value and not one written through - a
+// *agents.Runner, or a slice, map or channel the callee fills, each of which a
+// caller obtains a session from having supplied only an empty container. This
+// does not distinguish the two and so reports nothing for either. Nothing
+// reachable from agents.StageAgent or stages.StageDeps has that shape today.
 func ToFixerSession(root reflect.Type) []string {
 	forbidden := fixerRoutes()
 	var found []string
