@@ -54,8 +54,8 @@
 // stopped to ask something is a success, because the answer goes back through
 // the same surface and an agent that read a decision as a failure would stop
 // driving exactly when it should carry on. A run that is still advancing is a
-// success for the same reason, and internal/machine's outcome table says why
-// that is a member of its own rather than one of the four PRD section 9 names.
+// success for the same reason, and PRD section 9 gives it an outcome of its
+// own rather than one of the four that say a run is finished with.
 //
 // A verb's answer goes to standard output as a document under --json, and
 // progress goes to standard error, so a caller redirecting standard output

@@ -9,23 +9,15 @@ import (
 // Outcome is what a driving agent reads to decide what to do next. The set is
 // closed, and every member is one row of the table below.
 //
-// PRD section 9's machine interface names four: checks-passed, passed, and
-// failure and cancellation, which it requires to be terminal and to carry a
-// next action. This set has six, and the two additions are here for one
-// reason: that list describes what a BLOCKING call answers with, and a
-// blocking call cannot return while the run is still moving or before it has
-// been asked anything.
-//
-// OutcomeDecision is the first addition. The section makes a start or a
-// response block "until the next decision point or a terminal outcome", so a
-// decision point is an answer it names without naming an outcome for.
-// OutcomeExecuting is the second, and it exists for the reads the section's
-// contract does not cover: reporting one run, a status, and attaching to a run
-// this service is already advancing, none of which wait.
-//
-// That is a deviation from the specification, and it is recorded here rather
-// than closed quietly: it is a finding to raise against section 9's outcome
-// list, not a licence this comment grants. Nothing here edits the PRD.
+// PRD section 9's machine interface names these six, in the two groups it
+// divides them into by the question a call asks. Four say a run is finished
+// with - checks-passed, passed, failure and cancellation - which the section
+// requires to be terminal and to carry a next action, and they are the whole
+// answer a blocking call can give, because starting or responding does not
+// return while the run is still moving. Two say a run is not finished with.
+// OutcomeDecision is the decision point that section has a blocking call
+// return at. OutcomeExecuting is a run still advancing, and only an answer
+// that reported the run without advancing it can carry it.
 type Outcome string
 
 const (
@@ -69,11 +61,12 @@ const (
 	// failure and not terminal, and no decision is open: the run is between
 	// two of them, in a stage body that has not finished.
 	//
-	// Only a read reaches it, because a blocking call does not return until
-	// the run has stopped. Attaching to a run another call is already
-	// advancing is the one that reaches it deliberately - asking where a run
-	// stands is answered by saying that it is moving - and reporting one run
-	// or a branch's status reaches it whenever a segment is in flight.
+	// Only an answer that reported the run rather than advancing it carries
+	// it, because a call that advanced one returns where that run stopped.
+	// Reporting one run or a branch's status reaches it whenever a segment is
+	// in flight, and so does attaching to a run another call is already
+	// advancing, which is the one that reaches it deliberately: asking where a
+	// run stands is answered by saying that it is moving.
 	//
 	// A caller does not answer it. There is nothing to answer, and an agent
 	// that read it as a decision would try.
