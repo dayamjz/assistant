@@ -21,10 +21,12 @@ import (
 type installed struct {
 	// outcome is where the run ended.
 	outcome machine.Outcome
-	// agent is the agent the product resolved for this home, read back off the
-	// surface rather than out of the configuration this harness wrote.
-	agent string
 	// fired is every tripwire the scenario recorded by the end of the run.
+	// The branch's own agent binary is one of the planted executables, so this
+	// is also what says whether the branch's agent was launched: which agent a
+	// run resolved is not reported anywhere on the command surface, and the
+	// doctor's agent check answers what is runnable on this machine rather
+	// than what any run resolved.
 	fired []string
 	// mustStayQuiet is what the two conditions say may not run. It is the
 	// union of both lists rather than either, taken from the catalog once:
@@ -67,6 +69,15 @@ type installed struct {
 // executable appends to the scenario's tripwire file, so the claim is a file
 // that does not exist rather than an absence nobody looked for.
 //
+// The agent the branch ships is one of those executables, which is what
+// carries the agent half of P7 here. Which agent a run resolved is reported by
+// no shipped surface - no internal/machine shape carries one, and the doctor's
+// agent check resolves the constant "auto" against the default catalog, so it
+// answers what is runnable on this machine rather than what a run resolved - so
+// a check comparing a name off that report would hold whatever the run chose.
+// The tripwire does not have that problem: a run that launched the branch's
+// agent would have fired it.
+//
 // The suppressed case is here too, and it is a refusal rather than a run. The
 // shipped adapter declares no instruction suppression, so a home asking for it
 // cannot build a pipeline at all, which is PRD section 10's refusal before
@@ -96,7 +107,6 @@ func TestTheBranchUnderValidationChoosesNothingThatRuns(t *testing.T) {
 	j := open(t, scenario)
 	succeeds(t, j.Command("init", "--default-branch", fixture.DefaultBranch))
 	serve(t, j)
-	observed.agent = resolvedAgent(t, j)
 	observed.outcome = last(answerHolds(t, j,
 		startRun(t, j, "--intent", "narrow the Total loop bound on purpose"), "approved")).Outcome
 	if observed.fired, err = journey.Fired(scenario); err != nil {
@@ -127,10 +137,12 @@ func TestTheBranchUnderValidationChoosesNothingThatRuns(t *testing.T) {
 	observed.suppressionMessage = answer.Message()
 
 	governs := journey.Check[installed]{
-		What: "a run over a branch carrying an agent harness installation executes none of it, resolves " +
-			"the agent this home names rather than the one the branch ships, drops every key the branch " +
-			"was not allowed to set while keeping the one it was, and refuses outright when asked for a " +
-			"suppression the resolved adapter does not implement",
+		What: "a run over a branch carrying an agent harness installation executes none of it, the agent " +
+			"binary the branch ships among the rest, drops every key the branch was not allowed to set " +
+			"while keeping the one it was, and refuses outright when asked for a suppression the " +
+			"resolved adapter does not implement. Which agent the run resolved is not established " +
+			"here: no shipped surface reports it, so what is established is that the branch's own " +
+			"agent binary never ran",
 		Clauses: []journey.Clause[installed]{
 			{
 				States: "the run reached the stages the installation was planted in front of",
@@ -149,7 +161,10 @@ func TestTheBranchUnderValidationChoosesNothingThatRuns(t *testing.T) {
 				// file, so a scenario planting none would leave that file empty
 				// however the product behaved. What makes the file worth
 				// reading is that these two conditions plant executables and
-				// record their names.
+				// record their names. One of them is the agent binary the
+				// branch ships, so this clause is also what establishes that
+				// the branch's agent was not the one a stage's work went
+				// through.
 				Possible: func(i installed) error {
 					if len(i.mustStayQuiet) == 0 {
 						return errors.New("the conditions name no tripwire that has to stay quiet, so nothing " +
@@ -163,16 +178,6 @@ func TestTheBranchUnderValidationChoosesNothingThatRuns(t *testing.T) {
 							return fmt.Errorf("%s ran during the run, and nothing a pushed branch installs may "+
 								"execute; the scenario recorded %v", tripwire, i.fired)
 						}
-					}
-					return nil
-				},
-			},
-			{
-				States: "the run resolved the agent this home names rather than the one the branch ships",
-				Holds: func(i installed) error {
-					if i.agent != journey.AgentShimName {
-						return fmt.Errorf("the run resolved the agent %q, and the branch ships one called %q",
-							i.agent, pushedAgentName)
 					}
 					return nil
 				},
@@ -232,10 +237,6 @@ func TestTheBranchUnderValidationChoosesNothingThatRuns(t *testing.T) {
 				i.fired = append(slices.Clone(i.fired), i.mustStayQuiet[0])
 				return i
 			}},
-			{Named: "the run selected the agent the branch ships", Break: func(i installed) installed {
-				i.agent = pushedAgentName
-				return i
-			}},
 			{Named: "the condition records no rejection, so looking for them proves nothing",
 				Break: func(i installed) installed {
 					i.requiredRejections = nil
@@ -290,21 +291,4 @@ func pushedLayer(t *testing.T, scenario fixture.Scenario) config.Layer {
 		t.Fatalf("parsing the branch's own configuration document: %v", err)
 	}
 	return layer
-}
-
-// resolvedAgent is the agent this home would run a stage's work through, read
-// off the surface that reports it.
-func resolvedAgent(t *testing.T, j *journey.Journey) string {
-	t.Helper()
-	var report machine.Doctor
-	if err := j.Command("doctor").Decode(&report); err != nil {
-		t.Fatalf("reading the doctor's report: %v", err)
-	}
-	for _, check := range report.Checks {
-		if check.Name == "agent" {
-			return check.Detail
-		}
-	}
-	t.Fatalf("the doctor reported no agent check: %+v", report.Checks)
-	return ""
 }

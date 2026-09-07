@@ -122,6 +122,7 @@ works around them.
 | `core.hooksPath` in a git configuration file redirects a gate's own hooks. `internal/gate/doc.go` names it as an open gap. | Drives a push under the redirect and reports which hook ran, off the fixture's tripwire file. Reported as a known gap, never as a pass. |
 | Nothing reads a repository's configuration document from the default branch, so PRD section 10's abort before launch has no owner. | Drives `config.Parse` and `vcs.Repository.FileAt` against the planted documents directly, and observes on a run that it starts anyway. Reported as a gap against section 10. That nothing a branch names is executed is established over a branch that plants executables, by the P7 branch test, not there. |
 | Two of `internal/graph`'s three loop bounds sit on the back edge into a fixer, and no stage can produce a fix-eligible finding without a stage body. | Drives the run-wide step budget, which is reachable, and says the other two are not. |
+| No shipped surface reports which agent a run resolved. No `internal/machine` shape carries one, and `doctor`'s `agent` check resolves the constant `auto` against the default catalog, so it answers what is runnable on this machine rather than what any run resolved; `internal/cli` says so itself. | Establishes the P7 property from the tripwires instead: the branch ships its agent as a planted executable, so a run that launched it would have fired that tripwire. Reports that the branch's agent never ran, never which agent was chosen. |
 
 ## What accounts for what
 
