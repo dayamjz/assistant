@@ -446,9 +446,10 @@ Each has cost this repository more than one round of review.
   agent, no push, and no code host. It takes both of the platform guards
   `internal/cli` and `internal/service` carry, on their terms: a check that
   drives a run skips where `internal/ipc` reads no local socket peer
-  credentials, and a check that needs a service skips where there is no local
-  socket transport to serve the protocol over, which is the wider of the two
-  because a check needs a service before it can drive anything. Either skip is
+  credentials, and a check whose service did not come up skips where there is
+  no local socket transport to serve the protocol over, which is the wider of
+  the two because a check needs a service before it can drive anything. Either
+  skip is
   recorded as a limit in that `README.md` and in the `Coverage` note of every
   principle it takes down with it, because a skipped check that reads as a pass
   is what this package exists to refuse. Neither limit is recorded as a list of

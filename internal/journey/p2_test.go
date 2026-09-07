@@ -24,9 +24,12 @@ import (
 // anything.
 //
 // The order itself is internal/pipeline's, which makes another order unsayable
-// rather than checked, so this points at that owner rather than restating the
-// nine names. What it establishes that the owner cannot is that the shipped
-// binary walks them.
+// rather than checked, and internal/service renders it by iterating that order
+// rather than by carrying one of its own. So no clause here asserts it: over a
+// run's answer the order cannot come back wrong, and a clause that cannot fail
+// is what this package refuses. What this establishes that the owner cannot is
+// that the shipped binary reaches every one of those stages, runs each, and
+// carries each away with the outcome it was given.
 //
 // The third part is refused by internal/config's key table rather than by a
 // rule written against standing skips: the table admits no key named skip, so
@@ -54,14 +57,26 @@ func TestAPassMeansTheSameThingEverywhere(t *testing.T) {
 	}
 
 	walked := journey.Check[machine.Run]{
-		What: "a run through the binary walks the nine stages in the order internal/pipeline fixes, " +
-			"every one of them, and reaches the end of the gate",
+		What: "a run through the binary comes back carrying a report for every stage of the gate, every " +
+			"one of them ran, each stage this build has no body for carries the answer its hold was " +
+			"given, none was skipped, and the run reached the end. The order they come back in is not " +
+			"established here and no clause claims it: internal/service builds this list by iterating " +
+			"internal/pipeline's fixed order and appending one view per stage, so another order is " +
+			"unsayable on this wire and a clause over it could not fail. internal/pipeline owns that, " +
+			"and its nine named fields are what make another order unsayable in the first place",
 		Clauses: []journey.Clause[machine.Run]{
 			{
-				States: "the stages come back in the order internal/pipeline fixes, all nine and no more",
+				// The list's length is the one thing about its shape that is
+				// not fixed by construction. internal/service answers a run
+				// that never began executing before it builds any views at
+				// all, so an empty list is a shape this surface really does
+				// produce, and over one every clause below passes having
+				// looked at nothing.
+				States: "the answer carries a report for every stage the gate has",
 				Holds: func(run machine.Run) error {
-					if got, want := stageNames(run), stageOrder(); !slices.Equal(got, want) {
-						return fmt.Errorf("the run reported the stages %v, and the order is %v", got, want)
+					if got, want := len(run.Stages), len(stageOrder()); got != want {
+						return fmt.Errorf("the run reported %d stage report(s) and the gate has %d stages, "+
+							"so the clauses below have nothing to be about", got, want)
 					}
 					return nil
 				},
@@ -126,19 +141,15 @@ func TestAPassMeansTheSameThingEverywhere(t *testing.T) {
 			},
 		},
 		Counterfeits: []journey.Counterfeit[machine.Run]{
-			{Named: "two stages came back in the other order", Break: func(run machine.Run) machine.Run {
+			// Reordering the list, dropping one entry from it and appending a
+			// tenth were counterfeits here until review found that this
+			// surface can produce none of the three, so each showed a clause
+			// failing against a failure the mechanism cannot reach. What it
+			// can produce is no list at all, which is what a run that never
+			// began executing is answered with.
+			{Named: "the run came back carrying no stage reports at all", Break: func(run machine.Run) machine.Run {
 				run = cloneRun(run)
-				run.Stages[2], run.Stages[3] = run.Stages[3], run.Stages[2]
-				return run
-			}},
-			{Named: "a stage was left out of the walk", Break: func(run machine.Run) machine.Run {
-				run = cloneRun(run)
-				run.Stages = slices.Delete(run.Stages, 5, 6)
-				return run
-			}},
-			{Named: "a tenth stage was added", Break: func(run machine.Run) machine.Run {
-				run = cloneRun(run)
-				run.Stages = append(run.Stages, machine.Stage{Stage: "publish", Ran: true})
+				run.Stages = nil
 				return run
 			}},
 			{Named: "a stage nobody skipped did not run", Break: func(run machine.Run) machine.Run {

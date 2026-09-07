@@ -62,7 +62,7 @@ func Coverage() []Established {
 				"protocol over the test is skipped rather than passing and nothing about P1 is " +
 				"established there."},
 		{principles.P2, ReachBinary,
-			"One run of the binary walks the nine stages in the specified order; a second skips two of " +
+			"One run of the binary reaches every stage of the gate; a second skips two of " +
 				"them for that run only; and a home whose configuration document asks for a standing " +
 				"skip stops the service before it serves. Two narrow facts are what establish the third: " +
 				"internal/config's key table admits no key named skip, and a key it does not admit is " +
@@ -70,8 +70,12 @@ func Coverage() []Established {
 				"name is driven beside it and held to the same answer, so the refusal is not read off one " +
 				"word. Whether some row that table does carry would apply a standing skip is what a row " +
 				"means rather than what it is called, and that table is its one owner; nothing here " +
-				"enumerates it. The order being unsayable in any other shape is internal/pipeline's, " +
-				"which this does not repeat. All three parts are one test, and it starts a run through a " +
+				"enumerates it. The order the stages come back in is not established here and no clause " +
+				"claims it: internal/pipeline's nine named fields make another order unsayable, and " +
+				"internal/service renders a run's answer by iterating that order, so a clause over the " +
+				"order could not fail from what a run reports. What the run half establishes instead is " +
+				"that a report came back for every stage, that each ran, and that each carried the " +
+				"outcome its hold was given. All three parts are one test, and it starts a run through a " +
 				"method internal/ipc restricts, so on a platform where that package reads no local socket " +
 				"peer credentials the test is skipped rather than passing and nothing about P2 is " +
 				"established there."},
@@ -101,7 +105,11 @@ func Coverage() []Established {
 				"boundary rather than a count of them. A boundary is a hold, so the boundaries are the " +
 				"stages this build has no body for. The intent stage is not among them and no kill is " +
 				"manufactured for it: it has a body, PRD section 5 has it never block a run, and a stage " +
-				"that never holds offers nothing to kill at. The lease anchor and " +
+				"that never holds offers nothing to kill at. What the recovered decision is held to is " +
+				"that it stands at the same stage and still offers what it offered, which a checkpoint " +
+				"round trip can lose; that it offers something nobody was offered is not claimed, " +
+				"because internal/pipeline gives every hold the same fixed rendering and internal/graph " +
+				"copies it through, so no run can report one. The lease anchor and " +
 				"the refusal against a remote that advanced out of band are driven at package reach, " +
 				"because no stage body pushes. The killed run, and the contention check beside it, are " +
 				"driven through methods internal/ipc restricts, so on a platform where that package reads " +
