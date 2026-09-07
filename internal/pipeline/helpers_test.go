@@ -220,5 +220,5 @@ func start(t *testing.T, p *Pipeline, s Start) (*graph.Executor, graph.Result) {
 
 // complete is a Start naming what a run validates.
 func complete() Start {
-	return Start{Branch: "topic", Base: "main", Submitted: "c0"}
+	return Start{Repository: "repo-1", Run: "run-1", Branch: "topic", Base: "main", Submitted: "c0"}
 }

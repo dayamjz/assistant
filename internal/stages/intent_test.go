@@ -152,6 +152,7 @@ func TestTheWalkPastAssertionNoticesAnIntentStageThatBlocks(t *testing.T) {
 		Description: "this intent stage stops the run for a person",
 	})
 	result := runPipeline(t, blocking, pipeline.Start{
+		Repository: "repo-1", Run: "run-1",
 		Branch: "topic", Base: "main", Submitted: "9f2c1ab",
 	})
 	if got := pipeline.StageOutcome(result.State, pipeline.StageIntent); got != pipeline.OutcomeHeld {
@@ -279,6 +280,7 @@ type intentPath struct {
 func intentPaths() []intentPath {
 	run := func(intent string, supplied bool) *pipeline.Start {
 		return &pipeline.Start{
+			Repository: "repo-1", Run: "run-1",
 			Branch: "topic", Base: "main", Submitted: "9f2c1ab",
 			Intent: intent, IntentSupplied: supplied,
 		}
