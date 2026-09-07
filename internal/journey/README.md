@@ -81,6 +81,16 @@ form of it. It establishes that every assertion discriminates. That the
 observation is real is established separately, by producing it from a real
 process against a real repository.
 
+## How the subject is read back
+
+This package builds git command lines and runs them, which makes it the second
+documented exception to the rule that `internal/vcs` is the only package
+invoking git; `internal/fixture` is the first. Both take it for the same
+reason: a harness that confirmed the product's own git operation by asking the
+package under validation would be reporting that package agreeing with itself.
+The rule is not weakened by either - it has one owner and two named exceptions,
+and a third is a finding to raise rather than a precedent.
+
 ## Running it
 
 ```
