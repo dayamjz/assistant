@@ -16,6 +16,26 @@ type Key string
 // The keys a run carries across the whole pipeline. A stage names the ones it
 // reads and writes; the per-stage keys below belong to this package.
 const (
+	// KeyRepository identifies the repository the run validates, as
+	// internal/store records it. It is a run input.
+	//
+	// A stage body needs it to locate the isolated copy the run works in.
+	// That copy's path is derived from this and KeyRun rather than carried
+	// here, per PRD section 8's ordering rule: the run's row is written
+	// before its directory so a directory with no row is safe to remove, and
+	// a durable second copy of the path would give that rule a second fact to
+	// stay consistent with.
+	KeyRepository Key = "repository"
+	// KeyRun identifies the run, as internal/store records it. It is a run
+	// input.
+	//
+	// It is here because a stage body cannot reach it otherwise: graph.Body
+	// is handed a reader and a writer, and the run identifier stops at
+	// Executor.Run. Carrying it as state rather than widening the execution
+	// engine keeps internal/graph free of anything but execution, and it is
+	// the same shape as KeyBranch and KeySubmitted, which also restate a fact
+	// the run's store row holds.
+	KeyRun Key = "run"
 	// KeyBranch is the branch under validation. It is a run input.
 	KeyBranch Key = "branch"
 	// KeyBase is the branch target the change is rebased onto and pushed to.
@@ -100,6 +120,8 @@ type keySpec struct {
 
 // sharedKeys is the part of the schema that is not per stage.
 var sharedKeys = []keySpec{
+	{KeyRepository, graph.KindText, graph.MergeNone, ownerRun},
+	{KeyRun, graph.KindText, graph.MergeNone, ownerRun},
 	{KeyBranch, graph.KindText, graph.MergeNone, ownerRun},
 	{KeyBase, graph.KindText, graph.MergeNone, ownerRun},
 	{KeySubmitted, graph.KindText, graph.MergeNone, ownerRun},
