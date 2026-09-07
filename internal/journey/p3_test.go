@@ -48,7 +48,9 @@ type classified struct {
 // The binary half is separate and is what a run actually meets today. Every
 // stage of this build reports a finding with the action ask, so a run holds at
 // every one of them for a person rather than reporting a pass it did not
-// establish, and no such finding enters a fix round.
+// establish, and no such finding enters a fix round. That is driven over the
+// whole walk rather than over the first hold: a claim about nine stages that
+// rested on one would be a count nothing checked.
 func TestAFindingThatIsNotClassifiedStopsForAPerson(t *testing.T) {
 	principles.Cite(t, principles.P3)
 
@@ -208,113 +210,202 @@ func TestAFindingThatIsNotClassifiedStopsForAPerson(t *testing.T) {
 
 	t.Run("through the binary", func(t *testing.T) {
 		j := inClone(t)
-		held := startRun(t, j, "--intent", "a change whose stages have no bodies in this build")
+		walk := answerHolds(t, j,
+			startRun(t, j, "--intent", "a change whose stages have no bodies in this build"), "approved")
+		observed := stopped{holds: walk[:len(walk)-1], stages: len(stageOrder())}
 
-		holds := journey.Check[machine.Run]{
-			What: "a stage of a run through the binary that established nothing reports an unclassified " +
-				"finding, holds the run for a person, and offers no automatic fix",
-			Clauses: []journey.Clause[machine.Run]{
+		holds := journey.Check[stopped]{
+			What: "every stage of a run through the binary that established nothing reports a finding " +
+				"that holds the run for a person, relayed with the decision, and none of those findings " +
+				"is one a fixer may take",
+			Clauses: []journey.Clause[stopped]{
 				{
-					States: "the run is waiting on a person rather than reporting a pass",
-					Holds: func(run machine.Run) error {
-						if run.Outcome != machine.OutcomeDecision {
-							return fmt.Errorf("the run came back %s rather than waiting on a person", run.Outcome)
+					States: "the run held once for every stage the gate has",
+					Holds: func(s stopped) error {
+						if len(s.holds) != s.stages {
+							return fmt.Errorf("the run held %d time(s) and the gate has %d stages, so some "+
+								"stage reported a pass rather than holding for a person",
+								len(s.holds), s.stages)
 						}
 						return nil
 					},
 				},
 				{
-					States: "the waiting run carries a decision to answer",
-					Holds: func(run machine.Run) error {
-						if run.Decision == nil {
-							return errors.New("the run is waiting and carries no decision to answer")
-						}
-						return nil
+					States: "every hold carries a decision to answer",
+					Holds: func(s stopped) error {
+						return atEachHold(s, func(at int, run machine.Run) error {
+							if run.Decision == nil {
+								return fmt.Errorf("the hold at %s carries no decision to answer", run.Position)
+							}
+							return nil
+						})
 					},
 				},
 				{
-					States: "the decision is relayed with the findings that produced it",
-					Holds: func(run machine.Run) error {
-						if run.Decision == nil || len(run.Decision.Findings) == 0 {
-							return errors.New("the decision carries none of the findings that produced it, and " +
-								"PRD section 9 relays a finding that needs a decision with its full text")
-						}
-						return nil
+					States: "every decision is relayed with the findings that produced it",
+					Holds: func(s stopped) error {
+						return atEachHold(s, func(at int, run machine.Run) error {
+							if run.Decision == nil || len(run.Decision.Findings) == 0 {
+								return fmt.Errorf("the decision at %s carries none of the findings that "+
+									"produced it, and PRD section 9 relays a finding that needs a decision "+
+									"with its full text", run.Position)
+							}
+							return nil
+						})
 					},
 				},
 				{
-					States: "every finding holding the run carries the action ask",
-					Holds: func(run machine.Run) error {
-						if run.Decision == nil {
-							return errors.New("the run carries no decision, so no finding of one could be read")
-						}
-						for _, finding := range run.Decision.Findings {
-							if finding.Action != findings.ActionAsk {
-								return fmt.Errorf("the finding %q holding this run carries the action %q",
-									finding.ID, finding.Action)
+					States: "every finding holding the run reports itself as holding for a person",
+					Holds: func(s stopped) error {
+						return atEachHold(s, func(at int, run machine.Run) error {
+							if run.Decision == nil {
+								return fmt.Errorf("the hold at %s carries no decision, so no finding of one "+
+									"could be read", run.Position)
+							}
+							for _, finding := range run.Decision.Findings {
+								if !finding.Holds() {
+									return fmt.Errorf("the finding %q holding the run at %s carries the "+
+										"action %q, which internal/findings does not read as holding for a "+
+										"person", finding.ID, run.Position, finding.Action)
+								}
+							}
+							return nil
+						})
+					},
+				},
+				{
+					States:  "no finding holding the run is one a fixer may take",
+					Absence: true,
+					// A walk that reached no finding at all would report none
+					// eligible however the product classified what it read.
+					// What makes the answer worth reading is that the holds
+					// carry findings, which they are checked to.
+					Possible: func(s stopped) error {
+						for _, run := range s.holds {
+							if run.Decision != nil && len(run.Decision.Findings) > 0 {
+								return nil
 							}
 						}
-						return nil
+						return errors.New("no hold carried a finding, so there was nothing here that " +
+							"could have been fix-eligible and a count of none says nothing")
+					},
+					Holds: func(s stopped) error {
+						return atEachHold(s, func(at int, run machine.Run) error {
+							if run.Decision == nil {
+								return nil
+							}
+							for _, finding := range run.Decision.Findings {
+								if finding.FixEligible() {
+									return fmt.Errorf("the finding %q holding the run at %s is one a fixer "+
+										"may take, and an unclassified finding may never enter a fix round",
+										finding.ID, run.Position)
+								}
+							}
+							return nil
+						})
 					},
 				},
 				{
-					States: "the decision offers ending the run among its options",
-					Holds: func(run machine.Run) error {
-						if run.Decision == nil {
-							return errors.New("the run carries no decision, so it offers no options")
-						}
-						if !slices.Contains(run.Decision.Options, string(machine.OutcomeCancelled)) &&
-							!slices.Contains(run.Decision.Options, "cancelled") {
-							return fmt.Errorf("the decision offers %v, and ending the run is not among them",
-								run.Decision.Options)
-						}
-						return nil
+					States: "every decision offers ending the run among its options",
+					Holds: func(s stopped) error {
+						return atEachHold(s, func(at int, run machine.Run) error {
+							if run.Decision == nil {
+								return fmt.Errorf("the hold at %s carries no decision, so it offers no options",
+									run.Position)
+							}
+							if !slices.Contains(run.Decision.Options, string(machine.OutcomeCancelled)) &&
+								!slices.Contains(run.Decision.Options, "cancelled") {
+								return fmt.Errorf("the decision at %s offers %v, and ending the run is not "+
+									"among them", run.Position, run.Decision.Options)
+							}
+							return nil
+						})
 					},
 				},
 			},
-			Counterfeits: []journey.Counterfeit[machine.Run]{
-				{Named: "the stage reported a pass it did not establish", Break: func(run machine.Run) machine.Run {
-					run = cloneRun(run)
-					run.Outcome = machine.OutcomeChecksPassed
-					return run
+			Counterfeits: []journey.Counterfeit[stopped]{
+				{Named: "a stage reported a pass it did not establish rather than holding",
+					Break: func(s stopped) stopped {
+						s = cloneStopped(s)
+						s.holds = slices.Delete(s.holds, 3, 4)
+						return s
+					}},
+				{Named: "a waiting run came back with no decision at all", Break: func(s stopped) stopped {
+					s = cloneStopped(s)
+					s.holds[2].Decision = nil
+					return s
 				}},
-				{Named: "the waiting run came back with no decision at all",
-					Break: func(run machine.Run) machine.Run {
-						run = cloneRun(run)
-						run.Decision = nil
-						return run
+				{Named: "a decision was relayed without the findings that produced it",
+					Break: func(s stopped) stopped {
+						return withDecision(s, 4, func(d *machine.Decision) { d.Findings = nil })
 					}},
-				{Named: "the finding holding the run was classified as one a fixer may take",
-					Break: func(run machine.Run) machine.Run {
-						run = cloneRun(run)
-						decision := *run.Decision
-						decision.Findings = slices.Clone(decision.Findings)
-						decision.Findings[0].Action = findings.ActionFix
-						run.Decision = &decision
-						return run
+				{Named: "a finding holding the run was classified as one a fixer may take",
+					Break: func(s stopped) stopped {
+						return withDecision(s, 0, func(d *machine.Decision) {
+							d.Findings = slices.Clone(d.Findings)
+							d.Findings[0].Action = findings.ActionFix
+						})
 					}},
-				{Named: "the decision was relayed without the findings that produced it",
-					Break: func(run machine.Run) machine.Run {
-						run = cloneRun(run)
-						decision := *run.Decision
-						decision.Findings = nil
-						run.Decision = &decision
-						return run
+				{Named: "a finding holding the run came back as a note nobody has to answer",
+					Break: func(s stopped) stopped {
+						return withDecision(s, 6, func(d *machine.Decision) {
+							d.Findings = slices.Clone(d.Findings)
+							d.Findings[0].Action = findings.ActionNote
+						})
 					}},
-				{Named: "the decision offers no way to end the run",
-					Break: func(run machine.Run) machine.Run {
-						run = cloneRun(run)
-						decision := *run.Decision
-						decision.Options = nil
-						run.Decision = &decision
-						return run
-					}},
+				{Named: "a decision offers no way to end the run", Break: func(s stopped) stopped {
+					return withDecision(s, 8, func(d *machine.Decision) { d.Options = nil })
+				}},
 			},
 		}
-		if err := holds.Verify(held); err != nil {
+		if err := holds.Verify(observed); err != nil {
 			t.Fatalf("%v", err)
 		}
 	})
+}
+
+// stopped is every hold a run through the binary reached, in the order it
+// reached them.
+//
+// It is the whole walk rather than the first hold because the claim is about
+// every stage: answerHolds answers each decision until the run stops moving,
+// so the holds are every answer but the last, and the last is where the run
+// ended.
+type stopped struct {
+	// holds is the run as the surface reported it at each hold it reached.
+	holds []machine.Run
+	// stages is how many stages internal/pipeline fixes, which is how many
+	// holds a run whose every stage establishes nothing has to reach.
+	stages int
+}
+
+// atEachHold answers a question about every hold and reports the first it
+// fails on.
+func atEachHold(s stopped, ask func(at int, run machine.Run) error) error {
+	for at, run := range s.holds {
+		if err := ask(at, run); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// cloneStopped copies a walk far enough that a counterfeit can change one hold
+// without reaching the observation it was derived from.
+func cloneStopped(s stopped) stopped {
+	s.holds = slices.Clone(s.holds)
+	return s
+}
+
+// withDecision is the walk with the decision of one hold replaced by a copy
+// this change was applied to, so nothing a counterfeit does reaches the
+// decision the surface actually answered with.
+func withDecision(s stopped, at int, change func(*machine.Decision)) stopped {
+	s = cloneStopped(s)
+	decision := *s.holds[at].Decision
+	change(&decision)
+	s.holds[at].Decision = &decision
+	return s
 }
 
 // readResponse reads the exact bytes internal/fixture recorded an agent as
