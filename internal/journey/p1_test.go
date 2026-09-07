@@ -50,11 +50,11 @@ type consent struct {
 // package agreeing with itself.
 //
 // What it does not establish is the other half of P1, that pushing to the gate
-// by name authorizes a run. No push can cross that boundary in this build:
-// internal/gate installs a hook invoking "assistant gate admit", and
-// internal/cli's verb table carries no such command, so every push to the gate
-// is declined by the command surface reporting incorrect usage.
-// TestNothingOutsideTheGateChoosesWhatRunsOnAPushToIt drives that.
+// by name authorizes a run. That half is
+// TestAPushToTheGateByNameAuthorizesTheRun's, and it was not drivable at all
+// until internal/cli gained the subcommands the gate's admission hook invokes:
+// before that every push to a gate was declined by the command surface
+// reporting incorrect usage, so this half was the only half there was.
 func TestTheGateDoesNotTouchAnOrdinaryPushToOrigin(t *testing.T) {
 	principles.Cite(t, principles.P1)
 

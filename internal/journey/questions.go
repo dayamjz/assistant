@@ -170,13 +170,14 @@ func Settlements() []Settlement {
 				"is not asserted, since only pre-receive has to run for git to accept a push. Today it " +
 				"is the second half that happens, and it is reported as the gap internal/gate/doc.go " +
 				"names rather than as a pass.",
-			Raise: "The decline in the unredirected case is not an admission decision. internal/gate " +
-				"installs a hook that invokes \"assistant gate admit --gate ID\", which internal/cli's " +
-				"verb table does not carry, so the push is declined by the command surface reporting " +
-				"incorrect usage. internal/gate/hooks.go states the two subcommands it requires of that " +
-				"surface, and internal/cli implements neither, so no push can cross the consent boundary " +
-				"P1 draws. That is a finding against PRD section 9's table, which names no such command, " +
-				"and it is exactly the case internal/cli/doc.go says to raise rather than quietly add.",
+			Raise: "This settlement raised, and internal/cli has since answered, that the gate's " +
+				"admission hook invoked subcommands the command surface did not carry, so no push could " +
+				"cross the consent boundary P1 draws. That surface now carries them and a push to the " +
+				"gate is admitted and starts a run, which " +
+				"TestAPushToTheGateByNameAuthorizesTheRun drives. What is left of the finding is the " +
+				"specification rather than the code: PRD section 9's table still names no command for " +
+				"either subcommand, and internal/gate/hooks.go requires both of the surface, so the two " +
+				"documents disagree about what that surface owes.",
 		},
 	}
 }
