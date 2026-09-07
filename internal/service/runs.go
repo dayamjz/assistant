@@ -648,8 +648,8 @@ func (s *Service) recover(ctx context.Context) {
 //
 // It runs under the service's own context rather than any caller's, which is
 // what makes it a continuation rather than a second attempt at somebody's
-// request: there is nobody to answer, and the only thing that ends it is the
-// service giving up the home.
+// request: there is nobody to answer. What can end the segment it starts is
+// stated at carryOn.
 //
 // Whether it begins at all is startWork's, and that is where the ordering
 // against Close lives rather than in the disposition that got here. carryOn
