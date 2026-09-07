@@ -26,12 +26,13 @@ type installed struct {
 	agent string
 	// fired is every tripwire the scenario recorded by the end of the run.
 	fired []string
-	// mustStayQuiet is what the two conditions say may not run.
+	// mustStayQuiet is what the two conditions say may not run. It is the
+	// union of both lists rather than either, taken from the catalog once:
+	// comparing it afterwards against a second copy of the same expression
+	// would be a clause no observation could contradict, and what makes the
+	// union worth reading is the Absence precondition that refuses an empty
+	// one.
 	mustStayQuiet []string
-	// requiredQuiet is the same union taken straight from the catalog, which
-	// mustStayQuiet has to cover; keeping both in the observation is what lets
-	// a counterfeit shorten one of them.
-	requiredQuiet []string
 	// requiredRejections is what the pushed-configuration condition records
 	// the resolution has to report, and is in the observation for the same
 	// reason: a check reading it out of a closure could not be shown to fail
@@ -88,8 +89,6 @@ func TestTheBranchUnderValidationChoosesNothingThatRuns(t *testing.T) {
 	}
 	observed := installed{
 		mustStayQuiet: slices.Concat(
-			condition.Expect.TripwiresQuiet, pushedConfig.Expect.TripwiresQuiet),
-		requiredQuiet: slices.Concat(
 			condition.Expect.TripwiresQuiet, pushedConfig.Expect.TripwiresQuiet),
 		requiredRejections: pushedConfig.Expect.MessageContains,
 	}
@@ -169,17 +168,6 @@ func TestTheBranchUnderValidationChoosesNothingThatRuns(t *testing.T) {
 				},
 			},
 			{
-				States: "what was checked for silence covers every tripwire the two conditions name",
-				Holds: func(i installed) error {
-					for _, want := range i.requiredQuiet {
-						if !slices.Contains(i.mustStayQuiet, want) {
-							return fmt.Errorf("the condition requires %s to stay quiet and this did not check it", want)
-						}
-					}
-					return nil
-				},
-			},
-			{
 				States: "the run resolved the agent this home names rather than the one the branch ships",
 				Holds: func(i installed) error {
 					if i.agent != journey.AgentShimName {
@@ -244,11 +232,6 @@ func TestTheBranchUnderValidationChoosesNothingThatRuns(t *testing.T) {
 				i.fired = append(slices.Clone(i.fired), i.mustStayQuiet[0])
 				return i
 			}},
-			{Named: "one of the tripwires the conditions name was left out of what was checked",
-				Break: func(i installed) installed {
-					i.mustStayQuiet = slices.Clone(i.mustStayQuiet)[1:]
-					return i
-				}},
 			{Named: "the run selected the agent the branch ships", Break: func(i installed) installed {
 				i.agent = "fixture-pushed-agent"
 				return i

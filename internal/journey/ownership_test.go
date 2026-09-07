@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"slices"
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/fixture"
@@ -224,8 +223,9 @@ func TestACopiedProjectDirectoryDoesNotOwnTheGateItInherited(t *testing.T) {
 	if adoption.Expect.Summary == "" {
 		t.Fatalf("the adoption condition records no expectation, so what it must produce has changed")
 	}
-	if !slices.Contains([]string{"", adoption.Expect.Sentinel}, "") {
-		t.Fatalf("the adoption condition now names a sentinel, so it is a refusal and this drives it as one")
+	if adoption.Expect.Sentinel != "" {
+		t.Fatalf("the adoption condition now names the sentinel %s, so it is a refusal and this drives it "+
+			"as a success", adoption.Expect.Sentinel)
 	}
 }
 
