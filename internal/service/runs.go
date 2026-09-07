@@ -237,13 +237,9 @@ func (s *Service) respond(ctx context.Context, req machine.RespondRequest) (mach
 //
 // What the slot does close is the other half: the segment this cancels is
 // never followed by a continuation. endRun records the ending where carryOn
-// reads it, under the mutex the slot is taken and given back under, and it
-// stands in the slot itself when no segment holds one, so nothing begins
-// advancing the run while the move below is being made. What that does not
-// reach is a caller already part way through a call of its own, whose read of
-// the record predates this: it can take the slot once endRun gives it back and
-// go on to advance a run this call has ended. endRun names that residual and
-// the others with it.
+// reads it, under the mutex the slot is taken and given back under. What that
+// bounds on each of endRun's two branches, and what it leaves open, is written
+// down there and nowhere else.
 func (s *Service) cancel(ctx context.Context, req machine.CancelRequest) (machine.Run, error) {
 	built, err := s.driverFor(ctx)
 	if err != nil {
@@ -764,8 +760,8 @@ func (s *Service) release(runID string) bool {
 // still in flight.
 //
 // Those two sentences are the whole of what it buys, and neither reaches back
-// past the call. This is the one place the residual is written down; doc.go
-// points here rather than restating it.
+// past the call. What follows is what it does not close, and this is the one
+// place that is written down: everywhere else in this package points here.
 //
 // A segment already inside a node still has to return, which is the window
 // cancel's own documentation describes.
