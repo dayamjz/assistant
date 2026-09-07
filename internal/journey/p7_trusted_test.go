@@ -265,21 +265,18 @@ func TestATrustedConfigurationThatCannotBeReadIsNotFallenBackFrom(t *testing.T) 
 		// tripwires are real and the same claim is established.
 		j := inClone(t)
 		answer := j.Command("--intent", "a run whose default branch carries a document that will not parse")
-		observed := resolvedRun{
-			started: answer.Code == machine.ExitOK,
-			message: answer.Message(),
-			agent:   resolvedAgent(t, j),
-		}
+		observed := resolvedRun{started: answer.Code == machine.ExitOK, message: answer.Message()}
 		if observed.started {
 			observed.outcome = decodeRun(t, answer).Outcome
 		}
 
 		reads := journey.Check[resolvedRun]{
 			What: "a run whose default branch carries a trusted document that will not parse either stops " +
-				"before launching anything, or starts and reports an outcome having resolved the agent " +
-				"this home names rather than the one the branch's own document names, which is what a " +
-				"run that had read a repository document as trusted would have resolved; nothing here " +
-				"says what executed, because this subject plants nothing that could",
+				"before launching anything, or starts and reports an outcome; which document it read, " +
+				"and which agent it resolved, are not established here, because no shipped surface " +
+				"reports either and this subject plants nothing whose execution could stand in for " +
+				"them. TestTheBranchUnderValidationChoosesNothingThatRuns establishes over a branch " +
+				"that does plant them that the agent binary a branch ships never runs",
 			Clauses: []journey.Clause[resolvedRun]{
 				{
 					States: "a run that did not start stopped for the configuration",
@@ -300,19 +297,6 @@ func TestATrustedConfigurationThatCannotBeReadIsNotFallenBackFrom(t *testing.T) 
 						return nil
 					},
 				},
-				{
-					States: "the run resolved the agent this home names rather than the one the branch's " +
-						"own document names",
-					Holds: func(r resolvedRun) error {
-						if r.agent != journey.AgentShimName {
-							return fmt.Errorf("the run resolved the agent %q; this home names %q and the "+
-								"branch's own configuration document names %q, which is what a run that "+
-								"read a repository document as trusted would have resolved",
-								r.agent, journey.AgentShimName, pushedAgentName)
-						}
-						return nil
-					},
-				},
 			},
 			Counterfeits: []journey.Counterfeit[resolvedRun]{
 				{Named: "the run stopped for a reason that has nothing to do with configuration",
@@ -324,11 +308,6 @@ func TestATrustedConfigurationThatCannotBeReadIsNotFallenBackFrom(t *testing.T) 
 				{Named: "the run started and answered nothing at all", Break: func(r resolvedRun) resolvedRun {
 					r.started = true
 					r.outcome = ""
-					return r
-				}},
-				{Named: "the run resolved the agent the branch's own document names, so it had read that " +
-					"document as trusted", Break: func(r resolvedRun) resolvedRun {
-					r.agent = pushedAgentName
 					return r
 				}},
 			},
@@ -357,12 +336,6 @@ type resolvedRun struct {
 	outcome machine.Outcome
 	// message is what the surface said about it.
 	message string
-	// agent is the agent this home would run a stage's work through, read off
-	// the surface. It is what makes which layer was read observable rather
-	// than inherited from internal/service's own statement: the branch's own
-	// document parses and names another agent, so a run that had read it as
-	// trusted would have resolved that one.
-	agent string
 }
 
 // remoteDefaultBranch is the commit the default branch stands at on the
