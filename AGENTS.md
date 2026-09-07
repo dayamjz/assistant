@@ -88,7 +88,7 @@ Each has cost this repository more than one round of review.
   a document gate, where review is already past and no reviewer would see it.
   Its schema has no repository-wide review key, so a rule that holds everywhere
   is the `path: "*"` block rather than a copy in each package block. The gate
-  caps the whole section by an upper bound it computes before a run starts, and
+  caps the whole section by an upper bound it checks before a run starts, and
   this file now sits close to that cap, so a new rule means making room rather
   than appending; `no-mistakes`' own `ReviewPathInstructionsBytes` is the
   accounting, and a section over the cap fails config parsing for every later
