@@ -10,12 +10,12 @@ import (
 // closed, and every member is one row of the table below.
 //
 // PRD section 9's machine interface names these six, in the two groups it
-// divides them into by the question a call asks. Four say a run is finished
-// with - checks-passed, passed, failure and cancellation - which the section
-// requires to be terminal and to carry a next action, and they are the whole
-// answer to how a run ended rather than the whole set a call can return. What
-// starting or responding cannot report is a run still moving, because neither
-// returns while the run is still moving. Two say a run is not finished with.
+// divides them into by whether a run is finished with. Four say it is -
+// checks-passed, passed, failure and cancellation - which the section requires
+// to be terminal and to carry a next action, and they are the whole answer to
+// how a run ended rather than the whole set a call can return. No call that
+// advanced a run answers with one still moving, because internal/graph returns
+// at a halt, a completion or a bound. Two say a run is not finished with.
 // OutcomeDecision is the decision point that section has a blocking call
 // return at. OutcomeExecuting is a run still advancing, and only an answer
 // that reported the run without advancing it can carry it.

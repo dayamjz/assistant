@@ -15,8 +15,10 @@ import (
 //
 // The service decides which of those it is, in one call, because the answer
 // depends on records only it should be reading and writing while it holds the
-// home. That call blocks until the run reaches its next decision point or a
-// terminal outcome, per PRD section 9.
+// home. That call blocks while it advances the run and returns at its next
+// decision point or a terminal outcome, per PRD section 9. A run the service
+// is already advancing is reported as it stands instead, so the answer can be
+// a run still executing.
 //
 // --answer is how a decision is answered without a terminal to answer in. PRD
 // section 9's table gives this command no verb of its own for answering, and
@@ -75,7 +77,7 @@ func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 	if answered {
 		return in.answerDecision(ctx, working, answer)
 	}
-	in.progressf("starting or attaching to the run for this branch; this blocks until it needs a decision")
+	in.progressf("starting or attaching to the run for this branch; this blocks while the run advances")
 	var run machine.Run
 	err = in.callService(ctx, ipc.MethodRunStart, machine.StartRequest{
 		Working:        machine.Working{WorkingPath: working},

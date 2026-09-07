@@ -31,8 +31,10 @@
 // saying which of them this build can produce.
 //
 // Blocking calls and relaying verbatim are not shapes, so they are not here.
-// A call blocks because the service does not answer until the run reaches its
-// next decision point, and relaying verbatim is Decision carrying the stage's
+// A call blocks because the service advances the run before it answers, and a
+// call that advanced one answers where that run stopped rather than while it
+// moves; a start that finds the run already advancing is answered with the run
+// as it stands instead. Relaying verbatim is Decision carrying the stage's
 // findings as the stage reported them: unsummarized, unjudged, and not
 // filtered by anything on the way through.
 //

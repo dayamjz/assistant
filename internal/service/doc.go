@@ -38,8 +38,8 @@
 // # Blocking calls, and the one slot per run that makes them safe
 //
 // PRD section 9 has starting and responding block until the run reaches its
-// next decision point or a terminal outcome. They do, and the answer is the
-// run as it then stands.
+// next decision point or a terminal outcome. A call that advances the run does
+// exactly that, and the answer is the run as it then stands.
 //
 // One run advances at a time here. A second request to advance a run already
 // advancing is refused naming the first rather than queued, because
@@ -48,6 +48,13 @@
 // That is a bound on this service and not a distributed one: internal/graph's
 // anchoring is what holds when two processes drive one run, and the home lock
 // is what makes that not happen.
+//
+// The bare start is where that refusal becomes an answer instead. Attaching
+// asks where a run stands, and a run this service is already advancing stands
+// somewhere, so it is reported rather than refused and the call returns while
+// the run is still moving. That is the one blocking call whose answer can be a
+// run still executing; responding meets the refusal, because answering a
+// decision is not a question about where a run stands.
 //
 // # Containment is asked of the kernel, and answered from what this service
 // started

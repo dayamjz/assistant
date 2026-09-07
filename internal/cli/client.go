@@ -31,10 +31,11 @@ func (in *invocation) connect(ctx context.Context) (*ipc.Client, error) {
 // callService makes one call and decodes the answer.
 //
 // It holds the connection open for exactly the call, which matters for the
-// calls that block: starting and responding do not answer until the run
-// reaches its next decision point or a terminal outcome, per PRD section 9, so
-// this waits as long as the run takes and the caller's context is what ends
-// that wait.
+// calls that block: starting and responding advance the run and do not answer
+// until it reaches its next decision point or a terminal outcome, per PRD
+// section 9, so this waits as long as the run takes and the caller's context
+// is what ends that wait. A start that finds the run already advancing is
+// answered sooner, with the run as it stands.
 func (in *invocation) callService(ctx context.Context, method ipc.Method, params, out any) error {
 	client, err := in.connect(ctx)
 	if err != nil {
