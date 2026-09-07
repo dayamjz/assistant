@@ -132,6 +132,11 @@ type Service struct {
 	mu        sync.Mutex
 	built     *driver
 	advancing map[string]*slot
+	// givingUp is whether Close has stopped taking background work. It is
+	// read and written under mu with the registration itself, which is what
+	// orders a continuation started from a request-serving goroutine against
+	// the wait below.
+	givingUp bool
 	// starting holds one gate per branch a start is being decided for, so the
 	// check that a branch has no run and the creation of one are a single
 	// decision rather than a check a second caller can win the race to.
@@ -313,6 +318,13 @@ func (s *Service) Stop(restarting bool) {
 //
 // The lock is released last, so nothing this service still holds outlives the
 // point at which another service may take the home.
+//
+// Background work is refused before it is waited for, and the two are that way
+// round on purpose. A continuation is started from whichever goroutine a
+// segment ended on, so nothing orders its decision against this; what is
+// ordered is its registration, which stopWork closes off under the mutex
+// startWork registers under. Waiting first and refusing after would leave the
+// interleaving where work is registered against a database this then closes.
 func (s *Service) Close() error {
 	s.closeOnce.Do(func() {
 		s.Stop(false)
@@ -324,6 +336,7 @@ func (s *Service) Close() error {
 			errs = append(errs, s.listener.Close())
 		}
 		s.cancelAdvancing()
+		s.stopWork()
 		s.work.Wait()
 		if s.events != nil {
 			errs = append(errs, s.events.Close())

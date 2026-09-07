@@ -1,6 +1,7 @@
 package machine
 
 import (
+	"bytes"
 	"encoding/json"
 
 	"github.com/dayamjz/assistant/internal/findings"
@@ -256,12 +257,25 @@ func (r Run) Decide(s Standing) Run {
 // MarshalJSON writes the run with its next action, which is unexported so that
 // only Decide can put one there. The shape is the exported fields plus that
 // one, so what travels is what a caller decodes.
+//
+// It encodes with HTML escaping off for the reason Encoder gives: a run's
+// answer carries the most agent-written text of any shape here - intents,
+// reasons, stage reports, findings relayed verbatim - and rewriting three
+// ordinary characters in them is worse than leaving them. Encoder's own
+// setting cannot reach inside a Marshaler, which writes its own bytes, so the
+// choice has to be made again here rather than inherited.
 func (r Run) MarshalJSON() ([]byte, error) {
 	type fields Run
-	return json.Marshal(struct {
+	var document bytes.Buffer
+	enc := json.NewEncoder(&document)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(struct {
 		fields
 		NextAction string `json:"next_action"`
-	}{fields(r), r.nextAction})
+	}{fields(r), r.nextAction}); err != nil {
+		return nil, err
+	}
+	return bytes.TrimSuffix(document.Bytes(), []byte("\n")), nil
 }
 
 // UnmarshalJSON reads a run back, including the next action the answering
