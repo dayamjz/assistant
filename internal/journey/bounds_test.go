@@ -96,9 +96,7 @@ func TestTheRunBudgetStopsARunTheGateWouldHaveFinished(t *testing.T) {
 	}
 
 	stops := journey.Check[bounded]{
-		What: "a run whose step budget is smaller than the gate is parked by that budget, is not offered " +
-			"as a decision anybody can answer, and the same subject reaches the end of the gate when " +
-			"nothing bounds it",
+		What: "P2: a run held to a step budget",
 		Clauses: []journey.Clause[bounded]{
 			{
 				States: "the same subject with nothing bounding it reaches the end of the gate",

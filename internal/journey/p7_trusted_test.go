@@ -239,13 +239,7 @@ func TestATrustedConfigurationThatCannotBeReadIsNotFallenBackFrom(t *testing.T) 
 				})
 			}
 			aborts := journey.Check[trusted]{
-				What: string(planted.condition) + ": reading or parsing the default branch's own " +
-					"configuration document failed, the failure is not one a caller could read as the " +
-					"path simply being absent, and it says what the condition records it has to say; " +
-					"the branch's own copy names an agent of its own and resolving that copy drops it, " +
-					"so which layer a reader was handed is visible in the outcome. What the run then " +
-					"does with the failure is not established here, because nothing in this build reads " +
-					"a repository's document at all",
+				What:         "P7: " + string(planted.condition),
 				Clauses:      clauses,
 				Counterfeits: counterfeits,
 			}
@@ -281,13 +275,7 @@ func TestATrustedConfigurationThatCannotBeReadIsNotFallenBackFrom(t *testing.T) 
 		}
 
 		reads := journey.Check[resolvedRun]{
-			What: "a run whose default branch carries a trusted document that will not parse either stops " +
-				"before launching anything, or starts and reports an outcome; which document it read, " +
-				"and which agent it resolved, are not established here, because no shipped surface " +
-				"reports either and this subject plants nothing whose execution could stand in for " +
-				"them. Nothing else here establishes it either: the branch-installation family's " +
-				"planted executables are reached only through a stage body that launches something, " +
-				"and this build has none",
+			What: "P7: a trusted document that will not parse",
 			Clauses: []journey.Clause[resolvedRun]{
 				{
 					States: "a run that did not start stopped for the configuration",

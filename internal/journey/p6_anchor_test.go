@@ -137,10 +137,7 @@ func TestAnUpdateIsAnchoredToWhatTheRunObservedRatherThanToAFreshRead(t *testing
 	observed.asKind = decision.Kind()
 
 	refuses := journey.Check[anchored]{
-		What: "an update whose target moved out of band after the run observed it is refused for " +
-			"would-discard, the refusal names the commits it would drop, the lease is anchored to what " +
-			"the run observed rather than to a fresh read, and incorporating what moved makes the same " +
-			"decision allow a fast-forward",
+		What: "P6: an update whose target moved under the run",
 		Clauses: []journey.Clause[anchored]{
 			{
 				States: "the anchor names where the branch stood when the run observed it",

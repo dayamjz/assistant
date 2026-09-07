@@ -104,8 +104,7 @@ func TestTheGateDoesNotTouchAnOrdinaryPushToOrigin(t *testing.T) {
 	elsewhere := gitIn(t, scenario, scenario.Origin, "rev-parse", "refs/heads/"+fixture.DefaultBranch)
 
 	unchanged := journey.Check[consent]{
-		What: "after the product has created a gate for this working copy, an ordinary push to origin " +
-			"reaches the same remote, moves the reference it was asked to move, and starts no run",
+		What: "P1: an ordinary push to origin, after a gate exists",
 		Clauses: []journey.Clause[consent]{
 			{
 				States: "creating the gate left origin's own configuration exactly as it was",
