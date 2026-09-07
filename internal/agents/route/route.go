@@ -1,12 +1,3 @@
-package route
-
-import (
-	"reflect"
-	"sort"
-
-	"github.com/dayamjz/assistant/internal/agents"
-)
-
 // Package route answers one question about a type: can a caller holding it
 // reach a fixer session. It is the general form of the P4 check, and it is a
 // package rather than a helper in one test because two packages ask it -
@@ -34,6 +25,14 @@ import (
 // A caller must pair a "finds nothing" assertion with one over a type that
 // really does expose a route, or a walk that stopped inspecting anything would
 // report the guarantee forever. agents.Resolution is that control.
+package route
+
+import (
+	"reflect"
+	"sort"
+
+	"github.com/dayamjz/assistant/internal/agents"
+)
 
 // fixerRoutes are the three types a stage body must not be able to obtain, and
 // why each one is a session.
