@@ -2197,7 +2197,12 @@ flowchart TB
     return darkQuery.matches;
   }
 
-  const diagrams = [...document.querySelectorAll(".mermaid")].map((el) => ({ el, src: el.textContent }));
+  // Capture and restore innerHTML, not textContent. Mermaid reads a diagram out of the
+  // element's innerHTML and turns a <br /> in a node label into a line break, but the
+  // browser has already parsed that <br /> into an element, so textContent drops it. The
+  // loop below reseeds every element before the first run as well as before each re-theme,
+  // so a textContent round trip left every two-line label as one run-together string.
+  const diagrams = [...document.querySelectorAll(".mermaid")].map((el) => ({ el, src: el.innerHTML }));
   let applied, rendering = false, queued = false;
   function queueRender() { queued = true; if (rendering) return; void render(); }
   async function render() {
@@ -2208,7 +2213,7 @@ flowchart TB
         const theme = pageIsDark() ? "dark" : "default";
         if (theme === applied) continue;
         mermaid.initialize({ startOnLoad: false, theme, securityLevel: "strict" });
-        for (const { el, src } of diagrams) { el.removeAttribute("data-processed"); el.textContent = src; }
+        for (const { el, src } of diagrams) { el.removeAttribute("data-processed"); el.innerHTML = src; }
         try { await mermaid.run({ nodes: diagrams.map((d) => d.el) }); }
         catch (error) { console.error("Mermaid diagram render failed:", error); return; }
         applied = theme;
