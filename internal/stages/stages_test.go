@@ -1,10 +1,12 @@
 package stages_test
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/config"
+	"github.com/dayamjz/assistant/internal/graph"
 	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/stages"
 )
@@ -55,6 +57,69 @@ func TestAStageWithNoBodyHoldsForAPersonRatherThanPassing(t *testing.T) {
 			}
 			if !strings.Contains(report.Summary, stage.String()) {
 				t.Fatalf("the pending %s stage's summary %q does not name the stage", stage, report.Summary)
+			}
+		})
+	}
+}
+
+// Implemented names the stages this build has a body for, and All has to place
+// those bodies where a run actually walks. Nothing else checks that direction.
+// Removing a stage's row from written would leave the pending loop above
+// simply covering it, intent_test.go builds from stages.Intent directly rather
+// than from All, and the hold assertions in internal/cli and internal/service
+// derive their stage from Implemented, so they would follow the table down
+// with it and the whole suite would stay green while the product went back to
+// holding at a stage it reports a body for.
+//
+// So this runs what All holds for each implemented stage and requires it not
+// to be Pending. The two are told apart by behaviour rather than by comparing
+// function values: Pending cannot fail and reports one ask finding that holds
+// the stage for a person, so a body that reports something else, or that fails
+// on the state this hands it, is not Pending. Tolerating a failure is what
+// keeps this from having to know what a stage landing later needs of the
+// world; the stage bodies that are pure functions of run state give it teeth.
+func TestAllPlacesAWrittenBodyAtEveryImplementedStage(t *testing.T) {
+	t.Parallel()
+	implemented := stages.Implemented()
+	if len(implemented) == 0 {
+		t.Fatal("this build reports no stage bodies at all. A body has landed, so an empty " +
+			"written table is a row that went missing rather than a build that never had one, " +
+			"and skipping here is how that would go unnoticed: with nothing to loop over, every " +
+			"assertion below stops being reached.")
+	}
+	all := stages.All()
+	for _, stage := range implemented {
+		t.Run(stage.String(), func(t *testing.T) {
+			t.Parallel()
+			impl := implementationFor(t, all, stage)
+			allowed := make(map[pipeline.Key]bool, len(impl.Reads))
+			for _, key := range impl.Reads {
+				allowed[key] = true
+			}
+			out, err := impl.NewBody()(t.Context(), pipeline.Input{
+				Stage: stage,
+				State: declaredReader{allowed: allowed, state: map[pipeline.Key]graph.Value{
+					pipeline.KeyIntent:         graph.TextValue("add a greeting"),
+					pipeline.KeyIntentSupplied: graph.BoolValue(true),
+				}},
+			})
+			if err != nil {
+				return // Pending cannot fail, so a body that did is not it.
+			}
+			report := out.Report.Normalize()
+			if err := report.Validate(); err != nil {
+				t.Fatalf("the %s stage produced a report the pipeline refuses: %v", stage, err)
+			}
+			pending, err := stages.Pending(stage.String()).NewBody()(t.Context(), pipeline.Input{Stage: stage})
+			if err != nil {
+				t.Fatalf("running Pending for %s: %v", stage, err)
+			}
+			if reflect.DeepEqual(report, pending.Report.Normalize()) {
+				t.Fatalf("Implemented names %s, but All places Pending at it: a run stops for a "+
+					"person at a stage this build reports a body for", stage)
+			}
+			if report.HasHeld() {
+				t.Fatalf("the %s stage's body held for a person over a supplied intent: %+v", stage, report)
 			}
 		})
 	}

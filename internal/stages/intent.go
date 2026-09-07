@@ -22,8 +22,17 @@ import (
 // transcript-based intent inference to phase 2, on the grounds that supplying
 // intent explicitly is the mechanism that has to work first, so there is no
 // transcript to read, nothing to summarize, and no hint to record. What this
-// stage does is read the intent the run was started with, say whether it was
-// supplied, and report that.
+// stage does is read the intent the run was started with, say what standing it
+// has, and report that.
+//
+// A run carries three intent states rather than two, and this stage reports
+// each of them differently. An intent supplied as acceptance criteria is
+// authoritative. An intent offered without that claim is text the run carries
+// and the stages after this one read, but it is a hint rather than a contract,
+// so it is framed the way the PRD frames an inferred intent and for the same
+// reason: a hint read as a requirement makes review flag choices the person
+// made deliberately. A run with no intent text at all carries none, and only
+// that case is reported as absent.
 //
 // So it starts no agent and touches no filesystem: it is a function of the
 // run's state, which is what keeps the side effects of this pipeline at its
@@ -76,7 +85,7 @@ func Intent() pipeline.Implementation {
 // establishIntent is the stage body. It reports and never refuses: the one
 // error it can meet becomes a note on a report the run carries forward.
 func establishIntent(in pipeline.Input) (pipeline.Output, error) {
-	intent, supplied, err := readIntent(in.State)
+	intent, stated, err := readIntent(in.State)
 	switch {
 	case err != nil:
 		// A read this stage declared cannot be refused by the reader, so this
@@ -92,7 +101,7 @@ func establishIntent(in pipeline.Input) (pipeline.Output, error) {
 					"against. This is a defect in the intent stage rather than in the change "+
 					"being validated.", err))), nil
 
-	case supplied:
+	case stated && intent != "":
 		return intentReport(
 			"The intent for this run was supplied, so it is authoritative acceptance criteria.",
 			intentNote("intent-supplied", findings.SeverityInfo,
@@ -100,23 +109,39 @@ func establishIntent(in pipeline.Input) (pipeline.Output, error) {
 					"acceptance criteria for this change rather than a hint about it:\n\n"+
 					intent)), nil
 
+	case intent != "":
+		return intentReport(
+			"The intent for this run was offered as a hint rather than stated as acceptance criteria.",
+			intentNote("intent-offered", findings.SeverityInfo,
+				"The intent below was offered as a hint about this change rather than stated as "+
+					"acceptance criteria for it, so the run carries it and the stages after this one "+
+					"read it, but the change is not held to it. It is framed the way an inferred "+
+					"intent is framed, and for the same reason: a hint read as a requirement makes "+
+					"review flag choices the person made deliberately, so a change that departs "+
+					"from it is not a defect for departing from it:\n\n"+intent)), nil
+
 	default:
 		return intentReport(
-			"No intent was supplied for this run, so it carries none.",
+			"No intent text was recorded for this run, so it carries none.",
 			intentNote("intent-not-supplied", findings.SeverityWarning,
-				"No intent was supplied for this run, so nothing after this stage has criteria "+
+				"No intent was recorded for this run, so nothing after this stage has criteria "+
 					"to measure the change against and each judges it on what it does. "+
 					"Supplying an intent, with the decisions and tradeoffs behind it, is what "+
 					"gives them something to measure.")), nil
 	}
 }
 
-// readIntent reads the run's intent and whether it was supplied. It reports a
-// supplied intent as supplied only when there is text to it, which
-// pipeline.NewState already refuses to start a run without; the check is here
-// as well because this stage's behaviour turns on it and a bit set over an
-// empty string would otherwise report authoritative criteria that say nothing.
-func readIntent(state pipeline.Reader) (intent string, supplied bool, err error) {
+// readIntent reads the run's intent text and the supplied bit standing over
+// it, and returns them separately rather than as one verdict. The two are
+// distinct facts and the stage draws three cases from them, so collapsing them
+// here would leave an intent that was offered indistinguishable from no intent
+// at all.
+//
+// The text is trimmed, which is what makes the supplied bit standing over an
+// empty string report as no intent rather than as authoritative criteria that
+// say nothing. pipeline.NewState already refuses to start such a run; the
+// trimming is here as well because this stage's behaviour turns on it.
+func readIntent(state pipeline.Reader) (intent string, stated bool, err error) {
 	suppliedValue, err := state.Get(pipeline.KeyIntentSupplied)
 	if err != nil {
 		return "", false, err
@@ -125,10 +150,9 @@ func readIntent(state pipeline.Reader) (intent string, supplied bool, err error)
 	if err != nil {
 		return "", false, err
 	}
-	stated, _ := suppliedValue.Bool()
+	claimed, _ := suppliedValue.Bool()
 	text, _ := intentValue.Text()
-	text = strings.TrimSpace(text)
-	return text, stated && text != "", nil
+	return strings.TrimSpace(text), claimed, nil
 }
 
 // intentNote builds one of this stage's notes. Every finding this stage

@@ -163,22 +163,34 @@ func TestTheWalkPastAssertionNoticesAnIntentStageThatBlocks(t *testing.T) {
 	}
 }
 
-// A supplied intent is reported as authoritative and an absent one is not, so
-// the distinction PRD section 5 frames downstream prompts on is one this stage
-// actually draws rather than one it records the same way twice.
+// A run carries three intent states, not two: intent supplied as acceptance
+// criteria, intent offered without that claim, and no intent at all. The stage
+// has to report all three apart, so the distinction PRD section 5 frames
+// downstream prompts on is one it actually draws rather than one it records
+// the same way twice.
 //
-// It also has to carry the intent's own text, because a hold or a report that
-// said only "an intent was supplied" would send a reader to look it up.
-func TestASuppliedIntentIsReportedAsAuthoritativeAndAnAbsentOneIsNot(t *testing.T) {
+// The offered case is the one this most has to pin. pipeline.KeyIntent holds
+// the offered text and the stages after this one read it, so a report saying
+// the run carries no intent would be false about state the run is carrying.
+// It must carry the text, as the supplied case does, and it must not claim the
+// standing the supplied case has.
+func TestTheThreeIntentStatesAreReportedApart(t *testing.T) {
 	t.Parallel()
 
-	const intent = "add a greeting, and keep the existing one"
+	const criteria = "add a greeting, and keep the existing one"
+	const hint = "somewhere around the greeting, probably"
 	withIntent, err := runIntent(t, map[pipeline.Key]graph.Value{
-		pipeline.KeyIntent:         graph.TextValue(intent),
+		pipeline.KeyIntent:         graph.TextValue(criteria),
 		pipeline.KeyIntentSupplied: graph.BoolValue(true),
 	})
 	if err != nil {
 		t.Fatalf("running the intent stage over a supplied intent: %v", err)
+	}
+	offeredRun, err := runIntent(t, map[pipeline.Key]graph.Value{
+		pipeline.KeyIntent: graph.TextValue(hint),
+	})
+	if err != nil {
+		t.Fatalf("running the intent stage over an offered intent: %v", err)
 	}
 	without, err := runIntent(t, nil)
 	if err != nil {
@@ -186,18 +198,47 @@ func TestASuppliedIntentIsReportedAsAuthoritativeAndAnAbsentOneIsNot(t *testing.
 	}
 
 	supplied := only(t, withIntent.Report)
+	offered := only(t, offeredRun.Report)
 	absent := only(t, without.Report)
-	if supplied.ID == absent.ID {
-		t.Fatalf("a supplied intent and no intent are both reported as %s", supplied.ID)
+	byID := map[string]string{}
+	for _, state := range []struct {
+		name  string
+		found findings.Finding
+	}{{"a supplied intent", supplied}, {"an offered intent", offered}, {"no intent", absent}} {
+		if other, clash := byID[state.found.ID]; clash {
+			t.Fatalf("%s and %s are both reported as %s", other, state.name, state.found.ID)
+		}
+		byID[state.found.ID] = state.name
 	}
+
 	if !strings.Contains(supplied.Description, "authoritative") {
 		t.Fatalf("a supplied intent is not reported as authoritative: %s", supplied.Description)
 	}
-	if !strings.Contains(supplied.Description, intent) {
+	if !strings.Contains(supplied.Description, criteria) {
 		t.Fatalf("the report of a supplied intent does not carry it: %s", supplied.Description)
 	}
 	if strings.Contains(absent.Description, "authoritative") {
 		t.Fatalf("no intent at all is reported as authoritative: %s", absent.Description)
+	}
+
+	if !strings.Contains(offered.Description, hint) {
+		t.Fatalf("the report of an offered intent does not carry it, so a reader has to look it up: %s",
+			offered.Description)
+	}
+	if strings.Contains(offered.Description, "authoritative") {
+		t.Fatalf("an offered intent is reported with the standing of a supplied one: %s", offered.Description)
+	}
+	if !strings.Contains(offered.Description, "hint") {
+		t.Fatalf("an offered intent is not framed as the low-confidence hint PRD section 5 makes it: %s",
+			offered.Description)
+	}
+	for _, claim := range []string{"carries none", "No intent", "no intent was", "nothing was given"} {
+		for _, text := range []string{offered.Description, offeredRun.Report.Summary} {
+			if strings.Contains(text, claim) {
+				t.Fatalf("an offered intent is reported as if the run carried none (%q), but "+
+					"pipeline.KeyIntent holds it and the stages after this one read it: %s", claim, text)
+			}
+		}
 	}
 }
 
@@ -257,7 +298,9 @@ func intentPaths() []intentPath {
 			start: run("", false),
 		},
 		{
-			name: "an intent that was not supplied",
+			// assistant run --intent "..." --intent-supplied=false, which
+			// internal/service records as an offered intent.
+			name: "an intent offered rather than supplied",
 			state: map[pipeline.Key]graph.Value{
 				pipeline.KeyIntent: graph.TextValue("something already in state"),
 			},

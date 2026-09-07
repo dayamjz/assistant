@@ -166,12 +166,17 @@ func implementation(stage pipeline.Stage) pipeline.Implementation {
 }
 
 // Implemented returns the stages this build has a body for, in the order a run
-// takes them. It is empty today.
+// takes them. It reads the written table, so it reports what All places rather
+// than a count stated beside it, and it names no stage this build has not
+// written.
 //
 // assistant doctor reports it, which is what lets that command answer
-// decisively rather than by implication: a build with no stage bodies cannot
-// validate a change, and saying so is more use than reporting every dependency
-// as present.
+// decisively rather than by implication: how much of the gate a build can
+// actually validate is the set this returns, and saying which stages those are
+// is more use than reporting every dependency as present.
+//
+// Tests use it the same way, to derive the stage a run first stops at rather
+// than naming one, so a body that lands does not break them.
 func Implemented() []pipeline.Stage {
 	var out []pipeline.Stage
 	for _, stage := range pipeline.Order() {

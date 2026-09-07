@@ -874,14 +874,24 @@ func stageNames() []string {
 // reported run. The distinction that is acted on is supplied against not
 // supplied, and that is the whole of it.
 //
-// The residual gap is that offered and absent drive nothing different. Both
-// give IntentSupplied false, so the graph state a run begins from is identical
-// for the two, and the only other difference between them is that the Intent
-// column holds text, which a reader gets from that column rather than from
-// this one. The stage that would weigh a hint differently from a contract is
-// the intent stage, and it has no body, so nothing will act on the difference
-// until it does. The three are kept apart anyway because the record must not
-// say that a run holds intent text and that nothing was given.
+// The residual gap is that this column is not what drives the difference
+// between offered and absent. Both give IntentSupplied false, so the graph
+// state a run begins from differs only in the intent text itself, and a reader
+// gets that from the Intent column rather than from this one.
+//
+// The stage that weighs a hint differently from a contract is the intent
+// stage, and it has a body. It reads the intent text and the supplied bit out
+// of graph state, never this column, and reports the three apart: a supplied
+// intent as authoritative acceptance criteria, an offered one as a hint the
+// change is not held to and not a defect to depart from, and no intent text at
+// all as absent. It decides that from the same two facts this function reads,
+// so what it reports matches what was recorded here, with one corner: a
+// supplied bit standing over blank text is recorded as supplied and reported
+// as no intent, and no run reaches the stage that way because
+// pipeline.NewState refuses that start.
+//
+// The three are kept apart here anyway because the record must not say that a
+// run holds intent text and that nothing was given.
 const (
 	// intentSourceSupplied is an intent a person or a driving agent stated as
 	// acceptance criteria.
@@ -889,8 +899,9 @@ const (
 	// intentSourceOffered is an intent a caller gave as a hint, having
 	// declined to claim it as acceptance criteria.
 	intentSourceOffered = "offered"
-	// intentSourceAbsent is a run started with no intent at all, which leaves
-	// the intent stage to infer one.
+	// intentSourceAbsent is a run started with no intent at all. The intent
+	// stage reports it as absent; inferring one is deferred work, so nothing
+	// in this build fills it in.
 	intentSourceAbsent = "absent"
 )
 
