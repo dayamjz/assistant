@@ -2,6 +2,7 @@ package journey_test
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,6 +15,8 @@ import (
 	"github.com/dayamjz/assistant/internal/fixture"
 	"github.com/dayamjz/assistant/internal/journey"
 	"github.com/dayamjz/assistant/internal/machine"
+	"github.com/dayamjz/assistant/internal/redact"
+	"github.com/dayamjz/assistant/internal/store"
 )
 
 // claim takes a scenario for this test's exclusive use. A second test wanting
@@ -167,8 +170,8 @@ func scenarioNamed(t *testing.T, name fixture.ScenarioName) fixture.Scenario {
 // configuration a run could trip over, so a run against it is a run against an
 // ordinary repository. The trusted configuration document on its default
 // branch does not parse, which nothing in this build reads, and
-// TestTheBranchUnderValidationDoesNotChooseWhatRuns is where that is driven
-// rather than relied on.
+// TestATrustedConfigurationThatCannotBeReadIsNotFallenBackFrom is where that
+// is driven rather than relied on.
 func cloned(t *testing.T) (fixture.Scenario, string) {
 	t.Helper()
 	from := scenarioNamed(t, fixture.ScenarioUnparseableTrustedConfig)
@@ -218,6 +221,48 @@ func shimSuffix() string {
 
 // firstDocument decodes the first document of a stream into v, which is what a
 // verb that writes as it goes leaves on standard output.
+//
+// It refuses a field the shape does not declare, and it refuses an object with
+// no field at all. Without both, decoding says only that standard output began
+// with a JSON object: internal/machine's shapes share few keys and none has a
+// required field encoding/json would miss, so a failure envelope handed back
+// where a run was promised decodes into all-zero values and reads as the right
+// shape. What it establishes with them is that the document declared nothing
+// the promised shape does not have and was not empty, which tells every pair
+// of shapes on this surface apart. What it still cannot tell apart is a
+// document whose keys are a subset of the promised shape's, so a caller
+// wanting more than that asserts a field of its own.
 func firstDocument(stdout string, v any) error {
-	return json.NewDecoder(strings.NewReader(stdout)).Decode(v)
+	decoder := json.NewDecoder(strings.NewReader(stdout))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(v); err != nil {
+		return err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.NewDecoder(strings.NewReader(stdout)).Decode(&fields); err != nil {
+		return fmt.Errorf("the first document is not an object: %w", err)
+	}
+	if len(fields) == 0 {
+		return errors.New("the first document is an object carrying no field, which decodes into every " +
+			"shape this surface answers")
+	}
+	return nil
+}
+
+// records opens the home's database through the path internal/home owns.
+//
+// A test composing that path itself would open a fresh empty database the day
+// the layout moved, and go on reporting about records nobody wrote.
+func records(t *testing.T, j *journey.Journey) *store.Store {
+	t.Helper()
+	path, err := j.Database()
+	if err != nil {
+		t.Fatalf("finding the home's database: %v", err)
+	}
+	opened, err := store.Open(t.Context(), path, store.WithRedactor(redact.New()))
+	if err != nil {
+		t.Fatalf("opening the home's records: %v", err)
+	}
+	t.Cleanup(func() { _ = opened.Close() })
+	return opened
 }

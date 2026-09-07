@@ -33,18 +33,33 @@
 // it was. A package-reach pass says nothing about what ships, and recording
 // the difference is what stops it being read as though it did.
 //
-// # Every check carries the evidence that it can fail
+// # Every assertion carries the evidence that it can fail
 //
 // A harness of checks that cannot fail reports green while proving nothing,
 // which is the false confidence this product exists to prevent built into the
-// thing meant to verify it. Check and Counterfeit are the answer, and they are
-// structural rather than a habit: a check is a predicate over a typed
-// observation together with the counterfeit observations it must reject, and
-// Verify runs both halves every time. A counterfeit is a mutation of the real
-// observation rather than one written from nothing, so it cannot state a shape
-// the product could not produce. A check declaring no counterfeit is refused.
+// thing meant to verify it. Check, Clause and Counterfeit are the answer, and
+// they are structural rather than a habit: a check is a list of clauses over a
+// typed observation together with the counterfeit observations it must reject,
+// and Verify runs both halves every time. A counterfeit is a mutation of the
+// real observation rather than one written from nothing, so it cannot state a
+// shape the product could not produce. A check declaring no counterfeit is
+// refused.
 //
-// What that establishes is that the predicate discriminates. That the
+// The predicate is a list rather than one function because a check answered as
+// a whole hides the part of itself that discriminates nothing: the other
+// assertions reject every counterfeit, so the dead one is invisible, and this
+// package shipped three of them. Verify therefore holds every clause to the
+// standard the check is held to, and refuses a clause no counterfeit reaches.
+//
+// One shape needs more than that. A clause asserting an absence - nothing
+// fired, nothing was rejected, no run started, no session was carried - can be
+// perfectly falsifiable in the model and vacuous in the subject, because a
+// counterfeit mutates the model and says nothing about whether the thing could
+// have been there at all. Such a clause declares itself an absence and carries
+// Possible, which answers that from the real observation; a clause that is not
+// an absence may not carry one.
+//
+// What all of that establishes is that every assertion discriminates. That the
 // observation is real is established separately, by producing it from a real
 // process against a real repository, which is what everything else in this
 // package is for.

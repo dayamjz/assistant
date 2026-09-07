@@ -1,6 +1,7 @@
 package journey_test
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -19,9 +20,15 @@ type spoken struct {
 	verb string
 	// code is what the process exited with.
 	code machine.Code
-	// decoded is whether the first document on standard output was of the
-	// shape this verb answers.
+	// decoded is whether the first document on standard output decoded into
+	// the shape this verb answers, under a decoder that refuses a field the
+	// shape does not declare and refuses an object carrying none. What it does
+	// not establish is a required field: firstDocument says what that leaves.
 	decoded bool
+	// shaped re-answers decoded over other bytes, so a counterfeit can hand
+	// this verb a document of another shape and derive what the real decoder
+	// makes of it rather than stating the answer.
+	shaped func(string) error
 	// documents is how many whole documents standard output held, and streams
 	// says this verb is the one that writes one per thing it sees rather than
 	// one per invocation.
@@ -48,6 +55,18 @@ type surface struct {
 	// build does not honour.
 	versionAsDocument bool
 	versionAsLine     bool
+	// usageDocument is the document the surface answered a wrong command line
+	// with, kept because it is the one wrong-shape answer this run produced:
+	// a counterfeit hands it to a verb that promised a run rather than writing
+	// a shape from nothing.
+	usageDocument string
+	// usageAsRun is what the verb-shape decoder makes of those same bytes when
+	// it is asked for a run. A failure envelope accepted as a run is how
+	// "decoded" comes to mean only that standard output began with an object.
+	usageAsRun bool
+	// promisedRunAt is where in spoke the first verb that answers a run
+	// stands, so a counterfeit can put another shape in its place.
+	promisedRunAt int
 }
 
 // TestTheWholeCommandSurfaceAnswersOneDocumentPerInvocation drives every verb
@@ -87,6 +106,7 @@ func TestTheWholeCommandSurfaceAnswersOneDocumentPerInvocation(t *testing.T) {
 	// restarted in the middle. Every step is its own process, which is what
 	// makes this a claim about the surface rather than about a library.
 	started := drive[machine.Run](t, &observed, j, "--intent", "a change driven a command at a time")
+	observed.promisedRunAt = len(observed.spoke) - 1
 	answered := drive[machine.Run](t, &observed, j, "--answer", "approved")
 	if err := j.Kill(); err != nil {
 		t.Fatalf("killing the service between invocations: %v", err)
@@ -113,6 +133,7 @@ func TestTheWholeCommandSurfaceAnswersOneDocumentPerInvocation(t *testing.T) {
 		verb:    "assistant watch",
 		code:    watching.Code,
 		decoded: firstDocument(watching.Stdout, &fleet) == nil,
+		shaped:  func(stdout string) error { return firstDocument(stdout, &machine.Tasks{}) },
 		streams: true,
 		stdout:  watching.Stdout,
 		stderr:  watching.Stderr,
@@ -140,63 +161,188 @@ func TestTheWholeCommandSurfaceAnswersOneDocumentPerInvocation(t *testing.T) {
 	drive[machine.Help](t, &observed, j, "--help")
 
 	// The two failure codes, each from something that produces it for its own
-	// reason.
-	observed.usageCode = j.Command("summon").Code
+	// reason. The wrong command line's own document is kept: it is the shape
+	// no verb here promised, and the counterfeit that hands it to one that did
+	// is what shows the decoder tells them apart.
+	usage := j.Command("summon")
+	observed.usageCode = usage.Code
+	observed.usageDocument = strings.TrimSpace(usage.Stdout)
+	observed.usageAsRun = firstDocument(observed.usageDocument, &machine.Run{}) == nil
 	drive[machine.Eject](t, &observed, j, "eject", "--confirm")
 
 	answers := journey.Check[surface]{
 		What: "every verb the specification names answers exactly one document of its own shape on " +
 			"standard output, a run is driven across separate invocations of the binary and survives " +
 			"the service being replaced between two of them, and the three exit codes are told apart",
-		Holds: func(s surface) error {
-			if len(s.spoke) < 11 {
-				return fmt.Errorf("only %d verbs were driven, and the specification's table names eleven",
-					len(s.spoke))
-			}
-			for _, verb := range s.spoke {
-				if !verb.decoded {
-					return fmt.Errorf("%s did not answer a document of its own shape:\n  stdout: %s\n  stderr: %s",
-						verb.verb, verb.stdout, verb.stderr)
-				}
-				if verb.documents == 0 {
-					return fmt.Errorf("%s wrote nothing a driving agent could read:\n  stderr: %s",
-						verb.verb, verb.stderr)
-				}
-				if !verb.streams && verb.documents != 1 {
-					return fmt.Errorf("%s wrote %d documents, and a driving agent reads one per "+
-						"invocation:\n%s", verb.verb, verb.documents, verb.stdout)
-				}
-				if strings.Contains(verb.stderr, "{\"") {
-					return fmt.Errorf("%s wrote a document to standard error, where a caller "+
-						"redirecting standard output would not find it:\n%s", verb.verb, verb.stderr)
-				}
-			}
-			if !s.resumedAcrossInvocations {
-				return fmt.Errorf("one run was not carried across separate invocations of the binary " +
-					"with the service replaced in between")
-			}
-			if s.failureCode != machine.ExitFailure {
-				return fmt.Errorf("a decisive report that a run cannot start exited %d, and an "+
-					"operational failure is %d", s.failureCode, machine.ExitFailure)
-			}
-			if s.usageCode != machine.ExitUsage {
-				return fmt.Errorf("a command that is not a command exited %d, and incorrect usage is %d",
-					s.usageCode, machine.ExitUsage)
-			}
-			if s.usageCode == s.failureCode {
-				return fmt.Errorf("incorrect usage and an operational failure both exit %d, and a "+
-					"driving agent cannot tell a request it can fix from one it cannot", s.usageCode)
-			}
-			if !s.versionAsDocument {
-				return fmt.Errorf("--json written before --version did not answer a document")
-			}
-			return nil
+		Clauses: []journey.Clause[surface]{
+			{
+				States: "every verb the specification's table names was driven",
+				Holds: func(s surface) error {
+					if len(s.spoke) < 11 {
+						return fmt.Errorf("only %d verbs were driven, and the specification's table names eleven",
+							len(s.spoke))
+					}
+					return nil
+				},
+			},
+			{
+				States: "every verb answered a document of its own shape",
+				Holds: func(s surface) error {
+					for _, verb := range s.spoke {
+						if !verb.decoded {
+							return fmt.Errorf("%s did not answer a document of its own shape:\n  stdout: %s\n  stderr: %s",
+								verb.verb, verb.stdout, verb.stderr)
+						}
+					}
+					return nil
+				},
+			},
+			{
+				States: "every verb wrote something a driving agent could read",
+				Holds: func(s surface) error {
+					for _, verb := range s.spoke {
+						if verb.documents == 0 {
+							return fmt.Errorf("%s wrote nothing a driving agent could read:\n  stderr: %s",
+								verb.verb, verb.stderr)
+						}
+					}
+					return nil
+				},
+			},
+			{
+				States: "a verb that answers one thing wrote exactly one document",
+				Holds: func(s surface) error {
+					for _, verb := range s.spoke {
+						if !verb.streams && verb.documents != 1 {
+							return fmt.Errorf("%s wrote %d documents, and a driving agent reads one per "+
+								"invocation:\n%s", verb.verb, verb.documents, verb.stdout)
+						}
+					}
+					return nil
+				},
+			},
+			{
+				States:  "no verb wrote its answer to standard error",
+				Absence: true,
+				// A surface that wrote nothing to standard error at all would
+				// show no document there whatever it did with its answers.
+				// What makes the stream worth reading is that this product
+				// does write to it, which its progress output shows.
+				Possible: func(s surface) error {
+					for _, verb := range s.spoke {
+						if strings.TrimSpace(verb.stderr) != "" {
+							return nil
+						}
+					}
+					return errors.New("no verb wrote anything to standard error, so a stream nothing " +
+						"reaches carrying no document says nothing about where answers go")
+				},
+				Holds: func(s surface) error {
+					for _, verb := range s.spoke {
+						if strings.Contains(verb.stderr, "{\"") {
+							return fmt.Errorf("%s wrote a document to standard error, where a caller "+
+								"redirecting standard output would not find it:\n%s", verb.verb, verb.stderr)
+						}
+					}
+					return nil
+				},
+			},
+			{
+				States: "one run was carried across separate invocations with the service replaced between two",
+				Holds: func(s surface) error {
+					if !s.resumedAcrossInvocations {
+						return errors.New("one run was not carried across separate invocations of the binary " +
+							"with the service replaced in between")
+					}
+					return nil
+				},
+			},
+			{
+				States: "a decisive report that a run cannot start exits as an operational failure",
+				Holds: func(s surface) error {
+					if s.failureCode != machine.ExitFailure {
+						return fmt.Errorf("a decisive report that a run cannot start exited %d, and an "+
+							"operational failure is %d", s.failureCode, machine.ExitFailure)
+					}
+					return nil
+				},
+			},
+			{
+				States: "a command that is not a command exits as incorrect usage",
+				Holds: func(s surface) error {
+					if s.usageCode != machine.ExitUsage {
+						return fmt.Errorf("a command that is not a command exited %d, and incorrect usage is %d",
+							s.usageCode, machine.ExitUsage)
+					}
+					return nil
+				},
+			},
+			{
+				States: "incorrect usage and an operational failure are different codes",
+				Holds: func(s surface) error {
+					if s.usageCode == s.failureCode {
+						return fmt.Errorf("incorrect usage and an operational failure both exit %d, and a "+
+							"driving agent cannot tell a request it can fix from one it cannot", s.usageCode)
+					}
+					return nil
+				},
+			},
+			{
+				States: "a wrong command line answers a document rather than a bare exit code",
+				Holds: func(s surface) error {
+					if s.usageDocument == "" {
+						return errors.New("a wrong command line wrote nothing on standard output, so a " +
+							"driving agent is left with an exit code and no answer")
+					}
+					return nil
+				},
+			},
+			{
+				States: "the failure a wrong command line answers is not accepted as the shape a verb " +
+					"answering a run promises",
+				Absence: true,
+				// The distinction is only worth anything if there were bytes of
+				// another shape to try it on, which the wrong command line's
+				// own answer supplies.
+				Possible: func(s surface) error {
+					if s.usageDocument == "" {
+						return errors.New("no wrong-shape document was produced by this run, so nothing " +
+							"was offered to the decoder that it could have wrongly accepted")
+					}
+					return nil
+				},
+				Holds: func(s surface) error {
+					if s.usageAsRun {
+						return fmt.Errorf("the failure envelope %s decodes into the shape a verb answering "+
+							"a run promises, so recording a verb as having answered its own shape means "+
+							"only that standard output began with an object", s.usageDocument)
+					}
+					return nil
+				},
+			},
+			{
+				States: "--json written before --version answered a document",
+				Holds: func(s surface) error {
+					if !s.versionAsDocument {
+						return errors.New("--json written before --version did not answer a document")
+					}
+					return nil
+				},
+			},
 		},
 		Counterfeits: []journey.Counterfeit[surface]{
 			{Named: "one of the verbs answered nothing a driving agent could decode",
 				Break: func(s surface) surface {
 					s.spoke = slices.Clone(s.spoke)
 					s.spoke[0].decoded = false
+					return s
+				}},
+			{Named: "a verb that promised a run answered the failure envelope this run produced instead",
+				Break: func(s surface) surface {
+					s.spoke = slices.Clone(s.spoke)
+					at := s.promisedRunAt
+					s.spoke[at].stdout = s.usageDocument
+					s.spoke[at].decoded = s.spoke[at].shaped(s.usageDocument) == nil
 					return s
 				}},
 			{Named: "a verb that answers one thing wrote a second document", Break: func(s surface) surface {
@@ -232,6 +378,16 @@ func TestTheWholeCommandSurfaceAnswersOneDocumentPerInvocation(t *testing.T) {
 					s.failureCode = machine.ExitOK
 					return s
 				}},
+			{Named: "a wrong command line answered nothing on standard output",
+				Break: func(s surface) surface {
+					s.usageDocument = ""
+					return s
+				}},
+			{Named: "the failure envelope decoded into the shape a verb answering a run promises",
+				Break: func(s surface) surface {
+					s.usageAsRun = true
+					return s
+				}},
 			{Named: "--json before --version answered a plain line", Break: func(s surface) surface {
 				s.versionAsDocument = false
 				return s
@@ -263,6 +419,7 @@ func drive[T any](t *testing.T, s *surface, j *journey.Journey, args ...string) 
 		verb:      "assistant " + strings.Join(args, " "),
 		code:      answer.Code,
 		decoded:   firstDocument(answer.Stdout, &into) == nil,
+		shaped:    func(stdout string) error { var of T; return firstDocument(stdout, &of) },
 		documents: documents,
 		stdout:    answer.Stdout,
 		stderr:    answer.Stderr,

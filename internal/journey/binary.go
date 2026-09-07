@@ -31,11 +31,12 @@ var productBinary struct {
 
 // Binary returns the assistant binary this harness drives.
 //
-// It is what BinaryVariable names when that is set, checked to be an
-// executable file before it is returned so that a misspelled path fails here
-// rather than as every command refusing for a reason that is not the product's.
-// Otherwise it is built from the module this package is in, into a directory
-// that lives as long as the process.
+// It is what BinaryVariable names when that is set, checked to exist, to not
+// be a directory, and to be runnable as a program before it is returned, so
+// that a misspelled path or an artifact that never had its mode bits set fails
+// here rather than as every command refusing for a reason that is not the
+// product's. Otherwise it is built from the module this package is in, into a
+// directory that lives as long as the process.
 //
 // Nothing here reaches into the module's packages to do what the binary does.
 // The point of driving a process is that process spawning, exit codes, stream
@@ -59,6 +60,9 @@ func resolveBinary() (string, error) {
 		if info.IsDir() {
 			return "", fmt.Errorf("journey: %s names %s, which is a directory rather than a binary", BinaryVariable, named)
 		}
+		if err := executable(named, info); err != nil {
+			return "", err
+		}
 		absolute, err := filepath.Abs(named)
 		if err != nil {
 			return "", fmt.Errorf("journey: resolving %s: %w", named, err)
@@ -80,6 +84,29 @@ func resolveBinary() (string, error) {
 		return "", fmt.Errorf("journey: building the assistant binary from %s: %w\n%s", root, err, out)
 	}
 	return built, nil
+}
+
+// executable reports why a path this harness was pointed at cannot be run,
+// and nil when nothing says it cannot.
+//
+// It is the mode bits on the platforms that decide by them, and it is
+// exec.LookPath on Windows, where they decide nothing and the extension does.
+// The point either way is that a path naming something unrunnable fails here,
+// naming the variable that carries it, rather than as every command in the
+// suite refusing for a reason that is not the product's.
+func executable(named string, info os.FileInfo) error {
+	if runtime.GOOS == "windows" {
+		if _, err := exec.LookPath(named); err != nil {
+			return fmt.Errorf("journey: %s names %s, which this platform will not run as a program: %w",
+				BinaryVariable, named, err)
+		}
+		return nil
+	}
+	if info.Mode().Perm()&0o111 == 0 {
+		return fmt.Errorf("journey: %s names %s, whose mode %s carries no execute bit, so it is a file "+
+			"rather than a binary", BinaryVariable, named, info.Mode().Perm())
+	}
+	return nil
 }
 
 // exeSuffix is what an executable is named on this platform.
