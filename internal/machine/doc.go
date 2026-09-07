@@ -16,9 +16,16 @@
 // is a findings.Report, and a push's reference updates are gate.RefUpdate. P14
 // gives each of those one owner, and a wire shape that redeclared their fields
 // would be a second one that drifts. What this package adds is the envelope:
-// which records answer which call, and the three things a driving agent needs
-// that no record holds - the outcome, the next action, and whether to stop
-// driving.
+// which records answer which call, and the four things a driving agent needs
+// that no record holds - the outcome, whether anything is advancing the run,
+// the next action, and whether to stop driving.
+//
+// The first three of those are one decision rather than three fields a surface
+// fills in separately. Run.Decide derives them together from a Standing, which
+// is the run's record, where its execution stands, and whether a segment of it
+// is executing; the action it writes is unexported, so a surface outside this
+// package has no assignment site for one that disagrees with the outcome
+// beside it. Run.Decide and the fields it writes say the rest.
 //
 // # The five parts of the contract, and where each of them is
 //

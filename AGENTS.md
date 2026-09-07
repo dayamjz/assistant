@@ -310,10 +310,14 @@ Each has cost this repository more than one round of review.
 - `internal/machine` owns the shapes a structured answer takes, the three exit
   codes, and the outcome vocabulary. It composes records rather than restating
   them: a run is a `store.Run`, a report is a `findings.Report`, so no wire
-  shape becomes a second owner of a record. `Outcome` is a closed set and
-  `OutcomeOf` is the one translation from where a run stopped; `OutcomePassed`
-  has no producer here, because nothing in this build records that a pull
-  request merged.
+  shape becomes a second owner of a record. `Outcome` is a closed set, and one
+  translation answers for a run: `Run.Decide` takes a `Standing`, which is the
+  record, where execution stopped, and whether a segment is advancing the run,
+  and writes the outcome, that fact and the next action together. The action is
+  unexported for that reason, so a surface elsewhere has no assignment site for
+  one that disagrees with the outcome beside it; build an answer through
+  `Decide` rather than filling the fields in. `OutcomePassed` has no producer
+  here, because nothing in this build records that a pull request merged.
 - `internal/service` is the background service PRD section 8's process model
   puts at the centre of a home. It decides nothing: `internal/graph` executes,
   `internal/pipeline` is the topology, `internal/runs` owns the record,
