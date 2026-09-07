@@ -234,10 +234,15 @@ func TestNothingOutsideTheGateChoosesWhatRunsOnAPushToIt(t *testing.T) {
 				"%d run(s), so the admission boundary is answered by something now. git said:\n%s",
 				observed.ordinaryRuns, observed.ordinaryMessage)
 		} else {
-			t.Logf("A push through the gate with nothing redirected was declined. What declined it is not "+
-				"an admission decision: internal/gate installs a hook invoking \"assistant gate admit\", "+
-				"internal/cli carries no such verb, and the push is declined by the command surface "+
-				"reporting incorrect usage. It said:\n%s", observed.ordinaryMessage)
+			// This subtest starts no service, and the gate's admission hook
+			// asks one. So a decline here is not evidence about admission and
+			// is not reported as any: what the clause holds is only that the
+			// gate did not accept the push with nothing checking it.
+			// TestAPushToTheGateByNameAuthorizesTheRun is where admission is
+			// driven, with a service up to answer the hook.
+			t.Logf("A push through the gate with nothing redirected was declined. This subtest runs no "+
+				"service, so what declined it is not established here. It said:\n%s",
+				observed.ordinaryMessage)
 		}
 	})
 }
