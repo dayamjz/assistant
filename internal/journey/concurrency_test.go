@@ -1,6 +1,7 @@
 package journey_test
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"sync"
@@ -81,35 +82,70 @@ func TestSeveralCallersDrivingOneRunExecuteNoNodeTwice(t *testing.T) {
 		What: "a run several callers answered at once spent exactly what the stages it moved through " +
 			"cost, moved forward rather than sideways, and was still drivable to the end of the gate " +
 			"afterwards",
-		Holds: func(c contended) error {
-			if c.perStage <= 0 {
-				return fmt.Errorf("one stage was measured at %d node executions, so there is nothing to "+
-					"compare the contended run against", c.perStage)
-			}
-			if c.stagesAdvanced < 1 {
-				return fmt.Errorf("%d callers answered and the run moved through %d stages",
-					len(c.answers), c.stagesAdvanced)
-			}
-			spent := c.after.Steps - c.before.Steps
-			if want := c.stagesAdvanced * c.perStage; spent != want {
-				return fmt.Errorf("the run moved through %d stage(s) and spent %d node executions, and "+
-					"one stage costs %d, so %d were expected; a node body ran more than once or a "+
-					"segment wrote over another's history", c.stagesAdvanced, spent, c.perStage, want)
-			}
-			for i, code := range c.answers {
-				if code != machine.ExitOK && code != machine.ExitFailure {
-					return fmt.Errorf("caller %d exited %d, which is neither an answer nor a refusal", i, code)
-				}
-			}
-			if !slices.Contains(c.answers, machine.ExitOK) {
-				return fmt.Errorf("no caller advanced the run, so nothing here shows what happens when "+
-					"one does: they exited %v", c.answers)
-			}
-			if !c.completed {
-				return fmt.Errorf("the run could not be driven to the end afterwards, so what the callers " +
-					"left behind is not a history the run can be resumed from")
-			}
-			return nil
+		Clauses: []journey.Clause[contended]{
+			{
+				States: "one stage was measured at a cost there is something to compare against",
+				Holds: func(c contended) error {
+					if c.perStage <= 0 {
+						return fmt.Errorf("one stage was measured at %d node executions, so there is nothing to "+
+							"compare the contended run against", c.perStage)
+					}
+					return nil
+				},
+			},
+			{
+				States: "the run moved forward through at least one stage",
+				Holds: func(c contended) error {
+					if c.stagesAdvanced < 1 {
+						return fmt.Errorf("%d callers answered and the run moved through %d stages",
+							len(c.answers), c.stagesAdvanced)
+					}
+					return nil
+				},
+			},
+			{
+				States: "the run spent exactly what the stages it moved through cost",
+				Holds: func(c contended) error {
+					spent := c.after.Steps - c.before.Steps
+					if want := c.stagesAdvanced * c.perStage; spent != want {
+						return fmt.Errorf("the run moved through %d stage(s) and spent %d node executions, and "+
+							"one stage costs %d, so %d were expected; a node body ran more than once or a "+
+							"segment wrote over another's history", c.stagesAdvanced, spent, c.perStage, want)
+					}
+					return nil
+				},
+			},
+			{
+				States: "every caller was answered or refused rather than crashing",
+				Holds: func(c contended) error {
+					for i, code := range c.answers {
+						if code != machine.ExitOK && code != machine.ExitFailure {
+							return fmt.Errorf("caller %d exited %d, which is neither an answer nor a refusal", i, code)
+						}
+					}
+					return nil
+				},
+			},
+			{
+				States: "at least one caller advanced the run",
+				Holds: func(c contended) error {
+					if !slices.Contains(c.answers, machine.ExitOK) {
+						return fmt.Errorf("no caller advanced the run, so nothing here shows what happens when "+
+							"one does: they exited %v", c.answers)
+					}
+					return nil
+				},
+			},
+			{
+				States: "the run was still drivable to the end of the gate afterwards",
+				Holds: func(c contended) error {
+					if !c.completed {
+						return errors.New("the run could not be driven to the end afterwards, so what the callers " +
+							"left behind is not a history the run can be resumed from")
+					}
+					return nil
+				},
+			},
 		},
 		Counterfeits: []journey.Counterfeit[contended]{
 			{Named: "a node body executed twice", Break: func(c contended) contended {
@@ -120,6 +156,11 @@ func TestSeveralCallersDrivingOneRunExecuteNoNodeTwice(t *testing.T) {
 				c.after.Steps -= c.perStage
 				return c
 			}},
+			{Named: "one stage was measured at nothing, so there is no cost to compare against",
+				Break: func(c contended) contended {
+					c.perStage = 0
+					return c
+				}},
 			{Named: "the run went backwards", Break: func(c contended) contended {
 				c.stagesAdvanced = 0
 				return c

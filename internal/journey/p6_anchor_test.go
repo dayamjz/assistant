@@ -141,42 +141,95 @@ func TestAnUpdateIsAnchoredToWhatTheRunObservedRatherThanToAFreshRead(t *testing
 			"would-discard, the refusal names the commits it would drop, the lease is anchored to what " +
 			"the run observed rather than to a fresh read, and incorporating what moved makes the same " +
 			"decision allow a fast-forward",
-		Holds: func(a anchored) error {
-			if a.anchorCommit != a.observedCommit {
-				return fmt.Errorf("the anchor names %s and the branch stood at %s when the run observed it",
-					a.anchorCommit, a.observedCommit)
-			}
-			if a.anchorCommit == a.advancedCommit {
-				return fmt.Errorf("the anchor names %s, which is where the branch stands now; an anchor "+
-					"taken from a fresh read always succeeds and therefore protects nothing", a.anchorCommit)
-			}
-			if !a.refused {
-				return fmt.Errorf("the update was not refused; it answered %q", a.message)
-			}
-			if a.reason != safety.ReasonWouldDiscard {
-				return fmt.Errorf("the refusal reason is %q and the condition expects %q",
-					a.reason, safety.ReasonWouldDiscard)
-			}
-			if missing := journey.Carries(a.message, condition.Expect.MessageContains); len(missing) > 0 {
-				return fmt.Errorf("the refusal does not say %q; it said:\n%s", missing, a.message)
-			}
-			if len(a.discarded) == 0 {
-				return fmt.Errorf("the refusal names no commit it would drop, which is what an operator " +
-					"needs to decide whether to incorporate them")
-			}
-			if a.secondAnchorCommit != a.advancedCommit {
-				return fmt.Errorf("the second attempt anchored on %s and the branch stood at %s",
-					a.secondAnchorCommit, a.advancedCommit)
-			}
-			if !a.allowedAfterIncorporating {
-				return fmt.Errorf("incorporating what moved did not make the update allowable, so the "+
-					"action the refusal names leads to a second refusal: %s", a.message)
-			}
-			if a.asKind != safety.KindFastForward {
-				return fmt.Errorf("the incorporated update was allowed as %q rather than as a fast-forward",
-					a.asKind)
-			}
-			return nil
+		Clauses: []journey.Clause[anchored]{
+			{
+				States: "the anchor names where the branch stood when the run observed it",
+				Holds: func(a anchored) error {
+					if a.anchorCommit != a.observedCommit {
+						return fmt.Errorf("the anchor names %s and the branch stood at %s when the run observed it",
+							a.anchorCommit, a.observedCommit)
+					}
+					return nil
+				},
+			},
+			{
+				States: "the anchor is not where the branch stands now, which a fresh read would have given",
+				Holds: func(a anchored) error {
+					if a.anchorCommit == a.advancedCommit {
+						return fmt.Errorf("the anchor names %s, which is where the branch stands now; an anchor "+
+							"taken from a fresh read always succeeds and therefore protects nothing", a.anchorCommit)
+					}
+					return nil
+				},
+			},
+			{
+				States: "the update was refused",
+				Holds: func(a anchored) error {
+					if !a.refused {
+						return fmt.Errorf("the update was not refused; it answered %q", a.message)
+					}
+					return nil
+				},
+			},
+			{
+				States: "the refusal reason is the one the condition records",
+				Holds: func(a anchored) error {
+					if a.reason != safety.ReasonWouldDiscard {
+						return fmt.Errorf("the refusal reason is %q and the condition expects %q",
+							a.reason, safety.ReasonWouldDiscard)
+					}
+					return nil
+				},
+			},
+			{
+				States: "the refusal says what the condition requires it to say",
+				Holds: func(a anchored) error {
+					if missing := journey.Carries(a.message, condition.Expect.MessageContains); len(missing) > 0 {
+						return fmt.Errorf("the refusal does not say %q; it said:\n%s", missing, a.message)
+					}
+					return nil
+				},
+			},
+			{
+				States: "the refusal names the commits the update would drop",
+				Holds: func(a anchored) error {
+					if len(a.discarded) == 0 {
+						return errors.New("the refusal names no commit it would drop, which is what an operator " +
+							"needs to decide whether to incorporate them")
+					}
+					return nil
+				},
+			},
+			{
+				States: "the second attempt anchored on where the branch stands now",
+				Holds: func(a anchored) error {
+					if a.secondAnchorCommit != a.advancedCommit {
+						return fmt.Errorf("the second attempt anchored on %s and the branch stood at %s",
+							a.secondAnchorCommit, a.advancedCommit)
+					}
+					return nil
+				},
+			},
+			{
+				States: "incorporating what moved makes the same decision allow the update",
+				Holds: func(a anchored) error {
+					if !a.allowedAfterIncorporating {
+						return fmt.Errorf("incorporating what moved did not make the update allowable, so the "+
+							"action the refusal names leads to a second refusal: %s", a.message)
+					}
+					return nil
+				},
+			},
+			{
+				States: "the incorporated update is allowed as a fast-forward rather than as a force",
+				Holds: func(a anchored) error {
+					if a.asKind != safety.KindFastForward {
+						return fmt.Errorf("the incorporated update was allowed as %q rather than as a fast-forward",
+							a.asKind)
+					}
+					return nil
+				},
+			},
 		},
 		Counterfeits: []journey.Counterfeit[anchored]{
 			{Named: "the anchor was taken from a fresh read just before the update", Break: func(a anchored) anchored {

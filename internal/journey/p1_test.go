@@ -1,6 +1,7 @@
 package journey_test
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -32,6 +33,10 @@ type consent struct {
 	pushed string
 	// runs is how many runs the home holds after the push.
 	runs int
+	// canStartRun is what the doctor says about this home, which is what makes
+	// a count of no runs worth reading: a home that could not start one would
+	// report none however the push behaved.
+	canStartRun bool
 }
 
 // TestTheGateDoesNotTouchAnOrdinaryPushToOrigin drives PRD principle P1
@@ -84,29 +89,78 @@ func TestTheGateDoesNotTouchAnOrdinaryPushToOrigin(t *testing.T) {
 	}
 	observed.runs = len(runs.Runs)
 
+	var report machine.Doctor
+	if err := j.Command("doctor").Decode(&report); err != nil {
+		t.Fatalf("reading the doctor's report: %v", err)
+	}
+	observed.canStartRun = report.CanStartRun
+
 	unchanged := journey.Check[consent]{
 		What: "after the product has created a gate for this working copy, an ordinary push to origin " +
 			"reaches the same remote, moves the reference it was asked to move, and starts no run",
-		Holds: func(c consent) error {
-			if !slices.Equal(c.originBefore, c.originAfter) {
-				return fmt.Errorf("creating the gate changed origin's own configuration:\n  before %v\n  after  %v",
-					c.originBefore, c.originAfter)
-			}
-			if !slices.Equal(c.hooksBefore, c.hooksAfter) {
-				return fmt.Errorf("creating the gate changed the hooks git runs in this working copy:\n  before %v\n  after  %v",
-					c.hooksBefore, c.hooksAfter)
-			}
-			if c.refAfter == c.refBefore {
-				return fmt.Errorf("the push did not move %s on origin, which still stands at %s",
-					scenario.Branch, c.refBefore)
-			}
-			if c.refAfter != c.pushed {
-				return fmt.Errorf("the push landed %s on origin and the commit pushed was %s", c.refAfter, c.pushed)
-			}
-			if c.runs != 0 {
-				return fmt.Errorf("pushing to origin started %d run(s), and nothing but a push to the gate may", c.runs)
-			}
-			return nil
+		Clauses: []journey.Clause[consent]{
+			{
+				States: "creating the gate left origin's own configuration exactly as it was",
+				Holds: func(c consent) error {
+					if !slices.Equal(c.originBefore, c.originAfter) {
+						return fmt.Errorf("creating the gate changed origin's own configuration:\n  before %v\n  after  %v",
+							c.originBefore, c.originAfter)
+					}
+					return nil
+				},
+			},
+			{
+				States: "creating the gate left the hooks git runs in this working copy exactly as they were",
+				Holds: func(c consent) error {
+					if !slices.Equal(c.hooksBefore, c.hooksAfter) {
+						return fmt.Errorf("creating the gate changed the hooks git runs in this working copy:\n  before %v\n  after  %v",
+							c.hooksBefore, c.hooksAfter)
+					}
+					return nil
+				},
+			},
+			{
+				States: "the push moved the branch on origin",
+				Holds: func(c consent) error {
+					if c.refAfter == c.refBefore {
+						return fmt.Errorf("the push did not move %s on origin, which still stands at %s",
+							scenario.Branch, c.refBefore)
+					}
+					return nil
+				},
+			},
+			{
+				States: "origin stands at the commit the push was asked to land",
+				Holds: func(c consent) error {
+					if c.refAfter != c.pushed {
+						return fmt.Errorf("the push landed %s on origin and the commit pushed was %s",
+							c.refAfter, c.pushed)
+					}
+					return nil
+				},
+			},
+			{
+				States:  "the push to origin started no run",
+				Absence: true,
+				// A home that could not have started a run would report no run
+				// whatever the push did, so what makes the count worth reading
+				// is that this home is one a run can begin in. The surface is
+				// asked rather than assumed, because a gate that failed to
+				// register would leave exactly that.
+				Possible: func(c consent) error {
+					if !c.canStartRun {
+						return errors.New("this home reports that it cannot start a run at all, so a " +
+							"count of none says nothing about what the push did")
+					}
+					return nil
+				},
+				Holds: func(c consent) error {
+					if c.runs != 0 {
+						return fmt.Errorf("pushing to origin started %d run(s), and nothing but a push to the gate may", c.runs)
+					}
+					return nil
+				},
+			},
 		},
 		Counterfeits: []journey.Counterfeit[consent]{
 			{Named: "creating the gate rewrote origin's push address", Break: func(c consent) consent {

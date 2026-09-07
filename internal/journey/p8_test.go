@@ -3,14 +3,12 @@ package journey_test
 import (
 	"errors"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/journey"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/principles"
-	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/store"
 )
 
@@ -51,14 +49,10 @@ func TestAnEventLogIsNotCurrentState(t *testing.T) {
 	principles.Cite(t, principles.P8)
 
 	j := inClone(t)
-	records, err := store.Open(t.Context(), filepath.Join(j.Root(), "state.db"), store.WithRedactor(redact.New()))
-	if err != nil {
-		t.Fatalf("opening the home's records: %v", err)
-	}
-	defer func() { _ = records.Close() }()
+	written := records(t, j)
 
 	const id = "journey-task"
-	if _, err := records.CreateTask(t.Context(), store.Task{
+	if _, err := written.CreateTask(t.Context(), store.Task{
 		ID:           id,
 		Shape:        store.TaskDelivery,
 		Project:      "assistant",
@@ -76,19 +70,19 @@ func TestAnEventLogIsNotCurrentState(t *testing.T) {
 		{"validation-started", "a run was started for this branch"},
 		{"decision-open", "the run is holding on a decision nobody has answered"},
 	} {
-		if _, err := records.AppendTaskEvent(t.Context(), id, event.kind, event.detail); err != nil {
+		if _, err := written.AppendTaskEvent(t.Context(), id, event.kind, event.detail); err != nil {
 			t.Fatalf("appending %s: %v", event.kind, err)
 		}
 	}
 
 	// The run moved on, and whatever owns the task's state recorded that. The
 	// event log is not touched, because an event log is history.
-	if _, err := records.SetTaskState(t.Context(), id, "validated", "run",
+	if _, err := written.SetTaskState(t.Context(), id, "validated", "run",
 		store.Known("the run reached the end of the gate twenty minutes ago")); err != nil {
 		t.Fatalf("recording the resolved state: %v", err)
 	}
 
-	log, err := records.TaskEvents(t.Context(), id, 0, 0)
+	log, err := written.TaskEvents(t.Context(), id, 0, 0)
 	if err != nil {
 		t.Fatalf("reading the task's history: %v", err)
 	}
@@ -111,35 +105,76 @@ func TestAnEventLogIsNotCurrentState(t *testing.T) {
 	authoritative := journey.Check[resolvedState]{
 		What: "the surface reports a task's authoritative current state and its source, not the newest " +
 			"entry of the append-only log, which says something else",
-		Holds: func(r resolvedState) error {
-			if r.events < 2 {
-				return fmt.Errorf("the log holds %d entries, and a tail nothing precedes says nothing "+
-					"about whether the tail was read", r.events)
-			}
-			if !strings.Contains(r.lastEvent, "decision-open") {
-				return fmt.Errorf("the newest entry is %q, and this is about a log whose tail says a "+
-					"decision is open", r.lastEvent)
-			}
-			if r.reported == "" {
-				return errors.New("the surface reported no state at all")
-			}
-			if r.reported == r.lastEvent {
-				return fmt.Errorf("the surface reported %q, which is the newest entry of the log; "+
-					"reading the last line to decide what is true now is always wrong", r.reported)
-			}
-			if r.reported != "validated" {
-				return fmt.Errorf("the surface reported %q and the authoritative record says %q",
-					r.reported, "validated")
-			}
-			if r.source == "" {
-				return errors.New("the surface reported the state with no source, and a state whose " +
-					"source is unrecorded cannot be told from one somebody guessed")
-			}
-			if r.revision < 2 {
-				return fmt.Errorf("the state is at revision %d, so nothing here shows it moved after the "+
-					"log did", r.revision)
-			}
-			return nil
+		Clauses: []journey.Clause[resolvedState]{
+			{
+				States: "the log holds more than one entry",
+				Holds: func(r resolvedState) error {
+					if r.events < 2 {
+						return fmt.Errorf("the log holds %d entries, and a tail nothing precedes says "+
+							"nothing about whether the tail was read", r.events)
+					}
+					return nil
+				},
+			},
+			{
+				States: "the newest entry of the log says a decision is open",
+				Holds: func(r resolvedState) error {
+					if !strings.Contains(r.lastEvent, "decision-open") {
+						return fmt.Errorf("the newest entry is %q, and this is about a log whose tail "+
+							"says a decision is open", r.lastEvent)
+					}
+					return nil
+				},
+			},
+			{
+				States: "the surface reported a state",
+				Holds: func(r resolvedState) error {
+					if r.reported == "" {
+						return errors.New("the surface reported no state at all")
+					}
+					return nil
+				},
+			},
+			{
+				States: "the state the surface reported is not the newest entry of the log",
+				Holds: func(r resolvedState) error {
+					if r.reported == r.lastEvent {
+						return fmt.Errorf("the surface reported %q, which is the newest entry of the log; "+
+							"reading the last line to decide what is true now is always wrong", r.reported)
+					}
+					return nil
+				},
+			},
+			{
+				States: "the state the surface reported is the one the authoritative record holds",
+				Holds: func(r resolvedState) error {
+					if r.reported != "validated" {
+						return fmt.Errorf("the surface reported %q and the authoritative record says %q",
+							r.reported, "validated")
+					}
+					return nil
+				},
+			},
+			{
+				States: "the state carries the source that resolved it",
+				Holds: func(r resolvedState) error {
+					if r.source == "" {
+						return errors.New("the surface reported the state with no source, and a state " +
+							"whose source is unrecorded cannot be told from one somebody guessed")
+					}
+					return nil
+				},
+			},
+			{
+				States: "the authoritative record moved after the log did",
+				Holds: func(r resolvedState) error {
+					if r.revision < 2 {
+						return fmt.Errorf("the state is at revision %d, so nothing here shows it moved "+
+							"after the log did", r.revision)
+					}
+					return nil
+				},
+			},
 		},
 		Counterfeits: []journey.Counterfeit[resolvedState]{
 			{Named: "the surface answered with the newest entry of the log", Break: func(r resolvedState) resolvedState {
@@ -166,6 +201,11 @@ func TestAnEventLogIsNotCurrentState(t *testing.T) {
 			{Named: "the log has one entry, so a tail read and a whole read are the same read",
 				Break: func(r resolvedState) resolvedState {
 					r.events = 1
+					return r
+				}},
+			{Named: "the log this was read against ends on something other than an open decision",
+				Break: func(r resolvedState) resolvedState {
+					r.lastEvent = "started"
 					return r
 				}},
 		},

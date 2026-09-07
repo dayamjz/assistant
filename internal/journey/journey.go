@@ -443,8 +443,7 @@ func (j *Journey) Serve() error {
 	if err := opened.Create(); err != nil {
 		return err
 	}
-	log, err := os.OpenFile(filepath.Join(j.root, "journey-service.log"),
-		os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	log, err := os.OpenFile(j.harnessLog(), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return fmt.Errorf("journey: opening the service log: %w", err)
 	}
@@ -532,12 +531,22 @@ func (j *Journey) ServicePID() int {
 
 // ServiceLog is everything the serving processes of this home have printed,
 // which is where a failure that happened inside the service is explained.
+//
+// It reads two files: the one this harness redirects a child's streams into,
+// which is its own and is named here, and the product's own lifecycle log,
+// whose path is internal/home's and is asked of it. A layout spelled here
+// instead would go quietly empty the day that package moved it, which is
+// exactly when a failing P6 or concurrency test needs it most.
 func (j *Journey) ServiceLog() string {
 	var b strings.Builder
-	for _, path := range []string{
-		filepath.Join(j.root, "journey-service.log"),
-		filepath.Join(j.root, "logs", "service.log"),
-	} {
+	paths := []string{j.harnessLog()}
+	if opened, err := home.Open(j.root); err == nil {
+		paths = append(paths, opened.ServiceLog())
+	} else {
+		b.WriteString("--- the home " + j.root + " could not be opened to find its own log: " +
+			err.Error() + " ---\n")
+	}
+	for _, path := range paths {
 		body, err := os.ReadFile(path)
 		if err != nil || len(body) == 0 {
 			continue
@@ -546,6 +555,27 @@ func (j *Journey) ServiceLog() string {
 		b.Write(body)
 	}
 	return b.String()
+}
+
+// harnessLog is the file this harness redirects a serving child's streams
+// into. It is this package's own file rather than part of PRD section 8's
+// layout, which is why it is the one path under the root spelled here.
+func (j *Journey) harnessLog() string {
+	return filepath.Join(j.root, "journey-service.log")
+}
+
+// Database is the file internal/store opens for this home, asked of the
+// package that owns the layout.
+//
+// A test that opened a path it composed itself would create a fresh empty
+// database the day the layout moved, and report on records nobody wrote rather
+// than reporting that there are none.
+func (j *Journey) Database() (string, error) {
+	opened, err := home.Open(j.root)
+	if err != nil {
+		return "", err
+	}
+	return opened.Database(), nil
 }
 
 // Close ends the serving process and removes the home.

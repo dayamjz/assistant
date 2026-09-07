@@ -26,8 +26,17 @@ type installed struct {
 	agent string
 	// fired is every tripwire the scenario recorded by the end of the run.
 	fired []string
-	// mustStayQuiet is what the condition says may not run.
+	// mustStayQuiet is what the two conditions say may not run.
 	mustStayQuiet []string
+	// requiredQuiet is the same union taken straight from the catalog, which
+	// mustStayQuiet has to cover; keeping both in the observation is what lets
+	// a counterfeit shorten one of them.
+	requiredQuiet []string
+	// requiredRejections is what the pushed-configuration condition records
+	// the resolution has to report, and is in the observation for the same
+	// reason: a check reading it out of a closure could not be shown to fail
+	// when the catalog stops recording any.
+	requiredRejections []string
 	// rejected is the keys config.Resolve dropped from the pushed layer, and
 	// ignorePatterns is what it resolved that key to.
 	rejected       []string
@@ -77,8 +86,13 @@ func TestTheBranchUnderValidationChoosesNothingThatRuns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("%v", err)
 	}
-	observed := installed{mustStayQuiet: slices.Concat(
-		condition.Expect.TripwiresQuiet, pushedConfig.Expect.TripwiresQuiet)}
+	observed := installed{
+		mustStayQuiet: slices.Concat(
+			condition.Expect.TripwiresQuiet, pushedConfig.Expect.TripwiresQuiet),
+		requiredQuiet: slices.Concat(
+			condition.Expect.TripwiresQuiet, pushedConfig.Expect.TripwiresQuiet),
+		requiredRejections: pushedConfig.Expect.MessageContains,
+	}
 
 	j := open(t, scenario)
 	succeeds(t, j.Command("init", "--default-branch", fixture.DefaultBranch))
@@ -118,60 +132,132 @@ func TestTheBranchUnderValidationChoosesNothingThatRuns(t *testing.T) {
 			"the agent this home names rather than the one the branch ships, drops every key the branch " +
 			"was not allowed to set while keeping the one it was, and refuses outright when asked for a " +
 			"suppression the resolved adapter does not implement",
-		Holds: func(i installed) error {
-			if i.outcome != machine.OutcomeChecksPassed {
-				return fmt.Errorf("the run ended %s, so it did not reach the stages the installation was "+
-					"planted in front of", i.outcome)
-			}
-			if len(i.mustStayQuiet) == 0 {
-				return errors.New("the condition names no tripwire that has to stay quiet, so nothing here " +
-					"could tell an installation that ran from one that did not")
-			}
-			for _, tripwire := range i.mustStayQuiet {
-				if slices.Contains(i.fired, tripwire) {
-					return fmt.Errorf("%s ran during the run, and nothing a pushed branch installs may "+
-						"execute; the scenario recorded %v", tripwire, i.fired)
-				}
-			}
-			if i.agent != journey.AgentShimName {
-				return fmt.Errorf("the run resolved the agent %q, and the branch ships one called %q",
-					i.agent, "fixture-pushed-agent")
-			}
-			for _, want := range slices.Concat(condition.Expect.TripwiresQuiet, pushedConfig.Expect.TripwiresQuiet) {
-				if !slices.Contains(i.mustStayQuiet, want) {
-					return fmt.Errorf("the condition requires %s to stay quiet and this did not check it", want)
-				}
-			}
-			if len(pushedConfig.Expect.MessageContains) == 0 {
-				return errors.New("the pushed-configuration condition records no rejection to look for")
-			}
-			for _, want := range pushedConfig.Expect.MessageContains {
-				if !slices.ContainsFunc(i.rejected, func(got string) bool { return strings.Contains(got, want) }) {
-					return fmt.Errorf("the resolution does not report %q; it reported %v", want, i.rejected)
-				}
-			}
-			if !slices.Contains(i.ignorePatterns, "vendor/**") {
-				return fmt.Errorf("the resolution did not keep the branch's own ignore_patterns, which is a "+
-					"key a pushed branch may set; it resolved %v", i.ignorePatterns)
-			}
-			if !i.suppressionRefused {
-				return errors.New("a run asking for a suppression the adapter does not implement was not " +
-					"refused, so it launched an agent that suppresses nothing while reporting that it did")
-			}
-			if !strings.Contains(i.suppressionMessage, "suppress_project_instructions") {
-				return fmt.Errorf("the refusal does not name what it refused: %q", i.suppressionMessage)
-			}
-			return nil
+		Clauses: []journey.Clause[installed]{
+			{
+				States: "the run reached the stages the installation was planted in front of",
+				Holds: func(i installed) error {
+					if i.outcome != machine.OutcomeChecksPassed {
+						return fmt.Errorf("the run ended %s, so it did not reach the stages the installation was "+
+							"planted in front of", i.outcome)
+					}
+					return nil
+				},
+			},
+			{
+				States:  "nothing the branch installed ran during the run",
+				Absence: true,
+				// Every planted executable appends to the scenario's tripwire
+				// file, so a scenario planting none would leave that file empty
+				// however the product behaved. What makes the file worth
+				// reading is that these two conditions plant executables and
+				// record their names.
+				Possible: func(i installed) error {
+					if len(i.mustStayQuiet) == 0 {
+						return errors.New("the conditions name no tripwire that has to stay quiet, so nothing " +
+							"here could tell an installation that ran from one that did not")
+					}
+					return nil
+				},
+				Holds: func(i installed) error {
+					for _, tripwire := range i.mustStayQuiet {
+						if slices.Contains(i.fired, tripwire) {
+							return fmt.Errorf("%s ran during the run, and nothing a pushed branch installs may "+
+								"execute; the scenario recorded %v", tripwire, i.fired)
+						}
+					}
+					return nil
+				},
+			},
+			{
+				States: "what was checked for silence covers every tripwire the two conditions name",
+				Holds: func(i installed) error {
+					for _, want := range i.requiredQuiet {
+						if !slices.Contains(i.mustStayQuiet, want) {
+							return fmt.Errorf("the condition requires %s to stay quiet and this did not check it", want)
+						}
+					}
+					return nil
+				},
+			},
+			{
+				States: "the run resolved the agent this home names rather than the one the branch ships",
+				Holds: func(i installed) error {
+					if i.agent != journey.AgentShimName {
+						return fmt.Errorf("the run resolved the agent %q, and the branch ships one called %q",
+							i.agent, "fixture-pushed-agent")
+					}
+					return nil
+				},
+			},
+			{
+				States: "the pushed-configuration condition records rejections to look for",
+				Holds: func(i installed) error {
+					if len(i.requiredRejections) == 0 {
+						return errors.New("the pushed-configuration condition records no rejection to look for")
+					}
+					return nil
+				},
+			},
+			{
+				States: "the resolution reports every rejection the condition records",
+				Holds: func(i installed) error {
+					for _, want := range i.requiredRejections {
+						if !slices.ContainsFunc(i.rejected, func(got string) bool { return strings.Contains(got, want) }) {
+							return fmt.Errorf("the resolution does not report %q; it reported %v", want, i.rejected)
+						}
+					}
+					return nil
+				},
+			},
+			{
+				States: "the resolution kept the one key the branch was allowed to set",
+				Holds: func(i installed) error {
+					if !slices.Contains(i.ignorePatterns, "vendor/**") {
+						return fmt.Errorf("the resolution did not keep the branch's own ignore_patterns, which is a "+
+							"key a pushed branch may set; it resolved %v", i.ignorePatterns)
+					}
+					return nil
+				},
+			},
+			{
+				States: "a run asking for a suppression the adapter does not implement was refused",
+				Holds: func(i installed) error {
+					if !i.suppressionRefused {
+						return errors.New("a run asking for a suppression the adapter does not implement was not " +
+							"refused, so it launched an agent that suppresses nothing while reporting that it did")
+					}
+					return nil
+				},
+			},
+			{
+				States: "that refusal names what it refused",
+				Holds: func(i installed) error {
+					if !strings.Contains(i.suppressionMessage, "suppress_project_instructions") {
+						return fmt.Errorf("the refusal does not name what it refused: %q", i.suppressionMessage)
+					}
+					return nil
+				},
+			},
 		},
 		Counterfeits: []journey.Counterfeit[installed]{
 			{Named: "one of the installed hooks ran during the run", Break: func(i installed) installed {
 				i.fired = append(slices.Clone(i.fired), i.mustStayQuiet[0])
 				return i
 			}},
+			{Named: "one of the tripwires the conditions name was left out of what was checked",
+				Break: func(i installed) installed {
+					i.mustStayQuiet = slices.Clone(i.mustStayQuiet)[1:]
+					return i
+				}},
 			{Named: "the run selected the agent the branch ships", Break: func(i installed) installed {
 				i.agent = "fixture-pushed-agent"
 				return i
 			}},
+			{Named: "the condition records no rejection, so looking for them proves nothing",
+				Break: func(i installed) installed {
+					i.requiredRejections = nil
+					return i
+				}},
 			{Named: "a key the branch was not allowed to set was applied in silence",
 				Break: func(i installed) installed {
 					i.rejected = nil
@@ -187,6 +273,10 @@ func TestTheBranchUnderValidationChoosesNothingThatRuns(t *testing.T) {
 					i.suppressionRefused = false
 					return i
 				}},
+			{Named: "the refusal never names what it refused", Break: func(i installed) installed {
+				i.suppressionMessage = "assistant: something went wrong"
+				return i
+			}},
 			{Named: "the run stopped before it reached the stages the installation was planted for",
 				Break: func(i installed) installed {
 					i.outcome = machine.OutcomeFailed

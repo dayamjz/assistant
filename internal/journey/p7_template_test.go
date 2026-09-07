@@ -1,6 +1,7 @@
 package journey_test
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"slices"
@@ -25,6 +26,11 @@ type birth struct {
 	// fired is every tripwire the scenario had recorded by the end of the
 	// attempt.
 	fired []string
+	// quiet is the tripwire identifiers this condition records as having to
+	// stay out of that file. It is carried on the observation rather than read
+	// out of a closure so that a check asserting their absence can be shown to
+	// fail when there are none.
+	quiet []string
 }
 
 // TestNothingOutsideTheGateChoosesWhatRunsOnAPushToIt drives the trust anchor
@@ -108,60 +114,80 @@ func TestNothingOutsideTheGateChoosesWhatRunsOnAPushToIt(t *testing.T) {
 		observed.initRefused = under.CommandWith(underDir, redirect,
 			"init", "--default-branch", fixture.DefaultBranch).Code != machine.ExitOK
 		observed.redirectedPush, observed.redirectedMessage = pushToTheGate(t, scenario, redirect, underDir)
+		observed.expectedFired = redirectedHooks
 		if observed.fired, err = journey.Fired(scenario); err != nil {
 			t.Fatalf("reading the scenario's tripwires: %v", err)
 		}
 
+		clauses := []journey.Clause[admission]{
+			{
+				States: "a push through the gate with nothing redirected is declined",
+				Holds: func(a admission) error {
+					if a.ordinaryPush {
+						return errors.New("a push through the gate with nothing redirected was accepted, and " +
+							"no run started from it; the gate would then be admitting pushes with nothing " +
+							"checking them")
+					}
+					return nil
+				},
+			},
+			{
+				States: "either the redirect was refused at initialization or the push under it was accepted, " +
+					"so one of the two was observed",
+				Holds: func(a admission) error {
+					if !a.initRefused && !a.redirectedPush {
+						return fmt.Errorf("the redirected push was declined and the initialization was not "+
+							"refused, so this observed neither the gap nor its closure; the push said:\n%s",
+							a.redirectedMessage)
+					}
+					return nil
+				},
+			},
+		}
+		counterfeits := []journey.Counterfeit[admission]{
+			{Named: "the gate accepted an ordinary push with nothing checking it",
+				Break: func(a admission) admission {
+					a.ordinaryPush = true
+					return a
+				}},
+			{Named: "neither the initialization nor the push told us anything",
+				Break: func(a admission) admission {
+					a.initRefused = false
+					a.redirectedPush = false
+					return a
+				}},
+		}
+		if observed.redirectedPush {
+			// Only reachable once the push under the redirect was accepted: if
+			// the product had refused the redirect there would be no gate to
+			// push to and no hook of any kind to have run, and a clause about
+			// which hook ran would hold over a world in which none could.
+			clauses = append(clauses, journey.Clause[admission]{
+				States: "the hooks that ran on the accepted push are the redirected ones",
+				Holds: func(a admission) error {
+					for _, tripwire := range a.expectedFired {
+						if !slices.Contains(a.fired, tripwire) {
+							return fmt.Errorf("the push was accepted and %s did not run, so which hook git ran "+
+								"was not observed at all; the scenario recorded %v", tripwire, a.fired)
+						}
+					}
+					return nil
+				},
+			})
+			counterfeits = append(counterfeits, journey.Counterfeit[admission]{
+				Named: "the redirected push was accepted and no redirected hook ran, so nothing was observed",
+				Break: func(a admission) admission {
+					a.fired = nil
+					return a
+				},
+			})
+		}
 		reaches := journey.Check[admission]{
 			What: "a push through the gate under a configuration file that redirects core.hooksPath is " +
 				"observed rather than assumed: either the product refuses the redirect, or it accepts " +
 				"the push and the hooks that ran are the redirected ones rather than the gate's own",
-			Holds: func(a admission) error {
-				if a.ordinaryPush {
-					return fmt.Errorf("a push through the gate with nothing redirected was accepted, and " +
-						"no run started from it; the gate would then be admitting pushes with nothing " +
-						"checking them")
-				}
-				if a.initRefused {
-					// The gap is closed. Nothing about the redirect can then be
-					// observed on a push, because there is no gate to push to.
-					return nil
-				}
-				if !a.redirectedPush {
-					return fmt.Errorf("the redirected push was declined and the initialization was not "+
-						"refused, so this observed neither the gap nor its closure; the push said:\n%s",
-						a.redirectedMessage)
-				}
-				redirected := condition.Expect.TripwiresQuiet
-				if len(redirected) == 0 {
-					redirected = []string{"hookspath-hook-pre-receive"}
-				}
-				for _, tripwire := range redirected {
-					if !slices.Contains(a.fired, tripwire) {
-						return fmt.Errorf("the push was accepted and %s did not run, so which hook git ran "+
-							"was not observed at all; the scenario recorded %v", tripwire, a.fired)
-					}
-				}
-				return nil
-			},
-			Counterfeits: []journey.Counterfeit[admission]{
-				{Named: "the gate accepted an ordinary push with nothing checking it",
-					Break: func(a admission) admission {
-						a.ordinaryPush = true
-						return a
-					}},
-				{Named: "the redirected push was accepted and no redirected hook ran, so nothing was observed",
-					Break: func(a admission) admission {
-						a.fired = nil
-						return a
-					}},
-				{Named: "neither the initialization nor the push told us anything",
-					Break: func(a admission) admission {
-						a.initRefused = false
-						a.redirectedPush = false
-						return a
-					}},
-			},
+			Clauses:      clauses,
+			Counterfeits: counterfeits,
 		}
 		if err := reaches.Verify(observed); err != nil {
 			t.Fatalf("%v", err)
@@ -199,7 +225,23 @@ type admission struct {
 	// fired is every tripwire the scenario recorded, which is how which hook
 	// git ran is read rather than inferred.
 	fired []string
+	// expectedFired is the tripwires an accepted push under the redirect has
+	// to have set off. It is redirectedHooks, carried on the observation so a
+	// check reading it can be shown to fail.
+	expectedFired []string
 }
+
+// redirectedHooks are the hooks git runs in place of the gate's own when
+// core.hooksPath redirects them, named here rather than read off the catalog.
+//
+// internal/fixture records no field meaning "must have fired": Outcome carries
+// TripwiresQuiet, which means the opposite, and this condition is a gap rather
+// than a refusal, so its expectation is prose. Reading TripwiresQuiet here
+// would be reading a must-not-appear list as a must-have-appeared one, which
+// is right only while the list is empty. The gate installs pre-receive and
+// post-receive and the plant replaces both; a push git accepts runs pre-receive
+// first, so that is the one an accepted push has to show.
+var redirectedHooks = []string{"hookspath-hook-pre-receive"}
 
 // pushToTheGate pushes the branch under validation to the gate remote and
 // reports whether the push was accepted and what git said about it.
@@ -223,55 +265,80 @@ func refuses(t *testing.T, scenario fixture.Scenario, id fixture.ID, want bool, 
 	if err != nil {
 		t.Fatalf("%v", err)
 	}
-	quiet := condition.Expect.TripwiresQuiet
-	if len(quiet) == 0 {
-		t.Fatalf("%s records no tripwire that has to stay quiet, and every condition here has one", id)
-	}
-	check := journey.Check[birth]{
-		What: string(id) + ": " + firstSentence(condition.Expect.Summary),
-		Holds: func(b birth) error {
-			if b.refused != want {
-				if want {
-					return fmt.Errorf("%s was not refused; it answered %s", b.what, b.message)
+	observed.quiet = condition.Expect.TripwiresQuiet
+	clauses := []journey.Clause[birth]{
+		{
+			States: "the attempt came out the way the condition records",
+			Holds: func(b birth) error {
+				if b.refused != want {
+					if want {
+						return fmt.Errorf("%s was not refused; it answered %s", b.what, b.message)
+					}
+					return fmt.Errorf("%s was refused: %s", b.what, b.message)
 				}
-				return fmt.Errorf("%s was refused: %s", b.what, b.message)
+				return nil
+			},
+		},
+		{
+			States:  "no hook the template carries ran",
+			Absence: true,
+			// Every planted hook appends to the scenario's tripwire file, so a
+			// condition recording none would leave that file empty however the
+			// gate behaved. Each of these conditions plants hooks and names
+			// them, which is what makes the file worth reading.
+			Possible: func(b birth) error {
+				if len(b.quiet) == 0 {
+					return fmt.Errorf("%s records no tripwire that has to stay quiet, so nothing planted "+
+						"could have appeared in that file whatever the gate did", id)
+				}
+				return nil
+			},
+			Holds: func(b birth) error {
+				for _, tripwire := range b.quiet {
+					if slices.Contains(b.fired, tripwire) {
+						return fmt.Errorf("the planted hook %s ran, and nothing a template carries may "+
+							"execute here; the scenario recorded %v", tripwire, b.fired)
+					}
+				}
+				return nil
+			},
+		},
+	}
+	counterfeits := []journey.Counterfeit[birth]{
+		{Named: "the attempt came out the other way round", Break: func(b birth) birth {
+			b.refused = !b.refused
+			if b.refused {
+				b.message = strings.Join(condition.Expect.MessageContains, " ")
 			}
-			if want {
+			return b
+		}},
+		{Named: "a hook the template carries ran", Break: func(b birth) birth {
+			b.fired = append(slices.Clone(b.fired), b.quiet[0])
+			return b
+		}},
+	}
+	if want {
+		clauses = append(clauses, journey.Clause[birth]{
+			States: "the refusal says what the condition requires it to say",
+			Holds: func(b birth) error {
 				if missing := journey.Carries(b.message, condition.Expect.MessageContains); len(missing) > 0 {
 					return fmt.Errorf("the refusal does not say %q; it said:\n%s", missing, b.message)
 				}
-			}
-			for _, tripwire := range quiet {
-				if slices.Contains(b.fired, tripwire) {
-					return fmt.Errorf("the planted hook %s ran, and nothing a template carries may "+
-						"execute here; the scenario recorded %v", tripwire, b.fired)
-				}
-			}
-			return nil
-		},
-		Counterfeits: []journey.Counterfeit[birth]{
-			{Named: "the attempt came out the other way round", Break: func(b birth) birth {
-				b.refused = !b.refused
-				if b.refused {
-					b.message = strings.Join(condition.Expect.MessageContains, " ")
-				}
+				return nil
+			},
+		})
+		counterfeits = append(counterfeits, journey.Counterfeit[birth]{
+			Named: "the refusal says none of what the condition requires",
+			Break: func(b birth) birth {
+				b.message = "gate: something went wrong"
 				return b
-			}},
-			{Named: "a hook the template carries ran", Break: func(b birth) birth {
-				b.fired = append(slices.Clone(b.fired), quiet[0])
-				return b
-			}},
-		},
+			},
+		})
 	}
-	if want {
-		check.Counterfeits = append(check.Counterfeits,
-			journey.Counterfeit[birth]{
-				Named: "the refusal says none of what the condition requires",
-				Break: func(b birth) birth {
-					b.message = "gate: something went wrong"
-					return b
-				},
-			})
+	check := journey.Check[birth]{
+		What:         string(id) + ": " + firstSentence(condition.Expect.Summary),
+		Clauses:      clauses,
+		Counterfeits: counterfeits,
 	}
 	if err := check.Verify(observed); err != nil {
 		t.Fatalf("%v", err)
