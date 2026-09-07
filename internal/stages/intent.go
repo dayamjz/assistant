@@ -2,7 +2,6 @@ package stages
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
 	"github.com/dayamjz/assistant/internal/findings"
@@ -56,14 +55,21 @@ import (
 //
 // PRD section 5 says the intent stage never blocks a run. Every finding it
 // reports is a note, so nothing it finds holds the stage for a person and
-// nothing it finds enters a fix round, and no path returns an error, so
-// nothing it meets stops the run. That holds for the case where its own state
-// read fails as well, which is the only way this stage can go wrong at all.
+// nothing it finds enters a fix round.
 //
 // internal/pipeline deliberately does not enforce this, and that is the right
 // division. A stage node that could not hold would have to discard an ask
 // finding to keep the promise, and a discarded ask is exactly what P3 exists
 // to prevent. So the guarantee is this implementation's.
+//
+// The residual gap is the state read. A body cannot soften an error out of its
+// reader: the reader records the refusal before handing it back and the node
+// adapter takes that recorded error whatever the body returned, so a body that
+// swallowed one and reported a note would have the note discarded and the step
+// fail regardless. This body returns the error instead, which makes it agree
+// with the mechanism rather than appear to soften something it cannot. Such an
+// error says this stage declared its reads wrong, not that a run's input was
+// bad, and it declares both keys it reads, so no run reaches it.
 //
 // The bound on it is behavioural, not structural: the report is built here, so
 // a future edit could state an action other than note and nothing in the type
@@ -82,25 +88,16 @@ func Intent() pipeline.Implementation {
 	}
 }
 
-// establishIntent is the stage body. It reports and never refuses: the one
-// error it can meet becomes a note on a report the run carries forward.
+// establishIntent is the stage body. Every report it builds carries notes and
+// nothing else, and the one error it can meet is returned rather than dressed
+// as one, for the reason the guarantee section above gives: by the time the
+// body sees it the reader has already failed the step.
 func establishIntent(in pipeline.Input) (pipeline.Output, error) {
 	intent, stated, err := readIntent(in.State)
+	if err != nil {
+		return pipeline.Output{}, err
+	}
 	switch {
-	case err != nil:
-		// A read this stage declared cannot be refused by the reader, so this
-		// is a defect in the declaration above rather than a run's input. It
-		// is still reported as a note rather than returned as an error,
-		// because the guarantee is unconditional and a stage that blocked on
-		// its own defect would have broken it in the one case nobody tested.
-		return intentReport(
-			"The intent stage could not read the run's own intent, so this run carries no intent.",
-			intentNote("intent-unreadable", findings.SeverityError, fmt.Sprintf(
-				"Reading the run's recorded intent failed: %v. The run continues with no intent "+
-					"recorded, so nothing after this stage has criteria to measure the change "+
-					"against. This is a defect in the intent stage rather than in the change "+
-					"being validated.", err))), nil
-
 	case stated && intent != "":
 		return intentReport(
 			"The intent for this run was supplied, so it is authoritative acceptance criteria.",

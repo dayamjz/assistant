@@ -270,9 +270,6 @@ type intentPath struct {
 	// reach. The pipeline-level test skips those; the report-level one does
 	// not, because they are exactly the paths nothing else exercises.
 	start *pipeline.Start
-	// readErr makes the state reader fail, which is the only way this stage's
-	// own read can go wrong.
-	readErr error
 }
 
 // intentPaths is every path the intent stage has. Adding a path to the stage
@@ -314,10 +311,6 @@ func intentPaths() []intentPath {
 			},
 			// pipeline.NewState refuses this start, so no run reaches it.
 		},
-		{
-			name:    "the run's own state could not be read",
-			readErr: errors.New("the run's state is unreadable"),
-		},
 	}
 }
 
@@ -339,7 +332,7 @@ func runIntentWith(t *testing.T, path intentPath) (pipeline.Output, error) {
 	}
 	return impl.NewBody()(t.Context(), pipeline.Input{
 		Stage: pipeline.StageIntent,
-		State: declaredReader{allowed: allowed, state: path.state, err: path.readErr},
+		State: declaredReader{allowed: allowed, state: path.state},
 	})
 }
 
@@ -377,17 +370,19 @@ func runPipeline(t *testing.T, intent pipeline.Implementation, start pipeline.St
 // declaredReader is the pipeline.Reader a stage body is given: it answers the
 // keys the implementation declared and refuses the rest, so a test cannot read
 // a key the real stage node would not have handed over.
+//
+// It has no way to fail a declared read, and that is the point. The real
+// reader records every refusal it hands back and the node adapter takes the
+// recorded error whatever the body returned, so a fake that failed a read
+// without that consequence would state a shape the mechanism cannot produce
+// and would let a body look like it had recovered from something no body can.
 type declaredReader struct {
 	allowed map[pipeline.Key]bool
 	state   map[pipeline.Key]graph.Value
-	err     error
 }
 
 // Get implements pipeline.Reader.
 func (r declaredReader) Get(key pipeline.Key) (graph.Value, error) {
-	if r.err != nil {
-		return graph.Value{}, r.err
-	}
 	if !r.allowed[key] {
 		return graph.Value{}, errors.New("the intent stage did not declare a read of " + string(key))
 	}
