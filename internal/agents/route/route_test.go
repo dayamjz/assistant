@@ -181,3 +181,72 @@ func TestTheWalkClearsATypeThatExposesNothing(t *testing.T) {
 		t.Fatalf("the walk reports a route out of agents.StageAgent, which exposes only Run: %v", found)
 	}
 }
+
+// runnerCarrier is a value satisfying an ordinary interface that has nothing
+// to do with running an agent, and an agents.Runner as well. It is the shape a
+// forge provider or any other adapter takes when it happens to implement both:
+// nothing in the field's static type says so, and a body that guesses reaches
+// a fixer session through agents.OpenFixer.
+type runnerCarrier struct{}
+
+func (runnerCarrier) Carry() string { return "" }
+
+func (runnerCarrier) Name() string { return "route-carrier" }
+
+func (runnerCarrier) Capabilities() agents.Capabilities { return agents.Capabilities{} }
+
+func (runnerCarrier) Run(context.Context, agents.Purpose, agents.Invocation) (agents.Result, error) {
+	return agents.Result{}, errors.New("route: this runner exists to be reachable, not to run")
+}
+
+// carrier is the interface the field is typed as: methods, so the walk does
+// not treat it as an empty interface, and no relation to agents.Runner.
+type carrier interface{ Carry() string }
+
+type interfaceCarrierDeps struct {
+	Provider carrier
+}
+
+type concreteCarrierDeps struct {
+	Provider runnerCarrier
+}
+
+// TestTheWalkCannotSeeThroughAnInterfaceField pins a gap this walk does not
+// close, so it cannot reopen wider or narrower in silence.
+//
+// The walk reads static types, and an interface field's dynamic value is not
+// in its static type. runnerCarrier satisfies carrier and agents.Runner both,
+// so a body handed interfaceCarrierDeps asserts on Provider and has a Runner
+// while the walk reports nothing. stages.StageDeps.Forge is that shape today.
+//
+// This is not fixed by flagging every non-empty interface: no static predicate
+// separates an interface whose dynamic value might be a Runner from one that
+// might not, so that would report every interface-typed field as a route and
+// leave no deps struct able to hold one. The gap stays, and this test is what
+// makes it visible - the concrete control holds the same value in a field the
+// walk can read, so a walk that had stopped inspecting anything fails here
+// rather than agreeing with the recorded gap.
+func TestTheWalkCannotSeeThroughAnInterfaceField(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P4)
+
+	var value any = runnerCarrier{}
+	if _, ok := value.(carrier); !ok {
+		t.Fatal("runnerCarrier does not satisfy carrier, so the field below holds something else")
+	}
+	if _, ok := value.(agents.Runner); !ok {
+		t.Fatal("runnerCarrier is no longer an agents.Runner, so this pins nothing")
+	}
+
+	if found := route.ToFixerSession(reflect.TypeOf(concreteCarrierDeps{})); len(found) == 0 {
+		t.Fatal("the walk reports no route out of a struct holding runnerCarrier in a concrete " +
+			"field, so it is inspecting nothing and the gap recorded below is not the reason")
+	}
+	if found := route.ToFixerSession(reflect.TypeOf(interfaceCarrierDeps{})); len(found) != 0 {
+		t.Fatalf("the walk now reports a route through an interface-typed field: %v. That is a "+
+			"change to what internal/agents/route documents as its one gap. If interfaces are "+
+			"flagged now, stages.StageDeps.Forge is a route too and that guarantee is unpassable; "+
+			"update the package documentation and both callers deliberately rather than this line",
+			found)
+	}
+}

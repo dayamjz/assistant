@@ -96,10 +96,15 @@ type StageDeps struct {
 	// with the pull request and checks stages that need it. A body that needs
 	// one refuses rather than proceeding without it.
 	Forge forge.Provider
-	// git are the options every repository this seam opens is opened with, so
-	// a body cannot open one without the redactor the service configured. It
-	// is unexported because it is a decision the wiring makes and not one a
-	// body may vary.
+	// git are the options every repository opened through Copy is opened
+	// with, which is how the redactor the service configured reaches the
+	// repository a body works in. It is unexported because it is a decision
+	// the wiring makes and not one a body may vary.
+	//
+	// That bounds the options and not the opening. Package stages imports
+	// internal/vcs, so a body may call vcs.OpenWorktree itself and get that
+	// package's default redactor rather than the one configured here, and
+	// nothing on this struct prevents it.
 	git []vcs.Option
 }
 

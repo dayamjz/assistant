@@ -45,17 +45,20 @@ func fixerRoutes() map[reflect.Type]string {
 }
 
 // ToFixerSession reports how a caller outside the declaring package can reach
-// a fixer session starting from root. An empty result means there is none, and
-// a non-empty one names at least one path a reader can follow.
+// a fixer session starting from root. An empty result means the static type
+// graph holds no route, and a non-empty one names at least one path a reader
+// can follow. What a static type does not carry is the dynamic value behind an
+// interface, which is the one gap stated below.
 //
 // It is one path per type and not every path to it. A type already visited is
 // not walked again, which is what makes this terminate on a graph that refers
 // back to itself, so a type reachable two ways is reported at whichever way
 // was walked first and a caller that fixes the named path may find a second on
 // the next run. That costs nothing the guarantee needs: one route is already
-// enough for it to be gone, and the empty result is exact, because every
-// visited type's fields and results are walked once and reachability cannot be
-// lost by not walking them twice.
+// enough for it to be gone, and memoizing loses no reachability, because every
+// visited type's fields and results are walked once and walking them twice
+// finds nothing the first walk did not. So the empty result is exact over the
+// static type graph, and exact over nothing wider than that.
 //
 // A caller pairs it with a walk over a type that really does expose a route,
 // because a walk that stopped inspecting anything would report an empty result
@@ -84,16 +87,32 @@ func fixerRoutes() map[reflect.Type]string {
 // it. A value held somewhere addressable can have its address taken too, so a
 // method set only the pointer has counts as the caller's.
 //
-// Three of those overstate, and all three do so on purpose. A send-only
+// Four things here overstate, and all four do so on purpose. A send-only
 // channel cannot be received from, and an unbuffered one may never carry a
-// value; both are walked anyway. And that pointer method set is asked of every
+// value; both are walked anyway. That pointer method set is asked of every
 // type this reaches without asking how the type was held, so a value that is
 // not addressable - a map value, a function result, a method result - is
-// credited with a method set no caller could call on it.
+// credited with a method set no caller could call on it. And reflect's
+// NumMethod counts an interface's unexported methods alongside its exported
+// ones, so when this reaches an interface it walks the results of methods a
+// caller in another package cannot call, crediting a route nobody can take.
 //
 // Each over-reports a route nobody can take, which is the direction to err in
 // here: a guard that overstates fails loudly at the shape that has to be
 // argued about, while one that understates passes in silence.
+//
+// One thing understates, and it is the gap this cannot close. An interface
+// with methods is asked what it implements and then walked through its own
+// methods' results; the dynamic value stored in it is not part of its static
+// type, so a value that also implements one of the three forbidden interfaces
+// is invisible here and a caller reaches it by writing a type assertion.
+// stages.StageDeps.Forge is that shape today. The only static answer would be
+// to flag every non-empty interface, which reports every such field as a route
+// and leaves no type able to hold an interface at all, so the gap is left open
+// and pinned: TestTheWalkCannotSeeThroughAnInterfaceField holds what this
+// returns for that shape against a control holding the same value concretely,
+// so widening or closing the interface case fails there rather than changing
+// what a guarantee means without saying so.
 //
 // Method and function parameters are not walked. A method that takes a Runner
 // is not a way to obtain one: a caller would need it already.

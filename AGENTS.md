@@ -364,7 +364,12 @@ Each has cost this repository more than one round of review.
   owner of which stages have a body is the `written` table there: `All` places
   implementations from it and `Implemented` reports it, so adding a body is
   adding an entry. `PendingFixer` is the same answer for the fix path, and it
-  fails rather than summarizing. The intent stage is the body that exists, and
+  fails rather than summarizing. A body is handed a `StageDeps` at
+  construction, which carries the adapters that do not vary with the run; a
+  fact that does vary is a declared state key in `internal/pipeline` instead,
+  because one `All` serves every run of a service. Lifetime decides which, and
+  `deps.go` has that argument and the P4 reason `Agent` is a `StageAgent`. The
+  intent stage is the body that exists, and
   three things about it generalize. PRD section 5's "this stage never blocks a
   run" is owed by the implementation and not by `internal/pipeline`, which
   refuses to enforce it structurally because a stage that could not hold would
@@ -377,8 +382,13 @@ Each has cost this repository more than one round of review.
   phase list has reached and ships no seam for the rest: the intent stage reads
   supplied intent and does not infer, because inference is deferred, and what
   that deferred work inherits is a note in the package documentation rather
-  than an unwired interface. Exported surface whose only caller is work that
-  has not happened is a comment, and it is dropped in review.
+  than an unwired interface. Exported surface answers to a consumer: one that
+  exists today, or specified work whose absence would otherwise have each of
+  several consumers re-cut the same file. A seam is the second case, and it
+  names in its own doc which consumers it answers to, so the claim is checkable
+  rather than asserted. Surface added because deferred work might plug into it
+  answers to nobody - it grows whether or not that work arrives and nothing
+  breaks if it never does - and it is dropped in review.
 - `internal/fixture` builds the adversarial subject repository the end-to-end
   harness validates against, and records beside each planted condition what it
   must produce, down to the substrings the message has to carry. It is the one
