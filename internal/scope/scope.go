@@ -7,15 +7,16 @@ import (
 )
 
 // Change is what the lens looks at: the recorded intent, whether that intent
-// was supplied or inferred, and the paths the change touched.
+// was supplied as acceptance criteria, and the paths the change touched.
 type Change struct {
 	// Intent is what the change set out to do, in words, as the intent stage
 	// recorded it. The lens refuses an empty one.
 	Intent string
-	// Supplied says whether the intent was supplied by a person, and so is
-	// authoritative acceptance criteria, or inferred, and so is a
-	// low-confidence hint. It changes how the lens is framed to the reviewer
-	// and how an observation describes itself; it does not change what fires.
+	// Supplied says whether the intent was supplied by a person as the
+	// acceptance criteria this change answers to. An intent that was not is a
+	// low-confidence hint the change is not held to, whatever it came from.
+	// It changes how the lens is framed to the reviewer and how an
+	// observation describes itself; it does not change what fires.
 	Supplied bool
 	// Touched is the repository-relative paths the change touched, as the run
 	// knows them and not as the reviewer reports them. That is what makes the
@@ -66,8 +67,9 @@ func Guidance(c Change) (string, error) {
 		b.WriteString("The intent below was supplied by a person, so treat it as the " +
 			"acceptance criteria this change is answerable to.\n\n")
 	} else {
-		b.WriteString("The intent below was inferred from the change rather than supplied, " +
-			"so treat it as a low-confidence hint and not as a contract.\n\n")
+		b.WriteString("The intent below was not supplied as acceptance criteria, so treat it " +
+			"as a low-confidence hint the change is not held to: departing from it is " +
+			"not by itself a defect.\n\n")
 	}
 	b.WriteString("Intent:\n")
 	b.WriteString(intent)
@@ -137,11 +139,11 @@ func Observe(c Change, traces []Trace) ([]findings.Finding, error) {
 	return out, nil
 }
 
-// describe says what an untraced path means, and says it differently for a
-// supplied intent than for an inferred one. Against acceptance criteria the
-// observation is that nobody asked for the change; against an inference it is
-// that the hint does not cover it, which is a weaker claim and is written as
-// one.
+// describe says what an untraced path means, and says it differently for an
+// intent supplied as acceptance criteria than for one that was not. Against
+// acceptance criteria the observation is that nobody asked for the change;
+// against a hint it is that the hint does not cover it, which is a weaker
+// claim and is written as one.
 func describe(path string, supplied bool) string {
 	if supplied {
 		return "The change touches " + path + " and the review traced none of it to the " +
@@ -150,7 +152,8 @@ func describe(path string, supplied bool) string {
 			"land here. This is informational: it blocks nothing."
 	}
 	return "The change touches " + path + " and the review traced none of it to the " +
-		"recorded intent, which was inferred rather than supplied. That makes this a " +
+		"recorded intent, which was not supplied as acceptance criteria. The change is " +
+		"not held to it and departing from it is not by itself a defect, so this is a " +
 		"weak signal - the hint may simply not cover the work - but the part it does " +
 		"not cover is worth seeing. This is informational: it blocks nothing."
 }

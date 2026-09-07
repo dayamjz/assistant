@@ -264,9 +264,11 @@
 // stage that set it would have review check a diff against a guess while every
 // downstream prompt framed the guess as requirements, which is exactly the
 // distinction PRD section 5 draws between a supplied intent and an inferred
-// one. What a stage may still write is the intent itself, because recording
-// what it inferred is the intent stage's job; what it may not do is promote
-// that inference to authoritative.
+// one. What a stage may still write is the intent text itself, because
+// recording an intent is the intent stage's job; what it may not do is promote
+// the text it recorded to authoritative. The stage this build ships infers
+// nothing and writes neither key, so today the row narrows a stage that does
+// not exist yet, which is what a schema rule is for.
 //
 // NewState refuses a run claiming a supplied intent with none behind it. What
 // the schema row adds is narrower than that refusal: no stage can assert the
