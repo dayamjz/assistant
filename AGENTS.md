@@ -87,12 +87,37 @@ Each has cost this repository more than one round of review.
   findings for as long as it stands. Change it on a branch of its own, never at
   a document gate, where review is already past and no reviewer would see it.
   Its schema has no repository-wide review key, so a rule that holds everywhere
-  is the `path: "*"` block rather than a copy in each package block. The gate
-  caps the whole section by an upper bound it checks before a run starts, and
-  this file now sits close to that cap, so a new rule means making room rather
-  than appending; `no-mistakes`' own `ReviewPathInstructionsBytes` is the
-  accounting, and a section over the cap fails config parsing for every later
-  run rather than being truncated.
+  is the `path: "*"` block rather than a copy in each package block, which is
+  also the cheaper of the two.
+  The gate caps the whole section by an upper bound it checks before a run
+  starts, and the section is close enough to that cap that a new block cannot
+  fit at all and an addition to an existing block has well under a rule's worth
+  of room. Measure with `no-mistakes`' own `ReviewPathInstructionsBytes` before
+  writing anything: that function is the accounting, and
+  `docs/upstream-review-instruction-bounds.md` owns what it charges, how much
+  room is left, and the method behind each of those figures.
+  A section over the cap is refused rather than truncated, and the gate
+  validates the pushed copy too, so a branch that overfills it fails its own run
+  at start and cannot merge through the gate. Reaching later runs takes a commit
+  that lands on the default branch without a gate run.
+  Do not make room by deleting a rule. The deleted rule's defect starts
+  recurring, and a diff that removes one instruction and adds another reads as
+  an edit rather than as the regression it is. A channel with no room left is a
+  decision to raise, not one to settle at the point of use, and
+  `docs/upstream-review-instruction-bounds.md` is that ask; no local move
+  changes it materially.
+- This file is not an overflow channel for that section, and moving a review
+  rule here to make room is not a fix. It differs in trust: the gate reads
+  `.no-mistakes.yaml` from the default branch, while this file reaches a
+  reviewer only through the resolved agent CLI's project-doc discovery in the
+  pushed working copy, so a rule moved here is deletable by the branch it was
+  written to review. Its reach is also adapter-dependent and nothing here
+  settles it, so a rule moved here can stop applying with no error and nothing
+  reported; `docs/upstream-review-instruction-bounds.md` owns which mechanisms
+  decide that and what was searched to establish each one. Do not confuse the
+  gate's `disable_project_settings` with `suppress_project_instructions`, which
+  is this project's own key for the same idea and decides nothing about the
+  gate.
 - Every exported symbol carries a contract, so give it a doc comment that states
   the contract rather than restating the name.
 - Prefer a small, testable pure core with the side effects at the edges. The
