@@ -21,8 +21,10 @@ const (
 	// ReachPackage is driven through the package that owns the mechanism, in
 	// this process, against the fixture. It is what is left where the binary
 	// cannot reach a mechanism at all, which today is every mechanism a stage
-	// body would have used: internal/stages has a body for the intent stage
-	// alone, and that one reads the supplied intent and launches nothing.
+	// body would have used: internal/stages has bodies for the intent and pull
+	// request stages alone, the first reads the supplied intent and launches
+	// nothing, and the second fails without the code host this build never
+	// constructs, so no run reaches one.
 	ReachPackage Reach = "package"
 	// ReachNone is not driven here. The reason beside it says why, and it is
 	// prose nobody checks; what the row buys is that the gap is enumerable
@@ -69,7 +71,9 @@ func Coverage() []Established {
 				"either skip is taken nothing about that half is established there, and where both are, " +
 				"nothing about P1 is."},
 		{principles.P2, ReachBinary,
-			"One run of the binary reaches every stage of the gate; a second skips two of " +
+			"One run of the binary reaches every stage of the gate but the pull request stage, whose " +
+				"body fails without the code host this build never constructs and which that run " +
+				"therefore asks to skip; a second run skips two more of " +
 				"them for that run only; and a home whose configuration document asks for a standing " +
 				"skip stops the service before it serves. Two narrow facts are what establish the third: " +
 				"internal/config's key table admits no key named skip, and a key it does not admit is " +
@@ -81,13 +85,16 @@ func Coverage() []Established {
 				"claims it: internal/pipeline's nine named fields make another order unsayable, and " +
 				"internal/service renders a run's answer by iterating that order, so a clause over the " +
 				"order could not fail from what a run reports. What the run half establishes instead is " +
-				"that a report came back for every stage, that each ran, and that each carried the " +
-				"outcome its hold was given. All three parts are one test, and it starts a run through a " +
+				"that a report came back for every stage, that every stage the run did not ask to skip " +
+				"ran, and that each hold carried the " +
+				"outcome it was answered with. All three parts are one test, and it starts a run through a " +
 				"method internal/ipc restricts, so on a platform where that package reads no local socket " +
 				"peer credentials the test is skipped rather than passing and nothing about P2 is " +
 				"established there."},
 		{principles.P3, ReachBinary,
-			"A run through the binary is walked to its end and every hold it reaches is read: it holds " +
+			"A run through the binary is walked to its end, asking to skip the pull request stage " +
+				"because its body fails without the code host this build never constructs, and every " +
+				"hold it reaches is read: it holds " +
 				"once for each stage this build has no body for, which is read off internal/stages rather " +
 				"than counted, every hold is relayed with the finding that produced " +
 				"it, every one of those findings reports itself as holding for a person, and none is one " +
@@ -112,7 +119,9 @@ func Coverage() []Established {
 				"boundary rather than a count of them. A boundary is a hold, so the boundaries are the " +
 				"stages this build has no body for. The intent stage is not among them and no kill is " +
 				"manufactured for it: it has a body, PRD section 5 has it never block a run, and a stage " +
-				"that never holds offers nothing to kill at. What the recovered decision is held to is " +
+				"that never holds offers nothing to kill at. The pull request stage has a body too, and " +
+				"the driven run asks to skip it because it fails without the code host this build never " +
+				"constructs, so it offers no boundary either. What the recovered decision is held to is " +
 				"that it stands at the same stage and still offers what it offered, which a checkpoint " +
 				"round trip can lose; that it offers something nobody was offered is not claimed, " +
 				"because internal/pipeline gives every hold the same fixed rendering and internal/graph " +
@@ -135,8 +144,10 @@ func Coverage() []Established {
 				"process beside the run rather than anything the run does. Two things are not " +
 				"established at any reach and no clause claims them: that nothing the branch or the " +
 				"template installed arrived or executed, because the branch's planted executables are " +
-				"reached only through a stage body that launches something and this build's one stage " +
-				"body reads the supplied intent, while the template's are receive-side hooks reached " +
+				"reached only through a stage body that launches something and neither body this build " +
+				"has launches anything, the intent body reading the supplied intent and the pull request " +
+				"body failing without the code host this build never constructs, " +
+				"while the template's are receive-side hooks reached " +
 				"only by a push to the gate and the four subtests that plant one make no push; " +
 				"and which agent a run resolved, because no shipped surface reports it. The trusted configuration " +
 				"document is driven at package reach: nothing in this build reads a repository's own " +

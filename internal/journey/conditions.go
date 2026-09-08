@@ -114,8 +114,10 @@ func Drives() []Drove {
 				"drive is over the pushed layer with the trusted one absent, so it cannot resolve the " +
 				"default branch's fixture-trusted-agent at all. Its tripwire half has no producer " +
 				"either: every executable it plants is reached only through a stage body that launches " +
-				"something, internal/stages has one body and it reads the supplied intent, and a run " +
-				"therefore launches no agent, runs no configured command, " +
+				"something, and neither body internal/stages has launches anything, one reading the " +
+				"supplied intent and the other failing without the code host this build never " +
+				"constructs, so a run " +
+				"launches no agent, runs no configured command, " +
 				"and makes no commit or push. TestTheBranchUnderValidationChoosesNothingThatRuns does " +
 				"drive a whole run over this branch and reads the tripwire file at the end, and logs " +
 				"what it holds; what that test establishes is the row below and the suppression " +
@@ -145,7 +147,8 @@ func Drives() []Drove {
 
 		{"refusal-no-registered-checks", ReachPackage, checks,
 			"internal/forge over a provider command this harness stands in for, with the run's own head " +
-				"substituted into the recorded answer. No stage body talks to a code host."},
+				"substituted into the recorded answer. No run reaches a code host: the pull request " +
+				"stage's body asks one and fails without the provider this build never constructs."},
 
 		{"stage-logic-bug", ReachNone, "", noStageBody},
 		{"stage-failing-test", ReachNone, "", noStageBody},

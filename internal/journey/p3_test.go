@@ -214,8 +214,12 @@ func TestAFindingThatIsNotClassifiedStopsForAPerson(t *testing.T) {
 		requiresIdentifiedPeer(t)
 
 		j := inClone(t)
+		// The run asks to skip the pull request stage: its body fails without
+		// the code host this build never constructs, so a walk that took it
+		// would end there rather than reaching the holds past it.
 		walk := answerHolds(t, j,
-			startRun(t, j, "--intent", "a change most of whose stages have no body in this build"), "approved")
+			startRun(t, j, "--intent", "a change most of whose stages have no body in this build",
+				"--skip", pipeline.StagePR.String()), "approved")
 		observed := stopped{holds: walk[:len(walk)-1], stages: len(stagesWithoutABody(t))}
 		if len(observed.holds) == 0 {
 			t.Fatalf("the run reached no hold at all, so there is nothing here for any of this to be "+

@@ -21,19 +21,23 @@ does not stand in for it. A green run of this package says the mechanisms
 behave as specified on inputs we chose. It says nothing about review quality,
 and no report built on this may claim otherwise.
 
-## The second limit: eight of the nine stages have no body
+## The second limit: seven of the nine stages have no body
 
-`internal/stages` has an implementation for the intent stage and none for the
-other eight, and that one reads the intent it was supplied and launches
-nothing. Every stage without a body reports one unclassified finding and holds
-for a person, which is P3 working as specified and is also the reason large
-parts of the product are not reachable from a run today:
+`internal/stages` has implementations for the intent and pull request stages
+and none for the other seven. The intent body reads the intent it was supplied
+and launches nothing. The pull request body asks a code host, and this build's
+service constructs no provider, so a run that reaches it fails rather than
+reaching one; every run this harness drives to the end therefore asks to skip
+that stage, which is the per-run surface a person would use. Every stage
+without a body reports one unclassified finding and holds for a person, which
+is P3 working as specified and is also the reason large parts of the product
+are not reachable from a run today:
 
-- no stage launches an agent, so no run parses agent output, keeps a fixer
-  session, or takes a fix round;
-- no stage pushes, opens a pull request, or reads checks, so `internal/safety`,
-  `internal/forge` and the push half of `internal/vcs` are never reached by a
-  run;
+- no stage body launches an agent, so no run parses agent output, keeps a
+  fixer session, or takes a fix round;
+- no run pushes, opens a pull request, or reads checks, so `internal/safety`,
+  `internal/forge` and the push half of `internal/vcs` are never reached by
+  one;
 - nothing reads a repository's own configuration document from anywhere, which
   `internal/service` states, so the trusted-versus-pushed composition PRD
   section 10 describes has no owner and no run performs it.
@@ -45,7 +49,7 @@ row of `Coverage` and of `Drives` carries that distinction as `binary` or
 one.
 
 Which nine stages there are is read out of PRD section 5's table, and which
-eight of them have no body is a declaration in `stages.go` rather than a
+seven of them have no body is a declaration in `stages.go` rather than a
 subtraction from what the build reports, so a body that lands is a change
 somebody writes down here instead of one this harness silently follows.
 
@@ -143,9 +147,9 @@ works around them.
 | PRD section 9's table names no command for the two subcommands the gate's admission hook invokes, which `internal/gate/hooks.go` requires of the command surface. The surface carries them, so a push to a gate is admitted and starts a run; what is unreconciled is the specification, not the code. | Drives an admitted push and holds the run it authorized to the branch and the commit that were pushed, which is P1's positive half. A separate check holds a push made with no service up to the weaker property that the gate did not accept it with nothing checking it. |
 | `core.hooksPath` in a git configuration file redirects a gate's own hooks. `internal/gate/doc.go` names it as an open gap. | Drives a push under the redirect and reports which hook ran, off the fixture's tripwire file. Reported as a known gap, never as a pass. |
 | Nothing reads a repository's configuration document from the default branch, so PRD section 10's abort before launch has no owner. | Drives `config.Parse` and `vcs.Repository.FileAt` against the planted documents directly, and observes on a run that it starts anyway. Reported as a gap against section 10. That nothing a branch names is executed is established nowhere in this build; the row below says why. |
-| Two of `internal/graph`'s three loop bounds sit on the back edge into a fixer, and no stage here can produce a fix-eligible finding: a stage without a body reports an ask finding, which never enters a fix round, and the one stage with a body declares no fix rounds and reports only notes. | Drives the run-wide step budget, which is reachable, and says the other two are not. |
+| Two of `internal/graph`'s three loop bounds sit on the back edge into a fixer, and no stage here can produce a fix-eligible finding: a stage without a body reports an ask finding, which never enters a fix round, and the two stages with a body declare no fix rounds and report only notes. | Drives the run-wide step budget, which is reachable, and says the other two are not. |
 | No shipped surface reports which agent a run resolved. No `internal/machine` shape carries one, and `doctor`'s `agent` check resolves the constant `auto` against the default catalog, so it answers what is runnable on this machine rather than what any run resolved; `internal/cli` says so itself. | Does not claim it. The P7 branch test establishes the pushed-configuration rejections and the suppression refusal instead, both of which observe something. |
-| `internal/fixture`'s nothing-executed evidence has no producer for the branch-installation family. Every executable those conditions plant - the `.claude` hooks, the branch's agent binary, its `commands.test`, the `.githooks` scripts, `.envrc` - is reached only through a stage body that launches something, and the one body `internal/stages` has reads the supplied intent, so a run launches no agent, runs no configured command, and makes no commit or push. | Rests no clause on the tripwire file: one asserting that absence would hold whatever the product resolved. The P7 branch test reads it and logs what it holds, so the evidence is in place the day a stage body lands, and the `Drives` row for that condition says nothing about it is established. |
+| `internal/fixture`'s nothing-executed evidence has no producer for the branch-installation family. Every executable those conditions plant - the `.claude` hooks, the branch's agent binary, its `commands.test`, the `.githooks` scripts, `.envrc` - is reached only through a stage body that launches something, and neither body `internal/stages` has launches anything - the intent body reads the supplied intent, and the pull request body fails without the code host this build never constructs - so a run launches no agent, runs no configured command, and makes no commit or push. | Rests no clause on the tripwire file: one asserting that absence would hold whatever the product resolved. The P7 branch test reads it and logs what it holds, so the evidence is in place the day a stage body lands, and the `Drives` row for that condition says nothing about it is established. |
 | It has no producer for the hostile-template family either, for a different reason. Those hooks are receive-side, so only a push to the gate could run them, and the four subtests that plant them make no push: each initializes a gate and reads how that came out, and none starts a service. So neither a promoted template `pre-receive` nor `update` nor `post-update` is reached. A push to a gate is admitted in this build, which the PRD section 9 row above records, so what leaves these four short is what they do rather than a door that is shut. | Rests no clause on the tripwire file, for the same reason as the row above, and none on the gate's hooks directory either - so whether a hook arrived is unestablished as well as whether one ran. What those four subtests establish is how the initialization came out: the two refusals refuse with the substrings their conditions record, and the two closed channels are not refused. |
 
 ## What accounts for what

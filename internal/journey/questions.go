@@ -85,8 +85,9 @@ func Settlements() []Settlement {
 				"recorded head unchanged would report a stale check list, which internal/forge " +
 				"deliberately tells apart from an empty one, so the substitution silently doing nothing " +
 				"is the same failure as not doing it at all and is refused rather than skipped.",
-			Exercised: "Driven at package reach, against forge.ChecksReport.Evaluate. No stage body talks " +
-				"to a code host in this build, so no run asks the provider anything.",
+			Exercised: "Driven at package reach, against forge.ChecksReport.Evaluate. No run asks a " +
+				"provider anything in this build: the pull request stage's body would, and it fails " +
+				"without the provider this build never constructs.",
 		},
 		{
 			Question: "question-deferred-plant-timing",
@@ -126,7 +127,8 @@ func Settlements() []Settlement {
 				"under that key. The unsuppressed case is a whole run over the branch, but what it " +
 				"establishes is the pushed-configuration rejections rather than that nothing in the " +
 				"prose became an executed command: every planted executable is reached only through a " +
-				"stage body that launches something and this build has none, so the tripwire file is " +
+				"stage body that launches something and neither body this build has launches anything, " +
+				"so the tripwire file is " +
 				"read and logged rather " +
 				"than asserted on.",
 		},

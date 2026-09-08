@@ -24,11 +24,14 @@
 //
 // # Reach is part of every claim
 //
-// internal/stages has a body for the intent stage and none for the other
-// eight, so a run holds at every stage but that one and large
-// parts of this product are unreachable from one: no agent is launched, no
-// reference is moved, no code host is asked anything, and no repository
-// configuration is read.
+// internal/stages has bodies for the intent and pull request stages and none
+// for the other seven, so a run holds at each of those seven and large parts
+// of this product are unreachable from one: no agent is launched, no reference
+// is moved, no code host is asked anything, and no repository configuration is
+// read. The pull request body asks a code host, and this build's service
+// constructs no provider, so a run that reaches it fails rather than reaching
+// one; every run this harness drives to the end therefore asks to skip that
+// stage, which is the per-run surface a person would use.
 //
 // Where a mechanism cannot be reached through the binary, this harness drives
 // it through the package that owns it against the same fixture, and every row

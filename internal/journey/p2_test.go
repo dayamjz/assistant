@@ -28,8 +28,15 @@ import (
 // rather than by carrying one of its own. So no clause here asserts it: over a
 // run's answer the order cannot come back wrong, and a clause that cannot fail
 // is what this package refuses. What this establishes that the owner cannot is
-// that the shipped binary reaches every one of those stages, runs each, and
-// carries each away with the outcome it was given.
+// that the shipped binary reaches every one of those stages, runs each it was
+// not asked to skip, and carries each away with the outcome it was given.
+//
+// Every run here asks to skip the pull request stage. Its body fails without
+// a code host, this build's service constructs no provider, so a run that took
+// it could not reach the end of the gate however it was answered. The skip is
+// a run input, which is the per-run surface a person would use, so this drives
+// that surface rather than weakening what the stage does, and it narrows the
+// first part's claim to the stages the run did not ask to skip.
 //
 // The third part is refused by internal/config's key table rather than by a
 // rule written against standing skips: the table admits no key named skip, so
@@ -56,6 +63,11 @@ func TestAPassMeansTheSameThingEverywhere(t *testing.T) {
 		held[stage.String()] = true
 	}
 
+	// The one skip every run of this test takes, for the reason the doc
+	// comment gives: the pull request stage's body fails without the code host
+	// this build never constructs.
+	forced := []string{pipeline.StagePR.String()}
+
 	walked := journey.Check[machine.Run]{
 		What: "P2: a run through the binary over every stage",
 		Clauses: []journey.Clause[machine.Run]{
@@ -76,11 +88,15 @@ func TestAPassMeansTheSameThingEverywhere(t *testing.T) {
 				},
 			},
 			{
-				States: "every stage of a run that skipped nothing ran",
+				States: "every stage this run did not ask to skip ran",
 				Holds: func(run machine.Run) error {
 					for _, stage := range run.Stages {
+						if slices.Contains(forced, stage.Stage) {
+							continue
+						}
 						if !stage.Ran {
-							return fmt.Errorf("the %s stage did not run, and this run skipped nothing", stage.Stage)
+							return fmt.Errorf("the %s stage did not run, and this run did not ask to skip it",
+								stage.Stage)
 						}
 					}
 					return nil
@@ -111,13 +127,16 @@ func TestAPassMeansTheSameThingEverywhere(t *testing.T) {
 			{
 				// The stages with a body report what their bodies established,
 				// which this cannot state in advance. What it can state is the
-				// one outcome no stage of this run may carry, which is the
+				// one outcome only the asked skip may carry, which is the
 				// shape the clause above catches for the stages it covers.
-				States: "no stage of a run that skipped nothing came back skipped",
+				States: "no stage but the one this run asked to skip came back skipped",
 				Holds: func(run machine.Run) error {
 					for _, stage := range run.Stages {
+						if slices.Contains(forced, stage.Stage) {
+							continue
+						}
 						if stage.Outcome == pipeline.OutcomeSkipped {
-							return fmt.Errorf("the %s stage came back %q, and this run skipped nothing",
+							return fmt.Errorf("the %s stage came back %q, and this run did not ask to skip it",
 								stage.Stage, stage.Outcome)
 						}
 					}
@@ -171,13 +190,19 @@ func TestAPassMeansTheSameThingEverywhere(t *testing.T) {
 			}},
 		},
 	}
-	whole := last(answerHolds(t, j, startRun(t, j, "--intent", "narrow the Total loop bound on purpose"), "approved"))
+	whole := last(answerHolds(t, j, startRun(t, j,
+		"--intent", "narrow the Total loop bound on purpose",
+		"--skip", strings.Join(forced, ",")), "approved"))
 	if err := walked.Verify(whole); err != nil {
 		t.Fatalf("%v\n\nthe run stands at %q, outcome %s, over stages %v",
 			err, whole.Position, whole.Outcome, stageNames(whole))
 	}
 
-	asked := []string{pipeline.StageReview.String(), pipeline.StageLint.String()}
+	// The review and lint skips are this check's subject, a person skipping
+	// stages for one run on purpose; the third is the skip every run of this
+	// test takes, and the clauses hold all three to the same answer because
+	// the surface draws no line between them.
+	asked := append([]string{pipeline.StageReview.String(), pipeline.StageLint.String()}, forced...)
 	skipped := journey.Check[machine.Run]{
 		What: "P2: a skip asked for one run",
 		Clauses: []journey.Clause[machine.Run]{
@@ -286,7 +311,8 @@ func TestAPassMeansTheSameThingEverywhere(t *testing.T) {
 		},
 	}
 	second := last(answerHolds(t, j,
-		startRun(t, j, "--intent", "the same change, checked without two stages", "--skip", "review,lint"),
+		startRun(t, j, "--intent", "the same change, checked with stages skipped",
+			"--skip", strings.Join(asked, ",")),
 		"approved"))
 	if err := skipped.Verify(second); err != nil {
 		t.Fatalf("%v", err)

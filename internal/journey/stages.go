@@ -175,7 +175,6 @@ var bodyless = []pipeline.Stage{
 	pipeline.StageDocument,
 	pipeline.StageLint,
 	pipeline.StagePush,
-	pipeline.StagePR,
 	pipeline.StageCI,
 }
 

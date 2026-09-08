@@ -11,6 +11,7 @@ import (
 	"github.com/dayamjz/assistant/internal/fixture"
 	"github.com/dayamjz/assistant/internal/journey"
 	"github.com/dayamjz/assistant/internal/machine"
+	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/vcs"
@@ -29,8 +30,9 @@ type installed struct {
 	// has none: the two .claude hooks and the agent binary need an agent
 	// process, the branch's commands.test needs a test stage, the two
 	// .githooks scripts need this product to commit or push, and .envrc needs
-	// a shell to enter the worktree. The one body this build does have reads
-	// the run's supplied intent and starts nothing, so the file stays
+	// a shell to enter the worktree. Neither body this build does have starts
+	// anything, one reading the run's supplied intent and the other failing
+	// without the code host this build never constructs, so the file stays
 	// empty however the product resolved the branch's document, and a clause
 	// asserting the absence would hold over a world nothing could make it
 	// report in. They are recorded and logged so the evidence is here the day
@@ -72,8 +74,9 @@ type installed struct {
 // launches something, and this build has none: the .claude hooks and the
 // branch's agent binary need an agent process, its commands.test needs a test
 // stage, the .githooks scripts need this product to commit or push, and .envrc
-// needs a shell. The one body this build does have reads the run's supplied
-// intent and starts nothing, so
+// needs a shell. Neither body this build does have starts anything, one
+// reading the run's supplied intent and the other failing without the code
+// host this build never constructs, so
 // the scenario's tripwire file stays empty here whatever the product resolved,
 // and a clause reading it would be one nothing could make report. The file is
 // read and logged rather than asserted on, so the evidence is here the day a
@@ -121,8 +124,12 @@ func TestTheBranchUnderValidationChoosesNothingThatRuns(t *testing.T) {
 	j := open(t, scenario)
 	succeeds(t, j.Command("init", "--default-branch", fixture.DefaultBranch))
 	serve(t, j)
+	// The run asks to skip the pull request stage: its body fails without the
+	// code host this build never constructs, so a run that took it could not
+	// reach the stages the installation was planted in front of.
 	observed.outcome = last(answerHolds(t, j,
-		startRun(t, j, "--intent", "narrow the Total loop bound on purpose"), "approved")).Outcome
+		startRun(t, j, "--intent", "narrow the Total loop bound on purpose",
+			"--skip", pipeline.StagePR.String()), "approved")).Outcome
 	if observed.fired, err = journey.Fired(scenario); err != nil {
 		t.Fatalf("reading the scenario's tripwires: %v", err)
 	}
@@ -250,7 +257,8 @@ func TestTheBranchUnderValidationChoosesNothingThatRuns(t *testing.T) {
 	}
 	t.Logf("KNOWN GAP: the scenario's tripwire file holds %v after this run, and the two conditions "+
 		"require %v to stay out of it. Nothing here establishes that: every one of those executables "+
-		"is reached only through a stage body that launches something, this build has none, and a "+
+		"is reached only through a stage body that launches something, neither body this build has "+
+		"launches anything, and a "+
 		"run therefore launches no agent, runs no configured command, and makes no commit or push. "+
 		"The file is reported rather than asserted on until such a body gives one of them a path "+
 		"to fire.",

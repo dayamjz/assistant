@@ -7,6 +7,7 @@ import (
 
 	"github.com/dayamjz/assistant/internal/journey"
 	"github.com/dayamjz/assistant/internal/machine"
+	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/store"
 )
@@ -49,7 +50,10 @@ type survival struct {
 // lands, and a stage that never holds offers none. The intent stage is that
 // stage - it has a body and PRD section 5 has it never block a run, so every
 // finding it reports is a note - and it is therefore not among the boundaries
-// here. Manufacturing one for it would be a kill with nothing under it.
+// here. Manufacturing one for it would be a kill with nothing under it. The
+// pull request stage has a body too and offers no boundary either: it fails
+// without the code host this build never constructs, so the driven run asks
+// to skip it, and a skipped stage holds nothing.
 //
 // The kill is a kill and not a stop. A service asked to stop unwinds and
 // writes what it knows on the way out, and what P6 is about is the service
@@ -74,7 +78,8 @@ func TestARunSurvivesTheServiceBeingKilledAtEveryStageBoundary(t *testing.T) {
 	holding := stagesWithoutABody(t)
 
 	observed := survival{}
-	current := startRun(t, j, "--intent", "narrow the Total loop bound on purpose")
+	current := startRun(t, j, "--intent", "narrow the Total loop bound on purpose",
+		"--skip", pipeline.StagePR.String())
 	// Bounded for the reason answerHolds is bounded: a run that stops
 	// advancing past a hold turns this into an unbounded kill-and-serve loop,
 	// and the suite hanging to the test timeout says nothing about which stage

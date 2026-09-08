@@ -8,6 +8,7 @@ import (
 	"github.com/dayamjz/assistant/internal/graph"
 	"github.com/dayamjz/assistant/internal/journey"
 	"github.com/dayamjz/assistant/internal/machine"
+	"github.com/dayamjz/assistant/internal/pipeline"
 )
 
 // bounded is what became of a run held to a step budget smaller than the gate
@@ -44,10 +45,14 @@ type bounded struct {
 // convergence bound both sit on the back edge into a fixer, and a fix round
 // needs a stage that reports a fix-eligible finding; no stage of this build
 // reports one. A stage with no body reports one unclassified finding and holds
-// for a person, which P3 keeps out of a fix round by construction, and the one
-// stage that has a body declares no fix rounds and reports only notes. Drives
+// for a person, which P3 keeps out of a fix round by construction, and the two
+// stages that have a body declare no fix rounds and report only notes. Drives
 // records that the same way it records every other condition the missing
 // bodies put out of reach.
+//
+// Both runs here ask to skip the pull request stage: its body fails without
+// the code host this build never constructs, and the pair only says what it
+// says if the unbounded run reaches the end of the gate.
 //
 // What makes this a bound rather than a failure is the pair. The same journey
 // with the budget left alone reaches the end of the gate, so what stopped the
@@ -67,7 +72,8 @@ func TestTheRunBudgetStopsARunTheGateWouldHaveFinished(t *testing.T) {
 	// under it rather than as the stale number it was.
 	free := inClone(t)
 	freeWalk := answerHolds(t, free,
-		startRun(t, free, "--intent", "the same change with the budget left alone"), "approved")
+		startRun(t, free, "--intent", "the same change with the budget left alone",
+			"--skip", pipeline.StagePR.String()), "approved")
 	observed := bounded{unbounded: last(freeWalk).Outcome}
 
 	budget := freeWalk[0].Steps + 1
@@ -79,7 +85,8 @@ func TestTheRunBudgetStopsARunTheGateWouldHaveFinished(t *testing.T) {
 	observed.budget = budget
 
 	j := inCloneConfigured(t, map[string]any{"run_budget": budget})
-	walk := answerHolds(t, j, startRun(t, j, "--intent", "a change held to a budget smaller than the gate"),
+	walk := answerHolds(t, j, startRun(t, j, "--intent", "a change held to a budget smaller than the gate",
+		"--skip", pipeline.StagePR.String()),
 		"approved")
 	stopped := last(walk)
 	for _, answer := range walk[:len(walk)-1] {
