@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -297,11 +298,11 @@ func TestAllPlacesTheTestBodyAndItAdvancesAPassingRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("running Pending for the test stage: %v", err)
 	}
+	if reflect.DeepEqual(report, pending.Report.Normalize()) {
+		t.Fatalf("All places Pending at the test stage, which this build reports a body for: %+v", report)
+	}
 	if report.HasHeld() || len(report.Findings) != 0 {
 		t.Fatalf("the body All places at the test stage did not advance a run whose check passed: %+v", report)
-	}
-	if strings.Contains(pending.Report.Summary, report.Summary) {
-		t.Fatalf("All places Pending at the test stage, which this build reports a body for")
 	}
 }
 
