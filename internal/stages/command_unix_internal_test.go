@@ -137,9 +137,15 @@ func TestOutputStillHeldAfterTheCommandEndsIsNotOfferedAsWhole(t *testing.T) {
 	}
 }
 
-// A command whose output ends before the grace does is not reported as short,
-// and the record holds all of it. Without this the truncation fact could be set
-// on every run and every guard above would still pass.
+// A command whose output ends is not reported as short, and the record holds
+// all of it. Without this the truncation fact could be set on every run and
+// every guard above would still pass.
+//
+// It runs on the grace the stage passes rather than the short one its sibling
+// needs. Nothing here has to reach the give-up path, and the grace bounds only
+// how long the copy has to observe the end of an output that has already
+// ended, so a short one would make a loaded runner's scheduling a way for this
+// to fail for a reason that is not the code under test.
 func TestOutputThatReachesItsEndIsReportedWhole(t *testing.T) {
 	t.Parallel()
 	var whole strings.Builder
@@ -148,7 +154,7 @@ func TestOutputThatReachesItsEndIsReportedWhole(t *testing.T) {
 		dir:        t.TempDir(),
 		record:     &whole,
 		projection: testProjectionBytes,
-		grace:      50 * time.Millisecond,
+		grace:      commandGrace,
 	})
 	if !result.exited || result.code != 0 {
 		t.Fatalf("the command exited %d (reported a status: %t): %v", result.code, result.exited, result.err)
