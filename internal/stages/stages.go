@@ -143,6 +143,7 @@ func Pending(name string) pipeline.Implementation {
 var written = map[pipeline.Stage]func(StageDeps) pipeline.Implementation{
 	pipeline.StageIntent: Intent,
 	pipeline.StageTest:   Test,
+	pipeline.StageLint:   Lint,
 }
 
 // All returns the nine stages as this build has them: each stage's own body

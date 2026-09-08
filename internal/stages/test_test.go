@@ -11,7 +11,6 @@ import (
 	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/findings"
 	"github.com/dayamjz/assistant/internal/graph"
-	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/stages"
@@ -36,9 +35,9 @@ const (
 // The report carries no finding, so the run advances.
 func TestAPassingCheckIsReportedAsAPassWithItsEvidence(t *testing.T) {
 	t.Parallel()
-	run := newTestStageRun(t, passingTestCommand)
+	run := newStageRun(t, testStageConfig(passingTestCommand))
 
-	report := run.report(t)
+	report := run.report(t, stages.Test(run.deps), pipeline.StageTest)
 	if len(report.Findings) != 0 {
 		t.Fatalf("a passing check reported %d finding(s), and a pass has nothing to report: %+v",
 			len(report.Findings), report.Findings)
@@ -73,9 +72,9 @@ func TestAPassingCheckIsReportedAsAPassWithItsEvidence(t *testing.T) {
 // a fixer reading only the summary cannot act on it.
 func TestAFailingCheckIsAFixFindingCarryingWhatTheCommandSaid(t *testing.T) {
 	t.Parallel()
-	run := newTestStageRun(t, failingTestCommand)
+	run := newStageRun(t, testStageConfig(failingTestCommand))
 
-	report := run.report(t)
+	report := run.report(t, stages.Test(run.deps), pipeline.StageTest)
 	if len(report.Findings) != 1 {
 		t.Fatalf("a failing check reported %d findings, and one failure is one finding: %+v",
 			len(report.Findings), report.Findings)
@@ -151,13 +150,13 @@ func TestTheCheckComesFromConfigurationAndNotFromTheBranch(t *testing.T) {
 	t.Parallel()
 	principles.Cite(t, principles.P7)
 
-	run := newTestStageRun(t, passingTestCommand)
+	run := newStageRun(t, testStageConfig(passingTestCommand))
 	tripwire := filepath.Join(t.TempDir(), "the-branch-chose-this")
 	planted := "git log -1 --oneline > " + filepath.ToSlash(tripwire)
 	write(t, run.copy, ".assistant.yaml", "commands:\n  test: "+planted+"\n")
 	write(t, run.copy, "Makefile", "test:\n\t"+planted+"\n")
 
-	report := run.report(t)
+	report := run.report(t, stages.Test(run.deps), pipeline.StageTest)
 	if len(report.Tested) != 1 || report.Tested[0] != passingTestCommand {
 		t.Fatalf("the stage says it ran %q, and the configuration it was handed named %q",
 			report.Tested, passingTestCommand)
@@ -185,9 +184,9 @@ func TestTheCheckComesFromConfigurationAndNotFromTheBranch(t *testing.T) {
 // the run found it.
 func TestEvidenceIsWrittenOutsideTheIsolatedCopy(t *testing.T) {
 	t.Parallel()
-	run := newTestStageRun(t, passingTestCommand)
+	run := newStageRun(t, testStageConfig(passingTestCommand))
 
-	report := run.report(t)
+	report := run.report(t, stages.Test(run.deps), pipeline.StageTest)
 	at := report.Evidence[0].Path
 	if want := run.home.Evidence(run.runID); !strings.HasPrefix(at, want) {
 		t.Fatalf("the evidence is at %s, and PRD section 8 puts it under %s", at, want)
@@ -209,7 +208,7 @@ func TestEvidenceIsWrittenOutsideTheIsolatedCopy(t *testing.T) {
 // directory belongs, which is a state any platform can reach.
 func TestAnUnwritableRecordIsANoteAndNotAVerdict(t *testing.T) {
 	t.Parallel()
-	run := newTestStageRun(t, passingTestCommand)
+	run := newStageRun(t, testStageConfig(passingTestCommand))
 	occupied := run.home.Evidence(run.runID)
 	if err := os.MkdirAll(filepath.Dir(occupied), 0o700); err != nil {
 		t.Fatalf("making %s: %v", filepath.Dir(occupied), err)
@@ -218,7 +217,7 @@ func TestAnUnwritableRecordIsANoteAndNotAVerdict(t *testing.T) {
 		t.Fatalf("occupying %s: %v", occupied, err)
 	}
 
-	report := run.report(t)
+	report := run.report(t, stages.Test(run.deps), pipeline.StageTest)
 	if !strings.Contains(report.Summary, "passed") {
 		t.Fatalf("an unwritable record changed the verdict: %q", report.Summary)
 	}
@@ -239,11 +238,11 @@ func TestAnUnwritableRecordIsANoteAndNotAVerdict(t *testing.T) {
 // otherwise only the second, which is the half that says least.
 func TestASecondAttemptIsAddedToTheRecordRatherThanReplacingIt(t *testing.T) {
 	t.Parallel()
-	run := newTestStageRun(t, failingTestCommand)
-	first := run.report(t)
+	run := newStageRun(t, testStageConfig(failingTestCommand))
+	first := run.report(t, stages.Test(run.deps), pipeline.StageTest)
 
 	run.deps = stages.NewStageDeps(agents.StageAgent{}, run.home, testStageConfig(passingTestCommand), nil)
-	second := run.report(t)
+	second := run.report(t, stages.Test(run.deps), pipeline.StageTest)
 	if first.Evidence[0].Path != second.Evidence[0].Path {
 		t.Fatalf("the two attempts recorded to %s and %s, and one run has one record",
 			first.Evidence[0].Path, second.Evidence[0].Path)
@@ -281,10 +280,10 @@ func TestAMissingIsolatedCopyIsAnErrorAndNotAFinding(t *testing.T) {
 // StageDeps and this stage's answer to that is a hold.
 func TestAllPlacesTheTestBodyAndItAdvancesAPassingRun(t *testing.T) {
 	t.Parallel()
-	run := newTestStageRun(t, passingTestCommand)
+	run := newStageRun(t, testStageConfig(passingTestCommand))
 	placed := stages.All(run.deps).Test
 
-	out, err := runTestStageBody(t, placed, pipeline.StageTest, run.repositoryID, run.runID)
+	out, err := runStageBody(t, placed, pipeline.StageTest, run.repositoryID, run.runID)
 	if err != nil {
 		t.Fatalf("running the body All places at the test stage: %v", err)
 	}
@@ -311,7 +310,7 @@ func TestAllPlacesTheTestBodyAndItAdvancesAPassingRun(t *testing.T) {
 // a build which later reports a pass here is caught.
 func TestAFailingCheckReachesTheFixerThisBuildDoesNotHave(t *testing.T) {
 	t.Parallel()
-	run := newTestStageRun(t, failingTestCommand)
+	run := newStageRun(t, testStageConfig(failingTestCommand))
 
 	all := pipeline.ConstantStages("nothing to report")
 	all.Test = stages.All(run.deps).Test
@@ -347,112 +346,10 @@ func TestAFailingCheckReachesTheFixerThisBuildDoesNotHave(t *testing.T) {
 	}
 }
 
-// testStageRun is one run of the test stage against a real isolated copy.
-type testStageRun struct {
-	home         *home.Home
-	deps         stages.StageDeps
-	repositoryID string
-	runID        string
-	// copy is the isolated copy the stage runs the command in.
-	copy string
-	// commit is the commit at its head.
-	commit string
-	// subject is that commit's subject line, which the configured commands
-	// print, so a test can recognize the command's own output.
-	subject string
-}
-
-// newTestStageRun builds a home, an isolated copy at the place the stage looks for
-// one, and the dependencies a body is given.
-//
-// The copy is a linked worktree at a detached head, which is what a run works
-// in: a body reaches it through StageDeps.Copy, which opens and never creates.
-func newTestStageRun(t *testing.T, command string) *testStageRun {
-	t.Helper()
-	run := &testStageRun{
-		home:         newHome(t),
-		repositoryID: "repository-1",
-		runID:        "run-1",
-		subject:      "the commit the check prints",
-	}
-	source := t.TempDir()
-	git(t, source, "init", "--quiet")
-	write(t, source, "total.go", "package subject\n")
-	git(t, source, "add", ".")
-	git(t, source, "commit", "--quiet", "-m", run.subject)
-
-	run.copy = run.home.Worktree(run.repositoryID, run.runID)
-	if err := os.MkdirAll(filepath.Dir(run.copy), 0o700); err != nil {
-		t.Fatalf("making %s: %v", filepath.Dir(run.copy), err)
-	}
-	git(t, source, "worktree", "add", "--quiet", "--detach", run.copy)
-	run.commit = git(t, run.copy, "rev-parse", "HEAD")
-	run.deps = stages.NewStageDeps(agents.StageAgent{}, run.home, testStageConfig(command), nil)
-	return run
-}
-
-// report runs the test stage over this run and returns the report the pipeline
-// would record, normalized and validated as the stage node does.
-func (r *testStageRun) report(t *testing.T) findings.Report {
-	t.Helper()
-	out, err := runTestStage(t, r.deps, r.repositoryID, r.runID)
-	if err != nil {
-		t.Fatalf("running the test stage: %v", err)
-	}
-	report := out.Report.Normalize()
-	if err := report.Validate(); err != nil {
-		t.Fatalf("the test stage produced a report the pipeline refuses: %v", err)
-	}
-	return report
-}
-
 // runTestStage runs the test stage's body over a run's identity.
 func runTestStage(t *testing.T, deps stages.StageDeps, repositoryID, runID string) (pipeline.Output, error) {
 	t.Helper()
-	return runTestStageBody(t, stages.Test(deps), pipeline.StageTest, repositoryID, runID)
-}
-
-// runTestStageBody runs one implementation's body through the same
-// restriction the stage node applies, so a read it did not declare is refused
-// here as it would be there.
-//
-// What it reads from is a run state the pipeline built, so every key holds
-// what a run would put there rather than what this test remembered to fill in.
-func runTestStageBody(t *testing.T, impl pipeline.Implementation, stage pipeline.Stage,
-	repositoryID, runID string) (pipeline.Output, error) {
-	t.Helper()
-	allowed := make(map[pipeline.Key]bool, len(impl.Reads))
-	for _, key := range impl.Reads {
-		allowed[key] = true
-	}
-	return impl.NewBody()(t.Context(), pipeline.Input{
-		Stage: stage,
-		State: stateReader{allowed: allowed, state: newRunState(t, repositoryID, runID)},
-	})
-}
-
-// newRunState is the initial state of a run of this repository, built by the
-// pipeline that would run it.
-func newRunState(t *testing.T, repositoryID, runID string) graph.State {
-	t.Helper()
-	p, err := pipeline.New(pipeline.Options{
-		Stages: pipeline.ConstantStages("nothing to report"),
-		Budget: config.DefaultRunBudget,
-	})
-	if err != nil {
-		t.Fatalf("building a pipeline to take a run's initial state from: %v", err)
-	}
-	state, err := p.NewState(pipeline.Start{
-		Repository: repositoryID,
-		Run:        runID,
-		Branch:     "topic",
-		Base:       "main",
-		Submitted:  "0000000000000000000000000000000000000000",
-	})
-	if err != nil {
-		t.Fatalf("building the run's initial state: %v", err)
-	}
-	return state
+	return runStageBody(t, stages.Test(deps), pipeline.StageTest, repositoryID, runID)
 }
 
 // testStageConfig is the resolved configuration a run is given, with one command
@@ -461,14 +358,4 @@ func testStageConfig(command string) config.Config {
 	cfg := config.Defaults()
 	cfg.Commands.Test = command
 	return cfg
-}
-
-// readRecorded reads a file a test asserts the contents of.
-func readRecorded(t *testing.T, path string) string {
-	t.Helper()
-	content, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("reading %s: %v", path, err)
-	}
-	return string(content)
 }

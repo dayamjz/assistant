@@ -34,3 +34,22 @@ func interpreter() string {
 	}
 	return "cmd.exe"
 }
+
+// interpreterCouldNotRun reports whether an exit status is one the interpreter
+// uses for a command line it could not run, and in what sense it could not.
+//
+// This platform's interpreter has one such status rather than the two POSIX
+// gives a shell, and it is a convention of that interpreter rather than a
+// specified one. A command line that fails to start for a reason it reports
+// differently is therefore read here as a command that ran and objected.
+//
+// What it reads is the status and not who set it, so a command that exits 9009
+// on its own account is read the same way. That direction is the safe one -
+// the caller holds for a person rather than passing or prescribing a fix - and
+// the caller's documentation names it as the gap it is.
+func interpreterCouldNotRun(code int) (sense string, ok bool) {
+	if code == 9009 {
+		return "the command interpreter did not recognize it as a command it could run", true
+	}
+	return "", false
+}

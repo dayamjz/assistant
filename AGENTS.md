@@ -372,10 +372,15 @@ Each has cost this repository more than one round of review.
   construction, which carries the adapters that do not vary with the run; a
   fact that does vary is a declared state key in `internal/pipeline` instead,
   because one `All` serves every run of a service. Lifetime decides which, and
-  `deps.go` has that argument and the P4 reason `Agent` is a `StageAgent`. The
-  intent stage is the body that exists, and
-  three things about it generalize. PRD section 5's "this stage never blocks a
-  run" is owed by the implementation and not by `internal/pipeline`, which
+  `deps.go` has that argument and the P4 reason `Agent` is a `StageAgent`.
+  Running a configured `commands.*` line inside the run's isolated copy has one
+  owner, `check.go`: it locates the copy, resolves the commit a report names,
+  and files the evidence, and it classifies nothing, because which exit status
+  means what is each stage's own judgement. A stage that runs a configured
+  command calls it rather than repeating any of that. The intent stage is the
+  body this argument was first written against, and three things about it
+  generalize. PRD section 5's "this stage never blocks a run" is owed by the
+  implementation and not by `internal/pipeline`, which
   refuses to enforce it structurally because a stage that could not hold would
   have to drop an ask finding; every finding it reports is a note, and the test
   runs every path it has and is itself checked against a report that blocks, so

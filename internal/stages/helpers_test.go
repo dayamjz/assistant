@@ -8,9 +8,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/dayamjz/assistant/internal/agents"
+	"github.com/dayamjz/assistant/internal/config"
+	"github.com/dayamjz/assistant/internal/findings"
 	"github.com/dayamjz/assistant/internal/graph"
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/pipeline"
+	"github.com/dayamjz/assistant/internal/stages"
 )
 
 // git runs a git command in a directory, for building the subject repository a
@@ -82,4 +86,122 @@ func (r stateReader) Get(key pipeline.Key) (graph.Value, error) {
 	}
 	value, _ := r.state.Get(string(key))
 	return value, nil
+}
+
+// stageRun is one run of one stage body against a real isolated copy: a home,
+// a copy where the stage looks for one, and the dependencies a body is given.
+//
+// It is shared by the stage bodies that run a configured command, because what
+// it builds is the run rather than the stage. The stage is named at the call
+// that runs a body, so one run can be put to more than one of them.
+type stageRun struct {
+	home         *home.Home
+	deps         stages.StageDeps
+	repositoryID string
+	runID        string
+	// copy is the isolated copy the stage runs the command in.
+	copy string
+	// commit is the commit at its head.
+	commit string
+	// subject is that commit's subject line, which the configured commands
+	// print, so a test can recognize the command's own output.
+	subject string
+}
+
+// newStageRun builds a home, an isolated copy at the place a stage looks for
+// one, and the dependencies a body is given, with the configuration a test
+// wants the run resolved against.
+//
+// The copy is a linked worktree at a detached head, which is what a run works
+// in: a body reaches it through StageDeps.Copy, which opens and never creates.
+func newStageRun(t *testing.T, cfg config.Config) *stageRun {
+	t.Helper()
+	run := &stageRun{
+		home:         newHome(t),
+		repositoryID: "repository-1",
+		runID:        "run-1",
+		subject:      "the commit the check prints",
+	}
+	source := t.TempDir()
+	git(t, source, "init", "--quiet")
+	write(t, source, "total.go", "package subject\n")
+	git(t, source, "add", ".")
+	git(t, source, "commit", "--quiet", "-m", run.subject)
+
+	run.copy = run.home.Worktree(run.repositoryID, run.runID)
+	if err := os.MkdirAll(filepath.Dir(run.copy), 0o700); err != nil {
+		t.Fatalf("making %s: %v", filepath.Dir(run.copy), err)
+	}
+	git(t, source, "worktree", "add", "--quiet", "--detach", run.copy)
+	run.commit = git(t, run.copy, "rev-parse", "HEAD")
+	run.deps = stages.NewStageDeps(agents.StageAgent{}, run.home, cfg, nil)
+	return run
+}
+
+// report runs one stage's body over this run and returns the report the
+// pipeline would record, normalized and validated as the stage node does.
+func (r *stageRun) report(t *testing.T, impl pipeline.Implementation, stage pipeline.Stage) findings.Report {
+	t.Helper()
+	out, err := runStageBody(t, impl, stage, r.repositoryID, r.runID)
+	if err != nil {
+		t.Fatalf("running the %s stage: %v", stage, err)
+	}
+	report := out.Report.Normalize()
+	if err := report.Validate(); err != nil {
+		t.Fatalf("the %s stage produced a report the pipeline refuses: %v", stage, err)
+	}
+	return report
+}
+
+// runStageBody runs one implementation's body through the same
+// restriction the stage node applies, so a read it did not declare is refused
+// here as it would be there.
+//
+// What it reads from is a run state the pipeline built, so every key holds
+// what a run would put there rather than what this test remembered to fill in.
+func runStageBody(t *testing.T, impl pipeline.Implementation, stage pipeline.Stage,
+	repositoryID, runID string) (pipeline.Output, error) {
+	t.Helper()
+	allowed := make(map[pipeline.Key]bool, len(impl.Reads))
+	for _, key := range impl.Reads {
+		allowed[key] = true
+	}
+	return impl.NewBody()(t.Context(), pipeline.Input{
+		Stage: stage,
+		State: stateReader{allowed: allowed, state: newRunState(t, repositoryID, runID)},
+	})
+}
+
+// newRunState is the initial state of a run of this repository, built by the
+// pipeline that would run it.
+func newRunState(t *testing.T, repositoryID, runID string) graph.State {
+	t.Helper()
+	p, err := pipeline.New(pipeline.Options{
+		Stages: pipeline.ConstantStages("nothing to report"),
+		Budget: config.DefaultRunBudget,
+	})
+	if err != nil {
+		t.Fatalf("building a pipeline to take a run's initial state from: %v", err)
+	}
+	state, err := p.NewState(pipeline.Start{
+		Repository: repositoryID,
+		Run:        runID,
+		Branch:     "topic",
+		Base:       "main",
+		Submitted:  "0000000000000000000000000000000000000000",
+	})
+	if err != nil {
+		t.Fatalf("building the run's initial state: %v", err)
+	}
+	return state
+}
+
+// readRecorded reads a file a test asserts the contents of.
+func readRecorded(t *testing.T, path string) string {
+	t.Helper()
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("reading %s: %v", path, err)
+	}
+	return string(content)
 }
