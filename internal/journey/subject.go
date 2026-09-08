@@ -60,6 +60,13 @@ var ErrScenarioClaimed = errors.New("journey: this scenario is already claimed")
 // rather than as the mistake they are, so the second one is refused here and
 // names the first.
 //
+// The holder is what the rule is about, so a test re-claiming a scenario it
+// already holds is given it again rather than refused: one test is still
+// driving it. A claim outlives the test that took it, because the registry is
+// process-wide and nothing releases it, so without this a second run of the
+// same test in one process - which is all `go test -count` does - would be
+// refused by its own earlier claim and report a conflict naming itself twice.
+//
 // A test that only reads a scenario - the bytes of a planted agent response,
 // a commit on its origin - does not claim it. Reading does not interfere, and
 // requiring a claim for it would force scenarios apart for no reason.
@@ -74,7 +81,7 @@ func Claim(scenario fixture.ScenarioName, by string) (fixture.Scenario, error) {
 	}
 	claims.mu.Lock()
 	defer claims.mu.Unlock()
-	if holder, taken := claims.by[scenario]; taken {
+	if holder, taken := claims.by[scenario]; taken && holder != by {
 		return fixture.Scenario{}, fmt.Errorf("%w: %s took %s, and %s wants it too; a scenario is driven by "+
 			"one test", ErrScenarioClaimed, holder, scenario, by)
 	}
