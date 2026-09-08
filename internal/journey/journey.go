@@ -169,6 +169,16 @@ func Open(opts Options) (*Journey, error) {
 	if err != nil {
 		return nil, fmt.Errorf("journey: making a home root: %w", err)
 	}
+	// Nothing else removes this root until Close, and a caller holding an
+	// error holds no Journey to close. So every failure below takes the root
+	// with it rather than leaving a directory, sometimes a created home, under
+	// the temporary directory of whatever machine ran the suite.
+	opened := false
+	defer func() {
+		if !opened {
+			_ = os.RemoveAll(root)
+		}
+	}()
 	dir := opts.Dir
 	if dir == "" {
 		dir = opts.Scenario.WorkingCopy
@@ -206,6 +216,7 @@ func Open(opts Options) (*Journey, error) {
 	if err := j.WriteConfiguration(nil); err != nil {
 		return nil, err
 	}
+	opened = true
 	return j, nil
 }
 
@@ -518,6 +529,15 @@ func (j *Journey) exec(dir string, env map[string]string, within time.Duration, 
 // binary launch a detached one, because a harness that cannot name the process
 // cannot kill it, and killing it at a stage boundary is P6's own stated
 // verification criterion. The flag it uses is the product's own.
+//
+// A Serve that reported a failure after the child started still leaves this
+// journey serving, and the caller owes it a Kill. That is deliberate: the
+// readiness check failing says the service never answered, never that no
+// process is there, and a Serve that cleared the handle on its way out would
+// leave a running child nothing in this harness could name. So the two
+// failures are told apart by what the caller does next rather than by the
+// error: a second Serve is refused, and Kill is what ends whatever is there
+// and releases the log this one opened.
 func (j *Journey) Serve() error {
 	if j.service != nil {
 		return errors.New("journey: this journey is already serving")
@@ -597,6 +617,14 @@ func (j *Journey) WaitReady() error {
 // process still holds is a home that cannot be removed on a platform where an
 // open file is not unlinkable, so a Kill that reported a failure and kept the
 // handle would turn one failure into two and lose the first behind the second.
+//
+// The residual gap is on the first promise, and it is what that ordering
+// costs. A failure from end is exactly the case where this journey's reaper
+// still holds nothing, so something really is still serving, and by then this
+// journey has already let the process go: no later Kill, Close or Cleanup can
+// reach it, and Close removes the home underneath it regardless. The error
+// this returns is therefore the only notice a caller gets that a process
+// outlived its home, and there is nothing here for it to retry.
 func (j *Journey) Kill() error {
 	if j.service == nil {
 		return errors.New("journey: this journey is not serving")

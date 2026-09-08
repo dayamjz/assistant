@@ -41,6 +41,11 @@ const (
 // reaching for something the test did not know it would.
 const ExitShimUnprepared = 97
 
+// shimNames are the names this harness stands a copy of itself under, which is
+// one list rather than one per site: installShims writes them, shimName reads
+// the one this process was invoked as, and ShimPath answers for them.
+var shimNames = []string{AgentShimName, ProviderShimName}
+
 // shims is the directory of copies, made once per process. Which binary
 // answers as which name is a fact about this process, and copying the test
 // binary twice per journey would cost tens of megabytes for nothing.
@@ -66,6 +71,42 @@ func Shims() (string, error) {
 	return shims.dir, shims.err
 }
 
+// ShimPath is the file installShims wrote for the shim resolved under name.
+//
+// A caller reaching a shim directly - internal/forge takes the provider
+// command as a path rather than off PATH - asks for it here rather than
+// composing one, because the file name carries this platform's executable
+// suffix and a second copy of that rule composes a path to nothing the day
+// either changes. The failure that produces names a missing binary, which
+// says nothing about the naming rule that was wrong.
+//
+// It refuses a name this harness stands no shim under, since a path composed
+// for one is a file that was never written.
+func ShimPath(name string) (string, error) {
+	found := false
+	for _, stood := range shimNames {
+		if name == stood {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return "", fmt.Errorf("journey: this harness stands no shim under the name %q, only %s",
+			name, strings.Join(shimNames, " and "))
+	}
+	dir, err := Shims()
+	if err != nil {
+		return "", err
+	}
+	return shimFile(dir, name), nil
+}
+
+// shimFile is what a shim standing in dir under name is called, which is the
+// one place the platform's executable suffix reaches a shim's file name.
+func shimFile(dir, name string) string {
+	return filepath.Join(dir, name+exeSuffix())
+}
+
 // installShims is Shims without the memoization.
 func installShims() (string, error) {
 	self, err := os.Executable()
@@ -77,8 +118,8 @@ func installShims() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("journey: making a directory for the shims: %w", err)
 	}
-	for _, name := range []string{AgentShimName, ProviderShimName} {
-		if err := copyExecutable(self, filepath.Join(dir, name+exeSuffix())); err != nil {
+	for _, name := range shimNames {
+		if err := copyExecutable(self, shimFile(dir, name)); err != nil {
 			return "", err
 		}
 	}
@@ -143,7 +184,7 @@ func ActAsShim() {
 func shimName() string {
 	base := strings.ToLower(filepath.Base(os.Args[0]))
 	base = strings.TrimSuffix(base, strings.ToLower(exeSuffix()))
-	for _, name := range []string{AgentShimName, ProviderShimName} {
+	for _, name := range shimNames {
 		if base == name {
 			return name
 		}

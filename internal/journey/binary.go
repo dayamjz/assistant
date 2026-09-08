@@ -81,6 +81,10 @@ func resolveBinary() (string, error) {
 	cmd := exec.Command("go", "build", "-o", built, "./cmd/assistant")
 	cmd.Dir = root
 	if out, err := cmd.CombinedOutput(); err != nil {
+		// Cleanup removes this directory by way of productBinary.path, which a
+		// failed build never sets, so a build that failed has to take its own
+		// directory with it or nothing ever will.
+		_ = os.RemoveAll(dir)
 		return "", fmt.Errorf("journey: building the assistant binary from %s: %w\n%s", root, err, out)
 	}
 	return built, nil

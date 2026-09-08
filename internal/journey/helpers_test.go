@@ -369,15 +369,6 @@ func inCloneConfigured(t *testing.T, document map[string]any) *journey.Journey {
 // what makes it worth naming at all.
 const pushedAgentName = "fixture-pushed-agent"
 
-// shimSuffix is the executable suffix on this platform, which a shim's file
-// name carries.
-func shimSuffix() string {
-	if runtime.GOOS == "windows" {
-		return ".exe"
-	}
-	return ""
-}
-
 // firstDocument decodes the first document of a stream into v, which is what a
 // verb that writes as it goes leaves on standard output.
 //

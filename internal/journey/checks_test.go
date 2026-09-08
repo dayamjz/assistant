@@ -83,12 +83,12 @@ func TestAnEmptyCheckListIsNotAPass(t *testing.T) {
 	if err != nil {
 		t.Fatalf("substituting the run's head into the recorded answer: %v", err)
 	}
-	observed.headServed = readChecks(t, served).HeadCommit
+	report := readChecks(t, served)
+	observed.headServed = report.HeadCommit
 
 	stale := readChecks(t, answerPath)
 	observed.headStale = stale.HeadCommit
 
-	report := readChecks(t, served)
 	observed.verdict = report.Evaluate(forge.DeclaredNoCI(config.Config{})).Verdict
 	observed.declared = report.Evaluate(forge.DeclaredNoCI(config.Config{NoCI: true})).Verdict
 
@@ -200,12 +200,12 @@ func TestAnEmptyCheckListIsNotAPass(t *testing.T) {
 // prepared answer standing in for what the provider command prints.
 func readChecks(t *testing.T, answer string) forge.ChecksReport {
 	t.Helper()
-	shims, err := journey.Shims()
+	shim, err := journey.ShimPath(journey.ProviderShimName)
 	if err != nil {
 		t.Fatalf("%v", err)
 	}
 	provider, err := forge.NewGitHub(redact.New(),
-		forge.WithBinary(filepath.Join(shims, journey.ProviderShimName+shimSuffix())),
+		forge.WithBinary(shim),
 		forge.WithRepository("fixture/subject"),
 		forge.WithBaseEnvironment(append(os.Environ(), journey.ProviderAnswerVariable+"="+answer)))
 	if err != nil {
