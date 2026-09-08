@@ -157,3 +157,39 @@ func (s *subject) runRebase(overrides map[pipeline.Key]graph.Value) (pipeline.Ou
 		State: declaredReader{allowed: allowed, state: s.state(overrides)},
 	})
 }
+
+// runPipeline runs a real pipeline built from this build's own stages over
+// this subject, and returns where it stopped. The fix round limits are zero so
+// that no fixer is required, which is what lets a pipeline be built from
+// stages.All alone.
+func (s *subject) runPipeline() graph.Result {
+	s.t.Helper()
+	p, err := pipeline.New(pipeline.Options{
+		Stages: stages.All(s.deps),
+		Rounds: config.FixRounds{},
+		Budget: config.DefaultRunBudget,
+	})
+	if err != nil {
+		s.t.Fatalf("building a pipeline from this build's stages: %v", err)
+	}
+	exec, err := p.Executor(graph.NewMemoryStore())
+	if err != nil {
+		s.t.Fatalf("building an executor: %v", err)
+	}
+	state, err := p.NewState(pipeline.Start{
+		Repository: subjectRepository,
+		Run:        subjectRun,
+		Branch:     subjectBranch,
+		Base:       subjectBase,
+		Submitted:  s.head,
+		Intent:     "make the change",
+	})
+	if err != nil {
+		s.t.Fatalf("building the run's initial state: %v", err)
+	}
+	result, err := exec.Run(s.t.Context(), subjectRun, state)
+	if err != nil {
+		s.t.Fatalf("running the pipeline: %v", err)
+	}
+	return result
+}

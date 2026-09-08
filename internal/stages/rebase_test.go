@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/safety"
+	"github.com/dayamjz/assistant/internal/stages"
 )
 
 // A change whose commits still say something after the replay is rebased onto
@@ -426,4 +428,89 @@ func (s *subject) buildOnAnUnpushedTargetCommit() string {
 func (s *subject) dropTheLocalTargetReference() {
 	s.t.Helper()
 	git(s.t, s.copy, "branch", "--quiet", "-D", subjectBase)
+}
+
+// PRD section 5 does not only say the stage records that nothing is left; it
+// says the run then ends successfully with the rest of the stages skipped. A
+// report-shaped assertion cannot see that, so this runs a real pipeline built
+// from this build's own stages over a real subject.
+//
+// It is worth running against a pipeline whose later stages have no body,
+// because that is what this build has: every one of them holds for a person,
+// so a run that reaches any of them stops. Completing is therefore evidence
+// that none of them ran.
+func TestARunWithNothingLeftAfterTheRebaseCompletesWithTheRestSkipped(t *testing.T) {
+	t.Parallel()
+
+	s := newSubject(t)
+	s.landTheSameChangeOnTheTarget()
+
+	result := s.runPipeline()
+	if result.Status != graph.StatusCompleted {
+		t.Fatalf("the run came to %s rather than completing, and a change with nothing left in it "+
+			"ends the run successfully", result.Status)
+	}
+	for _, stage := range pipeline.Order() {
+		got := pipeline.StageOutcome(result.State, stage)
+		want := pipeline.OutcomeSkipped
+		if stage == pipeline.StageIntent || stage == pipeline.StageRebase {
+			want = pipeline.OutcomePassed
+		}
+		if got != want {
+			t.Fatalf("the %s stage came to %s, want %s: a run with no diff left validates nothing after the rebase",
+				stage, got, want)
+		}
+	}
+}
+
+// And that run has to be able to stop, or completing says nothing about the
+// empty-diff short circuit. The same pipeline over a change that still has a
+// diff has to hold at the first stage without a body.
+func TestTheSameRunStopsWhenTheChangeStillHasADiff(t *testing.T) {
+	t.Parallel()
+
+	s := newSubject(t)
+	result := s.runPipeline()
+	if result.Status == graph.StatusCompleted {
+		t.Fatal("a run over a change that still has a diff completed through nine stages this build " +
+			"has bodies for two of, so completing above proves nothing")
+	}
+	first := stages.Implemented()
+	unimplemented := pipeline.StageInvalid
+	for _, stage := range pipeline.Order() {
+		if !slices.Contains(first, stage) {
+			unimplemented = stage
+			break
+		}
+	}
+	if got := pipeline.StageOutcome(result.State, unimplemented); got != pipeline.OutcomeHeld {
+		t.Fatalf("the run's %s stage came to %s, want held: the run did not stop where this build stops",
+			unimplemented, got)
+	}
+}
+
+// The fixture's out-of-band remote advance is recovered from by re-running,
+// and what makes that work is this stage: a branch somebody else pushed to is
+// replayed onto rather than dropped, so the commit the run proposes contains
+// theirs.
+func TestABranchAdvancedOnTheRemoteIsReplayedOntoRatherThanDropped(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P6)
+
+	s := newSubject(t)
+	colleague := s.advanceBranch("theirs.txt", "somebody else lands work on the branch")
+
+	out, err := s.runRebase(nil)
+	if err != nil {
+		t.Fatalf("the rebase stage returned an error: %v", err)
+	}
+	rebased := s.written(out, pipeline.KeyHead)
+	if !s.contains(rebased, colleague) {
+		t.Fatalf("the commit this run proposes, %s, does not contain %s, which somebody else pushed "+
+			"to the branch: the run would ask to discard their work", rebased, colleague)
+	}
+	if got := s.anchor(out).State().Commit; got != colleague {
+		t.Fatalf("the anchor names %s and the branch stood at %s when the run looked: the anchor is "+
+			"not what the run observed", got, colleague)
+	}
 }
