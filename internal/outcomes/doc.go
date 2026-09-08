@@ -93,11 +93,12 @@
 // check them against: section 9 describes the answer in prose and does not
 // enumerate the fields of one, which is deliberate, because a PRD that listed
 // them would be a second owner of internal/machine's shapes. So a field added
-// to machine.Run, and a next action a surface writes for itself rather than
-// taking from the outcome, both pass here. Neither is hypothetical: a next
-// action composed at the surface that builds an answer, rather than taken from
-// the outcome, is a shape this repository has produced, and this package is
-// green on it.
+// to machine.Run passes here, and so would a next action a surface composed
+// for itself rather than taking it from the outcome. The second is not
+// hypothetical: this repository shipped that shape and this package was green
+// on it. What stops it now is machine.Run.nextAction being unexported and
+// written only by Run.Decide, so the answer's action has one writer by
+// construction - which is internal/machine's doing and not this check's.
 //
 // The check reads the document's source rather than what a browser renders
 // from it, so a marker inside a comment or a script string would be read as a
