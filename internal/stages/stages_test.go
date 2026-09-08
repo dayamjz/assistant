@@ -17,7 +17,7 @@ import (
 func TestTheStagesThisBuildHasBuildAPipeline(t *testing.T) {
 	t.Parallel()
 	if _, err := pipeline.New(pipeline.Options{
-		Stages: stages.All(),
+		Stages: stages.All(stages.StageDeps{}),
 		Rounds: config.FixRounds{},
 		Budget: 40,
 	}); err != nil {
@@ -34,7 +34,7 @@ func TestAStageWithNoBodyHoldsForAPersonRatherThanPassing(t *testing.T) {
 	for _, stage := range stages.Implemented() {
 		implemented[stage] = true
 	}
-	all := stages.All()
+	all := stages.All(stages.StageDeps{})
 	for _, stage := range pipeline.Order() {
 		if implemented[stage] {
 			continue
@@ -124,7 +124,7 @@ func TestAllPlacesAWrittenBodyAtEveryImplementedStage(t *testing.T) {
 		t.Fatal("this build reports no stage bodies, so the loop below checks nothing; " +
 			"TestImplementedIsTheSetThisBuildIsMeantToHave says which stages it should name")
 	}
-	all := stages.All()
+	all := stages.All(stages.StageDeps{})
 	for _, stage := range implemented {
 		t.Run(stage.String(), func(t *testing.T) {
 			t.Parallel()

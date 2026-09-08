@@ -319,10 +319,14 @@ Each has cost this repository more than one round of review.
   `Decide` rather than filling the fields in. `OutcomePassed` has no producer
   here, because nothing in this build records that a pull request merged.
 - `internal/service` is the background service PRD section 8's process model
-  puts at the centre of a home. It decides nothing: `internal/graph` executes,
-  `internal/pipeline` is the topology, `internal/runs` owns the record,
-  `internal/checkpoints` makes the position durable, and this wires them. Five
-  things there are load-bearing. It takes the home's lock before recovery and
+  puts at the centre of a home. It decides nothing a run validates:
+  `internal/graph` executes, `internal/pipeline` is the topology,
+  `internal/runs` owns the record, `internal/checkpoints` makes the position
+  durable, and this wires them. What it does decide is which build-scoped
+  dependencies a stage body gets, because it is the one place holding the home,
+  the resolved configuration and the resolved agent at once; `doc.go` owns why,
+  including why the agent reaches a body wrapped. Five things there are
+  load-bearing. It takes the home's lock before recovery and
   before binding the socket, in that order. It reconciles every unfinished run
   against its checkpoint on open, because a record saying running against a
   checkpoint saying halted is a run nobody can answer. Containment is a
@@ -364,7 +368,12 @@ Each has cost this repository more than one round of review.
   owner of which stages have a body is the `written` table there: `All` places
   implementations from it and `Implemented` reports it, so adding a body is
   adding an entry. `PendingFixer` is the same answer for the fix path, and it
-  fails rather than summarizing. The intent stage is the body that exists, and
+  fails rather than summarizing. A body is handed a `StageDeps` at
+  construction, which carries the adapters that do not vary with the run; a
+  fact that does vary is a declared state key in `internal/pipeline` instead,
+  because one `All` serves every run of a service. Lifetime decides which, and
+  `deps.go` has that argument and the P4 reason `Agent` is a `StageAgent`. The
+  intent stage is the body that exists, and
   three things about it generalize. PRD section 5's "this stage never blocks a
   run" is owed by the implementation and not by `internal/pipeline`, which
   refuses to enforce it structurally because a stage that could not hold would
@@ -377,8 +386,13 @@ Each has cost this repository more than one round of review.
   phase list has reached and ships no seam for the rest: the intent stage reads
   supplied intent and does not infer, because inference is deferred, and what
   that deferred work inherits is a note in the package documentation rather
-  than an unwired interface. Exported surface whose only caller is work that
-  has not happened is a comment, and it is dropped in review.
+  than an unwired interface. Exported surface answers to a consumer: one that
+  exists today, or specified work whose absence would otherwise have each of
+  several consumers re-cut the same file. A seam is the second case, and it
+  names in its own doc which consumers it answers to, so the claim is checkable
+  rather than asserted. Surface added because deferred work might plug into it
+  answers to nobody - it grows whether or not that work arrives and nothing
+  breaks if it never does - and it is dropped in review.
 - `internal/fixture` builds the adversarial subject repository the end-to-end
   harness validates against, and records beside each planted condition what it
   must produce, down to the substrings the message has to carry. It is the one
@@ -422,6 +436,20 @@ Each has cost this repository more than one round of review.
   than writing its own `Runner`. A double that states typed values directly is
   how this repository shipped a dead guard once; one that answers over the wire
   and is read by the real adapter cannot repeat it.
+- A guard that a caller *cannot reach* something is asked of the type graph,
+  never of one assertion. `any(x).(T)` answers whether `x` is a `T`, not whether
+  a caller can obtain one, and that gap is where the guarantee goes:
+  `agents.StageAgent` given a `Runner()` accessor hands a body a live `Runner`
+  while every such assertion stays green and P4 is gone.
+  `internal/agents/route` walks what a caller outside the package can reach
+  instead, exported fields and the results of exported methods, transitively,
+  so it catches a route nobody enumerated. It is a package rather than a helper
+  in one test because two packages ask it and two copies of a rule drift. Test
+  P4 that way.
+- A guard needs a positive control or it can pass by looking at nothing. That
+  walk is also run against `agents.Resolution`, which really does expose a
+  `Runner`, so a walk that stopped inspecting anything fails instead of
+  reporting a guarantee it no longer checks.
 
 ## Commits and pull requests
 

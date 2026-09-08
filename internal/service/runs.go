@@ -306,6 +306,12 @@ func (s *Service) begin(ctx context.Context, record store.Run, start pipeline.St
 	if err != nil {
 		return machine.Run{}, err
 	}
+	// Which repository and which run are taken from the record rather than
+	// from the caller's start, so the two facts a stage body locates its
+	// isolated copy from cannot disagree with the row that copy is reclaimed
+	// against, and no call site can forget them.
+	start.Repository = record.RepositoryID
+	start.Run = record.ID
 	initial, err := built.pipeline.NewState(start)
 	if err != nil {
 		return machine.Run{}, err

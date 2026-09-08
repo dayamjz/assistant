@@ -195,42 +195,45 @@ func newHeldService(t *testing.T) *heldService {
 	}
 	var entered, released sync.Once
 	held.let = func() { released.Do(func() { close(held.release) }) }
-	served := stages.All()
-	served.Intent = pipeline.Implementation{
-		NewBody: func() pipeline.Body {
-			return func(ctx context.Context, _ pipeline.Input) (pipeline.Output, error) {
-				held.entries.Add(1)
-				entered.Do(func() { close(held.inside) })
-				select {
-				case <-held.release:
-				case <-ctx.Done():
+	served := func(deps stages.StageDeps) pipeline.Stages {
+		nine := stages.All(deps)
+		nine.Intent = pipeline.Implementation{
+			NewBody: func() pipeline.Body {
+				return func(ctx context.Context, _ pipeline.Input) (pipeline.Output, error) {
+					held.entries.Add(1)
+					entered.Do(func() { close(held.inside) })
+					select {
+					case <-held.release:
+					case <-ctx.Done():
+					}
+					// The context decides, not the select. Both channels are
+					// ready once an ending cancels the segment and the teardown
+					// lets the body out, and a select over two ready cases picks
+					// between them at random - which would have the body report
+					// a decision on a run that was ended, at whatever rate the
+					// scheduler happens to produce.
+					if err := ctx.Err(); err != nil {
+						return pipeline.Output{}, err
+					}
+					return pipeline.Output{Report: findings.Report{
+						Summary: "the stage was held open for the length of the ending",
+						Findings: []findings.Finding{
+							{ID: "stand-in", Action: findings.ActionAsk, Description: "a decision"},
+						},
+					}}, nil
 				}
-				// The context decides, not the select. Both channels are ready
-				// once an ending cancels the segment and the teardown lets the
-				// body out, and a select over two ready cases picks between
-				// them at random - which would have the body report a decision
-				// on a run that was ended, at whatever rate the scheduler
-				// happens to produce.
-				if err := ctx.Err(); err != nil {
-					return pipeline.Output{}, err
-				}
-				return pipeline.Output{Report: findings.Report{
-					Summary: "the stage was held open for the length of the ending",
-					Findings: []findings.Finding{
-						{ID: "stand-in", Action: findings.ActionAsk, Description: "a decision"},
-					},
-				}}, nil
-			}
-		},
+			},
+		}
+		return nine
 	}
 
 	running, err := Open(t.Context(), Options{
-		Home:     h,
-		Stages:   served,
-		NewFixer: stages.PendingFixer,
-		Build:    build,
-		Catalog:  agents.NewCatalog(fixedRunner{runner: standin.New(t, standin.Script{}).Runner()}),
-		LockWait: -1,
+		Home:      h,
+		NewStages: served,
+		NewFixer:  stages.PendingFixer,
+		Build:     build,
+		Catalog:   agents.NewCatalog(fixedRunner{runner: standin.New(t, standin.Script{}).Runner()}),
+		LockWait:  -1,
 	})
 	if err != nil {
 		if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {

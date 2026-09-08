@@ -54,10 +54,15 @@
 //
 // No seam for it ships. An earlier draft of this package exported a transcript
 // source, a recorder, and an options struct that nothing constructed, and they
-// went for the reason Capabilities.Missing went: a declaration nothing reads
-// is a comment, and exported surface that exists so deferred work has
-// somewhere to plug in grows whether or not the work arrives. Whoever builds
-// inference adds the seams it actually uses.
+// went for the reason Capabilities.Missing went: they answered to no consumer.
+// Inference is deferred rather than specified, so nothing was queued to read
+// them and nothing would have broken had they never arrived, which is what
+// makes a declaration in that position a comment. Whoever builds inference
+// adds the seams it actually uses.
+//
+// Surface landed ahead of consumers it names is the other case, and StageDeps
+// is this package's one instance of it: deps.go names the bodies each of its
+// reader-less fields answers to.
 //
 // What that work inherits is stated here so it is not rediscovered. The intent
 // stage never blocks a run, and inference adds ways to fail that must not
@@ -130,8 +135,12 @@ func Pending(name string) pipeline.Implementation {
 //
 // The value is a constructor rather than an Implementation so that a body
 // holding anything per-build is constructed when the pipeline is, on the same
-// terms as pipeline.Implementation.NewBody.
-var written = map[pipeline.Stage]func() pipeline.Implementation{
+// terms as pipeline.Implementation.NewBody. It takes the build-scoped
+// dependencies for the same reason: they are settled once, when the service
+// has resolved an agent, and one pipeline then serves every run. Anything that
+// varies per run is a declared state key instead, because a value captured
+// here would be the same value for every run of this service.
+var written = map[pipeline.Stage]func(StageDeps) pipeline.Implementation{
 	pipeline.StageIntent: Intent,
 }
 
@@ -142,25 +151,25 @@ var written = map[pipeline.Stage]func() pipeline.Implementation{
 // not a set assembled somewhere else. The nine fields are named here because
 // pipeline.Stages is nine named fields on purpose, per P2: there is no list to
 // index and no order to get wrong.
-func All() pipeline.Stages {
+func All(deps StageDeps) pipeline.Stages {
 	return pipeline.Stages{
-		Intent:   implementation(pipeline.StageIntent),
-		Rebase:   implementation(pipeline.StageRebase),
-		Review:   implementation(pipeline.StageReview),
-		Test:     implementation(pipeline.StageTest),
-		Document: implementation(pipeline.StageDocument),
-		Lint:     implementation(pipeline.StageLint),
-		Push:     implementation(pipeline.StagePush),
-		PR:       implementation(pipeline.StagePR),
-		CI:       implementation(pipeline.StageCI),
+		Intent:   implementation(pipeline.StageIntent, deps),
+		Rebase:   implementation(pipeline.StageRebase, deps),
+		Review:   implementation(pipeline.StageReview, deps),
+		Test:     implementation(pipeline.StageTest, deps),
+		Document: implementation(pipeline.StageDocument, deps),
+		Lint:     implementation(pipeline.StageLint, deps),
+		Push:     implementation(pipeline.StagePush, deps),
+		PR:       implementation(pipeline.StagePR, deps),
+		CI:       implementation(pipeline.StageCI, deps),
 	}
 }
 
 // implementation returns the body written for a stage, or Pending when this
 // build has none.
-func implementation(stage pipeline.Stage) pipeline.Implementation {
+func implementation(stage pipeline.Stage, deps StageDeps) pipeline.Implementation {
 	if newImplementation, ok := written[stage]; ok {
-		return newImplementation()
+		return newImplementation(deps)
 	}
 	return Pending(stage.String())
 }

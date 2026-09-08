@@ -32,25 +32,28 @@ func TestARunAdvancesInOnePlaceAtATime(t *testing.T) {
 	var entered, released sync.Once
 	let := func() { released.Do(func() { close(release) }) }
 
-	held := stages.All()
-	held.Intent = pipeline.Implementation{
-		NewBody: func() pipeline.Body {
-			return func(ctx context.Context, _ pipeline.Input) (pipeline.Output, error) {
-				entered.Do(func() { close(inside) })
-				select {
-				case <-release:
-				case <-ctx.Done():
-					return pipeline.Output{}, ctx.Err()
+	held := func(deps stages.StageDeps) pipeline.Stages {
+		nine := stages.All(deps)
+		nine.Intent = pipeline.Implementation{
+			NewBody: func() pipeline.Body {
+				return func(ctx context.Context, _ pipeline.Input) (pipeline.Output, error) {
+					entered.Do(func() { close(inside) })
+					select {
+					case <-release:
+					case <-ctx.Done():
+						return pipeline.Output{}, ctx.Err()
+					}
+					return pipeline.Output{Report: findings.Report{
+						Summary:  "the stage was held open for the length of another call",
+						Findings: []findings.Finding{{ID: "held", Action: findings.ActionAsk, Description: "a decision"}},
+					}}, nil
 				}
-				return pipeline.Output{Report: findings.Report{
-					Summary:  "the stage was held open for the length of another call",
-					Findings: []findings.Finding{{ID: "held", Action: findings.ActionAsk, Description: "a decision"}},
-				}}, nil
-			}
-		},
+			},
+		}
+		return nine
 	}
 	o := options(t, h)
-	o.Stages = held
+	o.NewStages = held
 
 	running, err := service.Open(t.Context(), o)
 	if err != nil {

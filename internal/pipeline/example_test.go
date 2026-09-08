@@ -35,10 +35,12 @@ func Example() {
 		return
 	}
 	state, err := p.NewState(pipeline.Start{
-		Branch:    "topic",
-		Base:      "main",
-		Submitted: "9f2c1ab",
-		Skip:      []pipeline.Stage{pipeline.StageCI},
+		Repository: "repo-1",
+		Run:        "run-1",
+		Branch:     "topic",
+		Base:       "main",
+		Submitted:  "9f2c1ab",
+		Skip:       []pipeline.Stage{pipeline.StageCI},
 	})
 	if err != nil {
 		fmt.Println(err)

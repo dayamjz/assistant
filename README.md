@@ -139,7 +139,8 @@ working as it always did.
 | --- | --- |
 | `cmd/assistant` | The binary. The process boundary and nothing else: it hands the command surface what it needs and exits with the code that comes back. |
 | `cmd/fixture` | Builds the fixture repository into a directory you name. `scripts/build-fixture.sh DIR` runs it. |
-| `internal/agents` | The only package that starts an agent process: the run and fix roles, the capability declaration every adapter is held to, the Claude Code adapter, fallback resolution, the review shape and the evidence demand it carries, and invocation records. |
+| `internal/agents` | The only package that starts an agent process: the run and fix roles, the stage-body form of the agent that is not a route to a fixer session, the capability declaration every adapter is held to, the Claude Code adapter, fallback resolution, the review shape and the evidence demand it carries, and invocation records. |
+| `internal/agents/route` | The typed-graph answer to one question about a type: can a caller holding it reach a fixer session. The general form of the P4 check, asked by `internal/agents` and `internal/stages`. |
 | `internal/agents/standin` | The scripted agent the tests outside `internal/agents` run against: the test binary re-executed as the agent process, read by the production adapter. |
 | `internal/checkpoints` | The durable `graph.CheckpointStore` over `internal/store`: a run's checkpoint history, appends anchored to what the caller observed, and the fork that copies a run's history up to a point into a new run. |
 | `internal/cli` | The command surface: the verbs PRD section 9 specifies, their flags, the two renderings of one answer, and the two subcommands a gate's hooks invoke. It holds no validation logic. |
