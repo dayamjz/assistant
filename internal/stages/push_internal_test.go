@@ -430,6 +430,45 @@ func TestAnAllowedForceNamesEveryCommitItDropped(t *testing.T) {
 	}
 }
 
+// What is forwarded is the commit the run's state names, not whatever the
+// copy has checked out. The two are not the same thing: the copy is a linked
+// worktree whose HEAD moves during a run, because the rebase stage moves it
+// and every fix round commits to it.
+//
+// So this leaves HEAD somewhere that is neither the verified commit nor the
+// commit the branch was submitted at, and requires the verified commit to be
+// the one that lands. A body that read HEAD would forward the wrong commit
+// here, and one that read the submitted head would forward a commit no fix
+// round had reached.
+func TestWhatIsForwardedIsTheStatesHeadAndNotWhateverTheCopyHasCheckedOut(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	w := newPushWorld(t)
+	observed := w.observe()
+	head := w.commitInCopy("the change, fixed\n", "fix the change")
+	pushGit(t, w.copyPath, "checkout", "--quiet", "--detach", "origin/main")
+	elsewhere := pushGit(t, w.copyPath, "rev-parse", "HEAD")
+	if elsewhere == head || elsewhere == w.published {
+		t.Fatal("the copy's HEAD was not moved off both the verified and the submitted commit, " +
+			"so this cannot tell the three apart")
+	}
+
+	out, err := w.runPush(map[pipeline.Key]graph.Value{
+		pipeline.KeyHead:           graph.TextValue(head),
+		pipeline.KeyApproved:       graph.TextValue(w.published),
+		pipeline.KeyTargetObserved: graph.TextValue(w.recorded(observed)),
+	})
+	if err != nil {
+		t.Fatalf("the push stage failed: %v", err)
+	}
+	if out.Report.Normalize().HasHeld() {
+		t.Fatalf("a push whose copy has another commit checked out was refused: %+v", out.Report)
+	}
+	if got := w.remoteTip(); got != head {
+		t.Fatalf("the branch on the remote is %s, want the verified commit %s; the copy had %s "+
+			"checked out and was submitted at %s", got, head, elsewhere, w.published)
+	}
+}
+
 // An update proposed twice on the same anchor is not performed twice. The
 // second attempt finds the target standing where the first attempt put it,
 // which is not where the run observed it, and is refused as a target that
