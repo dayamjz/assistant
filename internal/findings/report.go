@@ -1,6 +1,9 @@
 package findings
 
-import "strings"
+import (
+	"encoding/json"
+	"strings"
+)
 
 // Evidence is one artifact a stage produced to support what it reported, such
 // as a captured test run. The PRD keeps evidence outside the isolated copy so
@@ -45,8 +48,10 @@ type Report struct {
 	// Traced is the review stage's answer to the scope lens: for each path
 	// the change touched, what part of the recorded intent it follows from.
 	// It is carried here for the reason Revision and Read are, and it is
-	// answered for by the same one stage; Trace says what it is worth.
-	Traced []Trace `json:"traced,omitempty"`
+	// answered for by the same one stage; Trace says what it is worth, and
+	// Traces says what an agent may write here and what becomes of a value
+	// this package cannot read.
+	Traced Traces `json:"traced,omitempty"`
 	// Findings is what the stage found, in the order it reported them. Empty
 	// is valid and means the stage found nothing.
 	Findings []Finding `json:"findings,omitempty"`
@@ -107,7 +112,9 @@ func (r Report) Normalize() Report {
 // claim about code the reviewer read, so ParseReviewReport binds it to what
 // the reviewer declared reading; a trace is an account of a path the change
 // touched, which the run already knows, and it silences an observation rather
-// than making one.
+// than making one. Traces is how one is read off the wire, and it is what
+// keeps a trace this package cannot read from costing the report the findings
+// around it.
 type Trace struct {
 	// Path is the repository-relative path being accounted for.
 	Path string `json:"path"`
@@ -115,6 +122,78 @@ type Trace struct {
 	// reason accounts for nothing, because a bare path asserts only that a
 	// file was changed, which was already known.
 	Reason string `json:"reason"`
+}
+
+// Traces is the review stage's whole answer to the scope lens, as an agent
+// wrote it. It is read from untrusted output, so it decodes on the terms
+// Action, Severity, Location, and Paths already set here, which is why it is a
+// named type rather than a plain slice: a part of a report this package cannot
+// read must not discard the findings around it.
+type Traces []Trace
+
+// UnmarshalJSON reads the shapes an agent writes its answer to the scope lens
+// in, and cannot fail:
+//
+//   - A JSON list yields one entry per element, and an element that is a JSON
+//     object holding a trace is that trace.
+//   - The whole value written as JSON null yields no traces, as does a list
+//     with no elements, and so does every other value that is not a list: an
+//     object keyed by path and a single bare path are both shapes an agent
+//     writes, and neither is a list of accounts this package can read.
+//   - Every element of a list that is not a JSON object, a bare string, a
+//     number, a nested list and null among them, and every object that does
+//     not decode as a trace, yields a trace holding the JSON as it was written
+//     as its reason and naming no path.
+//
+// The last two rules are the ones that decide rather than report, and both are
+// chosen to fail toward the scope note firing. A trace naming no path accounts
+// for no path, so it silences nothing and every path it might have been meant
+// for keeps its note; and an unreadable answer read as no answer at all leaves
+// every note standing rather than any of them silenced. Neither direction
+// refuses anything, which is what the lens being note-only requires: a review
+// may not lose the findings it wrote over the shape of an account that blocks
+// nothing.
+//
+// Keeping the JSON as it was written, rather than dropping the element, is
+// what Paths does for the same reason: the reviewer said something here, and a
+// person reading the report sees what it was instead of a gap. It is also why
+// a trace that accounts for nothing survives normalizeTraces, which drops only
+// the entry that is empty on both sides.
+func (t *Traces) UnmarshalJSON(b []byte) error {
+	if strings.TrimSpace(string(b)) == "null" {
+		*t = nil
+		return nil
+	}
+	var list []json.RawMessage
+	if json.Unmarshal(b, &list) != nil {
+		*t = nil
+		return nil
+	}
+	read := make(Traces, 0, len(list))
+	for _, entry := range list {
+		read = append(read, traceValue(entry))
+	}
+	*t = read
+	return nil
+}
+
+// traceValue is one element as a trace: the trace a JSON object holding one
+// spells, or, for every other value, a trace naming no path and holding the
+// JSON as it was written as its reason.
+//
+// Which of the two it is is decided by what the value is and then by whether
+// it decodes, rather than by either alone: a value that is not an object is
+// not an account whatever unmarshalling it would report, and an object whose
+// fields are not the ones a trace has is one this package could not read.
+func traceValue(raw json.RawMessage) Trace {
+	text := strings.TrimSpace(string(raw))
+	if strings.HasPrefix(text, "{") {
+		var trace Trace
+		if json.Unmarshal(raw, &trace) == nil {
+			return trace
+		}
+	}
+	return Trace{Reason: text}
 }
 
 // normalizeTraces trims each trace and drops the ones that carry nothing at
@@ -130,11 +209,14 @@ type Trace struct {
 // note-only and may not stop a run, so a report carrying a malformed trace is
 // refused nothing: the trace accounts for nothing, its path keeps whatever
 // observation it would have silenced, and the report is read as it stands.
-func normalizeTraces(traces []Trace) []Trace {
+// This is the half of that which runs once a trace has been read, and
+// Traces.UnmarshalJSON is the half that decides what a value this package
+// cannot read becomes before it gets here.
+func normalizeTraces(traces Traces) Traces {
 	if traces == nil {
 		return nil
 	}
-	out := make([]Trace, 0, len(traces))
+	out := make(Traces, 0, len(traces))
 	for _, t := range traces {
 		t.Path, t.Reason = strings.TrimSpace(t.Path), strings.TrimSpace(t.Reason)
 		if t.Path == "" && t.Reason == "" {

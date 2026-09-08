@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/principles"
+	"github.com/dayamjz/assistant/internal/scope"
 	"github.com/dayamjz/assistant/internal/stages"
 	"github.com/dayamjz/assistant/internal/vcs"
 )
@@ -340,43 +342,35 @@ func TestAnAgentThatDidNotReviewHoldsTheRunRatherThanPassingIt(t *testing.T) {
 }
 
 // An agent whose deadline elapsed did not come back, which is the same fact as
-// every case above and reaches the same ask finding. It is asserted apart from
-// them because it is the one the run's context can be read as saying something
-// about: a guard that returned whenever ctx.Err() was set would take this case
-// too, and agents.FailureTimeout is produced under exactly that condition, so
-// the ask would be unreachable for it.
+// every case above, and the body reaches the same ask finding for it. It is
+// asserted apart from them because it is the one the run's context can be read
+// as saying something about: a guard that returned whenever ctx.Err() was set
+// would take this case too, and agents.FailureTimeout is produced under
+// exactly that condition, so the ask would be unreachable for it.
 //
-// The deadline has to elapse while the agent holds rather than while the body
-// is still assembling what to ask, so it is derived from a first invocation
-// answered at once rather than guessed at: that invocation pays for the same
-// four git invocations and the same process start on the same machine under
-// the same load. A deadline that elapsed too early reaches a different answer,
-// which this fails on rather than passing.
-func TestAnAgentWhoseDeadlineElapsedHoldsTheRunRatherThanEndingIt(t *testing.T) {
+// The second half is what the run does with that ask, and today it does
+// nothing with it. The only deadline this build can produce the failure from
+// is the run's own context, so the write that would record the hold is refused
+// by the same expiry: the executor fails, the run's history stops short of the
+// review, and nothing a person can answer was recorded. That is asserted here
+// rather than assumed, because the name a reader trusts must say what is
+// checked, and because a change that made the ask durable should fail this and
+// be written up rather than passing quietly.
+//
+// Neither half uses a clock. The deadline is a context of this test's own that
+// elapses once the stand-in has recorded the call, which is the same read off
+// the wire the cancellation test below makes.
+func TestAnAgentWhoseDeadlineElapsedProducesAnAskTheRunCannotRecord(t *testing.T) {
 	t.Parallel()
 
 	s := newSubject(t)
-	answering := standin.New(t, script(standin.Report(cleanReview(s))))
-	measured, measuredIn := reviewBody(t,
-		stages.NewStageDeps(agents.NewStageAgent(answering.Runner()), s.home, config.Config{}, nil),
-		s.start())
-	begun := time.Now()
-	if _, err := measured(t.Context(), measuredIn); err != nil {
-		t.Fatalf("the invocation measuring what this stage costs ahead of its agent failed, so "+
-			"there is nothing here to set a deadline from: %v", err)
-	}
-	budget := max(6*time.Since(begun), 1500*time.Millisecond)
-
 	agent := standin.New(t, script(standin.Hang()))
 	deps := stages.NewStageDeps(agents.NewStageAgent(agent.Runner()), s.home, config.Config{}, nil)
 	call, in := reviewBody(t, deps, s.start())
-
-	ctx, cancel := context.WithTimeout(t.Context(), budget)
-	defer cancel()
-	out, err := call(ctx, in)
+	out, err := call(elapseOnceTheAgentIsAsked(t.Context(), agent), in)
 
 	if err != nil {
-		t.Fatalf("an agent that never came back ended the run with %v, want an ask finding: "+
+		t.Fatalf("an agent that never came back ended the stage with %v, want an ask finding: "+
 			"the stage ran and asked, and PRD section 5 makes that a person's to resolve", err)
 	}
 	if !hasFinding(out.Report, "review-not-established") {
@@ -392,6 +386,91 @@ func TestAnAgentWhoseDeadlineElapsedHoldsTheRunRatherThanEndingIt(t *testing.T) 
 		t.Fatalf("the finding does not say the agent timed out, so the deadline elapsed "+
 			"somewhere other than at the agent and this shows nothing: %q", found.Description)
 	}
+
+	whole := newSubject(t)
+	got, runErr := drive(t, whole, script(standin.Hang()), config.Config{}, whole.start(),
+		withContext(func(a *standin.Agent) context.Context {
+			return elapseOnceTheAgentIsAsked(t.Context(), a)
+		}))
+	if runErr == nil {
+		t.Fatalf("the run recorded the ask and came to %s; the deadline is on the run's own "+
+			"context, so a run that can record it is a change to internal/agents this test "+
+			"has not been told about", got.outcome())
+	}
+	if !errors.Is(runErr, context.DeadlineExceeded) {
+		t.Fatalf("the run ended with %v, want the elapsed deadline: something other than the "+
+			"deadline stopped it and the rest of this shows nothing", runErr)
+	}
+	history, err := got.store.History(t.Context(), whole.run)
+	if err != nil {
+		t.Fatalf("reading the run's history: %v", err)
+	}
+	if len(history) == 0 {
+		t.Fatal("the run wrote no checkpoint at all, so there is nothing here to ask what it " +
+			"recorded")
+	}
+	for _, cp := range history {
+		if pipeline.StageRan(cp.State, pipeline.StageReview) {
+			t.Fatalf("checkpoint %s records a review report, so the ask was durable after all "+
+				"and this stage's documentation understates what a person is told", cp.ID())
+		}
+		if cp.Status == graph.StatusHalted {
+			t.Fatalf("checkpoint %s holds the run, and no hold was recorded for a review "+
+				"nobody can see: %s", cp.ID(), cp.Reason)
+		}
+	}
+}
+
+// elapseOnceTheAgentIsAsked returns a context that ends the moment the stand-in
+// records a call and reports context.DeadlineExceeded from Err, which is the
+// condition internal/agents classifies an invocation as agents.FailureTimeout
+// by.
+//
+// It is watched rather than timed. A deadline sized from a measured invocation
+// has to outlast four git invocations and a process start on whatever machine
+// and under whatever load the test meets, and one that elapses too early lands
+// somewhere else in the stage entirely; the stand-in records its call before it
+// holds, so the wire says when the agent has been reached and no duration has
+// to be guessed at.
+func elapseOnceTheAgentIsAsked(parent context.Context, agent *standin.Agent) context.Context {
+	c := &elapsingContext{Context: parent, done: make(chan struct{})}
+	go func() {
+		defer close(c.done)
+		for len(agent.Calls()) == 0 {
+			select {
+			case <-parent.Done():
+				return
+			case <-time.After(time.Millisecond):
+			}
+		}
+		c.elapsed.Store(true)
+	}()
+	return c
+}
+
+// elapsingContext is the context elapseOnceTheAgentIsAsked hands out: the
+// parent, with a Done of its own that is closed by the watcher and an Err that
+// reports the elapsed deadline once it has been.
+//
+// The flag is set before the channel closes, so a caller that saw Done closed
+// never reads an Err that says the context is live.
+type elapsingContext struct {
+	context.Context
+	done    chan struct{}
+	elapsed atomic.Bool
+}
+
+// Done implements context.Context.
+func (c *elapsingContext) Done() <-chan struct{} { return c.done }
+
+// Err implements context.Context. It reports the parent's own end where the
+// watcher stopped for that rather than for the agent, so a cancelled parent
+// still reads as cancelled.
+func (c *elapsingContext) Err() error {
+	if c.elapsed.Load() {
+		return context.DeadlineExceeded
+	}
+	return c.Context.Err()
 }
 
 // A cancelled run is the other side of that line. Nobody is waiting on the
@@ -695,7 +774,13 @@ func TestTheReviewerIsToldTheRulesItsAnswerIsCheckedAgainst(t *testing.T) {
 	if !strings.Contains(prompt, start.Intent) {
 		t.Fatal("the reviewer was not told what the change set out to do")
 	}
-	if !strings.Contains(prompt, "Scope: every changed line should trace to the stated intent") {
+	lens, err := scope.Guidance(scope.Change{
+		Intent: start.Intent, Supplied: start.IntentSupplied, Touched: touched,
+	})
+	if err != nil {
+		t.Fatalf("building the scope guidance: %v", err)
+	}
+	if !strings.Contains(prompt, lens) {
 		t.Fatal("the reviewer was not asked the scope lens's question, which its answer is measured against")
 	}
 }
@@ -759,13 +844,18 @@ func TestAPathScopedReviewRuleReachesTheReviewerWithItsScope(t *testing.T) {
 // bullet list, and this reads that list back. Reading the prompt rather than
 // searching it is what keeps the assertion from being answered by the unified
 // diff further down, which names paths the touched set never admitted.
+//
+// The anchor it finds that list by is taken from Guidance itself rather than
+// spelled here, because internal/scope opens its own path list with the same
+// sentence and reviewPrompt emits the lens before the evidence demand. An
+// anchor restated here would read the lens's list and the doc above would name
+// the wrong owner.
 func askedAbout(t *testing.T, prompt string) map[string]bool {
 	t.Helper()
-	const anchor = "The change touches these paths."
-	at := strings.Index(prompt, anchor)
+	at := strings.Index(prompt, demandPathListHeader(t))
 	if at < 0 {
-		t.Fatal("the prompt carries no list of the paths the change touches, so there is " +
-			"nothing here to read the reviewer's question out of")
+		t.Fatal("the prompt carries no list of the paths the evidence demand asks about, so " +
+			"there is nothing here to read the reviewer's question out of")
 	}
 	out := make(map[string]bool)
 	for _, line := range strings.Split(prompt[at:], "\n")[1:] {
@@ -778,6 +868,36 @@ func askedAbout(t *testing.T, prompt string) map[string]bool {
 		t.Fatal("the prompt's list of the paths the change touches is empty")
 	}
 	return out
+}
+
+// demandPathListHeader is the line findings.Demand.Guidance writes immediately
+// above its bullet list of touched paths, taken from Guidance itself over a
+// demand of this helper's own rather than restated.
+//
+// Deriving it is the point. internal/scope's guidance opens its own path list
+// with the same first sentence and reviewPrompt emits that section first, so a
+// literal anchor would find the lens's list; asking the owner for its line
+// keeps askedAbout reading the section it says it reads, and makes a change to
+// either package's wording fail here rather than quietly retarget the search.
+func demandPathListHeader(t *testing.T) string {
+	t.Helper()
+	const sentinel = "internal/sentinel/sentinel.go"
+	guidance, err := (findings.Demand{Revision: "0", Touched: []string{sentinel}}).Guidance()
+	if err != nil {
+		t.Fatalf("building the evidence guidance this reads its anchor out of: %v", err)
+	}
+	at := strings.Index(guidance, "\n  - "+sentinel)
+	if at < 0 {
+		t.Fatal("the evidence guidance no longer lists the touched paths as a bullet list, so " +
+			"there is no line above that list to anchor on")
+	}
+	lines := strings.Split(guidance[:at], "\n")
+	header := lines[len(lines)-1]
+	if strings.TrimSpace(header) == "" {
+		t.Fatal("the line above the evidence guidance's path list is blank, so anchoring on it " +
+			"would match anywhere")
+	}
+	return header
 }
 
 // scopeNotes returns the report's scope observations: the notes the lens
@@ -937,6 +1057,11 @@ func script(reply standin.Reply) standin.Script {
 type setup struct {
 	options pipeline.Options
 	git     []vcs.Option
+	// context builds the context the run executes under, from the stand-in it
+	// will be answered by. It is a function of the agent because the two cases
+	// that need a context of their own need one that ends on something read
+	// off the wire, and the stand-in is built inside drive.
+	context func(*standin.Agent) context.Context
 }
 
 // option configures the run a review test drives.
@@ -955,12 +1080,22 @@ func withGit(opts ...vcs.Option) option {
 	return func(s *setup) { s.git = append(s.git, opts...) }
 }
 
-// reviewed is what a driven run came to: the executed result, and the stand-in
-// the review stage reached.
+// withContext executes the run under a context this test derives from the
+// stand-in the review stage will reach, which is how a run ends on something
+// that happened at the agent rather than after a duration guessed at here.
+func withContext(build func(*standin.Agent) context.Context) option {
+	return func(s *setup) { s.context = build }
+}
+
+// reviewed is what a driven run came to: the executed result, the stand-in the
+// review stage reached, and the store the run's history was written to, which
+// is where a test asks what the run actually recorded rather than what the
+// stage returned.
 type reviewed struct {
 	t      *testing.T
 	result graph.Result
 	agent  *standin.Agent
+	store  *graph.MemoryStore
 }
 
 // outcome is what became of the review stage.
@@ -992,6 +1127,18 @@ func (r reviewed) summary() string { return r.report().Summary }
 // and a body-level assertion would be this test's reading instead.
 func run(t *testing.T, s *subject, sc standin.Script, cfg config.Config, start pipeline.Start, opts ...option) reviewed {
 	t.Helper()
+	got, err := drive(t, s, sc, cfg, start, opts...)
+	if err != nil {
+		t.Fatalf("running the pipeline: %v", err)
+	}
+	return got
+}
+
+// drive is run without the assertion that the run finished. It is what the one
+// case whose run cannot be recorded needs: the executor's own failure is the
+// answer there rather than something that stops the test.
+func drive(t *testing.T, s *subject, sc standin.Script, cfg config.Config, start pipeline.Start, opts ...option) (reviewed, error) {
+	t.Helper()
 	agent := standin.New(t, sc)
 
 	cfgured := setup{options: pipeline.Options{Rounds: config.FixRounds{}, Budget: config.DefaultRunBudget}}
@@ -1008,7 +1155,8 @@ func run(t *testing.T, s *subject, sc standin.Script, cfg config.Config, start p
 	if err != nil {
 		t.Fatalf("building a pipeline around the review stage: %v", err)
 	}
-	exec, err := p.Executor(graph.NewMemoryStore())
+	store := graph.NewMemoryStore()
+	exec, err := p.Executor(store)
 	if err != nil {
 		t.Fatalf("building an executor: %v", err)
 	}
@@ -1016,11 +1164,12 @@ func run(t *testing.T, s *subject, sc standin.Script, cfg config.Config, start p
 	if err != nil {
 		t.Fatalf("building the run's initial state: %v", err)
 	}
-	result, err := exec.Run(t.Context(), s.run, state)
-	if err != nil {
-		t.Fatalf("running the pipeline: %v", err)
+	ctx := t.Context()
+	if cfgured.context != nil {
+		ctx = cfgured.context(agent)
 	}
-	return reviewed{t: t, result: result, agent: agent}
+	result, err := exec.Run(ctx, s.run, state)
+	return reviewed{t: t, result: result, agent: agent, store: store}, err
 }
 
 // body runs the review stage's body alone, for the failures that are the
