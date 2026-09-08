@@ -176,7 +176,7 @@ func TestAllPlacesAWrittenBodyAtEveryImplementedStage(t *testing.T) {
 			if err := report.Validate(); err != nil {
 				t.Fatalf("the %s stage produced a report the pipeline refuses: %v", stage, err)
 			}
-			if problem := pendingImpersonation(report, pendingID(t, stage)); problem != "" {
+			if problem := pendingImpersonation(report, pendingID(t, pendingReport(t, stage))); problem != "" {
 				t.Fatalf("Implemented names %s, but %s", stage, problem)
 			}
 		})
@@ -219,20 +219,17 @@ func pendingImpersonation(report findings.Report, pendingFinding string) string 
 func TestThePendingDiscriminatorRejectsAnImpersonationAndAcceptsARealBody(t *testing.T) {
 	t.Parallel()
 	stage := pipeline.StageIntent
-	identifier := pendingID(t, stage)
+	pending := pendingReport(t, stage)
+	identifier := pendingID(t, pending)
 
-	impersonation, err := stages.Pending(stage.String()).NewBody()(t.Context(), pipeline.Input{Stage: stage})
-	if err != nil {
-		t.Fatalf("running Pending for %s: %v", stage, err)
-	}
-	if problem := pendingImpersonation(impersonation.Report.Normalize(), identifier); problem == "" {
+	if problem := pendingImpersonation(pending.Normalize(), identifier); problem == "" {
 		t.Fatalf("the discriminator accepted %s's own report as a body's, so the loop that uses it "+
-			"would pass on a stage All left pending: %+v", "Pending", impersonation.Report)
+			"would pass on a stage All left pending: %+v", "Pending", pending)
 	}
 	// The same report with everything but the identifier changed. Whole-report
 	// equality against Pending would accept this one, which is what the
 	// identifier condition covers and the removed one did not.
-	disguised := impersonation.Report.Normalize()
+	disguised := pending.Normalize()
 	disguised.Summary = "the intent stage read the intent and reported on it"
 	disguised.Findings[0].Description = "a description no Pending report carries"
 	if problem := pendingImpersonation(disguised, identifier); problem == "" {
@@ -257,8 +254,21 @@ func TestThePendingDiscriminatorRejectsAnImpersonationAndAcceptsARealBody(t *tes
 	}
 }
 
-// pendingID is the finding identifier Pending reports for a stage, read off
-// Pending itself rather than spelled out, so a change to how it names its
+// pendingReport runs Pending for a stage and returns the report it produced.
+// It is the one place a test here runs Pending, so a caller that needs both
+// the report and the identifier it carries reads them off a single run rather
+// than running Pending once per question.
+func pendingReport(t *testing.T, stage pipeline.Stage) findings.Report {
+	t.Helper()
+	out, err := stages.Pending(stage.String()).NewBody()(t.Context(), pipeline.Input{Stage: stage})
+	if err != nil {
+		t.Fatalf("running Pending for %s: %v", stage, err)
+	}
+	return out.Report
+}
+
+// pendingID is the finding identifier a report of Pending's carries, read off
+// the report rather than spelled out, so a change to how Pending names its
 // finding cannot leave the discriminator checking for a name nothing produces
 // any more.
 //
@@ -266,17 +276,13 @@ func TestThePendingDiscriminatorRejectsAnImpersonationAndAcceptsARealBody(t *tes
 // findings.Report.Validate refuses an empty identifier, so a caller comparing
 // against one would be comparing against a value no finding it sees can carry,
 // and pendingImpersonation would accept every report.
-func pendingID(t *testing.T, stage pipeline.Stage) string {
+func pendingID(t *testing.T, report findings.Report) string {
 	t.Helper()
-	out, err := stages.Pending(stage.String()).NewBody()(t.Context(), pipeline.Input{Stage: stage})
-	if err != nil {
-		t.Fatalf("running Pending for %s: %v", stage, err)
+	if len(report.Findings) != 1 {
+		t.Fatalf("Pending reports %d findings, want exactly one: there is no single "+
+			"identifier to tell a body's report apart from Pending's by", len(report.Findings))
 	}
-	if len(out.Report.Findings) != 1 {
-		t.Fatalf("Pending for %s reports %d findings, want exactly one: there is no single "+
-			"identifier to tell a body's report apart from Pending's by", stage, len(out.Report.Findings))
-	}
-	return out.Report.Findings[0].ID
+	return report.Findings[0].ID
 }
 
 // Implemented is read off the same table All places implementations from, so a
