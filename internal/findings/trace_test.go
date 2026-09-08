@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/findings"
+	"github.com/dayamjz/assistant/internal/scope"
 )
 
 // A trace is the scope lens's input and not a claim about code, so it answers
@@ -49,9 +50,10 @@ func TestATraceSurvivesTheBindingAndIsBoundToNothing(t *testing.T) {
 // trace costs its path the observation it would have silenced and costs the
 // report nothing at all.
 //
-// The wholly empty entry is dropped, because it names no path and gives no
-// reason and so is indistinguishable from a trace nobody wrote. A half-filled
-// one is kept, so a reader sees what the reviewer actually said.
+// Every entry the reviewer printed is kept, whatever it says. A half-filled one
+// is kept as it stands, and one that says nothing on either side is kept as the
+// text it was printed as: the reviewer wrote an entry there, so a reader sees
+// what it was rather than a gap where an account should be.
 func TestAMalformedTraceRefusesNothingAndIsKeptWhereItSaysAnything(t *testing.T) {
 	t.Parallel()
 
@@ -65,9 +67,38 @@ func TestAMalformedTraceRefusesNothingAndIsKeptWhereItSaysAnything(t *testing.T)
 	if err != nil {
 		t.Fatalf("a review report carrying malformed traces was refused: %v", err)
 	}
-	want := findings.Traces{{Path: touchedPath}, {Reason: "an account of no path at all"}}
+	want := findings.Traces{
+		{Reason: `{"path":"   ","reason":"  "}`},
+		{Path: touchedPath},
+		{Reason: "an account of no path at all"},
+	}
 	if !reflect.DeepEqual(bound.Traced, want) {
 		t.Fatalf("the bound report carries traces %+v, want %+v", bound.Traced, want)
+	}
+}
+
+// The one trace that is dropped is one nothing printed: an entry in a Report a
+// caller built in Go and normalized without it ever having been on the wire,
+// which says nothing on either side and so is indistinguishable from a trace
+// nobody wrote.
+//
+// It is asserted because it is the whole of what normalizeTraces still removes,
+// and the test above is the control that says no printed entry reaches it: the
+// decoder turns an element it could not read into that element's own text, so
+// what survives parsing is never blank.
+func TestABlankTraceNothingPrintedIsDroppedByNormalize(t *testing.T) {
+	t.Parallel()
+
+	built := findings.Report{
+		Summary: "a report built in Go rather than parsed",
+		Traced: findings.Traces{
+			{Path: "  ", Reason: "\t"},
+			{Path: touchedPath, Reason: "the intent asked for it"},
+		},
+	}
+	want := findings.Traces{{Path: touchedPath, Reason: "the intent asked for it"}}
+	if got := built.Normalize().Traced; !reflect.DeepEqual(got, want) {
+		t.Fatalf("normalizing a report built in Go carries traces %+v, want %+v", got, want)
 	}
 }
 
@@ -104,7 +135,10 @@ func TestAnOrdinaryStageReportCarriesTracesWithoutAnsweringForThem(t *testing.T)
 // used to fail json.Unmarshal and refuse the report entire.
 //
 // Each case carries a supported finding, and the assertion that it survived is
-// what makes this a test about the report rather than about the field.
+// what makes this a test about the report rather than about the field. What
+// each answer silences is put to internal/scope's own lens rather than decided
+// by a copy of its matching rule here, which is the only way this can claim
+// the note still fires.
 func TestATracedValueThisPackageCannotReadCostsTheReportNothing(t *testing.T) {
 	t.Parallel()
 
@@ -141,9 +175,21 @@ func TestATracedValueThisPackageCannotReadCostsTheReportNothing(t *testing.T) {
 			want:   findings.Traces{{Reason: "7"}, {Reason: "null"}, {Reason: `["` + touchedPath + `"]`}},
 		},
 		{
-			name:   "an object whose fields are not the ones a trace has",
+			name:   "an object whose keys are not the ones a trace has",
+			traced: `[{"file": "` + touchedPath + `", "why": "the intent asked for it"}]`,
+			want: findings.Traces{
+				{Reason: `{"file": "` + touchedPath + `", "why": "the intent asked for it"}`},
+			},
+		},
+		{
+			name:   "an object naming a key a trace has, whose value the type cannot hold",
 			traced: `[{"path": 7, "reason": "the intent asked for it"}]`,
 			want:   findings.Traces{{Reason: `{"path": 7, "reason": "the intent asked for it"}`}},
+		},
+		{
+			name:   "an object holding one key a trace has and one it does not",
+			traced: `[{"file": "` + touchedPath + `", "reason": "the intent asked for it"}]`,
+			want:   findings.Traces{{Reason: "the intent asked for it"}},
 		},
 		{
 			name:     "the shape that was asked for",
@@ -180,20 +226,20 @@ func TestATracedValueThisPackageCannotReadCostsTheReportNothing(t *testing.T) {
 					"stated, so the traced value cost the report the findings around it",
 					found.Action)
 			}
-			// What internal/scope's lens reads is a trace naming the path and
-			// giving a reason, so that is what is asked here: only the shape
-			// that was asked for may silence the path's note, and every shape
-			// this package could not read leaves it standing.
-			silenced := false
-			for _, trace := range bound.Traced {
-				if trace.Path == touchedPath && trace.Reason != "" {
-					silenced = true
-				}
+			// Whether the path keeps its note is internal/scope's answer, so
+			// the lens is asked rather than its matching rule restated here.
+			// Only the shape that was asked for may silence the note; every
+			// shape this package could not read leaves it standing.
+			notes, err := scope.Observe(scope.Change{
+				Intent: "sum every value", Supplied: true, Touched: []string{touchedPath},
+			}, bound.Traced)
+			if err != nil {
+				t.Fatalf("asking the scope lens what these traces account for: %v", err)
 			}
-			if silenced != c.silences {
+			if silenced := len(notes) == 0; silenced != c.silences {
 				t.Fatalf("a traced value that is %s accounts for %s: %t, want %t; an answer "+
-					"this package could not read may not silence a path's note",
-					c.name, touchedPath, silenced, c.silences)
+					"this package could not read may not silence a path's note. The lens "+
+					"reported %+v", c.name, touchedPath, silenced, c.silences, notes)
 			}
 		})
 	}

@@ -141,8 +141,8 @@ type Traces []Trace
 //     object keyed by path and a single bare path are both shapes an agent
 //     writes, and neither is a list of accounts this package can read.
 //   - Every element of a list that is not a JSON object, a bare string, a
-//     number, a nested list and null among them, and every object that does
-//     not decode as a trace, yields a trace holding the JSON as it was written
+//     number, a nested list and null among them, and every object this package
+//     read nothing out of, yields a trace holding the JSON as it was written
 //     as its reason and naming no path.
 //
 // The last two rules are the ones that decide rather than report, and both are
@@ -156,9 +156,9 @@ type Traces []Trace
 //
 // Keeping the JSON as it was written, rather than dropping the element, is
 // what Paths does for the same reason: the reviewer said something here, and a
-// person reading the report sees what it was instead of a gap. It is also why
-// a trace that accounts for nothing survives normalizeTraces, which drops only
-// the entry that is empty on both sides.
+// person reading the report sees what it was instead of a gap. blankTrace is
+// what makes that hold all the way to the report, because this is not the only
+// place a trace can be dropped.
 func (t *Traces) UnmarshalJSON(b []byte) error {
 	if strings.TrimSpace(string(b)) == "null" {
 		*t = nil
@@ -181,19 +181,46 @@ func (t *Traces) UnmarshalJSON(b []byte) error {
 // spells, or, for every other value, a trace naming no path and holding the
 // JSON as it was written as its reason.
 //
-// Which of the two it is is decided by what the value is and then by whether
-// it decodes, rather than by either alone: a value that is not an object is
-// not an account whatever unmarshalling it would report, and an object whose
-// fields are not the ones a trace has is one this package could not read.
+// Which of the two it is is decided by what came out rather than by what went
+// in. A value that is not a JSON object is not an account whatever
+// unmarshalling it would report; an object with a field whose value the type
+// cannot hold does not decode at all; and an object that decodes to nothing
+// read nothing this package could use, which is what an object keyed by
+// something other than "path" and "reason" does, because encoding/json passes
+// over a field it was not asked for rather than refusing it. All three come to
+// the same place, because from a reviewer's side they are one thing: an
+// account this package could not read.
+//
+// Asking what came out is also what keeps the answer from resting on a
+// distinction the reviewer cannot see. Deciding on the decode error alone
+// would keep {"file": "a.go", "reason": "..."} and lose
+// {"file": "a.go", "why": "..."} over which of two unasked-for keys happened
+// to collide with one this package knows.
 func traceValue(raw json.RawMessage) Trace {
 	text := strings.TrimSpace(string(raw))
 	if strings.HasPrefix(text, "{") {
 		var trace Trace
-		if json.Unmarshal(raw, &trace) == nil {
+		if json.Unmarshal(raw, &trace) == nil && !blankTrace(trace) {
 			return trace
 		}
 	}
 	return Trace{Reason: text}
+}
+
+// blankTrace reports whether a trace carries nothing on either side once
+// trimmed. It is the one test of whether a trace is worth keeping, and it is
+// one function because the two places that decide a trace's visibility have to
+// give the same answer: traceValue chooses what an element becomes, and
+// normalizeTraces chooses what survives into the report.
+//
+// How they compose is the whole point. traceValue never returns a blank trace
+// for an element of a list, because an element this package could not read
+// becomes its own JSON text and no JSON value is blank once trimmed, so
+// normalizeTraces cannot erase what the decoder kept. What normalizeTraces
+// still drops is a blank entry in a Report a caller built in Go rather than
+// parsed, which no wire shape produces.
+func blankTrace(t Trace) bool {
+	return strings.TrimSpace(t.Path) == "" && strings.TrimSpace(t.Reason) == ""
 }
 
 // normalizeTraces trims each trace and drops the ones that carry nothing at
@@ -211,17 +238,18 @@ func traceValue(raw json.RawMessage) Trace {
 // observation it would have silenced, and the report is read as it stands.
 // This is the half of that which runs once a trace has been read, and
 // Traces.UnmarshalJSON is the half that decides what a value this package
-// cannot read becomes before it gets here.
+// cannot read becomes before it gets here. blankTrace is the test both ask,
+// and states how the two compose.
 func normalizeTraces(traces Traces) Traces {
 	if traces == nil {
 		return nil
 	}
 	out := make(Traces, 0, len(traces))
 	for _, t := range traces {
-		t.Path, t.Reason = strings.TrimSpace(t.Path), strings.TrimSpace(t.Reason)
-		if t.Path == "" && t.Reason == "" {
+		if blankTrace(t) {
 			continue
 		}
+		t.Path, t.Reason = strings.TrimSpace(t.Path), strings.TrimSpace(t.Reason)
 		out = append(out, t)
 	}
 	return out

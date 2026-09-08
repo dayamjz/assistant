@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -358,8 +359,9 @@ func TestAnAgentThatDidNotReviewHoldsTheRunRatherThanPassingIt(t *testing.T) {
 // be written up rather than passing quietly.
 //
 // Neither half uses a clock. The deadline is a context of this test's own that
-// elapses once the stand-in has recorded the call, which is the same read off
-// the wire the cancellation test below makes.
+// this test elapses once the stand-in has recorded the call, which is the same
+// read off the wire the cancellation test below makes, made from the same
+// goroutine and for the same reason.
 func TestAnAgentWhoseDeadlineElapsedProducesAnAskTheRunCannotRecord(t *testing.T) {
 	t.Parallel()
 
@@ -367,17 +369,36 @@ func TestAnAgentWhoseDeadlineElapsedProducesAnAskTheRunCannotRecord(t *testing.T
 	agent := standin.New(t, script(standin.Hang()))
 	deps := stages.NewStageDeps(agents.NewStageAgent(agent.Runner()), s.home, config.Config{}, nil)
 	call, in := reviewBody(t, deps, s.start())
-	out, err := call(elapseOnceTheAgentIsAsked(t.Context(), agent), in)
+	ctx := newElapsingContext(t.Context())
+	type answer struct {
+		out pipeline.Output
+		err error
+	}
+	answered := make(chan answer, 1)
+	go func() {
+		out, err := call(ctx, in)
+		answered <- answer{out, err}
+	}()
+	for len(agent.Calls()) == 0 {
+		select {
+		case got := <-answered:
+			t.Fatalf("the stage answered before the reviewer was ever asked, so elapsing a "+
+				"deadline now would measure nothing: %+v, %v", got.out.Report, got.err)
+		case <-time.After(time.Millisecond):
+		}
+	}
+	ctx.elapse()
+	got := <-answered
 
-	if err != nil {
+	if got.err != nil {
 		t.Fatalf("an agent that never came back ended the stage with %v, want an ask finding: "+
-			"the stage ran and asked, and PRD section 5 makes that a person's to resolve", err)
+			"the stage ran and asked, and PRD section 5 makes that a person's to resolve", got.err)
 	}
-	if !hasFinding(out.Report, "review-not-established") {
+	if !hasFinding(got.out.Report, "review-not-established") {
 		t.Fatalf("an agent that never came back was not recorded as a review that established "+
-			"nothing: %+v", out.Report.Findings)
+			"nothing: %+v", got.out.Report.Findings)
 	}
-	found := out.Report.Findings[0]
+	found := got.out.Report.Findings[0]
 	if found.Action != findings.ActionAsk {
 		t.Fatalf("the finding for an agent that never came back carries action %q, want ask",
 			found.Action)
@@ -388,20 +409,37 @@ func TestAnAgentWhoseDeadlineElapsedProducesAnAskTheRunCannotRecord(t *testing.T
 	}
 
 	whole := newSubject(t)
-	got, runErr := drive(t, whole, script(standin.Hang()), config.Config{}, whole.start(),
-		withContext(func(a *standin.Agent) context.Context {
-			return elapseOnceTheAgentIsAsked(t.Context(), a)
-		}))
-	if runErr == nil {
+	ready := prepare(t, whole, script(standin.Hang()), config.Config{}, whole.start())
+	runCtx := newElapsingContext(t.Context())
+	type ending struct {
+		got reviewed
+		err error
+	}
+	ended := make(chan ending, 1)
+	go func() {
+		run, err := ready.execute(runCtx)
+		ended <- ending{run, err}
+	}()
+	for len(ready.agent.Calls()) == 0 {
+		select {
+		case got := <-ended:
+			t.Fatalf("the run ended before the reviewer was ever asked: %v", got.err)
+		case <-time.After(time.Millisecond):
+		}
+	}
+	runCtx.elapse()
+	run := <-ended
+
+	if run.err == nil {
 		t.Fatalf("the run recorded the ask and came to %s; the deadline is on the run's own "+
 			"context, so a run that can record it is a change to internal/agents this test "+
-			"has not been told about", got.outcome())
+			"has not been told about", run.got.outcome())
 	}
-	if !errors.Is(runErr, context.DeadlineExceeded) {
+	if !errors.Is(run.err, context.DeadlineExceeded) {
 		t.Fatalf("the run ended with %v, want the elapsed deadline: something other than the "+
-			"deadline stopped it and the rest of this shows nothing", runErr)
+			"deadline stopped it and the rest of this shows nothing", run.err)
 	}
-	history, err := got.store.History(t.Context(), whole.run)
+	history, err := run.got.store.History(t.Context(), whole.run)
 	if err != nil {
 		t.Fatalf("reading the run's history: %v", err)
 	}
@@ -421,51 +459,65 @@ func TestAnAgentWhoseDeadlineElapsedProducesAnAskTheRunCannotRecord(t *testing.T
 	}
 }
 
-// elapseOnceTheAgentIsAsked returns a context that ends the moment the stand-in
-// records a call and reports context.DeadlineExceeded from Err, which is the
-// condition internal/agents classifies an invocation as agents.FailureTimeout
-// by.
+// elapsingContext is a context whose deadline elapses when the test says so
+// rather than after a duration. Err reports context.DeadlineExceeded once
+// elapse has been called, which is the condition internal/agents classifies an
+// invocation as agents.FailureTimeout by, and the parent's own end before that.
 //
-// It is watched rather than timed. A deadline sized from a measured invocation
-// has to outlast four git invocations and a process start on whatever machine
-// and under whatever load the test meets, and one that elapses too early lands
-// somewhere else in the stage entirely; the stand-in records its call before it
-// holds, so the wire says when the agent has been reached and no duration has
-// to be guessed at.
-func elapseOnceTheAgentIsAsked(parent context.Context, agent *standin.Agent) context.Context {
+// It is elapsed rather than timed because a deadline sized from a measured
+// invocation has to outlast four git invocations and a process start on
+// whatever machine and under whatever load the test meets, and one that elapses
+// too early lands somewhere else in the stage entirely.
+//
+// Nothing here reads the stand-in, and that is the point: standin.Agent.Calls
+// is fatal on a read it cannot make, and testing.T.FailNow is only valid on the
+// goroutine running the test. So the test watches the wire itself and puts the
+// work on a goroutine, which is the shape the cancellation test already uses,
+// and this hands out only what a caller can be given from anywhere.
+//
+// What it hands out is a shape a real context takes. Done closes exactly once,
+// and only ever after either elapse or the parent's own end, so a caller that
+// sees Done closed always reads a non-nil Err. The one difference from a
+// context.WithDeadline is that Deadline is the parent's, since there is no
+// instant here to report; nothing this test drives reads it.
+type elapsingContext struct {
+	context.Context
+	done    chan struct{}
+	once    sync.Once
+	elapsed atomic.Bool
+}
+
+// newElapsingContext returns a context that ends when elapse is called and when
+// parent ends, whichever comes first.
+func newElapsingContext(parent context.Context) *elapsingContext {
 	c := &elapsingContext{Context: parent, done: make(chan struct{})}
 	go func() {
-		defer close(c.done)
-		for len(agent.Calls()) == 0 {
-			select {
-			case <-parent.Done():
-				return
-			case <-time.After(time.Millisecond):
-			}
+		select {
+		case <-parent.Done():
+		case <-c.done:
 		}
-		c.elapsed.Store(true)
+		c.end()
 	}()
 	return c
 }
 
-// elapsingContext is the context elapseOnceTheAgentIsAsked hands out: the
-// parent, with a Done of its own that is closed by the watcher and an Err that
-// reports the elapsed deadline once it has been.
-//
-// The flag is set before the channel closes, so a caller that saw Done closed
-// never reads an Err that says the context is live.
-type elapsingContext struct {
-	context.Context
-	done    chan struct{}
-	elapsed atomic.Bool
+// elapse ends the context as an elapsed deadline. It is safe to call more than
+// once and from any goroutine.
+func (c *elapsingContext) elapse() {
+	c.elapsed.Store(true)
+	c.end()
 }
+
+// end closes Done once. The flag is set before the close in elapse, so a caller
+// that saw Done closed never reads an Err saying the context is live.
+func (c *elapsingContext) end() { c.once.Do(func() { close(c.done) }) }
 
 // Done implements context.Context.
 func (c *elapsingContext) Done() <-chan struct{} { return c.done }
 
 // Err implements context.Context. It reports the parent's own end where the
-// watcher stopped for that rather than for the agent, so a cancelled parent
-// still reads as cancelled.
+// parent is what ended this context, so a cancelled parent still reads as
+// cancelled.
 func (c *elapsingContext) Err() error {
 	if c.elapsed.Load() {
 		return context.DeadlineExceeded
@@ -1057,11 +1109,6 @@ func script(reply standin.Reply) standin.Script {
 type setup struct {
 	options pipeline.Options
 	git     []vcs.Option
-	// context builds the context the run executes under, from the stand-in it
-	// will be answered by. It is a function of the agent because the two cases
-	// that need a context of their own need one that ends on something read
-	// off the wire, and the stand-in is built inside drive.
-	context func(*standin.Agent) context.Context
 }
 
 // option configures the run a review test drives.
@@ -1078,13 +1125,6 @@ func withRounds(rounds config.FixRounds, fixer pipeline.Fixer) option {
 // enough to cross the shipped ones.
 func withGit(opts ...vcs.Option) option {
 	return func(s *setup) { s.git = append(s.git, opts...) }
-}
-
-// withContext executes the run under a context this test derives from the
-// stand-in the review stage will reach, which is how a run ends on something
-// that happened at the agent rather than after a duration guessed at here.
-func withContext(build func(*standin.Agent) context.Context) option {
-	return func(s *setup) { s.context = build }
 }
 
 // reviewed is what a driven run came to: the executed result, the stand-in the
@@ -1127,17 +1167,35 @@ func (r reviewed) summary() string { return r.report().Summary }
 // and a body-level assertion would be this test's reading instead.
 func run(t *testing.T, s *subject, sc standin.Script, cfg config.Config, start pipeline.Start, opts ...option) reviewed {
 	t.Helper()
-	got, err := drive(t, s, sc, cfg, start, opts...)
+	got, err := prepare(t, s, sc, cfg, start, opts...).execute(t.Context())
 	if err != nil {
 		t.Fatalf("running the pipeline: %v", err)
 	}
 	return got
 }
 
-// drive is run without the assertion that the run finished. It is what the one
-// case whose run cannot be recorded needs: the executor's own failure is the
-// answer there rather than something that stops the test.
-func drive(t *testing.T, s *subject, sc standin.Script, cfg config.Config, start pipeline.Start, opts ...option) (reviewed, error) {
+// prepared is a pipeline built around the real review stage and ready to
+// execute. Everything that can fail the test has already been done, so execute
+// may be called from a goroutine the test is not standing in, which is what the
+// two cases that watch the wire while a run is still going need.
+type prepared struct {
+	t     *testing.T
+	run   string
+	agent *standin.Agent
+	store *graph.MemoryStore
+	exec  *graph.Executor
+	state graph.State
+}
+
+// execute runs the pipeline under ctx and reports what it came to, including
+// the failure a run that could not be recorded ends with.
+func (p prepared) execute(ctx context.Context) (reviewed, error) {
+	result, err := p.exec.Run(ctx, p.run, p.state)
+	return reviewed{t: p.t, result: result, agent: p.agent, store: p.store}, err
+}
+
+// prepare builds the pipeline run drives, without running it.
+func prepare(t *testing.T, s *subject, sc standin.Script, cfg config.Config, start pipeline.Start, opts ...option) prepared {
 	t.Helper()
 	agent := standin.New(t, sc)
 
@@ -1164,12 +1222,7 @@ func drive(t *testing.T, s *subject, sc standin.Script, cfg config.Config, start
 	if err != nil {
 		t.Fatalf("building the run's initial state: %v", err)
 	}
-	ctx := t.Context()
-	if cfgured.context != nil {
-		ctx = cfgured.context(agent)
-	}
-	result, err := exec.Run(ctx, s.run, state)
-	return reviewed{t: t, result: result, agent: agent, store: store}, err
+	return prepared{t: t, run: s.run, agent: agent, store: store, exec: exec, state: state}
 }
 
 // body runs the review stage's body alone, for the failures that are the
