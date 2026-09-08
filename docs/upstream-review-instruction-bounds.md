@@ -14,7 +14,8 @@ Every figure below states the method that produces it. The two methods are:
   entries. This is the function the gate itself checks against the cap.
 - **Rendering.** `reviewPathInstructionsSection(matchPathInstructions(changed,
   entries))` in `internal/pipeline/steps`, which is what a review prompt
-  actually carries for a given changed-file set.
+  actually carries. Its result moves one byte per byte of the changed paths, so
+  every rendering figure below names the `changed` set it was measured against.
 
 Both were run against `no-mistakes`' own source rather than a reimplementation.
 
@@ -44,19 +45,28 @@ budget.
 
 ## Why, established rather than asserted
 
-From `internal/config/config.go` in `no-mistakes`:
+From `internal/config/config.go` in `no-mistakes`, verbatim:
 
 ```go
-MaxReviewPathInstructions      = 32
-MaxReviewPathInstructionsBytes = 16384   // = 32 x 512
+	// MaxReviewPathInstructions is the largest number of path_instructions
+	// entries a repository may configure.
+	MaxReviewPathInstructions = 32
+	// MaxReviewPathInstructionsBytes is the largest review-prompt section
+	// path_instructions may produce, measured by ReviewPathInstructionsBytes.
+	// It leaves room for the entry cap to be reached with a rule of ordinary
+	// length, so neither cap makes the other unusable.
+	MaxReviewPathInstructionsBytes = 16384
 ```
 
-The byte cap's own doc comment says it "leaves room for the entry cap to be
-reached with a rule of ordinary length, so neither cap makes the other
-unusable". It is derived from the entry cap. The danger it names - an oversized
-prompt fails the agent invocation outright rather than degrading - is real, but
-16 KB was not measured against a prompt or a model budget, so this is not a
-request to weaken a calibrated limit.
+That 16384 is 32 x 512 is this document's arithmetic, not the source's; the
+source states neither the product nor the factorisation. What grounds reading
+the byte cap as derived from the entry cap is the source's own doc comment
+above it: it "leaves room for the entry cap to be reached with a rule of
+ordinary length, so neither cap makes the other unusable". The danger the
+surrounding comment names - an oversized prompt fails the agent invocation
+outright rather than degrading - is real, but 16 KB is not stated anywhere to
+have been measured against a prompt or a model budget, so this is not a request
+to weaken a calibrated limit.
 
 The accounting charges the configured entries, not what a run renders. Reading
 `ReviewPathInstructionsBytes`, one entry costs `229 + len(path) + len(trimmed
@@ -68,11 +78,14 @@ before a run starts and so has to hold for every diff, but it means the number
 that gets refused is the worst case across all diffs rather than anything one
 review sees.
 
-By rendering, a change touching one file in one package carries 1442 to 1450
-bytes of this section for the twelve packages with no block of their own, and
-2013 (`internal/graph`) to 4341 (`internal/findings`) bytes for the eleven that
-have one, median 2223. So the gap between what is charged and what is delivered
-is roughly four to eleven times, and it is the charge that refuses a run.
+By rendering, with `changed` set to the single path `<package>/file.go`, one
+package at a time: for the twelve packages no glob covers, the section is the
+heading and the `path: "*"` block alone and comes to `1422 + len(changed)`, so
+1442 for `internal/cli/file.go` up to 1450 for `internal/checkpoints/file.go`.
+For the eleven a glob does cover it runs from 2013 (`internal/graph/file.go`)
+to 4341 (`internal/findings/file.go`), median 2223. So the gap between what is
+charged and what is delivered is roughly four to eleven times, and it is the
+charge that refuses a run.
 
 ## What it blocks here
 
@@ -83,15 +96,22 @@ cover eleven of this repository's twenty-three packages under `internal/`,
 because `internal/agents/**` matches both `internal/agents` and
 `internal/agents/standin`. Twelve packages have no block.
 
-Those ten package blocks are charged 14639 bytes, an average of 1464 each.
-Completing the set for the remaining twelve at that average costs
-`12 x 1464 + 12 x 2 = 17592` bytes more, for a section of 33865. Estimated
-instead from the `AGENTS.md` bullets those blocks would be drawn from - the
-twelve bullets measure 11664 bytes with each line stripped of its indent, and
-their globs 222 - it is `11664 + 12 x 229 + 222 + 12 x 2 = 14658` bytes more,
-for a section of 30931. Either basis puts the completed section at roughly twice
-the 16384 cap, so the channel is about half the size this repository needs, and
-the shortfall is structural rather than a matter of a few rules being verbose.
+By that accounting the ten package blocks are charged 14659 bytes, an average
+of 1466 each. Every one of the ten includes its 2-byte separator, since all ten
+follow the `path: "*"` entry, which is charged 1421 and pays none; with the
+fixed 193 that closes on the 16273 above. Completing the set for the remaining
+twelve at that average costs `12 x 1466 = 17592` bytes more, for a section of
+33865.
+
+Estimated instead from the `AGENTS.md` bullets those blocks would be drawn from,
+it is `11664 + 12 x 229 + 222 + 12 x 2 = 14658` bytes more, for a section of
+30931. The 11664 is those twelve bullets measured this way: take each bullet's
+first line and its indented continuation lines, remove leading and trailing
+whitespace from each line, rejoin with one newline between lines and none after
+the last, and sum the twelve. The 222 is their twelve globs. Either basis puts
+the completed section at roughly twice the 16384 cap, so the channel is about
+half the size this repository needs, and the shortfall is structural rather than
+a matter of a few rules being verbose.
 
 ## What was tried locally, and the result
 
@@ -103,14 +123,20 @@ what has to survive a hostile branch in the trusted, capped channel and moving
 the rest to `AGENTS.md`. Two things sank it.
 
 The destination is not reliable. No part of the gate reads `AGENTS.md`;
-delivery is entirely the resolved agent CLI's own project-doc discovery. The
-global configuration selects the agent automatically rather than pinning one,
-`no-mistakes` implements a project-instruction suppression knob for only three
-of its adapters, one of those knobs is a byte cap on `AGENTS.md` itself whose
-size is set outside this repository, and the gate's `disable_project_settings`
-suppresses the file wholesale. Each of those ends a moved rule's reach with no
-error, no failed parse and no refused run - the same silent stop-applying the
-move was meant to prevent, relocated rather than removed.
+delivery is entirely the resolved agent CLI's own project-doc discovery, and the
+global configuration selects that agent automatically rather than pinning one.
+Three things end a moved rule's reach from there, and two of them do it in
+silence: `no-mistakes` implements a project-instruction suppression knob for
+only three of its adapters, so for any other resolved adapter whether the file
+is read at all is that CLI's own business and not something the gate settles;
+and one of those three knobs is a byte cap on `AGENTS.md` itself, whose size is
+set outside this repository. The third, the gate's `disable_project_settings`,
+is silent for the three adapters that can suppress the file and loud for every
+other, where `agent.EnsureGateNeutralized` refuses the run rather than launching
+it, naming codex, claude and pi. A hazard that is loud in one configuration and
+silent in the rest is why nobody has hit this yet, and that refusal is the one
+place the gate fails closed on it. The silent paths are the same
+stop-applying the move was meant to prevent, relocated rather than removed.
 
 And the room it would free is not worth having. A first pass suggested roughly
 1.4 KB sat in per-package limits disclaimers, on the reasoning that a rule also
@@ -125,8 +151,11 @@ spans sampled that way, in `internal/findings` and `internal/agents`, about 405
 bytes of 1402 survive as removable, under a third, and buying under 3% of the
 cap costs the rules that make a gap visible.
 
-So the split was dropped and `.no-mistakes.yaml` is unchanged by this work: 11
-entries, 16273 of 16384, 111 bytes free, the same as before it started.
+So the split was dropped and `review.path_instructions` is unchanged by this
+work, byte for byte: 11 entries, 16273 of 16384, 111 bytes free, the same as
+before it started. The change does touch `.no-mistakes.yaml` elsewhere, adding
+this document's owner line to `document.instructions`, which is outside the
+capped section.
 
 **111 bytes is not room for a rule.** By the accounting above a new block costs
 at least 232 bytes before a word of guidance, so no new block fits at all, and
