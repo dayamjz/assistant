@@ -450,12 +450,14 @@ func (s *Service) driverFor(ctx context.Context) (*driver, error) {
 	// one. A stage body that needs one refuses rather than proceeding, which
 	// is the same answer PRD section 8 gives for any adapter a path needs and
 	// this build has not resolved.
+	redactor := redact.New()
 	deps := stages.NewStageDeps(
 		agents.NewStageAgent(resolution.Runner),
 		s.home,
 		s.cfg,
 		nil,
-		vcs.WithRedactor(redact.New()),
+		redactor,
+		vcs.WithRedactor(redactor),
 	)
 	built, err := pipeline.New(pipeline.Options{
 		Stages:                      s.newStages(deps),

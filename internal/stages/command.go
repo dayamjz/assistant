@@ -1,6 +1,7 @@
 package stages
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -8,6 +9,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/dayamjz/assistant/internal/redact"
 )
 
 // commandGrace is what a configured command's output is given to arrive once
@@ -72,10 +75,11 @@ type commandSpec struct {
 	// dir is the directory it runs in.
 	dir string
 	// record receives everything the command wrote, standard output and
-	// standard error interleaved as the command produced them. It is the
-	// run's test evidence, and it is written while the command runs rather
-	// than afterwards, so output survives a command this call gives up
-	// waiting on.
+	// standard error interleaved as the command produced them, after redact
+	// has removed what it recognizes. It is the run's test evidence, and it
+	// is written while the command runs rather than afterwards - a line at a
+	// time, as redaction completes each one - so output survives a command
+	// this call gives up waiting on.
 	record io.Writer
 	// projection bounds the tail of that output kept in memory for the
 	// stage's report. Zero keeps none.
@@ -87,6 +91,13 @@ type commandSpec struct {
 	// a field rather than the constant read directly so a test can reach the
 	// give-up path without waiting the stage's grace out.
 	grace time.Duration
+	// redact is applied to the command's output on its way into the record
+	// and the projection, upstream of both, so that the projection's bound
+	// cannot cut a credential's recognizable shape apart before it is
+	// removed. The zero value redacts, so a caller cannot leave it off. What
+	// it removes and what it misses is internal/redact's contract;
+	// redactingWriter owns the one gap this stream adds to it.
+	redact redact.Redactor
 }
 
 // commandResult is what running one command produced. It reports what
@@ -99,10 +110,12 @@ type commandResult struct {
 	exited bool
 	// code is that status, or -1 when the command reported none.
 	code int
-	// tail is the bounded projection of the output, ending at the last thing
-	// the command wrote.
+	// tail is the bounded projection of the output as redacted, ending at
+	// the last thing the command wrote.
 	tail string
-	// omitted is how many bytes of earlier output the projection leaves out.
+	// omitted is how many bytes of earlier output the projection leaves out,
+	// counted over the redacted stream the record holds, so the count and
+	// the file it points a reader at measure the same text.
 	omitted int64
 	// err is the error from starting or waiting on the process. It is nil
 	// when the command ran and exited on its own, including when it exited
@@ -122,7 +135,10 @@ type commandResult struct {
 }
 
 // runCommand runs one configured command line to completion, writing its whole
-// output to spec.record and keeping a bounded tail of it.
+// output to spec.record and keeping a bounded tail of it. The output passes
+// through spec.redact on its way to both, so neither the record nor the tail
+// is byte-identical to what the command printed; redactingWriter says how and
+// names the gap that buys.
 //
 // The command inherits this process's environment. PRD section 10 has these
 // commands run with the operator's own credentials, so withholding part of
@@ -193,7 +209,16 @@ func runCommand(ctx context.Context, spec commandSpec) commandResult {
 
 	copied := make(chan error, 1)
 	go func() {
-		_, err := io.Copy(out, read)
+		// The redaction sits upstream of the record and the projection both,
+		// so one pass covers the two and the projection's bound cannot cut a
+		// credential's shape apart before it was seen whole. The flush runs
+		// before copied is signalled, so the waits below still guarantee that
+		// nothing is writing to either when the caller reads them.
+		redacting := &redactingWriter{dst: out, redact: spec.redact}
+		_, err := io.Copy(redacting, read)
+		if flushErr := redacting.flush(); err == nil {
+			err = flushErr
+		}
 		copied <- err
 	}()
 
@@ -250,6 +275,67 @@ func awaitOutput(copied <-chan error, read *os.File, grace time.Duration) error 
 	return fmt.Errorf("%w: it was still arriving %s after the command ended", errOutputAbandoned, grace)
 }
 
+// redactBound is the most of a single unfinished line redactingWriter holds
+// before passing part of it on, so a command that prints without a line break
+// is bounded here the way tailWriter bounds the projection.
+const redactBound = 64 << 10
+
+// redactingWriter removes credentials from a stream on its way to dst.
+//
+// Redaction is over whole lines rather than over each Write, because what
+// arrives here is whatever one read of the command's output pipe returned, and
+// the boundary between two reads can fall inside a URL; each half of a
+// credential split that way carries no shape internal/redact recognizes, so
+// redacting the halves keeps the secret. The shape it recognizes spans no line
+// break, so a complete line cannot split it.
+//
+// A line that outgrows redactBound is not held whole. Enough of it goes on to
+// keep the hold bounded, cut at its last space or tab where one falls late
+// enough, because the recognized shape spans no whitespace either. That leaves
+// this stream's one addition to internal/redact's own gaps: a single
+// whitespace-free token longer than redactBound goes on in pieces, and a
+// credential whose URL shape straddles such a cut is not recognized in either
+// piece.
+//
+// flush redacts and passes on whatever is still held, so once the stream has
+// ended, dst holds everything that arrived.
+type redactingWriter struct {
+	dst    io.Writer
+	redact redact.Redactor
+	buf    []byte
+}
+
+// Write implements io.Writer. It consumes all of p whatever it passed on, and
+// carries dst's error if passing some of it on failed.
+func (w *redactingWriter) Write(p []byte) (int, error) {
+	w.buf = append(w.buf, p...)
+	// Everything through the last line break is complete and goes now.
+	cut := bytes.LastIndexByte(w.buf, '\n') + 1
+	if len(w.buf)-cut > redactBound {
+		least := len(w.buf) - redactBound
+		if at := bytes.LastIndexAny(w.buf[cut:], " \t"); at >= 0 && cut+at+1 >= least {
+			cut += at + 1
+		} else {
+			cut = least
+		}
+	}
+	return len(p), w.emit(cut)
+}
+
+// emit redacts the first n held bytes and passes them on.
+func (w *redactingWriter) emit(n int) error {
+	if n == 0 {
+		return nil
+	}
+	_, err := io.WriteString(w.dst, w.redact.Redact(string(w.buf[:n])))
+	w.buf = w.buf[:copy(w.buf, w.buf[n:])]
+	return err
+}
+
+// flush redacts and passes on what is still held: the final line of a stream
+// that did not end in one.
+func (w *redactingWriter) flush() error { return w.emit(len(w.buf)) }
+
 // tailWriter keeps the last limit bytes written to it and counts what it drops.
 // The tail rather than the head is kept because a check that fails says so at
 // the end, and a caller shown the beginning of a long run would be shown the
@@ -270,8 +356,9 @@ type tailWriter struct {
 //
 // What it holds between one write and the next is the limit plus that write,
 // so the memory this costs is bounded by the limit and by whoever is writing.
-// What writes here is runCommand's own copy off the command's output pipe,
-// which delivers what each read of that pipe returned, so a command that
+// What writes here is runCommand's redacting writer over its copy off the
+// command's output pipe, which passes text on in redacted pieces it bounds by
+// redactBound and by what each read of that pipe returned, so a command that
 // prints without bound arrives here in pieces rather than in one.
 func (w *tailWriter) Write(p []byte) (int, error) {
 	n := len(p)

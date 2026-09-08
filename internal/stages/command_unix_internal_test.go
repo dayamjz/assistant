@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/dayamjz/assistant/internal/findings"
+	"github.com/dayamjz/assistant/internal/redact"
 )
 
 // A command something else ended reports no exit status of its own, which is
@@ -34,9 +35,9 @@ func TestACommandEndedBySomethingElseReportsNoStatus(t *testing.T) {
 		t.Fatalf("a command ended by a signal reported exit status %d as its own", result.code)
 	}
 
-	record := openTestEvidence(scratchEvidencePath(t))
+	record := openTestEvidence(scratchEvidencePath(t), redact.New())
 	record.close()
-	report := testReport("kill -KILL $$", "0123456789abcdef", record, result).Normalize()
+	report := testReport(redact.New(), "kill -KILL $$", "0123456789abcdef", record, result).Normalize()
 	if err := report.Validate(); err != nil {
 		t.Fatalf("the report is one the pipeline refuses: %v", err)
 	}
@@ -77,7 +78,7 @@ func TestOutputStillHeldAfterTheCommandEndsIsNotOfferedAsWhole(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			record := openTestEvidence(scratchEvidencePath(t))
+			record := openTestEvidence(scratchEvidencePath(t), redact.New())
 			if !record.recorded() {
 				t.Fatalf("opening the record: %v", record.err)
 			}
@@ -111,7 +112,7 @@ func TestOutputStillHeldAfterTheCommandEndsIsNotOfferedAsWhole(t *testing.T) {
 				t.Fatal("the record reports itself whole after the read of the output was abandoned")
 			}
 
-			report := testReport(c.command, "0123456789abcdef", record, result).Normalize()
+			report := testReport(redact.New(), c.command, "0123456789abcdef", record, result).Normalize()
 			if err := report.Validate(); err != nil {
 				t.Fatalf("the report is one the pipeline refuses: %v", err)
 			}

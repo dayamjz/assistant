@@ -10,6 +10,7 @@ import (
 
 	"github.com/dayamjz/assistant/internal/findings"
 	"github.com/dayamjz/assistant/internal/home"
+	"github.com/dayamjz/assistant/internal/redact"
 )
 
 // scratchEvidencePath is where an internal test's record goes: a real
@@ -147,7 +148,7 @@ func TestTheRecordHoldsTheWholeOutputTheProjectionBounds(t *testing.T) {
 // descriptor is a write that fails.
 func TestARecordThatFailsPartwayDoesNotDecideTheVerdict(t *testing.T) {
 	t.Parallel()
-	record := openTestEvidence(scratchEvidencePath(t))
+	record := openTestEvidence(scratchEvidencePath(t), redact.New())
 	if !record.recorded() {
 		t.Fatalf("opening the record: %v", record.err)
 	}
@@ -173,7 +174,7 @@ func TestARecordThatFailsPartwayDoesNotDecideTheVerdict(t *testing.T) {
 		t.Fatal("the record reports itself whole after every write to it failed")
 	}
 
-	report := testReport("git --version", "0123456789abcdef", record, result).Normalize()
+	report := testReport(redact.New(), "git --version", "0123456789abcdef", record, result).Normalize()
 	if err := report.Validate(); err != nil {
 		t.Fatalf("the report is one the pipeline refuses: %v", err)
 	}
@@ -204,7 +205,7 @@ func TestABoundedProjectionSaysWhatItOmittedAndWhereTheRestIs(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			record := openTestEvidence(scratchEvidencePath(t))
+			record := openTestEvidence(scratchEvidencePath(t), redact.New())
 			if !c.recorded {
 				if err := record.file.Close(); err != nil {
 					t.Fatalf("closing the record behind it: %v", err)
@@ -227,7 +228,7 @@ func TestABoundedProjectionSaysWhatItOmittedAndWhereTheRestIs(t *testing.T) {
 					"nothing", result.tail)
 			}
 
-			report := testReport("git --version && exit 3", "0123456789abcdef", record, result).Normalize()
+			report := testReport(redact.New(), "git --version && exit 3", "0123456789abcdef", record, result).Normalize()
 			if err := report.Validate(); err != nil {
 				t.Fatalf("the report is one the pipeline refuses: %v", err)
 			}
@@ -316,9 +317,9 @@ func TestACommandWithNoStatusHoldsTheStageForAPerson(t *testing.T) {
 		grace:      commandGrace,
 	})
 
-	record := openTestEvidence(scratchEvidencePath(t))
+	record := openTestEvidence(scratchEvidencePath(t), redact.New())
 	record.close()
-	report := testReport("git --version", "0123456789abcdef", record, result).Normalize()
+	report := testReport(redact.New(), "git --version", "0123456789abcdef", record, result).Normalize()
 	if err := report.Validate(); err != nil {
 		t.Fatalf("the report is one the pipeline refuses: %v", err)
 	}
@@ -335,5 +336,81 @@ func TestACommandWithNoStatusHoldsTheStageForAPerson(t *testing.T) {
 	held := findings.Held(report.Findings)
 	if len(held) != 1 || !strings.Contains(held[0].Description, result.err.Error()) {
 		t.Fatalf("the hold does not say what happened instead: %+v", held)
+	}
+}
+
+// A credential split across two writes is still redacted, because the writer
+// redacts whole lines rather than each write: what arrives at it is whatever
+// one read of the command's output pipe returned, and that boundary falls
+// wherever the kernel put it, including inside a URL. Each half of a
+// credential split that way carries no shape internal/redact recognizes, so a
+// writer that redacted the halves would keep the secret.
+func TestARedactedStreamCatchesACredentialSplitAcrossWrites(t *testing.T) {
+	t.Parallel()
+	var got strings.Builder
+	w := &redactingWriter{dst: &got, redact: redact.New()}
+	for _, piece := range []string{"cloning https://alice:sec", "ret@forge.example/x.git failed\n"} {
+		if _, err := w.Write([]byte(piece)); err != nil {
+			t.Fatalf("writing %q: %v", piece, err)
+		}
+	}
+	if err := w.flush(); err != nil {
+		t.Fatalf("flushing: %v", err)
+	}
+	want := "cloning https://redacted@forge.example/x.git failed\n"
+	if got.String() != want {
+		t.Fatalf("the stream came out as %q, want %q", got.String(), want)
+	}
+}
+
+// A line that outgrows the writer's bound is passed on early, cut at its last
+// whitespace, so the hold stays bounded and a credential later in the line is
+// still seen whole when it is flushed. The intermediate observation is what
+// establishes the bound: a writer that simply held the whole line would
+// produce the same final text and no early output.
+func TestABoundedLineIsCutAtWhitespaceSoACredentialStaysWhole(t *testing.T) {
+	t.Parallel()
+	var got strings.Builder
+	w := &redactingWriter{dst: &got, redact: redact.New()}
+	filler := strings.Repeat("x", redactBound)
+	if _, err := w.Write([]byte(filler + " https://alice:secret@forge.example/x.git")); err != nil {
+		t.Fatalf("writing the long line: %v", err)
+	}
+	if got.Len() == 0 {
+		t.Fatal("a line over the bound passed nothing on, so the hold is not bounded")
+	}
+	if strings.Contains(got.String(), "forge.example") {
+		t.Fatalf("the URL went on before its line was complete, so the cut fell inside the held "+
+			"token: %q", got.String())
+	}
+	if err := w.flush(); err != nil {
+		t.Fatalf("flushing: %v", err)
+	}
+	want := filler + " https://redacted@forge.example/x.git"
+	if got.String() != want {
+		t.Fatalf("the stream came out with the wrong tail: got %q, want %q",
+			got.String()[len(filler):], want[len(filler):])
+	}
+}
+
+// A single whitespace-free token longer than the bound is passed on in pieces
+// rather than held without bound. What that costs redaction is the gap
+// redactingWriter's doc names; what this establishes is that nothing is lost.
+func TestATokenLongerThanTheBoundIsDeliveredWhole(t *testing.T) {
+	t.Parallel()
+	var got strings.Builder
+	w := &redactingWriter{dst: &got, redact: redact.New()}
+	token := strings.Repeat("A", redactBound+100)
+	if _, err := w.Write([]byte(token)); err != nil {
+		t.Fatalf("writing the token: %v", err)
+	}
+	if got.Len() == 0 {
+		t.Fatal("a token over the bound passed nothing on, so the hold is not bounded")
+	}
+	if err := w.flush(); err != nil {
+		t.Fatalf("flushing: %v", err)
+	}
+	if got.String() != token {
+		t.Fatalf("the token did not arrive whole: %d bytes in, %d out", len(token), got.Len())
 	}
 }

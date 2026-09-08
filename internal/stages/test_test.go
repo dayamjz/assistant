@@ -2,6 +2,7 @@ package stages_test
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -15,6 +16,7 @@ import (
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/principles"
+	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/stages"
 )
 
@@ -65,6 +67,63 @@ func TestAPassingCheckIsReportedAsAPassWithItsEvidence(t *testing.T) {
 	if !strings.Contains(recorded, passingTestCommand) || !strings.Contains(recorded, run.commit) {
 		t.Fatalf("the evidence at %s does not say which command ran against which commit; it holds:\n%s",
 			report.Evidence[0].Path, recorded)
+	}
+}
+
+// A credential in a URL's userinfo reaches none of the stage's destinations
+// unredacted. Running a configured command opens a persistence boundary, and
+// PRD section 8 has internal/redact called at every one, so the check is made
+// at all three places the stage puts a command's text: the evidence record on
+// disk, the fix finding's description carrying the bounded tail, and the
+// report's own summary and tested entries.
+//
+// One plant exercises all three at once: the credentialed URL rides in the
+// command line, which the report and the evidence header name, and the command
+// echoes it into its output, which the record and the tail carry; the command
+// fails, so the finding that quotes both exists. The redacted form is asserted
+// present at each destination where the secret is asserted absent, so a
+// destination that dropped the line entirely fails here rather than passing as
+// redacted.
+func TestACredentialInACommandReachesNoDestinationUnredacted(t *testing.T) {
+	t.Parallel()
+	const (
+		secret   = "planted-secret-credential"
+		planted  = "https://alice:" + secret + "@forge.example/x.git"
+		redacted = "https://redacted@forge.example/x.git"
+	)
+	run := newTestStageRun(t, "echo cloning "+planted+" failed && exit 7")
+
+	report := run.report(t)
+	if whole := fmt.Sprintf("%+v", report); strings.Contains(whole, secret) {
+		t.Fatalf("the secret %q survives somewhere in the report:\n%s", secret, whole)
+	}
+	if !strings.Contains(report.Summary, redacted) {
+		t.Fatalf("the summary does not carry the redacted command line, so the line was dropped "+
+			"rather than redacted: %q", report.Summary)
+	}
+	if len(report.Tested) != 1 || !strings.Contains(report.Tested[0], redacted) {
+		t.Fatalf("Tested does not carry the redacted command line: %q", report.Tested)
+	}
+	if len(report.Findings) != 1 {
+		t.Fatalf("a failing check reports one finding, got %d: %+v", len(report.Findings), report.Findings)
+	}
+	description := report.Findings[0].Description
+	if !strings.Contains(description, "cloning "+redacted+" failed") {
+		t.Fatalf("the finding's tail does not carry the redacted output line, so the line was "+
+			"dropped rather than redacted:\n%s", description)
+	}
+	if len(report.Evidence) != 1 {
+		t.Fatalf("the report names %d evidence artifacts, and one run of one command produces one",
+			len(report.Evidence))
+	}
+	recorded := readRecorded(t, report.Evidence[0].Path)
+	if strings.Contains(recorded, secret) {
+		t.Fatalf("the secret %q reached the evidence record at %s:\n%s", secret, report.Evidence[0].Path, recorded)
+	}
+	if !strings.Contains(recorded, "command: echo cloning "+redacted) ||
+		!strings.Contains(recorded, "cloning "+redacted+" failed") {
+		t.Fatalf("the evidence record does not carry the redacted command line and output line, so "+
+			"they were dropped rather than redacted:\n%s", recorded)
 	}
 }
 
@@ -170,7 +229,7 @@ func TestTheCheckComesFromConfigurationAndNotFromTheBranch(t *testing.T) {
 	// The tripwire has to be able to fire, or its absence above says nothing.
 	// The same command reaches the same interpreter through the same stage,
 	// this time by being the configured one.
-	armed := stages.NewStageDeps(agents.StageAgent{}, run.home, testStageConfig(planted), nil)
+	armed := stages.NewStageDeps(agents.StageAgent{}, run.home, testStageConfig(planted), nil, redact.New())
 	if _, err := runTestStage(t, armed, run.repositoryID, run.runID); err != nil {
 		t.Fatalf("running the planted command as the configured one: %v", err)
 	}
@@ -243,7 +302,7 @@ func TestASecondAttemptIsAddedToTheRecordRatherThanReplacingIt(t *testing.T) {
 	run := newTestStageRun(t, failingTestCommand)
 	first := run.report(t)
 
-	run.deps = stages.NewStageDeps(agents.StageAgent{}, run.home, testStageConfig(passingTestCommand), nil)
+	run.deps = stages.NewStageDeps(agents.StageAgent{}, run.home, testStageConfig(passingTestCommand), nil, redact.New())
 	second := run.report(t)
 	if first.Evidence[0].Path != second.Evidence[0].Path {
 		t.Fatalf("the two attempts recorded to %s and %s, and one run has one record",
@@ -265,7 +324,7 @@ func TestASecondAttemptIsAddedToTheRecordRatherThanReplacingIt(t *testing.T) {
 func TestAMissingIsolatedCopyIsAnErrorAndNotAFinding(t *testing.T) {
 	t.Parallel()
 	h := newHome(t)
-	deps := stages.NewStageDeps(agents.StageAgent{}, h, testStageConfig(passingTestCommand), nil)
+	deps := stages.NewStageDeps(agents.StageAgent{}, h, testStageConfig(passingTestCommand), nil, redact.New())
 
 	_, err := runTestStage(t, deps, "repository-1", "run-1")
 	if err == nil {
@@ -388,7 +447,7 @@ func newTestStageRun(t *testing.T, command string) *testStageRun {
 	}
 	git(t, source, "worktree", "add", "--quiet", "--detach", run.copy)
 	run.commit = git(t, run.copy, "rev-parse", "HEAD")
-	run.deps = stages.NewStageDeps(agents.StageAgent{}, run.home, testStageConfig(command), nil)
+	run.deps = stages.NewStageDeps(agents.StageAgent{}, run.home, testStageConfig(command), nil, redact.New())
 	return run
 }
 

@@ -14,6 +14,7 @@ import (
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/principles"
+	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/stages"
 )
 
@@ -109,7 +110,7 @@ func TestACopyPathIsDerivedFromTheRunsOwnKeys(t *testing.T) {
 	if err != nil {
 		t.Fatalf("opening a home: %v", err)
 	}
-	deps := stages.NewStageDeps(agents.StageAgent{}, h, config.Config{}, nil)
+	deps := stages.NewStageDeps(agents.StageAgent{}, h, config.Config{}, nil, redact.New())
 
 	const repository, run = "repo-under-test", "run-under-test"
 	var tried string
