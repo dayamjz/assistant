@@ -619,6 +619,47 @@ func TestThePullRequestBodyAccountsForEveryStage(t *testing.T) {
 	}
 }
 
+// The same property the body owes the forwarded commit and the base, owed by
+// the risks section: nothing looked is not nothing was found. A person may skip
+// every stage before this one, which is their per-run choice, and the run then
+// reaches here with nothing having judged the change. A section saying every
+// finding was informational reads to someone outside this system as a clean
+// result from checks that happened, so that sentence is not printed at all
+// where no stage ran.
+//
+// Both directions are checked, since an assertion that the sentence is absent
+// would hold just as well against a body that never prints it: a run whose
+// stages ran and found nothing must still say so.
+func TestThePullRequestBodyDoesNotCallARunThatCheckedNothingClean(t *testing.T) {
+	t.Parallel()
+
+	nothingRan := aRun()
+	for stage := range nothingRan.recorded {
+		nothingRan.recorded[stage] = recordedStage{outcome: pipeline.OutcomeSkipped}
+	}
+	h := newHost()
+	mustRunPR(t, h, nothingRan)
+	risks := sectionUnder(t, onlyBody(t, h), "## What the risks are")
+	if strings.Contains(risks, "informational") {
+		t.Errorf("no stage of the run ran and the risks section reports its findings as "+
+			"informational, which reads as a result from checks that did not happen:\n\n%s", risks)
+	}
+	if !strings.Contains(risks, "nothing looked at this change") {
+		t.Errorf("the risks section does not say that nothing looked at the change:\n\n%s", risks)
+	}
+
+	// The positive control: a run whose stages ran and reported only notes still
+	// says so, so the assertions above read this run rather than a section that
+	// never states a result.
+	clean := newHost()
+	mustRunPR(t, clean, aRun())
+	ranClean := sectionUnder(t, onlyBody(t, clean), "## What the risks are")
+	if !strings.Contains(ranClean, "every finding any stage reported was informational") {
+		t.Fatalf("the stages of this run ran and found nothing, and the risks section does not "+
+			"say so:\n\n%s", ranClean)
+	}
+}
+
 // A stage that recorded nothing is not a stage that found nothing, and the
 // body says which. The two cases are different facts: a stage the run passed
 // over was decided against, and a stage with no outcome at all had not been
@@ -819,6 +860,22 @@ func onlyBody(t *testing.T, h *host) string {
 		t.Fatalf("the host was handed %d bodies, want 1", len(h.bodies))
 	}
 	return h.bodies[0]
+}
+
+// sectionUnder returns what the rendered body says under one of its top-level
+// headings, up to the next one. The body is this stage's own generated output
+// and its four headings are the shape PRD section 5 asks of it, so reading one
+// out is reading the artifact rather than the source that wrote it.
+func sectionUnder(t *testing.T, body, heading string) string {
+	t.Helper()
+	_, after, found := strings.Cut(body, heading+"\n")
+	if !found {
+		t.Fatalf("the body has no %q section:\n\n%s", heading, body)
+	}
+	if next := strings.Index(after, "\n## "); next >= 0 {
+		after = after[:next]
+	}
+	return after
 }
 
 // bodySections splits the body's account of the stages into its per-stage
