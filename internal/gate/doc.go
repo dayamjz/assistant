@@ -433,12 +433,24 @@
 // received. Holds and TakeBranch are what let a caller keep the invariant the
 // copy rests on, that the gate holds every commit under validation.
 //
-// TakeBranch writes refs/assistant/submitted/<branch> and never a branch. That
-// namespace is this package's and nothing a person uses writes it, which is
-// what makes the forced update there safe: there is no history under it to
-// lose. A branch in the gate still moves only where a push moves it, so git's
-// own rejection of a non-fast-forward push is unchanged, and P6's answer there
-// stays what it was. The operation states the whole of that argument.
+// TakeBranch writes refs/assistant/submitted/<commit> and never a branch. The
+// reference is named for the commit it holds, which is what lets it be written
+// without a force: the name either does not exist yet or already points where
+// the fetch would put it, so there is no update to reject and nothing to
+// overwrite. Nothing here ever moves a reference. A branch in the gate moves
+// only where a push moves it, so git's own rejection of a non-fast-forward
+// push is unchanged, and P6's answer there stays what it was.
+//
+// Those references are the reachability a run's copy rests on, and they are
+// not garbage. A copy is a detached worktree and git does not list a linked
+// worktree's head among a repository's references, so the anchor is the only
+// thing in the gate containing the commit under validation. Deleting one
+// strands that copy: RemoveCopy then refuses to give it back for as long as
+// the directory stands. They accumulate, one per distinct validated commit and
+// nothing reads one by name, and that growth is the price of the property
+// rather than an oversight - reclaiming them is separate work and belongs with
+// whatever establishes the work has landed somewhere else. The operation
+// states the whole of that argument.
 //
 // RemoveCopy applies three refusals and names a fourth it does not implement.
 // A copy holding work no reference in the gate contains is refused, because a

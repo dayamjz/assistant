@@ -56,7 +56,10 @@ var (
 	// run's isolated copy should be and is not a worktree. It is refused
 	// rather than removed: this package did not create it, and answering that
 	// the copy was given back would leave a caller believing a directory is
-	// gone while it is still on disk.
+	// gone while it is still on disk. The message names the path and the step
+	// that succeeds, which is a person looking at what is there and moving or
+	// deleting it, after which the next reclaim of that run finds nothing at
+	// the path and reports the copy given back.
 	ErrNotACopy = errors.New("gate: path is not an isolated copy")
 	// ErrWorkUnreachable is returned by RemoveCopy when no reference in the
 	// gate contains the copy's head, so removing it would leave the commits
@@ -68,6 +71,12 @@ var (
 	// referenced in the gate and so will not be collected; it is not a claim
 	// that the work reached the upstream remote or a merged pull request,
 	// which are the other two proofs P12 lists.
+	//
+	// The message names the copy, the commit it holds, and the step that
+	// succeeds: getting that commit referenced in the gate, which a push of
+	// the copy's work to the gate does, after which the next reclaim of that
+	// run gives the copy back. Recovery asks again on every service open, so
+	// no further command is needed once the commit is reachable.
 	ErrWorkUnreachable = errors.New("gate: the isolated copy holds work no reference in the gate contains")
 	// ErrNotAGate is returned when a path that would be deleted as a gate
 	// repository is not one: it is outside this home's repository directory,
