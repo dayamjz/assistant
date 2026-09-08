@@ -76,7 +76,7 @@ func TestAStageWithNoBodyHoldsForAPersonRatherThanPassing(t *testing.T) {
 //
 // Landing a body means adding it here. That one edit is the whole cost of the
 // guard, and stating the set twice is the point rather than an oversight.
-var bodied = []pipeline.Stage{pipeline.StageIntent}
+var bodied = []pipeline.Stage{pipeline.StageIntent, pipeline.StageRebase}
 
 // The stages this build has bodies for have to be the ones it is meant to have
 // bodies for, in the order a run takes them.
@@ -116,7 +116,11 @@ func TestImplementedIsTheSetThisBuildIsMeantToHave(t *testing.T) {
 // stage reading a bool or a list is a value the real graph reader cannot
 // produce. A body that failed on it would be tolerated here and this test
 // would pass without checking that stage at all, so a stage needing more than
-// run state has to be given it here rather than left to the tolerance.
+// run state is given it in bodyEnvironment rather than left to the tolerance.
+//
+// bodyEnvironment is also what closes the gap for the stage it provisions: a
+// stage it builds a world for is held to succeeding in it, so the tolerance
+// applies only to a body nobody has provisioned yet.
 func TestAllPlacesAWrittenBodyAtEveryImplementedStage(t *testing.T) {
 	t.Parallel()
 	implemented := stages.Implemented()
@@ -124,23 +128,23 @@ func TestAllPlacesAWrittenBodyAtEveryImplementedStage(t *testing.T) {
 		t.Fatal("this build reports no stage bodies, so the loop below checks nothing; " +
 			"TestImplementedIsTheSetThisBuildIsMeantToHave says which stages it should name")
 	}
-	all := stages.All(stages.StageDeps{})
 	for _, stage := range implemented {
 		t.Run(stage.String(), func(t *testing.T) {
 			t.Parallel()
-			impl := implementationFor(t, all, stage)
+			deps, state, provisioned := bodyEnvironment(t, stage)
+			impl := implementationFor(t, stages.All(deps), stage)
 			allowed := make(map[pipeline.Key]bool, len(impl.Reads))
 			for _, key := range impl.Reads {
 				allowed[key] = true
 			}
 			out, err := impl.NewBody()(t.Context(), pipeline.Input{
 				Stage: stage,
-				State: declaredReader{allowed: allowed, state: map[pipeline.Key]graph.Value{
-					pipeline.KeyIntent:         graph.TextValue("add a greeting"),
-					pipeline.KeyIntentSupplied: graph.BoolValue(true),
-				}},
+				State: declaredReader{allowed: allowed, state: state},
 			})
 			if err != nil {
+				if provisioned {
+					t.Fatalf("the %s stage was given what its body needs and failed anyway: %v", stage, err)
+				}
 				return // Pending cannot fail, so a body that did is not it.
 			}
 			report := out.Report.Normalize()
@@ -213,5 +217,32 @@ func implementationFor(t *testing.T, s pipeline.Stages, stage pipeline.Stage) pi
 	default:
 		t.Fatalf("no field for stage %s", stage)
 		return pipeline.Implementation{}
+	}
+}
+
+// bodyEnvironment supplies what one stage's body needs of the world, and says
+// whether it supplied it. A stage nobody has built a world for gets the run
+// state alone and the caller's tolerance for a body that fails on it; a stage
+// this names is held to succeeding, because a world it was given and failed in
+// is a defect rather than a body the test cannot reach.
+//
+// It is a switch rather than a table because each stage's world is built
+// differently, and a map of constructors would only move the switch.
+func bodyEnvironment(t *testing.T, stage pipeline.Stage) (stages.StageDeps, map[pipeline.Key]graph.Value, bool) {
+	t.Helper()
+	runState := map[pipeline.Key]graph.Value{
+		pipeline.KeyIntent:         graph.TextValue("add a greeting"),
+		pipeline.KeyIntentSupplied: graph.BoolValue(true),
+	}
+	switch stage {
+	case pipeline.StageRebase:
+		s := newSubject(t)
+		state := s.state(nil)
+		for key, value := range runState {
+			state[key] = value
+		}
+		return s.deps, state, true
+	default:
+		return stages.StageDeps{}, runState, false
 	}
 }

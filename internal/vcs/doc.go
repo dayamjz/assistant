@@ -122,16 +122,25 @@
 // incorporation checks, and the refuse-when-unverifiable path are policy and
 // belong to internal/safety, the module named in PRD section 8. This package
 // exposes mechanism that policy needs, which is reading a remote ref,
-// resolving a commit, and comparing two commits, and stops there. It does not
-// expose everything internal/safety asks for: that package's git.go declares
-// the interface it decides against and names the operation still missing here.
+// resolving a commit, and comparing two commits, and stops there. That is the
+// whole of internal/safety's Git interface as it stands: *Repository satisfies
+// it, and no decision is taken here.
 //
-// Nothing here pushes, and no operation moves a branch in a working copy.
-// Fetch is the exception worth naming: it writes references in the local
-// repository, and a refspec beginning with + tells git to update one even when
-// that is not a fast-forward. A caller passing such a refspec has chosen that,
-// and this package does not second-guess it. Whether an update may proceed is
-// the safety module's question, not this one's.
+// Nothing here pushes, and no operation moves a branch in a working copy. Two
+// operations are worth naming against that sentence rather than leaving a
+// reader to check it.
+//
+// Fetch writes references in the local repository, and a refspec beginning
+// with + tells git to update one even when that is not a fast-forward. A
+// caller passing such a refspec has chosen that, and this package does not
+// second-guess it. Whether an update may proceed is the safety module's
+// question, not this one's.
+//
+// Rebase writes commits, moves HEAD, and rewrites the files in a working copy.
+// It moves no branch: it is given a commit to replay rather than a branch
+// name, so HEAD is left detached at the result and whatever branches the copy
+// carries still name what they named. It decides nothing about whether the
+// history it produced may replace anything.
 //
 // # Errors
 //

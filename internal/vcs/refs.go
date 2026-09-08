@@ -249,3 +249,34 @@ func checkArg(what, value string) error {
 	}
 	return nil
 }
+
+// CommitsNotIn returns the commits reachable from have and not from
+// incorporated, most recent first. An empty result means incorporated already
+// contains everything have does, so replacing have with incorporated loses no
+// commit.
+//
+// Both revisions are resolved locally first, so a commit this repository does
+// not hold fails with ErrRefNotFound rather than producing a comparison
+// answered against something else. That is the shape internal/safety needs:
+// a question it cannot answer becomes a refusal there, never an allow.
+func (r *Repository) CommitsNotIn(ctx context.Context, have, incorporated string) ([]string, error) {
+	a, err := r.ResolveCommit(ctx, have)
+	if err != nil {
+		return nil, err
+	}
+	b, err := r.ResolveCommit(ctx, incorporated)
+	if err != nil {
+		return nil, err
+	}
+	out, err := r.run(ctx, "commits-not-in", "rev-list", a, "--not", b, "--")
+	if err != nil {
+		return nil, err
+	}
+	var commits []string
+	for _, line := range strings.Split(string(out), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			commits = append(commits, line)
+		}
+	}
+	return commits, nil
+}
