@@ -19,11 +19,11 @@
 //
 // The lens is shipped guidance rather than a configured value, so a repository
 // that has never heard of it still gets it once a review stage puts it in
-// front of a reviewer. That wiring lands with that stage, which this
-// repository does not have yet, so what ships today is this package and its
-// guidance rather than a lens any run has been through. That is deliberate
-// and not an oversight of the configuration schema: a repository layer
-// replaces a list rather than appending to it, so a scope rule shipped as
+// front of a reviewer. internal/stages' review body is that wiring: it puts
+// Guidance in front of every reviewer it asks, reads the answer back off the
+// review report's traces, and appends what Observe makes of them. That is
+// deliberate and not an oversight of the configuration schema: a repository
+// layer replaces a list rather than appending to it, so a scope rule shipped as
 // the default of config's "review.path_rules" would be erased by any
 // repository that set that key for an unrelated reason, which is exactly the
 // opt-out PRD section 5 says the lens does not have. Path-scoped review

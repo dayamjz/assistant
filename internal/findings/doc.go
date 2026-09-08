@@ -122,6 +122,13 @@
 // text this package reads, and would hold reviewers to a stricter rule than
 // the PRD states.
 //
+// One thing a review report carries is outside all of that. Trace is the
+// review stage's answer to internal/scope's lens, and it is carried here
+// because a field the decoder does not know about is dropped rather than
+// read. It is bound to nothing, validated against nothing, and refuses
+// nothing: it is an account of a path the change touched, which the run
+// already knows, so there is no claim in it for an evidence set to support.
+//
 // # What this package does not promise
 //
 // The object extraction in ParseReport is a brace scan that tracks JSON string

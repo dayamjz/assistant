@@ -188,7 +188,15 @@ func TestARunIsStartedReportedAndAnsweredThroughSeparateInvocations(t *testing.T
 		t.Fatalf("assistant init exited %s:\n%s%s", got.code, got.stdout, got.stderr)
 	}
 
-	started := run(t, h, subject, "--json", "--intent", "add a greeting, with the tradeoffs stated")
+	// The run skips the review stage. Its body reads the run's isolated copy
+	// and nothing in this build creates one, so it fails on opening it rather
+	// than holding, and a run that took it could not walk from one hold to the
+	// next however it was answered. The skip is a run input, which P2 makes a
+	// person's per-run choice, so this drives the surface a person would drive
+	// rather than weakening the stage. The stage is named rather than derived,
+	// and the name goes away when this build creates the isolated copy.
+	started := run(t, h, subject, "--json", "--skip", pipeline.StageReview.String(),
+		"--intent", "add a greeting, with the tradeoffs stated")
 	if started.code != machine.ExitOK {
 		t.Fatalf("starting a run exited %s:\n%s", started.code, started.stdout)
 	}

@@ -134,6 +134,30 @@ func StageReport(s graph.State, stage Stage) (findings.Report, error) {
 	return decodeReport(text, stage)
 }
 
+// ReadStageReport returns the report a stage recorded, read through the Reader
+// a stage body is given rather than off a whole graph.State. It is
+// StageReport's answer on the surface a body actually holds, and it decodes
+// through the same one owner, so the two cannot come to differ about what a
+// recorded report means.
+//
+// A body reaches it by declaring a read of the stage's ReportKey, and it is
+// refused with ErrUndeclaredRead when it did not. That is the review stage's
+// path to the findings a fix round was sent to act on, which PRD section 5
+// makes claims for the round's re-review to check.
+//
+// A stage whose body never ran recorded nothing, which reads back as the zero
+// Report rather than as a failure: no round has run, so there is nothing to
+// check. A recorded report that cannot be decoded is refused with an error
+// wrapping ErrBadReport, on the same terms as StageReport.
+func ReadStageReport(state Reader, stage Stage) (findings.Report, error) {
+	v, err := state.Get(stage.ReportKey())
+	if err != nil {
+		return findings.Report{}, err
+	}
+	text, _ := v.Text()
+	return decodeReport(text, stage)
+}
+
 // FixSummary returns the sanitized summary the last fix round of a stage
 // wrote, empty when there was none.
 func FixSummary(s graph.State, stage Stage) string {

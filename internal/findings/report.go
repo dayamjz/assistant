@@ -42,6 +42,11 @@ type Report struct {
 	// never resolved against a filesystem. Paths says what an agent may write
 	// here and what becomes of a value this package cannot read.
 	Read Paths `json:"read,omitempty"`
+	// Traced is the review stage's answer to the scope lens: for each path
+	// the change touched, what part of the recorded intent it follows from.
+	// It is carried here for the reason Revision and Read are, and it is
+	// answered for by the same one stage; Trace says what it is worth.
+	Traced []Trace `json:"traced,omitempty"`
 	// Findings is what the stage found, in the order it reported them. Empty
 	// is valid and means the stage found nothing.
 	Findings []Finding `json:"findings,omitempty"`
@@ -82,9 +87,62 @@ func (r Report) Normalize() Report {
 	r.Revision = strings.TrimSpace(r.Revision)
 	r.Findings = NormalizeFindings(r.Findings)
 	r.Read = trimmedEntries(r.Read)
+	r.Traced = normalizeTraces(r.Traced)
 	r.Tested = normalizeTested(r.Tested)
 	r.Evidence = normalizeEvidence(r.Evidence)
 	return r
+}
+
+// Trace is one claim that a path the change touched follows from the recorded
+// intent. It is the reviewer's own words, recorded and attributable, and
+// nothing here or in internal/scope checks it against the intent or against
+// the code.
+//
+// It lives in this package because this is where a review report is decoded,
+// and a field the decoder does not know about is dropped rather than carried.
+// internal/scope, which is the lens that asks for these and reads them, names
+// this type rather than declaring a second one.
+//
+// A Trace is not a Finding and is bound to no evidence set. A finding is a
+// claim about code the reviewer read, so ParseReviewReport binds it to what
+// the reviewer declared reading; a trace is an account of a path the change
+// touched, which the run already knows, and it silences an observation rather
+// than making one.
+type Trace struct {
+	// Path is the repository-relative path being accounted for.
+	Path string `json:"path"`
+	// Reason is the part of the intent the path follows from. A trace with no
+	// reason accounts for nothing, because a bare path asserts only that a
+	// file was changed, which was already known.
+	Reason string `json:"reason"`
+}
+
+// normalizeTraces trims each trace and drops the ones that carry nothing at
+// all, preserving order and a nil input.
+//
+// It drops only the wholly empty entry. A trace naming a path with no reason,
+// and a reason naming no path, are each kept and each account for nothing, so
+// they stay visible to a reader of the report rather than being filtered here
+// into something indistinguishable from a trace nobody wrote.
+//
+// Validate asks nothing of a trace, which is the deliberate difference from
+// Evidence, whose missing path is a defect. The lens these answer is
+// note-only and may not stop a run, so a report carrying a malformed trace is
+// refused nothing: the trace accounts for nothing, its path keeps whatever
+// observation it would have silenced, and the report is read as it stands.
+func normalizeTraces(traces []Trace) []Trace {
+	if traces == nil {
+		return nil
+	}
+	out := make([]Trace, 0, len(traces))
+	for _, t := range traces {
+		t.Path, t.Reason = strings.TrimSpace(t.Path), strings.TrimSpace(t.Reason)
+		if t.Path == "" && t.Reason == "" {
+			continue
+		}
+		out = append(out, t)
+	}
+	return out
 }
 
 // normalizeTested trims each entry and drops the ones that were only
