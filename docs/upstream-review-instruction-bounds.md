@@ -158,17 +158,20 @@ suppression knob for only three of its adapters, so for any other resolved
 adapter whether the file is read at all is that CLI's own business and not
 something the gate settles - unguaranteed, and silent whichever way it falls.
 And the gate's `disable_project_settings` is what actually ends the reach, but
-only when it is set: with it set the file is suppressed for the three adapters
-that can suppress it, silently, and for every other `agent.EnsureGateNeutralized`
-refuses the run rather than launching it, naming codex, claude and pi. With it
-unset - the default, and what holds here - `no-mistakes` appends no suppression
-flag and the reach is simply not settled by the gate either way. That refusal is
+only when it is set: with it set the file is suppressed silently only when
+every adapter in the resolved set neutralizes with its effective knob intact,
+and otherwise `agent.EnsureGateNeutralized` refuses the run rather than
+launching it, naming codex, claude and pi. With it unset - the default, and what
+holds here - `no-mistakes` appends no suppression flag and the reach is simply
+not settled by the gate either way. That refusal is
 the only place the gate fails closed on any of this, and neither branch is
-reached in this repository: `grep -n 'disable_project_settings' .no-mistakes.yaml`
-returns nothing, and the field is a plain bool whose missing key is falsy
-(`internal/config/config.go:180`). A destination that is never guaranteed and
-can end without a word is the same stop-applying the move was meant to prevent,
-relocated rather than removed.
+reached in this repository: `git show origin/main:.no-mistakes.yaml | grep -n
+'disable_project_settings'` returns nothing against the default branch as it
+stands, which is the copy the gate honours for this key, this branch's only
+change to that file is the `document.instructions` lines, and the field is a
+plain bool whose missing key is falsy (`internal/config/config.go:180`). A
+destination that is never guaranteed and can end without a word is the same
+stop-applying the move was meant to prevent, relocated rather than removed.
 
 An earlier draft counted a third mechanism here, codex's
 `project_doc_max_bytes`, as a byte cap on `AGENTS.md` whose size is set outside
@@ -236,7 +239,7 @@ capped section.
 
 **111 bytes is not room for a rule.** By the accounting above a new block costs
 at least 232 bytes before a word of guidance, so no new block fits at all, and
-an addition to an existing block has under 111 bytes. Measure with
+an addition to an existing block has at most 111 bytes. Measure with
 `ReviewPathInstructionsBytes` before writing anything. A section over the cap is
 refused rather than truncated, and the gate validates the pushed copy too, so a
 branch that overfills it fails its own run at start and cannot merge; reaching
