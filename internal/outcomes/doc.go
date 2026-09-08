@@ -109,8 +109,11 @@
 // for itself rather than taking it from the outcome. The second is not
 // hypothetical: this repository shipped that shape and this package was green
 // on it. What stops it now is that machine.Run.nextAction is unexported, so no
-// package outside internal/machine has an assignment site for an action at
-// all, let alone one contradicting the outcome beside it. That is
+// package outside internal/machine has an assignment site for a run's action,
+// let alone one contradicting the outcome beside it. That is a run's answer
+// and not every action in this vocabulary: machine.Failure.NextAction is
+// exported and a surface does write it, and what keeps that one honest is that
+// a failure carries no outcome for its action to disagree with. The rest is
 // internal/machine's doing and not this check's, and it is a claim about the
 // package boundary rather than about the value: what writes the field inside
 // internal/machine, and why a decoded answer relays the producer's action

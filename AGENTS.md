@@ -417,11 +417,11 @@ Each has cost this repository more than one round of review.
   question: it has to sit inside `<section id="surfaces">`, named by that id
   because a section inserted earlier renumbers the section and not the id. A
   set the rule cannot read is a refusal too, never a short list. Agreement is
-  not correctness, and the gaps are worth knowing before relying on it:
-  nothing here reads what the row says an outcome
-  *means*, nothing pins `machine.OutcomeOf`'s translation from a run's state,
-  a set both sides get wrong agrees, and a field or a second next action added
-  to the answer passes. Read its `doc.go` before changing what fires.
+  not correctness, and the gaps are worth knowing before relying on it: nothing
+  here reads what the row says an outcome *means*, nothing pins
+  `machine.OutcomeOf`'s translation from a run's state, a set both sides get
+  wrong agrees, and a field or a second next action added to the answer passes.
+  Read its `doc.go` before changing what fires.
 
 ## Tests
 
