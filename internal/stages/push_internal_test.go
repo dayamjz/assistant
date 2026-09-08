@@ -53,6 +53,23 @@ type pushWorld struct {
 // published, and a detached copy of the feature branch for the run to work in.
 func newPushWorld(t *testing.T) *pushWorld {
 	t.Helper()
+	return buildPushWorld(t, true)
+}
+
+// newFirstPushWorld builds the subject as a run validating a branch nobody has
+// published finds it: the default branch is on the remote, and the branch under
+// validation exists only as the work the run's copy holds, so the remote
+// advertises nothing under the branch's name.
+func newFirstPushWorld(t *testing.T) *pushWorld {
+	t.Helper()
+	return buildPushWorld(t, false)
+}
+
+// buildPushWorld is both worlds: published decides whether the feature branch
+// exists on the remote before the run starts, which is the one fact that
+// separates an ordinary push from a branch's first.
+func buildPushWorld(t *testing.T, published bool) *pushWorld {
+	t.Helper()
 	gitConfig := pushGitEnvironment(t)
 	root := t.TempDir()
 	h, err := home.Open(root)
@@ -76,7 +93,9 @@ func newPushWorld(t *testing.T) *pushWorld {
 	pushWrite(t, author, "change.txt", "the change\n")
 	pushGit(t, author, "add", "-A")
 	pushGit(t, author, "commit", "--quiet", "-m", "the change")
-	pushGit(t, author, "push", "--quiet", w.upstream, "HEAD:refs/heads/"+w.branch)
+	if published {
+		pushGit(t, author, "push", "--quiet", w.upstream, "HEAD:refs/heads/"+w.branch)
+	}
 	w.published = pushGit(t, author, "rev-parse", "HEAD")
 
 	w.copyPath = h.Worktree(w.repoID, w.runID)
@@ -84,7 +103,15 @@ func newPushWorld(t *testing.T) *pushWorld {
 		t.Fatalf("making the directory above %s: %v", w.copyPath, err)
 	}
 	pushGit(t, root, "clone", "--quiet", w.upstream, w.copyPath)
-	pushGit(t, w.copyPath, "checkout", "--quiet", "--detach", "origin/"+w.branch)
+	if published {
+		pushGit(t, w.copyPath, "checkout", "--quiet", "--detach", "origin/"+w.branch)
+	} else {
+		// The branch's work reaches the copy the way a run's does, by the copy
+		// holding the commits rather than the remote: fetch from the author's
+		// repository and detach onto the branch's tip.
+		pushGit(t, w.copyPath, "fetch", "--quiet", author, "refs/heads/"+w.branch)
+		pushGit(t, w.copyPath, "checkout", "--quiet", "--detach", "FETCH_HEAD")
+	}
 
 	if w.repo, err = vcs.OpenWorktree(context.Background(), w.copyPath); err != nil {
 		t.Fatalf("opening the run's copy at %s: %v", w.copyPath, err)
@@ -136,6 +163,21 @@ func (w *pushWorld) advanceOutOfBand(message string) string {
 	colleague := filepath.Join(w.t.TempDir(), "colleague")
 	pushGit(w.t, filepath.Dir(colleague), "clone", "--quiet", w.upstream, colleague)
 	pushGit(w.t, colleague, "checkout", "--quiet", w.branch)
+	pushWrite(w.t, colleague, "theirs.txt", "somebody else's work\n")
+	pushGit(w.t, colleague, "add", "-A")
+	pushGit(w.t, colleague, "commit", "--quiet", "-m", message)
+	pushGit(w.t, colleague, "push", "--quiet", "origin", "HEAD:refs/heads/"+w.branch)
+	return pushGit(w.t, colleague, "rev-parse", "HEAD")
+}
+
+// createOutOfBand creates the branch on the remote from a second clone, which
+// is somebody else making the first push while this run was working. It
+// returns the commit their branch starts at.
+func (w *pushWorld) createOutOfBand(message string) string {
+	w.t.Helper()
+	colleague := filepath.Join(w.t.TempDir(), "colleague")
+	pushGit(w.t, filepath.Dir(colleague), "clone", "--quiet", w.upstream, colleague)
+	pushGit(w.t, colleague, "checkout", "--quiet", "-b", w.branch, "origin/main")
 	pushWrite(w.t, colleague, "theirs.txt", "somebody else's work\n")
 	pushGit(w.t, colleague, "add", "-A")
 	pushGit(w.t, colleague, "commit", "--quiet", "-m", message)
@@ -306,6 +348,98 @@ func TestThePushStageForwardsTheVerifiedCommitAndNamesTheAnchorItDecidedOn(t *te
 	}
 	assertNamesAll(t, "the report of a completed push", report.Summary,
 		head, "refs/heads/"+w.branch, "anchored on "+w.published)
+}
+
+// A branch nobody has published is a target the run observed absent, and
+// absence is a state the anchor records rather than a failure to read the
+// remote: the first push creates the branch, leased on that absence the way an
+// ordinary update is leased on the observed commit. A stage that refused here
+// would leave a new branch no way to ever reach its remote, because the action
+// such a refusal names cannot make a never-published branch exist first.
+//
+// The anchor value is asserted the way the ordinary forward asserts its
+// commit, and for PRD section 13's reason: a create leased on absence and one
+// performed on a fresh read are indistinguishable by outcome while nothing
+// races them, so the report naming absence is what separates the two.
+func TestAFirstPushCreatesTheBranchOnTheAnchorThatObservedItAbsent(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	w := newFirstPushWorld(t)
+	observed := w.observe()
+	head := w.commitInCopy("the change, fixed\n", "fix the change")
+
+	out, err := w.runPush(map[pipeline.Key]graph.Value{
+		pipeline.KeyHead:           graph.TextValue(head),
+		pipeline.KeyApproved:       graph.TextValue(head),
+		pipeline.KeyTargetObserved: graph.TextValue(w.recorded(observed)),
+	})
+	if err != nil {
+		t.Fatalf("the first push failed the step: %v", err)
+	}
+	report := out.Report.Normalize()
+	if err := report.Validate(); err != nil {
+		t.Fatalf("the first push produced a report the pipeline refuses: %v", err)
+	}
+	if report.HasHeld() {
+		t.Fatalf("the first push held the run for a person rather than creating the branch: %+v", report)
+	}
+	if got := w.remoteTip(); got != head {
+		t.Fatalf("the branch on the remote is %s, want it created at %s", got, head)
+	}
+	pushed, ok := out.Writes[pipeline.KeyPushed]
+	if !ok {
+		t.Fatalf("the first push wrote no %s, so nothing records what it forwarded: %v",
+			pipeline.KeyPushed, out.Writes)
+	}
+	if text, _ := pushed.Text(); text != head {
+		t.Fatalf("the first push recorded %q as pushed, want %s", text, head)
+	}
+	assertNamesAll(t, "the report of a first push", report.Summary,
+		head, "refs/heads/"+w.branch, "create", "anchored on absent")
+}
+
+// A target the run observed absent that somebody else has since created is a
+// target that moved, and the anchor on absence authorizes nothing over it. The
+// direction matters as its own test because it is the one a stage that read
+// observed-absent as create-no-matter-what would get wrong, and the commit it
+// would have overwritten is somebody else's first push.
+func TestAnAbsentObservationDoesNotAuthorizeOverwritingABranchCreatedSince(t *testing.T) {
+	principles.Cite(t, principles.P6, principles.P3)
+	w := newFirstPushWorld(t)
+	observed := w.observe()
+	head := w.commitInCopy("the change, fixed\n", "fix the change")
+	landed := w.createOutOfBand("somebody else's first push")
+
+	out, err := w.runPush(map[pipeline.Key]graph.Value{
+		pipeline.KeyHead:           graph.TextValue(head),
+		pipeline.KeyApproved:       graph.TextValue(head),
+		pipeline.KeyTargetObserved: graph.TextValue(w.recorded(observed)),
+	})
+	description := assertRefused(t, out, err, "push-refused-would-discard")
+	assertNamesAll(t, "the refusal", description, landed, "would discard")
+	if got := w.remoteTip(); got != landed {
+		t.Fatalf("the branch on the remote is %s, want it left where the colleague put it, %s", got, landed)
+	}
+}
+
+// A branch deleted from the remote after the run observed it is a target that
+// moved, not an unreadable one: the remote answered, and what it said is that
+// the reference is gone. The refusal has to say that and name an action, not
+// tell the person to restore access nobody lost.
+func TestABranchDeletedAfterTheObservationIsRefusedAsATargetThatMoved(t *testing.T) {
+	principles.Cite(t, principles.P6, principles.P3)
+	w := newPushWorld(t)
+	observed := w.observe()
+	head := w.commitInCopy("the change, fixed\n", "fix the change")
+	pushGit(t, w.upstream, "update-ref", "-d", "refs/heads/"+w.branch)
+
+	out, err := w.runPush(map[pipeline.Key]graph.Value{
+		pipeline.KeyHead:           graph.TextValue(head),
+		pipeline.KeyApproved:       graph.TextValue(w.published),
+		pipeline.KeyTargetObserved: graph.TextValue(w.recorded(observed)),
+	})
+	description := assertRefused(t, out, err, "push-refused-target-moved")
+	assertNamesAll(t, "the refusal", description,
+		w.published, "no longer advertises", "Start the run again")
 }
 
 // A remote that advanced out of band with a commit the run did not incorporate
@@ -768,9 +902,12 @@ func TestAPushRefusesWhenTheApprovedCommitIsNotContainedInWhatWouldBeForwarded(t
 	}
 }
 
-// A target whose history cannot be fetched is a target whose current contents
-// are unknown, and an update to it cannot be shown to discard nothing.
-func TestAPushRefusesWhenTheTargetCannotBeFetched(t *testing.T) {
+// A remote that cannot be reached is a target whose current contents are
+// unknown, and an update to it cannot be shown to discard nothing. This is a
+// genuine failure and not the absent-reference case: the remote answered
+// nothing, where absence is the remote answering that the reference does not
+// exist, and only the failure earns the restore-access instruction.
+func TestAPushRefusesWhenTheTargetCannotBeRead(t *testing.T) {
 	principles.Cite(t, principles.P6)
 	w := newPushWorld(t)
 	observed := w.observe()
@@ -785,7 +922,33 @@ func TestAPushRefusesWhenTheTargetCannotBeFetched(t *testing.T) {
 		pipeline.KeyTargetObserved: graph.TextValue(w.recorded(observed)),
 	})
 	description := assertRefused(t, out, err, "push-target-unreadable")
-	assertNamesAll(t, "the refusal", description, "refs/heads/"+w.branch, "Nothing was pushed")
+	assertNamesAll(t, "the refusal", description,
+		"refs/heads/"+w.branch, "Nothing was pushed", "Restore access")
+}
+
+// A reference the remote advertises and cannot deliver is the fetch failing
+// for a reason of its own, after absence has been ruled out structurally. It
+// keeps the same refusal as an unreachable remote, because in both cases what
+// the branch holds now could not be brought where the comparison is answered.
+func TestAPushRefusesWhenTheAdvertisedTargetCannotBeFetched(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	w := newPushWorld(t)
+	observed := w.observe()
+	head := w.commitInCopy("the change, fixed\n", "fix the change")
+	// Point the branch at an object the remote does not hold. ls-remote
+	// advertises whatever the reference file names, and the transfer then
+	// fails to deliver it, which is how a fetch fails while absence detection
+	// says the reference is there.
+	pushWrite(t, w.upstream, "refs/heads/"+w.branch, strings.Repeat("0123456789", 4)+"\n")
+
+	out, err := w.runPush(map[pipeline.Key]graph.Value{
+		pipeline.KeyHead:           graph.TextValue(head),
+		pipeline.KeyApproved:       graph.TextValue(w.published),
+		pipeline.KeyTargetObserved: graph.TextValue(w.recorded(observed)),
+	})
+	description := assertRefused(t, out, err, "push-target-unreadable")
+	assertNamesAll(t, "the refusal", description,
+		"refs/heads/"+w.branch, "could not be fetched", "Restore access")
 }
 
 // A remote that refuses the update leaves the branch where it was, and the
@@ -961,6 +1124,83 @@ func TestTheFixtureConditionForARemoteAdvancedOutOfBandIsMet(t *testing.T) {
 	assertNamesAll(t, "the refusal", description, landed)
 	if got := w.remoteTip(); got != landed {
 		t.Fatalf("the branch on the remote is %s, want it left where the colleague put it, %s", got, landed)
+	}
+}
+
+// The condition internal/fixture plants for a branch's first push is met by
+// this stage, down to the substrings that package records the message has to
+// carry. The scenario's remote advertises nothing under the branch's name, so
+// the observation, the decision, and the push all run against real absence
+// rather than one arranged by deleting something.
+func TestTheFixtureConditionForAFirstPushIsMet(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	pushGitEnvironment(t)
+	root := t.TempDir()
+	built, err := fixture.Build(root)
+	if err != nil {
+		t.Fatalf("building the fixture under %s: %v", root, err)
+	}
+	condition, ok := built.Condition("allowed-first-push-of-a-new-branch")
+	if !ok {
+		t.Fatal("the fixture no longer plants allowed-first-push-of-a-new-branch, so this checks nothing")
+	}
+	if len(condition.Expect.MessageContains) == 0 {
+		t.Fatal("the fixture records no expected message substrings, so this checks nothing")
+	}
+	scenario, ok := built.Scenario(fixture.ScenarioFirstPush)
+	if !ok {
+		t.Fatalf("the fixture has no %s scenario", fixture.ScenarioFirstPush)
+	}
+	if !scenario.BranchUnpublished {
+		t.Fatalf("the %s scenario no longer declares its branch unpublished, so this would drive an "+
+			"ordinary push", scenario.Name)
+	}
+
+	w := &pushWorld{t: t, home: nil, branch: scenario.Branch, repoID: "repository-1", runID: "run-1"}
+	w.upstream = scenario.Origin
+	if w.home, err = home.Open(filepath.Join(root, "home")); err != nil {
+		t.Fatalf("opening a home: %v", err)
+	}
+	if err := w.home.Create(); err != nil {
+		t.Fatalf("creating the home at %s: %v", w.home.Root(), err)
+	}
+	w.copyPath = w.home.Worktree(w.repoID, w.runID)
+	if err := os.MkdirAll(filepath.Dir(w.copyPath), 0o700); err != nil {
+		t.Fatalf("making the directory above %s: %v", w.copyPath, err)
+	}
+	// The clone brings only the default branch, because that is all the remote
+	// holds; the branch's work arrives from the scenario's working copy, which
+	// is the only place it exists.
+	pushGit(t, root, "clone", "--quiet", scenario.Origin, w.copyPath)
+	pushGit(t, w.copyPath, "fetch", "--quiet", scenario.WorkingCopy, "refs/heads/"+scenario.Branch)
+	pushGit(t, w.copyPath, "checkout", "--quiet", "--detach", "FETCH_HEAD")
+	if w.repo, err = vcs.OpenWorktree(context.Background(), w.copyPath); err != nil {
+		t.Fatalf("opening the run's copy: %v", err)
+	}
+	head := pushGit(t, w.copyPath, "rev-parse", "HEAD")
+
+	observed := w.observe()
+	if observed.State().Exists {
+		t.Fatalf("the run observed %s on the remote, and the scenario's plant is its absence", scenario.Branch)
+	}
+
+	out, runErr := w.runPush(map[pipeline.Key]graph.Value{
+		pipeline.KeyHead:           graph.TextValue(head),
+		pipeline.KeyApproved:       graph.TextValue(head),
+		pipeline.KeyTargetObserved: graph.TextValue(w.recorded(observed)),
+	})
+	if runErr != nil {
+		t.Fatalf("the first push failed the step: %v", runErr)
+	}
+	report := out.Report.Normalize()
+	if report.HasHeld() {
+		t.Fatalf("the first push was refused, and the condition records that a refusal here is the "+
+			"wrong answer whatever it says: %+v", report)
+	}
+	assertNamesAll(t, "the report", report.Summary, condition.Expect.MessageContains...)
+	assertNamesAll(t, "the report", report.Summary, head)
+	if got := w.remoteTip(); got != head {
+		t.Fatalf("the branch on the remote is %s, want it created at %s", got, head)
 	}
 }
 

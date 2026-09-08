@@ -22,10 +22,12 @@ const (
 	// this process, against the fixture. It is what is left where the binary
 	// cannot reach a mechanism at all, which today is every mechanism a stage
 	// body would have used past the run's own state: the intent body reads
-	// the supplied intent and launches nothing, and the review body opens the
+	// the supplied intent and launches nothing; the review body opens the
 	// run's isolated copy - which nothing in this build creates - before it
 	// launches anything, so a run that takes it fails there and every walk
-	// here skips it instead.
+	// here skips it instead; and the push body refuses every run this build
+	// can produce before opening the run's copy, for want of records only
+	// bodies not yet written would leave behind.
 	ReachPackage Reach = "package"
 	// ReachNone is not driven here. The reason beside it says why, and it is
 	// prose nobody checks; what the row buys is that the gap is enumerable
@@ -93,8 +95,9 @@ func Coverage() []Established {
 				"established there."},
 		{principles.P3, ReachBinary,
 			"A run through the binary is walked to its end and every hold it reaches is read: it holds " +
-				"once for each stage this build has no body for, which is read off internal/stages rather " +
-				"than counted, every hold is relayed with the finding that produced " +
+				"once for each stage this harness declares a run stops at, which is every stage without a " +
+				"body and the push stage, whose body refuses every run this build can produce for want of " +
+				"a recorded observation, every hold is relayed with the finding that produced " +
 				"it, every one of those findings reports itself as holding for a person, and none is one " +
 				"a fixer may take. The planted agent output is driven at package reach as well, because " +
 				"no run reaches an agent in this build - the review body would launch one, and it fails " +
@@ -119,17 +122,19 @@ func Coverage() []Established {
 			"The service is killed at every boundary a real run reaches and the run is driven to its " +
 				"end afterwards, which is P6's own stated verification criterion; the criterion is every " +
 				"boundary rather than a count of them. A boundary is a hold, so the boundaries are the " +
-				"stages this build has no body for. The intent stage is not among them and no kill is " +
-				"manufactured for it: it has a body, PRD section 5 has it never block a run, and a stage " +
-				"that never holds offers nothing to kill at. Review is not among them either: the run " +
-				"skips it, because its body fails on the isolated copy nothing creates rather than " +
+				"stages this harness declares a run stops at: every stage without a body, and the push " +
+				"stage, whose body holds every run this build can produce. The intent stage is not among " +
+				"them and no kill is manufactured for it: PRD section 5 has it never block a run, and a " +
+				"stage that never holds offers nothing to kill at. Review is not among them either: the " +
+				"run skips it, because its body fails on the isolated copy nothing creates rather than " +
 				"holding, and a skipped stage offers no hold. What the recovered decision is held to is " +
 				"that it stands at the same stage and still offers what it offered, which a checkpoint " +
 				"round trip can lose; that it offers something nobody was offered is not claimed, " +
 				"because internal/pipeline gives every hold the same fixed rendering and internal/graph " +
-				"copies it through, so no run can report one. The lease anchor and " +
-				"the refusal against a remote that advanced out of band are driven at package reach, " +
-				"because no stage body pushes. The killed run, and the contention check beside it, are " +
+				"copies it through, so no run can report one. The lease anchor, the refusal against a " +
+				"remote that advanced out of band, and the first push allowed as a creation are driven at " +
+				"package reach, because a run's push refuses before reaching git for want of a recorded " +
+				"observation. The killed run, and the contention check beside it, are " +
 				"driven through methods internal/ipc restricts, so on a platform where that package reads " +
 				"no local socket peer credentials both are skipped rather than passing, and the two " +
 				"package-reach observations are the whole of what is established there."},

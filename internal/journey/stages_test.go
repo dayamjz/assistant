@@ -50,6 +50,10 @@ func TestTheStageListComesFromThePRDRatherThanFromTheBuild(t *testing.T) {
 	if err := journey.DeclaresEveryStage(journey.Implemented(), journey.StagesWithoutABody()); err != nil {
 		t.Fatalf("%v", err)
 	}
+	if err := journey.DeclaresEveryHold(journey.Implemented(), journey.StagesWithoutABody(),
+		journey.StagesARunHoldsAt()); err != nil {
+		t.Fatalf("%v", err)
+	}
 
 	// Positive control one: a stage removed from the PRD's table must go red,
 	// and for being a PRD list of the wrong length rather than for anything
@@ -195,6 +199,74 @@ func TestTheStageListComesFromThePRDRatherThanFromTheBuild(t *testing.T) {
 				says, err)
 		}
 		t.Logf("control 5c red as required: %v", err)
+	})
+
+	// Positive controls six are DeclaresEveryHold's three branches, each handed
+	// the disagreement it exists to catch. What no control here can reach is an
+	// implemented stage declared holding whose body does not hold, because that
+	// is a fact about the build rather than about the lists; the walking checks
+	// are what go red on it, by comparing the holds a run reaches against the
+	// declaration.
+	holds := journey.StagesARunHoldsAt()
+	t.Run("a body-less stage missing from the holds declaration is caught", func(t *testing.T) {
+		short := slices.DeleteFunc(slices.Clone(holds), func(s pipeline.Stage) bool { return s == declared[0] })
+		err := journey.DeclaresEveryHold(journey.Implemented(), declared, short)
+		if err == nil {
+			t.Fatal("a holds declaration missing a body-less stage was accepted, and every body-less " +
+				"stage holds, so a walk held to it would pass one stop short")
+		}
+		if !errors.Is(err, journey.ErrUndeclaredHold) {
+			t.Fatalf("caught for the wrong reason: %v", err)
+		}
+		says := fmt.Sprintf("%s has no body, so a run holds at it", declared[0])
+		if !strings.Contains(err.Error(), says) {
+			t.Fatalf("caught, but not for the direction this control names; wanted a refusal saying %q "+
+				"and got: %v", says, err)
+		}
+		t.Logf("control 6a red as required: %v", err)
+	})
+
+	t.Run("a holds declaration naming something that is not a stage is caught", func(t *testing.T) {
+		notAStage := pipeline.StageInvalid
+		err := journey.DeclaresEveryHold(journey.Implemented(), declared, append(slices.Clone(holds), notAStage))
+		if err == nil {
+			t.Fatal("a holds declaration naming something that is not a stage was accepted")
+		}
+		if !errors.Is(err, journey.ErrUndeclaredHold) {
+			t.Fatalf("caught for the wrong reason: %v", err)
+		}
+		says := fmt.Sprintf("%s is declared holding here and is not one of the stages", notAStage)
+		if !strings.Contains(err.Error(), says) {
+			t.Fatalf("caught, but not for the name being no stage; wanted a refusal saying %q and got: %v",
+				says, err)
+		}
+		t.Logf("control 6b red as required: %v", err)
+	})
+
+	t.Run("a held stage the build neither implements nor leaves body-less is caught", func(t *testing.T) {
+		implemented := journey.Implemented()
+		if len(implemented) == 0 {
+			t.Skip("this build implements no stage, so no held stage can lose its implementation")
+		}
+		heldWithBody := implemented[len(implemented)-1]
+		if !slices.Contains(holds, heldWithBody) {
+			t.Skipf("%s is implemented and not declared holding, so taking its body away controls nothing here",
+				heldWithBody)
+		}
+		err := journey.DeclaresEveryHold(implemented[:len(implemented)-1], declared, holds)
+		if err == nil {
+			t.Fatal("a held stage that lost its body without either declaration moving was accepted, so " +
+				"the holds list would keep naming a stage no list accounts for")
+		}
+		if !errors.Is(err, journey.ErrUndeclaredHold) {
+			t.Fatalf("caught for the wrong reason: %v", err)
+		}
+		says := fmt.Sprintf("%s is declared holding here, is not declared body-less", heldWithBody)
+		if !strings.Contains(err.Error(), says) {
+			t.Fatalf("caught, but not for the direction this control names; wanted a refusal saying %q "+
+				"and got: %v", says, err)
+		}
+		t.Logf("control 6c red as required: %v", err)
 	})
 
 	// And the reader itself: a PRD it cannot read has to refuse rather than

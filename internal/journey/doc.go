@@ -24,11 +24,15 @@
 //
 // # Reach is part of every claim
 //
-// internal/stages has bodies for the intent and review stages and none for
-// the rest, and no run here can carry the review body through a launch: it
-// opens the run's isolated copy first, nothing in this build creates one, so
-// every walk skips that stage. A run therefore holds at every body-less stage
-// and large parts of this product are unreachable from one: no agent is
+// internal/stages has bodies for the intent, review and push stages and none
+// for the rest. The intent body reads the supplied intent and launches
+// nothing. No run here can carry the review body through a launch: it opens
+// the run's isolated copy first, nothing in this build creates one, so every
+// walk skips that stage. And the push body refuses every run this build can
+// produce, for want of the record of a verified commit and of an observed
+// target that only bodies not yet written would leave behind, before it opens
+// the run's copy. So a run holds at every stage this harness declares it does
+// and large parts of this product stay unreachable from one: no agent is
 // launched, no reference is moved, no code host is asked anything, and no
 // repository configuration is read.
 //
@@ -39,11 +43,12 @@
 // being read as though it did.
 //
 // Which nine stages those are is read from the PRD rather than taken from the
-// build, and which of them have no body is declared here rather than
-// subtracted from what the build reports. A harness that derived either from
-// the product could only fail when the product disagreed with itself, and this
-// one silently became an eight-boundary harness that way. stages.go owns both
-// halves and what its read of the PRD leaves open.
+// build, and which of them have no body, and which of them a run stops at, are
+// declared here rather than subtracted from what the build reports. A harness
+// that derived any of them from the product could only fail when the product
+// disagreed with itself, and this one silently became an eight-boundary
+// harness that way. stages.go owns all three and what its read of the PRD
+// leaves open.
 //
 // # Every assertion carries the evidence that it can fail
 //

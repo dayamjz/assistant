@@ -83,6 +83,62 @@ func buildRemoteAdvanced(b *builder) (*Scenario, []Condition, error) {
 	}}, nil
 }
 
+// buildFirstPush builds a subject whose branch under validation has never been
+// published: the remote advertises only the default branch, and the branch
+// exists as the working copy's own work. This is the case P6's refusal must
+// not fire on. An anchor that observed the target absent authorizes creating
+// it, leased on that absence, and a gate that read absence as a failure would
+// refuse every branch's first push with an instruction nobody can follow.
+func buildFirstPush(b *builder) (*Scenario, []Condition, error) {
+	s, err := b.newScenario(ScenarioFirstPush,
+		"A branch that has never been pushed, whose first push must be allowed as a creation.")
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := b.initSubject(s); err != nil {
+		return nil, nil, err
+	}
+	if err := b.startBranch(s); err != nil {
+		return nil, nil, err
+	}
+	if err := writeFile(s.WorkingCopy, "docs/first-change.md", 0o644,
+		"A change recorded on a branch nobody has published yet.\n"); err != nil {
+		return nil, nil, err
+	}
+	commit, err := b.git.commitAll(s.WorkingCopy, "record the branch's first change")
+	if err != nil {
+		return nil, nil, err
+	}
+	s.Commits["branch-change"] = commit
+	// The head is recorded here because pushBranch, which records it
+	// everywhere else, is the publication this scenario exists to not have
+	// had.
+	s.Commits["branch-head"] = commit
+	s.BranchUnpublished = true
+
+	return s, []Condition{{
+		ID:        "allowed-first-push-of-a-new-branch",
+		Scenario:  s.Name,
+		Kind:      KindRefusal,
+		Principle: "P6",
+		Planted: "A branch that exists only in the working copy: the bare remote advertises the default " +
+			"branch and nothing else, which is what every branch looks like before its first push. " +
+			"Nothing is planted on the remote, because the plant is the absence.",
+		Mechanism: "safety.Guard.Decide, over an anchor from Guard.Observe taken while the target was absent",
+		Expect: Outcome{
+			Summary: "The update is allowed as a creation, leased on the absence the run observed: the " +
+				"decision's kind is create, its anchor records the target absent, and the push it permits " +
+				"creates the branch at the proposed commit. This is the negative case that gives the " +
+				"would-discard refusal its meaning. A refusal here is the wrong answer whatever it says, " +
+				"and one reading absence as an unreadable remote is doubly wrong: the action it names, " +
+				"restoring access, cannot succeed, because no access was lost and no publication can " +
+				"precede the first.",
+			Value:           "safety.KindCreate",
+			MessageContains: []string{"create", "anchored on absent"},
+		},
+	}}, nil
+}
+
 // buildEmptyAfterRebase builds a branch whose change is already on the default
 // branch. The two histories are planted; the rebase that empties the branch is
 // a real rebase the run performs, because an empty commit planted directly is

@@ -21,6 +21,10 @@ const (
 	// ScenarioRemoteAdvanced carries the out-of-band remote advance, whose
 	// refusal stops the run at the push stage.
 	ScenarioRemoteAdvanced ScenarioName = "remote-advanced"
+	// ScenarioFirstPush carries a branch that has never been published, so the
+	// remote advertises nothing under its name and the run's push is the
+	// reference's first.
+	ScenarioFirstPush ScenarioName = "first-push"
 	// ScenarioEmptyAfterRebase carries a branch whose change is already on the
 	// default branch, so a real rebase leaves it with no diff.
 	ScenarioEmptyAfterRebase ScenarioName = "empty-after-rebase"
@@ -77,6 +81,12 @@ type Scenario struct {
 	// Branch is the branch under validation, empty for a scenario that has
 	// none.
 	Branch string `json:"branch"`
+	// BranchUnpublished records that the branch under validation is
+	// deliberately absent from Origin: the plant is the absence, so the branch
+	// exists only in the working copy. Every other scenario publishes it, and
+	// the fixture's own tests hold each scenario to whichever of the two this
+	// declares.
+	BranchUnpublished bool `json:"branch_unpublished,omitempty"`
 	// Tripwire is the file every planted executable appends to when it runs.
 	// It does not exist in a scenario nothing has executed.
 	Tripwire string `json:"tripwire"`
@@ -241,6 +251,7 @@ func Build(root string, opts ...Option) (*Fixture, error) {
 var scenarioBuilders = []func(*builder) (*Scenario, []Condition, error){
 	buildBase,
 	buildRemoteAdvanced,
+	buildFirstPush,
 	buildEmptyAfterRebase,
 	buildUnparseableTrustedConfig,
 	buildUnreadableTrustedConfig,

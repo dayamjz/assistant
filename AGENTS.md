@@ -414,9 +414,10 @@ Each has cost this repository more than one round of review.
   the assertion cannot pass vacuously. A body landing moves where a run first
   stops, so a test may not name the stage it expects a hold at: the ones in
   `internal/cli` and `internal/service` read `Implemented` and take the first
-  stage without a body, and `internal/journey` names them in a declaration
-  checked against `Implemented` both ways, so landing a body means writing it
-  down there too. And a stage implements the part of its PRD section the
+  stage without a body, and `internal/journey` names them in declarations
+  checked against `Implemented` in both directions - which stages have no body,
+  and which a run stops at, where a body that holds stays - so landing a body
+  means writing it down there too. And a stage implements the part of its PRD section the
   phase list has reached and ships no seam for the rest: the intent stage reads
   supplied intent and does not infer, because inference is deferred, and what
   that deferred work inherits is a note in the package documentation rather
@@ -517,9 +518,10 @@ Each has cost this repository more than one round of review.
   through the binary or
   through the package that owns the mechanism, because a run reaches no agent,
   no push, and no code host: the intent body reads the supplied intent and
-  launches nothing, and the review body fails on the run's isolated copy, which
+  launches nothing, the review body fails on the run's isolated copy, which
   nothing in this build creates, before it launches anything, so every walk
-  there skips that stage. It takes both of the platform guards
+  there skips that stage, and the push body refuses every run this build can
+  produce before opening the run's copy. It takes both of the platform guards
   `internal/cli` and `internal/service` carry, on their terms: a check that
   drives a run skips where `internal/ipc` reads no local socket peer
   credentials, and a check whose service did not come up skips where there is

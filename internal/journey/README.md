@@ -23,21 +23,26 @@ and no report built on this may claim otherwise.
 
 ## The second limit: most stages have no body, and no run reaches an agent
 
-`internal/stages` has two implementations. The intent stage's reads the intent
-it was supplied and launches nothing. The review stage's opens the run's
-isolated copy before it launches anything, and nothing in this build creates
-one, so a run that takes review fails there rather than reviewing - which is
-why every test here that walks a run skips that stage, as the run input P2
-gives a person. Every other stage has no body and reports one unclassified
-finding and holds for a person, which is P3 working as specified. Between
-them, that is the reason large parts of the product are not reachable from a
-run today:
+`internal/stages` has three implementations. The intent stage's reads the
+intent it was supplied and launches nothing. The review stage's opens the
+run's isolated copy before it launches anything, and nothing in this build
+creates one, so a run that takes review fails there rather than reviewing -
+which is why every test here that walks a run skips that stage, as the run
+input P2 gives a person. The push stage's requires a record of the verified
+commit and of where the target was observed, which only the bodies not yet
+written would leave behind, so it refuses every run this build can produce
+before opening the run's copy. Every stage without a body reports one
+unclassified finding and holds for a person, which is P3 working as
+specified, and the push stage holds the same way through its refusal; the
+body-less stages plus push are the holds declaration in `stages.go`, and
+between them these are the reason large parts of the product are not
+reachable from a run today:
 
 - no run launches an agent, so no run parses agent output, keeps a fixer
   session, or takes a fix round;
-- no stage pushes, opens a pull request, or reads checks, so `internal/safety`,
-  `internal/forge` and the push half of `internal/vcs` are never reached by a
-  run;
+- no run pushes, opens a pull request, or reads checks: the push body refuses
+  before it reaches git, so `internal/safety`, `internal/forge` and the push
+  half of `internal/vcs` are never reached by a run;
 - nothing reads a repository's own configuration document from anywhere, which
   `internal/service` states, so the trusted-versus-pushed composition PRD
   section 10 describes has no owner and no run performs it.
@@ -49,9 +54,10 @@ row of `Coverage` and of `Drives` carries that distinction as `binary` or
 one.
 
 Which nine stages there are is read out of PRD section 5's table, and which of
-them have no body is a declaration in `stages.go` rather than a subtraction
-from what the build reports, so a body that lands is a change somebody writes
-down here instead of one this harness silently follows.
+them have no body, and which of them a run stops at, are declarations in
+`stages.go` rather than subtractions from what the build reports, so a body
+that lands is a change somebody writes down here instead of one this harness
+silently follows.
 
 ## Every assertion is watched failing, on every run
 
@@ -149,7 +155,7 @@ works around them.
 | Nothing reads a repository's configuration document from the default branch, so PRD section 10's abort before launch has no owner. | Drives `config.Parse` and `vcs.Repository.FileAt` against the planted documents directly, and observes on a run that it starts anyway. Reported as a gap against section 10. That nothing a branch names is executed is established nowhere in this build; the row below says why. |
 | Two of `internal/graph`'s three loop bounds sit on the back edge into a fixer, and no stage of a run here can produce a fix-eligible finding: a stage without a body reports an ask finding, which never enters a fix round; the intent body declares no fix rounds and reports only notes; and the review stage, the one that does take fix rounds, cannot produce a report in a run - its body fails on the isolated copy nothing creates, so every walk skips it. | Drives the run-wide step budget, which is reachable, and says the other two are not. |
 | No shipped surface reports which agent a run resolved. No `internal/machine` shape carries one, and `doctor`'s `agent` check resolves the constant `auto` against the default catalog, so it answers what is runnable on this machine rather than what any run resolved; `internal/cli` says so itself. | Does not claim it. The P7 branch test establishes the pushed-configuration rejections and the suppression refusal instead, both of which observe something. |
-| `internal/fixture`'s nothing-executed evidence has no producer for the branch-installation family. Every executable those conditions plant - the `.claude` hooks, the branch's agent binary, its `commands.test`, the `.githooks` scripts, `.envrc` - is reached only through a stage body that launches something, and no run reaches one: the intent body reads the supplied intent and launches nothing, and the review body fails on the isolated copy nothing in this build creates before it launches, so a run launches no agent, runs no configured command, and makes no commit or push. | Rests no clause on the tripwire file: one asserting that absence would hold whatever the product resolved. The P7 branch test reads it and logs what it holds, so the evidence is in place the day a stage body lands, and the `Drives` row for that condition says nothing about it is established. |
+| `internal/fixture`'s nothing-executed evidence has no producer for the branch-installation family. Every executable those conditions plant - the `.claude` hooks, the branch's agent binary, its `commands.test`, the `.githooks` scripts, `.envrc` - is reached only through a stage body that launches something, and no run carries one through a launch: the intent body reads the supplied intent and launches nothing, the review body fails on the isolated copy nothing in this build creates before it launches, so every walk skips it, and the push body refuses every run this build can produce before opening the run's copy, so a run launches no agent, runs no configured command, and makes no commit or push. | Rests no clause on the tripwire file: one asserting that absence would hold whatever the product resolved. The P7 branch test reads it and logs what it holds, so the evidence is in place the day a stage body that launches something lands, and the `Drives` row for that condition says nothing about it is established. |
 | It has no producer for the hostile-template family either, for a different reason. Those hooks are receive-side, so only a push to the gate could run them, and the four subtests that plant them make no push: each initializes a gate and reads how that came out, and none starts a service. So neither a promoted template `pre-receive` nor `update` nor `post-update` is reached. A push to a gate is admitted in this build, which the PRD section 9 row above records, so what leaves these four short is what they do rather than a door that is shut. | Rests no clause on the tripwire file, for the same reason as the row above, and none on the gate's hooks directory either - so whether a hook arrived is unestablished as well as whether one ran. What those four subtests establish is how the initialization came out: the two refusals refuse with the substrings their conditions record, and the two closed channels are not refused. |
 
 ## What accounts for what

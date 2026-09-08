@@ -45,6 +45,7 @@ func Drives() []Drove {
 		branch     = "TestTheBranchUnderValidationChoosesNothingThatRuns"
 		trustedDoc = "TestATrustedConfigurationThatCannotBeReadIsNotFallenBackFrom"
 		anchor     = "TestAnUpdateIsAnchoredToWhatTheRunObservedRatherThanToAFreshRead"
+		firstPush  = "TestAFirstPushIsAllowedAsACreationAnchoredOnAbsence"
 		ownership  = "TestACopiedProjectDirectoryDoesNotOwnTheGateItInherited"
 		checks     = "TestAnEmptyCheckListIsNotAPass"
 	)
@@ -115,11 +116,12 @@ func Drives() []Drove {
 				"drive is over the pushed layer with the trusted one absent, so it cannot resolve the " +
 				"default branch's fixture-trusted-agent at all. Its tripwire half has no producer " +
 				"either: every executable it plants is reached only through a stage body that launches " +
-				"something, and no run reaches one - the intent body reads the supplied intent and " +
-				"launches nothing, and the review body fails on the isolated copy nothing creates " +
-				"before it launches, so a run skips it - and a run " +
-				"therefore launches no agent, runs no configured command, " +
-				"and makes no commit or push. TestTheBranchUnderValidationChoosesNothingThatRuns does " +
+				"something, and no run carries one through a launch - the intent body reads the supplied " +
+				"intent and launches nothing, the review body fails on the isolated copy nothing " +
+				"creates before it launches, so a run skips it, and the push body refuses every run " +
+				"this build can produce before opening the run's copy - and a run therefore launches " +
+				"no agent, runs no configured command, and makes no commit or push. " +
+				"TestTheBranchUnderValidationChoosesNothingThatRuns does " +
 				"drive a whole run over this branch and reads the tripwire file at the end, and logs " +
 				"what it holds; what that test establishes is the row below and the suppression " +
 				"refusal. This becomes drivable when a run can carry a stage body through a launch, " +
@@ -139,7 +141,15 @@ func Drives() []Drove {
 
 		{"refusal-remote-advanced-out-of-band", ReachPackage, anchor,
 			"internal/safety over internal/vcs's own reads, with the advance planted between the " +
-				"observation and the decision. No stage body pushes, so no run proposes an update."},
+				"observation and the decision. No run proposes an update: the push stage's body requires " +
+				"the observation a rebase body would record and refuses every run for its absence."},
+
+		{"allowed-first-push-of-a-new-branch", ReachPackage, firstPush,
+			"internal/safety over internal/vcs's own reads for the decision, and internal/vcs's one " +
+				"leased push performing the update the decision permits, so the branch the remote ends " +
+				"up holding was created under the decision's own lease. The push stage's body over the " +
+				"same planted scenario is driven in internal/stages' own tests, which is that package's " +
+				"claim rather than this row's."},
 
 		{"refusal-copied-working-copy-removal", ReachPackage, ownership,
 			"gate.Remove against the copy, with the binary's own removal driven alongside to establish " +

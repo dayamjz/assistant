@@ -111,6 +111,18 @@ import (
 // TestARemoteAdvancedOutOfBandIsRefusedNamingWhatWouldBeDiscarded is what
 // holds that, and it asserts the reason as well as the refusal.
 //
+// A reference the remote does not advertise has no history to fetch, and that
+// is a state rather than a failure: it is how the remote answers about a
+// branch nobody has pushed yet, whose run reaches this stage on an anchor that
+// observed it absent, and about a branch deleted since the run looked. Both
+// belong to the decision, which allows the first as a creation leased on the
+// absence the run observed and refuses the second as a target that moved. So
+// whether there is anything to fetch is read structurally first, and only a
+// read or a transfer that actually failed is reported as the target being
+// unreadable. fetchTarget owes that distinction, and
+// TestAFirstPushCreatesTheBranchOnTheAnchorThatObservedItAbsent is what holds
+// the case that used to be swallowed by it.
+//
 // What the fetch changes is worth stating exactly, because "it only reads" is
 // the easy thing to write here and it is not true. It brings the target's
 // objects into the copy's store, and git also updates the copy's own
@@ -184,6 +196,14 @@ import (
 //     wrote them is not established, because internal/safety never learns the
 //     run's base; a decision that drops commits names every one of them and
 //     this stage reports that list.
+//   - The advertisement read and the decision's own read are two ls-remotes,
+//     and the remote can change between them. Nothing rests on the first: the
+//     decision decides on its own read and the remote enforces the lease, so
+//     the race costs precision rather than safety. A reference that appears
+//     between the two is refused on commits the skipped fetch never brought
+//     over, which is the unverifiable refusal rather than one naming them, and
+//     one that disappears makes the fetch fail as unreadable rather than
+//     refusing as moved.
 func Push(deps StageDeps) pipeline.Implementation {
 	return pipeline.Implementation{
 		Reads: []pipeline.Key{
@@ -356,20 +376,56 @@ func requireApproval(ctx context.Context, repo *vcs.Repository, facts pushFacts)
 // that remote along the way, which is local bookkeeping and moves neither the
 // target nor anything the run is working on.
 //
-// A fetch that fails is refused here rather than left for the decision to
-// stumble over. The decision would refuse too, on the fetch's behalf and in
-// the vocabulary of a comparison it could not answer, which says less about
-// what went wrong than the fetch's own error does.
+// A reference the remote does not advertise is a state, not a failure, and it
+// is detected structurally: RemoteRefs is one ls-remote, an answer without the
+// reference is the remote saying it does not exist, and nothing here reads
+// git's prose to find that out. There is then no history to bring over, so the
+// fetch is skipped rather than asked to fail, and what absence means for the
+// update is internal/safety's question: its own fresh read allows a creation
+// the run observed absent and refuses an anchor the remote no longer
+// describes. Asking git to fetch the reference anyway is how absence used to
+// arrive here dressed as a failure, which turned every branch's first push
+// into a refusal whose named action could never succeed.
+//
+// A read or a transfer that fails is refused here rather than left for the
+// decision to stumble over. The decision would refuse too, on the failure's
+// behalf and in the vocabulary of a comparison it could not answer, which says
+// less about what went wrong than the failure's own error does. Those two are
+// the genuine failures, and only they say to restore access: the remote gave
+// no answer, or advertised history it then could not deliver.
 func fetchTarget(ctx context.Context, repo *vcs.Repository, target safety.Target) *pipeline.Output {
-	err := repo.Fetch(ctx, vcs.FetchSpec{Remote: target.Remote, Refspecs: []string{target.Ref}})
-	if err == nil {
+	refs, err := repo.RemoteRefs(ctx, target.Remote, target.Ref)
+	if err != nil {
+		out := refusePush("push-target-unreadable",
+			"What "+shownTarget(target).String()+" stands at could not be read, so what that branch holds now is "+
+				"unknown and no update to it can be shown to discard nothing: "+err.Error()+". Nothing "+
+				"was pushed. Restore access to the remote and run this stage again.")
+		return &out
+	}
+	if !advertises(refs, target.Ref) {
 		return nil
 	}
-	out := refusePush("push-target-unreadable",
-		"The history of "+shownTarget(target).String()+" could not be fetched, so what that branch holds now is "+
-			"unknown and no update to it can be shown to discard nothing: "+err.Error()+". Nothing "+
-			"was pushed. Restore access to the remote and run this stage again.")
-	return &out
+	if err := repo.Fetch(ctx, vcs.FetchSpec{Remote: target.Remote, Refspecs: []string{target.Ref}}); err != nil {
+		out := refusePush("push-target-unreadable",
+			"The history of "+shownTarget(target).String()+" could not be fetched, so what that branch holds now is "+
+				"unknown and no update to it can be shown to discard nothing: "+err.Error()+". Nothing "+
+				"was pushed. Restore access to the remote and run this stage again.")
+		return &out
+	}
+	return nil
+}
+
+// advertises reports whether refs carries name itself. ls-remote matches a
+// pattern against the tail of a reference name, so a read for refs/heads/x
+// can carry other references back; only an exact name is the target, which is
+// the same rule internal/safety's own read applies.
+func advertises(refs []vcs.Ref, name string) bool {
+	for _, ref := range refs {
+		if ref.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 // reportSafetyRefusal turns internal/safety's answer into this stage's report.

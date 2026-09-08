@@ -63,7 +63,7 @@ func TestSeveralCallersDrivingOneRunExecuteNoNodeTwice(t *testing.T) {
 	requiresIdentifiedPeer(t)
 	principles.Cite(t, principles.P6)
 
-	holding := stagesWithoutABody(t)
+	holding := stagesARunHoldsAt(t)
 	// One hold-to-hold transition costs what the next one does only while the
 	// stages a run holds at run consecutively: internal/pipeline gives a stage
 	// that holds a hold node as well as a stage node, and a stage that does
@@ -259,9 +259,9 @@ func holdPosition(t *testing.T, holding []pipeline.Stage, run machine.Run) int {
 		return stage.String() == run.Decision.Stage
 	})
 	if at < 0 {
-		t.Fatalf("the run is holding at %s, which is not one of the stages this build has no body for "+
-			"(%v), so a stage with a body is holding too and what one hold costs is no longer one "+
-			"number; this check needs rewriting against whatever holds a run now",
+		t.Fatalf("the run is holding at %s, which is not one of the stages this harness declares a run "+
+			"stops at (%v), so something undeclared is holding too and what one hold costs is no longer "+
+			"one number; this check needs rewriting against whatever holds a run now",
 			run.Decision.Stage, holding)
 	}
 	return at

@@ -202,8 +202,12 @@ func TestEveryRefusalThatIsADeadEndNamesAnAction(t *testing.T) {
 }
 
 // TestEveryScenarioHasAWorkingCopyOnTheBranchAndARemoteHoldingIt checks the
-// shape every scenario claims: a working copy whose origin is the bare
-// repository beside it, with the branch under validation published there.
+// shape each scenario claims: a working copy whose origin is the bare
+// repository beside it, with the branch under validation published there, or
+// deliberately absent from it where the scenario declares the absence to be
+// the plant. Absence is asserted rather than tolerated, because a scenario
+// whose plant is the absence rots the moment something publishes the branch
+// and nothing else would notice.
 func TestEveryScenarioHasAWorkingCopyOnTheBranchAndARemoteHoldingIt(t *testing.T) {
 	f := readOnly(t)
 	for _, s := range f.Scenarios {
@@ -220,20 +224,28 @@ func TestEveryScenarioHasAWorkingCopyOnTheBranchAndARemoteHoldingIt(t *testing.T
 			t.Errorf("%s: reading the remote: %s", s.Name, out)
 			continue
 		}
-		if !strings.Contains(out, "refs/heads/"+f.Branch) {
+		wantHeads := 2
+		if s.BranchUnpublished {
+			wantHeads = 1
+			if strings.Contains(out, "refs/heads/"+f.Branch) {
+				t.Errorf("%s: %s holds %s, and this scenario's plant is that branch never having been "+
+					"pushed: %s", s.Name, s.Origin, f.Branch, out)
+			}
+		} else if !strings.Contains(out, "refs/heads/"+f.Branch) {
 			t.Errorf("%s: %s does not hold %s: %s", s.Name, s.Origin, f.Branch, out)
 		}
-		// The default branch has to be there too: it is what the trusted
-		// configuration is read from and what the branch is diffed against.
+		// The default branch has to be there either way: it is what the
+		// trusted configuration is read from and what the branch is diffed
+		// against.
 		if !strings.Contains(out, "refs/heads/"+f.DefaultBranch) {
 			t.Errorf("%s: %s does not hold %s: %s", s.Name, s.Origin, f.DefaultBranch, out)
 		}
-		// ls-remote prints one identifier and one name per line, so two heads
-		// is four fields. Anything else is a scenario carrying a branch the
+		// ls-remote prints one identifier and one name per line, so a head is
+		// two fields. More heads than the scenario claims is a branch the
 		// catalog says nothing about.
-		if got := len(strings.Fields(out)) / 2; got != 2 {
-			t.Errorf("%s: %s holds %d heads, want exactly %s and %s: %s",
-				s.Name, s.Origin, got, f.DefaultBranch, f.Branch, out)
+		if got := len(strings.Fields(out)) / 2; got != wantHeads {
+			t.Errorf("%s: %s holds %d heads, want exactly %d: %s",
+				s.Name, s.Origin, got, wantHeads, out)
 		}
 	}
 }

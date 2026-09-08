@@ -173,7 +173,6 @@ var bodyless = []pipeline.Stage{
 	pipeline.StageTest,
 	pipeline.StageDocument,
 	pipeline.StageLint,
-	pipeline.StagePush,
 	pipeline.StagePR,
 	pipeline.StageCI,
 }
@@ -186,6 +185,85 @@ func StagesWithoutABody() []pipeline.Stage {
 		return slices.Index(pipeline.Order(), a) - slices.Index(pipeline.Order(), b)
 	})
 	return out
+}
+
+// ErrUndeclaredHold reports that the stages this harness declares a run stops
+// at and the declarations around it do not account for each other.
+var ErrUndeclaredHold = errors.New("journey: a stage's holding status is not declared here")
+
+// holding is the stages this harness declares a run of this build stops at,
+// named one at a time on the same terms as bodyless: a declaration somebody
+// writes, never a measurement.
+//
+// The two lists are different facts. A stage with no body holds because
+// Pending reports an ask finding, so every body-less stage is here; a stage
+// with a body holds when the body cannot establish what it is there to
+// establish, which for the push stage is every run this build can produce,
+// because no rebase body records the observation it requires. The review
+// stage is in neither list: it has a body, and that body fails on the
+// isolated copy nothing in this build creates rather than holding, so every
+// walk here skips it, which walkableRun owns the reason for. When a body
+// lands that changes where a run stops, this list is updated with it, and the
+// walking checks go red until it is: they hold the number and the places a
+// run stops to this list, so a declaration that has drifted from the build
+// fails rather than being followed.
+var holding = []pipeline.Stage{
+	pipeline.StageRebase,
+	pipeline.StageTest,
+	pipeline.StageDocument,
+	pipeline.StageLint,
+	pipeline.StagePush,
+	pipeline.StagePR,
+	pipeline.StageCI,
+}
+
+// StagesARunHoldsAt returns the stages declared above, in the order a run
+// takes them. It is a declaration, never a measurement.
+func StagesARunHoldsAt() []pipeline.Stage {
+	out := slices.Clone(holding)
+	slices.SortFunc(out, func(a, b pipeline.Stage) int {
+		return slices.Index(pipeline.Order(), a) - slices.Index(pipeline.Order(), b)
+	})
+	return out
+}
+
+// DeclaresEveryHold reports how the holds declaration disagrees with the
+// declarations beside it, and nil when they account for each other.
+//
+// Three relations are checkable without measuring the build, and they are what
+// this asks. Every body-less stage holds, because Pending reports an ask
+// finding, so a declaration missing one says a run passes a stage that stops
+// it. A held stage that is not body-less has to be one the build implements,
+// because a stage is one or the other and an unimplemented stage is Pending.
+// And a held stage has to be one of the nine at all. Whether an implemented
+// stage's body actually holds is a fact about the build no declaration
+// arithmetic can settle, which is what the walking checks establish: they
+// compare the holds a run actually reaches against this declaration, in both
+// number and place.
+//
+// Every list is an argument for the reason DeclaresEveryStage takes its two: a
+// disagreement of each kind can then be handed to this and watched being
+// caught.
+func DeclaresEveryHold(implemented, bodyless, holds []pipeline.Stage) error {
+	for _, stage := range bodyless {
+		if !slices.Contains(holds, stage) {
+			return fmt.Errorf("%w: %s has no body, so a run holds at it, and it is not declared holding "+
+				"here; a walk holding a run's stops to this declaration would pass one short",
+				ErrUndeclaredHold, stage)
+		}
+	}
+	for _, stage := range holds {
+		if !slices.Contains(pipeline.Order(), stage) {
+			return fmt.Errorf("%w: %s is declared holding here and is not one of the stages",
+				ErrUndeclaredHold, stage)
+		}
+		if !slices.Contains(bodyless, stage) && !slices.Contains(implemented, stage) {
+			return fmt.Errorf("%w: %s is declared holding here, is not declared body-less, and the build "+
+				"does not implement it; a stage is one or the other, so one of the three lists is stale",
+				ErrUndeclaredHold, stage)
+		}
+	}
+	return nil
 }
 
 // DeclaresEveryStage reports how a body-less declaration and the build

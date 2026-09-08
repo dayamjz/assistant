@@ -47,13 +47,15 @@ type classified struct {
 // all six as the bytes an agent prints rather than as reports built by hand.
 //
 // The binary half is separate and is what a run actually meets today. Every
-// stage this build has no body for reports a finding with the action ask, so a
-// run holds at every one of them for a person rather than reporting a pass it
-// did not establish, and no such finding enters a fix round. Which stages
-// those are is read off internal/stages rather than counted to nine, because a
-// body that lands moves where a run stops. That is driven over the whole walk
-// rather than over the first hold: a claim about every such stage that rested
-// on one would be a count nothing checked.
+// stage this build has no body for reports a finding with the action ask, and
+// so does the push stage, whose body refuses every run this build can produce
+// for want of a recorded observation; a run holds at each of them for a
+// person rather than reporting a pass it did not establish, and no such
+// finding enters a fix round. Which stages those are is this harness's own
+// holds declaration rather than a count to nine, because a body that lands
+// moves where a run stops and somebody writes the move down. That is driven
+// over the whole walk rather than over the first hold: a claim about every
+// such stage that rested on one would be a count nothing checked.
 func TestAFindingThatIsNotClassifiedStopsForAPerson(t *testing.T) {
 	principles.Cite(t, principles.P3)
 
@@ -216,16 +218,16 @@ func TestAFindingThatIsNotClassifiedStopsForAPerson(t *testing.T) {
 		j := inClone(t)
 		walk := answerHolds(t, j,
 			walkableRun(t, j, "a change most of whose stages have no body in this build"), "approved")
-		observed := stopped{holds: walk[:len(walk)-1], stages: len(stagesWithoutABody(t))}
+		observed := stopped{holds: walk[:len(walk)-1], stages: len(stagesARunHoldsAt(t))}
 		if len(observed.holds) == 0 {
 			t.Fatalf("the run reached no hold at all, so there is nothing here for any of this to be "+
 				"about; it ended %s at %q", last(walk).Outcome, last(walk).Position)
 		}
 
 		// Which hold a counterfeit changes is derived from the walk rather
-		// than named. How many holds a run reaches is how many stages this
-		// build has no body for, so a literal position stops being in range
-		// the day a body lands.
+		// than named. How many holds a run reaches is how many stages the
+		// declaration says a run stops at, so a literal position stops being
+		// in range the day a body lands and moves a hold.
 		firstHold := 0
 		middleHold := len(observed.holds) / 2
 		lastHold := len(observed.holds) - 1
@@ -234,12 +236,13 @@ func TestAFindingThatIsNotClassifiedStopsForAPerson(t *testing.T) {
 			What: "P3: a stage that established nothing",
 			Clauses: []journey.Clause[stopped]{
 				{
-					States: "the run held once for every stage this build has no body for",
+					States: "the run held once for every stage this harness declares it stops at",
 					Holds: func(s stopped) error {
 						if len(s.holds) != s.stages {
-							return fmt.Errorf("the run held %d time(s) and this build has %d stage(s) with "+
-								"no body, so some stage that established nothing reported a pass rather "+
-								"than holding for a person", len(s.holds), s.stages)
+							return fmt.Errorf("the run held %d time(s) and this harness declares %d "+
+								"stage(s) a run stops at, so either a stage that established nothing "+
+								"reported a pass rather than holding for a person, or the declaration "+
+								"is stale", len(s.holds), s.stages)
 						}
 						return nil
 					},
@@ -387,9 +390,10 @@ func TestAFindingThatIsNotClassifiedStopsForAPerson(t *testing.T) {
 type stopped struct {
 	// holds is the run as the surface reported it at each hold it reached.
 	holds []machine.Run
-	// stages is how many stages this build has no body for, which is how many
-	// holds a run has to reach: a stage with a body reports what it
-	// established and a stage without one holds for a person.
+	// stages is how many stages this harness declares a run stops at, which is
+	// how many holds a run has to reach: a stage without a body holds for a
+	// person, and so does one whose body cannot establish what it is there to
+	// establish, which the declaration names one stage at a time.
 	stages int
 }
 

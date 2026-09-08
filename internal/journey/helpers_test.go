@@ -90,9 +90,33 @@ func stagesWithoutABody(t *testing.T) []pipeline.Stage {
 	return pending
 }
 
+// stagesARunHoldsAt is the stages this harness DECLARES a run of this build
+// stops at, in the order a run takes them.
+//
+// It is the declaration the walking checks compare a run's actual stops
+// against, and it is not the body-less list: the push stage has a body and
+// still holds every run this build can produce, because no rebase body records
+// the observation it requires. journey.DeclaresEveryHold is what keeps this
+// list, the body-less one, and the build accounting for each other in the
+// directions declaration arithmetic can check; whether an implemented stage's
+// body actually holds is what the walks themselves establish, by going red
+// when a run stops more or fewer times than this declares, or somewhere this
+// does not name.
+func stagesARunHoldsAt(t *testing.T) []pipeline.Stage {
+	t.Helper()
+	requireStageListMatchesThePRD(t)
+	holds := journey.StagesARunHoldsAt()
+	if len(holds) < 2 {
+		t.Fatalf("this harness declares %d stage(s) a run holds at, so a run no longer walks from one "+
+			"hold to the next; the checks resting on this need rewriting against whatever now holds a run",
+			len(holds))
+	}
+	return holds
+}
+
 // requireStageListMatchesThePRD fails the test unless PRD section 5's stage
-// table, internal/pipeline's order and this harness's body-less declaration all
-// account for each other.
+// table, internal/pipeline's order and this harness's body-less and holds
+// declarations all account for each other.
 //
 // Every check that names a stage rests on this, so it is asked wherever such a
 // check begins rather than once in a test of its own that a filtered run might
@@ -107,6 +131,10 @@ func requireStageListMatchesThePRD(t *testing.T) {
 		t.Fatalf("the product's stage order and the PRD's list disagree: %v", err)
 	}
 	if err := journey.DeclaresEveryStage(journey.Implemented(), journey.StagesWithoutABody()); err != nil {
+		t.Fatalf("%v", err)
+	}
+	if err := journey.DeclaresEveryHold(journey.Implemented(), journey.StagesWithoutABody(),
+		journey.StagesARunHoldsAt()); err != nil {
 		t.Fatalf("%v", err)
 	}
 }
