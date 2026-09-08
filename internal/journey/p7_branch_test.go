@@ -25,16 +25,19 @@ type installed struct {
 	// mustStayQuiet is what the two conditions say may not appear there.
 	//
 	// No clause rests on either. Every executable those two conditions plant
-	// is downstream of a stage body that launches something, and this build
-	// has none: the two .claude hooks and the agent binary need an agent
+	// is downstream of a stage body that launches something, and no run
+	// reaches one: the two .claude hooks and the agent binary need an agent
 	// process, the branch's commands.test needs a test stage, the two
 	// .githooks scripts need this product to commit or push, and .envrc needs
-	// a shell to enter the worktree. The one body this build does have reads
-	// the run's supplied intent and starts nothing, so the file stays
-	// empty however the product resolved the branch's document, and a clause
-	// asserting the absence would hold over a world nothing could make it
-	// report in. They are recorded and logged so the evidence is here the day
-	// a stage body makes it discriminating.
+	// a shell to enter the worktree. The intent body reads the run's supplied
+	// intent and starts nothing, the review body fails on the isolated copy
+	// nothing in this build creates before it launches, and the pull request
+	// body fails because the run's record names no repository on the code
+	// host, so the
+	// file stays empty however the product resolved the branch's document, and
+	// a clause asserting the absence would hold over a world nothing could
+	// make it report in. They are recorded and logged so the evidence is here
+	// the day a stage body makes it discriminating.
 	fired         []string
 	mustStayQuiet []string
 	// requiredRejections is what the pushed-configuration condition records
@@ -73,10 +76,12 @@ type installed struct {
 // branch's agent binary need an agent process, its commands.test needs a test
 // stage, the .githooks scripts need this product to commit or push, and .envrc
 // needs a shell. The intent body reads the run's supplied intent and starts
-// nothing, and the review body - the one that would launch an agent - opens
-// the run's isolated copy before it launches, which nothing in this build
-// creates, so it fails before launching if taken and this run skips it for
-// the reason walkableRun states. So
+// nothing; the review body - the one that would launch an agent - opens the
+// run's isolated copy before it launches, which nothing in this build
+// creates, so it fails before launching if taken; and the pull request body
+// fails because the run's record names no repository on the code host. This
+// run skips
+// both of those for the reasons walkableRun states. So
 // the scenario's tripwire file stays empty here whatever the product resolved,
 // and a clause reading it would be one nothing could make report. The file is
 // read and logged rather than asserted on, so the evidence is here the day a
@@ -124,6 +129,9 @@ func TestTheBranchUnderValidationChoosesNothingThatRuns(t *testing.T) {
 	j := open(t, scenario)
 	succeeds(t, j.Command("init", "--default-branch", fixture.DefaultBranch))
 	serve(t, j)
+	// The run asks to skip the review and pull request stages, for the
+	// reasons walkableRun states: a run that took either would fail there and
+	// could not reach the stages the installation was planted in front of.
 	observed.outcome = last(answerHolds(t, j,
 		walkableRun(t, j, "narrow the Total loop bound on purpose"), "approved")).Outcome
 	if observed.fired, err = journey.Fired(scenario); err != nil {
@@ -253,7 +261,7 @@ func TestTheBranchUnderValidationChoosesNothingThatRuns(t *testing.T) {
 	}
 	t.Logf("KNOWN GAP: the scenario's tripwire file holds %v after this run, and the two conditions "+
 		"require %v to stay out of it. Nothing here establishes that: every one of those executables "+
-		"is reached only through a stage body that launches something, this build has none, and a "+
+		"is reached only through a stage body that launches something, no run reaches one, and a "+
 		"run therefore launches no agent, runs no configured command, and makes no commit or push. "+
 		"The file is reported rather than asserted on until such a body gives one of them a path "+
 		"to fire.",

@@ -45,10 +45,15 @@ type bounded struct {
 // needs a stage that reports a fix-eligible finding; no stage of this run
 // reports one. A stage with no body reports one unclassified finding and holds
 // for a person, which P3 keeps out of a fix round by construction; the intent
-// body reports only notes; and the review body, the one stage that does take
-// fix rounds, is skipped here for the reason walkableRun states, and could
-// only fail before reporting anything if it were taken. Drives records that
-// the same way it records every other condition out of a run's reach.
+// and pull request bodies declare no fix rounds and report only notes; and the
+// review body, the one stage that does take fix rounds, is skipped here for
+// the reason walkableRun states, and could only fail before reporting anything
+// if it were taken. Drives records that the same way it records every other
+// condition out of a run's reach.
+//
+// Both runs here ask to skip the review and pull request stages, for the
+// reasons walkableRun states, and the pair only says what it says if the
+// unbounded run reaches the end of the gate.
 //
 // What makes this a bound rather than a failure is the pair. The same journey
 // with the budget left alone reaches the end of the gate, so what stopped the

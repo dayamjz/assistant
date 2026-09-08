@@ -48,10 +48,11 @@ type survival struct {
 // internal/graph stops before a halt point runs, so that is where the kill
 // lands, and a stage that never holds offers none. The intent stage is such a
 // stage - it has a body and PRD section 5 has it never block a run, so every
-// finding it reports is a note - and so is the review stage on this run, which
-// skips it for the reason walkableRun states; a skipped stage runs nothing
-// that could hold. Neither is among the boundaries here, and manufacturing a
-// kill for either would be a kill with nothing under it.
+// finding it reports is a note - and so are the review and pull request
+// stages on this run, which skips both for the reasons walkableRun states: a
+// skipped stage runs nothing that could hold. None of the three is among the
+// boundaries here, and manufacturing a kill for any of them would be a kill
+// with nothing under it.
 //
 // The kill is a kill and not a stop. A service asked to stop unwinds and
 // writes what it knows on the way out, and what P6 is about is the service
