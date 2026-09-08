@@ -72,16 +72,17 @@ import (
 //
 // # Fields nothing in this build reads yet
 //
-// Forge and Config have no reader here, because this seam lands before the
-// stage bodies that need them and deliberately so. The bodies queued behind
-// this file are rebase, review and pull request, each specified work with a
-// task of its own, and a seam that arrived missing what they need would force
-// a second breaking change to the same file, which is the collision landing it
-// alone exists to prevent.
+// Forge has no reader here, because this seam lands before the stage bodies
+// that need it and deliberately so. The bodies queued behind this file are
+// rebase and pull request, each specified work with a task of its own, and a
+// seam that arrived missing what they need would force a second breaking
+// change to the same file, which is the collision landing it alone exists to
+// prevent.
 //
-// Forge answers to the pull request and checks bodies, and Config to the
-// review and test bodies. If a field below still has no reader once those have
-// landed, it is the field that was wrong and it should go.
+// Forge answers to the pull request and checks bodies. Config was the same
+// case until the review body landed and read it, and the test body is its
+// other consumer. If Forge still has no reader once the bodies it answers to
+// have landed, it is the field that was wrong and it should go.
 type StageDeps struct {
 	// Agent runs one invocation at a time with no session. It is a
 	// StageAgent rather than a Runner so that a body cannot open a fixer
