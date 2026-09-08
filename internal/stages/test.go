@@ -12,9 +12,10 @@ import (
 )
 
 // testProjectionBytes bounds the command output that travels in the stage's
-// report. The whole output goes to the run's evidence file, which PRD section
-// 8 makes the authority, and what a person or an agent is shown is a bounded
-// projection of it carrying an explicit marker for what was left out.
+// report. The whole output goes to the run's test evidence file, and what a
+// person or an agent is shown is a bounded projection of it carrying an
+// explicit marker for what was left out, which is what PRD section 8 asks of
+// anything travelling in findings, streams, and prompts.
 const testProjectionBytes = 8 << 10
 
 // testEvidenceFile is the name of the run's test evidence, under the run's
@@ -44,11 +45,15 @@ const testEvidenceFile = "test.log"
 //
 // # Where the command comes from, and where it must not come from
 //
-// The command is read from StageDeps.Config and from nothing else. It executes
-// shell, so P7 puts it on the trusted side: it belongs to the default branch
-// and never to the branch under validation, and this body opens no
-// configuration file in the isolated copy at all. A pushed branch setting a
-// commands.test of its own therefore changes nothing about what runs here.
+// The command is read from StageDeps.Config and from nothing else, and this
+// body opens no configuration file in the isolated copy at all. So the command
+// reaches this stage from the trusted layer, unless the operator set
+// allow_pushed_commands: commands.test is config.TrustCommands rather than
+// config.TrustTrusted, and PRD section 10 makes that opt-out the sanctioned
+// way to let a pushed branch set commands. The opt-out is itself trusted-only,
+// so a branch cannot enable it for itself, which is the guarantee that does
+// hold here. What does not hold is a categorical one: with the opt-out on, the
+// value the operator gets is the one the branch named.
 //
 // That is the half of P7 this stage owns. The other half is that what it was
 // handed was itself resolved from a trusted commit, and that half belongs to
@@ -89,17 +94,22 @@ const testEvidenceFile = "test.log"
 // writes while the command runs, so the record survives a command this build
 // gives up waiting on.
 //
-// The report names that file, and the finding carries a bounded tail of the
-// output with a marker saying how much earlier output it leaves out and where
-// the whole of it is. That is PRD section 8's rule that the full log is the
-// authority and what travels is a bounded projection of it.
+// That file is the run's test evidence and nothing more. PRD section 8's
+// authoritative per-stage log is logs/<run>/<stage>.log, home.StageLog owns
+// that path and that role, and this stage neither writes it nor claims it.
+//
+// The report names the evidence file, and the finding carries a bounded tail
+// of the output with a marker saying how much earlier output it leaves out and
+// where the whole of it is. That marker is what PRD section 8 requires of
+// anything travelling in findings, streams, and prompts.
 //
 // Filing that record is never allowed to decide the verdict. A command that
-// answered has answered, so an evidence file that could not be opened or
-// written is reported as a note, the report then names no evidence and claims
-// none, and the stage still reports what the check said. The alternative is a
-// gate that stops validating when a disk fills, and a report that points at a
-// file not holding what it says it does.
+// answered has answered, so a record that could not be opened, could not be
+// written, or was cut short before all of the output reached it is reported as
+// a note, the report then names no evidence and claims none, and the stage
+// still reports what the check said. The alternative is a gate that stops
+// validating when a disk fills, and a report that points at a file not holding
+// what it says it does.
 //
 // # No agent, and therefore no evidence binding
 //
@@ -136,8 +146,9 @@ const testEvidenceFile = "test.log"
 // shell against it; a build that judges that needs an agent, and this one does
 // not have that stage.
 //
-// A command that leaves a process behind leaves it running. commandGrace says
-// what that bounds and what it does not.
+// A command that leaves a process behind leaves it running, and nothing bounds
+// how long the command itself runs. commandGrace says what that bounds and
+// what it does not.
 func Test(deps StageDeps) pipeline.Implementation {
 	return pipeline.Implementation{
 		Reads: []pipeline.Key{pipeline.KeyRepository, pipeline.KeyRun},
@@ -187,8 +198,10 @@ func runTargetedCheck(ctx context.Context, deps StageDeps, in pipeline.Input) (p
 		dir:        copied.Path(),
 		record:     record,
 		projection: testProjectionBytes,
+		grace:      commandGrace,
 	})
 	record.footer(result)
+	record.cutShort(result.short)
 	record.close()
 	if err := ctx.Err(); err != nil {
 		return pipeline.Output{}, err
@@ -229,8 +242,13 @@ type testEvidence struct {
 	path string
 	// file is the open file, nil when it could not be opened.
 	file *os.File
-	// err is the first thing that went wrong: opening it, writing to it, or
-	// closing it. It is nil when the record is whole.
+	// err is the first thing that went wrong: opening it, writing to it,
+	// closing it, or the command's output being cut off before all of it was
+	// written to it. It is nil when the record is whole.
+	//
+	// The last of those is the one this type cannot see for itself. A write
+	// that never arrives is not a write that failed, so runCommand reports it
+	// and cutShort is how it gets here.
 	err error
 }
 
@@ -293,6 +311,21 @@ func (e *testEvidence) footer(result commandResult) {
 	}
 }
 
+// cutShort records that the command's output was cut off before all of it
+// reached this file, which is what commandResult.short reports. Nothing this
+// file does can notice that: the bytes never arrive, so every write it saw
+// succeeded and it would otherwise call itself whole.
+//
+// It takes a nil to mean nothing was cut off, so a caller passes what it has
+// rather than asking first. A record already broken keeps its first reason,
+// on the same terms as every other failure here.
+func (e *testEvidence) cutShort(err error) {
+	if err == nil || e.err != nil {
+		return
+	}
+	e.err = fmt.Errorf("the command's output was cut off before all of it reached %s: %w", e.path, err)
+}
+
 // close finishes the record, keeping a failure to flush on the same terms as a
 // failure to write.
 func (e *testEvidence) close() {
@@ -316,10 +349,17 @@ func (e *testEvidence) recorded() bool { return e.err == nil }
 // something else. Whether it reported a status is asked first, because a
 // status is what the other two read and a command that gave none carries the
 // same -1 as one this build could not start.
+//
+// Tested is set on the same condition, and only there. findings.Report.Tested
+// is what the stage actually checked, so a command that never reported a
+// status of its own - one that could not be started, or that something else
+// ended - does not belong in it. The command is still named in the summary, in
+// the finding, and in the evidence header, so nothing about it is lost; what
+// is withheld is the claim that it checked anything.
 func testReport(command, commit string, record *testEvidence, result commandResult) findings.Report {
-	report := findings.Report{
-		Revision: commit,
-		Tested:   []string{command},
+	report := findings.Report{Revision: commit}
+	if result.exited {
+		report.Tested = []string{command}
 	}
 	if record.recorded() {
 		report.Evidence = []findings.Evidence{{
@@ -369,10 +409,10 @@ func testReport(command, commit string, record *testEvidence, result commandResu
 			Severity: findings.SeverityWarning,
 			Action:   findings.ActionNote,
 			Description: fmt.Sprintf(
-				"The command's full output could not be recorded, so this run has no evidence file "+
-					"and the report names none. What the check answered is unaffected and is reported "+
-					"above; what is lost is everything the command printed beyond the bounded extract "+
-					"in this report.\n\nwhat went wrong: %v", record.err),
+				"The command's full output could not be recorded, so this report names no evidence "+
+					"file: a path offered as the full output has to hold it. What the check answered "+
+					"is unaffected and is reported above; what is lost is whatever the command printed "+
+					"beyond the bounded extract in this report.\n\nwhat went wrong: %v", record.err),
 		})
 	}
 	return report
@@ -409,7 +449,7 @@ func testOutputSection(result commandResult, record *testEvidence) string {
 				result.omitted, record.path)
 		} else {
 			fmt.Fprintf(&b, "[%d bytes of earlier output omitted, and the record that would hold "+
-				"them could not be written, so they are gone]\n", result.omitted)
+				"them is not whole, so this report points at no file for them]\n", result.omitted)
 		}
 	}
 	switch {
@@ -449,9 +489,11 @@ func noTestCommandConfigured() findings.Report {
 			Description: "This repository configures no test command, so the test stage had nothing " +
 				"targeted to run and could not gather evidence that this change does what it set out " +
 				"to do. Setting commands.test on the default branch is what gives this stage " +
-				"something to run; it executes shell, so it belongs to that branch and never to the " +
-				"branch under validation. Approving carries the run past a stage that checked " +
-				"nothing; skipping records it as skipped; cancelling ends the run.",
+				"something to run; it executes shell, so it is taken from that branch unless " +
+				"allow_pushed_commands is set there, which is what permits the branch under " +
+				"validation to name it instead. That opt-out can itself only be set on the trusted " +
+				"side, so a branch cannot turn it on for itself. Approving carries the run past a " +
+				"stage that checked nothing; skipping records it as skipped; cancelling ends the run.",
 		}},
 	}
 }
