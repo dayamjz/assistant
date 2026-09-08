@@ -94,8 +94,9 @@ func Coverage() []Established {
 				"established there."},
 		{principles.P3, ReachBinary,
 			"A run through the binary is walked to its end and every hold it reaches is read: it holds " +
-				"once for each stage this build has no body for, which is read off internal/stages rather " +
-				"than counted, every hold is relayed with the finding that produced " +
+				"once for each stage this harness declares a run stops at - every stage this build has " +
+				"no body for, and the test stage, whose body holds for the command nobody configured " +
+				"here - every hold is relayed with the finding that produced " +
 				"it, every one of those findings reports itself as holding for a person, and none is one " +
 				"a fixer may take. The planted agent output is driven at package reach as well, because " +
 				"no run reaches an agent in this build - the review body would launch one, and it fails " +
@@ -120,11 +121,13 @@ func Coverage() []Established {
 			"The service is killed at every boundary a real run reaches and the run is driven to its " +
 				"end afterwards, which is P6's own stated verification criterion; the criterion is every " +
 				"boundary rather than a count of them. A boundary is a hold, so the boundaries are the " +
-				"stages this build has no body for. The intent stage is not among them and no kill is " +
-				"manufactured for it: it has a body, PRD section 5 has it never block a run, and a stage " +
-				"that never holds offers nothing to kill at. Review is not among them either: the run " +
-				"skips it, because its body fails on the isolated copy nothing creates rather than " +
-				"holding, and a skipped stage offers no hold. What the recovered decision is held to is " +
+				"stages this harness declares a run stops at: every stage this build has no body for, " +
+				"and the test stage, whose body holds for the command nobody configured here. The " +
+				"intent stage is not among them and no kill is manufactured for it: PRD section 5 has " +
+				"it never block a run, and a stage that never holds offers nothing to kill at. Review " +
+				"is not among them either: the run skips it, because its body fails on the isolated " +
+				"copy nothing creates rather than holding, and a skipped stage offers no hold. What " +
+				"the recovered decision is held to is " +
 				"that it stands at the same stage and still offers what it offered, which a checkpoint " +
 				"round trip can lose; that it offers something nobody was offered is not claimed, " +
 				"because internal/pipeline gives every hold the same fixed rendering and internal/graph " +
