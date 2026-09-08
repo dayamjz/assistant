@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/forge"
 	"github.com/dayamjz/assistant/internal/principles"
+	"github.com/dayamjz/assistant/internal/vcs"
 )
 
 // TestOpenRefusesWhenTheProviderResolvesADifferentRepository is the positive
@@ -313,5 +315,161 @@ func TestEveryInvocationNamesTheHostItAddresses(t *testing.T) {
 	}
 	if kept {
 		t.Errorf("the invocation kept the environment's own host: %v", calls[0].Env)
+	}
+}
+
+// TestAPullRequestBodyReachesTheProviderRedacted is the positive control for
+// outbound redaction.
+//
+// A pull request body is generated from stage reports - fix summaries, command
+// output, whatever a stage had to say - and it lands on an external host. A
+// credential that reaches it has been published, and publishing is not an act
+// with an undo. Inbound provider text was redacted here from the start and
+// outbound text was not, which is the asymmetry this closes.
+//
+// It plants a credentialed URL in a body, drives the two writes that carry
+// one, and reads what the stand-in provider actually received. The assertions
+// are on the bytes on the wire rather than on the adapter having called a
+// redactor, because what matters is what left the process.
+func TestAPullRequestBodyReachesTheProviderRedacted(t *testing.T) {
+	principles.Cite(t, principles.P1)
+
+	const body = "the rebase stage re-pointed the remote to " + secretURL + " and retried"
+	h := newWriteHarness(t, ghScript{
+		"list":   {{Stdout: oneListedJSON}},
+		"create": {{Stdout: createdURL}},
+		"view":   {{Stdout: openPullRequestJSON}},
+		"edit":   {{}},
+	})
+
+	if _, err := h.gh.Open(context.Background(), forge.OpenSpec{
+		Head: "fm/work", Base: "main", Title: "feat: a change", Body: body,
+	}); err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if _, err := h.gh.UpdateBody(context.Background(), 12, body); err != nil {
+		t.Fatalf("UpdateBody: %v", err)
+	}
+
+	for _, op := range []string{"create", "edit"} {
+		calls := h.callsFor(op)
+		if len(calls) != 1 {
+			t.Fatalf("the adapter made %d %s calls, want 1", len(calls), op)
+		}
+		sent := calls[0].Stdin
+		if strings.Contains(sent, secret) {
+			t.Errorf("the %s call published the credential: %q", op, sent)
+		}
+		// The wire carries the supplied Redactor's output, which is the whole
+		// contract: this adapter writes no redaction of its own, so what it
+		// sends is what the Redactor it was constructed with produced.
+		//
+		// The assertion is not vacuous, because the body planted above is one
+		// that Redactor changes: an adapter that sent the body through
+		// untouched would fail this comparison rather than satisfy it.
+		if want := testRedactor.Redact(body); sent != want {
+			t.Errorf("the %s call sent %q, want the redactor's output %q", op, sent, want)
+		}
+		// The body is redacted and not discarded: what a reviewer is meant to
+		// read still arrives, which is the half a redactor that emptied its
+		// input would fail.
+		if !strings.Contains(sent, "the rebase stage re-pointed the remote to") ||
+			!strings.Contains(sent, "and retried") {
+			t.Errorf("the %s call did not carry the body a reviewer reads: %q", op, sent)
+		}
+	}
+}
+
+// TestATitleReachesTheProviderRedacted is the same rule for the other outbound
+// surface. A title travels on the argument vector rather than on standard
+// input, so a redaction applied to bodies alone would miss it.
+func TestATitleReachesTheProviderRedacted(t *testing.T) {
+	const title = "fix: stop cloning " + secretURL
+	h := newWriteHarness(t, ghScript{
+		"list":   {{Stdout: oneListedJSON}},
+		"create": {{Stdout: createdURL}},
+		"view":   {{Stdout: openPullRequestJSON}},
+	})
+
+	if _, err := h.gh.Open(context.Background(), forge.OpenSpec{
+		Head: "fm/work", Base: "main", Title: title, Body: "a body",
+	}); err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	calls := h.callsFor("create")
+	if len(calls) != 1 {
+		t.Fatalf("the adapter made %d create calls, want 1", len(calls))
+	}
+	joined := strings.Join(calls[0].Args, " ")
+	if strings.Contains(joined, secret) {
+		t.Errorf("the create call published the credential on its argument vector: %v", calls[0].Args)
+	}
+	if want := "--title=" + testRedactor.Redact(title); !slices.Contains(calls[0].Args, want) {
+		t.Errorf("the create call did not carry the redactor's output for the title.\n"+
+			" got: %v\nwant an argument: %q", calls[0].Args, want)
+	}
+	if !strings.Contains(joined, "fix: stop cloning") {
+		t.Errorf("the create call did not carry the title: %v", calls[0].Args)
+	}
+}
+
+// TestTheStandInRefusesOutboundTextItWasNotSupposedToSee is the positive
+// control for the stand-in's own tripwire.
+//
+// That tripwire is what makes every test in this package a check on outbound
+// redaction rather than only the two above. A guard nobody has watched refuse
+// is what this repository keeps shipping, so this hands the predicate text on
+// both sides and confirms it recognizes each, and then hands it what the
+// adapter's redactor produces and confirms it does not refuse that.
+func TestTheStandInRefusesOutboundTextItWasNotSupposedToSee(t *testing.T) {
+	if where, carried := carriesCredential([]string{"--title=" + secretURL}, ""); !carried || where != "argument" {
+		t.Errorf("a credentialed argument was not recognized: where=%q carried=%v", where, carried)
+	}
+	if where, carried := carriesCredential(nil, "cloned "+secretURL); !carried || where != "body" {
+		t.Errorf("a credentialed body was not recognized: where=%q carried=%v", where, carried)
+	}
+	// What the adapter's redactor produces must pass, or every write would
+	// fail the tripwire and it would be a guard that refuses everything.
+	if _, carried := carriesCredential([]string{"--title=" + testRedactor.Redact(secretURL)},
+		testRedactor.Redact("cloned "+secretURL)); carried {
+		t.Error("redacted text was reported as carrying a credential, so the tripwire refuses everything")
+	}
+}
+
+// TestTheStandInTripwireFiresOnARealWrite is the other half: the predicate
+// above recognizing text is one thing, and the stand-in acting on it during an
+// actual invocation is another.
+//
+// It drives a write whose body reaches the provider unredacted, by handing the
+// adapter a Redactor that removes nothing. That is a shape a caller can build -
+// NewGitHub takes whatever Redactor it is given - so this is the failure a
+// misconfigured caller produces, and the stand-in refuses the invocation
+// rather than recording it.
+func TestTheStandInTripwireFiresOnARealWrite(t *testing.T) {
+	inert := vcs.RedactorFunc(func(s string) string { return s })
+	dir := t.TempDir()
+	writeScript(t, dir, ghScript{
+		"repo":   {{Stdout: repoViewJSON(harnessRepository)}},
+		"create": {{Stdout: createdURL}},
+		"list":   {{Stdout: oneListedJSON}},
+		"view":   {{Stdout: openPullRequestJSON}},
+	})
+	gh, err := forge.NewGitHub(inert,
+		forge.WithBinary(os.Args[0]),
+		forge.WithBaseEnvironment([]string{fakeGHDir + "=" + dir}),
+		forge.WithRepository(harnessRepository),
+	)
+	if err != nil {
+		t.Fatalf("NewGitHub: %v", err)
+	}
+
+	_, err = gh.Open(context.Background(), forge.OpenSpec{
+		Head: "fm/work", Base: "main", Title: "feat: a change", Body: "cloned " + secretURL,
+	})
+	if err == nil {
+		t.Fatal("the stand-in accepted a body carrying a credential, so the tripwire protects nothing")
+	}
+	if !strings.Contains(err.Error(), "carries a credential") {
+		t.Fatalf("the write failed for some other reason: %v", err)
 	}
 }

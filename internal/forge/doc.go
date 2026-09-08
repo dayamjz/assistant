@@ -148,6 +148,13 @@
 // NewGitHub requires a vcs.Redactor, the seam internal/vcs already declares,
 // and every piece of provider text that reaches a Refusal passes through it.
 //
+// Outbound text goes through the same Redactor. Everything this package sends
+// a provider - the argument vector and the standard input of every invocation
+// - is redacted at the one point invocations pass through, so a pull request
+// body or title built from stage output does not publish a credential a stage
+// saw. runExact owns that argument, what the redaction costs, and what it does
+// not cover.
+//
 // Two structural measures sit under that, because a redactor is a filter and a
 // filter is a thing that can be handed the wrong pattern. A repository is
 // addressed as owner/name, and a specifier carrying a scheme or userinfo is
