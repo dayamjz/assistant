@@ -171,7 +171,6 @@ var ErrUndeclaredStage = errors.New("journey: a stage's implementation status is
 var bodyless = []pipeline.Stage{
 	pipeline.StageRebase,
 	pipeline.StageReview,
-	pipeline.StageTest,
 	pipeline.StageDocument,
 	pipeline.StageLint,
 	pipeline.StagePush,
@@ -183,6 +182,44 @@ var bodyless = []pipeline.Stage{
 // takes them. It is a declaration, never a measurement.
 func StagesWithoutABody() []pipeline.Stage {
 	out := slices.Clone(bodyless)
+	slices.SortFunc(out, func(a, b pipeline.Stage) int {
+		return slices.Index(pipeline.Order(), a) - slices.Index(pipeline.Order(), b)
+	})
+	return out
+}
+
+// stops is the stages this harness declares a run it drives stops at, named
+// one at a time for the reason bodyless is: an expectation subtracted from
+// what the build does would follow the build wherever it went.
+//
+// It is not the bodyless list under another name, because having a body and
+// holding are different questions. Every body-less stage holds, since a stage
+// with no body reports one ask finding, and the test stage holds here with a
+// body: PRD section 10 makes commands.test empty by default, no run this
+// harness drives is given one, and the branch's own is never read, so that
+// body holds for a person rather than reporting a pass it did not establish.
+//
+// What holds these names to the build is the checks that walk a real run
+// against them: the kill-at-every-boundary check and the classification walk
+// compare the stops a run actually made with this list's length, and the
+// contention check refuses a list whose stops do not run consecutively. A
+// name here a run does not stop at, or a stop no name here covers, is a red
+// check rather than a quiet drift.
+var stops = []pipeline.Stage{
+	pipeline.StageRebase,
+	pipeline.StageReview,
+	pipeline.StageTest,
+	pipeline.StageDocument,
+	pipeline.StageLint,
+	pipeline.StagePush,
+	pipeline.StagePR,
+	pipeline.StageCI,
+}
+
+// StagesARunStopsAt returns the stages declared above, in the order a run
+// takes them. It is a declaration, never a measurement.
+func StagesARunStopsAt() []pipeline.Stage {
+	out := slices.Clone(stops)
 	slices.SortFunc(out, func(a, b pipeline.Stage) int {
 		return slices.Index(pipeline.Order(), a) - slices.Index(pipeline.Order(), b)
 	})

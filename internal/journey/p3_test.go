@@ -216,16 +216,16 @@ func TestAFindingThatIsNotClassifiedStopsForAPerson(t *testing.T) {
 		j := inClone(t)
 		walk := answerHolds(t, j,
 			startRun(t, j, "--intent", "a change most of whose stages have no body in this build"), "approved")
-		observed := stopped{holds: walk[:len(walk)-1], stages: len(stagesWithoutABody(t))}
+		observed := stopped{holds: walk[:len(walk)-1], stages: len(stagesARunStopsAt(t))}
 		if len(observed.holds) == 0 {
 			t.Fatalf("the run reached no hold at all, so there is nothing here for any of this to be "+
 				"about; it ended %s at %q", last(walk).Outcome, last(walk).Position)
 		}
 
 		// Which hold a counterfeit changes is derived from the walk rather
-		// than named. How many holds a run reaches is how many stages this
-		// build has no body for, so a literal position stops being in range
-		// the day a body lands.
+		// than named. How many holds a run reaches is how many stops this
+		// harness declares, so a literal position stops being in range the
+		// day a stage stops holding.
 		firstHold := 0
 		middleHold := len(observed.holds) / 2
 		lastHold := len(observed.holds) - 1
@@ -234,11 +234,11 @@ func TestAFindingThatIsNotClassifiedStopsForAPerson(t *testing.T) {
 			What: "P3: a stage that established nothing",
 			Clauses: []journey.Clause[stopped]{
 				{
-					States: "the run held once for every stage this build has no body for",
+					States: "the run held once for every stage this harness declares a run stops at",
 					Holds: func(s stopped) error {
 						if len(s.holds) != s.stages {
-							return fmt.Errorf("the run held %d time(s) and this build has %d stage(s) with "+
-								"no body, so some stage that established nothing reported a pass rather "+
+							return fmt.Errorf("the run held %d time(s) and this harness declares %d "+
+								"stop(s), so some stage that established nothing reported a pass rather "+
 								"than holding for a person", len(s.holds), s.stages)
 						}
 						return nil

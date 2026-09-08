@@ -21,8 +21,10 @@ const (
 	// ReachPackage is driven through the package that owns the mechanism, in
 	// this process, against the fixture. It is what is left where the binary
 	// cannot reach a mechanism at all, which today is every mechanism a stage
-	// body would have used: internal/stages has a body for the intent stage
-	// alone, and that one reads the supplied intent and launches nothing.
+	// body would have used to launch or execute anything: the bodies
+	// internal/stages has launch nothing in these runs, because the intent
+	// body reads the supplied intent and the test body holds for the command
+	// nobody configured here.
 	ReachPackage Reach = "package"
 	// ReachNone is not driven here. The reason beside it says why, and it is
 	// prose nobody checks; what the row buys is that the gap is enumerable
@@ -135,8 +137,10 @@ func Coverage() []Established {
 				"process beside the run rather than anything the run does. Two things are not " +
 				"established at any reach and no clause claims them: that nothing the branch or the " +
 				"template installed arrived or executed, because the branch's planted executables are " +
-				"reached only through a stage body that launches something and this build's one stage " +
-				"body reads the supplied intent, while the template's are receive-side hooks reached " +
+				"reached only through a stage body that launches something and no body launches " +
+				"anything in these runs - the intent body reads the supplied intent, and the test " +
+				"body holds for the command nobody configured here, never the branch's - while the " +
+				"template's are receive-side hooks reached " +
 				"only by a push to the gate and the four subtests that plant one make no push; " +
 				"and which agent a run resolved, because no shipped surface reports it. The trusted configuration " +
 				"document is driven at package reach: nothing in this build reads a repository's own " +

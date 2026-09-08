@@ -70,10 +70,11 @@ func Drives() []Drove {
 		"substring and no sentinel, so there is nothing else here to hold a message to." +
 		noTemplateHookPath
 
-	// Every stage condition is undriven for one reason, stated once. A stage
-	// with no body reports one ask finding and holds, so there is nothing for
-	// review, test, document, or lint to have found and nothing for the rebase
-	// to have emptied.
+	// Every stage condition on a body-less stage is undriven for one reason,
+	// stated once. A stage with no body reports one ask finding and holds, so
+	// there is nothing for review, document, or lint to have found and nothing
+	// for the rebase to have emptied. The test stage has a body and its
+	// condition carries its own reason below.
 	const noStageBody = "internal/stages holds no body for the stage this condition names, so the stage " +
 		"reads nothing and reports one ask finding. There is no finding to compare against what was " +
 		"planted, and a harness that reported this condition as met would be reporting the placeholder. " +
@@ -114,18 +115,22 @@ func Drives() []Drove {
 				"drive is over the pushed layer with the trusted one absent, so it cannot resolve the " +
 				"default branch's fixture-trusted-agent at all. Its tripwire half has no producer " +
 				"either: every executable it plants is reached only through a stage body that launches " +
-				"something, internal/stages has one body and it reads the supplied intent, and a run " +
-				"therefore launches no agent, runs no configured command, " +
+				"something, and no body launches anything in these runs - the intent body reads the " +
+				"supplied intent, and the test body holds for the command nobody configured here, " +
+				"never the branch's - so a run launches no agent, runs no configured command, " +
 				"and makes no commit or push. TestTheBranchUnderValidationChoosesNothingThatRuns does " +
 				"drive a whole run over this branch and reads the tripwire file at the end, and logs " +
 				"what it holds; what that test establishes is the row below and the suppression " +
-				"refusal. This becomes drivable with the stage body."},
+				"refusal. This becomes drivable as the stage bodies that launch arrive and a run is " +
+				"given something to launch."},
 		{"refusal-pushed-commands-and-agent", ReachPackage, branch,
 			"The one call the condition names is config.Resolve over the operator's layer and the " +
 				"pushed one, driven in process: the three keys are dropped and reported as rejections " +
 				"and the one the branch may set survives. That is the whole of what is established " +
-				"here. Its tripwire half is not, for the reason in the row above: executing the " +
-				"branch's commands.test needs a test stage and this build has no body for one. Nothing " +
+				"here. Its tripwire half is not: the test stage's body reads commands.test only from " +
+				"the configuration it was resolved, where the branch's value is dropped unless the " +
+				"trusted opt-out admits it, and no run here is given the opt-out or a command, so the " +
+				"branch's commands.test has no path to execution. Nothing " +
 				"about this condition is met through the binary."},
 		{"refusal-unparseable-trusted-config", ReachPackage, trustedDoc,
 			"The document is read off the default branch through internal/vcs and parsed. No run reads a " +
@@ -148,7 +153,14 @@ func Drives() []Drove {
 				"substituted into the recorded answer. No stage body talks to a code host."},
 
 		{"stage-logic-bug", ReachNone, "", noStageBody},
-		{"stage-failing-test", ReachNone, "", noStageBody},
+		{"stage-failing-test", ReachNone, "",
+			"internal/stages has this stage's body now, but the condition is the trusted " +
+				"commands.test failing against the branch and no run here runs one: the trusted " +
+				"repository layer that command sits in is not read in this build, which " +
+				"internal/service states, and the harness's own configuration names no command " +
+				"either, so the stage holds for a person without executing anything. There is " +
+				"still no finding to compare against what was planted. It becomes drivable when " +
+				"a run is given the command."},
 		{"stage-stale-documentation", ReachNone, "", noStageBody},
 		{"stage-lint-violation", ReachNone, "", noStageBody},
 		{"stage-no-diff-after-rebase", ReachNone, "", noStageBody +

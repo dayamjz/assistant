@@ -90,6 +90,23 @@ func stagesWithoutABody(t *testing.T) []pipeline.Stage {
 	return pending
 }
 
+// stagesARunStopsAt is the declared list of stages a run this harness drives
+// stops at, behind the same PRD gate as stagesWithoutABody and refused on the
+// same terms when it thins below two, because the checks resting on it walk a
+// run from one hold to the next. journey.StagesARunStopsAt says why the list
+// is its own declaration rather than the body-less one under another name.
+func stagesARunStopsAt(t *testing.T) []pipeline.Stage {
+	t.Helper()
+	requireStageListMatchesThePRD(t)
+	holding := journey.StagesARunStopsAt()
+	if len(holding) < 2 {
+		t.Fatalf("this harness declares %d stage(s) a run stops at, so a run no longer walks from one "+
+			"hold to the next; the checks resting on this need rewriting against whatever now holds a run",
+			len(holding))
+	}
+	return holding
+}
+
 // requireStageListMatchesThePRD fails the test unless PRD section 5's stage
 // table, internal/pipeline's order and this harness's body-less declaration all
 // account for each other.
