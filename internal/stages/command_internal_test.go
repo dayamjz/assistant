@@ -9,7 +9,20 @@ import (
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/findings"
+	"github.com/dayamjz/assistant/internal/home"
 )
+
+// scratchEvidencePath is where an internal test's record goes: a real
+// home.EvidenceLog under a temporary root, so a test exercises the path the
+// stage actually writes rather than respelling its leaf here.
+func scratchEvidencePath(t *testing.T) string {
+	t.Helper()
+	h, err := home.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("opening a home at a temporary root: %v", err)
+	}
+	return h.EvidenceLog("run-1", "test")
+}
 
 // A projection bounded below what a command printed keeps the end of the
 // output, says how many bytes of the earlier output it left out, and starts at
@@ -134,7 +147,7 @@ func TestTheRecordHoldsTheWholeOutputTheProjectionBounds(t *testing.T) {
 // descriptor is a write that fails.
 func TestARecordThatFailsPartwayDoesNotDecideTheVerdict(t *testing.T) {
 	t.Parallel()
-	record := openTestEvidence(filepath.Join(t.TempDir(), "run-1", testEvidenceFile))
+	record := openTestEvidence(scratchEvidencePath(t))
 	if !record.recorded() {
 		t.Fatalf("opening the record: %v", record.err)
 	}
@@ -191,7 +204,7 @@ func TestABoundedProjectionSaysWhatItOmittedAndWhereTheRestIs(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			record := openTestEvidence(filepath.Join(t.TempDir(), "run-1", testEvidenceFile))
+			record := openTestEvidence(scratchEvidencePath(t))
 			if !c.recorded {
 				if err := record.file.Close(); err != nil {
 					t.Fatalf("closing the record behind it: %v", err)
@@ -303,7 +316,7 @@ func TestACommandWithNoStatusHoldsTheStageForAPerson(t *testing.T) {
 		grace:      commandGrace,
 	})
 
-	record := openTestEvidence(filepath.Join(t.TempDir(), "run-1", testEvidenceFile))
+	record := openTestEvidence(scratchEvidencePath(t))
 	record.close()
 	report := testReport("git --version", "0123456789abcdef", record, result).Normalize()
 	if err := report.Validate(); err != nil {

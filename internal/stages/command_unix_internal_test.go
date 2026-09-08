@@ -4,11 +4,11 @@ package stages
 
 import (
 	"errors"
-	"os/exec"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/dayamjz/assistant/internal/findings"
 )
 
 // A command something else ended reports no exit status of its own, which is
@@ -34,7 +34,7 @@ func TestACommandEndedBySomethingElseReportsNoStatus(t *testing.T) {
 		t.Fatalf("a command ended by a signal reported exit status %d as its own", result.code)
 	}
 
-	record := openTestEvidence(filepath.Join(t.TempDir(), "run-1", testEvidenceFile))
+	record := openTestEvidence(scratchEvidencePath(t))
 	record.close()
 	report := testReport("kill -KILL $$", "0123456789abcdef", record, result).Normalize()
 	if err := report.Validate(); err != nil {
@@ -45,70 +45,118 @@ func TestACommandEndedBySomethingElseReportsNoStatus(t *testing.T) {
 	}
 }
 
-// A command that exits zero and leaves a descendant holding its output pipe is
-// one os/exec answers twice about: the exit status is the command's, and
-// ErrWaitDelay says the copy of its output was abandoned once the grace ran
-// out. The record is then short by whatever was still in the pipe, and every
-// write to it succeeded, so nothing the record can see would notice. The stage
-// must therefore stop offering it as the full output.
+// A command that leaves a descendant holding its output pipe is one whose
+// output never reaches its end: the command has gone, the pipe is still open,
+// and whatever is still unread stays unread. The read is given the grace and
+// then abandoned, and the result says so - whatever exit status the command
+// reported.
 //
-// Without the guard the result carries no truncation fact at all, the report
-// names the evidence file, and an operator is told a short file is whole.
+// Both exit statuses are run because the guard this replaces covered only one
+// of them. It inferred truncation from os/exec's error, and os/exec answers an
+// ExitError on a non-zero exit and discards the wait-delay error behind it, so
+// the branch that produces the fix finding - the one that hands an operator
+// and a fixer agent a path to the output - was exactly the branch where the
+// old guard could not fire. Reading the pipe here makes the fact the same on
+// both.
 //
 // It is unix-only because leaving a background descendant holding a pipe is
-// written here as shell job control, and no portable equivalent is available;
-// what that leaves is that the other platform's answer to a cut-off record is
+// written here as shell job control and no portable equivalent is available;
+// what that leaves is that the other platform's answer to an abandoned read is
 // not checked anywhere. The grace is short so the give-up path is reached in
-// milliseconds rather than in the stage's five seconds, and the result comes
-// from a real runCommand rather than being assembled by hand.
-func TestOutputCutOffAfterAZeroExitIsNotOfferedAsTheFullOutput(t *testing.T) {
+// milliseconds rather than in the stage's five seconds, and every value comes
+// from a real runCommand call rather than being assembled by hand.
+func TestOutputStillHeldAfterTheCommandEndsIsNotOfferedAsWhole(t *testing.T) {
 	t.Parallel()
-	record := openTestEvidence(filepath.Join(t.TempDir(), "run-1", testEvidenceFile))
-	if !record.recorded() {
-		t.Fatalf("opening the record: %v", record.err)
+	for _, c := range []struct {
+		name    string
+		command string
+		code    int
+	}{
+		{"exiting zero", "sleep 30 & echo started", 0},
+		{"exiting non-zero", "sleep 30 & echo started; exit 3", 3},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			record := openTestEvidence(scratchEvidencePath(t))
+			if !record.recorded() {
+				t.Fatalf("opening the record: %v", record.err)
+			}
+			result := runCommand(t.Context(), commandSpec{
+				command:    c.command,
+				dir:        t.TempDir(),
+				record:     record,
+				projection: testProjectionBytes,
+				grace:      50 * time.Millisecond,
+			})
+			if !result.exited || result.code != c.code {
+				t.Fatalf("the command exited %d (reported a status: %t), and it exits %d: %v",
+					result.code, result.exited, c.code, result.err)
+			}
+			if result.err != nil {
+				t.Fatalf("a command that reported its own status also reported %v as a failure to "+
+					"obtain one", result.err)
+			}
+			if result.short == nil {
+				t.Fatal("the read of the output was abandoned and the result says it was whole, " +
+					"so a short record would be offered as the full output")
+			}
+			if !errors.Is(result.short, errOutputAbandoned) {
+				t.Fatalf("the output was cut off by %v, and giving up on the read is what cut it off",
+					result.short)
+			}
+
+			record.cutShort(result.short)
+			record.close()
+			if record.recorded() {
+				t.Fatal("the record reports itself whole after the read of the output was abandoned")
+			}
+
+			report := testReport(c.command, "0123456789abcdef", record, result).Normalize()
+			if err := report.Validate(); err != nil {
+				t.Fatalf("the report is one the pipeline refuses: %v", err)
+			}
+			if len(report.Evidence) != 0 {
+				t.Fatalf("the report offers %+v as the output, and that file is short", report.Evidence)
+			}
+			var said int
+			offered := "full output: " + record.path
+			for _, f := range report.Findings {
+				if strings.Contains(f.Description, offered) {
+					t.Fatalf("a finding offers %s as the full output, and that file is short:\n%s",
+						record.path, f.Description)
+				}
+				if f.Action == findings.ActionNote && strings.Contains(f.Description, record.err.Error()) {
+					said++
+				}
+			}
+			if said != 1 {
+				t.Fatalf("%d findings say the record is short, and the report owes exactly one: %+v",
+					said, report.Findings)
+			}
+		})
 	}
-	const command = "sleep 30 & echo started"
+}
+
+// A command whose output ends before the grace does is not reported as short,
+// and the record holds all of it. Without this the truncation fact could be set
+// on every run and every guard above would still pass.
+func TestOutputThatReachesItsEndIsReportedWhole(t *testing.T) {
+	t.Parallel()
+	var whole strings.Builder
 	result := runCommand(t.Context(), commandSpec{
-		command:    command,
+		command:    "echo first; echo second",
 		dir:        t.TempDir(),
-		record:     record,
+		record:     &whole,
 		projection: testProjectionBytes,
 		grace:      50 * time.Millisecond,
 	})
 	if !result.exited || result.code != 0 {
-		t.Fatalf("the command exited %d (reported a status: %t), and it exits zero: %v",
-			result.code, result.exited, result.err)
+		t.Fatalf("the command exited %d (reported a status: %t): %v", result.code, result.exited, result.err)
 	}
-	if result.err != nil {
-		t.Fatalf("a command that reported its own status also reported %v as a failure to obtain one",
-			result.err)
+	if result.short != nil {
+		t.Fatalf("a command whose output ended is reported short: %v", result.short)
 	}
-	if result.short == nil {
-		t.Fatal("os/exec gave up copying the output and the result says nothing was cut off, " +
-			"so a short record would be offered as whole")
-	}
-	if !errors.Is(result.short, exec.ErrWaitDelay) {
-		t.Fatalf("the output was cut off by %v, and the grace expiring is what cut it off", result.short)
-	}
-
-	record.cutShort(result.short)
-	record.close()
-	if record.recorded() {
-		t.Fatal("the record reports itself whole after the command's output was cut off")
-	}
-
-	report := testReport(command, "0123456789abcdef", record, result).Normalize()
-	if err := report.Validate(); err != nil {
-		t.Fatalf("the report is one the pipeline refuses: %v", err)
-	}
-	if len(report.Evidence) != 0 {
-		t.Fatalf("the report offers %+v as the full output, and that file is short", report.Evidence)
-	}
-	if !report.AllNotes() || len(report.Findings) != 1 {
-		t.Fatalf("a passing check with a cut-off record reported %+v, and it owes exactly the one note",
-			report.Findings)
-	}
-	if !strings.Contains(report.Findings[0].Description, record.err.Error()) {
-		t.Fatalf("the note does not say what went wrong: %s", report.Findings[0].Description)
+	if whole.String() != "first\nsecond\n" {
+		t.Fatalf("the record holds %q, and the command wrote %q", whole.String(), "first\nsecond\n")
 	}
 }

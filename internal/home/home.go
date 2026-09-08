@@ -104,6 +104,18 @@ func (h *Home) Evidence(runID string) string {
 	return filepath.Join(h.root, "evidence", runID)
 }
 
+// EvidenceLog is the file one stage writes its evidence to, under Evidence's
+// directory for the run and named for the stage. It is a full path including
+// the leaf, so a caller records evidence without composing a name of its own
+// and this package stays the one owner of the layout.
+//
+// The directory is not created here. Evidence's root is, and whoever writes a
+// file under it creates the run's directory, on the same terms as every other
+// path this package returns below its own directories list.
+func (h *Home) EvidenceLog(runID, stage string) string {
+	return filepath.Join(h.Evidence(runID), stage+".log")
+}
+
 // Task is where one task's records live: its instructions, its report, its
 // state, and its events.
 func (h *Home) Task(id string) string { return filepath.Join(h.root, "tasks", id) }
