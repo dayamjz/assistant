@@ -100,6 +100,46 @@ func callKey(args []string) string {
 	}
 }
 
+// subcommandFlags is which flags each subcommand this adapter runs accepts,
+// written down from the real command's own help rather than from what the
+// adapter happens to send. It is deliberately narrow: only the flags a test
+// could plausibly see are listed, and anything else is refused.
+//
+// The repository is the entry that matters. The pull request subcommands take
+// it as --repo and the repository read takes it as an operand, so a vector
+// carrying --repo into a repository read is refused here exactly as the real
+// command refuses it.
+var subcommandFlags = map[string]map[string]bool{
+	"pr": {
+		"--head": true, "--state": true, "--limit": true, "--json": true,
+		"--base": true, "--title": true, "--body-file": true, "--draft": true,
+		"--repo": true,
+	},
+	"repo": {"--json": true},
+}
+
+// unsupportedFlag reports the first flag in args that the subcommand does not
+// accept.
+func unsupportedFlag(args []string) (string, bool) {
+	if len(args) == 0 {
+		return "", false
+	}
+	accepted, known := subcommandFlags[args[0]]
+	if !known {
+		return "", false
+	}
+	for _, a := range args[1:] {
+		if !strings.HasPrefix(a, "--") {
+			continue
+		}
+		name, _, _ := strings.Cut(a, "=")
+		if !accepted[name] {
+			return name, true
+		}
+	}
+	return "", false
+}
+
 // TestMain runs the stand-in provider when the environment asks for it, and
 // the tests otherwise.
 func TestMain(m *testing.M) {
@@ -119,6 +159,16 @@ func fakeGHMain(dir string) int {
 	}
 
 	args := os.Args[1:]
+	if flag, bad := unsupportedFlag(args); bad {
+		// The real command refuses a flag the subcommand does not define, and
+		// so does this: a stand-in that accepted an argument vector gh rejects
+		// would let a test pass over a command line that cannot run. This
+		// package shipped exactly that once, appending the pull request
+		// commands' repository flag to a repository read that takes an
+		// operand.
+		os.Stderr.WriteString("unknown flag: " + flag + "\n")
+		return 1
+	}
 	key := callKey(args)
 
 	// Standard input is read to the end so a test can see what the adapter

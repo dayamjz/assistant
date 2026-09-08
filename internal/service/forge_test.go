@@ -9,8 +9,8 @@ import (
 	"github.com/dayamjz/assistant/internal/forge"
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/pipeline"
+	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/redact"
-	"github.com/dayamjz/assistant/internal/service"
 	"github.com/dayamjz/assistant/internal/stages"
 	"github.com/dayamjz/assistant/internal/store"
 )
@@ -18,9 +18,11 @@ import (
 // TestTheRepositoryAPullRequestWouldLandInComesFromTheRunsOwnRecord is what
 // stands between a run and a pull request opened somewhere nobody asked for.
 //
-// Opening a pull request is outward-facing and not undoable, so where it lands
-// may not come from a caller's request, from configuration, or from whichever
-// remote a working copy happens to carry. It is derived from the upstream URL
+// PRD principle P1 makes the push to the gate the consent boundary for the
+// pull request that run opens, and nothing else implies that consent. Opening
+// a pull request is outward-facing and not undoable, so where it lands may not
+// come from a caller's request, from configuration, or from whichever remote a
+// working copy happens to carry. It is derived from the upstream URL
 // on this run's repository row, which is the record PRD section 8 makes
 // authoritative for it, and the derivation is in the one place that has the
 // record and cannot be skipped by a call site.
@@ -31,6 +33,7 @@ import (
 // request stage would open against it. That is the failure this catches, and
 // it is why the two are set to disagree rather than to match.
 func TestTheRepositoryAPullRequestWouldLandInComesFromTheRunsOwnRecord(t *testing.T) {
+	principles.Cite(t, principles.P1)
 	requiresIdentifiedPeer(t)
 
 	const (
@@ -93,22 +96,19 @@ func observeForgeRepository(t *testing.T, upstream, remote string) string {
 		return all
 	}
 
-	running, err := service.Open(t.Context(), opts)
-	if err != nil {
-		requiresLocalSocket(t, err)
-		t.Fatalf("opening the service: %v", err)
-	}
-	t.Cleanup(func() { _ = running.Close() })
-
-	startRun(t, dial(t, running), subject)
-
-	select {
-	case got := <-seen:
-		return got
-	default:
+	var got string
+	var read bool
+	withServiceOptions(t, opts, func(under serviceUnderTest) {
+		startRun(t, under.client, subject)
+		select {
+		case got, read = <-seen:
+		default:
+		}
+	})
+	if !read {
 		t.Fatal("the run never reached the stage that reads the repository it acts on")
-		return ""
 	}
+	return got
 }
 
 // observingStage is a stage body that reports the code host repository the run

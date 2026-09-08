@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/forge"
+	"github.com/dayamjz/assistant/internal/principles"
 )
 
 // TestOpenRefusesWhenTheProviderResolvesADifferentRepository is the positive
@@ -15,10 +16,12 @@ import (
 // outward-facing act it cannot take back.
 //
 // A repository specifier and the repository a provider reaches through it are
-// two different things. A renamed or transferred repository keeps answering
-// under its old specifier, so a run addressing the old one reaches the new
-// repository, and the pull request it opens exists on a host where people can
-// see it. Nothing later in the run can undo that.
+// two different things, and nothing in this package can see the second. A pull
+// request opened against the wrong one exists on a host where people can see
+// it, and nothing later in the run can undo that. PRD principle P1 makes the
+// push to the gate the consent boundary for the pull request that run opens;
+// one opened somewhere the run's record does not name has no consent behind
+// it at all.
 //
 // So this points the adapter at owner/name and has the provider report that
 // specifier as somewhere-else/name. The two assertions are separate on
@@ -26,6 +29,8 @@ import (
 // create anything. A guard that refused after the write would satisfy the
 // first and fail the second, and it is the second that is the point.
 func TestOpenRefusesWhenTheProviderResolvesADifferentRepository(t *testing.T) {
+	principles.Cite(t, principles.P1)
+
 	h := newWriteHarness(t, ghScript{
 		"repo":   {{Stdout: repoViewJSON("somewhere-else/name")}},
 		"create": {{Stdout: createdURL}},

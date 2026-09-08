@@ -56,10 +56,14 @@ func GitHubRepository(remote string) (string, bool) {
 // remote takes.
 //
 // The host is returned without its userinfo and without its port, so a remote
-// carrying either is recognized as the host it names rather than refused. A
-// port is dropped rather than checked because what the specifier decides is
-// which repository is addressed, and GH_HOST is what decides where the
-// provider looks for it.
+// carrying either is recognized as the host it names rather than refused. The
+// ssh form of a GitHub remote carries both.
+//
+// Dropping the port has a consequence worth naming: a remote on this host at a
+// non-standard port yields the same specifier as one at the standard port. It
+// decides nothing about where a write lands, because a specifier carries no
+// host and every invocation is given GH_HOST, so what a port here could change
+// is which remotes are recognized and not which host is addressed.
 func splitRemote(remote string) (host, path string, ok bool) {
 	if scheme, rest, found := strings.Cut(remote, "://"); found {
 		if !validScheme(scheme) {
@@ -90,9 +94,10 @@ func hostOf(authority string) string {
 	return authority
 }
 
-// validScheme reports whether s is written as a URL scheme. It is here so that
-// a Windows path such as C:\repo, whose drive letter and colon read as an
-// scp-like authority, is not taken for a remote.
+// validScheme reports whether s is written in the characters a URL scheme
+// takes. It is what keeps text that merely contains "://" - a sentence, a
+// message quoting a URL - from being read as one, since a remote arrives here
+// as a stored field and this package does not control what was stored there.
 func validScheme(s string) bool {
 	if s == "" {
 		return false

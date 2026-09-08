@@ -31,10 +31,9 @@ import (
 // decisive one, since it holds whether or not a process ever restarts.
 //
 // So the adapters are here, and the run's own facts are declared state keys in
-// internal/pipeline. This build declares three of them: KeyRepository and
-// KeyRun, which are what Copy below derives its path from, and
-// KeyForgeRepository, which is which repository on the code host this run acts
-// on. Lifetime decides the owner, which is what P14 asks.
+// internal/pipeline. KeyRepository and KeyRun are what Copy below derives its
+// path from, and KeyForgeRepository is which repository on the code host this
+// run acts on. Lifetime decides the owner, which is what P14 asks.
 //
 // Where the run's target stood when it was observed is not one of them here.
 // Only the rebase and push stages need it, and declaring a key is one row in
@@ -43,12 +42,12 @@ import (
 //
 // # The code host is split by that same rule, and it is why Forge is a Host
 //
-// A forge.Provider addresses exactly one repository, so it is not an adapter
-// that a service can settle once: one All builds one pipeline and one executor
-// for every run of that service, and a Provider captured here would send every
-// run's pull request to the repository the first one happened to be for. The
-// same argument that put the isolated copy's path in state rather than on this
-// struct applies to it unchanged.
+// A forge.Provider addresses exactly one repository, so it is not an adapter a
+// service can settle once: one All builds one pipeline and one executor, and
+// those serve every run of that service, so a Provider captured here would
+// send every run's pull request to the repository the first one happened to be
+// for. The same argument that put the isolated copy's path in state rather
+// than on this struct applies to it unchanged.
 //
 // The two halves land on the two sides. forge.Host is the adapter: the
 // provider command line, the environment it runs in, the redactor, and the
@@ -132,10 +131,11 @@ type StageDeps struct {
 	// service; the repository is pipeline.KeyForgeRepository, and a body
 	// passes it to Open.
 	//
-	// It is nil only where nothing wired it: internal/service builds a
-	// forge.GitHubHost for every run of a service. A body given none, or
-	// given a run whose KeyForgeRepository is empty, refuses rather than
-	// proceeding without a code host.
+	// It is nil only where nothing wired it: internal/service builds one
+	// forge.GitHubHost and every run of that service opens through it. A run
+	// whose KeyForgeRepository is empty has no provider to open, because
+	// forge.Host.Open refuses an empty specifier; a body that needs a code
+	// host is to report that rather than proceed without one.
 	Forge forge.Host
 	// git are the options every repository opened through Copy is opened
 	// with, which is how the redactor the service configured reaches the
