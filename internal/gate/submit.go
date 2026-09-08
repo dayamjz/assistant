@@ -43,8 +43,16 @@ func Holds(ctx context.Context, spec Spec, commit string, opts ...Option) (bool,
 	return found, err
 }
 
-// TakeBranch puts the working copy's branch into the gate and reports the
-// commit the gate then has for it.
+// submittedRefPrefix is where TakeBranch puts a branch it takes into the gate.
+//
+// It is a namespace this package writes and nothing else does. No push a
+// caller makes lands in it, no branch of a working copy tracks it, and no
+// other operation in this repository writes it, which is what makes forcing
+// the update there safe: there is no history under it to lose.
+const submittedRefPrefix = "refs/assistant/submitted/"
+
+// TakeBranch puts the working copy's branch into the gate, under a reference
+// this package owns, and reports the commit the gate then has for it.
 //
 // PRD principle P1 makes pushing to the gate the consent boundary, and PRD
 // section 9's bare command starts a run from the branch you are on. Those two
@@ -61,10 +69,39 @@ func Holds(ctx context.Context, spec Spec, commit string, opts ...Option) (bool,
 // and none of those reach this, which runs only inside a command somebody
 // invoked.
 //
-// The reference is moved only where a push would move it. The refspec carries
-// no leading plus, so a branch that would not fast-forward is refused by git
-// rather than forced, and a gate reference is never rewritten here to make a
-// run startable.
+// # Where it writes, and why the forced refspec is safe there
+//
+// The destination is submittedRefPrefix + branch, never refs/heads/branch,
+// and the refspec carries a leading plus. A reader meeting that plus on its
+// own would be right to read a P6 hazard, so the thing that makes it safe is
+// named here with it: the safety is a property of the namespace rather than of
+// the update. Nothing but this operation writes under refs/assistant/, so
+// there is no history there for a force to destroy - what it overwrites is the
+// commit a previous take of the same branch put there, which is by
+// construction something this operation wrote and nothing a person has.
+//
+// This path never writes refs/heads in the gate and never forces one. A branch
+// in the gate moves only where a push moves it, so git's own rejection of a
+// non-fast-forward push stays exactly what it was, which is what keeps P6's
+// answer there true.
+//
+// Writing outside refs/heads is also what makes this total rather than
+// conditional. Rewriting a commit is what a fix round does to a branch, and a
+// rewritten branch is not a descendant of what the gate last took; a take into
+// refs/heads would be refused for that, and the bare command would then have
+// no way to start a run on the branch at all.
+//
+// # What the reference establishes, and what it does not
+//
+// It puts a reference over the submitted commit, so that commit is contained
+// by something in the gate for as long as the branch's latest take stands and
+// is not collected while a run validates it.
+//
+// It says nothing about a commit made later inside a run's copy.
+// RemoveCopy's reachability refusal reads every reference in the gate, and
+// this one contains the submitted commit and nothing beyond it, so a copy
+// whose head the rebase stage moved is still contained by no reference and is
+// still kept rather than removed.
 func TakeBranch(ctx context.Context, spec Spec, branch string, opts ...Option) (string, error) {
 	if branch == "" {
 		return "", fmt.Errorf("%w: no branch to take", ErrInvalidSpec)
@@ -75,18 +112,19 @@ func TakeBranch(ctx context.Context, spec Spec, branch string, opts ...Option) (
 		if err != nil {
 			return fmt.Errorf("gate: opening the gate repository at %s: %w", h.repository, err)
 		}
-		ref := "refs/heads/" + branch
+		source := branchRefPrefix + branch
+		destination := submittedRefPrefix + branch
 		if err := repo.Fetch(ctx, vcs.FetchSpec{
 			Remote:   h.workingPath,
-			Refspecs: []string{ref + ":" + ref},
+			Refspecs: []string{"+" + source + ":" + destination},
 		}); err != nil {
 			return fmt.Errorf("gate: taking %s from %s into the gate at %s: %w",
 				branch, h.workingPath, h.repository, err)
 		}
-		commit, err := repo.ResolveCommit(ctx, ref)
+		commit, err := repo.ResolveCommit(ctx, destination)
 		if err != nil {
 			return fmt.Errorf("gate: reading %s in the gate at %s after taking it: %w",
-				ref, h.repository, err)
+				destination, h.repository, err)
 		}
 		taken = commit
 		return nil

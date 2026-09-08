@@ -220,19 +220,20 @@ func TestARunWhoseCopyCannotBeMadeIsFailedRatherThanLeftRunning(t *testing.T) {
 	}
 }
 
-// TestTheBareCommandAttachesWhenTakingTheBranchWouldFail is PRD section 9's
-// promise that the bare command attaches to the branch's active run.
+// TestTheBareCommandAttachesToTheRunOfARewrittenBranch is PRD section 9's
+// promise that the bare command attaches to the branch's active run, held
+// against the history rewrite that used to defeat it.
 //
-// Attaching creates nothing, so it does not have to satisfy a creation
-// invariant. Before the peek, every invocation put the branch in the gate
-// first, and the refspec deliberately carries no leading plus - so any local
-// history rewrite after the first invocation made the take a non-fast-forward
-// and the command could then neither start a run nor report the one already
-// running, whose head the gate holds already.
+// Every invocation puts the branch in the gate before it decides create from
+// attach, so the attach path takes the branch too. That is only safe because
+// gate.TakeBranch writes a reference internal/gate owns: a take that moved the
+// gate's own copy of the branch would be refused as a non-fast-forward here,
+// and the command would then neither start a run nor report the one already
+// running.
 //
-// The rewrite here is an amend, which is the ordinary way a branch stops
+// The rewrite is an amend, which is the ordinary way a branch stops
 // fast-forwarding in this product: a fix round rewrites a commit.
-func TestTheBareCommandAttachesWhenTakingTheBranchWouldFail(t *testing.T) {
+func TestTheBareCommandAttachesToTheRunOfARewrittenBranch(t *testing.T) {
 	held := newHeldService(t)
 	record := held.begin(t)
 	<-held.inside
@@ -252,4 +253,139 @@ func TestTheBareCommandAttachesWhenTakingTheBranchWouldFail(t *testing.T) {
 	if attached.Record.ID != record.ID {
 		t.Errorf("attached to run %s, want the run the branch already had, %s", attached.Record.ID, record.ID)
 	}
+	if attached.Record.SubmittedHead != held.subject.head {
+		t.Errorf("the attached run now validates %s, want the commit it was started against, %s",
+			attached.Record.SubmittedHead, held.subject.head)
+	}
+}
+
+// TestTheBareCommandStartsARunOnARewrittenBranch is the create half of the
+// same case, and it is the one the attach test above cannot reach.
+//
+// A branch whose run has finished and whose history was then rewritten has no
+// active run to attach to, so the command must create one - against the commit
+// standing in the working copy now, not the one the previous run submitted.
+// This is what a take into the gate's own copy of the branch made impossible:
+// the fetch was refused as a non-fast-forward and the command had no route at
+// all.
+func TestTheBareCommandStartsARunOnARewrittenBranch(t *testing.T) {
+	held := newHeldService(t)
+	first := held.begin(t)
+	<-held.inside
+	held.let()
+	held.awaitSegment(t)
+	if _, err := held.service.cancel(t.Context(), machine.CancelRequest{Run: first.ID}); err != nil {
+		t.Fatalf("ending the first run: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(held.subject.workingPath, "rewritten.txt"), []byte("after\n"), 0o600); err != nil {
+		t.Fatalf("writing the rewritten content: %v", err)
+	}
+	rawGit(t, held.subject.workingPath, "add", "-A")
+	rawGit(t, held.subject.workingPath, "commit", "--quiet", "--amend", "-m", "rewritten after the run ended")
+	rewritten := rawGit(t, held.subject.workingPath, "rev-parse", "HEAD")
+	if rewritten == held.subject.head {
+		t.Fatal("the amend did not move the branch, so a take would still fast-forward")
+	}
+
+	started, err := held.service.start(t.Context(), machine.StartRequest{
+		Working:        machine.Working{WorkingPath: held.subject.workingPath},
+		Intent:         "validate the rewritten branch",
+		IntentSupplied: true,
+	})
+	if err != nil {
+		t.Fatalf("the bare command could not start a run on a locally rewritten branch: %v", err)
+	}
+	if started.Record.ID == first.ID {
+		t.Fatal("the command attached to the finished run rather than starting a new one")
+	}
+	if started.Record.SubmittedHead != rewritten {
+		t.Errorf("the new run validates %s, want the commit the branch now stands at, %s",
+			started.Record.SubmittedHead, rewritten)
+	}
+}
+
+// TestRecoveryDoesNotReportTheCopyOfAHeldRunAsKept keeps the surface the
+// reclaim's refusal is carried on worth reading.
+//
+// reclaimCopy takes no error back to its caller, so the service log is the
+// whole of what a refusal amounts to. A held run keeping its copy is the
+// designed state - it is waiting on an answer the copy resumes into - so
+// asking about one at every open would put a "was kept" line on that log for
+// every held run every time the service starts, and the one line that means
+// work would have been lost would be read as another of those.
+//
+// The positive control is in the same run of recovery: a finished run whose
+// copy genuinely cannot be given back still reaches the log, so a recovery
+// that stopped reporting anything fails here rather than passing.
+func TestRecoveryDoesNotReportTheCopyOfAHeldRunAsKept(t *testing.T) {
+	held := newHeldService(t)
+	built, err := held.service.driverFor(t.Context())
+	if err != nil {
+		t.Fatalf("building the driver: %v", err)
+	}
+
+	waiting, err := held.service.create(t.Context(), run{
+		repository: "subject",
+		branch:     "waiting",
+		head:       held.subject.head,
+		intent:     "waiting on a person",
+		source:     intentSourceSupplied,
+		supplied:   true,
+	})
+	if err != nil {
+		t.Fatalf("recording the run that waits: %v", err)
+	}
+	if _, err := built.runs.Start(t.Context(), waiting.ID); err != nil {
+		t.Fatalf("starting the run that waits: %v", err)
+	}
+	if _, err := built.runs.Hold(t.Context(), waiting.ID); err != nil {
+		t.Fatalf("holding the run that waits: %v", err)
+	}
+	makeCopy(t, held, waiting.ID)
+
+	finished, err := held.service.create(t.Context(), run{
+		repository: "subject",
+		branch:     "finished",
+		head:       held.subject.head,
+		intent:     "finished with work only its copy holds",
+		source:     intentSourceSupplied,
+		supplied:   true,
+	})
+	if err != nil {
+		t.Fatalf("recording the finished run: %v", err)
+	}
+	if _, err := built.runs.Terminate(t.Context(), finished.ID); err != nil {
+		t.Fatalf("ending the finished run: %v", err)
+	}
+	strandedIn := makeCopy(t, held, finished.ID)
+	if err := os.WriteFile(filepath.Join(strandedIn, "only-here.txt"), []byte("work\n"), 0o600); err != nil {
+		t.Fatalf("writing work into the finished run's copy: %v", err)
+	}
+	rawGit(t, strandedIn, "add", "-A")
+	rawGit(t, strandedIn, "commit", "--quiet", "-m", "work only this copy references")
+
+	held.service.recover(t.Context())
+
+	logged := readServiceLog(t, held.service)
+	if strings.Contains(logged, waiting.ID) {
+		t.Errorf("recovery reported the copy of a held run, which is the copy that is meant to "+
+			"stay:\n%s", logged)
+	}
+	if !strings.Contains(logged, finished.ID) {
+		t.Errorf("recovery did not report the copy it could not give back, so this test would "+
+			"pass against a recovery that reports nothing:\n%s", logged)
+	}
+}
+
+// makeCopy gives a run the isolated copy it would have been given, so that
+// what recovery decides about it is decided about a directory that is there.
+func makeCopy(t *testing.T, held *heldService, runID string) string {
+	t.Helper()
+	path := held.service.home.Worktree("subject", runID)
+	spec := gate.Spec{Home: held.service.home.Root(), WorkingPath: held.subject.workingPath}
+	if err := gate.AddCopy(t.Context(), spec, path, held.subject.head, gate.WithIndex(held.service.store)); err != nil {
+		t.Fatalf("creating the copy for run %s: %v", runID, err)
+	}
+	return path
 }
