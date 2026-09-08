@@ -1,6 +1,9 @@
 package journey_test
 
 import (
+	"errors"
+	"io/fs"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -78,5 +81,49 @@ func TestServingAHomeTheServiceRefusesReportsTheExitRatherThanWaitingItOut(t *te
 			"skip, did not come up either: %v\n\nso the exit above is not attributable to the "+
 			"document, and what this test read as a refusal was something about this home, this "+
 			"harness or this machine", err)
+	}
+}
+
+// TestKillingAServiceThatEndedOnItsOwnLeavesNothingHoldingTheHome drives the
+// end of a service this harness started but did not stop.
+//
+// It cites no principle, and like its sibling above it is about this harness
+// rather than the product. Kill promises that nothing is serving afterwards
+// and that what the harness opened for the service is let go, and a service
+// that died on its own already satisfies the first half while leaving the
+// second entirely to Kill. Reading the operating system's answer to a signal
+// aimed at a process already reaped is what got that wrong: the answer is not
+// the same everywhere, so a Kill that refused on one of them returned before
+// closing the log it had opened, and the home could then not be removed on the
+// platform that holds an open file against a delete. Closing is asserted
+// through the home actually going away rather than through Close's answer
+// alone, because the file left open and the directory left standing are the
+// same failure and only the second is observable everywhere.
+//
+// It takes no platform guard, and that is the point of it: the service here
+// exits over its own configuration document before any transport is involved,
+// so there is nothing about it a platform without one would answer differently.
+func TestKillingAServiceThatEndedOnItsOwnLeavesNothingHoldingTheHome(t *testing.T) {
+	scenario, dir := cloned(t)
+	j := open(t, scenario, func(o *journey.Options) { o.Dir = dir })
+	if err := j.WriteConfiguration(map[string]any{
+		standingSkipKey: []string{pipeline.StageReview.String()},
+	}); err != nil {
+		t.Fatalf("writing a configuration the service refuses: %v", err)
+	}
+
+	if err := j.Serve(); err == nil {
+		t.Fatal("this home carries a standing skip and the service reported itself ready over it")
+	}
+
+	if err := j.Kill(); err != nil {
+		t.Fatalf("ending a service that had already exited: %v", err)
+	}
+	if err := j.Close(); err != nil {
+		t.Fatalf("closing the journey after it: %v", err)
+	}
+	if _, err := os.Stat(j.Root()); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("the home %s answers %v after closing rather than being gone, so something this "+
+			"harness opened for the service is still held against it", j.Root(), err)
 	}
 }
