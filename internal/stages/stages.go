@@ -1,7 +1,5 @@
-// Package stages is where the nine delivery-gate stage bodies live. Which of
-// them this build has a body for is the written table below and nothing in
-// this comment: a sentence naming them would be wrong the next time one lands,
-// and Implemented answers the question off the table itself.
+// Package stages is where the nine delivery-gate stage bodies live. The intent
+// stage is written; the rest are not.
 //
 // PRD section 5 specifies the nine, internal/pipeline wires them into a graph
 // and owns their order, and each body is separate work against
@@ -10,7 +8,8 @@
 // pipeline with a missing one does not build.
 //
 // What an unwritten stage holds instead is Pending: a stage that validates
-// nothing and says so.
+// nothing and says so. Which stages have a body is the written table below,
+// and Implemented reports it, so no reader has to count.
 //
 // # Why a placeholder rather than a refusal to build the pipeline
 //
@@ -72,7 +71,7 @@
 //
 // Surface landed ahead of consumers it names is the other case, and StageDeps
 // is this package's one instance of it: deps.go names the bodies each of its
-// fields answers to, so a field is checkable against them as they land.
+// fields answers to.
 //
 // What that work inherits is stated here so it is not rediscovered. The intent
 // stage never blocks a run, and inference adds ways to fail that must not
