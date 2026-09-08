@@ -57,6 +57,12 @@ const (
 	// caller raises the bound or reports, and reading again at the same bound
 	// cannot help.
 	ReasonOversizeAnswer Reason = "oversize-answer"
+	// ReasonWrongRepository is the provider reports that the repository
+	// specifier this adapter was given names a different repository. It is
+	// separate from ReasonRejected because the provider refused nothing: it
+	// answered, and the answer was about somewhere the run did not ask about.
+	// A caller re-points the run rather than retrying.
+	ReasonWrongRepository Reason = "wrong-repository"
 	// ReasonAmbiguous is the provider answered with more than one thing where
 	// the request identifies one, such as a branch carrying two open pull
 	// requests. Picking one would be a guess, so this package refuses and

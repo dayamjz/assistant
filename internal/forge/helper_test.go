@@ -75,6 +75,9 @@ type ghCall struct {
 // does: the subcommand pair, and for a read the field set that distinguishes a
 // pull request read from a check read.
 func callKey(args []string) string {
+	if len(args) >= 2 && args[0] == "repo" && args[1] == "view" {
+		return "repo"
+	}
 	if len(args) < 2 || args[0] != "pr" {
 		return "other"
 	}
@@ -212,6 +215,19 @@ const (
 	secretURL = "https://x-access-token:" + secret + "@github.com/owner/name.git"
 )
 
+// harnessRepository is the repository a write harness addresses, and the one
+// its stand-in reports back when the confirmation asks. A read harness names
+// none, because a read does not need one.
+const harnessRepository = "owner/name"
+
+// repoViewJSON is the answer gh puts on the wire for the field set the
+// repository confirmation asks for. A test states the repository the provider
+// resolves the adapter's specifier to, which is the whole of what the
+// confirmation compares.
+func repoViewJSON(nameWithOwner string) string {
+	return `{"nameWithOwner":"` + nameWithOwner + `"}`
+}
+
 // harness is a stand-in provider together with the adapter that talks to it.
 type harness struct {
 	t   *testing.T
@@ -238,6 +254,26 @@ func newHarness(t *testing.T, script ghScript, opts ...forge.Option) *harness {
 	return &harness{t: t, dir: dir, gh: gh}
 }
 
+// newHarnessWithEnv returns a harness whose invocations start from a base
+// environment carrying extra alongside the stand-in's own directory. A test
+// uses it to state what an operator's environment holds, so an assertion about
+// what an invocation is given is made against something that had to be
+// overridden.
+func newHarnessWithEnv(t *testing.T, script ghScript, extra ...string) *harness {
+	t.Helper()
+	dir := t.TempDir()
+	writeScript(t, dir, script)
+	gh, err := forge.NewGitHub(testRedactor,
+		forge.WithBinary(os.Args[0]),
+		forge.WithBaseEnvironment(append([]string{fakeGHDir + "=" + dir}, extra...)),
+		forge.WithDirectory(dir),
+	)
+	if err != nil {
+		t.Fatalf("NewGitHub: %v", err)
+	}
+	return &harness{t: t, dir: dir, gh: gh}
+}
+
 // writeScript writes the answers the stand-in provider should give into the
 // directory it reads them from.
 func writeScript(t *testing.T, dir string, script ghScript) {
@@ -249,6 +285,20 @@ func writeScript(t *testing.T, dir string, script ghScript) {
 	if err := os.WriteFile(filepath.Join(dir, fakeGHScript), blob, 0o600); err != nil {
 		t.Fatalf("writing the script: %v", err)
 	}
+}
+
+// newWriteHarness returns a harness whose adapter may perform an outward-facing
+// write: it names a repository, and its stand-in confirms that specifier as the
+// repository it resolves to.
+//
+// A test that scripts its own "repo" answer keeps it, which is how a test
+// states a provider resolving the specifier somewhere else.
+func newWriteHarness(t *testing.T, script ghScript, opts ...forge.Option) *harness {
+	t.Helper()
+	if _, stated := script["repo"]; !stated {
+		script["repo"] = []ghResponse{{Stdout: repoViewJSON(harnessRepository)}}
+	}
+	return newHarness(t, script, append([]forge.Option{forge.WithRepository(harnessRepository)}, opts...)...)
 }
 
 // calls returns every invocation the stand-in provider recorded, in order.
