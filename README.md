@@ -102,6 +102,11 @@ document is a refusal rather than a seventh outcome, and a set the rule cannot
 read is a refusal too rather than a short one. What it establishes is only that
 both sides name the same set; it does not say those six are the right six, or
 that an outcome means on the wire what the row's sentence about it says.
+The twenty-third is `internal/journey`, the end-to-end harness: the binary driven
+as a process against the fixture's subject, organized by PRD principle rather
+than by feature, with every check carrying the counterfeit observations it must
+reject so no assertion that cannot fail may ship, and three tables accounting
+for the principles, the planted conditions and the fixture's open questions.
 
 So `assistant` builds and runs. A run can be started, reported on, answered and
 carried on across separate invocations, with the service restarted in between,
@@ -120,8 +125,12 @@ what the reviewer declared reading. A stage without a body holds a placeholder
 that validates nothing and holds for a decision, so a run runs the stages that
 have one and stops at the first that does not, saying so rather than reporting a
 pass it did not establish. `stages.Implemented` is the authority on which stages
-those are, and `assistant doctor` reports it. The end-to-end harness is separate
-work too.
+those are, and `assistant doctor` reports it. Until they land, a run reaches no
+agent, no push and no code host, which is what bounds what the end-to-end
+harness can drive through the binary; `internal/journey/README.md` is the
+authority on what a green run there does and does not establish, starting with
+the limit that a scripted agent proves the machinery and not the review
+quality.
 
 ## The two promises
 
@@ -160,6 +169,7 @@ working as it always did.
 | `internal/graph` | The execution engine: nodes, edges, bounds, halt points, checkpoints. |
 | `internal/home` | The one root everything lives under: where the database, the socket, the lock, the gates, the isolated copies and the logs go, and the exclusive lock that gives a home one service. |
 | `internal/ipc` | The local protocol between the command line and the background service: the method table, the event taxonomy, the bounded stream, the client and the server, peer identification, and the one resolver it derives for an answer that arrives here. |
+| `internal/journey` | The end-to-end harness: the `assistant` binary driven as a process against `internal/fixture`'s subject, organized by PRD principle, with every check carrying the counterfeit observations it must reject, and the three tables that account for principles, planted conditions and the fixture's open questions. |
 | `internal/machine` | The agent-facing half of the surface: the shapes an answer takes, the three exit codes, and the outcome vocabulary. |
 | `internal/outcomes` | The build-time check that the PRD's outcome row and `internal/machine`'s set declare the same six values, in the same order, in the same two groups: the marked row it reads, the comparison, and the refusal when it cannot be read. |
 | `internal/pipeline` | The nine stages as a graph definition over `internal/graph`: the stage contract, the fixed order, the state key table, the capabilities a path needs of the adapter, the fix loop, and its halt points and bounds. |
@@ -213,14 +223,18 @@ planted is written to `DIR/manifest.json`, whose path the script prints. The
 fixture is built from nothing every time, so none of it is checked in.
 
 `make test` exercises `internal/vcs`, `internal/gate`, `internal/cli`,
-`internal/service`, and `internal/fixture` against a real git, so it needs a
+`internal/service`, `internal/journey`, and `internal/fixture` against a real
+git, so it needs a
 git binary on `PATH`; `internal/vcs`'s package comment states the minimum
 version it needs. An `internal/fixture` test skips itself when git is not on
 `PATH`, and the ones that drive the planted toolchain conditions skip when `go`
-is not either. The `internal/cli` and `internal/service` tests that drive a run
-skip on any platform but linux and darwin, because `internal/ipc` reads no
-local socket peer credentials there and so refuses every method that drives
-one.
+is not either. The `internal/cli`, `internal/service` and `internal/journey`
+tests that drive a run skip on any platform but linux and darwin, because
+`internal/ipc` reads no local socket peer credentials there and so refuses
+every method that drives one; all three also skip a test whose service did not
+come up there, because the protocol needs a local socket to be served over.
+`internal/journey/README.md` records what those two leave a green run of the
+harness establishing on such a platform.
 
 `make lint` requires golangci-lint from the v2 series, the line that can read
 this module's `.golangci.yml`. It refuses when the linter is missing or comes

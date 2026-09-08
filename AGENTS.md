@@ -385,7 +385,9 @@ Each has cost this repository more than one round of review.
   the assertion cannot pass vacuously. A body landing moves where a run first
   stops, so a test may not name the stage it expects a hold at: the ones in
   `internal/cli` and `internal/service` read `Implemented` and take the first
-  stage without a body. And a stage implements the part of its PRD section the
+  stage without a body, and `internal/journey` names them in a declaration
+  checked against `Implemented` both ways, so landing a body means writing it
+  down there too. And a stage implements the part of its PRD section the
   phase list has reached and ships no seam for the rest: the intent stage reads
   supplied intent and does not infer, because inference is deferred, and what
   that deferred work inherits is a note in the package documentation rather
@@ -398,15 +400,16 @@ Each has cost this repository more than one round of review.
   breaks if it never does - and it is dropped in review.
 - `internal/fixture` builds the adversarial subject repository the end-to-end
   harness validates against, and records beside each planted condition what it
-  must produce, down to the substrings the message has to carry. It is the one
-  documented exception to the rule above that `internal/vcs` is the only package
-  invoking git: a fixture built with the code under validation cannot show that
-  code wrong, so it runs git directly the way `internal/vcs`'s own test helpers
-  do. Two rules there are load-bearing. A condition is reached by the path the
-  product takes to it, so the two states that only exist partway through a run
-  are deferred to `AdvanceRemoteOutOfBand` and `CopyGatedWorkingCopy` rather
-  than assembled. And "nothing executed" is checked, not assumed: every planted
-  executable appends to the scenario's tripwire file, and the package's own
+  must produce, down to the substrings the message has to carry. It is one of
+  the two documented exceptions to the rule above that `internal/vcs` is the
+  only package invoking git, `internal/journey` being the other: a fixture built
+  with the code under validation cannot show that code wrong, so it runs git
+  directly the way `internal/vcs`'s own test helpers do. Two rules there are
+  load-bearing. A condition is reached by the path the product takes to it, so
+  the two states that only exist partway through a run are deferred to
+  `AdvanceRemoteOutOfBand` and `CopyGatedWorkingCopy` rather than assembled.
+  And "nothing executed" is checked, not assumed: every planted executable
+  appends to the scenario's tripwire file, and the package's own
   tests run one to prove the tripwire fires. Nothing here decides how a harness
   drives a condition; what it ran into is in `OpenQuestions`. Build it with
   `scripts/build-fixture.sh DIR`, and read `doc.go` first.
@@ -436,6 +439,59 @@ Each has cost this repository more than one round of review.
   `machine.OutcomeOf`'s translation from a run's state, a set both sides get
   wrong agrees, and a field or a second next action added to the answer passes.
   Read its `doc.go` before changing what fires.
+- `internal/journey` is the end-to-end harness, and it is organized by PRD
+  principle rather than by feature: PRD section 13 turns each principle into a
+  test and that is its structure. It drives the real binary as a process,
+  against `internal/fixture`'s subject, with the binary taken from
+  `ASSISTANT_BINARY` when that is set so a shipped artifact can be validated
+  rather than a checkout. It is the second documented exception to the rule
+  that `internal/vcs` is the only package invoking git: `Git` and `GitWith`
+  build git command lines and run them, under the isolation the fixture built
+  its subject with, for the reason `internal/fixture` takes the same exception.
+  A harness that confirmed the product's own git operation by asking the
+  package under validation would be reporting that package agreeing with
+  itself. The rule is not weakened by either: it has one owner and two named
+  exceptions, and a third is a finding rather than a precedent. Two things
+  there are mechanism rather than rule. A check is a `Check[O]`: a list of
+  `Clause[O]` over a typed observation plus
+  the counterfeit observations it must reject, `Verify` runs both halves on
+  every invocation, and a check naming no counterfeit is refused, as is one
+  carrying a clause no counterfeit reaches, so neither a check nor a part of
+  one that nobody has shown can fail may ship. The predicate is a list because
+  a check answered as a whole hides the assertion that discriminates nothing.
+  A counterfeit is a mutation of the real observation rather than one written
+  from nothing, for the reason `internal/agents/standin` gives about fakes.
+  Starting from a real observation is all `Verify` enforces, since `Break` is
+  an unconstrained `func(O) O`; keeping the mutation inside a shape the product
+  could have produced is a rule the writer keeps, and the residual gap is that
+  nothing there can tell a counterfeit that broke it from one that did not. A
+  clause asserting an absence declares itself one and carries `Possible`,
+  because a mutation of the model cannot say whether the thing could have been
+  there in the subject, and that is the one gap counterfeits never close. And
+  three tables account for everything in both directions: `Coverage` against
+  the principles its own tests cite, `Drives` against the planted catalog, and
+  `Settlements` against the questions `internal/fixture` left open, which this
+  package owns and answers rather than editing that one. Read its `README.md`
+  first: green there says the machinery behaves on inputs we chose and says
+  nothing about review quality, and every row carries whether it was reached
+  through the binary or
+  through the package that owns the mechanism, because the one stage body this
+  build has reads the supplied intent and launches nothing, so a run reaches no
+  agent, no push, and no code host. It takes both of the platform guards
+  `internal/cli` and `internal/service` carry, on their terms: a check that
+  drives a run skips where `internal/ipc` reads no local socket peer
+  credentials, and a check whose service did not come up skips where there is
+  no local socket transport to serve the protocol over, which is the wider of
+  the two because a check needs a service before it can drive anything. The
+  second is taken wherever a service was expected to come up and never wherever
+  one is started, because a check whose subject is a service it arranged to
+  fail would otherwise be skipped on the arranged failure and establish nothing
+  there. Either skip is
+  recorded as a limit in that `README.md` and in the `Coverage` note of every
+  principle it takes down with it, because a skipped check that reads as a pass
+  is what this package exists to refuse. Neither limit is recorded as a list of
+  the checks it takes down: an enumeration goes stale the next time one is
+  added, so both say what a green run there establishes instead.
 
 ## Tests
 
