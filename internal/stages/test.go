@@ -3,12 +3,14 @@ package stages
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/dayamjz/assistant/internal/findings"
 	"github.com/dayamjz/assistant/internal/pipeline"
+	"github.com/dayamjz/assistant/internal/redact"
 )
 
 // testProjectionBytes bounds the command output that travels in the stage's
@@ -88,6 +90,14 @@ const testProjectionBytes = 8 << 10
 // writes while the command runs, so the record survives a command this build
 // gives up waiting on.
 //
+// The record is redacted rather than verbatim. PRD section 8 has
+// internal/redact called at every persistence boundary and carves out no
+// exception for evidence, so what reaches the file is the command's output
+// with credentials in URL userinfo removed, not the bytes the command printed;
+// the file says so in each attempt's header, and the same redaction covers the
+// bounded projection and the report's own text. Evidence that has been altered
+// has to say so, and this paragraph and that header line are where it does.
+//
 // That file is the run's test evidence and nothing more. PRD section 8's
 // authoritative per-stage log is logs/<run>/<stage>.log, home.StageLog owns
 // that path and that role, and this stage neither writes it nor claims it.
@@ -143,6 +153,15 @@ const testProjectionBytes = 8 << 10
 // A command that leaves a process behind leaves it running, and nothing bounds
 // how long the command itself runs. commandGrace says what that bounds and
 // what it does not.
+//
+// Redaction removes the one shape internal/redact recognizes, a credential in
+// a URL's userinfo, and nothing else. An API key echoed by a failing
+// assertion, a token in an environment dump, and every other secret a command
+// might print go into the record and the report as the command wrote them, and
+// a whitespace-free token longer than redactingWriter's bound can carry even
+// the recognized shape past it, which that writer's doc owns. What redaction
+// buys here is that this persistence boundary is no worse than the others in
+// this build, not that the record is safe to publish.
 func Test(deps StageDeps) pipeline.Implementation {
 	return pipeline.Implementation{
 		Reads: []pipeline.Key{pipeline.KeyRepository, pipeline.KeyRun},
@@ -189,7 +208,7 @@ func runTargetedCheck(ctx context.Context, deps StageDeps, in pipeline.Input) (p
 	// run rather than one per attempt: a stage that takes fix rounds runs more
 	// than once, and appending keeps every attempt's output rather than
 	// letting a later one replace an earlier one.
-	record := openTestEvidence(deps.Home.EvidenceLog(runID, in.Stage.String()))
+	record := openTestEvidence(deps.Home.EvidenceLog(runID, in.Stage.String()), deps.redact)
 	record.header(command, commit, copied.Path())
 	result := runCommand(ctx, commandSpec{
 		command:    command,
@@ -197,6 +216,7 @@ func runTargetedCheck(ctx context.Context, deps StageDeps, in pipeline.Input) (p
 		record:     record,
 		projection: testProjectionBytes,
 		grace:      commandGrace,
+		redact:     deps.redact,
 	})
 	record.footer(result)
 	record.cutShort(result.short)
@@ -204,7 +224,7 @@ func runTargetedCheck(ctx context.Context, deps StageDeps, in pipeline.Input) (p
 	if err := ctx.Err(); err != nil {
 		return pipeline.Output{}, err
 	}
-	return pipeline.Output{Report: testReport(command, commit, record, result)}, nil
+	return pipeline.Output{Report: testReport(deps.redact, command, commit, record, result)}, nil
 }
 
 // readTestState reads the two facts this stage needs of the run's state: which
@@ -238,6 +258,12 @@ type testEvidence struct {
 	// path is where the record was to be written, and is what the report
 	// names when there is a record to name.
 	path string
+	// redact is applied to the section marks this type composes before they
+	// are written. The command's own output arrives through Write already
+	// redacted, by runCommand's writer, which is the layer that can see a
+	// whole line; redacting again here would see each write's fragment and
+	// miss a credential split across two, so Write deliberately does not.
+	redact redact.Redactor
 	// file is the open file, nil when it could not be opened.
 	file *os.File
 	// err is the first thing that went wrong: opening it, writing to it,
@@ -261,16 +287,17 @@ type testEvidence struct {
 // It returns a usable evidence either way: one that could not be opened
 // records the reason and swallows every write, so a caller writes to it
 // without asking first.
-func openTestEvidence(path string) *testEvidence {
+func openTestEvidence(path string, r redact.Redactor) *testEvidence {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return &testEvidence{path: path, err: fmt.Errorf("making the evidence directory %s: %w", dir, err)}
+		return &testEvidence{path: path, redact: r,
+			err: fmt.Errorf("making the evidence directory %s: %w", dir, err)}
 	}
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
-		return &testEvidence{path: path, err: fmt.Errorf("opening %s: %w", path, err)}
+		return &testEvidence{path: path, redact: r, err: fmt.Errorf("opening %s: %w", path, err)}
 	}
-	return &testEvidence{path: path, file: file}
+	return &testEvidence{path: path, redact: r, file: file}
 }
 
 // Write implements io.Writer and never fails. It reports every byte consumed
@@ -286,14 +313,24 @@ func (e *testEvidence) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+// mark writes one formatted section mark, redacted, because a mark carries the
+// command line and error text and both can hold a credentialed URL.
+//
+// It discards what Write answered because Write never fails: a failure is kept
+// on the record itself and read off recorded, so there is nothing at this call
+// to handle.
+func (e *testEvidence) mark(format string, args ...any) {
+	_, _ = io.WriteString(e, e.redact.Redact(fmt.Sprintf(format, args...)))
+}
+
 // header opens one attempt's section, so a reader of a file holding several
 // attempts can tell which command ran against which commit in which directory.
-//
-// It discards what Write answered, here and in footer, because Write never
-// fails: a failure is kept on the record itself and read off recorded, so
-// there is nothing at this call to handle.
+// Its last line is for the reader of the file: the record is redacted rather
+// than verbatim, so what stands here is not byte-identical to what the command
+// printed.
 func (e *testEvidence) header(command, commit, dir string) {
-	_, _ = fmt.Fprintf(e, "=== test stage\n=== command: %s\n=== commit:  %s\n=== copy:    %s\n",
+	e.mark("=== test stage\n=== command: %s\n=== commit:  %s\n=== copy:    %s\n"+
+		"=== record:  redacted, not verbatim: credentials in URL userinfo are removed\n",
 		command, commit, dir)
 }
 
@@ -301,11 +338,11 @@ func (e *testEvidence) header(command, commit, dir string) {
 func (e *testEvidence) footer(result commandResult) {
 	switch {
 	case result.exited:
-		_, _ = fmt.Fprintf(e, "\n=== exit status: %d\n\n", result.code)
+		e.mark("\n=== exit status: %d\n\n", result.code)
 	case result.err != nil:
-		_, _ = fmt.Fprintf(e, "\n=== no exit status: %v\n\n", result.err)
+		e.mark("\n=== no exit status: %v\n\n", result.err)
 	default:
-		_, _ = fmt.Fprint(e, "\n=== no exit status\n\n")
+		e.mark("\n=== no exit status\n\n")
 	}
 }
 
@@ -354,7 +391,12 @@ func (e *testEvidence) recorded() bool { return e.err == nil }
 // ended - does not belong in it. The command is still named in the summary, in
 // the finding, and in the evidence header, so nothing about it is lost; what
 // is withheld is the claim that it checked anything.
-func testReport(command, commit string, record *testEvidence, result commandResult) findings.Report {
+//
+// The report leaves through redactReport, so no composition site here has to
+// remember the redactor and the fields below may be written from the raw
+// command line and error text.
+func testReport(r redact.Redactor, command, commit string, record *testEvidence,
+	result commandResult) findings.Report {
 	report := findings.Report{Revision: commit}
 	if result.exited {
 		report.Tested = []string{command}
@@ -413,6 +455,36 @@ func testReport(command, commit string, record *testEvidence, result commandResu
 					"is unaffected and is reported above; what is lost is whatever the command printed "+
 					"beyond the bounded extract in this report.\n\nwhat went wrong: %v", record.err),
 		})
+	}
+	return redactReport(r, report)
+}
+
+// redactReport returns the report with every field this stage composes from
+// the command line, the command's output, or an error around them passed
+// through the redactor: the summary, the entries of Tested, each evidence
+// artifact's label and path, and each finding's description. It runs once,
+// where the report leaves the stage, which is what makes it a boundary rather
+// than a convention each composition site above it has to remember; a field
+// this stage starts composing later has to be added here, and that is the
+// residual gap this shape carries.
+//
+// The projection inside a description arrives already redacted, upstream of
+// the bound that could have cut a credential's shape apart, so this pass adds
+// the command line and the error texts rather than covering the output twice
+// over. The fields left alone - the revision and each finding's identifier,
+// action, and severity - are this build's own vocabulary and carry nothing the
+// command wrote.
+func redactReport(r redact.Redactor, report findings.Report) findings.Report {
+	report.Summary = r.Redact(report.Summary)
+	for i, tested := range report.Tested {
+		report.Tested[i] = r.Redact(tested)
+	}
+	for i, artifact := range report.Evidence {
+		report.Evidence[i].Label = r.Redact(artifact.Label)
+		report.Evidence[i].Path = r.Redact(artifact.Path)
+	}
+	for i, finding := range report.Findings {
+		report.Findings[i].Description = r.Redact(finding.Description)
 	}
 	return report
 }

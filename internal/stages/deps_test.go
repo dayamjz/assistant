@@ -111,7 +111,7 @@ func TestACopyPathIsDerivedFromTheRunsOwnKeys(t *testing.T) {
 	if err != nil {
 		t.Fatalf("opening a home: %v", err)
 	}
-	deps := stages.NewStageDeps(agents.StageAgent{}, h, config.Config{}, nil)
+	deps := stages.NewStageDeps(agents.StageAgent{}, h, config.Config{}, nil, redact.New())
 
 	const repository, run = "repo-under-test", "run-under-test"
 	var tried string
@@ -202,7 +202,7 @@ func TestAForgeProviderIsOpenedOnTheRunsOwnRepository(t *testing.T) {
 	t.Parallel()
 
 	host := &recordingHost{}
-	deps := stages.NewStageDeps(agents.StageAgent{}, nil, config.Config{}, host)
+	deps := stages.NewStageDeps(agents.StageAgent{}, nil, config.Config{}, host, redact.New())
 
 	const forgeRepository = "dayamjz/assistant"
 	body := pipeline.Implementation{
@@ -245,7 +245,7 @@ func TestAForgeProviderIsOpenedOnTheRunsOwnRepository(t *testing.T) {
 func TestARunWithNoCodeHostOpensNoProvider(t *testing.T) {
 	t.Parallel()
 
-	deps := stages.NewStageDeps(agents.StageAgent{}, nil, config.Config{}, forge.NewGitHubHost(redact.New()))
+	deps := stages.NewStageDeps(agents.StageAgent{}, nil, config.Config{}, forge.NewGitHubHost(redact.New()), redact.New())
 
 	var opened error
 	body := pipeline.Implementation{
