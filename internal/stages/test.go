@@ -3,25 +3,11 @@ package stages
 import (
 	"context"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/dayamjz/assistant/internal/findings"
 	"github.com/dayamjz/assistant/internal/pipeline"
 )
-
-// testProjectionBytes bounds the command output that travels in the stage's
-// report. The whole output goes to the run's evidence file, which PRD section
-// 8 makes the authority, and what a person or an agent is shown is a bounded
-// projection of it carrying an explicit marker for what was left out.
-const testProjectionBytes = 8 << 10
-
-// testEvidenceFile is the name of the run's test evidence, under the run's
-// evidence directory. One file per run rather than one per attempt: a stage
-// that takes fix rounds runs more than once, and appending keeps every
-// attempt's output rather than letting a later one replace an earlier one.
-const testEvidenceFile = "test.log"
 
 // Test is the test stage: it validates this change with the check the
 // configuration names, and reports what that check answered.
@@ -156,169 +142,22 @@ func runTargetedCheck(ctx context.Context, deps StageDeps, in pipeline.Input) (p
 	if command == "" {
 		return pipeline.Output{Report: noTestCommandConfigured()}, nil
 	}
-
-	repositoryID, runID, err := readTestState(in.State)
+	check, err := runConfiguredCheck(ctx, deps, in, command)
 	if err != nil {
 		return pipeline.Output{}, err
 	}
-	copied, err := deps.Copy(ctx, repositoryID, runID)
-	if err != nil {
-		return pipeline.Output{}, err
-	}
-	// The commit is read from the copy rather than from state, because the
-	// copy's head moves during a run - a rebase moves it and a fix round
-	// commits to it - so the commit the run started from is not the tree this
-	// stage checked. It is read immediately before the command starts, which
-	// is as close to it as a read and a process launch get; nothing here makes
-	// the two one, so a copy something changed in between would be reported
-	// under the commit that was read.
-	commit, err := copied.ResolveCommit(ctx, "HEAD")
-	if err != nil {
-		return pipeline.Output{}, fmt.Errorf(
-			"stages: reading the commit the %s stage would check in %s: %w", in.Stage, copied.Path(), err)
-	}
-
-	// deps.Copy refused a nil home above, so the evidence path can be composed
-	// here without asking again.
-	record := openTestEvidence(filepath.Join(deps.Home.Evidence(runID), testEvidenceFile))
-	record.header(command, commit, copied.Path())
-	result := runCommand(ctx, commandSpec{
-		command:    command,
-		dir:        copied.Path(),
-		record:     record,
-		projection: testProjectionBytes,
-	})
-	record.footer(result)
-	record.close()
-	if err := ctx.Err(); err != nil {
-		return pipeline.Output{}, err
-	}
-	return pipeline.Output{Report: testReport(command, commit, record, result)}, nil
+	return pipeline.Output{Report: testReport(in.Stage, command, check)}, nil
 }
-
-// readTestState reads the two facts this stage needs of the run's state: which
-// repository it validates and which run it is. They are what locate the
-// isolated copy and the evidence directory, and neither is derivable from the
-// other.
-func readTestState(state pipeline.Reader) (repositoryID, runID string, err error) {
-	repositoryValue, err := state.Get(pipeline.KeyRepository)
-	if err != nil {
-		return "", "", err
-	}
-	runValue, err := state.Get(pipeline.KeyRun)
-	if err != nil {
-		return "", "", err
-	}
-	repositoryID, _ = repositoryValue.Text()
-	runID, _ = runValue.Text()
-	return repositoryID, runID, nil
-}
-
-// testEvidence is the run's test evidence file, and what went wrong if it
-// could not be written.
-//
-// Its Write never reports an error, which is the whole reason it exists. The
-// command's output goes to this and to the report's bounded tail through one
-// io.MultiWriter, and a MultiWriter stops at the first writer that fails, so a
-// file that could not be written would otherwise cut the command's output
-// short and end its run with an error - turning a full disk into a verdict.
-// The first failure is kept here instead and reported as a note.
-type testEvidence struct {
-	// path is where the record was to be written, and is what the report
-	// names when there is a record to name.
-	path string
-	// file is the open file, nil when it could not be opened.
-	file *os.File
-	// err is the first thing that went wrong: opening it, writing to it, or
-	// closing it. It is nil when the record is whole.
-	err error
-}
-
-// openTestEvidence opens the run's test evidence file for appending, creating the
-// run's evidence directory if this is the first thing to write there.
-//
-// Appending rather than replacing is what keeps a fix round from erasing the
-// attempt before it. The directory is created here rather than by
-// internal/home, which creates the evidence root and leaves what goes under it
-// to whoever writes it.
-//
-// It returns a usable evidence either way: one that could not be opened
-// records the reason and swallows every write, so a caller writes to it
-// without asking first.
-func openTestEvidence(path string) *testEvidence {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return &testEvidence{path: path, err: fmt.Errorf("making the evidence directory %s: %w", dir, err)}
-	}
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
-	if err != nil {
-		return &testEvidence{path: path, err: fmt.Errorf("opening %s: %w", path, err)}
-	}
-	return &testEvidence{path: path, file: file}
-}
-
-// Write implements io.Writer and never fails. It reports every byte consumed
-// whatever became of them, so the writer it is combined with sees the whole
-// output.
-func (e *testEvidence) Write(p []byte) (int, error) {
-	if e.file == nil || e.err != nil {
-		return len(p), nil
-	}
-	if _, err := e.file.Write(p); err != nil {
-		e.err = fmt.Errorf("writing %s: %w", e.path, err)
-	}
-	return len(p), nil
-}
-
-// header opens one attempt's section, so a reader of a file holding several
-// attempts can tell which command ran against which commit in which directory.
-//
-// It discards what Write answered, here and in footer, because Write never
-// fails: a failure is kept on the record itself and read off recorded, so
-// there is nothing at this call to handle.
-func (e *testEvidence) header(command, commit, dir string) {
-	_, _ = fmt.Fprintf(e, "=== test stage\n=== command: %s\n=== commit:  %s\n=== copy:    %s\n",
-		command, commit, dir)
-}
-
-// footer closes one attempt's section with what the command answered.
-func (e *testEvidence) footer(result commandResult) {
-	switch {
-	case result.exited:
-		_, _ = fmt.Fprintf(e, "\n=== exit status: %d\n\n", result.code)
-	case result.err != nil:
-		_, _ = fmt.Fprintf(e, "\n=== no exit status: %v\n\n", result.err)
-	default:
-		_, _ = fmt.Fprint(e, "\n=== no exit status\n\n")
-	}
-}
-
-// close finishes the record, keeping a failure to flush on the same terms as a
-// failure to write.
-func (e *testEvidence) close() {
-	if e.file == nil {
-		return
-	}
-	err := e.file.Close()
-	e.file = nil
-	if err != nil && e.err == nil {
-		e.err = fmt.Errorf("closing %s: %w", e.path, err)
-	}
-}
-
-// recorded reports whether the whole of the command's output reached the file.
-// A report names the file only when it did, because a path offered as the full
-// output has to hold it.
-func (e *testEvidence) recorded() bool { return e.err == nil }
 
 // testReport is what the stage found. The three cases are what a command can
 // answer: it did not report a status at all, it exited zero, or it exited
 // something else. Whether it reported a status is asked first, because a
 // status is what the other two read and a command that gave none carries the
 // same -1 as one this build could not start.
-func testReport(command, commit string, record *testEvidence, result commandResult) findings.Report {
+func testReport(stage pipeline.Stage, command string, check configuredCheck) findings.Report {
+	result, record := check.result, check.record
 	report := findings.Report{
-		Revision: commit,
+		Revision: check.commit,
 		Tested:   []string{command},
 	}
 	if record.recorded() {
@@ -331,7 +170,7 @@ func testReport(command, commit string, record *testEvidence, result commandResu
 	case !result.exited:
 		report.Summary = fmt.Sprintf(
 			"The configured test command did not report an exit status against %s, so nothing was "+
-				"established about this change either way.", commit)
+				"established about this change either way.", check.commit)
 		report.Findings = append(report.Findings, findings.Finding{
 			ID:       "test-not-settled",
 			Severity: findings.SeverityWarning,
@@ -341,18 +180,18 @@ func testReport(command, commit string, record *testEvidence, result commandResu
 					"established neither a pass nor a failure. Approving carries the run past a check "+
 					"that answered nothing; skipping records the stage as skipped; cancelling ends the "+
 					"run.\n\ncommand: %s\ncommit: %s\n%s\n\n%s",
-				command, commit, testNotSettledReason(result), testOutputSection(result, record)),
+				command, check.commit, notSettledReason(result), checkOutputSection(result, record)),
 		})
 
 	case result.code == 0:
 		report.Summary = fmt.Sprintf(
 			"The configured test command passed against %s: %q exited zero in the run's isolated copy.",
-			commit, command)
+			check.commit, command)
 
 	default:
 		report.Summary = fmt.Sprintf(
 			"The configured test command failed against %s: %q exited %d in the run's isolated copy.",
-			commit, command, result.code)
+			check.commit, command, result.code)
 		report.Findings = append(report.Findings, findings.Finding{
 			ID:       "test-failed",
 			Severity: findings.SeverityError,
@@ -360,68 +199,13 @@ func testReport(command, commit string, record *testEvidence, result commandResu
 			Description: fmt.Sprintf(
 				"The configured test command failed, so this change does not pass the check this "+
 					"repository holds it to.\n\ncommand: %s\nexit status: %d\ncommit: %s\n\n%s",
-				command, result.code, commit, testOutputSection(result, record)),
+				command, result.code, check.commit, checkOutputSection(result, record)),
 		})
 	}
 	if !record.recorded() {
-		report.Findings = append(report.Findings, findings.Finding{
-			ID:       "test-evidence-unrecorded",
-			Severity: findings.SeverityWarning,
-			Action:   findings.ActionNote,
-			Description: fmt.Sprintf(
-				"The command's full output could not be recorded, so this run has no evidence file "+
-					"and the report names none. What the check answered is unaffected and is reported "+
-					"above; what is lost is everything the command printed beyond the bounded extract "+
-					"in this report.\n\nwhat went wrong: %v", record.err),
-		})
+		report.Findings = append(report.Findings, record.unrecordedNote(stage))
 	}
 	return report
-}
-
-// testNotSettledReason renders what os/exec reported about a command that never
-// gave a status, and says so plainly when it reported nothing.
-func testNotSettledReason(result commandResult) string {
-	if result.err != nil {
-		return "what happened instead: " + result.err.Error()
-	}
-	return "what happened instead: it was ended by something other than its own exit"
-}
-
-// testOutputSection renders the command's output for a finding: the bounded tail,
-// preceded by a marker naming what was left out and where the whole of it is,
-// and followed by the evidence path.
-//
-// The marker is PRD section 8's requirement that a bounded projection say what
-// was omitted and how to read the rest. Where there is no record to read the
-// rest from, it says that instead of naming a file: a pointer to output
-// nothing wrote is worse than no pointer.
-//
-// A command that printed nothing at all is said so rather than left as a blank
-// space, and that is only said where nothing was omitted either: a tail empty
-// because the projection left everything out is already explained by its
-// marker, and saying nothing was written over it would contradict the line
-// above.
-func testOutputSection(result commandResult, record *testEvidence) string {
-	var b strings.Builder
-	if result.omitted > 0 {
-		if record.recorded() {
-			fmt.Fprintf(&b, "[%d bytes of earlier output omitted; the whole of it is at %s]\n",
-				result.omitted, record.path)
-		} else {
-			fmt.Fprintf(&b, "[%d bytes of earlier output omitted, and the record that would hold "+
-				"them could not be written, so they are gone]\n", result.omitted)
-		}
-	}
-	switch {
-	case result.tail != "":
-		b.WriteString(result.tail + "\n")
-	case result.omitted == 0:
-		b.WriteString("[the command wrote nothing]\n")
-	}
-	if record.recorded() {
-		fmt.Fprintf(&b, "\nfull output: %s", record.path)
-	}
-	return strings.TrimRight(b.String(), "\n")
 }
 
 // noTestCommandConfigured is the report for a run whose configuration names no test

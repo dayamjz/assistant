@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/findings"
+	"github.com/dayamjz/assistant/internal/pipeline"
 )
 
 // A projection bounded below what a command printed keeps the end of the
@@ -16,7 +17,7 @@ import (
 // a line boundary rather than partway through one.
 //
 // The limit here is small so a short, portable command overruns it. It is the
-// same parameter the stage passes testProjectionBytes in, so what differs from
+// same parameter the stage passes checkProjectionBytes in, so what differs from
 // a run is the number and not the mechanism.
 func TestAProjectionKeepsTheEndAndSaysWhatItLeftOut(t *testing.T) {
 	t.Parallel()
@@ -133,7 +134,7 @@ func TestTheRecordHoldsTheWholeOutputTheProjectionBounds(t *testing.T) {
 // descriptor is a write that fails.
 func TestARecordThatFailsPartwayDoesNotDecideTheVerdict(t *testing.T) {
 	t.Parallel()
-	record := openTestEvidence(filepath.Join(t.TempDir(), "run-1", testEvidenceFile))
+	record := openCheckEvidence(filepath.Join(t.TempDir(), "run-1", "test.log"), "test stage")
 	if !record.recorded() {
 		t.Fatalf("opening the record: %v", record.err)
 	}
@@ -145,7 +146,7 @@ func TestARecordThatFailsPartwayDoesNotDecideTheVerdict(t *testing.T) {
 		command:    "git --version",
 		dir:        t.TempDir(),
 		record:     record,
-		projection: testProjectionBytes,
+		projection: checkProjectionBytes,
 	})
 	if !result.exited || result.code != 0 {
 		t.Fatalf("a record that could not be written changed what the command answered: status %d, "+
@@ -158,7 +159,7 @@ func TestARecordThatFailsPartwayDoesNotDecideTheVerdict(t *testing.T) {
 		t.Fatal("the record reports itself whole after every write to it failed")
 	}
 
-	report := testReport("git --version", "0123456789abcdef", record, result).Normalize()
+	report := testReport(pipeline.StageTest, "git --version", configuredCheck{commit: "0123456789abcdef", record: record, result: result}).Normalize()
 	if err := report.Validate(); err != nil {
 		t.Fatalf("the report is one the pipeline refuses: %v", err)
 	}
@@ -189,7 +190,7 @@ func TestABoundedProjectionSaysWhatItOmittedAndWhereTheRestIs(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			record := openTestEvidence(filepath.Join(t.TempDir(), "run-1", testEvidenceFile))
+			record := openCheckEvidence(filepath.Join(t.TempDir(), "run-1", "test.log"), "test stage")
 			if !c.recorded {
 				if err := record.file.Close(); err != nil {
 					t.Fatalf("closing the record behind it: %v", err)
@@ -211,7 +212,7 @@ func TestABoundedProjectionSaysWhatItOmittedAndWhereTheRestIs(t *testing.T) {
 					"nothing", result.tail)
 			}
 
-			report := testReport("git --version && exit 3", "0123456789abcdef", record, result).Normalize()
+			report := testReport(pipeline.StageTest, "git --version && exit 3", configuredCheck{commit: "0123456789abcdef", record: record, result: result}).Normalize()
 			if err := report.Validate(); err != nil {
 				t.Fatalf("the report is one the pipeline refuses: %v", err)
 			}
@@ -244,7 +245,7 @@ func TestACommandThatCannotStartReportsNoStatus(t *testing.T) {
 		command:    "git --version",
 		dir:        filepath.Join(t.TempDir(), "not-there"),
 		record:     &whole,
-		projection: testProjectionBytes,
+		projection: checkProjectionBytes,
 	})
 	if result.exited {
 		t.Fatalf("a command that could not start reported exit status %d", result.code)
@@ -269,7 +270,7 @@ func TestACancelledCommandReportsNoStatus(t *testing.T) {
 		command:    "git --version",
 		dir:        t.TempDir(),
 		record:     &whole,
-		projection: testProjectionBytes,
+		projection: checkProjectionBytes,
 	})
 	if result.exited {
 		t.Fatalf("a command run under a cancelled context reported exit status %d", result.code)
@@ -292,12 +293,12 @@ func TestACommandWithNoStatusHoldsTheStageForAPerson(t *testing.T) {
 		command:    "git --version",
 		dir:        filepath.Join(t.TempDir(), "not-there"),
 		record:     &whole,
-		projection: testProjectionBytes,
+		projection: checkProjectionBytes,
 	})
 
-	record := openTestEvidence(filepath.Join(t.TempDir(), "run-1", testEvidenceFile))
+	record := openCheckEvidence(filepath.Join(t.TempDir(), "run-1", "test.log"), "test stage")
 	record.close()
-	report := testReport("git --version", "0123456789abcdef", record, result).Normalize()
+	report := testReport(pipeline.StageTest, "git --version", configuredCheck{commit: "0123456789abcdef", record: record, result: result}).Normalize()
 	if err := report.Validate(); err != nil {
 		t.Fatalf("the report is one the pipeline refuses: %v", err)
 	}

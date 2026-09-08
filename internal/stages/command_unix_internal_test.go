@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/dayamjz/assistant/internal/pipeline"
 )
 
 // A command something else ended reports no exit status of its own, which is
@@ -24,15 +26,16 @@ func TestACommandEndedBySomethingElseReportsNoStatus(t *testing.T) {
 		command:    "kill -KILL $$",
 		dir:        t.TempDir(),
 		record:     &whole,
-		projection: testProjectionBytes,
+		projection: checkProjectionBytes,
 	})
 	if result.exited {
 		t.Fatalf("a command ended by a signal reported exit status %d as its own", result.code)
 	}
 
-	record := openTestEvidence(filepath.Join(t.TempDir(), "run-1", testEvidenceFile))
+	record := openCheckEvidence(filepath.Join(t.TempDir(), "run-1", "test.log"), "test stage")
 	record.close()
-	report := testReport("kill -KILL $$", "0123456789abcdef", record, result).Normalize()
+	report := testReport(pipeline.StageTest, "kill -KILL $$",
+		configuredCheck{commit: "0123456789abcdef", record: record, result: result}).Normalize()
 	if err := report.Validate(); err != nil {
 		t.Fatalf("the report is one the pipeline refuses: %v", err)
 	}
