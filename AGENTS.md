@@ -373,7 +373,9 @@ Each has cost this repository more than one round of review.
   the assertion cannot pass vacuously. A body landing moves where a run first
   stops, so a test may not name the stage it expects a hold at: the ones in
   `internal/cli` and `internal/service` read `Implemented` and take the first
-  stage without a body. And a stage implements the part of its PRD section the
+  stage without a body, and `internal/journey` names them in a declaration
+  checked against `Implemented` both ways, so landing a body means writing it
+  down there too. And a stage implements the part of its PRD section the
   phase list has reached and ships no seam for the rest: the intent stage reads
   supplied intent and does not infer, because inference is deferred, and what
   that deferred work inherits is a note in the package documentation rather
