@@ -115,8 +115,9 @@ Each has cost this repository more than one round of review.
   reviewer only through the resolved agent CLI's project-doc discovery in the
   pushed working copy, so a rule moved here is deletable by the branch it was
   written to review. Its reach is also adapter-dependent in a way nothing here
-  settles: no part of the gate reads this file, nothing in this repository
-  selects or pins the adapter that does, and `no-mistakes` knows a
+  settles: no part of the gate reads this file, and nothing in this repository
+  selects or pins the adapter that does - `docs/upstream-review-instruction-bounds.md`
+  owns the searches behind both - and `no-mistakes` knows a
   project-instruction suppression knob for only three of its adapters -
   one of which is a byte cap on this file itself, whose size is set outside this
   repository. The gate's `disable_project_settings`, which defaults false and

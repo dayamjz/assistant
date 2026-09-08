@@ -21,9 +21,10 @@ document:
     README.md owns the introduction and the development commands.
     Package-level doc comments own each package's contract.
     AGENTS.md owns the working agreement for agents in this repository.
-    docs/upstream-review-instruction-bounds.md owns one outstanding ask against
-    the gate itself. It is closed by that ask landing or being declined, never
-    by editing it to match what this repository settled for meanwhile.
+    docs/upstream-review-instruction-bounds.md is a prepared ask against the
+    gate itself that has not been submitted anywhere, and nothing here asks for
+    it to be. It stops being current when the bound it describes changes, never
+    by being edited to match what this repository settled for meanwhile.
 
 review:
   path_instructions:

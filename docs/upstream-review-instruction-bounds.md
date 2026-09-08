@@ -1,11 +1,19 @@
-# Outstanding upstream ask: bound one review rule, not the pool
+# Prepared upstream ask: bound one review rule, not the pool
 
-Status: open. Nothing in this repository is waiting on it to build or pass, and
-everything in it is waiting on it to grow.
+Status: prepared, not submitted. This ask has not been filed anywhere. Where it
+would go is `kunchenguid/no-mistakes`, a third-party repository, and sending it
+there is an outward-facing act and a separate decision that needs its own
+authorization. This document does not carry that authorization, and no sentence
+in it asks anyone to file it.
 
-This is an ask against `no-mistakes`, the validation gate this repository is
-pushed through. It is recorded here because the constraint is ours and the
-triage that works around it is ours; the change is not.
+So nothing here is pending in an upstream queue; there is no queue it is in.
+What it is is the case, written out so it can be checked rather than trusted,
+for whoever weighs that decision. It stops being current when the bound it
+describes changes - not when this repository works around it, and not by being
+edited to match whatever it settled for meanwhile.
+
+It is recorded here because the constraint is ours and the triage that works
+around it is ours; the change is not.
 
 Every figure below states the method that produces it. The three methods are:
 
@@ -72,9 +80,12 @@ the byte cap as derived from the entry cap is the source's own doc comment
 above it: it "leaves room for the entry cap to be reached with a rule of
 ordinary length, so neither cap makes the other unusable". The danger the
 surrounding comment names - an oversized prompt fails the agent invocation
-outright rather than degrading - is real, but 16 KB is not stated anywhere to
-have been measured against a prompt or a model budget, so this is not a request
-to weaken a calibrated limit.
+outright rather than degrading - is real, but nothing states that 16 KB was
+measured against a prompt or a model budget: `grep -rnE --include='*.go'
+'16384|16 KB'` over `internal` and `docs` in the `no-mistakes` checkout returns
+a single line, the constant itself at `config.go:262`. So this is not a request
+to weaken a calibrated limit. What the sweep cannot reach is a budget recorded
+somewhere outside that source.
 
 The accounting charges the configured entries, not what a run renders. Reading
 `ReviewPathInstructionsBytes`, one entry costs `229 + len(path) + len(trimmed
@@ -123,17 +134,24 @@ a matter of a few rules being verbose.
 
 ## What was tried locally, and the result
 
-Nothing. This is a null result, not a partial win.
+Nothing that touches the shortfall. One small recovery was measured and then
+declined; the arithmetic for both is below, and neither is a partial win.
 
 The attempt was to split review rules across two surfaces by one test - would
 this rule still need to apply if the contributor were hostile? - keeping only
 what has to survive a hostile branch in the trusted, capped channel and moving
 the rest to `AGENTS.md`. Two things sank it.
 
-The destination is not reliable. No part of the gate reads `AGENTS.md`;
-delivery is entirely the resolved agent CLI's own project-doc discovery, and
-nothing in this repository selects or pins that adapter, so which one resolves
-is settled outside the branch under review.
+The destination is not reliable. No part of the gate reads `AGENTS.md`:
+`grep -rnE --include='*.go' 'AGENTS\.md|CLAUDE\.md'` over the `no-mistakes`
+checkout, excluding `_test.go`, returns 23 lines, and every one is a comment, a
+prompt body or an error string - none opens the file. That sweep is over the
+literal filenames, so a path assembled at runtime would not appear in it.
+Delivery is therefore the resolved agent CLI's own project-doc discovery, and
+nothing in this repository selects or pins that adapter: this repository's
+`.no-mistakes.yaml` has four top-level keys - `commands`, `ignore_patterns`,
+`document` and `review` - and no `agent` key at any level. Which adapter
+resolves is settled outside the branch under review.
 Three things end a moved rule's reach from there, and two of them do it in
 silence: `no-mistakes` implements a project-instruction suppression knob for
 only three of its adapters, so for any other resolved adapter whether the file
@@ -177,9 +195,12 @@ Three sub-spans of those survive the deletion test as removable, totalling 358:
 
 An earlier draft of this document put that second figure at 405. That was an
 estimate reported as though it had been measured; measured, it is 358, so the
-triage frees less than the estimate claimed and this null result is slightly
-stronger than it read, not weaker. 358 of 1402 is just over a quarter, it is
-2.2% of the 16384 cap, and it costs the text that makes a gap visible.
+triage frees less than the estimate claimed. 358 of 1402 is just over a quarter,
+and 2.2% of the 16384 cap. Those 358 bytes come out at no cost to
+gap-visibility - surviving the deletion test is what that means - and the other
+1044 stay, because they are what lets a reviewer see a change that widens a gap.
+So the triage is not blocked. It is small, and past the 358 it starts costing
+gap-visible text.
 
 So the split was dropped and `review.path_instructions` is unchanged by this
 work, byte for byte: 11 entries, 16273 of 16384, 111 bytes free, the same as
@@ -195,10 +216,22 @@ refused rather than truncated, and the gate validates the pushed copy too, so a
 branch that overfills it fails its own run at start and cannot merge; reaching
 later runs takes a commit that lands on the default branch without a gate run.
 
+The triage above would raise that figure, and the raise is worth stating
+exactly. 111 free plus the 358 it frees is 469 bytes, which by the same
+accounting fits one new block carrying about 220 bytes of guidance once a
+package glob is paid for, or a 469-byte addition to an existing block - 39% of
+the 1191 bytes of guidance the shared `path: "*"` block carries today. That is
+roughly the one-more-rule case, so the recovery is real and it was declined
+rather than unavailable: 469 bytes is 2.7% to 3.2% of the 14658 to 17592 a
+completed set needs, so it buys one rule, changes nothing about the bound, and
+spends prose that is currently earning its place.
+
 Compaction and per-package placement were both considered and rejected.
 Compaction compresses hard-won prose toward a number that is not a measured
 budget. Per-package placement is arithmetically backwards: each copy re-pays the
 229-byte frame as well as the text, so the `path: "*"` block is the cheapest
 home a shared rule has.
 
-There is no local fix. The bound has to come from upstream.
+There is no local fix for the shortfall. The 469 bytes above are the whole of
+what triage recovers, and they are one rule rather than a bound. The bound
+itself can only change in `no-mistakes`.
