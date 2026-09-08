@@ -409,9 +409,9 @@ func (s *Service) cancelAdvancing() {
 // is refused every restricted method. internal/agents starts an agent as the
 // leader of a new process group, which is the identifier to pass here.
 //
-// Nothing in this build calls it, because no stage launches an agent yet. That
-// is stated in doc.go rather than hidden: until a stage launcher calls this,
-// the registry is empty and containment refuses nobody.
+// Nothing in this build calls it, and doc.go owns why rather than hiding it:
+// until a stage launcher calls this, the registry is empty and containment
+// refuses nobody.
 func (s *Service) StageStarted(run, stage string, pgid int) func() {
 	return s.registry.add(run, stage, pgid)
 }

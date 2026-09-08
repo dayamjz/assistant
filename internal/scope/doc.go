@@ -19,15 +19,24 @@
 //
 // The lens is shipped guidance rather than a configured value, so a repository
 // that has never heard of it still gets it once a review stage puts it in
-// front of a reviewer. That wiring lands with that stage, which this
-// repository does not have yet, so what ships today is this package and its
-// guidance rather than a lens any run has been through. That is deliberate
-// and not an oversight of the configuration schema: a repository layer
-// replaces a list rather than appending to it, so a scope rule shipped as
+// front of a reviewer. internal/stages' review body is that wiring: it puts
+// Guidance in front of every reviewer it asks, reads the answer back off the
+// review report's traces, and appends what Observe makes of them. That is
+// deliberate and not an oversight of the configuration schema: a repository
+// layer replaces a list rather than appending to it, so a scope rule shipped as
 // the default of config's "review.path_rules" would be erased by any
 // repository that set that key for an unrelated reason, which is exactly the
 // opt-out PRD section 5 says the lens does not have. Path-scoped review
 // rules still strengthen it, the way they strengthen review anywhere.
+//
+// The one run that gets none of that is the one this lens has nothing to say
+// about. A run carrying no intent gets ErrNoIntent from Guidance, so that body
+// leaves the scope section out of the prompt entirely, along with the report
+// field asking for traces, rather than putting a question there that has no
+// answer, and it reports that the lens did not run instead of calling Observe.
+// That is this package's own refusal and not an opt-out: what is missing is
+// the thing to trace to, no configuration can produce it or withhold it, and
+// the run says so in its own report where a person reads it.
 //
 // # A scope observation is a note, and can be nothing else
 //

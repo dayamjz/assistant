@@ -30,16 +30,19 @@ type Change struct {
 // Trace is the reviewer's claim that one changed path follows from the stated
 // intent. It is a claim in the reviewer's own words, recorded and attributable
 // but not verified here.
-type Trace struct {
-	// Path is the repository-relative path being accounted for. It is matched
-	// against Change.Touched exactly, after trimming surrounding space.
-	Path string
-	// Reason is the part of the intent the path follows from. A trace with an
-	// empty reason accounts for nothing and silences nothing, because a trace
-	// is the reason: a bare path is the assertion that a file was changed,
-	// which was already known.
-	Reason string
-}
+//
+// Its Path is matched against Change.Touched exactly, after trimming
+// surrounding space, and a trace with an empty reason accounts for nothing and
+// silences nothing, because a trace is the reason: a bare path is the
+// assertion that a file was changed, which was already known.
+//
+// It is an alias rather than a type of this package's own. A trace arrives in
+// the review report, internal/findings is the one place a report is decoded,
+// and a second type here would mean one fact with two owners and a conversion
+// between them at the only seam that carries it. So findings.Trace is the
+// type, this is the name the lens calls it by, and a value crosses from the
+// report to Observe without being rebuilt.
+type Trace = findings.Trace
 
 // Guidance returns the scope section the review stage puts in front of its
 // reviewer. It names every touched path, so the reviewer is asked about each

@@ -70,10 +70,11 @@ func Drives() []Drove {
 		"substring and no sentinel, so there is nothing else here to hold a message to." +
 		noTemplateHookPath
 
-	// Every stage condition is undriven for one reason, stated once. A stage
-	// with no body reports one ask finding and holds, so there is nothing for
-	// review, test, document, or lint to have found and nothing for the rebase
-	// to have emptied.
+	// Every body-less stage condition is undriven for one reason, stated once.
+	// A stage with no body reports one ask finding and holds, so there is
+	// nothing for test, document, or lint to have found and nothing for the
+	// rebase to have emptied. The review stage's condition is undriven for a
+	// reason of its own, stated on its row.
 	const noStageBody = "internal/stages holds no body for the stage this condition names, so the stage " +
 		"reads nothing and reports one ask finding. There is no finding to compare against what was " +
 		"planted, and a harness that reported this condition as met would be reporting the placeholder. " +
@@ -114,12 +115,15 @@ func Drives() []Drove {
 				"drive is over the pushed layer with the trusted one absent, so it cannot resolve the " +
 				"default branch's fixture-trusted-agent at all. Its tripwire half has no producer " +
 				"either: every executable it plants is reached only through a stage body that launches " +
-				"something, internal/stages has one body and it reads the supplied intent, and a run " +
+				"something, and no run reaches one - the intent body reads the supplied intent and " +
+				"launches nothing, and the review body fails on the isolated copy nothing creates " +
+				"before it launches, so a run skips it - and a run " +
 				"therefore launches no agent, runs no configured command, " +
 				"and makes no commit or push. TestTheBranchUnderValidationChoosesNothingThatRuns does " +
 				"drive a whole run over this branch and reads the tripwire file at the end, and logs " +
 				"what it holds; what that test establishes is the row below and the suppression " +
-				"refusal. This becomes drivable with the stage body."},
+				"refusal. This becomes drivable when a run can carry a stage body through a launch, " +
+				"which needs the isolated copy."},
 		{"refusal-pushed-commands-and-agent", ReachPackage, branch,
 			"The one call the condition names is config.Resolve over the operator's layer and the " +
 				"pushed one, driven in process: the three keys are dropped and reported as rejections " +
@@ -147,7 +151,14 @@ func Drives() []Drove {
 			"internal/forge over a provider command this harness stands in for, with the run's own head " +
 				"substituted into the recorded answer. No stage body talks to a code host."},
 
-		{"stage-logic-bug", ReachNone, "", noStageBody},
+		{"stage-logic-bug", ReachNone, "",
+			"The review stage has a body, and a run cannot take it: the body opens the run's isolated " +
+				"copy before anything else, nothing in this build creates one, so a run that takes the " +
+				"stage fails there rather than reviewing and every walk here skips it. No review " +
+				"happens, so there is no finding to compare against what was planted. It becomes " +
+				"drivable when the build creates the isolated copy - and what it establishes then is " +
+				"still bounded by README.md's first limit, because the stand-in answers what a test " +
+				"scripts rather than reading the planted bug."},
 		{"stage-failing-test", ReachNone, "", noStageBody},
 		{"stage-stale-documentation", ReachNone, "", noStageBody},
 		{"stage-lint-violation", ReachNone, "", noStageBody},

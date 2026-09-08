@@ -69,11 +69,14 @@ type installed struct {
 //
 // What "nothing executed" can be established from is not this run. Every
 // executable those conditions plant is reached only through a stage body that
-// launches something, and this build has none: the .claude hooks and the
+// launches something, and no run reaches one: the .claude hooks and the
 // branch's agent binary need an agent process, its commands.test needs a test
 // stage, the .githooks scripts need this product to commit or push, and .envrc
-// needs a shell. The one body this build does have reads the run's supplied
-// intent and starts nothing, so
+// needs a shell. The intent body reads the run's supplied intent and starts
+// nothing, and the review body - the one that would launch an agent - opens
+// the run's isolated copy before it launches, which nothing in this build
+// creates, so it fails before launching if taken and this run skips it for
+// the reason walkableRun states. So
 // the scenario's tripwire file stays empty here whatever the product resolved,
 // and a clause reading it would be one nothing could make report. The file is
 // read and logged rather than asserted on, so the evidence is here the day a
@@ -122,7 +125,7 @@ func TestTheBranchUnderValidationChoosesNothingThatRuns(t *testing.T) {
 	succeeds(t, j.Command("init", "--default-branch", fixture.DefaultBranch))
 	serve(t, j)
 	observed.outcome = last(answerHolds(t, j,
-		startRun(t, j, "--intent", "narrow the Total loop bound on purpose"), "approved")).Outcome
+		walkableRun(t, j, "narrow the Total loop bound on purpose"), "approved")).Outcome
 	if observed.fired, err = journey.Fired(scenario); err != nil {
 		t.Fatalf("reading the scenario's tripwires: %v", err)
 	}

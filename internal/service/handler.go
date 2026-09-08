@@ -229,10 +229,10 @@ func (s *Service) task(ctx context.Context, req machine.TaskRequest) (machine.Ta
 // one method a contained caller may reach, because returning its own stage is
 // what such a caller is there to do.
 //
-// It refuses, and the refusal is the honest answer rather than a gap: no stage
-// in this build launches an agent, so no caller of this can be one. Recording
-// a result for a stage nothing is running would put a report against a stage
-// that never ran.
+// It refuses, and the refusal is the honest answer rather than a gap: no run
+// in this build carries a stage body through an agent launch, so no caller of
+// this can be one. Recording a result for a stage nothing is running would put
+// a report against a stage that never ran.
 func (s *Service) stageReport(_ context.Context, req machine.StageReportRequest) (struct{}, error) {
 	return struct{}{}, fmt.Errorf(
 		"%w: this build launches no stage agent, so there is no %s stage of run %s to return a result for",

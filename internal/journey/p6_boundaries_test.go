@@ -46,10 +46,12 @@ type survival struct {
 // classification is correct. What the criterion turns on is every boundary,
 // not a count of them: a stage boundary in this build is a hold, because
 // internal/graph stops before a halt point runs, so that is where the kill
-// lands, and a stage that never holds offers none. The intent stage is that
+// lands, and a stage that never holds offers none. The intent stage is such a
 // stage - it has a body and PRD section 5 has it never block a run, so every
-// finding it reports is a note - and it is therefore not among the boundaries
-// here. Manufacturing one for it would be a kill with nothing under it.
+// finding it reports is a note - and so is the review stage on this run, which
+// skips it for the reason walkableRun states; a skipped stage runs nothing
+// that could hold. Neither is among the boundaries here, and manufacturing a
+// kill for either would be a kill with nothing under it.
 //
 // The kill is a kill and not a stop. A service asked to stop unwinds and
 // writes what it knows on the way out, and what P6 is about is the service
@@ -74,7 +76,7 @@ func TestARunSurvivesTheServiceBeingKilledAtEveryStageBoundary(t *testing.T) {
 	holding := stagesWithoutABody(t)
 
 	observed := survival{}
-	current := startRun(t, j, "--intent", "narrow the Total loop bound on purpose")
+	current := walkableRun(t, j, "narrow the Total loop bound on purpose")
 	// Bounded for the reason answerHolds is bounded: a run that stops
 	// advancing past a hold turns this into an unbounded kill-and-serve loop,
 	// and the suite hanging to the test timeout says nothing about which stage

@@ -42,12 +42,13 @@ type bounded struct {
 // PRD section 13 asks for each of the three bounds to stop a run the other two
 // would not. Only this one is reachable here. The per-stage round limit and the
 // convergence bound both sit on the back edge into a fixer, and a fix round
-// needs a stage that reports a fix-eligible finding; no stage of this build
+// needs a stage that reports a fix-eligible finding; no stage of this run
 // reports one. A stage with no body reports one unclassified finding and holds
-// for a person, which P3 keeps out of a fix round by construction, and the one
-// stage that has a body declares no fix rounds and reports only notes. Drives
-// records that the same way it records every other condition the missing
-// bodies put out of reach.
+// for a person, which P3 keeps out of a fix round by construction; the intent
+// body reports only notes; and the review body, the one stage that does take
+// fix rounds, is skipped here for the reason walkableRun states, and could
+// only fail before reporting anything if it were taken. Drives records that
+// the same way it records every other condition out of a run's reach.
 //
 // What makes this a bound rather than a failure is the pair. The same journey
 // with the budget left alone reaches the end of the gate, so what stopped the
@@ -67,7 +68,7 @@ func TestTheRunBudgetStopsARunTheGateWouldHaveFinished(t *testing.T) {
 	// under it rather than as the stale number it was.
 	free := inClone(t)
 	freeWalk := answerHolds(t, free,
-		startRun(t, free, "--intent", "the same change with the budget left alone"), "approved")
+		walkableRun(t, free, "the same change with the budget left alone"), "approved")
 	observed := bounded{unbounded: last(freeWalk).Outcome}
 
 	budget := freeWalk[0].Steps + 1
@@ -79,7 +80,7 @@ func TestTheRunBudgetStopsARunTheGateWouldHaveFinished(t *testing.T) {
 	observed.budget = budget
 
 	j := inCloneConfigured(t, map[string]any{"run_budget": budget})
-	walk := answerHolds(t, j, startRun(t, j, "--intent", "a change held to a budget smaller than the gate"),
+	walk := answerHolds(t, j, walkableRun(t, j, "a change held to a budget smaller than the gate"),
 		"approved")
 	stopped := last(walk)
 	for _, answer := range walk[:len(walk)-1] {

@@ -30,7 +30,7 @@ func TestARunSurvivesTheProcessThatStartedItAndIsAnsweredByAnother(t *testing.T)
 
 	var runID string
 	withService(t, h, func(running serviceUnderTest) {
-		run := startRun(t, running.client, subject)
+		run := startRunSkipping(t, running.client, subject, pipeline.StageReview)
 		holdingAt(t, run, pendingStage(t, 0))
 		runID = run.Record.ID
 		if run.Record.Status != store.RunHeld {
@@ -71,6 +71,12 @@ func TestARunSurvivesTheProcessThatStartedItAndIsAnsweredByAnother(t *testing.T)
 
 // A run answered through to the end completes, and what it ends as is one of
 // the outcomes a driving agent is written against.
+//
+// The run skips the review stage, because that stage's body reads the run's
+// isolated copy and this service creates none: it fails on opening it rather
+// than holding, so a run that took it could not reach the end however it was
+// answered. What the skip costs this test is that one stage, and what it keeps
+// is everything after it, which is the part no other test reaches.
 func TestARunAnsweredThroughToTheEndCompletes(t *testing.T) {
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
@@ -78,7 +84,7 @@ func TestARunAnsweredThroughToTheEndCompletes(t *testing.T) {
 	recordRepository(t, h, subject)
 
 	withService(t, h, func(running serviceUnderTest) {
-		run := startRun(t, running.client, subject)
+		run := startRunSkipping(t, running.client, subject, pipeline.StageReview)
 		for run.Outcome == machine.OutcomeDecision {
 			run = answer(t, running.client, run.Record.ID, string(pipeline.OutcomeApproved))
 		}
@@ -334,7 +340,7 @@ func TestRecoveryReconcilesARecordAgainstItsCheckpoint(t *testing.T) {
 
 	var runID string
 	withService(t, h, func(running serviceUnderTest) {
-		runID = startRun(t, running.client, subject).Record.ID
+		runID = startRunSkipping(t, running.client, subject, pipeline.StageReview).Record.ID
 	})
 
 	// Put the record back where a service that died between the halt and the
