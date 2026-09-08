@@ -7,7 +7,7 @@ This is an ask against `no-mistakes`, the validation gate this repository is
 pushed through. It is recorded here because the constraint is ours and the
 triage that works around it is ours; the change is not.
 
-Every figure below states the method that produces it. The two methods are:
+Every figure below states the method that produces it. The three methods are:
 
 - **Accounting.** `config.LoadRepoFromBytes` on this repository's
   `.no-mistakes.yaml`, then `config.ReviewPathInstructionsBytes` on the parsed
@@ -16,8 +16,16 @@ Every figure below states the method that produces it. The two methods are:
   entries))` in `internal/pipeline/steps`, which is what a review prompt
   actually carries. Its result moves one byte per byte of the changed paths, so
   every rendering figure below names the `changed` set it was measured against.
+- **Quoting.** A named span of one entry's `review.path_instructions` guidance,
+  located by the opening and closing words quoted here inside that entry's
+  instruction text with the YAML block indent removed and wrapped lines joined
+  by a single space, and measured in UTF-8 bytes. For an interior span that
+  count equals the count against the raw block scalar, because each newline the
+  join replaces is one byte and no line in these blocks carries trailing
+  whitespace; both were checked against the file.
 
-Both were run against `no-mistakes`' own source rather than a reimplementation.
+The first two were run against `no-mistakes`' own source rather than a
+reimplementation.
 
 ## The ask
 
@@ -123,8 +131,9 @@ what has to survive a hostile branch in the trusted, capped channel and moving
 the rest to `AGENTS.md`. Two things sank it.
 
 The destination is not reliable. No part of the gate reads `AGENTS.md`;
-delivery is entirely the resolved agent CLI's own project-doc discovery, and the
-global configuration selects that agent automatically rather than pinning one.
+delivery is entirely the resolved agent CLI's own project-doc discovery, and
+nothing in this repository selects or pins that adapter, so which one resolves
+is settled outside the branch under review.
 Three things end a moved rule's reach from there, and two of them do it in
 silence: `no-mistakes` implements a project-instruction suppression knob for
 only three of its adapters, so for any other resolved adapter whether the file
@@ -139,17 +148,38 @@ place the gate fails closed on it. The silent paths are the same
 stop-applying the move was meant to prevent, relocated rather than removed.
 
 And the room it would free is not worth having. A first pass suggested roughly
-1.4 KB sat in per-package limits disclaimers, on the reasoning that a rule also
-present in `AGENTS.md` is safe to drop from the trusted block. That reasoning is
-wrong: `AGENTS.md` is read from the pushed branch, so the duplicate is exactly
-the copy a contributor deletes, and duplication says nothing about whether
-removal is safe. Under the test that does apply - if a contributor deleted this
-from `AGENTS.md` on their branch, would its absence from the review matter? -
-text naming a mechanism's residual gaps stays, because a reviewer who does not
-know a gap exists cannot see a change that widens it. Hand-measuring the four
-spans sampled that way, in `internal/findings` and `internal/agents`, about 405
-bytes of 1402 survive as removable, under a third, and buying under 3% of the
-cap costs the rules that make a gap visible.
+1.4 KB of per-package limits disclaimers could go, on the reasoning that a rule
+also present in `AGENTS.md` is safe to drop from the trusted block. That
+reasoning is wrong: `AGENTS.md` is read from the pushed branch, so the duplicate
+is exactly the copy a contributor deletes, and duplication says nothing about
+whether removal is safe. Under the test that does apply - if a contributor
+deleted this from `AGENTS.md` on their branch, would its absence from the review
+matter? - text naming a mechanism's residual gaps stays, because a reviewer who
+does not know a gap exists cannot see a change that widens it.
+
+By quoting, four spans were sampled, and they total the 1402 bytes that "roughly
+1.4 KB" names:
+
+| Entry | Span | Bytes |
+| --- | --- | --- |
+| `internal/findings/**` | "What the binding does not do" ... "reasoning rests on." | 397 |
+| `internal/agents/**` | "Two gaps that leaves" ... "for a Runner it returned." | 495 |
+| `internal/store/**` | "Reading it as an authorization check" ... "standing authority permits." | 135 |
+| `internal/store/**` | "What keeps the person value out" ... "and this repository has none." | 375 |
+
+Three sub-spans of those survive the deletion test as removable, totalling 358:
+
+| Entry | Span | Bytes |
+| --- | --- | --- |
+| `internal/agents/**` | "and nothing in this package refuses a suppression request" ... "when it builds the topology." | 181 |
+| `internal/store/**` | "Reading it as an authorization check" ... "standing authority permits." | 135 |
+| `internal/store/**` | "The absent check is not the gap to report;" | 42 |
+
+An earlier draft of this document put that second figure at 405. That was an
+estimate reported as though it had been measured; measured, it is 358, so the
+triage frees less than the estimate claimed and this null result is slightly
+stronger than it read, not weaker. 358 of 1402 is just over a quarter, it is
+2.2% of the 16384 cap, and it costs the text that makes a gap visible.
 
 So the split was dropped and `review.path_instructions` is unchanged by this
 work, byte for byte: 11 entries, 16273 of 16384, 111 bytes free, the same as
