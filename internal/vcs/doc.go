@@ -122,16 +122,27 @@
 // incorporation checks, and the refuse-when-unverifiable path are policy and
 // belong to internal/safety, the module named in PRD section 8. This package
 // exposes mechanism that policy needs, which is reading a remote ref,
-// resolving a commit, and comparing two commits, and stops there. It does not
-// expose everything internal/safety asks for: that package's git.go declares
-// the interface it decides against and names the operation still missing here.
+// resolving a commit, comparing two commits, and performing an update the
+// policy has already decided on, and stops there. internal/safety's git.go
+// declares the interface it decides against, and every operation on it is one
+// this package now provides.
 //
-// Nothing here pushes, and no operation moves a branch in a working copy.
-// Fetch is the exception worth naming: it writes references in the local
-// repository, and a refspec beginning with + tells git to update one even when
-// that is not a fast-forward. A caller passing such a refspec has chosen that,
-// and this package does not second-guess it. Whether an update may proceed is
-// the safety module's question, not this one's.
+// No operation here moves a branch in a working copy. Two operations do change
+// a reference, and neither decides that it should be changed.
+//
+// Fetch writes references in the local repository, and a refspec beginning
+// with + tells git to update one even when that is not a fast-forward. A
+// caller passing such a refspec has chosen that, and this package does not
+// second-guess it.
+//
+// Push changes a reference on a remote. It is mechanism on the same terms:
+// PushSpec carries the lease the update is performed under and this package
+// never invents one, so which commit may replace which, and on what anchor,
+// stays the safety module's decision. What the shape of PushSpec does buy is
+// that there is no unleased push here to reach for, since no field turns the
+// lease off. What it does not buy is that the lease is worth anything, because
+// nothing here can tell a commit a run observed from the tip it read a moment
+// ago; PRD principle P6 is internal/safety's, and Lease says so.
 //
 // # Errors
 //
