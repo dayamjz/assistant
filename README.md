@@ -106,14 +106,15 @@ deletes a branch, or that carries anything that is not a branch, is accepted
 and starts nothing, and reports that rather than passing over it.
 
 The stage bodies are separate work against the stage contract, and they land one
-at a time. The intent stage is written; still outstanding is the review stage
-that puts the scope lens in front of a reviewer and binds what comes back to
-what the reviewer declared reading. A stage without a body holds a placeholder
-that validates nothing and holds for a decision, so a run runs the stages that
-have one and stops at the first that does not, saying so rather than reporting a
-pass it did not establish. `stages.Implemented` is the authority on which stages
-those are, and `assistant doctor` reports it. The end-to-end harness is separate
-work too.
+at a time. The intent and review stages are written: review is the one that
+reads the change against the diff and the recorded intent, puts the scope lens
+in front of a reviewer, binds what comes back to what the reviewer declared
+reading, and takes automatic fix rounds. A stage without a body holds a
+placeholder that validates nothing and holds for a decision, so a run runs the
+stages that have one and stops at the first that does not, saying so rather
+than reporting a pass it did not establish. `stages.Implemented` is the
+authority on which stages those are, and `assistant doctor` reports it. The
+end-to-end harness is separate work too.
 
 ## The two promises
 

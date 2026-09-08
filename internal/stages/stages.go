@@ -84,11 +84,14 @@
 // answered over the machine interface, under the authority PRD section 9 gives
 // a caller of it, and store.Hold.ResolvedBy records which it was.
 //
-// The prose is not wrong yet, and this stage does not make it wrong. It is
+// The prose is not wrong yet, and neither body here makes it wrong. It is
 // true for as long as no stage body connects a graph halt to a stored hold,
 // and internal/store's own documentation says nothing in production resolves
 // one. The intent stage cannot be the body that changes that, because it never
-// holds: it reports notes and nothing else, so it has no halt to resolve.
+// holds: it reports notes and nothing else, so it has no halt to resolve. The
+// review stage does hold, on an ask finding, but a body only reports, and
+// store.RegisterHold and store.ResolveHold still have no caller outside their
+// own package's tests, so that halt is answered through no stored hold either.
 //
 // Whichever stage body first resolves a store hold owns correcting those lines
 // so the halt description says what actually answers it. This note is here
@@ -202,22 +205,21 @@ func Implemented() []pipeline.Stage {
 // stage can produce a finding for it.
 //
 // Its body refuses. A fix round is an agent editing the change and a stage
-// re-running to verify it, and neither exists yet, so the honest answer is a
-// failure naming what is missing. A body that returned a summary and changed
-// nothing would leave the stage reporting the same findings, the loop
-// converging, and the run parked with a reason that named the bound rather
-// than the missing fixer.
+// re-running to verify it; the review stage is the second half and nothing
+// here is the first, so the honest answer is a failure naming what is missing.
+// A body that returned a summary and changed nothing would leave the stage
+// reporting the same findings, the loop converging, and the run parked with a
+// reason that named the bound rather than the missing fixer.
 //
-// It is unreachable while no stage has both halves of what reaching it takes,
-// and reachable is what it is written for. A fix node exists only for a stage
-// whose row in internal/pipeline's stage table declares a fix round limit
-// above zero, because the pipeline builds one for no other; and only a stage
-// with a body can report the fix-eligible finding that routes into one,
-// because a stage without a body reports an ask finding, which never enters a
-// fix loop. The intent stage has a body and no rounds - its row declares none,
-// so it has no fix node at all, and it reports only notes besides. The first
-// body to land on a row that does take rounds meets this rather than a silent
-// pass.
+// Reachable is what it is written for, and the review stage is what reaches
+// it. A fix node exists only for a stage whose row in internal/pipeline's
+// stage table declares a fix round limit above zero, because the pipeline
+// builds one for no other; and only a stage with a body can report the
+// fix-eligible finding that routes into one, because a stage without a body
+// reports an ask finding, which never enters a fix loop. The intent stage has
+// neither half: its row declares no rounds, so it has no fix node at all, and
+// it reports only notes besides. The review stage has both, so a fix-eligible
+// review finding meets this failure rather than a silent pass.
 //
 // requires is what the run's fixer path needs of the agent adapter, which
 // internal/runs answers with Service.FixerRequires. It is a parameter rather
