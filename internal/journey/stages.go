@@ -29,9 +29,16 @@ var ErrPRDStages = errors.New("journey: PRD section 5's stage table could not be
 // in bold. The table is the PRD's own rendering and this reads it as written.
 var prdStageRow = regexp.MustCompile(`<td class="prd-num">(\d+)</td>\s*<td><b>([^<]+)</b></td>`)
 
-// prdStagesHeading is where section 5's stage table begins. Reading from it
-// rather than from the top of the document is what keeps another numbered
-// table elsewhere in the PRD out of the answer.
+// prdStagesHeading is where the read of section 5's stage table begins. It
+// fixes where reading starts and buys nothing else today: this document holds
+// no numbered row before it, so slicing there excludes nothing, and the offset
+// could only ever exclude a table that came earlier.
+//
+// What tells a stage row from any other numbered row is the shape prdStageRow
+// requires, where the bold name is the whole of its cell. The PRD's other
+// numbered table writes prose around its bold runs, so none of its rows
+// matches. That is how that table happens to be written rather than anything
+// enforced here, and StagesFromPRD names what it leaves open.
 const prdStagesHeading = "The nine stages"
 
 // StagesFromPRD returns the stages PRD section 5's table names, in the order it
@@ -44,6 +51,12 @@ const prdStagesHeading = "The nine stages"
 //
 // It refuses a document whose table it cannot find, whose numbering is not one
 // through however many rows it holds, or which holds no rows at all.
+//
+// The residual gap is that nothing here bounds the read to one table. A row
+// elsewhere in the document that matched prdStageRow's shape would be read as
+// a further row of this one, and what catches it is the numbering rather than
+// the position: such a row restarts at one where the sequence wants the next
+// number, so the document is refused rather than quietly read long.
 func StagesFromPRD(html []byte) ([]string, error) {
 	at := strings.Index(string(html), prdStagesHeading)
 	if at < 0 {
@@ -176,13 +189,17 @@ func StagesWithoutABody() []pipeline.Stage {
 	return out
 }
 
-// DeclaresEveryStage reports how the declaration above and the build disagree,
-// and nil when every stage is accounted for exactly once.
+// DeclaresEveryStage reports how a body-less declaration and the build
+// disagree, and nil when every stage is accounted for exactly once.
 //
-// implemented is what the build says it has bodies for, taken as an argument so
-// a disagreement can be handed to this and watched being caught.
-func DeclaresEveryStage(implemented []pipeline.Stage) error {
-	declared := StagesWithoutABody()
+// Both lists are arguments for one reason: a disagreement of either kind can
+// then be handed to this and watched being caught, which is what keeps a
+// branch here from being one nobody has shown can fire. implemented is what the
+// build says it has bodies for and declared is the declaration above, so a
+// caller answering for this build passes Implemented and StagesWithoutABody;
+// passing anything else for the second compares the build against a list
+// nobody wrote down.
+func DeclaresEveryStage(implemented, declared []pipeline.Stage) error {
 	for _, stage := range pipeline.Order() {
 		hasBody := slices.Contains(implemented, stage)
 		isDeclared := slices.Contains(declared, stage)
