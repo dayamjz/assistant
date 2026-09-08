@@ -557,8 +557,18 @@ func (j *Journey) Kill() error {
 	// A service that has already gone - because something asked it to stop, or
 	// because it failed - is not an error to kill. What Kill promises is that
 	// nothing is serving afterwards, and that already holds.
-	if err := j.service.cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
-		return fmt.Errorf("journey: killing the service: %w", err)
+	//
+	// The reaping this harness did is what settles that, rather than what the
+	// operating system makes of a signal to a process already reaped: one
+	// platform answers os.ErrProcessDone there and another answers that the
+	// handle it released is an invalid argument, so a Kill that read the
+	// answer would refuse on the second and leave the log open behind it. Only
+	// a process this harness has not seen end is signalled, and the answer to
+	// that is still read, for the process that ends between the two.
+	if ended, _ := j.service.exited(); !ended {
+		if err := j.service.cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+			return fmt.Errorf("journey: killing the service: %w", err)
+		}
 	}
 	<-j.service.done
 	if j.service.log != nil {
