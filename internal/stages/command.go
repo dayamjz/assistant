@@ -17,8 +17,16 @@ import (
 // file's own read of the command's output after the command exited, which is
 // where a descendant still holding the pipe would otherwise hold the call for
 // as long as it lives. The second is os/exec's wait for the command to end
-// after the run was cancelled. Either way the call ends after this rather than
-// stalling the run on a process nothing is going to reap.
+// after the run was cancelled.
+//
+// What ends the first wait is closing the read end, so the bound is only as
+// good as that close interrupting a read already in flight. That is checked
+// here on unix and nowhere else: the test that reaches the give-up path is
+// unix-only, for want of a portable way to leave a descendant holding a pipe,
+// so on any other platform this bound is taken on the standard library's word
+// rather than demonstrated. That is a gap in what this repository verifies,
+// and it predates the read living here: os/exec bounded the same wait the same
+// way when it owned the copy.
 //
 // Both waits it bounds begin after the command exited or after the run was
 // cancelled, so it bounds neither how long the command itself runs nor what
@@ -206,6 +214,12 @@ func runCommand(ctx context.Context, spec commandSpec) commandResult {
 //
 // A grace of zero waits without bound, which is what a caller that named no
 // grace asked for.
+//
+// The grace expiring is not by itself what ends the wait: closing the read end
+// is, and this call then waits for the read to return before answering, so
+// nothing is still writing to the record or the projection when the caller
+// reads them. A platform where that close left a read in flight would leave
+// this call waiting on it. commandGrace says where that is checked.
 func awaitOutput(copied <-chan error, read *os.File, grace time.Duration) error {
 	if grace <= 0 {
 		return <-copied
@@ -247,8 +261,9 @@ type tailWriter struct {
 //
 // What it holds between one write and the next is the limit plus that write,
 // so the memory this costs is bounded by the limit and by whoever is writing.
-// os/exec copies a command's output through a buffer of its own, so a command
-// that prints without bound arrives here in pieces rather than in one.
+// What writes here is runCommand's own copy off the command's output pipe,
+// which delivers what each read of that pipe returned, so a command that
+// prints without bound arrives here in pieces rather than in one.
 func (w *tailWriter) Write(p []byte) (int, error) {
 	n := len(p)
 	if w.limit <= 0 {
