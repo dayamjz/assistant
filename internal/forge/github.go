@@ -569,8 +569,33 @@ func (g *GitHub) run(ctx context.Context, op, stdin string, args ...string) ([]b
 // for one is refused by the other. Keeping the flag out of this path is what
 // lets confirmRepository state its own vector rather than have one appended to
 // it.
+//
+// # This is where outbound text is redacted, and why it is here
+//
+// Everything this package sends a provider passes through here: runProvider is
+// called from this function and from nowhere else, so the argument vector and
+// the standard input are redacted at the one point no outbound path can go
+// around. A pull request body is written from stage reports - fix summaries
+// and command output among them - and it lands on an external host, where a
+// credential that reached it cannot be recalled. Redacting at each call site
+// instead would make that a rule every future write has to remember, and the
+// write that forgot would be the one that published.
+//
+// The redactor is the one NewGitHub was given, so inbound and outbound are the
+// same owner, per P14, and this package still writes no redaction of its own.
+//
+// What it costs is worth stating. internal/redact recognizes a credential in a
+// URL's userinfo, so a body legitimately quoting a URL that carries userinfo
+// reaches the provider with that userinfo replaced. That is a fidelity loss in
+// text a person reads, taken deliberately: the alternative trades it for
+// publishing whatever the userinfo held.
+//
+// What it does not cover is every shape a secret takes. internal/redact says
+// what it recognizes and this inherits exactly that, so a token in a body that
+// is not written as a URL userinfo reaches the provider unchanged. Nothing
+// here looks for one, and nothing here reports that it looked.
 func (g *GitHub) runExact(ctx context.Context, op, stdin string, full []string) ([]byte, error) {
-	res := runProvider(ctx, &g.settings, g.env, stdin, full)
+	res := runProvider(ctx, &g.settings, g.env, g.redact.Redact(stdin), g.redactAll(full))
 	if res.startErr != nil {
 		return nil, &Refusal{
 			Reason: ReasonUnavailable,
@@ -629,6 +654,18 @@ func (g *GitHub) runExact(ctx context.Context, op, stdin string, full []string) 
 		}
 	}
 	return res.stdout, nil
+}
+
+// redactAll returns the argument vector with the redactor run over every
+// element. It is separate from the vector's construction so that an argument
+// added later is covered by having been added, rather than by its author
+// having remembered.
+func (g *GitHub) redactAll(args []string) []string {
+	out := make([]string, len(args))
+	for i, a := range args {
+		out[i] = g.redact.Redact(a)
+	}
+	return out
 }
 
 // decode reads a provider answer into v.

@@ -140,6 +140,33 @@ func unsupportedFlag(args []string) (string, bool) {
 	return "", false
 }
 
+// carriesCredential reports whether anything the adapter sent this invocation
+// holds the secret these tests plant, and which side it came in on.
+//
+// It looks for the literal secret rather than for text that looks unredacted,
+// and that choice is what makes it usable as a blanket check. A pattern for
+// "a userinfo that was not redacted" has to know what a redaction looks like,
+// and this package's tests supply their own Redactor whose marker is its own
+// business, so such a pattern would fail every properly redacted write. The
+// secret is unambiguous: if it left the process, it was published.
+//
+// The reach of that is worth stating rather than implying away. It catches an
+// outbound path that carries the secret these tests plant, which is every path
+// a test exercises with one; it says nothing about a credential of some other
+// shape, and what the adapter removes is internal/redact's business and stated
+// there.
+func carriesCredential(args []string, stdin string) (string, bool) {
+	for _, a := range args {
+		if strings.Contains(a, secret) {
+			return "argument", true
+		}
+	}
+	if strings.Contains(stdin, secret) {
+		return "body", true
+	}
+	return "", false
+}
+
 // TestMain runs the stand-in provider when the environment asks for it, and
 // the tests otherwise.
 func TestMain(m *testing.M) {
@@ -175,6 +202,27 @@ func fakeGHMain(dir string) int {
 	// sent there. A terminal would block here; os.DevNull ends at once.
 	stdin, _ := io.ReadAll(os.Stdin)
 	wd, _ := os.Getwd()
+
+	// The credential check comes after standard input has been read, because
+	// a body arrives there and standard input can only be read once. Ordering
+	// it before the read is a guard that inspects an empty string and passes
+	// whatever the adapter sent, which is what it looked like when this was
+	// first written.
+	//
+	// It fails the invocation rather than recording it, so a write path added
+	// later that skips redaction fails whatever test exercises it instead of
+	// failing only a test written to look.
+	//
+	// The real gh accepts such text, so this is stricter than the command it
+	// stands in for. That is deliberate and it is the one place this stand-in
+	// may be: everywhere else it may only refuse what gh refuses, because a
+	// fake that rejects what the real thing accepts makes a test fail for a
+	// reason the product does not have. Here the stricter answer is the
+	// adapter's own contract rather than this file's invention.
+	if where, carried := carriesCredential(args, string(stdin)); carried {
+		os.Stderr.WriteString("stand-in provider: outbound " + where + " carries a credential\n")
+		return 1
+	}
 
 	calls := readCalls(dir)
 	seen := 0
