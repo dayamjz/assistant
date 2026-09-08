@@ -110,14 +110,14 @@ Each has cost this repository more than one round of review.
   `docs/upstream-review-instruction-bounds.md` is that ask; no local move
   changes it materially.
 - This file is not an overflow channel for that section, and moving a review
-  rule here to make room is not a fix. It differs in trust, because the gate
-  reads `.no-mistakes.yaml` from the default branch and reads this file out of
-  the pushed working copy, so a rule moved here is deletable by the branch it
-  was written to review. Its reach is also adapter-dependent in a way nothing
-  here settles: no part of the gate reads this file, so delivery is entirely the
-  resolved agent CLI's own project-doc discovery, the global configuration
-  selects that agent automatically rather than pinning one, and `no-mistakes`
-  knows a project-instruction suppression knob for only three of its adapters -
+  rule here to make room is not a fix. It differs in trust: the gate reads
+  `.no-mistakes.yaml` from the default branch, while this file reaches a
+  reviewer only through the resolved agent CLI's project-doc discovery in the
+  pushed working copy, so a rule moved here is deletable by the branch it was
+  written to review. Its reach is also adapter-dependent in a way nothing here
+  settles: no part of the gate reads this file, nothing in this repository
+  selects or pins the adapter that does, and `no-mistakes` knows a
+  project-instruction suppression knob for only three of its adapters -
   one of which is a byte cap on this file itself, whose size is set outside this
   repository. The gate's `disable_project_settings`, which defaults false and
   which nothing here sets, suppresses this file wholesale for those three and
