@@ -119,12 +119,15 @@ deletes a branch, or that carries anything that is not a branch, is accepted
 and starts nothing, and reports that rather than passing over it.
 
 The stage bodies are separate work against the stage contract, and they land one
-at a time. The intent stage is written; still outstanding is the review stage
-that puts the scope lens in front of a reviewer and binds what comes back to
-what the reviewer declared reading. A stage without a body holds a placeholder
-that validates nothing and holds for a decision, so a run runs the stages that
-have one and stops at the first that does not, saying so rather than reporting a
-pass it did not establish. `stages.Implemented` is the authority on which stages
+at a time. The intent stage is written, and so is the test stage, which
+validates a change with the targeted check `commands.test` names, read from the
+operator's own configuration and never from the branch under validation, and
+holds for a person when no command is configured; still outstanding is the
+review stage that puts the scope lens in front of a reviewer and binds what
+comes back to what the reviewer declared reading. A stage without a body holds
+a placeholder that validates nothing and holds for a decision, so a run runs
+the stages that have one and stops at the first that does not, saying so
+rather than reporting a pass it did not establish. `stages.Implemented` is the authority on which stages
 those are, and `assistant doctor` reports it. Until they land, a run reaches no
 agent, no push and no code host, which is what bounds what the end-to-end
 harness can drive through the binary; `internal/journey/README.md` is the
