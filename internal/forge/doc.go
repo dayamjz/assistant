@@ -6,6 +6,47 @@
 // Provider is the interface. GitHub is the adapter over the gh command line,
 // and it is the only implementation in this module.
 //
+// # A provider addresses one repository, and a Host is how it gets one
+//
+// A Provider is fixed to a repository, and the thing holding one is not: a
+// service resolves its adapters once and then serves every run. A Provider
+// settled at that point would address one repository for every run, so this
+// package splits the two by lifetime. Host holds what is settled once - the
+// command line, the environment, the redactor, the output bound - and
+// Host.Open takes the repository, which is the run's own fact and arrives from
+// the run's record. GitHubRepository is what reads that specifier out of the
+// upstream URL a record holds.
+//
+// GitHubRepository reads a remote on GitHubHostname and no other host, and
+// every invocation is given that host in GH_HOST. Both are there for one
+// reason: the specifier this package puts on a command line is owner/name and
+// names no host, so a remote on another host that yielded owner/name would
+// send a pull request to the github.com repository sharing the name, and an
+// operator's environment pointing gh elsewhere would move where a write lands.
+// What that costs is a GitHub Enterprise installation, which this adapter does
+// not address; a run whose upstream is on one carries no specifier, and the
+// stage that needs a code host refuses.
+//
+// # A write goes where the run said, or it does not happen
+//
+// Opening a pull request is outward-facing and cannot be taken back, so the
+// two write operations - Open and UpdateBody - are preceded by a confirmation
+// that the repository the provider resolves this adapter's specifier to is
+// that specifier. An adapter that names no repository cannot write at all,
+// because there is nothing for the provider's answer to be checked against.
+//
+// What that buys is that a specifier which no longer names what it used to -
+// a renamed or transferred repository still answers under its old name -
+// refuses instead of producing a pull request in a repository nobody asked
+// for. Nothing is created when it refuses; that is the part the guard is for.
+//
+// Two gaps in it are worth naming rather than implying away. It runs before a
+// write and not before a read, so Find, Get and Checks may report facts read
+// out of whatever the specifier resolves to; what a caller does with those is
+// a write, and the write refuses. And it establishes what the provider
+// reported when it was asked, not a lock: a rename between the confirmation
+// and the write is outside it.
+//
 // # What "the same behavior on any forge" means here
 //
 // Every state a caller acts on is a typed value declared in this package, and

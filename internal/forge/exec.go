@@ -53,7 +53,17 @@ const DefaultProviderGrace = 2 * time.Second
 // a person fails instead: there is nobody to answer a prompt inside a
 // pipeline, and standard input carries either the body of a request or
 // nothing.
+//
+// GH_HOST is there for a stronger reason than the rest. A repository specifier
+// this package puts on a command line is owner/name and names no host, so
+// without this entry the host a write lands on would be whatever the invoking
+// environment last set, which is an ambient value nothing in a run chose.
+// Giving the child GitHubHostname means the host is the adapter's and not the
+// environment's. What it costs is stated at GitHubHostname: this adapter
+// addresses github.com and an environment pointing gh at a GitHub Enterprise
+// installation does not redirect it.
 var providerEnv = map[string]string{
+	"GH_HOST":               GitHubHostname,
 	"GH_PAGER":              "",
 	"PAGER":                 "",
 	"GH_NO_UPDATE_NOTIFIER": "1",
