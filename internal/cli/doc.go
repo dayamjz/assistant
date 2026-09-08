@@ -38,8 +38,11 @@
 //
 // One thing the protocol serves has no command at all: returning a stage's
 // result, which internal/ipc leaves open to a caller contained by an active
-// validation stage. Section 9's table names no command for it, and no stage in
-// this build launches an agent that would need one, so none is invented here.
+// validation stage. Section 9's table names no command for it, and no agent a
+// stage launches would need one: the one body that launches an agent, the
+// review stage's, reads the report back off the invocation itself, and no run
+// in this build carries that body to a launch besides. So none is invented
+// here.
 //
 // # The gate hook verbs are a second table on purpose
 //

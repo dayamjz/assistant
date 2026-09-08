@@ -231,10 +231,13 @@
 // can see fire is worth nothing. It fires: TestACallerInsideAnActiveStageIsRefused
 // registers this test process's own group and then makes a restricted call,
 // which is refused with ipc.ErrContained. And it has no producer in this
-// build: nothing calls StageStarted, because no stage this build has a body
-// for launches an agent - the written ones are functions of the run's state
-// and start no process - so the registry is empty and nothing is contained
-// today. What that costs is stated rather than implied: until a stage launcher
+// build: nothing calls StageStarted. The intent body starts no process, and
+// the review body, the one that does launch an agent, launches through the
+// agents.StageAgent seam, and nothing on that path records the process group
+// here - not that a run reaches its launch, since that body opens the run's
+// isolated copy first and nothing in this build creates one. So the registry
+// is empty and nothing is contained today. What that costs is stated rather
+// than implied: until a stage launcher
 // calls StageStarted, containment protects nothing. The alternative, refusing
 // every restricted call until then, is a service nobody can drive.
 //

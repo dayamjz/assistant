@@ -500,9 +500,11 @@ Each has cost this repository more than one round of review.
   first: green there says the machinery behaves on inputs we chose and says
   nothing about review quality, and every row carries whether it was reached
   through the binary or
-  through the package that owns the mechanism, because the one stage body this
-  build has reads the supplied intent and launches nothing, so a run reaches no
-  agent, no push, and no code host. It takes both of the platform guards
+  through the package that owns the mechanism, because a run reaches no agent,
+  no push, and no code host: the intent body reads the supplied intent and
+  launches nothing, and the review body fails on the run's isolated copy, which
+  nothing in this build creates, before it launches anything, so every walk
+  there skips that stage. It takes both of the platform guards
   `internal/cli` and `internal/service` carry, on their terms: a check that
   drives a run skips where `internal/ipc` reads no local socket peer
   credentials, and a check whose service did not come up skips where there is
