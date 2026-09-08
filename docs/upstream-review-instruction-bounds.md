@@ -226,7 +226,7 @@ so the sample is 10.5% of the text and touches three of the eleven entries,
 `internal/findings/**`, `internal/agents/**` and `internal/store/**`. The other
 eight were not triaged, and that triage is deliberately deferred. The claim that
 does cover the whole section is the triage ceiling, measured by deleting every
-byte of package-block guidance, and it does not rest on this sample.
+byte of guidance in the whole section, and it does not rest on this sample.
 
 So the split was dropped and `review.path_instructions` is unchanged by this
 work, byte for byte: 11 entries, 16273 of 16384, 111 bytes free, the same as
@@ -249,8 +249,7 @@ package glob is paid for, or a 469-byte addition to an existing block - 39% of
 the 1191 bytes of guidance the shared `path: "*"` block carries today. That is
 roughly the one-more-rule case, so the recovery is real and it was declined
 rather than unavailable: 469 bytes is 2.7% to 3.2% of the 14658 to 17592 a
-completed set needs, so it buys one rule, changes nothing about the bound, and
-spends prose that is currently earning its place.
+completed set needs, so it buys one rule and changes nothing about the bound.
 
 Compaction and per-package placement were both considered and rejected.
 Compaction compresses hard-won prose toward a number that is not a measured
