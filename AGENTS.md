@@ -122,9 +122,10 @@ Each has cost this repository more than one round of review.
   of them gated on the gate's `disable_project_settings`, which defaults false
   and which nothing here sets. With that key false nothing is suppressed, so the
   reach is never guaranteed and nothing reports either way; with it true the file
-  is suppressed wholesale for those three adapters and the run is refused
-  outright for any other. The one path that ends a moved rule's reach without a
-  word is that wholesale suppression, which is the same silent stop-applying that
+  is suppressed wholesale only when every adapter in the resolved set neutralizes
+  with its effective knob intact, and the run is refused outright otherwise. The
+  one path that ends a moved rule's reach without a word is that wholesale
+  suppression, which is the same silent stop-applying that
   moving the rule was supposed to avoid. Do not confuse
   `disable_project_settings` with `suppress_project_instructions`, which is this
   project's own key for the same idea and decides nothing about the gate.
