@@ -385,6 +385,16 @@ func shimSuffix() string {
 // of shapes on this surface apart. What it still cannot tell apart is a
 // document whose keys are a subset of the promised shape's, so a caller
 // wanting more than that asserts a field of its own.
+//
+// Two mechanisms are needed for the first of those, because one of them stops
+// at a shape that decodes itself. DisallowUnknownFields is a setting on this
+// decoder, and a shape carrying its own UnmarshalJSON is handed the raw bytes
+// and never sees it: machine.Run is one, so that setting alone accepts a
+// failure envelope as a run. The second is the shape's own answer - what it
+// encodes back - and a key the document carried that the shape does not put
+// back is a key the shape does not hold, whichever way it decodes. A shape
+// this surface answered survives it, because the bytes came from encoding that
+// same shape, so every key present was one it emits.
 func firstDocument(stdout string, v any) error {
 	decoder := json.NewDecoder(strings.NewReader(stdout))
 	decoder.DisallowUnknownFields()
@@ -398,6 +408,25 @@ func firstDocument(stdout string, v any) error {
 	if len(fields) == 0 {
 		return errors.New("the first document is an object carrying no field, which decodes into every " +
 			"shape this surface answers")
+	}
+	encoded, err := json.Marshal(v)
+	if err != nil {
+		return fmt.Errorf("re-encoding the shape the first document decoded into: %w", err)
+	}
+	var held map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &held); err != nil {
+		return fmt.Errorf("the shape the first document decoded into does not encode as an object: %w", err)
+	}
+	var undeclared []string
+	for name := range fields {
+		if _, declared := held[name]; !declared {
+			undeclared = append(undeclared, name)
+		}
+	}
+	if len(undeclared) > 0 {
+		slices.Sort(undeclared)
+		return fmt.Errorf("the first document carries %s, which the shape it was decoded into does not "+
+			"hold, so it is a document of some other shape", strings.Join(undeclared, ", "))
 	}
 	return nil
 }
