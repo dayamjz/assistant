@@ -319,10 +319,14 @@ Each has cost this repository more than one round of review.
   `Decide` rather than filling the fields in. `OutcomePassed` has no producer
   here, because nothing in this build records that a pull request merged.
 - `internal/service` is the background service PRD section 8's process model
-  puts at the centre of a home. It decides nothing: `internal/graph` executes,
-  `internal/pipeline` is the topology, `internal/runs` owns the record,
-  `internal/checkpoints` makes the position durable, and this wires them. Five
-  things there are load-bearing. It takes the home's lock before recovery and
+  puts at the centre of a home. It decides nothing a run validates:
+  `internal/graph` executes, `internal/pipeline` is the topology,
+  `internal/runs` owns the record, `internal/checkpoints` makes the position
+  durable, and this wires them. What it does decide is which build-scoped
+  dependencies a stage body gets, because it is the one place holding the home,
+  the resolved configuration and the resolved agent at once; `doc.go` owns why,
+  including why the agent reaches a body wrapped. Five things there are
+  load-bearing. It takes the home's lock before recovery and
   before binding the socket, in that order. It reconciles every unfinished run
   against its checkpoint on open, because a record saying running against a
   checkpoint saying halted is a run nobody can answer. Containment is a
