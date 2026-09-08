@@ -1,11 +1,13 @@
 package stages_test
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/config"
+	"github.com/dayamjz/assistant/internal/findings"
 	"github.com/dayamjz/assistant/internal/graph"
 	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/stages"
@@ -107,8 +109,26 @@ func TestImplementedIsTheSetThisBuildIsMeantToHave(t *testing.T) {
 // A body and Pending are told apart by behaviour rather than by comparing
 // function values: Pending cannot fail and reports one finding it names after
 // the stage it stands in for, so a body that fails on the state this hands it,
-// that reports a different report, or that reports no finding carrying that
-// name, is not Pending.
+// or that reports no finding carrying that name, is not Pending.
+//
+// There is one condition rather than two. Comparing the whole report against
+// Pending's stood beside the identifier check until this round, and it could
+// reject nothing the identifier check did not already reject: equality admits
+// exactly one report, Pending's own, and that report carries the identifier by
+// construction, so the identifier condition fires on the only value the
+// comparison ever fires on. A condition no control can show rejecting on its
+// own is one condition wearing two names, so it went.
+//
+// What the comparison covered and the identifier does not is a body whose
+// report matches Pending's in every field except the finding identifier. That
+// body is not Pending, since Pending is what produces Pending's identifier, so
+// what would be lost is a report imitating one - and TestImplementedIsTheSetThisBuildIsMeantToHave
+// is what catches a stage that lost its body, which is the regression that
+// imitation would stand in for.
+//
+// TestThePendingDiscriminatorRejectsAnImpersonationAndAcceptsARealBody is the
+// control. It drives the same predicate this loop does, in both directions, so
+// what is shown rejecting is the thing in use rather than a copy of it.
 //
 // Whether a body holds is not one of those signals, and it was one until the
 // push stage landed. Holding for a person is what a body does when it cannot
@@ -156,33 +176,96 @@ func TestAllPlacesAWrittenBodyAtEveryImplementedStage(t *testing.T) {
 			if err := report.Validate(); err != nil {
 				t.Fatalf("the %s stage produced a report the pipeline refuses: %v", stage, err)
 			}
-			pending, err := stages.Pending(stage.String()).NewBody()(t.Context(), pipeline.Input{Stage: stage})
-			if err != nil {
-				t.Fatalf("running Pending for %s: %v", stage, err)
-			}
-			if reflect.DeepEqual(report, pending.Report.Normalize()) {
-				t.Fatalf("Implemented names %s, but All places Pending at it: a run stops for a "+
-					"person at a stage this build reports a body for", stage)
-			}
-			pendingFinding := pendingID(t, stage)
-			for _, found := range report.Findings {
-				if found.ID == pendingFinding {
-					t.Fatalf("the %s stage's body reported %s's own finding, so a run reaching it is "+
-						"told the stage is not implemented in this build: %+v", stage, "Pending", report)
-				}
+			if problem := pendingImpersonation(report, pendingID(t, stage)); problem != "" {
+				t.Fatalf("Implemented names %s, but %s", stage, problem)
 			}
 		})
 	}
 }
 
+// pendingImpersonation says why a report is the one Pending produces rather
+// than a body's own, and returns the empty string when it is a body's.
+//
+// It is a predicate returning a reason rather than a set of assertions so that
+// a control can drive it directly and watch it answer in both directions,
+// which is what keeps the loop above from being a guard nothing has shown
+// rejecting.
+func pendingImpersonation(report findings.Report, pendingFinding string) string {
+	for _, found := range report.Findings {
+		if found.ID == pendingFinding {
+			return fmt.Sprintf("the body placed there reported %s's own finding %q, so a run "+
+				"reaching it is told the stage is not implemented in this build: %+v",
+				"Pending", pendingFinding, report)
+		}
+	}
+	return ""
+}
+
+// The discriminator has to reject a body that reports what Pending reports and
+// accept one that does not, and it is shown doing both here rather than only
+// in the loop that uses it, where a guard that rejected nothing would look the
+// same as one that had nothing to reject.
+//
+// The impersonation is Pending's own report, which is the strongest case
+// available: nothing a body could produce is closer to Pending than what
+// Pending produces. It is also what establishes the subsumption the loop's
+// documentation states, because whole-report equality against Pending admits
+// exactly that value and no other, so a predicate rejecting it rejects
+// everything that comparison could have.
+//
+// The second case is the direction a check that rejects everything would fail.
+// It is a real body's report rather than one written out here, so a rule this
+// package's own bodies would trip is one this fails on.
+func TestThePendingDiscriminatorRejectsAnImpersonationAndAcceptsARealBody(t *testing.T) {
+	t.Parallel()
+	stage := pipeline.StageIntent
+	identifier := pendingID(t, stage)
+
+	impersonation, err := stages.Pending(stage.String()).NewBody()(t.Context(), pipeline.Input{Stage: stage})
+	if err != nil {
+		t.Fatalf("running Pending for %s: %v", stage, err)
+	}
+	if problem := pendingImpersonation(impersonation.Report.Normalize(), identifier); problem == "" {
+		t.Fatalf("the discriminator accepted %s's own report as a body's, so the loop that uses it "+
+			"would pass on a stage All left pending: %+v", "Pending", impersonation.Report)
+	}
+	// The same report with everything but the identifier changed. Whole-report
+	// equality against Pending would accept this one, which is what the
+	// identifier condition covers and the removed one did not.
+	disguised := impersonation.Report.Normalize()
+	disguised.Summary = "the intent stage read the intent and reported on it"
+	disguised.Findings[0].Description = "a description no Pending report carries"
+	if problem := pendingImpersonation(disguised, identifier); problem == "" {
+		t.Fatalf("the discriminator accepted a report carrying %q under different text, which is "+
+			"the case whole-report equality misses: %+v", identifier, disguised)
+	}
+
+	real, err := implementationFor(t, stages.All(stages.StageDeps{}), stage).NewBody()(t.Context(),
+		pipeline.Input{Stage: stage, State: declaredReader{
+			allowed: map[pipeline.Key]bool{pipeline.KeyIntent: true, pipeline.KeyIntentSupplied: true},
+			state: map[pipeline.Key]graph.Value{
+				pipeline.KeyIntent:         graph.TextValue("add a greeting"),
+				pipeline.KeyIntentSupplied: graph.BoolValue(true),
+			},
+		}})
+	if err != nil {
+		t.Fatalf("running the %s stage's body: %v", stage, err)
+	}
+	if problem := pendingImpersonation(real.Report.Normalize(), identifier); problem != "" {
+		t.Fatalf("the discriminator rejected the %s stage's real body, so it rejects everything "+
+			"and the loop that uses it checks nothing: %s", stage, problem)
+	}
+}
+
 // pendingID is the finding identifier Pending reports for a stage, read off
 // Pending itself rather than spelled out, so a change to how it names its
-// finding cannot leave this checking for a name nothing produces any more.
+// finding cannot leave the discriminator checking for a name nothing produces
+// any more.
 //
 // It fails the test rather than returning nothing when it cannot read one.
 // findings.Report.Validate refuses an empty identifier, so a caller comparing
 // against one would be comparing against a value no finding it sees can carry,
-// and the discriminator below would pass by checking nothing.
+// and pendingImpersonation would accept every report.
 func pendingID(t *testing.T, stage pipeline.Stage) string {
 	t.Helper()
 	out, err := stages.Pending(stage.String()).NewBody()(t.Context(), pipeline.Input{Stage: stage})

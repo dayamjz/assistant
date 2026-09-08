@@ -73,10 +73,28 @@ import (
 // the redactor over exactly repository.upstream_url and repository.fork_url
 // and says so; a graph checkpoint is opaque bytes that no layer inspects, and
 // pipeline.KeyTargetObserved travels in one, so what the rebase stage recorded
-// is stored exactly as it recorded it. So every report this stage builds goes
-// through internal/redact on the way out, which is the one owner of credential
-// removal PRD section 8 names. reportPush is where that happens, so a message
-// added later cannot be the one that skipped it.
+// is stored exactly as it recorded it. So credentials are removed on the way
+// out through internal/redact, which is the one owner of that under PRD
+// section 8, and this file writes no remover of its own.
+//
+// Two places do it, and what each covers is worth stating rather than
+// summarizing, because a step error leaves this package by a different door
+// than a report and internal/service writes it to the home's log.
+//
+//   - shownTarget renders a target for a person, and every site that puts a
+//     target or a remote into text goes through it, errors included. That is
+//     the display path, and it is one function so that a message added later
+//     has one obvious thing to call.
+//   - reportPush redacts findings.Report.Summary and Finding.Description as a
+//     report leaves. It covers those two fields and no other, which is what
+//     catches text this file did not compose: internal/safety's own refusal
+//     sentence names the remote, and git's words arrive inside it.
+//
+// What neither covers is a wrapped error's own text, which stays whichever
+// package produced it: internal/vcs redacts its command errors through the
+// redactor the service configured, and an error from a package that does not
+// would arrive here unredacted. Nor does either recognize a credential outside
+// a URL's userinfo, which is internal/redact's stated scope.
 //
 // # The fetch before the decision
 //
@@ -291,7 +309,7 @@ func anchorFor(facts pushFacts) (safety.Observation, *pipeline.Output) {
 	}
 	if anchor.Target().Ref != branchRef(facts.branch) {
 		out := refusePush("push-observation-of-another-reference",
-			"This run recorded an observation of "+anchor.Target().String()+", which is not "+
+			"This run recorded an observation of "+shownTarget(anchor.Target()).String()+", which is not "+
 				branchRef(facts.branch)+", the branch it validates. Nothing was pushed, because an "+
 				"anchor taken against another reference would authorize forwarding this run's commit "+
 				"to a reference nobody asked about. Start the run again so its rebase stage observes "+
@@ -348,7 +366,7 @@ func fetchTarget(ctx context.Context, repo *vcs.Repository, target safety.Target
 		return nil
 	}
 	out := refusePush("push-target-unreadable",
-		"The history of "+target.String()+" could not be fetched, so what that branch holds now is "+
+		"The history of "+shownTarget(target).String()+" could not be fetched, so what that branch holds now is "+
 			"unknown and no update to it can be shown to discard nothing: "+err.Error()+". Nothing "+
 			"was pushed. Restore access to the remote and run this stage again.")
 	return &out
@@ -362,7 +380,7 @@ func reportSafetyRefusal(err error, facts pushFacts, target safety.Target) (pipe
 	var refusal *safety.Refusal
 	if !errors.As(err, &refusal) {
 		return pipeline.Output{}, fmt.Errorf("stages: deciding whether %s may be updated to %s: %w",
-			target, facts.head, err)
+			shownTarget(target), facts.head, err)
 	}
 	return refusePush("push-refused-"+string(refusal.Reason),
 		refusal.Error()+".\n\n"+discardedClause(refusal)+nextStepFor(refusal, facts, target)), nil
@@ -388,7 +406,7 @@ func discardedClause(refusal *safety.Refusal) string {
 func nextStepFor(refusal *safety.Refusal, facts pushFacts, target safety.Target) string {
 	switch refusal.Reason {
 	case safety.ReasonWouldDiscard:
-		return "Nothing was pushed and nothing was lost. Fetch " + target.Remote + " and rebase " +
+		return "Nothing was pushed and nothing was lost. Fetch " + shownTarget(target).Remote + " and rebase " +
 			facts.head + " onto " + target.Ref + " so that it contains those commits, then run this " +
 			"stage again: the same decision then allows a fast-forward. Deciding not to incorporate " +
 			"them is a decision to discard them, and it is yours to make rather than this stage's."
@@ -399,11 +417,11 @@ func nextStepFor(refusal *safety.Refusal, facts pushFacts, target safety.Target)
 			"rebase onto it and run this stage again."
 	case safety.ReasonUnrelatedHistories:
 		return "Nothing was pushed. The two commits share no ancestor, so nothing can be said about " +
-			"what either contains of the other. Check that " + target.String() + " is the branch this " +
+			"what either contains of the other. Check that " + shownTarget(target).String() + " is the branch this " +
 			"run should be forwarding to, and start the run again against the right one."
 	default:
 		return "Nothing was pushed, because a fact this update rests on could not be established " +
-			"rather than because it was shown to be false. Restore access to " + target.Remote +
+			"rather than because it was shown to be false. Restore access to " + shownTarget(target).Remote +
 			" and to the history it advertises, then run this stage again."
 	}
 }
@@ -428,10 +446,10 @@ func performUpdate(ctx context.Context, repo *vcs.Repository, decision safety.De
 		var rejection *vcs.PushRejection
 		if !errors.As(err, &rejection) {
 			return pipeline.Output{}, fmt.Errorf("stages: forwarding %s to %s: %w",
-				decision.Proposed(), target, err)
+				decision.Proposed(), shownTarget(target), err)
 		}
 		return refusePush("push-rejected",
-			"The remote refused to update "+target.String()+", so nothing was pushed and nothing on "+
+			"The remote refused to update "+shownTarget(target).String()+", so nothing was pushed and nothing on "+
 				"that branch changed. It gave this reason: "+rejection.Reason+". The update was "+
 				"proposed under a lease on "+state.String()+", which is where this run observed the "+
 				"branch, so the branch may have moved since, or the remote may have declined the "+
@@ -441,7 +459,7 @@ func performUpdate(ctx context.Context, repo *vcs.Repository, decision safety.De
 	}
 	return pipeline.Output{
 		Report: reportPush(findings.Report{
-			Summary: "Forwarded " + decision.Proposed() + " to " + target.String() + ": " +
+			Summary: "Forwarded " + decision.Proposed() + " to " + shownTarget(target).String() + ": " +
 				decision.String() + ".",
 			Findings: rewrittenNote(decision),
 		}),
@@ -504,20 +522,36 @@ func refusePush(id, description string) pipeline.Output {
 // nothing here recognizes a credential for itself.
 var pushRedactor = redact.New()
 
-// reportPush is the one exit every report this stage produces takes, and it
-// removes credentials on the way through.
+// shownTarget returns target as it may be shown to a person: the same
+// reference, and the remote with any credential in it removed.
 //
-// It is a choke point rather than a call beside each interpolation, because
-// what leaks is not one message. The target is a remote this stage read back
-// out of the run's state and nothing on that path removed a credential from
-// it, so every sentence naming the target or the remote carries whatever the
-// rebase stage recorded, and a report is persisted and shown. A remover at
-// each site would be a list to keep complete; here a message added later
-// cannot be the one that skipped it.
+// It returns a safety.Target rather than a string so that one function serves
+// both renders this file makes, the whole target and the remote alone, and a
+// site that needs either has nothing to reach for but this. The redaction is
+// on the display path only and never where the anchor is decoded, because the
+// remote has to stay usable for the fetch and the push that address it.
 //
-// It reads the text rather than the target because a refusal also carries
-// internal/safety's own sentence and git's own words, which name the remote
-// too and are not this stage's to reformat.
+// Every site that puts a target or a remote into text calls it, and the error
+// sites are the reason it exists rather than reportPush alone: a step error
+// leaves this package as an error and internal/service writes it to the home's
+// log, so the report path's redaction never sees it.
+func shownTarget(target safety.Target) safety.Target {
+	return safety.Target{Remote: pushRedactor.Redact(target.Remote), Ref: target.Ref}
+}
+
+// reportPush is the exit every report this stage produces takes, and it
+// removes credentials from the two fields of one that carry prose.
+//
+// It reads text rather than a target, which is what shownTarget does not
+// reach: a refusal carries internal/safety's own sentence and git's own words,
+// both of which name the remote and neither of which is this stage's to
+// reformat. The two overlap on what this file composes itself, and that is
+// deliberate rather than redundant, because neither alone covers the other's
+// path.
+//
+// What it covers is Summary and Finding.Description. Every other field of a
+// report is untouched, and an error is not a report at all, so it goes out
+// through shownTarget instead.
 func reportPush(report findings.Report) findings.Report {
 	report.Summary = pushRedactor.Redact(report.Summary)
 	for i := range report.Findings {
@@ -585,7 +619,7 @@ func encodeObservation(o safety.Observation) (string, error) {
 		Commit: rec.Commit,
 	})
 	if err != nil {
-		return "", fmt.Errorf("stages: recording the observation of %s: %w", o.Target(), err)
+		return "", fmt.Errorf("stages: recording the observation of %s: %w", shownTarget(o.Target()), err)
 	}
 	return string(out), nil
 }
