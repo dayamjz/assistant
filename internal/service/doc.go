@@ -268,8 +268,36 @@
 // being read from a pushed branch, and no branch's configuration is read here
 // at all.
 //
-// It does not push, open a pull request, or move any reference. Those are
-// stage bodies' work, behind internal/vcs, internal/safety and internal/forge.
+// It does not push to a remote, open a pull request, or move a reference on
+// anything it does not own. Those are stage bodies' work, behind internal/vcs,
+// internal/safety and internal/forge.
+//
+// It does move one reference, and only one: the gate's own copy of the branch
+// a run is about to validate. PRD principle P1 makes reaching the gate the
+// consent boundary, and PRD section 9's bare command starts a run from the
+// branch you are on, so the branch has to get there before the run is
+// recorded. gate.TakeBranch is that step and the gate is a local bare
+// repository, so nothing is published by it. The refspec carries no leading
+// plus, so a branch that would not fast-forward is refused rather than forced.
+//
+// # A run's isolated copy
+//
+// A run works in a linked worktree of its repository's gate, at the path PRD
+// section 8 gives it, created after the run's row exists and given back when
+// the run finishes. Both endings come through one place here, reclaimCopy,
+// which asks whether the run is finished and leaves the rest to internal/gate:
+// the copy of a run that is held for a person is kept, because the copy is
+// what the answer resumes into.
+//
+// That reclaim asks fewer refusals than PRD section 11 describes, and the one
+// it does not ask is stated rather than implied. Section 11 reaps the
+// processes running in a copy before removing it. Nothing here reaps: a
+// stage's process group is registered through StageStarted and nothing calls
+// it, so there is no set of live processes to ask about. gate.RemoveCopy
+// records the same gap at the operation. It costs nothing today, because no
+// stage body in this build starts a process, so there is nothing in a copy to
+// pull a directory out from under - and when a producer for StageStarted
+// arrives, the hazard and the gap arrive together.
 //
 // It does not decide who resolved a hold. internal/ipc derives that from the
 // surface, and every resolution arriving over this protocol is

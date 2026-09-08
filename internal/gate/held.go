@@ -6,24 +6,28 @@ import (
 	"fmt"
 )
 
-// resolution says which gate the seam is being asked for. The two operations
-// differ in this and in nothing else the seam does, so the difference is a
-// value the seam reads rather than a second seam that could drift from this
-// one.
+// resolution says which gate the seam is being asked for. Operations differ in
+// this and in nothing else the seam does, so the difference is a value the seam
+// reads rather than a second seam that could drift from this one.
+//
+// The names say what is resolved rather than which operation asked, because
+// more than one operation wants each answer and a constant named after its
+// first caller reads as the wrong thing at the second.
 type resolution int
 
 const (
-	// gateToRepair is the gate an initialization acts on. It is the gate the
-	// working copy already names, when that path is a gate of this home, holds
-	// a repository, and nobody else is bound to it; otherwise it is the gate
-	// the working copy's own path hashes to, which is what a copy of a gated
-	// project falls back to.
-	gateToRepair resolution = iota
-	// gateToRemove is the gate a removal acts on. It is the gate the working
-	// copy names and nothing else: a removal that fell back to a gate the
-	// working copy does not name would delete a repository on the strength of
-	// a path hash.
-	gateToRemove
+	// gateNamedOrHashed is the gate the working copy already names, when that
+	// path is a gate of this home, holds a repository, and nobody else is
+	// bound to it; otherwise it is the gate the working copy's own path hashes
+	// to, which is what a copy of a gated project falls back to. Initializing
+	// wants this, because it is what repairs a binding.
+	gateNamedOrHashed resolution = iota
+	// gateNamed is the gate the working copy names and nothing else. Every
+	// operation that would act destructively, or would act on the history of
+	// whatever it resolved, wants this: falling back to a path hash would
+	// delete a repository, or validate a project's code, on the strength of a
+	// path rather than a binding.
+	gateNamed
 )
 
 // held is a gate an operation may act on, and the only way to obtain one is
@@ -133,7 +137,7 @@ func acquire(ctx context.Context, set settings, home, workingPath string, want r
 	touched.add(named)
 
 	base := held{set: set, home: home, workingPath: workingPath, copyOf: copyOf}
-	if want == gateToRemove {
+	if want == gateNamed {
 		return base.resolveNamed(ctx, named)
 	}
 	id, err := Identify(workingPath)
@@ -144,7 +148,7 @@ func acquire(ctx context.Context, set settings, home, workingPath string, want r
 	return base.resolveRepairable(ctx, named, id)
 }
 
-// resolveNamed is the removal resolution: the gate the working copy names, or a
+// resolveNamed answers gateNamed: the gate the working copy names, or a
 // refusal naming the step that succeeds from where the reader is.
 func (h held) resolveNamed(ctx context.Context, named string) (*held, error) {
 	if named == "" {

@@ -423,5 +423,28 @@
 // One write is common to every refusal and is stated once, in errors.go rather
 // than in each of them: obtaining a gate seals any gate the resolution observed
 // that has no admission hook. Where a refusal says nothing was created,
-// written, or deleted, it means nothing beyond that.
+// written, or deleted, it means nothing beyond that.//
+// # A run's isolated copy
+//
+// AddCopy and RemoveCopy make and give back the disposable copy one run works
+// in: a linked worktree of the gate, detached at the commit under validation,
+// so the object store is shared and the commit is the one the gate actually
+// received. Holds and TakeBranch are what let a caller keep the invariant the
+// copy rests on, that the gate holds every commit under validation.
+//
+// RemoveCopy applies three refusals and names a fourth it does not implement.
+// A copy holding work no reference in the gate contains is refused, because a
+// detached copy's own head is the only thing referencing a commit made in it.
+// A path that is not a copy is refused rather than removed. Git's own refusal
+// of a worktree holding modified or untracked files is used rather than worked
+// around, which is why the removal is never the discarding variant.
+//
+// The one PRD section 11 asks for and this does not is a refusal for a copy
+// something is still running in. That section reaps processes before removing
+// a copy, and nothing in this build reaps, so such a refusal would have no
+// input and could never fire. A missing refusal is an absence and absences are
+// noticed; a refusal whose input has no producer reads as protection and gets
+// trusted. It is left out and said here instead, and internal/service records
+// the same gap where its own reclaim is wired.
+
 package gate

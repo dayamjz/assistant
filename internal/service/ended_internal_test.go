@@ -93,6 +93,10 @@ type heldService struct {
 	// returned is closed when the segment that begins the run has returned,
 	// which is after its own carryOn has decided.
 	returned chan struct{}
+	// subject is the gated working copy the run validates, and its head is
+	// the commit the gate holds for it. A run cannot be recorded against
+	// anything else: create refuses a head the gate does not hold.
+	subject gatedSubject
 }
 
 // begin starts a run and returns its record once the segment advancing it is
@@ -102,7 +106,7 @@ func (h *heldService) begin(t *testing.T) store.Run {
 	record, err := h.service.create(t.Context(), run{
 		repository: "subject",
 		branch:     "main",
-		head:       "0000000000000000000000000000000000000000",
+		head:       h.subject.head,
 		intent:     "held open for the length of an ending",
 		source:     intentSourceSupplied,
 		supplied:   true,
@@ -252,14 +256,7 @@ func newHeldService(t *testing.T) *heldService {
 	// teardown waiting on a stage nothing is going to release.
 	t.Cleanup(held.let)
 
-	if _, err := running.store.UpsertRepository(t.Context(), store.Repository{
-		ID:            "subject",
-		WorkingPath:   root,
-		UpstreamURL:   "https://example.invalid/o/r.git",
-		DefaultBranch: "main",
-	}); err != nil {
-		t.Fatalf("recording the repository: %v", err)
-	}
+	held.subject = newGatedSubject(t, h, running.store)
 	return held
 }
 

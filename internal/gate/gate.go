@@ -167,7 +167,7 @@ func openWithVCS(ctx context.Context, path string) (WorkingCopy, error) {
 // admits nothing rather than one that admits everything. See doc.go.
 func Initialize(ctx context.Context, spec Spec, opts ...Option) (*Gate, error) {
 	var g *Gate
-	err := withGate(ctx, spec, gateToRepair, opts, func(h *held) error {
+	err := withGate(ctx, spec, gateNamedOrHashed, opts, func(h *held) error {
 		var err error
 		g, err = h.initialize(ctx, spec.Command)
 		return err
@@ -242,7 +242,7 @@ func (h *held) initialize(ctx context.Context, command string) (*Gate, error) {
 // as well as its remote, so a later operation is not told the deleted gate is
 // still somebody's.
 func Remove(ctx context.Context, spec Spec, opts ...Option) error {
-	return withGate(ctx, spec, gateToRemove, opts, func(h *held) error {
+	return withGate(ctx, spec, gateNamed, opts, func(h *held) error {
 		return h.remove(ctx)
 	})
 }

@@ -32,6 +32,16 @@ import (
 // pipeline to run.
 var ErrIncomplete = errors.New("service: cannot be built as asked")
 
+// ErrHeadNotInGate reports that a run would be recorded against a commit the
+// gate does not hold.
+//
+// The gate holds every commit under validation, and create is where that is
+// made true rather than assumed. A run recorded without it could have no
+// isolated copy - the copy is a linked worktree of the gate - and every stage
+// after the intent stage reads the change out of one, so such a run could
+// only report outcomes it never established.
+var ErrHeadNotInGate = errors.New("service: the gate does not hold the commit the run would validate")
+
 // ErrRunAdvancing reports that a run is already being advanced here.
 // Advancing one run twice at once would have internal/graph refuse the loser's
 // checkpoint after its node body had already run, so the slot is taken before
