@@ -197,7 +197,7 @@
 // costs is a stray process rather than a stuck run.
 //
 // It does not write a pull request body. What a body says is the pull request
-// stage's, generated from the round history; this package carries the text.
+// stage's to decide; this package carries the text it is handed.
 //
 // # Requirements
 //
