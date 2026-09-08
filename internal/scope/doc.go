@@ -29,6 +29,15 @@
 // opt-out PRD section 5 says the lens does not have. Path-scoped review
 // rules still strengthen it, the way they strengthen review anywhere.
 //
+// The one run that gets none of that is the one this lens has nothing to say
+// about. A run carrying no intent gets ErrNoIntent from Guidance, so that body
+// leaves the scope section out of the prompt entirely, along with the report
+// field asking for traces, rather than putting a question there that has no
+// answer, and it reports that the lens did not run instead of calling Observe.
+// That is this package's own refusal and not an opt-out: what is missing is
+// the thing to trace to, no configuration can produce it or withhold it, and
+// the run says so in its own report where a person reads it.
+//
 // # A scope observation is a note, and can be nothing else
 //
 // Observe builds its findings itself and builds them with findings.ActionNote,

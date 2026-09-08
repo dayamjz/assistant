@@ -87,6 +87,13 @@ import (
 // this build's own machinery, and a failure in it means nothing was reviewed
 // and nothing can be. Those are returned as errors.
 //
+// Size is the one thing on that side of the line that is not machinery. A read
+// git refused for producing more output than internal/vcs takes in one piece
+// says the change is too large to read, which is a property of the change and
+// the same fact the prompt bound reports one threshold further on. Both come
+// to tooLargeToReview and hold for a person, so which cap a change crossed
+// decides what the person is told and never whether they are asked.
+//
 // The agent's own failure is the other side. The stage ran, it asked, and it
 // did not get back a review it could use: an agent that crashed, timed out,
 // exceeded its output limit, reported its own failure, or printed something
@@ -168,6 +175,10 @@ func reviewChange(ctx context.Context, deps StageDeps, in pipeline.Input) (pipel
 	}
 	change, err := readChange(ctx, repo, facts, deps.Config.IgnorePatterns)
 	if err != nil {
+		if errors.Is(err, vcs.ErrOutputTooLarge) {
+			return tooLargeToReview(change, "The change at "+facts.head+" could not be read "+
+				"from git in one piece: "+err.Error()+"."), nil
+		}
 		return pipeline.Output{}, err
 	}
 	if len(change.touched) == 0 {
@@ -188,7 +199,9 @@ func reviewChange(ctx context.Context, deps StageDeps, in pipeline.Input) (pipel
 
 	prompt := reviewPrompt(deps.Config, facts, change, evidence, scopeGuidance)
 	if len(prompt) > agents.MaxPromptBytes {
-		return oversizeReport(facts, change, len(prompt)), nil
+		return tooLargeToReview(change, "Reviewing "+facts.head+" would take a prompt of "+
+			strconv.Itoa(len(prompt))+" bytes, and one invocation may carry "+
+			strconv.Itoa(agents.MaxPromptBytes)+"."), nil
 	}
 
 	result, err := deps.Agent.Run(ctx, agents.PurposeReview, agents.Invocation{
@@ -313,7 +326,9 @@ func readChange(ctx context.Context, repo *vcs.Repository, f reviewFacts, ignore
 		return set, nil
 	}
 	if set.diff, err = repo.Diff(ctx, from, f.head); err != nil {
-		return reviewChangeSet{}, fmt.Errorf("stages: the review stage cannot read the diff of %s: %w", f.head, err)
+		// The set travels with the refusal, so a caller that turns a diff too
+		// large to read into a report can still say how much the change touches.
+		return set, fmt.Errorf("stages: the review stage cannot read the diff of %s: %w", f.head, err)
 	}
 	return set, nil
 }
@@ -365,6 +380,15 @@ func changedPaths(changed []vcs.FileChange) []string {
 // lens applied. Observe is asked again rather than assumed, and its own
 // refusal takes the same path, so neither call can quietly become the one that
 // decides.
+//
+// The note carries no identifier of its own. It is appended to a report an
+// agent wrote, an identifier a finding arrived with survives
+// findings.Normalize verbatim, and a literal here would collide with a
+// reviewer that happened to write the same string. Validate refuses a set with
+// duplicates whole, so that collision would fail the run over agent output
+// that everywhere else in this stage holds it for a person.
+// findings.NormalizeFindings derives one instead, checked against every
+// identifier the report already carries.
 func observeScope(c scope.Change, traced []findings.Trace, refused error) []findings.Finding {
 	if refused == nil {
 		notes, err := scope.Observe(c, traced)
@@ -374,7 +398,6 @@ func observeScope(c scope.Change, traced []findings.Trace, refused error) []find
 		refused = err
 	}
 	return []findings.Finding{{
-		ID:       "scope-lens-not-applied",
 		Severity: findings.SeverityInfo,
 		Action:   findings.ActionNote,
 		Description: "The scope lens did not run over this change, so nothing here says whether " +
@@ -424,27 +447,37 @@ func nothingToReview(change reviewChangeSet) pipeline.Output {
 	}}
 }
 
-// oversizeReport is what a change too large to put in front of a reviewer
-// comes to. agents.MaxPromptBytes bounds what one invocation may hand an
-// agent, and a diff is exactly the unbounded thing that bound exists for, so
-// the assembled prompt is measured before it is sent rather than refused at
-// the call.
+// tooLargeToReview is what a change too large to review in one piece comes to.
+//
+// Two bounds produce it and it is one report because it is one fact. A diff
+// git produced more of than internal/vcs reads in one invocation is refused
+// before the prompt is assembled, and agents.MaxPromptBytes bounds what one
+// invocation may hand an agent, so a change that got past the first is
+// measured against the second before it is sent rather than refused at the
+// call. Which cap a change crossed decides only what the person is told, which
+// is what crossed carries: a sentence about this change rather than about the
+// threshold it met.
 //
 // It holds for a person rather than failing the run. Nothing was reviewed and
 // nothing here can review it, which PRD section 5 makes an ask finding: a
 // stage that could not gather enough evidence is the person's to resolve, and
 // splitting a change that large is a decision rather than a repair.
-func oversizeReport(f reviewFacts, change reviewChangeSet, size int) pipeline.Output {
+//
+// The reviewable path count is stated only when the change is known, because a
+// read that failed before the paths were listed knows nothing about how many
+// there are and would otherwise report none.
+func tooLargeToReview(change reviewChangeSet, crossed string) pipeline.Output {
+	scale := ""
+	if len(change.touched) > 0 {
+		scale = "The change touches " + strconv.Itoa(len(change.touched)) + " reviewable path(s). "
+	}
 	return pipeline.Output{Report: findings.Report{
-		Summary: "This change is too large to put in front of a reviewer in one piece, so it " +
-			"was not reviewed.",
+		Summary: "This change is too large to review in one piece, so it was not reviewed.",
 		Findings: []findings.Finding{{
 			ID:       "review-change-too-large",
 			Severity: findings.SeverityError,
 			Action:   findings.ActionAsk,
-			Description: "Reviewing " + f.head + " would take a prompt of " + strconv.Itoa(size) +
-				" bytes, and one invocation may carry " + strconv.Itoa(agents.MaxPromptBytes) +
-				". The change touches " + strconv.Itoa(len(change.touched)) + " reviewable path(s). " +
+			Description: crossed + " " + scale +
 				"Nothing was reviewed, so nothing here says whether this change is good. " +
 				"Splitting it into changes that can each be reviewed is the usual answer; " +
 				"approving here records that the run advanced past a review that did not happen.",
@@ -457,6 +490,14 @@ func oversizeReport(f reviewFacts, change reviewChangeSet, size int) pipeline.Ou
 //
 // A cancelled run is returned as the error it is: the run is being stopped, so
 // a finding asking a person to decide about it would be answered by nobody.
+// Cancellation alone, which is why the guard below asks for
+// context.Canceled rather than reading ctx.Err() whole. A deadline that
+// elapsed is the agent not coming back, not the run being stopped, and it
+// holds for a person like any other way the agent fails. A guard reading
+// ctx.Err() whole would take that case too, and agents.FailureTimeout is
+// produced under exactly the condition such a guard tests, so the ask below
+// would be unreachable for the failure most likely to need it.
+//
 // Anything else that is an *agents.InvocationError is the agent's own failure -
 // it crashed, timed out, overran its output limit, reported its own failure,
 // or printed something findings.ParseReviewReport refused - and PRD section 5
@@ -469,7 +510,7 @@ func oversizeReport(f reviewFacts, change reviewChangeSet, size int) pipeline.Ou
 // came back empty, and dressing one as a question for a person would put the
 // person in front of a decision they cannot make.
 func unreviewed(ctx context.Context, f reviewFacts, err error) (pipeline.Output, error) {
-	if ctx.Err() != nil {
+	if errors.Is(ctx.Err(), context.Canceled) {
 		return pipeline.Output{}, err
 	}
 	var invocation *agents.InvocationError

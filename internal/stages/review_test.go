@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/agents/standin"
@@ -17,6 +18,7 @@ import (
 	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/stages"
+	"github.com/dayamjz/assistant/internal/vcs"
 )
 
 // The two paths the change under review touches in every test here, and the
@@ -238,13 +240,59 @@ func TestTheScopeLensSaysSoWhenTheRunCarriesNoIntentToTraceTo(t *testing.T) {
 		t.Fatalf("the lens reported %d per-path note(s) for a run with no intent to trace to: %+v",
 			len(notes), notes)
 	}
-	if !hasFinding(got.report(), "scope-lens-not-applied") {
+	if len(lensNotApplied(got.report())) != 1 {
 		t.Fatalf("a run with no intent reports nothing about the scope lens not having run: %+v",
 			got.report().Findings)
 	}
 	if outcome := got.outcome(); outcome != pipeline.OutcomePassed {
 		t.Fatalf("a run with no intent came to %s at the review stage, want passed: the lens "+
 			"not applying may not stop a run", outcome)
+	}
+}
+
+// The note saying the lens did not run is appended to a report the reviewer
+// wrote, so it may not carry an identifier the reviewer could have written
+// too. An identifier a finding arrives with is never rewritten, and a report
+// with two findings sharing one is refused whole, which would fail the run
+// over agent output that every other path in this stage holds for a person.
+//
+// The reviewer here writes the identifier the note used to carry, on the run
+// where the note is produced. The control is the same run without that
+// finding, which passes, so what this measures is the collision and not the
+// intent-less run.
+func TestAReviewerCannotFailTheRunByNamingAFindingTheLensAppends(t *testing.T) {
+	t.Parallel()
+
+	s := newSubject(t)
+	start := s.start()
+	start.Intent, start.IntentSupplied = "", false
+
+	clean := run(t, s, script(standin.Report(cleanReview(s))), config.Config{}, start)
+	if outcome := clean.outcome(); outcome != pipeline.OutcomePassed {
+		t.Fatalf("the control run came to %s, want passed; the collision below shows nothing", outcome)
+	}
+
+	claiming := cleanReview(s)
+	claiming.Findings = []findings.Finding{{
+		ID:          "scope-lens-not-applied",
+		Severity:    findings.SeverityInfo,
+		Action:      findings.ActionNote,
+		Location:    findings.Location{Path: totalPath, Line: 4},
+		Description: "I am naming this finding whatever I like.",
+	}}
+	got := run(t, s, script(standin.Report(claiming)), config.Config{}, start)
+
+	if outcome := got.outcome(); outcome != pipeline.OutcomePassed {
+		t.Fatalf("a reviewer that named its own finding after the lens's note brought the run "+
+			"to %s, want passed: agent output may not fail a run this stage would otherwise "+
+			"hold", outcome)
+	}
+	if !hasFinding(got.report(), "scope-lens-not-applied") {
+		t.Fatalf("the reviewer's own finding lost the identifier it wrote: %+v", got.report().Findings)
+	}
+	if len(lensNotApplied(got.report())) != 1 {
+		t.Fatalf("the lens's note went missing from a report whose reviewer named a finding "+
+			"after it: %+v", got.report().Findings)
 	}
 }
 
@@ -288,6 +336,147 @@ func TestAnAgentThatDidNotReviewHoldsTheRunRatherThanPassingIt(t *testing.T) {
 					c.name, got.report().Findings)
 			}
 		})
+	}
+}
+
+// An agent whose deadline elapsed did not come back, which is the same fact as
+// every case above and reaches the same ask finding. It is asserted apart from
+// them because it is the one the run's context can be read as saying something
+// about: a guard that returned whenever ctx.Err() was set would take this case
+// too, and agents.FailureTimeout is produced under exactly that condition, so
+// the ask would be unreachable for it.
+//
+// The deadline has to elapse while the agent holds rather than while the body
+// is still assembling what to ask, so it is derived from a first invocation
+// answered at once rather than guessed at: that invocation pays for the same
+// four git invocations and the same process start on the same machine under
+// the same load. A deadline that elapsed too early reaches a different answer,
+// which this fails on rather than passing.
+func TestAnAgentWhoseDeadlineElapsedHoldsTheRunRatherThanEndingIt(t *testing.T) {
+	t.Parallel()
+
+	s := newSubject(t)
+	answering := standin.New(t, script(standin.Report(cleanReview(s))))
+	measured, measuredIn := reviewBody(t,
+		stages.NewStageDeps(agents.NewStageAgent(answering.Runner()), s.home, config.Config{}, nil),
+		s.start())
+	begun := time.Now()
+	if _, err := measured(t.Context(), measuredIn); err != nil {
+		t.Fatalf("the invocation measuring what this stage costs ahead of its agent failed, so "+
+			"there is nothing here to set a deadline from: %v", err)
+	}
+	budget := max(6*time.Since(begun), 1500*time.Millisecond)
+
+	agent := standin.New(t, script(standin.Hang()))
+	deps := stages.NewStageDeps(agents.NewStageAgent(agent.Runner()), s.home, config.Config{}, nil)
+	call, in := reviewBody(t, deps, s.start())
+
+	ctx, cancel := context.WithTimeout(t.Context(), budget)
+	defer cancel()
+	out, err := call(ctx, in)
+
+	if err != nil {
+		t.Fatalf("an agent that never came back ended the run with %v, want an ask finding: "+
+			"the stage ran and asked, and PRD section 5 makes that a person's to resolve", err)
+	}
+	if !hasFinding(out.Report, "review-not-established") {
+		t.Fatalf("an agent that never came back was not recorded as a review that established "+
+			"nothing: %+v", out.Report.Findings)
+	}
+	found := out.Report.Findings[0]
+	if found.Action != findings.ActionAsk {
+		t.Fatalf("the finding for an agent that never came back carries action %q, want ask",
+			found.Action)
+	}
+	if !strings.Contains(found.Description, string(agents.FailureTimeout)) {
+		t.Fatalf("the finding does not say the agent timed out, so the deadline elapsed "+
+			"somewhere other than at the agent and this shows nothing: %q", found.Description)
+	}
+}
+
+// A cancelled run is the other side of that line. Nobody is waiting on the
+// answer, so there is no person to hold the run for, and the stage returns the
+// error rather than reporting a finding.
+//
+// The cancellation happens once the reviewer has been asked, which the
+// stand-in records before it holds, so what this measures is the body's answer
+// to a cancelled agent invocation rather than to a context that was already
+// dead when the stage started.
+func TestACancelledRunEndsTheStageRatherThanHoldingItForAPerson(t *testing.T) {
+	t.Parallel()
+
+	s := newSubject(t)
+	agent := standin.New(t, script(standin.Hang()))
+	deps := stages.NewStageDeps(agents.NewStageAgent(agent.Runner()), s.home, config.Config{}, nil)
+	call, in := reviewBody(t, deps, s.start())
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	type answer struct {
+		out pipeline.Output
+		err error
+	}
+	done := make(chan answer, 1)
+	go func() {
+		out, err := call(ctx, in)
+		done <- answer{out, err}
+	}()
+	for len(agent.Calls()) == 0 {
+		select {
+		case got := <-done:
+			t.Fatalf("the stage answered before the reviewer was ever asked, so cancelling now "+
+				"would measure nothing: %+v, %v", got.out.Report, got.err)
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+	cancel()
+	got := <-done
+
+	if got.err == nil {
+		t.Fatalf("a cancelled run came back with a report rather than the error it is: %+v",
+			got.out.Report)
+	}
+	if !errors.Is(got.err, context.Canceled) {
+		t.Fatalf("a cancelled run ended with %v, want an error carrying context.Canceled", got.err)
+	}
+	if len(got.out.Report.Findings) != 0 {
+		t.Fatalf("a cancelled run reported %d finding(s) as well as failing: %+v",
+			len(got.out.Report.Findings), got.out.Report.Findings)
+	}
+}
+
+// A change whose diff git produced more of than this build reads in one piece
+// is the same fact as a change too large to put in one prompt, one threshold
+// earlier, and it reaches the same ask rather than ending the run. Which cap a
+// change crossed is the person's to read; whether they are asked is not.
+//
+// The bound is internal/vcs's own and is reached by lowering it rather than by
+// building a change large enough to cross the shipped one. The control is the
+// same change under the shipped bound, which passes, so what this measures is
+// the size of the diff and not the change.
+func TestAChangeWhoseDiffIsTooLargeToReadHoldsForAPersonRatherThanFailing(t *testing.T) {
+	t.Parallel()
+
+	s := newSubject(t)
+	within := run(t, s, script(standin.Report(cleanReview(s))), config.Config{}, s.start())
+	if outcome := within.outcome(); outcome != pipeline.OutcomePassed {
+		t.Fatalf("the control run came to %s, want passed; the refusal below shows nothing", outcome)
+	}
+
+	got := run(t, s, script(standin.Report(cleanReview(s))), config.Config{}, s.start(),
+		withGit(vcs.WithMaxOutput(256)))
+	if calls := got.agent.Calls(); len(calls) != 0 {
+		t.Fatalf("the review stage asked an agent %d time(s) about a change it could not read "+
+			"the diff of", len(calls))
+	}
+	if outcome := got.outcome(); outcome != pipeline.OutcomeHeld {
+		t.Fatalf("a change whose diff could not be read in one piece came to %s, want held: "+
+			"nothing was reviewed, and this build's own limit is not the person's problem to "+
+			"be failed over", outcome)
+	}
+	if !hasFinding(got.report(), "review-change-too-large") {
+		t.Fatalf("a change whose diff could not be read was not recorded as too large to "+
+			"review: %+v", got.report().Findings)
 	}
 }
 
@@ -376,24 +565,44 @@ func TestAChangeTooLargeToReviewHoldsForAPersonRatherThanFailing(t *testing.T) {
 // used to be, and unable to be asked whether moving it was in scope.
 //
 // The prompt is read off the wire, which is where the question actually
-// reaches the reviewer.
+// reaches the reviewer, and what is read is the list of paths the evidence
+// demand states rather than the prompt as a whole. The whole prompt ends with
+// the unified diff, and git names both sides of a rename in it whether or not
+// the touched set does, so a search over the prompt text would find the old
+// path with the stage doing nothing to put it there.
 func TestARenameIsAskedAboutAtBothOfItsPaths(t *testing.T) {
 	t.Parallel()
 
 	s := newSubject(t)
+	// The prose goes back to what the target branch has before it moves, so
+	// what git reports is a rename. A move that also rewrites a one-line file
+	// is below git's similarity threshold and comes back as a deletion and an
+	// addition, which reaches the old path through vcs.FileChange.Path and so
+	// would leave the branch under test here unexercised.
+	write(t, s.dir, readmePath, baseReadme)
 	git(t, s.dir, "mv", readmePath, "GUIDE.md")
-	s.head = s.commit(t, "rename the guide")
+	s.head = s.commit(t, "put the guide back as it was and move it")
+	if status := git(t, s.dir, "diff", "--name-status", "--find-renames", s.base, s.head); !strings.Contains(status, "R100") {
+		t.Fatalf("git does not report this change as a rename, so nothing here asks about "+
+			"one:\n%s", status)
+	}
 
 	report := cleanReview(s)
 	report.Revision = s.head
 	got := run(t, s, script(standin.Report(report)), config.Config{}, s.start())
 	prompt := got.agent.Call().Prompt
 
-	for _, path := range []string{readmePath, "GUIDE.md"} {
-		if !strings.Contains(prompt, path) {
+	asked := askedAbout(t, prompt)
+	want := map[string]bool{totalPath: true, readmePath: true, "GUIDE.md": true}
+	for path := range want {
+		if !asked[path] {
 			t.Fatalf("the reviewer was not asked about %q, and a rename changed both of its "+
-				"paths", path)
+				"paths: it was asked about %v", path, asked)
 		}
+	}
+	if len(asked) != len(want) {
+		t.Fatalf("the reviewer was asked about %v, want exactly %d path(s): the change's own "+
+			"two plus the path the rename moved away from", asked, len(want))
 	}
 }
 
@@ -542,6 +751,35 @@ func TestAPathScopedReviewRuleReachesTheReviewerWithItsScope(t *testing.T) {
 	}
 }
 
+// askedAbout returns the set of paths the prompt asked the reviewer about.
+//
+// It reads them out of the prompt, which is the generated interface the agent
+// is handed and the one place the touched set becomes visible to it:
+// findings.Demand.Guidance closes its section with the touched paths as a
+// bullet list, and this reads that list back. Reading the prompt rather than
+// searching it is what keeps the assertion from being answered by the unified
+// diff further down, which names paths the touched set never admitted.
+func askedAbout(t *testing.T, prompt string) map[string]bool {
+	t.Helper()
+	const anchor = "The change touches these paths."
+	at := strings.Index(prompt, anchor)
+	if at < 0 {
+		t.Fatal("the prompt carries no list of the paths the change touches, so there is " +
+			"nothing here to read the reviewer's question out of")
+	}
+	out := make(map[string]bool)
+	for _, line := range strings.Split(prompt[at:], "\n")[1:] {
+		if !strings.HasPrefix(line, "  - ") {
+			break
+		}
+		out[strings.TrimPrefix(line, "  - ")] = true
+	}
+	if len(out) == 0 {
+		t.Fatal("the prompt's list of the paths the change touches is empty")
+	}
+	return out
+}
+
 // scopeNotes returns the report's scope observations: the notes the lens
 // produced, told from the reviewer's own findings by the description
 // internal/scope writes.
@@ -549,6 +787,23 @@ func scopeNotes(report findings.Report) []findings.Finding {
 	var out []findings.Finding
 	for _, f := range report.Findings {
 		if strings.Contains(f.Description, "the review traced none of it to the") {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// lensNotApplied returns the report's notes saying the scope lens did not run
+// over this change.
+//
+// They are told from the reviewer's own findings by the sentence the stage
+// writes rather than by an identifier, because the note carries none: one
+// appended to an agent's report would collide with a reviewer that wrote the
+// same string, and a report with a duplicate identifier is refused whole.
+func lensNotApplied(report findings.Report) []findings.Finding {
+	var out []findings.Finding
+	for _, f := range report.Findings {
+		if strings.Contains(f.Description, "The scope lens did not run over this change") {
 			out = append(out, f)
 		}
 	}
@@ -595,6 +850,10 @@ func summarizingFixer(summary string) pipeline.Fixer {
 	}
 }
 
+// baseReadme is the prose the change under review rewrites, as the target
+// branch has it.
+const baseReadme = "Total adds up numbers.\n"
+
 // baseTotal is the file the change under review edits.
 const baseTotal = `package total
 
@@ -635,7 +894,7 @@ func newSubject(t *testing.T) *subject {
 	}
 	git(t, s.dir, "init", "--quiet", "-b", "main", ".")
 	write(t, s.dir, totalPath, baseTotal)
-	write(t, s.dir, readmePath, "Total adds up numbers.\n")
+	write(t, s.dir, readmePath, baseReadme)
 	s.base = s.commit(t, "the code as it stood")
 
 	git(t, s.dir, "checkout", "--quiet", "-b", "topic")
@@ -672,13 +931,28 @@ func script(reply standin.Reply) standin.Script {
 	return standin.Script{Steps: []standin.Step{{Times: standin.Always, Reply: reply}}}
 }
 
-// option configures the pipeline a review test runs in.
-type option func(*pipeline.Options)
+// setup is what a review test varies about the run it drives: the pipeline it
+// is executed by, and the options every repository the stage opens is opened
+// with.
+type setup struct {
+	options pipeline.Options
+	git     []vcs.Option
+}
+
+// option configures the run a review test drives.
+type option func(*setup)
 
 // withRounds gives the review stage automatic fix rounds and the fixer that
 // serves them.
 func withRounds(rounds config.FixRounds, fixer pipeline.Fixer) option {
-	return func(o *pipeline.Options) { o.Rounds, o.Fixer = rounds, fixer }
+	return func(s *setup) { s.options.Rounds, s.options.Fixer = rounds, fixer }
+}
+
+// withGit opens the run's isolated copy with these options, which is how a
+// test reaches internal/vcs's own bounds without building a change large
+// enough to cross the shipped ones.
+func withGit(opts ...vcs.Option) option {
+	return func(s *setup) { s.git = append(s.git, opts...) }
 }
 
 // reviewed is what a driven run came to: the executed result, and the stand-in
@@ -719,14 +993,17 @@ func (r reviewed) summary() string { return r.report().Summary }
 func run(t *testing.T, s *subject, sc standin.Script, cfg config.Config, start pipeline.Start, opts ...option) reviewed {
 	t.Helper()
 	agent := standin.New(t, sc)
-	deps := stages.NewStageDeps(agents.NewStageAgent(agent.Runner()), s.home, cfg, nil)
+
+	cfgured := setup{options: pipeline.Options{Rounds: config.FixRounds{}, Budget: config.DefaultRunBudget}}
+	for _, opt := range opts {
+		opt(&cfgured)
+	}
+	deps := stages.NewStageDeps(agents.NewStageAgent(agent.Runner()), s.home, cfg, nil, cfgured.git...)
 
 	all := pipeline.ConstantStages("nothing to report")
 	all.Review = stages.Review(deps)
-	options := pipeline.Options{Stages: all, Rounds: config.FixRounds{}, Budget: config.DefaultRunBudget}
-	for _, opt := range opts {
-		opt(&options)
-	}
+	options := cfgured.options
+	options.Stages = all
 	p, err := pipeline.New(options)
 	if err != nil {
 		t.Fatalf("building a pipeline around the review stage: %v", err)
@@ -750,6 +1027,17 @@ func run(t *testing.T, s *subject, sc standin.Script, cfg config.Config, start p
 // stage refusing to run rather than a run coming to an outcome.
 func body(t *testing.T, deps stages.StageDeps, start pipeline.Start) (pipeline.Output, error) {
 	t.Helper()
+	run, in := reviewBody(t, deps, start)
+	return run(t.Context(), in)
+}
+
+// reviewBody prepares the review stage's body and the input a stage node would
+// hand it, without running either. The two answers that are a function of what
+// became of the run's context need a context of the caller's own, and one of
+// them needs the call made from a goroutine the test is not standing in, so
+// everything that can fail the test is done here first.
+func reviewBody(t *testing.T, deps stages.StageDeps, start pipeline.Start) (pipeline.Body, pipeline.Input) {
+	t.Helper()
 	impl := stages.Review(deps)
 	all := pipeline.ConstantStages("nothing to report")
 	all.Review = impl
@@ -765,8 +1053,8 @@ func body(t *testing.T, deps stages.StageDeps, start pipeline.Start) (pipeline.O
 	for _, key := range impl.Reads {
 		allowed[key] = true
 	}
-	return impl.NewBody()(t.Context(), pipeline.Input{
+	return impl.NewBody(), pipeline.Input{
 		Stage: pipeline.StageReview,
 		State: stateReader{allowed: allowed, state: state},
-	})
+	}
 }
