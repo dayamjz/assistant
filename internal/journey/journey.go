@@ -96,10 +96,11 @@ func (s *serving) exited() (bool, error) {
 // What the kill itself answered is not what this reports. Asking to kill a
 // process this journey's own reaper has already reaped is refused, and which
 // refusal it is is not settled here: this code recognized one of them and met
-// another, and TestKillIsAnsweredByTheReaperAndNotByWhatTheKillReported
-// reaches a refusal that is not the recognized one on any platform. So a
-// caller conditioned on the refusal it had seen is conditioned on where it was
-// running rather than on what had happened.
+// another on a platform it was not written on. So a caller conditioned on the
+// refusal it had seen is conditioned on where it was running rather than on
+// what had happened, which is why nothing below reads it and why
+// TestKillIsAnsweredByTheReaperAndNotByWhatTheKillReported asserts only that
+// there was one.
 //
 // The reaper is the one thing here that can answer it without that problem: it
 // holds the process's exit or it does not. So a kill that reported a failure
