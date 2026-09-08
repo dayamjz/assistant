@@ -23,11 +23,13 @@ import (
 // wait is closing the read end, and os.File.Close undertakes to cancel a
 // pending operation only on a file that supports os.File.SetDeadline. A pipe
 // from os.Pipe supports one on unix, which is what makes the bound hold there
-// and what the unix-only give-up test exercises. On Windows it does not: the
-// handles os.Pipe returns there answer os.ErrNoDeadline, so Close carries no
+// and what the give-up test exercises. That test is unix-only because leaving
+// a descendant holding a pipe has no portable spelling, so the abandoned read
+// is the one path here no test reaches on another platform. On Windows the
+// handles os.Pipe returns answer os.ErrNoDeadline, so Close carries no
 // documented promise to end a read already in flight, and this package
 // establishes nothing about what a descendant holding that handle does to the
-// wait. Nothing in this repository has run this code on that platform.
+// wait.
 //
 // That asymmetry is inherited rather than introduced by reading the output
 // here: os/exec closed its own parent pipes and then waited on the same copy
