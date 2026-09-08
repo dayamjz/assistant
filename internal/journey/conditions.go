@@ -54,10 +54,10 @@ func Drives() []Drove {
 	// initialization came out.
 	const noTemplateHookPath = " Whether a hook the template carries arrived in the gate is not " +
 		"established, and neither is whether one ran. No clause looks at the gate's hooks, and the " +
-		"tripwire file has no producer here: a template's hooks are receive-side, and internal/gate's " +
-		"own pre-receive runs \"assistant gate admit\" and exits on its status before chaining to a " +
-		"preserved hook, so with no gate verb in internal/cli every push is declined and neither a " +
-		"promoted pre-receive nor update nor post-update ever runs."
+		"tripwire file has no producer here: a template's hooks are receive-side, so only a push to " +
+		"the gate could run one, and these four subtests make no push. Each initializes a gate and " +
+		"reads how that came out, and none starts a service, so neither a promoted pre-receive nor " +
+		"update nor post-update is reached."
 	// The two refusals: what is established is that the binary refused, and
 	// that the refusal carries the substrings the condition records.
 	const templateRefusalDriven = "What is established is the refusal itself, with the substrings the " +

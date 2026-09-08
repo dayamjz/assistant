@@ -54,13 +54,20 @@ type Established struct {
 func Coverage() []Established {
 	return []Established{
 		{principles.P1, ReachBinary,
-			"An ordinary push to origin after the binary has created a gate is driven as a process and " +
-				"read back off the remote. What is checked is that origin's own configuration is " +
-				"untouched, that the push lands, and that no run exists afterwards. It reaches no method " +
-				"internal/ipc restricts, so no platform refuses it for want of peer credentials, but it " +
-				"does need a service, so on a platform with no local socket transport to serve this " +
-				"protocol over the test is skipped rather than passing and nothing about P1 is " +
-				"established there."},
+			"P1 has two halves and both are driven, so a skip takes down one of them rather than the " +
+				"principle. The half that says what a push to origin must not become: an ordinary push " +
+				"to origin after the binary has created a gate is driven as a process and read back off " +
+				"the remote, and what is checked is that origin's own configuration is untouched, that " +
+				"the push lands, and that no run exists afterwards. It reaches no method internal/ipc " +
+				"restricts, so no platform refuses it for want of peer credentials, but it does need a " +
+				"service, so on a platform with no local socket transport to serve this protocol over it " +
+				"is skipped rather than passing. The half that says what a push to the gate by name does: " +
+				"such a push is driven and the run it authorized is held to the branch and the commit " +
+				"that were pushed, rather than to some run having started. That push crosses the gate's " +
+				"admission hook, which asks methods internal/ipc restricts, so on a platform where that " +
+				"package reads no local socket peer credentials it is skipped rather than passing. Where " +
+				"either skip is taken nothing about that half is established there, and where both are, " +
+				"nothing about P1 is."},
 		{principles.P2, ReachBinary,
 			"One run of the binary reaches every stage of the gate; a second skips two of " +
 				"them for that run only; and a home whose configuration document asks for a standing " +
@@ -127,9 +134,10 @@ func Coverage() []Established {
 				"reported while the one it may set survives, but that is config.Resolve driven in " +
 				"process beside the run rather than anything the run does. Two things are not " +
 				"established at any reach and no clause claims them: that nothing the branch or the " +
-				"template installed arrived or executed, because every planted executable is reached " +
-				"only through a stage body that launches something or a push admission declines, and this " +
-				"build has neither: its one stage body reads the supplied intent and no push is admitted; " +
+				"template installed arrived or executed, because the branch's planted executables are " +
+				"reached only through a stage body that launches something and this build's one stage " +
+				"body reads the supplied intent, while the template's are receive-side hooks reached " +
+				"only by a push to the gate and the four subtests that plant one make no push; " +
 				"and which agent a run resolved, because no shipped surface reports it. The trusted configuration " +
 				"document is driven at package reach: nothing in this build reads a repository's own " +
 				"configuration from anywhere, which internal/service states, so there is no composition " +
