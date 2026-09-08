@@ -8,9 +8,13 @@ import (
 )
 
 // shellPath is the interpreter a configured command line runs through on this
-// platform. It is an absolute path rather than a name looked up on PATH, so
-// which interpreter runs does not depend on the environment the service
-// happened to be started with.
+// platform. It is an absolute path rather than a name looked up on PATH, so on
+// this platform which interpreter runs does not depend on the environment the
+// service happened to be started with.
+//
+// That is this file's property and not the pair's. The Windows twin names its
+// interpreter from the environment, and says so; a reader should not carry the
+// sentence above across to it.
 const shellPath = "/bin/sh"
 
 // shellCommand builds the process one configured command line runs as.
