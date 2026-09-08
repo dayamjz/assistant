@@ -41,16 +41,26 @@ func (s *Service) createCopy(ctx context.Context, record store.Run) error {
 type terminalMove func(context.Context, string) (store.Run, error)
 
 // endAndReclaim moves a run to a terminal status and gives its isolated copy
-// back, and it is the only way this package ends a run.
+// back, and it is the one place this package ends a run.
 //
 // Every path that ends one goes through here rather than calling a move and
 // then remembering to reclaim: a segment settling, a caller cancelling, a push
 // superseding the run it displaces, and a run whose copy could not be created.
-// Adding two more calls to reclaimCopy would have been three sites agreeing by
-// convention, and a fourth would have been written without it - which is how
-// the two paths into a run came to disagree about the gate in the first place.
-// This is the same answer as putting the gate-holds guard at create rather
-// than at its callers: make the state unreachable rather than remembered.
+// Four sites calling reclaimCopy would have been four agreeing by convention,
+// and a fifth would have been written without it - which is how the two paths
+// into a run came to disagree about the gate in the first place.
+//
+// What that is worth is bounded, and the bound is stated because the guard it
+// resembles is stronger. gateHoldsHead sits inside create, and create is the
+// only function that writes a run row, so no path that records a run can skip
+// it; that one is structural. This is not. Every terminal move stays callable
+// beside this - built.runs.Terminate, Pass and Fail are all reachable, and
+// driverFor hands the whole run service to any code added later - so a fifth
+// ending that never gives a copy back is as writable as it ever was, and what
+// keeps it from being written is review rather than construction. Making it
+// structural means the terminal moves being reachable only through this seam:
+// a wrapper this package holds that exposes the endings and not the moves, so
+// a caller has nothing else to call.
 //
 // A move refused because the run had already reached some other status is not
 // swallowed: the error is returned unchanged so the caller keeps whatever it

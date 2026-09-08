@@ -58,15 +58,16 @@ func (s *Service) start(ctx context.Context, req machine.StartRequest) (machine.
 	//
 	// It happens on every invocation, including the ones that turn out to be an
 	// attach. That is deliberate rather than unconsidered. gate.TakeBranch
-	// writes a reference internal/gate owns instead of the gate's copy of the
-	// branch, so no local history rewrite can make the take a non-fast-forward
-	// and there is nothing it can be refused for; what an attach pays for it is
-	// one fetch between two local repositories that it did not need. Deciding
-	// attach from create before the take, so as not to pay that, would need this
-	// to read a head outside the branch claim from a run that can reach a
-	// terminal status a moment later - which records the new run against the
-	// commit some previous run submitted rather than the one the caller is
-	// standing on.
+	// writes a reference internal/gate owns, named for the commit it holds, so
+	// no local history rewrite can make the take a non-fast-forward and no take
+	// moves a reference an earlier run is anchored by. What an attach pays is
+	// one fetch between two local repositories and, when the branch has moved
+	// since, an anchor over a commit no run went on to validate; internal/gate
+	// says why those anchors are kept rather than swept. Deciding attach from
+	// create before the take, so as not to pay that, would need this to read a
+	// head outside the branch claim from a run that can reach a terminal status
+	// a moment later - which records the new run against the commit some
+	// previous run submitted rather than the one the caller is standing on.
 	//
 	// What the gate took is also the only commit this run may validate, so it is
 	// read back from there rather than from the working copy. The two would

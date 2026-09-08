@@ -147,7 +147,9 @@ func copyWorkIsReferenced(ctx context.Context, gateRepo *vcs.Repository, path st
 	if err != nil {
 		if errors.Is(err, vcs.ErrNotARepository) {
 			return fmt.Errorf("%w: %s is not a worktree, so what is there was not created as this "+
-				"run's copy and is not this operation's to remove", ErrNotACopy, path)
+				"run's copy and is not this operation's to remove; look at what is standing there "+
+				"and move or delete it by hand, after which the next reclaim of this run finds "+
+				"nothing at the path and reports the copy given back", ErrNotACopy, path)
 		}
 		return fmt.Errorf("gate: reading the isolated copy at %s: %w", path, err)
 	}
@@ -176,6 +178,9 @@ func copyWorkIsReferenced(ctx context.Context, gateRepo *vcs.Repository, path st
 			return nil
 		}
 	}
-	return fmt.Errorf("%w: %s holds %s, which no reference in the gate at %s contains",
+	return fmt.Errorf("%w: %s holds %s, which no reference in the gate at %s contains; the copy is "+
+		"kept and nothing is lost, and what makes it removable is that commit reaching the gate, "+
+		"which pushing the copy's work there does - the next reclaim of this run then gives the "+
+		"copy back, and recovery asks again on every service open",
 		ErrWorkUnreachable, path, head, gateRepo.Path())
 }
