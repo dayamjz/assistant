@@ -169,6 +169,21 @@ func copyWorkIsReferenced(ctx context.Context, gateRepo *vcs.Repository, path st
 	for _, ref := range refs {
 		contains, err := gateRepo.IsAncestor(ctx, head, ref.Commit)
 		if err != nil {
+			// A reference that does not reach a commit cannot contain one, so
+			// it is passed over and the walk goes on. vcs.Ref.Commit documents
+			// the shape: a tag on a blob or a tree lands there unpeeled, and a
+			// push can put one in the gate, because admission reads reference
+			// update lines and object types are nobody's to check. IsAncestor
+			// answers ErrRefNotFound for it, and treating that as unverifiable
+			// would let one such tag make every reclaim in this repository
+			// unanswerable for as long as it stands. The copy's own head is
+			// resolved against the same object store the worktree shares, so
+			// the not-found answer is the reference's; were the head itself
+			// gone, every reference would be passed over and the refusal below
+			// would keep the copy, which is the same direction.
+			if errors.Is(err, vcs.ErrRefNotFound) {
+				continue
+			}
 			// A comparison that could not be answered is not evidence that
 			// the work is unreferenced, so it is reported as unverifiable
 			// rather than folded into the refusal below.

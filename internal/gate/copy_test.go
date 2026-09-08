@@ -149,6 +149,44 @@ func TestACopyHoldingUncommittedWorkIsRefusedByGit(t *testing.T) {
 	}
 }
 
+// TestAReferenceOnANonCommitDoesNotMakeReclaimUnanswerable keeps one odd
+// reference in the gate from wedging every reclaim of the repository.
+//
+// A tag on a blob is pushable - admission reads reference update lines, and
+// object types are nobody's to check - and vcs.Ref.Commit carries it unpeeled,
+// so the reachability walk meets an object that does not resolve to a commit.
+// Treating that as "could not be determined" would refuse this reclaim and
+// every later one, logged on every service open, for as long as the tag
+// stands. A reference that does not reach a commit cannot contain one, so the
+// walk passes it over and the answer stays the honest refusal: the work is
+// unreachable, and pushing it is what makes the copy removable.
+//
+// The copy holds a commit no reference contains, so the walk reaches the odd
+// tag rather than returning at a containing reference sorted before it; the
+// assertion discriminates because before the skip existed this returned the
+// unverifiable error instead of ErrWorkUnreachable.
+func TestAReferenceOnANonCommitDoesNotMakeReclaimUnanswerable(t *testing.T) {
+	_, spec, path, head := gatedCopy(t)
+
+	writeFile(t, filepath.Join(spec.WorkingPath, "odd.txt"), "not a commit\n")
+	blob := strings.TrimSpace(rawGit(t, spec.WorkingPath, "hash-object", "-w", "odd.txt"))
+	rawGit(t, spec.WorkingPath, "tag", "-a", "-m", "a tag on a blob", "oddity", blob)
+	rawGit(t, spec.WorkingPath, "push", "--quiet", gate.RemoteName, "refs/tags/oddity")
+
+	if err := gate.AddCopy(ctx(t), spec, path, head, indexOptions(t)()...); err != nil {
+		t.Fatalf("AddCopy: %v", err)
+	}
+	writeFile(t, filepath.Join(path, "worked.txt"), "work only this copy references\n")
+	rawGit(t, path, "add", "worked.txt")
+	rawGit(t, path, "commit", "--quiet", "-m", "unreferenced work")
+
+	err := gate.RemoveCopy(ctx(t), spec, path, indexOptions(t)()...)
+	if !errors.Is(err, gate.ErrWorkUnreachable) {
+		t.Fatalf("RemoveCopy = %v, want ErrWorkUnreachable: a reference that does not reach a "+
+			"commit made the walk unanswerable instead of being passed over", err)
+	}
+}
+
 // TestGivingBackACopyThatIsNotThereSucceeds keeps the refusals meaningful.
 //
 // Recovery gives back copies a dead service left, and a run whose copy was

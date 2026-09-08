@@ -365,11 +365,18 @@ func (s *Service) begin(ctx context.Context, record store.Run, start pipeline.St
 	// reach because no segment ever began. The ending goes through the seam,
 	// so whatever the failed creation left behind is given back with it.
 	if err := s.createCopy(ctx, record); err != nil {
-		if _, failed := s.endAndReclaim(ctx, record.ID, built.runs.Fail); failed != nil {
+		// The ending runs on a context the caller's departure does not end,
+		// exactly as settle's record write does, with one more turn here: the
+		// likeliest cause of the creation failing is the caller's own context
+		// dying, which kills the git invocation making the copy. An ending
+		// riding that same context fails with it, and the stall above then
+		// survives its own remedy.
+		ending := context.WithoutCancel(ctx)
+		if _, failed := s.endAndReclaim(ending, record.ID, built.runs.Fail); failed != nil {
 			s.log.Printf("run %s could not be failed after its isolated copy could not be made: %v",
 				record.ID, failed)
 		}
-		s.publishRunState(ctx, record.ID)
+		s.publishRunState(ending, record.ID)
 		return machine.Run{}, err
 	}
 	return s.advance(ctx, record.ID, func(ctx context.Context) (graph.Result, error) {

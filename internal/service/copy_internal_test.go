@@ -1,14 +1,17 @@
 package service
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dayamjz/assistant/internal/gate"
 	"github.com/dayamjz/assistant/internal/machine"
+	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/store"
 )
@@ -217,6 +220,92 @@ func TestARunWhoseCopyCannotBeMadeIsFailedRatherThanLeftRunning(t *testing.T) {
 	if got := records[0].Status; got == store.RunRunning || got == store.RunPending {
 		t.Fatalf("the run is recorded as %s with no copy and nothing advancing it, which is the "+
 			"stall a person cannot tell from work in progress", got)
+	}
+}
+
+// TestARunWhoseCallerLeftDuringCopyCreationIsStillFailed holds the ending to
+// the context that most often triggers it.
+//
+// The likeliest way a copy's creation fails is the caller's own context dying:
+// a client that disconnects mid-start kills the git invocation making the
+// copy. An ending that rode that same context would fail with it, leaving the
+// run recorded running with no copy, no checkpoint, and nothing advancing -
+// the stall the ending exists to prevent, surviving its own remedy, and one
+// recovery re-reports on every open without settling. So the ending runs on
+// the surviving context, exactly as settle's record write does, and this
+// drives the trigger itself rather than a stand-in failure.
+//
+// The gate's own post-checkout hook is the deterministic point inside the
+// creation: git runs it during worktree add, so the test holds the creation
+// open there, ends the caller's context while it is provably inside, and the
+// kill lands exactly where a departing client's does.
+func TestARunWhoseCallerLeftDuringCopyCreationIsStillFailed(t *testing.T) {
+	held := newHeldService(t)
+
+	repos, err := filepath.Glob(filepath.Join(held.service.home.Root(), "repos", "*.git"))
+	if err != nil || len(repos) != 1 {
+		t.Fatalf("finding the subject's gate repository: %v (%d found)", err, len(repos))
+	}
+	marker := filepath.Join(t.TempDir(), "inside-worktree-add")
+	hook := filepath.Join(repos[0], "hooks", "post-checkout")
+	if err := os.WriteFile(hook, []byte("#!/bin/sh\ntouch '"+marker+"'\nsleep 30\n"), 0o700); err != nil {
+		t.Fatalf("planting the hook that holds the creation open: %v", err)
+	}
+
+	record, err := held.service.create(t.Context(), run{
+		repository: "subject",
+		branch:     "main",
+		head:       held.subject.head,
+		intent:     "a caller that leaves during the copy's creation",
+		source:     intentSourceSupplied,
+		supplied:   true,
+	})
+	if err != nil {
+		t.Fatalf("recording the run: %v", err)
+	}
+
+	caller, leave := context.WithCancel(context.WithoutCancel(t.Context()))
+	defer leave()
+	done := make(chan error, 1)
+	go func() {
+		_, beginErr := held.service.begin(caller, record, pipeline.Start{
+			Branch:         record.Branch,
+			Base:           "main",
+			Submitted:      record.SubmittedHead,
+			Intent:         record.Intent,
+			IntentSupplied: true,
+		})
+		done <- beginErr
+	}()
+
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		if _, err := os.Stat(marker); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the copy's creation never reached the gate's post-checkout hook")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	leave()
+
+	select {
+	case beginErr := <-done:
+		if beginErr == nil {
+			t.Fatal("begin reported success though its caller's departure killed the copy's creation")
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("begin never returned after the caller left")
+	}
+
+	current, err := held.service.store.Run(t.Context(), record.ID)
+	if err != nil {
+		t.Fatalf("reading the run: %v", err)
+	}
+	if current.Status != store.RunFailed {
+		t.Fatalf("the run is recorded as %s with no copy and nothing advancing it, which is the "+
+			"stall a person cannot tell from work in progress; want failed", current.Status)
 	}
 }
 
