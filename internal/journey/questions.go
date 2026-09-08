@@ -87,8 +87,9 @@ func Settlements() []Settlement {
 				"recorded head unchanged would report a stale check list, which internal/forge " +
 				"deliberately tells apart from an empty one, so the substitution silently doing nothing " +
 				"is the same failure as not doing it at all and is refused rather than skipped.",
-			Exercised: "Driven at package reach, against forge.ChecksReport.Evaluate. No stage body talks " +
-				"to a code host in this build, so no run asks the provider anything.",
+			Exercised: "Driven at package reach, against forge.ChecksReport.Evaluate. No run asks a " +
+				"provider anything in this build: the pull request stage's body would, and it fails " +
+				"because the run's record names no repository on the code host.",
 		},
 		{
 			Question: "question-deferred-plant-timing",
@@ -129,9 +130,10 @@ func Settlements() []Settlement {
 				"establishes is the pushed-configuration rejections rather than that nothing in the " +
 				"prose became an executed command: every planted executable is reached only through a " +
 				"stage body that launches something, and no body launches anything in these runs - the " +
-				"review body fails on the isolated copy nothing creates before it launches, and the " +
-				"walk skips it, and the test body holds for the command nobody configured here, never " +
-				"the branch's - so the tripwire file is read and logged rather " +
+				"review body fails on the isolated copy nothing creates before it launches, the pull " +
+				"request body fails because the run's record names no repository on the code host, " +
+				"and the walk skips both, and the test body holds for the command nobody configured " +
+				"here, never the branch's - so the tripwire file is read and logged rather " +
 				"than asserted on.",
 		},
 		{
