@@ -44,10 +44,12 @@
 // so a row moved elsewhere is a refusal rather than a pin that stays green
 // while the section this package is documented against no longer states the
 // set. What that establishes is that the row is inside <section id="surfaces">,
-// by that section's id, and nothing about that section's number. So every
-// claim here about where the row lives, and every refusal Report writes, names
-// the section and the row by their anchors: the thing the words name is then
-// the thing the mechanism checks.
+// by that section's id, and nothing about that section's number. Every claim
+// here about where the row lives names the section and the row by their
+// anchors. No refusal Report writes names the section by its number, so none
+// of them can send a reader to a section that has since been renumbered, and
+// the three that point a reader at the row name the row and the section by
+// their anchors: what those words name is then what the mechanism checks.
 //
 // That is as far as it goes, and the rest is a gap rather than a closure. This
 // repository cites the PRD by section number throughout, this package included,

@@ -80,7 +80,7 @@ func (a Agreement) Report() string {
 	var b strings.Builder
 	if !a.compared() {
 		fmt.Fprintf(&b, "the comparison was over %d declared outcomes and %d built ones, so it compared nothing.\n", len(a.Listed), len(a.Built))
-		b.WriteString("  This is the value Check returns beside a refusal. Read the error it came with rather than this.\n")
+		b.WriteString("  One side declared nothing, or this is the zero value Check pairs with a refusal. Read the error Check returned if it returned one, and otherwise the empty side is the finding.\n")
 	}
 	for _, name := range a.Unbuilt {
 		fmt.Fprintf(&b, "%s: %s declares it and internal/machine does not.\n", name, rowName)
