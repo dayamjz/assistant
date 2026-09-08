@@ -490,13 +490,23 @@ func tooLargeToReview(change reviewChangeSet, crossed string) pipeline.Output {
 //
 // A cancelled run is returned as the error it is: the run is being stopped, so
 // a finding asking a person to decide about it would be answered by nobody.
-// Cancellation alone, which is why the guard below asks for
-// context.Canceled rather than reading ctx.Err() whole. A deadline that
-// elapsed is the agent not coming back, not the run being stopped, and it
-// holds for a person like any other way the agent fails. A guard reading
-// ctx.Err() whole would take that case too, and agents.FailureTimeout is
-// produced under exactly the condition such a guard tests, so the ask below
-// would be unreachable for the failure most likely to need it.
+// That is what the guard below is for, and it asks for context.Canceled alone
+// rather than reading ctx.Err() whole. A deadline that elapsed is the agent
+// not coming back rather than the run being stopped, so this returns the ask
+// for it; a guard reading ctx.Err() whole would take that case too, and
+// agents.FailureTimeout is produced under exactly the condition such a guard
+// tests, so the ask below would be unreachable for the failure most likely to
+// need it.
+//
+// What the run then does with that ask is not what this body returns, and on
+// the only path this build produces agents.FailureTimeout on the two do not
+// agree. The deadline that elapsed is the run's own context, so the write that
+// would record the hold is refused by the same expiry: no checkpoint carries
+// the ask and it is discarded with the segment, which
+// TestAnAgentWhoseDeadlineElapsedProducesAnAskTheRunCannotRecord drives and
+// asserts. Making that ask durable means the deadline sitting on a context of
+// internal/agents' own so the body's stays live, which is work in that package
+// and is not done: nothing here or there arranges it today.
 //
 // Anything else that is an *agents.InvocationError is the agent's own failure -
 // it crashed, timed out, overran its output limit, reported its own failure,

@@ -128,6 +128,10 @@
 // read. It is bound to nothing, validated against nothing, and refuses
 // nothing: it is an account of a path the change touched, which the run
 // already knows, so there is no claim in it for an evidence set to support.
+// Refusing nothing is Traces.UnmarshalJSON's to hold rather than a property of
+// the shape an agent happens to write, on the terms Paths sets: an answer this
+// package cannot read costs the report none of the findings around it, and
+// what it costs instead is the notes it might have silenced.
 //
 // # What this package does not promise
 //
