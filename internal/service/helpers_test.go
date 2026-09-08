@@ -217,6 +217,35 @@ func startRun(t *testing.T, client *ipc.Client, workingPath string) machine.Run 
 	return run
 }
 
+// startRunSkipping starts a run that does not take the named stages.
+//
+// It exists for the one thing this build cannot walk through: a stage body
+// that needs a dependency this service does not construct. Nothing here builds
+// a code host, so the pull request stage fails rather than holding, and a test
+// that wants to reach the end of a run has to go around it. The skip is a run
+// input, which is a person's per-run choice, so this drives the surface a
+// person would rather than weakening what the stage does.
+//
+// It names the stage rather than deriving it, and that name goes away when
+// this service constructs a provider.
+func startRunSkipping(t *testing.T, client *ipc.Client, workingPath string, skip ...pipeline.Stage) machine.Run {
+	t.Helper()
+	names := make([]string, len(skip))
+	for i, stage := range skip {
+		names[i] = stage.String()
+	}
+	var run machine.Run
+	err := client.Call(t.Context(), ipc.MethodRunStart, machine.StartRequest{
+		Working: machine.Working{WorkingPath: workingPath},
+		Intent:  "a change with acceptance criteria stated up front",
+		Skip:    names,
+	}, &run)
+	if err != nil {
+		t.Fatalf("starting a run skipping %v: %v", names, err)
+	}
+	return run
+}
+
 // answer answers the decision a run is holding on.
 func answer(t *testing.T, client *ipc.Client, runID, with string) machine.Run {
 	t.Helper()

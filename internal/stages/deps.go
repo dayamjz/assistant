@@ -70,18 +70,18 @@ import (
 // shape today, which makes what is put in one a question review has to ask
 // rather than one the test answers.
 //
-// # Fields nothing in this build reads yet
+// # Fields whose readers land after this seam did
 //
-// Forge and Config have no reader here, because this seam lands before the
-// stage bodies that need them and deliberately so. The bodies queued behind
-// this file are rebase, review and pull request, each specified work with a
-// task of its own, and a seam that arrived missing what they need would force
-// a second breaking change to the same file, which is the collision landing it
-// alone exists to prevent.
+// A field here may have no reader yet, because this seam landed before the
+// stage bodies that need it and deliberately so. The bodies queued behind this
+// file are separate work, each with a task of its own, and a seam that arrived
+// missing what they need would force a second breaking change to the same
+// file, which is the collision landing it alone exists to prevent.
 //
-// Forge answers to the pull request and checks bodies, and Config to the
-// review and test bodies. If a field below still has no reader once those have
-// landed, it is the field that was wrong and it should go.
+// Each such field names in its own documentation below the bodies it answers
+// to, so the claim is checkable against them rather than restated here. A
+// field still without a reader once those bodies have landed is the field that
+// was wrong, and it should go.
 type StageDeps struct {
 	// Agent runs one invocation at a time with no session. It is a
 	// StageAgent rather than a Runner so that a body cannot open a fixer
@@ -99,10 +99,14 @@ type StageDeps struct {
 	// anywhere yet, which internal/service's documentation states.
 	Config config.Config
 	// Forge is the code host this run's pull request and checks stages talk
-	// to. Nothing in this build constructs one, so it is nil on every run:
-	// internal/service passes nil here unconditionally, and a provider arrives
-	// with the pull request and checks stages that need it. A body that needs
-	// one refuses rather than proceeding without it.
+	// to. The pull request stage reads it; the checks stage is the other
+	// consumer it is here for.
+	//
+	// Nothing in this build constructs one, so it is nil on every run:
+	// internal/service passes nil here unconditionally. A body that needs one
+	// refuses rather than proceeding without it, which is what the pull
+	// request stage does, so a run reaching that stage in this build fails
+	// there rather than opening nothing and reporting a pass.
 	Forge forge.Provider
 	// git are the options every repository opened through Copy is opened
 	// with, which is how the redactor the service configured reaches the

@@ -71,6 +71,12 @@ func TestARunSurvivesTheProcessThatStartedItAndIsAnsweredByAnother(t *testing.T)
 
 // A run answered through to the end completes, and what it ends as is one of
 // the outcomes a driving agent is written against.
+//
+// The run skips the pull request stage, because that stage's body needs a code
+// host and this service constructs none: it fails rather than holding, so a
+// run that took it could not reach the end however it was answered. What the
+// skip costs this test is that one stage, and what it keeps is everything
+// after it, which is the part no other test reaches.
 func TestARunAnsweredThroughToTheEndCompletes(t *testing.T) {
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
@@ -78,7 +84,7 @@ func TestARunAnsweredThroughToTheEndCompletes(t *testing.T) {
 	recordRepository(t, h, subject)
 
 	withService(t, h, func(running serviceUnderTest) {
-		run := startRun(t, running.client, subject)
+		run := startRunSkipping(t, running.client, subject, pipeline.StagePR)
 		for run.Outcome == machine.OutcomeDecision {
 			run = answer(t, running.client, run.Record.ID, string(pipeline.OutcomeApproved))
 		}
