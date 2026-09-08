@@ -152,18 +152,28 @@ nothing in this repository selects or pins that adapter: this repository's
 `.no-mistakes.yaml` has four top-level keys - `commands`, `ignore_patterns`,
 `document` and `review` - and no `agent` key at any level. Which adapter
 resolves is settled outside the branch under review.
-Three things end a moved rule's reach from there, and two of them do it in
-silence: `no-mistakes` implements a project-instruction suppression knob for
-only three of its adapters, so for any other resolved adapter whether the file
-is read at all is that CLI's own business and not something the gate settles;
-and one of those three knobs is a byte cap on `AGENTS.md` itself, whose size is
-set outside this repository. The third, the gate's `disable_project_settings`,
-is silent for the three adapters that can suppress the file and loud for every
-other, where `agent.EnsureGateNeutralized` refuses the run rather than launching
-it, naming codex, claude and pi. A hazard that is loud in one configuration and
-silent in the rest is why nobody has hit this yet, and that refusal is the one
-place the gate fails closed on it. The silent paths are the same
+Two mechanisms end a moved rule's reach from there. `no-mistakes` implements a
+project-instruction suppression knob for only three of its adapters, so for any
+other resolved adapter whether the file is read at all is that CLI's own
+business and not something the gate settles - silent either way. And the gate's
+`disable_project_settings` is silent for the three adapters that can suppress
+the file and loud for every other, where `agent.EnsureGateNeutralized` refuses
+the run rather than launching it, naming codex, claude and pi. That refusal is
+the only place the gate fails closed on any of this, and its narrowness is why
+nobody has hit the silent paths yet. Those silent paths are the same
 stop-applying the move was meant to prevent, relocated rather than removed.
+
+An earlier draft counted a third mechanism here, codex's
+`project_doc_max_bytes`, as a byte cap on `AGENTS.md` whose size is set outside
+this repository. That is withdrawn. `buildArgs` appends
+`-c project_doc_max_bytes=0` only inside `if a.disableProjectSettings`
+(`internal/agent/codex.go`), and the doc comment on `NeutralizesGateInstructions`
+in that file says the knob is meaningful only under that opt-out - the same
+guard the claude and pi knobs sit behind. So under the opt-out the cap is the
+wholesale suppression already described, set to zero, and outside it
+`no-mistakes` passes nothing. A third hazard would need codex's own behaviour
+absent the opt-out, which is not something `no-mistakes` sets and was not
+verified here.
 
 And the room it would free is not worth having. A first pass suggested roughly
 1.4 KB of per-package limits disclaimers could go, on the reasoning that a rule
