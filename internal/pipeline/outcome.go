@@ -169,6 +169,102 @@ func FixSummary(s graph.State, stage Stage) string {
 	return text
 }
 
+// StageResult is everything one stage left behind in a run's state: whether
+// its body ran, what became of it, the report it recorded, and the summary of
+// the last fix round it took.
+//
+// It exists for PRD section 5's pull request stage, which narrates the run for
+// a reviewer who was not present and therefore needs all four facts about
+// every stage. The facts live in four keys of this package's schema and the
+// report is JSON this package encoded, so gathering and decoding them here is
+// what keeps a consumer from becoming a second reader of that encoding, per
+// P14.
+//
+// It is a snapshot of the state it was read from and not a history. A stage
+// that took several fix rounds recorded a report and a fix summary each round
+// and each write replaced the last, so what a StageResult carries is the final
+// one of each. Nothing in this package keeps the earlier ones, so nothing
+// built on this may describe it as the rounds.
+type StageResult struct {
+	// Stage is the stage this describes.
+	Stage Stage
+	// Ran reports whether the stage's body ran, on the terms StageRan states:
+	// it is read from whether a report was recorded, and it does not tell a
+	// stage that ran clean from one a person waved past at its hold.
+	Ran bool
+	// Outcome is what became of the stage. A stage that has not run reads as
+	// OutcomePending, which is also what a stage the run has not reached yet
+	// reads as, so Ran is what separates those from a stage that was skipped.
+	Outcome Outcome
+	// Report is what the stage recorded. A stage whose body never ran carries
+	// the zero Report, which is not a report of nothing found: Ran is the
+	// field that says which.
+	Report findings.Report
+	// Fix is the sanitized summary the stage's last fix round wrote, empty
+	// when the stage took none and empty for every stage that takes no
+	// automatic fix rounds at all.
+	Fix string
+}
+
+// StageResultKeys returns the state keys ReadStageResult reads for a stage, in
+// declaration order. An implementation that calls ReadStageResult declares
+// these in Implementation.Reads, so the two cannot drift apart: a key added to
+// the result is a key every caller then declares.
+//
+// The set is not the same for every stage. Only a stage that takes automatic
+// fix rounds has a fix key in the schema, so only such a stage has one here,
+// and a caller that declared one for a stage without rounds would be refused
+// when the pipeline is built.
+//
+// A Stage that names no stage yields keys the schema does not hold, so a
+// caller that declares them is refused with ErrUndeclaredKey rather than
+// quietly reading nothing.
+func StageResultKeys(stage Stage) []Key {
+	keys := []Key{stage.ReportKey(), stage.OutcomeKey()}
+	if row, ok := stage.spec(); ok && row.rounds != nil {
+		keys = append(keys, stage.FixKey())
+	}
+	return keys
+}
+
+// ReadStageResult returns what a stage left behind, read through a body's own
+// declared reads rather than off a whole state. StageRan, StageOutcome,
+// StageReport, and FixSummary are the same four facts for a caller holding a
+// graph.State; a stage body holds a Reader instead, which is why this exists
+// beside them rather than replacing them.
+//
+// It returns the reader's own error unchanged when a key was not declared, so
+// a body that forgot StageResultKeys fails the step rather than reading a
+// stage as having done nothing. A recorded report that cannot be decoded is an
+// error wrapping ErrBadReport, on the same terms as StageReport: an empty
+// report reads as a stage that found nothing.
+func ReadStageResult(r Reader, stage Stage) (StageResult, error) {
+	out := StageResult{Stage: stage}
+	recorded, err := r.Get(stage.ReportKey())
+	if err != nil {
+		return StageResult{}, err
+	}
+	text, _ := recorded.Text()
+	out.Ran = text != ""
+	if out.Report, err = decodeReport(text, stage); err != nil {
+		return StageResult{}, err
+	}
+	outcome, err := r.Get(stage.OutcomeKey())
+	if err != nil {
+		return StageResult{}, err
+	}
+	outcomeText, _ := outcome.Text()
+	out.Outcome = Outcome(outcomeText)
+	if row, ok := stage.spec(); ok && row.rounds != nil {
+		fix, err := r.Get(stage.FixKey())
+		if err != nil {
+			return StageResult{}, err
+		}
+		out.Fix, _ = fix.Text()
+	}
+	return out, nil
+}
+
 // Cancelled reports whether a person cancelled the run at a hold.
 func Cancelled(s graph.State) bool {
 	v, ok := s.Get(string(KeyCancelled))
