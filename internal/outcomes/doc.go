@@ -108,9 +108,13 @@
 // to machine.Run passes here, and so would a next action a surface composed
 // for itself rather than taking it from the outcome. The second is not
 // hypothetical: this repository shipped that shape and this package was green
-// on it. What stops it now is machine.Run.nextAction being unexported and
-// written only by Run.Decide, so the answer's action has one writer by
-// construction - which is internal/machine's doing and not this check's.
+// on it. What stops it now is that machine.Run.nextAction is unexported, so no
+// package outside internal/machine has an assignment site for an action at
+// all, let alone one contradicting the outcome beside it. That is
+// internal/machine's doing and not this check's, and it is a claim about the
+// package boundary rather than about the value: what writes the field inside
+// internal/machine, and why a decoded answer relays the producer's action
+// rather than a fresh one, is written on the field itself.
 //
 // The check reads the document's source rather than what a browser renders
 // from it, so a marker inside a comment or a script string would be read as a
