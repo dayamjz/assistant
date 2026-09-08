@@ -35,17 +35,19 @@
 // that specifier. An adapter that names no repository cannot write at all,
 // because there is nothing for the provider's answer to be checked against.
 //
-// What that buys is that a specifier which no longer names what it used to -
-// a renamed or transferred repository still answers under its old name -
-// refuses instead of producing a pull request in a repository nobody asked
-// for. Nothing is created when it refuses; that is the part the guard is for.
+// A specifier and the repository behind it are two things, and this package
+// cannot see which repository a provider will reach. What the confirmation
+// buys is not knowledge of that: it is that a write happens only where the
+// provider itself, asked which repository the specifier names, answers with
+// that specifier. Where the two differ, for whatever reason, nothing is
+// created, and it is that half the guard is for.
 //
 // Two gaps in it are worth naming rather than implying away. It runs before a
 // write and not before a read, so Find, Get and Checks may report facts read
 // out of whatever the specifier resolves to; what a caller does with those is
 // a write, and the write refuses. And it establishes what the provider
-// reported when it was asked, not a lock: a rename between the confirmation
-// and the write is outside it.
+// reported when it was asked, not a lock: anything that changes the answer
+// between the confirmation and the write is outside it.
 //
 // # What "the same behavior on any forge" means here
 //
