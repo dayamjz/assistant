@@ -22,10 +22,11 @@ const (
 	// this process, against the fixture. It is what is left where the binary
 	// cannot reach a mechanism at all, which today is every mechanism a stage
 	// body would have used past the run's own state: the intent body reads
-	// the supplied intent and launches nothing, and the review body opens the
+	// the supplied intent and launches nothing, the review body opens the
 	// run's isolated copy - which nothing in this build creates - before it
 	// launches anything, so a run that takes it fails there and every walk
-	// here skips it instead.
+	// here skips it instead, and the test body holds for the command nobody
+	// configured here.
 	ReachPackage Reach = "package"
 	// ReachNone is not driven here. The reason beside it says why, and it is
 	// prose nobody checks; what the row buys is that the gap is enumerable
@@ -146,10 +147,11 @@ func Coverage() []Established {
 				"process beside the run rather than anything the run does. Two things are not " +
 				"established at any reach and no clause claims them: that nothing the branch or the " +
 				"template installed arrived or executed, because the branch's planted executables are " +
-				"reached only through a stage body that launches something and no run reaches one - " +
-				"the intent body reads the supplied intent, and the review body fails on the isolated " +
-				"copy nothing creates before it launches, so the run skips it - while the template's " +
-				"are receive-side hooks reached " +
+				"reached only through a stage body that launches something and no body launches " +
+				"anything in these runs - the intent body reads the supplied intent, the review body " +
+				"fails on the isolated copy nothing creates before it launches, so the run skips it, " +
+				"and the test body holds for the command nobody configured here, never the " +
+				"branch's - while the template's are receive-side hooks reached " +
 				"only by a push to the gate and the four subtests that plant one make no push; " +
 				"and which agent a run resolved, because no shipped surface reports it. The trusted configuration " +
 				"document is driven at package reach: nothing in this build reads a repository's own " +

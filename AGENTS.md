@@ -410,9 +410,8 @@ Each has cost this repository more than one round of review.
   construction, which carries the adapters that do not vary with the run; a
   fact that does vary is a declared state key in `internal/pipeline` instead,
   because one `All` serves every run of a service. Lifetime decides which, and
-  `deps.go` has that argument and the P4 reason `Agent` is a `StageAgent`. The
-  intent and review stages are the bodies that exist, and three things about
-  the intent stage generalize. PRD section 5's "this stage never blocks a
+  `deps.go` has that argument and the P4 reason `Agent` is a `StageAgent`.
+  Three things about the intent stage generalize. PRD section 5's "this stage never blocks a
   run" is owed by the implementation and not by `internal/pipeline`, which
   refuses to enforce it structurally because a stage that could not hold would
   have to drop an ask finding; every finding it reports is a note, and the test
@@ -512,9 +511,10 @@ Each has cost this repository more than one round of review.
   through the binary or
   through the package that owns the mechanism, because a run reaches no agent,
   no push, and no code host: the intent body reads the supplied intent and
-  launches nothing, and the review body fails on the run's isolated copy, which
+  launches nothing, the review body fails on the run's isolated copy, which
   nothing in this build creates, before it launches anything, so every walk
-  there skips that stage. It takes both of the platform guards
+  there skips that stage, and the test body holds for the command nobody
+  configured rather than executing anything. It takes both of the platform guards
   `internal/cli` and `internal/service` carry, on their terms: a check that
   drives a run skips where `internal/ipc` reads no local socket peer
   credentials, and a check whose service did not come up skips where there is

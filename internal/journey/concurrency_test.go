@@ -63,7 +63,7 @@ func TestSeveralCallersDrivingOneRunExecuteNoNodeTwice(t *testing.T) {
 	requiresIdentifiedPeer(t)
 	principles.Cite(t, principles.P6)
 
-	holding := stagesWithoutABody(t)
+	holding := stagesARunStopsAt(t)
 	// One hold-to-hold transition costs what the next one does only while the
 	// stages a run holds at run consecutively: internal/pipeline gives a stage
 	// that holds a hold node as well as a stage node, and a stage that does
@@ -74,9 +74,9 @@ func TestSeveralCallersDrivingOneRunExecuteNoNodeTwice(t *testing.T) {
 	// the transition that crosses it costs more than its neighbours. The first
 	// answer below is therefore spent as setup rather than measured, and what
 	// the measurement rests on is the rest of the walk, which is required to
-	// be consecutive here. Refusing on that is what keeps the day another
-	// middle stage gets a body from arriving as a contention failure rather
-	// than as the measurement no longer applying.
+	// be consecutive here. Refusing on that is what keeps the day a middle
+	// stage stops holding, or another skip lands mid-walk, from arriving as a
+	// contention failure rather than as the measurement no longer applying.
 	consecutiveHolds(t, holding[1:])
 
 	j := inClone(t)
