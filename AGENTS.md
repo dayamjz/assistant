@@ -120,14 +120,14 @@ Each has cost this repository more than one round of review.
   owns the searches behind both - and `no-mistakes` knows a
   project-instruction suppression knob for only three of its adapters, every one
   of them gated on the gate's `disable_project_settings`, which defaults false
-  and which nothing here sets. So with that key false nothing is suppressed and
-  whether this file is read is the resolved CLI's own business, and with it true
-  the file is suppressed wholesale for those three adapters while the run is
-  refused outright for any other. Every path but that refusal ends a moved
-  rule's reach with no error, no failed parse and no refused run, which is the
-  same silent stop-applying that moving the rule was supposed to avoid. Do not confuse `disable_project_settings` with
-  `suppress_project_instructions`, which is this project's own key for the same
-  idea and decides nothing about the gate.
+  and which nothing here sets. With that key false nothing is suppressed, so the
+  reach is never guaranteed and nothing reports either way; with it true the file
+  is suppressed wholesale for those three adapters and the run is refused
+  outright for any other. The one path that ends a moved rule's reach without a
+  word is that wholesale suppression, which is the same silent stop-applying that
+  moving the rule was supposed to avoid. Do not confuse
+  `disable_project_settings` with `suppress_project_instructions`, which is this
+  project's own key for the same idea and decides nothing about the gate.
 - Every exported symbol carries a contract, so give it a doc comment that states
   the contract rather than restating the name.
 - Prefer a small, testable pure core with the side effects at the edges. The

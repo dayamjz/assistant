@@ -152,16 +152,21 @@ nothing in this repository selects or pins that adapter: this repository's
 `.no-mistakes.yaml` has four top-level keys - `commands`, `ignore_patterns`,
 `document` and `review` - and no `agent` key at any level. Which adapter
 resolves is settled outside the branch under review.
-Two mechanisms end a moved rule's reach from there. `no-mistakes` implements a
-project-instruction suppression knob for only three of its adapters, so for any
-other resolved adapter whether the file is read at all is that CLI's own
-business and not something the gate settles - silent either way. And the gate's
-`disable_project_settings` is silent for the three adapters that can suppress
-the file and loud for every other, where `agent.EnsureGateNeutralized` refuses
-the run rather than launching it, naming codex, claude and pi. That refusal is
+Two mechanisms decide whether a moved rule reaches a reviewer, and neither
+guarantees that it does. `no-mistakes` implements a project-instruction
+suppression knob for only three of its adapters, so for any other resolved
+adapter whether the file is read at all is that CLI's own business and not
+something the gate settles - unguaranteed, and silent whichever way it falls.
+And the gate's `disable_project_settings` is what actually ends the reach, but
+only when it is set: with it set the file is suppressed for the three adapters
+that can suppress it, silently, and for every other `agent.EnsureGateNeutralized`
+refuses the run rather than launching it, naming codex, claude and pi. With it
+unset - the default, and what holds here - `no-mistakes` appends no suppression
+flag and the reach is simply not settled by the gate either way. That refusal is
 the only place the gate fails closed on any of this, and its narrowness is why
-nobody has hit the silent paths yet. Those silent paths are the same
-stop-applying the move was meant to prevent, relocated rather than removed.
+nobody has hit the silent path yet. A destination that is never guaranteed and
+can end without a word is the same stop-applying the move was meant to prevent,
+relocated rather than removed.
 
 An earlier draft counted a third mechanism here, codex's
 `project_doc_max_bytes`, as a byte cap on `AGENTS.md` whose size is set outside
@@ -209,8 +214,17 @@ triage frees less than the estimate claimed. 358 of 1402 is just over a quarter,
 and 2.2% of the 16384 cap. Those 358 bytes come out at no cost to
 gap-visibility - surviving the deletion test is what that means - and the other
 1044 stay, because they are what lets a reviewer see a change that widens a gap.
-So the triage is not blocked. It is small, and past the 358 it starts costing
-gap-visible text.
+So the triage is not blocked. It is small, and past the 358 this sample starts
+costing gap-visible text.
+
+That 358 is what one sample yielded, not a ceiling on what triage recovers. By
+quoting, the four spans total 1402 bytes against 13369 bytes of guidance across
+all 11 entries - the ten package blocks carry 12178 and the shared block 1191 -
+so the sample is 10.5% of the text and touches three of the eleven entries,
+`internal/findings/**`, `internal/agents/**` and `internal/store/**`. The other
+eight were not triaged, and that triage is deliberately deferred. What can be
+said about the whole section is the ceiling in the next paragraph, which does not
+rest on this sample.
 
 So the split was dropped and `review.path_instructions` is unchanged by this
 work, byte for byte: 11 entries, 16273 of 16384, 111 bytes free, the same as
@@ -242,6 +256,11 @@ budget. Per-package placement is arithmetically backwards: each copy re-pays the
 229-byte frame as well as the text, so the `path: "*"` block is the cheapest
 home a shared rule has.
 
-There is no local fix for the shortfall. The 469 bytes above are the whole of
-what triage recovers, and they are one rule rather than a bound. The bound
-itself can only change in `no-mistakes`.
+There is no local fix for the shortfall, and this does not depend on how much
+triage would find. By the accounting above the ten package blocks carry 12178
+bytes of guidance in total, so deleting every byte of it - far past anything the
+deletion test would allow - frees 12178 against the 14658 this document's own
+lower estimate says a completed set needs. The shortfall survives the most
+aggressive triage available by 2480 bytes, and by 5414 against the higher
+estimate. Triage buys rules; it cannot buy the bound. That can only change in
+`no-mistakes`.
