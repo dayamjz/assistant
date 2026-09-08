@@ -176,8 +176,18 @@ Each has cost this repository more than one round of review.
   so a forge adapter never shells out to it. Its checks model is the part that
   is not a thin wrapper: an empty check list is not green, only a `no_ci`
   declaration makes it so, a cancelled check is settled, and an unrecognized
-  state deliberately keeps the caller waiting. Read its `doc.go` before
-  changing any of those four.
+  state deliberately keeps the caller waiting. A `Provider` addresses exactly
+  one repository, so it is never the build-scoped thing: `Host` holds what is
+  settled once and `Host.Open` takes the repository, which reaches a run as
+  `pipeline.KeyForgeRepository`, derived in `internal/service`'s `begin` from
+  the run's own repository row. Three measures keep a write on the repository
+  the run named, and each answers the same fact that a specifier on a command
+  line carries no host: `GitHubRepository` reads one only out of a remote on
+  `GitHubHostname`, every invocation is given that host in `GH_HOST`, and
+  `Open` and `UpdateBody` first confirm the provider resolves the specifier to
+  itself. Read its `doc.go` before changing any of that, and for the residual
+  gaps: the confirmation precedes a write and not a read, it is not a lock
+  against a later rename, and a GitHub Enterprise upstream yields no specifier.
 - `internal/gate` owns the local bare repository a push is validated through:
   where it lives, what it is born with, its hooks, and its identity across a
   move or a copy. It composes `internal/vcs` and builds no command lines, and it

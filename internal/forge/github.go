@@ -315,21 +315,22 @@ func (g *GitHub) Checks(ctx context.Context, number int) (ChecksReport, error) {
 // is that specifier.
 //
 // It exists because a specifier and the repository a provider reaches through
-// it are two different things. A repository that has been renamed or
-// transferred keeps answering under the name it had, so a run addressing the
-// old specifier reaches the new repository and would open a pull request in a
-// repository nobody asked it to. That is not recoverable after the fact: the
-// pull request exists, on a host, where people can see it.
+// it are two different things, and nothing here can see the second. A write
+// that landed on the wrong one is not recoverable after the fact: the pull
+// request exists, on a host, where people can see it.
 //
 // So a write is refused unless two things hold. The adapter names a
-// repository, because an adapter that resolves one from a working directory
-// has no specifier to check the answer against and would write wherever the
-// directory pointed. And the provider, asked which repository that specifier
-// names, answers with that specifier.
+// repository, because an adapter given only a working directory has no
+// specifier for an answer to be held to and there is nothing here to
+// establish. And the provider, asked which repository that specifier names,
+// answers with that specifier. The second is the provider's own report and
+// this claims nothing beyond it.
 //
-// The comparison ignores letter case, because GitHub addresses one repository
-// under any casing of its owner and name and refusing a casing difference
-// would refuse a repository that is the right one.
+// The comparison ignores letter case, and that is a loosening stated as a
+// trade rather than as a fact about the host. Refusing a pair that differs
+// only in casing would refuse a write this has no evidence is wrong; accepting
+// it means a host that did treat those as two repositories would not be caught
+// here.
 //
 // Only a confirmed answer is remembered, so the probe runs once per adapter
 // that succeeds and again on each write after one that did not. What that
@@ -340,13 +341,14 @@ func (g *GitHub) Checks(ctx context.Context, number int) (ChecksReport, error) {
 // still report facts read out of a repository the specifier resolves
 // elsewhere to; what that leads to is a write, and the write refuses. And it
 // establishes what the provider reported at the moment it was asked, not a
-// lock: a rename between the confirmation and the write is outside it.
+// lock: anything that changes the answer between the confirmation and the
+// write is outside it.
 func (g *GitHub) confirmRepository(ctx context.Context) error {
 	const op = "confirm-repository"
 	if g.settings.repo == "" {
 		return &argumentError{
 			what:   "adapter",
-			reason: "was given no repository, so a write would go wherever its working directory resolved to rather than to a repository this run named",
+			reason: "was given no repository, so there is no specifier to hold the provider's answer to and nothing establishes where a write would land",
 		}
 	}
 	g.mu.Lock()
@@ -354,7 +356,12 @@ func (g *GitHub) confirmRepository(ctx context.Context) error {
 	if g.confirmed {
 		return nil
 	}
-	out, err := g.run(ctx, op, "", "repo", "view", "--json="+repoFields)
+	// The repository is an operand here and not the flag the pull request
+	// commands take, so the vector is built whole. The specifier reaching a
+	// command line as an operand is safe on the same terms it is safe as a
+	// flag value: validRepository has already refused anything carrying a
+	// scheme, userinfo, or a leading dash.
+	out, err := g.runExact(ctx, op, "", []string{"repo", "view", g.settings.repo, "--json=" + repoFields})
 	if err != nil {
 		return err
 	}
@@ -550,6 +557,19 @@ func (g *GitHub) run(ctx context.Context, op, stdin string, args ...string) ([]b
 	if g.settings.repo != "" {
 		full = append(full, "--repo="+g.settings.repo)
 	}
+	return g.runExact(ctx, op, stdin, full)
+}
+
+// runExact is run without the repository flag appended, for the one command
+// whose argument list this package builds whole.
+//
+// The two exist separately because how a repository is named is the command's
+// choice and not this package's: the pull request commands take it as a flag
+// and the repository read takes it as an operand, so an argument vector built
+// for one is refused by the other. Keeping the flag out of this path is what
+// lets confirmRepository state its own vector rather than have one appended to
+// it.
+func (g *GitHub) runExact(ctx context.Context, op, stdin string, full []string) ([]byte, error) {
 	res := runProvider(ctx, &g.settings, g.env, stdin, full)
 	if res.startErr != nil {
 		return nil, &Refusal{
