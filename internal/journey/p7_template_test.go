@@ -45,16 +45,17 @@ type birth struct {
 //
 // What these four do not establish is that no template hook ran, and no clause
 // here claims it. Those hooks are receive-side, so only a push to the gate
-// could run one, and no push in this build reaches any of them: internal/gate
-// installs its own pre-receive, whose script runs "assistant gate admit" and
-// exits on its status before chaining to a preserved hook at the .local name,
-// and internal/cli carries no gate verb. So admission fails, the push is
-// declined, and neither a promoted template pre-receive nor update nor
-// post-update runs. A clause on the tripwire file would hold whatever a
-// template had installed, so these four subtests carry no such clause and read
-// that file not at all; README.md records the gap among the limits of the
-// binary being driven. Nor does any clause look at the gate's hooks directory,
-// so whether a hook arrived is unestablished as well as whether one ran.
+// could run one, and these four make no push: each initializes a gate and
+// reads how that came out, and none starts a service, so neither a promoted
+// template pre-receive nor update nor post-update is reached. A push to a gate
+// is admitted in this build, which TestAPushToTheGateByNameAuthorizesTheRun
+// drives, so what leaves these four short of that claim is what they do rather
+// than a verb the command surface is missing. A clause on the tripwire file
+// would hold whatever a template had installed, so these four subtests carry
+// no such clause and read that file not at all; README.md records the gap
+// among the limits of the binary being driven. Nor does any clause look at the
+// gate's hooks directory, so whether a hook arrived is unestablished as well as
+// whether one ran.
 //
 // What each subtest does establish is how the initialization came out: the two
 // refusals refuse, carrying the substrings their conditions record, and the
@@ -139,10 +140,13 @@ func TestNothingOutsideTheGateChoosesWhatRunsOnAPushToIt(t *testing.T) {
 				// A disjunction for the reason the one below it is a
 				// disjunction, which Settlements states: a clause holding that
 				// this push is declined would assert that a gap persists, and
-				// would fail on the day the admit verb it is missing lands.
-				// What has to hold either way is that the gate does not admit
-				// a push with nothing checking it, and the run count is read
-				// out of the home's own records so both halves are observed.
+				// this subtest starts none of the service the gate's admission
+				// hook asks, so it would be holding the product to a decline
+				// that says nothing about admission and would fail the day a
+				// service stands beside it. What has to hold either way is that
+				// the gate does not admit a push with nothing checking it, and
+				// the run count is read out of the home's own records so both
+				// halves are observed.
 				States: "a push through the gate with nothing redirected is not accepted with nothing " +
 					"checking it: either it is declined, or it is accepted and a run started from it",
 				Holds: func(a admission) error {
