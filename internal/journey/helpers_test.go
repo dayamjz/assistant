@@ -106,7 +106,7 @@ func requireStageListMatchesThePRD(t *testing.T) {
 	if err := journey.AgreesWithPRD(prd, pipeline.Order()); err != nil {
 		t.Fatalf("the product's stage order and the PRD's list disagree: %v", err)
 	}
-	if err := journey.DeclaresEveryStage(journey.Implemented()); err != nil {
+	if err := journey.DeclaresEveryStage(journey.Implemented(), journey.StagesWithoutABody()); err != nil {
 		t.Fatalf("%v", err)
 	}
 }
