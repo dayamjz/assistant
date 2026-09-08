@@ -222,9 +222,9 @@ quoting, the four spans total 1402 bytes against 13369 bytes of guidance across
 all 11 entries - the ten package blocks carry 12178 and the shared block 1191 -
 so the sample is 10.5% of the text and touches three of the eleven entries,
 `internal/findings/**`, `internal/agents/**` and `internal/store/**`. The other
-eight were not triaged, and that triage is deliberately deferred. What can be
-said about the whole section is the ceiling in the next paragraph, which does not
-rest on this sample.
+eight were not triaged, and that triage is deliberately deferred. The claim that
+does cover the whole section is the triage ceiling, measured by deleting every
+byte of package-block guidance, and it does not rest on this sample.
 
 So the split was dropped and `review.path_instructions` is unchanged by this
 work, byte for byte: 11 entries, 16273 of 16384, 111 bytes free, the same as
@@ -259,8 +259,8 @@ home a shared rule has.
 There is no local fix for the shortfall, and this does not depend on how much
 triage would find. By the accounting above the ten package blocks carry 12178
 bytes of guidance in total, so deleting every byte of it - far past anything the
-deletion test would allow - frees 12178 against the 14658 this document's own
-lower estimate says a completed set needs. The shortfall survives the most
-aggressive triage available by 2480 bytes, and by 5414 against the higher
-estimate. Triage buys rules; it cannot buy the bound. That can only change in
-`no-mistakes`.
+deletion test would allow - leaves the section at 4095. Adding the 14658 this
+document's own lower estimate says a completed set needs gives 18753, so the
+shortfall survives the most aggressive triage available by 2369 bytes against the
+16384 cap, and by 5303 on the higher estimate's 21687. Triage buys rules; it
+cannot buy the bound. That can only change in `no-mistakes`.
