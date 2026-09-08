@@ -57,6 +57,38 @@ const titleLimit = 72
 // those are is read out of the state rather than stated here, so nothing in
 // the body depends on where this stage sits in the order.
 //
+// # The body may not assert what the run did not establish
+//
+// The pull request is the one thing this run produces that a person outside
+// the system reads, so a sentence in it is a claim made on the run's behalf.
+// A run can reach this stage having forwarded no commit, because the push
+// stage may hold and a person may answer approved, and in that case the branch
+// the code host carries is whatever was already there. The body then states
+// that rather than naming the commit the run validated as though it were on
+// the branch, and the report carries the same fact as a note. It is a note and
+// not a hold: skipping the push stage is a person's decision to make, and a
+// refusal here would take it away from them.
+//
+// # What the body does not carry: how many attempts it took
+//
+// PRD "what passing the gate means" says the pull request records what was
+// checked, what was fixed, and how many attempts it took. This body carries
+// the first two and no count of the third, and the section that would hold one
+// says so rather than reading as complete.
+//
+// Neither record a count could come from is available to this body. A stage
+// body reads state, the per-edge traversal counts are graph.Counters, and no
+// internal/pipeline key exposes them. The PRD's round-history record, which it
+// says the narrative is generated from, does exist as internal/store's round
+// table with store.AppendRound and store.Rounds, but nothing in this build
+// appends to it, so it holds no round for any run; and this package does not
+// import internal/store, so reading it here would take a state key or a
+// dependency that does not exist either.
+//
+// What the state does hold is what each stage's fixer last wrote, and
+// pipeline.StageResult's own documentation says each write replaced the last,
+// so nothing here may describe it as the rounds.
+//
 // # What it refuses
 //
 // A run with no code host cannot open a pull request, and StageDeps' rule
@@ -271,6 +303,11 @@ func pullRequestTitle(facts runFacts) string {
 // because a person may have retargeted it deliberately, and holding would stop
 // every later run over a decision already made. The body carries the same fact
 // in its own words, so a reviewer is told whether or not anyone reads this.
+//
+// A run that forwarded no commit is the other fact it reports, on the same
+// terms and for the same reason: the pull request then describes a branch this
+// run did not update, and a person may have skipped the push stage on purpose,
+// so refusing would take a decision that is theirs.
 func pullRequestReport(facts runFacts, pr forge.PullRequest) findings.Report {
 	found := []findings.Finding{{
 		ID:       "pull-request",
@@ -293,6 +330,21 @@ func pullRequestReport(facts runFacts, pr forge.PullRequest) findings.Report {
 					"does not retarget a pull request, because the base may have been changed "+
 					"deliberately.",
 				quoteName(facts.base), quoteName(pr.Base), quoteName(pr.Base)),
+		})
+	}
+	if facts.pushed == "" {
+		found = append(found, findings.Finding{
+			ID:       "pull-request-without-a-forwarded-commit",
+			Severity: findings.SeverityWarning,
+			Action:   findings.ActionNote,
+			Description: fmt.Sprintf(
+				"No stage of this run recorded forwarding a commit to %s, so pull request %d "+
+					"describes a branch this run did not update: what the code host carries there "+
+					"is whatever was already there. The body says that rather than naming the "+
+					"commit this run validated as though it were on the branch. This is reported "+
+					"and not refused, because skipping the push stage is a person's decision to "+
+					"make.",
+				quoteName(facts.branch), pr.Number),
 		})
 	}
 	return findings.Report{
@@ -339,15 +391,23 @@ func bodyPreamble(facts runFacts) string {
 
 // whatChanged renders the change the run validated: where it goes, which
 // commits it moved between, and what it was measured against.
+//
+// What it attests to is conditional on what the run forwarded. A run that
+// forwarded a commit is attested as validated at the commit it validated,
+// which is the commit the branch then carries. A run that forwarded none says
+// so instead and the attestation is not rendered at all: the commit was still
+// validated and that is still stated, but a line reading as though it were on
+// the branch would be this artifact claiming what the run did not establish.
 func whatChanged(facts runFacts) string {
 	var where strings.Builder
 	fmt.Fprintf(&where, "Merging %s into %s.\n\n", quoteName(facts.branch), quoteName(facts.base))
 	fmt.Fprintf(&where, "- Submitted to the gate: %s\n", quoteCommit(facts.submitted))
-	fmt.Fprintf(&where, "- Validated at: %s\n", quoteCommit(facts.head))
 	if facts.pushed == "" {
-		where.WriteString("- Forwarded to the branch target: nothing was recorded, " +
-			"so no stage of this run reported forwarding a commit\n")
+		fmt.Fprintf(&where, "- Forwarded to the branch target: nothing was forwarded. This run "+
+			"validated the change at %s, no stage of it recorded forwarding a commit, and the "+
+			"branch on the code host is whatever was already there.\n", quoteCommit(facts.head))
 	} else {
+		fmt.Fprintf(&where, "- Validated at: %s\n", quoteCommit(facts.head))
 		fmt.Fprintf(&where, "- Forwarded to the branch target: %s\n", quoteCommit(facts.pushed))
 	}
 	switch {
@@ -478,6 +538,13 @@ func whatTheRisksAre(facts runFacts) string {
 
 // whatWasFixed renders what each stage's fixer changed, which is the summary
 // the last fix round of that stage wrote.
+//
+// It closes by saying what it does not carry. PRD "what passing the gate
+// means" asks for how many attempts it took, this build has no count to render,
+// and a section that stopped at the summaries would read to a person as the
+// whole account of the fixing. Where the count would have to come from is in
+// PullRequest's own documentation; what belongs here is that a reader is told
+// this is the last summary per stage and not the tally.
 func whatWasFixed(facts runFacts) string {
 	var b strings.Builder
 	var rounds int
@@ -491,8 +558,11 @@ func whatWasFixed(facts runFacts) string {
 	}
 	if rounds == 0 {
 		b.WriteString("No stage of this run recorded a fix round, so nothing in this change was " +
-			"written by the gate.\n")
+			"written by the gate.\n\n")
 	}
+	b.WriteString("This section is the last fix summary each stage recorded, and it does not say " +
+		"how many attempts anything took: this build of the gate records no history of the rounds " +
+		"a stage went through, so it has no count to state here.\n")
 	return b.String()
 }
 

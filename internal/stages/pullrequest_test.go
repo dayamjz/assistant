@@ -509,6 +509,72 @@ func TestThePullRequestBodyAnswersTheFourQuestions(t *testing.T) {
 	}
 }
 
+// The property: the artifact must not assert what the run did not establish.
+//
+// A run reaches this stage having forwarded no commit whenever a person
+// approves the push stage's hold, and the branch the code host carries is then
+// whatever was already there. A body attesting that it was validated at the
+// run's head would tell the one reader outside this system that a commit the
+// branch does not carry was checked and is on it, so that line is not rendered
+// at all in that case. What did happen is rendered instead, and the report
+// carries the same fact as a note, since a person may have skipped the push
+// stage deliberately.
+//
+// Both directions are checked. An absent line proves nothing on its own,
+// because a body that never rendered one would satisfy that assertion just as
+// well, so the same run with a commit forwarded is asserted to carry it.
+func TestThePullRequestBodyAttestsValidationOnlyForACommitTheRunForwarded(t *testing.T) {
+	t.Parallel()
+
+	forwarded := aRun()
+	pushed := newHost()
+	mustRunPR(t, pushed, forwarded)
+	if body := onlyBody(t, pushed); !strings.Contains(body, "- Validated at: `"+forwarded.head+"`") {
+		t.Fatalf("the run forwarded %s and the body does not attest validating it:\n\n%s",
+			forwarded.head, body)
+	}
+
+	nothing := aRun()
+	nothing.pushed = ""
+	h := newHost()
+	out := mustRunPR(t, h, nothing)
+	body := onlyBody(t, h)
+	if strings.Contains(body, "Validated at") {
+		t.Fatalf("the run forwarded nothing and the body still attests where the branch "+
+			"was validated:\n\n%s", body)
+	}
+	for _, want := range []string{
+		nothing.head,
+		"nothing was forwarded",
+		"whatever was already there",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the body does not say %q, so a reviewer is not told what did happen:\n\n%s",
+				want, body)
+		}
+	}
+
+	report := out.Report.Normalize()
+	if err := report.Validate(); err != nil {
+		t.Fatalf("the stage produced a report the pipeline refuses: %v", err)
+	}
+	if !report.AllNotes() {
+		t.Fatalf("the stage reported something that is not a note over a run that forwarded "+
+			"nothing, which would stop a run over a person's own decision: %+v", report)
+	}
+	if !mentions(out.Report, "did not update") {
+		t.Fatalf("the report does not say the pull request describes a branch this run did "+
+			"not update: %+v", out.Report)
+	}
+	// The positive control for the report half: a run that did forward a commit
+	// reports nothing of the sort, so the assertion above reads this run rather
+	// than something the stage always says.
+	if forwardedOut := mustRunPR(t, newHost(), forwarded); mentions(forwardedOut.Report, "did not update") {
+		t.Fatalf("a run that forwarded %s is reported as not having updated the branch: %+v",
+			forwarded.head, forwardedOut.Report)
+	}
+}
+
 // The body accounts for every stage of the run. A stage missing from it is a
 // stage a reviewer is not told about, and reading the set from
 // pipeline.Order is what keeps this from having to say how many there are.
