@@ -119,13 +119,14 @@ Each has cost this repository more than one round of review.
   selects that agent automatically rather than pinning one, and `no-mistakes`
   knows a project-instruction suppression knob for only three of its adapters -
   one of which is a byte cap on this file itself, whose size is set outside this
-  repository. The gate's `disable_project_settings` suppresses this file
-  wholesale; it defaults false and nothing here sets it. Each of those ends a
-  rule's reach with no error, no failed parse, and no refused run, which is the
-  same silent stop-applying that moving the rule was supposed to avoid. Do not
-  confuse `disable_project_settings` with `suppress_project_instructions`, which
-  is this project's own key for the same idea and decides nothing about the
-  gate.
+  repository. The gate's `disable_project_settings`, which defaults false and
+  which nothing here sets, suppresses this file wholesale for those three and
+  refuses the run outright for any other resolved adapter. So a moved rule stops
+  applying with no error, no failed parse and no refused run on every path but
+  that last one, which is the same silent stop-applying that moving the rule was
+  supposed to avoid. Do not confuse `disable_project_settings` with
+  `suppress_project_instructions`, which is this project's own key for the same
+  idea and decides nothing about the gate.
 - Every exported symbol carries a contract, so give it a doc comment that states
   the contract rather than restating the name.
 - Prefer a small, testable pure core with the side effects at the edges. The
