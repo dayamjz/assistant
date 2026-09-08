@@ -22,8 +22,10 @@ Every figure below states the method that produces it. The three methods are:
   entries. This is the function the gate itself checks against the cap.
 - **Rendering.** `reviewPathInstructionsSection(matchPathInstructions(changed,
   entries))` in `internal/pipeline/steps`, which is what a review prompt
-  actually carries. Its result moves one byte per byte of the changed paths, so
-  every rendering figure below names the `changed` set it was measured against.
+  actually carries. Each matching block renders its own matched-file line, so
+  the result moves one byte per byte of the changed paths *per matching block*
+  rather than once overall; every rendering figure below therefore names the
+  `changed` set it was measured against as well as the blocks that matched it.
 - **Quoting.** A named span of one entry's `review.path_instructions` guidance,
   located by the opening and closing words quoted here inside that entry's
   instruction text with the YAML block indent removed and wrapped lines joined
@@ -94,11 +96,17 @@ above it: it "leaves room for the entry cap to be reached with a rule of
 ordinary length, so neither cap makes the other unusable". The danger the
 surrounding comment names - an oversized prompt fails the agent invocation
 outright rather than degrading - is real, but nothing states that 16 KB was
-measured against a prompt or a model budget: `grep -rnE --include='*.go'
-'16384|16 KB'` over `internal` and `docs` in the `no-mistakes` checkout returns
-a single line, the constant itself at `config.go:262`. So this is not a request
-to weaken a calibrated limit. What the sweep cannot reach is a budget recorded
-somewhere outside that source.
+measured against a prompt or a model budget: `grep -rnE '16384|16 KB'` over
+`internal` and `docs` in the `no-mistakes` checkout returns a single line, the
+constant itself at `config.go:262`. The sweep carries no extension filter on
+purpose: `docs` there holds no Go file at all, so an earlier `--include='*.go'`
+form of this same command read zero files on that half of what it named and
+could not have found anything there whatever was written. So this is not a
+request to weaken a calibrated limit. The sweep has two limits and both are the
+pattern's rather than the result's. It is literal, so a budget written `16 *
+1024`, `16<<10` or "16 kilobytes" would not match it. And it reads that
+checkout only, so a budget recorded outside that source is out of its reach
+either way.
 
 The accounting charges the configured entries, not what a run renders. Reading
 `ReviewPathInstructionsBytes`, one entry costs `229 + len(path) + len(trimmed
@@ -211,12 +219,13 @@ installed on the machine this work was done on, and no file in this repository
 records the number. What would settle it is reading codex's actual default
 together with the codex version it belongs to, and that is left unclaimed here
 rather than assumed. The reason to record the conditional at all is scale
-rather than the figure: by this branch's tree `AGENTS.md` is 34364 bytes and at
-base `eab70bf` it was 32630, both within a page or two of a bound in that
-range, so if such a bound is real this file is already near it and ordinary
-growth reaches it. Until someone reads the default, this repository is neither
-in compliance with that bound nor in breach of it, nothing here is a target
-derived from it, and no prose was cut to fit it.
+rather than the figure: by `wc -c`, `AGENTS.md` on this branch's tree is 34364
+bytes and at base `eab70bf` it was 32630, which against that unconfirmed figure
+is 1596 over and 138 under respectively. So if such a bound were real the
+position would already be past it rather than approaching it. Until someone
+reads the default, this repository is neither in compliance with that bound nor
+in breach of it, nothing here is a target derived from it, and no prose was cut
+to fit it.
 
 And the room it would free is not worth having. A first pass suggested roughly
 1.4 KB of per-package limits disclaimers could go, on the reasoning that a rule
