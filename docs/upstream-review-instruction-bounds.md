@@ -35,6 +35,19 @@ Every figure below states the method that produces it. The three methods are:
 The first two were run against `no-mistakes`' own source rather than a
 reimplementation.
 
+Which source a method *runs* and which tree it *reads* are separate, and a
+figure can only be rechecked when both are known. Every figure the three
+methods above produce reads this repository's tree - `.no-mistakes.yaml`,
+`AGENTS.md`, and the package directories under `internal/` - which moves under
+this document at every rebase; all of them were measured on this branch,
+`fm/assistant-review-instruction-capacity`, over base `eab70bf` with this
+branch's changes applied, so recheck one by rerunning its method against the
+tree you have. The figures that are not of that class are the ones quoted from
+or cited to `no-mistakes`' own source - the two constants, the per-entry frame
+sizes, and the greps - and each of those names the file it was read in. Two
+this-tree figures went stale silently across a rebase before this labelling
+existed.
+
 ## The ask
 
 Bound `review.path_instructions` per rule rather than as one shared pool, so
@@ -101,8 +114,8 @@ By rendering, with `changed` set to the single path `<package>/file.go`, one
 package at a time: for the twelve packages no glob covers, the section is the
 heading and the `path: "*"` block alone and comes to `1422 + len(changed)`, so
 1442 for `internal/cli/file.go` up to 1450 for `internal/checkpoints/file.go`.
-For the eleven a glob does cover it runs from 2013 (`internal/graph/file.go`)
-to 4341 (`internal/findings/file.go`), median 2223. So the gap between what is
+For the twelve a glob does cover it runs from 2013 (`internal/graph/file.go`)
+to 4341 (`internal/findings/file.go`), median 2274. So the gap between what is
 charged and what is delivered is roughly four to eleven times, and it is the
 charge that refuses a run.
 
@@ -111,9 +124,10 @@ charge that refuses a run.
 By accounting, `review.path_instructions` has 11 entries totalling 16273 of the
 16384 allowed, leaving 111 bytes. Ten of those entries are package blocks; the
 eleventh is the shared `path: "*"` block, which is not a package. The ten globs
-cover eleven of this repository's twenty-three packages under `internal/`,
-because `internal/agents/**` matches both `internal/agents` and
-`internal/agents/standin`. Twelve packages have no block.
+cover twelve of this repository's twenty-four packages under `internal/`,
+because `internal/agents/**` is a literal prefix test and so matches three of
+them: `internal/agents`, `internal/agents/standin` and `internal/agents/route`.
+Twelve packages have no block.
 
 By that accounting the ten package blocks are charged 14659 bytes, an average
 of 1466 each. Every one of the ten includes its 2-byte separator, since all ten
@@ -123,8 +137,8 @@ twelve at that average costs `12 x 1466 = 17592` bytes more, for a section of
 33865.
 
 Estimated instead from the `AGENTS.md` bullets those blocks would be drawn from,
-it is `11664 + 12 x 229 + 222 + 12 x 2 = 14658` bytes more, for a section of
-30931. The 11664 is those twelve bullets measured this way: take each bullet's
+it is `13492 + 12 x 229 + 222 + 12 x 2 = 16486` bytes more, for a section of
+32759. The 13492 is those twelve bullets measured this way: take each bullet's
 first line and its indented continuation lines, remove leading and trailing
 whitespace from each line, rejoin with one newline between lines and none after
 the last, and sum the twelve. The 222 is their twelve globs. Either basis puts
@@ -184,6 +198,25 @@ wholesale suppression already described, set to zero, and outside it
 `no-mistakes` passes nothing. A third hazard would need codex's own behaviour
 absent the opt-out, which is not something `no-mistakes` sets and was not
 verified here.
+
+What survives that withdrawal is a conditional, and it is worth writing down as
+one rather than acting on it. If codex is ever the resolved adapter and the
+opt-out is not set, `no-mistakes` passes no value for `project_doc_max_bytes`,
+so whatever codex's own default is governs how much of `AGENTS.md` a reviewer
+gets, and no part of the gate observes or reports what that leaves out. A
+figure for that default - 32768 - has been in circulation through this work and
+an earlier draft of it treated the figure as measured. It was not measured:
+this document asserts no value for codex's default, the adapter is not
+installed on the machine this work was done on, and no file in this repository
+records the number. What would settle it is reading codex's actual default
+together with the codex version it belongs to, and that is left unclaimed here
+rather than assumed. The reason to record the conditional at all is scale
+rather than the figure: by this branch's tree `AGENTS.md` is 34364 bytes and at
+base `eab70bf` it was 32630, both within a page or two of a bound in that
+range, so if such a bound is real this file is already near it and ordinary
+growth reaches it. Until someone reads the default, this repository is neither
+in compliance with that bound nor in breach of it, nothing here is a target
+derived from it, and no prose was cut to fit it.
 
 And the room it would free is not worth having. A first pass suggested roughly
 1.4 KB of per-package limits disclaimers could go, on the reasoning that a rule
@@ -251,7 +284,7 @@ accounting fits one new block carrying about 220 bytes of guidance once a
 package glob is paid for, or a 469-byte addition to an existing block - 39% of
 the 1191 bytes of guidance the shared `path: "*"` block carries today. That is
 roughly the one-more-rule case, so the recovery is real and it was declined
-rather than unavailable: 469 bytes is 2.7% to 3.2% of the 14658 to 17592 a
+rather than unavailable: 469 bytes is 2.7% to 2.8% of the 16486 to 17592 a
 completed set needs, so it buys one rule and changes nothing about the bound.
 
 Compaction and per-package placement were both considered and rejected.
@@ -261,12 +294,12 @@ budget. Per-package placement is arithmetically backwards: each copy re-pays the
 home a shared rule has.
 
 There is no local fix for the shortfall, and this does not depend on how much
-triage would find. By the accounting above the eleven entries carry 13369
-bytes of guidance between them, 12178 in the ten package blocks and 1191 in the
-shared one, so deleting every byte of it - the whole section's guidance, far past
-anything the deletion test would allow - leaves the section at 2904, which is its
-frames and heading alone. Adding the 14658 this document's own lower estimate
-says a completed set needs gives 17562, so the shortfall survives the deletion of
-every rule in the section by 1178 bytes against the 16384 cap, and by 4112 on the
-higher estimate's 20496. Triage buys rules; it
-cannot buy the bound. That can only change in `no-mistakes`.
+triage would find. By the accounting above the eleven entries carry 13369 bytes
+of guidance between them, 12178 in the ten package blocks and 1191 in the
+shared one, so deleting every byte of it - the whole section's guidance, far
+past anything the deletion test would allow - leaves the section at 2904, which
+is its frames and heading alone. Adding the 16486 this document's own lower
+estimate says a completed set needs gives 19390, so the shortfall survives the
+deletion of every rule in the section by 3006 bytes against the 16384 cap, and
+by 4112 on the higher estimate's 20496. Triage buys rules; it cannot buy the
+bound. That can only change in `no-mistakes`.

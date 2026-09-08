@@ -88,17 +88,14 @@ Each has cost this repository more than one round of review.
   a document gate, where review is already past and no reviewer would see it.
   Its schema has no repository-wide review key, so a rule that holds everywhere
   is the `path: "*"` block rather than a copy in each package block, which is
-  also the cheaper of the two: every block is charged a fixed frame on top of
-  its text, so a copy per package pays that frame again each time.
+  also the cheaper of the two.
   The gate caps the whole section by an upper bound it checks before a run
   starts, and the section is close enough to that cap that a new block cannot
   fit at all and an addition to an existing block has well under a rule's worth
   of room. Measure with `no-mistakes`' own `ReviewPathInstructionsBytes` before
-  writing anything; that function is the accounting, and what it charges is the
-  configured entries rather than what a run renders: every entry is billed its
-  frame, its full matched-file allowance, and its text whether or not its glob
-  matches the change, so the refused number is the worst case over every
-  possible diff rather than the section any one review sees.
+  writing anything: that function is the accounting, and
+  `docs/upstream-review-instruction-bounds.md` owns what it charges, how much
+  room is left, and the method behind each of those figures.
   A section over the cap is refused rather than truncated, and the gate
   validates the pushed copy too, so a branch that overfills it fails its own run
   at start and cannot merge through the gate. Reaching later runs takes a commit
@@ -114,21 +111,13 @@ Each has cost this repository more than one round of review.
   `.no-mistakes.yaml` from the default branch, while this file reaches a
   reviewer only through the resolved agent CLI's project-doc discovery in the
   pushed working copy, so a rule moved here is deletable by the branch it was
-  written to review. Its reach is also adapter-dependent in a way nothing here
-  settles: no part of the gate reads this file, and nothing in this repository
-  selects or pins the adapter that does - `docs/upstream-review-instruction-bounds.md`
-  owns the searches behind both - and `no-mistakes` knows a
-  project-instruction suppression knob for only three of its adapters, every one
-  of them gated on the gate's `disable_project_settings`, which defaults false
-  and which nothing here sets. With that key false nothing is suppressed, so the
-  reach is never guaranteed and nothing reports either way; with it true the file
-  is suppressed wholesale only when every adapter in the resolved set neutralizes
-  with its effective knob intact, and the run is refused outright otherwise. The
-  one path that ends a moved rule's reach without a word is that wholesale
-  suppression, which is the same silent stop-applying that
-  moving the rule was supposed to avoid. Do not confuse
-  `disable_project_settings` with `suppress_project_instructions`, which is this
-  project's own key for the same idea and decides nothing about the gate.
+  written to review. Its reach is also adapter-dependent and nothing here
+  settles it, so a rule moved here can stop applying with no error and nothing
+  reported; `docs/upstream-review-instruction-bounds.md` owns which mechanisms
+  decide that and what was searched to establish each one. Do not confuse the
+  gate's `disable_project_settings` with `suppress_project_instructions`, which
+  is this project's own key for the same idea and decides nothing about the
+  gate.
 - Every exported symbol carries a contract, so give it a doc comment that states
   the contract rather than restating the name.
 - Prefer a small, testable pure core with the side effects at the edges. The
