@@ -163,8 +163,10 @@ that can suppress it, silently, and for every other `agent.EnsureGateNeutralized
 refuses the run rather than launching it, naming codex, claude and pi. With it
 unset - the default, and what holds here - `no-mistakes` appends no suppression
 flag and the reach is simply not settled by the gate either way. That refusal is
-the only place the gate fails closed on any of this, and its narrowness is why
-nobody has hit the silent path yet. A destination that is never guaranteed and
+the only place the gate fails closed on any of this, and neither branch is
+reached in this repository: `grep -n 'disable_project_settings' .no-mistakes.yaml`
+returns nothing, and the field is a plain bool whose missing key is falsy
+(`internal/config/config.go:180`). A destination that is never guaranteed and
 can end without a word is the same stop-applying the move was meant to prevent,
 relocated rather than removed.
 
@@ -257,10 +259,12 @@ budget. Per-package placement is arithmetically backwards: each copy re-pays the
 home a shared rule has.
 
 There is no local fix for the shortfall, and this does not depend on how much
-triage would find. By the accounting above the ten package blocks carry 12178
-bytes of guidance in total, so deleting every byte of it - far past anything the
-deletion test would allow - leaves the section at 4095. Adding the 14658 this
-document's own lower estimate says a completed set needs gives 18753, so the
-shortfall survives the most aggressive triage available by 2369 bytes against the
-16384 cap, and by 5303 on the higher estimate's 21687. Triage buys rules; it
+triage would find. By the accounting above the eleven entries carry 13369
+bytes of guidance between them, 12178 in the ten package blocks and 1191 in the
+shared one, so deleting every byte of it - the whole section's guidance, far past
+anything the deletion test would allow - leaves the section at 2904, which is its
+frames and heading alone. Adding the 14658 this document's own lower estimate
+says a completed set needs gives 17562, so the shortfall survives the deletion of
+every rule in the section by 1178 bytes against the 16384 cap, and by 4112 on the
+higher estimate's 20496. Triage buys rules; it
 cannot buy the bound. That can only change in `no-mistakes`.
