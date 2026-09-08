@@ -87,6 +87,13 @@ type heldService struct {
 	inside  chan struct{}
 	release chan struct{}
 	let     func()
+	// ignoreCancel keeps the body inside itself after the segment's context is
+	// cancelled, until the test lets it out. It models a body still working in
+	// the run's isolated copy when an ending arrives: a cancellation is a
+	// signal a body between cancellation points has not seen yet, and the
+	// reclaim-timing tests hold that window open rather than racing it. Set it
+	// before begin; the body's goroutine reads it after.
+	ignoreCancel bool
 	// entries counts every entry into the stage body, including one a
 	// continuation would make.
 	entries atomic.Int64
@@ -206,9 +213,15 @@ func newHeldService(t *testing.T) *heldService {
 				return func(ctx context.Context, _ pipeline.Input) (pipeline.Output, error) {
 					held.entries.Add(1)
 					entered.Do(func() { close(held.inside) })
-					select {
-					case <-held.release:
-					case <-ctx.Done():
+					if held.ignoreCancel {
+						// A body between cancellation points: the ending has
+						// signalled and the body is still working.
+						<-held.release
+					} else {
+						select {
+						case <-held.release:
+						case <-ctx.Done():
+						}
 					}
 					// The context decides, not the select. Both channels are
 					// ready once an ending cancels the segment and the teardown

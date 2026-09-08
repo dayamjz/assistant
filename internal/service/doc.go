@@ -302,6 +302,16 @@
 // the copy of a run that is held for a person is kept, because the copy is
 // what the answer resumes into.
 //
+// When the copy comes back is a decision apart from the status moving, and
+// reclaimWhenEnded owns it. A cancel and a superseding push move the record
+// immediately - a person who cancels sees the record move and waits on no
+// segment - while the copy is given back only once no segment may still be
+// executing a stage body in it, observed off the run's slot rather than
+// awaited. A service that dies between the two leaves the copy standing, and
+// that direction is chosen: the next open reclaims the copies of finished
+// runs, and a directory outliving its run for a while is the lesser loss
+// against a working tree removed from under an executing body.
+//
 // A copy is also kept when its work is nowhere else. The rebase stage moves a
 // copy's head to commits only that copy holds until the push stage forwards
 // them, so a run ended between those two stages keeps its copy and the refusal

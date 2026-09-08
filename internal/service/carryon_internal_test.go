@@ -111,7 +111,7 @@ func TestAnEndingThroughTheProtocolIsOrderedAgainstTheSegmentItEnds(t *testing.T
 		if segment.Err() == nil {
 			t.Fatal("ending the run left the segment advancing it running")
 		}
-		if !s.release("run") {
+		if ended, _ := s.release("run"); !ended {
 			t.Fatal("the segment gave its slot back without being told the run had been ended")
 		}
 	})
@@ -151,7 +151,7 @@ func TestAnEndingThroughTheProtocolIsOrderedAgainstTheSegmentItEnds(t *testing.T
 		if err := s.claim("run", func() {}); err != nil {
 			t.Fatalf("the slot was not given back once the ending was written: %v", err)
 		}
-		if s.release("run") {
+		if ended, _ := s.release("run"); ended {
 			t.Fatal("a segment that ran after the ending was written was told the run had been ended")
 		}
 	})

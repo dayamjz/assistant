@@ -309,7 +309,11 @@ func (s *Service) startPushedBranch(ctx context.Context, found subject, branch, 
 //
 // In no case is the displaced run's departure awaited, so nothing bounds how
 // long two runs of one branch may execute at once. That is a missing wait
-// rather than an interleaving. The mechanism that would bound it - a per-branch
+// rather than an interleaving. What the displaced run does keep for as long as
+// it executes is its isolated copy: the record moves here, and
+// reclaimWhenEnded gives the copy back only once the displaced segment is
+// known to have ended, so a stage body still reading it does not lose its
+// working tree. The mechanism that would bound it - a per-branch
 // predecessor set, with the wait as the arriving run's own first step - is
 // specified outside this tree, in internal/daemon's package documentation at
 // tag pre-rebase-2-observation-edges, and is deliberately not implemented here;

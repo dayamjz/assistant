@@ -271,6 +271,11 @@ func (s *Service) respond(ctx context.Context, req machine.RespondRequest) (mach
 // reads it, under the mutex the slot is taken and given back under. What that
 // bounds on each of endRun's two branches, and what it leaves open, is written
 // down there and nowhere else.
+//
+// The run's isolated copy is not given back here. The record moves now, which
+// is the promise above, and reclaimWhenEnded gives the copy back once no
+// segment may still be executing a stage body in it, so the window this
+// paragraph describes is one the copy survives.
 func (s *Service) cancel(ctx context.Context, req machine.CancelRequest) (machine.Run, error) {
 	built, err := s.driverFor(ctx)
 	if err != nil {
@@ -546,7 +551,7 @@ func (s *Service) advance(ctx context.Context, runID string, step func(context.C
 	defer func() { s.carryOn(runID, how) }()
 	defer func() {
 		how.byContext = segment.Err() != nil
-		how.byProtocol = s.release(runID)
+		how.byProtocol, how.owesReclaim = s.release(runID)
 	}()
 	// The caller's context ends the segment as well as the service's, so a
 	// node in flight stops rather than running on for a client that is gone.
@@ -592,6 +597,11 @@ type ending struct {
 	// under the one mutex, which is what orders an ending against the segment
 	// it ends.
 	byProtocol bool
+	// owesReclaim is whether the run's terminal move committed while this
+	// segment held the slot, leaving the isolated copy for this segment's
+	// departure to give back. It is written by reclaimWhenEnded and read by
+	// release under the same mutex, exactly as byProtocol is.
+	owesReclaim bool
 }
 
 // carryOn continues a run whose segment ended leaving nobody to answer for it.
@@ -627,6 +637,14 @@ type ending struct {
 // here. That is a bound on the shape of the thing rather than a counter
 // somebody has to keep.
 func (s *Service) carryOn(runID string, how ending) {
+	// A reclaim the slot carries is honoured before the switch and on every
+	// disposition, because it is not a continuation: it is the half of an
+	// ending that waited for this segment to be gone, and which ending that
+	// was does not change what is owed. reclaimWhenEnded says why it rides
+	// here rather than at the move.
+	if how.owesReclaim {
+		s.reclaimOwed(runID)
+	}
 	switch how.disposition(s.stopCtx.Err() != nil) {
 	case dispositionEnded:
 		s.log.Printf("run %s was ended through the protocol; nothing carries it on", runID)
@@ -886,6 +904,14 @@ type slot struct {
 	// ended is whether the run was ended through the protocol while this slot
 	// stood.
 	ended bool
+	// owesReclaim is whether the run's terminal move committed while this slot
+	// stood, which leaves the isolated copy's reclaim riding the slot: the
+	// segment's release reports it and carryOn gives the copy back. It is set
+	// only by reclaimWhenEnded and only after the move it answers for is
+	// durable, so a release that reads it true reads a record already at a
+	// terminal status. reclaimWhenEnded also reads it, to leave a run whose
+	// reclaim some earlier ending already owns alone.
+	owesReclaim bool
 }
 
 // claim takes the one slot a run advances in.
@@ -910,14 +936,18 @@ func (s *Service) claim(runID string, cancel context.CancelFunc) error {
 	return nil
 }
 
-// release gives the slot back, and reports whether the run was ended through
-// the protocol while this segment held it.
-func (s *Service) release(runID string) bool {
+// release gives the slot back, and reports two facts read off it under the one
+// mutex: whether the run was ended through the protocol while this segment
+// held it, and whether the slot carries the run's copy reclaim.
+func (s *Service) release(runID string) (ended, owesReclaim bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	held, taken := s.advancing[runID]
 	delete(s.advancing, runID)
-	return taken && held.ended
+	if !taken {
+		return false, false
+	}
+	return held.ended, held.owesReclaim
 }
 
 // endRun records that a run is being ended through the protocol and ends the
