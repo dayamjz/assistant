@@ -260,19 +260,31 @@ func TestAConflictingRebaseIsAFixEligibleFinding(t *testing.T) {
 	}
 }
 
-// A copy whose remote is not the one this stage fetches from fails the stage
-// with a message naming what is missing, rather than fetching from whatever
-// happens to be configured or rebasing onto what the copy already held.
+// A copy whose remote is not the one this stage fetches from fails the stage,
+// rather than fetching from whatever happens to be configured or rebasing onto
+// what the copy already held.
+//
+// What is asserted is the diagnosis and not only the failure. Every git
+// invocation this stage makes against a remote that is not there fails on its
+// own, so a test asking only whether the stage failed would pass with no such
+// check in the code at all. This stage's documentation promises a message
+// naming what is missing, because that message is the difference between an
+// operator reading "this copy has no origin remote" and reading whatever git
+// says about a repository it could not reach, and a doc comment is a contract.
 func TestACopyWithNoUpstreamRemoteFailsTheStage(t *testing.T) {
 	t.Parallel()
 
 	s := newSubject(t)
 	git(t, s.copy, "remote", "rename", "origin", "somewhere-else")
 
-	if _, err := s.runRebase(nil); err == nil {
+	_, err := s.runRebase(nil)
+	if err == nil {
 		t.Fatal("the stage ran against a copy with no remote to fetch the upstream from")
-	} else if !strings.Contains(err.Error(), "origin") {
-		t.Fatalf("the failure does not name the remote it needed: %v", err)
+	}
+	for _, want := range []string{`no "origin" remote`, s.copy, "cannot be fetched"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("the failure does not say %q, so it does not name what is missing: %v", want, err)
+		}
 	}
 }
 
