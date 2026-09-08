@@ -147,16 +147,19 @@ func open(t *testing.T, scenario fixture.Scenario, opts ...func(*journey.Options
 // serving starts the service in a process this test owns, so it can be killed
 // the way a crash kills it, and reports what starting it came to.
 //
-// This is where the platform guard is taken, on the failure the sibling
-// packages take it on, which is what keeps a check from failing for the
-// transport rather than for the product.
+// It takes no platform guard, and that is the difference between it and serve.
+// The guard answers a service that was expected to come up and did not, so it
+// belongs to a caller that expected one; a caller reaching for this reached
+// for the error, and the only such caller's whole subject is a service it
+// arranged to fail. A guard here would fire on that arranged failure and skip
+// the check for the failure it exists to observe, which is what it did until
+// the day a platform without the transport ran it.
 //
 // It and startsService are the two ways a service is started here, because a
 // service this harness owns as a child and a service the command surface
 // starts are different things: only the first can be killed at a stage
 // boundary, only the second answers as a document, and only the first hands
-// back an error a guard can be conditioned on. That last difference is why the
-// guard lives here rather than in both.
+// back an error a caller can condition on.
 //
 // The rule they exist for is that no test starts a service another way, and
 // the residual gap is that nothing enforces it. Go cannot close the door on an
@@ -168,17 +171,20 @@ func open(t *testing.T, scenario fixture.Scenario, opts ...func(*journey.Options
 // not, and startsService for one asked for over the surface.
 func serving(t *testing.T, j *journey.Journey) error {
 	t.Helper()
-	err := j.Serve()
-	if err != nil {
-		requiresLocalSocket(t, err)
-	}
-	return err
+	return j.Serve()
 }
 
 // serve starts the service and fails the test unless it came up.
+//
+// This is where the platform guard is taken, on the failure the sibling
+// packages take it on: a service that had to come up and did not, which is the
+// one failure a missing transport can be read off. That keeps a check from
+// failing for the transport rather than for the product, and it keeps the skip
+// off every other way a service can fail to start.
 func serve(t *testing.T, j *journey.Journey) {
 	t.Helper()
 	if err := serving(t, j); err != nil {
+		requiresLocalSocket(t, err)
 		t.Fatalf("serving: %v", err)
 	}
 }

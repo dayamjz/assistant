@@ -482,8 +482,11 @@ Each has cost this repository more than one round of review.
   drives a run skips where `internal/ipc` reads no local socket peer
   credentials, and a check whose service did not come up skips where there is
   no local socket transport to serve the protocol over, which is the wider of
-  the two because a check needs a service before it can drive anything. Either
-  skip is
+  the two because a check needs a service before it can drive anything. The
+  second is taken wherever a service was expected to come up and never wherever
+  one is started, because a check whose subject is a service it arranged to
+  fail would otherwise be skipped on the arranged failure and establish nothing
+  there. Either skip is
   recorded as a limit in that `README.md` and in the `Coverage` note of every
   principle it takes down with it, because a skipped check that reads as a pass
   is what this package exists to refuse. Neither limit is recorded as a list of

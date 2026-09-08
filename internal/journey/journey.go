@@ -25,6 +25,16 @@ const ReadyTimeout = 30 * time.Second
 // readyPoll is how often the wait re-asks.
 const readyPoll = 20 * time.Millisecond
 
+// reapGrace bounds how long a kill that reported a failure waits for this
+// journey's reaper to account for the process anyway.
+//
+// It is not a timeout on the kill. The process is either already reaped, in
+// which case the reaper closes its channel as soon as the goroutine holding it
+// is scheduled and any grace at all is enough, or it is still running, in
+// which case no wait would change the answer. What the length buys is only
+// that a loaded machine does not turn the first case into the second.
+const reapGrace = 5 * time.Second
+
 // Journey is one home, one subject scenario, and the product binary driven
 // against them as a process.
 //
@@ -78,6 +88,34 @@ func (s *serving) exited() (bool, error) {
 		return true, s.err
 	default:
 		return false, nil
+	}
+}
+
+// end kills the process and returns once the reaper holds its exit.
+//
+// What the kill itself answered is not what this reports. Asking to kill a
+// process this journey's own reaper has already reaped is refused, and which
+// refusal it is is not settled here: this code recognized one of them and met
+// another, and TestKillIsAnsweredByTheReaperAndNotByWhatTheKillReported
+// reaches a refusal that is not the recognized one on any platform. So a
+// caller conditioned on the refusal it had seen is conditioned on where it was
+// running rather than on what had happened.
+//
+// The reaper is the one thing here that can answer it without that problem: it
+// holds the process's exit or it does not. So a kill that reported a failure
+// is reported on only when the reaper still has nothing, which is the case
+// where something really is still serving.
+func (s *serving) end() error {
+	killed := s.cmd.Process.Kill()
+	if killed == nil {
+		<-s.done
+		return nil
+	}
+	select {
+	case <-s.done:
+		return nil
+	case <-time.After(reapGrace):
+		return fmt.Errorf("journey: killing the service: %w", killed)
 	}
 }
 
@@ -550,32 +588,31 @@ func (j *Journey) WaitReady() error {
 // and what P6 is about is the service that did not get the chance: the run's
 // position has to be recoverable from what was already durable, not from
 // anything the process wrote on its way out.
+//
+// It promises two things, and it keeps the second whatever became of the
+// first. Nothing is serving this home afterwards, which end establishes. And
+// this harness holds nothing of the home open afterwards, which is why the log
+// is released and the journey stops serving on the way out of every path
+// rather than only the one where the kill went as expected: a handle this
+// process still holds is a home that cannot be removed on a platform where an
+// open file is not unlinkable, so a Kill that reported a failure and kept the
+// handle would turn one failure into two and lose the first behind the second.
 func (j *Journey) Kill() error {
 	if j.service == nil {
 		return errors.New("journey: this journey is not serving")
 	}
-	// A service that has already gone - because something asked it to stop, or
-	// because it failed - is not an error to kill. What Kill promises is that
-	// nothing is serving afterwards, and that already holds.
-	//
-	// The reaping this harness did is what settles that, rather than what the
-	// operating system makes of a signal to a process already reaped: one
-	// platform answers os.ErrProcessDone there and another answers that the
-	// handle it released is an invalid argument, so a Kill that read the
-	// answer would refuse on the second and leave the log open behind it. Only
-	// a process this harness has not seen end is signalled, and the answer to
-	// that is still read, for the process that ends between the two.
-	if ended, _ := j.service.exited(); !ended {
-		if err := j.service.cmd.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
-			return fmt.Errorf("journey: killing the service: %w", err)
+	service := j.service
+	j.service = nil
+	var errs []error
+	if err := service.end(); err != nil {
+		errs = append(errs, err)
+	}
+	if service.log != nil {
+		if err := service.log.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("journey: closing the service log %s: %w", j.harnessLog(), err))
 		}
 	}
-	<-j.service.done
-	if j.service.log != nil {
-		_ = j.service.log.Close()
-	}
-	j.service = nil
-	return nil
+	return errors.Join(errs...)
 }
 
 // describeExit renders how a serving process ended, for a failure that says

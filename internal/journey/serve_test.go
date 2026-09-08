@@ -38,6 +38,12 @@ import (
 // refusal names the key this home's document asked for, and the same home with
 // that key taken back out comes up. The second is what rules out this home,
 // this harness and this machine, none of which the key changed.
+//
+// The refusal is arranged rather than encountered, so this check needs no
+// service that comes up until that second half, and it is guarded there rather
+// than at the top. A guard over the whole check would skip it wherever a
+// service cannot come up, and it would skip it on the arranged failure, which
+// is the observation it exists to make.
 func TestServingAHomeTheServiceRefusesReportsTheExitRatherThanWaitingItOut(t *testing.T) {
 	scenario, dir := cloned(t)
 	j := open(t, scenario, func(o *journey.Options) { o.Dir = dir })
@@ -77,6 +83,12 @@ func TestServingAHomeTheServiceRefusesReportsTheExitRatherThanWaitingItOut(t *te
 		t.Fatalf("rewriting the home's configuration without the standing skip: %v", err)
 	}
 	if err := serving(t, j); err != nil {
+		// This half, and only this half, asks for a service that comes up, so
+		// it is the half a platform without the transport is read off. The
+		// skip forfeits the control below it and keeps everything above,
+		// which is the opposite of a guard over the whole check: what the
+		// refusal named is still established there.
+		requiresLocalSocket(t, err)
 		t.Fatalf("the same home, differing only in that its document no longer asks for a standing "+
 			"skip, did not come up either: %v\n\nso the exit above is not attributable to the "+
 			"document, and what this test read as a refusal was something about this home, this "+
@@ -98,7 +110,14 @@ func TestServingAHomeTheServiceRefusesReportsTheExitRatherThanWaitingItOut(t *te
 // platform that holds an open file against a delete. Closing is asserted
 // through the home actually going away rather than through Close's answer
 // alone, because the file left open and the directory left standing are the
-// same failure and only the second is observable everywhere.
+// same failure and only the second is a thing a test can look at.
+//
+// What that buys is bounded, and the bound is worth stating: the removal only
+// fails where an open file is held against a delete, so this check runs
+// everywhere and can fail only there. Everywhere else it passes whether or not
+// Kill let go of anything. TestKillIsAnsweredByTheReaperAndNotByWhatTheKill
+// Reported is what covers the same ground on any platform, by asserting the
+// handle rather than its consequence.
 //
 // It takes no platform guard, and that is the point of it: the service here
 // exits over its own configuration document before any transport is involved,
@@ -112,7 +131,7 @@ func TestKillingAServiceThatEndedOnItsOwnLeavesNothingHoldingTheHome(t *testing.
 		t.Fatalf("writing a configuration the service refuses: %v", err)
 	}
 
-	if err := j.Serve(); err == nil {
+	if err := serving(t, j); err == nil {
 		t.Fatal("this home carries a standing skip and the service reported itself ready over it")
 	}
 
