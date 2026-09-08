@@ -18,18 +18,20 @@ import (
 // binary that ships.
 //
 // It answers section 13's three-part test for P2 in one scenario, because the
-// three parts are one claim: a run walks the nine stages in the specified
-// order, a person may skip stages for one run on purpose, and a configuration
-// document that asks for a standing skip is refused before the service serves
-// anything.
+// three parts are one claim: a run walks the stages in the specified order, a
+// person may skip stages for one run on purpose, and a configuration document
+// that asks for a standing skip is refused before the service serves anything.
+// Both runs here skip the review stage, for the reason walkableRun states, so
+// the first part is established for every stage but that one: no run in this
+// build both takes review and reaches the end of the gate.
 //
 // The order itself is internal/pipeline's, which makes another order unsayable
 // rather than checked, and internal/service renders it by iterating that order
 // rather than by carrying one of its own. So no clause here asserts it: over a
 // run's answer the order cannot come back wrong, and a clause that cannot fail
 // is what this package refuses. What this establishes that the owner cannot is
-// that the shipped binary reaches every one of those stages, runs each, and
-// carries each away with the outcome it was given.
+// that the shipped binary reaches every one of those stages, runs each that
+// the run did not skip, and carries each away with the outcome it was given.
 //
 // The third part is refused by internal/config's key table rather than by a
 // rule written against standing skips: the table admits no key named skip, so
@@ -56,8 +58,14 @@ func TestAPassMeansTheSameThingEverywhere(t *testing.T) {
 		held[stage.String()] = true
 	}
 
+	// The one stage this walk skips, so the clauses below can say "every stage
+	// this run did not skip" and mean something a reader can hold them to. The
+	// skip semantics themselves - a skipped stage does not run and comes back
+	// skipped - are the second check's subject, not this one's.
+	walkSkips := pipeline.StageReview.String()
+
 	walked := journey.Check[machine.Run]{
-		What: "P2: a run through the binary over every stage",
+		What: "P2: a run through the binary over every stage it can take",
 		Clauses: []journey.Clause[machine.Run]{
 			{
 				// The list's length is the one thing about its shape that is
@@ -76,11 +84,11 @@ func TestAPassMeansTheSameThingEverywhere(t *testing.T) {
 				},
 			},
 			{
-				States: "every stage of a run that skipped nothing ran",
+				States: "every stage this run did not skip ran",
 				Holds: func(run machine.Run) error {
 					for _, stage := range run.Stages {
-						if !stage.Ran {
-							return fmt.Errorf("the %s stage did not run, and this run skipped nothing", stage.Stage)
+						if stage.Stage != walkSkips && !stage.Ran {
+							return fmt.Errorf("the %s stage did not run, and this run did not skip it", stage.Stage)
 						}
 					}
 					return nil
@@ -111,13 +119,14 @@ func TestAPassMeansTheSameThingEverywhere(t *testing.T) {
 			{
 				// The stages with a body report what their bodies established,
 				// which this cannot state in advance. What it can state is the
-				// one outcome no stage of this run may carry, which is the
-				// shape the clause above catches for the stages it covers.
-				States: "no stage of a run that skipped nothing came back skipped",
+				// one outcome no unskipped stage of this run may carry, which
+				// is the shape the clause above catches for the stages it
+				// covers.
+				States: "no stage this run did not skip came back skipped",
 				Holds: func(run machine.Run) error {
 					for _, stage := range run.Stages {
-						if stage.Outcome == pipeline.OutcomeSkipped {
-							return fmt.Errorf("the %s stage came back %q, and this run skipped nothing",
+						if stage.Stage != walkSkips && stage.Outcome == pipeline.OutcomeSkipped {
+							return fmt.Errorf("the %s stage came back %q, and this run did not skip it",
 								stage.Stage, stage.Outcome)
 						}
 					}
@@ -171,7 +180,7 @@ func TestAPassMeansTheSameThingEverywhere(t *testing.T) {
 			}},
 		},
 	}
-	whole := last(answerHolds(t, j, startRun(t, j, "--intent", "narrow the Total loop bound on purpose"), "approved"))
+	whole := last(answerHolds(t, j, walkableRun(t, j, "narrow the Total loop bound on purpose"), "approved"))
 	if err := walked.Verify(whole); err != nil {
 		t.Fatalf("%v\n\nthe run stands at %q, outcome %s, over stages %v",
 			err, whole.Position, whole.Outcome, stageNames(whole))

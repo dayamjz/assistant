@@ -70,9 +70,11 @@ func Settlements() []Settlement {
 				"other commit before a finding is reached.",
 			Exercised: "The delivery half is driven: a copy of this binary standing on PATH under the " +
 				"agent's name answers a scripted invocation, and a run resolves its agent off that PATH. " +
-				"The selection half has nothing to select. No stage body launches an agent in this " +
-				"build, so no report an agent wrote reaches a run, and the planted responses are driven " +
-				"through internal/findings and the production adapter instead.",
+				"The selection half has nothing to select. No run reaches an agent in this build - the " +
+				"review body would launch one and fails on the isolated copy nothing creates before it " +
+				"launches, so every walk skips it - so no report an agent wrote reaches a run, and the " +
+				"planted responses are driven through internal/findings and the production adapter " +
+				"instead.",
 		},
 		{
 			Question: "question-provider-response-delivery",
@@ -126,8 +128,9 @@ func Settlements() []Settlement {
 				"under that key. The unsuppressed case is a whole run over the branch, but what it " +
 				"establishes is the pushed-configuration rejections rather than that nothing in the " +
 				"prose became an executed command: every planted executable is reached only through a " +
-				"stage body that launches something and this build has none, so the tripwire file is " +
-				"read and logged rather " +
+				"stage body that launches something, and no run reaches one - the review body fails on " +
+				"the isolated copy nothing creates before it launches, and the walk skips it - so the " +
+				"tripwire file is read and logged rather " +
 				"than asserted on.",
 		},
 		{

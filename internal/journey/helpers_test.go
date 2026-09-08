@@ -240,6 +240,23 @@ func startRun(t *testing.T, j *journey.Journey, args ...string) machine.Run {
 	return decodeRun(t, succeeds(t, j.Command(args...)))
 }
 
+// walkableRun starts a run a walk can carry from one hold to the next, which
+// in this build means skipping the review stage.
+//
+// The review stage has a body, and that body opens the run's isolated copy
+// before it launches anything. Nothing in this build creates one, so a run
+// that takes the stage fails there rather than holding, and a walk that took
+// it would end at review however its holds were answered. The skip is a run
+// input, which PRD principle P2 makes a person's per-run choice, so this
+// drives the surface a person would drive rather than weakening the stage:
+// the internal/cli and internal/service tests that walk a run carry the same
+// skip for the same reason. The stage is named rather than derived, and the
+// name goes away when the build creates the isolated copy a run works in.
+func walkableRun(t *testing.T, j *journey.Journey, intent string) machine.Run {
+	t.Helper()
+	return startRun(t, j, "--skip", pipeline.StageReview.String(), "--intent", intent)
+}
+
 // answerHolds answers every decision the run reaches with the same option
 // until the run stops moving, and returns every answer in order, the one it
 // was given first among them.

@@ -11,6 +11,7 @@ import (
 	"github.com/dayamjz/assistant/internal/fixture"
 	"github.com/dayamjz/assistant/internal/journey"
 	"github.com/dayamjz/assistant/internal/machine"
+	"github.com/dayamjz/assistant/internal/pipeline"
 )
 
 // attachOrStart stands for the row of PRD section 9's table that has no word
@@ -155,7 +156,11 @@ func TestTheWholeCommandSurfaceAnswersOneDocumentPerInvocation(t *testing.T) {
 	// One run, across separate invocations of the binary, with the service
 	// restarted in the middle. Every step is its own process, which is what
 	// makes this a claim about the surface rather than about a library.
-	started := drive[machine.Run](t, &observed, j, "--intent", "a change driven a command at a time")
+	// The skip is the one walkableRun documents: answering the first hold
+	// carries the run into the review stage, which fails on the isolated copy
+	// nothing creates, and this test needs the run holding afterwards.
+	started := drive[machine.Run](t, &observed, j, "--skip", pipeline.StageReview.String(),
+		"--intent", "a change driven a command at a time")
 	observed.promisedRunAt = len(observed.spoke) - 1
 	answered := drive[machine.Run](t, &observed, j, "--answer", "approved")
 	if err := j.Kill(); err != nil {

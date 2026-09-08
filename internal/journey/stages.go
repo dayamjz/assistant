@@ -170,7 +170,6 @@ var ErrUndeclaredStage = errors.New("journey: a stage's implementation status is
 // names and the build stop matching in either direction.
 var bodyless = []pipeline.Stage{
 	pipeline.StageRebase,
-	pipeline.StageReview,
 	pipeline.StageTest,
 	pipeline.StageDocument,
 	pipeline.StageLint,

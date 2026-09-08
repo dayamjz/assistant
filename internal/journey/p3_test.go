@@ -215,7 +215,7 @@ func TestAFindingThatIsNotClassifiedStopsForAPerson(t *testing.T) {
 
 		j := inClone(t)
 		walk := answerHolds(t, j,
-			startRun(t, j, "--intent", "a change most of whose stages have no body in this build"), "approved")
+			walkableRun(t, j, "a change most of whose stages have no body in this build"), "approved")
 		observed := stopped{holds: walk[:len(walk)-1], stages: len(stagesWithoutABody(t))}
 		if len(observed.holds) == 0 {
 			t.Fatalf("the run reached no hold at all, so there is nothing here for any of this to be "+

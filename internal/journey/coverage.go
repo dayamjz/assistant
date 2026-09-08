@@ -21,8 +21,11 @@ const (
 	// ReachPackage is driven through the package that owns the mechanism, in
 	// this process, against the fixture. It is what is left where the binary
 	// cannot reach a mechanism at all, which today is every mechanism a stage
-	// body would have used: internal/stages has a body for the intent stage
-	// alone, and that one reads the supplied intent and launches nothing.
+	// body would have used past the run's own state: the intent body reads
+	// the supplied intent and launches nothing, and the review body opens the
+	// run's isolated copy - which nothing in this build creates - before it
+	// launches anything, so a run that takes it fails there and every walk
+	// here skips it instead.
 	ReachPackage Reach = "package"
 	// ReachNone is not driven here. The reason beside it says why, and it is
 	// prose nobody checks; what the row buys is that the gap is enumerable
@@ -69,9 +72,11 @@ func Coverage() []Established {
 				"either skip is taken nothing about that half is established there, and where both are, " +
 				"nothing about P1 is."},
 		{principles.P2, ReachBinary,
-			"One run of the binary reaches every stage of the gate; a second skips two of " +
+			"One run of the binary reaches every stage it does not skip; a second skips two of " +
 				"them for that run only; and a home whose configuration document asks for a standing " +
-				"skip stops the service before it serves. Two narrow facts are what establish the third: " +
+				"skip stops the service before it serves. Both runs skip review, because its body " +
+				"fails on the isolated copy nothing in this build creates, so no run here both takes " +
+				"that stage and reaches the end of the gate. Two narrow facts are what establish the third: " +
 				"internal/config's key table admits no key named skip, and a key it does not admit is " +
 				"refused where the document is walked, before the service binds. A second key of another " +
 				"name is driven beside it and held to the same answer, so the refusal is not read off one " +
@@ -81,8 +86,8 @@ func Coverage() []Established {
 				"claims it: internal/pipeline's nine named fields make another order unsayable, and " +
 				"internal/service renders a run's answer by iterating that order, so a clause over the " +
 				"order could not fail from what a run reports. What the run half establishes instead is " +
-				"that a report came back for every stage, that each ran, and that each carried the " +
-				"outcome its hold was given. All three parts are one test, and it starts a run through a " +
+				"that a report came back for every stage, that each the run did not skip ran, and that " +
+				"each carried the outcome its hold was given. All three parts are one test, and it starts a run through a " +
 				"method internal/ipc restricts, so on a platform where that package reads no local socket " +
 				"peer credentials the test is skipped rather than passing and nothing about P2 is " +
 				"established there."},
@@ -92,27 +97,33 @@ func Coverage() []Established {
 				"than counted, every hold is relayed with the finding that produced " +
 				"it, every one of those findings reports itself as holding for a person, and none is one " +
 				"a fixer may take. The planted agent output is driven at package reach as well, because " +
-				"no stage body launches an agent in this build, so no report an agent wrote reaches a run. " +
+				"no run reaches an agent in this build - the review body would launch one, and it fails " +
+				"on the isolated copy nothing creates before launching, so the walk skips it - and no " +
+				"report an agent wrote therefore reaches a run. " +
 				"The run half starts a run through a method internal/ipc restricts, so on a platform where " +
 				"that package reads no local socket peer credentials it is skipped rather than passing, and " +
 				"the package-reach half over the planted agent output is the whole of what is established " +
 				"there."},
 		{principles.P4, ReachPackage,
-			"The binary cannot reach this: no stage body launches an agent, so a run makes no agent " +
-				"invocation to assert over. What is driven is the production adapter over the stand-in, " +
-				"which is where the type split lives and where an invocation record can be read off the " +
-				"wire."},
+			"The binary cannot reach this: no run launches an agent, because the one body that would - " +
+				"review - fails on the isolated copy nothing in this build creates before it launches, " +
+				"and every walk here skips it, so a run makes no agent invocation to assert over. What " +
+				"is driven is the production adapter over the stand-in, which is where the type split " +
+				"lives and where an invocation record can be read off the wire."},
 		{principles.P5, ReachNone,
-			"The review stage has no body, so no run reviews anything and no fix round is taken for " +
-				"one to re-review. internal/principles declares this gap and this harness adds nothing " +
-				"to it."},
+			"The review stage has a body and no run this harness drives can take it: it fails on the " +
+				"isolated copy nothing in this build creates, so every walk skips it, no run reviews " +
+				"anything, and no fix round is taken for one to re-review. internal/stages' own tests " +
+				"claim P5 against the body directly; this harness adds nothing to that."},
 		{principles.P6, ReachBinary,
 			"The service is killed at every boundary a real run reaches and the run is driven to its " +
 				"end afterwards, which is P6's own stated verification criterion; the criterion is every " +
 				"boundary rather than a count of them. A boundary is a hold, so the boundaries are the " +
 				"stages this build has no body for. The intent stage is not among them and no kill is " +
 				"manufactured for it: it has a body, PRD section 5 has it never block a run, and a stage " +
-				"that never holds offers nothing to kill at. What the recovered decision is held to is " +
+				"that never holds offers nothing to kill at. Review is not among them either: the run " +
+				"skips it, because its body fails on the isolated copy nothing creates rather than " +
+				"holding, and a skipped stage offers no hold. What the recovered decision is held to is " +
 				"that it stands at the same stage and still offers what it offered, which a checkpoint " +
 				"round trip can lose; that it offers something nobody was offered is not claimed, " +
 				"because internal/pipeline gives every hold the same fixed rendering and internal/graph " +
@@ -135,8 +146,10 @@ func Coverage() []Established {
 				"process beside the run rather than anything the run does. Two things are not " +
 				"established at any reach and no clause claims them: that nothing the branch or the " +
 				"template installed arrived or executed, because the branch's planted executables are " +
-				"reached only through a stage body that launches something and this build's one stage " +
-				"body reads the supplied intent, while the template's are receive-side hooks reached " +
+				"reached only through a stage body that launches something and no run reaches one - " +
+				"the intent body reads the supplied intent, and the review body fails on the isolated " +
+				"copy nothing creates before it launches, so the run skips it - while the template's " +
+				"are receive-side hooks reached " +
 				"only by a push to the gate and the four subtests that plant one make no push; " +
 				"and which agent a run resolved, because no shipped surface reports it. The trusted configuration " +
 				"document is driven at package reach: nothing in this build reads a repository's own " +
