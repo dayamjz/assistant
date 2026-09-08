@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/dayamjz/assistant/internal/forge"
+	"github.com/dayamjz/assistant/internal/gate"
 	"github.com/dayamjz/assistant/internal/graph"
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
@@ -45,11 +46,25 @@ func (s *Service) start(ctx context.Context, req machine.StartRequest) (machine.
 	if err != nil {
 		return machine.Run{}, fmt.Errorf("service: reading the branch to validate: %w", err)
 	}
-	head, err := working.ResolveCommit(ctx, "HEAD")
-	if err != nil {
-		return machine.Run{}, fmt.Errorf("service: reading the commit to validate: %w", err)
-	}
 	skip, err := parseStages(req.Skip)
+	if err != nil {
+		return machine.Run{}, err
+	}
+	// The branch reaches the gate before the run is recorded, which is what
+	// makes this path agree with the one a gate push takes. PRD principle P1
+	// makes the push the consent boundary and PRD section 9's bare command
+	// starts a run from the branch you are on; those only agree if the branch
+	// is in the gate, and the invocation is the asking.
+	//
+	// What the gate took is also the only commit this run may validate, so it
+	// is read back from here rather than from the working copy. The two would
+	// almost always agree, and a second read would be a second answer to
+	// which commit is under validation - one of which the gate does not hold.
+	spec, err := s.gateSpecFor(ctx, repository.ID)
+	if err != nil {
+		return machine.Run{}, err
+	}
+	head, err := gate.TakeBranch(ctx, spec, branch, gate.WithIndex(s.store))
 	if err != nil {
 		return machine.Run{}, err
 	}
@@ -331,6 +346,12 @@ func (s *Service) begin(ctx context.Context, record store.Run, start pipeline.St
 	if _, err := built.runs.Start(ctx, record.ID); err != nil {
 		return machine.Run{}, err
 	}
+	// The copy is made after the row exists, per PRD section 8's ordering
+	// rule, and before the first stage runs, because every stage after the
+	// intent stage reads the change out of it.
+	if err := s.createCopy(ctx, record); err != nil {
+		return machine.Run{}, err
+	}
 	return s.advance(ctx, record.ID, func(ctx context.Context) (graph.Result, error) {
 		return built.executor.Run(ctx, record.ID, initial)
 	})
@@ -378,8 +399,8 @@ type run struct {
 }
 
 // create records a new run. PRD section 8 requires the row to precede the run's
-// directory, and nothing here creates one, so a stage that needs an isolated
-// copy makes it after this.
+// directory, which is why this only records: begin makes the copy once the row
+// exists, so a directory never stands without a row to account for it.
 func (s *Service) create(ctx context.Context, r run) (store.Run, error) {
 	built, err := s.driverFor(ctx)
 	if err != nil {
@@ -387,6 +408,9 @@ func (s *Service) create(ctx context.Context, r run) (store.Run, error) {
 	}
 	if r.supplied && strings.TrimSpace(r.intent) == "" {
 		return store.Run{}, errors.New("service: a run cannot claim a supplied intent with nothing behind it")
+	}
+	if err := s.gateHoldsHead(ctx, r); err != nil {
+		return store.Run{}, err
 	}
 	id, err := newRunID()
 	if err != nil {
@@ -403,6 +427,44 @@ func (s *Service) create(ctx context.Context, r run) (store.Run, error) {
 		Build:         s.build,
 		ConfigDigest:  s.digest,
 	})
+}
+
+// gateHoldsHead refuses a run recorded against a commit the gate does not
+// hold, which is the invariant every path into a run answers to: the gate
+// holds every commit under validation.
+//
+// It sits here rather than at either caller because here is where a run record
+// is written, and all three paths that write one - the bare command, a rerun,
+// and a gate push - reach it. A check at the callers would be a check a fourth
+// path could be written without, and the two paths that exist today disagreed
+// about this until it was made unrepresentable: the push path takes its head
+// from the push, so the gate holds it by construction, while the bare command
+// reads the working copy's head, which the gate may never have seen.
+//
+// Failing here rather than where the copy is made is the point. A run recorded
+// against a commit the gate does not hold is a run that cannot have an
+// isolated copy, and every stage after the intent stage reads the change out
+// of that copy, so such a run could only report outcomes it never established.
+// Refusing at the record keeps that state from existing at all.
+//
+// It is one read of a local bare repository, and it runs under the branch
+// claim. That claim is per branch, so no other branch waits on it; what waits
+// is a second start of the same branch, which is a call that is about to be
+// told the branch already has a run.
+func (s *Service) gateHoldsHead(ctx context.Context, r run) error {
+	spec, err := s.gateSpecFor(ctx, r.repository)
+	if err != nil {
+		return err
+	}
+	held, err := gate.Holds(ctx, spec, r.head, gate.WithIndex(s.store))
+	if err != nil {
+		return fmt.Errorf("service: whether the gate holds %s could not be established: %w", r.head, err)
+	}
+	if !held {
+		return fmt.Errorf("%w: the gate does not hold %s, so a run validating it could have no "+
+			"isolated copy to read the change out of", ErrHeadNotInGate, r.head)
+	}
+	return nil
 }
 
 // baseCommit is the commit the change is measured against: where this branch
@@ -604,13 +666,23 @@ func (s *Service) settle(ctx context.Context, runID string, result graph.Result)
 	default:
 		return nil
 	}
-	if _, err := move(ctx, runID); err != nil {
+	moved, err := move(ctx, runID)
+	if err != nil {
 		var wrong *store.RunStatusError
 		if !errors.As(err, &wrong) {
 			return err
 		}
 		s.log.Printf("run %s was %s rather than where this segment left it", runID, wrong.Actual)
+		moved, err = s.store.Run(ctx, runID)
+		if err != nil {
+			return err
+		}
 	}
+	// A run that has finished gives its copy back here, which is one of the
+	// two times reclaimCopy is called; recovery is the other, for the copies
+	// a service that died left behind. A run that halted keeps its copy: it
+	// is waiting on an answer, and the copy is what the answer resumes into.
+	s.reclaimCopy(ctx, moved)
 	s.publishRunState(ctx, runID)
 	return nil
 }
@@ -669,6 +741,12 @@ func (s *Service) recover(ctx context.Context) {
 		}
 		for _, record := range records {
 			if record.Status != store.RunRunning && record.Status != store.RunPending {
+				// A run that finished before this service opened may still
+				// have its copy: the service that ran it died, or was killed
+				// between the verdict and the reclaim. This is the second of
+				// reclaimCopy's two call sites, and without it a home
+				// accumulates one directory per run a dead service finished.
+				s.reclaimCopy(ctx, record)
 				continue
 			}
 			settled, err := s.reconcile(ctx, record.ID)

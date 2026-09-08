@@ -52,6 +52,23 @@ var (
 	// opened cannot remove a remote. Nothing has been removed when it is
 	// returned. See Detacher for the operation internal/vcs still owes.
 	ErrDetachUnsupported = errors.New("gate: working copy cannot remove a remote")
+	// ErrNotACopy is returned by RemoveCopy when something stands where a
+	// run's isolated copy should be and is not a worktree. It is refused
+	// rather than removed: this package did not create it, and answering that
+	// the copy was given back would leave a caller believing a directory is
+	// gone while it is still on disk.
+	ErrNotACopy = errors.New("gate: path is not an isolated copy")
+	// ErrWorkUnreachable is returned by RemoveCopy when no reference in the
+	// gate contains the copy's head, so removing it would leave the commits
+	// made in it referenced by nothing. It is the data-loss refusal PRD
+	// principle P12 asks for, and the run is not failed for it: the copy is
+	// preserved and the refusal reported.
+	//
+	// What it establishes is bounded. It says the commits are still
+	// referenced in the gate and so will not be collected; it is not a claim
+	// that the work reached the upstream remote or a merged pull request,
+	// which are the other two proofs P12 lists.
+	ErrWorkUnreachable = errors.New("gate: the isolated copy holds work no reference in the gate contains")
 	// ErrNotAGate is returned when a path that would be deleted as a gate
 	// repository is not one: it is outside this home's repository directory,
 	// nothing is there, or it carries no gate record. Removal refuses rather

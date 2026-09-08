@@ -13,6 +13,7 @@ import (
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/agents/standin"
 	"github.com/dayamjz/assistant/internal/config"
+	"github.com/dayamjz/assistant/internal/gate"
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
@@ -127,8 +128,13 @@ func writeFile(path, content string) error {
 	return os.WriteFile(path, []byte(content), 0o600)
 }
 
-// recordRepository writes the repository record a run needs, which assistant
-// init writes in the product.
+// recordRepository writes the repository record a run needs and gives the
+// working copy a gate, which is the pair assistant init writes in the product.
+//
+// The gate is not decoration here. A run's isolated copy is a linked worktree
+// of it, and service.create refuses a run whose head the gate does not hold,
+// so a subject without one is a subject no run can start against - which is
+// the product's answer too, not a strictness these tests add.
 func recordRepository(t *testing.T, h *home.Home, workingPath string) store.Repository {
 	t.Helper()
 	if err := h.Create(); err != nil {
@@ -148,7 +154,31 @@ func recordRepository(t *testing.T, h *home.Home, workingPath string) store.Repo
 	if err != nil {
 		t.Fatalf("recording the repository: %v", err)
 	}
+	// The hook command is never invoked by these tests, which drive the
+	// service directly rather than by pushing, but a gate is written with a
+	// real one because internal/gate refuses a command it cannot execute -
+	// and refusing a hook that could never run is the right answer, so the
+	// fixture meets it rather than working around it.
+	if _, err := gate.Initialize(t.Context(), gate.Spec{
+		Home:        h.Root(),
+		WorkingPath: workingPath,
+		Command:     hookCommand(t),
+	}, gate.WithIndex(records)); err != nil {
+		t.Fatalf("initializing the gate for the subject: %v", err)
+	}
 	return repository
+}
+
+// hookCommand writes an executable for a gate's hooks to name. Nothing here
+// invokes it: these tests drive the service directly rather than by pushing,
+// and what the gate needs is a command it could execute.
+func hookCommand(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "assistant")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil {
+		t.Fatalf("writing the hook command: %v", err)
+	}
+	return path
 }
 
 // scriptedAgent is a catalog holding the scripted stand-in under the name the

@@ -116,6 +116,16 @@ func (s *Service) apply(ctx context.Context, id string, m move) (store.Run, erro
 	return r, nil
 }
 
+// Finished reports whether a run in this status is one no move leads out of,
+// so a caller outside this package can ask the same question the table answers
+// rather than keeping a second list of terminal statuses that has to be
+// remembered when a status is added.
+//
+// internal/service asks it to decide whether a run's isolated copy may be
+// given back: a copy belongs to its run for as long as any move leads out of
+// the status it is in, which includes a run held for a person.
+func Finished(status store.RunStatus) bool { return finished(status) }
+
 // finished reports whether a run in this status is one no move leads out of.
 //
 // That is the three terminal statuses, and it is read off the table rather
