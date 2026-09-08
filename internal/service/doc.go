@@ -232,11 +232,13 @@
 // registers this test process's own group and then makes a restricted call,
 // which is refused with ipc.ErrContained. And it has no producer in this
 // build: nothing calls StageStarted, because no stage this build has a body
-// for launches an agent - the written ones are functions of the run's state
-// and start no process - so the registry is empty and nothing is contained
-// today. What that costs is stated rather than implied: until a stage launcher
-// calls StageStarted, containment protects nothing. The alternative, refusing
-// every restricted call until then, is a service nobody can drive.
+// for launches an agent - the intent body is a function of the run's state,
+// and the pull request body fails without the code host this service never
+// constructs - so no written body starts a process, the registry is empty and
+// nothing is contained today. What that costs is stated rather than implied:
+// until a stage launcher calls StageStarted, containment protects nothing.
+// The alternative, refusing every restricted call until then, is a service
+// nobody can drive.
 //
 // The residual gap is the same one internal/agents names for its own sweep: a
 // descendant that leaves its process group escapes the relation. Closing that
