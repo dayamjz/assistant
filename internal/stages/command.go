@@ -3,18 +3,22 @@ package stages
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
-	"os/exec"
+	"os"
 	"strings"
 	"time"
 )
 
-// commandGrace is what os/exec's WaitDelay is set to, which bounds two waits
-// that would otherwise be unbounded: how long the call waits on the output
-// pipes once the command has exited, and how long it waits for the command to
-// end after the run was cancelled. Either one is a descendant holding
-// something the call is waiting for, and either way the call ends after this
-// rather than stalling the run on a process nothing is going to reap.
+// commandGrace is what a configured command's output is given to arrive once
+// the command itself has ended, and what os/exec's WaitDelay is set to.
+//
+// It bounds two waits that would otherwise be unbounded. The first is this
+// file's own read of the command's output after the command exited, which is
+// where a descendant still holding the pipe would otherwise hold the call for
+// as long as it lives. The second is os/exec's wait for the command to end
+// after the run was cancelled. Either way the call ends after this rather than
+// stalling the run on a process nothing is going to reap.
 //
 // Both waits it bounds begin after the command exited or after the run was
 // cancelled, so it bounds neither how long the command itself runs nor what
@@ -27,13 +31,21 @@ import (
 // table, which is that schema's single owner, so adding one is its own change
 // rather than something this file may decide.
 //
-// Nor does it end a descendant: this file starts one process and ends that one
-// process, and a child the command left behind goes on running.
-// internal/agents terminates the process tree an agent invocation started, and
-// nothing here does the equivalent for a configured command, so a command that
-// starts something and detaches leaves it behind. That is a gap rather than a
-// decision this file is entitled to make quietly.
+// Nor does it end a descendant. Giving up on the output closes this side of
+// the pipe and nothing more: this file starts one process and ends that one
+// process, and a child the command left behind goes on running with the
+// descriptor it inherited. internal/agents terminates the process tree an
+// agent invocation started, and nothing here does the equivalent for a
+// configured command, so a command that starts something and detaches leaves
+// it behind. That is a gap rather than a decision this file is entitled to
+// make quietly.
 const commandGrace = 5 * time.Second
+
+// errOutputAbandoned is what a result carries when the command's output was
+// still arriving after the grace expired and this call stopped reading it.
+// Whatever was still unread is not in the record and is not in the
+// projection, so a caller holding this may not offer either as whole.
+var errOutputAbandoned = errors.New("stages: gave up reading the command's output")
 
 // commandSpec is one configured command line to run.
 type commandSpec struct {
@@ -53,11 +65,12 @@ type commandSpec struct {
 	// projection bounds the tail of that output kept in memory for the
 	// stage's report. Zero keeps none.
 	projection int
-	// grace is what os/exec's WaitDelay is set to. The stage passes
+	// grace is how long the command's output is given to arrive after the
+	// command ended, and what os/exec's WaitDelay is set to. The stage passes
 	// commandGrace; a caller passing zero leaves both of the waits described
-	// there unbounded. It is a field rather than the constant read directly
-	// so a test can reach the give-up path without waiting the stage's grace
-	// out.
+	// there unbounded, so a descendant holding the pipe holds the call. It is
+	// a field rather than the constant read directly so a test can reach the
+	// give-up path without waiting the stage's grace out.
 	grace time.Duration
 }
 
@@ -81,20 +94,15 @@ type commandResult struct {
 	// non-zero, because a non-zero status is the answer rather than a failure
 	// to obtain one.
 	err error
-	// short is set when the command reported an exit status and os/exec still
-	// answered an error alongside it. That is the case where the output was
-	// cut off before all of it reached the record: os/exec closes the output
-	// pipes and answers ErrWaitDelay once grace expires with a descendant
-	// still holding them, and it answers a copy error where the copy itself
-	// failed. The status is still the command's answer, so this is not a
-	// verdict; what it costs is the claim that the record holds the whole
-	// output.
+	// short is set when the read of the command's output did not reach the
+	// end of it: the grace expired with the pipe still open, or the read
+	// failed. Neither the record nor the projection then holds the whole
+	// output, so a caller may not offer either as whole.
 	//
-	// It can only be set where the command exited zero. os/exec prefers the
-	// exit error for any other status and discards the wait error behind it,
-	// so a command that exits non-zero and is also cut short arrives here
-	// indistinguishable from one that was not. That gap is os/exec's and
-	// nothing here narrows it.
+	// It is independent of the exit status, because runCommand reads the
+	// output itself rather than asking os/exec whether it managed to. A
+	// command that exits non-zero and is cut short carries both its status
+	// and this.
 	short error
 }
 
@@ -111,46 +119,112 @@ type commandResult struct {
 // did not settle. A caller that cancelled deliberately should say so from the
 // context rather than read that result as a verdict.
 //
-// Two things can go wrong at once, and they are reported apart. A command that
-// reported no status of its own carries the reason on err. A command that
-// reported one and whose output os/exec still could not finish copying carries
-// that on short, because the status is the answer and the truncated record is
-// a separate fact about the evidence rather than a reason to doubt it.
+// # Why this owns the pipe
+//
+// The output pipe is created here and read here, rather than handed to os/exec
+// as an io.Writer for it to copy. That is not the shorter way to write this,
+// and the shorter way was tried: os/exec will report a wait-delay overrun or a
+// copy failure from Cmd.Wait, and a guard can read it off that error. It
+// cannot fire where it matters. Cmd.Wait sets its error to an ExitError
+// whenever the command exited non-zero, and takes the wait-delay and copy
+// errors only where that error is still nil, so on the failing branch - the
+// one that produces a fix finding pointing an operator at the record - both
+// are discarded before any caller sees them. No inspection of Wait's error
+// recovers them.
+//
+// Handing os/exec an *os.File instead makes it pass that descriptor to the
+// child directly and start no copy of its own, which is the point: whether the
+// read reached the end of the output becomes a fact this file holds for every
+// exit status rather than one os/exec decides whether to report.
+//
+// What that does not buy is any hold over the command's descendants. Giving up
+// closes this side of the pipe; a child that inherited the other side keeps
+// it, and keeps running. commandGrace says what is and is not bounded.
 func runCommand(ctx context.Context, spec commandSpec) commandResult {
 	tail := &tailWriter{limit: spec.projection}
 	out := io.MultiWriter(spec.record, tail)
+	settle := func(res commandResult) commandResult {
+		res.tail, res.omitted = tail.projection()
+		return res
+	}
+
+	read, write, err := os.Pipe()
+	if err != nil {
+		return settle(commandResult{code: -1,
+			err: fmt.Errorf("opening a pipe for the command's output: %w", err)})
+	}
+	defer func() { _ = read.Close() }()
 
 	cmd := shellCommand(ctx, spec.command, spec.dir)
 	// Standard input is left unset, which os/exec reads as the null device, so
 	// a command that reads it reaches end of file at once rather than waiting
-	// for a person who is not there.
-	cmd.Stdout = out
-	cmd.Stderr = out
+	// for a person who is not there. Standard output and standard error are
+	// the one descriptor, so the two arrive interleaved as the command wrote
+	// them; os/exec passes the same file to both rather than duplicating it.
+	cmd.Stdout = write
+	cmd.Stderr = write
 	cmd.WaitDelay = spec.grace
 
-	err := cmd.Run()
+	if err := cmd.Start(); err != nil {
+		_ = write.Close()
+		return settle(commandResult{code: -1, err: err})
+	}
+	// os/exec does not close a descriptor a caller supplied, and the child now
+	// holds its own copy. Closing the parent's is what lets the read below
+	// reach end of file once the last holder is gone; leaving it open would
+	// hold every run for ever, since this process would itself be the writer
+	// the read is waiting on.
+	_ = write.Close()
 
-	text, omitted := tail.projection()
-	res := commandResult{tail: text, omitted: omitted, code: -1}
+	copied := make(chan error, 1)
+	go func() {
+		_, err := io.Copy(out, read)
+		copied <- err
+	}()
+
+	// The copy is already draining while the command runs, so waiting on the
+	// command cannot deadlock against a command that outruns the pipe buffer.
+	waitErr := cmd.Wait()
+
+	res := commandResult{code: -1, short: awaitOutput(copied, read, spec.grace)}
 	if cmd.ProcessState == nil {
-		res.err = err
-		return res
+		res.err = waitErr
+		return settle(res)
 	}
 	res.exited = cmd.ProcessState.Exited()
 	res.code = cmd.ProcessState.ExitCode()
 	if !res.exited {
-		res.err = err
-		return res
+		res.err = waitErr
 	}
-	// The command reported a status, so an error alongside it is not about the
-	// status. os/exec's own way of saying "it exited non-zero" is one, and that
-	// is the answer rather than a problem with it; anything else is os/exec
-	// reporting that it could not finish reading the command's output.
-	var exit *exec.ExitError
-	if err != nil && !errors.As(err, &exit) {
-		res.short = err
+	return settle(res)
+}
+
+// awaitOutput waits for the read of the command's output to finish and returns
+// nil when it reached the end of it. It is called after the command has ended,
+// so anything still arriving is a descendant writing to the descriptor it
+// inherited.
+//
+// A grace of zero waits without bound, which is what a caller that named no
+// grace asked for.
+func awaitOutput(copied <-chan error, read *os.File, grace time.Duration) error {
+	if grace <= 0 {
+		return <-copied
 	}
-	return res
+	timer := time.NewTimer(grace)
+	defer timer.Stop()
+	select {
+	case err := <-copied:
+		return err
+	case <-timer.C:
+	}
+	// Closing this side of the pipe is what ends the read; the read then fails
+	// because of that close, so what it answers describes this call rather
+	// than the output, and the abandonment is reported instead. The read is
+	// waited for so nothing is still writing to the record or the projection
+	// when the caller reads them.
+	_ = read.Close()
+	<-copied
+	return fmt.Errorf("%w: it was still arriving %s after the command ended", errOutputAbandoned, grace)
 }
 
 // tailWriter keeps the last limit bytes written to it and counts what it drops.

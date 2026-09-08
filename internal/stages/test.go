@@ -18,12 +18,6 @@ import (
 // anything travelling in findings, streams, and prompts.
 const testProjectionBytes = 8 << 10
 
-// testEvidenceFile is the name of the run's test evidence, under the run's
-// evidence directory. One file per run rather than one per attempt: a stage
-// that takes fix rounds runs more than once, and appending keeps every
-// attempt's output rather than letting a later one replace an earlier one.
-const testEvidenceFile = "test.log"
-
 // Test is the test stage: it validates this change with the check the
 // configuration names, and reports what that check answered.
 //
@@ -189,9 +183,13 @@ func runTargetedCheck(ctx context.Context, deps StageDeps, in pipeline.Input) (p
 			"stages: reading the commit the %s stage would check in %s: %w", in.Stage, copied.Path(), err)
 	}
 
-	// deps.Copy refused a nil home above, so the evidence path can be composed
-	// here without asking again.
-	record := openTestEvidence(filepath.Join(deps.Home.Evidence(runID), testEvidenceFile))
+	// deps.Copy refused a nil home above, so the evidence path can be asked
+	// for here without checking again. internal/home names the file, including
+	// its leaf, so this body spells no path under the home root. One file per
+	// run rather than one per attempt: a stage that takes fix rounds runs more
+	// than once, and appending keeps every attempt's output rather than
+	// letting a later one replace an earlier one.
+	record := openTestEvidence(deps.Home.EvidenceLog(runID, in.Stage.String()))
 	record.header(command, commit, copied.Path())
 	result := runCommand(ctx, commandSpec{
 		command:    command,
@@ -363,8 +361,9 @@ func testReport(command, commit string, record *testEvidence, result commandResu
 	}
 	if record.recorded() {
 		report.Evidence = []findings.Evidence{{
-			Label: "the full output of every attempt this run made at the configured test command",
-			Path:  record.path,
+			Label: "this run's test evidence: the output of the attempts at the configured test " +
+				"command that could be recorded",
+			Path: record.path,
 		}}
 	}
 	switch {
@@ -486,14 +485,15 @@ func noTestCommandConfigured() findings.Report {
 			ID:       "test-no-command",
 			Severity: findings.SeverityWarning,
 			Action:   findings.ActionAsk,
-			Description: "This repository configures no test command, so the test stage had nothing " +
-				"targeted to run and could not gather evidence that this change does what it set out " +
-				"to do. Setting commands.test on the default branch is what gives this stage " +
-				"something to run; it executes shell, so it is taken from that branch unless " +
-				"allow_pushed_commands is set there, which is what permits the branch under " +
-				"validation to name it instead. That opt-out can itself only be set on the trusted " +
-				"side, so a branch cannot turn it on for itself. Approving carries the run past a " +
-				"stage that checked nothing; skipping records it as skipped; cancelling ends the run.",
+			Description: "No test command is configured, so the test stage had nothing targeted to " +
+				"run and could not gather evidence that this change does what it set out to do. " +
+				"Setting commands.test in this machine's own configuration file is what gives this " +
+				"stage something to run in this build: the trusted repository layer is not read " +
+				"yet, so committing the key to the default branch does not reach here. The key " +
+				"executes shell, so the branch under validation may name it only where " +
+				"allow_pushed_commands is set, and that opt-out is refused from a pushed branch, " +
+				"so a branch cannot turn it on for itself. Approving carries the run past a stage " +
+				"that checked nothing; skipping records it as skipped; cancelling ends the run.",
 		}},
 	}
 }

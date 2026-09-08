@@ -57,21 +57,41 @@ func TestEveryPathIsUnderTheRoot(t *testing.T) {
 	t.Parallel()
 	h := open(t, t.TempDir())
 	paths := map[string]string{
-		"config file": h.ConfigFile(),
-		"database":    h.Database(),
-		"socket":      h.Socket(),
-		"lock":        h.LockFile(),
-		"worktree":    h.Worktree("repo", "run"),
-		"evidence":    h.Evidence("run"),
-		"task":        h.Task("task"),
-		"queue":       h.Queue(),
-		"stage log":   h.StageLog("run", "review"),
-		"service log": h.ServiceLog(),
+		"config file":  h.ConfigFile(),
+		"database":     h.Database(),
+		"socket":       h.Socket(),
+		"lock":         h.LockFile(),
+		"worktree":     h.Worktree("repo", "run"),
+		"evidence":     h.Evidence("run"),
+		"evidence log": h.EvidenceLog("run", "test"),
+		"task":         h.Task("task"),
+		"queue":        h.Queue(),
+		"stage log":    h.StageLog("run", "review"),
+		"service log":  h.ServiceLog(),
 	}
 	for name, path := range paths {
 		if !strings.HasPrefix(path, h.Root()+string(filepath.Separator)) {
 			t.Fatalf("the %s at %q is not under the root %q", name, path, h.Root())
 		}
+	}
+}
+
+// A stage's evidence log is that stage named under the run's evidence
+// directory, so a caller records evidence without composing a leaf of its own
+// and this package stays the one owner of the layout. The stage names it, so
+// two stages of one run do not write over each other.
+func TestAStageEvidenceLogIsNamedForTheStageUnderTheRunEvidenceDirectory(t *testing.T) {
+	t.Parallel()
+	h := open(t, t.TempDir())
+	at := h.EvidenceLog("run", "test")
+	if want := filepath.Join(h.Evidence("run"), "test.log"); at != want {
+		t.Fatalf("EvidenceLog = %q, want %q", at, want)
+	}
+	if other := h.EvidenceLog("run", "lint"); other == at {
+		t.Fatalf("the test and lint stages of one run share %q", at)
+	}
+	if elsewhere := h.EvidenceLog("other", "test"); elsewhere == at {
+		t.Fatalf("two runs share the evidence log %q", at)
 	}
 }
 
