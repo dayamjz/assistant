@@ -433,6 +433,13 @@
 // received. Holds and TakeBranch are what let a caller keep the invariant the
 // copy rests on, that the gate holds every commit under validation.
 //
+// TakeBranch writes refs/assistant/submitted/<branch> and never a branch. That
+// namespace is this package's and nothing a person uses writes it, which is
+// what makes the forced update there safe: there is no history under it to
+// lose. A branch in the gate still moves only where a push moves it, so git's
+// own rejection of a non-fast-forward push is unchanged, and P6's answer there
+// stays what it was. The operation states the whole of that argument.
+//
 // RemoveCopy applies three refusals and names a fourth it does not implement.
 // A copy holding work no reference in the gate contains is refused, because a
 // detached copy's own head is the only thing referencing a commit made in it.

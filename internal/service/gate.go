@@ -256,9 +256,15 @@ func pushPartlyStarted(gateID string, started []machine.Started, ref string, cau
 // stands wherever its owner left it, and a run recorded from its head would be
 // a run about a commit nobody pushed.
 func (s *Service) startPushedBranch(ctx context.Context, found subject, branch, head string) (machine.Started, error) {
-	// Everything slow happens before the branch is claimed: resolving an agent
+	// What can be done before the branch is claimed is: resolving an agent
 	// asks what is runnable on this machine, and the base is a git invocation.
 	// Under the claim, branches would queue behind each other's.
+	//
+	// Not everything slow is out. claimPush reclaims the copy of the run it
+	// supersedes and creates the new record under the claim, and both reach
+	// internal/gate - a reachability walk over the gate's references for the
+	// first, a resolution for the second. gateHoldsHead states that cost; what
+	// waits on it is a second push of this same branch.
 	built, err := s.driverFor(ctx)
 	if err != nil {
 		return machine.Started{}, err

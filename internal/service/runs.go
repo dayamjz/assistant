@@ -17,6 +17,7 @@ import (
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/redact"
+	"github.com/dayamjz/assistant/internal/runs"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/vcs"
 )
@@ -50,56 +51,40 @@ func (s *Service) start(ctx context.Context, req machine.StartRequest) (machine.
 	if err != nil {
 		return machine.Run{}, err
 	}
-	// A branch that already has a run is attached to, and attaching creates
-	// nothing, so it does not have to satisfy a creation invariant. PRD
-	// section 9 gives this command as attaching to the branch's active run and
-	// starting one only when there is none, and an attach that first had to
-	// put the branch in the gate would be a different promise: after any local
-	// history rewrite the take is not a fast-forward, and the command would
-	// then neither start a run nor report the one already running, whose head
-	// the gate holds already.
+	// The branch reaches the gate before the run is recorded, which is what
+	// makes this path agree with the one a gate push takes. PRD principle P1
+	// makes the push the consent boundary and this command starts a run from
+	// the branch you are on; those only agree if the branch is in the gate, and
+	// the invocation is the asking.
 	//
-	// The race this peek leaves is benign in the direction that matters. A run
-	// appearing between here and the claim means claimBranch attaches to it
-	// anyway and the take was merely unnecessary: wasted work, not wrong work.
+	// It happens on every invocation, including the ones that turn out to be an
+	// attach. That is deliberate rather than unconsidered. gate.TakeBranch
+	// writes a reference internal/gate owns instead of the gate's copy of the
+	// branch, so no local history rewrite can make the take a non-fast-forward
+	// and there is nothing it can be refused for; what an attach pays for it is
+	// one fetch between two local repositories that it did not need. Deciding
+	// attach from create before the take, so as not to pay that, would need this
+	// to read a head outside the branch claim from a run that can reach a
+	// terminal status a moment later - which records the new run against the
+	// commit some previous run submitted rather than the one the caller is
+	// standing on.
 	//
-	// Two ways of closing that race are wrong and are named because they are
-	// what a reader reaches for. Moving the take inside the branch claim puts
-	// git under a lock claimBranch's own documentation says nothing slow runs
-	// under. Forcing the refspec would let a run rewrite a gate reference to
-	// make itself startable, which is the loss P6 forbids and which the
-	// refspec's missing plus exists to prevent - a mechanism that repairs its
-	// own precondition by destroying history is the failure with extra steps.
-	head := ""
-	if active, found, err := s.activeRun(ctx, repository.ID, branch); err != nil {
+	// What the gate took is also the only commit this run may validate, so it is
+	// read back from there rather than from the working copy. The two would
+	// almost always agree, and a second read would be a second answer to which
+	// commit is under validation - one of which the gate does not hold.
+	spec, err := s.gateSpecFor(ctx, repository.ID)
+	if err != nil {
 		return machine.Run{}, err
-	} else if found {
-		head = active.SubmittedHead
-	} else {
-		// The branch reaches the gate before the run is recorded, which is
-		// what makes this path agree with the one a gate push takes. PRD
-		// principle P1 makes the push the consent boundary and this command
-		// starts a run from the branch you are on; those only agree if the
-		// branch is in the gate, and the invocation is the asking.
-		//
-		// What the gate took is also the only commit this run may validate,
-		// so it is read back from here rather than from the working copy. The
-		// two would almost always agree, and a second read would be a second
-		// answer to which commit is under validation - one of which the gate
-		// does not hold.
-		spec, specErr := s.gateSpecFor(ctx, repository.ID)
-		if specErr != nil {
-			return machine.Run{}, specErr
-		}
-		taken, takeErr := gate.TakeBranch(ctx, spec, branch, gate.WithIndex(s.store))
-		if takeErr != nil {
-			return machine.Run{}, takeErr
-		}
-		head = taken
+	}
+	head, err := gate.TakeBranch(ctx, spec, branch, gate.WithIndex(s.store))
+	if err != nil {
+		return machine.Run{}, err
 	}
 	// Everything the record is built from is read before the branch is
-	// claimed, so what the claim holds is the decision and the write and not
-	// two git invocations between them.
+	// claimed. What the claim holds is the decision, the write, and the one
+	// gate read create makes to answer for the invariant; gateHoldsHead says
+	// what that read costs and why it sits there.
 	record, created, err := s.claimBranch(ctx, branchKey{repository: repository.ID, branch: branch}, run{
 		repository: repository.ID,
 		branch:     branch,
@@ -488,10 +473,23 @@ func (s *Service) create(ctx context.Context, r run) (store.Run, error) {
 // of that copy, so such a run could only report outcomes it never established.
 // Refusing at the record keeps that state from existing at all.
 //
-// It is one read of a local bare repository, and it runs under the branch
-// claim. That claim is per branch, so no other branch waits on it; what waits
-// is a second start of the same branch, which is a call that is about to be
-// told the branch already has a run.
+// What it costs is stated rather than glossed, because it runs under the
+// branch claim and the claim's own documentation used to say nothing slow ran
+// there. gate.Holds is not one read of a local bare repository: it goes
+// through internal/gate's resolution seam, which opens the working copy, reads
+// its assistant remote, resolves the gate, asks the store's ownership index,
+// and seals an admission hook into every gate it observed - a filesystem write
+// - before the commit lookup this is described by. All three paths that write
+// a run record reach it under the claim, and claimPush reaches a reclaim's
+// reachability walk under the same claim as well.
+//
+// That claim is per branch, so no other branch waits on it; what waits is a
+// second start or a second push of the same branch. The check stays here
+// regardless, because here is the one place a fourth path could not be written
+// without it. What would reduce the cost is a resolution that answers from a
+// gate this service already holds rather than acquiring one per question -
+// that is internal/gate's seam to offer, and moving the check away from create
+// is not a substitute for it.
 func (s *Service) gateHoldsHead(ctx context.Context, r run) error {
 	spec, err := s.gateSpecFor(ctx, r.repository)
 	if err != nil {
@@ -791,7 +789,16 @@ func (s *Service) recover(ctx context.Context) {
 				// between the verdict and the reclaim. This is the second of
 				// reclaimCopy's two call sites, and without it a home
 				// accumulates one directory per run a dead service finished.
-				s.reclaimCopy(ctx, record)
+				//
+				// Only a finished run is asked, and that is what keeps the
+				// report reclaimCopy makes worth reading. A held run keeps its
+				// copy by design - it is waiting on an answer the copy resumes
+				// into - so asking would log a kept copy for every held run at
+				// every open, and the one line that means work would have been
+				// lost would be buried in lines that mean nothing happened.
+				if runs.Finished(record.Status) {
+					s.reclaimCopy(ctx, record)
+				}
 				continue
 			}
 			settled, err := s.reconcile(ctx, record.ID)
@@ -1014,9 +1021,14 @@ type branchGate struct {
 // The check and the create are one step because they are one decision: a check
 // another caller can win the race to is what leaves a branch with two runs, of
 // which the older is unreachable through every branch-scoped verb and blocks
-// an eject for as long as it stands. Nothing slow runs under the claim - the
-// record's inputs are read before it - so branches do not queue behind each
-// other's git.
+// an eject for as long as it stands.
+//
+// What runs under the claim is the record's inputs read before it and one git
+// question after: create asks whether the gate holds the head, and that answer
+// costs a gate resolution rather than a lookup. gateHoldsHead states the whole
+// of that cost and why the check sits there and not at the callers. So a
+// second start of one branch does wait on that resolution, and branches still
+// do not wait on each other, because the claim is per branch.
 //
 // The residual gap is the same one internal/runs names for a run's fixer: this
 // is exclusion within one service, and PRD section 8 gives a home one service,

@@ -35,6 +35,46 @@ func (s *Service) createCopy(ctx context.Context, record store.Run) error {
 	return nil
 }
 
+// terminalMove is one of internal/runs' moves to a status no move leads out
+// of. It is a type so endAndReclaim can take any of them and so a reader can
+// see that the seam is about the class rather than about one of them.
+type terminalMove func(context.Context, string) (store.Run, error)
+
+// endAndReclaim moves a run to a terminal status and gives its isolated copy
+// back, and it is the only way this package ends a run.
+//
+// Every path that ends one goes through here rather than calling a move and
+// then remembering to reclaim: a segment settling, a caller cancelling, a push
+// superseding the run it displaces, and a run whose copy could not be created.
+// Adding two more calls to reclaimCopy would have been three sites agreeing by
+// convention, and a fourth would have been written without it - which is how
+// the two paths into a run came to disagree about the gate in the first place.
+// This is the same answer as putting the gate-holds guard at create rather
+// than at its callers: make the state unreachable rather than remembered.
+//
+// A move refused because the run had already reached some other status is not
+// swallowed: the error is returned unchanged so the caller keeps whatever it
+// makes of it, and the copy is reclaimed against where the run actually is
+// rather than where this move wanted to put it. A run that ended by another
+// route still has a copy to give back.
+func (s *Service) endAndReclaim(ctx context.Context, runID string, move terminalMove) (store.Run, error) {
+	record, err := move(ctx, runID)
+	if err == nil {
+		s.reclaimCopy(ctx, record)
+		return record, nil
+	}
+	var wrong *store.RunStatusError
+	if !errors.As(err, &wrong) {
+		return store.Run{}, err
+	}
+	current, readErr := s.store.Run(ctx, runID)
+	if readErr != nil {
+		return store.Run{}, errors.Join(err, readErr)
+	}
+	s.reclaimCopy(ctx, current)
+	return current, err
+}
+
 // reclaimCopy gives back the isolated copy of a run that has finished, and
 // reports rather than acts when something stands in the way.
 //
@@ -79,46 +119,6 @@ func (s *Service) createCopy(ctx context.Context, record store.Run) error {
 // worktree holding modified or untracked files. RemoveCopy's documentation
 // states what each establishes, and states the reaping gap PRD section 11
 // leaves open in this build.
-// terminalMove is one of internal/runs' moves to a status no move leads out
-// of. It is a type so endAndReclaim can take any of them and so a reader can
-// see that the seam is about the class rather than about one of them.
-type terminalMove func(context.Context, string) (store.Run, error)
-
-// endAndReclaim moves a run to a terminal status and gives its isolated copy
-// back, and it is the only way this package ends a run.
-//
-// Every path that ends one goes through here rather than calling a move and
-// then remembering to reclaim: a segment settling, a caller cancelling, a push
-// superseding the run it displaces, and a run whose copy could not be created.
-// Adding two more calls to reclaimCopy would have been three sites agreeing by
-// convention, and a fourth would have been written without it - which is how
-// the two paths into a run came to disagree about the gate in the first place.
-// This is the same answer as putting the gate-holds guard at create rather
-// than at its callers: make the state unreachable rather than remembered.
-//
-// A move refused because the run had already reached some other status is not
-// swallowed: the error is returned unchanged so the caller keeps whatever it
-// makes of it, and the copy is reclaimed against where the run actually is
-// rather than where this move wanted to put it. A run that ended by another
-// route still has a copy to give back.
-func (s *Service) endAndReclaim(ctx context.Context, runID string, move terminalMove) (store.Run, error) {
-	record, err := move(ctx, runID)
-	if err == nil {
-		s.reclaimCopy(ctx, record)
-		return record, nil
-	}
-	var wrong *store.RunStatusError
-	if !errors.As(err, &wrong) {
-		return store.Run{}, err
-	}
-	current, readErr := s.store.Run(ctx, runID)
-	if readErr != nil {
-		return store.Run{}, errors.Join(err, readErr)
-	}
-	s.reclaimCopy(ctx, current)
-	return current, err
-}
-
 func (s *Service) reclaimCopy(ctx context.Context, record store.Run) {
 	if !runs.Finished(record.Status) {
 		s.log.Printf("the isolated copy for run %s was kept: the run is %s, which is not a status "+

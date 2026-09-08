@@ -276,13 +276,19 @@
 // anything it does not own. Those are stage bodies' work, behind internal/vcs,
 // internal/safety and internal/forge.
 //
-// It does move one reference, and only one: the gate's own copy of the branch
-// a run is about to validate. PRD principle P1 makes reaching the gate the
-// consent boundary, and PRD section 9's bare command starts a run from the
-// branch you are on, so the branch has to get there before the run is
-// recorded. gate.TakeBranch is that step and the gate is a local bare
-// repository, so nothing is published by it. The refspec carries no leading
-// plus, so a branch that would not fast-forward is refused rather than forced.
+// It does move one reference, and only one, and it is not a branch: the gate's
+// own record, under refs/assistant/, of the commit a run is about to validate.
+// PRD principle P1 makes reaching the gate the consent boundary, and PRD
+// section 9's bare command starts a run from the branch you are on, so the
+// commit has to get there before the run is recorded. gate.TakeBranch is that
+// step and the gate is a local bare repository, so nothing is published by it.
+//
+// That reference is forced, and what makes forcing it safe is where it is
+// rather than what the update is: nothing but that operation writes under
+// refs/assistant/, so there is no history there to lose. No branch in the gate
+// is written by this path, so a push's own branch is still git's to accept or
+// reject and P6's answer there is unchanged. internal/gate states the whole of
+// that at the operation.
 //
 // # A run's isolated copy
 //
