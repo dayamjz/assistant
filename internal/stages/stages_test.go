@@ -1,6 +1,7 @@
 package stages_test
 
 import (
+	"context"
 	"reflect"
 	"strings"
 	"testing"
@@ -76,7 +77,7 @@ func TestAStageWithNoBodyHoldsForAPersonRatherThanPassing(t *testing.T) {
 //
 // Landing a body means adding it here. That one edit is the whole cost of the
 // guard, and stating the set twice is the point rather than an oversight.
-var bodied = []pipeline.Stage{pipeline.StageIntent, pipeline.StageReview}
+var bodied = []pipeline.Stage{pipeline.StageIntent, pipeline.StageReview, pipeline.StagePush}
 
 // The stages this build has bodies for have to be the ones it is meant to have
 // bodies for, in the order a run takes them.
@@ -105,9 +106,18 @@ func TestImplementedIsTheSetThisBuildIsMeantToHave(t *testing.T) {
 // that, and it is why the set is stated a second time.
 //
 // A body and Pending are told apart by behaviour rather than by comparing
-// function values: Pending cannot fail and reports one ask finding that holds
-// the stage for a person, so a body that reports something else, or that fails
-// on the state this hands it, is not Pending.
+// function values: Pending cannot fail and reports one finding it names after
+// the stage it stands in for, so a body that fails on the state this hands it,
+// that reports a different report, or that reports no finding carrying that
+// name, is not Pending.
+//
+// Whether a body holds is not one of those signals, and it was one until the
+// push stage landed. Holding for a person is what a body does when it cannot
+// establish what it is there to establish, and a run state carrying nothing
+// but an intent is exactly that case for every stage that reads the world.
+// The intent stage's own never-blocks guarantee is PRD section 5's rule about
+// that stage, checked in intent_test.go where it belongs, rather than a
+// property of being written.
 //
 // The residual gap is that tolerance and the reader behind it. Treating a
 // failure as proof the body is not Pending is what keeps this from having to
@@ -117,6 +127,17 @@ func TestImplementedIsTheSetThisBuildIsMeantToHave(t *testing.T) {
 // produce. A body that failed on it would be tolerated here and this test
 // would pass without checking that stage at all, so a stage needing more than
 // run state has to be given it here rather than left to the tolerance.
+// pendingID is the finding identifier Pending reports for a stage, read off
+// Pending itself rather than spelled out, so a change to how it names its
+// finding cannot leave this checking for a name nothing produces any more.
+func pendingID(stage pipeline.Stage) string {
+	out, err := stages.Pending(stage.String()).NewBody()(context.Background(), pipeline.Input{Stage: stage})
+	if err != nil || len(out.Report.Findings) != 1 {
+		return ""
+	}
+	return out.Report.Findings[0].ID
+}
+
 func TestAllPlacesAWrittenBodyAtEveryImplementedStage(t *testing.T) {
 	t.Parallel()
 	implemented := stages.Implemented()
@@ -155,8 +176,11 @@ func TestAllPlacesAWrittenBodyAtEveryImplementedStage(t *testing.T) {
 				t.Fatalf("Implemented names %s, but All places Pending at it: a run stops for a "+
 					"person at a stage this build reports a body for", stage)
 			}
-			if report.HasHeld() {
-				t.Fatalf("the %s stage's body held for a person over a supplied intent: %+v", stage, report)
+			for _, found := range report.Findings {
+				if found.ID == pendingID(stage) {
+					t.Fatalf("the %s stage's body reported %s's own finding, so a run reaching it is "+
+						"told the stage is not implemented in this build: %+v", stage, "Pending", report)
+				}
 			}
 		})
 	}

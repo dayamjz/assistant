@@ -31,14 +31,17 @@ import (
 // decisive one, since it holds whether or not a process ever restarts.
 //
 // So the adapters are here, and the run's own facts are declared state keys in
-// internal/pipeline. This build declares two of them, KeyRepository and
-// KeyRun, which are what Copy below derives its path from. Lifetime decides
-// the owner, which is what P14 asks.
+// internal/pipeline. KeyRepository and KeyRun are the two Copy below derives
+// its path from; the rest of the schema is that package's key table, which is
+// the one place to read what a run carries. Lifetime decides the owner, which
+// is what P14 asks.
 //
-// Where the run's target stood when it was observed is not one of them here.
-// Only the rebase and push stages need it, and declaring a key is one row in
-// internal/pipeline/key.go, so the rebase stage adds that row when it lands
-// rather than this seam declaring a key nothing reads.
+// Where the run's target stood when it was observed is one of them, and it is
+// pipeline.KeyTargetObserved. The push stage declared that row when it landed,
+// because it is the reader: an anchor older than the run's work is what PRD
+// principle P6 requires an update to be leased on, and a body that took one
+// for itself would be taking the tip read a moment before pushing. The rebase
+// stage is what will write it.
 //
 // # The agent is not a Runner, and that is P4
 //

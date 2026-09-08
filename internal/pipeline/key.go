@@ -63,6 +63,24 @@ const (
 	// it and does not run its body while it holds, which is PRD section 5's
 	// empty-diff short circuit; the rebase stage is what sets it.
 	KeyDiffEmpty Key = "diff.empty"
+	// KeyTargetObserved is where the run's branch target stood on the remote
+	// when the run actually looked at it, in the notation the stage that wrote
+	// it uses.
+	//
+	// It is here because PRD principle P6 forbids anchoring a
+	// history-rewriting update to the tip read a moment before pushing, so the
+	// anchor has to be a fact one stage established and a later stage read
+	// back. The rebase stage observes the target; the push stage decides on
+	// what it observed. A run interrupted between the two carries this in its
+	// checkpointed state and resumes on the same anchor, which is the whole
+	// reason it is durable state rather than a value a body holds.
+	//
+	// What it is worth is not decided here. This package neither produces nor
+	// reads the value, so it cannot tell an observation a run took before
+	// doing its work from a tip read a moment ago; internal/safety states
+	// where that guarantee rests, and internal/stages owns the notation, which
+	// is why no shape for it is spelled out in this comment.
+	KeyTargetObserved Key = "target.observed"
 	// KeyApproved is the commit a completed review approved. PRD section 5 has
 	// the push stage require a durable record of one this commit descends
 	// from; nothing in this package checks that.
@@ -130,6 +148,7 @@ var sharedKeys = []keySpec{
 	{KeyIntent, graph.KindText, graph.MergeNone, ownerStage},
 	{KeyIntentSupplied, graph.KindBool, graph.MergeNone, ownerRun},
 	{KeyDiffEmpty, graph.KindBool, graph.MergeNone, ownerStage},
+	{KeyTargetObserved, graph.KindText, graph.MergeNone, ownerStage},
 	{KeyApproved, graph.KindText, graph.MergeNone, ownerStage},
 	{KeyPushed, graph.KindText, graph.MergeNone, ownerStage},
 	{KeyPullRequest, graph.KindText, graph.MergeNone, ownerStage},

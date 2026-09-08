@@ -43,6 +43,11 @@ var (
 	// package does not recognize. It refuses rather than guessing, because a
 	// silently dropped change is a change nobody reviewed.
 	ErrUnknownStatus = errors.New("vcs: unrecognized change status from git")
+	// ErrPushRejected is returned when a remote refused a reference update.
+	// It is the answer a push can give rather than a failure of the
+	// invocation, so it is a sentinel of its own: nothing moved, and use
+	// errors.As with **PushRejection to read the remote's reason.
+	ErrPushRejected = errors.New("vcs: the remote refused the reference update")
 	// ErrMalformedOutput is returned when git's output does not have the shape
 	// the requested format promises.
 	ErrMalformedOutput = errors.New("vcs: git output did not have the expected shape")

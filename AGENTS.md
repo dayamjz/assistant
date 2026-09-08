@@ -142,6 +142,10 @@ Each has cost this repository more than one round of review.
 - `internal/vcs` is the only package that invokes git. Do not shell out to git
   anywhere else; add a typed operation there instead. Its package comment states
   the two rules it applies to every invocation and the residual gaps in them.
+  It performs the update a policy has decided on and decides none of it:
+  `PushSpec` has no field that turns the lease off, so there is no unleased
+  push here to reach for, and whether a lease is worth anything is
+  `internal/safety`'s question, not this package's.
 - `internal/store` is the only package that opens the database and the only one
   that writes SQL. Add a typed accessor there rather than a query elsewhere. Its
   driver is pure Go on purpose, so `make check` needs no cgo on any platform.
@@ -401,8 +405,8 @@ Each has cost this repository more than one round of review.
   fact that does vary is a declared state key in `internal/pipeline` instead,
   because one `All` serves every run of a service. Lifetime decides which, and
   `deps.go` has that argument and the P4 reason `Agent` is a `StageAgent`. The
-  intent and review stages are the bodies that exist, and three things about
-  the intent stage generalize. PRD section 5's "this stage never blocks a
+  intent, review and push stages are the bodies that exist, and three things
+  about the intent stage generalize. PRD section 5's "this stage never blocks a
   run" is owed by the implementation and not by `internal/pipeline`, which
   refuses to enforce it structurally because a stage that could not hold would
   have to drop an ask finding; every finding it reports is a note, and the test
@@ -423,6 +427,17 @@ Each has cost this repository more than one round of review.
   rather than asserted. Surface added because deferred work might plug into it
   answers to nobody - it grows whether or not that work arrives and nothing
   breaks if it never does - and it is dropped in review.
+  The push stage is where P6 is spent, and its shape is what any body acting on
+  the world is held to. It reads its anchor out of
+  `pipeline.KeyTargetObserved` and never calls `safety.Guard.Observe`, because
+  a body that observed for itself would be leasing on the tip read a moment
+  before pushing, and it takes the target from that anchor rather than
+  composing one, so it cannot update a reference the run did not observe. It
+  fetches the target before deciding, because `internal/safety` answers
+  reachability locally and an unfetched commit turns a named loss into an
+  unanswerable comparison. Every fact it cannot establish is a refusal reported
+  as one `ask` finding, never a step error and never a default. Read `push.go`
+  before changing any of that, and for the residual gaps.
 - `internal/fixture` builds the adversarial subject repository the end-to-end
   harness validates against, and records beside each planted condition what it
   must produce, down to the substrings the message has to carry. It is one of
