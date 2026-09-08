@@ -12,9 +12,16 @@ import (
 )
 
 // checkProjectionBytes bounds the command output that travels in a stage's
-// report. The whole output goes to the run's evidence file, which PRD section
-// 8 makes the authority, and what a person or an agent is shown is a bounded
-// projection of it carrying an explicit marker for what was left out.
+// report. The whole output goes to the run's evidence file, and what a person
+// or an agent is shown is a bounded projection of it carrying an explicit
+// marker for what was left out.
+//
+// That evidence file is not offered as the authoritative full output. PRD
+// section 8 gives that role to logs/<run>/<stage>.log, which nothing in this
+// build writes, and calls evidence/<run> the run's evidence instead. Naming
+// the record here as the authority would give one fact two owners and would
+// settle a convention for all nine stages from inside whichever body landed
+// next, so this file describes what it writes and claims no more for it.
 const checkProjectionBytes = 8 << 10
 
 // configuredCheck is what one run of one configured command in the run's
@@ -278,10 +285,12 @@ func notSettledReason(result commandResult) string {
 // tail, preceded by a marker naming what was left out and where the whole of
 // it is, and followed by the evidence path.
 //
-// The marker is PRD section 8's requirement that a bounded projection say what
-// was omitted and how to read the rest. Where there is no record to read the
-// rest from, it says that instead of naming a file: a pointer to output
-// nothing wrote is worse than no pointer.
+// The marker is the discipline PRD section 8 asks of a bounded projection -
+// name what was omitted and how to read the rest - applied to the record this
+// package does write. It does not make that record the authoritative log
+// section 8 names; checkProjectionBytes says where that stands. Where there is
+// no record to read the rest from, the marker says that instead of naming a
+// file: a pointer to output nothing wrote is worse than no pointer.
 //
 // A command that printed nothing at all is said so rather than left as a blank
 // space, and that is only said where nothing was omitted either: a tail empty

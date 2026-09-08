@@ -94,9 +94,10 @@ func TestATailWithNoWholeLineKeepsItsFragment(t *testing.T) {
 	}
 }
 
-// The record keeps the whole output whatever the projection keeps, which is
-// PRD section 8's rule that the full output is the authority and what travels
-// is a bounded view of it.
+// The record keeps the whole output whatever the projection keeps, so what
+// travels in a report is a bounded view of something still held whole. That is
+// a property of this record and not a claim that it is the authoritative log
+// PRD section 8 names; checkProjectionBytes says where that stands.
 func TestTheRecordHoldsTheWholeOutputTheProjectionBounds(t *testing.T) {
 	t.Parallel()
 	var whole strings.Builder

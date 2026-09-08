@@ -33,10 +33,10 @@ type commandSpec struct {
 	// dir is the directory it runs in.
 	dir string
 	// record receives everything the command wrote, standard output and
-	// standard error interleaved as the command produced them. It is the
-	// authoritative full output PRD section 8 asks for, and it is written
+	// standard error interleaved as the command produced them. It is written
 	// while the command runs rather than afterwards, so output survives a
-	// command this call gives up waiting on.
+	// command this call gives up waiting on. What the record is offered as,
+	// and what it is deliberately not offered as, is checkProjectionBytes'.
 	record io.Writer
 	// projection bounds the tail of that output kept in memory for the
 	// stage's report. Zero keeps none.
