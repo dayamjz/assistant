@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/dayamjz/assistant/internal/vcs"
 )
@@ -43,13 +44,29 @@ const prFields = "number,url,title,state,mergeable,headRefName,headRefOid,baseRe
 // earlier head.
 const checkFields = "headRefOid,statusCheckRollup"
 
+// repoFields is the field set the repository confirmation asks for. It is one
+// field: the specifier the provider resolves this adapter's own specifier to,
+// which is the whole of what confirmRepository compares.
+const repoFields = "nameWithOwner"
+
 // GitHub is the provider adapter over the gh command line. It is safe for
-// concurrent use: every field is fixed at construction and every call runs its
-// own process.
+// concurrent use: every call runs its own process, every configured field is
+// fixed at construction, and the one field that is not - whether this adapter
+// has confirmed the repository it addresses - is held under mu.
 type GitHub struct {
 	settings settings
 	env      []string
 	redact   vcs.Redactor
+
+	// mu guards confirmed, and is held across the confirming invocation so
+	// two concurrent writes do not both probe.
+	mu sync.Mutex
+	// confirmed records that the provider has reported this adapter's
+	// repository specifier as the repository it resolves that specifier to.
+	// Only a success is remembered: a confirmation that could not be made is
+	// retried rather than leaving an adapter that refuses every later write
+	// because one invocation failed once.
+	confirmed bool
 }
 
 var _ Provider = (*GitHub)(nil)
@@ -99,33 +116,6 @@ func NewGitHub(redact vcs.Redactor, opts ...Option) (*GitHub, error) {
 		env:      environment(baseEnvironment(&s), providerEnv),
 		redact:   redact,
 	}, nil
-}
-
-// validRepository reports whether spec is owner/name written in the characters
-// GitHub allows in each, and nothing else. A scheme, userinfo, a host, or a
-// third path segment all fail it, and so does a segment that would be read as
-// an option.
-func validRepository(spec string) bool {
-	owner, name, ok := strings.Cut(spec, "/")
-	if !ok {
-		return false
-	}
-	return validRepositorySegment(owner) && validRepositorySegment(name)
-}
-
-func validRepositorySegment(seg string) bool {
-	if seg == "" || len(seg) > 100 || strings.HasPrefix(seg, "-") {
-		return false
-	}
-	for _, r := range seg {
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
-		case r == '.', r == '_', r == '-':
-		default:
-			return false
-		}
-	}
-	return true
 }
 
 // Find returns the open pull request whose head is the named branch.
@@ -204,6 +194,10 @@ func (g *GitHub) Get(ctx context.Context, number int) (PullRequest, error) {
 // the command line, because a body written for a reviewer who was not present
 // is the one input a stage can make large and an argument list has a ceiling
 // this package neither sets nor can raise.
+//
+// It is the outward-facing write this package exists to be careful about, so
+// it is preceded by the repository confirmation for the reason
+// confirmRepository states. Nothing is created when that refuses.
 func (g *GitHub) Open(ctx context.Context, spec OpenSpec) (PullRequest, error) {
 	if err := g.checkRef("head branch", spec.Head); err != nil {
 		return PullRequest{}, err
@@ -215,6 +209,9 @@ func (g *GitHub) Open(ctx context.Context, spec OpenSpec) (PullRequest, error) {
 		return PullRequest{}, err
 	}
 	if err := g.checkBody(spec.Body); err != nil {
+		return PullRequest{}, err
+	}
+	if err := g.confirmRepository(ctx); err != nil {
 		return PullRequest{}, err
 	}
 	const op = "open"
@@ -245,11 +242,17 @@ func (g *GitHub) Open(ctx context.Context, spec OpenSpec) (PullRequest, error) {
 
 // UpdateBody replaces a pull request's body and returns it as the provider
 // then reports it. Nothing else about the pull request is changed.
+//
+// It is a write, so it is preceded by the repository confirmation for the
+// reason confirmRepository states.
 func (g *GitHub) UpdateBody(ctx context.Context, number int, body string) (PullRequest, error) {
 	if err := checkNumber(number); err != nil {
 		return PullRequest{}, err
 	}
 	if err := g.checkBody(body); err != nil {
+		return PullRequest{}, err
+	}
+	if err := g.confirmRepository(ctx); err != nil {
 		return PullRequest{}, err
 	}
 	if _, err := g.run(ctx, "update-body", body, "pr", "edit", strconv.Itoa(number), "--body-file=-"); err != nil {
@@ -305,6 +308,78 @@ func (g *GitHub) Checks(ctx context.Context, number int) (ChecksReport, error) {
 		report.Runs = append(report.Runs, node.checkRun())
 	}
 	return report, nil
+}
+
+// confirmRepository establishes, before this adapter performs an outward-facing
+// write, that the repository the provider resolves this adapter's specifier to
+// is that specifier.
+//
+// It exists because a specifier and the repository a provider reaches through
+// it are two different things. A repository that has been renamed or
+// transferred keeps answering under the name it had, so a run addressing the
+// old specifier reaches the new repository and would open a pull request in a
+// repository nobody asked it to. That is not recoverable after the fact: the
+// pull request exists, on a host, where people can see it.
+//
+// So a write is refused unless two things hold. The adapter names a
+// repository, because an adapter that resolves one from a working directory
+// has no specifier to check the answer against and would write wherever the
+// directory pointed. And the provider, asked which repository that specifier
+// names, answers with that specifier.
+//
+// The comparison ignores letter case, because GitHub addresses one repository
+// under any casing of its owner and name and refusing a casing difference
+// would refuse a repository that is the right one.
+//
+// Only a confirmed answer is remembered, so the probe runs once per adapter
+// that succeeds and again on each write after one that did not. What that
+// costs is one extra provider invocation per adapter.
+//
+// Two things it does not do are worth naming rather than implying away. It
+// runs before a write and not before a read, so Find, Get and Checks may
+// still report facts read out of a repository the specifier resolves
+// elsewhere to; what that leads to is a write, and the write refuses. And it
+// establishes what the provider reported at the moment it was asked, not a
+// lock: a rename between the confirmation and the write is outside it.
+func (g *GitHub) confirmRepository(ctx context.Context) error {
+	const op = "confirm-repository"
+	if g.settings.repo == "" {
+		return &argumentError{
+			what:   "adapter",
+			reason: "was given no repository, so a write would go wherever its working directory resolved to rather than to a repository this run named",
+		}
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.confirmed {
+		return nil
+	}
+	out, err := g.run(ctx, op, "", "repo", "view", "--json="+repoFields)
+	if err != nil {
+		return err
+	}
+	var raw struct {
+		NameWithOwner string `json:"nameWithOwner"`
+	}
+	if err := g.decode(op, out, &raw); err != nil {
+		return err
+	}
+	if !strings.EqualFold(raw.NameWithOwner, g.settings.repo) {
+		// The specifier and the repository behind it disagree, so nothing is
+		// written. The specifier this adapter was given is stated because a
+		// caller cannot act on the refusal without it, and it is one this
+		// package already established is owner/name rather than a URL, so it
+		// carries no credential; the provider's own answer goes through the
+		// Redactor like every other piece of provider text.
+		return &Refusal{
+			Reason: ReasonWrongRepository,
+			Op:     op,
+			Detail: "this run addresses " + g.settings.repo + " and the provider reports that specifier as " +
+				g.redact.Redact(raw.NameWithOwner) + ", so nothing was written",
+		}
+	}
+	g.confirmed = true
+	return nil
 }
 
 // ghPullRequest is the pull request shape gh puts on the wire for prFields.

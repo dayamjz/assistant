@@ -36,6 +36,20 @@ const (
 	// the same shape as KeyBranch and KeySubmitted, which also restate a fact
 	// the run's store row holds.
 	KeyRun Key = "run"
+	// KeyForgeRepository names the repository on the code host that the pull
+	// request and checks stages act on, in the notation that host addresses a
+	// repository by. It is a run input.
+	//
+	// It is a state key rather than something the stage seam carries because
+	// it is a fact about this run and not an adapter: one service builds one
+	// pipeline and serves every run, so a repository settled beside the
+	// adapter would be the same repository for every run of that service.
+	//
+	// It is empty when the run's record does not name a repository on a host
+	// this build talks to. That is an answer rather than a failure of the run:
+	// most stages need no code host, and a stage that does refuses when this
+	// is empty rather than resolving one for itself.
+	KeyForgeRepository Key = "forge.repository"
 	// KeyBranch is the branch under validation. It is a run input.
 	KeyBranch Key = "branch"
 	// KeyBase is the branch target the change is rebased onto and pushed to.
@@ -122,6 +136,7 @@ type keySpec struct {
 var sharedKeys = []keySpec{
 	{KeyRepository, graph.KindText, graph.MergeNone, ownerRun},
 	{KeyRun, graph.KindText, graph.MergeNone, ownerRun},
+	{KeyForgeRepository, graph.KindText, graph.MergeNone, ownerRun},
 	{KeyBranch, graph.KindText, graph.MergeNone, ownerRun},
 	{KeyBase, graph.KindText, graph.MergeNone, ownerRun},
 	{KeySubmitted, graph.KindText, graph.MergeNone, ownerRun},

@@ -11,9 +11,11 @@ import (
 	"github.com/dayamjz/assistant/internal/agents/route"
 	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/findings"
+	"github.com/dayamjz/assistant/internal/forge"
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/principles"
+	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/stages"
 )
 
@@ -162,4 +164,112 @@ func text(in pipeline.Input, key pipeline.Key) (string, error) {
 	}
 	s, _ := v.Text()
 	return s, nil
+}
+
+// recordingHost is a forge.Host that records the specifier it was opened on
+// and returns no provider.
+//
+// It is a fake of a decision and not of a wire, which is what makes one
+// acceptable here: forge.Host.Open takes a string and this records the string.
+// The provider behind it is a real adapter over a real command line, and what
+// that adapter does with a specifier is established in internal/forge against
+// its stand-in provider rather than here.
+type recordingHost struct {
+	opened []string
+}
+
+func (h *recordingHost) Open(repository string) (forge.Provider, error) {
+	h.opened = append(h.opened, repository)
+	return nil, errors.New("this host opens no provider")
+}
+
+// TestAForgeProviderIsOpenedOnTheRunsOwnRepository is the run-scoped half of
+// the code host seam, and it is the reason StageDeps carries a forge.Host
+// rather than a forge.Provider.
+//
+// A provider addresses one repository, and one StageDeps is built once and
+// serves every run of a service. So the repository cannot be settled beside
+// the adapter: a body reaches a provider by opening one on the run's own
+// KeyForgeRepository, exactly as it locates its isolated copy from
+// KeyRepository and KeyRun.
+//
+// This drives a real stage body through a real pipeline, so what reaches the
+// host is what a run actually carries. A body that read the repository from
+// configuration, from a working copy's remote, or from anything settled at
+// construction would open something other than what Start supplied, and that
+// is the failure this catches.
+func TestAForgeProviderIsOpenedOnTheRunsOwnRepository(t *testing.T) {
+	t.Parallel()
+
+	host := &recordingHost{}
+	deps := stages.NewStageDeps(agents.StageAgent{}, nil, config.Config{}, host)
+
+	const forgeRepository = "dayamjz/assistant"
+	body := pipeline.Implementation{
+		Reads: []pipeline.Key{pipeline.KeyForgeRepository},
+		NewBody: func() pipeline.Body {
+			return func(_ context.Context, in pipeline.Input) (pipeline.Output, error) {
+				repository, err := text(in, pipeline.KeyForgeRepository)
+				if err != nil {
+					return pipeline.Output{}, err
+				}
+				if _, err := deps.Forge.Open(repository); err == nil {
+					t.Error("the recording host returned a provider, so it is not the host under test")
+				}
+				return pipeline.Output{Report: findings.Report{
+					Summary: "opened a provider on the run's own repository",
+				}}, nil
+			}
+		},
+	}
+
+	runPipeline(t, body, pipeline.Start{
+		Repository: "repo-under-test", Run: "run-under-test",
+		ForgeRepository: forgeRepository,
+		Branch:          "topic", Base: "main", Submitted: "9f2c1ab",
+	})
+
+	if len(host.opened) != 1 || host.opened[0] != forgeRepository {
+		t.Fatalf("the body opened %v, want exactly [%q]", host.opened, forgeRepository)
+	}
+}
+
+// TestARunWithNoCodeHostOpensNoProvider is the other half, and it is the case
+// a run of a repository whose upstream is not on a host this build talks to
+// actually reaches.
+//
+// The specifier is empty, and forge.Host.Open refuses it. What must not happen
+// is a provider that resolves a repository for itself: an adapter left to work
+// one out would act on whatever it found, which is how a run reaches a
+// repository nobody named.
+func TestARunWithNoCodeHostOpensNoProvider(t *testing.T) {
+	t.Parallel()
+
+	deps := stages.NewStageDeps(agents.StageAgent{}, nil, config.Config{}, forge.NewGitHubHost(redact.New()))
+
+	var opened error
+	body := pipeline.Implementation{
+		Reads: []pipeline.Key{pipeline.KeyForgeRepository},
+		NewBody: func() pipeline.Body {
+			return func(_ context.Context, in pipeline.Input) (pipeline.Output, error) {
+				repository, err := text(in, pipeline.KeyForgeRepository)
+				if err != nil {
+					return pipeline.Output{}, err
+				}
+				_, opened = deps.Forge.Open(repository)
+				return pipeline.Output{Report: findings.Report{
+					Summary: "asked for a provider the run has no repository for",
+				}}, nil
+			}
+		},
+	}
+
+	runPipeline(t, body, pipeline.Start{
+		Repository: "repo-under-test", Run: "run-under-test",
+		Branch: "topic", Base: "main", Submitted: "9f2c1ab",
+	})
+
+	if !errors.Is(opened, forge.ErrInvalidArgument) {
+		t.Fatalf("opening a provider for a run with no code host returned %v, want ErrInvalidArgument", opened)
+	}
 }
