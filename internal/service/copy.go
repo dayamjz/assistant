@@ -40,8 +40,8 @@ func (s *Service) createCopy(ctx context.Context, record store.Run) error {
 // see that the seam is about the class rather than about one of them.
 type terminalMove func(context.Context, string) (store.Run, error)
 
-// endAndReclaim moves a run to a terminal status and gives its isolated copy
-// back, and it is the one place this package ends a run.
+// endAndReclaim moves a run to a terminal status and arranges its isolated
+// copy given back, and it is the one place this package ends a run.
 //
 // Every path that ends one goes through here rather than calling a move and
 // then remembering to reclaim: a segment settling, a caller cancelling, a push
@@ -49,6 +49,13 @@ type terminalMove func(context.Context, string) (store.Run, error)
 // Four sites calling reclaimCopy would have been four agreeing by convention,
 // and a fifth would have been written without it - which is how the two paths
 // into a run came to disagree about the gate in the first place.
+//
+// The move is now and the reclaim is not always. The status is what a person
+// who cancelled is watching, so it is durable before this returns, while a
+// segment may still be executing a stage body in the copy - a cancel and a
+// supersession both signal a segment without waiting for it. When the copy
+// comes back is therefore a decision of its own, and reclaimWhenEnded is its
+// one owner.
 //
 // What that is worth is bounded, and the bound is stated because the guard it
 // resembles is stronger. gateHoldsHead sits inside create, and create is the
@@ -70,7 +77,7 @@ type terminalMove func(context.Context, string) (store.Run, error)
 func (s *Service) endAndReclaim(ctx context.Context, runID string, move terminalMove) (store.Run, error) {
 	record, err := move(ctx, runID)
 	if err == nil {
-		s.reclaimCopy(ctx, record)
+		s.reclaimWhenEnded(ctx, record)
 		return record, nil
 	}
 	var wrong *store.RunStatusError
@@ -81,8 +88,100 @@ func (s *Service) endAndReclaim(ctx context.Context, runID string, move terminal
 	if readErr != nil {
 		return store.Run{}, errors.Join(err, readErr)
 	}
-	s.reclaimCopy(ctx, current)
+	s.reclaimWhenEnded(ctx, current)
 	return current, err
+}
+
+// reclaimWhenEnded gives a run's copy back no earlier than the moment no
+// segment may still be executing in it. It is called only from endAndReclaim,
+// after the move it answers for is durable, so the record it reads and the
+// mark it leaves both stand over a run whose status is already settled.
+//
+// # Why the reclaim does not simply ride the move
+//
+// A run's record can reach a terminal status while a segment is still inside
+// a stage body: cancel signals the segment and moves the record without
+// waiting for it, which is a promise the status path makes to a person, and a
+// push superseding the branch's run moves the displaced record the same way.
+// Reclaiming at the move would remove the directory from under whatever that
+// segment is doing in it - PRD section 11's reaping hazard arriving through
+// the filesystem rather than through processes, against the stage bodies that
+// read and write the copy. So the status moves at the move, and the copy
+// waits for the segment.
+//
+// # The segment's end is observed rather than awaited
+//
+// The run's slot is the one owner of whether a segment is executing, and this
+// decision is made under the mutex the slot lives under. When no slot stands,
+// or the slot stands for an ending rather than a segment, nothing is
+// executing in the copy and it is given back here and now - under the
+// ending's own placeholder where one stands, so no segment can begin while
+// the removal runs. When a segment holds the slot, the slot is marked
+// instead: the segment's release reports the mark and carryOn gives the copy
+// back, so the reclaim rides the segment's own departure, and nothing new
+// waits and nothing new polls. A slot already marked is left alone, because
+// some earlier ending owns the reclaim and a second would race it over one
+// directory.
+//
+// That mark is how the ordinary completion travels too, not only a cancel: a
+// segment settling its own result still holds its own slot, so its reclaim
+// rides its release a moment later, on the same goroutine, before the call
+// that advanced the run returns.
+//
+// # The failure direction is the leak
+//
+// A service that dies after the move and before the segment's end leaves the
+// copy standing, as does a segment that never returns. That is deliberate: a
+// copy outliving its cancelled run is a directory, and a directory removed
+// under an executing body is lost work. The leak is collected - the next
+// service open reclaims the copies of finished runs, and one whose service
+// stays up while its segment never returns is the stranded-copy work
+// internal/gate's TakeBranch documentation names - so failing toward it costs
+// a directory for a while rather than work.
+//
+// # The residual gap
+//
+// The decision and the removal are two steps, so a claim landing between them
+// can put a segment into a copy as it is removed. Such a segment is one
+// endRun's own documentation already describes - it read a record that
+// predates the ending - and what bounds the loss is internal/gate's refusals:
+// git refuses to remove a worktree holding modified or untracked files, and
+// the submitted commit stays anchored in the gate either way.
+func (s *Service) reclaimWhenEnded(ctx context.Context, record store.Run) {
+	s.mu.Lock()
+	held, taken := s.advancing[record.ID]
+	if taken && held.owesReclaim {
+		s.mu.Unlock()
+		return
+	}
+	if taken {
+		held.owesReclaim = true
+		if held.cancel != nil {
+			s.mu.Unlock()
+			return
+		}
+	}
+	s.mu.Unlock()
+	s.reclaimCopy(ctx, record)
+}
+
+// reclaimOwed gives back the copy a run's ending left riding a segment, at the
+// moment reclaimWhenEnded deferred it to: the segment has released the run's
+// slot, so nothing is executing in the copy any more. The record is read
+// fresh, and it is already terminal, because the mark this answers is set only
+// after the terminal move committed.
+//
+// The context is the service's own rather than a caller's, because the caller
+// the segment answered may be the very one whose cancel or departure ended it.
+// A reclaim cut short by the service stopping leaves the copy for the next
+// open's recovery, which is the leak direction reclaimWhenEnded chooses.
+func (s *Service) reclaimOwed(runID string) {
+	record, err := s.store.Run(s.stopCtx, runID)
+	if err != nil {
+		s.log.Printf("the isolated copy for run %s was kept: %v", runID, err)
+		return
+	}
+	s.reclaimCopy(s.stopCtx, record)
 }
 
 // reclaimCopy gives back the isolated copy of a run that has finished, and
