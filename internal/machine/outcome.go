@@ -9,25 +9,24 @@ import (
 // Outcome is what a driving agent reads to decide what to do next. The set is
 // closed, and every member is one row of the table below.
 //
-// PRD section 9's machine interface names these six, in the two groups it
-// divides them into by whether a run is finished with. Four say it is -
-// checks-passed, passed, failure and cancellation - which the section requires
-// to be terminal and to carry a next action, and they are the whole answer to
-// how a run ended rather than the whole set a call can return. No call that
-// advanced a run answers with one still moving, because internal/graph returns
-// at a halt, a completion or a bound. Two say a run is not finished with.
-// OutcomeDecision is the decision point that section has a blocking call
-// return at. OutcomeExecuting is a run still advancing, and only an answer
-// that reported the run without advancing it can carry it.
+// PRD section 9's machine interface names these six, and the table below is
+// in that row's order: the two groups it divides them into by whether a run is
+// finished with, the four that say it is first. Those four - checks-passed,
+// passed, failed and cancelled - the section requires to be terminal and to
+// carry a next action, and they are the whole answer to how a run ended rather
+// than the whole set a call can return. No call that advanced a run answers
+// with one still moving, because internal/graph returns at a halt, a
+// completion or a bound. Two say a run is not finished with. OutcomeDecision
+// is the decision point that section has a blocking call return at.
+// OutcomeExecuting is a run still advancing, and only an answer that reported
+// the run without advancing it can carry it.
+//
+// The row is the owner of the set, and internal/outcomes fails the build when
+// this table and that row stop declaring the same values, in the same order,
+// in the same groups.
 type Outcome string
 
 const (
-	// OutcomeDecision is a run waiting on an answer. It is not a failure and
-	// not a terminal state: it is the normal way a run stops, and answering it
-	// is what carries the run on. The answer goes back through the same
-	// surface, so a driving agent continues without a person unless the
-	// finding needs one.
-	OutcomeDecision Outcome = "decision"
 	// OutcomeChecksPassed is a run that reached the end of the gate and was
 	// not merged. PRD section 9 gives it one meaning beyond that: stop driving
 	// and ask the person. Merging is not the gate's to do.
@@ -58,6 +57,12 @@ const (
 	// OutcomeCancelled is a run a person ended at a hold. It is terminal, and
 	// the work is not undone: the run stopped.
 	OutcomeCancelled Outcome = "cancelled"
+	// OutcomeDecision is a run waiting on an answer. It is not a failure and
+	// not a terminal state: it is the normal way a run stops, and answering it
+	// is what carries the run on. The answer goes back through the same
+	// surface, so a driving agent continues without a person unless the
+	// finding needs one.
+	OutcomeDecision Outcome = "decision"
 	// OutcomeExecuting is a run whose execution has not finished. It is not a
 	// failure and not terminal, and no decision is open: the run is between
 	// two of them, at a position its last checkpoint recorded and nothing has
@@ -90,10 +95,13 @@ const (
 	OutcomeExecuting Outcome = "executing"
 )
 
-// outcomes is the closed set in the order the table above declares them.
+// outcomes is the closed set in the order the table above declares them,
+// which is the order the PRD's outcome row declares them in: the four that say
+// a run is finished with, then the two that say it is not. internal/outcomes
+// fails the build when the two orders come apart.
 var outcomes = []Outcome{
-	OutcomeDecision, OutcomeChecksPassed, OutcomePassed, OutcomeFailed, OutcomeCancelled,
-	OutcomeExecuting,
+	OutcomeChecksPassed, OutcomePassed, OutcomeFailed, OutcomeCancelled,
+	OutcomeDecision, OutcomeExecuting,
 }
 
 // Outcomes returns the closed set. The result is a copy, so a caller cannot
@@ -285,11 +293,11 @@ func NextActionOf(s Standing) string {
 // every outcome to carry one, terminal or not, so this is a row per member
 // rather than a sentence for the cases somebody remembered.
 var nextActions = map[Outcome]string{
-	OutcomeDecision:     "Answer the decision to carry the run on.",
 	OutcomeChecksPassed: "The gate is done with this change. Ask the person whether to merge it.",
 	OutcomePassed:       "Nothing. The change is merged or closed.",
 	OutcomeFailed:       "Read the reason. A run a bound parked is taken further by forking it or by giving it more budget; a run that could not proceed needs the failure fixed and a fresh run.",
 	OutcomeCancelled:    "Nothing was undone. Start a fresh run when the change is ready again.",
+	OutcomeDecision:     "Answer the decision to carry the run on.",
 	OutcomeExecuting:    "Nothing yet. Attach to carry it on - that blocks until the next decision unless this service is already advancing the run, in which case it answers at once and you should pause before asking again.",
 }
 

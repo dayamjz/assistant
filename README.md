@@ -10,7 +10,7 @@ until it has been independently reviewed, tested, documented, and linted.
 ## Status
 
 Early. The product requirements are settled and checked in at
-[`docs/prd.html`](docs/prd.html). Twenty-one pieces exist so far, and the
+[`docs/prd.html`](docs/prd.html). Twenty-two pieces exist so far, and the
 binary can be driven. The execution
 engine in `internal/graph` is the first: the graph builder with its
 construction-time checks, an executor with halt points and bounded cycles, and
@@ -94,6 +94,14 @@ The twenty-first is `internal/cli`, the command surface itself: the verbs PRD
 section 9 specifies and no others, rendered for a person or as one structured
 document per invocation, and beside that table the two subcommands a gate's
 hooks invoke, which are what makes a push to the gate start a run.
+The twenty-second is `internal/outcomes`, the build-time check that fails when
+the PRD's outcome row and `internal/machine`'s outcome set stop declaring the
+same six values, in the same order, in the same two groups. The row owns the
+set, and it is read by a marker on that row alone, so a marker elsewhere in the
+document is a refusal rather than a seventh outcome, and a set the rule cannot
+read is a refusal too rather than a short one. What it establishes is only that
+both sides name the same set; it does not say those six are the right six, or
+that an outcome means on the wire what the row's sentence about it says.
 
 So `assistant` builds and runs. A run can be started, reported on, answered and
 carried on across separate invocations, with the service restarted in between,
@@ -153,6 +161,7 @@ working as it always did.
 | `internal/home` | The one root everything lives under: where the database, the socket, the lock, the gates, the isolated copies and the logs go, and the exclusive lock that gives a home one service. |
 | `internal/ipc` | The local protocol between the command line and the background service: the method table, the event taxonomy, the bounded stream, the client and the server, peer identification, and the one resolver it derives for an answer that arrives here. |
 | `internal/machine` | The agent-facing half of the surface: the shapes an answer takes, the three exit codes, and the outcome vocabulary. |
+| `internal/outcomes` | The build-time check that the PRD's outcome row and `internal/machine`'s set declare the same six values, in the same order, in the same two groups: the marked row it reads, the comparison, and the refusal when it cannot be read. |
 | `internal/pipeline` | The nine stages as a graph definition over `internal/graph`: the stage contract, the fixed order, the state key table, the capabilities a path needs of the adapter, the fix loop, and its halt points and bounds. |
 | `internal/principles` | The build-time check that no principle the PRD lists goes unclaimed: the constants pinned to that list, the `Cite` call a test claims a principle with, the scan that finds those calls, and the written table of what nothing claims. |
 | `internal/redact` | The one owner of credential removal, called wherever text is persisted or reported. |

@@ -176,6 +176,14 @@ type Run struct {
 	// decision made here; an answer that arrived that way is as consistent as
 	// the service that sent it and no more.
 	//
+	// Re-deriving the action on decode is the obvious alternative and it is
+	// deliberately not done. An answer written by an older or a newer build
+	// would then come back carrying this build's action rather than the one it
+	// was sent with, so two builds genuinely disagreeing about what to do with
+	// a run would be masked at the moment that mattered. Relaying the
+	// producer's computation keeps such a disagreement legible; re-deriving
+	// hides it behind a value that looks locally consistent.
+	//
 	// What the field being unexported buys is a package boundary rather than a
 	// property of this package: no code outside internal/machine can assign
 	// it, so a surface like internal/service's report has no assignment site

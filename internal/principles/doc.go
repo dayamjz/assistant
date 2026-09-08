@@ -86,8 +86,12 @@
 //
 // The shape here is three parts: an owner that enumerates the claims, a
 // vocabulary a test speaks a claim in, and a written list of what nothing
-// claims. Only the first is specific to principles. A second claim class
-// would repeat that shape with its own owner and its own vocabulary, and
-// nothing here is generalized for it yet, deliberately: one instance is not
-// enough to know which parts are common and which are this one's.
+// claims. Only the first is specific to principles. internal/outcomes is the
+// second claim class, and it took the first part alone: the build already
+// exports the set it declares, so it needs no vocabulary, and its comparison
+// covers that set whole, so it has no counterpart to unclaimed.go. It states
+// its own residual gaps instead. Nothing here is generalized for the two of
+// them, deliberately: two instances are still not enough to know which parts
+// are common and which are each one's, and that package's documentation says
+// what the two have in common so far.
 package principles
