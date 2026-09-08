@@ -104,6 +104,28 @@ const titleLimit = 72
 // pipeline.StageResult's own documentation says each write replaced the last,
 // so nothing here may describe it as the rounds.
 //
+// # Residual gap: the body it publishes is not redacted
+//
+// Nothing redacts the body this stage hands the code host, today. internal/
+// forge takes a redactor and applies it to what comes back from the provider
+// and to the arguments it refuses, and to neither of the two paths that carry
+// a body outward: Open writes it to the provider's standard input and
+// UpdateBody passes it along, both unfiltered. Nothing in this package filters
+// it either.
+//
+// That makes this a publish surface rather than a theoretical one. The body
+// carries the run's intent and, for every stage, its summary, what it checked,
+// the evidence it named and the text of each finding, so whatever a stage
+// recorded is what a code host receives. A reader may not assume any of it was
+// filtered on the way out.
+//
+// The fix does not belong here. Every outbound body passes through
+// internal/forge, so redacting at that boundary covers every composer at once
+// where redacting in each composer covers whichever ones remembered to; and
+// the work wiring an actual forge provider owns that package's outbound side.
+// This stage composes internal/forge and adds no second remover, which is the
+// rule internal/redact is the one owner under.
+//
 // # What it refuses
 //
 // A build with no code host cannot open a pull request, and StageDeps' rule
@@ -521,13 +543,21 @@ func ranAs(result pipeline.StageResult) string {
 // that was not a note, which is every finding a person answered or a fixer did
 // not clear. The findings themselves are in the section above, so these are
 // pointers into it rather than a second copy.
+//
+// A run in which no stage ran says that rather than that nothing was found,
+// which is the distinction didNotRun keeps one section above. Skipping every
+// stage before this one is a person's per-run choice and reaches here, and the
+// two are different facts: nothing looked is not a clean bill of health, and a
+// section that stated one would be this artifact asserting what the run did
+// not establish.
 func whatTheRisksAre(facts runFacts) string {
 	var b strings.Builder
-	var stated, standing int
+	var ran, stated, standing int
 	for _, result := range facts.stages {
 		if !result.Ran {
 			continue
 		}
+		ran++
 		if result.Report.Risk != findings.RiskUnstated {
 			stated++
 			fmt.Fprintf(&b, "- The %s stage judged the risk %s", result.Stage, result.Report.Risk)
@@ -545,7 +575,11 @@ func whatTheRisksAre(facts runFacts) string {
 				result.Stage, finding.ID, finding.Action)
 		}
 	}
-	if stated == 0 && standing == 0 {
+	switch {
+	case ran == 0:
+		b.WriteString("No stage of this run ran, so nothing looked at this change and nothing " +
+			"here is a judgement about it. What became of each stage is in the section above.\n")
+	case stated == 0 && standing == 0:
 		b.WriteString("No stage of this run stated a risk level, and every finding any stage " +
 			"reported was informational.\n")
 	}
@@ -556,11 +590,13 @@ func whatTheRisksAre(facts runFacts) string {
 // the last fix round of that stage wrote.
 //
 // It closes by saying what it does not carry. PRD "what passing the gate
-// means" asks for how many attempts it took, this build has no count to render,
+// means" asks for how many attempts it took, this body has no count to render,
 // and a section that stopped at the summaries would read to a person as the
-// whole account of the fixing. Where the count would have to come from is in
-// PullRequest's own documentation; what belongs here is that a reader is told
-// this is the last summary per stage and not the tally.
+// whole account of the fixing. What it says is what is true of this stage -
+// the count is kept and this stage is not given it - and not that the gate
+// keeps none, which is false: graph.Counters counts a stage's fix rounds and
+// rides on every checkpoint. Where a count would have to come from is in
+// PullRequest's own documentation.
 func whatWasFixed(facts runFacts) string {
 	var b strings.Builder
 	var rounds int
@@ -577,8 +613,9 @@ func whatWasFixed(facts runFacts) string {
 			"written by the gate.\n\n")
 	}
 	b.WriteString("This section is the last fix summary each stage recorded, and it does not say " +
-		"how many attempts anything took: this build of the gate records no history of the rounds " +
-		"a stage went through, so it has no count to state here.\n")
+		"how many attempts anything took. The gate counts a stage's fix rounds as it takes them, " +
+		"and nothing in the run state this stage reads carries that count, so there is no number " +
+		"here to state.\n")
 	return b.String()
 }
 

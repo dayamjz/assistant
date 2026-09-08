@@ -373,15 +373,16 @@ Each has cost this repository more than one round of review.
   fact that does vary is a declared state key in `internal/pipeline` instead,
   because one `All` serves every run of a service. Lifetime decides which, and
   `deps.go` has that argument and the P4 reason `Agent` is a `StageAgent`.
-  Three things about the intent stage generalize. PRD section 5's "this stage
-  never blocks a run" is owed by the implementation and not by
-  `internal/pipeline`, which refuses to enforce it structurally because a stage
-  that could not hold would have to drop an ask finding; every finding it
-  reports is a note, and the test runs every path it has and is itself checked
-  against a report that blocks, so the assertion cannot pass vacuously. A body
-  landing moves where a run first stops, so a test may not name the stage it
-  expects a hold at: the ones in `internal/cli` and `internal/service` read
-  `Implemented` and take the first stage without a body. A body needing an
+  What the bodies written so far establish generalizes. PRD section 5's "this
+  stage never blocks a run" is owed by the intent stage's implementation and
+  not by `internal/pipeline`, which refuses to enforce it structurally because
+  a stage that could not hold would have to drop an ask finding; every finding
+  it reports is a note, and the test runs every path it has and is itself
+  checked against a report that blocks, so the assertion cannot pass
+  vacuously. A body landing moves where a run first stops, so a test may not
+  name the stage it expects a hold at: the ones in `internal/cli` and
+  `internal/service` read `Implemented` and take the first stage without a
+  body. A body needing an
   adapter the service does not construct cannot be walked past either, because
   it fails rather than holding, so `internal/service`'s answer-to-the-end test
   skips that stage for the one run instead of the body softening; the pull
