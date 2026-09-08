@@ -39,6 +39,7 @@ import (
 type pushWorld struct {
 	t         *testing.T
 	home      *home.Home
+	gitConfig string
 	upstream  string
 	copyPath  string
 	repo      *vcs.Repository
@@ -52,7 +53,7 @@ type pushWorld struct {
 // published, and a detached copy of the feature branch for the run to work in.
 func newPushWorld(t *testing.T) *pushWorld {
 	t.Helper()
-	pushGitEnvironment(t)
+	gitConfig := pushGitEnvironment(t)
 	root := t.TempDir()
 	h, err := home.Open(root)
 	if err != nil {
@@ -61,7 +62,7 @@ func newPushWorld(t *testing.T) *pushWorld {
 	if err := h.Create(); err != nil {
 		t.Fatalf("creating the home at %s: %v", h.Root(), err)
 	}
-	w := &pushWorld{t: t, home: h, branch: "feature", repoID: "repository-1", runID: "run-1"}
+	w := &pushWorld{t: t, home: h, gitConfig: gitConfig, branch: "feature", repoID: "repository-1", runID: "run-1"}
 	w.upstream = filepath.Join(root, "upstream.git")
 	pushGit(t, root, "init", "--quiet", "--bare", w.upstream)
 
@@ -668,6 +669,60 @@ func TestACredentialInTheRecordedRemoteDoesNotReachAReport(t *testing.T) {
 	}
 }
 
+// A credential in the recorded remote does not reach a step error either.
+//
+// This is the same leak as the test above on the path a report never takes. A
+// push that failed for a reason other than the remote refusing is the one case
+// this stage reports as a step error, and an error is not a report: it leaves
+// as an error, and internal/service writes it to the home's log before
+// returning it, so a credential in one is persisted to disk.
+//
+// The subject reaches that path through git's own URL rewriting rather than
+// through a double: the recorded remote is a credentialed URL that reads as
+// the upstream this test built, so the fetch and the decision succeed against
+// real history, and pushes to a transport that does not exist, so the push
+// fails outright instead of being refused.
+func TestAStepErrorDoesNotCarryACredentialFromTheRecordedRemote(t *testing.T) {
+	const secret = "s3cr3t-token"
+	credentialed := "https://" + secret + "@example.invalid/repo.git"
+	w := newPushWorld(t)
+	appendPushConfig(t, w.gitConfig,
+		"[url \""+w.upstream+"\"]\n\tinsteadOf = "+credentialed+"\n"+
+			"[url \"xyz://nowhere/repo.git\"]\n\tpushInsteadOf = "+credentialed+"\n")
+
+	observed, err := safety.RestoreObservedFromCheckpoint(safety.ObservationRecord{
+		Remote: credentialed,
+		Ref:    "refs/heads/" + w.branch,
+		Exists: true,
+		Commit: w.published,
+	})
+	if err != nil {
+		t.Fatalf("restoring an observation of the branch on %s: %v", credentialed, err)
+	}
+	head := w.commitInCopy("the change, fixed\n", "fix the change")
+
+	out, runErr := w.runPush(map[pipeline.Key]graph.Value{
+		pipeline.KeyHead:           graph.TextValue(head),
+		pipeline.KeyApproved:       graph.TextValue(w.published),
+		pipeline.KeyTargetObserved: graph.TextValue(w.recorded(observed)),
+	})
+	if runErr == nil {
+		t.Fatalf("the push stage reported %+v rather than failing the step: this subject makes the "+
+			"push fail for a reason other than the remote refusing, which is the one case this "+
+			"stage does not turn into a finding", out.Report)
+	}
+	if strings.Contains(runErr.Error(), secret) {
+		t.Fatalf("the step error carries the credential the run recorded, and internal/service "+
+			"writes a stage's error to the home's log before returning it:\n%v", runErr)
+	}
+	// The host survives, so the error still says which remote it was: an error
+	// naming no remote would pass the check above by saying nothing.
+	assertNamesAll(t, "the step error", runErr.Error(), "example.invalid", redact.Marker)
+	if got := w.remoteTip(); got != w.published {
+		t.Fatalf("the branch on the remote is %s, want it untouched at %s", got, w.published)
+	}
+}
+
 // PRD section 5 has this stage require a durable record that a completed
 // review approved a commit this one descends from. A run with no such record
 // is refused.
@@ -912,14 +967,30 @@ func TestTheFixtureConditionForARemoteAdvancedOutOfBandIsMet(t *testing.T) {
 // pushGitEnvironment points git at a configuration file this test owns, so a
 // developer's own git configuration cannot change what these tests prove. It
 // is what internal/vcs's and internal/gate's own tests do, and it is why the
-// tests in this file do not run in parallel.
-func pushGitEnvironment(t *testing.T) {
+// tests in this file do not run in parallel. It returns that file so a test
+// that needs git to behave a particular way can add to it.
+func pushGitEnvironment(t *testing.T) string {
 	t.Helper()
 	cfg := filepath.Join(t.TempDir(), "gitconfig")
 	pushWrite(t, filepath.Dir(cfg), "gitconfig",
 		"[user]\n\tname = Test\n\temail = test@example.invalid\n[init]\n\tdefaultBranch = main\n")
 	t.Setenv("GIT_CONFIG_GLOBAL", cfg)
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	return cfg
+}
+
+// appendPushConfig adds lines to the configuration file pushGitEnvironment
+// wrote.
+func appendPushConfig(t *testing.T, cfg, text string) {
+	t.Helper()
+	f, err := os.OpenFile(cfg, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatalf("opening %s: %v", cfg, err)
+	}
+	defer f.Close()
+	if _, err := f.WriteString(text); err != nil {
+		t.Fatalf("appending to %s: %v", cfg, err)
+	}
 }
 
 // pushGit runs git directly, without the package under test, and fails the
