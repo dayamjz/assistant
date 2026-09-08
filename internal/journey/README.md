@@ -44,6 +44,11 @@ row of `Coverage` and of `Drives` carries that distinction as `binary` or
 `package` reach, so a package-reach pass can never be read as an end-to-end
 one.
 
+Which nine stages there are is read out of PRD section 5's table, and which
+eight of them have no body is a declaration in `stages.go` rather than a
+subtraction from what the build reports, so a body that lands is a change
+somebody writes down here instead of one this harness silently follows.
+
 ## Every assertion is watched failing, on every run
 
 A harness of checks that cannot fail reports green while proving nothing, which

@@ -36,13 +36,20 @@
 // # Replacing one
 //
 // A body that lands is added to this package and named in the row below,
-// replacing that stage's call to Pending. Nothing else changes: the pipeline
-// is built from the same Stages value and the wiring is the same for all nine.
+// replacing that stage's call to Pending. The product needs nothing else: the
+// pipeline is built from the same Stages value and the wiring is the same for
+// all nine.
 //
 // A body that lands also changes where a run first stops, so a test that named
 // the stage it expected a run to hold at has to derive it instead. The ones in
 // internal/cli and internal/service read Implemented and take the first stage
 // without a body, which is what a run actually walks to.
+//
+// internal/journey is the exception, and deliberately so: it declares the
+// stages without a body by name rather than deriving them, and that
+// declaration is checked against Implemented in both directions. So a body
+// landing here is red there until somebody writes it down. That package's
+// stages.go says why deriving them would be worse.
 //
 // # Carried forward: the deferred half of the intent stage
 //

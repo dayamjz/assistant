@@ -28,11 +28,20 @@
 // eight, so a run holds at every stage but that one and large
 // parts of this product are unreachable from one: no agent is launched, no
 // reference is moved, no code host is asked anything, and no repository
-// configuration is read. Where a mechanism cannot be reached through the
-// binary, this harness drives it through the package that owns it against the
-// same fixture, and every row of Coverage and Drives carries which of the two
-// it was. A package-reach pass says nothing about what ships, and recording
-// the difference is what stops it being read as though it did.
+// configuration is read.
+//
+// Where a mechanism cannot be reached through the binary, this harness drives
+// it through the package that owns it against the same fixture, and every row
+// of Coverage and Drives carries which of the two it was. A package-reach pass
+// says nothing about what ships, and recording the difference is what stops it
+// being read as though it did.
+//
+// Which nine stages those are is read from the PRD rather than taken from the
+// build, and which of them have no body is declared here rather than
+// subtracted from what the build reports. A harness that derived either from
+// the product could only fail when the product disagreed with itself, and this
+// one silently became an eight-boundary harness that way. stages.go owns both
+// halves and what its read of the PRD leaves open.
 //
 // # Every assertion carries the evidence that it can fail
 //
@@ -132,8 +141,8 @@
 // # What this package does not do
 //
 // It decides nothing about the product and reimplements none of it. Every
-// answer it holds the product to is either PRD section 13's own test for a
-// principle or a value internal/fixture recorded, and a check that invented a
-// requirement of its own would be a second owner of a contract that already has
-// one.
+// answer it holds the product to comes from the PRD - section 13's own test
+// for a principle, section 5's table for the stages - or is a value
+// internal/fixture recorded, and a check that invented a requirement of its own
+// would be a second owner of a contract that already has one.
 package journey
