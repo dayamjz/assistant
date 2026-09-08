@@ -69,6 +69,21 @@ const titleLimit = 72
 // not a hold: skipping the push stage is a person's decision to make, and a
 // refusal here would take it away from them.
 //
+// The base answers the same rule. A pull request a person retargeted keeps
+// that base, per forge.Submit, so where the pull request merges to is
+// something this run does not know. What the body says is therefore what this
+// run validated merging into, which stays true whatever the pull request is
+// targeted at.
+//
+// The residual gap is that the body does not disclose the pull request's own
+// base, nor the disagreement when there is one, and a reader outside this
+// system would be strictly better served if it did. That is deferred rather
+// than overlooked. It would take the existing pull request found before the
+// body is rendered, and the body is built as an argument to forge.Submit, so
+// having it would reorder this stage around internal/forge's owned
+// create-or-update rule while other work is being written against that seam.
+// The disagreement does reach the run's record as a note in the meantime.
+//
 // # What the body does not carry: how many attempts it took
 //
 // PRD "what passing the gate means" says the pull request records what was
@@ -301,8 +316,12 @@ func pullRequestTitle(facts runFacts) string {
 // is about a different merge than the one the pull request describes.
 // That is reported rather than held: forge.Submit keeps the existing base
 // because a person may have retargeted it deliberately, and holding would stop
-// every later run over a decision already made. The body carries the same fact
-// in its own words, so a reviewer is told whether or not anyone reads this.
+// every later run over a decision already made. What the finding has to carry
+// is the consequence rather than the mismatch alone, because the mismatch is
+// what a reader has to be told the meaning of: the merge that will happen is
+// not the merge that was validated, so this run's verdict does not transfer to
+// it. The body states which merge the run validated and does not disclose the
+// pull request's own base, so this finding is where the disagreement is said.
 //
 // A run that forwarded no commit is the other fact it reports, on the same
 // terms and for the same reason: the pull request then describes a branch this
@@ -326,8 +345,11 @@ func pullRequestReport(facts runFacts, pr forge.PullRequest) findings.Report {
 			Action:   findings.ActionNote,
 			Description: fmt.Sprintf(
 				"This run validated the change against %s, and the pull request merges into %s. "+
-					"Nothing this run established is evidence about merging into %s, and this stage "+
-					"does not retarget a pull request, because the base may have been changed "+
+					"Nothing this run established is evidence about merging into %s, so this "+
+					"run's verdict does not transfer to the merge the pull request describes: "+
+					"the merge that will happen is not the merge that was validated, and a "+
+					"checks-passed result on this run says nothing about it. This stage does not "+
+					"retarget a pull request, because the base may have been changed "+
 					"deliberately.",
 				quoteName(facts.base), quoteName(pr.Base), quoteName(pr.Base)),
 		})
@@ -398,9 +420,15 @@ func bodyPreamble(facts runFacts) string {
 // so instead and the attestation is not rendered at all: the commit was still
 // validated and that is still stated, but a line reading as though it were on
 // the branch would be this artifact claiming what the run did not establish.
+//
+// The opening line answers the same rule for the base. It says what this run
+// validated merging into, which is pipeline.KeyBase and is true whatever the
+// pull request is targeted at, rather than what the pull request merges into,
+// which this run does not know and may be wrong about.
 func whatChanged(facts runFacts) string {
 	var where strings.Builder
-	fmt.Fprintf(&where, "Merging %s into %s.\n\n", quoteName(facts.branch), quoteName(facts.base))
+	fmt.Fprintf(&where, "This run validated merging %s into %s.\n\n",
+		quoteName(facts.branch), quoteName(facts.base))
 	fmt.Fprintf(&where, "- Submitted to the gate: %s\n", quoteCommit(facts.submitted))
 	if facts.pushed == "" {
 		fmt.Fprintf(&where, "- Forwarded to the branch target: nothing was forwarded. This run "+

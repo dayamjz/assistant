@@ -26,9 +26,15 @@ import (
 // is updated rather than opened again - is a relationship between calls that
 // only a modelled host can get wrong.
 //
-// It refuses nothing on its own. The two shapes a test needs that this model
-// does not reach on its own are set explicitly, and each is commented where it
-// is set with what the GitHub adapter would do with it.
+// What it refuses on its own is what the GitHub adapter refuses before it
+// invokes anything: a head it was asked to look up by, and a head, a base or a
+// title it was asked to open with, that are empty. That is modelled rather than
+// copied - the rule is that those arguments are required, and the refusal
+// carries forge.ErrInvalidArgument the way the adapter's own does - because a
+// stand-in that accepts a call the mechanism cannot make lets a guard rest on a
+// shape that cannot occur. The two shapes a test needs that this model does not
+// reach on its own are set explicitly, and each is commented where it is set
+// with what the GitHub adapter would do with it.
 type host struct {
 	mu sync.Mutex
 	// open is the pull requests this host has open, by head branch.
@@ -64,10 +70,21 @@ func (h *host) retarget(head, base string) {
 
 func (h *host) record(call string) { h.calls = append(h.calls, call) }
 
+// required is the refusal a code host gives for an argument it cannot be asked
+// anything with. It matches forge.ErrInvalidArgument, which is what the GitHub
+// adapter's own refusal for a missing argument matches, so a caller telling the
+// two apart cannot tell this host from that one.
+func required(what string) error {
+	return fmt.Errorf("forge: %s is required: %w", what, forge.ErrInvalidArgument)
+}
+
 func (h *host) Find(_ context.Context, head string) (forge.PullRequest, bool, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.record("find " + head)
+	if head == "" {
+		return forge.PullRequest{}, false, required("head branch")
+	}
 	if h.refuse != nil {
 		return forge.PullRequest{}, false, h.refuse
 	}
@@ -80,6 +97,18 @@ func (h *host) Open(_ context.Context, spec forge.OpenSpec) (forge.PullRequest, 
 	defer h.mu.Unlock()
 	h.record("open " + spec.Head)
 	h.bodies = append(h.bodies, spec.Body)
+	for _, missing := range []struct {
+		what  string
+		value string
+	}{
+		{"head branch", spec.Head},
+		{"base branch", spec.Base},
+		{"title", spec.Title},
+	} {
+		if missing.value == "" {
+			return forge.PullRequest{}, required(missing.what)
+		}
+	}
 	if h.refuse != nil {
 		return forge.PullRequest{}, h.refuse
 	}
@@ -632,6 +661,15 @@ func TestThePullRequestBodyDoesNotReportAStageThatDidNotRun(t *testing.T) {
 // can validate against one branch while the pull request merges into another.
 // The stage reports that rather than passing over it, because nothing the run
 // established is evidence about the other merge.
+//
+// What the finding has to carry is the consequence and not the mismatch alone:
+// the merge that will happen is not the merge that was validated, so this run's
+// verdict does not transfer to it. That is the thing a person acts on, and a
+// finding naming two branch names without it leaves them to work it out.
+//
+// The negative control is the same run against a host that kept the run's own
+// base, which must report no such finding, so none of this can pass against a
+// stage that reports the mismatch unconditionally.
 func TestThePullRequestStageReportsABaseTheRunDidNotValidateAgainst(t *testing.T) {
 	t.Parallel()
 	run := aRun()
@@ -646,21 +684,31 @@ func TestThePullRequestStageReportsABaseTheRunDidNotValidateAgainst(t *testing.T
 	if err := out.Report.Normalize().Validate(); err != nil {
 		t.Fatalf("the stage produced a report the pipeline refuses: %v", err)
 	}
-	if !mentions(out.Report, "release/2") || !mentions(out.Report, run.base) {
-		t.Fatalf("the report does not name both bases: %+v", out.Report)
+	mismatch, ok := finding(out.Report, "pull-request-base")
+	if !ok {
+		t.Fatalf("the report carries no pull-request-base finding: %+v", out.Report)
+	}
+	for _, want := range []string{run.base, "release/2"} {
+		if !strings.Contains(mismatch.Description, want) {
+			t.Errorf("the pull-request-base finding does not name %s: %q", want, mismatch.Description)
+		}
+	}
+	if !strings.Contains(mismatch.Description, "does not transfer") {
+		t.Errorf("the pull-request-base finding names the mismatch and not its consequence, "+
+			"which is that this run's verdict does not carry to the merge the pull request "+
+			"describes: %q", mismatch.Description)
 	}
 
 	// The same run against a host that kept the run's base reports only that
-	// the pull request exists, so the assertion above reads the mismatch
+	// the pull request exists, so the assertions above read the mismatch
 	// rather than something the stage always says.
 	matching := mustRunPR(t, newHost(), run)
+	if _, ok := finding(matching.Report, "pull-request-base"); ok {
+		t.Fatalf("a pull request on the base this run validated against is reported as a "+
+			"mismatch: %+v", matching.Report)
+	}
 	if mentions(matching.Report, "release/2") {
 		t.Fatalf("the report names a base nothing in the run carries: %+v", matching.Report)
-	}
-	if len(matching.Report.Findings) >= len(out.Report.Findings) {
-		t.Fatalf("a matching base reported %d findings and a mismatched one %d, so the "+
-			"mismatch is not what the extra finding reports",
-			len(matching.Report.Findings), len(out.Report.Findings))
 	}
 }
 
@@ -773,12 +821,19 @@ func onlyBody(t *testing.T, h *host) string {
 	return h.bodies[0]
 }
 
-// bodySections splits a rendered body into its per-stage sections, keyed by
-// the stage name each heading carries.
+// bodySections splits the body's account of the stages into its per-stage
+// sections, keyed by the stage name each heading carries.
+//
+// It reads only what is under "## What was checked", because that is not the
+// only section a stage name heads: the fix section heads one per stage too, and
+// a split over the whole body would key both under the one name and keep
+// whichever came last. Confining it means a heading can only key one thing,
+// whatever a run happens to have recorded.
 func bodySections(t *testing.T, body string) map[string]string {
 	t.Helper()
 	sections := map[string]string{}
 	var name string
+	var within bool
 	var current strings.Builder
 	flush := func() {
 		if name != "" {
@@ -789,18 +844,34 @@ func bodySections(t *testing.T, body string) map[string]string {
 	for _, line := range strings.Split(body, "\n") {
 		if heading, ok := strings.CutPrefix(line, "### "); ok {
 			flush()
-			name = strings.TrimSpace(heading)
+			if within {
+				name = strings.TrimSpace(heading)
+			} else {
+				name = ""
+			}
 			continue
 		}
 		if strings.HasPrefix(line, "## ") {
 			flush()
 			name = ""
+			within = strings.TrimSpace(line) == "## What was checked"
 			continue
 		}
 		current.WriteString(line + "\n")
 	}
 	flush()
 	return sections
+}
+
+// finding returns the report's finding with an identifier, and whether it has
+// one.
+func finding(report findings.Report, id string) (findings.Finding, bool) {
+	for _, f := range report.Findings {
+		if f.ID == id {
+			return f, true
+		}
+	}
+	return findings.Finding{}, false
 }
 
 // mentions reports whether a report says text anywhere a person would read it.
