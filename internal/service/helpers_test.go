@@ -204,17 +204,13 @@ func dial(t *testing.T, running *service.Service) *ipc.Client {
 
 // startRun starts or attaches to the run for a working copy and returns where
 // it stopped.
+//
+// It is startRunSkipping with nothing skipped, so the request a run is started
+// with is stated once. Skip is omitempty, so a run started here and a run
+// started there differ in the skip list and in nothing else.
 func startRun(t *testing.T, client *ipc.Client, workingPath string) machine.Run {
 	t.Helper()
-	var run machine.Run
-	err := client.Call(t.Context(), ipc.MethodRunStart, machine.StartRequest{
-		Working: machine.Working{WorkingPath: workingPath},
-		Intent:  "a change with acceptance criteria stated up front",
-	}, &run)
-	if err != nil {
-		t.Fatalf("starting a run: %v", err)
-	}
-	return run
+	return startRunSkipping(t, client, workingPath)
 }
 
 // startRunSkipping starts a run that does not take the named stages.
@@ -241,7 +237,7 @@ func startRunSkipping(t *testing.T, client *ipc.Client, workingPath string, skip
 		Skip:    names,
 	}, &run)
 	if err != nil {
-		t.Fatalf("starting a run skipping %v: %v", names, err)
+		t.Fatalf("starting a run with skip %v: %v", names, err)
 	}
 	return run
 }

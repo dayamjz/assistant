@@ -116,7 +116,8 @@ func TestImplementedIsTheSetThisBuildIsMeantToHave(t *testing.T) {
 // stage reading a bool or a list is a value the real graph reader cannot
 // produce. A body that failed on it would be tolerated here and this test
 // would pass without checking that stage at all, so a stage needing more than
-// run state has to be given it here rather than left to the tolerance.
+// run state has to be given it in depsForEveryBody rather than left to the
+// tolerance.
 func TestAllPlacesAWrittenBodyAtEveryImplementedStage(t *testing.T) {
 	t.Parallel()
 	implemented := stages.Implemented()
@@ -124,7 +125,7 @@ func TestAllPlacesAWrittenBodyAtEveryImplementedStage(t *testing.T) {
 		t.Fatal("this build reports no stage bodies, so the loop below checks nothing; " +
 			"TestImplementedIsTheSetThisBuildIsMeantToHave says which stages it should name")
 	}
-	all := stages.All(stages.StageDeps{})
+	all := stages.All(depsForEveryBody())
 	for _, stage := range implemented {
 		t.Run(stage.String(), func(t *testing.T) {
 			t.Parallel()
@@ -160,6 +161,23 @@ func TestAllPlacesAWrittenBodyAtEveryImplementedStage(t *testing.T) {
 			}
 		})
 	}
+}
+
+// depsForEveryBody is the StageDeps the placement guard drives every written
+// body with, and it grows as bodies land. A body handed an adapter it needs
+// reaches its report, which is what the guard compares against Pending's; a
+// body handed nil refuses, and the guard's tolerance for a failure then returns
+// before it has compared anything, so that stage silently opts out of the one
+// assertion that All wired it rather than Pending.
+//
+// The pull request stage is why this exists: it is the first body needing an
+// adapter, and against the zero StageDeps it checked nothing at all. The checks
+// stage is next, per internal/stages/deps.go, and it belongs here for the same
+// reason. Its provider is the modelled host in pullrequest_test.go rather than
+// a second double, so what the guard drives is what that stage's own tests
+// drive.
+func depsForEveryBody() stages.StageDeps {
+	return stages.StageDeps{Forge: newHost()}
 }
 
 // Implemented is read off the same table All places implementations from, so a
