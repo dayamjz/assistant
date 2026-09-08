@@ -1,4 +1,7 @@
-// Package stages is where the nine delivery-gate stage bodies live.
+// Package stages is where the nine delivery-gate stage bodies live. Which of
+// them this build has a body for is the written table below and nothing in
+// this comment: a sentence naming them would be wrong the next time one lands,
+// and Implemented answers the question off the table itself.
 //
 // PRD section 5 specifies the nine, internal/pipeline wires them into a graph
 // and owns their order, and each body is separate work against
@@ -7,8 +10,7 @@
 // pipeline with a missing one does not build.
 //
 // What an unwritten stage holds instead is Pending: a stage that validates
-// nothing and says so. Which stages have a body is the written table below,
-// and Implemented reports it, so no reader has to count.
+// nothing and says so.
 //
 // # Why a placeholder rather than a refusal to build the pipeline
 //
@@ -68,7 +70,7 @@
 //
 // Surface landed ahead of consumers it names is the other case, and StageDeps
 // is this package's one instance of it: deps.go names the bodies each of its
-// reader-less fields answers to.
+// fields answers to, so a field is checkable against them as they land.
 //
 // What that work inherits is stated here so it is not rediscovered. The intent
 // stage never blocks a run, and inference adds ways to fail that must not
@@ -91,14 +93,11 @@
 // answered over the machine interface, under the authority PRD section 9 gives
 // a caller of it, and store.Hold.ResolvedBy records which it was.
 //
-// The prose is not wrong yet, and neither body here makes it wrong. It is
-// true for as long as no stage body connects a graph halt to a stored hold,
+// The prose is not wrong yet, and nothing here makes it wrong: this package
+// does not import internal/store, so no body it holds can resolve a stored
+// hold, whatever that body reports. It stays true for as long as that is so,
 // and internal/store's own documentation says nothing in production resolves
-// one. The intent stage cannot be the body that changes that, because it never
-// holds: it reports notes and nothing else, so it has no halt to resolve. The
-// review stage does hold, on an ask finding, but a body only reports, and
-// store.RegisterHold and store.ResolveHold still have no caller outside their
-// own package's tests, so that halt is answered through no stored hold either.
+// one either.
 //
 // Whichever stage body first resolves a store hold owns correcting those lines
 // so the halt description says what actually answers it. This note is here
@@ -152,6 +151,7 @@ func Pending(name string) pipeline.Implementation {
 var written = map[pipeline.Stage]func(StageDeps) pipeline.Implementation{
 	pipeline.StageIntent: Intent,
 	pipeline.StageReview: Review,
+	pipeline.StagePR:     PullRequest,
 }
 
 // All returns the nine stages as this build has them: each stage's own body

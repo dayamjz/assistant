@@ -219,18 +219,22 @@ func startRun(t *testing.T, client *ipc.Client, workingPath string) machine.Run 
 
 // startRunSkipping starts a run that does not take the named stages.
 //
-// It exists for the one thing this build cannot walk a run through: a stage
-// body that needs something this service does not construct. Nothing here
-// creates a run's isolated copy, so the review stage's body fails on opening
-// it rather than holding, and a test that walks a run from one hold to the
-// next has to go around that stage.
+// It exists for the one thing these tests cannot walk a run through: a stage
+// body that fails rather than holds because what it needs is not there.
+// Nothing here creates a run's isolated copy, so the review stage's body
+// fails on opening it, and the subject repository's record names no
+// repository on a code host this build talks to, so the pull request stage's
+// body fails on opening a provider. A test that walks a run from one hold to
+// the next has to go around those stages.
 //
 // The skip is a run input, which PRD principle P2 makes a person's per-run
 // choice, so this drives the surface a person would drive rather than
 // weakening what the stage does or what the walk demonstrates.
 //
-// It names the stage rather than deriving it, and that name goes away when
-// this service creates the isolated copy a run works in.
+// It names each stage rather than deriving it, and a name goes away when the
+// run it starts can give that stage's body what it is missing: the isolated
+// copy a run works in for review, a repository on the code host for the pull
+// request stage.
 func startRunSkipping(t *testing.T, client *ipc.Client, workingPath string, skip ...pipeline.Stage) machine.Run {
 	t.Helper()
 	names := make([]string, len(skip))

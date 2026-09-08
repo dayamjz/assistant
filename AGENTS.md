@@ -411,8 +411,8 @@ Each has cost this repository more than one round of review.
   fact that does vary is a declared state key in `internal/pipeline` instead,
   because one `All` serves every run of a service. Lifetime decides which, and
   `deps.go` has that argument and the P4 reason `Agent` is a `StageAgent`. The
-  intent and review stages are the bodies that exist, and three things about
-  the intent stage generalize. PRD section 5's "this stage never blocks a
+  intent stage is one of the bodies that exist, and three things about it
+  generalize. PRD section 5's "this stage never blocks a
   run" is owed by the implementation and not by `internal/pipeline`, which
   refuses to enforce it structurally because a stage that could not hold would
   have to drop an ask finding; every finding it reports is a note, and the test
@@ -422,7 +422,16 @@ Each has cost this repository more than one round of review.
   `internal/cli` and `internal/service` read `Implemented` and take the first
   stage without a body, and `internal/journey` names them in a declaration
   checked against `Implemented` both ways, so landing a body means writing it
-  down there too. And a stage implements the part of its PRD section the
+  down there too. A body refusing what its run cannot give it cannot be
+  walked past either, because it fails rather than holding, so
+  `internal/service`'s answer-to-the-end test skips such stages for the one
+  run instead of the bodies softening: the review stage fails on the isolated
+  copy nothing in this build creates, and the pull request stage on a record
+  naming no repository on the code host.
+  It is also where a body reads another stage's record:
+  `pipeline.StageResultKeys` declares the keys and `pipeline.ReadStageResult`
+  decodes them, so `internal/pipeline` stays the one owner of the report
+  encoding. And a stage implements the part of its PRD section the
   phase list has reached and ships no seam for the rest: the intent stage reads
   supplied intent and does not infer, because inference is deferred, and what
   that deferred work inherits is a note in the package documentation rather
