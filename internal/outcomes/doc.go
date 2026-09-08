@@ -44,10 +44,20 @@
 // so a row moved elsewhere is a refusal rather than a pin that stays green
 // while the section this package is documented against no longer states the
 // set. What that establishes is that the row is inside <section id="surfaces">,
-// by that section's id; it does not establish the section's number, which is
-// why these comments name the section rather than its position in the
-// document, and why a section inserted earlier in the PRD leaves every one of
-// them true.
+// by that section's id, and nothing about that section's number. So every
+// claim here about where the row lives, and every refusal Report writes, names
+// the section and the row by their anchors: the thing the words name is then
+// the thing the mechanism checks.
+//
+// That is as far as it goes, and the rest is a gap rather than a closure. This
+// repository cites the PRD by section number throughout, this package included,
+// and those citations are about what the section says rather than where the row
+// is. Nothing verifies a section number, here or anywhere else, so a section
+// inserted earlier in the PRD would falsify all of them at once and no check
+// would notice. Removing the number from the claims this package enforces is
+// what was worth doing; removing it from a repository-wide citation convention
+// was not, and pretending the first did the second would be the overclaim this
+// package exists to catch.
 //
 // The build declares an outcome by having a member in machine.Outcomes, whose
 // group is machine.Outcome.Terminal and whose action is

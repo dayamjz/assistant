@@ -16,6 +16,14 @@ import (
 // owns where the document is.
 const PRDPath = principles.PRDPath
 
+// rowName is how a refusal points a reader at the row the set is stated in. It
+// names the row and the section by their anchors and not by the section's
+// number, because the anchors are what this package checks and the number is
+// not. A refusal that fires correctly and then sends its reader to a section
+// that has since been renumbered is worse than a terse one, and precision is
+// this check's whole claim.
+const rowName = `the PRD's outcome row (<tr id="outcome-set"> in <section id="surfaces">)`
+
 // Agreement is the answer to one question: do the PRD's outcome row and
 // internal/machine's outcome set say the same thing.
 //
@@ -75,11 +83,11 @@ func (a Agreement) Report() string {
 		b.WriteString("  This is the value Check returns beside a refusal. Read the error it came with rather than this.\n")
 	}
 	for _, name := range a.Unbuilt {
-		fmt.Fprintf(&b, "%s: PRD section 9 declares it and internal/machine does not.\n", name)
+		fmt.Fprintf(&b, "%s: %s declares it and internal/machine does not.\n", name, rowName)
 		b.WriteString("  Add it to the constant block and the set in internal/machine/outcome.go, or take its marker out of the PRD.\n")
 	}
 	for _, name := range a.Unlisted {
-		fmt.Fprintf(&b, "%s: internal/machine declares it and PRD section 9 does not.\n", name)
+		fmt.Fprintf(&b, "%s: internal/machine declares it and %s does not.\n", name, rowName)
 		b.WriteString("  The PRD owns the set. Add the outcome to its row on a branch of its own, or take it out of the build.\n")
 	}
 	for _, line := range a.Reordered {
@@ -91,7 +99,7 @@ func (a Agreement) Report() string {
 		b.WriteString("  One of the two changed which group the outcome is in. Reconcile with the PRD rather than around it.\n")
 	}
 	for _, name := range a.Actionless {
-		fmt.Fprintf(&b, "%s: it is declared and carries no next action, which PRD section 9 requires of every outcome, terminal or not.\n", name)
+		fmt.Fprintf(&b, "%s: it is declared and carries no next action, which %s requires of every outcome, terminal or not.\n", name, rowName)
 		b.WriteString("  Add its row to nextActions in internal/machine/outcome.go.\n")
 	}
 	return b.String()
