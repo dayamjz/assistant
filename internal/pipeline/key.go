@@ -38,8 +38,16 @@ const (
 	KeyRun Key = "run"
 	// KeyBranch is the branch under validation. It is a run input.
 	KeyBranch Key = "branch"
-	// KeyBase is the branch target the change is rebased onto and pushed to.
-	// It is a run input.
+	// KeyBase is the branch target the change is rebased onto, and the base a
+	// pull request is opened against. It is a run input.
+	//
+	// It is not what the run pushes to. PRD section 5 has the push stage
+	// forward to the branch under validation and the stage after it open a
+	// pull request, so the base is that request's base: the push stage reads
+	// KeyBranch and refuses an anchor taken against any other reference. This
+	// row says so because the rebase stage is what records the observation
+	// that stage decides on, and observing the base instead would produce an
+	// anchor refused on every run.
 	KeyBase Key = "base"
 	// KeySubmitted is the commit the push submitted to the gate, which is what
 	// the run was asked to validate. It is a run input and never changes.

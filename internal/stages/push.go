@@ -10,6 +10,7 @@ import (
 	"github.com/dayamjz/assistant/internal/findings"
 	"github.com/dayamjz/assistant/internal/graph"
 	"github.com/dayamjz/assistant/internal/pipeline"
+	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/safety"
 	"github.com/dayamjz/assistant/internal/vcs"
 )
@@ -62,14 +63,20 @@ import (
 // other reference would otherwise authorize forwarding this run's commit
 // there.
 //
-// No URL is composed or read from state on the way. PRD section 8 stores every
-// URL with its credentials removed, so a URL a stage could read out of a
-// record is one that would not authenticate, and the credentialed form stays
-// in the copy's git configuration where a remote name reaches it.
+// No URL is composed here. What is not checked either is that the recorded
+// remote is a name rather than a URL: safety.Target takes either, and the
+// stage that observes the target is what chooses which, so this body addresses
+// whatever that stage recorded.
 //
-// What is not checked here is that the recorded remote is a name rather than a
-// URL. safety.Target takes either, and the stage that observes the target is
-// what chooses which; this body addresses whatever that stage recorded.
+// A remote read back out of state is therefore text that may carry a
+// credential, and nothing before this point removed one. internal/store runs
+// the redactor over exactly repository.upstream_url and repository.fork_url
+// and says so; a graph checkpoint is opaque bytes that no layer inspects, and
+// pipeline.KeyTargetObserved travels in one, so what the rebase stage recorded
+// is stored exactly as it recorded it. So every report this stage builds goes
+// through internal/redact on the way out, which is the one owner of credential
+// removal PRD section 8 names. reportPush is where that happens, so a message
+// added later cannot be the one that skipped it.
 //
 // # The fetch before the decision
 //
@@ -140,6 +147,15 @@ import (
 //     on anything checkable here. internal/safety states where that guarantee
 //     lives; this body inherits it whole, and a record written from a live
 //     read would be indistinguishable from one the rebase stage took.
+//   - The anchor's remote is not constrained, only its reference is. An
+//     observation taken against refs/heads/<branch> on some other remote is
+//     honoured, and both the fetch and the update then address that remote,
+//     which is the reasoning behind the reference check reaching the other
+//     half of safety.Target. It is a gap rather than a check because nothing
+//     in a run's state names an expected remote: pipeline.KeyRepository
+//     identifies a store row, not a remote, so a check written today would
+//     have to invent the fact it checks against. It belongs with whichever
+//     change first gives a run a named upstream remote.
 //   - Nothing in this build writes pipeline.KeyTargetObserved or
 //     pipeline.KeyApproved, because the rebase and review stages that record
 //     them have no body yet. A run reaching this stage today is refused for
@@ -424,11 +440,11 @@ func performUpdate(ctx context.Context, repo *vcs.Repository, decision safety.De
 				"so it observes the branch where it now stands, and run this stage again."), nil
 	}
 	return pipeline.Output{
-		Report: findings.Report{
+		Report: reportPush(findings.Report{
 			Summary: "Forwarded " + decision.Proposed() + " to " + target.String() + ": " +
 				decision.String() + ".",
 			Findings: rewrittenNote(decision),
-		},
+		}),
 		Writes: map[pipeline.Key]graph.Value{pipeline.KeyPushed: graph.TextValue(decision.Proposed())},
 	}, nil
 }
@@ -471,7 +487,7 @@ func rewrittenNote(decision safety.Decision) []findings.Finding {
 // it about which of the two it was.
 func refusePush(id, description string) pipeline.Output {
 	return pipeline.Output{
-		Report: findings.Report{
+		Report: reportPush(findings.Report{
 			Summary: "The push was refused. " + firstSentence(description),
 			Findings: []findings.Finding{{
 				ID:          id,
@@ -479,8 +495,35 @@ func refusePush(id, description string) pipeline.Output {
 				Action:      findings.ActionAsk,
 				Description: description,
 			}},
-		},
+		}),
 	}
+}
+
+// pushRedactor is what removes a credential from a message this stage reports.
+// It is internal/redact, which PRD section 8 makes the one owner of that, so
+// nothing here recognizes a credential for itself.
+var pushRedactor = redact.New()
+
+// reportPush is the one exit every report this stage produces takes, and it
+// removes credentials on the way through.
+//
+// It is a choke point rather than a call beside each interpolation, because
+// what leaks is not one message. The target is a remote this stage read back
+// out of the run's state and nothing on that path removed a credential from
+// it, so every sentence naming the target or the remote carries whatever the
+// rebase stage recorded, and a report is persisted and shown. A remover at
+// each site would be a list to keep complete; here a message added later
+// cannot be the one that skipped it.
+//
+// It reads the text rather than the target because a refusal also carries
+// internal/safety's own sentence and git's own words, which name the remote
+// too and are not this stage's to reformat.
+func reportPush(report findings.Report) findings.Report {
+	report.Summary = pushRedactor.Redact(report.Summary)
+	for i := range report.Findings {
+		report.Findings[i].Description = pushRedactor.Redact(report.Findings[i].Description)
+	}
+	return report
 }
 
 // firstSentence returns the opening sentence of a description: everything up

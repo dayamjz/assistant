@@ -18,6 +18,7 @@ import (
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/principles"
+	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/safety"
 	"github.com/dayamjz/assistant/internal/vcs"
 )
@@ -593,6 +594,77 @@ func TestAPushRefusesAnObservationTakenAgainstAnotherReference(t *testing.T) {
 	}
 	if got := w.remoteTip(); got != w.published {
 		t.Fatalf("the branch on the remote is %s, want it untouched at %s", got, w.published)
+	}
+}
+
+// A credential in the remote the run recorded does not reach a report.
+//
+// The leak this closes is real rather than hypothetical. internal/store runs
+// the redactor over exactly repository.upstream_url and repository.fork_url,
+// and a graph checkpoint payload is opaque bytes nothing inspects, so a remote
+// the rebase stage wrote into pipeline.KeyTargetObserved is stored exactly as
+// it recorded it. Every message this stage builds names the target, and a
+// report is persisted and shown.
+//
+// Both cases run the real body over a recorded observation carrying a
+// credential, and each reaches a different message: the first is refused
+// before any git runs, and the second gets as far as the fetch.
+func TestACredentialInTheRecordedRemoteDoesNotReachAReport(t *testing.T) {
+	const secret = "s3cr3t-token"
+	credentialed := "https://" + secret + "@example.invalid/repo.git"
+
+	for _, tc := range []struct {
+		name string
+		ref  string
+		id   string
+	}{
+		// An observation of another reference, which is refused before the
+		// stage opens the run's copy or runs git at all.
+		{"an anchor on another reference", "refs/heads/somewhere-else", "push-observation-of-another-reference"},
+		// An observation of the right reference on a remote nothing can read,
+		// which is refused at the fetch. The scheme has no helper, so git
+		// fails immediately and contacts nothing.
+		{"a target that cannot be fetched", "", "push-target-unreadable"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newPushWorld(t)
+			remote := credentialed
+			ref := tc.ref
+			if ref == "" {
+				ref = "refs/heads/" + w.branch
+				remote = "xyz://" + secret + "@example.invalid/repo.git"
+			}
+			observed, err := safety.RestoreObservedFromCheckpoint(safety.ObservationRecord{
+				Remote: remote,
+				Ref:    ref,
+				Exists: true,
+				Commit: w.published,
+			})
+			if err != nil {
+				t.Fatalf("restoring an observation of %s on %s: %v", ref, remote, err)
+			}
+
+			out, runErr := w.runPush(map[pipeline.Key]graph.Value{
+				pipeline.KeyHead:           graph.TextValue(w.published),
+				pipeline.KeyApproved:       graph.TextValue(w.published),
+				pipeline.KeyTargetObserved: graph.TextValue(w.recorded(observed)),
+			})
+			description := assertRefused(t, out, runErr, tc.id)
+			report := out.Report.Normalize()
+			for what, text := range map[string]string{
+				"the refusal": description,
+				"the summary": report.Summary,
+			} {
+				if strings.Contains(text, secret) {
+					t.Fatalf("%s carries the credential the run recorded, and a report is persisted "+
+						"and shown:\n%s", what, text)
+				}
+			}
+			// The host survives, so a person still reads which remote it was:
+			// a report that named no remote would pass the check above by
+			// saying nothing.
+			assertNamesAll(t, "the refusal", description, "example.invalid", redact.Marker)
+		})
 	}
 }
 
