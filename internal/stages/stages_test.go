@@ -136,10 +136,7 @@ func TestAllPlacesAWrittenBodyAtEveryImplementedStage(t *testing.T) {
 			}
 			out, err := impl.NewBody()(t.Context(), pipeline.Input{
 				Stage: stage,
-				State: declaredReader{allowed: allowed, state: map[pipeline.Key]graph.Value{
-					pipeline.KeyIntent:         graph.TextValue("add a greeting"),
-					pipeline.KeyIntentSupplied: graph.BoolValue(true),
-				}},
+				State: declaredReader{allowed: allowed, state: stateForEveryBody(t)},
 			})
 			if err != nil {
 				return // Pending cannot fail, so a body that did is not it.
@@ -176,8 +173,36 @@ func TestAllPlacesAWrittenBodyAtEveryImplementedStage(t *testing.T) {
 // reason. Its provider is the modelled host in pullrequest_test.go rather than
 // a second double, so what the guard drives is what that stage's own tests
 // drive.
+//
+// The deps are half of what a body needs and stateForEveryBody is the other,
+// so the two grow together. An adapter given to a body driven over state it
+// cannot work from fails just as a missing adapter does, and the guard's
+// tolerance for a failure swallows either one identically.
 func depsForEveryBody() stages.StageDeps {
 	return stages.StageDeps{Forge: newHost()}
+}
+
+// stateForEveryBody is the run state the placement guard drives every written
+// body with, and it grows as bodies land for the same reason depsForEveryBody
+// does: a body that cannot work from it fails, and a failure is the guard's
+// tolerance, so that stage silently opts out of the assertion instead of
+// failing to say so.
+//
+// It is aRun, which is a run that reached the last written stage with the run's
+// own facts recorded and something recorded at every stage before it, rather
+// than a second fixture stating the same thing less completely. The checks
+// stage is the next body, it will read the pull request number, and that key
+// belongs here when it lands.
+//
+// The intent-only literal this replaced is what made the point. Every key a
+// body did not find was answered with the empty text, so the pull request body
+// asked its code host to open a pull request with no head, no base and no
+// title - a call the GitHub adapter refuses before it invokes anything - and
+// the guard passed only because the stand-in accepted what the mechanism
+// cannot.
+func stateForEveryBody(t *testing.T) map[pipeline.Key]graph.Value {
+	t.Helper()
+	return aRun().state(t)
 }
 
 // Implemented is read off the same table All places implementations from, so a
