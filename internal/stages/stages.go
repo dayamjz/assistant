@@ -1,5 +1,4 @@
-// Package stages is where the nine delivery-gate stage bodies live. The intent
-// stage is written; the rest are not.
+// Package stages is where the nine delivery-gate stage bodies live.
 //
 // PRD section 5 specifies the nine, internal/pipeline wires them into a graph
 // and owns their order, and each body is separate work against

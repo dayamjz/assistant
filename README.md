@@ -119,22 +119,23 @@ deletes a branch, or that carries anything that is not a branch, is accepted
 and starts nothing, and reports that rather than passing over it.
 
 The stage bodies are separate work against the stage contract, and they land one
-at a time. The intent and review stages are written: review is the one that
-reads the change against the diff and the recorded intent, puts the scope lens
-in front of a reviewer, binds what comes back to what the reviewer declared
-reading, and takes automatic fix rounds. A stage without a body holds a
-placeholder that validates nothing and holds for a decision, so a run runs the
-stages that have one and stops at the first that does not, saying so rather
-than reporting a pass it did not establish. `stages.Implemented` is the
-authority on which stages those are, and `assistant doctor` reports it. A run
-still reaches no agent, no push and no code host: the review body opens the
+at a time. The intent, review and pull request stages are written: review is
+the one that reads the change against the diff and the recorded intent, puts
+the scope lens in front of a reviewer, binds what comes back to what the
+reviewer declared reading, and takes automatic fix rounds. A stage without a
+body holds a placeholder that validates nothing and holds for a decision, so a
+run runs the stages that have one and stops at the first that does not, saying
+so rather than reporting a pass it did not establish. `stages.Implemented` is
+the authority on which stages those are, and `assistant doctor` reports it. A
+run still reaches no agent, no push and no code host: the review body opens the
 run's isolated copy before it launches anything, nothing in this build creates
-one yet, and no other body launches at all, so review can only fail or be
-skipped for the run until that work lands. That is what bounds what the
-end-to-end harness can drive through the binary; `internal/journey/README.md`
-is the authority on what a green run there does and does not establish,
-starting with the limit that a scripted agent proves the machinery and not the
-review quality.
+one yet, the pull request body fails without the code host this build's service
+never constructs, and no other body launches at all, so each of those two can
+only fail or be skipped for the run until that work lands. That is what bounds
+what the end-to-end harness can drive through the binary;
+`internal/journey/README.md` is the authority on what a green run there does
+and does not establish, starting with the limit that a scripted agent proves
+the machinery and not the review quality.
 
 ## The two promises
 
