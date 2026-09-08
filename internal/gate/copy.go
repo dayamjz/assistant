@@ -69,6 +69,24 @@ func AddCopy(ctx context.Context, spec Spec, path, commit string, opts ...Option
 // files, never the one that discards them, so a copy holding uncommitted work
 // survives with git's refusal reported.
 //
+// # The case that will actually produce the refusal
+//
+// A reader meeting a leftover copy should find this decided rather than wonder
+// whether the reclaim is broken, so the case is named rather than left to be
+// derived from the rule.
+//
+// The rebase stage is the first thing in this product that moves a copy's head
+// to commits no reference in the gate contains: it rebases, and those commits
+// exist only in the copy until the push stage forwards them. So a run ended
+// between those two stages keeps its copy, with ErrWorkUnreachable reported on
+// the service log and the run's verdict unchanged.
+//
+// That is this refusal working rather than a leak. The copy holds the only
+// instance of the rebased commits, and P6 ranks losing work far above leaving
+// a directory behind. Reclaiming such a copy - once its work is somewhere else
+// - is separate work, and it is not a reason to relax this operation or to add
+// an exception for the case.
+//
 // # The reaping gap, stated rather than implied
 //
 // PRD section 11 reaps the processes running in a copy before removing it, and

@@ -289,6 +289,13 @@
 // the copy of a run that is held for a person is kept, because the copy is
 // what the answer resumes into.
 //
+// A copy is also kept when its work is nowhere else. The rebase stage moves a
+// copy's head to commits only that copy holds until the push stage forwards
+// them, so a run ended between those two stages keeps its copy and the refusal
+// is reported on the service log. That is deliberate: the copy holds the only
+// instance of that work, and leaving a directory behind is the lesser loss.
+// Reclaiming one whose work has since landed is separate work.
+//
 // That reclaim asks fewer refusals than PRD section 11 describes, and the one
 // it does not ask is stated rather than implied. Section 11 reaps the
 // processes running in a copy before removing it. Nothing here reaps: a

@@ -322,7 +322,7 @@ func (s *Service) claimPush(ctx context.Context, built *driver, repository, bran
 		return store.Run{}, "", err
 	} else if found {
 		s.signalCancellation(active.ID)
-		if _, err := built.runs.Terminate(ctx, active.ID); err != nil {
+		if _, err := s.endAndReclaim(ctx, active.ID, built.runs.Terminate); err != nil {
 			var wrong *store.RunStatusError
 			if !errors.As(err, &wrong) {
 				return store.Run{}, "", err

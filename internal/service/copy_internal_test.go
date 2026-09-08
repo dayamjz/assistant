@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/gate"
+	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/store"
 )
@@ -90,6 +91,11 @@ func TestARunIsRecordedAgainstACommitTheGateHolds(t *testing.T) {
 // A refusal reported into something nobody reads is indistinguishable from no
 // refusal at all, which is why this asserts the message arrived rather than
 // asserting that reclaimCopy was called.
+//
+// The shape driven here is the one the product will actually produce. A commit
+// made in the copy that no reference in the gate contains is what the rebase
+// stage leaves behind, so a run ended between rebase and push meets exactly
+// this, and this is the test that says somebody is told about it.
 func TestARefusedReclaimReachesTheServiceLog(t *testing.T) {
 	principles.Cite(t, principles.P6)
 	held := newHeldService(t)
@@ -168,4 +174,82 @@ func readServiceLog(t *testing.T, s *Service) string {
 		t.Fatalf("reading the service log: %v", err)
 	}
 	return string(content)
+}
+
+// TestARunWhoseCopyCannotBeMadeIsFailedRatherThanLeftRunning holds the seam to
+// the ending it owes.
+//
+// runs.Start moves the record to running before the copy is made, so a
+// creation that fails and returns only an error leaves a run recorded as
+// running with no copy and nothing advancing it. That is the stall PRD section
+// 9 calls worse than an error, and carryOn cannot reach it because no segment
+// ever began.
+//
+// The copy is made impossible by putting a file where this repository's copies
+// have to live, so nothing can be created beneath it. The run's identifier is
+// minted inside create, so the obstruction is the parent rather than the
+// copy's own path.
+func TestARunWhoseCopyCannotBeMadeIsFailedRatherThanLeftRunning(t *testing.T) {
+	held := newHeldService(t)
+	perRepository := filepath.Dir(held.service.home.Worktree("subject", "unused"))
+	if err := os.MkdirAll(filepath.Dir(perRepository), 0o700); err != nil {
+		t.Fatalf("making the worktrees root: %v", err)
+	}
+	if err := os.WriteFile(perRepository, []byte("not a directory\n"), 0o600); err != nil {
+		t.Fatalf("blocking the copy's parent: %v", err)
+	}
+
+	if _, err := held.service.start(t.Context(), machine.StartRequest{
+		Working:        machine.Working{WorkingPath: held.subject.workingPath},
+		Intent:         "a run whose copy cannot be made",
+		IntentSupplied: true,
+	}); err == nil {
+		t.Fatal("start reported success though the isolated copy could not be made")
+	}
+
+	records, err := held.service.store.RunsForRepository(t.Context(), "subject")
+	if err != nil {
+		t.Fatalf("reading the repository's runs: %v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("the repository holds %d runs, want the one that was attempted", len(records))
+	}
+	if got := records[0].Status; got == store.RunRunning || got == store.RunPending {
+		t.Fatalf("the run is recorded as %s with no copy and nothing advancing it, which is the "+
+			"stall a person cannot tell from work in progress", got)
+	}
+}
+
+// TestTheBareCommandAttachesWhenTakingTheBranchWouldFail is PRD section 9's
+// promise that the bare command attaches to the branch's active run.
+//
+// Attaching creates nothing, so it does not have to satisfy a creation
+// invariant. Before the peek, every invocation put the branch in the gate
+// first, and the refspec deliberately carries no leading plus - so any local
+// history rewrite after the first invocation made the take a non-fast-forward
+// and the command could then neither start a run nor report the one already
+// running, whose head the gate holds already.
+//
+// The rewrite here is an amend, which is the ordinary way a branch stops
+// fast-forwarding in this product: a fix round rewrites a commit.
+func TestTheBareCommandAttachesWhenTakingTheBranchWouldFail(t *testing.T) {
+	held := newHeldService(t)
+	record := held.begin(t)
+	<-held.inside
+
+	rawGit(t, held.subject.workingPath, "commit", "--quiet", "--amend", "-m", "rewritten after the run began")
+	rewritten := rawGit(t, held.subject.workingPath, "rev-parse", "HEAD")
+	if rewritten == held.subject.head {
+		t.Fatal("the amend did not move the branch, so a take would still fast-forward")
+	}
+
+	attached, err := held.service.start(t.Context(), machine.StartRequest{
+		Working: machine.Working{WorkingPath: held.subject.workingPath},
+	})
+	if err != nil {
+		t.Fatalf("the bare command could not attach to the run this branch already has: %v", err)
+	}
+	if attached.Record.ID != record.ID {
+		t.Errorf("attached to run %s, want the run the branch already had, %s", attached.Record.ID, record.ID)
+	}
 }

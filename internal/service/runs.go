@@ -49,23 +49,52 @@ func (s *Service) start(ctx context.Context, req machine.StartRequest) (machine.
 	if err != nil {
 		return machine.Run{}, err
 	}
-	// The branch reaches the gate before the run is recorded, which is what
-	// makes this path agree with the one a gate push takes. PRD principle P1
-	// makes the push the consent boundary and PRD section 9's bare command
-	// starts a run from the branch you are on; those only agree if the branch
-	// is in the gate, and the invocation is the asking.
+	// A branch that already has a run is attached to, and attaching creates
+	// nothing, so it does not have to satisfy a creation invariant. PRD
+	// section 9 gives this command as attaching to the branch's active run and
+	// starting one only when there is none, and an attach that first had to
+	// put the branch in the gate would be a different promise: after any local
+	// history rewrite the take is not a fast-forward, and the command would
+	// then neither start a run nor report the one already running, whose head
+	// the gate holds already.
 	//
-	// What the gate took is also the only commit this run may validate, so it
-	// is read back from here rather than from the working copy. The two would
-	// almost always agree, and a second read would be a second answer to
-	// which commit is under validation - one of which the gate does not hold.
-	spec, err := s.gateSpecFor(ctx, repository.ID)
-	if err != nil {
+	// The race this peek leaves is benign in the direction that matters. A run
+	// appearing between here and the claim means claimBranch attaches to it
+	// anyway and the take was merely unnecessary: wasted work, not wrong work.
+	//
+	// Two ways of closing that race are wrong and are named because they are
+	// what a reader reaches for. Moving the take inside the branch claim puts
+	// git under a lock claimBranch's own documentation says nothing slow runs
+	// under. Forcing the refspec would let a run rewrite a gate reference to
+	// make itself startable, which is the loss P6 forbids and which the
+	// refspec's missing plus exists to prevent - a mechanism that repairs its
+	// own precondition by destroying history is the failure with extra steps.
+	head := ""
+	if active, found, err := s.activeRun(ctx, repository.ID, branch); err != nil {
 		return machine.Run{}, err
-	}
-	head, err := gate.TakeBranch(ctx, spec, branch, gate.WithIndex(s.store))
-	if err != nil {
-		return machine.Run{}, err
+	} else if found {
+		head = active.SubmittedHead
+	} else {
+		// The branch reaches the gate before the run is recorded, which is
+		// what makes this path agree with the one a gate push takes. PRD
+		// principle P1 makes the push the consent boundary and this command
+		// starts a run from the branch you are on; those only agree if the
+		// branch is in the gate, and the invocation is the asking.
+		//
+		// What the gate took is also the only commit this run may validate,
+		// so it is read back from here rather than from the working copy. The
+		// two would almost always agree, and a second read would be a second
+		// answer to which commit is under validation - one of which the gate
+		// does not hold.
+		spec, specErr := s.gateSpecFor(ctx, repository.ID)
+		if specErr != nil {
+			return machine.Run{}, specErr
+		}
+		taken, takeErr := gate.TakeBranch(ctx, spec, branch, gate.WithIndex(s.store))
+		if takeErr != nil {
+			return machine.Run{}, takeErr
+		}
+		head = taken
 	}
 	// Everything the record is built from is read before the branch is
 	// claimed, so what the claim holds is the decision and the write and not
@@ -262,7 +291,7 @@ func (s *Service) cancel(ctx context.Context, req machine.CancelRequest) (machin
 	}
 	forget := s.endRun(req.Run)
 	defer forget()
-	if _, err := built.runs.Terminate(ctx, req.Run); err != nil {
+	if _, err := s.endAndReclaim(ctx, req.Run, built.runs.Terminate); err != nil {
 		return machine.Run{}, err
 	}
 	return s.view(ctx, req.Run)
@@ -337,7 +366,19 @@ func (s *Service) begin(ctx context.Context, record store.Run, start pipeline.St
 	// The copy is made after the row exists, per PRD section 8's ordering
 	// rule, and before the first stage runs, because every stage after the
 	// intent stage reads the change out of it.
+	//
+	// A copy that cannot be made ends the run here. runs.Start has already
+	// moved the record to running, so returning the error alone would leave a
+	// run recorded as running with no copy and nothing advancing it - the
+	// stall PRD section 9 calls worse than an error, and one carryOn cannot
+	// reach because no segment ever began. The ending goes through the seam,
+	// so whatever the failed creation left behind is given back with it.
 	if err := s.createCopy(ctx, record); err != nil {
+		if _, failed := s.endAndReclaim(ctx, record.ID, built.runs.Fail); failed != nil {
+			s.log.Printf("run %s could not be failed after its isolated copy could not be made: %v",
+				record.ID, failed)
+		}
+		s.publishRunState(ctx, record.ID)
 		return machine.Run{}, err
 	}
 	return s.advance(ctx, record.ID, func(ctx context.Context) (graph.Result, error) {
@@ -631,23 +672,27 @@ func (s *Service) settle(ctx context.Context, runID string, result graph.Result)
 	default:
 		return nil
 	}
-	moved, err := move(ctx, runID)
-	if err != nil {
+	// A halt is not an ending, so it does not go through the seam: a run
+	// waiting on a person keeps its copy, because the copy is what the answer
+	// resumes into.
+	if result.Status == graph.StatusHalted {
+		if _, err := move(ctx, runID); err != nil {
+			var wrong *store.RunStatusError
+			if !errors.As(err, &wrong) {
+				return err
+			}
+			s.log.Printf("run %s was %s rather than where this segment left it", runID, wrong.Actual)
+		}
+		s.publishRunState(ctx, runID)
+		return nil
+	}
+	if _, err := s.endAndReclaim(ctx, runID, move); err != nil {
 		var wrong *store.RunStatusError
 		if !errors.As(err, &wrong) {
 			return err
 		}
 		s.log.Printf("run %s was %s rather than where this segment left it", runID, wrong.Actual)
-		moved, err = s.store.Run(ctx, runID)
-		if err != nil {
-			return err
-		}
 	}
-	// A run that has finished gives its copy back here, which is one of the
-	// two times reclaimCopy is called; recovery is the other, for the copies
-	// a service that died left behind. A run that halted keeps its copy: it
-	// is waiting on an answer, and the copy is what the answer resumes into.
-	s.reclaimCopy(ctx, moved)
 	s.publishRunState(ctx, runID)
 	return nil
 }
