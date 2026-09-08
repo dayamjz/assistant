@@ -2,7 +2,9 @@ package stages
 
 import (
 	"context"
+	"errors"
 	"io"
+	"os/exec"
 	"strings"
 	"time"
 )
@@ -14,13 +16,23 @@ import (
 // something the call is waiting for, and either way the call ends after this
 // rather than stalling the run on a process nothing is going to reap.
 //
-// It bounds the run and not the machine. What it does not do is end that
-// descendant: this file starts one process and ends that one process, and a
-// child the command left behind goes on running. internal/agents terminates
-// the process tree an agent invocation started, and nothing here does the
-// equivalent for a configured command, so a command that starts something and
-// detaches leaves it behind. That is a gap rather than a decision this file is
-// entitled to make quietly.
+// Both waits it bounds begin after the command exited or after the run was
+// cancelled, so it bounds neither how long the command itself runs nor what
+// the command leaves behind.
+//
+// Nothing here bounds the command's own runtime. There is no stage-level
+// timeout and no configuration key holding one, so a configured command that
+// hangs holds the run's segment until an operator cancels the run, which is
+// the recourse that ends it. A duration would belong in internal/config's key
+// table, which is that schema's single owner, so adding one is its own change
+// rather than something this file may decide.
+//
+// Nor does it end a descendant: this file starts one process and ends that one
+// process, and a child the command left behind goes on running.
+// internal/agents terminates the process tree an agent invocation started, and
+// nothing here does the equivalent for a configured command, so a command that
+// starts something and detaches leaves it behind. That is a gap rather than a
+// decision this file is entitled to make quietly.
 const commandGrace = 5 * time.Second
 
 // commandSpec is one configured command line to run.
@@ -34,13 +46,19 @@ type commandSpec struct {
 	dir string
 	// record receives everything the command wrote, standard output and
 	// standard error interleaved as the command produced them. It is the
-	// authoritative full output PRD section 8 asks for, and it is written
-	// while the command runs rather than afterwards, so output survives a
-	// command this call gives up waiting on.
+	// run's test evidence, and it is written while the command runs rather
+	// than afterwards, so output survives a command this call gives up
+	// waiting on.
 	record io.Writer
 	// projection bounds the tail of that output kept in memory for the
 	// stage's report. Zero keeps none.
 	projection int
+	// grace is what os/exec's WaitDelay is set to. The stage passes
+	// commandGrace; a caller passing zero leaves both of the waits described
+	// there unbounded. It is a field rather than the constant read directly
+	// so a test can reach the give-up path without waiting the stage's grace
+	// out.
+	grace time.Duration
 }
 
 // commandResult is what running one command produced. It reports what
@@ -63,6 +81,21 @@ type commandResult struct {
 	// non-zero, because a non-zero status is the answer rather than a failure
 	// to obtain one.
 	err error
+	// short is set when the command reported an exit status and os/exec still
+	// answered an error alongside it. That is the case where the output was
+	// cut off before all of it reached the record: os/exec closes the output
+	// pipes and answers ErrWaitDelay once grace expires with a descendant
+	// still holding them, and it answers a copy error where the copy itself
+	// failed. The status is still the command's answer, so this is not a
+	// verdict; what it costs is the claim that the record holds the whole
+	// output.
+	//
+	// It can only be set where the command exited zero. os/exec prefers the
+	// exit error for any other status and discards the wait error behind it,
+	// so a command that exits non-zero and is also cut short arrives here
+	// indistinguishable from one that was not. That gap is os/exec's and
+	// nothing here narrows it.
+	short error
 }
 
 // runCommand runs one configured command line to completion, writing its whole
@@ -77,6 +110,12 @@ type commandResult struct {
 // Cancelling ctx ends the command, and the result then reports a command that
 // did not settle. A caller that cancelled deliberately should say so from the
 // context rather than read that result as a verdict.
+//
+// Two things can go wrong at once, and they are reported apart. A command that
+// reported no status of its own carries the reason on err. A command that
+// reported one and whose output os/exec still could not finish copying carries
+// that on short, because the status is the answer and the truncated record is
+// a separate fact about the evidence rather than a reason to doubt it.
 func runCommand(ctx context.Context, spec commandSpec) commandResult {
 	tail := &tailWriter{limit: spec.projection}
 	out := io.MultiWriter(spec.record, tail)
@@ -87,7 +126,7 @@ func runCommand(ctx context.Context, spec commandSpec) commandResult {
 	// for a person who is not there.
 	cmd.Stdout = out
 	cmd.Stderr = out
-	cmd.WaitDelay = commandGrace
+	cmd.WaitDelay = spec.grace
 
 	err := cmd.Run()
 
@@ -101,6 +140,15 @@ func runCommand(ctx context.Context, spec commandSpec) commandResult {
 	res.code = cmd.ProcessState.ExitCode()
 	if !res.exited {
 		res.err = err
+		return res
+	}
+	// The command reported a status, so an error alongside it is not about the
+	// status. os/exec's own way of saying "it exited non-zero" is one, and that
+	// is the answer rather than a problem with it; anything else is os/exec
+	// reporting that it could not finish reading the command's output.
+	var exit *exec.ExitError
+	if err != nil && !errors.As(err, &exit) {
+		res.short = err
 	}
 	return res
 }

@@ -93,9 +93,9 @@ func TestATailWithNoWholeLineKeepsItsFragment(t *testing.T) {
 	}
 }
 
-// The record keeps the whole output whatever the projection keeps, which is
-// PRD section 8's rule that the full output is the authority and what travels
-// is a bounded view of it.
+// The record keeps the whole output whatever the projection keeps, so what
+// travels in the report is a bounded view of a record that is not itself
+// bounded.
 func TestTheRecordHoldsTheWholeOutputTheProjectionBounds(t *testing.T) {
 	t.Parallel()
 	var whole strings.Builder
@@ -104,6 +104,7 @@ func TestTheRecordHoldsTheWholeOutputTheProjectionBounds(t *testing.T) {
 		dir:        t.TempDir(),
 		record:     &whole,
 		projection: 4,
+		grace:      commandGrace,
 	})
 	if !result.exited || result.code != 0 {
 		t.Fatalf("git --version exited %d (reported a status: %t), err %v", result.code, result.exited, result.err)
@@ -146,6 +147,7 @@ func TestARecordThatFailsPartwayDoesNotDecideTheVerdict(t *testing.T) {
 		dir:        t.TempDir(),
 		record:     record,
 		projection: testProjectionBytes,
+		grace:      commandGrace,
 	})
 	if !result.exited || result.code != 0 {
 		t.Fatalf("a record that could not be written changed what the command answered: status %d, "+
@@ -200,6 +202,7 @@ func TestABoundedProjectionSaysWhatItOmittedAndWhereTheRestIs(t *testing.T) {
 				dir:        t.TempDir(),
 				record:     record,
 				projection: 4,
+				grace:      commandGrace,
 			})
 			record.close()
 			if !result.exited || result.code != 3 {
@@ -245,6 +248,7 @@ func TestACommandThatCannotStartReportsNoStatus(t *testing.T) {
 		dir:        filepath.Join(t.TempDir(), "not-there"),
 		record:     &whole,
 		projection: testProjectionBytes,
+		grace:      commandGrace,
 	})
 	if result.exited {
 		t.Fatalf("a command that could not start reported exit status %d", result.code)
@@ -270,6 +274,7 @@ func TestACancelledCommandReportsNoStatus(t *testing.T) {
 		dir:        t.TempDir(),
 		record:     &whole,
 		projection: testProjectionBytes,
+		grace:      commandGrace,
 	})
 	if result.exited {
 		t.Fatalf("a command run under a cancelled context reported exit status %d", result.code)
@@ -281,7 +286,9 @@ func TestACancelledCommandReportsNoStatus(t *testing.T) {
 
 // A command that reported no status becomes an ask, which holds the stage for
 // a person: nothing was established either way, and PRD section 5 calls that a
-// stage that could not gather enough evidence.
+// stage that could not gather enough evidence. It also claims to have checked
+// nothing, because findings.Report.Tested is what the stage actually checked
+// and a command that never ran checked nothing.
 //
 // The result it is given comes from runCommand rather than from this test, so
 // the shape it classifies is one the mechanism produces.
@@ -293,6 +300,7 @@ func TestACommandWithNoStatusHoldsTheStageForAPerson(t *testing.T) {
 		dir:        filepath.Join(t.TempDir(), "not-there"),
 		record:     &whole,
 		projection: testProjectionBytes,
+		grace:      commandGrace,
 	})
 
 	record := openTestEvidence(filepath.Join(t.TempDir(), "run-1", testEvidenceFile))
@@ -303,6 +311,10 @@ func TestACommandWithNoStatusHoldsTheStageForAPerson(t *testing.T) {
 	}
 	if !report.HasHeld() {
 		t.Fatalf("a command that reported no status produced %+v, which does not hold for a person", report)
+	}
+	if len(report.Tested) != 0 {
+		t.Fatalf("the report says it checked %v, and the command never reported a status of its own",
+			report.Tested)
 	}
 	if len(report.Fixable()) != 0 {
 		t.Fatalf("a command that reported no status offered a finding to a fixer, and there is nothing to fix")
