@@ -147,7 +147,10 @@
 // that there is no unleased push here to reach for, since no field turns the
 // lease off. What it does not buy is that the lease is worth anything, because
 // nothing here can tell a commit a run observed from the tip it read a moment
-// ago; PRD principle P6 is internal/safety's, and Lease says so.
+// ago; PRD principle P6 is internal/safety's, and Lease says so. Nor does the
+// shape of a spec decide how many references a push carries, since git decides
+// that from its configuration: what the argument vector pins against that, and
+// what it leaves outside the pin, is stated on Push.
 //
 // # Errors
 //

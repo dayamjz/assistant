@@ -308,3 +308,172 @@ func TestCommitsNotInRefusesARevisionThisRepositoryDoesNotHold(t *testing.T) {
 		t.Fatalf("error is %v, want one matching ErrRefNotFound", err)
 	}
 }
+
+// An operator's git configuration must not turn one PushSpec into two
+// reference updates. push.followTags makes git send every annotated tag
+// reachable from the commit being pushed, and this package keeps
+// GIT_CONFIG_GLOBAL on purpose, so that setting reaches the invocation.
+//
+// A tag created that way is a reference on the shared remote that no lease
+// covered and that internal/safety never decided on, which is what makes this
+// P6's problem rather than a tidiness one.
+func TestPushDoesNotCarryATagAConfigurationWouldFollow(t *testing.T) {
+	cfg := gitEnvironment(t)
+	appendConfig(t, cfg, "[push]\n\tfollowTags = true\n")
+	root := t.TempDir()
+	remote := filepath.Join(root, "remote.git")
+	work := filepath.Join(root, "work")
+	rawGit(t, root, "init", "--quiet", "--bare", remote)
+	rawGit(t, root, "init", "--quiet", work)
+	writeFile(t, filepath.Join(work, "f.txt"), "one\n")
+	rawGit(t, work, "add", "-A")
+	rawGit(t, work, "commit", "--quiet", "-m", "one")
+	published := strings.TrimSpace(rawGit(t, work, "rev-parse", "HEAD"))
+	rawGit(t, work, "push", "--quiet", remote, "HEAD:refs/heads/main")
+
+	next := commitOn(t, work, "two\n", "two")
+	// An annotated tag reachable from the commit being pushed, which is what
+	// push.followTags sends alongside it. A lightweight tag is not followed,
+	// so this has to be annotated for the setting to have anything to do.
+	rawGit(t, work, "tag", "--annotate", "-m", "release one", "v1", next)
+
+	repo, err := vcs.OpenWorktree(ctx(t), work)
+	if err != nil {
+		t.Fatalf("open %s: %v", work, err)
+	}
+	if err := repo.Push(ctx(t), vcs.PushSpec{
+		Remote: remote,
+		Ref:    "refs/heads/main",
+		Commit: next,
+		Lease:  vcs.Lease{Exists: true, Commit: published},
+	}); err != nil {
+		t.Fatalf("push: %v", err)
+	}
+	if got := remoteCommit(t, remote, "refs/heads/main"); got != next {
+		t.Fatalf("refs/heads/main is %s, want %s", got, next)
+	}
+	refs := strings.TrimSpace(rawGit(t, remote, "for-each-ref", "--format=%(refname)"))
+	if refs != "refs/heads/main" {
+		t.Fatalf("the remote holds %q, want refs/heads/main and nothing else: one PushSpec "+
+			"updated a reference no lease covered", refs)
+	}
+}
+
+// The fate of the reference a caller asked to update is that reference's own
+// status line, never another's. git exits non-zero when it refused anything at
+// all, so a push whose branch landed while some other reference was refused
+// exits 1 with both outcomes in its output, and reading the first rejection
+// would report a shared branch as untouched when it had in fact moved.
+//
+// The output below is what real git printed for exactly that case: a receiving
+// repository with an update hook declining refs/tags/*, and push.followTags
+// sending a tag along with the branch. The stand-in replays those bytes,
+// because with --no-follow-tags now pinned this package can no longer be made
+// to produce a second reference itself, while a push option the receiving side
+// acts on still can.
+func TestPushReportsItsOwnReferencesFateWhenAnotherIsRejected(t *testing.T) {
+	logPath, exe := useFakeGit(t)
+	fakeGitOutput(t, "To /somewhere/remote.git\n"+
+		" \t"+fakeCommit+":refs/heads/main\t65daf36..5dbd1fc\n"+
+		"!\trefs/tags/v1:refs/tags/v1\t[remote rejected] (hook declined)\n"+
+		"Done\n")
+	fakeGitStderrOutput(t, "remote: error: hook declined to update refs/tags/v1\n", 1)
+
+	repo, err := vcs.OpenWorktree(ctx(t), t.TempDir(), vcs.WithGitBinary(exe))
+	if err != nil {
+		t.Fatalf("OpenWorktree against the stand-in git: %v", err)
+	}
+	err = repo.Push(ctx(t), vcs.PushSpec{
+		Remote: "origin",
+		Ref:    "refs/heads/main",
+		Commit: fakeCommit,
+		Lease:  vcs.Lease{Exists: true, Commit: fakeCommit},
+	})
+	if err != nil {
+		t.Fatalf("push reported %v, want success: refs/heads/main moved and only refs/tags/v1 "+
+			"was refused, so reporting a rejection says a branch did not move when it did", err)
+	}
+	// The invocation is read as well, so this cannot pass because no push was
+	// attempted at all.
+	if !pushWasInvoked(t, logPath) {
+		t.Fatal("the stand-in git recorded no push, so nothing about a push was checked")
+	}
+}
+
+// A push whose own reference was refused is still a rejection, which is what
+// keeps the test above from passing by never reporting one.
+func TestPushReportsARejectionOfItsOwnReferenceAlongsideAnothers(t *testing.T) {
+	logPath, exe := useFakeGit(t)
+	fakeGitOutput(t, "To /somewhere/remote.git\n"+
+		"!\t"+fakeCommit+":refs/heads/main\t[rejected] (stale info)\n"+
+		"!\trefs/tags/v1:refs/tags/v1\t[remote rejected] (hook declined)\n"+
+		"Done\n")
+	fakeGitStderrOutput(t, "", 1)
+
+	repo, err := vcs.OpenWorktree(ctx(t), t.TempDir(), vcs.WithGitBinary(exe))
+	if err != nil {
+		t.Fatalf("OpenWorktree against the stand-in git: %v", err)
+	}
+	err = repo.Push(ctx(t), vcs.PushSpec{
+		Remote: "origin",
+		Ref:    "refs/heads/main",
+		Commit: fakeCommit,
+		Lease:  vcs.Lease{Exists: true, Commit: fakeCommit},
+	})
+	var rejection *vcs.PushRejection
+	if !errors.As(err, &rejection) {
+		t.Fatalf("push error %v does not reach a *PushRejection", err)
+	}
+	if rejection.Ref != "refs/heads/main" {
+		t.Fatalf("rejection names %q, want refs/heads/main", rejection.Ref)
+	}
+	if !strings.Contains(rejection.Reason, "stale info") {
+		t.Fatalf("rejection reason is %q, want refs/heads/main's own summary rather than "+
+			"another reference's", rejection.Reason)
+	}
+	if !pushWasInvoked(t, logPath) {
+		t.Fatal("the stand-in git recorded no push, so nothing about a push was checked")
+	}
+}
+
+// Output that says nothing about the reference the caller asked to update
+// leaves what happened to it unknown, and this package reports that rather
+// than reading silence as a push that happened.
+func TestPushRefusesOutputThatSaysNothingAboutItsOwnReference(t *testing.T) {
+	_, exe := useFakeGit(t)
+	fakeGitOutput(t, "To /somewhere/remote.git\n"+
+		"!\trefs/tags/v1:refs/tags/v1\t[remote rejected] (hook declined)\n"+
+		"Done\n")
+	fakeGitStderrOutput(t, "", 1)
+
+	repo, err := vcs.OpenWorktree(ctx(t), t.TempDir(), vcs.WithGitBinary(exe))
+	if err != nil {
+		t.Fatalf("OpenWorktree against the stand-in git: %v", err)
+	}
+	err = repo.Push(ctx(t), vcs.PushSpec{
+		Remote: "origin",
+		Ref:    "refs/heads/main",
+		Commit: fakeCommit,
+		Lease:  vcs.Lease{Exists: true, Commit: fakeCommit},
+	})
+	if err == nil {
+		t.Fatal("push reported success on output naming no status for refs/heads/main, which " +
+			"reads silence about a reference as evidence that it moved")
+	}
+	if errors.Is(err, vcs.ErrPushRejected) {
+		t.Fatalf("push reported %v, which reports another reference's rejection as this one's", err)
+	}
+}
+
+// pushWasInvoked reports whether the stand-in git was actually asked to push.
+func pushWasInvoked(t *testing.T, logPath string) bool {
+	t.Helper()
+	for _, call := range readInvocations(t, logPath) {
+		for _, arg := range call.Args {
+			if arg == "push" {
+				return true
+			}
+		}
+	}
+	return false
+}

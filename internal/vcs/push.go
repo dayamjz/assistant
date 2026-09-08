@@ -2,6 +2,7 @@ package vcs
 
 import (
 	"context"
+	"strconv"
 	"strings"
 )
 
@@ -28,7 +29,8 @@ type Lease struct {
 	Commit string
 }
 
-// PushSpec describes one reference update on a remote.
+// PushSpec is the one reference update a caller asks this package to perform
+// on a remote.
 //
 // There is no field that turns the lease off, and that is the shape rather
 // than an omission: every push this package performs is a compare-and-swap
@@ -38,7 +40,11 @@ type Lease struct {
 // The narrowness of that is worth being exact about. It buys that no update
 // this package performs overwrites a reference whose current value the caller
 // did not name, which is the failure mode a bare force has. It does not buy
-// that the value named is one worth leasing on; see Lease.
+// that the value named is one worth leasing on; see Lease. Nor does it buy
+// that a push carries this reference and no other, which is not a property of
+// a struct describing what was asked for: what git puts on the wire is decided
+// by its configuration, and Push says which part of that it pins and which
+// part it only reports around.
 type PushSpec struct {
 	// Remote is a configured remote name or a URL. It is required.
 	Remote string
@@ -69,15 +75,41 @@ type PushSpec struct {
 // reason as text rather than classifying it, because the set of reasons a
 // remote may give is the remote's and not this package's to enumerate.
 //
-// Nothing is fetched, merged, or moved locally. The only thing that changes is
-// the reference on the remote.
+// Nothing is fetched or merged, and no branch in this repository moves. What
+// does change locally is the remote-tracking reference for a named remote,
+// which git updates on a successful push; that is local bookkeeping, and it is
+// stated because "the only thing that changes is the reference on the remote"
+// is the easy sentence here and it is not true.
 //
-// Submodule recursion is disabled, on the same grounds as Fetch: the
-// configuration that turns it on makes a push contact further URLs named by
-// the .gitmodules of the branch being pushed, and PRD principle P7 does not
-// let the branch under validation choose what is contacted. A pre-push hook is
-// not disabled, because a hook can only refuse an update, and refusing is what
-// this operation is already built to report.
+// # What this invocation pins about how many references move
+//
+// A push is not one reference update because a caller described one. git sends
+// the references its configuration tells it to, and push.followTags adds every
+// annotated tag reachable from the commit being pushed. This package keeps
+// GIT_CONFIG_GLOBAL and GIT_CONFIG_SYSTEM on purpose, which the package
+// documentation states as a trust policy, so an operator's configuration
+// reaches this invocation. So --no-follow-tags is passed, on the same grounds
+// Fetch passes --no-tags: that setting may not widen one PushSpec into a
+// second reference update, which would be a reference created under no lease
+// and one internal/safety never decided on.
+//
+// Submodule recursion is disabled, on the same grounds: the configuration that
+// turns it on makes a push contact further URLs named by the .gitmodules of
+// the branch being pushed, and PRD principle P7 does not let the branch under
+// validation choose what is contacted. A pre-push hook is not disabled,
+// because a hook can only refuse an update, and refusing is what this
+// operation is already built to report.
+//
+// What those pins do not reach is a push option the receiving side acts on, a
+// configuration key a later git introduces, and a reference that git decides
+// to send for a reason this argument vector does not name. That residue is why
+// the answer is read per reference rather than off the exit status: what is
+// reported is the fate the porcelain output gives spec.Ref, and a line about
+// any other reference is never read as this one's. git exits non-zero when it
+// refused any reference at all, so reading the status alone would report an
+// update that landed as a rejection. Output that says nothing about spec.Ref
+// is a failure rather than a success, because silence about a reference is not
+// evidence that it moved.
 func (r *Repository) Push(ctx context.Context, spec PushSpec) error {
 	if err := checkArg("remote", spec.Remote); err != nil {
 		return err
@@ -100,23 +132,30 @@ func (r *Repository) Push(ctx context.Context, spec PushSpec) error {
 	// update, which the porcelain lines below say which of. Any other status
 	// is a failure and comes back as a *CommandError.
 	out, code, err := r.runExpecting(ctx, "push", []int{1},
-		"push", "--porcelain", "--no-recurse-submodules", lease, "--end-of-options",
+		"push", "--porcelain", "--no-recurse-submodules", "--no-follow-tags", lease, "--end-of-options",
 		spec.Remote, commit+":"+spec.Ref)
 	if err != nil {
 		return err
 	}
-	rejected, err := r.rejectedRef(out)
+	status, err := r.statusFor(out, spec.Ref)
 	if err != nil {
 		return err
 	}
-	if rejected != nil {
-		return rejected
+	if status == nil {
+		// git said nothing about the reference this was asked to update, so
+		// what happened to it is unknown. Reporting success here would be
+		// reading silence as a push that happened.
+		return &outputError{op: "push", detail: "git exited " + strconv.Itoa(code) +
+			" and reported no status for " + r.set.redactor.Redact(spec.Ref)}
 	}
-	if code != 0 {
-		// git exited as though something was refused and the porcelain lines
-		// named nothing refused. Reporting success here would be reading a
-		// failure as a push that happened, so this refuses instead.
-		return &outputError{op: "push", detail: "git reported a failed push and no rejected reference"}
+	if status.flag == "!" {
+		return &PushRejection{
+			Ref: r.set.redactor.Redact(spec.Ref),
+			// The summary is git's own text and the only line of this output
+			// that reaches a report, so it is redacted like every other
+			// message this package hands back.
+			Reason: r.set.redactor.Redact(status.summary),
+		}
 	}
 	return nil
 }
@@ -147,17 +186,33 @@ func leaseArgument(spec PushSpec) (string, error) {
 	return "--force-with-lease=" + spec.Ref + ":" + spec.Lease.Commit, nil
 }
 
-// rejectedRef returns the rejection the porcelain output reports, or nil when
-// it reports none.
+// pushStatus is what the porcelain output says happened to one reference: the
+// flag that says which of the outcomes it was, and git's own summary of it.
+type pushStatus struct {
+	flag    string
+	summary string
+}
+
+// statusFor returns what the porcelain output reports about ref, or nil when
+// it reports nothing about it.
 //
 // The format is one line per reference: a one-character flag, the refspec, and
 // a summary, separated by tabs. The flag is what is read here, because it is
-// the field that says what happened; the summary is carried along as the
-// reason without being interpreted, since what a remote may say is the
-// remote's vocabulary. A line this package cannot read at all is refused
-// rather than skipped, because a skipped rejection reads as a push that
-// succeeded.
-func (r *Repository) rejectedRef(out []byte) (*PushRejection, error) {
+// the field that says what happened; the summary is carried along without
+// being interpreted, since what a remote may say is the remote's vocabulary. A
+// line this package cannot read at all is refused rather than skipped, because
+// a skipped rejection reads as a push that succeeded.
+//
+// It is scoped to one destination reference rather than answering for the
+// whole output, and that is the load-bearing part. git may report more than
+// one reference, and a status line naming another one says nothing about this
+// one: an output that reports the requested branch moving and some other
+// reference refused is a landed push, and reading whichever rejection came
+// first would report it as one that never happened. Two lines for the same
+// destination is refused rather than resolved, because nothing here can say
+// which of them the reference ended up at.
+func (r *Repository) statusFor(out []byte, ref string) (*pushStatus, error) {
+	var found *pushStatus
 	for _, line := range strings.Split(strings.TrimRight(string(out), "\n"), "\n") {
 		// Only the reference lines carry tabs. "To <url>", "Done", and the
 		// error lines git writes around them do not, and none of them reports
@@ -169,30 +224,35 @@ func (r *Repository) rejectedRef(out []byte) (*PushRejection, error) {
 		if len(fields) < 3 || len([]rune(fields[0])) != 1 {
 			return nil, &outputError{op: "push", detail: "expected a flag, a refspec and a summary, got " + line}
 		}
-		if fields[0] != "!" {
+		if destinationOf(fields[1]) != ref {
 			continue
 		}
-		refspec := fields[1]
-		_, ref, _ := strings.Cut(refspec, ":")
-		if ref == "" {
-			ref = refspec
+		if found != nil {
+			return nil, &outputError{op: "push",
+				detail: "git reported " + r.set.redactor.Redact(ref) + " more than once"}
 		}
-		return &PushRejection{
-			Ref: r.set.redactor.Redact(ref),
-			// The summary is git's own text and the only line of this output
-			// that reaches a report, so it is redacted like every other
-			// message this package hands back.
-			Reason: r.set.redactor.Redact(strings.Join(fields[2:], " ")),
-		}, nil
+		found = &pushStatus{flag: fields[0], summary: strings.Join(fields[2:], " ")}
 	}
-	return nil, nil
+	return found, nil
+}
+
+// destinationOf returns the reference a porcelain refspec updates, which is
+// the half after the colon. A refspec with no colon names one reference and is
+// its own destination.
+func destinationOf(refspec string) string {
+	if _, dst, ok := strings.Cut(refspec, ":"); ok {
+		return dst
+	}
+	return refspec
 }
 
 // PushRejection reports that a remote refused an update. It is the answer to
 // the question a push asks, not a warning a caller may continue past: no
 // reference moved.
 type PushRejection struct {
-	// Ref is the reference on the remote the update would have moved.
+	// Ref is the reference on the remote the update would have moved, which
+	// is always the one the spec named: a rejection is reported only from
+	// that reference's own status line, never from another reference's.
 	Ref string
 	// Reason is git's own account of why the remote refused, carried as the
 	// text git produced. This package does not classify it, so a caller

@@ -1,7 +1,6 @@
 package stages_test
 
 import (
-	"context"
 	"reflect"
 	"strings"
 	"testing"
@@ -127,17 +126,6 @@ func TestImplementedIsTheSetThisBuildIsMeantToHave(t *testing.T) {
 // produce. A body that failed on it would be tolerated here and this test
 // would pass without checking that stage at all, so a stage needing more than
 // run state has to be given it here rather than left to the tolerance.
-// pendingID is the finding identifier Pending reports for a stage, read off
-// Pending itself rather than spelled out, so a change to how it names its
-// finding cannot leave this checking for a name nothing produces any more.
-func pendingID(stage pipeline.Stage) string {
-	out, err := stages.Pending(stage.String()).NewBody()(context.Background(), pipeline.Input{Stage: stage})
-	if err != nil || len(out.Report.Findings) != 1 {
-		return ""
-	}
-	return out.Report.Findings[0].ID
-}
-
 func TestAllPlacesAWrittenBodyAtEveryImplementedStage(t *testing.T) {
 	t.Parallel()
 	implemented := stages.Implemented()
@@ -176,14 +164,36 @@ func TestAllPlacesAWrittenBodyAtEveryImplementedStage(t *testing.T) {
 				t.Fatalf("Implemented names %s, but All places Pending at it: a run stops for a "+
 					"person at a stage this build reports a body for", stage)
 			}
+			pendingFinding := pendingID(t, stage)
 			for _, found := range report.Findings {
-				if found.ID == pendingID(stage) {
+				if found.ID == pendingFinding {
 					t.Fatalf("the %s stage's body reported %s's own finding, so a run reaching it is "+
 						"told the stage is not implemented in this build: %+v", stage, "Pending", report)
 				}
 			}
 		})
 	}
+}
+
+// pendingID is the finding identifier Pending reports for a stage, read off
+// Pending itself rather than spelled out, so a change to how it names its
+// finding cannot leave this checking for a name nothing produces any more.
+//
+// It fails the test rather than returning nothing when it cannot read one.
+// findings.Report.Validate refuses an empty identifier, so a caller comparing
+// against one would be comparing against a value no finding it sees can carry,
+// and the discriminator below would pass by checking nothing.
+func pendingID(t *testing.T, stage pipeline.Stage) string {
+	t.Helper()
+	out, err := stages.Pending(stage.String()).NewBody()(t.Context(), pipeline.Input{Stage: stage})
+	if err != nil {
+		t.Fatalf("running Pending for %s: %v", stage, err)
+	}
+	if len(out.Report.Findings) != 1 {
+		t.Fatalf("Pending for %s reports %d findings, want exactly one: there is no single "+
+			"identifier to tell a body's report apart from Pending's by", stage, len(out.Report.Findings))
+	}
+	return out.Report.Findings[0].ID
 }
 
 // Implemented is read off the same table All places implementations from, so a
