@@ -423,7 +423,8 @@
 // One write is common to every refusal and is stated once, in errors.go rather
 // than in each of them: obtaining a gate seals any gate the resolution observed
 // that has no admission hook. Where a refusal says nothing was created,
-// written, or deleted, it means nothing beyond that.//
+// written, or deleted, it means nothing beyond that.
+//
 // # A run's isolated copy
 //
 // AddCopy and RemoveCopy make and give back the disposable copy one run works
@@ -446,5 +447,4 @@
 // noticed; a refusal whose input has no producer reads as protection and gets
 // trusted. It is left out and said here instead, and internal/service records
 // the same gap where its own reclaim is wired.
-
 package gate
