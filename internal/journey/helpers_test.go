@@ -149,11 +149,13 @@ func open(t *testing.T, scenario fixture.Scenario, opts ...func(*journey.Options
 //
 // It takes no platform guard, and that is the difference between it and serve.
 // The guard answers a service that was expected to come up and did not, so it
-// belongs to a caller that expected one; a caller reaching for this reached
-// for the error, and the only such caller's whole subject is a service it
-// arranged to fail. A guard here would fire on that arranged failure and skip
-// the check for the failure it exists to observe, which is what it did until
-// the day a platform without the transport ran it.
+// belongs to a caller that expects one and has not already taken it. No caller
+// reaching for this is that: the harness checks whose whole subject is a
+// service they arranged to fail expect the failure, and the P6 boundary walk
+// re-serves a home whose first service came up through serve, which took the
+// guard before the walk began. A guard here would fire on an arranged failure
+// and skip the check for the failure it exists to observe, which is what it
+// did until the day a platform without the transport ran it.
 //
 // It and startsService are the two ways a service is started here, because a
 // service this harness owns as a child and a service the command surface
@@ -168,7 +170,8 @@ func open(t *testing.T, scenario fixture.Scenario, opts ...func(*journey.Options
 // repository rejects. So it is a rule a reader keeps, and what makes it
 // keepable is that every answer a caller could want is here: serve for a
 // service that has to come up, this for a test whose subject is one that did
-// not, and startsService for one asked for over the surface.
+// not and for one serving a home again after a kill, and startsService for one
+// asked for over the surface.
 func serving(t *testing.T, j *journey.Journey) error {
 	t.Helper()
 	return j.Serve()
