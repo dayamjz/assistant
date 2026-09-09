@@ -272,22 +272,25 @@
 // anything it does not own. Those are stage bodies' work, behind internal/vcs,
 // internal/safety and internal/forge.
 //
-// It does write one reference, and it is not a branch: the gate's own anchor,
-// under refs/assistant/submitted/, over the commit a run is about to validate.
-// PRD principle P1 makes reaching the gate the consent boundary, and PRD
-// section 9's bare command starts a run from the branch you are on, so the
-// commit has to get there before the run is recorded. gate.TakeBranch is that
-// step and the gate is a local bare repository, so nothing is published by it.
+// It does write references in the gate, and none of them is a branch: the
+// gate's own anchor, under refs/assistant/submitted/, over the commit a run
+// is about to validate, plus the take's staging name that carries the fetch
+// and is given back on the way out. PRD principle P1 makes reaching the gate
+// the consent boundary, and PRD section 9's bare command starts a run from
+// the branch you are on, so the commit has to get there before the run is
+// recorded. gate.TakeBranch is that step and the gate is a local bare
+// repository, so nothing is published by it.
 //
 // It writes rather than moves, and that distinction is the whole of why this
-// is safe. The reference is named for the commit it holds, so a take either
-// creates a name that was not there or finds one already pointing where it
-// would have put it; no force is used, and no reference this or any earlier
-// run wrote is ever repointed. A run still validating an earlier commit keeps
-// its anchor when the branch is taken again. No branch in the gate is written
-// by this path either, so a push's own branch is still git's to accept or
-// reject and P6's answer there is unchanged. internal/gate states the whole of
-// that at the operation, including why those anchors are not litter to sweep.
+// is safe. The anchor is created over the commit the fetch actually
+// delivered and named for it, create-only, so a take either creates a name
+// that was not there or finds one already holding exactly its commit; no
+// force is used, and no reference this or any earlier run wrote is ever
+// repointed. A run still validating an earlier commit keeps its anchor when
+// the branch is taken again. No branch in the gate is written by this path
+// either, so a push's own branch is still git's to accept or reject and P6's
+// answer there is unchanged. internal/gate states the whole of that at the
+// operation, including why those anchors are not litter to sweep.
 //
 // # A run's isolated copy
 //

@@ -78,6 +78,16 @@ var (
 	// run gives the copy back. Recovery asks again on every service open, so
 	// no further command is needed once the commit is reachable.
 	ErrWorkUnreachable = errors.New("gate: the isolated copy holds work no reference in the gate contains")
+	// ErrForeignAnchor is returned by TakeBranch when the commit-keyed name
+	// its take resolves to already exists holding some other commit. The take
+	// only ever creates that name over the commit it is named for, so
+	// something else wrote what stands there, and it is refused rather than
+	// repaired: nothing here moves or deletes a reference in that namespace,
+	// because the reference standing there may be the reachability keeping
+	// another run's work alive. The message names the step that succeeds -
+	// moving the branch to a new commit, which takes under a name nothing has
+	// written.
+	ErrForeignAnchor = errors.New("gate: a reference in the gate's submitted namespace holds a commit its name does not agree with")
 	// ErrNotAGate is returned when a path that would be deleted as a gate
 	// repository is not one: it is outside this home's repository directory,
 	// nothing is there, or it carries no gate record. Removal refuses rather

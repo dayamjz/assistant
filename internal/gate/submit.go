@@ -2,6 +2,8 @@ package gate
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 
@@ -66,6 +68,36 @@ func Holds(ctx context.Context, spec Spec, commit string, opts ...Option) (bool,
 // stranding above with a schedule.
 const submittedRefPrefix = "refs/assistant/submitted/"
 
+// incomingRefPrefix is where TakeBranch stages a fetch before the commit it
+// delivered is known. Each take fetches into a fresh name of its own here,
+// reads what arrived, and only then creates the commit-keyed anchor under
+// submittedRefPrefix; the staging name is deleted once the anchor stands.
+//
+// The staging step exists so that no fetch ever has a commit-keyed name as
+// its destination. A fetch's destination is written from whatever the source
+// holds at fetch time, so a fetch aimed at a name chosen from an earlier read
+// is what could put one commit under a name that says another. A name used by
+// no other take cannot collide with anything, and what it comes to hold is
+// the answer rather than a claim to verify.
+//
+// Every path out of a take gives its staging name back, so what can leave one
+// behind is a take that died between the fetch and the anchor, or one whose
+// cleanup itself failed. A reference left that way is kept objects and
+// nothing else: nothing reads this namespace, and extra reachability strands
+// nothing. Nothing in this build sweeps it, which is the same accounting the
+// anchors above carry, at the same forty bytes a name.
+const incomingRefPrefix = "refs/assistant/incoming/"
+
+// stagingRefName names one take's staging reference: a fresh name under
+// incomingRefPrefix no other take is using.
+func stagingRefName() (string, error) {
+	var raw [8]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", fmt.Errorf("gate: naming a take's staging reference: %w", err)
+	}
+	return incomingRefPrefix + hex.EncodeToString(raw[:]), nil
+}
+
 // TakeBranch puts the working copy's branch into the gate, under a reference
 // this package owns, and reports the commit the gate then holds for it.
 //
@@ -84,36 +116,45 @@ const submittedRefPrefix = "refs/assistant/submitted/"
 // and none of those reach this, which runs only inside a command somebody
 // invoked.
 //
-// # The reference is named for the commit, which is what makes it safe
+// # The reference is named for the commit, and the name is chosen after the fetch
 //
-// The destination is submittedRefPrefix + commit, never refs/heads/branch, and
-// the refspec carries no leading plus. It needs none, and that is a property
-// of the name rather than a risk accepted: a reference whose name IS its
-// target either does not exist or already holds exactly the commit being
-// fetched, so there is no update for git to reject and nothing this could
-// overwrite. No force is used anywhere here, in any namespace.
+// The fetch's destination is a staging reference under incomingRefPrefix used
+// by no other take, never a commit-keyed name and never refs/heads/branch.
+// The commit under validation is read off what the fetch actually delivered,
+// and the anchor is then created at submittedRefPrefix + that commit, so the
+// name and the target agree by construction rather than by verification. An
+// earlier design chose the name from a read made before the fetch, and the
+// branch moving between those two steps could put one commit under a name
+// that says another, or fast-forward an earlier take's anchor; there are no
+// longer two reads for the branch to move between.
+//
+// No force is used anywhere here, in any namespace, and no unforced update
+// can move an existing reference either: the anchor is written with
+// vcs.CreateRef, which can only create, so a name that exists is never
+// rewritten - by this take, a racing take, or a retry. A take of a commit
+// already anchored finds the name holding exactly that commit and reports it
+// taken; the check is a read after a refused creation, and it cannot go stale
+// against this package because nothing here ever moves a reference in this
+// namespace.
 //
 // This is what keeps a take from taking an earlier run's anchor away. A branch
 // rewritten locally - which is what a fix round does to one - takes cleanly
 // under a NEW name, and the reference anchoring a run still validating the old
-// commit is untouched, because nothing here ever moves a reference. Keying the
-// anchor by branch instead would have had the second take move the first run's
-// only anchor off its copy's head and strand that copy permanently.
+// commit is untouched. Keying the anchor by branch instead would have had the
+// second take move the first run's only anchor off its copy's head and strand
+// that copy permanently.
+//
+// A name in the submitted namespace holding a commit other than the one it is
+// named for is refused with ErrForeignAnchor: this operation only ever
+// creates that name over its own commit, so something else wrote what stands
+// there, and it is not repaired here because the reference may be the
+// reachability keeping another run's work alive. The refusal says what gets a
+// caller out - moving the branch to a new commit takes it under a name
+// nothing has written.
 //
 // This path never writes refs/heads in the gate. A branch there moves only
 // where a push moves it, so git's own rejection of a non-fast-forward push
 // stays exactly what it was, which is what keeps P6's answer there true.
-//
-// # The name and the target are checked to agree
-//
-// The reference cannot be named until the commit is known, so the branch is
-// resolved in the working copy first and fetched into the reference named for
-// what it read. Those are two steps, and the branch can move between them, in
-// which case the fetch would put one commit under a name that says another.
-// The whole design rests on the name and the target agreeing, so that is
-// established rather than assumed: the reference is read back afterwards and a
-// disagreement is refused, naming running the command again as the step that
-// succeeds. What comes back is the verified commit.
 //
 // # What the reference establishes, and what it does not
 //
@@ -131,40 +172,65 @@ func TakeBranch(ctx context.Context, spec Spec, branch string, opts ...Option) (
 	}
 	taken := ""
 	err := withGate(ctx, spec, gateNamed, opts, func(h *held) error {
-		working, err := vcs.OpenWorktree(ctx, h.workingPath)
-		if err != nil {
-			return fmt.Errorf("gate: opening the working copy at %s: %w", h.workingPath, err)
-		}
-		source := branchRefPrefix + branch
-		commit, err := working.ResolveCommit(ctx, source)
-		if err != nil {
-			return fmt.Errorf("gate: reading %s in %s to name the reference it is taken into: %w",
-				source, h.workingPath, err)
-		}
 		repo, err := vcs.OpenBare(ctx, h.repository)
 		if err != nil {
 			return fmt.Errorf("gate: opening the gate repository at %s: %w", h.repository, err)
 		}
-		destination := submittedRefPrefix + commit
+		staging, err := stagingRefName()
+		if err != nil {
+			return err
+		}
+		source := branchRefPrefix + branch
 		if err := repo.Fetch(ctx, vcs.FetchSpec{
 			Remote:   h.workingPath,
-			Refspecs: []string{source + ":" + destination},
+			Refspecs: []string{source + ":" + staging},
 		}); err != nil {
 			return fmt.Errorf("gate: taking %s from %s into the gate at %s: %w",
 				branch, h.workingPath, h.repository, err)
 		}
-		landed, err := repo.ResolveCommit(ctx, destination)
+		landed, err := repo.ResolveCommit(ctx, staging)
 		if err != nil {
-			return fmt.Errorf("gate: reading %s in the gate at %s after taking it: %w",
-				destination, h.repository, err)
+			return fmt.Errorf("gate: reading what taking %s delivered to %s in the gate at %s: %w",
+				branch, staging, h.repository, err)
 		}
-		if landed != commit {
-			return fmt.Errorf("gate: %s in the gate at %s holds %s, and the reference is named for "+
-				"%s: %s moved in %s while it was being taken, so nothing here anchors either commit "+
-				"by a name that means it; run the command again to take the branch where it now stands",
-				destination, h.repository, landed, commit, branch, h.workingPath)
+		destination := submittedRefPrefix + landed
+		if err := repo.CreateRef(ctx, destination, landed); err != nil {
+			standing, readErr := repo.ResolveCommit(ctx, destination)
+			var refused error
+			switch {
+			case readErr == nil && standing == landed:
+				// The anchor already stands over exactly this commit, which is
+				// what a second take of an already-taken commit meets. The
+				// creation was refused because there was nothing left to do.
+			case readErr == nil:
+				refused = fmt.Errorf("%w: %s in the gate at %s holds %s, and this operation only ever "+
+					"creates that name over %s itself, so something else wrote it; it is not repaired "+
+					"here, because the reference standing there may be the reachability keeping another "+
+					"run's work alive; moving %s to a new commit, which an amend does, takes it under a "+
+					"name nothing has written",
+					ErrForeignAnchor, destination, h.repository, standing, landed, branch)
+			default:
+				refused = fmt.Errorf("gate: anchoring %s in the gate at %s: %w", landed, h.repository, err)
+			}
+			if refused != nil {
+				// The staging reference is this take's own, so a refusal gives
+				// it back rather than leaking one per retry. A cleanup failure
+				// is joined rather than dropped, and the refusal stays
+				// matchable through the join.
+				if derr := repo.DeleteRef(ctx, staging, landed); derr != nil {
+					return errors.Join(refused, fmt.Errorf("gate: giving back the take's staging "+
+						"reference %s: %w", staging, derr))
+				}
+				return refused
+			}
 		}
-		taken = commit
+		if err := repo.DeleteRef(ctx, staging, landed); err != nil {
+			return fmt.Errorf("gate: %s is anchored in the gate at %s, but the take could not give "+
+				"back its staging reference %s: %w; the leftover keeps objects reachable and nothing "+
+				"reads it, and running the command again takes the branch without it",
+				landed, h.repository, staging, err)
+		}
+		taken = landed
 		return nil
 	})
 	return taken, err

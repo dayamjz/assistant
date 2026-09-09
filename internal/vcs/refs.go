@@ -205,6 +205,52 @@ func (r *Repository) MergeBase(ctx context.Context, a, b string) (string, error)
 	return id, nil
 }
 
+// CreateRef creates reference name pointing at commit, and refuses when a
+// reference of that name already exists, whatever it holds. Creation is the
+// only write it can make, so an invariant of the shape "a name that exists is
+// never rewritten" comes from this operation's shape rather than from a
+// caller's discipline.
+//
+// The must-not-exist check is git's own, made inside the same locked update
+// that creates the reference, so two racing creations cannot both succeed and
+// a reference appearing between a caller's read and this write is refused
+// rather than overwritten. The refusal carries git's report and does not say
+// what the existing reference holds: by the time a caller read that, the
+// answer could have changed, so a caller that needs it reads the reference
+// itself and owns the staleness of what it read.
+func (r *Repository) CreateRef(ctx context.Context, name, commit string) error {
+	if err := checkArg("reference", name); err != nil {
+		return err
+	}
+	id, err := r.ResolveCommit(ctx, commit)
+	if err != nil {
+		return err
+	}
+	// The empty old value is git's spelling of "the reference must not exist
+	// yet", and --no-deref makes both the check and the write about this name
+	// rather than about whatever a symbolic reference of the same name points
+	// through.
+	_, err = r.run(ctx, "create-ref", "update-ref", "--no-deref", "--end-of-options", name, id, "")
+	return err
+}
+
+// DeleteRef deletes reference name after verifying it still points at commit,
+// so a caller can give back a reference it created without being able to
+// delete one that has since come to hold something else. The verification and
+// the deletion are one locked update, git's own, not a read followed by a
+// delete.
+func (r *Repository) DeleteRef(ctx context.Context, name, commit string) error {
+	if err := checkArg("reference", name); err != nil {
+		return err
+	}
+	id, err := r.ResolveCommit(ctx, commit)
+	if err != nil {
+		return err
+	}
+	_, err = r.run(ctx, "delete-ref", "update-ref", "--no-deref", "-d", "--end-of-options", name, id)
+	return err
+}
+
 // refError reports a revision that does not resolve to a commit.
 type refError struct {
 	rev  string
