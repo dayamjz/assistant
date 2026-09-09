@@ -77,7 +77,17 @@ func TestAStageWithNoBodyHoldsForAPersonRatherThanPassing(t *testing.T) {
 //
 // Landing a body means adding it here. That one edit is the whole cost of the
 // guard, and stating the set twice is the point rather than an oversight.
-var bodied = []pipeline.Stage{pipeline.StageIntent, pipeline.StageReview, pipeline.StageTest, pipeline.StagePR}
+var bodied = []pipeline.Stage{
+	pipeline.StageIntent,
+	pipeline.StageRebase,
+	pipeline.StageReview,
+	pipeline.StageTest,
+	pipeline.StageDocument,
+	pipeline.StageLint,
+	pipeline.StagePush,
+	pipeline.StagePR,
+	pipeline.StageCI,
+}
 
 // The stages this build has bodies for have to be the ones it is meant to have
 // bodies for, in the order a run takes them.
