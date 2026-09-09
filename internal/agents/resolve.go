@@ -45,9 +45,17 @@ func NewCatalog(factories ...Factory) *Catalog {
 }
 
 // DefaultCatalog returns the adapters this build ships, in the order "auto"
-// tries them. Claude Code is the only one, per the MVP cut in PRD section 12,
-// and it sits behind the full interface so a second adapter is additive.
-func DefaultCatalog() *Catalog { return NewCatalog(ClaudeFactory()) }
+// tries them. The order is: Cursor (most common in this environment), Claude
+// (full-featured with sessions), OpenAI, and Grok. All implement the core
+// Runner interface, and Claude additionally supports resumable sessions.
+func DefaultCatalog() *Catalog {
+	return NewCatalog(
+		CursorFactory(),
+		ClaudeFactory(),
+		OpenAIFactory(),
+		GrokFactory(),
+	)
+}
 
 // Add appends a factory, replacing any factory already registered under the
 // same name.

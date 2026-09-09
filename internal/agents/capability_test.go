@@ -201,17 +201,56 @@ func TestAnAdapterWithoutSessionsConformsToItsDeclaration(t *testing.T) {
 // declaration of it here would be a claim with nothing behind it, and this is
 // what fails if one is ever added without the mechanism.
 func TestWhatTheShippedAdapterDeclares(t *testing.T) {
-	declared := newRunner(t).Capabilities()
-	want := []agents.Capability{agents.CapabilityResumableSessions}
-	if got := declared.List(); !slices.Equal(got, want) {
-		t.Errorf("the claude adapter declares %v, want exactly %v", got, want)
+	// Test that Claude declares resumable sessions
+	claude := newRunner(t)
+	claudeDeclared := claude.Capabilities()
+	wantClaude := []agents.Capability{agents.CapabilityResumableSessions}
+	if got := claudeDeclared.List(); !slices.Equal(got, wantClaude) {
+		t.Errorf("the claude adapter declares %v, want exactly %v", got, wantClaude)
 	}
-	if declared.Has(agents.CapabilitySuppressProjectInstructions) {
+	if claudeDeclared.Has(agents.CapabilitySuppressProjectInstructions) {
 		t.Errorf("the claude adapter declares %s, and nothing in this repository implements it",
 			agents.CapabilitySuppressProjectInstructions)
 	}
-	if names := agents.DefaultCatalog().Names(); !slices.Equal(names, []string{agents.ClaudeName}) {
-		t.Errorf("this build ships adapters %v, which this test does not cover", names)
+
+	// Test that all adapters are in the default catalog
+	names := agents.DefaultCatalog().Names()
+	wantNames := []string{agents.CursorName, agents.ClaudeName, agents.OpenAIName, agents.GrokName}
+	if !slices.Equal(names, wantNames) {
+		t.Errorf("this build ships adapters %v, want %v", names, wantNames)
+	}
+
+	// Verify Cursor also declares resumable sessions
+	cursorFactory := agents.CursorFactory(agents.WithCursorBinary(helperBinary(t)))
+	cursor, err := cursorFactory.New(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("cursor factory failed: %v", err)
+	}
+	cursorDeclared := cursor.Capabilities()
+	if got := cursorDeclared.List(); !slices.Equal(got, wantClaude) {
+		t.Errorf("the cursor adapter declares %v, want exactly %v", got, wantClaude)
+	}
+
+	// Verify OpenAI declares no capabilities
+	openaiFactory := agents.OpenAIFactory(agents.WithOpenAIBinary(helperBinary(t)))
+	openai, err := openaiFactory.New(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("openai factory failed: %v", err)
+	}
+	openaiDeclared := openai.Capabilities()
+	if got := openaiDeclared.List(); len(got) != 0 {
+		t.Errorf("the openai adapter declares %v, want no capabilities", got)
+	}
+
+	// Verify Grok declares no capabilities
+	grokFactory := agents.GrokFactory(agents.WithGrokBinary(helperBinary(t)))
+	grok, err := grokFactory.New(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("grok factory failed: %v", err)
+	}
+	grokDeclared := grok.Capabilities()
+	if got := grokDeclared.List(); len(got) != 0 {
+		t.Errorf("the grok adapter declares %v, want no capabilities", got)
 	}
 }
 
