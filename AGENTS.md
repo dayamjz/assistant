@@ -338,10 +338,10 @@ Each has cost this repository more than one round of review.
   Read its `doc.go` for the residual gaps: an advisory lock binds only the
   processes that ask for it, and two roots naming one directory are two homes.
 - `internal/redact` is the one owner of credential removal, which
-  `internal/store` refuses to open without and `internal/vcs` and
-  `internal/forge` take. It recognizes a credential in a URL's userinfo and
-  nothing else, and says so; adding a shape means adding it there, never a
-  second remover at a call site.
+  `internal/store` refuses to open without and `internal/vcs`,
+  `internal/forge`, and `internal/stages` take. It recognizes a credential in
+  a URL's userinfo and nothing else, and says so; adding a shape means adding
+  it there, never a second remover at a call site.
 - `internal/machine` owns the shapes a structured answer takes, the three exit
   codes, and the outcome vocabulary. It composes records rather than restating
   them: a run is a `store.Run`, a report is a `findings.Report`, so no wire

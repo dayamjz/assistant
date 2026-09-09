@@ -2,7 +2,8 @@
 // log, or a record. PRD section 8 gives credential removal one owner, so every
 // package that persists or reports text that might carry one calls this rather
 // than deciding for itself: internal/vcs takes a Redactor, internal/store
-// refuses to open without one, and internal/forge takes one too.
+// refuses to open without one, and internal/forge and internal/stages take
+// one too.
 //
 // # What it recognizes
 //
