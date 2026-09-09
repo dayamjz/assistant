@@ -7,12 +7,10 @@ import (
 
 	"github.com/dayamjz/assistant/internal/findings"
 	"github.com/dayamjz/assistant/internal/forge"
-	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/stages"
-	"github.com/dayamjz/assistant/internal/store"
 )
 
 // TestTheRepositoryAPullRequestWouldLandInComesFromTheRunsOwnRecord is what
@@ -132,27 +130,5 @@ func observingStage(seen chan<- string) pipeline.Implementation {
 				}}, nil
 			}
 		},
-	}
-}
-
-// recordRepositoryWithUpstream writes the repository record a run needs,
-// naming the upstream the code host repository is derived from.
-func recordRepositoryWithUpstream(t *testing.T, h *home.Home, workingPath, upstream string) {
-	t.Helper()
-	if err := h.Create(); err != nil {
-		t.Fatalf("creating the home: %v", err)
-	}
-	records, err := store.Open(t.Context(), h.Database(), store.WithRedactor(redact.New()))
-	if err != nil {
-		t.Fatalf("opening the store: %v", err)
-	}
-	defer func() { _ = records.Close() }()
-	if _, err := records.UpsertRepository(t.Context(), store.Repository{
-		ID:            "subject",
-		WorkingPath:   workingPath,
-		UpstreamURL:   upstream,
-		DefaultBranch: "main",
-	}); err != nil {
-		t.Fatalf("recording the repository: %v", err)
 	}
 }

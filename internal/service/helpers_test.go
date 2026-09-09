@@ -129,13 +129,23 @@ func writeFile(path, content string) error {
 }
 
 // recordRepository writes the repository record a run needs and gives the
-// working copy a gate, which is the pair assistant init writes in the product.
-//
-// The gate is not decoration here. A run's isolated copy is a linked worktree
-// of it, and service.create refuses a run whose head the gate does not hold,
-// so a subject without one is a subject no run can start against - which is
-// the product's answer too, not a strictness these tests add.
+// working copy a gate, under an upstream no test reads.
 func recordRepository(t *testing.T, h *home.Home, workingPath string) store.Repository {
+	t.Helper()
+	return recordRepositoryWithUpstream(t, h, workingPath, "https://example.invalid/o/r.git")
+}
+
+// recordRepositoryWithUpstream writes the repository record a run needs, under
+// the upstream URL the caller states, and gives the working copy a gate: the
+// pair assistant init writes in the product, with one owner here so a fixture
+// cannot get half of it.
+//
+// The gate is not decoration. A run's isolated copy is a linked worktree of
+// it, the start path takes the branch into it before a run is recorded, and
+// service.create refuses a run whose head the gate does not hold, so a subject
+// without one is a subject no run can start against - which is the product's
+// answer too, not a strictness these tests add.
+func recordRepositoryWithUpstream(t *testing.T, h *home.Home, workingPath, upstream string) store.Repository {
 	t.Helper()
 	if err := h.Create(); err != nil {
 		t.Fatalf("creating the home: %v", err)
@@ -148,7 +158,7 @@ func recordRepository(t *testing.T, h *home.Home, workingPath string) store.Repo
 	repository, err := records.UpsertRepository(t.Context(), store.Repository{
 		ID:            "subject",
 		WorkingPath:   workingPath,
-		UpstreamURL:   "https://example.invalid/o/r.git",
+		UpstreamURL:   upstream,
 		DefaultBranch: "main",
 	})
 	if err != nil {
