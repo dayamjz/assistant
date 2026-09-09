@@ -522,8 +522,8 @@ Each has cost this repository more than one round of review.
   no push, and no code host: the intent body reads the supplied intent and
   launches nothing, the review body fails on the run's isolated copy, which
   nothing in this build creates, before it launches anything, and the pull
-  request body fails without the code host this build's service never
-  constructs, so every walk there skips those two stages. It takes both of the
+  request body fails because the run's record names no repository on the code
+  host, so every walk there skips those two stages. It takes both of the
   platform guards
   `internal/cli` and `internal/service` carry, on their terms: a check that
   drives a run skips where `internal/ipc` reads no local socket peer

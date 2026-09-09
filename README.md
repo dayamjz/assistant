@@ -129,9 +129,10 @@ so rather than reporting a pass it did not establish. `stages.Implemented` is
 the authority on which stages those are, and `assistant doctor` reports it. A
 run still reaches no agent, no push and no code host: the review body opens the
 run's isolated copy before it launches anything, nothing in this build creates
-one yet, the pull request body fails without the code host this build's service
-never constructs, and no other body launches at all, so each of those two can
-only fail or be skipped for the run until that work lands. That is what bounds
+one yet, the pull request body fails when the run's record names no repository
+on the code host, which no record here does, and no other body launches at
+all, so each of those two can only fail or be skipped for the run until that
+work lands. That is what bounds
 what the end-to-end harness can drive through the binary;
 `internal/journey/README.md` is the authority on what a green run there does
 and does not establish, starting with the limit that a scripted agent proves

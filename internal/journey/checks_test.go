@@ -42,9 +42,10 @@ type checked struct {
 // TestAnEmptyCheckListIsNotAPass drives internal/fixture's no-registered-checks
 // condition at package reach.
 //
-// The binary cannot reach it. No stage body talks to a code host in this
-// build, so no run asks the provider anything and there is no run to read a
-// verdict out of. What is driven is internal/forge over the provider command,
+// The binary cannot reach it. No run asks a provider anything in this build -
+// the pull request stage's body would, and it fails because the run's record
+// names no repository on the code host - so there is no run to read a verdict
+// out of. What is driven is internal/forge over the provider command,
 // which is a process this harness stands in for the same way it stands in for
 // the agent: a copy of this test binary on PATH, printing the prepared answer.
 //

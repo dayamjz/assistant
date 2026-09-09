@@ -104,27 +104,27 @@ const titleLimit = 72
 // pipeline.StageResult's own documentation says each write replaced the last,
 // so nothing here may describe it as the rounds.
 //
-// # Residual gap: the body it publishes is not redacted
+// # The body it publishes is redacted at the forge boundary, not here
 //
-// Nothing redacts the body this stage hands the code host, today. internal/
-// forge takes a redactor and applies it to what comes back from the provider
-// and to the arguments it refuses, and to neither of the two paths that carry
-// a body outward: Open writes it to the provider's standard input and
-// UpdateBody passes it along, both unfiltered. Nothing in this package filters
-// it either.
+// The body is a publish surface rather than a theoretical one. It carries the
+// run's intent and, for every stage, its summary, what it checked, the
+// evidence it named and the text of each finding, so whatever a stage
+// recorded is what leaves for the code host, and it lands somewhere nothing
+// can recall it from.
 //
-// That makes this a publish surface rather than a theoretical one. The body
-// carries the run's intent and, for every stage, its summary, what it checked,
-// the evidence it named and the text of each finding, so whatever a stage
-// recorded is what a code host receives. A reader may not assume any of it was
-// filtered on the way out.
+// Credential removal on that path is internal/forge's, not this stage's.
+// Everything that package sends a provider - the argument vector and the
+// standard input this body travels on - passes through the redactor its
+// adapter was given, which for a run of this service is internal/redact's.
+// Redacting at that boundary covers every composer at once where redacting in
+// each composer covers whichever ones remembered to, so this stage composes
+// internal/forge and adds no second remover, which is the rule
+// internal/redact is the one owner under.
 //
-// The fix does not belong here. Every outbound body passes through
-// internal/forge, so redacting at that boundary covers every composer at once
-// where redacting in each composer covers whichever ones remembered to; and
-// the work wiring an actual forge provider owns that package's outbound side.
-// This stage composes internal/forge and adds no second remover, which is the
-// rule internal/redact is the one owner under.
+// The residual gap is the redactor's own, stated scope: internal/redact
+// recognizes a credential in a URL's userinfo and nothing else, so a secret a
+// stage recorded in any other shape reaches the code host unchanged, and
+// nothing in this package filters it.
 //
 // # What it refuses
 //

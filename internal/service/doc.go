@@ -232,8 +232,9 @@
 // registers this test process's own group and then makes a restricted call,
 // which is refused with ipc.ErrContained. And it has no producer in this
 // build: nothing calls StageStarted. The intent body starts no process, the
-// pull request body fails without the code host this service never constructs,
-// and the review body, the one that does launch an agent, launches through the
+// pull request body launches only internal/forge's provider command and
+// nothing on that path calls StageStarted either, and the review body, the
+// one that does launch an agent, launches through the
 // agents.StageAgent seam, and nothing on that path records the process group
 // here - not that a run reaches its launch, since that body opens the run's
 // isolated copy first and nothing in this build creates one. So the registry
