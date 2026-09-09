@@ -275,7 +275,7 @@ func TestHoldingNamesTheTestStageExactlyWhenNoCommandIsConfigured(t *testing.T) 
 	t.Parallel()
 	unconfigured := config.Defaults()
 	want := []pipeline.Stage{pipeline.StageRebase, pipeline.StageTest, pipeline.StageDocument,
-		pipeline.StageLint, pipeline.StagePush, pipeline.StagePR, pipeline.StageCI}
+		pipeline.StageLint, pipeline.StagePush, pipeline.StageCI}
 	if got := stages.Holding(unconfigured); !slices.Equal(got, want) {
 		t.Fatalf("a default configuration holds a run at %v, want %v: every stage without a body, "+
 			"and the test stage for the command the configuration does not name", got, want)

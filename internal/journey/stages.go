@@ -199,7 +199,10 @@ func StagesWithoutABody() []pipeline.Stage {
 // establish. And the review stage has a body and is not a stop, because every
 // run this harness walks skips it, for the reason walkableRun states: its body
 // opens the run's isolated copy, nothing in this build creates one, and a run
-// that took the stage would fail there rather than hold.
+// that took the stage would fail there rather than hold. The pull request
+// stage is off the list on the same terms: it has a body, that body fails
+// when the run's record names no repository on the code host, no record here
+// names one, and every run this harness drives to the end asks to skip it.
 //
 // What holds these names to the build is the checks that walk a real run
 // against them: the kill-at-every-boundary check and the classification walk
@@ -213,7 +216,6 @@ var stops = []pipeline.Stage{
 	pipeline.StageDocument,
 	pipeline.StageLint,
 	pipeline.StagePush,
-	pipeline.StagePR,
 	pipeline.StageCI,
 }
 
