@@ -69,11 +69,12 @@ func TestARunSurvivesTheServiceBeingKilledAtEveryStageBoundary(t *testing.T) {
 
 	j := inClone(t)
 
-	// A run stops at every stage this build has no body for, which is read off
-	// internal/stages rather than counted to nine: a body that lands takes a
-	// boundary away, and a check written against the stage count would fail
-	// for a reason that is not P6.
-	holding := stagesWithoutABody(t)
+	// A run stops at every stage this harness declares it does - every
+	// body-less stage, and the test stage holding for its unconfigured
+	// command - which is a declaration rather than a count to nine: a stage
+	// that stops holding takes a boundary away, and a check written against
+	// the stage count would fail for a reason that is not P6.
+	holding := stagesARunStopsAt(t)
 
 	observed := survival{}
 	current := walkableRun(t, j, "narrow the Total loop bound on purpose")
@@ -102,8 +103,8 @@ func TestARunSurvivesTheServiceBeingKilledAtEveryStageBoundary(t *testing.T) {
 		current = decodeRun(t, succeeds(t, j.Command("--answer", "approved")))
 	}
 	if current.Outcome == machine.OutcomeDecision {
-		t.Fatalf("the run was killed and answered at %d boundaries and is still holding at %s; this build "+
-			"has %d stage(s) with no body", len(observed.boundaries), current.Position, len(holding))
+		t.Fatalf("the run was killed and answered at %d boundaries and is still holding at %s; this "+
+			"harness declares %d stop(s)", len(observed.boundaries), current.Position, len(holding))
 	}
 	observed.ended = current
 	if len(observed.boundaries) == 0 {
@@ -112,10 +113,10 @@ func TestARunSurvivesTheServiceBeingKilledAtEveryStageBoundary(t *testing.T) {
 	}
 
 	// Which boundary a counterfeit changes is wrapped into the walk it was
-	// derived from. How many boundaries a run reaches is how many stages this
-	// build has no body for, so a literal position stops being in range the
-	// day a body lands, and a counterfeit that panicked would take the check
-	// down with something that is not a finding.
+	// derived from. How many boundaries a run reaches is how many stops this
+	// harness declares, so a literal position stops being in range the day a
+	// stage stops holding, and a counterfeit that panicked would take the
+	// check down with something that is not a finding.
 	at := func(nth int) int { return nth % len(observed.boundaries) }
 
 	survived := journey.Check[survival]{
@@ -125,8 +126,8 @@ func TestARunSurvivesTheServiceBeingKilledAtEveryStageBoundary(t *testing.T) {
 				States: "the service was killed at every boundary this run stops at",
 				Holds: func(s survival) error {
 					if len(s.boundaries) != len(holding) {
-						return fmt.Errorf("the service was killed at %d boundaries and this build has %d "+
-							"stage(s) with no body, each of which is a boundary a run stops at",
+						return fmt.Errorf("the service was killed at %d boundaries and this harness "+
+							"declares %d stop(s), each of which is a boundary a run stops at",
 							len(s.boundaries), len(holding))
 					}
 					return nil

@@ -2,6 +2,7 @@ package stages_test
 
 import (
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -76,7 +77,7 @@ func TestAStageWithNoBodyHoldsForAPersonRatherThanPassing(t *testing.T) {
 //
 // Landing a body means adding it here. That one edit is the whole cost of the
 // guard, and stating the set twice is the point rather than an oversight.
-var bodied = []pipeline.Stage{pipeline.StageIntent, pipeline.StageReview}
+var bodied = []pipeline.Stage{pipeline.StageIntent, pipeline.StageReview, pipeline.StageTest}
 
 // The stages this build has bodies for have to be the ones it is meant to have
 // bodies for, in the order a run takes them.
@@ -108,6 +109,14 @@ func TestImplementedIsTheSetThisBuildIsMeantToHave(t *testing.T) {
 // function values: Pending cannot fail and reports one ask finding that holds
 // the stage for a person, so a body that reports something else, or that fails
 // on the state this hands it, is not Pending.
+//
+// What tells them apart is that the reports differ, and not that the body's
+// report advances the run. A body may legitimately hold on what this hands it:
+// the test stage runs the check StageDeps.Config names, and a StageDeps
+// carrying no configuration names none, which is PRD section 5's stage that
+// could not gather enough evidence and so an ask. Asking here that no body
+// holds would be asking every stage to answer without its dependencies, which
+// is a property this build's stages do not have and should not be given.
 //
 // The residual gap is that tolerance and the reader behind it. Treating a
 // failure as proof the body is not Pending is what keeps this from having to
@@ -154,9 +163,6 @@ func TestAllPlacesAWrittenBodyAtEveryImplementedStage(t *testing.T) {
 			if reflect.DeepEqual(report, pending.Report.Normalize()) {
 				t.Fatalf("Implemented names %s, but All places Pending at it: a run stops for a "+
 					"person at a stage this build reports a body for", stage)
-			}
-			if report.HasHeld() {
-				t.Fatalf("the %s stage's body held for a person over a supplied intent: %+v", stage, report)
 			}
 		})
 	}
@@ -213,5 +219,43 @@ func implementationFor(t *testing.T, s pipeline.Stages, stage pipeline.Stage) pi
 	default:
 		t.Fatalf("no field for stage %s", stage)
 		return pipeline.Implementation{}
+	}
+}
+
+// Holding is the fact a walk derives a run's stops from, and the test stage is
+// what makes it more than Implemented's complement: with no test command
+// configured it holds with a body, and with one configured it does not. The
+// emptiness rule is asserted on the same terms the body answers a run with,
+// so a whitespace-only value configures nothing here the way it runs nothing
+// there.
+func TestHoldingNamesTheTestStageExactlyWhenNoCommandIsConfigured(t *testing.T) {
+	t.Parallel()
+	unconfigured := config.Defaults()
+	want := []pipeline.Stage{pipeline.StageRebase, pipeline.StageTest, pipeline.StageDocument,
+		pipeline.StageLint, pipeline.StagePush, pipeline.StagePR, pipeline.StageCI}
+	if got := stages.Holding(unconfigured); !slices.Equal(got, want) {
+		t.Fatalf("a default configuration holds a run at %v, want %v: every stage without a body, "+
+			"and the test stage for the command the configuration does not name", got, want)
+	}
+
+	blank := config.Defaults()
+	blank.Commands.Test = "   \t"
+	if got := stages.Holding(blank); !slices.Contains(got, pipeline.StageTest) {
+		t.Fatalf("a whitespace-only test command holds a run at %v, and the body treats it as no "+
+			"command at all", got)
+	}
+
+	configured := config.Defaults()
+	configured.Commands.Test = "go test ./..."
+	got := stages.Holding(configured)
+	if slices.Contains(got, pipeline.StageTest) {
+		t.Fatalf("a configured test command still reports the test stage holding: %v; whether that "+
+			"command passes depends on the change, which this predicate cannot see", got)
+	}
+	for _, stage := range []pipeline.Stage{pipeline.StageIntent, pipeline.StageReview} {
+		if slices.Contains(got, stage) {
+			t.Fatalf("%s is reported as holding unconditionally, and no configuration decides a hold "+
+				"for it", stage)
+		}
 	}
 }

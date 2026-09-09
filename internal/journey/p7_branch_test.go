@@ -25,16 +25,19 @@ type installed struct {
 	// mustStayQuiet is what the two conditions say may not appear there.
 	//
 	// No clause rests on either. Every executable those two conditions plant
-	// is downstream of a stage body that launches something, and this build
-	// has none: the two .claude hooks and the agent binary need an agent
-	// process, the branch's commands.test needs a test stage, the two
-	// .githooks scripts need this product to commit or push, and .envrc needs
-	// a shell to enter the worktree. The one body this build does have reads
-	// the run's supplied intent and starts nothing, so the file stays
-	// empty however the product resolved the branch's document, and a clause
-	// asserting the absence would hold over a world nothing could make it
-	// report in. They are recorded and logged so the evidence is here the day
-	// a stage body makes it discriminating.
+	// is downstream of a stage body that launches something, and no body
+	// launches anything in this run: the two .claude hooks and the agent
+	// binary need an agent process, the branch's commands.test needs a run
+	// whose resolved configuration carries it, the two .githooks scripts need
+	// this product to commit or push, and .envrc needs a shell to enter the
+	// worktree. The intent body reads the run's supplied intent and starts
+	// nothing, the review body fails on the isolated copy nothing creates
+	// before launching and the run skips it, and the test body holds for the
+	// command nobody configured here, so the file stays empty however the
+	// product resolved the branch's document, and a clause asserting the
+	// absence would hold over a world nothing could make it report in. They
+	// are recorded and logged so the evidence is here the day a stage body
+	// makes it discriminating.
 	fired         []string
 	mustStayQuiet []string
 	// requiredRejections is what the pushed-configuration condition records
@@ -69,14 +72,18 @@ type installed struct {
 //
 // What "nothing executed" can be established from is not this run. Every
 // executable those conditions plant is reached only through a stage body that
-// launches something, and no run reaches one: the .claude hooks and the
-// branch's agent binary need an agent process, its commands.test needs a test
-// stage, the .githooks scripts need this product to commit or push, and .envrc
-// needs a shell. The intent body reads the run's supplied intent and starts
-// nothing, and the review body - the one that would launch an agent - opens
-// the run's isolated copy before it launches, which nothing in this build
-// creates, so it fails before launching if taken and this run skips it for
-// the reason walkableRun states. So
+// launches something, and no body launches anything in this run: the .claude
+// hooks and the branch's agent binary need an agent process, its commands.test
+// needs a run whose resolved configuration carries it, the .githooks scripts
+// need this product to commit or push, and .envrc needs a shell. The intent
+// body reads the run's supplied intent and starts nothing; the review body -
+// the one that would launch an agent - opens the run's isolated copy before it
+// launches, which nothing in this build creates, so it fails before launching
+// if taken and this run skips it for the reason walkableRun states; and the
+// test body reads commands.test only from the configuration this run resolved,
+// where the branch's value is dropped unless the trusted opt-out admits it and
+// neither the opt-out nor a command is set here, so it holds rather than
+// running anything. So
 // the scenario's tripwire file stays empty here whatever the product resolved,
 // and a clause reading it would be one nothing could make report. The file is
 // read and logged rather than asserted on, so the evidence is here the day a

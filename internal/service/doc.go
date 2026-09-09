@@ -231,12 +231,13 @@
 // can see fire is worth nothing. It fires: TestACallerInsideAnActiveStageIsRefused
 // registers this test process's own group and then makes a restricted call,
 // which is refused with ipc.ErrContained. And it has no producer in this
-// build: nothing calls StageStarted. The intent body starts no process, and
-// the review body, the one that does launch an agent, launches through the
+// build: nothing calls StageStarted. The intent body starts no process; the
+// review body, the one that does launch an agent, launches through the
 // agents.StageAgent seam, and nothing on that path records the process group
 // here - not that a run reaches its launch, since that body opens the run's
-// isolated copy first and nothing in this build creates one. So the registry
-// is empty and nothing is contained today. What that costs is stated rather
+// isolated copy first and nothing in this build creates one; and the test
+// body starts the configured command, and nothing on that path records a
+// group here either. So the registry is empty and nothing is contained today. What that costs is stated rather
 // than implied: until a stage launcher
 // calls StageStarted, containment protects nothing. The alternative, refusing
 // every restricted call until then, is a service nobody can drive.
@@ -252,7 +253,7 @@
 // this package takes a constructor for them rather than a value because a
 // stage body's dependencies include the resolved agent and which agent
 // resolves is not known until a run needs one. A build serves runs that hold
-// at the first stage without a body rather than runs that pass.
+// at the stages stages.Holding names rather than runs that pass.
 //
 // What it does decide about them is which dependencies they get, since it is
 // the one place holding the home, the resolved configuration, and the resolved

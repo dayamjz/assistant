@@ -8,6 +8,7 @@ import (
 	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/forge"
 	"github.com/dayamjz/assistant/internal/home"
+	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/vcs"
 )
 
@@ -148,17 +149,37 @@ type StageDeps struct {
 	// package's default redactor rather than the one configured here, and
 	// nothing on this struct prevents it.
 	git []vcs.Option
+	// redact removes credentials from text on its way into anything a body
+	// here persists or reports: a run's evidence record, the bounded
+	// projection of a command's output, and a report's own text. PRD section
+	// 8's module table has internal/redact called at every persistence
+	// boundary, and a body that runs a configured command and records its
+	// output opens one.
+	//
+	// It is unexported on the same terms as git: which redactor applies is
+	// the wiring's decision, not one a body may vary. Its zero value redacts
+	// - internal/redact documents that the zero Redactor works - so an
+	// unwired StageDeps does not quietly skip redaction.
+	//
+	// What it removes is the one shape internal/redact recognizes, a
+	// credential in a URL's userinfo, and nothing else; that package's doc
+	// owns the residual gap, and the test stage's doc restates it where the
+	// record is described.
+	redact redact.Redactor
 }
 
 // NewStageDeps returns the dependencies a stage body is given.
 //
-// git are the options every repository opened through Copy is opened with. The
-// caller supplies them because credential redaction is the service's decision:
-// internal/store refuses to open without a redactor and internal/vcs takes
-// one, so a body opening a repository some other way would be the one path
-// that skipped it.
-func NewStageDeps(agent agents.StageAgent, h *home.Home, cfg config.Config, host forge.Host, git ...vcs.Option) StageDeps {
-	return StageDeps{Agent: agent, Home: h, Config: cfg, Forge: host, git: git}
+// git are the options every repository opened through Copy is opened with, and
+// redactor is what the bodies that persist or report a command's text apply at
+// those boundaries. The caller supplies both because credential redaction is
+// the service's decision: internal/store refuses to open without a redactor,
+// internal/vcs takes one, and the command-running path here takes this one, so
+// a body that opened a repository or persisted output some other way would be
+// a path that skipped it.
+func NewStageDeps(agent agents.StageAgent, h *home.Home, cfg config.Config, host forge.Host,
+	redactor redact.Redactor, git ...vcs.Option) StageDeps {
+	return StageDeps{Agent: agent, Home: h, Config: cfg, Forge: host, redact: redactor, git: git}
 }
 
 // Copy opens the isolated copy this run works in, which PRD section 8 places

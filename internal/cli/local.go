@@ -212,8 +212,8 @@ func syncBranch(_ context.Context, in *invocation) (any, error) {
 // The decision is the point of the command, so it is a field rather than
 // something a reader infers from a list. A check that is not blocking is
 // reported and does not decide: a build short of all nine stage bodies can
-// start a run, and what that run does is hold at the first stage without one,
-// which is worth knowing and is not the same as being unable to start.
+// start a run, and what that run does is hold at the stages stages.Holding
+// names, which is worth knowing and is not the same as being unable to start.
 func doctor(ctx context.Context, in *invocation) (any, error) {
 	if err := in.parseFlags("doctor", func(*flag.FlagSet) {}); err != nil {
 		return nil, err

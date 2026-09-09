@@ -24,13 +24,14 @@
 //
 // # Reach is part of every claim
 //
-// internal/stages has bodies for the intent and review stages and none for
-// the rest, and no run here can carry the review body through a launch: it
+// internal/stages has bodies for the intent, review, and test stages and none
+// for the rest, and no run here can carry the review body through a launch: it
 // opens the run's isolated copy first, nothing in this build creates one, so
 // every walk skips that stage. A run therefore holds at every body-less stage
-// and large parts of this product are unreachable from one: no agent is
-// launched, no reference is moved, no code host is asked anything, and no
-// repository configuration is read.
+// - and at the test stage too, which holds for the command nobody configured
+// here - and large parts of this product are unreachable from one: no agent is
+// launched, no configured command is run, no reference is moved, no code host
+// is asked anything, and no repository configuration is read.
 //
 // Where a mechanism cannot be reached through the binary, this harness drives
 // it through the package that owns it against the same fixture, and every row

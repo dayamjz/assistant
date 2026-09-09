@@ -453,13 +453,16 @@ func (s *Service) driverFor(ctx context.Context) (*driver, error) {
 	// repository arrives per run instead, as pipeline.KeyForgeRepository. What
 	// is settled here is the rest of the adapter, including the redactor,
 	// which is the same one every repository this service opens is opened
-	// with.
+	// with and the one the bodies that persist or report a command's text
+	// apply at those boundaries.
+	redactor := redact.New()
 	deps := stages.NewStageDeps(
 		agents.NewStageAgent(resolution.Runner),
 		s.home,
 		s.cfg,
-		forge.NewGitHubHost(redact.New()),
-		vcs.WithRedactor(redact.New()),
+		forge.NewGitHubHost(redactor),
+		redactor,
+		vcs.WithRedactor(redactor),
 	)
 	built, err := pipeline.New(pipeline.Options{
 		Stages:                      s.newStages(deps),

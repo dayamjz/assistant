@@ -338,10 +338,10 @@ Each has cost this repository more than one round of review.
   Read its `doc.go` for the residual gaps: an advisory lock binds only the
   processes that ask for it, and two roots naming one directory are two homes.
 - `internal/redact` is the one owner of credential removal, which
-  `internal/store` refuses to open without and `internal/vcs` and
-  `internal/forge` take. It recognizes a credential in a URL's userinfo and
-  nothing else, and says so; adding a shape means adding it there, never a
-  second remover at a call site.
+  `internal/store` refuses to open without and `internal/vcs`,
+  `internal/forge`, and `internal/stages` take. It recognizes a credential in
+  a URL's userinfo and nothing else, and says so; adding a shape means adding
+  it there, never a second remover at a call site.
 - `internal/machine` owns the shapes a structured answer takes, the three exit
   codes, and the outcome vocabulary. It composes records rather than restating
   them: a run is a `store.Run`, a report is a `findings.Report`, so no wire
@@ -410,18 +410,20 @@ Each has cost this repository more than one round of review.
   construction, which carries the adapters that do not vary with the run; a
   fact that does vary is a declared state key in `internal/pipeline` instead,
   because one `All` serves every run of a service. Lifetime decides which, and
-  `deps.go` has that argument and the P4 reason `Agent` is a `StageAgent`. The
-  intent and review stages are the bodies that exist, and three things about
-  the intent stage generalize. PRD section 5's "this stage never blocks a
+  `deps.go` has that argument and the P4 reason `Agent` is a `StageAgent`.
+  Three things about the intent stage generalize. PRD section 5's "this stage never blocks a
   run" is owed by the implementation and not by `internal/pipeline`, which
   refuses to enforce it structurally because a stage that could not hold would
   have to drop an ask finding; every finding it reports is a note, and the test
   runs every path it has and is itself checked against a report that blocks, so
-  the assertion cannot pass vacuously. A body landing moves where a run first
-  stops, so a test may not name the stage it expects a hold at: the ones in
-  `internal/cli` and `internal/service` read `Implemented` and take the first
-  stage without a body, and `internal/journey` names them in a declaration
-  checked against `Implemented` both ways, so landing a body means writing it
+  the assertion cannot pass vacuously. A body landing can move where a run
+  stops, so a test may not name the stage it expects a hold at: the helpers in
+  `internal/cli` and `internal/service` derive a run's stops from
+  `stages.Holding`, which owns which stages hold under a configuration -
+  having a body and holding are different questions, and the test stage holds
+  with a body wherever no test command is configured - and `internal/journey`
+  names both its body-less stages and the stages a run stops at in
+  declarations checked against the build, so landing a body means writing it
   down there too. And a stage implements the part of its PRD section the
   phase list has reached and ships no seam for the rest: the intent stage reads
   supplied intent and does not infer, because inference is deferred, and what
@@ -512,9 +514,10 @@ Each has cost this repository more than one round of review.
   through the binary or
   through the package that owns the mechanism, because a run reaches no agent,
   no push, and no code host: the intent body reads the supplied intent and
-  launches nothing, and the review body fails on the run's isolated copy, which
+  launches nothing, the review body fails on the run's isolated copy, which
   nothing in this build creates, before it launches anything, so every walk
-  there skips that stage. It takes both of the platform guards
+  there skips that stage, and the test body holds for the command nobody
+  configured rather than executing anything. It takes both of the platform guards
   `internal/cli` and `internal/service` carry, on their terms: a check that
   drives a run skips where `internal/ipc` reads no local socket peer
   credentials, and a check whose service did not come up skips where there is

@@ -22,10 +22,11 @@ const (
 	// this process, against the fixture. It is what is left where the binary
 	// cannot reach a mechanism at all, which today is every mechanism a stage
 	// body would have used past the run's own state: the intent body reads
-	// the supplied intent and launches nothing, and the review body opens the
+	// the supplied intent and launches nothing, the review body opens the
 	// run's isolated copy - which nothing in this build creates - before it
 	// launches anything, so a run that takes it fails there and every walk
-	// here skips it instead.
+	// here skips it instead, and the test body holds for the command nobody
+	// configured here.
 	ReachPackage Reach = "package"
 	// ReachNone is not driven here. The reason beside it says why, and it is
 	// prose nobody checks; what the row buys is that the gap is enumerable
@@ -93,8 +94,9 @@ func Coverage() []Established {
 				"established there."},
 		{principles.P3, ReachBinary,
 			"A run through the binary is walked to its end and every hold it reaches is read: it holds " +
-				"once for each stage this build has no body for, which is read off internal/stages rather " +
-				"than counted, every hold is relayed with the finding that produced " +
+				"once for each stage this harness declares a run stops at - every stage this build has " +
+				"no body for, and the test stage, whose body holds for the command nobody configured " +
+				"here - every hold is relayed with the finding that produced " +
 				"it, every one of those findings reports itself as holding for a person, and none is one " +
 				"a fixer may take. The planted agent output is driven at package reach as well, because " +
 				"no run reaches an agent in this build - the review body would launch one, and it fails " +
@@ -119,11 +121,13 @@ func Coverage() []Established {
 			"The service is killed at every boundary a real run reaches and the run is driven to its " +
 				"end afterwards, which is P6's own stated verification criterion; the criterion is every " +
 				"boundary rather than a count of them. A boundary is a hold, so the boundaries are the " +
-				"stages this build has no body for. The intent stage is not among them and no kill is " +
-				"manufactured for it: it has a body, PRD section 5 has it never block a run, and a stage " +
-				"that never holds offers nothing to kill at. Review is not among them either: the run " +
-				"skips it, because its body fails on the isolated copy nothing creates rather than " +
-				"holding, and a skipped stage offers no hold. What the recovered decision is held to is " +
+				"stages this harness declares a run stops at: every stage this build has no body for, " +
+				"and the test stage, whose body holds for the command nobody configured here. The " +
+				"intent stage is not among them and no kill is manufactured for it: PRD section 5 has " +
+				"it never block a run, and a stage that never holds offers nothing to kill at. Review " +
+				"is not among them either: the run skips it, because its body fails on the isolated " +
+				"copy nothing creates rather than holding, and a skipped stage offers no hold. What " +
+				"the recovered decision is held to is " +
 				"that it stands at the same stage and still offers what it offered, which a checkpoint " +
 				"round trip can lose; that it offers something nobody was offered is not claimed, " +
 				"because internal/pipeline gives every hold the same fixed rendering and internal/graph " +
@@ -146,10 +150,11 @@ func Coverage() []Established {
 				"process beside the run rather than anything the run does. Two things are not " +
 				"established at any reach and no clause claims them: that nothing the branch or the " +
 				"template installed arrived or executed, because the branch's planted executables are " +
-				"reached only through a stage body that launches something and no run reaches one - " +
-				"the intent body reads the supplied intent, and the review body fails on the isolated " +
-				"copy nothing creates before it launches, so the run skips it - while the template's " +
-				"are receive-side hooks reached " +
+				"reached only through a stage body that launches something and no body launches " +
+				"anything in these runs - the intent body reads the supplied intent, the review body " +
+				"fails on the isolated copy nothing creates before it launches, so the run skips it, " +
+				"and the test body holds for the command nobody configured here, never the " +
+				"branch's - while the template's are receive-side hooks reached " +
 				"only by a push to the gate and the four subtests that plant one make no push; " +
 				"and which agent a run resolved, because no shipped surface reports it. The trusted configuration " +
 				"document is driven at package reach: nothing in this build reads a repository's own " +
