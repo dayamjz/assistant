@@ -434,12 +434,15 @@
 // copy rests on, that the gate holds every commit under validation.
 //
 // TakeBranch writes refs/assistant/submitted/<commit> and never a branch. The
-// reference is named for the commit it holds, which is what lets it be written
-// without a force: the name either does not exist yet or already points where
-// the fetch would put it, so there is no update to reject and nothing to
-// overwrite. Nothing here ever moves a reference. A branch in the gate moves
-// only where a push moves it, so git's own rejection of a non-fast-forward
-// push is unchanged, and P6's answer there stays what it was.
+// fetch lands in a staging name of the take's own, the commit is read off
+// what arrived, and the anchor is created over exactly that, create-only, so
+// the name and its target agree by construction and a name that exists is
+// never rewritten. No force is used, and nothing here ever moves a
+// reference; a commit-keyed name found holding some other commit was written
+// by something else and is refused with ErrForeignAnchor rather than
+// repaired. A branch in the gate moves only where a push moves it, so git's
+// own rejection of a non-fast-forward push is unchanged, and P6's answer
+// there stays what it was.
 //
 // Those references are the reachability a run's copy rests on, and they are
 // not garbage. A copy is a detached worktree and git does not list a linked

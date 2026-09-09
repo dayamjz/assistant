@@ -176,6 +176,111 @@ func TestASecondTakeLeavesAnEarlierRunsCopyReclaimable(t *testing.T) {
 	}
 }
 
+// TestTakingTheSameCommitTwiceAnchorsItOnceAndCleansItsStaging is the
+// idempotence half of the create-only anchor, driven as two whole takes of one
+// commit - the interleaving that used to carry the race, since a second take
+// once aimed a fetch at the name the first had already written.
+//
+// Both takes must report the same commit taken, the anchor must hold exactly
+// that commit, and no staging reference may remain: the staging namespace is
+// scaffolding each take gives back, and a take that leaked one per invocation
+// would grow the gate by a reference per command rather than per commit.
+func TestTakingTheSameCommitTwiceAnchorsItOnceAndCleansItsStaging(t *testing.T) {
+	principles.Cite(t, principles.P1)
+	g, spec, opts, wc := takeable(t)
+
+	first, err := gate.TakeBranch(ctx(t), spec, "main", opts()...)
+	if err != nil {
+		t.Fatalf("taking the branch: %v", err)
+	}
+	second, err := gate.TakeBranch(ctx(t), spec, "main", opts()...)
+	if err != nil {
+		t.Fatalf("taking the same commit again: %v", err)
+	}
+	if first != wc.commit || second != wc.commit {
+		t.Fatalf("the takes report %s then %s, want the branch's commit %s both times",
+			first, second, wc.commit)
+	}
+
+	gateRepo, err := vcs.OpenBare(ctx(t), g.Repository())
+	if err != nil {
+		t.Fatalf("opening the gate repository: %v", err)
+	}
+	anchored, err := gateRepo.ResolveCommit(ctx(t), "refs/assistant/submitted/"+wc.commit)
+	if err != nil {
+		t.Fatalf("reading the anchor the takes wrote: %v", err)
+	}
+	if anchored != wc.commit {
+		t.Fatalf("the anchor holds %s, want the commit it is named for, %s", anchored, wc.commit)
+	}
+	staged, err := gateRepo.ListRefs(ctx(t), "refs/assistant/incoming/")
+	if err != nil {
+		t.Fatalf("listing the staging namespace: %v", err)
+	}
+	if len(staged) != 0 {
+		t.Errorf("%d staging reference(s) remain after the takes completed, want none: %v",
+			len(staged), staged)
+	}
+}
+
+// TestAForeignAnchorIsRefusedRatherThanRewritten is the create-only half, and
+// it is the positive control for the race the staged take removes.
+//
+// The hazard the old design could produce was a commit-keyed name pointing at
+// some other commit - written when the branch moved between the read that
+// chose the name and the fetch aimed at it. The staged take cannot produce
+// that state, so the test plants it directly, the way a counterfeit models a
+// state the mechanism no longer reaches, and holds the take to the two things
+// that keep the state from spreading: a typed refusal rather than success,
+// and the standing reference untouched rather than rewritten - it may be the
+// reachability keeping another run's work alive.
+//
+// The discriminating assertion is the reference staying put. With CreateRef's
+// must-not-exist guard removed the take overwrites the foreign reference and
+// reports success, which was watched: both halves of this went red under that
+// mutation.
+func TestAForeignAnchorIsRefusedRatherThanRewritten(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	g, spec, opts, wc := takeable(t)
+
+	// A commit the working copy holds and the branch does not stand on, so
+	// the planted reference disagrees with its name the way the raced write
+	// did.
+	other := strings.TrimSpace(rawGit(t, wc.path, "commit-tree", "-m", "elsewhere", "HEAD^{tree}"))
+	if other == wc.commit {
+		t.Fatal("the planted commit equals the branch's, so the reference would not disagree")
+	}
+	rawGit(t, wc.path, "push", "--quiet", gate.RemoteName, other+":refs/assistant/planted/carrier")
+	rawGit(t, g.Repository(), "update-ref", "refs/assistant/submitted/"+wc.commit, other)
+
+	_, err := gate.TakeBranch(ctx(t), spec, "main", opts()...)
+	if !errors.Is(err, gate.ErrForeignAnchor) {
+		t.Fatalf("TakeBranch = %v, want ErrForeignAnchor", err)
+	}
+
+	gateRepo, err := vcs.OpenBare(ctx(t), g.Repository())
+	if err != nil {
+		t.Fatalf("opening the gate repository: %v", err)
+	}
+	standing, err := gateRepo.ResolveCommit(ctx(t), "refs/assistant/submitted/"+wc.commit)
+	if err != nil {
+		t.Fatalf("reading the reference the take was refused over: %v", err)
+	}
+	if standing != other {
+		t.Errorf("the refused take moved the standing reference to %s, want it untouched at %s",
+			standing, other)
+	}
+	// The refusal gives its own staging reference back, or every retry
+	// against the foreign anchor would leak one.
+	staged, err := gateRepo.ListRefs(ctx(t), "refs/assistant/incoming/")
+	if err != nil {
+		t.Fatalf("listing the staging namespace: %v", err)
+	}
+	if len(staged) != 0 {
+		t.Errorf("%d staging reference(s) remain after the refusal, want none: %v", len(staged), staged)
+	}
+}
+
 // TestATakenBranchDoesNotMoveTheGatesOwnBranch is the other half of the same
 // decision.
 //
