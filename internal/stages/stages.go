@@ -226,6 +226,10 @@ var holdsByConfiguration = map[pipeline.Stage]func(config.Config) bool{
 		_, configured := configuredTestCommand(cfg)
 		return !configured
 	},
+	pipeline.StageLint: func(cfg config.Config) bool {
+		_, configured := configuredLintCommand(cfg)
+		return !configured
+	},
 	pipeline.StageDocument: func(cfg config.Config) bool {
 		_, configured := configuredDocumentCommand(cfg)
 		return !configured
