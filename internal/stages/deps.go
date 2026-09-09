@@ -31,14 +31,36 @@ import (
 // decisive one, since it holds whether or not a process ever restarts.
 //
 // So the adapters are here, and the run's own facts are declared state keys in
-// internal/pipeline. This build declares two of them, KeyRepository and
-// KeyRun, which are what Copy below derives its path from. Lifetime decides
-// the owner, which is what P14 asks.
+// internal/pipeline. KeyRepository and KeyRun are what Copy below derives its
+// path from, and KeyForgeRepository is which repository on the code host this
+// run acts on. Lifetime decides the owner, which is what P14 asks.
 //
 // Where the run's target stood when it was observed is not one of them here.
 // Only the rebase and push stages need it, and declaring a key is one row in
 // internal/pipeline/key.go, so the rebase stage adds that row when it lands
 // rather than this seam declaring a key nothing reads.
+//
+// # The code host is split by that same rule, and it is why Forge is a Host
+//
+// A forge.Provider addresses exactly one repository, so it is not an adapter a
+// service can settle once: one All builds one pipeline and one executor, and
+// those serve every run of that service, so a Provider captured here would
+// send every run's pull request to the repository the first one happened to be
+// for. The same argument that put the isolated copy's path in state rather
+// than on this struct applies to it unchanged.
+//
+// The two halves land on the two sides. forge.Host is the adapter: the
+// provider command line, the environment it runs in, the redactor, and the
+// output bound are the service's decisions and do not vary with the run, so a
+// Host is built once and lives here. Which repository is the run's own fact,
+// so it is KeyForgeRepository, filled from the run's record the way
+// KeyRepository and KeyRun are, and a body reaches a Provider by opening one
+// on that key.
+//
+// A path is what this must not become. A directory is not an adapter, and a
+// forge adapter that resolved its repository from one would address whatever
+// the directory pointed at rather than what the run named, which is why
+// forge.Host.Open takes the specifier and refuses an empty one.
 //
 // # The agent is not a Runner, and that is P4
 //
@@ -79,6 +101,11 @@ import (
 // change to the same file, which is the collision landing it alone exists to
 // prevent.
 //
+// Forge differs from Config in one way worth stating: it is wired rather than
+// nil, so what has no reader is the field and not the mechanism behind it. A
+// run of this build carries the specifier its record names and a Host that
+// would open a provider on it; the pull request stage adds the call.
+//
 // Forge answers to the pull request and checks bodies. Config was the same
 // case until the review body landed and read it, and the test body is its
 // other consumer. If Forge still has no reader once the bodies it answers to
@@ -99,12 +126,18 @@ type StageDeps struct {
 	// resolves them; PRD section 10's trusted repository layer is not read
 	// anywhere yet, which internal/service's documentation states.
 	Config config.Config
-	// Forge is the code host this run's pull request and checks stages talk
-	// to. Nothing in this build constructs one, so it is nil on every run:
-	// internal/service passes nil here unconditionally, and a provider arrives
-	// with the pull request and checks stages that need it. A body that needs
-	// one refuses rather than proceeding without it.
-	Forge forge.Provider
+	// Forge is the code host the pull request and checks stages open their
+	// provider on. It is a forge.Host and not a forge.Provider because a
+	// Provider addresses one repository and this seam is built once per
+	// service; the repository is pipeline.KeyForgeRepository, and a body
+	// passes it to Open.
+	//
+	// It is nil only where nothing wired it: internal/service builds one
+	// forge.GitHubHost and every run of that service opens through it. A run
+	// whose KeyForgeRepository is empty has no provider to open, because
+	// forge.Host.Open refuses an empty specifier; a body that needs a code
+	// host is to report that rather than proceed without one.
+	Forge forge.Host
 	// git are the options every repository opened through Copy is opened
 	// with, which is how the redactor the service configured reaches the
 	// repository a body works in. It is unexported because it is a decision
@@ -124,8 +157,8 @@ type StageDeps struct {
 // internal/store refuses to open without a redactor and internal/vcs takes
 // one, so a body opening a repository some other way would be the one path
 // that skipped it.
-func NewStageDeps(agent agents.StageAgent, h *home.Home, cfg config.Config, provider forge.Provider, git ...vcs.Option) StageDeps {
-	return StageDeps{Agent: agent, Home: h, Config: cfg, Forge: provider, git: git}
+func NewStageDeps(agent agents.StageAgent, h *home.Home, cfg config.Config, host forge.Host, git ...vcs.Option) StageDeps {
+	return StageDeps{Agent: agent, Home: h, Config: cfg, Forge: host, git: git}
 }
 
 // Copy opens the isolated copy this run works in, which PRD section 8 places

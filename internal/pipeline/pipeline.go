@@ -258,6 +258,16 @@ type Start struct {
 	Repository string
 	// Run identifies this run, as internal/store records it.
 	Run string
+	// ForgeRepository names the repository on the code host, in the notation
+	// that host addresses a repository by. It is empty when the run's record
+	// does not name one on a host this build talks to, and a stage that needs
+	// a code host refuses on an empty one rather than resolving a repository
+	// for itself.
+	//
+	// NewState does not require it, because eight of the nine stages need no
+	// code host and a run that cannot reach one still has to be able to walk
+	// them and report.
+	ForgeRepository string
 	// Branch is the branch under validation.
 	Branch string
 	// Base is the branch target the change is rebased onto and pushed to.
@@ -294,14 +304,15 @@ func (p *Pipeline) NewState(s Start) (graph.State, error) {
 		skip = append(skip, stage.String())
 	}
 	return p.graph.NewState(map[string]graph.Value{
-		string(KeyRepository):     graph.TextValue(s.Repository),
-		string(KeyRun):            graph.TextValue(s.Run),
-		string(KeyBranch):         graph.TextValue(s.Branch),
-		string(KeyBase):           graph.TextValue(s.Base),
-		string(KeySubmitted):      graph.TextValue(s.Submitted),
-		string(KeyHead):           graph.TextValue(s.Submitted),
-		string(KeyIntent):         graph.TextValue(s.Intent),
-		string(KeyIntentSupplied): graph.BoolValue(s.IntentSupplied),
-		string(KeySkip):           graph.ListValue(skip...),
+		string(KeyRepository):      graph.TextValue(s.Repository),
+		string(KeyRun):             graph.TextValue(s.Run),
+		string(KeyForgeRepository): graph.TextValue(s.ForgeRepository),
+		string(KeyBranch):          graph.TextValue(s.Branch),
+		string(KeyBase):            graph.TextValue(s.Base),
+		string(KeySubmitted):       graph.TextValue(s.Submitted),
+		string(KeyHead):            graph.TextValue(s.Submitted),
+		string(KeyIntent):          graph.TextValue(s.Intent),
+		string(KeyIntentSupplied):  graph.BoolValue(s.IntentSupplied),
+		string(KeySkip):            graph.ListValue(skip...),
 	})
 }

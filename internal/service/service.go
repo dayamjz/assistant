@@ -15,6 +15,7 @@ import (
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/checkpoints"
 	"github.com/dayamjz/assistant/internal/config"
+	"github.com/dayamjz/assistant/internal/forge"
 	"github.com/dayamjz/assistant/internal/graph"
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/ipc"
@@ -446,15 +447,18 @@ func (s *Service) driverFor(ctx context.Context) (*driver, error) {
 	// body handed the Runner itself could open a fixer session on it through
 	// agents.OpenFixer, and a StageAgent has no Runner to hand over.
 	//
-	// No forge provider is supplied because nothing in this build constructs
-	// one. A stage body that needs one refuses rather than proceeding, which
-	// is the same answer PRD section 8 gives for any adapter a path needs and
-	// this build has not resolved.
+	// The code host is a forge.Host rather than a forge.Provider for the
+	// lifetime reason internal/stages' deps.go gives: a Provider addresses one
+	// repository and this is built once for every run of this service, so the
+	// repository arrives per run instead, as pipeline.KeyForgeRepository. What
+	// is settled here is the rest of the adapter, including the redactor,
+	// which is the same one every repository this service opens is opened
+	// with.
 	deps := stages.NewStageDeps(
 		agents.NewStageAgent(resolution.Runner),
 		s.home,
 		s.cfg,
-		nil,
+		forge.NewGitHubHost(redact.New()),
 		vcs.WithRedactor(redact.New()),
 	)
 	built, err := pipeline.New(pipeline.Options{

@@ -511,7 +511,7 @@ func TestADecoderMessageIsRedacted(t *testing.T) {
 }
 
 func TestSubmitOpensOnceAndThenUpdatesTheBody(t *testing.T) {
-	h := newHarness(t, ghScript{
+	h := newWriteHarness(t, ghScript{
 		// The first list read is the one Submit makes before deciding, and it
 		// finds nothing. Every later one is the read that follows the create.
 		"list":   {{Stdout: noneListedJSON}, {Stdout: oneListedJSON}},
@@ -560,7 +560,7 @@ func TestSubmitOpensOnceAndThenUpdatesTheBody(t *testing.T) {
 }
 
 func TestOpenRefusesWhenTheProviderThenReportsNoPullRequest(t *testing.T) {
-	h := newHarness(t, ghScript{
+	h := newWriteHarness(t, ghScript{
 		"create": {{Stdout: createdURL}},
 		"list":   {{Stdout: noneListedJSON}},
 	})

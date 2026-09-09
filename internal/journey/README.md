@@ -35,9 +35,12 @@ run today:
 
 - no run launches an agent, so no run parses agent output, keeps a fixer
   session, or takes a fix round;
-- no stage pushes, opens a pull request, or reads checks, so `internal/safety`,
-  `internal/forge` and the push half of `internal/vcs` are never reached by a
-  run;
+- no stage pushes, opens a pull request, or reads checks, so `internal/safety`
+  and the push half of `internal/vcs` are never reached by a run. A run does
+  reach `internal/forge`: it derives its code-host repository specifier
+  through `GitHubRepository` and its stages carry the `Host` the service
+  built, but no body opens a provider on that host, so no run asks a code
+  host anything;
 - nothing reads a repository's own configuration document from anywhere, which
   `internal/service` states, so the trusted-versus-pushed composition PRD
   section 10 describes has no owner and no run performs it.

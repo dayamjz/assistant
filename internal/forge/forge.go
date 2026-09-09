@@ -181,8 +181,9 @@ type Provider interface {
 //
 // A pull request that already exists keeps its title, its base, and its draft
 // state. Those are things a person may have changed on purpose after the run
-// opened it, and the stage's business is the body, which is generated fresh
-// from the round history every time.
+// opened it, and the stage's business is the body: what it says is the pull
+// request stage's to decide, and this function writes the text it was handed,
+// every time.
 func Submit(ctx context.Context, p Provider, spec OpenSpec) (PullRequest, error) {
 	existing, found, err := p.Find(ctx, spec.Head)
 	if err != nil {

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/dayamjz/assistant/internal/forge"
 	"github.com/dayamjz/assistant/internal/graph"
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
@@ -312,6 +313,17 @@ func (s *Service) begin(ctx context.Context, record store.Run, start pipeline.St
 	// against, and no call site can forget them.
 	start.Repository = record.RepositoryID
 	start.Run = record.ID
+	// Which repository on the code host is settled here for the same reason
+	// and from the same record. A pull request is outward-facing and not
+	// undoable, so where it lands may not come from a caller's start, from
+	// configuration, or from whatever remote a working copy happens to carry:
+	// it is derived from the upstream this run's repository row records, which
+	// is the same row PRD section 8 makes authoritative for it.
+	forgeRepository, err := s.forgeRepositoryFor(ctx, record.RepositoryID)
+	if err != nil {
+		return machine.Run{}, err
+	}
+	start.ForgeRepository = forgeRepository
 	initial, err := built.pipeline.NewState(start)
 	if err != nil {
 		return machine.Run{}, err
@@ -322,6 +334,29 @@ func (s *Service) begin(ctx context.Context, record store.Run, start pipeline.St
 	return s.advance(ctx, record.ID, func(ctx context.Context) (graph.Result, error) {
 		return built.executor.Run(ctx, record.ID, initial)
 	})
+}
+
+// forgeRepositoryFor returns the specifier the code host addresses this
+// repository by, read from its record's upstream URL.
+//
+// It answers with the empty string, and no error, for a repository whose
+// upstream is not on a host this build talks to. That is not the strict stance
+// relaxed: it is the difference between "this repository has no code host
+// here" and "this repository's code host could not be reached". Eight of the
+// nine stages need no code host, and a run of a repository that has none still
+// has to walk them and report; the stage that needs one is handed an empty
+// specifier, and forge.Host.Open refuses it rather than resolving a repository
+// of its own.
+//
+// The error it does return is the record being unreadable, which is a failure
+// of the store and not an answer about the repository.
+func (s *Service) forgeRepositoryFor(ctx context.Context, repositoryID string) (string, error) {
+	repository, err := s.store.Repository(ctx, repositoryID)
+	if err != nil {
+		return "", fmt.Errorf("service: reading the repository a run acts on: %w", err)
+	}
+	specifier, _ := forge.GitHubRepository(repository.UpstreamURL)
+	return specifier, nil
 }
 
 // run is what a new run is recorded from. It is a struct because the six

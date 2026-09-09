@@ -6,6 +6,49 @@
 // Provider is the interface. GitHub is the adapter over the gh command line,
 // and it is the only implementation in this module.
 //
+// # A provider addresses one repository, and a Host is how it gets one
+//
+// A Provider is fixed to a repository, and the thing holding one is not: a
+// service resolves its adapters once and then serves every run. A Provider
+// settled at that point would address one repository for every run, so this
+// package splits the two by lifetime. Host holds what is settled once - the
+// command line, the environment, the redactor, the output bound - and
+// Host.Open takes the repository, which is the run's own fact and arrives from
+// the run's record. GitHubRepository is what reads that specifier out of the
+// upstream URL a record holds.
+//
+// GitHubRepository reads a remote on GitHubHostname and no other host, and
+// every invocation is given that host in GH_HOST. Both are there for one
+// reason: the specifier this package puts on a command line is owner/name and
+// names no host, so a remote on another host that yielded owner/name would
+// send a pull request to the github.com repository sharing the name, and an
+// operator's environment pointing gh elsewhere would move where a write lands.
+// What that costs is a GitHub Enterprise installation, which this adapter does
+// not address; a run whose upstream is on one carries no specifier, and the
+// stage that needs a code host refuses.
+//
+// # A write goes where the run said, or it does not happen
+//
+// Opening a pull request is outward-facing and cannot be taken back, so the
+// two write operations - Open and UpdateBody - are preceded by a confirmation
+// that the repository the provider resolves this adapter's specifier to is
+// that specifier. An adapter that names no repository cannot write at all,
+// because there is nothing for the provider's answer to be checked against.
+//
+// A specifier and the repository behind it are two things, and this package
+// cannot see which repository a provider will reach. What the confirmation
+// buys is not knowledge of that: it is that a write happens only where the
+// provider itself, asked which repository the specifier names, answers with
+// that specifier. Where the two differ, for whatever reason, nothing is
+// created, and it is that half the guard is for.
+//
+// Two gaps in it are worth naming rather than implying away. It runs before a
+// write and not before a read, so Find, Get and Checks may report facts read
+// out of whatever the specifier resolves to; what a caller does with those is
+// a write, and the write refuses. And it establishes what the provider
+// reported when it was asked, not a lock: anything that changes the answer
+// between the confirmation and the write is outside it.
+//
 // # What "the same behavior on any forge" means here
 //
 // Every state a caller acts on is a typed value declared in this package, and
@@ -105,6 +148,13 @@
 // NewGitHub requires a vcs.Redactor, the seam internal/vcs already declares,
 // and every piece of provider text that reaches a Refusal passes through it.
 //
+// Outbound text goes through the same Redactor. Everything this package sends
+// a provider - the argument vector and the standard input of every invocation
+// - is redacted at the one point invocations pass through, so a pull request
+// body or title built from stage output does not publish a credential a stage
+// saw. runExact owns that argument, what the redaction costs, and what it does
+// not cover.
+//
 // Two structural measures sit under that, because a redactor is a filter and a
 // filter is a thing that can be handed the wrong pattern. A repository is
 // addressed as owner/name, and a specifier carrying a scheme or userinfo is
@@ -147,7 +197,7 @@
 // costs is a stray process rather than a stuck run.
 //
 // It does not write a pull request body. What a body says is the pull request
-// stage's, generated from the round history; this package carries the text.
+// stage's to decide; this package carries the text it is handed.
 //
 // # Requirements
 //

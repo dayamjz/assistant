@@ -75,6 +75,9 @@ type ghCall struct {
 // does: the subcommand pair, and for a read the field set that distinguishes a
 // pull request read from a check read.
 func callKey(args []string) string {
+	if len(args) >= 2 && args[0] == "repo" && args[1] == "view" {
+		return "repo"
+	}
 	if len(args) < 2 || args[0] != "pr" {
 		return "other"
 	}
@@ -97,6 +100,73 @@ func callKey(args []string) string {
 	}
 }
 
+// subcommandFlags is which flags each subcommand this adapter runs accepts,
+// written down from the real command's own help rather than from what the
+// adapter happens to send. It is deliberately narrow: only the flags a test
+// could plausibly see are listed, and anything else is refused.
+//
+// The repository is the entry that matters. The pull request subcommands take
+// it as --repo and the repository read takes it as an operand, so a vector
+// carrying --repo into a repository read is refused here exactly as the real
+// command refuses it.
+var subcommandFlags = map[string]map[string]bool{
+	"pr": {
+		"--head": true, "--state": true, "--limit": true, "--json": true,
+		"--base": true, "--title": true, "--body-file": true, "--draft": true,
+		"--repo": true,
+	},
+	"repo": {"--json": true},
+}
+
+// unsupportedFlag reports the first flag in args that the subcommand does not
+// accept.
+func unsupportedFlag(args []string) (string, bool) {
+	if len(args) == 0 {
+		return "", false
+	}
+	accepted, known := subcommandFlags[args[0]]
+	if !known {
+		return "", false
+	}
+	for _, a := range args[1:] {
+		if !strings.HasPrefix(a, "--") {
+			continue
+		}
+		name, _, _ := strings.Cut(a, "=")
+		if !accepted[name] {
+			return name, true
+		}
+	}
+	return "", false
+}
+
+// carriesCredential reports whether anything the adapter sent this invocation
+// holds the secret these tests plant, and which side it came in on.
+//
+// It looks for the literal secret rather than for text that looks unredacted,
+// and that choice is what makes it usable as a blanket check. A pattern for
+// "a userinfo that was not redacted" has to know what a redaction looks like,
+// and this package's tests supply their own Redactor whose marker is its own
+// business, so such a pattern would fail every properly redacted write. The
+// secret is unambiguous: if it left the process, it was published.
+//
+// The reach of that is worth stating rather than implying away. It catches an
+// outbound path that carries the secret these tests plant, which is every path
+// a test exercises with one; it says nothing about a credential of some other
+// shape, and what the adapter removes is internal/redact's business and stated
+// there.
+func carriesCredential(args []string, stdin string) (string, bool) {
+	for _, a := range args {
+		if strings.Contains(a, secret) {
+			return "argument", true
+		}
+	}
+	if strings.Contains(stdin, secret) {
+		return "body", true
+	}
+	return "", false
+}
+
 // TestMain runs the stand-in provider when the environment asks for it, and
 // the tests otherwise.
 func TestMain(m *testing.M) {
@@ -116,12 +186,43 @@ func fakeGHMain(dir string) int {
 	}
 
 	args := os.Args[1:]
+	if flag, bad := unsupportedFlag(args); bad {
+		// The real command refuses a flag the subcommand does not define, and
+		// so does this: a stand-in that accepted an argument vector gh rejects
+		// would let a test pass over a command line that cannot run. This
+		// package shipped exactly that once, appending the pull request
+		// commands' repository flag to a repository read that takes an
+		// operand.
+		os.Stderr.WriteString("unknown flag: " + flag + "\n")
+		return 1
+	}
 	key := callKey(args)
 
 	// Standard input is read to the end so a test can see what the adapter
 	// sent there. A terminal would block here; os.DevNull ends at once.
 	stdin, _ := io.ReadAll(os.Stdin)
 	wd, _ := os.Getwd()
+
+	// The credential check comes after standard input has been read, because
+	// a body arrives there and standard input can only be read once. Ordering
+	// it before the read is a guard that inspects an empty string and passes
+	// whatever the adapter sent, which is what it looked like when this was
+	// first written.
+	//
+	// It fails the invocation rather than recording it, so a write path added
+	// later that skips redaction fails whatever test exercises it instead of
+	// failing only a test written to look.
+	//
+	// The real gh accepts such text, so this is stricter than the command it
+	// stands in for. That is deliberate and it is the one place this stand-in
+	// may be: everywhere else it may only refuse what gh refuses, because a
+	// fake that rejects what the real thing accepts makes a test fail for a
+	// reason the product does not have. Here the stricter answer is the
+	// adapter's own contract rather than this file's invention.
+	if where, carried := carriesCredential(args, string(stdin)); carried {
+		os.Stderr.WriteString("stand-in provider: outbound " + where + " carries a credential\n")
+		return 1
+	}
 
 	calls := readCalls(dir)
 	seen := 0
@@ -212,6 +313,19 @@ const (
 	secretURL = "https://x-access-token:" + secret + "@github.com/owner/name.git"
 )
 
+// harnessRepository is the repository a write harness addresses, and the one
+// its stand-in reports back when the confirmation asks. A read harness names
+// none, because a read does not need one.
+const harnessRepository = "owner/name"
+
+// repoViewJSON is the answer gh puts on the wire for the field set the
+// repository confirmation asks for. A test states the repository the provider
+// resolves the adapter's specifier to, which is the whole of what the
+// confirmation compares.
+func repoViewJSON(nameWithOwner string) string {
+	return `{"nameWithOwner":"` + nameWithOwner + `"}`
+}
+
 // harness is a stand-in provider together with the adapter that talks to it.
 type harness struct {
 	t   *testing.T
@@ -238,6 +352,26 @@ func newHarness(t *testing.T, script ghScript, opts ...forge.Option) *harness {
 	return &harness{t: t, dir: dir, gh: gh}
 }
 
+// newHarnessWithEnv returns a harness whose invocations start from a base
+// environment carrying extra alongside the stand-in's own directory. A test
+// uses it to state what an operator's environment holds, so an assertion about
+// what an invocation is given is made against something that had to be
+// overridden.
+func newHarnessWithEnv(t *testing.T, script ghScript, extra ...string) *harness {
+	t.Helper()
+	dir := t.TempDir()
+	writeScript(t, dir, script)
+	gh, err := forge.NewGitHub(testRedactor,
+		forge.WithBinary(os.Args[0]),
+		forge.WithBaseEnvironment(append([]string{fakeGHDir + "=" + dir}, extra...)),
+		forge.WithDirectory(dir),
+	)
+	if err != nil {
+		t.Fatalf("NewGitHub: %v", err)
+	}
+	return &harness{t: t, dir: dir, gh: gh}
+}
+
 // writeScript writes the answers the stand-in provider should give into the
 // directory it reads them from.
 func writeScript(t *testing.T, dir string, script ghScript) {
@@ -249,6 +383,20 @@ func writeScript(t *testing.T, dir string, script ghScript) {
 	if err := os.WriteFile(filepath.Join(dir, fakeGHScript), blob, 0o600); err != nil {
 		t.Fatalf("writing the script: %v", err)
 	}
+}
+
+// newWriteHarness returns a harness whose adapter may perform an outward-facing
+// write: it names a repository, and its stand-in confirms that specifier as the
+// repository it resolves to.
+//
+// A test that scripts its own "repo" answer keeps it, which is how a test
+// states a provider resolving the specifier somewhere else.
+func newWriteHarness(t *testing.T, script ghScript, opts ...forge.Option) *harness {
+	t.Helper()
+	if _, stated := script["repo"]; !stated {
+		script["repo"] = []ghResponse{{Stdout: repoViewJSON(harnessRepository)}}
+	}
+	return newHarness(t, script, append([]forge.Option{forge.WithRepository(harnessRepository)}, opts...)...)
 }
 
 // calls returns every invocation the stand-in provider recorded, in order.
