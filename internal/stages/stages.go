@@ -150,10 +150,15 @@ func Pending(name string) pipeline.Implementation {
 // varies per run is a declared state key instead, because a value captured
 // here would be the same value for every run of this service.
 var written = map[pipeline.Stage]func(StageDeps) pipeline.Implementation{
-	pipeline.StageIntent: Intent,
-	pipeline.StageReview: Review,
-	pipeline.StageTest:   Test,
-	pipeline.StagePR:     PullRequest,
+	pipeline.StageIntent:   Intent,
+	pipeline.StageRebase:   Rebase,
+	pipeline.StageReview:   Review,
+	pipeline.StageTest:     Test,
+	pipeline.StageDocument: Document,
+	pipeline.StageLint:     Lint,
+	pipeline.StagePush:     Push,
+	pipeline.StagePR:       PullRequest,
+	pipeline.StageCI:       CI,
 }
 
 // All returns the nine stages as this build has them: each stage's own body
