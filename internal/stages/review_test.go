@@ -19,6 +19,7 @@ import (
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/principles"
+	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/scope"
 	"github.com/dayamjz/assistant/internal/stages"
 	"github.com/dayamjz/assistant/internal/vcs"
@@ -367,7 +368,7 @@ func TestAnAgentWhoseDeadlineElapsedProducesAnAskTheRunCannotRecord(t *testing.T
 
 	s := newSubject(t)
 	agent := standin.New(t, script(standin.Hang()))
-	deps := stages.NewStageDeps(agents.NewStageAgent(agent.Runner()), s.home, config.Config{}, nil)
+	deps := stages.NewStageDeps(agents.NewStageAgent(agent.Runner()), s.home, config.Config{}, nil, redact.New())
 	call, in := reviewBody(t, deps, s.start())
 	ctx := newElapsingContext(t.Context())
 	type answer struct {
@@ -538,7 +539,7 @@ func TestACancelledRunEndsTheStageRatherThanHoldingItForAPerson(t *testing.T) {
 
 	s := newSubject(t)
 	agent := standin.New(t, script(standin.Hang()))
-	deps := stages.NewStageDeps(agents.NewStageAgent(agent.Runner()), s.home, config.Config{}, nil)
+	deps := stages.NewStageDeps(agents.NewStageAgent(agent.Runner()), s.home, config.Config{}, nil, redact.New())
 	call, in := reviewBody(t, deps, s.start())
 
 	ctx, cancel := context.WithCancel(t.Context())
@@ -622,7 +623,7 @@ func TestAStageWiredWithNoAgentFailsRatherThanAskingAPerson(t *testing.T) {
 	t.Parallel()
 
 	s := newSubject(t)
-	deps := stages.NewStageDeps(agents.StageAgent{}, s.home, config.Config{}, nil)
+	deps := stages.NewStageDeps(agents.StageAgent{}, s.home, config.Config{}, nil, redact.New())
 	_, err := body(t, deps, s.start())
 	if err == nil {
 		t.Fatal("a review stage with no agent produced a report rather than failing, so a " +
@@ -1203,7 +1204,7 @@ func prepare(t *testing.T, s *subject, sc standin.Script, cfg config.Config, sta
 	for _, opt := range opts {
 		opt(&cfgured)
 	}
-	deps := stages.NewStageDeps(agents.NewStageAgent(agent.Runner()), s.home, cfg, nil, cfgured.git...)
+	deps := stages.NewStageDeps(agents.NewStageAgent(agent.Runner()), s.home, cfg, nil, redact.New(), cfgured.git...)
 
 	all := pipeline.ConstantStages("nothing to report")
 	all.Review = stages.Review(deps)

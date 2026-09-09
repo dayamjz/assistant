@@ -12,6 +12,7 @@ import (
 
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/agents/standin"
+	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
@@ -276,26 +277,27 @@ func holdingAt(t *testing.T, run machine.Run, stage pipeline.Stage) machine.Deci
 	return *run.Decision
 }
 
-// pendingStage returns the nth stage this build has no body for, counting from
-// zero in the order a run takes them. Those are the stages a run holds at, so
-// a test that walks a run from one hold to the next names them this way rather
-// than by stage: a run advances through every stage that has a body, so naming
-// one would make these tests fail the day a body lands for a reason unrelated
-// to what they check.
-func pendingStage(t *testing.T, n int) pipeline.Stage {
+// holdingStage returns the nth stage a run these tests start stops at,
+// counting from zero in the order a run takes them. It derives them from
+// stages.Holding rather than from Implemented's complement, because a run
+// stops at the stages that hold and not at the stages without a body: the
+// test stage holds with a body wherever the configuration names no test
+// command. Deriving rather than naming is what keeps these tests from failing
+// the day a body lands for a reason unrelated to what they check.
+//
+// The configuration passed is the resolved default, because the homes these
+// tests build write no commands.* into their configuration documents, so the
+// runs resolve none either; a test that starts configuring one breaks that
+// premise loudly, since its run then stops somewhere this did not derive. The
+// review stage never appears here: it holds under no configuration, and the
+// walks these tests drive skip it besides, so a stage both holding and
+// skipped would need this helper taught about skips before it could stay
+// right.
+func holdingStage(t *testing.T, n int) pipeline.Stage {
 	t.Helper()
-	implemented := make(map[pipeline.Stage]bool)
-	for _, stage := range stages.Implemented() {
-		implemented[stage] = true
-	}
-	var pending []pipeline.Stage
-	for _, stage := range pipeline.Order() {
-		if !implemented[stage] {
-			pending = append(pending, stage)
-		}
-	}
+	pending := stages.Holding(config.Defaults())
 	if n >= len(pending) {
-		t.Fatalf("this build has %d stages without a body and this test walks a run to hold %d; "+
+		t.Fatalf("this build holds a default run at %d stage(s) and this test walks a run to hold %d; "+
 			"it needs rewriting against whatever now holds a run", len(pending), n)
 	}
 	return pending[n]

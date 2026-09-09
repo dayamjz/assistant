@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/gate"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/pipeline"
@@ -204,9 +205,9 @@ func TestARunIsStartedReportedAndAnsweredThroughSeparateInvocations(t *testing.T
 	if first.Outcome != machine.OutcomeDecision {
 		t.Fatalf("a started run reports %s, want a decision", first.Outcome)
 	}
-	holds, next := firstPendingStages(t)
+	holds, next := firstHoldingStages(t)
 	if first.Decision == nil || first.Decision.Stage != holds.String() {
-		t.Fatalf("the run is not holding at %s, the first stage with no body: %+v", holds, first.Decision)
+		t.Fatalf("the run is not holding at %s, the first stage that holds it: %+v", holds, first.Decision)
 	}
 
 	// A separate invocation reports the same decision without advancing it.
@@ -1090,31 +1091,32 @@ func decodeDoctor(t *testing.T, document string) machine.Doctor {
 	return report
 }
 
-// firstPendingStages returns the first two stages this build has no body for,
-// which are the two holds a run walks into. It is derived from
-// stages.Implemented rather than written out, because a run advances through
-// every stage that has a body and stops at the first that does not, so naming
-// the stages here would make this test fail the day a body lands for a reason
-// that has nothing to do with what it checks.
+// firstHoldingStages returns the first two stages a run these tests start
+// stops at, which are the two holds a walk meets. It derives them from
+// stages.Holding rather than from Implemented's complement, because a run
+// stops at the stages that hold and not at the stages without a body: the
+// test stage holds with a body wherever the configuration names no test
+// command. Deriving rather than naming is what keeps this from failing the
+// day a body lands for a reason that has nothing to do with what a test
+// checks.
 //
-// It needs two stages to be pending. A build with fewer has stopped being one
+// The configuration passed is the resolved default, because the homes these
+// tests build write no commands.* into their configuration documents, so the
+// runs resolve none either; a test that starts configuring one breaks that
+// premise loudly, since its run then stops somewhere this did not derive. The
+// review stage never appears here: it holds under no configuration, and these
+// walks skip it besides, so a stage both holding and skipped would need this
+// helper taught about skips before it could stay right.
+//
+// It needs two stages to be holding. A build with fewer has stopped being one
 // where answering a hold is what carries a run to the next one, and this test
 // says so rather than reporting a decision that did not arrive.
-func firstPendingStages(t *testing.T) (holds, next pipeline.Stage) {
+func firstHoldingStages(t *testing.T) (holds, next pipeline.Stage) {
 	t.Helper()
-	implemented := make(map[pipeline.Stage]bool)
-	for _, stage := range stages.Implemented() {
-		implemented[stage] = true
+	holding := stages.Holding(config.Defaults())
+	if len(holding) < 2 {
+		t.Fatalf("this build holds a default run at %d stage(s), so no run walks from one hold to the "+
+			"next; this test needs rewriting against whatever now holds a run", len(holding))
 	}
-	var pending []pipeline.Stage
-	for _, stage := range pipeline.Order() {
-		if !implemented[stage] {
-			pending = append(pending, stage)
-		}
-	}
-	if len(pending) < 2 {
-		t.Fatalf("this build has %d stages without a body, so no run walks from one hold to the next; "+
-			"this test needs rewriting against whatever now holds a run", len(pending))
-	}
-	return pending[0], pending[1]
+	return holding[0], holding[1]
 }

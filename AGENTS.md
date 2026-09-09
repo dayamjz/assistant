@@ -416,11 +416,14 @@ Each has cost this repository more than one round of review.
   refuses to enforce it structurally because a stage that could not hold would
   have to drop an ask finding; every finding it reports is a note, and the test
   runs every path it has and is itself checked against a report that blocks, so
-  the assertion cannot pass vacuously. A body landing moves where a run first
-  stops, so a test may not name the stage it expects a hold at: the ones in
-  `internal/cli` and `internal/service` read `Implemented` and take the first
-  stage without a body, and `internal/journey` names them in a declaration
-  checked against `Implemented` both ways, so landing a body means writing it
+  the assertion cannot pass vacuously. A body landing can move where a run
+  stops, so a test may not name the stage it expects a hold at: the helpers in
+  `internal/cli` and `internal/service` derive a run's stops from
+  `stages.Holding`, which owns which stages hold under a configuration -
+  having a body and holding are different questions, and the test stage holds
+  with a body wherever no test command is configured - and `internal/journey`
+  names both its body-less stages and the stages a run stops at in
+  declarations checked against the build, so landing a body means writing it
   down there too. And a stage implements the part of its PRD section the
   phase list has reached and ships no seam for the rest: the intent stage reads
   supplied intent and does not infer, because inference is deferred, and what

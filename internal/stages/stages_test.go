@@ -2,6 +2,7 @@ package stages_test
 
 import (
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -218,5 +219,43 @@ func implementationFor(t *testing.T, s pipeline.Stages, stage pipeline.Stage) pi
 	default:
 		t.Fatalf("no field for stage %s", stage)
 		return pipeline.Implementation{}
+	}
+}
+
+// Holding is the fact a walk derives a run's stops from, and the test stage is
+// what makes it more than Implemented's complement: with no test command
+// configured it holds with a body, and with one configured it does not. The
+// emptiness rule is asserted on the same terms the body answers a run with,
+// so a whitespace-only value configures nothing here the way it runs nothing
+// there.
+func TestHoldingNamesTheTestStageExactlyWhenNoCommandIsConfigured(t *testing.T) {
+	t.Parallel()
+	unconfigured := config.Defaults()
+	want := []pipeline.Stage{pipeline.StageRebase, pipeline.StageTest, pipeline.StageDocument,
+		pipeline.StageLint, pipeline.StagePush, pipeline.StagePR, pipeline.StageCI}
+	if got := stages.Holding(unconfigured); !slices.Equal(got, want) {
+		t.Fatalf("a default configuration holds a run at %v, want %v: every stage without a body, "+
+			"and the test stage for the command the configuration does not name", got, want)
+	}
+
+	blank := config.Defaults()
+	blank.Commands.Test = "   \t"
+	if got := stages.Holding(blank); !slices.Contains(got, pipeline.StageTest) {
+		t.Fatalf("a whitespace-only test command holds a run at %v, and the body treats it as no "+
+			"command at all", got)
+	}
+
+	configured := config.Defaults()
+	configured.Commands.Test = "go test ./..."
+	got := stages.Holding(configured)
+	if slices.Contains(got, pipeline.StageTest) {
+		t.Fatalf("a configured test command still reports the test stage holding: %v; whether that "+
+			"command passes depends on the change, which this predicate cannot see", got)
+	}
+	for _, stage := range []pipeline.Stage{pipeline.StageIntent, pipeline.StageReview} {
+		if slices.Contains(got, stage) {
+			t.Fatalf("%s is reported as holding unconditionally, and no configuration decides a hold "+
+				"for it", stage)
+		}
 	}
 }

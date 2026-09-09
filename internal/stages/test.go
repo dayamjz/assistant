@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/findings"
 	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/redact"
@@ -173,11 +174,21 @@ func Test(deps StageDeps) pipeline.Implementation {
 	}
 }
 
+// configuredTestCommand returns the targeted check cfg names for this stage
+// and whether it names one at all, decided after trimming: a value that is
+// all whitespace configures nothing. It is one read with two consumers -
+// runTargetedCheck answers a run with it, and Holding predicts the hold with
+// it - so the body and the prediction cannot drift apart.
+func configuredTestCommand(cfg config.Config) (string, bool) {
+	command := strings.TrimSpace(cfg.Commands.Test)
+	return command, command != ""
+}
+
 // runTargetedCheck is the stage body: it runs the configured check in the run's
 // isolated copy and turns what the check answered into the stage's report.
 func runTargetedCheck(ctx context.Context, deps StageDeps, in pipeline.Input) (pipeline.Output, error) {
-	command := strings.TrimSpace(deps.Config.Commands.Test)
-	if command == "" {
+	command, configured := configuredTestCommand(deps.Config)
+	if !configured {
 		return pipeline.Output{Report: noTestCommandConfigured()}, nil
 	}
 

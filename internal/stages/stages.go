@@ -39,10 +39,12 @@
 // pipeline is built from the same Stages value and the wiring is the same for
 // all nine.
 //
-// A body that lands also changes where a run first stops, so a test that named
-// the stage it expected a run to hold at has to derive it instead. The ones in
-// internal/cli and internal/service read Implemented and take the first stage
-// without a body, which is what a run actually walks to.
+// A body that lands can also change where a run stops, so a test that named
+// the stage it expected a run to hold at has to derive it instead - and from
+// Holding, not from this table's complement, because having a body and
+// holding are different questions: the test stage holds with a body wherever
+// its configuration names no command. The deriving helpers in internal/cli
+// and internal/service read Holding for exactly that reason.
 //
 // internal/journey is the exception, and deliberately so: it declares the
 // stages without a body by name rather than deriving them, and that
@@ -112,6 +114,7 @@ import (
 	"fmt"
 
 	"github.com/dayamjz/assistant/internal/agents"
+	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/findings"
 	"github.com/dayamjz/assistant/internal/pipeline"
 )
@@ -195,8 +198,9 @@ func implementation(stage pipeline.Stage, deps StageDeps) pipeline.Implementatio
 // actually validate is the set this returns, and saying which stages those are
 // is more use than reporting every dependency as present.
 //
-// Tests use it the same way, to derive the stage a run first stops at rather
-// than naming one, so a body that lands does not break them.
+// It answers which stages have a body and nothing more. Where a run stops is
+// a different fact, because a bodied stage can still hold; Holding owns that
+// one, and a test deriving a run's walk reads it rather than this.
 func Implemented() []pipeline.Stage {
 	var out []pipeline.Stage
 	for _, stage := range pipeline.Order() {
@@ -205,6 +209,50 @@ func Implemented() []pipeline.Stage {
 		}
 	}
 	return out
+}
+
+// holdsByConfiguration is the bodied stages whose resolved configuration alone
+// already decides a hold, before the body reads the run or the change: each
+// row is the rule that decides it, and each rule is the same read the body
+// itself answers a run with, so the prediction and the body cannot drift
+// apart. A body lands a row here when P3 makes it hold on a fact the
+// configuration settles in advance; a hold that depends on the change or on
+// an agent's answer has no row, because nothing here can see it.
+var holdsByConfiguration = map[pipeline.Stage]func(config.Config) bool{
+	pipeline.StageTest: func(cfg config.Config) bool {
+		_, configured := configuredTestCommand(cfg)
+		return !configured
+	},
+}
+
+// Holding returns the stages a run holds at under cfg regardless of the change
+// under validation, in the order a run takes them.
+//
+// Two kinds of stage are in it: a stage with no body, whose Pending
+// placeholder reports one ask finding and holds; and a bodied stage whose row
+// in holdsByConfiguration says cfg already decides a hold - today the test
+// stage wherever cfg names no test command. What it deliberately leaves out is
+// every hold that depends on the change or on what an agent answers, such as a
+// configured check that fails, so absence from this list means a stage does
+// not hold unconditionally, never that it cannot hold. A caller that skips a
+// stage subtracts that skip itself: a skip is a per-run input this package
+// does not see.
+//
+// cfg is a parameter rather than read here, because which configuration
+// applies is the caller's fact: the service resolves one per service and a
+// test resolves its own, and a predicate that read a file or a default to find
+// out would be guessing at the one fact that changes its answer. Pass the
+// configuration the runs in question resolve.
+func Holding(cfg config.Config) []pipeline.Stage {
+	var holding []pipeline.Stage
+	for _, stage := range pipeline.Order() {
+		if _, hasBody := written[stage]; !hasBody {
+			holding = append(holding, stage)
+		} else if holds, ok := holdsByConfiguration[stage]; ok && holds(cfg) {
+			holding = append(holding, stage)
+		}
+	}
+	return holding
 }
 
 // PendingFixer is the fixer for a build that has none. internal/pipeline
