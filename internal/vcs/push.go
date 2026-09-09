@@ -96,9 +96,12 @@ type PushSpec struct {
 // Submodule recursion is disabled, on the same grounds: the configuration that
 // turns it on makes a push contact further URLs named by the .gitmodules of
 // the branch being pushed, and PRD principle P7 does not let the branch under
-// validation choose what is contacted. A pre-push hook is not disabled,
-// because a hook can only refuse an update, and refusing is what this
-// operation is already built to report.
+// validation choose what is contacted. A pre-push hook is not disabled: it is
+// the operator's own configuration reaching the invocation, which the trust
+// policy above admits on purpose, and a push it stops cannot read as a
+// success here, because output that says nothing about spec.Ref is already
+// reported as a failure. What else a hook does is that configuration's
+// business, and no claim this package makes.
 //
 // What those pins do not reach is a push option the receiving side acts on, a
 // configuration key a later git introduces, and a reference that git decides

@@ -440,7 +440,7 @@ func TestPushReportsARejectionOfItsOwnReferenceAlongsideAnothers(t *testing.T) {
 // leaves what happened to it unknown, and this package reports that rather
 // than reading silence as a push that happened.
 func TestPushRefusesOutputThatSaysNothingAboutItsOwnReference(t *testing.T) {
-	_, exe := useFakeGit(t)
+	logPath, exe := useFakeGit(t)
 	fakeGitOutput(t, "To /somewhere/remote.git\n"+
 		"!\trefs/tags/v1:refs/tags/v1\t[remote rejected] (hook declined)\n"+
 		"Done\n")
@@ -462,6 +462,12 @@ func TestPushRefusesOutputThatSaysNothingAboutItsOwnReference(t *testing.T) {
 	}
 	if errors.Is(err, vcs.ErrPushRejected) {
 		t.Fatalf("push reported %v, which reports another reference's rejection as this one's", err)
+	}
+	// The invocation is read as well, like both siblings read it: an error
+	// from a refusal before git ran would otherwise satisfy the two checks
+	// above with the silence branch never reached.
+	if !pushWasInvoked(t, logPath) {
+		t.Fatal("the stand-in git recorded no push, so nothing about a push was checked")
 	}
 }
 

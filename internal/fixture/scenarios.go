@@ -69,8 +69,11 @@ func buildRemoteAdvanced(b *builder) (*Scenario, []Condition, error) {
 			},
 			NamesAction: "The refusal names the commits that would be dropped, in Refusal.Discarded and in " +
 				"the message, which is what an operator needs to decide whether to incorporate them.",
-			ActionSucceeds: "Fetching and rebasing onto the advanced branch produces a proposed commit that " +
-				"contains the colleague's commit, and the same decision then allows a fast-forward.",
+			ActionSucceeds: "Starting the run again takes a fresh observation of the advanced branch; " +
+				"rebasing onto it produces a proposed commit that contains the colleague's commit, and " +
+				"the same decision over that fresh anchor then allows a fast-forward. Retrying on the " +
+				"first anchor cannot succeed, because the decision refuses an anchor the target has " +
+				"moved off whatever the work contains.",
 		},
 		Deferred: &Deferred{
 			AppliedBy: "AdvanceRemoteOutOfBand",

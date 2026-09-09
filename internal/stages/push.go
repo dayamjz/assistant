@@ -439,7 +439,7 @@ func reportSafetyRefusal(err error, facts pushFacts, target safety.Target) (pipe
 			shownTarget(target), facts.head, err)
 	}
 	return refusePush("push-refused-"+string(refusal.Reason),
-		refusal.Error()+".\n\n"+discardedClause(refusal)+nextStepFor(refusal, facts, target)), nil
+		refusal.Error()+".\n\n"+discardedClause(refusal)+nextStepFor(refusal, target)), nil
 }
 
 // discardedClause names every commit the refused update would have dropped, or
@@ -459,18 +459,27 @@ func discardedClause(refusal *safety.Refusal) string {
 // nextStepFor names the action that resolves each refusal. A refusal that
 // names none leaves a person holding a fact and no move, which is the half of
 // a refusal that makes it an annoyance rather than an obstruction.
-func nextStepFor(refusal *safety.Refusal, facts pushFacts, target safety.Target) string {
+//
+// The one action either anchor-mismatch refusal may name is starting the run
+// again, and that is the mechanism rather than caution: this stage re-reads
+// the recorded anchor, and the decision refuses an anchor the target has
+// moved off whatever the work contains, so "rebase and run this stage again"
+// is an instruction that can never succeed - the same defect class as telling
+// a first push to restore access. Only a fresh run takes a fresh observation.
+func nextStepFor(refusal *safety.Refusal, target safety.Target) string {
 	switch refusal.Reason {
 	case safety.ReasonWouldDiscard:
-		return "Nothing was pushed and nothing was lost. Fetch " + shownTarget(target).Remote + " and rebase " +
-			facts.head + " onto " + target.Ref + " so that it contains those commits, then run this " +
-			"stage again: the same decision then allows a fast-forward. Deciding not to incorporate " +
-			"them is a decision to discard them, and it is yours to make rather than this stage's."
+		return "Nothing was pushed and nothing was lost. Start the run again so it observes " + target.Ref +
+			" where it now stands and rebases the work onto it: with those commits incorporated, the " +
+			"decision over that fresh anchor allows a fast-forward. Running this stage again on the " +
+			"recorded anchor cannot succeed, whatever the work now contains, because that anchor no " +
+			"longer describes the target. Deciding not to incorporate them is a decision to discard " +
+			"them, and it is yours to make rather than this stage's."
 	case safety.ReasonTargetMoved:
 		return "Nothing was pushed. No commit was identified that this update would discard, and the " +
 			"update is still refused, because an anchor that no longer describes the target protects " +
-			"nothing. Start the run again so it observes " + target.Ref + " where it now stands, or " +
-			"rebase onto it and run this stage again."
+			"nothing. Start the run again so it observes " + target.Ref + " where it now stands; " +
+			"running this stage again on the recorded anchor cannot succeed."
 	case safety.ReasonUnrelatedHistories:
 		return "Nothing was pushed. The two commits share no ancestor, so nothing can be said about " +
 			"what either contains of the other. Check that " + shownTarget(target).String() + " is the branch this " +

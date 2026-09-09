@@ -466,6 +466,10 @@ func TestARemoteAdvancedOutOfBandIsRefusedNamingWhatWouldBeDiscarded(t *testing.
 		pipeline.KeyTargetObserved: graph.TextValue(w.recorded(observed)),
 	})
 	description := assertRefused(t, out, err, "push-refused-would-discard")
+	// The action pinned is the one that succeeds from this state: only a fresh
+	// run takes a fresh observation, and the message may not send the person
+	// back through this stage on the recorded anchor, which the decision
+	// refuses whatever the work contains.
 	assertNamesAll(t, "the refusal", description,
 		landed,
 		"safety: refused to update refs/heads/"+w.branch,
@@ -473,8 +477,9 @@ func TestARemoteAdvancedOutOfBandIsRefusedNamingWhatWouldBeDiscarded(t *testing.
 		"holds commits that",
 		"does not contain",
 		"would discard ",
-		"rebase "+head+" onto refs/heads/"+w.branch,
+		"Start the run again so it observes refs/heads/"+w.branch+" where it now stands",
 		"allows a fast-forward",
+		"Running this stage again on the recorded anchor cannot succeed",
 	)
 	if got := w.remoteTip(); got != landed {
 		t.Fatalf("the branch on the remote is %s, want it left where somebody else put it, %s", got, landed)
