@@ -24,6 +24,9 @@ const (
 	KeyCommandsLint Key = "commands.lint"
 	// KeyCommandsFormat is "commands.format": run immediately before pushing.
 	KeyCommandsFormat Key = "commands.format"
+	// KeyCommandsDocument is "commands.document": updates documentation the
+	// change made stale.
+	KeyCommandsDocument Key = "commands.document"
 	// KeyFixRoundsReview is "fix_rounds.review": automatic review fix rounds,
 	// over fix findings only.
 	KeyFixRoundsReview Key = "fix_rounds.review"
@@ -117,6 +120,8 @@ var specs = []spec{
 		func(c *Config, v any) { c.Commands.Lint = v.(string) }},
 	{KeyCommandsFormat, TrustCommands, "", decodeCommand,
 		func(c *Config, v any) { c.Commands.Format = v.(string) }},
+	{KeyCommandsDocument, TrustCommands, "", decodeCommand,
+		func(c *Config, v any) { c.Commands.Document = v.(string) }},
 	{KeyFixRoundsReview, TrustPushed, DefaultFixRoundsReview, decodeFixRounds,
 		func(c *Config, v any) { c.FixRounds.Review = v.(int) }},
 	{KeyFixRoundsRebase, TrustPushed, DefaultFixRoundsStage, decodeFixRounds,

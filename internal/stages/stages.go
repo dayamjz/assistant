@@ -226,6 +226,10 @@ var holdsByConfiguration = map[pipeline.Stage]func(config.Config) bool{
 		_, configured := configuredTestCommand(cfg)
 		return !configured
 	},
+	pipeline.StageDocument: func(cfg config.Config) bool {
+		_, configured := configuredDocumentCommand(cfg)
+		return !configured
+	},
 }
 
 // Holding returns the stages a run holds at under cfg regardless of the change

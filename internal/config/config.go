@@ -66,6 +66,8 @@ type Commands struct {
 	Lint string
 	// Format runs immediately before pushing.
 	Format string
+	// Document updates documentation the change made stale.
+	Document string
 }
 
 // FixRounds is the per-stage limit on automatic fix attempts.
