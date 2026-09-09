@@ -214,6 +214,9 @@ func TestAFindingThatIsNotClassifiedStopsForAPerson(t *testing.T) {
 		requiresIdentifiedPeer(t)
 
 		j := inClone(t)
+		// The run asks to skip the review and pull request stages, for the
+		// reasons walkableRun states: a walk that took either would end there
+		// rather than reaching the holds past it.
 		walk := answerHolds(t, j,
 			walkableRun(t, j, "a change most of whose stages have no body in this build"), "approved")
 		observed := stopped{holds: walk[:len(walk)-1], stages: len(stagesARunStopsAt(t))}

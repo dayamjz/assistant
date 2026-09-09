@@ -32,12 +32,14 @@ type installed struct {
 	// this product to commit or push, and .envrc needs a shell to enter the
 	// worktree. The intent body reads the run's supplied intent and starts
 	// nothing, the review body fails on the isolated copy nothing creates
-	// before launching and the run skips it, and the test body holds for the
-	// command nobody configured here, so the file stays empty however the
-	// product resolved the branch's document, and a clause asserting the
-	// absence would hold over a world nothing could make it report in. They
-	// are recorded and logged so the evidence is here the day a stage body
-	// makes it discriminating.
+	// before launching and the run skips it, the pull request body fails
+	// because the run's record names no repository on the code host and the
+	// run skips it too, and the test body holds for the command nobody
+	// configured here, so the file stays empty however the product resolved
+	// the branch's document, and a clause asserting the absence would hold
+	// over a world nothing could make it report in. They are recorded and
+	// logged so the evidence is here the day a stage body makes it
+	// discriminating.
 	fired         []string
 	mustStayQuiet []string
 	// requiredRejections is what the pushed-configuration condition records
@@ -79,7 +81,9 @@ type installed struct {
 // body reads the run's supplied intent and starts nothing; the review body -
 // the one that would launch an agent - opens the run's isolated copy before it
 // launches, which nothing in this build creates, so it fails before launching
-// if taken and this run skips it for the reason walkableRun states; and the
+// if taken; the pull request body fails because the run's record names no
+// repository on the code host, and this run skips both of those for the
+// reasons walkableRun states; and the
 // test body reads commands.test only from the configuration this run resolved,
 // where the branch's value is dropped unless the trusted opt-out admits it and
 // neither the opt-out nor a command is set here, so it holds rather than
@@ -131,6 +135,9 @@ func TestTheBranchUnderValidationChoosesNothingThatRuns(t *testing.T) {
 	j := open(t, scenario)
 	succeeds(t, j.Command("init", "--default-branch", fixture.DefaultBranch))
 	serve(t, j)
+	// The run asks to skip the review and pull request stages, for the
+	// reasons walkableRun states: a run that took either would fail there and
+	// could not reach the stages the installation was planted in front of.
 	observed.outcome = last(answerHolds(t, j,
 		walkableRun(t, j, "narrow the Total loop bound on purpose"), "approved")).Outcome
 	if observed.fired, err = journey.Fired(scenario); err != nil {
@@ -260,7 +267,7 @@ func TestTheBranchUnderValidationChoosesNothingThatRuns(t *testing.T) {
 	}
 	t.Logf("KNOWN GAP: the scenario's tripwire file holds %v after this run, and the two conditions "+
 		"require %v to stay out of it. Nothing here establishes that: every one of those executables "+
-		"is reached only through a stage body that launches something, this build has none, and a "+
+		"is reached only through a stage body that launches something, no run reaches one, and a "+
 		"run therefore launches no agent, runs no configured command, and makes no commit or push. "+
 		"The file is reported rather than asserted on until such a body gives one of them a path "+
 		"to fire.",

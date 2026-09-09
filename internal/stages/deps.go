@@ -93,24 +93,18 @@ import (
 // shape today, which makes what is put in one a question review has to ask
 // rather than one the test answers.
 //
-// # Fields nothing in this build reads yet
+// # Fields whose readers land after this seam did
 //
-// Forge has no reader here, because this seam lands before the stage bodies
-// that need it and deliberately so. The bodies queued behind this file are
-// rebase and pull request, each specified work with a task of its own, and a
-// seam that arrived missing what they need would force a second breaking
-// change to the same file, which is the collision landing it alone exists to
-// prevent.
+// A field here may have no reader yet, because this seam landed before the
+// stage bodies that need it and deliberately so. The bodies queued behind this
+// file are separate work, each with a task of its own, and a seam that arrived
+// missing what they need would force a second breaking change to the same
+// file, which is the collision landing it alone exists to prevent.
 //
-// Forge differs from Config in one way worth stating: it is wired rather than
-// nil, so what has no reader is the field and not the mechanism behind it. A
-// run of this build carries the specifier its record names and a Host that
-// would open a provider on it; the pull request stage adds the call.
-//
-// Forge answers to the pull request and checks bodies. Config was the same
-// case until the review body landed and read it, and the test body is its
-// other consumer. If Forge still has no reader once the bodies it answers to
-// have landed, it is the field that was wrong and it should go.
+// Each such field names in its own documentation below the bodies it answers
+// to, so the claim is checkable against them rather than restated here. A
+// field still without a reader once those bodies have landed is the field that
+// was wrong, and it should go.
 type StageDeps struct {
 	// Agent runs one invocation at a time with no session. It is a
 	// StageAgent rather than a Runner so that a body cannot open a fixer

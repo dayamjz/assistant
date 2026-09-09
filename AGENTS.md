@@ -424,7 +424,16 @@ Each has cost this repository more than one round of review.
   with a body wherever no test command is configured - and `internal/journey`
   names both its body-less stages and the stages a run stops at in
   declarations checked against the build, so landing a body means writing it
-  down there too. And a stage implements the part of its PRD section the
+  down there too. A body refusing what its run cannot give it cannot be
+  walked past either, because it fails rather than holding, so
+  `internal/service`'s answer-to-the-end test skips such stages for the one
+  run instead of the bodies softening: the review stage fails on the isolated
+  copy nothing in this build creates, and the pull request stage on a record
+  naming no repository on the code host.
+  It is also where a body reads another stage's record:
+  `pipeline.StageResultKeys` declares the keys and `pipeline.ReadStageResult`
+  decodes them, so `internal/pipeline` stays the one owner of the report
+  encoding. And a stage implements the part of its PRD section the
   phase list has reached and ships no seam for the rest: the intent stage reads
   supplied intent and does not infer, because inference is deferred, and what
   that deferred work inherits is a note in the package documentation rather
@@ -515,9 +524,11 @@ Each has cost this repository more than one round of review.
   through the package that owns the mechanism, because a run reaches no agent,
   no push, and no code host: the intent body reads the supplied intent and
   launches nothing, the review body fails on the run's isolated copy, which
-  nothing in this build creates, before it launches anything, so every walk
-  there skips that stage, and the test body holds for the command nobody
-  configured rather than executing anything. It takes both of the platform guards
+  nothing in this build creates, before it launches anything, and the pull
+  request body fails because the run's record names no repository on the code
+  host, so every walk there skips those two stages, and the test body
+  holds for the command nobody configured rather than executing anything. It
+  takes both of the platform guards
   `internal/cli` and `internal/service` carry, on their terms: a check that
   drives a run skips where `internal/ipc` reads no local socket peer
   credentials, and a check whose service did not come up skips where there is

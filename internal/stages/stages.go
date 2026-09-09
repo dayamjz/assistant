@@ -70,7 +70,7 @@
 //
 // Surface landed ahead of consumers it names is the other case, and StageDeps
 // is this package's one instance of it: deps.go names the bodies each of its
-// reader-less fields answers to.
+// fields answers to.
 //
 // What that work inherits is stated here so it is not rediscovered. The intent
 // stage never blocks a run, and inference adds ways to fail that must not
@@ -93,16 +93,11 @@
 // answered over the machine interface, under the authority PRD section 9 gives
 // a caller of it, and store.Hold.ResolvedBy records which it was.
 //
-// The prose is not wrong yet, and no body here makes it wrong. It is
-// true for as long as no stage body connects a graph halt to a stored hold,
+// The prose is not wrong yet, and nothing here makes it wrong: this package
+// does not import internal/store, so no body it holds can resolve a stored
+// hold, whatever that body reports. It stays true for as long as that is so,
 // and internal/store's own documentation says nothing in production resolves
-// one. The intent stage cannot be the body that changes that, because it never
-// holds: it reports notes and nothing else, so it has no halt to resolve. The
-// review stage does hold, on an ask finding, and so does the test stage,
-// where its configuration names no command or its command settled nothing;
-// but a body only reports, and store.RegisterHold and store.ResolveHold still
-// have no caller outside their own package's tests, so those halts are
-// answered through no stored hold either.
+// one either.
 //
 // Whichever stage body first resolves a store hold owns correcting those lines
 // so the halt description says what actually answers it. This note is here
@@ -158,6 +153,7 @@ var written = map[pipeline.Stage]func(StageDeps) pipeline.Implementation{
 	pipeline.StageIntent: Intent,
 	pipeline.StageReview: Review,
 	pipeline.StageTest:   Test,
+	pipeline.StagePR:     PullRequest,
 }
 
 // All returns the nine stages as this build has them: each stage's own body

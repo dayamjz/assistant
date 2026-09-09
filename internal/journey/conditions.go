@@ -117,9 +117,10 @@ func Drives() []Drove {
 				"either: every executable it plants is reached only through a stage body that launches " +
 				"something, and no body launches anything in these runs - the intent body reads the " +
 				"supplied intent and launches nothing, the review body fails on the isolated copy " +
-				"nothing creates before it launches, so every walk here skips it, and the test body " +
-				"holds for the command nobody configured here, never the branch's - so a run " +
-				"launches no agent, runs no configured command, " +
+				"nothing creates before it launches, the pull request body fails because the run's " +
+				"record names no repository on the code host, so every walk here skips both of " +
+				"those stages, and the test body holds for the command nobody configured here, " +
+				"never the branch's - so a run launches no agent, runs no configured command, " +
 				"and makes no commit or push. TestTheBranchUnderValidationChoosesNothingThatRuns does " +
 				"drive a whole run over this branch and reads the tripwire file at the end, and logs " +
 				"what it holds; what that test establishes is the row below and the suppression " +
@@ -152,7 +153,8 @@ func Drives() []Drove {
 
 		{"refusal-no-registered-checks", ReachPackage, checks,
 			"internal/forge over a provider command this harness stands in for, with the run's own head " +
-				"substituted into the recorded answer. No stage body talks to a code host."},
+				"substituted into the recorded answer. No run reaches a code host: the pull request " +
+				"stage's body asks one and fails because the run's record names no repository there."},
 
 		{"stage-logic-bug", ReachNone, "",
 			"The review stage has a body, and a run cannot take it: the body opens the run's isolated " +
