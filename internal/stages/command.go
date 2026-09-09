@@ -265,13 +265,17 @@ func awaitOutput(copied <-chan error, read *os.File, grace time.Duration) error 
 		return err
 	case <-timer.C:
 	}
-	// Closing this side of the pipe is what ends the read; the read then fails
-	// because of that close, so what it answers describes this call rather
-	// than the output, and the abandonment is reported instead. The read is
-	// waited for so nothing is still writing to the record or the projection
-	// when the caller reads them.
+	// Closing this side of the pipe is what ends a read still in flight; that
+	// read then fails because of the close, so what it answers describes this
+	// call rather than the output, and the abandonment is reported instead.
+	// The read is waited for so nothing is still writing to the record or the
+	// projection when the caller reads them. A read that drains nil here
+	// reached the end of the output in a photo-finish with the timer, and an
+	// output read whole is reported whole.
 	_ = read.Close()
-	<-copied
+	if err := <-copied; err == nil {
+		return nil
+	}
 	return fmt.Errorf("%w: it was still arriving %s after the command ended", errOutputAbandoned, grace)
 }
 

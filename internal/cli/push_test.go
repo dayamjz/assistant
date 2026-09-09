@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/gate"
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/machine"
@@ -78,14 +79,14 @@ func TestAPushToTheGateStartsARunForThePushedCommit(t *testing.T) {
 	}
 
 	// And it is a run the service is advancing, not a record nobody picked up.
-	// It walks the stages that have a body and stops at the first that does
-	// not, which is read from internal/stages rather than named here.
+	// It walks the stages and stops at the first that holds, which is read
+	// from internal/stages rather than named here.
 	held := awaitHold(t, h, subject, started.ID)
 	if held.Outcome != machine.OutcomeDecision {
 		t.Fatalf("the run the push started reached %s, want a decision:\n%+v", held.Outcome, held)
 	}
-	if want := firstStageWithoutABody(t); held.Decision == nil || held.Decision.Stage != want.String() {
-		t.Fatalf("the run holds at %+v, want the first stage with no body, %s", held.Decision, want)
+	if want := firstHoldingStage(t); held.Decision == nil || held.Decision.Stage != want.String() {
+		t.Fatalf("the run holds at %+v, want the first stage that holds, %s", held.Decision, want)
 	}
 }
 
@@ -613,21 +614,26 @@ func awaitHold(t *testing.T, h *home.Home, subject, id string) machine.Run {
 	return machine.Run{}
 }
 
-// firstStageWithoutABody is where a run in this build stops. It is read from
-// internal/stages rather than named, because a body landing moves it and a
-// test that named the stage would fail the day one does, for a reason that has
-// nothing to do with pushes.
-func firstStageWithoutABody(t *testing.T) pipeline.Stage {
+// firstHoldingStage is where a run in this build first stops. It derives that
+// from stages.Holding rather than from Implemented's complement, because a
+// run stops at the stages that hold and not at the stages without a body: the
+// test stage holds with a body wherever the configuration names no test
+// command. Deriving rather than naming is what keeps this from failing the
+// day a body lands for a reason that has nothing to do with pushes.
+//
+// The configuration passed is the resolved default, because the homes these
+// tests build write no commands.* into their configuration documents, so the
+// runs resolve none either; a test that starts configuring one breaks that
+// premise loudly, since its run then stops somewhere this did not derive.
+//
+// It answers only the run's first stop, which the runs these pushes start
+// reach before any skip could matter.
+func firstHoldingStage(t *testing.T) pipeline.Stage {
 	t.Helper()
-	implemented := make(map[pipeline.Stage]bool)
-	for _, stage := range stages.Implemented() {
-		implemented[stage] = true
+	holding := stages.Holding(config.Defaults())
+	if len(holding) == 0 {
+		t.Fatal("this build holds a default run at no stage, so no run stops; this test needs " +
+			"rewriting against whatever now stops one")
 	}
-	for _, stage := range pipeline.Order() {
-		if !implemented[stage] {
-			return stage
-		}
-	}
-	t.Fatal("every stage has a body, so no run holds; this test needs rewriting against whatever now stops one")
-	return pipeline.StageInvalid
+	return holding[0]
 }
