@@ -129,14 +129,13 @@ and holds for a person when no command is configured. A stage without a body
 holds a placeholder that validates nothing and holds for a decision, so a run
 runs the stages that have one and stops at the first that does not, saying so
 rather than reporting a pass it did not establish. `stages.Implemented` is the
-authority on which stages those are, and `assistant doctor` reports it. A run
-still reaches no agent, no push and no code host: the review body opens the
-run's isolated copy before it launches anything, nothing in this build creates
-one yet, so review can only fail or be skipped for the run until that work
-lands; the pull request body fails when the run's record names no repository
-on the code host, which no record here does, so it too can only fail or be
-skipped; the intent body launches nothing; and the test body starts only the
-configured targeted check, which is none of the three. That is what bounds
+authority on which stages those are, and `assistant doctor` reports it. Every
+run is given an isolated copy of its own, cut from the gate's repository, and
+the review body launches the resolved agent over it; the pull request body
+fails when the run's record names no repository on the code host, so a run of
+a repository with none can only fail there or skip the stage; the intent body
+launches nothing; and the test body starts only the configured targeted
+check. That is what bounds
 what the end-to-end harness can drive through the binary;
 `internal/journey/README.md` is the authority on what a green run there does
 and does not establish, starting with the limit that a scripted agent proves

@@ -3,7 +3,10 @@ package service
 import (
 	"context"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -12,6 +15,7 @@ import (
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/agents/standin"
 	"github.com/dayamjz/assistant/internal/findings"
+	"github.com/dayamjz/assistant/internal/gate"
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/pipeline"
@@ -87,6 +91,10 @@ type heldService struct {
 	inside  chan struct{}
 	release chan struct{}
 	let     func()
+	// head is the commit the subject repository stands at, which is what a
+	// run of it validates: begin builds the run's isolated copy before any
+	// stage body runs, so the commit has to be one that copy can be cut at.
+	head string
 	// entries counts every entry into the stage body, including one a
 	// continuation would make.
 	entries atomic.Int64
@@ -102,7 +110,7 @@ func (h *heldService) begin(t *testing.T) store.Run {
 	record, err := h.service.create(t.Context(), run{
 		repository: "subject",
 		branch:     "main",
-		head:       "0000000000000000000000000000000000000000",
+		head:       h.head,
 		intent:     "held open for the length of an ending",
 		source:     intentSourceSupplied,
 		supplied:   true,
@@ -252,15 +260,88 @@ func newHeldService(t *testing.T) *heldService {
 	// teardown waiting on a stage nothing is going to release.
 	t.Cleanup(held.let)
 
+	// The repository is real and bound to a gate, because begin builds the
+	// run's isolated copy before its record moves to running: a record naming
+	// a working copy no commit can be fetched from is a run that fails before
+	// the stage body this fixture holds open is ever reached.
+	subject, upstream, head := heldSubject(t)
+	held.head = head
 	if _, err := running.store.UpsertRepository(t.Context(), store.Repository{
 		ID:            "subject",
-		WorkingPath:   root,
-		UpstreamURL:   "https://example.invalid/o/r.git",
+		WorkingPath:   subject,
+		UpstreamURL:   upstream,
 		DefaultBranch: "main",
 	}); err != nil {
 		t.Fatalf("recording the repository: %v", err)
 	}
+	command, err := os.Executable()
+	if err != nil {
+		t.Fatalf("finding this test binary: %v", err)
+	}
+	if _, err := gate.Initialize(t.Context(), gate.Spec{
+		Home:        h.Root(),
+		WorkingPath: subject,
+		// The hooks are written but never fire here: nothing in these tests
+		// pushes to the gate, and what they need out of it is the repository
+		// the run's isolated copy is cut from.
+		Command: command,
+	}, gate.WithIndex(running.store)); err != nil {
+		t.Fatalf("initializing the gate: %v", err)
+	}
 	return held
+}
+
+// heldSubject builds the working copy a held run is of: one commit on its
+// default branch, a local bare upstream beside it so the record's upstream
+// resolves without a network, and the path resolved the way the service
+// resolves the recorded one. It shells out on the same terms the package's
+// external helpers do: a subject assembled with the code under test could not
+// show that code wrong.
+func heldSubject(t *testing.T) (path, upstream, head string) {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "s")
+	if err != nil {
+		t.Fatalf("making a subject repository: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	heldGit(t, dir, "init", "--quiet", "-b", "main", ".")
+	if err := os.WriteFile(filepath.Join(dir, "file.txt"), []byte("hello\n"), 0o600); err != nil {
+		t.Fatalf("writing a file: %v", err)
+	}
+	heldGit(t, dir, "add", "-A")
+	heldGit(t, dir, "commit", "--quiet", "-m", "first")
+	remote, err := os.MkdirTemp("", "u")
+	if err != nil {
+		t.Fatalf("making an upstream repository: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(remote) })
+	heldGit(t, remote, "init", "--quiet", "--bare", "-b", "main", ".")
+	heldGit(t, dir, "remote", "add", "origin", remote)
+	heldGit(t, dir, "push", "--quiet", "origin", "main")
+	resolved, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatalf("resolving the subject path: %v", err)
+	}
+	return resolved, remote, heldGit(t, dir, "rev-parse", "HEAD")
+}
+
+// heldGit runs a git command for building that subject, insulated from the
+// machine's own git configuration.
+func heldGit(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(),
+		"GIT_CONFIG_GLOBAL="+filepath.Join(dir, ".gitconfig-absent"),
+		"GIT_CONFIG_SYSTEM="+filepath.Join(dir, ".gitconfig-absent"),
+		"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@example.invalid",
+		"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@example.invalid",
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s in %s: %v\n%s", strings.Join(args, " "), dir, err, out)
+	}
+	return strings.TrimSpace(string(out))
 }
 
 // fixedRunner hands back a Runner somebody else built, so nothing here can

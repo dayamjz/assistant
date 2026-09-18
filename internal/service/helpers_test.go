@@ -100,8 +100,8 @@ func git(t *testing.T, dir string, args ...string) string {
 	return strings.TrimSpace(string(out))
 }
 
-// newSubject returns a working copy with one commit on its default branch, and
-// an upstream it can reach.
+// newSubject returns a working copy standing on a branch with a change of its
+// own, and an upstream it can reach.
 //
 // The upstream is a bare repository beside it rather than a URL nobody can
 // resolve. A run walks the rebase stage, and that body fetches the branch and
@@ -109,6 +109,12 @@ func git(t *testing.T, dir string, args ...string) string {
 // unreachable one every test here would be watching a network failure rather
 // than the service it is about. It is local so that nothing in this package
 // reaches the network.
+//
+// The checkout stands on a work branch one commit past the default branch,
+// because a run is of the branch the caller is standing on and a run of the
+// default branch itself carries no change: the rebase stage ends such a run at
+// its empty-diff short circuit, so a test that drove one would be watching
+// that short circuit rather than the walk it is about.
 func newSubject(t *testing.T) string {
 	t.Helper()
 	dir, err := os.MkdirTemp("", "s")
@@ -133,6 +139,12 @@ func newSubject(t *testing.T) string {
 	// derives one from rather than one arranged some other way.
 	git(t, dir, "remote", "add", "origin", upstream)
 	git(t, dir, "push", "--quiet", "origin", "main")
+	git(t, dir, "checkout", "--quiet", "-b", "work")
+	if err := os.WriteFile(filepath.Join(dir, "work.txt"), []byte("a change under validation\n"), 0o600); err != nil {
+		t.Fatalf("writing the change under validation: %v", err)
+	}
+	git(t, dir, "add", "-A")
+	git(t, dir, "commit", "--quiet", "-m", "the change under validation")
 	// The path a repository record is filed under is the resolved one, which
 	// is what the service compares against.
 	resolved, err := filepath.EvalSymlinks(dir)
@@ -204,9 +216,20 @@ func testCommand(t *testing.T) string {
 
 // scriptedAgent is a catalog holding the scripted stand-in under the name the
 // production adapter carries, so a service resolving "auto" reaches it.
+//
+// The one thing it is scripted to do is answer every review invocation with a
+// clean review of whatever change the invocation carries, because the review
+// stage launches one for any run that reaches it un-skipped and a run these
+// tests drive should stop at the stages that hold, not at a reviewer that
+// never answered. Everything else stays unscripted, so a run that reaches an
+// agent these tests did not mean it to reach fails loudly.
 func scriptedAgent(t *testing.T) *agents.Catalog {
 	t.Helper()
-	runner := standin.New(t, standin.Script{}).Runner()
+	runner := standin.New(t, standin.Script{Steps: []standin.Step{{
+		Match: standin.MatchReview(),
+		Times: standin.Always,
+		Reply: standin.Reviewed("the change reads cleanly"),
+	}}}).Runner()
 	return agents.NewCatalog(fixedFactory{runner: runner})
 }
 

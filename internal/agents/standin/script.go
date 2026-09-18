@@ -110,6 +110,105 @@ func Resumed() *bool { yes := true; return &yes }
 // Fresh returns a Match.Resumed selecting invocations that carried no session.
 func Fresh() *bool { no := false; return &no }
 
+// The two landmarks a review invocation's prompt is recognized and read by.
+// Both are sentences findings.Demand.Guidance writes, quoted here rather than
+// computed, because the stand-in reads the prompt the way the reviewer it
+// replaces does: off the text the invocation carries. A change to that
+// package's wording breaks these loudly - the derived report is refused and
+// the invocation fails naming the missing landmark - rather than quietly
+// answering with a report the binding would refuse.
+const (
+	// reviewRevisionPrefix precedes the one revision a review report may
+	// carry.
+	reviewRevisionPrefix = "It must be exactly "
+	// reviewRevisionSuffix follows it.
+	reviewRevisionSuffix = ". A report of any other revision is refused whole"
+	// reviewTouchedHeading precedes the list of paths the change touched.
+	reviewTouchedHeading = "The change touches these paths."
+)
+
+// MatchReview returns a Match selecting review invocations: the ones whose
+// prompt carries the evidence demand a review report is bound to. It is the
+// same landmark Reviewed derives the revision from, so an invocation this
+// selects is one that reply can answer.
+func MatchReview() Match {
+	return Match{PromptContains: reviewRevisionPrefix}
+}
+
+// Reviewed replies with a review of whatever change the invocation carries:
+// a report whose revision and read set are derived from the evidence demand
+// in the prompt, and whose findings are exactly those given, so none makes it
+// a clean review that approves the change.
+//
+// It exists because a review report is checked against the run's own facts,
+// the commit under review and the paths it touched, and a script is data
+// written before the run those facts belong to. A test that knows its head
+// states a report with Report instead; one that drives the product surface,
+// where the head is the run's to know, answers with this.
+//
+// The derivation happens in the stand-in process, off the prompt on standard
+// input, which is the same text the reviewer this stands in for is told those
+// facts through. An invocation whose prompt carries no evidence demand cannot
+// be answered this way and fails with a message naming what was missing, so a
+// step that matched too broadly is a loud failure rather than a fabricated
+// review.
+func Reviewed(summary string, found ...findings.Finding) Reply {
+	return Reply{Review: &Review{Summary: summary, Findings: found}}
+}
+
+// Review is the part of a derived review answer the script states; Reviewed
+// builds one and Reply.Review carries it. The revision and the read set are
+// deliberately absent: both are derived from the invocation's own prompt when
+// the reply is emitted.
+type Review struct {
+	// Summary is the report's summary, which findings.Validate requires.
+	Summary string `json:"summary"`
+	// Findings is what the derived review reports, empty for a clean one. A
+	// finding here is checked by the product like any other: one whose
+	// location or citations reach past the derived read set is refused by the
+	// binding, which is the product behaving as specified rather than this
+	// package failing.
+	Findings []findings.Finding `json:"findings,omitempty"`
+}
+
+// report derives the findings.Report this review answers with from the
+// prompt: the demanded revision between the two revision landmarks, and the
+// read set declared as exactly the listed touched paths.
+func (r Review) report(prompt string) (findings.Report, error) {
+	_, tail, ok := strings.Cut(prompt, reviewRevisionPrefix)
+	if !ok {
+		return findings.Report{}, fmt.Errorf("deriving a review: the prompt carries no %q, so there is no demanded revision to answer with", reviewRevisionPrefix)
+	}
+	revision, _, ok := strings.Cut(tail, reviewRevisionSuffix)
+	if !ok {
+		return findings.Report{}, fmt.Errorf("deriving a review: the prompt names a revision without %q after it", reviewRevisionSuffix)
+	}
+	_, tail, ok = strings.Cut(prompt, reviewTouchedHeading)
+	if !ok {
+		return findings.Report{}, fmt.Errorf("deriving a review: the prompt carries no %q, so there is no read set to declare", reviewTouchedHeading)
+	}
+	var read []string
+	for line := range strings.Lines(tail) {
+		path, listed := strings.CutPrefix(line, "  - ")
+		if !listed {
+			if len(read) > 0 {
+				break
+			}
+			continue
+		}
+		read = append(read, strings.TrimRight(path, "\n"))
+	}
+	if len(read) == 0 {
+		return findings.Report{}, fmt.Errorf("deriving a review: the prompt lists no paths under %q", reviewTouchedHeading)
+	}
+	return findings.Report{
+		Summary:  r.Summary,
+		Revision: revision,
+		Read:     findings.Paths(read),
+		Findings: r.Findings,
+	}, nil
+}
+
 // Reply is everything one invocation of the stand-in does: what it prints on
 // each stream, how long it stays alive, and what status it exits with. The
 // fields compose, so a well-formed envelope followed by a non-zero exit, or a
@@ -132,6 +231,11 @@ type Reply struct {
 	// Stdout. A nil Envelope prints none, which the adapter reports as
 	// FailureOutput unless something else already ended the invocation.
 	Envelope *Envelope `json:"envelope,omitempty"`
+	// Review, when the Envelope is nil, has the stand-in derive a review
+	// report from the invocation's own prompt and answer with that inside a
+	// well-formed envelope. Reviewed builds a reply carrying one, and its doc
+	// comment says why the derivation cannot happen at scripting time.
+	Review *Review `json:"review,omitempty"`
 	// Pad is a number of filler bytes appended to standard output. It is how a
 	// reply exceeds the adapter's output limit without a script carrying
 	// megabytes of text.
@@ -159,13 +263,18 @@ func (r Reply) WithStderr(text string) Reply { r = r.own(); r.Stderr = text; ret
 // invocation answered by it ends on its context rather than on the agent.
 func (r Reply) WithHold(d time.Duration) Reply { r = r.own(); r.Hold = d; return r }
 
-// own returns the reply with an envelope of its own, so a reply derived from
-// another can be adjusted through Envelope without reaching the one it came
-// from. Every other field is already a value the copy owns.
+// own returns the reply with an envelope and review of its own, so a reply
+// derived from another can be adjusted through either pointer without
+// reaching the one it came from. Every other field is already a value the
+// copy owns.
 func (r Reply) own() Reply {
 	if r.Envelope != nil {
 		envelope := *r.Envelope
 		r.Envelope = &envelope
+	}
+	if r.Review != nil {
+		review := *r.Review
+		r.Review = &review
 	}
 	return r
 }

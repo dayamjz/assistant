@@ -107,5 +107,9 @@
 //
 // It is not a model of any agent's behavior. It answers what it was scripted
 // to answer and nothing else; an invocation no step matches exits with
-// ExitUnscripted rather than being given a default nobody wrote.
+// ExitUnscripted rather than being given a default nobody wrote. The one
+// answer a script states without stating its text is Reviewed, and what it
+// derives comes off the invocation's own prompt on the wire, never from
+// anything the test process knew; its doc comment says why that is not a
+// default.
 package standin

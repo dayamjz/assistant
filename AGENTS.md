@@ -431,10 +431,13 @@ Each has cost this repository more than one round of review.
   declarations checked against the build, so landing a body means writing it
   down there too. A body refusing what its run cannot give it cannot be
   walked past either, because it fails rather than holding, so
-  `internal/service`'s answer-to-the-end test skips such stages for the one
-  run instead of the bodies softening: the review stage fails on the isolated
-  copy nothing in this build creates, and the pull request stage on a record
-  naming no repository on the code host.
+  `internal/service`'s answer-to-the-end test skips such a stage for the one
+  run instead of the body softening: the pull request stage fails on a record
+  naming no repository on the code host. The review stage is skipped there on
+  different terms: its body launches the resolved agent over the run's
+  isolated copy, and the tests that walk a run script that agent to answer a
+  clean review, so a walk that takes the stage rests on what the script says
+  rather than on the configuration's holds.
   It is also where a body reads another stage's record:
   `pipeline.StageResultKeys` declares the keys and `pipeline.ReadStageResult`
   decodes them, so `internal/pipeline` stays the one owner of the report
@@ -526,16 +529,14 @@ Each has cost this repository more than one round of review.
   first: green there says the machinery behaves on inputs we chose and says
   nothing about review quality, and every row carries whether it was reached
   through the binary or
-  through the package that owns the mechanism. This section is the part of
-  this file most likely to be out of date: it was written when a run reached
-  no agent, no push, and no code host, and the reason it gave for the review
-  stage - that nothing created the run's isolated copy - stopped being true
-  when `internal/service` started building one. What a walk there now reaches
-  is a question for whoever next works in that package, and its declarations
-  are red until somebody settles it. What has not changed is the pull request
-  body, which fails because the run's record names no repository on the code
-  host, and the test body, which holds for the command nobody configured
-  rather than executing anything. It
+  through the package that owns the mechanism, because a run there still
+  reaches no agent, no push, and no code host: `internal/service` builds every
+  run an isolated copy now, so what keeps the agent out is the walks
+  themselves - every one asks to skip the review stage, whose body would
+  launch the agent the harness scripts to answer nothing - while the pull
+  request body fails because the run's record names no repository on the code
+  host, so every walk skips that stage too, and the test body holds for the
+  command nobody configured rather than executing anything. It
   takes both of the platform guards
   `internal/cli` and `internal/service` carry, on their terms: a check that
   drives a run skips where `internal/ipc` reads no local socket peer

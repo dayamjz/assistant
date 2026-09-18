@@ -188,15 +188,9 @@ func TestARunIsStartedReportedAndAnsweredThroughSeparateInvocations(t *testing.T
 	if got := run(t, h, subject, "init"); got.code != machine.ExitOK {
 		t.Fatalf("assistant init exited %s:\n%s%s", got.code, got.stdout, got.stderr)
 	}
+	standingOnChange(t, subject, "a-change")
 
-	// The run skips the review stage. Its body reads the run's isolated copy
-	// and nothing in this build creates one, so it fails on opening it rather
-	// than holding, and a run that took it could not walk from one hold to the
-	// next however it was answered. The skip is a run input, which P2 makes a
-	// person's per-run choice, so this drives the surface a person would drive
-	// rather than weakening the stage. The stage is named rather than derived,
-	// and the name goes away when this build creates the isolated copy.
-	started := run(t, h, subject, "--json", "--skip", pipeline.StageReview.String(),
+	started := run(t, h, subject, "--json",
 		"--intent", "add a greeting, with the tradeoffs stated")
 	if started.code != machine.ExitOK {
 		t.Fatalf("starting a run exited %s:\n%s", started.code, started.stdout)
@@ -261,6 +255,7 @@ func TestTheHumanRenderingShowsTheDecisionAndHowToAnswerIt(t *testing.T) {
 	if got := run(t, h, subject, "init"); got.code != machine.ExitOK {
 		t.Fatalf("assistant init exited %s:\n%s%s", got.code, got.stdout, got.stderr)
 	}
+	standingOnChange(t, subject, "a-change")
 	got := run(t, h, subject, "--intent", "a change with its tradeoffs stated")
 	if got.code != machine.ExitOK {
 		t.Fatalf("starting a run exited %s:\n%s%s", got.code, got.stdout, got.stderr)
@@ -269,7 +264,10 @@ func TestTheHumanRenderingShowsTheDecisionAndHowToAnswerIt(t *testing.T) {
 		"Waiting on you",
 		"Options: approved, skipped, cancelled",
 		"assistant --answer approved",
-		"not implemented in this build",
+		// The finding behind the hold, in full: the run stops at the test
+		// stage, which holds wherever the configuration names no test
+		// command, and these homes configure none.
+		"No test command is configured",
 	} {
 		if !strings.Contains(got.stdout, want) {
 			t.Fatalf("the rendering does not say %q:\n%s", want, got.stdout)
@@ -415,6 +413,7 @@ func TestARunCanBeReadAndEndedThroughTheSurface(t *testing.T) {
 	if got := run(t, h, subject, "init"); got.code != machine.ExitOK {
 		t.Fatalf("assistant init exited %s:\n%s%s", got.code, got.stdout, got.stderr)
 	}
+	standingOnChange(t, subject, "a-change")
 	started := decodeRun(t, run(t, h, subject, "--json", "--intent", "a change").stdout)
 
 	// One run in full, by name.
@@ -531,6 +530,7 @@ func TestEjectRefusedByAnActiveRunRemovesNothing(t *testing.T) {
 	if err := json.Unmarshal([]byte(created.stdout), &built); err != nil {
 		t.Fatalf("init does not decode: %v\n%s", err, created.stdout)
 	}
+	standingOnChange(t, subject, "a-change")
 
 	started := run(t, h, subject, "--json", "--intent", "a change held at its first stage")
 	if started.code != machine.ExitOK {
@@ -682,7 +682,7 @@ func TestTheIntentSuppliedFlagIsHonouredWhenTheCallerWritesIt(t *testing.T) {
 		{"criteria", []string{"--intent", "acceptance criteria stated up front"}},
 		{"hint", []string{"--intent", "a hint about what this is for", "--intent-supplied=false"}},
 	} {
-		git(t, subject, "checkout", "--quiet", "-b", c.branch)
+		standingOnChange(t, subject, c.branch)
 		started := run(t, h, subject, append([]string{"--json"}, c.args...)...)
 		if started.code != machine.ExitOK {
 			t.Fatalf("starting the run for %s exited %s:\n%s", c.branch, started.code, started.stdout)
@@ -701,7 +701,7 @@ func TestTheIntentSuppliedFlagIsHonouredWhenTheCallerWritesIt(t *testing.T) {
 		t.Fatalf("--intent-supplied=false was discarded: both runs record %q", sources["hint"])
 	}
 	// And neither says nothing was given, because both were given something.
-	git(t, subject, "checkout", "--quiet", "-b", "nothing")
+	standingOnChange(t, subject, "nothing")
 	started := run(t, h, subject, "--json")
 	if started.code != machine.ExitOK {
 		t.Fatalf("starting a run with no intent exited %s:\n%s", started.code, started.stdout)
@@ -813,6 +813,7 @@ func TestStatusReportsARefusalRatherThanAServiceThatIsNotRunning(t *testing.T) {
 	if got := run(t, h, subject, "init"); got.code != machine.ExitOK {
 		t.Fatalf("assistant init exited %s:\n%s%s", got.code, got.stdout, got.stderr)
 	}
+	standingOnChange(t, subject, "a-change")
 	started := run(t, h, subject, "--json", "--intent", "a change held at its first stage")
 	if started.code != machine.ExitOK {
 		t.Fatalf("starting a run exited %s:\n%s", started.code, started.stdout)
@@ -917,6 +918,7 @@ func TestAttachingSaysWhichStartingInputsWereNotApplied(t *testing.T) {
 	if got := run(t, h, subject, "init"); got.code != machine.ExitOK {
 		t.Fatalf("assistant init exited %s:\n%s%s", got.code, got.stdout, got.stderr)
 	}
+	standingOnChange(t, subject, "a-change")
 	started := run(t, h, subject, "--json", "--intent", "the intent the run was built from")
 	if started.code != machine.ExitOK {
 		t.Fatalf("starting a run exited %s:\n%s", started.code, started.stdout)
@@ -1047,6 +1049,7 @@ func TestARunThatHasEndedIsNotOfferedAsAnswerable(t *testing.T) {
 	if got := run(t, h, subject, "init"); got.code != machine.ExitOK {
 		t.Fatalf("assistant init exited %s:\n%s%s", got.code, got.stdout, got.stderr)
 	}
+	standingOnChange(t, subject, "a-change")
 	started := decodeRun(t, run(t, h, subject, "--json", "--intent", "a change").stdout)
 	if started.Decision == nil {
 		t.Fatal("the run did not stop at a decision, so there is nothing to end at a hold")

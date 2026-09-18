@@ -72,14 +72,16 @@ func TestARunSurvivesTheProcessThatStartedItAndIsAnsweredByAnother(t *testing.T)
 // A run answered through to the end completes, and what it ends as is one of
 // the outcomes a driving agent is written against.
 //
-// The run skips the review and pull request stages, because each body fails
-// rather than holds on what this run cannot give it: the review body reads
-// the run's isolated copy, which nothing here creates, and the pull request
-// body opens a provider on the repository the run's record names on the code
-// host, which this subject's record does not name. A run that took either
-// could not reach the end however it was answered. What the skip costs this
-// test is those stages, and what it keeps is everything else of the walk,
-// which is the part no other test reaches.
+// The run skips the review and pull request stages. The pull request body
+// fails rather than holds on what this run cannot give it: it opens a
+// provider on the repository the run's record names on the code host, which
+// this subject's record does not name, so a run that took it could not reach
+// the end however it was answered. The review skip keeps the walk's holds to
+// the ones the configuration decides: taken, the stage passes on the scripted
+// agent's clean answer, so the skip costs the walk nothing it stops at and
+// keeps this test from resting on what that script happens to say. What the
+// skips cost this test is those stages, and what they keep is everything else
+// of the walk, which is the part no other test reaches.
 func TestARunAnsweredThroughToTheEndCompletes(t *testing.T) {
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
@@ -478,9 +480,12 @@ func TestARunThatNeverExecutedIsReportedRatherThanResumed(t *testing.T) {
 		t.Fatalf("reading this build's identity: %v", err)
 	}
 	created, err := records.CreateRun(t.Context(), store.Run{
-		ID:            "never-executed",
-		RepositoryID:  repository.ID,
-		Branch:        "main",
+		ID:           "never-executed",
+		RepositoryID: repository.ID,
+		// The branch the subject stands on, because attaching below reads it
+		// off the working copy and a run planted on another branch would not
+		// be the one that start finds.
+		Branch:        git(t, subject, "rev-parse", "--abbrev-ref", "HEAD"),
 		SubmittedHead: "0000000000000000000000000000000000000000",
 		Intent:        "recorded and then nothing",
 		IntentSource:  "supplied",

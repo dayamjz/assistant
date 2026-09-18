@@ -159,7 +159,10 @@ func AgreesWithPRD(prd []string, order []pipeline.Stage) error {
 var ErrUndeclaredStage = errors.New("journey: a stage's implementation status is not declared here")
 
 // bodyless is the stages this harness declares this build has no implementation
-// for, named one at a time.
+// for, named one at a time. This build implements all nine, so the list is
+// empty; it stays a declaration rather than being deleted, because a build
+// that quietly stopped implementing a stage is exactly what an absent
+// declaration could not catch.
 //
 // Naming them is the whole point. Subtracting what the build implements from
 // the stage list would make this harness agree with the build about which
@@ -168,13 +171,7 @@ var ErrUndeclaredStage = errors.New("journey: a stage's implementation status is
 // eight-boundary harness in the middle of a run and reported success. A name
 // here has to be written by somebody, and DeclaresEveryStage goes red when the
 // names and the build stop matching in either direction.
-var bodyless = []pipeline.Stage{
-	pipeline.StageRebase,
-	pipeline.StageDocument,
-	pipeline.StageLint,
-	pipeline.StagePush,
-	pipeline.StageCI,
-}
+var bodyless = []pipeline.Stage{}
 
 // StagesWithoutABody returns the stages declared above, in the order a run
 // takes them. It is a declaration, never a measurement.
@@ -191,18 +188,22 @@ func StagesWithoutABody() []pipeline.Stage {
 // what the build does would follow the build wherever it went.
 //
 // It is not the bodyless list under another name, because having a body and
-// holding are different questions, in both directions. Every body-less stage
-// holds, since a stage with no body reports one ask finding. The test stage
-// holds here with a body: PRD section 10 makes commands.test empty by default,
-// no run this harness drives is given one, and the branch's own is never read,
-// so that body holds for a person rather than reporting a pass it did not
-// establish. And the review stage has a body and is not a stop, because every
-// run this harness walks skips it, for the reason walkableRun states: its body
-// opens the run's isolated copy, nothing in this build creates one, and a run
-// that took the stage would fail there rather than hold. The pull request
-// stage is off the list on the same terms: it has a body, that body fails
-// when the run's record names no repository on the code host, no record here
-// names one, and every run this harness drives to the end asks to skip it.
+// holding are different questions, in both directions. The test, document and
+// lint stages hold here with bodies: PRD section 10 makes each of their
+// commands empty by default, no run this harness drives is given one, and the
+// branch's own is never read, so each body holds for a person rather than
+// reporting a pass it did not establish. The push stage holds with a body
+// because every run here skips the review stage, and a push whose run carries
+// no completed review is an ask rather than a push. The checks stage holds
+// with a body because no record here names a repository on a code host, so it
+// has no provider to query. And the review stage has a body and is not a
+// stop, because every run this harness walks skips it, for the reason
+// walkableRun states: its body launches the resolved agent over the change,
+// and a harness run may not reach whatever agent the machine happens to have.
+// The pull request stage is off the list on the same terms: it has a body,
+// that body fails when the run's record names no repository on the code host,
+// no record here names one, and every run this harness drives to the end asks
+// to skip it.
 //
 // What holds these names to the build is the checks that walk a real run
 // against them: the kill-at-every-boundary check and the classification walk
@@ -211,7 +212,6 @@ func StagesWithoutABody() []pipeline.Stage {
 // name here a run does not stop at, or a stop no name here covers, is a red
 // check rather than a quiet drift.
 var stops = []pipeline.Stage{
-	pipeline.StageRebase,
 	pipeline.StageTest,
 	pipeline.StageDocument,
 	pipeline.StageLint,
