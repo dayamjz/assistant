@@ -230,7 +230,7 @@ func newHeldService(t *testing.T) *heldService {
 	running, err := Open(t.Context(), Options{
 		Home:      h,
 		NewStages: served,
-		NewFixer:  stages.PendingFixer,
+		NewFixer:  stages.Fix,
 		Build:     build,
 		Catalog:   agents.NewCatalog(fixedRunner{runner: standin.New(t, standin.Script{}).Runner()}),
 		LockWait:  -1,

@@ -397,6 +397,7 @@ func TestRepositoryFileStillAcceptsEveryOtherKey(t *testing.T) {
 		KeyCommandsTest:                `{"commands": {"test": "go test ./..."}}`,
 		KeyCommandsLint:                `{"commands": {"lint": "make lint"}}`,
 		KeyCommandsFormat:              `{"commands": {"format": "gofmt -w ."}}`,
+		KeyCommandsDocument:            `{"commands": {"document": "make docs"}}`,
 		KeyFixRoundsReview:             `{"fix_rounds": {"review": 0}}`,
 		KeyFixRoundsRebase:             `{"fix_rounds": {"rebase": 1}}`,
 		KeyFixRoundsTest:               `{"fix_rounds": {"test": 1}}`,

@@ -95,16 +95,22 @@ type Options struct {
 	// defaulting to the nine internal/stages ships would make this package the
 	// second place that decides what a run validates.
 	NewStages func(stages.StageDeps) pipeline.Stages
-	// NewFixer builds the fixer for the pipeline, given what the run's fixer
-	// path needs of the agent adapter. It is a constructor rather than a value
-	// because that requirement is internal/runs' answer and is not known until
-	// this service has resolved an agent.
+	// NewFixer builds the fixer for the pipeline, given the dependencies a fix
+	// body reaches the world through. It is a constructor rather than a value
+	// for the reason NewStages is one: those dependencies include the resolved
+	// agent and what internal/runs asks of it, neither of which is known until
+	// this service has resolved one.
+	//
+	// What it is given is deliberately not a stages.StageDeps. A fix body needs
+	// a route to the run's fixer and a stage body must not have one, which is
+	// P4 at this seam; stages.FixDeps is that route and nothing a stage body
+	// holds can reach it.
 	//
 	// It is required. internal/pipeline needs a fixer whenever any stage's fix
 	// round limit is above zero, and zeroing the configured limits to avoid
 	// supplying one would quietly turn every fix-eligible finding into a
 	// question for a person.
-	NewFixer func(requires []agents.Capability) pipeline.Fixer
+	NewFixer func(stages.FixDeps) pipeline.Fixer
 	// Build identifies the software, which PRD section 8 requires every run
 	// to be traceable to. store.CurrentBuild reads it for the common caller.
 	Build store.Build
@@ -137,7 +143,7 @@ type Service struct {
 
 	checkpoints *checkpoints.Store
 	newStages   func(stages.StageDeps) pipeline.Stages
-	newFixer    func(requires []agents.Capability) pipeline.Fixer
+	newFixer    func(stages.FixDeps) pipeline.Fixer
 	cfg         config.Config
 	// digest identifies the configuration document a run resolved, which PRD
 	// section 8 requires on every run so a surprising verdict traces to the
@@ -464,9 +470,25 @@ func (s *Service) driverFor(ctx context.Context) (*driver, error) {
 		redactor,
 		vcs.WithRedactor(redactor),
 	)
+	// The fix seam is built here, beside the stage seam and deliberately apart
+	// from it. It carries the one thing a stage body may not have: a route to
+	// the run's fixer role, which internal/runs hands out per run and which
+	// keeps the durable session those rounds share. P4 is what makes the two
+	// separate values rather than one - a stage body that could reach a fixer
+	// is a stage body that can fix what it is about to report on.
+	fixDeps := stages.NewFixDeps(
+		func(ctx context.Context, runID string) (agents.Fixer, error) {
+			return runService.Fixer(ctx, runID)
+		},
+		s.home,
+		s.cfg,
+		runService.FixerRequires(),
+		redactor,
+		vcs.WithRedactor(redactor),
+	)
 	built, err := pipeline.New(pipeline.Options{
 		Stages:                      s.newStages(deps),
-		Fixer:                       s.newFixer(runService.FixerRequires()),
+		Fixer:                       s.newFixer(fixDeps),
 		Rounds:                      s.cfg.FixRounds,
 		Budget:                      s.cfg.RunBudget,
 		Adapter:                     resolution.Capabilities,

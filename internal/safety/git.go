@@ -20,17 +20,14 @@ import (
 // until the caller has fetched it. That is the intended shape: an unanswerable
 // question becomes a refusal, never an allow.
 //
-// CommitsNotIn is the one method *vcs.Repository does not implement today.
-// This package does not add it, because internal/vcs is the only package that
-// invokes git and adding an operation there is not this package's change to
-// make. Until it exists, the typed operation vcs needs is the one declared
-// here: the commits reachable from one revision and not from another, which is
-// git rev-list incorporated..have. This is a named follow-up, not an oversight.
-// Two checks in this package's tests keep both claims honest. A compile-time
-// assertion fails the build if RemoteRefs, ResolveCommit, or MergeBase drifts
-// from what *vcs.Repository provides, and a test fails on the day
-// *vcs.Repository satisfies this interface in full, which is the day the
-// paragraph above stops being true.
+// *vcs.Repository satisfies this interface in full. CommitsNotIn was once the
+// one method it did not carry, and the follow-up this comment named has
+// landed: internal/vcs owns that operation, as it owns every git invocation,
+// and this package still adds none of its own.
+//
+// A compile-time assertion in this package's tests fails the build if any of
+// the four signatures drifts from what *vcs.Repository provides, so the claim
+// above is checked rather than asserted.
 type Git interface {
 	// RemoteRefs reads the references a remote advertises, without changing
 	// anything locally. This is the fresh read every decision is made

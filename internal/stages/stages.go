@@ -107,10 +107,8 @@
 package stages
 
 import (
-	"context"
 	"fmt"
 
-	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/findings"
 	"github.com/dayamjz/assistant/internal/pipeline"
@@ -264,43 +262,4 @@ func Holding(cfg config.Config) []pipeline.Stage {
 		}
 	}
 	return holding
-}
-
-// PendingFixer is the fixer for a build that has none. internal/pipeline
-// requires one whenever any stage's fix round limit is above zero, so a build
-// that keeps the configured limits has to supply something even before any
-// stage can produce a finding for it.
-//
-// Its body refuses. A fix round is an agent editing the change and a stage
-// re-running to verify it; the review stage is the second half and nothing
-// here is the first, so the honest answer is a failure naming what is missing.
-// A body that returned a summary and changed nothing would leave the stage
-// reporting the same findings, the loop converging, and the run parked with a
-// reason that named the bound rather than the missing fixer.
-//
-// Reachable is what it is written for, and the review stage is what reaches
-// it. A fix node exists only for a stage whose row in internal/pipeline's
-// stage table declares a fix round limit above zero, because the pipeline
-// builds one for no other; and only a stage with a body can report the
-// fix-eligible finding that routes into one, because a stage without a body
-// reports an ask finding, which never enters a fix loop. The intent stage has
-// neither half: its row declares no rounds, so it has no fix node at all, and
-// it reports only notes besides. The review stage has both, so a fix-eligible
-// review finding meets this failure rather than a silent pass.
-//
-// requires is what the run's fixer path needs of the agent adapter, which
-// internal/runs answers with Service.FixerRequires. It is a parameter rather
-// than a constant here because whether a run keeps a durable fixer session is
-// the service's configuration, not this package's.
-func PendingFixer(requires []agents.Capability) pipeline.Fixer {
-	return pipeline.Fixer{
-		Requires: requires,
-		NewBody: func() pipeline.FixBody {
-			return func(_ context.Context, in pipeline.FixInput) (pipeline.FixOutput, error) {
-				return pipeline.FixOutput{}, fmt.Errorf(
-					"no fixer is implemented in this build, so the %d fix-eligible finding(s) the %s stage reported cannot be applied",
-					len(in.Findings), in.Stage)
-			}
-		},
-	}
 }

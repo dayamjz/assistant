@@ -405,12 +405,17 @@ Each has cost this repository more than one round of review.
   stage for a person and no stage reports a pass it did not establish. The one
   owner of which stages have a body is the `written` table there: `All` places
   implementations from it and `Implemented` reports it, so adding a body is
-  adding an entry. `PendingFixer` is the same answer for the fix path, and it
-  fails rather than summarizing. A body is handed a `StageDeps` at
-  construction, which carries the adapters that do not vary with the run; a
-  fact that does vary is a declared state key in `internal/pipeline` instead,
-  because one `All` serves every run of a service. Lifetime decides which, and
-  `deps.go` has that argument and the P4 reason `Agent` is a `StageAgent`.
+  adding an entry. `Fix` is the fix path's body: it asks the run's fixer to
+  resolve a stage's findings in the isolated copy, commits what changed, and
+  reports the new head, which is the write the convergence bound reads. A body
+  is handed a `StageDeps` at construction, which carries the adapters that do
+  not vary with the run; a fact that does vary is a declared state key in
+  `internal/pipeline` instead, because one `All` serves every run of a service.
+  Lifetime decides which, and `deps.go` has that argument and the P4 reason
+  `Agent` is a `StageAgent`. A fix body is handed a `FixDeps` instead, and the
+  two are separate types for the same reason: it carries a route to the run's
+  fixer, and a stage body that could reach one could fix what it is about to
+  report on. Do not merge them.
   Three things about the intent stage generalize. PRD section 5's "this stage never blocks a
   run" is owed by the implementation and not by `internal/pipeline`, which
   refuses to enforce it structurally because a stage that could not hold would
@@ -521,13 +526,16 @@ Each has cost this repository more than one round of review.
   first: green there says the machinery behaves on inputs we chose and says
   nothing about review quality, and every row carries whether it was reached
   through the binary or
-  through the package that owns the mechanism, because a run reaches no agent,
-  no push, and no code host: the intent body reads the supplied intent and
-  launches nothing, the review body fails on the run's isolated copy, which
-  nothing in this build creates, before it launches anything, and the pull
-  request body fails because the run's record names no repository on the code
-  host, so every walk there skips those two stages, and the test body
-  holds for the command nobody configured rather than executing anything. It
+  through the package that owns the mechanism. This section is the part of
+  this file most likely to be out of date: it was written when a run reached
+  no agent, no push, and no code host, and the reason it gave for the review
+  stage - that nothing created the run's isolated copy - stopped being true
+  when `internal/service` started building one. What a walk there now reaches
+  is a question for whoever next works in that package, and its declarations
+  are red until somebody settles it. What has not changed is the pull request
+  body, which fails because the run's record names no repository on the code
+  host, and the test body, which holds for the command nobody configured
+  rather than executing anything. It
   takes both of the platform guards
   `internal/cli` and `internal/service` carry, on their terms: a check that
   drives a run skips where `internal/ipc` reads no local socket peer

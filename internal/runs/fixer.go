@@ -100,7 +100,7 @@ func (s *Service) Fixer(ctx context.Context, id string) (*Fixer, error) {
 	if err != nil {
 		return nil, err
 	}
-	if finished(r.Status) {
+	if Finished(r.Status) {
 		delete(s.fixers, id)
 		return nil, fmt.Errorf("%w: run %s is %s", ErrRunEnded, id, r.Status)
 	}

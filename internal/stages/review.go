@@ -305,10 +305,11 @@ type reviewChangeSet struct {
 
 // readChange derives the change from the run's isolated copy.
 func readChange(ctx context.Context, repo *vcs.Repository, f reviewFacts, ignore config.PatternSet) (reviewChangeSet, error) {
-	from, err := repo.MergeBase(ctx, f.base, f.head)
+	base := baseRevision(ctx, repo, f.base)
+	from, err := repo.MergeBase(ctx, base, f.head)
 	if err != nil {
 		return reviewChangeSet{}, fmt.Errorf("stages: the review stage cannot locate where %s left %s: %w",
-			f.head, f.base, err)
+			f.head, base, err)
 	}
 	changed, err := repo.ChangedFiles(ctx, from, f.head)
 	if err != nil {

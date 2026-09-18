@@ -177,7 +177,20 @@ func newSubject(t *testing.T) string {
 	}
 	git(t, dir, "add", "-A")
 	git(t, dir, "commit", "--quiet", "-m", "first")
-	git(t, dir, "remote", "add", "origin", "https://example.invalid/o/r.git")
+	// The upstream is a bare repository beside the subject rather than a URL
+	// nobody can resolve. A run walks the rebase stage, and that body reads
+	// what the upstream holds: against an unreachable one every run these
+	// tests drive would be watching a network failure rather than the command
+	// surface they are about. It is local so that nothing here reaches the
+	// network.
+	upstream, err := os.MkdirTemp("", "u")
+	if err != nil {
+		t.Fatalf("making an upstream repository: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(upstream) })
+	git(t, upstream, "init", "--quiet", "--bare", "-b", "main", ".")
+	git(t, dir, "remote", "add", "origin", upstream)
+	git(t, dir, "push", "--quiet", "origin", "main")
 	resolved, err := filepath.EvalSymlinks(dir)
 	if err != nil {
 		t.Fatalf("resolving the subject path: %v", err)
@@ -233,7 +246,7 @@ func serveCatalog(t *testing.T, h *home.Home, served func(stages.StageDeps) pipe
 	running, err := service.Open(t.Context(), service.Options{
 		Home:      h,
 		NewStages: served,
-		NewFixer:  stages.PendingFixer,
+		NewFixer:  stages.Fix,
 		Build:     build,
 		Catalog:   catalog,
 	})

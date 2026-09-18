@@ -3,7 +3,6 @@ package vcs
 import (
 	"context"
 	"errors"
-	"strings"
 )
 
 // RebaseSpec describes a rebase operation.
@@ -37,7 +36,7 @@ func (r *Repository) Rebase(ctx context.Context, spec RebaseSpec) error {
 		args = append(args, upstream)
 	}
 	args = append(args, onto)
-	
+
 	_, code, err := r.runExpecting(ctx, "rebase", []int{1}, args...)
 	if err != nil {
 		return err
@@ -69,30 +68,4 @@ func (r *Repository) RebaseStatus(ctx context.Context) (inProgress bool, err err
 		return false, err
 	}
 	return code == 0, nil
-}
-
-// conflictError reports a rebase that stopped due to conflicts.
-type conflictError struct {
-	detail string
-}
-
-func (e *conflictError) Error() string {
-	msg := "vcs: rebase stopped due to conflicts"
-	if e.detail != "" {
-		msg += ": " + e.detail
-	}
-	return msg
-}
-
-// Unwrap makes every rebase conflict match ErrRebaseConflict.
-func (e *conflictError) Unwrap() error { return ErrRebaseConflict }
-
-// parseRebaseError examines git's stderr to determine if a rebase failure
-// was due to conflicts.
-func parseRebaseError(stderr string) error {
-	lower := strings.ToLower(stderr)
-	if strings.Contains(lower, "conflict") || strings.Contains(lower, "could not apply") {
-		return &conflictError{detail: strings.TrimSpace(stderr)}
-	}
-	return nil
 }

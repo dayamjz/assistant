@@ -16,6 +16,7 @@ import (
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/redact"
+	"github.com/dayamjz/assistant/internal/runs"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/vcs"
 )
@@ -328,6 +329,15 @@ func (s *Service) begin(ctx context.Context, record store.Run, start pipeline.St
 	if err != nil {
 		return machine.Run{}, err
 	}
+	// The copy is built before the run is recorded as started, so a run that
+	// is walking has somewhere to walk. PRD section 8 orders the row before
+	// the directory and create wrote the row, so this is the second half of
+	// that ordering rather than a departure from it: a directory with no row
+	// is what the rule forbids, and a row whose directory could not be built
+	// leaves a run that never started.
+	if err := s.ensureCopy(ctx, record); err != nil {
+		return machine.Run{}, err
+	}
 	if _, err := built.runs.Start(ctx, record.ID); err != nil {
 		return machine.Run{}, err
 	}
@@ -378,8 +388,8 @@ type run struct {
 }
 
 // create records a new run. PRD section 8 requires the row to precede the run's
-// directory, and nothing here creates one, so a stage that needs an isolated
-// copy makes it after this.
+// directory, and this writes the row: begin builds the directory afterwards,
+// which is the ordering that rule asks for.
 func (s *Service) create(ctx context.Context, r run) (store.Run, error) {
 	built, err := s.driverFor(ctx)
 	if err != nil {
@@ -604,12 +614,19 @@ func (s *Service) settle(ctx context.Context, runID string, result graph.Result)
 	default:
 		return nil
 	}
-	if _, err := move(ctx, runID); err != nil {
+	moved, err := move(ctx, runID)
+	if err != nil {
 		var wrong *store.RunStatusError
 		if !errors.As(err, &wrong) {
 			return err
 		}
 		s.log.Printf("run %s was %s rather than where this segment left it", runID, wrong.Actual)
+	} else if runs.Finished(moved.Status) {
+		// A held run keeps its copy, because answering the hold resumes the
+		// run in it. Whether this status is one no move leads out of is
+		// internal/runs' fact and is asked there rather than decided from
+		// which move was chosen above.
+		s.reclaimCopy(ctx, moved)
 	}
 	s.publishRunState(ctx, runID)
 	return nil

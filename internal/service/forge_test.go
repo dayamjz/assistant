@@ -7,6 +7,7 @@ import (
 
 	"github.com/dayamjz/assistant/internal/findings"
 	"github.com/dayamjz/assistant/internal/forge"
+	"github.com/dayamjz/assistant/internal/gate"
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/principles"
@@ -85,7 +86,10 @@ func observeForgeRepository(t *testing.T, upstream, remote string) string {
 
 	h := newHome(t)
 	subject := newSubject(t)
-	git(t, subject, "remote", "add", "origin", remote)
+	// newSubject gives the checkout an origin of its own, and this test is
+	// about the run ignoring it, so the ambient remote replaces that one rather
+	// than being added beside it.
+	git(t, subject, "remote", "set-url", "origin", remote)
 	recordRepositoryWithUpstream(t, h, subject, upstream)
 
 	seen := make(chan string, 1)
@@ -99,7 +103,10 @@ func observeForgeRepository(t *testing.T, upstream, remote string) string {
 	var got string
 	var read bool
 	withServiceOptions(t, opts, func(under serviceUnderTest) {
-		startRun(t, under.client, subject)
+		// Only the first stage is under test here, and every stage after it
+		// would reach for the upstream this record names, which is a real code
+		// host. Skipping them keeps this test off the network.
+		startRunSkipping(t, under.client, subject, afterIntent()...)
 		select {
 		case got, read = <-seen:
 		default:
@@ -154,5 +161,15 @@ func recordRepositoryWithUpstream(t *testing.T, h *home.Home, workingPath, upstr
 		DefaultBranch: "main",
 	}); err != nil {
 		t.Fatalf("recording the repository: %v", err)
+	}
+	// The gate is the other half of what assistant init writes, and a run
+	// cannot start without one: its isolated copy is cut from the gate's
+	// repository. recordRepository says the same thing at more length.
+	if _, err := gate.Initialize(t.Context(), gate.Spec{
+		Home:        h.Root(),
+		WorkingPath: workingPath,
+		Command:     testCommand(t),
+	}, gate.WithIndex(records)); err != nil {
+		t.Fatalf("initializing the gate: %v", err)
 	}
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/agents/standin"
 	"github.com/dayamjz/assistant/internal/config"
+	"github.com/dayamjz/assistant/internal/gate"
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
@@ -99,7 +100,15 @@ func git(t *testing.T, dir string, args ...string) string {
 	return strings.TrimSpace(string(out))
 }
 
-// newSubject returns a working copy with one commit on its default branch.
+// newSubject returns a working copy with one commit on its default branch, and
+// an upstream it can reach.
+//
+// The upstream is a bare repository beside it rather than a URL nobody can
+// resolve. A run walks the rebase stage, and that body fetches the branch and
+// the base from the upstream the repository record names: against an
+// unreachable one every test here would be watching a network failure rather
+// than the service it is about. It is local so that nothing in this package
+// reaches the network.
 func newSubject(t *testing.T) string {
 	t.Helper()
 	dir, err := os.MkdirTemp("", "s")
@@ -113,6 +122,17 @@ func newSubject(t *testing.T) string {
 	}
 	git(t, dir, "add", "-A")
 	git(t, dir, "commit", "--quiet", "-m", "first")
+	upstream, err := os.MkdirTemp("", "u")
+	if err != nil {
+		t.Fatalf("making an upstream repository: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(upstream) })
+	git(t, upstream, "init", "--quiet", "--bare", "-b", "main", ".")
+	// The remote is named origin because that is what assistant init reads an
+	// upstream out of, so a test subject carries the same fact the product
+	// derives one from rather than one arranged some other way.
+	git(t, dir, "remote", "add", "origin", upstream)
+	git(t, dir, "push", "--quiet", "origin", "main")
 	// The path a repository record is filed under is the resolved one, which
 	// is what the service compares against.
 	resolved, err := filepath.EvalSymlinks(dir)
@@ -127,8 +147,14 @@ func writeFile(path, content string) error {
 	return os.WriteFile(path, []byte(content), 0o600)
 }
 
-// recordRepository writes the repository record a run needs, which assistant
-// init writes in the product.
+// recordRepository writes what assistant init writes for a working copy: the
+// repository record a run is of, and the gate it is validated through.
+//
+// Both halves are here because both are what the product produces. A run needs
+// a gate - its isolated copy is cut from the gate's repository - so a setup
+// that recorded only the repository would be arranging a state assistant init
+// never leaves behind, and every test built on it would be driving the service
+// through a door the product does not have.
 func recordRepository(t *testing.T, h *home.Home, workingPath string) store.Repository {
 	t.Helper()
 	if err := h.Create(); err != nil {
@@ -140,15 +166,40 @@ func recordRepository(t *testing.T, h *home.Home, workingPath string) store.Repo
 	}
 	defer func() { _ = records.Close() }()
 	repository, err := records.UpsertRepository(t.Context(), store.Repository{
-		ID:            "subject",
-		WorkingPath:   workingPath,
-		UpstreamURL:   "https://example.invalid/o/r.git",
+		ID:          "subject",
+		WorkingPath: workingPath,
+		// Read off the working copy's own origin, which is where assistant
+		// init reads it from, so the record says what the product would have
+		// recorded for this subject.
+		UpstreamURL:   git(t, workingPath, "remote", "get-url", "origin"),
 		DefaultBranch: "main",
 	})
 	if err != nil {
 		t.Fatalf("recording the repository: %v", err)
 	}
+	if _, err := gate.Initialize(t.Context(), gate.Spec{
+		Home:        h.Root(),
+		WorkingPath: workingPath,
+		// The hooks are written but never fire here: nothing in these tests
+		// pushes to the gate, and what they need out of it is the repository
+		// its runs are cut from. The command still has to be one, because
+		// initializing refuses a gate whose hooks would name nothing.
+		Command: testCommand(t),
+	}, gate.WithIndex(records)); err != nil {
+		t.Fatalf("initializing the gate: %v", err)
+	}
 	return repository
+}
+
+// testCommand is an absolute path to an executable, which is what a gate's
+// hooks are written to invoke. This binary is one.
+func testCommand(t *testing.T) string {
+	t.Helper()
+	command, err := os.Executable()
+	if err != nil {
+		t.Fatalf("finding this test binary: %v", err)
+	}
+	return command
 }
 
 // scriptedAgent is a catalog holding the scripted stand-in under the name the
@@ -179,7 +230,7 @@ func options(t *testing.T, h *home.Home) service.Options {
 	return service.Options{
 		Home:      h,
 		NewStages: stages.All,
-		NewFixer:  stages.PendingFixer,
+		NewFixer:  stages.Fix,
 		Build:     build,
 		Catalog:   scriptedAgent(t),
 		// Ask for the home's lock once and refuse rather than waiting. A test
@@ -217,21 +268,23 @@ func startRun(t *testing.T, client *ipc.Client, workingPath string) machine.Run 
 // startRunSkipping starts a run that does not take the named stages.
 //
 // It exists for the one thing these tests cannot walk a run through: a stage
-// body that fails rather than holds because what it needs is not there.
-// Nothing here creates a run's isolated copy, so the review stage's body
-// fails on opening it, and the subject repository's record names no
-// repository on a code host this build talks to, so the pull request stage's
-// body fails on opening a provider. A test that walks a run from one hold to
-// the next has to go around those stages.
+// body that fails rather than holds because what it needs is not there. The
+// subject repository's record names no repository on a code host this build
+// talks to, so the pull request stage's body fails on opening a provider. A
+// test that walks a run from one hold to the next has to go around that stage.
+//
+// The isolated copy is no longer one of those reasons. internal/service builds
+// a run one, so the review stage's body opens it like any other; what a test
+// skipping review is going around now is the agent it would call, not a copy
+// that was never there.
 //
 // The skip is a run input, which PRD principle P2 makes a person's per-run
 // choice, so this drives the surface a person would drive rather than
 // weakening what the stage does or what the walk demonstrates.
 //
 // It names each stage rather than deriving it, and a name goes away when the
-// run it starts can give that stage's body what it is missing: the isolated
-// copy a run works in for review, a repository on the code host for the pull
-// request stage.
+// run it starts can give that stage's body what it is missing: a repository on
+// the code host for the pull request stage.
 func startRunSkipping(t *testing.T, client *ipc.Client, workingPath string, skip ...pipeline.Stage) machine.Run {
 	t.Helper()
 	names := make([]string, len(skip))
@@ -439,4 +492,16 @@ func homeIsFree(t *testing.T, h *home.Home) {
 	if err := held.Release(); err != nil {
 		t.Fatalf("releasing the home lock: %v", err)
 	}
+}
+
+// afterIntent is every stage a run takes after the first one, derived from
+// internal/pipeline's order rather than listed here.
+//
+// A test that named them would be a second list of the nine, and PRD principle
+// P2 puts that list in one place. It would also go quietly wrong the next time
+// a stage was added: the new stage would run in a test that meant to skip
+// everything.
+func afterIntent() []pipeline.Stage {
+	order := pipeline.Order()
+	return append([]pipeline.Stage(nil), order[1:]...)
 }
