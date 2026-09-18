@@ -40,6 +40,11 @@ const (
 	// exitNoUse is a use of a bounded step this stand-in could not claim, so
 	// it does not know whether the step was still free to answer with.
 	exitNoUse = 8
+	// exitNoDemand is a review reply for an invocation whose prompt carries no
+	// evidence demand, so there is no commit for the report to name. It is
+	// distinct from ExitUnscripted because a step did answer this invocation;
+	// what it could not do is complete the answer.
+	exitNoDemand = 9
 )
 
 // Main runs this process as the stand-in agent when it was started as one, and
@@ -182,7 +187,28 @@ func choose(control string, script Script, call Call) (int, error) {
 // own rather than being ignored, because standard output is the whole of what
 // this process is for. Padding is written in blocks so a reply that exceeds
 // the adapter's output limit costs one buffer rather than its whole size.
+//
+// A review reply is completed before anything is printed, because a prompt it
+// cannot read a revision out of ends the invocation and printing half of one
+// first would leave the adapter reading output the reply never finished.
 func emit(reply Reply, call Call) int {
+	if reply.Review != nil {
+		result, err := reviewResult(*reply.Review, call.Prompt)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "standin: this step answers with a review of the commit the "+
+				"invocation asked about, and "+err.Error())
+			return exitNoDemand
+		}
+		if reply.Envelope == nil {
+			// Nothing here builds such a reply, and a caller that wrote one by
+			// hand gets the envelope-less output failure rather than a silently
+			// discarded review.
+			return exitNoOutput
+		}
+		envelope := *reply.Envelope
+		envelope.Result = result
+		reply.Envelope = &envelope
+	}
 	if reply.Stderr != "" {
 		if _, err := io.WriteString(os.Stderr, reply.Stderr); err != nil {
 			// There is nowhere left to say so, since standard error is what

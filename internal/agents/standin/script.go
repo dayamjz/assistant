@@ -136,6 +136,17 @@ type Reply struct {
 	// reply exceeds the adapter's output limit without a script carrying
 	// megabytes of text.
 	Pad int64 `json:"pad,omitempty"`
+	// Review is a review report the stand-in completes with the revision the
+	// invocation's own evidence demand named, and then encodes as the
+	// envelope's result. Review sets it; review.go says why a review report is
+	// the one answer a script cannot state in full.
+	//
+	// It replaces Envelope.Result rather than adding to it, and it needs an
+	// Envelope to write into: a Reply carrying one and no envelope prints
+	// nothing, which is the same output failure any other envelope-less reply
+	// produces. An invocation whose prompt carries no evidence demand is not
+	// answered at all; the stand-in exits with exitNoDemand saying so.
+	Review *findings.Report `json:"review,omitempty"`
 	// Stderr is printed on standard error, where the adapter keeps it as the
 	// message on an *agents.InvocationError.
 	Stderr string `json:"stderr,omitempty"`
@@ -159,13 +170,22 @@ func (r Reply) WithStderr(text string) Reply { r = r.own(); r.Stderr = text; ret
 // invocation answered by it ends on its context rather than on the agent.
 func (r Reply) WithHold(d time.Duration) Reply { r = r.own(); r.Hold = d; return r }
 
-// own returns the reply with an envelope of its own, so a reply derived from
-// another can be adjusted through Envelope without reaching the one it came
-// from. Every other field is already a value the copy owns.
+// own returns the reply with an envelope and a review report of its own, so a
+// reply derived from another can be adjusted through either without reaching
+// the one it came from.
+//
+// Both are copied one level deep, which is as far as adjusting them reaches: a
+// field set through either is set on the copy alone. A slice inside one is
+// still shared, so appending to a copied report's findings appends to the
+// original's too; nothing here derives a reply that way.
 func (r Reply) own() Reply {
 	if r.Envelope != nil {
 		envelope := *r.Envelope
 		r.Envelope = &envelope
+	}
+	if r.Review != nil {
+		review := *r.Review
+		r.Review = &review
 	}
 	return r
 }
@@ -195,6 +215,26 @@ func Report(r findings.Report) Reply {
 func Prose(intro string, r findings.Report) Reply {
 	body := Report(r)
 	return Text(intro + "\n\n```json\n" + body.Envelope.Result + "\n```\n")
+}
+
+// Review replies with a well-formed envelope carrying r, completed with the
+// commit the invocation's own evidence demand named.
+//
+// It is Report for the review stage, where a report stated in full cannot be
+// written: internal/findings refuses a review report whose revision is not the
+// commit the run asked about, and a script is written before that commit
+// exists. Everything else about the report is the caller's and is answered
+// unchanged - a report with findings, one declaring what it read, one with
+// nothing to say - so what this decides is the revision alone. review.go owns
+// how it is found and what it costs.
+//
+// An invocation whose prompt carries no evidence demand is not answered with
+// this. The stand-in says so on standard error and exits non-zero, which the
+// adapter reports as the agent failing, because a review of a commit nobody
+// asked about is worse than no answer: internal/findings would refuse it whole
+// and the caller would be reading a refusal it did not script.
+func Review(r findings.Report) Reply {
+	return Reply{Review: &r, Envelope: &Envelope{Usage: DefaultUsage()}}
 }
 
 // Text replies with a well-formed envelope carrying result. It is the answer

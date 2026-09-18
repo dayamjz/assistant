@@ -5,6 +5,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -544,5 +546,134 @@ func waitForCalls(t *testing.T, agent *Agent, n int) {
 			t.Fatalf("the stand-in recorded %d calls, waited for %d", len(agent.Calls()), n)
 		}
 		time.Sleep(time.Millisecond)
+	}
+}
+
+// The two commits a review reply is measured against. Neither is a commit any
+// repository here holds, and that is the point: what a review has to report is
+// the commit the invocation named, and the second is what a script would have
+// had to guess at.
+const (
+	askedAboutCommit = "8f0f1b6f3f5a4c2d9e7b0a1c3d5e7f9a1b3c5d7e"
+	someOtherCommit  = "1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d"
+)
+
+// reviewDemand is the evidence demand a review invocation carries, and
+// reviewInvocation is the invocation the review stage makes: the demand's own
+// guidance is in the prompt, which is where the reviewer - and the stand-in -
+// is told which commit to report.
+func reviewDemand() findings.Demand {
+	return findings.Demand{Revision: askedAboutCommit, Touched: []string{"total.go", "README.md"}}
+}
+
+func reviewInvocation(t *testing.T, demand findings.Demand) agents.Invocation {
+	t.Helper()
+	guidance, err := demand.Guidance()
+	if err != nil {
+		t.Fatalf("building the evidence guidance the prompt carries: %v", err)
+	}
+	return agents.Invocation{
+		Prompt: "Review this change, independently.\n\n" + guidance,
+		Shape:  agents.ShapeReview,
+		Review: demand,
+		Dir:    t.TempDir(),
+	}
+}
+
+// Review answers with the commit the invocation asked about, which is the one
+// thing about a review report a script cannot state: internal/findings refuses
+// a report naming any other commit, findings and all, and a script is written
+// before the run whose commit it would have to name exists.
+//
+// The refusal is driven alongside so this shows Review doing something. A
+// report whose revision the script stated is refused by the same binding, over
+// the same invocation, so what carries the first half is the completion and
+// not some looseness in what the binding accepts.
+func TestAReviewReplyReportsTheCommitTheInvocationAskedAbout(t *testing.T) {
+	demand := reviewDemand()
+	reviewed := findings.Report{
+		Summary: "One pass over the change. Nothing to report.",
+		Read:    findings.Paths{"total.go", "README.md"},
+	}
+
+	completed := New(t, oneStep(Review(reviewed)))
+	result, err := completed.Runner().Run(t.Context(), agents.PurposeReview, reviewInvocation(t, demand))
+	if err != nil {
+		t.Fatalf("running a review reply: %v", err)
+	}
+	if result.Report.Revision != askedAboutCommit {
+		t.Errorf("the review reports revision %q, want the commit the invocation asked about, %q",
+			result.Report.Revision, askedAboutCommit)
+	}
+	if result.Report.Summary != reviewed.Summary {
+		t.Errorf("the review's summary is %q, want the one the script stated", result.Report.Summary)
+	}
+	if !slices.Equal([]string(result.Binding.Read), []string(reviewed.Read)) {
+		t.Errorf("the review declared reading %v, want what the script stated, %v",
+			result.Binding.Read, reviewed.Read)
+	}
+
+	stated := reviewed
+	stated.Revision = someOtherCommit
+	guessed := New(t, oneStep(Report(stated)))
+	_, err = guessed.Runner().Run(t.Context(), agents.PurposeReview, reviewInvocation(t, demand))
+	if got := failureOf(t, err); got != agents.FailureOutput {
+		t.Fatalf("a review naming a commit the invocation did not ask about came back %q, want %q; "+
+			"the completion above therefore shows nothing", got, agents.FailureOutput)
+	}
+}
+
+// A review reply to an invocation that asked for no review has no commit to
+// report, and the stand-in refuses rather than answering with one it invented.
+// A report naming a commit nobody asked about is refused whole by
+// internal/findings, so a caller would be reading a refusal it never scripted.
+func TestAReviewReplyToAnInvocationThatDemandedNoReviewFails(t *testing.T) {
+	agent := New(t, oneStep(Review(findings.Report{Summary: "nothing to report"})))
+
+	_, err := agent.Runner().Run(t.Context(), agents.PurposeReview, invocation(t, agents.ShapeReport))
+	if got := failureOf(t, err); got != agents.FailureExit {
+		t.Fatalf("a review reply to a prompt carrying no evidence demand came back %q, want %q",
+			got, agents.FailureExit)
+	}
+	var refusal *agents.InvocationError
+	if !errors.As(err, &refusal) {
+		t.Fatalf("expected an *agents.InvocationError, got %v", err)
+	}
+	if !strings.Contains(refusal.Message, "no evidence demand") {
+		t.Errorf("the refusal does not say what it could not find: %q", refusal.Message)
+	}
+}
+
+// The anchors this reads a revision by come from findings.Demand.Guidance
+// itself, so a reworded demand fails here rather than silently reading
+// nothing. This is that read asked directly, over a prompt built the way the
+// review stage builds one and over three prompts that carry no revision to
+// find.
+func TestTheRevisionIsReadOutOfTheDemandTheStageWrote(t *testing.T) {
+	demand := reviewDemand()
+	guidance, err := demand.Guidance()
+	if err != nil {
+		t.Fatalf("building the evidence guidance: %v", err)
+	}
+	got, err := revisionAskedAbout("Review this change.\n\n" + guidance)
+	if err != nil {
+		t.Fatalf("reading the revision out of a prompt the stage would have written: %v", err)
+	}
+	if got != askedAboutCommit {
+		t.Errorf("read revision %q, want %q", got, askedAboutCommit)
+	}
+
+	around, err := demandAnchors()
+	if err != nil {
+		t.Fatalf("deriving the anchors: %v", err)
+	}
+	for _, c := range []struct{ what, prompt string }{
+		{"a prompt with no evidence demand in it at all", "Have a look at this and tell me what you think."},
+		{"a demand whose sentence is never finished", "Review this.\n\n" + around.lead + askedAboutCommit},
+		{"a demand that asks for a revision and names none", "Review this.\n\n" + around.lead + around.trail},
+	} {
+		if _, err := revisionAskedAbout(c.prompt); !errors.Is(err, errNoDemand) {
+			t.Errorf("%s was read as naming a revision: %v", c.what, err)
+		}
 	}
 }

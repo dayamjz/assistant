@@ -108,4 +108,19 @@
 // It is not a model of any agent's behavior. It answers what it was scripted
 // to answer and nothing else; an invocation no step matches exits with
 // ExitUnscripted rather than being given a default nobody wrote.
+//
+// # The one answer a script cannot state in full
+//
+// A review report has to name the commit the run asked about, and
+// internal/findings refuses one that names any other, findings and all. A
+// script is written before that commit exists, so Review states everything but
+// the revision and the stand-in fills it in from the prompt, which is where a
+// reviewer is told the same thing. That keeps the bound above: the bytes are
+// still a report an agent could have printed, and the adapter still reads them
+// the way it reads a real one.
+//
+// Where the revision sits in the prompt is derived from
+// findings.Demand.Guidance rather than spelled out, so a reworded demand fails
+// here naming what it could not find instead of quietly reading nothing;
+// review.go owns that and what it leaves open.
 package standin
