@@ -233,13 +233,11 @@
 // which is refused with ipc.ErrContained. And it has no producer in this
 // build: nothing calls StageStarted. The intent body starts no process, the
 // pull request body launches only internal/forge's provider command and
-// nothing on that path calls StageStarted either, and the review body, the
-// one that does launch an agent, launches through the
-// agents.StageAgent seam, and nothing on that path records the process group
-// here - not that a run reaches its launch, since that body opens the run's
-// isolated copy first and nothing in this build creates one; and the test
-// body starts the configured command, and nothing on that path records a
-// group here either. So the registry is empty and nothing is contained today. What that costs is stated rather
+// nothing on that path calls StageStarted either, the review body launches an
+// agent through the agents.StageAgent seam and nothing on that path records
+// the process group here, and the test, document and lint bodies start the
+// configured command and nothing on those paths records a group here either.
+// So the registry is empty and nothing is contained today. What that costs is stated rather
 // than implied: until a stage launcher
 // calls StageStarted, containment protects nothing. The alternative, refusing
 // every restricted call until then, is a service nobody can drive.

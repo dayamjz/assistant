@@ -3,7 +3,10 @@ package service
 import (
 	"context"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -12,6 +15,7 @@ import (
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/agents/standin"
 	"github.com/dayamjz/assistant/internal/findings"
+	"github.com/dayamjz/assistant/internal/gate"
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/pipeline"
@@ -93,6 +97,11 @@ type heldService struct {
 	// returned is closed when the segment that begins the run has returned,
 	// which is after its own carryOn has decided.
 	returned chan struct{}
+	// head is the commit the subject stands on, which is what a run of it
+	// validates. A run is given a copy of its own before it walks anything,
+	// and that copy is cut at this commit, so a run naming one the subject
+	// does not hold never reaches a stage body at all.
+	head string
 }
 
 // begin starts a run and returns its record once the segment advancing it is
@@ -102,7 +111,7 @@ func (h *heldService) begin(t *testing.T) store.Run {
 	record, err := h.service.create(t.Context(), run{
 		repository: "subject",
 		branch:     "main",
-		head:       "0000000000000000000000000000000000000000",
+		head:       h.head,
 		intent:     "held open for the length of an ending",
 		source:     intentSourceSupplied,
 		supplied:   true,
@@ -110,20 +119,28 @@ func (h *heldService) begin(t *testing.T) store.Run {
 	if err != nil {
 		t.Fatalf("recording a run: %v", err)
 	}
+	begun := make(chan error, 1)
 	go func() {
 		defer close(h.returned)
 		// The context is the service's own, so nothing about this goroutine
 		// going away ends the segment: what ends it is the ending under test.
-		_, _ = h.service.begin(context.WithoutCancel(t.Context()), record, pipeline.Start{
+		_, err := h.service.begin(context.WithoutCancel(t.Context()), record, pipeline.Start{
 			Branch:         record.Branch,
 			Base:           "main",
 			Submitted:      record.SubmittedHead,
 			Intent:         record.Intent,
 			IntentSupplied: true,
 		})
+		begun <- err
 	}()
 	select {
 	case <-h.inside:
+	case err := <-begun:
+		// A segment that returned without ever entering the body failed before
+		// the graph, and the failure it returned is the only thing that says
+		// why. Reporting it here is the difference between naming the cause and
+		// waiting out the deadline below for a body nothing was going to reach.
+		t.Fatalf("the segment returned without reaching the stage body: %v", err)
 	case <-time.After(30 * time.Second):
 		t.Fatal("the run never reached the stage body")
 	}
@@ -252,15 +269,93 @@ func newHeldService(t *testing.T) *heldService {
 	// teardown waiting on a stage nothing is going to release.
 	t.Cleanup(held.let)
 
+	// A working copy and a gate, because a run is given an isolated copy
+	// before it walks anything: the service cuts that copy from the gate's
+	// repository, after fetching the commit the run validates out of the
+	// working copy the record names. A record naming a directory with no
+	// commits, or a repository bound to no gate, is a run that never reaches a
+	// stage body, which is the whole of what these tests hold open.
+	subject, head := newSubjectRepository(t)
+	held.head = head
 	if _, err := running.store.UpsertRepository(t.Context(), store.Repository{
 		ID:            "subject",
-		WorkingPath:   root,
-		UpstreamURL:   "https://example.invalid/o/r.git",
+		WorkingPath:   subject,
+		UpstreamURL:   gitIn(t, subject, "remote", "get-url", "origin"),
 		DefaultBranch: "main",
 	}); err != nil {
 		t.Fatalf("recording the repository: %v", err)
 	}
+	command, err := os.Executable()
+	if err != nil {
+		t.Fatalf("finding this test binary, which is what a gate's hooks are written to invoke: %v", err)
+	}
+	if _, err := gate.Initialize(t.Context(), gate.Spec{
+		Home:        h.Root(),
+		WorkingPath: subject,
+		Command:     command,
+	}, gate.WithIndex(running.store)); err != nil {
+		t.Fatalf("initializing the gate a run's copy is cut from: %v", err)
+	}
 	return held
+}
+
+// newSubjectRepository is a working copy with a commit and a local upstream,
+// and the commit it stands on.
+//
+// It is a second subject builder beside the one in helpers_test.go because
+// that one belongs to this package's external test package and nothing in this
+// one can reach it. What both have to produce is the same: a repository record
+// naming a real working copy, so the commit a run validates can be fetched out
+// of it, and a local upstream so nothing here reaches the network.
+func newSubjectRepository(t *testing.T) (path, head string) {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "s")
+	if err != nil {
+		t.Fatalf("making a subject repository: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	upstream, err := os.MkdirTemp("", "u")
+	if err != nil {
+		t.Fatalf("making an upstream repository: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(upstream) })
+
+	gitIn(t, dir, "init", "--quiet", "-b", "main", ".")
+	if err := os.WriteFile(filepath.Join(dir, "file.txt"), []byte("hello\n"), 0o600); err != nil {
+		t.Fatalf("writing a file: %v", err)
+	}
+	gitIn(t, dir, "add", "-A")
+	gitIn(t, dir, "commit", "--quiet", "-m", "first")
+	gitIn(t, upstream, "init", "--quiet", "--bare", "-b", "main", ".")
+	gitIn(t, dir, "remote", "add", "origin", upstream)
+	gitIn(t, dir, "push", "--quiet", "origin", "main")
+
+	resolved, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatalf("resolving the subject path: %v", err)
+	}
+	return resolved, gitIn(t, dir, "rev-parse", "HEAD")
+}
+
+// gitIn runs a git command and fails the test when it fails. It shells out on
+// the same terms internal/vcs's and internal/gate's own test helpers do: a
+// working copy assembled with the code under test could not show that code
+// wrong.
+func gitIn(t *testing.T, dir string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(),
+		"GIT_CONFIG_GLOBAL="+filepath.Join(dir, ".gitconfig-absent"),
+		"GIT_CONFIG_SYSTEM="+filepath.Join(dir, ".gitconfig-absent"),
+		"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@example.invalid",
+		"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@example.invalid",
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s in %s: %v\n%s", strings.Join(args, " "), dir, err, out)
+	}
+	return strings.TrimSpace(string(out))
 }
 
 // fixedRunner hands back a Runner somebody else built, so nothing here can

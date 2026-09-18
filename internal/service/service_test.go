@@ -30,7 +30,7 @@ func TestARunSurvivesTheProcessThatStartedItAndIsAnsweredByAnother(t *testing.T)
 
 	var runID string
 	withService(t, h, func(running serviceUnderTest) {
-		run := startRunSkipping(t, running.client, subject, pipeline.StageReview)
+		run := startRun(t, running.client, subject)
 		holdingAt(t, run, holdingStage(t, 0))
 		runID = run.Record.ID
 		if run.Record.Status != store.RunHeld {
@@ -72,14 +72,18 @@ func TestARunSurvivesTheProcessThatStartedItAndIsAnsweredByAnother(t *testing.T)
 // A run answered through to the end completes, and what it ends as is one of
 // the outcomes a driving agent is written against.
 //
-// The run skips the review and pull request stages, because each body fails
-// rather than holds on what this run cannot give it: the review body reads
-// the run's isolated copy, which nothing here creates, and the pull request
-// body opens a provider on the repository the run's record names on the code
-// host, which this subject's record does not name. A run that took either
-// could not reach the end however it was answered. What the skip costs this
-// test is those stages, and what it keeps is everything else of the walk,
-// which is the part no other test reaches.
+// The run skips the pull request stage alone, because that body fails rather
+// than holds on what this run cannot give it: it opens a provider on the
+// repository the run's record names on the code host, and this subject's
+// record names none, so a run that took it could not reach the end however it
+// was answered. Every other stage is walked, review and push among them.
+//
+// Those two are held to having passed on their own, because the loop below
+// answers every decision: a run whose review held for want of an answer, or
+// whose push held for want of a completed review to forward, would reach the
+// end here too, and this would be reporting a walk in which neither stage
+// established anything. Passing is what says the review came back clean and
+// that the commit really was forwarded to the subject's upstream.
 func TestARunAnsweredThroughToTheEndCompletes(t *testing.T) {
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
@@ -87,7 +91,7 @@ func TestARunAnsweredThroughToTheEndCompletes(t *testing.T) {
 	recordRepository(t, h, subject)
 
 	withService(t, h, func(running serviceUnderTest) {
-		run := startRunSkipping(t, running.client, subject, pipeline.StageReview, pipeline.StagePR)
+		run := startRunSkipping(t, running.client, subject, pipeline.StagePR)
 		for run.Outcome == machine.OutcomeDecision {
 			run = answer(t, running.client, run.Record.ID, string(pipeline.OutcomeApproved))
 		}
@@ -99,6 +103,14 @@ func TestARunAnsweredThroughToTheEndCompletes(t *testing.T) {
 		}
 		if run.Position != "" {
 			t.Fatalf("a completed run stands at %q", run.Position)
+		}
+		for _, stage := range []pipeline.Stage{pipeline.StageReview, pipeline.StagePush} {
+			view := stageView(t, run, stage)
+			if !view.Ran || view.Outcome != pipeline.OutcomePassed {
+				t.Fatalf("the %s stage came back ran=%t, %s; want a stage that passed on its own, "+
+					"because this loop answers every hold and a stage that held would reach the end too",
+					stage, view.Ran, view.Outcome)
+			}
 		}
 	})
 }
@@ -343,7 +355,7 @@ func TestRecoveryReconcilesARecordAgainstItsCheckpoint(t *testing.T) {
 
 	var runID string
 	withService(t, h, func(running serviceUnderTest) {
-		runID = startRunSkipping(t, running.client, subject, pipeline.StageReview).Record.ID
+		runID = startRun(t, running.client, subject).Record.ID
 	})
 
 	// Put the record back where a service that died between the halt and the

@@ -13,6 +13,7 @@ import (
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/agents/standin"
 	"github.com/dayamjz/assistant/internal/config"
+	"github.com/dayamjz/assistant/internal/findings"
 	"github.com/dayamjz/assistant/internal/gate"
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/ipc"
@@ -100,8 +101,8 @@ func git(t *testing.T, dir string, args ...string) string {
 	return strings.TrimSpace(string(out))
 }
 
-// newSubject returns a working copy with one commit on its default branch, and
-// an upstream it can reach.
+// newSubject returns a working copy with a change to validate on its default
+// branch, and an upstream it can reach.
 //
 // The upstream is a bare repository beside it rather than a URL nobody can
 // resolve. A run walks the rebase stage, and that body fetches the branch and
@@ -109,6 +110,13 @@ func git(t *testing.T, dir string, args ...string) string {
 // unreachable one every test here would be watching a network failure rather
 // than the service it is about. It is local so that nothing in this package
 // reaches the network.
+//
+// The second commit is not pushed to that upstream, and it is what makes this
+// a subject a run has something to do with. PRD section 5 ends a run
+// successfully at the rebase stage when nothing remains to change, and a
+// working copy standing exactly where its upstream stands is that case: every
+// run of it would complete at the second stage, and every test below that
+// answers a hold would be answering a run that finished before it reached one.
 func newSubject(t *testing.T) string {
 	t.Helper()
 	dir, err := os.MkdirTemp("", "s")
@@ -133,6 +141,11 @@ func newSubject(t *testing.T) string {
 	// derives one from rather than one arranged some other way.
 	git(t, dir, "remote", "add", "origin", upstream)
 	git(t, dir, "push", "--quiet", "origin", "main")
+	if err := os.WriteFile(filepath.Join(dir, "file.txt"), []byte("hello, and a change to validate\n"), 0o600); err != nil {
+		t.Fatalf("writing the change a run validates: %v", err)
+	}
+	git(t, dir, "add", "-A")
+	git(t, dir, "commit", "--quiet", "-m", "a change to validate")
 	// The path a repository record is filed under is the resolved one, which
 	// is what the service compares against.
 	resolved, err := filepath.EvalSymlinks(dir)
@@ -206,8 +219,38 @@ func testCommand(t *testing.T) string {
 // production adapter carries, so a service resolving "auto" reaches it.
 func scriptedAgent(t *testing.T) *agents.Catalog {
 	t.Helper()
-	runner := standin.New(t, standin.Script{}).Runner()
+	runner := standin.New(t, reviewScript()).Runner()
 	return agents.NewCatalog(fixedFactory{runner: runner})
+}
+
+// reviewScript is what the stand-in answers every invocation a run of these
+// tests makes, which today is the review stage's one call.
+//
+// A run has to get past that stage for anything below to be about the service:
+// an unanswered review is a stage that established nothing, which P3 holds for
+// a person, so every test here would be reading a decision the review stage
+// raised rather than the one it meant to reach. The reviewer answers cleanly
+// because what this package's tests are about is where a run stops and how it
+// is answered, not what a review finds; internal/stages' own tests are where a
+// report's content decides anything.
+//
+// The report names no revision, and that is standin.Review's whole point: the
+// commit a review is bound to is the run's, and no test here knows it when the
+// script is written - the runs that make their own branches create it after
+// this. The stand-in fills it in from the invocation.
+//
+// It answers every invocation rather than matching the review's prompt. An
+// invocation of any other shape would be answered with a review it has no
+// evidence demand for, which the stand-in refuses loudly, so a body that
+// started calling an agent shows up here as a failure rather than as a
+// scripted answer nobody wrote for it.
+func reviewScript() standin.Script {
+	return standin.Script{Steps: []standin.Step{{
+		Times: standin.Always,
+		Reply: standin.Review(findings.Report{
+			Summary: "One pass over the change. Nothing to report.",
+		}),
+	}}}
 }
 
 // fixedFactory hands back a Runner somebody else built. It builds no Runner of
@@ -273,10 +316,12 @@ func startRun(t *testing.T, client *ipc.Client, workingPath string) machine.Run 
 // talks to, so the pull request stage's body fails on opening a provider. A
 // test that walks a run from one hold to the next has to go around that stage.
 //
-// The isolated copy is no longer one of those reasons. internal/service builds
-// a run one, so the review stage's body opens it like any other; what a test
-// skipping review is going around now is the agent it would call, not a copy
-// that was never there.
+// Neither the isolated copy nor the review stage is one of those reasons any
+// more. internal/service builds a run its copy, so the review body opens it
+// like any other, and reviewScript answers the one invocation it makes, so a
+// run takes review and passes it. A test that still skips review does so
+// because its subject is a walk over the stages a person answers, and it says
+// so where it asks.
 //
 // The skip is a run input, which PRD principle P2 makes a person's per-run
 // choice, so this drives the surface a person would drive rather than
@@ -342,10 +387,10 @@ func holdingAt(t *testing.T, run machine.Run, stage pipeline.Stage) machine.Deci
 // tests build write no commands.* into their configuration documents, so the
 // runs resolve none either; a test that starts configuring one breaks that
 // premise loudly, since its run then stops somewhere this did not derive. The
-// review stage never appears here: it holds under no configuration, and the
-// walks these tests drive skip it besides, so a stage both holding and
-// skipped would need this helper taught about skips before it could stay
-// right.
+// review stage never appears here and is never a stop of these runs either:
+// it holds under no configuration, and reviewScript answers the invocation it
+// makes, so it passes. A run that stopped there would fail every caller of
+// this helper by name rather than quietly shifting what each index means.
 func holdingStage(t *testing.T, n int) pipeline.Stage {
 	t.Helper()
 	pending := stages.Holding(config.Defaults())

@@ -170,9 +170,10 @@ func TestTheSeamTheServiceBuildsCarriesItsHomeAndTheRedactorItChose(t *testing.T
 			deps.Home.Root(), h.Root())
 	}
 
-	// Copy opens and never creates, and nothing in this build creates one, so
-	// the copy this reads through is made here at the path the home names for
-	// it rather than by asking the product for something it does not do yet.
+	// Copy opens and never creates: the service builds a run its copy before
+	// the run walks anything, and this test drives the seam rather than a run.
+	// So the copy this reads through is made here at the path the home names
+	// for it, which is the same path a run's would stand at.
 	const repositoryID, runID = "subject", "seam-under-test"
 	copyPath := h.Worktree(repositoryID, runID)
 	if err := os.MkdirAll(copyPath, 0o700); err != nil {
