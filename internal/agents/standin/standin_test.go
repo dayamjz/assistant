@@ -608,7 +608,7 @@ func TestAReviewReplyReportsTheCommitTheInvocationAskedAbout(t *testing.T) {
 	if result.Report.Summary != reviewed.Summary {
 		t.Errorf("the review's summary is %q, want the one the script stated", result.Report.Summary)
 	}
-	if !slices.Equal([]string(result.Binding.Read), []string(reviewed.Read)) {
+	if !slices.Equal(result.Binding.Read, reviewed.Read) {
 		t.Errorf("the review declared reading %v, want what the script stated, %v",
 			result.Binding.Read, reviewed.Read)
 	}
