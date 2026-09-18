@@ -192,6 +192,14 @@ func newFixRun(t *testing.T, reply standin.Reply) *fixRun {
 
 	source := t.TempDir()
 	git(t, source, "init", "--quiet", "-b", "main")
+	// The round's commit is made by the product, under whatever identity the
+	// environment provides - vcs.CommitAll's contract - so the subject carries
+	// one in its own configuration the way a person's clone does. The test
+	// helper's environment only covers the commands the test itself runs, and
+	// a machine with no global identity (CI among them) fails the product's
+	// commit without this.
+	git(t, source, "config", "user.name", "test")
+	git(t, source, "config", "user.email", "test@example.invalid")
 	write(t, source, "total.go", "package subject\n")
 	git(t, source, "add", ".")
 	git(t, source, "commit", "--quiet", "-m", "the change under validation")
