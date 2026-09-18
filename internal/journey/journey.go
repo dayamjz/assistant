@@ -725,13 +725,35 @@ func (j *Journey) Database() (string, error) {
 // The subject is left standing. It is the fixture's, this journey only pointed
 // at it, and a harness that removed it would take the evidence of what a run
 // did along with it.
+//
+// The removal retries, bounded, because killing the service reaches that one
+// process and nothing it spawned: a git invocation a run had in flight - the
+// fetch or worktree add that builds the run's isolated copy under repos/ -
+// survives the kill briefly and can recreate entries while RemoveAll walks,
+// which surfaces as "directory not empty". Such an orphan fails and exits on
+// its own once its paths are gone, so a retry meets a quiet tree; a removal
+// still failing at the bound is reported, because by then nothing this
+// harness started explains it.
 func (j *Journey) Close() error {
 	var errs []error
 	if j.service != nil {
 		errs = append(errs, j.Kill())
 	}
-	if err := os.RemoveAll(j.root); err != nil {
+	if err := j.removeHome(); err != nil {
 		errs = append(errs, fmt.Errorf("journey: removing the home %s: %w", j.root, err))
 	}
 	return errors.Join(errs...)
+}
+
+// removeHome removes the home, retrying while writers the kill did not reach
+// wind down. Close's comment owns why those exist.
+func (j *Journey) removeHome() error {
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		err := os.RemoveAll(j.root)
+		if err == nil || time.Now().After(deadline) {
+			return err
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 }
