@@ -20,14 +20,15 @@ const (
 	ReachBinary Reach = "binary"
 	// ReachPackage is driven through the package that owns the mechanism, in
 	// this process, against the fixture. It is what is left where the binary
-	// cannot reach a mechanism at all, which today is every mechanism a stage
-	// body would have used past the run's own state: the intent body reads
-	// the supplied intent and launches nothing, the review body opens the
-	// run's isolated copy - which nothing in this build creates - before it
-	// launches anything, and the pull request body fails because the run's
-	// record names no repository on the code host, so a run that takes either
-	// of those two fails there and every walk here skips them instead, and
-	// the test body holds for the command nobody configured here.
+	// cannot reach a mechanism at all, which today is every mechanism behind
+	// an agent invocation, a push, or a code host: the intent body reads the
+	// supplied intent and launches nothing; every walk here skips review, so
+	// no run launches the agent that body would, for the reason walkableRun
+	// states; every walk skips the pull request stage too, because that body
+	// fails when the run's record names no repository on the code host; the
+	// push body holds for want of a completed review to forward, which is
+	// what skipping review leaves it; and the test, document and lint bodies
+	// hold for the commands nobody configured here.
 	ReachPackage Reach = "package"
 	// ReachNone is not driven here. The reason beside it says why, and it is
 	// prose nobody checks; what the row buys is that the gap is enumerable
@@ -77,9 +78,8 @@ func Coverage() []Established {
 			"One run of the binary reaches every stage it does not ask to skip; a second run skips one " +
 				"more of them for that run only; and a home whose configuration document asks for a " +
 				"standing skip stops the service before it serves. Both runs skip review and the pull " +
-				"request stage, because the review body fails on the isolated copy nothing in this " +
-				"build creates and the pull request body fails because the run's record names no " +
-				"repository on the code host, so no run here both takes either of those stages and reaches the end of " +
+				"request stage, for the reasons walkableRun states, so no run here both takes " +
+				"either of those stages and reaches the end of " +
 				"the gate. Two narrow facts are what establish the third: " +
 				"internal/config's key table admits no key named skip, and a key it does not admit is " +
 				"refused where the document is walked, before the service binds. A second key of another " +
@@ -100,13 +100,15 @@ func Coverage() []Established {
 			"A run through the binary is walked to its end, asking to skip the pull request stage " +
 				"because its body fails when the run's record names no repository on the code host, " +
 				"and every hold it reaches is read: it holds " +
-				"once for each stage this harness declares a run stops at - every stage this build has " +
-				"no body for, and the test stage, whose body holds for the command nobody configured " +
-				"here - every hold is relayed with the finding that produced " +
+				"once for each stage this harness declares a run stops at, which this build answers " +
+				"with five stages that all have bodies - test, document and lint holding for the " +
+				"commands nobody configured here, push for the completed review the skip leaves it " +
+				"without, and checks for the pull request nobody opened - every hold is relayed with " +
+				"the finding that produced " +
 				"it, every one of those findings reports itself as holding for a person, and none is one " +
 				"a fixer may take. The planted agent output is driven at package reach as well, because " +
-				"no run reaches an agent in this build - the review body would launch one, and it fails " +
-				"on the isolated copy nothing creates before launching, so the walk skips it - and no " +
+				"no run reaches an agent in this build - the review body would launch one, and every " +
+				"walk skips that stage for the reason walkableRun states - and no " +
 				"report an agent wrote therefore reaches a run. " +
 				"The run half starts a run through a method internal/ipc restricts, so on a platform where " +
 				"that package reads no local socket peer credentials it is skipped rather than passing, and " +
@@ -114,28 +116,26 @@ func Coverage() []Established {
 				"there."},
 		{principles.P4, ReachPackage,
 			"The binary cannot reach this: no run launches an agent, because the one body that would - " +
-				"review - fails on the isolated copy nothing in this build creates before it launches, " +
-				"and every walk here skips it, so a run makes no agent invocation to assert over. What " +
+				"review - is skipped by every walk here, for the reason walkableRun states, so a run " +
+				"makes no agent invocation to assert over. What " +
 				"is driven is the production adapter over the stand-in, which is where the type split " +
 				"lives and where an invocation record can be read off the wire."},
 		{principles.P5, ReachNone,
-			"The review stage has a body and no run this harness drives can take it: it fails on the " +
-				"isolated copy nothing in this build creates, so every walk skips it, no run reviews " +
+			"The review stage has a body and every walk here skips it, for the reason walkableRun " +
+				"states, so no run reviews " +
 				"anything, and no fix round is taken for one to re-review. internal/stages' own tests " +
 				"claim P5 against the body directly; this harness adds nothing to that."},
 		{principles.P6, ReachBinary,
 			"The service is killed at every boundary a real run reaches and the run is driven to its " +
 				"end afterwards, which is P6's own stated verification criterion; the criterion is every " +
 				"boundary rather than a count of them. A boundary is a hold, so the boundaries are the " +
-				"stages this harness declares a run stops at: every stage this build has no body for, " +
-				"and the test stage, whose body holds for the command nobody configured here. The " +
-				"intent stage is not among them and no kill is manufactured for it: PRD section 5 has " +
-				"it never block a run, and a stage that never holds offers nothing to kill at. Review " +
-				"is not among them either: the run skips it, because its body fails on the isolated " +
-				"copy nothing creates rather than holding, and a skipped stage offers no hold. The " +
-				"pull request stage is not among them for the same reason: the driven run asks to " +
-				"skip it because its body fails when the run's record names no repository on the " +
-				"code host, so it offers no boundary either. What " +
+				"stages this harness declares a run stops at, which this build answers with five " +
+				"stages that all have bodies and hold anyway. The " +
+				"intent and rebase stages are not among them and no kill is manufactured for either: " +
+				"both report what they established and a stage that does not hold offers nothing to " +
+				"kill at. Review and the pull request stage are not among them because the driven " +
+				"run asks to skip both, for the reasons walkableRun states, and a skipped stage " +
+				"offers no hold. What " +
 				"the recovered decision is held to is " +
 				"that it stands at the same stage and still offers what it offered, which a checkpoint " +
 				"round trip can lose; that it offers something nobody was offered is not claimed, " +
@@ -160,10 +160,9 @@ func Coverage() []Established {
 				"established at any reach and no clause claims them: that nothing the branch or the " +
 				"template installed arrived or executed, because the branch's planted executables are " +
 				"reached only through a stage body that launches something and no body launches " +
-				"anything in these runs - the intent body reads the supplied intent, the review body " +
-				"fails on the isolated copy nothing creates before it launches, the pull request " +
-				"body fails because the run's record names no repository on the code host, so the " +
-				"run skips both of those stages, and the test body holds for the command nobody " +
+				"anything in these runs - the intent body reads the supplied intent, the run skips " +
+				"review and the pull request stage for the reasons walkableRun states, and the test, " +
+				"document and lint bodies hold for the commands nobody " +
 				"configured here, never the branch's - while the template's are receive-side hooks reached " +
 				"only by a push to the gate and the four subtests that plant one make no push; " +
 				"and which agent a run resolved, because no shipped surface reports it. The trusted configuration " +

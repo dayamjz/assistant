@@ -21,22 +21,37 @@ does not stand in for it. A green run of this package says the mechanisms
 behave as specified on inputs we chose. It says nothing about review quality,
 and no report built on this may claim otherwise.
 
-## The second limit: most stages have no body, and no body launches
+## The second limit: every stage has a body and no body launches
 
-`internal/stages` has three implementations. The intent stage's reads the
-intent it was supplied and launches nothing. The review stage's opens the
-run's isolated copy before it launches anything, and nothing in this build
-creates one, so a run that takes review fails there rather than reviewing.
-The pull request stage opens a provider for the repository the run's record
-names on the code host, and no record here names one - the fixture's upstream
-is a local repository rather than a host `internal/forge` addresses - so a
-run that reaches it fails rather than reaching one. That is why every test
-here that walks a run asks to skip both of those stages, as the run input P2
-gives a person. The test stage holds for the command nobody configured here
-rather than executing anything. Every other stage has no body and reports one
-unclassified finding and holds for a person, which is P3 working as
-specified. Between them, that is the reason large parts of the product are
-not reachable from a run today:
+`internal/stages` implements all nine stages now, and a run driven here still
+reaches almost nothing behind them.
+
+Two stages are skipped by every test here that walks a run, as the run input
+P2 gives a person. The pull request stage opens a provider for the repository
+the run's record names on the code host, and no record here names one - the
+fixture's upstream is a local repository rather than a host `internal/forge`
+addresses - so a run that reaches it fails rather than reaching one. The
+review stage is skipped for a reason about this harness rather than about its
+body: that body opens the copy `internal/service` now builds for every run and
+launches an agent, and the agent reachable here is the scripted stand-in,
+which is given no step answering a review. A run that took the stage would
+hold on a review that established nothing, and a run whose review passed would
+reach the push body with an approval to forward and push the fixture's branch
+to the fixture's upstream, which is a walk this harness has never driven.
+Scripting a review answer here is what removes that skip.
+
+The five stages left hold anyway, which is P3 working as specified: a stage
+that established nothing holds for a person. The test, document and lint
+bodies hold for the commands nobody configured here rather than executing
+anything. The push body holds because no completed review approved a commit
+its head descends from, which is what skipping review leaves it. The checks
+body holds because the run's record names no repository on a code host and no
+pull request was opened. The intent body reads the intent it was supplied,
+launches nothing, and never blocks a run; the rebase body fetches the
+fixture's upstream, rebases onto it, and reports what it established.
+
+Between them, that is the reason large parts of the product are not reachable
+from a run today:
 
 - no run launches an agent, so no run parses agent output, keeps a fixer
   session, or takes a fix round;
@@ -57,9 +72,12 @@ row of `Coverage` and of `Drives` carries that distinction as `binary` or
 one.
 
 Which nine stages there are is read out of PRD section 5's table, and which of
-them have no body is a declaration in `stages.go` rather than a subtraction
-from what the build reports, so a body that lands is a change somebody writes
-down here instead of one this harness silently follows.
+them have no body, and which of them a run stops at, are declarations in
+`stages.go` rather than subtractions from what the build reports, so a body
+that lands or a stage that stops holding is a change somebody writes down here
+instead of one this harness silently follows. The body-less declaration is
+empty today, and empty is a declaration like any other: a stage that lost its
+body is red here until somebody writes it down.
 
 ## Every assertion is watched failing, on every run
 
@@ -155,9 +173,9 @@ works around them.
 | PRD section 9's table names no command for the two subcommands the gate's admission hook invokes, which `internal/gate/hooks.go` requires of the command surface. The surface carries them, so a push to a gate is admitted and starts a run; what is unreconciled is the specification, not the code. | Drives an admitted push and holds the run it authorized to the branch and the commit that were pushed, which is P1's positive half. A separate check holds a push made with no service up to the weaker property that the gate did not accept it with nothing checking it. |
 | `core.hooksPath` in a git configuration file redirects a gate's own hooks. `internal/gate/doc.go` names it as an open gap. | Drives a push under the redirect and reports which hook ran, off the fixture's tripwire file. Reported as a known gap, never as a pass. |
 | Nothing reads a repository's configuration document from the default branch, so PRD section 10's abort before launch has no owner. | Drives `config.Parse` and `vcs.Repository.FileAt` against the planted documents directly, and observes on a run that it starts anyway. Reported as a gap against section 10. That nothing a branch names is executed is established nowhere in this build; the row below says why. |
-| Two of `internal/graph`'s three loop bounds sit on the back edge into a fixer, and no stage of a run here can produce a fix-eligible finding: a stage without a body reports an ask finding, which never enters a fix round; the intent and pull request bodies declare no fix rounds and report only notes; the review stage, one of the two that do take fix rounds, cannot produce a report in a run - its body fails on the isolated copy nothing creates, so every walk skips it; and the test body, the other, reports a fix finding only when a configured command fails, and holds for the command nobody configured here instead. | Drives the run-wide step budget, which is reachable, and says the other two are not. |
+| Two of `internal/graph`'s three loop bounds sit on the back edge into a fixer, and no stage of a run here sends a finding to one. Five stages take fix rounds: rebase reports a fix finding only for a conflict, and no branch here conflicts; review reports nothing at all in a run, because every walk skips it; test and lint report one only when a configured command fails, and hold for the commands nobody configured here instead; and checks reports one only for a check that failed, and holds because no pull request was opened. The other four - intent, document, push and pull request - take no fix rounds, so a finding of theirs has nowhere to go. | Drives the run-wide step budget, which is reachable, and says the other two are not. |
 | No shipped surface reports which agent a run resolved. No `internal/machine` shape carries one, and `doctor`'s `agent` check resolves the constant `auto` against the default catalog, so it answers what is runnable on this machine rather than what any run resolved; `internal/cli` says so itself. | Does not claim it. The P7 branch test establishes the pushed-configuration rejections and the suppression refusal instead, both of which observe something. |
-| `internal/fixture`'s nothing-executed evidence has no producer for the branch-installation family. Every executable those conditions plant - the `.claude` hooks, the branch's agent binary, its `commands.test`, the `.githooks` scripts, `.envrc` - is reached only through a stage body that launches something, and no body launches anything in these runs: the intent body reads the supplied intent and launches nothing, the review body fails on the isolated copy nothing in this build creates before it launches, the pull request body fails because the run's record names no repository on the code host, and the test body holds for the command nobody configured here, never the branch's, so a run launches no agent, runs no configured command, and makes no commit or push. | Rests no clause on the tripwire file: one asserting that absence would hold whatever the product resolved. The P7 branch test reads it and logs what it holds, so the evidence is in place the day a stage body lands, and the `Drives` row for that condition says nothing about it is established. |
+| `internal/fixture`'s nothing-executed evidence has no producer for the branch-installation family. Every executable those conditions plant - the `.claude` hooks, the branch's agent binary, its `commands.test`, the `.githooks` scripts, `.envrc` - is reached only through a stage body that launches something, and no body launches anything in these runs: the intent body reads the supplied intent and launches nothing, every walk skips review and the pull request stage for the reasons above, and the test, document and lint bodies hold for the commands nobody configured here, never the branch's, so a run launches no agent, runs no configured command, and makes no commit or push. | Rests no clause on the tripwire file: one asserting that absence would hold whatever the product resolved. The P7 branch test reads it and logs what it holds, so the evidence is in place the day a run here launches something, and the `Drives` row for that condition says nothing about it is established. |
 | It has no producer for the hostile-template family either, for a different reason. Those hooks are receive-side, so only a push to the gate could run them, and the four subtests that plant them make no push: each initializes a gate and reads how that came out, and none starts a service. So neither a promoted template `pre-receive` nor `update` nor `post-update` is reached. A push to a gate is admitted in this build, which the PRD section 9 row above records, so what leaves these four short is what they do rather than a door that is shut. | Rests no clause on the tripwire file, for the same reason as the row above, and none on the gate's hooks directory either - so whether a hook arrived is unestablished as well as whether one ran. What those four subtests establish is how the initialization came out: the two refusals refuse with the substrings their conditions record, and the two closed channels are not refused. |
 
 ## What accounts for what

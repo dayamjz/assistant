@@ -70,11 +70,11 @@ func TestARunSurvivesTheServiceBeingKilledAtEveryStageBoundary(t *testing.T) {
 
 	j := inClone(t)
 
-	// A run stops at every stage this harness declares it does - every
-	// body-less stage, and the test stage holding for its unconfigured
-	// command - which is a declaration rather than a count to nine: a stage
-	// that stops holding takes a boundary away, and a check written against
-	// the stage count would fail for a reason that is not P6.
+	// A run stops at every stage this harness declares it does, which is a
+	// declaration rather than a count to nine: every stage has a body in this
+	// build and five of them still hold, so a check written against the stage
+	// count would fail for a reason that is not P6, and so would one written
+	// against the stages without a body.
 	holding := stagesARunStopsAt(t)
 
 	observed := survival{}

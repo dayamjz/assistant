@@ -43,13 +43,15 @@ type bounded struct {
 // would not. Only this one is reachable here. The per-stage round limit and the
 // convergence bound both sit on the back edge into a fixer, and a fix round
 // needs a stage that reports a fix-eligible finding; no stage of this run
-// reports one. A stage with no body reports one unclassified finding and holds
-// for a person, which P3 keeps out of a fix round by construction; the intent
-// and pull request bodies declare no fix rounds and report only notes; and the
-// review body, the one stage that does take fix rounds, is skipped here for
-// the reason walkableRun states, and could only fail before reporting anything
-// if it were taken. Drives records that the same way it records every other
-// condition out of a run's reach.
+// reports one. Of the five stages that take fix rounds, review is skipped here
+// for the reason walkableRun states; rebase reports a fix finding only for a
+// conflict and this branch does not conflict; test and lint report one only
+// when a configured command fails, and hold for the commands nobody
+// configured here; and checks reports one only for a check that failed, and
+// holds because no pull request was opened. The four that take no fix rounds -
+// intent, document, push and pull request - have nowhere to send a finding
+// anyway. Drives records that the same way it records every other condition
+// out of a run's reach.
 //
 // Both runs here ask to skip the review and pull request stages, for the
 // reasons walkableRun states, and the pair only says what it says if the

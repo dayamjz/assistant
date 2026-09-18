@@ -71,8 +71,8 @@ func Settlements() []Settlement {
 			Exercised: "The delivery half is driven: a copy of this binary standing on PATH under the " +
 				"agent's name answers a scripted invocation, and a run resolves its agent off that PATH. " +
 				"The selection half has nothing to select. No run reaches an agent in this build - the " +
-				"review body would launch one and fails on the isolated copy nothing creates before it " +
-				"launches, so every walk skips it - so no report an agent wrote reaches a run, and the " +
+				"review body would launch one and every walk skips that stage, for the reason " +
+				"walkableRun states - so no report an agent wrote reaches a run, and the " +
 				"planted responses are driven through internal/findings and the production adapter " +
 				"instead.",
 		},
@@ -88,8 +88,10 @@ func Settlements() []Settlement {
 				"deliberately tells apart from an empty one, so the substitution silently doing nothing " +
 				"is the same failure as not doing it at all and is refused rather than skipped.",
 			Exercised: "Driven at package reach, against forge.ChecksReport.Evaluate. No run asks a " +
-				"provider anything in this build: the pull request stage's body would, and it fails " +
-				"because the run's record names no repository on the code host.",
+				"provider anything in this build. Two bodies would: the pull request stage's fails " +
+				"because the run's record names no repository on the code host, and every walk skips " +
+				"it; the checks stage's reports that there is neither a repository on a code host nor " +
+				"a pull request to read checks of, and holds, before it opens one.",
 		},
 		{
 			Question: "question-deferred-plant-timing",
@@ -111,8 +113,10 @@ func Settlements() []Settlement {
 				"configuration document and reads the run's park rather than waiting the timeout out. A " +
 				"run that waited parks on the bound; a run that concluded reports a verdict. The two are " +
 				"different answers on the same surface, so nothing has to be inferred from elapsed time.",
-			Exercised: "Not driven. There is no checks stage, so nothing reads checks_timeout and no run " +
-				"can wait on anything. What is driven is the verdict itself, at package reach: an empty " +
+			Exercised: "Not driven. The checks stage has a body now and no run here gets past its first " +
+				"read: the run's record names no repository on a code host and no pull request was " +
+				"opened, so the body reports that and holds without ever reading checks_timeout or " +
+				"waiting on anything. What is driven is the verdict itself, at package reach: an empty " +
 				"check list with no no_ci declaration evaluates to VerdictNoChecks, which is not green.",
 		},
 		{
@@ -130,9 +134,8 @@ func Settlements() []Settlement {
 				"establishes is the pushed-configuration rejections rather than that nothing in the " +
 				"prose became an executed command: every planted executable is reached only through a " +
 				"stage body that launches something, and no body launches anything in these runs - the " +
-				"review body fails on the isolated copy nothing creates before it launches, the pull " +
-				"request body fails because the run's record names no repository on the code host, " +
-				"and the walk skips both, and the test body holds for the command nobody configured " +
+				"walk skips review and the pull request stage, for the reasons walkableRun states, " +
+				"and the test, document and lint bodies hold for the commands nobody configured " +
 				"here, never the branch's - so the tripwire file is read and logged rather " +
 				"than asserted on.",
 		},

@@ -34,15 +34,12 @@ import (
 // that the shipped binary reaches every one of those stages, runs each it was
 // not asked to skip, and carries each away with the outcome it was given.
 //
-// Every run here asks to skip the review and pull request stages. Each of
-// those bodies fails rather than holding when a run takes it: the review body
-// on the isolated copy nothing in this build creates, and the pull request
-// body on the run's record naming no repository on the code host, so a run
-// that took either could not reach the end of the gate however it was
-// answered. The skip is a run input, which is the per-run surface a person
-// would use, so this drives that surface rather than weakening what the
-// stages do, and it narrows the first part's claim to the stages the run did
-// not ask to skip.
+// Every run here asks to skip the review and pull request stages, for the
+// reasons walkableRun states, so a run that took either could not reach the
+// end of the gate however it was answered. The skip is a run input, which is
+// the per-run surface a person would use, so this drives that surface rather
+// than weakening what the stages do, and it narrows the first part's claim to
+// the stages the run did not ask to skip.
 //
 // The third part is refused by internal/config's key table rather than by a
 // rule written against standing skips: the table admits no key named skip, so
@@ -60,12 +57,16 @@ func TestAPassMeansTheSameThingEverywhere(t *testing.T) {
 
 	j := inClone(t)
 
-	// Which stages a run holds at is derived rather than named, because a body
-	// that lands moves it: a stage with one reports what it established and
-	// never sees the answer this test gives, so a clause holding every stage
-	// to that answer would fail for a reason that is not P2.
+	// Which stages a run holds at is read from the declaration that owns it
+	// rather than named here, because a stage that stops holding moves it: a
+	// stage that reports what it established never sees the answer this test
+	// gives, so a clause holding every stage to that answer would fail for a
+	// reason that is not P2. It is the stages a run stops at and not the
+	// stages without a body, which are different questions and now different
+	// lists: this build has a body for all nine and a run still stops at five
+	// of them.
 	held := map[string]bool{}
-	for _, stage := range stagesWithoutABody(t) {
+	for _, stage := range stagesARunStopsAt(t) {
 		held[stage.String()] = true
 	}
 
@@ -117,16 +118,17 @@ func TestAPassMeansTheSameThingEverywhere(t *testing.T) {
 				// answer this test gave, which internal/machine says a stage's
 				// Ran flag alone cannot tell apart from being skipped past at
 				// its hold.
-				States: "every stage this build has no body for carries the outcome this run's holds " +
-					"were answered with",
+				States: "every stage this harness declares a run stops at carries the outcome this " +
+					"run's holds were answered with",
 				Holds: func(run machine.Run) error {
 					for _, stage := range run.Stages {
 						if !held[stage.Stage] {
 							continue
 						}
 						if stage.Outcome != pipeline.OutcomeApproved {
-							return fmt.Errorf("the %s stage has no body in this build and came back %q, "+
-								"and every hold in this run was approved", stage.Stage, stage.Outcome)
+							return fmt.Errorf("the %s stage is one this harness declares a run stops at "+
+								"and came back %q, and every hold in this run was approved",
+								stage.Stage, stage.Outcome)
 						}
 					}
 					return nil
@@ -179,8 +181,9 @@ func TestAPassMeansTheSameThingEverywhere(t *testing.T) {
 				return run
 			}},
 			// The stage this one changes is found rather than counted to,
-			// because the clause it has to reach covers the stages this build
-			// has no body for and which those are moves as bodies land.
+			// because the clause it has to reach covers the stages a run stops
+			// at, and which those are moves as bodies land and as stages stop
+			// holding.
 			{Named: "a stage came back carrying an outcome nobody gave it", Break: func(run machine.Run) machine.Run {
 				run = cloneRun(run)
 				for i, stage := range run.Stages {

@@ -70,15 +70,17 @@ func Drives() []Drove {
 		"substring and no sentinel, so there is nothing else here to hold a message to." +
 		noTemplateHookPath
 
-	// Every body-less stage condition is undriven for one reason, stated once.
-	// A stage with no body reports one ask finding and holds, so there is
-	// nothing for document or lint to have found and nothing for the rebase to
-	// have emptied. The review and test stages have bodies, so each of their
-	// conditions carries a reason of its own on its row.
-	const noStageBody = "internal/stages holds no body for the stage this condition names, so the stage " +
-		"reads nothing and reports one ask finding. There is no finding to compare against what was " +
-		"planted, and a harness that reported this condition as met would be reporting the placeholder. " +
-		"It becomes drivable with the stage body."
+	// Three stage conditions are undriven for one reason, stated once. Each
+	// names a stage whose body runs the command its resolved configuration
+	// supplies, and no run here is given one, so the stage holds for a person
+	// without executing anything. Every stage has a body in this build, so no
+	// condition here is undriven for want of one.
+	const noConfiguredCommand = "internal/stages has this stage's body now, and the condition is the " +
+		"trusted command the stage runs reporting against the branch. No run here runs one: the " +
+		"trusted repository layer that command sits in is not read in this build, which " +
+		"internal/service states, and the harness's own configuration names no command either, so " +
+		"the stage holds for a person without executing anything. There is no finding to compare " +
+		"against what was planted. It becomes drivable when a run is given the command."
 	return []Drove{
 		{"refusal-finding-action-missing", ReachPackage, findings,
 			"The planted bytes go through the production adapter and internal/findings, on the entry " +
@@ -116,16 +118,14 @@ func Drives() []Drove {
 				"default branch's fixture-trusted-agent at all. Its tripwire half has no producer " +
 				"either: every executable it plants is reached only through a stage body that launches " +
 				"something, and no body launches anything in these runs - the intent body reads the " +
-				"supplied intent and launches nothing, the review body fails on the isolated copy " +
-				"nothing creates before it launches, the pull request body fails because the run's " +
-				"record names no repository on the code host, so every walk here skips both of " +
-				"those stages, and the test body holds for the command nobody configured here, " +
+				"supplied intent and launches nothing, every walk here skips review and the pull " +
+				"request stage for the reasons walkableRun states, and the test, document and lint " +
+				"bodies hold for the commands nobody configured here, " +
 				"never the branch's - so a run launches no agent, runs no configured command, " +
 				"and makes no commit or push. TestTheBranchUnderValidationChoosesNothingThatRuns does " +
 				"drive a whole run over this branch and reads the tripwire file at the end, and logs " +
 				"what it holds; what that test establishes is the row below and the suppression " +
-				"refusal. This becomes drivable when the build creates the isolated copy a launch " +
-				"needs and a run is given something to launch."},
+				"refusal. This becomes drivable when a run here is given something to launch."},
 		{"refusal-pushed-commands-and-agent", ReachPackage, branch,
 			"The one call the condition names is config.Resolve over the operator's layer and the " +
 				"pushed one, driven in process: the three keys are dropped and reported as rejections " +
@@ -157,26 +157,21 @@ func Drives() []Drove {
 				"stage's body asks one and fails because the run's record names no repository there."},
 
 		{"stage-logic-bug", ReachNone, "",
-			"The review stage has a body, and a run cannot take it: the body opens the run's isolated " +
-				"copy before anything else, nothing in this build creates one, so a run that takes the " +
-				"stage fails there rather than reviewing and every walk here skips it. No review " +
-				"happens, so there is no finding to compare against what was planted. It becomes " +
-				"drivable when the build creates the isolated copy - and what it establishes then is " +
-				"still bounded by README.md's first limit, because the stand-in answers what a test " +
-				"scripts rather than reading the planted bug."},
-		{"stage-failing-test", ReachNone, "",
-			"internal/stages has this stage's body now, but the condition is the trusted " +
-				"commands.test failing against the branch and no run here runs one: the trusted " +
-				"repository layer that command sits in is not read in this build, which " +
-				"internal/service states, and the harness's own configuration names no command " +
-				"either, so the stage holds for a person without executing anything. There is " +
-				"still no finding to compare against what was planted. It becomes drivable when " +
-				"a run is given the command."},
-		{"stage-stale-documentation", ReachNone, "", noStageBody},
-		{"stage-lint-violation", ReachNone, "", noStageBody},
-		{"stage-no-diff-after-rebase", ReachNone, "", noStageBody +
-			" This one needs the rebase stage in particular, because the branch's change is only " +
-			"invisible once a real rebase has dropped it."},
+			"The review stage has a body and every walk here skips it, for the reason walkableRun " +
+				"states, so no review happens and there is no finding to compare against what was " +
+				"planted. It becomes drivable when a run here takes the stage - and what it " +
+				"establishes then is still bounded by README.md's first limit, because the stand-in " +
+				"answers what a test scripts rather than reading the planted bug."},
+		{"stage-failing-test", ReachNone, "", noConfiguredCommand},
+		{"stage-stale-documentation", ReachNone, "", noConfiguredCommand},
+		{"stage-lint-violation", ReachNone, "", noConfiguredCommand},
+		{"stage-no-diff-after-rebase", ReachNone, "",
+			"internal/stages has the rebase body now and every run here takes it, but no run here " +
+				"takes it over this branch: the scenario this condition is planted in is claimed by " +
+				"the P1 test for an ordinary push to origin, which starts no run at all, and claiming " +
+				"is exclusive. Nothing therefore reads the short circuit back. It becomes drivable " +
+				"with a check that walks this branch and reads the run completing with every stage " +
+				"after rebase skipped."},
 	}
 }
 

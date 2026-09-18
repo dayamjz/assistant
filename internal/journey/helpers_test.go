@@ -64,37 +64,17 @@ func requiresLocalSocket(t *testing.T, cause error) {
 	}
 }
 
-// stagesWithoutABody is the stages this harness DECLARES this build has no
-// implementation for, in the order a run takes them.
-//
-// It is a declaration read back, never a measurement. Subtracting what the
-// build implements from the stage list is what let this harness quietly become
-// an eight-boundary harness mid-run and report success: a harness that derives
-// its expectations from the build can only fail when the build disagrees with
-// itself. journey.StagesWithoutABody is the named list, and
-// journey.DeclaresEveryStage goes red when those names and the build stop
-// accounting for each other in either direction, so a body that lands or
-// disappears is a change somebody has to write down here.
-//
-// requireStageListMatchesThePRD is asked first, so a check resting on this is
-// resting on a stage list the PRD owns rather than one the product supplied.
-func stagesWithoutABody(t *testing.T) []pipeline.Stage {
-	t.Helper()
-	requireStageListMatchesThePRD(t)
-	pending := journey.StagesWithoutABody()
-	if len(pending) < 2 {
-		t.Fatalf("this harness declares %d stage(s) without a body, so a run no longer walks from one "+
-			"hold to the next; the checks resting on this need rewriting against whatever now holds a run",
-			len(pending))
-	}
-	return pending
-}
-
 // stagesARunStopsAt is the declared list of stages a run this harness drives
-// stops at, behind the same PRD gate as stagesWithoutABody and refused on the
-// same terms when it thins below two, because the checks resting on it walk a
-// run from one hold to the next. journey.StagesARunStopsAt says why the list
-// is its own declaration rather than the body-less one under another name.
+// stops at, behind the PRD gate requireStageListMatchesThePRD holds and
+// refused when it thins below two, because the checks resting on it walk a run
+// from one hold to the next. journey.StagesARunStopsAt says why the list is
+// its own declaration rather than the body-less one under another name.
+//
+// There is no sibling reading the body-less declaration back, because this
+// build has a body for all nine stages and a helper over an empty list would
+// hand every caller a list with nothing in it. What holds that declaration to
+// the build is requireStageListMatchesThePRD, which every check naming a stage
+// goes through.
 func stagesARunStopsAt(t *testing.T) []pipeline.Stage {
 	t.Helper()
 	requireStageListMatchesThePRD(t)
@@ -260,19 +240,29 @@ func startRun(t *testing.T, j *journey.Journey, args ...string) machine.Run {
 // walkableRun starts a run a walk can carry from one hold to the next, which
 // in this build means skipping the review and pull request stages.
 //
-// Each of those stages has a body that fails rather than holding when a run
-// takes it. The review body opens the run's isolated copy before it launches
-// anything, and nothing in this build creates one; the pull request body
-// opens a provider for the repository the run's record names on the code
-// host, and no record here names one. A walk that took either would end
-// there however its holds were answered. The skip is a
-// run input, which PRD principle P2 makes a person's per-run choice, so this
-// drives the surface a person would drive rather than weakening the stages:
-// the internal/cli and internal/service tests that walk a run carry the same
-// skips for the same reason. The stages are named rather than derived, and a
-// name goes away when a run can give that stage's body what it is missing:
-// the isolated copy a run works in for review, a repository on the code host
-// for the pull request stage.
+// The two are skipped for different reasons and only one of them is about a
+// body that fails. The pull request body opens a provider for the repository
+// the run's record names on the code host, no record here names one, and a
+// walk that took that stage would end there however its holds were answered.
+//
+// Review is skipped because of what this harness is and not because of what
+// its body does. That body opens the copy internal/service now builds for
+// every run and launches an agent, and the agent reachable here is the
+// scripted stand-in, which is given no step answering a review. A run that
+// took the stage would therefore hold on a review that established nothing,
+// and every clause about where a run stops would be a statement about this
+// harness's own script rather than about the product. Scripting a review
+// answer here is the work that removes the skip, and it is not done: a run
+// whose review passed reaches the push body with an approval to forward, so it
+// would push the fixture's branch to the fixture's upstream, which is a walk
+// this harness has never driven and README.md records that it does not.
+//
+// The skip is a run input, which PRD principle P2 makes a person's per-run
+// choice, so this drives the surface a person would drive rather than
+// weakening the stages. The stages are named rather than derived, and a name
+// goes away when a run can give that stage's body what it is missing: a
+// scripted review answer for review, a repository on the code host for the
+// pull request stage.
 func walkableRun(t *testing.T, j *journey.Journey, intent string) machine.Run {
 	t.Helper()
 	return startRun(t, j,

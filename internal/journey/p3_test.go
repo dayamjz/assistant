@@ -47,13 +47,15 @@ type classified struct {
 // all six as the bytes an agent prints rather than as reports built by hand.
 //
 // The binary half is separate and is what a run actually meets today. Every
-// stage this build has no body for reports a finding with the action ask, so a
-// run holds at every one of them for a person rather than reporting a pass it
-// did not establish, and no such finding enters a fix round. Which stages
-// those are is read off internal/stages rather than counted to nine, because a
-// body that lands moves where a run stops. That is driven over the whole walk
-// rather than over the first hold: a claim about every such stage that rested
-// on one would be a count nothing checked.
+// stage a run here stops at reports a finding with the action ask, because it
+// established nothing: it has a body and that body could not get what it
+// needed. So the run holds at every one of them for a person rather than
+// reporting a pass it did not establish, and no such finding enters a fix
+// round. Which stages those are is the declaration in stages.go rather than a
+// count to nine, because a body that lands, or a stage that stops holding,
+// moves where a run stops. That is driven over the whole walk rather than over
+// the first hold: a claim about every such stage that rested on one would be a
+// count nothing checked.
 func TestAFindingThatIsNotClassifiedStopsForAPerson(t *testing.T) {
 	principles.Cite(t, principles.P3)
 
@@ -218,7 +220,7 @@ func TestAFindingThatIsNotClassifiedStopsForAPerson(t *testing.T) {
 		// reasons walkableRun states: a walk that took either would end there
 		// rather than reaching the holds past it.
 		walk := answerHolds(t, j,
-			walkableRun(t, j, "a change most of whose stages have no body in this build"), "approved")
+			walkableRun(t, j, "a change most of whose stages establish nothing in this build"), "approved")
 		observed := stopped{holds: walk[:len(walk)-1], stages: len(stagesARunStopsAt(t))}
 		if len(observed.holds) == 0 {
 			t.Fatalf("the run reached no hold at all, so there is nothing here for any of this to be "+
@@ -390,9 +392,9 @@ func TestAFindingThatIsNotClassifiedStopsForAPerson(t *testing.T) {
 type stopped struct {
 	// holds is the run as the surface reported it at each hold it reached.
 	holds []machine.Run
-	// stages is how many stages this build has no body for, which is how many
-	// holds a run has to reach: a stage with a body reports what it
-	// established and a stage without one holds for a person.
+	// stages is how many stages this harness declares a run stops at, which is
+	// how many holds a run has to reach: a stage that established something
+	// reports it, and a stage that established nothing holds for a person.
 	stages int
 }
 

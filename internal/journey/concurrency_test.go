@@ -61,12 +61,13 @@ type contended struct {
 // cost.
 //
 // The contention stays inside the holds that sit consecutively from the first
-// measured one, because the review and pull request stages have bodies and a
-// stage with one between two holds prices that transition differently. The
-// run asks to skip both, for the reasons walkableRun states. The review
-// crossing is spent as setup before anything is measured, and the run is
-// driven to the end across the pull request crossing afterwards, where no
-// arithmetic rests on what the crossing costs.
+// one, because a stage that does not hold sitting between two holds prices
+// that transition differently. This run has one such stage between holds: the
+// pull request stage, which it asks to skip for the reason walkableRun states.
+// That crossing sits before the last hold, so the run is driven to the end
+// across it afterwards, where no arithmetic rests on what it costs. The review
+// stage the run also skips sits before the first hold, so no measured
+// transition crosses it at all.
 func TestSeveralCallersDrivingOneRunExecuteNoNodeTwice(t *testing.T) {
 	requiresIdentifiedPeer(t)
 	principles.Cite(t, principles.P6)
@@ -75,25 +76,21 @@ func TestSeveralCallersDrivingOneRunExecuteNoNodeTwice(t *testing.T) {
 	// stages a run holds at run consecutively: internal/pipeline gives a stage
 	// that holds a hold node as well as a stage node, and a stage that does
 	// not hold goes straight on, so a non-holding stage sitting between two
-	// holds adds a node to that transition and to no other. This run has two
-	// such stages: it skips review and the pull request stage for the reasons
-	// walkableRun states, and a skipped stage's node still executes to record
-	// the skip, so the transition that crosses one costs more than its
-	// neighbours. The review crossing sits on the first transition, so the
-	// first answer below is spent as setup rather than measured; the pull
-	// request crossing sits before the last hold, so the contention stays
-	// inside the consecutive span before it. Bounding the measurement that
-	// way is what keeps the day another middle stage gets a body from
-	// arriving as a contention failure rather than as the measurement no
-	// longer applying.
-	holding := contendedHolds(t, stagesARunStopsAt(t)[1:])
+	// holds adds a node to that transition and to no other. This run reaches
+	// its first hold with review already behind it and crosses only the
+	// skipped pull request stage between holds, and a skipped stage's node
+	// still executes to record the skip, so that one transition costs more
+	// than its neighbours and the contention stays inside the consecutive span
+	// before it. Bounding the measurement that way is what keeps the day
+	// another middle stage stops holding from arriving as a contention failure
+	// rather than as the measurement no longer applying.
+	holding := contendedHolds(t, stagesARunStopsAt(t))
 
 	j := inClone(t)
-	walkableRun(t, j, "a change several callers answer at once")
-
-	// The setup answer: it carries the run across the skipped review stage,
-	// whose extra node would otherwise be measured into the per-hold cost.
-	started := decodeRun(t, succeeds(t, j.Command("--answer", "approved")))
+	// The run as it stands at the first of the contended holds, which is where
+	// the measurement below starts from. Nothing is spent getting there: every
+	// stage the run crosses before it either passes or is skipped.
+	started := walkableRun(t, j, "a change several callers answer at once")
 	observed := contended{}
 
 	// One answer with nobody else driving, which is the measurement everything
@@ -104,9 +101,10 @@ func TestSeveralCallersDrivingOneRunExecuteNoNodeTwice(t *testing.T) {
 
 	// As many callers as the run has holds left to be carried through while
 	// still holding at the end of them, which is what the reads below need:
-	// the setup hold sits outside the contended span, one of the span's holds
-	// is spent on the measurement above, and one has to survive so the run
-	// this reads back is the same run, still waiting. A count written here
+	// one of the span's holds is spent on the measurement above, and one has
+	// to survive so the run this reads back is the same run, still waiting,
+	// and so that no caller can carry it past the end of the span, where one
+	// hold no longer costs one number. A count written here
 	// instead would be safe only for as long as this build has the number of
 	// stage bodies it has today, and would then fail as a contention failure
 	// rather than as the stale number it was.
@@ -280,8 +278,8 @@ func holdPosition(t *testing.T, holding []pipeline.Stage, run machine.Run) int {
 // contendedHolds returns the holds this test may contend over: the longest
 // prefix of the span it is given that sits consecutively in
 // internal/pipeline's order. The caller passes the holds from its first
-// measured transition onward; a hold the walk spends as setup before
-// measuring is outside the span.
+// measured transition onward, which is every hold a run stops at while nothing
+// the walk spends before measuring sits among them.
 //
 // Consecutive is the property the per-hold cost rests on. internal/pipeline
 // gives a stage that holds both a stage node and a hold node and sends a

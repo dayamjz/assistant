@@ -24,20 +24,18 @@
 //
 // # Reach is part of every claim
 //
-// internal/stages has bodies for the intent, review, test, and pull request
-// stages and none for the rest, and no run here can carry the review or pull
-// request body through a launch. The review body opens the run's isolated
-// copy first, and nothing in this build creates one, so every walk skips that
-// stage. The pull request body opens a provider for the repository the run's
-// record names on the code host, and no record here names one, so a run that
-// reaches it fails rather than reaching a code host; every run this harness
-// drives to the end therefore asks to skip that stage too, which is the
-// per-run surface a person would use. A run therefore holds at every
-// body-less stage - and at the test stage too, which holds for the command
-// nobody configured here - and large parts of this product are unreachable
-// from one: no agent is launched, no configured command is run, no reference
-// is moved, no code host is asked anything, and no repository configuration
-// is read.
+// internal/stages has a body for all nine stages, and a run here still reaches
+// almost nothing behind them. Every walk asks to skip review and the pull
+// request stage, which is the per-run surface a person would use, for the
+// reasons walkableRun states: the pull request body fails when the run's
+// record names no repository on the code host, and the review body would
+// launch an agent this harness scripts no review answer for. What is left
+// holds anyway: the test, document and lint bodies for the commands nobody
+// configured here, the push body for the completed review skipping review
+// leaves it without, and the checks body for the pull request nobody opened.
+// So large parts of this product are still unreachable from a run: no agent is
+// launched, no configured command is run, no reference is moved, no code host
+// is asked anything, and no repository configuration is read.
 //
 // Where a mechanism cannot be reached through the binary, this harness drives
 // it through the package that owns it against the same fixture, and every row
@@ -46,11 +44,12 @@
 // being read as though it did.
 //
 // Which nine stages those are is read from the PRD rather than taken from the
-// build, and which of them have no body is declared here rather than
-// subtracted from what the build reports. A harness that derived either from
-// the product could only fail when the product disagreed with itself, and this
-// one silently became an eight-boundary harness that way. stages.go owns both
-// halves and what its read of the PRD leaves open.
+// build, and which of them have no body, and which of them a run stops at, are
+// declared here rather than subtracted from what the build reports. A harness
+// that derived any of that from the product could only fail when the product
+// disagreed with itself, and this one silently became an eight-boundary
+// harness that way. stages.go owns all three and what its read of the PRD
+// leaves open.
 //
 // # Every assertion carries the evidence that it can fail
 //

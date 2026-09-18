@@ -139,15 +139,24 @@ func TestTheStageListComesFromThePRDRatherThanFromTheBuild(t *testing.T) {
 	// reach.
 	declared := journey.StagesWithoutABody()
 	t.Run("an undeclared change in which stages have bodies is caught", func(t *testing.T) {
-		gained := append(slices.Clone(journey.Implemented()), declared[0])
-		err := journey.DeclaresEveryStage(gained, declared)
+		bodied := journey.Implemented()
+		if len(bodied) == 0 {
+			t.Skip("this build implements no stage, so none can be declared body-less while having one")
+		}
+		// The disagreement is made on the declaration's side rather than on the
+		// build's, because the declaration is what an author writes and it may
+		// be empty: a build where every stage has a body leaves nothing to take
+		// from it, and a control that indexed into it would stop running the
+		// day it emptied rather than reporting anything.
+		stillDeclared := append(slices.Clone(declared), bodied[0])
+		err := journey.DeclaresEveryStage(bodied, stillDeclared)
 		if err == nil {
 			t.Fatal("a stage that gained a body while still declared body-less was accepted")
 		}
 		if !errors.Is(err, journey.ErrUndeclaredStage) {
 			t.Fatalf("caught for the wrong reason: %v", err)
 		}
-		says := fmt.Sprintf("%s has an implementation and is declared body-less here", declared[0])
+		says := fmt.Sprintf("%s has an implementation and is declared body-less here", bodied[0])
 		if !strings.Contains(err.Error(), says) {
 			t.Fatalf("caught, but not for the direction this control names; wanted a refusal saying %q "+
 				"and got: %v", says, err)

@@ -31,11 +31,9 @@ type installed struct {
 	// whose resolved configuration carries it, the two .githooks scripts need
 	// this product to commit or push, and .envrc needs a shell to enter the
 	// worktree. The intent body reads the run's supplied intent and starts
-	// nothing, the review body fails on the isolated copy nothing creates
-	// before launching and the run skips it, the pull request body fails
-	// because the run's record names no repository on the code host and the
-	// run skips it too, and the test body holds for the command nobody
-	// configured here, so the file stays empty however the product resolved
+	// nothing, the run skips review and the pull request stage for the reasons
+	// walkableRun states, and the test, document and lint bodies hold for the
+	// commands nobody configured here, so the file stays empty however the product resolved
 	// the branch's document, and a clause asserting the absence would hold
 	// over a world nothing could make it report in. They are recorded and
 	// logged so the evidence is here the day a stage body makes it
@@ -78,12 +76,9 @@ type installed struct {
 // hooks and the branch's agent binary need an agent process, its commands.test
 // needs a run whose resolved configuration carries it, the .githooks scripts
 // need this product to commit or push, and .envrc needs a shell. The intent
-// body reads the run's supplied intent and starts nothing; the review body -
-// the one that would launch an agent - opens the run's isolated copy before it
-// launches, which nothing in this build creates, so it fails before launching
-// if taken; the pull request body fails because the run's record names no
-// repository on the code host, and this run skips both of those for the
-// reasons walkableRun states; and the
+// body reads the run's supplied intent and starts nothing; this run skips
+// review - the one stage whose body would launch an agent - and the pull
+// request stage, for the reasons walkableRun states; and the
 // test body reads commands.test only from the configuration this run resolved,
 // where the branch's value is dropped unless the trusted opt-out admits it and
 // neither the opt-out nor a command is set here, so it holds rather than
