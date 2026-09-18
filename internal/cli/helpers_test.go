@@ -15,6 +15,7 @@ import (
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/agents/standin"
 	"github.com/dayamjz/assistant/internal/cli"
+	"github.com/dayamjz/assistant/internal/findings"
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/pipeline"
@@ -162,8 +163,8 @@ func git(t *testing.T, dir string, args ...string) string {
 	return strings.TrimSpace(out)
 }
 
-// newSubject returns a working copy with one commit and an origin, which is
-// what assistant init reads the upstream and the default branch from.
+// newSubject returns a working copy with a change to validate and an origin,
+// which is what assistant init reads the upstream and the default branch from.
 func newSubject(t *testing.T) string {
 	t.Helper()
 	dir, err := os.MkdirTemp("", "s")
@@ -191,6 +192,17 @@ func newSubject(t *testing.T) string {
 	git(t, upstream, "init", "--quiet", "--bare", "-b", "main", ".")
 	git(t, dir, "remote", "add", "origin", upstream)
 	git(t, dir, "push", "--quiet", "origin", "main")
+	// The second commit is not pushed to that upstream, and it is what gives a
+	// run something to validate. PRD section 5 ends a run successfully at the
+	// rebase stage when nothing remains to change, and a working copy standing
+	// exactly where its upstream stands is that case, so every run started here
+	// would complete at the second stage and every command below that answers
+	// or ends one would be acting on a run that had already finished.
+	if err := os.WriteFile(filepath.Join(dir, "file.txt"), []byte("hello, and a change to validate\n"), 0o600); err != nil {
+		t.Fatalf("writing the change a run validates: %v", err)
+	}
+	git(t, dir, "add", "-A")
+	git(t, dir, "commit", "--quiet", "-m", "a change to validate")
 	resolved, err := filepath.EvalSymlinks(dir)
 	if err != nil {
 		t.Fatalf("resolving the subject path: %v", err)
@@ -212,7 +224,7 @@ func serve(t *testing.T, h *home.Home) {
 // reached.
 func serveStages(t *testing.T, h *home.Home, served func(stages.StageDeps) pipeline.Stages) {
 	t.Helper()
-	runner := standin.New(t, standin.Script{}).Runner()
+	runner := standin.New(t, reviewScript()).Runner()
 	serveCatalog(t, h, served, agents.NewCatalog(fixedFactory{runner: runner}))
 }
 
@@ -222,8 +234,38 @@ func serveStages(t *testing.T, h *home.Home, served func(stages.StageDeps) pipel
 // test called it.
 func serveUntilStopped(t *testing.T, h *home.Home) func() {
 	t.Helper()
-	runner := standin.New(t, standin.Script{}).Runner()
+	runner := standin.New(t, reviewScript()).Runner()
 	return serveCatalog(t, h, stages.All, agents.NewCatalog(fixedFactory{runner: runner}))
+}
+
+// reviewScript is what the stand-in answers every invocation a run driven here
+// makes, which today is the review stage's one call.
+//
+// A run has to get past that stage for anything below to be about the command
+// surface: an unanswered review is a stage that established nothing, which P3
+// holds for a person, so every command here would be answering a decision the
+// review stage raised rather than the one it meant to reach. The reviewer
+// answers cleanly because what these tests are about is the surface a person
+// or an agent drives, not what a review finds; internal/stages' own tests are
+// where a report's content decides anything.
+//
+// The report names no revision, and that is standin.Review's whole point: the
+// commit a review is bound to is the run's, and no test here knows it when the
+// script is written - the push tests commit the branch they push after this.
+// The stand-in fills it in from the invocation.
+//
+// It answers every invocation rather than matching the review's prompt. An
+// invocation of any other shape would be answered with a review it has no
+// evidence demand for, which the stand-in refuses loudly, so a body that
+// started calling an agent shows up here as a failure rather than as a
+// scripted answer nobody wrote for it.
+func reviewScript() standin.Script {
+	return standin.Script{Steps: []standin.Step{{
+		Times: standin.Always,
+		Reply: standin.Review(findings.Report{
+			Summary: "One pass over the change. Nothing to report.",
+		}),
+	}}}
 }
 
 // serveWithNoRunnableAgent serves a home whose one configured adapter refuses

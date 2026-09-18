@@ -189,14 +189,11 @@ func TestARunIsStartedReportedAndAnsweredThroughSeparateInvocations(t *testing.T
 		t.Fatalf("assistant init exited %s:\n%s%s", got.code, got.stdout, got.stderr)
 	}
 
-	// The run skips the review stage. Its body reads the run's isolated copy
-	// and nothing in this build creates one, so it fails on opening it rather
-	// than holding, and a run that took it could not walk from one hold to the
-	// next however it was answered. The skip is a run input, which P2 makes a
-	// person's per-run choice, so this drives the surface a person would drive
-	// rather than weakening the stage. The stage is named rather than derived,
-	// and the name goes away when this build creates the isolated copy.
-	started := run(t, h, subject, "--json", "--skip", pipeline.StageReview.String(),
+	// The run takes every stage. It used to skip review, because that body
+	// opened an isolated copy nothing created and failed there; the service
+	// builds one now and reviewScript answers the invocation it makes, so the
+	// stage passes and a run walks from one hold to the next through it.
+	started := run(t, h, subject, "--json",
 		"--intent", "add a greeting, with the tradeoffs stated")
 	if started.code != machine.ExitOK {
 		t.Fatalf("starting a run exited %s:\n%s", started.code, started.stdout)
@@ -269,10 +266,37 @@ func TestTheHumanRenderingShowsTheDecisionAndHowToAnswerIt(t *testing.T) {
 		"Waiting on you",
 		"Options: approved, skipped, cancelled",
 		"assistant --answer approved",
-		"not implemented in this build",
 	} {
 		if !strings.Contains(got.stdout, want) {
 			t.Fatalf("the rendering does not say %q:\n%s", want, got.stdout)
+		}
+	}
+
+	// And the findings behind the decision, in full. What they say is read off
+	// the machine surface rather than spelled here: a literal would be this
+	// test's copy of whatever stage happens to hold a run today, and it would
+	// go stale the day that stage's body changed - which is exactly what a
+	// literal here did when the last stage without a body got one. Reading
+	// them also makes the comparison the claim: every finding the decision
+	// carries appears verbatim, so a rendering that summarized one fails.
+	reported := run(t, h, subject, "--json", "status")
+	if reported.code != machine.ExitOK {
+		t.Fatalf("status exited %s:\n%s", reported.code, reported.stdout)
+	}
+	var status machine.Status
+	if err := json.Unmarshal([]byte(reported.stdout), &status); err != nil {
+		t.Fatalf("status does not decode: %v\n%s", err, reported.stdout)
+	}
+	if status.ActiveRun == nil || status.ActiveRun.Decision == nil {
+		t.Fatalf("the run is not waiting on a decision, so the rendering above shows none: %+v", status.ActiveRun)
+	}
+	if len(status.ActiveRun.Decision.Findings) == 0 {
+		t.Fatal("the decision carries no findings, so there is nothing here for the rendering to have shown")
+	}
+	for _, finding := range status.ActiveRun.Decision.Findings {
+		if !strings.Contains(got.stdout, finding.Description) {
+			t.Fatalf("the rendering does not carry finding %q in full; it says:\n%s\n\nand the finding is:\n%s",
+				finding.ID, got.stdout, finding.Description)
 		}
 	}
 }
@@ -1104,9 +1128,10 @@ func decodeDoctor(t *testing.T, document string) machine.Doctor {
 // tests build write no commands.* into their configuration documents, so the
 // runs resolve none either; a test that starts configuring one breaks that
 // premise loudly, since its run then stops somewhere this did not derive. The
-// review stage never appears here: it holds under no configuration, and these
-// walks skip it besides, so a stage both holding and skipped would need this
-// helper taught about skips before it could stay right.
+// review stage never appears here and is never a stop of these runs either: it
+// holds under no configuration, and reviewScript answers the invocation it
+// makes, so it passes. A run that stopped there would fail the caller by name
+// rather than quietly shifting what each of these two stages means.
 //
 // It needs two stages to be holding. A build with fewer has stopped being one
 // where answering a hold is what carries a run to the next one, and this test
