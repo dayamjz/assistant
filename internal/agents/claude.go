@@ -369,13 +369,14 @@ func (r *claudeRunner) invoke(ctx context.Context, purpose Purpose, inv Invocati
 	}
 
 	proc := runProcess(ctx, procSpec{
-		bin:    r.resolved,
-		args:   r.arguments(inv, s.resume),
-		stdin:  inv.Prompt,
-		dir:    inv.Dir,
-		env:    environment(r.settings.base, inv.Env),
-		grace:  r.settings.grace,
-		maxOut: r.settings.maxOut,
+		bin:     r.resolved,
+		args:    r.arguments(inv, s.resume),
+		stdin:   inv.Prompt,
+		dir:     inv.Dir,
+		env:     environment(r.settings.base, inv.Env),
+		grace:   r.settings.grace,
+		maxOut:  r.settings.maxOut,
+		started: inv.Started,
 	})
 	r.sweep(ctx, inv.Dir)
 

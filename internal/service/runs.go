@@ -487,7 +487,10 @@ func baseCommit(ctx context.Context, working *vcs.Repository, head, defaultBranc
 // caller that reads an answer and immediately asks again finds the record
 // already settled rather than the run still moving.
 func (s *Service) advance(ctx context.Context, runID string, step func(context.Context) (graph.Result, error)) (machine.Run, error) {
-	segment, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	// The segment carries which run it advances, so the containment wrapper
+	// around the resolved agent can register an invocation under the run that
+	// launched it without any stage body carrying the fact there.
+	segment, cancel := context.WithCancel(withAdvancing(context.WithoutCancel(ctx), runID))
 	if err := s.claim(runID, cancel); err != nil {
 		cancel()
 		return machine.Run{}, err

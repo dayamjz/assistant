@@ -368,9 +368,11 @@ Each has cost this repository more than one round of review.
   before binding the socket, in that order. It reconciles every unfinished run
   against its checkpoint on open, because a record saying running against a
   checkpoint saying halted is a run nobody can answer. Containment is a
-  process group this service registered through `StageStarted`, never anything
-  a caller says about itself; nothing calls that yet, so the guard protects
-  nothing today, which `doc.go` states rather than implies. A push is the one
+  process group this service registered, never anything a caller says about
+  itself, and it has a producer now: `containRunner` wraps the resolved agent
+  so every invocation and fix round registers its group for exactly the
+  process's lifetime, while the configured commands and the provider command
+  still register nothing, which `doc.go` states rather than implies. A push is the one
   caller that does not wait: `gate.notify` records the runs and walks each on a
   goroutine of the service's, and a new push supersedes the branch's run in the
   record, which is the whole of what that word buys: `doc.go` says nothing

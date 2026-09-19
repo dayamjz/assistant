@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/ipc"
 )
 
@@ -60,6 +61,105 @@ func (r *registry) lookup(pgid int) (stage, bool) {
 	defer r.mu.Unlock()
 	s, ok := r.groups[pgid]
 	return s, ok
+}
+
+// advancingKey carries which run a segment advances, written by advance and
+// read by the containment wrapper below. It is a key of this package's own,
+// set by this service for itself within one process, so nothing here rests on
+// what a caller says: a peer's containment is still decided from kernel
+// credentials and this registry alone.
+type advancingKey struct{}
+
+// withAdvancing marks ctx as advancing one run.
+func withAdvancing(ctx context.Context, runID string) context.Context {
+	return context.WithValue(ctx, advancingKey{}, runID)
+}
+
+// advancingRun is the run the segment on ctx advances, empty where the
+// invocation runs outside one. Empty does not weaken containment - the group
+// is registered either way - it only leaves the refusal without a run to name.
+func advancingRun(ctx context.Context) string {
+	runID, _ := ctx.Value(advancingKey{}).(string)
+	return runID
+}
+
+// containRunner wraps the resolved agent so that every invocation it runs is
+// registered with this service's registry for as long as its process group
+// exists. It is what makes StageStarted called rather than callable: the
+// wrapper stands where every invocation of a run passes - the stage bodies
+// reach the runner through agents.StageAgent and the fix rounds through the
+// fixer the wrapped runner opens - so no stage body has to remember to
+// register anything on the resolved agent's path. A body that resolved an
+// adapter of its own would stand outside it, which is the same gap
+// stages.StageDeps already names for P4, not a new one this wrapper opens.
+//
+// The stage recorded is the invocation's purpose, because that is what this
+// seam can say truthfully: the pipeline stage that asked is not in an
+// invocation, and the purpose names the same work in the same words for every
+// stage that launches an agent. The run is read off the segment context
+// advance marked.
+//
+// The wrapper preserves the shape agents.Resolve vouched for: a runner with
+// resumable sessions stays an agents.SessionRunner and one without stays a
+// plain agents.Runner, so agents.OpenFixer reads the same declaration and
+// finds the same mechanism either way.
+func (s *Service) containRunner(r agents.Runner) agents.Runner {
+	wrapped := containedRunner{inner: r, registry: s.registry}
+	if sessions, ok := r.(agents.SessionRunner); ok {
+		return containedSessionRunner{containedRunner: wrapped, sessions: sessions}
+	}
+	return wrapped
+}
+
+// containedRunner is containRunner's plain half.
+type containedRunner struct {
+	inner    agents.Runner
+	registry *registry
+}
+
+func (c containedRunner) Name() string                      { return c.inner.Name() }
+func (c containedRunner) Capabilities() agents.Capabilities { return c.inner.Capabilities() }
+
+func (c containedRunner) Run(ctx context.Context, purpose agents.Purpose, inv agents.Invocation) (
+	agents.Result, error) {
+	inv.Started = c.registry.starter(advancingRun(ctx), string(purpose))
+	return c.inner.Run(ctx, purpose, inv)
+}
+
+// containedSessionRunner is containRunner's session-carrying half, and the
+// fixer it opens registers its rounds the same way.
+type containedSessionRunner struct {
+	containedRunner
+	sessions agents.SessionRunner
+}
+
+func (c containedSessionRunner) Fixer(ctx context.Context, resume string) (agents.Fixer, error) {
+	fixer, err := c.sessions.Fixer(ctx, resume)
+	if err != nil {
+		return nil, err
+	}
+	return containedFixer{inner: fixer, registry: c.registry}, nil
+}
+
+// containedFixer registers each fix round's invocation on the same terms as
+// containedRunner registers a stage's.
+type containedFixer struct {
+	inner    agents.Fixer
+	registry *registry
+}
+
+func (c containedFixer) Apply(ctx context.Context, inv agents.Invocation) (agents.Result, error) {
+	inv.Started = c.registry.starter(advancingRun(ctx), string(agents.PurposeFix))
+	return c.inner.Apply(ctx, inv)
+}
+
+func (c containedFixer) Reference() string { return c.inner.Reference() }
+
+// starter is the agents.Invocation.Started value the wrappers set: it
+// registers the invocation's process group under the run and purpose it was
+// launched for, and hands back the forget.
+func (r *registry) starter(run, purpose string) func(pgid int) func() {
+	return func(pgid int) func() { return r.add(run, purpose, pgid) }
 }
 
 // Contained reports whether the process on the other end of a connection is

@@ -451,9 +451,16 @@ func (s *Service) cancelAdvancing() {
 // is refused every restricted method. internal/agents starts an agent as the
 // leader of a new process group, which is the identifier to pass here.
 //
-// Nothing in this build calls it, and doc.go owns why rather than hiding it:
-// until a stage launcher calls this, the registry is empty and containment
-// refuses nobody.
+// On a run's path nothing needs to call it, because registration is the
+// wrapper's: driverFor wraps the resolved runner in containRunner, which sets
+// agents.Invocation.Started on every invocation, and the adapter then reports
+// the group when the process starts and its end when the tree has been
+// terminated. This entry point remains for a launcher outside that path.
+// The residual gaps are the relation's own: a descendant that moves itself to
+// a new process group is no longer in the registered one, which
+// internal/agents' documentation names, and a peer whose group cannot be read
+// while a stage runs has its request refused rather than passed, which
+// contain.go states.
 func (s *Service) StageStarted(run, stage string, pgid int) func() {
 	return s.registry.add(run, stage, pgid)
 }
@@ -474,6 +481,11 @@ func (s *Service) driverFor(ctx context.Context) (*driver, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Every invocation of a run passes through the resolved runner or the
+	// fixer it opens, so wrapping here is what registers each one's process
+	// group with the containment registry for as long as it runs; contain.go
+	// owns the wrapper and StageStarted's doc owns what registration buys.
+	resolution.Runner = s.containRunner(resolution.Runner)
 	runService, err := runs.New(runs.Options{
 		Store:        s.store,
 		Agent:        resolution,
