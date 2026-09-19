@@ -213,7 +213,8 @@ assistant --json status        # the same answer as one structured document
 assistant doctor               # can a run start at all, and what stops one
 ```
 
-The home is `~/.assistant` unless `ASSISTANT_HOME` names another root. Add
+The home is `~/.assistant` unless `ASSISTANT_HOME` names another root, and
+`--home PATH` names one for a single command. Add
 `--json` to any command for the machine interface: one document on standard
 output, progress on standard error, and three exit codes that mean success or
 a normal decision point, an operational failure, and incorrect usage.
