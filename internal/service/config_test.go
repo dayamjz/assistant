@@ -71,6 +71,16 @@ func TestARunResolvesTheTrustedRepositoryConfiguration(t *testing.T) {
 		if run.Record.ConfigDigest == "" {
 			t.Fatal("the run records no configuration digest")
 		}
+		// The record carries the resolution's other two facts, and it arrived
+		// here over the wire, so the structured surface carries them too. A
+		// resolution that dropped nothing is a known empty list, which is a
+		// different fact from the unknown a run keeps until it resolves.
+		if rejected, known := run.Record.ConfigRejections.Get(); !known || len(rejected) != 0 {
+			t.Fatalf("ConfigRejections = %v (known=%v), want a known empty list", rejected, known)
+		}
+		if name, known := run.Record.ResolvedAgent.Get(); !known || name == "" {
+			t.Fatalf("ResolvedAgent = %v, want the agent the run resolved", run.Record.ResolvedAgent)
+		}
 
 		// A second run after the trusted document changes records a different
 		// digest, which is what makes the record trace to the documents the
@@ -175,6 +185,28 @@ func TestAPushedCommandDoesNotDisplaceTheTrustedOne(t *testing.T) {
 		if view.Outcome != pipeline.OutcomePassed {
 			t.Fatalf("the test stage came back %s; the trusted command passes, so a run that read "+
 				"the pushed copy as trusted is the likely cause", view.Outcome)
+		}
+		// The displaced key is on the run's record, so the author who set it
+		// learns it had no effect from the run rather than from the service
+		// log; the record arrived here over the wire, so the structured
+		// surface carries the same lines. The rejection text is
+		// config.Rejection's rendering, held here to the two facts an author
+		// acts on: which key, and that the pushed layer is what lost it.
+		rejected, known := run.Record.ConfigRejections.Get()
+		if !known || len(rejected) == 0 {
+			t.Fatalf("ConfigRejections = %v (known=%v), want the dropped pushed key reported", rejected, known)
+		}
+		var namesTheKey bool
+		for _, line := range rejected {
+			if strings.Contains(line, "commands.test") && strings.Contains(line, "pushed") {
+				namesTheKey = true
+			}
+		}
+		if !namesTheKey {
+			t.Fatalf("no rejection names the pushed commands.test: %v", rejected)
+		}
+		if name, _ := run.Record.ResolvedAgent.Get(); name != "claude" {
+			t.Fatalf("ResolvedAgent = %v, want the resolved stand-in's name", run.Record.ResolvedAgent)
 		}
 	})
 }

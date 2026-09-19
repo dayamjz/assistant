@@ -167,6 +167,47 @@ func TestAStalledRunAndARunInFlightDoNotRenderTheSame(t *testing.T) {
 	}
 }
 
+// The record's configuration rejections and resolved agent are rendered where
+// a run is shown, so an author whose key was dropped reads that from the
+// command rather than from the service log, and only when the record carries
+// them: a run recorded before either fact existed prints neither line, because
+// an unknown is not an empty answer.
+func TestARunsRejectedKeysAndResolvedAgentAreRendered(t *testing.T) {
+	t.Parallel()
+	rejection := "commands.test is trusted-repository-and-above and was set from the pushed layer"
+
+	var out bytes.Buffer
+	readOut(&out, machine.Run{
+		Record: store.Run{
+			ID: "abc", Branch: "work", Status: store.RunHeld,
+			ConfigRejections: store.Known([]string{rejection}),
+			ResolvedAgent:    store.Known("claude"),
+		},
+	})
+	rendered := out.String()
+	if !strings.Contains(rendered, "Agent      claude\n") {
+		t.Fatalf("the rendering does not name the resolved agent:\n%s", rendered)
+	}
+	if !strings.Contains(rendered, "Rejected from this run's configuration:\n  "+rejection+"\n") {
+		t.Fatalf("the rendering does not carry the rejection line:\n%s", rendered)
+	}
+
+	out.Reset()
+	readOut(&out, machine.Run{
+		Record: store.Run{
+			ID: "abc", Branch: "work", Status: store.RunHeld,
+			ConfigRejections: store.Known([]string{}),
+		},
+	})
+	rendered = out.String()
+	if strings.Contains(rendered, "Agent") {
+		t.Fatalf("a record with no resolved agent rendered an Agent line:\n%s", rendered)
+	}
+	if strings.Contains(rendered, "Rejected") {
+		t.Fatalf("a resolution that dropped nothing rendered a rejection header:\n%s", rendered)
+	}
+}
+
 // renderFor drives the rendering an answer gets and returns the exit code, so
 // a test asserts what a caller sees rather than a value on its way there.
 func renderFor(w *bytes.Buffer, answer any) machine.Code {

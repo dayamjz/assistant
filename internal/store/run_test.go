@@ -528,8 +528,11 @@ func TestRunStatusesAreAClosedSet(t *testing.T) {
 
 // The configuration digest is replaceable after creation, because a run's row
 // is written before its repository's configuration copies are read and PRD
-// section 8's traceability is about what the run actually resolved.
-func TestSetRunConfigDigestReplacesThePlaceholder(t *testing.T) {
+// section 8's traceability is about what the run actually resolved. The
+// rejected keys ride the same write, and a resolution that dropped nothing is
+// a known empty list, which is a different fact from the unknown a run keeps
+// until its own resolution exists.
+func TestSetRunConfigResolutionReplacesThePlaceholder(t *testing.T) {
 	ctx := context.Background()
 	s := openStore(t)
 	seedRepository(t, s)
@@ -537,8 +540,13 @@ func TestSetRunConfigDigestReplacesThePlaceholder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateRun: %v", err)
 	}
-	if err := s.SetRunConfigDigest(ctx, r.ID, "resolved-digest"); err != nil {
-		t.Fatalf("SetRunConfigDigest: %v", err)
+	if r.ConfigRejections.IsKnown() {
+		t.Fatalf("a run created before its resolution carries rejections %v", r.ConfigRejections)
+	}
+
+	rejected := []string{"agent is operator-only and was set from the pushed layer"}
+	if err := s.SetRunConfigResolution(ctx, r.ID, "resolved-digest", rejected); err != nil {
+		t.Fatalf("SetRunConfigResolution: %v", err)
 	}
 	got, err := s.Run(ctx, r.ID)
 	if err != nil {
@@ -547,10 +555,59 @@ func TestSetRunConfigDigestReplacesThePlaceholder(t *testing.T) {
 	if got.ConfigDigest != "resolved-digest" {
 		t.Fatalf("ConfigDigest = %q, want the replacement", got.ConfigDigest)
 	}
-	if err := s.SetRunConfigDigest(ctx, "no-such-run", "d"); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("SetRunConfigDigest on a missing run: %v", err)
+	if lines, known := got.ConfigRejections.Get(); !known || len(lines) != 1 || lines[0] != rejected[0] {
+		t.Fatalf("ConfigRejections = %v, want the recorded line", got.ConfigRejections)
 	}
-	if err := s.SetRunConfigDigest(ctx, r.ID, " "); err == nil {
+
+	// A resolution that dropped nothing reads back as known and empty, not as
+	// the unknown a run refused before resolution keeps.
+	if err := s.SetRunConfigResolution(ctx, r.ID, "second-digest", nil); err != nil {
+		t.Fatalf("SetRunConfigResolution with no rejections: %v", err)
+	}
+	got, err = s.Run(ctx, r.ID)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if lines, known := got.ConfigRejections.Get(); !known || len(lines) != 0 {
+		t.Fatalf("ConfigRejections = %v (known=%v), want a known empty list", lines, known)
+	}
+
+	if err := s.SetRunConfigResolution(ctx, "no-such-run", "d", nil); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("SetRunConfigResolution on a missing run: %v", err)
+	}
+	if err := s.SetRunConfigResolution(ctx, r.ID, " ", nil); err == nil {
 		t.Fatal("an empty digest was accepted, so a run could be made untraceable after the fact")
+	}
+}
+
+// The resolved agent's name is recordable after creation, unknown until then,
+// and never fabricated: a run refused before an agent answered for it keeps
+// the unknown.
+func TestSetRunResolvedAgentRecordsTheName(t *testing.T) {
+	ctx := context.Background()
+	s := openStore(t)
+	seedRepository(t, s)
+	r, err := s.CreateRun(ctx, completeRun())
+	if err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	if r.ResolvedAgent.IsKnown() {
+		t.Fatalf("a run created before resolution carries the agent %v", r.ResolvedAgent)
+	}
+	if err := s.SetRunResolvedAgent(ctx, r.ID, "claude"); err != nil {
+		t.Fatalf("SetRunResolvedAgent: %v", err)
+	}
+	got, err := s.Run(ctx, r.ID)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if name, known := got.ResolvedAgent.Get(); !known || name != "claude" {
+		t.Fatalf("ResolvedAgent = %v, want the recorded name", got.ResolvedAgent)
+	}
+	if err := s.SetRunResolvedAgent(ctx, "no-such-run", "claude"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("SetRunResolvedAgent on a missing run: %v", err)
+	}
+	if err := s.SetRunResolvedAgent(ctx, r.ID, " "); err == nil {
+		t.Fatal("an empty agent name was accepted, so the record could name an agent nobody resolved")
 	}
 }

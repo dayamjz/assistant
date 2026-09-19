@@ -372,8 +372,15 @@ func (s *Service) begin(ctx context.Context, record store.Run, start pipeline.St
 	}
 	// The record catches up to the run's own resolution, so a surprising
 	// verdict traces to the three documents the run was actually given rather
-	// than to the operator-layer placeholder create wrote.
-	if err := s.store.SetRunConfigDigest(ctx, record.ID, resolved.digest); err != nil {
+	// than to the operator-layer placeholder create wrote. The keys that
+	// resolution rejected ride the same write, and the resolved agent's name
+	// is recorded beside them, so both facts reach the surfaces that report
+	// the record rather than only this service's log. A run refused before
+	// this point carries neither: the record understates.
+	if err := s.store.SetRunConfigResolution(ctx, record.ID, resolved.digest, resolved.rejected); err != nil {
+		return machine.Run{}, err
+	}
+	if err := s.store.SetRunResolvedAgent(ctx, record.ID, built.agent.Name); err != nil {
 		return machine.Run{}, err
 	}
 	topo, err := s.topologyFor(built, resolved)

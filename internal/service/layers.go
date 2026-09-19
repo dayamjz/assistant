@@ -84,6 +84,12 @@ type runResolution struct {
 	// documents digest differently, which is the point: the question a reader
 	// asks is which settings the run was given.
 	digest string
+	// rejected is each key the resolution dropped because the layer that set
+	// it was not allowed to, rendered as config.Rejection does, in the order
+	// the resolution reported them. It goes to the run's record with the
+	// digest, so an author whose key had no effect can read that from the
+	// run rather than from this service's log.
+	rejected []string
 }
 
 // resolveRunConfig reads the run's two repository configuration copies and
@@ -115,16 +121,19 @@ func (s *Service) resolveRunConfig(ctx context.Context, record store.Run) (runRe
 	if err != nil {
 		return runResolution{}, fmt.Errorf("service: resolving the configuration of run %s: %w", record.ID, err)
 	}
+	rejected := make([]string, 0, len(resolution.Rejected))
 	for _, rejection := range resolution.Rejected {
 		s.log.Printf("run %s: configuration key dropped: %s", record.ID, rejection)
+		rejected = append(rejected, rejection.String())
 	}
 	if !slices.Equal(resolution.Config.Agent, s.cfg.Agent) {
 		return runResolution{}, fmt.Errorf("%w: the run resolves %v and this service resolved %v",
 			ErrRepositoryAgent, resolution.Config.Agent, s.cfg.Agent)
 	}
 	return runResolution{
-		cfg:    resolution.Config,
-		digest: runConfigDigest(s.digest, trustedAt, trustedBytes, pushedBytes),
+		cfg:      resolution.Config,
+		digest:   runConfigDigest(s.digest, trustedAt, trustedBytes, pushedBytes),
+		rejected: rejected,
 	}, nil
 }
 

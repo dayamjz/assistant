@@ -99,10 +99,12 @@ type installed struct {
 // document the branch pushed has the three keys it may not set dropped and
 // reported as rejections while the one it may set survives, and a home asking
 // for a suppression the resolved adapter does not implement is refused before
-// anything launches. Which agent a run resolved is reported by no shipped
-// surface at all - no internal/machine shape carries one, and the doctor's
-// agent check resolves the constant "auto" against the default catalog, so it
-// answers what is runnable on this machine rather than what a run resolved.
+// anything launches. Which agent a run resolved is on the run's record now,
+// beside the resolution's rejected keys, and the run-reporting surfaces relay
+// both; this test predates that and reads neither off a record, so what it
+// establishes about them is unchanged. The doctor's agent check still
+// resolves the constant "auto" against the default catalog, so it answers
+// what is runnable on this machine rather than what any run resolved.
 //
 // The suppressed case is here too, and it is a refusal rather than a run. The
 // shipped adapter declares no instruction suppression, so a home asking for it
@@ -180,9 +182,9 @@ func TestTheBranchUnderValidationChoosesNothingThatRuns(t *testing.T) {
 
 	// The call the pushed-configuration condition names, driven in process so
 	// the rejection texts are readable here: the run above performs the full
-	// three-document composition through internal/service, and reports its
-	// rejections to the service log rather than on the wire, so this is the
-	// same rule read where a clause can quote it.
+	// three-document composition through internal/service, which records its
+	// rejections on the run's row now; this in-process read predates that
+	// record and is kept as the same rule read where a clause can quote it.
 	pushed := pushedLayer(t, scenario)
 	resolution, err := config.Resolve(config.Absent(config.OriginGlobal), pushed)
 	if err != nil {
