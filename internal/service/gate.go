@@ -92,12 +92,13 @@ func (s *Service) gateSubject(ctx context.Context, id string) (subject, error) {
 // Containment is decided before this is reached rather than here.
 // internal/ipc refuses a restricted method to a caller its Ancestry places
 // inside an active validation stage, and this method is restricted, so this is
-// where PRD section 9's "push around a pipeline" would be refused - before any
-// reference in the gate changes, on the one surface a push arrives on. Whether
-// anything is contained today is a different question, and doc.go answers it:
-// nothing calls StageStarted in this build, so the registry is empty and the
-// refusal has nothing to fire on. That is stated rather than implied, because
-// a restricted method reads as a guarded one.
+// where PRD section 9's "push around a pipeline" is refused - before any
+// reference in the gate changes, on the one surface a push arrives on. The
+// registry has a producer now: containRunner registers every invocation the
+// resolved agent runs for as long as its process group exists, so an agent
+// inside a stage that pushes to the gate is a caller Ancestry places inside
+// that stage. The gaps that remain are stated on StageStarted rather than
+// implied here.
 func (s *Service) admit(ctx context.Context, req machine.GateRequest) (machine.Admission, error) {
 	// Resolving is the check; the resolution itself is the notification's to
 	// use.

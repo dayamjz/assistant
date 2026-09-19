@@ -372,8 +372,15 @@ func (s *Service) begin(ctx context.Context, record store.Run, start pipeline.St
 	}
 	// The record catches up to the run's own resolution, so a surprising
 	// verdict traces to the three documents the run was actually given rather
-	// than to the operator-layer placeholder create wrote.
-	if err := s.store.SetRunConfigDigest(ctx, record.ID, resolved.digest); err != nil {
+	// than to the operator-layer placeholder create wrote. The keys that
+	// resolution rejected ride the same write, and the resolved agent's name
+	// is recorded beside them, so both facts reach the surfaces that report
+	// the record rather than only this service's log. A run refused before
+	// this point carries neither: the record understates.
+	if err := s.store.SetRunConfigResolution(ctx, record.ID, resolved.digest, resolved.rejected); err != nil {
+		return machine.Run{}, err
+	}
+	if err := s.store.SetRunResolvedAgent(ctx, record.ID, built.agent.Name); err != nil {
 		return machine.Run{}, err
 	}
 	topo, err := s.topologyFor(built, resolved)
@@ -487,7 +494,10 @@ func baseCommit(ctx context.Context, working *vcs.Repository, head, defaultBranc
 // caller that reads an answer and immediately asks again finds the record
 // already settled rather than the run still moving.
 func (s *Service) advance(ctx context.Context, runID string, step func(context.Context) (graph.Result, error)) (machine.Run, error) {
-	segment, cancel := context.WithCancel(context.WithoutCancel(ctx))
+	// The segment carries which run it advances, so the containment wrapper
+	// around the resolved agent can register an invocation under the run that
+	// launched it without any stage body carrying the fact there.
+	segment, cancel := context.WithCancel(withAdvancing(context.WithoutCancel(ctx), runID))
 	if err := s.claim(runID, cancel); err != nil {
 		cancel()
 		return machine.Run{}, err

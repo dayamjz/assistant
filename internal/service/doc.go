@@ -225,22 +225,25 @@
 // agent as the leader of a new process group, so everything a stage's agent
 // starts is in that group unless it deliberately leaves it, and a group this
 // service started for a stage is a fact this service holds rather than one a
-// caller states. StageStarted is how a stage launcher records one.
+// caller states. StageStarted is how a launcher records one, and on the
+// agent's path nothing needs to call it: driverFor wraps the resolved runner
+// in containRunner, which sets agents.Invocation.Started on every invocation
+// - a stage's through the agents.StageAgent seam and a fix round's through
+// the fixer the wrapped runner opens - so the adapter reports the group when
+// the process starts and its end once the tree has been terminated, and the
+// registration spans exactly the process's lifetime. The run it is filed
+// under is the one the segment context names and the stage recorded is the
+// invocation's purpose, both of which contain.go owns.
 //
 // Two things about that are worth being exact about, because a guard nobody
 // can see fire is worth nothing. It fires: TestACallerInsideAnActiveStageIsRefused
 // registers this test process's own group and then makes a restricted call,
-// which is refused with ipc.ErrContained. And it has no producer in this
-// build: nothing calls StageStarted. The intent body starts no process, the
-// pull request body launches only internal/forge's provider command and
-// nothing on that path calls StageStarted either, the review body launches
-// its agent through the agents.StageAgent seam, and nothing on that path
-// records the process group here, and the test
-// body starts the configured command, and nothing on that path records a
-// group here either. So the registry is empty and nothing is contained today. What that costs is stated rather
-// than implied: until a stage launcher
-// calls StageStarted, containment protects nothing. The alternative, refusing
-// every restricted call until then, is a service nobody can drive.
+// which is refused with ipc.ErrContained. And its producer covers the agent
+// and only the agent: the configured commands the test, document and lint
+// bodies run, and the provider command the pull request and checks bodies
+// launch, are started outside internal/agents and register no group, so a
+// push made from inside one of those is not contained. That is stated rather
+// than implied, because a restricted method reads as a guarded one.
 //
 // The residual gap is the same one internal/agents names for its own sweep: a
 // descendant that leaves its process group escapes the relation. Closing that

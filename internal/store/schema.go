@@ -311,4 +311,26 @@ var schema = []migration{
 				END`,
 		},
 	},
+	{
+		version: 7,
+		name:    "run configuration rejections and resolved agent",
+		statements: []string{
+			// The rejection lines the run's own configuration resolution
+			// reported: the keys a layer set that its origin was not allowed
+			// to set, one rendered line per rejection, stored as a JSON array
+			// so a resolution that dropped nothing reads back as an empty list
+			// rather than as nothing recorded. It is written together with the
+			// resolved digest, so the two describe one resolution.
+			//
+			// Both columns are nullable and carry no default, so a run
+			// recorded before they existed - and a run refused before its own
+			// resolution or its agent existed - reads back unknown rather
+			// than as a fabricated empty answer. The record understates.
+			`ALTER TABLE run ADD COLUMN config_rejections TEXT`,
+			// The name of the agent the run resolved, as configuration spells
+			// it. It is a name and not a second record of the agent: what the
+			// name means is the agent catalog's.
+			`ALTER TABLE run ADD COLUMN resolved_agent TEXT`,
+		},
+	},
 }

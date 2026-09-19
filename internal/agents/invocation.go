@@ -143,6 +143,22 @@ type Invocation struct {
 	Env map[string]string
 	// Model names the model to run, empty to leave the choice to the agent.
 	Model string
+	// Started, when set, is told that the invocation's process has started:
+	// it is called once, after the process exists, with the identifier of the
+	// process group the invocation leads, and the function it returns is
+	// called after the invocation's process tree has been terminated. On a
+	// platform without process groups the identifier is the leader's process
+	// identifier, and whether anything can read a peer's group there is the
+	// caller's question, not this one.
+	//
+	// It is transport rather than shape: Validate does not read it, no Record
+	// carries it, and an invocation that never starts a process never calls
+	// it. It exists for the containment relation PRD section 9 rests on -
+	// internal/service registers the group so a caller inside a validation
+	// stage is refused the gate's restricted methods - and on a run's path the
+	// service's own wrapper owns the field, so a value set earlier is
+	// replaced there rather than chained.
+	Started func(pgid int) (ended func())
 }
 
 // Validate reports whether the invocation can be run at all. Every refusal

@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -100,6 +101,20 @@ type Run struct {
 	// surprising verdict can be traced to the settings that reached it as well
 	// as to the code.
 	ConfigDigest string `json:"config_digest"`
+	// ConfigRejections lists the keys the run's own configuration resolution
+	// dropped because the layer that set them was not allowed to, one rendered
+	// line per rejection, in the order the resolution reported them. It is
+	// recorded with ConfigDigest when the run's own resolution exists, so a
+	// known empty list is a resolution that dropped nothing. It is unknown for
+	// a run recorded before the column existed and for one refused before its
+	// configuration resolved: the record understates rather than fabricating
+	// an empty answer.
+	ConfigRejections Optional[[]string] `json:"config_rejections"`
+	// ResolvedAgent is the name of the agent the run resolved, as
+	// configuration spells it. It is unknown for a run recorded before the
+	// column existed and for one refused before an agent answered for it, so
+	// the record understates here too.
+	ResolvedAgent Optional[string] `json:"resolved_agent"`
 	// CreatedAt is when the run was recorded, which PRD section 8 requires to
 	// precede the creation of its directory.
 	CreatedAt time.Time `json:"created_at"`
@@ -141,11 +156,13 @@ func (s *Store) CreateRun(ctx context.Context, r Run) (Run, error) {
 				id, repository_id, branch, submitted_head, base, current_head, status,
 				approved_commit, push_binding, pull_request, fixer_session, intent, intent_source,
 				build_version, build_revision, build_modified, build_go, config_digest,
+				config_rejections, resolved_agent,
 				created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			r.ID, r.RepositoryID, r.Branch, r.SubmittedHead, r.Base, r.CurrentHead, string(r.Status),
 			r.ApprovedCommit, r.PushBinding, r.PullRequest, r.FixerSession, r.Intent, r.IntentSource,
 			r.Build.Version, r.Build.Revision, boolToInt(r.Build.Modified), r.Build.Go, r.ConfigDigest,
+			rejectionsText(r.ConfigRejections), r.ResolvedAgent,
 			encodeTime(now), encodeTime(now))
 		return err
 	})
@@ -292,8 +309,8 @@ func (s *Store) SetRunPullRequest(ctx context.Context, id, pullRequest string) e
 	return s.updateRun(ctx, id, "pull_request", pullRequest)
 }
 
-// SetRunConfigDigest replaces the digest identifying the configuration the run
-// resolved.
+// SetRunConfigResolution replaces the digest identifying the configuration the
+// run resolved and records the keys that resolution rejected, in one write.
 //
 // A run's record is created before its repository's configuration copies are
 // read, because PRD section 8 orders the row before the run's directory and
@@ -301,8 +318,44 @@ func (s *Store) SetRunPullRequest(ctx context.Context, id, pullRequest string) e
 // created with covers what was known then. This is how the record catches up
 // once the run's own resolution exists, keeping PRD section 8's traceability
 // about what the run actually resolved rather than about a placeholder.
-func (s *Store) SetRunConfigDigest(ctx context.Context, id, digest string) error {
-	return s.updateRun(ctx, id, "config_digest", digest)
+//
+// The rejections travel with the digest because they are two facts about one
+// resolution, and a write that carried one without the other could leave the
+// record describing a digest with another resolution's rejections beside it. A
+// nil or empty rejected records "this resolution dropped nothing", which is a
+// different fact from the unknown a run refused before resolution keeps.
+//
+// It refuses an empty digest, so a run cannot be made untraceable after the
+// fact, and an unknown run with ErrNotFound.
+func (s *Store) SetRunConfigResolution(ctx context.Context, id, digest string, rejected []string) error {
+	if strings.TrimSpace(digest) == "" {
+		return fmt.Errorf("store: run %s: config_digest is empty", id)
+	}
+	encoded := encodeRejections(rejected)
+	return s.inTx(ctx, func(tx *sql.Tx) error {
+		result, err := tx.ExecContext(ctx,
+			`UPDATE run SET config_digest = ?, config_rejections = ?, updated_at = ? WHERE id = ?`,
+			digest, encoded, encodeTime(nowUTC()), id)
+		if err != nil {
+			return fmt.Errorf("store: updating run %s: %w", id, err)
+		}
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("store: updating run %s: %w", id, err)
+		}
+		if affected == 0 {
+			return fmt.Errorf("store: updating run %s: %w", id, ErrNotFound)
+		}
+		return nil
+	})
+}
+
+// SetRunResolvedAgent records the name of the agent the run resolved, as
+// configuration spells it. It is a name and not a second record of the agent:
+// what the name means is the agent catalog's, and internal/agents owns the
+// resolution itself.
+func (s *Store) SetRunResolvedAgent(ctx context.Context, id, name string) error {
+	return s.updateRun(ctx, id, "resolved_agent", name)
 }
 
 // updateRun writes one column of one run. The column name is never a caller's
@@ -334,16 +387,19 @@ const runColumns = `SELECT
 	id, repository_id, branch, submitted_head, base, current_head, status,
 	approved_commit, push_binding, pull_request, fixer_session, intent, intent_source,
 	build_version, build_revision, build_modified, build_go, config_digest,
+	config_rejections, resolved_agent,
 	created_at, updated_at`
 
 func scanRun(sc scanner) (Run, error) {
 	var r Run
 	var status, created, updated string
 	var modified int
+	var rejections Optional[string]
 	if err := sc.Scan(
 		&r.ID, &r.RepositoryID, &r.Branch, &r.SubmittedHead, &r.Base, &r.CurrentHead, &status,
 		&r.ApprovedCommit, &r.PushBinding, &r.PullRequest, &r.FixerSession, &r.Intent, &r.IntentSource,
 		&r.Build.Version, &r.Build.Revision, &modified, &r.Build.Go, &r.ConfigDigest,
+		&rejections, &r.ResolvedAgent,
 		&created, &updated,
 	); err != nil {
 		return Run{}, err
@@ -351,6 +407,9 @@ func scanRun(sc scanner) (Run, error) {
 	r.Status = RunStatus(status)
 	r.Build.Modified = modified != 0
 	var err error
+	if r.ConfigRejections, err = rejectionsValue(rejections); err != nil {
+		return Run{}, err
+	}
 	if r.CreatedAt, err = decodeTime(created); err != nil {
 		return Run{}, err
 	}
@@ -358,6 +417,46 @@ func scanRun(sc scanner) (Run, error) {
 		return Run{}, err
 	}
 	return r, nil
+}
+
+// encodeRejections renders the rejection lines as the JSON array the column
+// stores. nil and empty both encode as [], which reads back as a resolution
+// that dropped nothing; the encoding cannot say "unknown", which is the
+// column's NULL and not a value.
+func encodeRejections(list []string) string {
+	if list == nil {
+		list = []string{}
+	}
+	// Encoding a []string cannot fail: json.Marshal replaces invalid UTF-8
+	// rather than refusing it.
+	encoded, _ := json.Marshal(list)
+	return string(encoded)
+}
+
+// rejectionsText converts an optional rejection list to the stored text, for
+// the one insert that writes whatever the caller's Run carries.
+func rejectionsText(o Optional[[]string]) Optional[string] {
+	list, ok := o.Get()
+	if !ok {
+		return Unknown[string]()
+	}
+	return Known(encodeRejections(list))
+}
+
+// rejectionsValue converts stored text back to the optional list. Text that is
+// present but not the stored encoding is an error rather than an unknown,
+// because reporting a corrupt row as "no resolution was recorded" is the
+// fabrication Optional exists to prevent.
+func rejectionsValue(o Optional[string]) (Optional[[]string], error) {
+	text, ok := o.Get()
+	if !ok {
+		return Unknown[[]string](), nil
+	}
+	var list []string
+	if err := json.Unmarshal([]byte(text), &list); err != nil {
+		return Unknown[[]string](), fmt.Errorf("store: column config_rejections: %w", err)
+	}
+	return Known(list), nil
 }
 
 func boolToInt(b bool) int {

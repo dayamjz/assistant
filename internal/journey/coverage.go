@@ -163,13 +163,15 @@ func Coverage() []Established {
 				"file is asserted quiet with that execution as what makes the absence " +
 				"discriminating, so nothing the branch installed executed and nothing it named was " +
 				"selected. The same test drives the suppression refusal, and reads the rejections " +
-				"of the branch's own keys in process, because a run reports its rejections to the " +
-				"service log rather than on any shipped surface. A run over a trusted document that " +
+				"of the branch's own keys in process; the run's record carries its rejections and " +
+				"its resolved agent now, and the in-process read predates that rather than " +
+				"establishing anything about it. A run over a trusted document that " +
 				"will not parse is refused through the binary before anything launches, and the " +
 				"in-process reads hold that refusal's exact shape to the planted conditions. What " +
 				"stays unestablished and no clause claims: whether a template's hooks arrived or " +
 				"ran, since those are receive-side and the four subtests that plant one make no " +
-				"push, and which agent a run resolved, since no shipped surface reports it. The " +
+				"push, and which agent a run resolved, which the run's record now reports and no " +
+				"check here reads. The " +
 				"runs go through methods internal/ipc restricts, so on a platform where that " +
 				"package reads no local socket peer credentials they are skipped rather than " +
 				"passing; what is established there is the template initialization, which needs no " +

@@ -118,8 +118,8 @@ func Drives() []Drove {
 				"commands.test against the branch, and converges at the failing check, and the " +
 				"tripwire file is asserted quiet with that execution as the fact that makes the " +
 				"absence discriminating. The branch's own \"agent\" is read as a rejection of the " +
-				"pushed layer in process, because rejections reach the service log rather than any " +
-				"shipped surface, and the suppression refusal is driven in a home of its own. The " +
+				"pushed layer in process - the run's record carries its rejections now, and this " +
+				"read predates that - and the suppression refusal is driven in a home of its own. The " +
 				"run's fix rounds launch the operator-resolved stand-in, scripted to change " +
 				"nothing; the .claude hooks and the branch's agent binary stay unreached because " +
 				"the walk skips the review stage and the resolution rejects the branch's agent, " +
@@ -128,9 +128,10 @@ func Drives() []Drove {
 			"The run above is this condition's tripwire half through the binary: the test stage " +
 				"executed the trusted commands.test while the branch's own, a script that would " +
 				"have appended to the tripwire file, left it empty. The rejections are read in " +
-				"process, over config.Resolve on the operator's layer and the pushed one, because " +
-				"the run's own rejections reach the service log rather than any shipped surface; " +
-				"the three keys are dropped and reported and the one the branch may set survives."},
+				"process, over config.Resolve on the operator's layer and the pushed one - a read " +
+				"that predates the run's record carrying its own rejections and has not been " +
+				"rewired to it; the three keys are dropped and reported and the one the branch " +
+				"may set survives."},
 		{"refusal-unparseable-trusted-config", ReachBinary, trustedDoc,
 			"Both reaches. The document is read off the default branch through internal/vcs and " +
 				"parsed in process, which is where the refusal's shape is held to the condition; " +

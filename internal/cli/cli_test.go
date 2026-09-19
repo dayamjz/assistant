@@ -3,6 +3,9 @@ package cli_test
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -322,6 +325,78 @@ func TestDoctorDecidesWhetherARunCanStart(t *testing.T) {
 	if !namesCheck(report, "stages") {
 		t.Fatal("doctor does not report how much of the gate this build implements")
 	}
+	if !namesCheck(report, "code host") {
+		t.Fatal("doctor does not report whether the code-host provider command line is runnable")
+	}
+}
+
+// doctor reports whether the code-host provider command line resolves, and
+// the row does not decide: a run can start without a code host and the stages
+// that talk to one refuse there, so the row informs before a stage does. The
+// test builds a PATH holding git and no provider, so what the row reports is
+// established rather than being whatever this machine has installed; it stays
+// serial because PATH is process state that every command run here reads.
+func TestDoctorReportsTheCodeHostAndDoesNotBlockOnIt(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("building a PATH that holds git and nothing else needs a symlink this test cannot portably make on windows")
+	}
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatalf("resolving git: %v", err)
+	}
+	bin := t.TempDir()
+	if err := os.Symlink(realGit, filepath.Join(bin, "git")); err != nil {
+		t.Fatalf("planting git on the probe PATH: %v", err)
+	}
+	t.Setenv("PATH", bin)
+	h := newHome(t)
+	subject := newSubject(t)
+
+	report := decodeDoctor(t, run(t, h, subject, "--json", "doctor").stdout)
+	row, found := findCheck(report, "code host")
+	if !found {
+		t.Fatal("doctor does not report the code host")
+	}
+	if row.OK {
+		t.Fatalf("doctor reports a provider command line that is not on PATH as runnable: %s", row.Detail)
+	}
+	if row.Blocking {
+		t.Fatal("the code host row blocks, and a run can start without a code host")
+	}
+	if row.Detail == "" {
+		t.Fatal("the code host row is not OK and does not say what was found")
+	}
+	// The decision does not count it: what stops a run from starting names the
+	// blocking rows that failed and the code host is not among them.
+	if report.CanStartRun {
+		t.Fatal("doctor says a run can start with no gate and no service, so the decision below is not being made")
+	}
+	if strings.Contains(report.Detail, "code host") {
+		t.Fatalf("the code host is named among what stops a run from starting: %q", report.Detail)
+	}
+
+	// With a provider command line standing where PATH points, the same row
+	// reports it, path and all. The file only has to resolve: the probe's
+	// contract is that the command resolves to something this process may
+	// execute, not that it answers as a provider.
+	planted := filepath.Join(bin, "gh")
+	if err := os.WriteFile(planted, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("planting a provider command line: %v", err)
+	}
+	report = decodeDoctor(t, run(t, h, subject, "--json", "doctor").stdout)
+	row, found = findCheck(report, "code host")
+	if !found {
+		t.Fatal("doctor does not report the code host")
+	}
+	if !row.OK {
+		t.Fatalf("doctor reports a resolvable provider command line as not runnable: %s", row.Detail)
+	}
+	if row.Blocking {
+		t.Fatal("the code host row blocks")
+	}
+	if row.Detail != planted {
+		t.Fatalf("the code host row reports %q, want the resolved command line %q", row.Detail, planted)
+	}
 }
 
 // sync is present and refuses, because the module that owns reconciling a
@@ -391,12 +466,18 @@ func decodeRun(t *testing.T, document string) machine.Run {
 
 // namesCheck reports whether a doctor report looked at something.
 func namesCheck(report machine.Doctor, name string) bool {
+	_, found := findCheck(report, name)
+	return found
+}
+
+// findCheck returns what a doctor report says about one named check.
+func findCheck(report machine.Doctor, name string) (machine.Check, bool) {
 	for _, check := range report.Checks {
 		if check.Name == name {
-			return true
+			return check, true
 		}
 	}
-	return false
+	return machine.Check{}, false
 }
 
 // Every method the protocol serves has to be reachable from this surface, or

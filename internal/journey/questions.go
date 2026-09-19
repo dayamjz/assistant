@@ -143,13 +143,19 @@ func Settlements() []Settlement {
 				"so the composition had no owner - described the build before that call existed.",
 			Exercised: "A run over the harness-installation branch executes the trusted commands.test " +
 				"while the branch's own is rejected, which is the composition observed through the " +
-				"binary; the rejection texts are read at package reach because a run reports its " +
-				"rejections to the service log rather than on any shipped surface. A run over a " +
+				"binary; the rejection texts are read at package reach, which predates the run's " +
+				"record carrying them and has not been rewired to read them off it. A run over a " +
 				"trusted document that will not parse is refused before launching anything, through " +
 				"the binary as well.",
-			Raise: "A run's configuration rejections reach the service log only. A surface that " +
-				"relays them to the pushing author is worth raising against PRD section 9; until " +
-				"one exists, an author learns their key was dropped by reading the log.",
+			Raise: "Raised here once that a run's rejections reached the service log only; answered " +
+				"since. The run's record now carries the resolution's rejected keys and the " +
+				"resolved agent's name, written when the run begins, and the surfaces that report " +
+				"the record relay both: the terminal rendering prints an Agent line and the " +
+				"rejection lines wherever a run is shown, and the structured answer carries them " +
+				"on the record itself. What the record still understates: a run refused before " +
+				"its resolution carries neither fact, and a resume does not rewrite them, so " +
+				"they describe the resolution the run began under. This harness still reads the " +
+				"rejection texts in process rather than off a run's record.",
 		},
 		{
 			Question: "question-hookspath-redirect-observation",

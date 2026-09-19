@@ -95,10 +95,7 @@ func NewGitHub(redact vcs.Redactor, opts ...Option) (*GitHub, error) {
 	if redact == nil {
 		panic("forge: NewGitHub requires a Redactor")
 	}
-	s := settings{bin: DefaultGitHubBinary, maxOut: DefaultMaxOutput, grace: DefaultProviderGrace}
-	for _, opt := range opts {
-		opt(&s)
-	}
+	s := newSettings(opts)
 	if s.repo != "" && !validRepository(s.repo) {
 		return nil, &argumentError{
 			what:   "repository",

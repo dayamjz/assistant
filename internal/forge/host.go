@@ -1,6 +1,8 @@
 package forge
 
 import (
+	"os/exec"
+
 	"github.com/dayamjz/assistant/internal/vcs"
 )
 
@@ -88,4 +90,41 @@ func (h *GitHubHost) Open(repository string) (Provider, error) {
 		return nil, err
 	}
 	return adapter, nil
+}
+
+// Probe reports whether the provider command line this host would run
+// resolves here, and to what. It reads the same settled command line every
+// adapter Open builds runs - the executable WithBinary named, or
+// DefaultGitHubBinary through PATH - so its answer is about the invocation a
+// run would make rather than a second spelling of it.
+//
+// What it establishes is exactly one thing: that the command line resolves to
+// a file this process may execute, which is the requirement whose absence
+// every call otherwise reports as "the provider command line could not be
+// run". It runs nothing, on the same trade internal/agents makes for an
+// agent's availability: proving more would cost a process and a possible hang
+// at the moment a caller is deciding what can run here. So it deliberately
+// does not establish that the executable starts, that it behaves as a
+// provider, that it is authenticated, or that any repository is reachable;
+// each of those surfaces as its own refusal from the call that needs it, and
+// an executable that resolves and then fails to start is a gap this probe
+// does not close. Nor is the answer a lock: it is what resolves as it is
+// asked, and each invocation resolves again.
+//
+// A command line that resolves is returned as the resolved path. One that
+// does not is a *Refusal with ReasonUnavailable. A caller reporting the
+// refusal must not gate a run on it: a run can start without a code host, and
+// the stages that talk to one refuse there.
+func (h *GitHubHost) Probe() (string, error) {
+	s := newSettings(h.opts)
+	resolved, err := exec.LookPath(s.bin)
+	if err != nil {
+		return "", &Refusal{
+			Reason: ReasonUnavailable,
+			Op:     "probe",
+			Detail: h.redact.Redact("the provider command line could not be run: " + err.Error()),
+			Cause:  err,
+		}
+	}
+	return resolved, nil
 }

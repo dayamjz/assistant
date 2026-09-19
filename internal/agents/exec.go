@@ -31,6 +31,11 @@ type procSpec struct {
 	env    []string
 	grace  time.Duration
 	maxOut int64
+	// started is Invocation.Started, threaded through by the adapter: told
+	// once when the process has started, with the group leader's identifier,
+	// and the function it returns is called after the tree has been
+	// terminated. Nil means nobody is watching.
+	started func(pgid int) (ended func())
 }
 
 // procResult is what running a process produced. It reports what happened
@@ -99,6 +104,15 @@ func runProcess(ctx context.Context, spec procSpec) procResult {
 	if err := cmd.Start(); err != nil {
 		return procResult{code: -1, err: err}
 	}
+	// The process exists from here on, so whoever asked to watch it is told
+	// now, with the leader's identifier, which names the group everywhere
+	// setProcessGroup gives it one. The ended function runs after the final
+	// terminateTree below, so by the time a watcher is told the invocation is
+	// over, everything this package can end has been ended.
+	var ended func()
+	if spec.started != nil {
+		ended = spec.started(cmd.Process.Pid)
+	}
 
 	// The watcher terminates the tree the moment the context ends. It is
 	// joined before this function returns, so no goroutine outlives the call
@@ -125,6 +139,9 @@ func runProcess(ctx context.Context, spec procSpec) procResult {
 	// The leader has been reaped. Anything still in its group is a child it
 	// left behind, and the invocation owns it too.
 	terminateTree(cmd.Process, spec.grace, false, nil)
+	if ended != nil {
+		ended()
+	}
 
 	res := procResult{
 		stderr: stderr.text(),

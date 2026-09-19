@@ -105,12 +105,29 @@ func readOutService(w io.Writer, s machine.Service) {
 
 func readOutRun(w io.Writer, r machine.Run) {
 	writef(w, "Run        %s on %s (%s)\n", r.Record.ID, r.Record.Branch, r.Record.Status)
+	// The agent the run resolved, straight off the record. It is absent for a
+	// run recorded before one was resolved, and rendering nothing then is the
+	// record's own honesty carried through: an unknown is not a name.
+	if agent, ok := r.Record.ResolvedAgent.Get(); ok {
+		writef(w, "Agent      %s\n", printable(agent))
+	}
 	writef(w, "Outcome    %s%s\n", r.Outcome, advancingNote(r))
 	if r.Progress != nil {
 		writef(w, "Position   %s after %d of %d steps\n", positionOf(r), r.Steps, r.Budget)
 	}
 	if r.Reason != "" {
 		writef(w, "Reason     %s\n", r.Reason)
+	}
+	// The keys the run's configuration resolution dropped, one line each as
+	// the record carries them, so an author whose setting had no effect learns
+	// that here rather than from the service log. A resolution that dropped
+	// nothing, and a run with no recorded resolution, both print nothing: the
+	// lines exist to be acted on, not to say none were needed.
+	if rejected, ok := r.Record.ConfigRejections.Get(); ok && len(rejected) > 0 {
+		writeln(w, "Rejected from this run's configuration:")
+		for _, line := range rejected {
+			writef(w, "  %s\n", printable(line))
+		}
 	}
 	if len(r.Stages) > 0 {
 		writeln(w, "\nStages")

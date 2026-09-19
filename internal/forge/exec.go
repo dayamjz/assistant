@@ -87,6 +87,18 @@ type settings struct {
 	grace   time.Duration
 }
 
+// newSettings settles the defaults and applies the options over them. It is
+// the one place the provider command line and its bounds are settled, so the
+// adapter NewGitHub builds and the probe GitHubHost.Probe answers describe the
+// same invocation rather than two spellings of it.
+func newSettings(opts []Option) settings {
+	s := settings{bin: DefaultGitHubBinary, maxOut: DefaultMaxOutput, grace: DefaultProviderGrace}
+	for _, opt := range opts {
+		opt(&s)
+	}
+	return s
+}
+
 // WithBinary names the provider executable to run. The default is "gh",
 // resolved through PATH. A caller that pins an installation, or a test that
 // substitutes a stand-in, passes it here. An empty path leaves the default in
