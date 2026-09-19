@@ -525,3 +525,32 @@ func TestRunStatusesAreAClosedSet(t *testing.T) {
 		t.Fatal("writing to the returned slice changed the set")
 	}
 }
+
+// The configuration digest is replaceable after creation, because a run's row
+// is written before its repository's configuration copies are read and PRD
+// section 8's traceability is about what the run actually resolved.
+func TestSetRunConfigDigestReplacesThePlaceholder(t *testing.T) {
+	ctx := context.Background()
+	s := openStore(t)
+	seedRepository(t, s)
+	r, err := s.CreateRun(ctx, completeRun())
+	if err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	if err := s.SetRunConfigDigest(ctx, r.ID, "resolved-digest"); err != nil {
+		t.Fatalf("SetRunConfigDigest: %v", err)
+	}
+	got, err := s.Run(ctx, r.ID)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if got.ConfigDigest != "resolved-digest" {
+		t.Fatalf("ConfigDigest = %q, want the replacement", got.ConfigDigest)
+	}
+	if err := s.SetRunConfigDigest(ctx, "no-such-run", "d"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("SetRunConfigDigest on a missing run: %v", err)
+	}
+	if err := s.SetRunConfigDigest(ctx, r.ID, " "); err == nil {
+		t.Fatal("an empty digest was accepted, so a run could be made untraceable after the fact")
+	}
+}

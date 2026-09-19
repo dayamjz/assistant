@@ -26,10 +26,10 @@ import (
 // What was missing splits in two by lifetime, and the split is compelled
 // rather than tidy. An adapter cannot be serialized into state, so it cannot
 // be a run-scoped fact. And a run-scoped fact cannot ride a constructor,
-// because All is called once when the service resolves an agent and one
-// pipeline and one executor then serve every run: a value captured here would
-// be the same value for every run of this service. That second argument is the
-// decisive one, since it holds whether or not a process ever restarts.
+// because All is called once per resolved configuration and one pipeline and
+// one executor then serve every run that resolved the same documents: a value
+// captured here would be the same value for all of them. That second argument
+// is the decisive one, since it holds whether or not a process ever restarts.
 //
 // So the adapters are here, and the run's own facts are declared state keys in
 // internal/pipeline. KeyRepository and KeyRun are what Copy below derives its
@@ -117,9 +117,11 @@ type StageDeps struct {
 	// Config is the run's resolved configuration, and the review and test
 	// bodies are the consumers it is here for: ReviewPathRules is the extra
 	// guidance a review is held to, and Commands is what a test run executes.
-	// It is the operator's global layer and the schema defaults as this build
-	// resolves them; PRD section 10's trusted repository layer is not read
-	// anywhere yet, which internal/service's documentation states.
+	// It is PRD section 10's full resolution - the operator's layer, the
+	// repository document's trusted copy, and its pushed copy - which
+	// internal/service resolves per run and builds one of these seams for
+	// each distinct resolution of, so one StageDeps still serves every run
+	// that resolved the same documents.
 	Config config.Config
 	// Forge is the code host the pull request and checks stages open their
 	// provider on. It is a forge.Host and not a forge.Provider because a

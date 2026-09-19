@@ -568,9 +568,10 @@ func noLintCommandConfigured() findings.Report {
 			Action:   findings.ActionAsk,
 			Description: "No lint command is configured, so the lint stage had nothing to " +
 				"run and could not gather evidence that this change passes static analysis. " +
-				"Setting commands.lint in this machine's own configuration file is what gives this " +
-				"stage something to run in this build: the trusted repository layer is not read " +
-				"yet, so committing the key to the default branch does not reach here. The key " +
+				"Setting commands.lint in the repository's configuration document on the default " +
+				"branch, or in this machine's own configuration file, is what gives this " +
+				"stage something to run; the trusted copy is read at a fresh fetch of that " +
+				"branch, so the committed key reaches the next run. The key " +
 				"executes shell, so the branch under validation may name it only where " +
 				"allow_pushed_commands is set, and that opt-out is refused from a pushed branch, " +
 				"so a branch cannot turn it on for itself. Approving carries the run past a stage " +

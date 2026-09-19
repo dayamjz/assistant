@@ -158,15 +158,21 @@ func Watch(parent context.Context) context.Context {
 )
 
 // subjectConfig is the repository configuration document on the default
-// branch. It is the trusted copy: the commands and the agent a run is supposed
-// to use come from here and from nowhere else, which is what the pushed-branch
-// condition is measured against.
+// branch. It is the trusted copy: the commands a run is supposed to use come
+// from here and from nowhere else, which is what the pushed-branch condition
+// is measured against.
+//
+// It deliberately sets no "agent". The product resolves one agent per
+// service, from the operator's layer, and refuses a run whose trusted copy
+// asks for a different list, so a pin here would stop every run of every
+// scenario before its first stage and hide the stage conditions behind one
+// refusal. The pushed copies still pin one, because a pushed agent is dropped
+// at the resolution and observably so.
 const subjectConfig = `{
   "commands": {
     "test": "go test ./...",
     "lint": "go vet ./..."
   },
-  "agent": "fixture-trusted-agent",
   "fix_rounds": {
     "review": 1
   }

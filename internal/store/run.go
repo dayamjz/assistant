@@ -292,6 +292,19 @@ func (s *Store) SetRunPullRequest(ctx context.Context, id, pullRequest string) e
 	return s.updateRun(ctx, id, "pull_request", pullRequest)
 }
 
+// SetRunConfigDigest replaces the digest identifying the configuration the run
+// resolved.
+//
+// A run's record is created before its repository's configuration copies are
+// read, because PRD section 8 orders the row before the run's directory and
+// the copies are read from repositories that fetch, so the digest a run is
+// created with covers what was known then. This is how the record catches up
+// once the run's own resolution exists, keeping PRD section 8's traceability
+// about what the run actually resolved rather than about a placeholder.
+func (s *Store) SetRunConfigDigest(ctx context.Context, id, digest string) error {
+	return s.updateRun(ctx, id, "config_digest", digest)
+}
+
 // updateRun writes one column of one run. The column name is never a caller's
 // string: it comes from the fixed set above, so no accessor composes SQL from
 // input.

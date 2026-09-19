@@ -81,16 +81,27 @@ func TestARunWhoseUpstreamIsNotOnThisHostCarriesNoRepository(t *testing.T) {
 // It reads the value out of a real run: the stage body is placed through the
 // service's own stage hook, so what it sees is what the service put in the
 // run's state and not what a helper computed alongside it.
+//
+// A run fetches the recorded upstream now - the trusted configuration copy is
+// read at a freshly fetched default branch - and the URLs these tests record
+// name hosts nothing here may reach, so the gate repository is given git's
+// own url.insteadOf rewrite pointing the recorded URL at the subject's local
+// upstream. What the run derives its code host repository from is the
+// record's URL as written, which is the fact under test; where the bytes of a
+// fetch of it come from is what the rewrite decides, and that keeps this test
+// off the network without weakening what it observes.
 func observeForgeRepository(t *testing.T, upstream, remote string) string {
 	t.Helper()
 
 	h := newHome(t)
 	subject := newSubject(t)
+	local := git(t, subject, "remote", "get-url", "origin")
 	// newSubject gives the checkout an origin of its own, and this test is
 	// about the run ignoring it, so the ambient remote replaces that one rather
 	// than being added beside it.
 	git(t, subject, "remote", "set-url", "origin", remote)
 	recordRepositoryWithUpstream(t, h, subject, upstream)
+	git(t, gateRepositoryOf(t, h, subject), "config", "url."+local+".insteadOf", upstream)
 
 	seen := make(chan string, 1)
 	opts := options(t, h)

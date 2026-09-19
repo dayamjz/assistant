@@ -34,10 +34,13 @@
 // a code host; every run this harness drives to the end therefore asks to
 // skip that stage too, which is the per-run surface a person would use. A run
 // therefore holds at the stages this harness declares a run stops at - among
-// them the test stage, which holds for the command nobody configured here -
-// and large parts of this product are unreachable from one: no agent is
-// launched, no configured command is run, no reference is moved, no code host
-// is asked anything, and no repository configuration is read.
+// them the test stage, which holds for the command nobody configures in the
+// walked scenario - and large parts of this product stay unreachable from
+// such a walk: no agent is launched, no reference is moved, and no code host
+// is asked anything. Two walks reach further on purpose: every run reads the
+// repository configuration document's two copies now, so the P7 branch test
+// executes a trusted command and takes a scripted fix round, and the trusted
+// document that cannot be parsed refuses a run through the binary.
 //
 // Where a mechanism cannot be reached through the binary, this harness drives
 // it through the package that owns it against the same fixture, and every row

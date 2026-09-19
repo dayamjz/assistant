@@ -348,7 +348,14 @@ func scenarioNamed(t *testing.T, name fixture.ScenarioName) fixture.Scenario {
 // is driven rather than relied on.
 func cloned(t *testing.T) (fixture.Scenario, string) {
 	t.Helper()
-	from := scenarioNamed(t, fixture.ScenarioUnparseableTrustedConfig)
+	// The walkable scenario carries no condition and no repository
+	// configuration document, so a run of a clone resolves the harness's own
+	// configuration and the schema defaults, and a walk answers for the walk
+	// rather than for a planted condition. Every other scenario's default
+	// branch carries a document now that the product reads it: one whose
+	// commands would run, or one whose refusal would stop the run this test
+	// is not about.
+	from := scenarioNamed(t, fixture.ScenarioWalkable)
 	path, err := journey.Clone(from, filepath.Join(t.TempDir(), "work"))
 	if err != nil {
 		t.Fatalf("cloning a working copy to run against: %v", err)

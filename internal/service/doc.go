@@ -263,14 +263,23 @@
 // reach the memory P4 keeps a reviewer out of, and a StageAgent has no Runner
 // to hand it.
 //
-// It does not read a repository's own configuration. PRD section 10 has the
-// trusted layer read from the default branch at a freshly fetched commit, and
-// nothing here fetches. What a run resolves is the operator's global layer and
-// the schema defaults, so a repository's own settings are ignored rather than
-// read from the wrong place. That is a gap against section 10 and not a hole
-// in P7: the failure P7 exists to prevent is configuration that executes code
-// being read from a pushed branch, and no branch's configuration is read here
-// at all.
+// It reads a repository's own configuration per run, on PRD section 10's
+// terms, and layers.go owns the mechanism: the trusted copy from the default
+// branch at a freshly fetched commit, the pushed copy at the run's submitted
+// commit, both composed with the operator's layer by config.ResolveRun before
+// the run's record moves to running. A trusted copy that cannot be fetched,
+// read, or parsed stops the run there, before any stage body or agent
+// launches, rather than the run guessing at defaults; an invalid pushed copy
+// is refused on the same section's parse-time rule. A resume resolves again,
+// fresh, and a resolution whose bounds moved is a different topology that
+// internal/graph's identity check decides the resumability of.
+//
+// The one repository key the resolution admits and this wiring cannot honor
+// is "agent": this build resolves one agent per service, from the operator's
+// layer, so a run whose resolved agent list differs is refused with
+// ErrRepositoryAgent rather than run under an agent its repository did not
+// ask for. The refusal rather than a silent drop is the point; the operator
+// aligns the two lists or unsets the repository's key.
 //
 // It does not push, open a pull request, or move any reference. Those are
 // stage bodies' work, behind internal/vcs, internal/safety and internal/forge.

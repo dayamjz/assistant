@@ -209,11 +209,21 @@ func (s *Service) respond(ctx context.Context, req machine.RespondRequest) (mach
 	if err != nil {
 		return machine.Run{}, err
 	}
+	// The answer resumes the run, so its configuration is resolved again on
+	// the same terms attach states.
+	resolved, err := s.resolveRunConfig(ctx, record)
+	if err != nil {
+		return machine.Run{}, err
+	}
+	topo, err := s.topologyFor(built, resolved)
+	if err != nil {
+		return machine.Run{}, err
+	}
 	if _, err := built.runs.Release(ctx, record.ID); err != nil {
 		return machine.Run{}, err
 	}
 	return s.advance(ctx, record.ID, func(ctx context.Context) (graph.Result, error) {
-		return built.executor.Answer(ctx, record.ID, req.Answer)
+		return topo.executor.Answer(ctx, record.ID, req.Answer)
 	})
 }
 
@@ -284,6 +294,21 @@ func (s *Service) attach(ctx context.Context, runID string) (machine.Run, error)
 	if err != nil {
 		return machine.Run{}, err
 	}
+	// A resumed run's configuration is resolved again, on the terms layers.go
+	// states: the trusted copy is read at a fresh fetch, per P7, and the
+	// pushed copy at the run's own submitted commit is unchanged by
+	// construction. A resolution whose bounds moved hands the run a different
+	// topology, and internal/graph's identity check is then what decides
+	// whether the position can be resumed under it, rather than this package
+	// quietly resuming a run under bounds it did not run under.
+	resolved, err := s.resolveRunConfig(ctx, settled)
+	if err != nil {
+		return machine.Run{}, err
+	}
+	topo, err := s.topologyFor(built, resolved)
+	if err != nil {
+		return machine.Run{}, err
+	}
 	if settled.Status == store.RunPending {
 		if _, err := built.runs.Start(ctx, settled.ID); err != nil {
 			return machine.Run{}, err
@@ -294,7 +319,7 @@ func (s *Service) attach(ctx context.Context, runID string) (machine.Run, error)
 	// that. Taking the slot and reporting the refusal is what makes this a
 	// decision rather than a check that another caller can win the race to.
 	view, err := s.advance(ctx, settled.ID, func(ctx context.Context) (graph.Result, error) {
-		return built.executor.Resume(ctx, settled.ID)
+		return topo.executor.Resume(ctx, settled.ID)
 	})
 	if errors.Is(err, ErrRunAdvancing) || errors.Is(err, ErrRunEnding) {
 		return s.view(ctx, settled.ID)
@@ -303,6 +328,13 @@ func (s *Service) attach(ctx context.Context, runID string) (machine.Run, error)
 }
 
 // begin records the run as started and walks it from its initial state.
+//
+// The run's configuration is resolved between the copy and the record's move
+// to running, and that placement is PRD section 10's ordering: the pushed
+// document is read at the submitted commit, which the copy's build is what
+// fetches into the gate repository, and a trusted copy that cannot be read
+// stops the run here, before anything is recorded as running and before any
+// stage body or agent launches.
 func (s *Service) begin(ctx context.Context, record store.Run, start pipeline.Start) (machine.Run, error) {
 	built, err := s.driverFor(ctx)
 	if err != nil {
@@ -325,10 +357,6 @@ func (s *Service) begin(ctx context.Context, record store.Run, start pipeline.St
 		return machine.Run{}, err
 	}
 	start.ForgeRepository = forgeRepository
-	initial, err := built.pipeline.NewState(start)
-	if err != nil {
-		return machine.Run{}, err
-	}
 	// The copy is built before the run is recorded as started, so a run that
 	// is walking has somewhere to walk. PRD section 8 orders the row before
 	// the directory and create wrote the row, so this is the second half of
@@ -338,11 +366,29 @@ func (s *Service) begin(ctx context.Context, record store.Run, start pipeline.St
 	if err := s.ensureCopy(ctx, record); err != nil {
 		return machine.Run{}, err
 	}
+	resolved, err := s.resolveRunConfig(ctx, record)
+	if err != nil {
+		return machine.Run{}, err
+	}
+	// The record catches up to the run's own resolution, so a surprising
+	// verdict traces to the three documents the run was actually given rather
+	// than to the operator-layer placeholder create wrote.
+	if err := s.store.SetRunConfigDigest(ctx, record.ID, resolved.digest); err != nil {
+		return machine.Run{}, err
+	}
+	topo, err := s.topologyFor(built, resolved)
+	if err != nil {
+		return machine.Run{}, err
+	}
+	initial, err := topo.pipeline.NewState(start)
+	if err != nil {
+		return machine.Run{}, err
+	}
 	if _, err := built.runs.Start(ctx, record.ID); err != nil {
 		return machine.Run{}, err
 	}
 	return s.advance(ctx, record.ID, func(ctx context.Context) (graph.Result, error) {
-		return built.executor.Run(ctx, record.ID, initial)
+		return topo.executor.Run(ctx, record.ID, initial)
 	})
 }
 

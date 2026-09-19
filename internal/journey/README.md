@@ -21,27 +21,41 @@ does not stand in for it. A green run of this package says the mechanisms
 behave as specified on inputs we chose. It says nothing about review quality,
 and no report built on this may claim otherwise.
 
-## The second limit: no body of a run here launches
+## The second limit: how far a run here reaches
 
 `internal/stages` has all nine implementations, and every run is given an
-isolated copy of its own, cut from the gate's repository. The intent stage's
-body reads the intent it was supplied and launches nothing. The review
-stage's launches the agent the run resolved over that copy, and the agent
-these journeys resolve is the harness's own stand-in, scripted to answer
-nothing, so a taken review would stop at an ask recording that no review
-happened. The pull request stage opens a provider for the repository the
-run's record names on the code host, and no record here names one - the
+isolated copy of its own, cut from the gate's repository. Every run also
+resolves its repository's configuration document: `internal/service` fetches
+the trusted copy from the default branch, reads the pushed copy at the
+submitted commit, and composes both with the operator's layer under PRD
+section 10's trust classes, so what a stage executes is the trusted
+document's word rather than the branch's. That is what lets the P7 branch
+walk go further than the rest: its default branch configures `commands.test`
+and `commands.lint`, both fail against the branch by plant, the fix rounds
+those failures take launch the operator-resolved stand-in scripted to change
+nothing, and the convergence bound parks the run. One walk therefore
+executes trusted commands, opens a fixer session, takes the back edge into a
+fix round, and is parked by a bound, all through the binary.
+
+Every other walk stops short, and the same reasons bound them all. The
+review stage's body launches the agent the run resolved over the run's copy,
+and the agent these journeys resolve is the harness's own stand-in, scripted
+to answer nothing, so a taken review would stop at an ask recording that no
+review happened. The pull request stage opens a provider for the repository
+the run's record names on the code host, and no record here names one - the
 fixture's upstream is a local repository rather than a host `internal/forge`
 addresses - so a run that reaches it fails rather than reaching one. That is
 why every test here that walks a run asks to skip both of those stages, as
-the run input P2 gives a person. The test, document and lint stages hold for
-the commands nobody configured here rather than executing anything, the push
-stage holds because the run carries no completed review, and the checks stage
-holds because there is no code host to ask. Between them, that is the reason
-large parts of the product are not reachable from a run today:
+the run input P2 gives a person. Where a walk's trusted document configures
+no command, the test, document and lint stages hold rather than executing
+anything, the push stage holds because the run carries no completed review,
+and the checks stage holds because there is no code host to ask. Between
+them, that is the reason parts of the product are still not reachable from a
+run today:
 
-- no run launches an agent, so no run parses agent output, keeps a fixer
-  session, or takes a fix round;
+- no run launches an agent for review, so no run parses a real review
+  report; the one agent a run here launches is a fix round's, and it is
+  scripted to change nothing;
 - no run pushes, opens a pull request, or reads checks: the rebase body takes
   its P6 anchor through `internal/safety`'s `Observe` on every run, but every
   run here holds at the push stage for want of a completed review before a
@@ -50,10 +64,7 @@ large parts of the product are not reachable from a run today:
   reach `internal/forge`: it derives its code-host repository specifier
   through `GitHubRepository` and its stages carry the `Host` the service
   built, but every walk here skips the pull request stage, the one body that
-  would open a provider on that host, so no run asks a code host anything;
-- nothing reads a repository's own configuration document from anywhere, which
-  `internal/service` states, so the trusted-versus-pushed composition PRD
-  section 10 describes has no owner and no run performs it.
+  would open a provider on that host, so no run asks a code host anything.
 
 Where a mechanism cannot be reached through the binary, this harness drives it
 through the package that owns it, against the same fixture, and says so. Every
@@ -159,10 +170,10 @@ works around them.
 | `assistant --version --json` writes a plain line where `assistant --json --version` writes a document. `internal/cli/doc.go` records it and the parser rework owns it. | Writes `--json` before the verb everywhere, which every verb honours, and reports the `--version` ordering it observed. |
 | PRD section 9's table names no command for the two subcommands the gate's admission hook invokes, which `internal/gate/hooks.go` requires of the command surface. The surface carries them, so a push to a gate is admitted and starts a run; what is unreconciled is the specification, not the code. | Drives an admitted push and holds the run it authorized to the branch and the commit that were pushed, which is P1's positive half. A separate check holds a push made with no service up to the weaker property that the gate did not accept it with nothing checking it. |
 | `core.hooksPath` in a git configuration file redirects a gate's own hooks. `internal/gate/doc.go` names it as an open gap. | Drives a push under the redirect and reports which hook ran, off the fixture's tripwire file. Reported as a known gap, never as a pass. |
-| Nothing reads a repository's configuration document from the default branch, so PRD section 10's abort before launch has no owner. | Drives `config.Parse` and `vcs.Repository.FileAt` against the planted documents directly, and observes on a run that it starts anyway. Reported as a gap against section 10. That nothing a branch names is executed is established nowhere in this build; the row below says why. |
-| Two of `internal/graph`'s three loop bounds sit on the back edge into a fixer, and no run this harness drives produces a fix-eligible finding: the intent and pull request bodies declare no fix rounds and report only notes; the review stage takes fix rounds and every walk here asks to skip it, so no report of it reaches a run; the rebase body reports a fix finding only on a rebase conflict, and the branches driven here rebase cleanly; the test, document and lint bodies report one only when a configured command fails, and each holds for the command nobody configured here instead; and the checks body reports one only when a registered check fails, and no run here reaches a code host. | Drives the run-wide step budget, which is reachable, and says the other two are not. |
+| A run reports the pushed document's rejected keys to the service log and to no shipped surface, so nothing a caller receives says which keys a branch tried to set and lost. `internal/service`'s `resolveRunConfig` logs them and `internal/journey`'s `Settlements` raises the missing surface against PRD section 9. | The P7 branch test walks a run that performs the full three-document composition through the binary, then drives `config.Resolve` over the same pushed document in process, where the rejection texts are readable, and holds them to what the condition records. |
+| Two of `internal/graph`'s three loop bounds sit on the back edge into a fixer. The P7 branch run now takes that edge through the binary: the trusted `commands.test` fails by plant, a fix round launches the scripted stand-in, and the convergence bound parks the round that changed no state. The per-edge round cap is still never exhausted by a run here, because a fixer that changes nothing converges before the cap is reached; the other producers of a fix-eligible finding stay unreached for the reasons the second-limit section gives. | Drives the run-wide step budget and the convergence bound, both through the binary, and says the per-edge cap is not. |
 | No shipped surface reports which agent a run resolved. No `internal/machine` shape carries one, and `doctor`'s `agent` check resolves the constant `auto` against the default catalog, so it answers what is runnable on this machine rather than what any run resolved; `internal/cli` says so itself. | Does not claim it. The P7 branch test establishes the pushed-configuration rejections and the suppression refusal instead, both of which observe something. |
-| `internal/fixture`'s nothing-executed evidence has no producer for the branch-installation family. Every executable those conditions plant - the `.claude` hooks, the branch's agent binary, its `commands.test`, the `.githooks` scripts, `.envrc` - is reached only through a stage body that launches something, and no body launches anything in these runs: the intent body reads the supplied intent and launches nothing, the review body would launch the agent this harness scripts to answer nothing so every walk asks to skip it, the pull request body fails because the run's record names no repository on the code host, and the test body holds for the command nobody configured here, never the branch's, so a run launches no agent, runs no configured command, and makes no commit or push. | Rests no clause on the tripwire file: one asserting that absence would hold whatever the product resolved. The P7 branch test reads it and logs what it holds, so the evidence is in place the day a stage body lands, and the `Drives` row for that condition says nothing about it is established. |
+| `internal/fixture`'s nothing-executed evidence has a producer for one member of the branch-installation family now: the branch's `commands.test`. The P7 branch run resolves the trusted document and executes its commands against the branch, so a resolution that had taken the branch's `commands.test` instead would have run the branch's script, which appends to the tripwire file. The rest of the family - the `.claude` hooks, the branch's agent binary, the `.githooks` scripts, `.envrc` - still has none: the run's fix rounds launch the operator-resolved stand-in and every walk skips the review stage, so no launched agent could have honoured the branch's harness, and what keeps those unselected is the resolution's rejection of the branch's `agent`, which the test observes. | Rests one clause on the tripwire file, as an absence whose `Possible` is that a configured command demonstrably ran, so the file staying quiet discriminates for exactly the member with a producer and asserts nothing where none could have fired. |
 | It has no producer for the hostile-template family either, for a different reason. Those hooks are receive-side, so only a push to the gate could run them, and the four subtests that plant them make no push: each initializes a gate and reads how that came out, and none starts a service. So neither a promoted template `pre-receive` nor `update` nor `post-update` is reached. A push to a gate is admitted in this build, which the PRD section 9 row above records, so what leaves these four short is what they do rather than a door that is shut. | Rests no clause on the tripwire file, for the same reason as the row above, and none on the gate's hooks directory either - so whether a hook arrived is unestablished as well as whether one ran. What those four subtests establish is how the initialization came out: the two refusals refuse with the substrings their conditions record, and the two closed channels are not refused. |
 
 ## What accounts for what

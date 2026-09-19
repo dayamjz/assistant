@@ -639,3 +639,34 @@ func buildCopiedWorkingCopy(b *builder) (*Scenario, []Condition, error) {
 		},
 	}, nil
 }
+
+// buildWalkable builds the scenario a harness walks runs through: no planted
+// condition, no repository configuration document, and one ordinary change on
+// the branch under validation. ScenarioWalkable's constant owns why it
+// exists; what this builder owes is only that the subject is the same one
+// every other scenario starts from, minus the document, so a walk over it
+// resolves the operator's configuration and the schema defaults alone.
+func buildWalkable(b *builder) (*Scenario, []Condition, error) {
+	s, err := b.newScenario(ScenarioWalkable,
+		"An ordinary subject carrying no condition and no repository configuration document.")
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := b.initSubjectBare(s); err != nil {
+		return nil, nil, err
+	}
+	if err := b.startBranch(s); err != nil {
+		return nil, nil, err
+	}
+	if err := writeFile(s.WorkingCopy, "docs/behavior.md", 0o644,
+		subjectDocsBehavior+"\nThis paragraph is the change under validation.\n"); err != nil {
+		return nil, nil, err
+	}
+	if _, err := b.git.commitAll(s.WorkingCopy, "add a paragraph about behavior"); err != nil {
+		return nil, nil, err
+	}
+	if err := b.pushBranch(s); err != nil {
+		return nil, nil, err
+	}
+	return s, nil, nil
+}

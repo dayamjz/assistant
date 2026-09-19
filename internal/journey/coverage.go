@@ -26,8 +26,9 @@ const (
 	// scripts to answer nothing, so a taken review stops at an ask recording
 	// that no review happened - and the pull request body fails because the
 	// run's record names no repository on the code host, so every walk here
-	// asks to skip those two stages, and the test body holds for the command
-	// nobody configured here.
+	// asks to skip those two stages, and the test body holds wherever the
+	// run's resolved configuration names no command, which is every walk but
+	// the P7 branch one.
 	ReachPackage Reach = "package"
 	// ReachNone is not driven here. The reason beside it says why, and it is
 	// prose nobody checks; what the row buys is that the gap is enumerable
@@ -156,28 +157,23 @@ func Coverage() []Established {
 				"of what those four subtests establish: the refusals refuse with the substrings their " +
 				"conditions record, and the closed channels are not refused. Whether a template hook " +
 				"arrived in the gate is not among it, because no clause there looks at a hook. A whole " +
-				"run is driven over a branch carrying an agent harness installation, and " +
-				"what that run establishes is that a suppression the adapter does not implement is " +
-				"refused before anything launches. The keys the branch may not set are dropped and " +
-				"reported while the one it may set survives, but that is config.Resolve driven in " +
-				"process beside the run rather than anything the run does. Two things are not " +
-				"established at any reach and no clause claims them: that nothing the branch or the " +
-				"template installed arrived or executed, because the branch's planted executables are " +
-				"reached only through a stage body that launches something and no body launches " +
-				"anything in these runs - the intent body reads the supplied intent, the review body " +
-				"would launch the agent this harness scripts to answer nothing, the pull request " +
-				"body fails because the run's record names no repository on the code host, so the " +
-				"run asks to skip both of those stages, and the test body holds for the command nobody " +
-				"configured here, never the branch's - while the template's are receive-side hooks reached " +
-				"only by a push to the gate and the four subtests that plant one make no push; " +
-				"and which agent a run resolved, because no shipped surface reports it. The trusted configuration " +
-				"document is driven at package reach: nothing in this build reads a repository's own " +
-				"configuration from anywhere, which internal/service states, so there is no composition " +
-				"to drive. The branch run, and the one subtest that starts a run over the unparseable " +
-				"trusted document, go through methods internal/ipc restricts, so on a platform where that " +
-				"package reads no local socket peer credentials both are skipped rather than passing; what " +
-				"is established there is the template initialization, which needs no service, and the " +
-				"package-reach reads of the planted documents."},
+				"run is driven over the branch carrying an agent harness installation: it resolves " +
+				"the trusted document, executes the trusted commands.test against the branch, " +
+				"converges at the planted failure rather than walking past it, and the tripwire " +
+				"file is asserted quiet with that execution as what makes the absence " +
+				"discriminating, so nothing the branch installed executed and nothing it named was " +
+				"selected. The same test drives the suppression refusal, and reads the rejections " +
+				"of the branch's own keys in process, because a run reports its rejections to the " +
+				"service log rather than on any shipped surface. A run over a trusted document that " +
+				"will not parse is refused through the binary before anything launches, and the " +
+				"in-process reads hold that refusal's exact shape to the planted conditions. What " +
+				"stays unestablished and no clause claims: whether a template's hooks arrived or " +
+				"ran, since those are receive-side and the four subtests that plant one make no " +
+				"push, and which agent a run resolved, since no shipped surface reports it. The " +
+				"runs go through methods internal/ipc restricts, so on a platform where that " +
+				"package reads no local socket peer credentials they are skipped rather than " +
+				"passing; what is established there is the template initialization, which needs no " +
+				"service, and the package-reach reads of the planted documents."},
 		{principles.P8, ReachBinary,
 			"A task whose event log ends on an open decision and whose resolved state has moved past it " +
 				"is reported by the binary as the resolved state. Reading it reaches no method " +
