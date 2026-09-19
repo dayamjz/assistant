@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+
+	"github.com/dayamjz/assistant/internal/config"
 )
 
 // ScenarioName names one scenario. There is more than one because the
@@ -38,6 +40,14 @@ const (
 	// ScenarioCopiedWorkingCopy carries a working copy that is copied once a
 	// gate exists, so the copy inherits the original's remote.
 	ScenarioCopiedWorkingCopy ScenarioName = "copied-working-copy"
+	// ScenarioWalkable carries no planted condition and no repository
+	// configuration document at all, which PRD section 10 makes the valid
+	// no-configuration case. It exists for a harness test that needs a
+	// repository to walk a run through rather than a particular condition:
+	// every other scenario's default branch carries a document whose commands
+	// and refusals are its conditions' business, and a walk driven over one
+	// would be answering for those conditions as well as for itself.
+	ScenarioWalkable ScenarioName = "walkable-subject"
 )
 
 // The shape every scenario shares.
@@ -49,11 +59,10 @@ const (
 	// side of every trust-boundary condition here.
 	BranchUnderValidation = "fixture/change"
 	// ConfigPath is where the repository configuration document is planted,
-	// relative to the repository root. PRD section 10 places that document at
-	// the repository root and does not name it, and no package in this product
-	// owns the name yet, so it is stated here once and carried in the manifest
-	// rather than assumed by a reader. See OpenQuestions.
-	ConfigPath = "assistant.json"
+	// relative to the repository root. internal/config's RepositoryDocument
+	// owns the name now, and this follows it, carried in the manifest so a
+	// harness reads where the document was planted rather than assuming.
+	ConfigPath = config.RepositoryDocument
 	// TripwireFile is the scenario-relative path every planted executable
 	// appends to when it runs. It must not exist after a run.
 	TripwireFile = "tripwires/fired"
@@ -246,6 +255,7 @@ var scenarioBuilders = []func(*builder) (*Scenario, []Condition, error){
 	buildUnreadableTrustedConfig,
 	buildHostileTemplate,
 	buildCopiedWorkingCopy,
+	buildWalkable,
 }
 
 // requireEmpty refuses a root that already holds something. A build that
@@ -301,19 +311,36 @@ func (b *builder) newScenario(name ScenarioName, purpose string) (*Scenario, err
 // branch to it. Every scenario starts from the same trusted document, which is
 // what the pushed-branch condition is measured against.
 func (b *builder) initSubject(s *Scenario) error {
+	return b.initSubjectFiles(s, map[string]string{
+		"go.mod":           subjectGoMod,
+		"total.go":         subjectTotalGo,
+		"total_test.go":    subjectTotalTestGo,
+		"docs/behavior.md": subjectDocsBehavior,
+		ConfigPath:         subjectConfig,
+	})
+}
+
+// initSubjectBare is initSubject without the repository configuration
+// document, which PRD section 10 makes the valid no-configuration case: a run
+// of this subject resolves the operator's layer and the schema defaults, and
+// nothing about the repository steers it. ScenarioWalkable is the consumer.
+func (b *builder) initSubjectBare(s *Scenario) error {
+	return b.initSubjectFiles(s, map[string]string{
+		"go.mod":           subjectGoMod,
+		"total.go":         subjectTotalGo,
+		"total_test.go":    subjectTotalTestGo,
+		"docs/behavior.md": subjectDocsBehavior,
+	})
+}
+
+// initSubjectFiles is the shared core of the two subject initializers.
+func (b *builder) initSubjectFiles(s *Scenario, files map[string]string) error {
 	work := s.WorkingCopy
 	if err := os.MkdirAll(work, 0o755); err != nil {
 		return fmt.Errorf("fixture: creating %s: %w", work, err)
 	}
 	if _, err := b.git.run(work, "init", "--quiet", "."); err != nil {
 		return err
-	}
-	files := map[string]string{
-		"go.mod":           subjectGoMod,
-		"total.go":         subjectTotalGo,
-		"total_test.go":    subjectTotalTestGo,
-		"docs/behavior.md": subjectDocsBehavior,
-		ConfigPath:         subjectConfig,
 	}
 	for rel, content := range files {
 		if err := writeFile(work, rel, 0o644, content); err != nil {

@@ -7,16 +7,22 @@
 // turns bytes plus a stated origin into a typed configuration, or into a
 // refusal that names the key and the value it refused.
 //
-// # Two layers
+// # Two documents, three layers
 //
-// A global document lives in the operator's home and a repository document
-// lives at the repository root. The repository layer overrides the global one
-// key by key, never section by section: a repository that sets
-// "fix_rounds.review" keeps the global values for the other fix round limits.
-// Parse records which keys a document actually wrote, which is what makes that
-// possible and what keeps an explicitly empty value distinct from an absent
-// one. Setting "ignore_patterns" to an empty list overrides a global list;
-// omitting the key inherits it.
+// A global document lives in the operator's home and a repository document,
+// named RepositoryDocument, lives at the repository root. A run reads the
+// repository document twice - once from the default branch at a freshly
+// fetched commit, the trusted copy, and once from the commit under
+// validation, the pushed copy - and ResolveRun composes those three layers.
+// It is the composition PRD section 10's trust diagram describes and the one
+// owner of it; Resolve is its projection for a caller holding one repository
+// copy. A repository layer overrides the global one key by key, never
+// section by section: a repository that sets "fix_rounds.review" keeps the
+// global values for the other fix round limits. Parse records which keys a
+// document actually wrote, which is what makes that possible and what keeps
+// an explicitly empty value distinct from an absent one. Setting
+// "ignore_patterns" to an empty list overrides a global list; omitting the
+// key inherits it.
 //
 // Absence has two shapes and they are not the same. A file that is not there
 // is a valid layer that sets nothing, built with Absent. A file that exists and

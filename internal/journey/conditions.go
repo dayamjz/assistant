@@ -71,14 +71,19 @@ func Drives() []Drove {
 		noTemplateHookPath
 
 	// The document and lint conditions are undriven for one reason, stated
-	// once: each stage's body runs only the command its configuration names,
-	// and no run here is given one, so each holds for a person without
-	// reading the branch and there is no finding to compare against what was
-	// planted.
-	const noConfiguredCommand = "The stage this condition names runs only the command its " +
-		"configuration names, no run here is given one, and the branch's own is never read, so the " +
-		"stage holds for a person without reading anything. There is no finding to compare against " +
-		"what was planted. It becomes drivable when a run is given the command."
+	// once: each stage's body runs only the command the run's resolved
+	// configuration names, and no run here reaches either stage with one.
+	// The P7 branch run's trusted document does name commands, but the
+	// convergence bound parks that run at the test stage, before the
+	// document or lint stage is reached; every other run's resolution names
+	// none, so each holds for a person without reading the branch, and there
+	// is no finding to compare against what was planted.
+	const noConfiguredCommand = "The stage this condition names runs only the command the run's " +
+		"resolved configuration names, and no run here reaches this stage with one: the one run " +
+		"whose trusted document names commands is parked at the test stage first, and every other " +
+		"run's resolution names none, so the stage holds for a person without reading the branch. " +
+		"There is no finding to compare against what was planted. It becomes drivable when a run " +
+		"carrying a configured command reaches the stage."
 	return []Drove{
 		{"refusal-finding-action-missing", ReachPackage, findings,
 			"The planted bytes go through the production adapter and internal/findings, on the entry " +
@@ -108,38 +113,33 @@ func Drives() []Drove {
 			"Reported as the gap internal/gate names rather than as a pass: a push is driven through the " +
 				"gate under the redirect and the tripwire says which hook git ran."},
 
-		{"refusal-hostile-harness-installation", ReachNone, "",
-			"Neither half of what this condition records is established, at any reach. Its Value is the " +
-				"agent and commands a run resolves, and no shipped surface reports either: no " +
-				"internal/machine shape carries an agent, and the config.Resolve call this harness does " +
-				"drive is over the pushed layer with the trusted one absent, so it cannot resolve the " +
-				"default branch's fixture-trusted-agent at all. Its tripwire half has no producer " +
-				"either: every executable it plants is reached only through a stage body that launches " +
-				"something, and no body launches anything in these runs - the intent body reads the " +
-				"supplied intent and launches nothing, the review body would launch the agent this " +
-				"harness scripts to answer nothing, the pull request body fails because the run's " +
-				"record names no repository on the code host, so every walk here asks to skip both " +
-				"of those stages, and the test body holds for the command nobody configured here, " +
-				"never the branch's - so a run launches no agent, runs no configured command, " +
-				"and makes no commit or push. TestTheBranchUnderValidationChoosesNothingThatRuns does " +
-				"drive a whole run over this branch and reads the tripwire file at the end, and logs " +
-				"what it holds; what that test establishes is the row below and the suppression " +
-				"refusal. This becomes drivable when a walk takes the review stage against an agent " +
-				"scripted to answer it."},
-		{"refusal-pushed-commands-and-agent", ReachPackage, branch,
-			"The one call the condition names is config.Resolve over the operator's layer and the " +
-				"pushed one, driven in process: the three keys are dropped and reported as rejections " +
-				"and the one the branch may set survives. That is the whole of what is established " +
-				"here. Its tripwire half is not: the test stage's body reads commands.test only from " +
-				"the configuration it was resolved, where the branch's value is dropped unless the " +
-				"trusted opt-out admits it, and no run here is given the opt-out or a command, so the " +
-				"branch's commands.test has no path to execution. Nothing " +
-				"about this condition is met through the binary."},
-		{"refusal-unparseable-trusted-config", ReachPackage, trustedDoc,
-			"The document is read off the default branch through internal/vcs and parsed. No run reads a " +
-				"repository's own document in this build, which the same test observes on a run."},
-		{"refusal-unreadable-trusted-config", ReachPackage, trustedDoc, "As above, for the read rather " +
-			"than the parse."},
+		{"refusal-hostile-harness-installation", ReachBinary, branch,
+			"A whole run over the branch: the run resolves the trusted document, executes its " +
+				"commands.test against the branch, and converges at the failing check, and the " +
+				"tripwire file is asserted quiet with that execution as the fact that makes the " +
+				"absence discriminating. The branch's own \"agent\" is read as a rejection of the " +
+				"pushed layer in process, because rejections reach the service log rather than any " +
+				"shipped surface, and the suppression refusal is driven in a home of its own. The " +
+				"run's fix rounds launch the operator-resolved stand-in, scripted to change " +
+				"nothing; the .claude hooks and the branch's agent binary stay unreached because " +
+				"the walk skips the review stage and the resolution rejects the branch's agent, " +
+				"not because nothing launches at all."},
+		{"refusal-pushed-commands-and-agent", ReachBinary, branch,
+			"The run above is this condition's tripwire half through the binary: the test stage " +
+				"executed the trusted commands.test while the branch's own, a script that would " +
+				"have appended to the tripwire file, left it empty. The rejections are read in " +
+				"process, over config.Resolve on the operator's layer and the pushed one, because " +
+				"the run's own rejections reach the service log rather than any shipped surface; " +
+				"the three keys are dropped and reported and the one the branch may set survives."},
+		{"refusal-unparseable-trusted-config", ReachBinary, trustedDoc,
+			"Both reaches. The document is read off the default branch through internal/vcs and " +
+				"parsed in process, which is where the refusal's shape is held to the condition; " +
+				"and a run over a clone of the scenario is refused before launching anything, " +
+				"naming the trusted configuration, which is PRD section 10's abort through the " +
+				"binary."},
+		{"refusal-unreadable-trusted-config", ReachPackage, trustedDoc, "As the row above's in-process " +
+			"half, for the read rather than the parse; no run is driven over this scenario, and " +
+			"internal/service takes the same path for both failures."},
 
 		{"refusal-remote-advanced-out-of-band", ReachPackage, anchor,
 			"internal/safety over internal/vcs's own reads, with the advance planted between the " +
@@ -165,14 +165,11 @@ func Drives() []Drove {
 				"what it establishes then is " +
 				"still bounded by README.md's first limit, because the stand-in answers what a test " +
 				"scripts rather than reading the planted bug."},
-		{"stage-failing-test", ReachNone, "",
-			"internal/stages has this stage's body now, but the condition is the trusted " +
-				"commands.test failing against the branch and no run here runs one: the trusted " +
-				"repository layer that command sits in is not read in this build, which " +
-				"internal/service states, and the harness's own configuration names no command " +
-				"either, so the stage holds for a person without executing anything. There is " +
-				"still no finding to compare against what was planted. It becomes drivable when " +
-				"a run is given the command."},
+		{"stage-failing-test", ReachBinary, branch,
+			"The run over the harness-installation branch is this condition's too: the trusted " +
+				"commands.test runs against the branch, fails with the planted assertion in its " +
+				"output, the do-nothing fix round changes no state, and the convergence bound " +
+				"parks the run rather than walking past the failure."},
 		{"stage-stale-documentation", ReachNone, "", noConfiguredCommand},
 		{"stage-lint-violation", ReachNone, "", noConfiguredCommand},
 		{"stage-no-diff-after-rebase", ReachNone, "",

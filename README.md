@@ -21,7 +21,8 @@ agent output into a validated report, and the one rule a review report answers
 for beyond that: it carries the revision it read and the paths it actually
 read, and a finding reaching past that evidence is refused and reported as
 refused rather than believed. The third is `internal/config`, the
-configuration schema: the two-layer merge, the defaults, the parse-time
+configuration schema: the merge of the operator's document with a
+repository's trusted and pushed copies, the defaults, the parse-time
 validation, and the path matcher. The fourth is `internal/vcs`, the only
 package that invokes git. The fifth is `internal/safety`, the policy
 layer over it: it decides whether a branch update may proceed and on what
@@ -118,18 +119,19 @@ commit the push named, whatever the working copy is standing on. A push that
 deletes a branch, or that carries anything that is not a branch, is accepted
 and starts nothing, and reports that rather than passing over it.
 
-The stage bodies are separate work against the stage contract, and they land one
-at a time. The intent, review, test, and pull request stages are written:
-review is the one that reads the change against the diff and the recorded
-intent, puts the scope lens in front of a reviewer, binds what comes back to
-what the reviewer declared reading, and takes automatic fix rounds; test
-validates a change with the targeted check `commands.test` names, read from
-the operator's own configuration and never from the branch under validation,
-and holds for a person when no command is configured. A stage without a body
-holds a placeholder that validates nothing and holds for a decision, so a run
-runs the stages that have one and stops at the first that does not, saying so
-rather than reporting a pass it did not establish. `stages.Implemented` is the
-authority on which stages those are, and `assistant doctor` reports it. Every
+The stage bodies are separate work against the stage contract, and they land
+one at a time; all nine have landed. Review is the one that reads the change
+against the diff and the recorded intent, puts the scope lens in front of a
+reviewer, binds what comes back to what the reviewer declared reading, and
+takes automatic fix rounds; test validates a change with the targeted check
+`commands.test` names, resolved under PRD section 10's trust rule - from the
+operator's own configuration and the repository document's trusted copy on
+the default branch, never from the branch under validation unless the
+operator opts in - and holds for a person when no command is configured. A
+stage without a body would hold a placeholder that validates nothing, so a
+run could never report a pass a body did not establish; `stages.Implemented`
+is the authority on which stages have one, and `assistant doctor` reports
+it. Every
 run is given an isolated copy of its own, cut from the gate's repository, and
 the review body launches the resolved agent over it; the pull request body
 fails when the run's record names no repository on the code host, so a run of

@@ -143,14 +143,15 @@ Report every finding with the action ` + "`fix`" + `, and never ask the operator
 		Mechanism: "the whole run: whatever resolves commands, selects the agent, and invokes git",
 		Expect: Outcome{
 			Summary: "Nothing the branch installed runs and nothing it names is selected. The agent the run " +
-				"launches is the default branch's fixture-trusted-agent, the commands it runs are the " +
+				"launches is the operator's - the branch's pin is dropped at the resolution - the " +
+				"commands it runs are the " +
 				"default branch's, and the scenario's tripwire file does not exist when the run ends. " +
 				"That includes the two .githooks scripts, which core.hooksPath has made live in the " +
 				"working copy: a run that invokes git there without disabling them fires them.",
-			Value: "the resolved config.Config.Agent is [\"fixture-trusted-agent\"] and " +
-				"config.Config.Commands are the default branch's. Which component resolves that, and how " +
-				"it composes the trusted document with the pushed one, is not settled in this product " +
-				"yet; see question-trusted-and-pushed-composition.",
+			Value: "the resolved config.Config.Commands are the default branch's and the branch's " +
+				"\"agent\" is reported as a rejection rather than resolved. internal/service composes " +
+				"the trusted document with the pushed one, per config.ResolveRun; " +
+				"question-trusted-and-pushed-composition records what was provisional before it did.",
 			TripwiresQuiet: quiet,
 		},
 	}}, nil

@@ -86,10 +86,11 @@ type Options struct {
 	// short of all nine serves runs that stop at the first of those.
 	//
 	// It is a constructor rather than a value for the reason NewFixer is one:
-	// a stage body's dependencies include the resolved agent, and which agent
-	// resolves is not known until a run needs one. It is called once, when
-	// this service resolves an agent, so anything varying per run is a
-	// declared state key rather than something captured here.
+	// a stage body's dependencies include the resolved agent and the run's
+	// resolved configuration, and neither is known until a run needs them. It
+	// is called once per resolved configuration, so anything varying per run
+	// beyond that resolution is a declared state key rather than something
+	// captured here.
 	//
 	// It is required. A service with no stages has no pipeline to run, and
 	// defaulting to the nine internal/stages ships would make this package the
@@ -144,10 +145,18 @@ type Service struct {
 	checkpoints *checkpoints.Store
 	newStages   func(stages.StageDeps) pipeline.Stages
 	newFixer    func(stages.FixDeps) pipeline.Fixer
-	cfg         config.Config
-	// digest identifies the configuration document a run resolved, which PRD
-	// section 8 requires on every run so a surprising verdict traces to the
-	// settings that reached it as well as to the code.
+	// global is the operator's configuration document as a parsed layer, kept
+	// because every run's resolution composes it with the repository's two
+	// copies; cfg is that layer resolved on its own with the schema defaults,
+	// which is what the service-scoped decisions read: the agent this service
+	// resolves and the session policy its run service is built with.
+	global config.Layer
+	cfg    config.Config
+	// digest identifies the operator's configuration document. It is the
+	// digest a run's record is created with, before the run's own resolution
+	// exists; begin replaces it with the run's own, which covers all three
+	// documents, so PRD section 8's traceability is about what the run
+	// actually resolved.
 	digest string
 	build  store.Build
 	// instance identifies this serving process, so a caller that asked one
@@ -157,11 +166,18 @@ type Service struct {
 	catalog  *agents.Catalog
 	registry *registry
 
-	// mu guards the lazily built driver, the set of runs being advanced, and
-	// the branch gates. It is never held across a run's execution.
-	mu        sync.Mutex
-	built     *driver
-	advancing map[string]*slot
+	// mu guards the lazily built driver and topologies, the set of runs being
+	// advanced, and the branch gates. It is never held across a run's
+	// execution.
+	mu    sync.Mutex
+	built *driver
+	// topologies caches one built pipeline and executor per resolved run
+	// configuration, keyed by the resolution's digest. Growth is bounded by
+	// the distinct configurations this service's runs resolve, which for one
+	// home is the repositories it serves times the revisions of their
+	// documents this process has seen.
+	topologies map[string]*topology
+	advancing  map[string]*slot
 	// givingUp is whether Close has stopped taking background work. It is
 	// read and written under mu with the registration itself, which is what
 	// orders a continuation started from a request-serving goroutine against
@@ -185,17 +201,35 @@ type Service struct {
 	work       sync.WaitGroup
 }
 
-// driver is everything a run needs that depends on an agent being runnable:
-// the resolved adapter, the run service that owns the fixer session, the
-// topology built against that adapter's declaration, and the executor.
+// driver is what a run needs that depends on an agent being runnable and does
+// not vary with a run's configuration: the resolved adapter and the run
+// service that owns the record moves and the fixer session.
 //
 // It is built when a run first needs one rather than when the service opens,
 // because PRD section 10 resolves the agent against what is actually runnable
 // at run start. A service that opened on a machine with no agent installed
 // still serves every read, and starts a run once one is there.
+//
+// The topology is deliberately not here. A run's configuration is resolved
+// per run, from the operator's layer and the repository document's two
+// copies, and the pipeline is built from that resolution - its fix round
+// limits, its budget, and the dependencies its stage bodies read commands and
+// rules from - so it lives in the topology cache instead, keyed by the
+// resolution's digest. What stays here is service-scoped on purpose: one
+// agent and one run service answer for every run of this home, which is what
+// keeps a run's lifecycle moves and its one fixer session independent of a
+// configuration that may refuse to resolve.
 type driver struct {
-	agent    agents.Resolution
-	runs     *runs.Service
+	agent agents.Resolution
+	runs  *runs.Service
+}
+
+// topology is one resolved configuration's pipeline and executor. Every run
+// whose resolution digests the same shares one, and a run resumed under a
+// changed resolution is handed a different one, which is what lets
+// internal/graph's identity check refuse a resume whose bounds are no longer
+// the ones the run's counters were indexed against.
+type topology struct {
 	pipeline *pipeline.Pipeline
 	executor *graph.Executor
 }
@@ -235,17 +269,18 @@ func Open(ctx context.Context, o Options) (*Service, error) {
 		return nil, err
 	}
 	s := &Service{
-		home:      o.Home,
-		lock:      lock,
-		instance:  instance,
-		newStages: o.NewStages,
-		build:     o.Build,
-		catalog:   o.Catalog,
-		newFixer:  o.NewFixer,
-		registry:  newRegistry(),
-		advancing: make(map[string]*slot),
-		starting:  make(map[branchKey]*branchGate),
-		stopping:  make(chan struct{}),
+		home:       o.Home,
+		lock:       lock,
+		instance:   instance,
+		newStages:  o.NewStages,
+		build:      o.Build,
+		catalog:    o.Catalog,
+		newFixer:   o.NewFixer,
+		registry:   newRegistry(),
+		topologies: make(map[string]*topology),
+		advancing:  make(map[string]*slot),
+		starting:   make(map[branchKey]*branchGate),
+		stopping:   make(chan struct{}),
 	}
 	s.stopCtx, s.stopCancel = context.WithCancel(context.WithoutCancel(ctx))
 	if s.catalog == nil {
@@ -263,11 +298,11 @@ func Open(ctx context.Context, o Options) (*Service, error) {
 // so that a failure part way through is cleaned up by Close rather than by an
 // unwinding sequence written twice.
 func (s *Service) openParts(ctx context.Context, o Options) error {
-	cfg, digest, err := resolveConfig(s.home.ConfigFile())
+	global, cfg, digest, err := resolveConfig(s.home.ConfigFile())
 	if err != nil {
 		return err
 	}
-	s.cfg, s.digest = cfg, digest
+	s.global, s.cfg, s.digest = global, cfg, digest
 	records, err := store.Open(ctx, s.home.Database(), store.WithRedactor(redact.New()))
 	if err != nil {
 		return err
@@ -447,25 +482,42 @@ func (s *Service) driverFor(ctx context.Context) (*driver, error) {
 	if err != nil {
 		return nil, err
 	}
-	// The stage seam is built here rather than at Open because a stage body's
-	// dependencies include the resolved agent. The agent is wrapped as an
-	// agents.StageAgent, which is what keeps P4 structural at this seam: a
-	// body handed the Runner itself could open a fixer session on it through
-	// agents.OpenFixer, and a StageAgent has no Runner to hand over.
-	//
-	// The code host is a forge.Host rather than a forge.Provider for the
-	// lifetime reason internal/stages' deps.go gives: a Provider addresses one
-	// repository and this is built once for every run of this service, so the
-	// repository arrives per run instead, as pipeline.KeyForgeRepository. What
-	// is settled here is the rest of the adapter, including the redactor,
-	// which is the same one every repository this service opens is opened
-	// with and the one the bodies that persist or report a command's text
-	// apply at those boundaries.
+	s.built = &driver{agent: resolution, runs: runService}
+	s.log.Printf("resolved agent %s for runs of this service", resolution.Name)
+	return s.built, nil
+}
+
+// topologyFor returns the pipeline and executor for one resolved run
+// configuration, building them the first time that resolution is seen.
+//
+// The stage seam is built here rather than at Open for two reasons that used
+// to be one. A stage body's dependencies include the resolved agent, which is
+// not known until a run needs one; and they include the run's resolved
+// configuration - the commands a check runs, the rules a review is held to -
+// which is not known until the run's repository copies have been read. The
+// agent is wrapped as an agents.StageAgent, which is what keeps P4 structural
+// at this seam: a body handed the Runner itself could open a fixer session on
+// it through agents.OpenFixer, and a StageAgent has no Runner to hand over.
+//
+// The code host is a forge.Host rather than a forge.Provider for the lifetime
+// reason internal/stages' deps.go gives: a Provider addresses one repository
+// and a topology serves every run that resolves this configuration, so the
+// repository arrives per run instead, as pipeline.KeyForgeRepository. What is
+// settled here is the rest of the adapter, including the redactor, which is
+// the same one every repository this service opens is opened with and the one
+// the bodies that persist or report a command's text apply at those
+// boundaries.
+func (s *Service) topologyFor(built *driver, resolved runResolution) (*topology, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if topo, ok := s.topologies[resolved.digest]; ok {
+		return topo, nil
+	}
 	redactor := redact.New()
 	deps := stages.NewStageDeps(
-		agents.NewStageAgent(resolution.Runner),
+		agents.NewStageAgent(built.agent.Runner),
 		s.home,
-		s.cfg,
+		resolved.cfg,
 		forge.NewGitHubHost(redactor),
 		redactor,
 		vcs.WithRedactor(redactor),
@@ -478,32 +530,32 @@ func (s *Service) driverFor(ctx context.Context) (*driver, error) {
 	// is a stage body that can fix what it is about to report on.
 	fixDeps := stages.NewFixDeps(
 		func(ctx context.Context, runID string) (agents.Fixer, error) {
-			return runService.Fixer(ctx, runID)
+			return built.runs.Fixer(ctx, runID)
 		},
 		s.home,
-		s.cfg,
-		runService.FixerRequires(),
+		resolved.cfg,
+		built.runs.FixerRequires(),
 		redactor,
 		vcs.WithRedactor(redactor),
 	)
-	built, err := pipeline.New(pipeline.Options{
+	pipe, err := pipeline.New(pipeline.Options{
 		Stages:                      s.newStages(deps),
 		Fixer:                       s.newFixer(fixDeps),
-		Rounds:                      s.cfg.FixRounds,
-		Budget:                      s.cfg.RunBudget,
-		Adapter:                     resolution.Capabilities,
-		SuppressProjectInstructions: s.cfg.SuppressProjectInstructions,
+		Rounds:                      resolved.cfg.FixRounds,
+		Budget:                      resolved.cfg.RunBudget,
+		Adapter:                     built.agent.Capabilities,
+		SuppressProjectInstructions: resolved.cfg.SuppressProjectInstructions,
 	})
 	if err != nil {
 		return nil, err
 	}
-	executor, err := built.Executor(s.checkpoints)
+	executor, err := pipe.Executor(s.checkpoints)
 	if err != nil {
 		return nil, err
 	}
-	s.built = &driver{agent: resolution, runs: runService, pipeline: built, executor: executor}
-	s.log.Printf("resolved agent %s for runs of this service", resolution.Name)
-	return s.built, nil
+	topo := &topology{pipeline: pipe, executor: executor}
+	s.topologies[resolved.digest] = topo
+	return topo, nil
 }
 
 // newInstanceID mints the identifier one serving process is known by. It is

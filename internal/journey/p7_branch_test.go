@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/dayamjz/assistant/internal/agents/standin"
 	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/fixture"
 	"github.com/dayamjz/assistant/internal/journey"
@@ -24,24 +25,27 @@ type installed struct {
 	// fired is every tripwire the scenario recorded by the end of the run, and
 	// mustStayQuiet is what the two conditions say may not appear there.
 	//
-	// No clause rests on either. Every executable those two conditions plant
-	// is downstream of a stage body that launches something, and no body
-	// launches anything in this run: the two .claude hooks and the agent
-	// binary need an agent process, the branch's commands.test needs a run
-	// whose resolved configuration carries it, the two .githooks scripts need
-	// this product to commit or push, and .envrc needs a shell to enter the
-	// worktree. The intent body reads the run's supplied intent and starts
-	// nothing, the review body would launch the agent this harness scripts
-	// to answer nothing and the run skips it, the pull request body fails
-	// because the run's record names no repository on the code host and the
-	// run skips it too, and the test body holds for the command nobody
-	// configured here, so the file stays empty however the product resolved
-	// the branch's document, and a clause asserting the absence would hold
-	// over a world nothing could make it report in. They are recorded and
-	// logged so the evidence is here the day a stage body makes it
-	// discriminating.
+	// The absence clause over them is discriminating now, and commandRan is
+	// the fact that makes it so: the run resolves the trusted document's
+	// commands and executes them, so a run that had resolved the branch's
+	// commands.test instead would have executed the branch's script, which
+	// appends to the tripwire file. A world in which the file could not have
+	// gained an entry is the world before the repository layer was read, and
+	// the clause's Possible refuses to assert anything over that one.
 	fired         []string
 	mustStayQuiet []string
+	// commandRan is whether the run's test stage executed a configured
+	// command at all, read off the run's own stage report rather than
+	// assumed, because the absence above is evidence exactly when a command
+	// ran and was the trusted one. testedCommands is what that report says
+	// it ran, which is where the trusted command's text is read from.
+	commandRan     bool
+	testedCommands []string
+	// testFailureText is what the test stage reported about the failing
+	// trusted command, and requiredFailureText is what the planted
+	// failing-test condition says that report has to carry.
+	testFailureText     string
+	requiredFailureText []string
 	// requiredRejections is what the pushed-configuration condition records
 	// the resolution has to report, and is in the observation for the same
 	// reason: a check reading it out of a closure could not be shown to fail
@@ -72,26 +76,22 @@ type installed struct {
 // two .githooks scripts are the hooks git runs there rather than two inert
 // files.
 //
-// What "nothing executed" can be established from is not this run. Every
-// executable those conditions plant is reached only through a stage body that
-// launches something, and no body launches anything in this run: the .claude
-// hooks and the branch's agent binary need an agent process, its commands.test
-// needs a run whose resolved configuration carries it, the .githooks scripts
-// need this product to commit or push, and .envrc needs a shell. The intent
-// body reads the run's supplied intent and starts nothing; the review body -
-// the one that would launch an agent - would launch the one this harness
-// scripts to answer nothing; the pull request body fails because the run's
-// record names no repository on the code host, and this run asks to skip both
-// of those for the reasons walkableRun states; and the
-// test body reads commands.test only from the configuration this run resolved,
-// where the branch's value is dropped unless the trusted opt-out admits it and
-// neither the opt-out nor a command is set here, so it holds rather than
-// running anything. So
-// the scenario's tripwire file stays empty here whatever the product resolved,
-// and a clause reading it would be one nothing could make report. The file is
-// read and logged rather than asserted on, so the evidence is here the day a
-// stage body makes it discriminating. This is a gap in what can be
-// established, not a defect in the fixture: the gate's own hooks are tripwires
+// "Nothing executed" is established from this run now. The run resolves the
+// trusted document from the default branch, so its test stage executes the
+// trusted commands.test against the branch - which fails, because the branch
+// plants exactly that - and the fix round the failure takes launches the
+// operator-resolved stand-in, which this test scripts to change nothing, so
+// the convergence bound parks the run at that stage and the lint stage
+// behind it is never reached. What that buys the tripwire clause is its discriminating
+// half: a run that had resolved the branch's commands.test instead would have
+// executed the branch's script, which appends to the tripwire file, so the
+// file staying empty while a command demonstrably ran is the branch's
+// installation not being chosen rather than nothing having been looked at.
+// The run still asks to skip the review and pull request stages, for the
+// reasons walkableRun states, so the .claude hooks and the branch's agent
+// binary stay unreached by an agent this walk launches; what keeps them
+// unselected is the resolution itself, whose rejection of the branch's
+// "agent" the clauses below read. The gate's own hooks are tripwires
 // too and they do fire, which
 // TestNothingOutsideTheGateChoosesWhatRunsOnAPushToIt observes.
 //
@@ -125,28 +125,64 @@ func TestTheBranchUnderValidationChoosesNothingThatRuns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("%v", err)
 	}
+	failingTest, err := journey.Condition("stage-failing-test")
+	if err != nil {
+		t.Fatalf("%v", err)
+	}
 	observed := installed{
 		mustStayQuiet: slices.Concat(
 			condition.Expect.TripwiresQuiet, pushedConfig.Expect.TripwiresQuiet),
-		requiredRejections: pushedConfig.Expect.MessageContains,
+		requiredRejections:  pushedConfig.Expect.MessageContains,
+		requiredFailureText: failingTest.Expect.MessageContains,
 	}
 
-	j := open(t, scenario)
+	// The agent this run resolves is scripted for one thing beyond the
+	// default nothing: a fix round that changes no file. The trusted
+	// commands.test fails against this branch by plant, so the test stage
+	// takes a fix round, and a round the agent answers without editing
+	// anything completes as "changed no file" rather than failing the run;
+	// the convergence bound then parks the run at that stage.
+	agent := standin.New(t, standin.Script{Steps: []standin.Step{{
+		Match: standin.Match{PromptContains: "You are fixing a change"},
+		Times: standin.Always,
+		Reply: standin.Text("nothing here is mine to change"),
+	}}})
+	j := open(t, scenario, func(o *journey.Options) { o.AgentArguments = agent.Arguments() })
 	succeeds(t, j.Command("init", "--default-branch", fixture.DefaultBranch))
 	serve(t, j)
 	// The run asks to skip the review and pull request stages, for the
-	// reasons walkableRun states: a run that took either would fail there and
-	// could not reach the stages the installation was planted in front of.
-	observed.outcome = last(answerHolds(t, j,
-		walkableRun(t, j, "narrow the Total loop bound on purpose"), "approved")).Outcome
+	// reasons walkableRun states. It does not skip the test stage: executing
+	// the trusted command against the branch is this test's positive half.
+	// The branch plants a failing test, the do-nothing fix round changes no
+	// state, and the convergence bound then parks the run, so the command is
+	// not asserted to succeed and the walk is not asserted to finish; what
+	// the outcome establishes is that the failing check was the trusted
+	// command's and that the run did not walk past it.
+	final := decodeRun(t, j.Command("--skip", "review,pr",
+		"--intent", "narrow the Total loop bound on purpose"))
+	observed.outcome = final.Outcome
+	for _, view := range final.Stages {
+		if view.Stage != "test" {
+			continue
+		}
+		observed.commandRan = view.Ran && view.Report != nil &&
+			!strings.Contains(view.Report.Summary, "No test command is configured")
+		if view.Report != nil {
+			observed.testedCommands = slices.Clone(view.Report.Tested)
+			for _, finding := range view.Report.Findings {
+				observed.testFailureText += finding.Description + "\n"
+			}
+		}
+	}
 	if observed.fired, err = journey.Fired(scenario); err != nil {
 		t.Fatalf("reading the scenario's tripwires: %v", err)
 	}
 
-	// The one call the pushed-configuration condition names: the operator's
-	// own layer and the branch's, which is the only composition anything in
-	// this build performs. What the trusted document carries reaches no run,
-	// and Settlements records that as a gap rather than as a pass.
+	// The call the pushed-configuration condition names, driven in process so
+	// the rejection texts are readable here: the run above performs the full
+	// three-document composition through internal/service, and reports its
+	// rejections to the service log rather than on the wire, so this is the
+	// same rule read where a clause can quote it.
 	pushed := pushedLayer(t, scenario)
 	resolution, err := config.Resolve(config.Absent(config.OriginGlobal), pushed)
 	if err != nil {
@@ -170,11 +206,25 @@ func TestTheBranchUnderValidationChoosesNothingThatRuns(t *testing.T) {
 		What: "P7: a branch carrying a harness installation",
 		Clauses: []journey.Clause[installed]{
 			{
-				States: "the run reached the stages the installation was planted in front of",
+				States: "the trusted command ran against the branch and the run did not walk past its failure",
 				Holds: func(i installed) error {
-					if i.outcome != machine.OutcomeChecksPassed {
-						return fmt.Errorf("the run ended %s, so it did not reach the stages the installation was "+
-							"planted in front of", i.outcome)
+					if !slices.Contains(i.testedCommands, "go test ./...") {
+						return fmt.Errorf("the test stage reports having run %v, want the default "+
+							"branch's \"go test ./...\"", i.testedCommands)
+					}
+					if i.outcome == machine.OutcomeChecksPassed {
+						return errors.New("the run reached the end of the gate over a failing trusted " +
+							"check, so something walked past it")
+					}
+					return nil
+				},
+			},
+			{
+				States: "the failure the stage reports is the planted one",
+				Holds: func(i installed) error {
+					if missing := journey.Carries(i.testFailureText, i.requiredFailureText); len(missing) > 0 {
+						return fmt.Errorf("the test stage's report does not say %q; it said:\n%s",
+							missing, i.testFailureText)
 					}
 					return nil
 				},
@@ -228,6 +278,33 @@ func TestTheBranchUnderValidationChoosesNothingThatRuns(t *testing.T) {
 					return nil
 				},
 			},
+			{
+				States:  "nothing either condition planted executed",
+				Absence: true,
+				// The counterfactual is live exactly because a configured
+				// command ran: had the resolution taken the branch's
+				// commands.test, the branch's script would have executed and
+				// appended to the tripwire file. A run that executed no
+				// command at all is back in the world where nothing could
+				// have made this file report, and this clause refuses to
+				// assert anything over that one.
+				Possible: func(i installed) error {
+					if !i.commandRan {
+						return errors.New("the run executed no configured command, so no planted " +
+							"executable had a path to fire")
+					}
+					return nil
+				},
+				Holds: func(i installed) error {
+					for _, quiet := range i.mustStayQuiet {
+						if slices.Contains(i.fired, quiet) {
+							return fmt.Errorf("the tripwire file holds %q, so something the branch "+
+								"planted executed; it holds %v", quiet, i.fired)
+						}
+					}
+					return nil
+				},
+			},
 		},
 		Counterfeits: []journey.Counterfeit[installed]{
 			{Named: "the condition records no rejection, so looking for them proves nothing",
@@ -254,9 +331,24 @@ func TestTheBranchUnderValidationChoosesNothingThatRuns(t *testing.T) {
 				i.suppressionMessage = "assistant: something went wrong"
 				return i
 			}},
-			{Named: "the run stopped before it reached the stages the installation was planted for",
+			{Named: "the stage reported some other failure than the planted one",
 				Break: func(i installed) installed {
-					i.outcome = machine.OutcomeFailed
+					i.testFailureText = "something else entirely went wrong"
+					return i
+				}},
+			{Named: "the test stage ran some other command than the trusted one",
+				Break: func(i installed) installed {
+					i.testedCommands = []string{"sh tripwires/pushed-commands-test.sh"}
+					return i
+				}},
+			{Named: "the run walked past the failing trusted check to the end of the gate",
+				Break: func(i installed) installed {
+					i.outcome = machine.OutcomeChecksPassed
+					return i
+				}},
+			{Named: "a planted executable fired and left its mark in the tripwire file",
+				Break: func(i installed) installed {
+					i.fired = append(slices.Clone(i.fired), i.mustStayQuiet...)
 					return i
 				}},
 		},
@@ -264,13 +356,6 @@ func TestTheBranchUnderValidationChoosesNothingThatRuns(t *testing.T) {
 	if err := governs.Verify(observed); err != nil {
 		t.Fatalf("%v", err)
 	}
-	t.Logf("KNOWN GAP: the scenario's tripwire file holds %v after this run, and the two conditions "+
-		"require %v to stay out of it. Nothing here establishes that: every one of those executables "+
-		"is reached only through a stage body that launches something, no run reaches one, and a "+
-		"run therefore launches no agent, runs no configured command, and makes no commit or push. "+
-		"The file is reported rather than asserted on until such a body gives one of them a path "+
-		"to fire.",
-		observed.fired, observed.mustStayQuiet)
 }
 
 // pushedLayer parses the configuration document the branch under validation

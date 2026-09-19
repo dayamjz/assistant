@@ -382,8 +382,13 @@ Each has cost this repository more than one round of review.
   `machine.Run.Advancing`. A segment that ends without settling leaves a run
   something can resume and nothing is resuming, which is the stall PRD section 9
   calls worse than an error; `carryOn` is what stops that persisting, and it
-  decides from what ended the segment rather than from the run. Read `doc.go`
-  for that and for the repository configuration layer it does not read.
+  decides from what ended the segment rather than from the run. It also reads
+  the repository's own configuration document per run - the trusted copy at a
+  fresh fetch of the default branch, the pushed copy at the submitted commit,
+  composed by `config.ResolveRun` - and refuses the run before anything
+  launches when the trusted copy cannot be read or the composed document pins
+  a different agent than the operator's. Read `doc.go` for that, including
+  how a resume resolves fresh and what decides its resumability.
 - `internal/cli` is the command surface, and its verb table is PRD section 9's
   table and nothing else. A verb that section does not describe is a finding to
   raise against the specification, not a row to add: `cli_test.go` holds both
@@ -530,13 +535,17 @@ Each has cost this repository more than one round of review.
   nothing about review quality, and every row carries whether it was reached
   through the binary or
   through the package that owns the mechanism, because a run there still
-  reaches no agent, no push, and no code host: `internal/service` builds every
-  run an isolated copy now, so what keeps the agent out is the walks
-  themselves - every one asks to skip the review stage, whose body would
-  launch the agent the harness scripts to answer nothing - while the pull
-  request body fails because the run's record names no repository on the code
-  host, so every walk skips that stage too, and the test body holds for the
-  command nobody configured rather than executing anything. It
+  reaches no review, no push, and no code host: `internal/service` builds every
+  run an isolated copy and resolves its repository configuration now, so what
+  keeps the reviewing agent out is the walks themselves - every one asks to
+  skip the review stage, whose body would launch the agent the harness
+  scripts to answer nothing - while the pull request body fails because the
+  run's record names no repository on the code host, so every walk skips that
+  stage too, and the test body holds wherever the resolved configuration
+  names no command. The one exception is the P7 branch walk, whose trusted
+  document does name commands: its test stage executes the trusted command,
+  the failure takes a fix round through the scripted stand-in, and the
+  convergence bound parks the run. It
   takes both of the platform guards
   `internal/cli` and `internal/service` carry, on their terms: a check that
   drives a run skips where `internal/ipc` reads no local socket peer

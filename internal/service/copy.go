@@ -244,4 +244,11 @@ func (s *Service) reclaimCopy(ctx context.Context, record store.Run) {
 	if err := bare.DeleteRef(ctx, submittedRef(record.ID)); err != nil {
 		s.log.Printf("the submitted reference of run %s was not removed: %v", record.ID, err)
 	}
+	// The trusted-configuration reference is the run's too, written by
+	// resolveRunConfig when the run began or resumed, and it goes with the
+	// run on the same terms. A run that never resolved has none, and deleting
+	// an absent reference is not an error internal/vcs reports.
+	if err := bare.DeleteRef(ctx, trustedRef(record.ID)); err != nil {
+		s.log.Printf("the trusted-configuration reference of run %s was not removed: %v", record.ID, err)
+	}
 }

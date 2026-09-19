@@ -288,8 +288,9 @@ func peerOf(req ipc.Request) string {
 	return creds.String()
 }
 
-// resolveConfig reads the operator's global configuration document and
-// resolves it, and returns the digest that identifies what it resolved.
+// resolveConfig reads the operator's global configuration document, and
+// returns it as a layer, resolved on its own against the schema defaults, and
+// as the digest that identifies the document.
 //
 // A document that is there and cannot be read or parsed refuses, rather than
 // falling back to defaults: PRD section 10 makes invalid configuration a
@@ -297,31 +298,30 @@ func peerOf(req ipc.Request) string {
 // there is a different case and is the defaults, which that section says in as
 // many words.
 //
-// The repository layer is deliberately absent. PRD section 10 reads it from
-// the default branch at a freshly fetched commit, and nothing here fetches, so
-// what a run resolves is the global layer and the schema defaults. doc.go says
-// what that leaves.
-func resolveConfig(path string) (config.Config, string, error) {
+// The repository layer is deliberately absent here. PRD section 10 reads its
+// two copies per run - the trusted one from the default branch at a freshly
+// fetched commit, the pushed one from the branch under validation - so they
+// are read in resolveRunConfig when a run begins or resumes, and what this
+// resolution answers for is the service-scoped decisions alone: the agent
+// this service resolves and its run service's session policy.
+func resolveConfig(path string) (config.Layer, config.Config, string, error) {
 	document, err := os.ReadFile(path)
+	global := config.Absent(config.OriginGlobal)
 	switch {
 	case errors.Is(err, os.ErrNotExist):
-		resolution, err := config.Resolve(config.Absent(config.OriginGlobal), config.Absent(config.OriginTrusted))
-		if err != nil {
-			return config.Config{}, "", err
-		}
-		return resolution.Config, digestOf(nil), nil
+		document = nil
 	case err != nil:
-		return config.Config{}, "", fmt.Errorf("service: reading %s: %w", path, err)
-	}
-	global, err := config.Parse(config.OriginGlobal, document)
-	if err != nil {
-		return config.Config{}, "", err
+		return config.Layer{}, config.Config{}, "", fmt.Errorf("service: reading %s: %w", path, err)
+	default:
+		if global, err = config.Parse(config.OriginGlobal, document); err != nil {
+			return config.Layer{}, config.Config{}, "", err
+		}
 	}
 	resolution, err := config.Resolve(global, config.Absent(config.OriginTrusted))
 	if err != nil {
-		return config.Config{}, "", err
+		return config.Layer{}, config.Config{}, "", err
 	}
-	return resolution.Config, digestOf(document), nil
+	return global, resolution.Config, digestOf(document), nil
 }
 
 // digestOf identifies a configuration by the bytes it was resolved from, so a

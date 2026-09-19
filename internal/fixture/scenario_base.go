@@ -214,7 +214,8 @@ func plantPushedCommandsAndAgent(b *builder, s *Scenario) ([]Condition, error) {
 		Kind:      KindRefusal,
 		Principle: "P7",
 		Planted: "The branch commits a configuration document setting commands.test, commands.lint, and " +
-			"agent, and pushes it. The default branch's document sets all three to something else, so " +
+			"agent, and pushes it. The default branch's document sets both commands to something else " +
+			"and leaves the agent to the operator's layer, so " +
 			"which copy was read is observable rather than inferred. ignore_patterns is set alongside them " +
 			"and is a key a pushed branch may set, so a run that dropped the whole document rather than the " +
 			"three keys is distinguishable from one that applied the trust classes.",

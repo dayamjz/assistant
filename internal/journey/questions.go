@@ -44,13 +44,14 @@ func Settlements() []Settlement {
 			Decision: "This harness never spells the name. It reads Fixture.ConfigPath out of the built " +
 				"catalog wherever it needs the path, so the name stays internal/fixture's to state and " +
 				"following a package that comes to own it costs nothing here.",
-			Exercised: "Nothing in this build reads a repository's own configuration document from " +
-				"anywhere, which internal/service states outright, so the name is load-bearing in no " +
-				"code path a run takes. What this harness reads it for is driving config.Parse and " +
-				"vcs.Repository.FileAt against the planted documents directly.",
-			Raise: "PRD section 10 places the document at the repository root and does not name it, and " +
-				"no package owns the name. That is a gap in the specification rather than in any package, " +
-				"and it stays open.",
+			Exercised: "Every run reads the document now: internal/service reads both repository " +
+				"copies per run, spelling the name from config.RepositoryDocument, and " +
+				"internal/fixture's ConfigPath follows that constant, so the name has one owner and " +
+				"this harness still reads it out of the built catalog. The harness also drives " +
+				"config.Parse and vcs.Repository.FileAt against the planted documents directly.",
+			Raise: "PRD section 10 places the document at the repository root and does not name it. " +
+				"config.RepositoryDocument owns the name in the mechanism now; what the PRD still " +
+				"owes is the sentence naming it.",
 		},
 		{
 			Question: "question-agent-response-delivery",
@@ -126,32 +127,29 @@ func Settlements() []Settlement {
 				"internal/fixture therefore does not owe a second trusted document. The suppressed case " +
 				"needs no scenario, because no run reaches a scenario under it.",
 			Exercised: "The refusal is driven through the binary: it is the answer to starting a run " +
-				"under that key. The unsuppressed case is a whole run over the branch, but what it " +
-				"establishes is the pushed-configuration rejections rather than that nothing in the " +
-				"prose became an executed command: every planted executable is reached only through a " +
-				"stage body that launches something, and no body launches anything in these runs - the " +
-				"review body would launch the agent this harness scripts to answer nothing, the pull " +
-				"request body fails because the run's record names no repository on the code host, " +
-				"and the walk asks to skip both, and the test body holds for the command nobody " +
-				"configured here, never the branch's - so the tripwire file is read and logged rather " +
-				"than asserted on.",
+				"under that key. The unsuppressed case is a whole run over the branch, and it now " +
+				"establishes the other half too: the run executes the trusted commands.test against " +
+				"the branch, and the tripwire file is asserted quiet with that execution as the " +
+				"fact that makes the absence discriminating, so nothing in the installation's prose " +
+				"became an executed command or a selected agent.",
 		},
 		{
 			Question: "question-trusted-and-pushed-composition",
-			Decision: "Nothing in this build composes them, so this harness drives the one call the " +
-				"condition names - config.Resolve over the operator's global layer and the pushed layer " +
-				"- and reports the other half as a gap rather than as a pass. Inventing a composition " +
-				"here would make the harness the owner of a contract no shipped code answers to, and a " +
-				"green harness would then be evidence about the harness.",
-			Exercised: "The three rejections and the pushed ignore_patterns winning are driven at package " +
-				"reach. The trusted values the default branch carries reach no run, because " +
-				"internal/service reads the operator's global layer and the schema defaults and nothing " +
-				"else.",
-			Raise: "PRD section 10 requires configuration that executes code to be read from the default " +
-				"branch at a freshly fetched commit, and no package in this build does that or owns " +
-				"doing it. internal/service states the gap for itself. It is not a hole in P7 - no " +
-				"branch's configuration is read at all, so none can direct what runs - and it is a gap " +
-				"against section 10 that stays open.",
+			Decision: "internal/service owns it now. Its layers.go reads the trusted copy from the " +
+				"default branch at a freshly fetched commit and the pushed copy at the run's " +
+				"submitted commit, both out of the gate's bare repository, and config.ResolveRun is " +
+				"the composition itself, taking the operator's layer and both copies in one call. " +
+				"The fixture's provisional answer - that config.Resolve takes one repository layer, " +
+				"so the composition had no owner - described the build before that call existed.",
+			Exercised: "A run over the harness-installation branch executes the trusted commands.test " +
+				"while the branch's own is rejected, which is the composition observed through the " +
+				"binary; the rejection texts are read at package reach because a run reports its " +
+				"rejections to the service log rather than on any shipped surface. A run over a " +
+				"trusted document that will not parse is refused before launching anything, through " +
+				"the binary as well.",
+			Raise: "A run's configuration rejections reach the service log only. A surface that " +
+				"relays them to the pushing author is worth raising against PRD section 9; until " +
+				"one exists, an author learns their key was dropped by reading the log.",
 		},
 		{
 			Question: "question-hookspath-redirect-observation",
