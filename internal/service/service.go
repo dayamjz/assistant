@@ -116,7 +116,10 @@ type Options struct {
 	// to be traceable to. store.CurrentBuild reads it for the common caller.
 	Build store.Build
 	// Catalog is the agent adapters this build has. Zero means
-	// agents.DefaultCatalog.
+	// agents.DefaultCatalog, built with the recorder that feeds this
+	// service's store the agent invocation history; a supplied catalog
+	// already constructed its factories, so it records only what its own
+	// factories arranged.
 	Catalog *agents.Catalog
 	// Ancestry decides whether a caller is contained by an active validation
 	// stage. Zero means this service's own registry of the stages it started,
@@ -284,7 +287,15 @@ func Open(ctx context.Context, o Options) (*Service, error) {
 	}
 	s.stopCtx, s.stopCancel = context.WithCancel(context.WithoutCancel(ctx))
 	if s.catalog == nil {
-		s.catalog = agents.DefaultCatalog()
+		// The shipped adapters are built with the recorder that feeds the
+		// store's agent invocation history, so a run's cost is recorded
+		// without any caller arranging it. The recorder reads the store at
+		// call time because the store opens below and adapters only invoke
+		// once a run does, well after Open; a supplied catalog built its
+		// factories already, so there this history holds only what that
+		// caller's own factories arranged, which invocation.go states.
+		s.catalog = agents.DefaultCatalog(
+			agents.WithCatalogRecorder(invocationRecorder{s}))
 	}
 	if err := s.openParts(ctx, o); err != nil {
 		_ = s.Close()

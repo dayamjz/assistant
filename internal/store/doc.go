@@ -292,7 +292,13 @@
 // it again; what it means is the agent adapter's, and which invocations may
 // carry one is internal/agents' type split.
 //
-// It does not yet carry every record PRD section 8 lists. The agent invocation
-// record has no table and no accessor here; adding it is a later migration, and
-// until then this package is not where a caller looks for one.
+// The agent invocation record PRD section 8 lists is here, as
+// AppendAgentInvocation and AgentInvocations, and it is history on that
+// section's terms: appended, never revised, and holding purpose, agent,
+// model, timing, failure category, and token usage with no column a prompt,
+// an output, a diff, or a credential could land in. What each vocabulary
+// value means is internal/agents', and who feeds the history is
+// internal/service, which is also where its one softness is owned and stated:
+// the recording interface returns nothing, so a row that cannot be written is
+// dropped and the history understates.
 package store
