@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/dayamjz/assistant/internal/agents"
+	"github.com/dayamjz/assistant/internal/forge"
 	"github.com/dayamjz/assistant/internal/gate"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/pipeline"
@@ -214,6 +215,9 @@ func syncBranch(_ context.Context, in *invocation) (any, error) {
 // reported and does not decide: a build short of all nine stage bodies can
 // start a run, and what that run does is hold at the stages stages.Holding
 // names, which is worth knowing and is not the same as being unable to start.
+// The code host row is the same kind: a run can start without a runnable
+// provider command line and the stages that talk to the code host refuse
+// there, so the row informs before a stage does and stops nothing.
 func doctor(ctx context.Context, in *invocation) (any, error) {
 	if err := in.parseFlags("doctor", func(*flag.FlagSet) {}); err != nil {
 		return nil, err
@@ -256,6 +260,7 @@ func doctor(ctx context.Context, in *invocation) (any, error) {
 		add(machine.Check{Name: "agent", OK: true, Blocking: true, Detail: resolution.Name})
 	}
 
+	add(codeHost())
 	add(stageBodies())
 
 	report.CanStartRun = true
@@ -294,6 +299,27 @@ func gateCheck(ctx context.Context, records *store.Store, working string) machin
 		}
 	}
 	return machine.Check{Name: "gate", OK: true, Blocking: true, Detail: "bound to " + binding.GateID}
+}
+
+// codeHost reports whether the code-host provider command line resolves on
+// this machine. It probes the host built the way internal/service builds the
+// one its stage bodies get, so what it answers for is the command a run would
+// invoke rather than a second spelling of it, and what the probe does and
+// does not establish is forge.GitHubHost.Probe's contract.
+//
+// It does not block, because a run can start without a code host: the stages
+// that talk to one refuse there, honestly, when they are reached. What the
+// row buys is that the operator learns here rather than from a stage partway
+// through a run.
+func codeHost() machine.Check {
+	resolved, err := forge.NewGitHubHost(redact.New()).Probe()
+	if err != nil {
+		return machine.Check{
+			Name:   "code host",
+			Detail: err.Error() + "; a run can start without it, and a stage that needs the code host reports the refusal itself",
+		}
+	}
+	return machine.Check{Name: "code host", OK: true, Detail: resolved}
 }
 
 // stageBodies reports how much of the gate this build actually implements. It
