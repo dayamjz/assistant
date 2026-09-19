@@ -20,9 +20,9 @@ import (
 // pinned adapter does and produce no agent output at all, only a refusal - so
 // no shape the real mechanism cannot produce is stated anywhere here.
 
-// probeErr is what every probe returns, so a test knows its assertions ran
+// errProbe is what every probe returns, so a test knows its assertions ran
 // because the call came back with it.
-var probeErr = errors.New("seam probe: the invocation stops here")
+var errProbe = errors.New("seam probe: the invocation stops here")
 
 // startedProbe exercises an Invocation.Started value the way the adapter
 // does, and asserts the registration it makes against the registry it is
@@ -67,7 +67,7 @@ func (r probeRunner) Capabilities() agents.Capabilities { return agents.Capabili
 func (r probeRunner) Run(_ context.Context, _ agents.Purpose, inv agents.Invocation) (
 	agents.Result, error) {
 	r.probe.exercise(inv)
-	return agents.Result{}, probeErr
+	return agents.Result{}, errProbe
 }
 
 func TestEveryInvocationOfTheResolvedAgentIsRegisteredWhileItRuns(t *testing.T) {
@@ -79,7 +79,7 @@ func TestEveryInvocationOfTheResolvedAgentIsRegisteredWhileItRuns(t *testing.T) 
 	}
 
 	ctx := withAdvancing(t.Context(), "run-1")
-	if _, err := wrapped.Run(ctx, agents.PurposeReview, agents.Invocation{}); !errors.Is(err, probeErr) {
+	if _, err := wrapped.Run(ctx, agents.PurposeReview, agents.Invocation{}); !errors.Is(err, errProbe) {
 		t.Fatalf("the wrapped runner answered %v, want the probe's refusal", err)
 	}
 	if !probe.asserted {
@@ -105,7 +105,7 @@ type probeFixer struct{ probe *startedProbe }
 
 func (f probeFixer) Apply(_ context.Context, inv agents.Invocation) (agents.Result, error) {
 	f.probe.exercise(inv)
-	return agents.Result{}, probeErr
+	return agents.Result{}, errProbe
 }
 
 func (f probeFixer) Reference() string { return "probe-session" }
@@ -125,7 +125,7 @@ func TestAFixRoundOfTheResolvedAgentIsRegisteredWhileItRuns(t *testing.T) {
 		t.Fatalf("opening the probe fixer: %v", err)
 	}
 	ctx := withAdvancing(t.Context(), "run-2")
-	if _, err := fixer.Apply(ctx, agents.Invocation{}); !errors.Is(err, probeErr) {
+	if _, err := fixer.Apply(ctx, agents.Invocation{}); !errors.Is(err, errProbe) {
 		t.Fatalf("the wrapped fixer answered %v, want the probe's refusal", err)
 	}
 	if !probe.asserted {
@@ -147,7 +147,7 @@ func TestAnInvocationOutsideARunIsStillContained(t *testing.T) {
 	probe := &startedProbe{t: t, registry: s.registry, wantRun: "", wantStage: "intent"}
 	wrapped := s.containRunner(probeRunner{probe: probe})
 
-	if _, err := wrapped.Run(t.Context(), agents.PurposeIntent, agents.Invocation{}); !errors.Is(err, probeErr) {
+	if _, err := wrapped.Run(t.Context(), agents.PurposeIntent, agents.Invocation{}); !errors.Is(err, errProbe) {
 		t.Fatalf("the wrapped runner answered %v, want the probe's refusal", err)
 	}
 	if !probe.asserted {
