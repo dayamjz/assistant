@@ -333,4 +333,41 @@ var schema = []migration{
 			`ALTER TABLE run ADD COLUMN resolved_agent TEXT`,
 		},
 	},
+	{
+		version: 8,
+		name:    "agent invocation history",
+		statements: []string{
+			// PRD section 8's agent invocation record: purpose, agent, model,
+			// timing, failure category, and token usage. It is history, so
+			// rows are appended and none is revised, and the sequence is the
+			// order the store accepted them in.
+			//
+			// The same row fixes what is never here: there is no column a
+			// prompt, an agent's output, a diff, or a credential could be
+			// written into, which is how AppendAgentInvocation keeps that
+			// half of the record's contract structural rather than asked of
+			// its callers.
+			//
+			// Every usage column is nullable because a count the agent did
+			// not report and a count it reported as zero are different facts,
+			// and only the second may be stored as a zero. The remaining
+			// columns describe the invocation itself, which the recording
+			// caller always knows, so they are NOT NULL.
+			`CREATE TABLE agent_invocation (
+				seq                   INTEGER PRIMARY KEY,
+				purpose               TEXT NOT NULL,
+				agent                 TEXT NOT NULL,
+				model                 TEXT NOT NULL,
+				session_use           TEXT NOT NULL,
+				started               TEXT NOT NULL,
+				duration_ns           INTEGER NOT NULL,
+				failure               TEXT NOT NULL,
+				input_tokens          INTEGER,
+				output_tokens         INTEGER,
+				cache_read_tokens     INTEGER,
+				cache_creation_tokens INTEGER,
+				turns                 INTEGER
+			) STRICT`,
+		},
+	},
 }

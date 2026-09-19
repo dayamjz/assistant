@@ -266,6 +266,17 @@
 // reach the memory P4 keeps a reviewer out of, and a StageAgent has no Runner
 // to hand it.
 //
+// It is also where PRD section 8's agent invocation history gets its feed.
+// The default catalog's adapters are built with a recorder over this
+// service's store, so every invocation a run makes through them, failed and
+// cancelled ones included, lands one row of cost: purpose, agent, model,
+// timing, failure category, and token usage, never a prompt or an output.
+// invocation.go owns the translation and states the two edges plainly: a
+// caller-supplied catalog built its factories already, so it records only
+// what its own factories arranged, and a row that cannot be written is
+// logged and dropped, so the history understates rather than blocking or
+// failing an invocation over its own bookkeeping.
+//
 // It reads a repository's own configuration per run, on PRD section 10's
 // terms, and layers.go owns the mechanism: the trusted copy from the default
 // branch at a freshly fetched commit, the pushed copy at the run's submitted

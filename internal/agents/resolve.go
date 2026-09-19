@@ -44,16 +44,60 @@ func NewCatalog(factories ...Factory) *Catalog {
 	return c
 }
 
+// CatalogOption configures every adapter DefaultCatalog builds, at the one
+// place the shipped adapter list lives. It exists for a dependency that is
+// the same for all of them and settled by the caller that owns the build:
+// each adapter family has its own option type for what varies per adapter,
+// and restating the shipped list at a call site to hand all four the same
+// value would give that list a second owner. internal/service is the
+// consumer, for the invocation recorder its store backs.
+//
+// It reaches only the catalog DefaultCatalog builds. A caller assembling its
+// own catalog from factories configures each factory itself, so nothing here
+// applies to it.
+type CatalogOption func(*catalogSettings)
+
+type catalogSettings struct {
+	recorder Recorder
+}
+
+// WithCatalogRecorder gives every adapter DefaultCatalog builds r as its
+// Recorder, exactly as if each factory had been constructed with its own
+// recorder option. What a Recorder receives, and when, is Recorder's
+// contract; this option only delivers it to all four adapters.
+func WithCatalogRecorder(r Recorder) CatalogOption {
+	return func(s *catalogSettings) { s.recorder = r }
+}
+
 // DefaultCatalog returns the adapters this build ships, in the order "auto"
 // tries them. The order is: Cursor (most common in this environment), Claude
 // (full-featured with sessions), OpenAI, and Grok. All implement the core
 // Runner interface, and Claude additionally supports resumable sessions.
-func DefaultCatalog() *Catalog {
+//
+// Options apply to every adapter in the returned catalog and to nothing
+// else; DefaultCatalog with none behaves as it always has.
+func DefaultCatalog(opts ...CatalogOption) *Catalog {
+	var s catalogSettings
+	for _, opt := range opts {
+		opt(&s)
+	}
+	var (
+		cursor []CursorOption
+		claude []ClaudeOption
+		openai []OpenAIOption
+		grok   []GrokOption
+	)
+	if s.recorder != nil {
+		cursor = append(cursor, WithCursorRecorder(s.recorder))
+		claude = append(claude, WithRecorder(s.recorder))
+		openai = append(openai, WithOpenAIRecorder(s.recorder))
+		grok = append(grok, WithGrokRecorder(s.recorder))
+	}
 	return NewCatalog(
-		CursorFactory(),
-		ClaudeFactory(),
-		OpenAIFactory(),
-		GrokFactory(),
+		CursorFactory(cursor...),
+		ClaudeFactory(claude...),
+		OpenAIFactory(openai...),
+		GrokFactory(grok...),
 	)
 }
 
