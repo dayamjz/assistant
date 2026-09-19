@@ -200,7 +200,23 @@ func recordRepository(t *testing.T, h *home.Home, workingPath string) store.Repo
 	}, gate.WithIndex(records)); err != nil {
 		t.Fatalf("initializing the gate: %v", err)
 	}
+	identifyGateRepository(t, h, workingPath)
 	return repository
+}
+
+// identifyGateRepository gives the gate's repository a committer identity.
+//
+// A run's isolated copy is a linked worktree of that repository and shares its
+// configuration, and the rebase stage replays the branch's commits in the copy
+// when the branch is behind its freshly fetched upstream. Replaying writes
+// commits, writing commits needs an identity, and a CI runner carries none
+// globally, so the tests state one where every isolated copy inherits it. On
+// an operator's machine their own global configuration supplies the same fact.
+func identifyGateRepository(t *testing.T, h *home.Home, workingPath string) {
+	t.Helper()
+	repository := gateRepositoryOf(t, h, workingPath)
+	git(t, repository, "config", "user.name", "test")
+	git(t, repository, "config", "user.email", "test@example.invalid")
 }
 
 // testCommand is an absolute path to an executable, which is what a gate's

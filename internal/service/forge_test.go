@@ -183,4 +183,5 @@ func recordRepositoryWithUpstream(t *testing.T, h *home.Home, workingPath, upstr
 	}, gate.WithIndex(records)); err != nil {
 		t.Fatalf("initializing the gate: %v", err)
 	}
+	identifyGateRepository(t, h, workingPath)
 }
