@@ -156,9 +156,10 @@ func TestTheWholeCommandSurfaceAnswersOneDocumentPerInvocation(t *testing.T) {
 	// One run, across separate invocations of the binary, with the service
 	// restarted in the middle. Every step is its own process, which is what
 	// makes this a claim about the surface rather than about a library.
-	// The skip is the one walkableRun documents: answering the first hold
-	// carries the run into the review stage, which fails on the isolated copy
-	// nothing creates, and this test needs the run holding afterwards.
+	// The skip is the one walkableRun documents for the review stage: taken,
+	// it would stop at an ask recording that the agent this harness scripts
+	// to answer nothing reviewed nothing, and this test is about the holds a
+	// walk meets rather than that one.
 	started := drive[machine.Run](t, &observed, j, "--skip", pipeline.StageReview.String(),
 		"--intent", "a change driven a command at a time")
 	observed.promisedRunAt = len(observed.spoke) - 1

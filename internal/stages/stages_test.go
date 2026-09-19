@@ -275,20 +275,21 @@ func implementationFor(t *testing.T, s pipeline.Stages, stage pipeline.Stage) pi
 	}
 }
 
-// Holding is the fact a walk derives a run's stops from, and the test stage is
-// what makes it more than Implemented's complement: with no test command
-// configured it holds with a body, and with one configured it does not. The
+// Holding is the fact a walk derives a run's stops from, and the command
+// stages are what make it more than Implemented's complement. Every stage has
+// a body in this build, so Implemented's complement is empty and Holding is
+// not: the test, document, and lint stages hold with a body wherever the
+// configuration names no command for them, and do not once it does. The
 // emptiness rule is asserted on the same terms the body answers a run with,
 // so a whitespace-only value configures nothing here the way it runs nothing
 // there.
 func TestHoldingNamesTheTestStageExactlyWhenNoCommandIsConfigured(t *testing.T) {
 	t.Parallel()
 	unconfigured := config.Defaults()
-	want := []pipeline.Stage{pipeline.StageRebase, pipeline.StageTest, pipeline.StageDocument,
-		pipeline.StageLint, pipeline.StagePush, pipeline.StageCI}
+	want := []pipeline.Stage{pipeline.StageTest, pipeline.StageDocument, pipeline.StageLint}
 	if got := stages.Holding(unconfigured); !slices.Equal(got, want) {
 		t.Fatalf("a default configuration holds a run at %v, want %v: every stage without a body, "+
-			"and the test stage for the command the configuration does not name", got, want)
+			"and each command stage for the command the configuration does not name", got, want)
 	}
 
 	blank := config.Defaults()

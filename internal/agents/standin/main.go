@@ -40,6 +40,11 @@ const (
 	// exitNoUse is a use of a bounded step this stand-in could not claim, so
 	// it does not know whether the step was still free to answer with.
 	exitNoUse = 8
+	// exitNoDemand is a derived review reply answering an invocation whose
+	// prompt carries no evidence demand to derive the review from. The step
+	// matched something that is not a review, and fabricating one would be
+	// worse than saying so.
+	exitNoDemand = 9
 )
 
 // Main runs this process as the stand-in agent when it was started as one, and
@@ -182,7 +187,20 @@ func choose(control string, script Script, call Call) (int, error) {
 // own rather than being ignored, because standard output is the whole of what
 // this process is for. Padding is written in blocks so a reply that exceeds
 // the adapter's output limit costs one buffer rather than its whole size.
+//
+// A derived review is resolved first, against the prompt this call carries,
+// because that prompt is the one thing a Review needs that the script could
+// not hold. It fills the envelope and only an empty one, so a reply stating
+// both an envelope and a review is answered with the envelope it stated.
 func emit(reply Reply, call Call) int {
+	if reply.Envelope == nil && reply.Review != nil {
+		report, err := reply.Review.report(call.Prompt)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "standin: "+err.Error())
+			return exitNoDemand
+		}
+		reply.Envelope = Report(report).Envelope
+	}
 	if reply.Stderr != "" {
 		if _, err := io.WriteString(os.Stderr, reply.Stderr); err != nil {
 			// There is nowhere left to say so, since standard error is what

@@ -186,17 +186,31 @@ func NewStageDeps(agent agents.StageAgent, h *home.Home, cfg config.Config, host
 // give that rule a second fact to stay consistent with.
 //
 // It opens and never creates, because a body that created its own would be
-// working somewhere the service does not know to reclaim. Nothing in this
-// build's production code creates one either, so a run reaching this today
-// finds nothing to open and gets back an error naming the path it tried:
-// creation and reclaim is the work queued next, and this is the path it has to
-// produce.
+// working somewhere the service does not know to reclaim. internal/service
+// creates it, before the run is recorded as started and so before any body
+// runs, and reclaims it when the run reaches a terminal status; that package's
+// copy.go owns what it is cut from and why.
+//
+// So an error from here is a run whose copy is missing rather than one nothing
+// ever built, and it names the path it tried.
 func (d StageDeps) Copy(ctx context.Context, repositoryID, runID string) (*vcs.Repository, error) {
-	if d.Home == nil {
+	return openRunCopy(ctx, d.Home, d.git, repositoryID, runID)
+}
+
+// openRunCopy is the one place a run's isolated copy is located and opened.
+//
+// Both seams go through it - a stage body's and a fix round's - because the
+// path is PRD section 8's layout and a second composition of it would be a
+// second owner of where a run works. A fix round that opened a different
+// directory than the stage it is fixing would be editing something nobody
+// validates.
+func openRunCopy(ctx context.Context, h *home.Home, git []vcs.Option, repositoryID, runID string) (
+	*vcs.Repository, error) {
+	if h == nil {
 		return nil, fmt.Errorf("stages: no home, so the isolated copy for run %s cannot be located", runID)
 	}
-	path := d.Home.Worktree(repositoryID, runID)
-	repo, err := vcs.OpenWorktree(ctx, path, d.git...)
+	path := h.Worktree(repositoryID, runID)
+	repo, err := vcs.OpenWorktree(ctx, path, git...)
 	if err != nil {
 		return nil, fmt.Errorf("stages: opening the isolated copy for run %s at %s: %w", runID, path, err)
 	}

@@ -110,13 +110,13 @@ func (s *Service) apply(ctx context.Context, id string, m move) (store.Run, erro
 	if err != nil {
 		return store.Run{}, err
 	}
-	if finished(r.Status) {
+	if Finished(r.Status) {
 		delete(s.fixers, id)
 	}
 	return r, nil
 }
 
-// finished reports whether a run in this status is one no move leads out of.
+// Finished reports whether a run in this status is one no move leads out of.
 //
 // That is the three terminal statuses, and it is read off the table rather
 // than listed again, so a status added later is covered by whichever rows are
@@ -124,7 +124,12 @@ func (s *Service) apply(ctx context.Context, id string, m move) (store.Run, erro
 // this service cannot move is a run it cannot take further, so a word nobody
 // recognizes answers here the way a finished run does rather than opening a
 // path on the strength of not being understood.
-func finished(status store.RunStatus) bool {
+//
+// It is exported for internal/service, which reclaims a run's isolated copy
+// when the run is over and must not reclaim one a hold will resume in. That
+// caller asks here rather than naming the terminal statuses beside its own
+// switch, because a second list of them is a second owner of which they are.
+func Finished(status store.RunStatus) bool {
 	for _, m := range moves {
 		if slices.Contains(m.from, status) {
 			return false

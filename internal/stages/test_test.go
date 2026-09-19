@@ -1,6 +1,7 @@
 package stages_test
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -365,21 +366,41 @@ func TestAllPlacesTheTestBodyAndItAdvancesAPassingRun(t *testing.T) {
 	}
 }
 
-// A failing check is fix-eligible, and this build has no fixer, so a run that
-// reaches one ends at PendingFixer naming what is missing. That is the
-// documented end of this path, and it is checked rather than described so that
-// a build which later reports a pass here is caught.
-func TestAFailingCheckReachesTheFixerThisBuildDoesNotHave(t *testing.T) {
+// A failing check is fix-eligible, so a run that reaches one routes into this
+// stage's fix node rather than failing or passing.
+//
+// What is asserted is the routing and not what a fixer does with it. The fixer
+// this build wires calls an agent and commits, which is fix.go's subject and
+// not this stage's; what this stage owes is that a failing check produces a
+// finding the fix path accepts, and that is what a fixer standing in for the
+// real one can observe.
+//
+// The stand-in reports that it changed nothing, which is an answer the real
+// fixer also gives. That keeps the loop converging here rather than running to
+// its round limit, so a failure in this test is about the routing rather than
+// about how many rounds a bound allows.
+func TestAFailingCheckRoutesIntoTheStagesFixRound(t *testing.T) {
 	t.Parallel()
 	run := newTestStageRun(t, failingTestCommand)
 
+	var rounds int
+	var fixedStage pipeline.Stage
+	var sawFindings []findings.Finding
 	all := pipeline.ConstantStages("nothing to report")
 	all.Test = stages.All(run.deps).Test
-	rounds := config.FixRounds{Test: 3}
 	p, err := pipeline.New(pipeline.Options{
 		Stages: all,
-		Fixer:  stages.PendingFixer(nil),
-		Rounds: rounds,
+		Fixer: pipeline.Fixer{
+			NewBody: func() pipeline.FixBody {
+				return func(_ context.Context, in pipeline.FixInput) (pipeline.FixOutput, error) {
+					rounds++
+					fixedStage = in.Stage
+					sawFindings = in.Findings
+					return pipeline.FixOutput{Summary: "changed nothing"}, nil
+				}
+			},
+		},
+		Rounds: config.FixRounds{Test: 3},
 		Budget: config.DefaultRunBudget,
 	})
 	if err != nil {
@@ -399,11 +420,25 @@ func TestAFailingCheckReachesTheFixerThisBuildDoesNotHave(t *testing.T) {
 	if err != nil {
 		t.Fatalf("building the run's initial state: %v", err)
 	}
-	if _, err := executor.Run(t.Context(), run.runID, state); err == nil {
-		t.Fatal("a run whose check failed reached no fixer and reported no failure, so it passed a " +
-			"stage this build cannot fix")
-	} else if !strings.Contains(err.Error(), "no fixer is implemented") {
-		t.Fatalf("a run whose check failed ended with %v, and this build ends it at the missing fixer", err)
+	if _, err := executor.Run(t.Context(), run.runID, state); err != nil {
+		t.Fatalf("running a pipeline whose check fails: %v", err)
+	}
+
+	if rounds == 0 {
+		t.Fatal("a run whose check failed reached no fix round, so the finding this stage reports " +
+			"for a failing check is not one the fix path accepts")
+	}
+	if fixedStage != pipeline.StageTest {
+		t.Fatalf("the fix round was for the %s stage, want the test stage", fixedStage)
+	}
+	if len(sawFindings) == 0 {
+		t.Fatal("the fix round was given no findings, so it was asked to fix nothing")
+	}
+	for _, finding := range sawFindings {
+		if finding.Action != findings.ActionFix {
+			t.Fatalf("the fix round was given a %s finding, and only fix findings may enter one: %+v",
+				finding.Action, finding)
+		}
 	}
 }
 

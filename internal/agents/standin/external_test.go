@@ -84,3 +84,65 @@ func TestAReviewFixReviewLoopKeepsItsSessionsApart(t *testing.T) {
 			got, fixer.Reference())
 	}
 }
+
+// A derived review answers the demand the invocation carries, so the adapter's
+// own binding accepts it. This is the check that keeps Reviewed's reading of
+// the prompt and findings.Demand.Guidance's writing of it one contract: the
+// prompt here is assembled from that package's own text, exactly as the review
+// stage assembles it, and the assertion is the adapter's ShapeReview path
+// refusing or accepting the reply, not this test's opinion of the parsing.
+func TestADerivedReviewAnswersTheDemandTheInvocationCarries(t *testing.T) {
+	demand := findings.Demand{
+		Revision: "0123456789abcdef0123456789abcdef01234567",
+		Touched:  []string{"internal/example/a.go", "docs/readme with spaces.md"},
+	}
+	guidance, err := demand.Guidance()
+	if err != nil {
+		t.Fatalf("building the evidence demand: %v", err)
+	}
+
+	agent := standin.New(t, standin.Script{Steps: []standin.Step{
+		{Match: standin.MatchReview(), Times: standin.Always, Reply: standin.Reviewed("the change is sound")},
+	}})
+	result, err := agent.Runner().Run(t.Context(), agents.PurposeReview, agents.Invocation{
+		Prompt: "You are reviewing a change.\n\n" + guidance + "\n\nThe diff follows.",
+		Shape:  agents.ShapeReview,
+		Review: demand,
+		Dir:    t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("the adapter refused the derived review: %v", err)
+	}
+	if result.Report.Revision != demand.Revision {
+		t.Errorf("the derived review reports revision %q, want the demanded %q", result.Report.Revision, demand.Revision)
+	}
+	if len(result.Binding.Undeclared) != 0 || len(result.Binding.Beyond) != 0 {
+		t.Errorf("the derived read set does not match the touched set: undeclared %v, beyond %v",
+			result.Binding.Undeclared, result.Binding.Beyond)
+	}
+	// The binding appends its own informational note about the evidence set,
+	// so a clean review is one that blocks nothing, not one with no findings.
+	if held := result.Report.Held(); len(held) != 0 {
+		t.Errorf("a clean derived review holds the run: %v", held)
+	}
+	if fixable := result.Report.Fixable(); len(fixable) != 0 {
+		t.Errorf("a clean derived review prescribes fixes: %v", fixable)
+	}
+}
+
+// An invocation with no evidence demand in its prompt cannot be answered with
+// a derived review, and the failure names what was missing rather than the
+// stand-in fabricating a report. This is the loud half of Reviewed's contract:
+// a step that matched too broadly fails the invocation instead of approving
+// something nobody demanded a review of.
+func TestADerivedReviewRefusesAPromptWithNoDemand(t *testing.T) {
+	agent := standin.New(t, standin.Script{Steps: []standin.Step{
+		{Reply: standin.Reviewed("nothing to derive from")},
+	}})
+	_, err := agent.Runner().Run(t.Context(), agents.PurposeReview, agents.Invocation{
+		Prompt: "just fix it", Shape: agents.ShapeText, Dir: t.TempDir(),
+	})
+	if err == nil {
+		t.Fatal("a derived review of a prompt with no demand was answered rather than refused")
+	}
+}

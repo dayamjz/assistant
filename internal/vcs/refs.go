@@ -2,6 +2,7 @@ package vcs
 
 import (
 	"context"
+	"fmt"
 	"strings"
 )
 
@@ -248,4 +249,58 @@ func checkArg(what, value string) error {
 		return &argumentError{what: what, value: value, reason: "must not contain a NUL byte or a newline"}
 	}
 	return nil
+}
+
+// DeleteRef removes a reference, and is silent when there is none to remove.
+//
+// The reference is named in full, as refs/... , because this deletes whatever
+// the name resolves to and a short name resolves through git's disambiguation
+// rules: "work" is a branch today and could be a tag tomorrow. A name outside
+// refs/ is refused rather than interpreted.
+//
+// It deletes the reference and nothing else. The objects it made reachable
+// stay in the repository until git collects them, so this is not a way to
+// establish that anything is gone.
+func (r *Repository) DeleteRef(ctx context.Context, name string) error {
+	if err := checkArg("ref", name); err != nil {
+		return err
+	}
+	if !strings.HasPrefix(name, "refs/") {
+		return fmt.Errorf("vcs: %q is not a full reference name, which begins refs/", name)
+	}
+	_, _, err := r.runExpecting(ctx, "update-ref-delete", []int{1},
+		"update-ref", "-d", "--end-of-options", name)
+	return err
+}
+
+// CommitsNotIn returns the commits reachable from have and not from
+// incorporated, most recent first. It is git rev-list incorporated..have.
+//
+// An empty result means incorporated already contains everything have does, so
+// replacing have with incorporated drops no commit. That is the question
+// internal/safety asks before it allows an update that rewrites a branch, and
+// answering it is the whole of what this operation is for.
+//
+// Both revisions are resolved in the local repository first, so a revision
+// that only exists on a remote is ErrRefNotFound rather than an empty answer.
+// The difference is the one internal/safety turns into a refusal: a comparison
+// that could not be made is not a comparison that found nothing.
+func (r *Repository) CommitsNotIn(ctx context.Context, have, incorporated string) ([]string, error) {
+	h, err := r.ResolveCommit(ctx, have)
+	if err != nil {
+		return nil, err
+	}
+	i, err := r.ResolveCommit(ctx, incorporated)
+	if err != nil {
+		return nil, err
+	}
+	out, err := r.run(ctx, "rev-list", "rev-list", "--end-of-options", i+".."+h)
+	if err != nil {
+		return nil, err
+	}
+	fields := strings.Fields(string(out))
+	if len(fields) == 0 {
+		return nil, nil
+	}
+	return fields, nil
 }

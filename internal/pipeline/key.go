@@ -81,6 +81,22 @@ const (
 	// the push stage require a durable record of one this commit descends
 	// from; nothing in this package checks that.
 	KeyApproved Key = "approved"
+	// KeyPushAnchor is where the branch the push stage forwards to stood when
+	// this run observed it, before the run did its work. It is the durable
+	// form of a safety.Observation, and the push stage's update is anchored to
+	// it.
+	//
+	// It is state rather than something the push stage reads for itself
+	// because of what P6 asks: an anchor read a moment before pushing always
+	// holds and so protects nothing. A key is what carries the observation
+	// across the stages in between and across a restart, and what makes the
+	// gap between observing and deciding a real one.
+	//
+	// Nothing here checks when it was written or that the stage that wrote it
+	// observed anything. internal/safety says the same of its own restore: the
+	// provenance rests on the checkpoint the record came out of, not on the
+	// type.
+	KeyPushAnchor Key = "push.anchor"
 	// KeyPushed is the commit the push stage forwarded.
 	KeyPushed Key = "pushed"
 	// KeyPullRequest identifies the pull request the run created or updated.
@@ -146,6 +162,12 @@ var sharedKeys = []keySpec{
 	{KeyIntentSupplied, graph.KindBool, graph.MergeNone, ownerRun},
 	{KeyDiffEmpty, graph.KindBool, graph.MergeNone, ownerStage},
 	{KeyApproved, graph.KindText, graph.MergeNone, ownerStage},
+	// The anchor carries a merge rule because the stage that observes it takes
+	// fix rounds, so a run may write it more than once. Each write is a fresh
+	// observation of the same target, and the last one is the state the change
+	// was finally brought up to date against, which is the one the push has to
+	// be anchored on.
+	{KeyPushAnchor, graph.KindText, graph.MergeLastWriteWins, ownerStage},
 	{KeyPushed, graph.KindText, graph.MergeNone, ownerStage},
 	{KeyPullRequest, graph.KindText, graph.MergeNone, ownerStage},
 	{KeyChecks, graph.KindText, graph.MergeNone, ownerStage},

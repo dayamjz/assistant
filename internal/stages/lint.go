@@ -65,10 +65,10 @@ const lintProjectionBytes = 8 << 10
 // A command that exits non-zero fails, and the finding is a fix. It is
 // objectively wrong and mechanically fixable in PRD section 5's sense, so it
 // is eligible for this stage's automatic fix rounds, config.FixRounds.Lint.
-// No fixer is written, and internal/cli wires PendingFixer, so such a finding
-// reaches that and the run fails there naming what is missing. That is the
-// honest end of this path, it is documented on PendingFixer rather than
-// softened here, and it is what this stage's tests hold the built pipeline to.
+// Such a finding routes into this stage's fix node, where the fixer asks an
+// agent to resolve it in the run's isolated copy and commits what changed;
+// this stage then runs again against that commit. fix.go owns what a round
+// does and what it does not establish.
 //
 // A command that did not report an exit status of its own establishes nothing
 // either way, and neither does a run with no command configured at all. Both

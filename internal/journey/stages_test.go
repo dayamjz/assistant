@@ -139,15 +139,23 @@ func TestTheStageListComesFromThePRDRatherThanFromTheBuild(t *testing.T) {
 	// reach.
 	declared := journey.StagesWithoutABody()
 	t.Run("an undeclared change in which stages have bodies is caught", func(t *testing.T) {
-		gained := append(slices.Clone(journey.Implemented()), declared[0])
-		err := journey.DeclaresEveryStage(gained, declared)
+		// A stage that gained a body while the declaration still names it,
+		// driven from the build's own implemented list because the real
+		// declaration may be empty: the disagreement is the same whichever
+		// side moved.
+		implemented := journey.Implemented()
+		if len(implemented) == 0 {
+			t.Skip("this build implements no stage, so none can be one the declaration still names")
+		}
+		stillDeclared := implemented[0]
+		err := journey.DeclaresEveryStage(implemented, append(slices.Clone(declared), stillDeclared))
 		if err == nil {
 			t.Fatal("a stage that gained a body while still declared body-less was accepted")
 		}
 		if !errors.Is(err, journey.ErrUndeclaredStage) {
 			t.Fatalf("caught for the wrong reason: %v", err)
 		}
-		says := fmt.Sprintf("%s has an implementation and is declared body-less here", declared[0])
+		says := fmt.Sprintf("%s has an implementation and is declared body-less here", stillDeclared)
 		if !strings.Contains(err.Error(), says) {
 			t.Fatalf("caught, but not for the direction this control names; wanted a refusal saying %q "+
 				"and got: %v", says, err)

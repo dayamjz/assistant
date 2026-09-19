@@ -163,7 +163,11 @@ func git(t *testing.T, dir string, args ...string) string {
 }
 
 // newSubject returns a working copy with one commit and an origin, which is
-// what assistant init reads the upstream and the default branch from.
+// what assistant init reads the upstream and the default branch from. It
+// stands on the default branch; a test that starts a run from the checkout
+// stands on a change first with standingOnChange, because a run of the
+// default branch itself carries nothing and ends at the rebase stage's
+// empty-diff short circuit.
 func newSubject(t *testing.T) string {
 	t.Helper()
 	dir, err := os.MkdirTemp("", "s")
@@ -177,12 +181,49 @@ func newSubject(t *testing.T) string {
 	}
 	git(t, dir, "add", "-A")
 	git(t, dir, "commit", "--quiet", "-m", "first")
-	git(t, dir, "remote", "add", "origin", "https://example.invalid/o/r.git")
+	// The upstream is a bare repository beside the subject rather than a URL
+	// nobody can resolve. A run walks the rebase stage, and that body reads
+	// what the upstream holds: against an unreachable one every run these
+	// tests drive would be watching a network failure rather than the command
+	// surface they are about. It is local so that nothing here reaches the
+	// network.
+	upstream, err := os.MkdirTemp("", "u")
+	if err != nil {
+		t.Fatalf("making an upstream repository: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(upstream) })
+	git(t, upstream, "init", "--quiet", "--bare", "-b", "main", ".")
+	git(t, dir, "remote", "add", "origin", upstream)
+	git(t, dir, "push", "--quiet", "origin", "main")
+	// What a clone records about origin's own HEAD, written here because this
+	// subject was made in place rather than cloned: it is what assistant init
+	// reads the default branch from, and without it init would fall back to
+	// whatever branch the checkout happens to stand on.
+	git(t, dir, "remote", "set-head", "origin", "main")
 	resolved, err := filepath.EvalSymlinks(dir)
 	if err != nil {
 		t.Fatalf("resolving the subject path: %v", err)
 	}
 	return resolved
+}
+
+// standingOnChange puts the working copy on a new branch with one commit of
+// its own, which is what a run started from the checkout is then of. A run of
+// the default branch itself carries no change, and the rebase stage ends such
+// a run at its empty-diff short circuit, so a test that means to watch a run
+// stop at a hold stands on a change first.
+//
+// The commit's file is named for the branch, so a test that stands on several
+// changes in turn puts a distinct change on each rather than an empty commit
+// on every branch after the first.
+func standingOnChange(t *testing.T, subject, branch string) {
+	t.Helper()
+	git(t, subject, "checkout", "--quiet", "-b", branch)
+	if err := os.WriteFile(filepath.Join(subject, branch+".txt"), []byte("a change on "+branch+"\n"), 0o600); err != nil {
+		t.Fatalf("writing the change under validation: %v", err)
+	}
+	git(t, subject, "add", "-A")
+	git(t, subject, "commit", "--quiet", "-m", "the change under validation on "+branch)
 }
 
 // serve opens a service on a home with the stages the product wires and serves
@@ -199,8 +240,7 @@ func serve(t *testing.T, h *home.Home) {
 // reached.
 func serveStages(t *testing.T, h *home.Home, served func(stages.StageDeps) pipeline.Stages) {
 	t.Helper()
-	runner := standin.New(t, standin.Script{}).Runner()
-	serveCatalog(t, h, served, agents.NewCatalog(fixedFactory{runner: runner}))
+	serveCatalog(t, h, served, agents.NewCatalog(fixedFactory{runner: reviewingRunner(t)}))
 }
 
 // serveUntilStopped is serve for a test whose subject is what happens with the
@@ -209,8 +249,23 @@ func serveStages(t *testing.T, h *home.Home, served func(stages.StageDeps) pipel
 // test called it.
 func serveUntilStopped(t *testing.T, h *home.Home) func() {
 	t.Helper()
-	runner := standin.New(t, standin.Script{}).Runner()
-	return serveCatalog(t, h, stages.All, agents.NewCatalog(fixedFactory{runner: runner}))
+	return serveCatalog(t, h, stages.All, agents.NewCatalog(fixedFactory{runner: reviewingRunner(t)}))
+}
+
+// reviewingRunner is the stand-in these tests serve as the resolved agent. It
+// is scripted to answer every review invocation with a clean review of
+// whatever change the invocation carries, because the review stage launches
+// one for any run that reaches it and a run these tests drive should stop at
+// the stages that hold, not at a reviewer that never answered. Everything
+// else stays unscripted, so a run that reaches an agent a test did not mean
+// it to reach fails loudly.
+func reviewingRunner(t *testing.T) agents.Runner {
+	t.Helper()
+	return standin.New(t, standin.Script{Steps: []standin.Step{{
+		Match: standin.MatchReview(),
+		Times: standin.Always,
+		Reply: standin.Reviewed("the change reads cleanly"),
+	}}}).Runner()
 }
 
 // serveWithNoRunnableAgent serves a home whose one configured adapter refuses
@@ -233,7 +288,7 @@ func serveCatalog(t *testing.T, h *home.Home, served func(stages.StageDeps) pipe
 	running, err := service.Open(t.Context(), service.Options{
 		Home:      h,
 		NewStages: served,
-		NewFixer:  stages.PendingFixer,
+		NewFixer:  stages.Fix,
 		Build:     build,
 		Catalog:   catalog,
 	})

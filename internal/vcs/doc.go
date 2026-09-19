@@ -126,17 +126,25 @@
 // It does not implement the data-loss rules. Anchored force updates,
 // incorporation checks, and the refuse-when-unverifiable path are policy and
 // belong to internal/safety, the module named in PRD section 8. This package
-// exposes mechanism that policy needs, which is reading a remote ref,
-// resolving a commit, and comparing two commits, and stops there. It does not
-// expose everything internal/safety asks for: that package's git.go declares
-// the interface it decides against and names the operation still missing here.
+// exposes the mechanism that policy needs - reading a remote ref, resolving a
+// commit, and comparing two commits - and stops there. It exposes all of it:
+// *Repository satisfies safety.Git in full, and that package's own test fails
+// the build if either side drifts.
 //
-// Nothing here pushes, and no operation moves a branch in a working copy.
-// Fetch is the exception worth naming: it writes references in the local
+// Push is mechanism on the same terms, and it is the one operation here that
+// changes a remote. It performs one reference update under a lease and decides
+// nothing about whether that update should happen: there is no shape of
+// PushSpec that omits the lease, so a caller always carries an expectation
+// about what it is overwriting, and where that expectation came from is
+// internal/safety's question. Nothing here deletes a remote reference at all.
+//
+// Two local operations write as well. Fetch writes references in the local
 // repository, and a refspec beginning with + tells git to update one even when
-// that is not a fast-forward. A caller passing such a refspec has chosen that,
-// and this package does not second-guess it. Whether an update may proceed is
-// the safety module's question, not this one's.
+// that is not a fast-forward; a caller passing such a refspec has chosen that.
+// CommitAll records the working copy as a commit and moves the branch or
+// detached HEAD it was made on, and nothing else here moves a branch in a
+// working copy. Whether any of it may proceed is the safety module's question,
+// not this one's.
 //
 // # Errors
 //

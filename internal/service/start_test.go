@@ -24,8 +24,8 @@ import (
 // Copy derives the path from whatever those keys hold - but it does so from a
 // pipeline.Start it builds itself, so the assignment here was never on any
 // test's path. Swapping the two lines compiles, passes go vet, and would put
-// every run's copy at worktrees/<run>/<repository>, which nothing observes
-// today only because nothing creates or reclaims a copy yet.
+// every run's copy at worktrees/<run>/<repository>, where a body opening the
+// copy at the path the record derives would no longer find it.
 //
 // So this drives the real start path, reads the keys from inside a stage body
 // the way a real body will, and compares them against the record the same call
@@ -170,9 +170,10 @@ func TestTheSeamTheServiceBuildsCarriesItsHomeAndTheRedactorItChose(t *testing.T
 			deps.Home.Root(), h.Root())
 	}
 
-	// Copy opens and never creates, and nothing in this build creates one, so
-	// the copy this reads through is made here at the path the home names for
-	// it rather than by asking the product for something it does not do yet.
+	// Copy opens and never creates, and the service builds one only for a run
+	// it starts, so the copy this reads through for a run of this test's own
+	// naming is made here at the path the home names for it rather than by
+	// driving a whole run to stand one up.
 	const repositoryID, runID = "subject", "seam-under-test"
 	copyPath := h.Worktree(repositoryID, runID)
 	if err := os.MkdirAll(copyPath, 0o700); err != nil {

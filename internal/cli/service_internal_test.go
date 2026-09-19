@@ -104,7 +104,7 @@ func serveForTest(t *testing.T, h *home.Home) *service.Service {
 	running, err := service.Open(t.Context(), service.Options{
 		Home:      h,
 		NewStages: stages.All,
-		NewFixer:  stages.PendingFixer,
+		NewFixer:  stages.Fix,
 		Build:     build,
 	})
 	if err != nil {

@@ -218,7 +218,7 @@ func (in *invocation) serveHere(parent context.Context) error {
 	running, err := service.Open(ctx, service.Options{
 		Home:      in.home,
 		NewStages: stages.All,
-		NewFixer:  stages.PendingFixer,
+		NewFixer:  stages.Fix,
 		Build:     build,
 	})
 	if err != nil {

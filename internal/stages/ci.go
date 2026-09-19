@@ -55,20 +55,19 @@ import (
 // that check. The declaration decides nothing once checks exist, which is
 // forge.ChecksReport.Evaluate's rule and not one this stage adds.
 //
-// # What a fix round would do, and why there is none yet
+// # What a fix round does here, and what it is working from
 //
 // A check that failed is reported as a fix finding, so it is eligible for this
-// stage's automatic fix rounds. No fixer is wired: internal/cli places
-// PendingFixer, which refuses, so a fix-eligible finding reaches that and the
-// run fails there naming what is missing. That is the honest answer and it is
-// documented on PendingFixer rather than softened here, which is the same
-// shape the test stage takes.
+// stage's automatic fix rounds. Such a finding routes into this stage's fix
+// node, where the fixer asks an agent to resolve it in the run's isolated copy
+// and commits what changed.
 //
-// What a fixer would do is read the check's output, decide what to change, and
-// apply it. All three need an agent: the output is unstructured text, the
-// decision is "edit the code so this check passes", and the change is a commit
-// to the isolated copy. This stage does not call an agent and has nothing to
-// ask one yet, so the fixer is the work that ships after this does.
+// What that round is working from is this stage's finding and not the check's
+// own output. This stage reports the provider's verdict and the names of the
+// checks that failed; it does not fetch their logs, so the agent is asked to
+// resolve a named failing check rather than to read what it printed. Fetching
+// that output is the work that would make this round better informed, and it
+// is not done here.
 func CI(deps StageDeps) pipeline.Implementation {
 	return pipeline.Implementation{
 		Reads: []pipeline.Key{pipeline.KeyForgeRepository, pipeline.KeyPullRequest},
