@@ -6,6 +6,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/dayamjz/assistant/internal/agents"
 )
 
 // The wiring check has to fail when it should, or it is worse than no check:
@@ -19,7 +21,9 @@ import (
 // answers the handshake.
 func TestNewRefusesABinaryThatDoesNotAnswerTheHandshake(t *testing.T) {
 	fake := &fatalTB{TB: t}
-	run(func() { newAgent(fake, oneStep(Text("unreachable")), "--standin-not-the-handshake=") })
+	run(func() {
+		newAgent(fake, oneStep(Text("unreachable")), "--standin-not-the-handshake=", agents.ClaudeFactory)
+	})
 
 	if !fake.failed {
 		t.Fatal("building a stand-in over a binary that answers nothing was allowed")
@@ -49,7 +53,7 @@ func TestNewAcceptsThisBinary(t *testing.T) {
 	}
 
 	fake := &fatalTB{TB: t}
-	run(func() { newAgent(fake, oneStep(Text("done")), handshakeFlag) })
+	run(func() { newAgent(fake, oneStep(Text("done")), handshakeFlag, agents.ClaudeFactory) })
 
 	if fake.failed {
 		t.Fatalf("building a stand-in over this binary was refused: %s", fake.message)

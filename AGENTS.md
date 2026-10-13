@@ -245,7 +245,17 @@ Each has cost this repository more than one round of review.
   `Invocation` and so sits outside the P4 split, which is why
   `Invocation.ValidateForFixer` refuses `ShapeReview` at the fixer with
   `ErrReviewInFixerSession` before anything starts; put a new shape on one side
-  of the line the same way. Reading agent output is `internal/findings`' job and
+  of the line the same way. A task's worker is the third entry point and sits
+  on the fixer side by its types: `WorkerRunner.Start` takes a `WorkerSpec`
+  with no purpose and no shape, `OpenWorker` is the only route to one from a
+  `Runner`, the `Worker` handle is a process and no route back, and its
+  environment is the one builder's output passed through
+  `vcs.StripRedirecting`, which owns what redirects git. The handle reports
+  its process group and registers it nowhere; `internal/service`'s
+  `containRunner` has no worker arm, because a worker's push is what the gate
+  admits. No shipped adapter declares `worker_sessions`; `ScriptedFactory`,
+  which `standin.NewWorker` builds, is the declarer the conformance suite
+  holds to the mechanism. Reading agent output is `internal/findings`' job and
   never a second parser here; the one choice this package makes is `Shape`, and
   `ShapeReview` is the only one carrying a `findings.Demand`, which
   `Invocation.Validate` requires there and refuses everywhere else. Read its
@@ -255,7 +265,9 @@ Each has cost this repository more than one round of review.
   `internal/agents` run against. It implements no `agents` interface and builds
   no `agents.Result`: it prints bytes and exits with a status, and the real
   adapter reads that, so a shape the adapter cannot produce is unsayable
-  there. A consuming package's `TestMain` must call `standin.Main()`, and the
+  there. Started without `--print` it is a worker, reading lines and answering
+  as `Script.Worker` says, and `NewWorker` is how a test gets the adapter that
+  starts one. A consuming package's `TestMain` must call `standin.Main()`, and the
   first `New` in a process refuses loudly when it did not. Read its
   `doc.go` for what a recorded `Call` does and does not prove about P4, and for
   the two residual gaps.

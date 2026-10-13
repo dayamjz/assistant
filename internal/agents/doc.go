@@ -3,8 +3,8 @@
 // session reuse, and structured output, and its interface is running a prompt
 // and getting back text or a validated report, with what the invocation cost.
 //
-// Everything that reaches an agent goes through Runner and Fixer. Nothing else
-// in the product starts an agent process.
+// Everything that reaches an agent goes through Runner, Fixer, and Worker.
+// Nothing else in the product starts an agent process.
 //
 // # P4 is arranged rather than remembered
 //
@@ -90,12 +90,83 @@
 // request could arrive in and so nothing to refuse at. The conformance test
 // fails on the first adapter that declares it without a probe to hold it to.
 //
-// SessionRunner is exported, so calling Fixer on it is expressible without
-// going through OpenFixer, and a caller that built a Runner itself and asserts
-// on it reaches a session with no declaration read at all. The runners in
-// internal/agents/standin and in this package's own tests are built that way.
-// Resolve is what closes this for a run rather than the type, and only for a
-// Runner that came out of Resolve.
+// SessionRunner and WorkerRunner are exported, so calling Fixer or Start on
+// one is expressible without going through OpenFixer or OpenWorker, and a
+// caller that built a Runner itself and asserts on it reaches the mechanism
+// with no declaration read at all. The runners in internal/agents/standin and
+// in this package's own tests are built that way. Resolve is what closes this
+// for a run rather than the type, and only for a Runner that came out of
+// Resolve.
+//
+// # A worker is the fixer side of the split, started once and driven
+//
+// PRD section 6 gives a task a worker: a long-lived agent in an isolated
+// copy, driven over its terminal, that pushes to the gate the way a person
+// does. The process is this package's to start, because nothing else starts
+// an agent process, and the layer that owns a task wraps what this returns.
+// CapabilityWorkerSessions names the mechanism, WorkerRunner carries it, and
+// OpenWorker is the one route to it from a Runner, reading the declaration
+// before the type on the terms OpenFixer states.
+//
+// It sits on the fixer side of P4 by its types rather than by a rule. Start
+// takes no purpose, and WorkerSpec has no shape and no purpose, so a worker
+// cannot be told it is a review in either of the two ways an Invocation can
+// say so; Invocation.ValidateForFixer's refusal of a review shape is
+// therefore not asked, because there is no shape to refuse. The handle a
+// caller holds is a Worker, which is a process and nothing else: no Runner,
+// no session, no Result, and internal/agents/route's walk finds no route out
+// of it, with agents.Resolution and WorkerRunner itself, which embeds Runner,
+// as the controls. The walk's blind spot is its own, a value held in an
+// interface field, and Worker holds none.
+//
+// The environment is built by the one builder with one rule more. A worker
+// runs git itself, in the copy it was started in, and a GIT_DIR it inherited
+// from a hook or from the service would make every one of those invocations
+// act on the other repository while the worker believes it is in its own,
+// which is the "can be pointed at its own repository" P11 names. So Start
+// removes the redirecting variables through vcs.StripRedirecting, which is
+// the one owner of that list, after the spec's own Env has been applied, so a
+// GIT_DIR a caller put in the spec is removed too. What that buys is exactly
+// what the list buys internal/vcs and no more: the names on it, and not a
+// variable a later git introduces until it is added there. It is not the
+// isolation proof P11 asks for before a worker launches. This package starts
+// a worker where it is told and asks nothing about the directory, and that
+// proof has no owner in this repository yet.
+//
+// The process group is the handle's to report and nobody's here to register.
+// Which task a worker belongs to is not a fact this package holds, so Worker
+// reports its group and whoever starts one keeps the set. One thing about
+// that set is settled here rather than left open: it is not the containment
+// registry internal/service keeps for validation stages. A worker's push is
+// the one thing the gate exists to admit, and a worker registered as a stage
+// would have every push refused before admission, so internal/service's
+// wrapper around the resolved agent carries no worker arm and the handle is
+// obtained from the agent it wraps; its own tests hold that.
+//
+// Three gaps are left open and named.
+//
+// No adapter this build ships declares the capability. The scripted adapter
+// ScriptedFactory builds does, over the stand-in, so the conformance suite
+// holds the mechanism to the declaration and a layer built on workers can
+// run against something real; the Claude Code adapter's declaration is a
+// change of its own, made when the invocation mode it runs as a worker in is
+// known and a probe can check it. Until then nothing here launches a real
+// worker.
+//
+// A worker produces no Record. The Recorder's unit is an invocation with a
+// purpose, and a worker has neither: it is started once and what it costs
+// is spent over a life this package does not see the end of. Nothing here
+// accounts for it, and a consumer that needs the accounting is a finding
+// against this package rather than a field to add quietly.
+//
+// Runner.Run's environment still passes a redirecting variable through. A
+// stage launched from a git hook inherits one pointing at the gate, and the
+// one builder applies the rule above to the worker entry only, because
+// applying it to Run would change the environment every existing run's
+// stages see. Whether a stage body is ever harmed by it is a question with
+// its own test, not yet written, and TestTheWorkerEnvironmentCarriesNoRedirectingGitVariable
+// reads the run path as its control, so the day it stops passing the
+// variable through that test says so.
 //
 // # Agent output is untrusted, and one package parses it
 //

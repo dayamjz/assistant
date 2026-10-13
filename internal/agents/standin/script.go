@@ -37,6 +37,48 @@ type Script struct {
 	// Always answers whichever invocations look like that, however many there
 	// are and whenever they arrive.
 	Steps []Step `json:"steps"`
+	// Worker is what a stand-in started as a worker does, line by line. It
+	// is read by a process the scripted adapter started through
+	// agents.WorkerRunner.Start and by no one-shot invocation, so a script
+	// may carry both halves and each answers its own kind of process. A nil
+	// Worker is a worker that answers no line, which still reads and still
+	// lingers.
+	Worker *WorkerScript `json:"worker,omitempty"`
+}
+
+// WorkerScript is what the stand-in does when it is started as a worker: a
+// long-lived process that reads its standard input line by line and replies
+// as the exchanges say. It reads the instructions the adapter delivers first
+// as lines like any other, because that is all the wire carries: nothing on
+// it marks where the instructions end and the text sent afterwards begins.
+type WorkerScript struct {
+	// Greeting is printed on standard output, followed by a newline, before
+	// the first line is read. Empty prints nothing.
+	Greeting string `json:"greeting,omitempty"`
+	// Exchanges are tried in order for every line read, and the first one
+	// that matches answers it, however many lines match it. A line no
+	// exchange matches is answered with nothing on standard output and a
+	// note on standard error, so a worker's silence is never a default
+	// nobody wrote.
+	Exchanges []Exchange `json:"exchanges,omitempty"`
+	// Exit is the status the worker exits with once its standard input has
+	// been closed.
+	Exit int `json:"exit,omitempty"`
+}
+
+// Exchange is one scripted reply to a line a worker reads.
+type Exchange struct {
+	// Contains requires the line to contain this text. Empty matches every
+	// line.
+	Contains string `json:"contains,omitempty"`
+	// Reply is printed on standard output, followed by a newline, for a line
+	// this exchange answers.
+	Reply string `json:"reply"`
+}
+
+// answers reports whether this exchange accepts the line.
+func (e Exchange) answers(line string) bool {
+	return e.Contains == "" || strings.Contains(line, e.Contains)
 }
 
 // Step is one scripted answer and the invocations it is for.

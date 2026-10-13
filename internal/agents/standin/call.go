@@ -35,11 +35,23 @@ type Call struct {
 	// the string a caller passed.
 	Dir string `json:"dir"`
 	// Step is the index of the script step that answered this invocation, or
-	// -1 when no step matched and the stand-in exited with ExitUnscripted.
+	// -1 when no step matched and the stand-in exited with ExitUnscripted. It
+	// is -1 for a worker, which no step answers.
 	Step int `json:"step"`
+	// Worker reports that this process was started as a worker rather than
+	// as a one-shot invocation: the adapter put no --print on its command
+	// line, which is the whole of how the stand-in tells the two apart.
+	Worker bool `json:"worker,omitempty"`
+	// Lines is every line a worker read on its standard input, in order, the
+	// instructions first. A worker rewrites its record as each line arrives,
+	// so what a reader sees is complete up to some line and may be behind
+	// the worker; Agent.Calls states the terms. It is empty for a one-shot
+	// invocation, whose input is Prompt.
+	Lines []string `json:"lines,omitempty"`
 }
 
-// Answered reports whether a step of the script answered this invocation.
+// Answered reports whether a step of the script answered this invocation. It
+// is false for a worker, which steps do not answer.
 func (c Call) Answered() bool { return c.Step >= 0 }
 
 // Session is the session the invocation asked the agent to continue, empty
@@ -65,6 +77,9 @@ func (c Call) flag(name string) string {
 // String renders the call for a diagnostic: which invocation it was, which
 // step answered it, and enough of the prompt to tell it from another.
 func (c Call) String() string {
+	if c.Worker {
+		return fmt.Sprintf("call %d (worker, %d lines read): %s", c.Seq, len(c.Lines), shorten(strings.Join(c.Lines, " / ")))
+	}
 	step := "unscripted"
 	if c.Answered() {
 		step = fmt.Sprintf("step %d", c.Step)

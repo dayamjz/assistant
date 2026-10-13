@@ -12,8 +12,9 @@
 // against that value looked alive while being dead. Deleting the guard failed
 // the test, so mutation testing said nothing about it.
 //
-// So no type here implements agents.Runner or agents.Fixer, and nothing here
-// constructs an agents.Result, an *agents.InvocationError, or an agents.Record.
+// So no type here implements agents.Runner, agents.Fixer, or agents.Worker,
+// and nothing here constructs an agents.Result, an *agents.InvocationError, an
+// agents.Record, or an agents.Capture.
 // Agent.Runner hands back the adapter's own Runner, which is the one of those
 // this package passes along rather than makes. It writes bytes on standard
 // output and standard error, exits with a status, and lets
@@ -96,6 +97,31 @@
 // credentials, and a Call is written to a file, which is exactly where those
 // should not be. internal/agents keeps them out of a Record by having no field
 // they fit in; this keeps them out of a Call the same way.
+//
+// # The worker mode, and what its Call proves
+//
+// A stand-in is started as a worker when the adapter puts no --print on its
+// command line, which is how the wire tells an interactive agent from a
+// one-shot invocation. NewWorker builds the one adapter in this build that
+// starts one, agents.ScriptedFactory, and a test reaches the worker through
+// agents.OpenWorker exactly as it reaches a fixer through agents.OpenFixer.
+// The worker reads its standard input line by line, instructions first, and
+// answers each line as Script.Worker says; a line nothing answers draws a note
+// on standard error and nothing on standard output, so silence is the
+// stand-in's and never a default.
+//
+// A worker's Call is the exception to "complete or absent": it is written
+// when the worker starts and rewritten whole, under the same number, as each
+// line arrives, so a reader sees a record complete up to some line and
+// possibly behind the worker. What it proves is what reached the process,
+// in order, and that the record was taken off the wire by the process
+// itself; what it cannot say is which lines were the instructions and which
+// were sent afterwards, because nothing on the wire marks that, and a test
+// that needs the distinction scripts lines it can tell apart.
+//
+// Being a worker is not on the Call either, except as the absence of --print
+// the stand-in itself read: Call.Worker is the process's own account of how
+// it decided, not a second observation.
 //
 // # What this package is not
 //

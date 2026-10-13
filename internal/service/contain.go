@@ -103,6 +103,15 @@ func advancingRun(ctx context.Context) string {
 // resumable sessions stays an agents.SessionRunner and one without stays a
 // plain agents.Runner, so agents.OpenFixer reads the same declaration and
 // finds the same mechanism either way.
+//
+// It carries no worker arm on purpose, and that is the one place the shape is
+// not preserved: an agents.WorkerRunner wrapped here is no WorkerRunner
+// afterwards, so agents.OpenWorker on the wrapped agent is refused as a
+// declaration the wrapper does not back. A worker is not a validation stage.
+// It pushes to the gate the way a person does, and a worker registered here
+// would have every push refused ErrContained before admission, so a worker is
+// obtained from the agent this wraps and registered in a set of whoever owns
+// the task, never in this registry.
 func (s *Service) containRunner(r agents.Runner) agents.Runner {
 	wrapped := containedRunner{inner: r, registry: s.registry}
 	if sessions, ok := r.(agents.SessionRunner); ok {

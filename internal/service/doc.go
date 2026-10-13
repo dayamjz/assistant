@@ -270,6 +270,13 @@
 // push made from inside one of those is not contained. That is stated rather
 // than implied, because a restricted method reads as a guarded one.
 //
+// What the relation deliberately excludes is a task's worker. A worker's push
+// is the one the gate exists to admit, so containRunner carries no worker arm
+// and a worker's group is never in this registry: a worker started on the
+// agent the wrapper wraps is answered not contained while a stage runs, and
+// contain_worker_unix_test.go holds that against the control of the same
+// process registered as a stage.
+//
 // The residual gap is the same one internal/agents names for its own sweep: a
 // descendant that leaves its process group escapes the relation. Closing that
 // needs a process-tree walk per platform, and the group is what this service
