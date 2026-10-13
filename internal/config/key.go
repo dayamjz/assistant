@@ -46,6 +46,10 @@ const (
 	// KeyReviewPathRules is "review.path_rules": review guidance scoped to
 	// paths, applied in declared order.
 	KeyReviewPathRules Key = "review.path_rules"
+	// KeyJudgePaths is "judge_paths": the patterns naming the files that
+	// decide whether a check passes. It is trusted-only, because a branch that
+	// could shrink the list could exempt its own edits to those files.
+	KeyJudgePaths Key = "judge_paths"
 	// KeyDocumentOwnership is "document.ownership": which document owns which
 	// subject.
 	KeyDocumentOwnership Key = "document.ownership"
@@ -142,6 +146,8 @@ var specs = []spec{
 		func(c *Config, v any) { c.IgnorePatterns = cloneSlice(v.(PatternSet)) }},
 	{KeyReviewPathRules, TrustTrusted, []PathRule(nil), decodePathRules,
 		func(c *Config, v any) { c.ReviewPathRules = clonePathRules(v.([]PathRule)) }},
+	{KeyJudgePaths, TrustTrusted, defaultJudgePaths, decodeJudgePaths,
+		func(c *Config, v any) { c.JudgePaths = cloneSlice(v.(PatternSet)) }},
 	{KeyDocumentOwnership, TrustTrusted, []Ownership(nil), decodeOwnership,
 		func(c *Config, v any) { c.DocumentOwnership = cloneSlice(v.([]Ownership)) }},
 	{KeySuppressProjectInstructions, TrustTrusted, false, decodeBool,

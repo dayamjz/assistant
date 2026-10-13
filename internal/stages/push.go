@@ -61,10 +61,16 @@ import (
 // that passes by looking at nothing.
 //
 // What the check does not establish is that the reviewed commit is still what
-// a person would approve of. A fix round that commits after the review leaves
-// a head that descends from the reviewed commit and carries lines nobody
-// reviewed, and this stage forwards it: PRD section 5 asks for descent and the
-// re-review after a fix round is where that is caught.
+// a person would approve of. This stage asks only for descent. Review's own
+// fix round is re-reviewed, because the review stage runs again after it and
+// its report revision is the commit that round made. A fix round of the test,
+// lint, or checks stage is not: it is re-verified by its own check re-running,
+// and the head it leaves descends from the reviewed commit while carrying
+// lines no review read, which this stage forwards. PRD section 14 records
+// whether those commits should be reviewed as an open question. What does
+// apply to them is the judge rule in judge.go, and it is narrower than a
+// review: such a round may not change a judge path without the stage holding
+// for a person, and its edits to any other path reach this stage unreviewed.
 //
 // # No fix rounds
 //

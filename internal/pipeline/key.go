@@ -194,6 +194,13 @@ func (s Stage) AnswerKey() Key { return Key("answer." + s.String()) }
 // and it exists only for the stages that take automatic fix rounds.
 func (s Stage) FixKey() Key { return Key("fix." + s.String()) }
 
+// HeldKey is where the holds the last fix round of this stage raised land,
+// encoded as a JSON list of findings. The fix node writes it every round,
+// empty when the round raised none, and the stage node reads it on the
+// execution that verifies that round and adds what it holds to the stage's
+// report. It exists only for the stages that take automatic fix rounds.
+func (s Stage) HeldKey() Key { return Key("held." + s.String()) }
+
 // schema is every key the pipeline declares, built once from the shared table
 // and the nine stages. It is the one place a key's declaration is looked up.
 var schema = buildSchema()
@@ -217,6 +224,7 @@ func buildSchema() map[Key]keySpec {
 		add(keySpec{row.stage.AnswerKey(), graph.KindText, graph.MergeNone, ownerPipeline})
 		if row.rounds != nil {
 			add(keySpec{row.stage.FixKey(), graph.KindText, graph.MergeNone, ownerPipeline})
+			add(keySpec{row.stage.HeldKey(), graph.KindText, graph.MergeNone, ownerPipeline})
 		}
 	}
 	return out

@@ -165,7 +165,7 @@ func wire(b *graph.Builder, stage Stage, impl Implementation, fixer Fixer, round
 	if err := checkDeclared("stage "+stage.String(), "writes", impl.Writes, declaredStageWrites); err != nil {
 		return err
 	}
-	b.Node(stageNode(stage, impl))
+	b.Node(stageNode(stage, impl, rounds > 0))
 	b.Node(holdNode(stage))
 
 	// A stage that found something a person must decide holds. A stage that

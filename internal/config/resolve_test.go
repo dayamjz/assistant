@@ -409,6 +409,7 @@ func TestRepositoryFileStillAcceptsEveryOtherKey(t *testing.T) {
 		KeyRunBudget:                   `{"run_budget": 10}`,
 		KeyIgnorePatterns:              `{"ignore_patterns": ["docs/**"]}`,
 		KeyReviewPathRules:             `{"review": {"path_rules": [{"paths": ["a.go"], "guidance": "g"}]}}`,
+		KeyJudgePaths:                  `{"judge_paths": ["spec/**"]}`,
 		KeyDocumentOwnership:           `{"document": {"ownership": [{"subject": "s", "document": "d.md"}]}}`,
 		KeySuppressProjectInstructions: `{"suppress_project_instructions": true}`,
 		KeyNoCI:                        `{"no_ci": true}`,

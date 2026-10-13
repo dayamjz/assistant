@@ -367,3 +367,51 @@ func assertNoWeaker(t *testing.T, base, got findings.Report) {
 		}
 	}
 }
+
+// The judge lens and the decision-model checks both add to the one review
+// report, and neither drops the other's findings. The change edits a judge
+// file, and the screen flags that same file, so the report has to carry two
+// findings at that path: the judge lens's note that the file was modified, and
+// the screen's note that it was flagged. Each feature's own tests pass with the
+// other's findings absent, which is why the combination is checked here.
+func TestTheJudgeLensAndTheDecisionChecksBothReachTheReport(t *testing.T) {
+	t.Parallel()
+	provider := judgetest.New(t, func(r judgetest.Request) judgetest.Reply {
+		switch {
+		case r.Question == "reviewer_directed_text" && r.Path == judgeTestPath:
+			return judgetest.Answer(0.9)
+		case r.Question == "reviewer_directed_text":
+			return judgetest.Answer(0.0)
+		default:
+			return judgetest.Answer(0.95)
+		}
+	})
+	cfg := config.Defaults()
+	cfg.DecisionModel = config.DecisionEvaluate
+	s := newJudgeSubject(t, func(dir string) {
+		write(t, dir, judgeTestPath, strings.Replace(judgeTestBody, "got != 6", "got < 0", 1))
+	})
+	got := run(t, s, script(standin.Report(judgeReview(s, judgeTestPath))), cfg, s.start(),
+		withJudge(decided(provider)))
+
+	var judged, flagged int
+	for _, found := range got.report().Findings {
+		if found.Location.Path != judgeTestPath {
+			continue
+		}
+		switch {
+		case strings.Contains(found.Description, "modified "+judgeTestPath):
+			judged++
+		case strings.Contains(found.Description, "A decision model flagged "+judgeTestPath):
+			flagged++
+		}
+	}
+	if judged != 1 || flagged != 1 {
+		t.Fatalf("the report carries %d judge finding(s) and %d screen finding(s) at %s, want one of each: %+v",
+			judged, flagged, judgeTestPath, got.report().Findings)
+	}
+	if outcome := got.outcome(); outcome != pipeline.OutcomePassed {
+		t.Fatalf("in evaluate, a judge edit and a flagged file brought the review to %s, want passed: %+v",
+			outcome, got.report().Findings)
+	}
+}

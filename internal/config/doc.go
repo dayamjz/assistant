@@ -62,9 +62,9 @@
 //     branch may set one only when KeyAllowPushedCommands is set, and that key
 //     is itself TrustTrusted, so a branch cannot enable itself.
 //   - TrustTrusted keys shape what review or documentation demands or declare
-//     a check unnecessary: the path-scoped review rules, document ownership,
-//     instruction suppression, the no-CI declaration, and the run budget. A
-//     pushed branch may never set one.
+//     a check unnecessary: the path-scoped review rules, the judge paths,
+//     document ownership, instruction suppression, the no-CI declaration, and
+//     the run budget. A pushed branch may never set one.
 //   - TrustGlobal keys are the operator's preferences about how their own
 //     machine behaves rather than facts about a repository: the checks timeout,
 //     session reuse, and the decision-model mode. Only the operator's own file may set one, and a
@@ -117,8 +117,8 @@
 //
 // # The path matcher
 //
-// One matcher serves ignore patterns and path-scoped review rules, so a path
-// means the same thing to both. Its rules are documented on Pattern, and the
+// One matcher serves ignore patterns, path-scoped review rules, and judge
+// paths, so a path means the same thing to all three. Its rules are documented on Pattern, and the
 // one PRD section 10 states outright is that a wildcard never crosses a path
 // separator on any platform. That holds here because matching is performed one
 // segment at a time and a separator is never inside a segment, and because a

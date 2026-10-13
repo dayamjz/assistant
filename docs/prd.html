@@ -858,6 +858,53 @@ flowchart TD
     unless the code now presents a materially different issue.
   </p>
 
+  <h3 class="text-xl font-semibold mb-3">A check does not judge its own edits</h3>
+  <p class="mb-4 opacity-90">
+    A check is only as independent as the files that decide its verdict. The test command is read
+    from the trusted copy, but the tests it runs, the lint configuration it reads, and the workflow
+    files that define your CI come from the change under validation. Whoever can edit those files
+    can make a check pass without making the code right, so an edit to them is a fact a person
+    sees, never one that slips through as a pass.
+  </p>
+  <p class="mb-4 opacity-90">
+    Those files are the <b>judge paths</b>: the patterns in <code>judge_paths</code>, read only from
+    the trusted copy, because a branch that could shrink the list could exempt its own edits. The
+    defaults cover the common conventions. A repository replaces them from its default branch when
+    its tests or check configuration live elsewhere.
+  </p>
+  <ul class="list-disc pl-6 space-y-1.5 mb-4 opacity-90">
+    <li><b>The pipeline may not edit the judge on its own authority.</b> Any commit the pipeline
+      authors after the review stage has read the change, which means a fix round of the test,
+      lint, or checks stage and the document stage's in-pass edits, is compared against the judge
+      paths. If it adds, changes, deletes, or renames one, the stage holds with an <code>ask</code>
+      naming each such path, what happened to it, and the commit. This is decided from the paths
+      the commit touched, not from the fixer's account of what it did. The fixer is also told that
+      the judge paths are not its to change, but the hold does not depend on it listening.</li>
+    <li><b>The rule covers the case where the stage is supposed to write a test.</b> Section 5 lets
+      the test stage write a targeted check when none exists. A test the pipeline wrote to certify
+      its own pass is the clearest case for a person to read, so it holds like any other judge
+      edit.</li>
+    <li><b>The author's edits to the judge are reported in review.</b> The review stage lists every
+      judge path the change touched and what happened to it, and asks the reviewer to say whether
+      each edit makes a check weaker. An edit or an addition is a <code>note</code>; the reviewer's
+      own finding carries any judgment that it is wrong. A judge file the change deletes, or moves
+      to a path no judge pattern matches, is an <code>ask</code>, because removing a check is the
+      plainest way to make a run pass, and whether the check was meant to go is the author's call.
+      Like the scope lens, this is part of review and adds no stage.</li>
+    <li><b>At the hold, the existing actions apply.</b> Approve accepts the edit. Fix sends a round
+      with your notes, such as "fix the code, not the test," and that round is held to the same
+      rule. Cancel ends the run with the work recoverable.</li>
+  </ul>
+  <p class="mb-8 opacity-90">
+    What this does not establish: the judge paths are patterns, so a check that reads a file outside
+    them, such as a script the test command calls, a build file, or a package manifest that also
+    holds test configuration, can still be changed without a hold. A weakened assertion inside a
+    test the change edited is reported as an edit, not detected as a weakening; that judgment is the
+    reviewer's. And the rule stops the pipeline changing the judge after review, not changing the
+    code: a fix round's edits to code outside the judge paths still reach the push stage without
+    a review, which section 14 lists as a question to settle.
+  </p>
+
   <h3 class="text-xl font-semibold mb-3">What passing the gate means</h3>
   <p class="mb-3 opacity-90">Exactly this, and nothing more:</p>
   <ul class="list-disc pl-6 space-y-1.5 opacity-90">
@@ -1870,7 +1917,7 @@ flowchart TB
   global["Your global settings<br />in your home"]
 
   push -->|"read from here"| A["Ignore patterns<br />Fix limits<br />Commit message template<br />Intent settings"]
-  trusted -->|"read from here, always"| B["Documentation instructions<br />Path-scoped review rules<br />Instruction suppression<br />No-CI declaration<br />Rerun budget"]
+  trusted -->|"read from here, always"| B["Documentation instructions<br />Path-scoped review rules<br />Judge paths<br />Instruction suppression<br />No-CI declaration<br />Rerun budget"]
   trusted -->|"read from here, unless you opt out"| C["Test, lint, and format commands<br />Agent selection"]
 
   global -->|"read from here only"| D["Checks timeout<br />Session reuse<br />Decision model"]
@@ -1931,6 +1978,7 @@ flowchart TB
         <tr><td><code>run_budget</code></td><td><code class="prd-num">40</code></td><td>Total node executions per run. The second of the three loop bounds.</td></tr>
         <tr><td><code>ignore_patterns</code></td><td>empty</td><td>Paths excluded from review and documentation checks.</td></tr>
         <tr><td><code>review.path_rules</code></td><td>empty</td><td>Extra review guidance scoped to paths. Applied in declared order, each labelled with its own scope and the files it matched, so a scoped rule never reads as repository-wide.</td></tr>
+        <tr><td><code>judge_paths</code></td><td>tests, CI, lint config</td><td>Path patterns for the files that decide whether a check passes. Read only from the trusted copy. The default is <code>*_test.go</code>, <code>*_test.py</code>, <code>test_*.py</code>, <code>*.test.*</code>, <code>*.spec.*</code>, <code>**/test/**</code>, <code>**/tests/**</code>, <code>**/__tests__/**</code>, <code>**/testdata/**</code>, <code>.github/workflows/**</code>, <code>.golangci.yml</code>, <code>.golangci.yaml</code>, <code>.eslintrc*</code>, <code>eslint.config.*</code>, <code>ruff.toml</code>, and <code>Makefile</code>. Like any list, a repository's value replaces the default rather than extending it, and an empty list turns the rule off.</td></tr>
         <tr><td><code>document.ownership</code></td><td>empty</td><td>Which document owns which subject. Without this the document stage guesses, and guessing produces documentation churn on most changes.</td></tr>
         <tr><td><code>suppress_project_instructions</code></td><td><code>false</code></td><td>For a repository whose own instructions would give a validating agent an operator identity. If any resolved agent lacks a verified suppression mechanism, the run fails before launching it.</td></tr>
         <tr><td><code>no_ci</code></td><td><code>false</code></td><td>A positive declaration that this repository has no checks. Only this makes an empty check list count as green.</td></tr>
@@ -1963,6 +2011,7 @@ flowchart TB
         <tr><td>Path-scoped review rules</td><td><code class="prd-num">64</code></td><td>Elements of <code>review.path_rules</code>.</td></tr>
         <tr><td>Patterns per review rule</td><td><code class="prd-num">64</code></td><td>The paths one rule scopes to.</td></tr>
         <tr><td>Review rule guidance length</td><td><code class="prd-num">4096</code></td><td>Runes of one rule's guidance text.</td></tr>
+        <tr><td>Judge path patterns</td><td><code class="prd-num">512</code></td><td>Elements of <code>judge_paths</code>.</td></tr>
         <tr><td>Document ownership entries</td><td><code class="prd-num">512</code></td><td>Elements of <code>document.ownership</code>.</td></tr>
         <tr><td>Ownership subject or path length</td><td><code class="prd-num">512</code></td><td>Runes of one subject or document path.</td></tr>
         <tr><td>Fix commit subject length</td><td><code class="prd-num">72</code></td><td>Runes of the template, and again of the rendered result.</td></tr>
@@ -2174,6 +2223,7 @@ flowchart TB
         <tr><td><b>P12</b></td><td>Cleanup with committed, unpushed work refuses. Cleanup after a squash merge and branch deletion succeeds through the content check. A provider lookup failure that leaves the question open refuses.</td></tr>
         <tr><td><b>P13</b></td><td>A static test over every user-facing string: assert the required wording is present and assert the internal vocabulary is absent. Both directions, or it drifts.</td></tr>
         <tr><td><b>P14</b></td><td>A static test asserting each contract appears in its owner and does not appear anywhere else. The negative half is the one that actually holds the line.</td></tr>
+        <tr><td><b>Judge paths</b></td><td>A fix round after review whose commit adds, changes, deletes, or renames a judge path holds with an <code>ask</code> naming it, including when the fixer's reply says it touched nothing; the same round with no judge path in its commit does not hold. A change that deletes a judge file, or moves one outside every pattern, holds at review; one that edits a judge file produces a <code>note</code>. A branch whose own configuration sets <code>judge_paths</code> has no effect on either.</td></tr>
         <tr><td><b>Graph</b></td><td>A topology with an unbounded back edge fails to build. Two nodes writing one key with no declared merge rule fails to build. A checkpoint restore re-emits the open decision.</td></tr>
         <tr><td><b>Decision model</b></td><td>Against a stand-in provider that answers over the wire, every answer from certain-yes to certain-no, plus an error, a timeout, and an unreadable answer, leaves the findings at least as strict as with the model off: nothing removed, nothing lowered, no stage passed that would have held. In <code>evaluate</code> no answer holds a run, and in every mode a failed call, an unreadable answer, or a missing key holds nothing and is reported. With the mode <code>off</code> or no key, no request leaves the machine. A repository layer that sets the key is rejected at parse time.</td></tr>
       </tbody>
@@ -2260,6 +2310,14 @@ flowchart TB
       anything, and how often a person waved a held file through. If they rarely lead anywhere, turn
       them off; if they fire wrongly on this kind of code, the fix is a new measurement rather than
       a looser setting.</li>
+    <li><b>Whether fix commits after review get reviewed.</b> P5 says fixes the gate writes are
+      reviewed like code you wrote, and review's own fix round is. A fix round of the test, lint, or
+      checks stage is not: it is verified by its own check re-running, and the push stage asks only
+      that the head descend from a reviewed commit, so those lines reach the push unreviewed.
+      Section 5's judge rule stops such a round from changing a check's verdict files without a
+      person; it does not review the code the round changed. Closing that means the push stage
+      requiring a review that covers the head, which brings review back after later stages' fixes
+      and has to be weighed against why review comes before test.</li>
   </ul>
 </section>
 

@@ -79,6 +79,16 @@ import (
 // lens not having run is a fact about the review, and a silent skip would read
 // exactly like a change whose every path was accounted for.
 //
+// # The judge lens
+//
+// PRD section 5's "A check does not judge its own edits" is applied here as
+// well as on the fix path. Every judge path the change touched is listed in
+// the prompt with what happened to it, the reviewer is asked whether each edit
+// makes a check weaker, and each is reported whatever the reviewer says: an
+// edit or an addition as a note, a deletion or a move out of the judge paths
+// as an ask. judge.go owns the rule, why it reads the change unfiltered by the
+// ignore patterns, and its residual gaps.
+//
 // # The decision-model checks
 //
 // PRD section 5's "Checks a decision model may add" are applied here, after
@@ -197,15 +207,20 @@ func reviewChange(ctx context.Context, deps StageDeps, in pipeline.Input) (pipel
 		return pipeline.Output{}, err
 	}
 	change, err := readChange(ctx, repo, facts, deps.Config.IgnorePatterns)
+	// The judge lens is read off the change unfiltered, and it is added to
+	// every report this body returns from here on, including the ones that
+	// review nothing: a change the ignore patterns exclude whole is exactly
+	// the change that must not delete a judge file unseen.
+	judged := judgeEdits(deps.Config.JudgePaths, change.changes)
 	if err != nil {
 		if errors.Is(err, vcs.ErrOutputTooLarge) {
-			return tooLargeToReview(change, "The change at "+facts.head+" could not be read "+
-				"from git in one piece: "+err.Error()+"."), nil
+			return withJudged(tooLargeToReview(change, "The change at "+facts.head+" could not be read "+
+				"from git in one piece: "+err.Error()+"."), judged), nil
 		}
 		return pipeline.Output{}, err
 	}
 	if len(change.touched) == 0 {
-		return nothingToReview(change), nil
+		return withJudged(nothingToReview(change), judged), nil
 	}
 
 	demand := findings.Demand{Revision: facts.head, Touched: change.touched}
@@ -220,11 +235,12 @@ func reviewChange(ctx context.Context, deps StageDeps, in pipeline.Input) (pipel
 	scoped := scope.Change{Intent: facts.intent, Supplied: facts.supplied, Touched: change.touched}
 	scopeGuidance, scopeErr := scope.Guidance(scoped)
 
-	prompt := reviewPrompt(deps.Config, facts, change, evidence, scopeGuidance)
+	prompt := reviewPrompt(deps.Config, facts, change, evidence, scopeGuidance,
+		judgeReviewGuidance(judged, change.excluded))
 	if len(prompt) > agents.MaxPromptBytes {
-		return tooLargeToReview(change, "Reviewing "+facts.head+" would take a prompt of "+
+		return withJudged(tooLargeToReview(change, "Reviewing "+facts.head+" would take a prompt of "+
 			strconv.Itoa(len(prompt))+" bytes, and one invocation may carry "+
-			strconv.Itoa(agents.MaxPromptBytes)+"."), nil
+			strconv.Itoa(agents.MaxPromptBytes)+"."), judged), nil
 	}
 
 	result, err := deps.Agent.Run(ctx, agents.PurposeReview, agents.Invocation{
@@ -234,7 +250,11 @@ func reviewChange(ctx context.Context, deps StageDeps, in pipeline.Input) (pipel
 		Dir:    repo.Path(),
 	})
 	if err != nil {
-		return unreviewed(ctx, facts, err)
+		out, err := unreviewed(ctx, facts, err)
+		if err != nil {
+			return out, err
+		}
+		return withJudged(out, judged), nil
 	}
 
 	report := result.Report
@@ -260,7 +280,15 @@ func reviewChange(ctx context.Context, deps StageDeps, in pipeline.Input) (pipel
 		report.Findings = append(report.Findings, noKeyNote())
 	}
 	report.Findings = append(report.Findings, observeScope(scoped, report.Traced, unconfirmed, scopeErr)...)
-	return pipeline.Output{Report: report}, nil
+	return withJudged(pipeline.Output{Report: report}, judged), nil
+}
+
+// withJudged adds the judge lens's findings to a report this stage built. It
+// is one function so that every report the body returns after reading the
+// change goes through it, whichever path produced the report.
+func withJudged(out pipeline.Output, judged []judgeEdit) pipeline.Output {
+	out.Report.Findings = append(out.Report.Findings, judgeReviewFindings(judged)...)
+	return out
 }
 
 // reviewFacts is what the run's own state says about the change under review.
@@ -345,6 +373,10 @@ type reviewChangeSet struct {
 	// diff is the unified diff of the whole change, excluded paths included.
 	// Review's documentation states why.
 	diff string
+	// changes is every change git reported, unfiltered by the ignore
+	// patterns, which is what the judge lens reads: judge.go says why it
+	// does not honour a key a pushed branch may set.
+	changes []vcs.FileChange
 }
 
 // readChange derives the change from the run's isolated copy.
@@ -359,7 +391,7 @@ func readChange(ctx context.Context, repo *vcs.Repository, f reviewFacts, ignore
 	if err != nil {
 		return reviewChangeSet{}, fmt.Errorf("stages: the review stage cannot list what %s changed: %w", f.head, err)
 	}
-	set := reviewChangeSet{from: from}
+	set := reviewChangeSet{from: from, changes: changed}
 	for _, path := range changedPaths(changed) {
 		if ignore.Matches(path) {
 			set.excluded = append(set.excluded, path)

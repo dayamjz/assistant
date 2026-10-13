@@ -117,7 +117,8 @@ type StageDeps struct {
 	Home *home.Home
 	// Config is the run's resolved configuration, and the review and test
 	// bodies are the consumers it is here for: ReviewPathRules is the extra
-	// guidance a review is held to, and Commands is what a test run executes.
+	// guidance a review is held to, JudgePaths is what its judge lens reports,
+	// and Commands is what a test run executes.
 	// It is PRD section 10's full resolution - the operator's layer, the
 	// repository document's trusted copy, and its pushed copy - which
 	// internal/service resolves per run and builds one of these seams for
