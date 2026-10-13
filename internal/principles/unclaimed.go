@@ -14,9 +14,5 @@ package principles
 // Check refuses a row whose principle a test does turn out to cite, so a row
 // cannot outlive the gap it describes.
 var unclaimed = map[Principle]string{
-	P10: "There is no coordinator and no watcher here, so no turn ends. " +
-		"internal/home's lock gives a home one service, which is a different question from whether a healthy watcher holds it.",
 	P12: "Nothing here removes an isolated copy. internal/gate's removal is about a gate repository, not about proving a worker's work landed.",
-	P13: "internal/cli renders for a person, and no test claims what it prints names the outcome rather than the mechanics: " +
-		"run identifiers, stage names and home paths are on that surface today.",
 }
