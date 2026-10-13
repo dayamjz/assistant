@@ -35,8 +35,10 @@ The gate is not your CI (PRD section 12 lists "Being your CI" as a permanent
 non-goal). Keep the forge's required checks on the pull request as the shared
 outer check. The last stage reads the checks registered on the pull request's
 head and reports what the code host says at that moment. It does not poll: when
-checks are still running it holds, and `checks_timeout` bounds the wait. A pass
-there does not say the checks stayed green, and it is not a merge decision.
+checks are still running it holds. `checks_timeout` is the setting meant to bound
+that wait, but nothing in this build applies it yet, so a held run waits until a
+person or a later segment reads the checks again. A pass there does not say the
+checks stayed green, and it is not a merge decision.
 
 A repository with no CI at all must say so by setting `no_ci` in its trusted
 configuration. Without that declaration an empty list of checks is not treated
