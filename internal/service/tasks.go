@@ -81,10 +81,10 @@ func (s *Service) branchInGate(ctx context.Context, repository store.Repository,
 // successor onto a branch its worker is still pushing to. The one push that
 // does call it is the one whose replacement run could not be created after
 // the displaced run was terminated: the branch is then idle, and the call
-// runs after the exclusion is given back. No test here drives that path,
-// because making the create fail after the terminate needs a fault in the
-// run table that only SQL written in internal/store could plant; the call
-// is the same releaseQueued the three settled sites take. The third moment
+// runs after the exclusion is given back. The create fails in driverFor as
+// well as in the store, which is how stranded_internal_test.go reaches the
+// path: a hand-built service whose driver does the terminate and whose
+// catalog resolves no agent for the create. The third moment
 // the design names, a merge record or a cleanup record being written, is not
 // a call site here, because nothing in this build resolves a state from
 // either (#107, #108).
