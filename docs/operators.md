@@ -40,10 +40,27 @@ reports what they settle on. `checks_timeout` (global-only, default `168h`)
 bounds that wait, and when it elapses the run holds for you rather than ending.
 The timeout starts when the stage first finds the checks unsettled, starts again
 whenever your base branch advances on the upstream, and is kept across a service
-restart, so resuming a run does not reset it. A check or base read that fails
-outright stops the stage instead of waiting through it; running `assistant` on
-the branch again resumes it into the same wait. A pass does not say the checks stayed green,
-and it is not a merge decision.
+restart, so resuming a run does not reset it. A pass does not say the checks
+stayed green, and it is not a merge decision.
+
+While the stage waits, the run is not held, so there is nothing to answer. A
+run's outcome reads `executing (a segment is running)` for as long as the wait
+lasts: up to `checks_timeout`, and longer if your base branch keeps advancing.
+The `assistant` command that started or attached to the run blocks for that
+whole time. Walking away from it (interrupting it, closing the terminal) does
+not stop the wait: the service carries the run on by itself and keeps reading
+the checks once a minute with nobody attached, because the wait belongs to the
+service rather than to the command that started it. To stop waiting, run
+`assistant --cancel` on the branch, which ends the run. A run that a newer push
+superseded can also keep reading the checks until they settle or the timeout
+elapses, when the service had not yet registered it at the moment of the push.
+
+If a check or base read fails outright, the stage stops instead of waiting
+through the failure, and the run's outcome reads `executing (stalled - nothing
+is advancing this run)`. Running `assistant` on the branch again resumes it into
+the same wait. Before resuming, nothing re-reads the pull request, so a pull
+request that was merged or closed in the meantime does not complete the run. PRD
+section 11 asks for that, and this build does not do it yet.
 
 A repository with no CI at all must say so by setting `no_ci` in its trusted
 configuration. Without that declaration an empty list of checks is not treated
