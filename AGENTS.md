@@ -671,16 +671,38 @@ Each has cost this repository more than one round of review.
   the service's `session.Pipe` - built in `driverFor` on the resolved agent
   before `containRunner` takes its worker arm away - and records
   `Session.Reference()` on the attempt through `store.SetAttemptSession`.
-  The probe is not wired into the service's reader, so a launched task still
-  resolves Dispatched and nothing writes an event to say otherwise; an
+  Every task reader is built through `reader`, probing through
+  `Options.Terminals`, the one seam a terminal is observed through, which
+  is nil in production until the session hookup, so a launched task still
+  resolves Dispatched there and nothing writes an event to say otherwise; an
   adapter without `worker_sessions` dispatches and never launches, with the
-  `*agents.CapabilityError` logged and nothing recorded; a restart relaunches
-  as a new attempt and the earlier process is an orphan nothing here ends;
-  and `Close` ends only the sessions this service created. A path already
-  standing at the copy's path is asserted and never removed. The environment
-  half of P11 is only as strong as every launch path building its
-  environment through `agents.WorkerEnvironment`, which both assertions and
-  the worker's start do; no second strip list exists or should.
+  `*agents.CapabilityError` logged and nothing recorded; and `Close` ends
+  only the sessions this service created. A path already standing at the
+  copy's path is asserted and never removed. The environment half of P11 is
+  only as strong as every launch path building its environment through
+  `agents.WorkerEnvironment`, which every assertion and the worker's start
+  do; no second strip list exists or should. A launched task is never
+  dispatched again: what a restart does about it is `reconcile.go`'s, PRD
+  section 11's fleet reconciliation inside `recover`, after the runs and
+  before `releaseQueued`. The table `reconcileRow` is keyed on the resolved
+  state, its source and the probed liveness, and its test derives the
+  domain from `taskstate.States`, `Sources` and `Livenesses`; only Unknown
+  from the process tier and Failed relaunch, and only with a dead terminal.
+  The synchronous half is bounded, per probe and per read, and takes the
+  anchored attempt claim; the launch goes to a goroutine under `startWork`.
+  `relaunch.go`'s `relaunchTask` is the one relaunch: it decides from its
+  own read, re-runs `tasks.HoldsBranch`, re-probes before the claim, claims
+  through `store.BeginTaskAttempt`, appends `relaunched` then `dispatched`,
+  asserts the standing copy through the `assertCopy` dispatch and launch
+  share and never cuts one, and acknowledges as the program only the
+  terminal-gone wakes about the session it replaced, matched through the
+  loop's own marker composer. `relaunch_attempts` is a global-only row read
+  only there, a task-level bound and not a loop bound, and `key.go` says
+  why. Reconciliation writes no wake and no marker: the queue and the
+  markers are the loop's, under its fence, and the loop's terminal-gone row
+  is what tells the person about a terminal this pass did not relaunch.
+  `reconcile.go` states what a dead terminal does not prove about the copy,
+  since no sweep exists.
   It is also where PRD section 5's supervisor loop lives, in `supervise.go`,
   started by `Open` after recovery and before the caller serves. The loop
   runs as incarnations fenced by `store.BeginIncarnation`: every wake append

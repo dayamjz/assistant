@@ -288,6 +288,24 @@ func decodeSupervisionBeaconInterval(k Key, v any) (any, error) {
 	return d, nil
 }
 
+// decodeRelaunchAttempts accepts a whole number from zero to
+// MaxRelaunchAttempts, on decodeFixRounds' terms about fractions and
+// negatives: zero is a choice to relaunch nothing, and a value over the
+// ceiling is refused rather than clamped.
+func decodeRelaunchAttempts(k Key, v any) (any, error) {
+	n, err := asInt(k, v)
+	if err != nil {
+		return nil, err
+	}
+	if n < 0 {
+		return nil, keyErr(k, v, "a relaunch count cannot be negative")
+	}
+	if n > MaxRelaunchAttempts {
+		return nil, keyErr(k, v, "a relaunch count may be at most "+itoa(MaxRelaunchAttempts))
+	}
+	return n, nil
+}
+
 // decodeBoundedDuration accepts a Go duration string on decodeChecksTimeout's
 // terms about numbers, and refuses one outside the floor and the ceiling
 // rather than clamping it, for decodeSupervisionBeaconInterval's reason: a

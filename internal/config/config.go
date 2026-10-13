@@ -67,6 +67,11 @@ type Config struct {
 	// precede the one that demands a deeper inspection, read by the loop into
 	// supervisor.Stall.InspectAt.
 	StallInspectionCount int
+	// RelaunchAttempts is how many times reconciliation at service start
+	// relaunches a task that resolves Failed with its terminal gone, counted
+	// from its attempt rows, before surfacing it instead. KeyRelaunchAttempts
+	// says why it is a task-level bound and not a loop bound.
+	RelaunchAttempts int
 	// DecisionModel is the mode of the decision-model checks PRD section 5
 	// describes. Whether a request is sent at all also needs the provider's
 	// key in the operator's environment, which this package never reads.
@@ -178,6 +183,12 @@ const (
 	// measured: the third surface of the same screen is a stall the first
 	// two looks did not resolve.
 	DefaultStallInspectionCount = 3
+	// DefaultRelaunchAttempts is how many relaunches of a Failed task
+	// reconciliation makes on its own when the operator's file says nothing.
+	// Chosen, not measured: two restarts of a worker whose run failed is
+	// enough to get past a transient and few enough that a worker which fails
+	// the same way every time reaches a person within the hour.
+	DefaultRelaunchAttempts = 2
 	// DefaultDecisionModel is the decision-model mode a run gets when the
 	// operator's file sets none: the checks run where the key is present and
 	// what they find is a note.
@@ -261,6 +272,12 @@ const (
 	MaxFixRounds = 100
 	// MaxChecksTimeout is the longest idle timeout for checks.
 	MaxChecksTimeout = 8760 * time.Hour
+	// MaxRelaunchAttempts is the most relaunches reconciliation may make of
+	// one task on its own. The floor is zero, which is never relaunch a
+	// Failed task and surface every one, and that is a value an operator may
+	// choose. Above the ceiling a worker that fails the same way every time
+	// is restarted for days before a person hears. Chosen, not measured.
+	MaxRelaunchAttempts = 20
 	// MinSupervisionBeaconInterval is the shortest beacon interval. Below it
 	// the loop would spend its passes rewriting the beacon. Chosen, not
 	// measured.

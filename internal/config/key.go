@@ -109,6 +109,29 @@ const (
 	// PRD section 10's schema table and its limits table have no row for
 	// this key or its bounds; that is #95 line I and not closed here.
 	KeyStallInspectionCount Key = "stall_inspection_count"
+	// KeyRelaunchAttempts is "relaunch_attempts": how many times
+	// reconciliation at service start relaunches a task that resolves
+	// Failed with its terminal gone, counted from the task's attempt rows,
+	// before it surfaces the task to a person instead. It is global-only
+	// for the beacon interval's reason: the relaunch is the service's act
+	// on the operator's machine, and a repository has no standing over how
+	// many workers are started on its behalf.
+	//
+	// It is a task-level bound and not one of internal/graph's three loop
+	// bounds: it stops no run and parks nothing. A loop bound limits how
+	// far one run's execution may go and survives a resume with the thing
+	// it is compared against; this row limits how many attempts of one
+	// task the program begins on its own, and the thing it is compared
+	// against is the attempt history, which is durable in its own right.
+	// internal/service's reconcile.go is the one reader. Who decides a
+	// retry past the bound is #95 line G and not this row. A task past it
+	// is told to a person by the supervisor loop's terminal-gone wake, which
+	// is why no second surface and no tolerance row sit beside this one.
+	//
+	// PRD section 10's schema table and its limits table have no row for
+	// this key or its bounds; that is raised as a finding and not closed
+	// here, on the beacon interval's terms.
+	KeyRelaunchAttempts Key = "relaunch_attempts"
 	// KeyCommitFixMessage is "commit.fix_message": the fix commit subject
 	// template.
 	KeyCommitFixMessage Key = "commit.fix_message"
@@ -210,6 +233,8 @@ var specs = []spec{
 		func(c *Config, v any) { c.RecheckWindow = v.(time.Duration) }},
 	{KeyStallInspectionCount, TrustGlobal, DefaultStallInspectionCount, decodeStallInspectionCount,
 		func(c *Config, v any) { c.StallInspectionCount = v.(int) }},
+	{KeyRelaunchAttempts, TrustGlobal, DefaultRelaunchAttempts, decodeRelaunchAttempts,
+		func(c *Config, v any) { c.RelaunchAttempts = v.(int) }},
 	{KeyCommitFixMessage, TrustPushed, DefaultCommitFixMessage, decodeFixMessage,
 		func(c *Config, v any) { c.CommitFixMessage = v.(string) }},
 	{KeyAllowPushedCommands, TrustTrusted, false, decodeBool,

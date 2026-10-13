@@ -250,7 +250,9 @@ func Coverage() []Established {
 				"not produce before it asks for a worker. The launch edge is internal/service's, at " +
 				"package reach through that package's own test rather than through this harness: its " +
 				"launch asserts the copy again before Create, and a copy retargeted between dispatch " +
-				"and launch is refused there and not launched. A worker started through internal/agents " +
+				"and launch is refused there and not launched; its relaunch at service start asserts " +
+				"the standing copy through the same function, and a copy that became the primary " +
+				"checkout is refused there with no worker started. A worker started through internal/agents " +
 				"directly is still started where it is told, so a green P11 does not read as no worker " +
 				"launches unproven."},
 		{principles.P12, ReachNone,

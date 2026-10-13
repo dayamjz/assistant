@@ -167,8 +167,9 @@
 // cleanup record after that, which it resolves as Complete. Both are terminal
 // for the task, so a successor dispatched onto the branch shares it with
 // nothing live. Clears' doc states the consequence Failed carries: it is not
-// terminal in the lifecycle, so a relaunch (#94) must re-run this floor and
-// queue itself when a live task now holds the branch.
+// terminal in the lifecycle, so internal/service's relaunch re-runs this
+// floor, through HoldsBranch, and refuses itself when a live task now holds
+// the branch.
 //
 // # No caller in this build
 //

@@ -126,7 +126,7 @@ func (q *Queue) Release(ctx context.Context) ([]Outcome, error) {
 			out = append(out, o)
 			continue
 		}
-		if holder, held := holdsBranch(r, resolved); held {
+		if holder, held := HoldsBranch(r, resolved); held {
 			o.Result, o.Holding, o.HoldingState = Waiting, holder.Record.ID, holder.State.State
 			out = append(out, o)
 			continue
@@ -149,11 +149,15 @@ func (q *Queue) Release(ctx context.Context) ([]Outcome, error) {
 	return out, nil
 }
 
-// holdsBranch is the floor at release: the newest task other than r on r's
-// repository and branch that holds it, if there is one. A task holds r when
-// it is live and not itself queued, or when it is queued with a lower row
-// than r. A task with no branch is held by nothing.
-func holdsBranch(r taskstate.Resolved, resolved []taskstate.Resolved) (taskstate.Resolved, bool) {
+// HoldsBranch is the floor at release, and the floor a relaunch re-runs: the
+// newest task other than r on r's repository and branch that holds it, if
+// there is one, over resolved, which is one consistent read of every task. A
+// task holds r when it is live and not itself queued, or when it is queued
+// with a lower row than r. A task with no branch is held by nothing. It is
+// exported so that internal/service's relaunch asks the same question
+// Release asks, of the same function, rather than of a second one; it reads
+// states and records only and writes nothing.
+func HoldsBranch(r taskstate.Resolved, resolved []taskstate.Resolved) (taskstate.Resolved, bool) {
 	branch, ok := r.Record.Branch.Get()
 	if !ok {
 		return taskstate.Resolved{}, false
