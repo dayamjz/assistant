@@ -108,18 +108,17 @@ func Coverage() []Established {
 				"with the finding that produced " +
 				"it, every one of those findings reports itself as holding for a person, and none is one " +
 				"a fixer may take. The planted agent output is driven at package reach as well, because " +
-				"no run this harness drives reaches an agent - the review body would launch the one " +
-				"this harness scripts to answer nothing, so the walk skips the stage - and no " +
-				"report an agent wrote therefore reaches a run. " +
+				"exactly one walk launches an agent, as the reviewer, and the report it answers is a " +
+				"scripted clean one that reaches findings.ParseReviewReport; every other walk skips " +
+				"the review stage, so no report an agent wrote reaches those runs. " +
 				"The run half starts a run through a method internal/ipc restricts, so on a platform where " +
 				"that package reads no local socket peer credentials it is skipped rather than passing, and " +
 				"the package-reach half over the planted agent output is the whole of what is established " +
 				"there."},
 		{principles.P4, ReachPackage,
-			"The binary cannot reach this in the runs this harness drives: none launches an agent, " +
-				"because the one body that would - review - launches the agent this harness scripts " +
-				"to answer nothing, and every walk here skips it, so a run makes no agent invocation " +
-				"to assert over. What " +
+			"The binary reaches an agent in exactly one walk, the delivery walk, which launches the " +
+				"reviewer through the production adapter; that walk does not assert the P4 session " +
+				"split, and every other walk skips the review stage. What " +
 				"is driven is the production adapter over the stand-in, which is where the type split " +
 				"lives and where an invocation record can be read off the wire."},
 		{principles.P5, ReachNone,

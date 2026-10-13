@@ -71,9 +71,9 @@ func Settlements() []Settlement {
 				"other commit before a finding is reached.",
 			Exercised: "The delivery half is driven: a copy of this binary standing on PATH under the " +
 				"agent's name answers a scripted invocation, and a run resolves its agent off that PATH. " +
-				"The selection half has nothing to select. No run this harness drives reaches an agent " +
-				"- the review body would launch the one these journeys script to answer nothing, so " +
-				"every walk skips the stage - so no report an agent wrote reaches a run, and the " +
+				"The selection half has nothing to select. Only the delivery walk reaches an agent, " +
+				"as a reviewer scripted clean; every other walk skips the review stage, so no " +
+				"planted report reaches a run, and the " +
 				"planted responses are driven through internal/findings and the production adapter " +
 				"instead.",
 		},

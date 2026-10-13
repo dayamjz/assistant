@@ -74,6 +74,13 @@ func (d delivered) edited(stage pipeline.Stage, change func(*machine.Stage)) del
 // does not have, so the push stage has an update to make and the remote's
 // branch moving is the evidence it made it.
 //
+// The P6 cite covers the push path only: the commit forwarded from the run's
+// isolated copy to the upstream remote lands. It does not cover the lease or
+// the refusal against a remote that moved, which p6_anchor_test.go drives at
+// package reach. Nothing here pushes through the gate. The expected stops are
+// stages.Holding fed config.Defaults plus the two commands this test writes
+// into the home, not the service's whole resolved configuration.
+//
 // The pull request and checks stages are skipped. Both need a repository on a
 // code host, no record here names one and this fixture has no host for
 // internal/forge to address, so a run that took either would stop there
@@ -187,7 +194,7 @@ func TestARunTakesTheDeliveryPathToAPush(t *testing.T) {
 				},
 			},
 			{
-				States: "the run stopped at the stages the resolved configuration holds, in order, and nowhere else",
+				States: "the run stopped at the stages stages.Holding gives for those commands, in order, and nowhere else",
 				Holds: func(d delivered) error {
 					var want []string
 					for _, stage := range d.expectedStops {
@@ -209,11 +216,12 @@ func TestARunTakesTheDeliveryPathToAPush(t *testing.T) {
 				},
 			},
 			{
-				States: "the review stage launched the scripted reviewer and it answered",
+				States: "the review stage launched the scripted reviewer exactly once, so no commit followed the review",
 				Holds: func(d delivered) error {
-					if d.reviewsAnswered == 0 {
-						return errors.New("the scripted reviewer answered no review, so the review stage passed " +
-							"without one or was never reached")
+					if d.reviewsAnswered != 1 {
+						return fmt.Errorf("the scripted reviewer answered %d review(s), wanted exactly one: none "+
+							"means the stage passed without a review, more means the push stage reviewed later commits",
+							d.reviewsAnswered)
 					}
 					return nil
 				},
@@ -293,8 +301,31 @@ func TestARunTakesTheDeliveryPathToAPush(t *testing.T) {
 				d.stops = nil
 				return d
 			}},
-			{Named: "the review stage never ran", Break: func(d delivered) delivered {
-				return d.edited(pipeline.StageReview, func(v *machine.Stage) { v.Ran = false })
+			{Named: "the review stage never ran and was skipped", Break: func(d delivered) delivered {
+				return d.edited(pipeline.StageReview, func(v *machine.Stage) {
+					v.Ran, v.Outcome = false, pipeline.OutcomeSkipped
+				})
+			}},
+			{Named: "the reviewer was asked a second time", Break: func(d delivered) delivered {
+				d.reviewsAnswered = 2
+				return d
+			}},
+			{Named: "the declared document hold passed unasked", Break: func(d delivered) delivered {
+				return d.edited(pipeline.StageDocument, func(v *machine.Stage) { v.Outcome = pipeline.OutcomePassed })
+			}},
+			{Named: "the test stage ran nothing", Break: func(d delivered) delivered {
+				return d.edited(pipeline.StageTest, func(v *machine.Stage) {
+					if v.Report != nil {
+						r := *v.Report
+						r.Tested = nil
+						v.Report = &r
+					}
+				})
+			}},
+			{Named: "a skipped stage passed", Break: func(d delivered) delivered {
+				return d.edited(pipeline.StagePR, func(v *machine.Stage) {
+					v.Ran, v.Outcome = true, pipeline.OutcomePassed
+				})
 			}},
 			{Named: "the push stage held instead of passing", Break: func(d delivered) delivered {
 				return d.edited(pipeline.StagePush, func(v *machine.Stage) { v.Outcome = pipeline.OutcomeHeld })

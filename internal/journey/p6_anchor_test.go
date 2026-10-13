@@ -47,9 +47,8 @@ type anchored struct {
 // TestAnUpdateIsAnchoredToWhatTheRunObservedRatherThanToAFreshRead drives the
 // first two of PRD section 13's tests for principle P6, at package reach.
 //
-// The binary cannot reach this. No stage body pushes, so no run observes a
-// remote and none proposes an update, which means there is no run to drive the
-// refusal out of. What is driven instead is internal/safety over
+// The binary cannot reach this. Only the delivery walk pushes, and on a remote
+// nobody advanced, so no run drives a refusal out of this. What is driven instead is internal/safety over
 // internal/vcs's own reads of the subject repository, with the out-of-band
 // advance planted by the route internal/fixture states: a real push from a
 // real second clone, made after the observation and before the decision.

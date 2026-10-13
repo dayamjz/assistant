@@ -34,7 +34,7 @@ import (
 // that the shipped binary reaches every one of those stages, runs each it was
 // not asked to skip, and carries each away with the outcome it was given.
 //
-// Every run here asks to skip the review and pull request stages, for the
+// Every run here, the delivery walk aside, asks to skip the review and pull request stages, for the
 // reasons walkableRun states: the review body launches this harness's agent,
 // which is scripted to answer nothing, and the pull request body fails on
 // the run's record naming no repository on the code host, so a run

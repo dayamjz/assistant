@@ -193,11 +193,11 @@ func StagesWithoutABody() []pipeline.Stage {
 // commands empty by default, no run this harness drives is given one, and the
 // branch's own is never read, so each body holds for a person rather than
 // reporting a pass it did not establish. The push stage holds with a body
-// because every run here skips the review stage, and a push whose run carries
+// because every run here but the delivery walk skips the review stage, and a push whose run carries
 // no completed review is an ask rather than a push. The checks stage holds
 // with a body because no record here names a repository on a code host, so it
 // has no provider to query. And the review stage has a body and is not a
-// stop, because every run this harness walks skips it, for the reason
+// stop, because every run this harness walks but the delivery walk skips it, for the reason
 // walkableRun states: its body launches the resolved agent over the change,
 // and a harness run may not reach whatever agent the machine happens to have.
 // The pull request stage is off the list on the same terms: it has a body,
