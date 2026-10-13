@@ -124,3 +124,18 @@ func (h *Home) TaskInstructions(id string) (string, error) {
 	}
 	return filepath.Join(task, "instructions.md"), nil
 }
+
+// TaskReport is the evidence copy of the report an investigation task's
+// worker filed, under the task's own directory. It is refused on the same
+// terms as Task. The copy is for a person to open and is not the source: PRD
+// section 11's report that survives cleanup is internal/store's task_report
+// row, written by internal/tasks when the report is stored, and this file is
+// written beside it from the same text. Cleanup removes the task's copy and
+// leaves the rest of the task directory, this file among it, standing.
+func (h *Home) TaskReport(id string) (string, error) {
+	task, err := h.Task(id)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(task, "report.md"), nil
+}

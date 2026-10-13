@@ -203,4 +203,15 @@
 //
 // The gh command line on PATH, or one named with WithBinary, authenticated for
 // the repository being addressed.
+//
+// # The stand-in another package tests against
+//
+// forgetest is a stand-in gh answering over the wire, read by this package's
+// real adapter, scripted with only shapes gh puts on standard output, on
+// internal/judge/judgetest's terms: a test outside this package that needs a
+// merged, open or closed pull request builds a Host over it and never a
+// forge.PullRequest by hand. This package's own tests keep their private
+// stand-in, which also models a killed provider, one holding its pipes
+// open, and the credential tripwire, and moving them is not the small
+// change forgetest is.
 package forge

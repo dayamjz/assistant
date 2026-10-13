@@ -213,6 +213,10 @@ type Service struct {
 	// built at Open from the branch gate and the gate repositories this
 	// service knows; tasks.go says which of its entries this service calls.
 	queue *tasks.Queue
+	// cleaner is internal/tasks' cleanup decision over this service's store,
+	// home and code host; cleanup.go says which of its entries this service
+	// calls and from where.
+	cleaner *tasks.Cleaner
 
 	// mu guards the lazily built driver and topologies, the set of runs being
 	// advanced, and the branch gates. It is never held across a run's
@@ -438,6 +442,9 @@ func (s *Service) openParts(ctx context.Context, o Options) error {
 	s.store = records
 	s.checkpoints = checkpoints.New(records)
 	if s.queue, err = s.newQueue(); err != nil {
+		return err
+	}
+	if s.cleaner, err = tasks.NewCleaner(tasks.CleanupDeps{Home: s.home, Store: s.store, Forge: s.forge}); err != nil {
 		return err
 	}
 

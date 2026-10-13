@@ -801,4 +801,84 @@ var schema = []migration{
 			) STRICT`,
 		},
 	},
+	{
+		version: 18,
+		name:    "run cleanup records and stored task reports",
+		statements: []string{
+			// The cleanup record of a run's isolated copy, on task_cleanup's
+			// terms: PRD principle P12 covers every isolated copy, and a
+			// run's copy at worktrees/<repository>/<run> is one, so the
+			// decision that removes it leaves the same record a task's
+			// does. It is keyed by the run and sits beside the run row
+			// rather than on it, because the run row is the run's status and
+			// this is what became of its copy. The run column references
+			// the run table, on task_cleanup's terms rather than
+			// merge_record's: the writer holds the run's own record.
+			//
+			// It differs from task_cleanup in one column, refusal, because
+			// a run's copy is cleaned up at the moment its run settles and a
+			// refusal there is what PRD section 9's status has to say about
+			// a copy left standing: the word is the cleanup decision's own
+			// reason, recorded here and not interpreted. A refusal is the
+			// one state a row may be revised out of: it is rewritten by a
+			// later refusal and replaced by a proof, and once the proof is
+			// written the row takes exactly one more revision, removed_at,
+			// which the triggers below hold at the database.
+			`CREATE TABLE run_cleanup (
+				run         TEXT PRIMARY KEY REFERENCES run(id),
+				proof       TEXT,
+				examined    TEXT NOT NULL,
+				refusal     TEXT,
+				detail      TEXT NOT NULL,
+				recorded_at TEXT NOT NULL,
+				removed_at  TEXT
+			) STRICT`,
+			`CREATE TRIGGER run_cleanup_proof_is_written_once
+				BEFORE UPDATE OF proof, examined, refusal, detail, recorded_at ON run_cleanup
+				WHEN OLD.proof IS NOT NULL
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a run cleanup record is written once with its proof and is not rewritten');
+				END`,
+			`CREATE TRIGGER run_cleanup_is_removed_once
+				BEFORE UPDATE OF removed_at ON run_cleanup
+				WHEN OLD.removed_at IS NOT NULL
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a run cleanup record marks its removal once and the first mark stands');
+				END`,
+			`CREATE TRIGGER run_cleanup_is_not_removed
+				BEFORE DELETE ON run_cleanup
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a run cleanup record is not deleted');
+				END`,
+
+			// PRD section 11's stored report: the report an investigation
+			// task's worker filed, which survives the copy's cleanup. body
+			// is the worker's text as it arrived, which is evidence and
+			// never interpreted here; report is the same text as
+			// internal/findings parsed it, encoded by the writer and opaque
+			// to this package; hold_keys is the keys of the holds the
+			// writer registered from it, as a JSON array, written in the
+			// same transaction as the row so a stored report whose decisions
+			// were never registered cannot exist through this package. It
+			// is written once and never revised, and the triggers hold that
+			// at the database.
+			`CREATE TABLE task_report (
+				task_id     TEXT PRIMARY KEY REFERENCES task(id),
+				body        TEXT NOT NULL,
+				report      TEXT NOT NULL,
+				hold_keys   TEXT NOT NULL,
+				recorded_at TEXT NOT NULL
+			) STRICT`,
+			`CREATE TRIGGER task_report_is_written_once
+				BEFORE UPDATE ON task_report
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a task report is written once by the store that filed it and is not updated');
+				END`,
+			`CREATE TRIGGER task_report_is_not_removed
+				BEFORE DELETE ON task_report
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a task report survives cleanup and is not deleted');
+				END`,
+		},
+	},
 }

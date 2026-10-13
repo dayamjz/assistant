@@ -85,7 +85,7 @@ func TestAccessorsRefuseAfterClose(t *testing.T) {
 		"SetAttemptSession": func() error { return s.SetAttemptSession(ctx, "taskaaaaaaab", 1, "pane") },
 		"TaskAttempts":      func() error { _, err := s.TaskAttempts(ctx, "taskaaaaaaab"); return err },
 		"RecordTaskCleanup": func() error {
-			_, err := s.RecordTaskCleanup(ctx, TaskCleanup{TaskID: "taskaaaaaaab", Proof: CleanupProofRemoteBranch})
+			_, err := s.RecordTaskCleanup(ctx, TaskCleanup{TaskID: "taskaaaaaaab", Proof: CleanupProofRemoteBranch}, TaskDelivery)
 			return err
 		},
 		"TaskCleanup": func() error { _, err := s.TaskCleanup(ctx, "taskaaaaaaab"); return err },
