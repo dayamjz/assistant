@@ -114,9 +114,11 @@ type Worker interface {
 	// rest must follow them or a later send would interleave with them. So
 	// the pending write is drained first by whatever comes next: a later
 	// Send waits on it under its own ctx and writes nothing until it has
-	// drained, and Close ends it by closing the input. A worker that never
-	// reads therefore turns every later Send into a wait that only its own
-	// ctx or Close ends, which is the worker's doing and is visible as such.
+	// drained, and Close ends it by closing the input. Every waiting Send
+	// honours its own ctx, whether it is waiting for the pending write or
+	// for its turn behind another Send, so a worker that never reads turns
+	// every later Send into a wait that its own ctx or Close ends, which is
+	// the worker's doing and is visible as such.
 	Send(ctx context.Context, text string) error
 
 	// Capture returns the most recent output the worker has written on
@@ -192,12 +194,15 @@ type procWorker struct {
 	// and whatever it left in its group has been terminated.
 	done chan struct{}
 
-	// sendMu serializes writes to standard input, the instructions among
-	// them. pending is the write a ctx cut off and left in flight, nil when
-	// there is none; it is read under sendMu, and whoever takes sendMu next
-	// drains it before writing, which is what keeps the order of sends the
-	// order of bytes on the pipe.
-	sendMu  sync.Mutex
+	// slot serializes writes to standard input, the instructions among
+	// them. It is a one-place channel rather than a mutex so that a sender
+	// waiting its turn waits under its own ctx: a mutex would hold every
+	// queued sender until the one ahead returned, whatever their contexts
+	// said. pending is the write a ctx cut off and left in flight, nil when
+	// there is none; it is read holding the slot, and whoever holds the slot
+	// next drains it before writing, which is what keeps the order of sends
+	// the order of bytes on the pipe.
+	slot    chan struct{}
 	pending chan error
 	// closeOnce makes Close idempotent, and closeMu guards the stdin close
 	// against a concurrent Send.
@@ -238,6 +243,7 @@ func startWorker(ctx context.Context, spec procSpec, instructions string) (*proc
 		out:       out,
 		grace:     spec.grace,
 		done:      make(chan struct{}),
+		slot:      make(chan struct{}, 1),
 		stdinOpen: true,
 	}
 	go func() {
@@ -265,8 +271,14 @@ func (w *procWorker) Send(ctx context.Context, text string) error {
 // write is still in flight it returns ctx's error and leaves the write
 // pending, on the terms Worker.Send states; the next write drains it first.
 func (w *procWorker) write(ctx context.Context, text string) error {
-	w.sendMu.Lock()
-	defer w.sendMu.Unlock()
+	select {
+	case w.slot <- struct{}{}:
+	case <-w.done:
+		return ErrWorkerEnded
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	defer func() { <-w.slot }()
 	if w.pending != nil {
 		select {
 		case <-w.pending:

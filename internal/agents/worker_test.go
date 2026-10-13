@@ -419,3 +419,55 @@ func TestASendCutOffByItsContextKeepsItsPlaceInTheOrder(t *testing.T) {
 			"it contains the second send: %t", len(got), strings.Contains(got, "second"))
 	}
 }
+
+// Every sender waiting on a worker honours its own context, whether it is
+// behind a pending write or behind another sender: with the pipe full and
+// the worker reading nothing, two sends started together both return their
+// own deadline promptly, and the worker is still alive afterwards.
+func TestEveryQueuedSendHonoursItsOwnContext(t *testing.T) {
+	runner, err := agents.ScriptedFactory(
+		agents.WithBinary(helperBinary(t)),
+		agents.WithTerminationGrace(300*time.Millisecond),
+	).New(t.Context(), []string{helperModeFlag + "worker-echo-when"})
+	if err != nil {
+		t.Fatalf("building the scripted runner over the helper: %v", err)
+	}
+	spec := workerSpec(t)
+	spec.Env = map[string]string{helperGoVar: filepath.Join(t.TempDir(), "never")}
+	worker, err := agents.OpenWorker(t.Context(), runner, spec)
+	if err != nil {
+		t.Fatalf("starting the worker: %v", err)
+	}
+	defer worker.Close()
+
+	ctx, cancel := context.WithTimeout(t.Context(), 300*time.Millisecond)
+	err = worker.Send(ctx, strings.Repeat("a", 1<<20))
+	cancel()
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("a send the worker does not read answered %v, want the context's deadline", err)
+	}
+
+	results := make(chan error, 2)
+	for range 2 {
+		go func() {
+			ctx, cancel := context.WithTimeout(t.Context(), 300*time.Millisecond)
+			defer cancel()
+			results <- worker.Send(ctx, "queued")
+		}()
+	}
+	for i := range 2 {
+		select {
+		case err := <-results:
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Errorf("queued send %d answered %v, want its own context's deadline", i, err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("queued send %d did not return within five seconds of its 300ms deadline", i)
+		}
+	}
+	select {
+	case <-worker.Done():
+		t.Fatal("the worker ended, and nothing here asked it to")
+	default:
+	}
+}

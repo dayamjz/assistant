@@ -149,9 +149,10 @@
 // A send its context cut off is not taken back. The bytes already in the
 // pipe are the worker's, so the rest of that write follows them and every
 // later send waits behind it, under its own context, until it drains or
-// Close shuts the input. Order is kept; what is lost is that a worker which
-// never reads its input turns every later send into a wait, and nothing
-// here ends that wait but the caller's own context or Close.
+// Close shuts the input, and a send waiting its turn behind another send
+// waits under its own context too. Order is kept; what is lost is that a
+// worker which never reads its input turns every later send into a wait,
+// and nothing here ends that wait but the caller's own context or Close.
 //
 // No adapter this build ships declares the capability. The scripted adapter
 // ScriptedFactory builds does, over the stand-in, so the conformance suite
