@@ -1,10 +1,39 @@
 // Package tasks is PRD section 8's tasks module as far as this build takes
-// it: intake and queueing. Create records a task with the disposition PRD
-// section 6 gives it at intake, Queued behind a blocker or Dispatched, and
-// Release dispatches a queued task once its blocker has cleared. Dispatch,
-// cutting a copy, the P11 isolation assertion and launching a worker are
-// #98 and #104, and nothing here does any of them; promotion and cleanup
-// proofs are later still.
+// it: intake, queueing, and the P11 isolation assertion. Create records a
+// task with the disposition PRD section 6 gives it at intake, Queued behind a
+// blocker or Dispatched, and Release dispatches a queued task once its
+// blocker has cleared. AssertIsolated is the pure half of P11, described
+// below. Dispatch, cutting a copy and launching a worker are #104 and #91,
+// and nothing here does any of them; promotion and cleanup proofs are later
+// still.
+//
+// # The isolation assertion
+//
+// P11 says a worker does not launch unless the resolved path is a real
+// isolated copy, distinct from the primary checkout, and that being a linked
+// copy is not proof when the tool can be pointed at its own repository.
+// Expect computes, from the task's record and the home, what its copy must
+// be (Expectation) and the shell line a worker runs as the principle's second
+// check, out of one call so the two cannot name different paths.
+// AssertIsolated takes a vcs.Observation of the directory, the environment
+// the launcher will use, and that Expectation, and returns an Isolation or a
+// typed *IsolationError naming the comparison that failed. The comparisons
+// are the ones isolation.go lists in order; every path comparison is by file
+// identity and never by string, so a symbolic link into the primary and a
+// case variant of it on a case-insensitive filesystem are both the primary.
+// The remote set is exact, assistant at this home's gate for a delivery copy
+// and none for an investigation copy, because any other route is a push the
+// gate's hooks never see. The environment is refused when vcs.StripRedirecting
+// would change it, so the list of what points git elsewhere stays that
+// package's (P14); the observation itself is taken under internal/vcs's own
+// environment and answers what the copy is, never what a worker would see.
+//
+// The assertion is the proof and not the gate. Isolation's unexported field
+// is set only here, so a launch seam that takes one cannot be handed a value
+// nobody asserted, and that seam is #91's: nothing in this build takes an
+// Isolation, and a worker started through internal/agents today is started
+// where it is told. The second check is detection, obeyed by an obedient
+// worker and ignored by any other, and Expect's doc says so.
 //
 // # Every lifecycle move here is an appended event, anchored
 //
@@ -114,4 +143,14 @@
 //     one branch apart. The floor keeps the arrangement out of this
 //     package's own intakes and nothing else: a task given the branch some
 //     other way is outside it.
+//   - AssertIsolated proves the copy at the moment it was observed. A
+//     worker may add a linked worktree to its clone, retarget its remote, or
+//     be launched later into a directory that has since changed, and none of
+//     that reaches an Isolation already returned; the second check is the
+//     only thing that runs afterwards, and it is detection by a worker that
+//     chooses to run it.
+//   - The second check compares the remote URL as a string against the gate
+//     path as Expect was given it, without the file:// and trailing-separator
+//     normalization AssertIsolated applies, so a copy the assertion passes
+//     under one of those spellings fails its own second check.
 package tasks

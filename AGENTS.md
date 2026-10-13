@@ -142,6 +142,12 @@ Each has cost this repository more than one round of review.
 - `internal/vcs` is the only package that invokes git. Do not shell out to git
   anywhere else; add a typed operation there instead. Its package comment states
   the two rules it applies to every invocation and the residual gaps in them.
+  `StripRedirecting` is the one list of what points git at another repository,
+  and `Observe` is taken under this package's own environment, so an
+  `Observation` says what a copy on disk is and never what a worker's
+  environment would make git see there; a check on that environment derives
+  from `StripRedirecting` rather than carrying a second list. `Clone` promises
+  the remote set the caller named and refuses a destination that exists.
 - `internal/store` is the only package that opens the database and the only one
   that writes SQL. Add a typed accessor there rather than a query elsewhere. Its
   driver is pure Go on purpose, so `make check` needs no cgo on any platform.
@@ -335,8 +341,14 @@ Each has cost this repository more than one round of review.
   no meaning. Read its `doc.go` for the residual gaps, and for why PRD section
   8's "task state" row is read as a resolution rather than a row.
 - `internal/tasks` is PRD section 8's tasks module as far as this build takes
-  it: intake and queueing, with dispatch, copies and the P11 assertion left to
-  later work. Every lifecycle move there is an appended event, never a state
+  it: intake, queueing, and the P11 assertion, with dispatch, copies and the
+  launch left to #104 and #91. `Expect` computes a task's `Expectation` and
+  its second-check shell line from one call, and `AssertIsolated` compares a
+  real `vcs.Observation` against it by file identity, never by string, with
+  an exact remote set per shape and a typed `*IsolationError` naming the
+  comparison; only it sets `Isolation`'s unexported field, nothing in this
+  build takes one, and its P11 citation claims the assertion refuses and
+  nothing about launch. Every lifecycle move there is an appended event, never a state
   column: `Create` writes the disposition through `store.CreateTask`, anchored
   to the newest task row it saw on the branch and under the service's branch
   exclusion, and `Release` appends `dispatched` through
