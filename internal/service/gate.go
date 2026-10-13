@@ -310,6 +310,12 @@ func (s *Service) startPushedBranch(ctx context.Context, found subject, branch, 
 // tag pre-rebase-2-observation-edges, and is deliberately not implemented here;
 // the second read above shortens the reach of the unsignalled state and closes
 // none of it.
+//
+// The checks stage makes that reach longer than one pass over the nine stages.
+// A displaced run that was never signalled and reaches the checks stage with
+// unsettled checks waits there, reading the provider once a minute, until they
+// settle or checks_timeout elapses; internal/stages' CI says why that body does
+// not ask whether its run is still wanted.
 func (s *Service) claimPush(ctx context.Context, built *driver, repository, branch, head, base string) (store.Run, string, error) {
 	key := branchKey{repository: repository, branch: branch}
 	release, err := s.holdBranch(ctx, key)

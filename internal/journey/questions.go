@@ -108,13 +108,18 @@ func Settlements() []Settlement {
 		},
 		{
 			Question: "question-checks-timeout-observation",
-			Decision: "checks_timeout is global-only, so the harness sets it short in the home's own " +
-				"configuration document and reads the run's park rather than waiting the timeout out. A " +
-				"run that waited parks on the bound; a run that concluded reports a verdict. The two are " +
-				"different answers on the same surface, so nothing has to be inferred from elapsed time.",
-			Exercised: "Not driven. There is no checks stage, so nothing reads checks_timeout and no run " +
-				"can wait on anything. What is driven is the verdict itself, at package reach: an empty " +
-				"check list with no no_ci declaration evaluates to VerdictNoChecks, which is not green.",
+			Decision: "checks_timeout is global-only, so a harness that drives it sets it short in the " +
+				"home's own configuration document rather than waiting the timeout out. A run whose " +
+				"wait elapsed holds at the checks stage with a finding saying checks_timeout elapsed; a " +
+				"run whose checks settled reports their verdict. The two are different answers on the " +
+				"same surface, so nothing has to be inferred from elapsed time.",
+			Exercised: "Not driven through the binary. Every walk's run names no repository on the code " +
+				"host, so the checks stage holds on that before it reads any checks and never waits. The " +
+				"wait itself is established at package reach in internal/stages, whose checks tests drive " +
+				"the stage body against a scripted provider, a real upstream and a real store: it waits " +
+				"through unsettled checks, holds when checks_timeout elapses, and re-arms when the base " +
+				"advances. The verdict is driven at package reach too: an empty check list with no no_ci " +
+				"declaration evaluates to VerdictNoChecks, which is not green and is waited through.",
 		},
 		{
 			Question: "question-project-instructions-suppression",
