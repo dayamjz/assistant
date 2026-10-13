@@ -56,6 +56,15 @@ type Config struct {
 	// its liveness beacon. The staleness window and the first-beacon wait
 	// are internal/supervisor's multiples of it, never values of their own.
 	SupervisionBeaconInterval time.Duration
+	// RelaunchAttempts is how many times reconciliation at service start
+	// relaunches a task that resolves Failed with its terminal gone, counted
+	// from its attempt rows, before surfacing it instead. KeyRelaunchAttempts
+	// says why it is a task-level bound and not a loop bound.
+	RelaunchAttempts int
+	// UnobservedTolerance is how long a task's terminal may stay unobserved
+	// by a probe that was asked before reconciliation surfaces the task once.
+	// It is a duration and not a loop bound; KeyUnobservedTolerance says so.
+	UnobservedTolerance time.Duration
 	// DecisionModel is the mode of the decision-model checks PRD section 5
 	// describes. Whether a request is sent at all also needs the provider's
 	// key in the operator's environment, which this package never reads.
@@ -155,6 +164,18 @@ const (
 	// at the staleness multiple, long enough that an idle service writes
 	// almost nothing.
 	DefaultSupervisionBeaconInterval = 10 * time.Second
+	// DefaultRelaunchAttempts is how many relaunches of a Failed task
+	// reconciliation makes on its own when the operator's file says nothing.
+	// Chosen, not measured: two restarts of a worker whose run failed is
+	// enough to get past a transient and few enough that a worker which fails
+	// the same way every time reaches a person within the hour.
+	DefaultRelaunchAttempts = 2
+	// DefaultUnobservedTolerance is how long an unobserved terminal is
+	// tolerated when the operator's file says nothing. Chosen, not measured:
+	// long enough that a provider which is slow to come back does not wake a
+	// person, short enough that a provider which never comes back is noticed
+	// within the hour.
+	DefaultUnobservedTolerance = time.Hour
 	// DefaultDecisionModel is the decision-model mode a run gets when the
 	// operator's file sets none: the checks run where the key is present and
 	// what they find is a note.
@@ -238,6 +259,20 @@ const (
 	MaxFixRounds = 100
 	// MaxChecksTimeout is the longest idle timeout for checks.
 	MaxChecksTimeout = 8760 * time.Hour
+	// MaxRelaunchAttempts is the most relaunches reconciliation may make of
+	// one task on its own. The floor is zero, which is never relaunch a
+	// Failed task and surface every one, and that is a value an operator may
+	// choose. Above the ceiling a worker that fails the same way every time
+	// is restarted for days before a person hears. Chosen, not measured.
+	MaxRelaunchAttempts = 20
+	// MinUnobservedTolerance is the shortest unobserved tolerance. Below it a
+	// provider that is merely slow to answer would surface every task it
+	// serves. Chosen, not measured.
+	MinUnobservedTolerance = time.Second
+	// MaxUnobservedTolerance is the longest unobserved tolerance. Above it a
+	// provider that never comes back leaves a fleet silent for more than a
+	// week. Chosen, not measured.
+	MaxUnobservedTolerance = 168 * time.Hour
 	// MinSupervisionBeaconInterval is the shortest beacon interval. Below it
 	// the loop would spend its passes rewriting the beacon. Chosen, not
 	// measured.

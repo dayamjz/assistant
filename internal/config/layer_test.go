@@ -92,6 +92,8 @@ func TestParseAcceptsTheWholeSchema(t *testing.T) {
 		"session_reuse": false,
 		"decision_model": "enforce",
 		"supervision_beacon_interval": "30s",
+		"relaunch_attempts": 3,
+		"unobserved_tolerance": "20m",
 		"commit": {"fix_message": "fix(gate): {summary}"},
 		"allow_pushed_commands": true
 	}`
@@ -195,6 +197,14 @@ func TestParseRefusalsNameTheKeyAndValue(t *testing.T) {
 		{"beacon interval unparseable", `{"supervision_beacon_interval": "soon"}`, KeySupervisionBeaconInterval, `"soon"`},
 		{"beacon interval under the floor", `{"supervision_beacon_interval": "500ms"}`, KeySupervisionBeaconInterval, `"500ms"`},
 		{"beacon interval over the ceiling", `{"supervision_beacon_interval": "11m"}`, KeySupervisionBeaconInterval, `"11m"`},
+		{"relaunch attempts negative", `{"relaunch_attempts": -1}`, KeyRelaunchAttempts, "-1"},
+		{"relaunch attempts fractional", `{"relaunch_attempts": 1.5}`, KeyRelaunchAttempts, "1.5"},
+		{"relaunch attempts over the ceiling", `{"relaunch_attempts": 21}`, KeyRelaunchAttempts, "21"},
+		{"relaunch attempts not a number", `{"relaunch_attempts": "2"}`, KeyRelaunchAttempts, `"2"`},
+		{"unobserved tolerance as a number", `{"unobserved_tolerance": 60}`, KeyUnobservedTolerance, "60"},
+		{"unobserved tolerance unparseable", `{"unobserved_tolerance": "later"}`, KeyUnobservedTolerance, `"later"`},
+		{"unobserved tolerance under the floor", `{"unobserved_tolerance": "500ms"}`, KeyUnobservedTolerance, `"500ms"`},
+		{"unobserved tolerance over the ceiling", `{"unobserved_tolerance": "169h"}`, KeyUnobservedTolerance, `"169h"`},
 		{"decision model misspelled", `{"decision_model": "Evaluate"}`, KeyDecisionModel, `"Evaluate"`},
 		{"decision model not a string", `{"decision_model": false}`, KeyDecisionModel, "false"},
 		{"decision model as a cutoff", `{"decision_model": "0.5"}`, KeyDecisionModel, `"0.5"`},

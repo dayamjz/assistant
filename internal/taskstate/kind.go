@@ -86,10 +86,11 @@ const (
 	// stands inside the gate repository, or the environment the worker would
 	// launch with points git at another repository.
 	RefusedNotIsolated IsolationRefusal = "not-isolated"
-	// RefusedCopyMissing is the resolved path does not exist. No path in
-	// this build produces it: a dispatch cuts the copy when its path is
-	// absent and asserts the path that is there, so a missing copy is cut
-	// rather than refused.
+	// RefusedCopyMissing is the resolved path does not exist. A dispatch
+	// never produces it, because it cuts the copy when its path is absent
+	// and asserts the path that is there; a relaunch does, because PRD
+	// section 11 relaunches in that same copy and a copy that no longer
+	// stands is refused rather than replaced by a fresh clone.
 	RefusedCopyMissing IsolationRefusal = "copy-missing"
 	// RefusedWrongShape is the resolved path is a repository of its own and
 	// distinct from the primary, and is not the shape the task's shape gives

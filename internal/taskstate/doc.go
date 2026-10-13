@@ -104,11 +104,14 @@
 //     is not carried into the detail.
 //   - The ordering rules this package
 //     states for its own kinds, "relaunched" then "dispatched" and the
-//     closed detail of "isolation-refused", are owed by their writers (#94,
-//     and internal/service's dispatch) and checked by nothing here: the
-//     store appends any text, and
+//     closed detail of "isolation-refused", are owed by their writers
+//     (internal/service's relaunch and its dispatch) and checked by nothing
+//     here: the store appends any text, and
 //     Row.Detail is the decoder a writer calls before appending, not a gate
 //     at the append.
+//   - Basis.EventKind is the newest event's kind as read, so a reader that
+//     must tell one event-tier answer from another reads it rather than the
+//     log; it says which row decided and nothing about the rows before it.
 //   - Row.Writer says who may append a kind and refuses nothing itself. The
 //     worker event path that reads it (#91) is the refusal; until it exists,
 //     the column is a declaration a test pins and no mechanism enforces.

@@ -62,6 +62,13 @@ const (
 	SourceNone    Source = "none"
 )
 
+var sources = []Source{SourceRecord, SourceRun, SourceProcess, SourceEvent, SourceNone}
+
+// Sources returns the closed set of sources in precedence order. The result
+// is a copy. A table keyed on a Source derives its domain from here, so a
+// tier added later fails that table until it is decided.
+func Sources() []Source { return slices.Clone(sources) }
+
 // Liveness is what a task's terminal looked like when it was asked about.
 // Unobserved is not Dead: it means nobody asked, or nothing could answer, and
 // the process tier then declines rather than reading absence as a stopped
@@ -80,6 +87,12 @@ const (
 	Live Liveness = "live"
 	Dead Liveness = "dead"
 )
+
+var livenesses = []Liveness{Unobserved, Live, Dead}
+
+// Livenesses returns the three answers, Unobserved first. The result is a
+// copy, and a table keyed on a Liveness derives its domain from here.
+func Livenesses() []Liveness { return slices.Clone(livenesses) }
 
 // Inputs is everything Resolve reads. It is a value: Resolve takes no context,
 // opens nothing and reads no clock.
@@ -174,6 +187,13 @@ type Basis struct {
 	CleanupRemoved  bool `json:"cleanup_removed"`
 	// EventSequence is the highest event sequence read, zero for an empty log.
 	EventSequence int64 `json:"event_sequence"`
+	// EventKind is the kind of the newest event read, and empty for an empty
+	// log. It is what was read, recorded beside the sequence: when the event
+	// tier decided, it is the kind whose row decided, so a reader that must
+	// tell one event-tier Failed from another, such as a refusal the
+	// isolation assertion recorded from a worker's own report, reads it here
+	// rather than reading the log's tail itself (P8).
+	EventKind string `json:"event_kind"`
 	// Process is the liveness that was read.
 	Process Liveness `json:"process"`
 	// Advancing is Inputs.Advancing as it was asked, whether or not the

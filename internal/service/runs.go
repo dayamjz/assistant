@@ -924,11 +924,21 @@ func (s *Service) recover(ctx context.Context) {
 			s.continueRun(settled.ID)
 		}
 	}
+	// PRD section 11's fleet reconciliation, after the runs and before
+	// anything is served: the queued wakes are drained as input, every task
+	// of this home is read with its terminal probed under a bound, and a
+	// terminal gone with the work not landed is relaunched in its own copy.
+	// reconcile.go owns the table and the bound; the launch itself goes to a
+	// goroutine of this service's, so a home with several dead terminals
+	// comes back serving after the claims and not after the launches.
+	s.reconcileTasks(ctx)
 	// A blocker may have cleared while no service was serving the home, so
 	// the queued tasks are released once the records are reconciled, before
-	// anything is served. Every task that then resolves Dispatched is
+	// anything is served: the Queued row of the reconciliation table is this
+	// call, which is idempotent. Every task that then resolves Dispatched is
 	// dispatched, which for one a service died part way through dispatching
-	// is the retry dispatch.go describes.
+	// is the retry dispatch.go describes; a task a relaunch just dispatched
+	// holds its slot and is passed over.
 	s.releaseQueued(ctx)
 }
 

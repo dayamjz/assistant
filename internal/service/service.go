@@ -27,6 +27,7 @@ import (
 	"github.com/dayamjz/assistant/internal/stages"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/tasks"
+	"github.com/dayamjz/assistant/internal/taskstate"
 	"github.com/dayamjz/assistant/internal/vcs"
 )
 
@@ -141,6 +142,15 @@ type Options struct {
 	// the recorder this service gives it, so a test can point the client at a
 	// stand-in provider. The product passes none.
 	Judge []judge.Option
+	// probe is the terminal probe the service's task reader is built with,
+	// which reconcile.go reads every task's terminal through at start and
+	// the task surface reads through afterwards. It is nil in production:
+	// until #91's last PR wires the session provider's Probe here, every
+	// terminal reads Unobserved and reconciliation relaunches nothing, which
+	// reconcile.go states. It is unexported because its one producer today
+	// is this package's tests, which inject a probe over the stand-in through
+	// export_test.go; a production producer is that PR's to add.
+	probe func(ctx context.Context, sessionRef string) taskstate.Liveness
 	// Forge is the code host every run of this service reaches: the one the
 	// pull request and checks bodies are handed, and the one this service
 	// re-reads a run's pull request through before resuming the hold the
@@ -200,6 +210,9 @@ type Service struct {
 	// forge is the code host, settled at Open from Options.Forge; checkshold.go
 	// is the one reader of it outside the stage dependencies.
 	forge forge.Host
+	// probe is Options.probe, the terminal probe reader builds every task
+	// reader with; nil means no terminal is observed.
+	probe func(ctx context.Context, sessionRef string) taskstate.Liveness
 	// queue is internal/tasks' intake and release over this service's store,
 	// built at Open from the branch gate and the gate repositories this
 	// service knows; tasks.go says which of its entries this service calls.
@@ -357,6 +370,7 @@ func Open(ctx context.Context, o Options) (*Service, error) {
 		build:      o.Build,
 		catalog:    o.Catalog,
 		newFixer:   o.NewFixer,
+		probe:      o.probe,
 		registry:   newRegistry(),
 		topologies: make(map[string]*topology),
 		advancing:  make(map[string]*slot),

@@ -86,6 +86,42 @@ const (
 	// this key or its bounds; that is raised as a finding and not closed
 	// here.
 	KeySupervisionBeaconInterval Key = "supervision_beacon_interval"
+	// KeyRelaunchAttempts is "relaunch_attempts": how many times
+	// reconciliation at service start relaunches a task that resolves
+	// Failed with its terminal gone, counted from the task's attempt rows,
+	// before it surfaces the task to a person instead. It is global-only
+	// for the beacon interval's reason: the relaunch is the service's act
+	// on the operator's machine, and a repository has no standing over how
+	// many workers are started on its behalf.
+	//
+	// It is a task-level bound and not one of internal/graph's three loop
+	// bounds: it stops no run and parks nothing. A loop bound limits how
+	// far one run's execution may go and survives a resume with the thing
+	// it is compared against; this row limits how many attempts of one
+	// task the program begins on its own, and the thing it is compared
+	// against is the attempt history, which is durable in its own right.
+	// internal/service's reconcile.go is the one reader. Who decides a
+	// retry past the bound is #95 line G and not this row.
+	//
+	// PRD section 10's schema table and its limits table have no row for
+	// this key or its bounds; that is raised as a finding and not closed
+	// here, on the beacon interval's terms.
+	KeyRelaunchAttempts Key = "relaunch_attempts"
+	// KeyUnobservedTolerance is "unobserved_tolerance": how long a task's
+	// terminal may go unobserved, by a probe that was asked and could not
+	// answer, before reconciliation surfaces the task once through the
+	// wake queue rather than leaving it silently unrelaunched. It is
+	// global-only because a repository key would let a repository silence
+	// a provider that is down. It is a duration and not a pass count, so
+	// it is not a hidden loop bound: it stops nothing and parks nothing,
+	// and the thing it is compared against is the unobserved-since marker
+	// internal/store's wake markers carry. internal/service's reconcile.go
+	// is the one reader.
+	//
+	// PRD section 10's schema table and its limits table have no row for
+	// this key or its bounds; that is raised as a finding and not closed
+	// here, on the beacon interval's terms.
+	KeyUnobservedTolerance Key = "unobserved_tolerance"
 	// KeyCommitFixMessage is "commit.fix_message": the fix commit subject
 	// template.
 	KeyCommitFixMessage Key = "commit.fix_message"
@@ -181,6 +217,10 @@ var specs = []spec{
 		func(c *Config, v any) { c.DecisionModel = v.(DecisionModel) }},
 	{KeySupervisionBeaconInterval, TrustGlobal, DefaultSupervisionBeaconInterval, decodeSupervisionBeaconInterval,
 		func(c *Config, v any) { c.SupervisionBeaconInterval = v.(time.Duration) }},
+	{KeyRelaunchAttempts, TrustGlobal, DefaultRelaunchAttempts, decodeRelaunchAttempts,
+		func(c *Config, v any) { c.RelaunchAttempts = v.(int) }},
+	{KeyUnobservedTolerance, TrustGlobal, DefaultUnobservedTolerance, decodeUnobservedTolerance,
+		func(c *Config, v any) { c.UnobservedTolerance = v.(time.Duration) }},
 	{KeyCommitFixMessage, TrustPushed, DefaultCommitFixMessage, decodeFixMessage,
 		func(c *Config, v any) { c.CommitFixMessage = v.(string) }},
 	{KeyAllowPushedCommands, TrustTrusted, false, decodeBool,

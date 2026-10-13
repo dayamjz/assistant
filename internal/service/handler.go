@@ -252,12 +252,24 @@ func (s *Service) task(ctx context.Context, req machine.TaskRequest) (machine.Ta
 	return machine.Task{Record: r.Record, State: r.State}, nil
 }
 
-// tasks is the resolver over the service's store. No session module exists in
-// this build, so it has no probe and no task's terminal is observed. Whether
-// a run is advancing is this service's own fact, read off the slot map the
-// way report reads it, so a task's resolution can say whether its validation
-// is being driven and not only that a run is recorded as running.
-func (s *Service) tasks() *taskstate.Reader { return taskstate.NewReader(s.store, nil, s.isAdvancing) }
+// tasks is the resolver over the service's store, built through reader with
+// the service's probe under the per-task bound alone, so a provider that
+// does not answer costs a read reconcileProbeTimeout per task and never
+// hangs it. In production the probe is nil and no task's terminal is
+// observed, which reconcile.go states. Whether a run is advancing is this
+// service's own fact, read off the slot map the way report reads it, so a
+// task's resolution can say whether its validation is being driven and not
+// only that a run is recorded as running.
+func (s *Service) tasks() *taskstate.Reader { return s.reader(s.boundedProbe(context.Background())) }
+
+// reader is the one constructor of a task reader in this service: every
+// reader is built here, over the service's store and its advancing fact, with
+// whichever probe the caller bounded. The task surface, the queue and
+// reconciliation therefore differ in the bound on the probe and in nothing
+// else, so two readers cannot disagree about which terminal a task has.
+func (s *Service) reader(probe func(ctx context.Context, sessionRef string) taskstate.Liveness) *taskstate.Reader {
+	return taskstate.NewReader(s.store, probe, s.isAdvancing)
+}
 
 // stageReport is how an agent running a stage returns its result. It is the
 // one method a contained caller may reach, because returning its own stage is

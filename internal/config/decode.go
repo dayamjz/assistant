@@ -287,6 +287,46 @@ func decodeSupervisionBeaconInterval(k Key, v any) (any, error) {
 	return d, nil
 }
 
+// decodeRelaunchAttempts accepts a whole number from zero to
+// MaxRelaunchAttempts, on decodeFixRounds' terms about fractions and
+// negatives: zero is a choice to relaunch nothing, and a value over the
+// ceiling is refused rather than clamped.
+func decodeRelaunchAttempts(k Key, v any) (any, error) {
+	n, err := asInt(k, v)
+	if err != nil {
+		return nil, err
+	}
+	if n < 0 {
+		return nil, keyErr(k, v, "a relaunch count cannot be negative")
+	}
+	if n > MaxRelaunchAttempts {
+		return nil, keyErr(k, v, "a relaunch count may be at most "+itoa(MaxRelaunchAttempts))
+	}
+	return n, nil
+}
+
+// decodeUnobservedTolerance accepts a Go duration string such as "1h", on
+// decodeChecksTimeout's terms about numbers, and refuses one outside the
+// floor and the ceiling rather than clamping it, for the beacon interval's
+// reason.
+func decodeUnobservedTolerance(k Key, v any) (any, error) {
+	s, err := asString(k, v)
+	if err != nil {
+		return nil, keyErr(k, v, `expected a duration string such as "1h"`)
+	}
+	d, parseErr := time.ParseDuration(s)
+	if parseErr != nil {
+		return nil, keyErr(k, v, "not a duration: "+parseErr.Error())
+	}
+	if d < MinUnobservedTolerance {
+		return nil, keyErr(k, v, "an unobserved tolerance must be at least "+MinUnobservedTolerance.String())
+	}
+	if d > MaxUnobservedTolerance {
+		return nil, keyErr(k, v, "an unobserved tolerance may be at most "+MaxUnobservedTolerance.String())
+	}
+	return d, nil
+}
+
 // decodeDecisionModel accepts one of the three decision-model modes, spelled
 // exactly. Any other text is refused rather than read as the default, because
 // a misspelled mode is a mode the operator did not get.
