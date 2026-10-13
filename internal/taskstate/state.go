@@ -12,10 +12,11 @@ import (
 type State string
 
 // The states a resolution can name. Landed and Complete are in the lifecycle
-// and are deliberately absent: they need a merge fact and a cleanup proof that
-// no record in this build holds, so a state that could not be established is
-// not declared rather than declared and never produced. Unknown is the
-// resolver declining to say.
+// and are deliberately absent: they are resolved from the merge record and
+// the cleanup record in the tier above the run tier, which this build does not
+// read (the package comment says what that waits on), so a state that could
+// not be established is not declared rather than declared and never produced.
+// Unknown is the resolver declining to say.
 const (
 	Queued     State = "queued"
 	Dispatched State = "dispatched"
@@ -61,8 +62,13 @@ type Liveness string
 // Unobserved.
 const (
 	Unobserved Liveness = "unobserved"
-	Live       Liveness = "live"
-	Dead       Liveness = "dead"
+	// Live means the agent process is running in the session: a probe that
+	// finds only a shell in the pane, with the agent gone, answers Dead. A
+	// session whose shell survives its agent is the ordinary shape of a
+	// worker that finished or crashed, and reading it as Live would be the
+	// stale evidence the process tier exists to refuse.
+	Live Liveness = "live"
+	Dead Liveness = "dead"
 )
 
 // Inputs is everything Resolve reads. It is a value: Resolve takes no context,
@@ -80,6 +86,12 @@ type Inputs struct {
 	Events []store.TaskEvent
 	// Process is what the terminal looked like, as of when it was asked.
 	Process Liveness
+	// Advancing is whether the service is executing the newest of Runs now:
+	// its own fact about the slot a run advances in, which no record holds.
+	// It is recorded in Basis as asked and used only for Progress, and there
+	// only when the run tier answered Validating; it moves no state, so a
+	// caller that cannot answer passes false and loses nothing but Progress.
+	Advancing bool
 }
 
 // Resolution is the answer: one state, the source that decided it, and what was
@@ -95,6 +107,15 @@ type Resolution struct {
 	// nothing. It never carries the text of an event: a worker's words are
 	// history, not part of an answer.
 	Detail store.Optional[string] `json:"detail"`
+	// Progress is whether the answer rests on positive evidence that work is
+	// proceeding, which PRD section 6's supervisor absorbs a wake on and
+	// nothing else. It is derived here and nowhere else, and it is true in
+	// exactly two cases: Validating from SourceRun with Inputs.Advancing, and
+	// Running from SourceProcess with a Live terminal. Every other answer is
+	// no progress, including a run the service says it is advancing while
+	// the record says it has settled: the record decided the state, and a
+	// slot that disagrees with it is not evidence.
+	Progress bool `json:"progress"`
 	// Superseded lists the events that claim something a higher source
 	// overrode: a decision still open in the log, and the newest event when it
 	// maps to a state of its own that differs from State. Empty when the event
@@ -128,4 +149,8 @@ type Basis struct {
 	EventSequence int64 `json:"event_sequence"`
 	// Process is the liveness that was read.
 	Process Liveness `json:"process"`
+	// Advancing is Inputs.Advancing as it was asked, whether or not the
+	// answer used it: it is recorded so a reader can see what Progress
+	// rested on, and it is used only for Validating from the run tier.
+	Advancing bool `json:"advancing"`
 }

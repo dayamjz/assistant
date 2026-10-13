@@ -15,9 +15,14 @@
 // The important part of the data model is not the field list; it is which
 // records answer what is true now and which record what happened. A repository,
 // a run, a stage result, a task, a hold, and a gate binding are
-// authoritative: each has one owner and one row, rewritten in place. A round
-// and a task event are history: appended, never revised, and no answer to any
-// present-tense question.
+// authoritative: each has one owner and one row, rewritten in place. A round,
+// a task event, and a task attempt are history: appended, never revised, and
+// no answer to any present-tense question. A task's cleanup record is the one
+// PRD section 8 calls appended and written once: one row, written with its
+// proof and taking exactly one revision afterwards, the mark of when the copy
+// was removed, in that order and never the reverse; TaskCleanup's doc says
+// why the two are separate writes. It is what section 6's Complete is derived
+// from once internal/taskstate reads it.
 //
 // A run's graph checkpoint history is the one record here that is appended,
 // never revised, and still answers one. What P8 forbids is inferring what is
@@ -36,6 +41,53 @@
 // upgraded from a build that wrote the row does not carry it forward. That
 // refusal is what a caller adding new SQL for it would meet, and it is not a
 // guarantee against a later migration that dropped the trigger.
+//
+// # A task's anchored writes
+//
+// Three task writes are decided against what the caller had read, on the
+// terms AppendGraphCheckpoint sets for a run's position: the anchor is a
+// property of the request, the decision and the write are one transaction on
+// the single writer connection, and a caller whose anchor the record has
+// moved past is refused with a *TaskMovedError naming where it stands rather
+// than written over it (P6). AppendTaskEventAfter is anchored to the highest
+// event sequence seen, BeginTaskAttempt to the highest attempt seen, and
+// CreateTask to the highest Task.Row seen among the tasks of the same
+// repository and branch, so an intake that read a branch, decided a task was
+// independent or queued behind another, and then created it cannot be
+// overtaken between the read and the write. AppendTaskEvent stays
+// unanchored for a caller recording that something happened whatever else
+// has happened since, and its doc says who that is.
+//
+// The attempt is also the attribution boundary. TaskSnapshot attributes a run
+// to a task by repository and branch only from the start of the task's latest
+// attempt, and attributes nothing by branch to a task never launched, which is
+// what keeps a task queued behind another on the same branch from inheriting
+// the blocker's runs and a relaunched task from being outranked by a run from
+// before the relaunch. What the cutoff does not do is separate two tasks whose
+// attempts are both live on one branch: a newer run made for one is
+// attributed to both. Preventing that is the intake's disposition, which the
+// anchor above protects, and not the read.
+//
+// The attempt's session_ref is the one record of which session an attempt
+// had, filled once by SetAttemptSession after the process starts. The
+// session_ref column migration 1 gave the task table is neither written nor
+// read by this build: it stays declared because a migration may not remove a
+// column, and holds NULL for every task created here.
+//
+// # What the terminal tier reads
+//
+// PRD section 6 resolves Landed and Complete from two records written once:
+// the merge record, which migration 13's merge_record table holds and
+// TransitionRunOnPullRequest writes in the transaction that moves the run,
+// and the cleanup record, which migration 14's task_cleanup table holds and
+// RecordTaskCleanup writes. TaskSnapshot carries both: the merge record of
+// every attributed run, read in the snapshot's own transaction through the
+// same column list and scanner Store.MergeRecord uses, so the records and the
+// runs they are keyed by are one consistent read; and the task's cleanup
+// record. Nothing reads either off the snapshot in this build. The resolver's
+// terminal tier (#107) is the consumer, and which attributed run's merge
+// record makes a task Landed is its question: the snapshot carries all of
+// them rather than deciding.
 //
 // # The gate ownership index
 //
@@ -198,8 +250,8 @@
 // redactor, and it runs it on both of them on the way in.
 //
 // Every other column holds exactly what the caller passed. A push binding, a
-// pull request reference, a run's intent, a run's fixer session reference, a
-// task's session reference, a hold's subject and detail, a stage's log path,
+// pull request reference, a run's intent, a run's fixer session reference, an
+// attempt's session reference, a hold's subject and detail, a stage's log path,
 // and the round and graph checkpoint payloads are all bound verbatim, so a
 // caller that puts a credential in one of them has stored a credential, and
 // nothing in this package will notice or remove it. That is the caller's
@@ -236,7 +288,9 @@
 // makes the sequence AppendTaskEvent assigns dense with no duplicates under any
 // number of concurrent callers. It is also what makes AppendGraphCheckpoint's anchor
 // decision and the sequence it assigns one step rather than two, which is the
-// whole of what that accessor is for. The reader pool is unbounded and carries
+// whole of what that accessor is for, and the same step is what
+// AppendTaskEventAfter, BeginTaskAttempt and CreateTask's branch anchor rest
+// on. The reader pool is unbounded and carries
 // queries only.
 //
 // The cost is that writes across the whole store serialize, including writes to

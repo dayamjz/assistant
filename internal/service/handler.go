@@ -220,8 +220,11 @@ func (s *Service) task(ctx context.Context, req machine.TaskRequest) (machine.Ta
 }
 
 // tasks is the resolver over the service's store. No session module exists in
-// this build, so it has no probe and no task's terminal is observed.
-func (s *Service) tasks() *taskstate.Reader { return taskstate.NewReader(s.store, nil) }
+// this build, so it has no probe and no task's terminal is observed. Whether
+// a run is advancing is this service's own fact, read off the slot map the
+// way report reads it, so a task's resolution can say whether its validation
+// is being driven and not only that a run is recorded as running.
+func (s *Service) tasks() *taskstate.Reader { return taskstate.NewReader(s.store, nil, s.isAdvancing) }
 
 // stageReport is how an agent running a stage returns its result. It is the
 // one method a contained caller may reach, because returning its own stage is

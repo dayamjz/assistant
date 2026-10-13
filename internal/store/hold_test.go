@@ -122,7 +122,7 @@ func TestFinishingTheWorkDoesNotCloseAHold(t *testing.T) {
 	ctx := context.Background()
 	s := openStore(t)
 	run := seedRun(t, s)
-	task := seedTask(t, s, "task-1")
+	task := seedTask(t, s, "taskaaaaaaab")
 
 	for _, key := range []string{"on-the-run", "on-the-task"} {
 		h := Hold{Key: key, Subject: "a decision"}

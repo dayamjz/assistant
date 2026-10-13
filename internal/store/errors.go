@@ -220,3 +220,87 @@ var ErrHoldResolved = errors.New("store: hold is already resolved")
 // versions that do not start at one or do not increase by one. It is a
 // programming error in this package rather than a condition of the database.
 var ErrMigrationsMalformed = errors.New("store: migration list is malformed")
+
+// ErrTaskMoved is the class every *TaskMovedError belongs to. It is returned
+// by the task writes that take an anchor - AppendTaskEventAfter,
+// BeginTaskAttempt and CreateTask - when the record the anchor names has moved
+// since the caller read it, so the write was decided against a position the
+// record no longer stands at. Read again and decide again from what the record
+// says now; retrying the same write would act on a decision the record has
+// already outrun.
+var ErrTaskMoved = errors.New("store: the task's record moved since the position this write is anchored to")
+
+// TaskAnchor names which of a task's records a refused write was anchored to.
+// It is a closed set: one value per accessor that takes an anchor.
+type TaskAnchor string
+
+const (
+	// AnchoredEvent is an anchor on the task's event history, named by the
+	// highest sequence the caller had seen.
+	AnchoredEvent TaskAnchor = "event"
+	// AnchoredAttempt is an anchor on the task's attempt history, named by
+	// the highest attempt sequence the caller had seen.
+	AnchoredAttempt TaskAnchor = "attempt"
+	// AnchoredBranch is an anchor on the tasks of one repository and branch,
+	// named by the highest Task.Row the caller had seen among them.
+	AnchoredBranch TaskAnchor = "branch"
+)
+
+// TaskMovedError reports a refused anchored write and names where the record
+// actually stands, so a caller reports the position it found rather than only
+// that it was surprised by one.
+type TaskMovedError struct {
+	// Task is the task the write was for.
+	Task string
+	// Anchor is which record the write was anchored to.
+	Anchor TaskAnchor
+	// Expected is the position the caller said it had observed.
+	Expected int64
+	// Stands is the position the record actually reaches, and is zero when
+	// the record is empty.
+	Stands int64
+}
+
+// Error names the task, the record, the anchor the write was decided against,
+// and where the record actually stands.
+func (e *TaskMovedError) Error() string {
+	return fmt.Sprintf("store: task %s: its %s record stands at %d, so a write anchored to %d is refused",
+		e.Task, e.Anchor, e.Stands, e.Expected)
+}
+
+// Unwrap makes every refused anchored write match ErrTaskMoved.
+func (e *TaskMovedError) Unwrap() error { return ErrTaskMoved }
+
+// ErrAttemptSessionRecorded is returned by SetAttemptSession when the attempt
+// already names a session. An attempt is one process, and its reference is
+// filled once after that process starts; a second reference on the same
+// attempt would be a relaunch, which is a new attempt and not a rewrite of
+// this one's record.
+var ErrAttemptSessionRecorded = errors.New("store: the attempt already names a session")
+
+// ErrCleanupRecorded is returned by RecordTaskCleanup when the task already
+// has a cleanup record. PRD section 8 says the record is written once, so a
+// second write is refused rather than overwriting the proof the first was made
+// from.
+var ErrCleanupRecorded = errors.New("store: the task already has a cleanup record")
+
+// ErrCleanupRemoved is returned by MarkCleanupRemoved when the task's cleanup
+// record already says when the copy was removed. The removal happens once,
+// so a second mark is a caller re-reporting what the record already holds
+// rather than a fact to overwrite.
+var ErrCleanupRemoved = errors.New("store: the cleanup record already records the copy's removal")
+
+// ErrCleanupRemovalFirst is returned by RecordTaskCleanup when the record it
+// is handed already says when the copy was removed. The record is two
+// writes in a fixed order, the proof and then the removal mark, so a first
+// write that carries a removal would be a record of a removal that preceded
+// its proof.
+var ErrCleanupRemovalFirst = errors.New("store: a cleanup record is written with its proof and marked removed afterwards")
+
+// ErrUnknownCleanupProof is what a read of a cleanup record returns when its
+// proof column holds a value outside the closed set CleanupProof defines, and
+// what RecordTaskCleanup returns when asked to record one. The set is closed,
+// so a row outside it was not written by this package's accessors, and reading
+// it back as some proof it is not would turn a row nobody can account for into
+// a fact about what cleanup established.
+var ErrUnknownCleanupProof = errors.New("store: cleanup proof is outside the closed set")

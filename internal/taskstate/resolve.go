@@ -43,12 +43,13 @@ var runStates = map[store.RunStatus]State{
 // timestamp decides anything except which run is newest.
 //
 // Superseded is computed from the whole log, never from its tail alone, and
-// only when a higher source decided. See Resolution.Superseded.
+// only when a higher source decided. See Resolution.Superseded. Progress is
+// derived last, from the answer and the two inputs its doc names.
 func Resolve(in Inputs) Resolution {
 	events := slices.Clone(in.Events)
 	slices.SortFunc(events, func(a, b store.TaskEvent) int { return cmp.Compare(a.Sequence, b.Sequence) })
 
-	out := Resolution{TaskID: in.Task.ID, Basis: Basis{Process: Unobserved}}
+	out := Resolution{TaskID: in.Task.ID, Basis: Basis{Process: Unobserved, Advancing: in.Advancing}}
 	if in.Process == Live || in.Process == Dead {
 		out.Basis.Process = in.Process
 	}
@@ -73,6 +74,8 @@ func Resolve(in Inputs) Resolution {
 	if out.Source == SourceRun || out.Source == SourceProcess {
 		out.Superseded = supersededBy(events, out.State, out.Source)
 	}
+	out.Progress = (out.State == Validating && out.Source == SourceRun && in.Advancing) ||
+		(out.State == Running && out.Source == SourceProcess && in.Process == Live)
 	return out
 }
 

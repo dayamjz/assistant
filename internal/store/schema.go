@@ -574,4 +574,73 @@ var schema = []migration{
 				END`,
 		},
 	},
+	{
+		version: 14,
+		name:    "task blockers, attempts and cleanup records",
+		statements: []string{
+			// The task an intake queued this one behind, when it did. PRD
+			// section 6's lifecycle enters Queued when a task overlaps live
+			// work, and the record of what it overlapped is what lets the
+			// blocker clearing be a fact rather than a guess. It names a
+			// task and nothing else: a branch has no defined resolution, and
+			// a person's run on a branch is outside what this records.
+			//
+			// Nullable and without a default, so a task recorded before the
+			// column existed, and an independent task, both read back
+			// unknown rather than as a fabricated "not queued behind
+			// anything".
+			`ALTER TABLE task ADD COLUMN blocker_task TEXT REFERENCES task(id)`,
+			// The tasks of one repository and branch, which CreateTask's
+			// anchor is decided over and which an intake reads to find what
+			// a new task would overlap.
+			`CREATE INDEX task_branch ON task(repository_id, branch)`,
+
+			// One row per attempt to run the task: the first launch and
+			// every relaunch after it. It is history, appended and never
+			// revised, except that session_ref is filled once after the
+			// attempt's process starts, because a record precedes the
+			// process it is about and the reference does not exist until the
+			// process does.
+			//
+			// started_at is the attribution cutoff: a run of the task's
+			// branch created at or after the latest attempt began is the
+			// task's, and a task with no attempt has no branch attribution at
+			// all. That is what keeps a task queued behind another on the
+			// same branch from inheriting the blocker's runs, and what lets a
+			// relaunch stop being outranked by a run from before it.
+			//
+			// The attempt's session_ref is the one record of which session an
+			// attempt had. task.session_ref, from migration 1, is no longer
+			// written or read: a migration may not remove a column, so it
+			// stays declared and holds NULL for every task this build creates.
+			`CREATE TABLE task_attempt (
+				task_id     TEXT NOT NULL REFERENCES task(id),
+				sequence    INTEGER NOT NULL,
+				started_at  TEXT NOT NULL,
+				session_ref TEXT,
+				PRIMARY KEY (task_id, sequence)
+			) STRICT`,
+
+			// PRD section 8's cleanup record: written once, recording the
+			// cleanup check it was made from, and what section 6's Complete
+			// is derived from. proof is the closed set store.CleanupProof
+			// names; examined is the commit identifiers the check read, as a
+			// JSON array, so a check that examined none reads back as an
+			// empty list rather than as nothing recorded. removed_at is
+			// known only when the isolated copy was removed on the strength
+			// of the proof: a cleanup that proved the work landed and still
+			// left the copy standing is a record with a proof and no removal,
+			// which is a different fact from no record.
+			//
+			// The task is the primary key, which is what makes the record
+			// write-once at the database rather than only at the accessor.
+			`CREATE TABLE task_cleanup (
+				task_id     TEXT PRIMARY KEY REFERENCES task(id),
+				proof       TEXT NOT NULL,
+				examined    TEXT NOT NULL,
+				recorded_at TEXT NOT NULL,
+				removed_at  TEXT
+			) STRICT`,
+		},
+	},
 }

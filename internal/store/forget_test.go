@@ -87,9 +87,9 @@ func TestForgettingARepositoryIsRefusedWhileATaskNamesOneOfItsRuns(t *testing.T)
 		t.Fatalf("TransitionRun: %v", err)
 	}
 	if _, err := s.CreateTask(ctx, Task{
-		ID: "task-1", Shape: TaskDelivery, Project: "one", Mode: "local", WorktreePath: "/copies/one",
+		ID: "taskaaaaaaab", Shape: TaskDelivery, Project: "one", Mode: "local", WorktreePath: "/copies/one",
 		RunID: Known(run.ID),
-	}); err != nil {
+	}, Disposition{}); err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
 
@@ -124,10 +124,10 @@ func TestTasksAreListedNewestFirst(t *testing.T) {
 	if tasks, err := s.Tasks(ctx); err != nil || len(tasks) != 0 {
 		t.Fatalf("a fresh store lists (%d tasks, %v), want none", len(tasks), err)
 	}
-	for _, id := range []string{"task-1", "task-2"} {
+	for _, id := range []string{"taskaaaaaaab", "taskaaaaaaac"} {
 		if _, err := s.CreateTask(ctx, Task{
 			ID: id, Shape: TaskDelivery, Project: "one", Mode: "local", WorktreePath: "/copies/" + id,
-		}); err != nil {
+		}, Disposition{}); err != nil {
 			t.Fatalf("CreateTask %s: %v", id, err)
 		}
 	}

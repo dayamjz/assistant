@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -38,7 +39,38 @@ type TaskEvent struct {
 // resolved from the records that own it. PRD section 8 says every append is a wake, and
 // classifying that wake is the supervisor's job; this package records the
 // entry and stops there.
+//
+// It takes no anchor, so it is for a caller recording that something happened
+// whatever else has happened since: a worker's own progress, or a note the
+// program appends about an event it observed. A caller whose append is a
+// decision made against the history it read - an intake queueing or
+// dispatching, a relaunch, a supervisor acting on a wake - uses
+// AppendTaskEventAfter, because for that caller an entry it did not see is a
+// reason to decide again. It returns ErrNotFound, wrapped, for a task that
+// does not exist.
 func (s *Store) AppendTaskEvent(ctx context.Context, taskID, kind, detail string) (TaskEvent, error) {
+	return s.appendTaskEvent(ctx, taskID, kind, detail, Unknown[int64]())
+}
+
+// AppendTaskEventAfter is AppendTaskEvent anchored to the history the caller
+// read: expectedSequence is the highest sequence it had seen, and the append
+// is accepted only while that is still the highest. It is decided in the same
+// transaction as the insert, on the single writer connection, so two callers
+// that read the same tip cannot both append after it: one is assigned
+// expectedSequence+1 and the other is refused with a *TaskMovedError wrapping
+// ErrTaskMoved naming where the history actually stands. A refused caller
+// reads the history again and decides again; retrying the same append would
+// record a decision made without the entry that outran it (P6).
+//
+// Every task has at least its opening event, so an anchor of zero names a
+// position no task's history stands at and is refused the same way.
+func (s *Store) AppendTaskEventAfter(ctx context.Context, taskID string, expectedSequence int64, kind, detail string) (TaskEvent, error) {
+	return s.appendTaskEvent(ctx, taskID, kind, detail, Known(expectedSequence))
+}
+
+// appendTaskEvent is the one transaction behind both appends. An unknown
+// anchor accepts whatever the tip is; a known one must equal it.
+func (s *Store) appendTaskEvent(ctx context.Context, taskID, kind, detail string, anchor Optional[int64]) (TaskEvent, error) {
 	if strings.TrimSpace(taskID) == "" {
 		return TaskEvent{}, fmt.Errorf("store: no task named")
 	}
@@ -49,17 +81,29 @@ func (s *Store) AppendTaskEvent(ctx context.Context, taskID, kind, detail string
 	now := nowUTC()
 	var sequence int64
 	err := s.inTx(ctx, func(tx *sql.Tx) error {
-		if err := tx.QueryRowContext(ctx,
-			`SELECT COALESCE(MAX(sequence), 0) + 1 FROM task_event WHERE task_id = ?`, taskID).
-			Scan(&sequence); err != nil {
+		if err := taskExists(ctx, tx, taskID); err != nil {
 			return err
 		}
+		var stands int64
+		if err := tx.QueryRowContext(ctx,
+			`SELECT COALESCE(MAX(sequence), 0) FROM task_event WHERE task_id = ?`, taskID).
+			Scan(&stands); err != nil {
+			return err
+		}
+		if expected, anchored := anchor.Get(); anchored && expected != stands {
+			return &TaskMovedError{Task: taskID, Anchor: AnchoredEvent, Expected: expected, Stands: stands}
+		}
+		sequence = stands + 1
 		_, err := tx.ExecContext(ctx,
 			`INSERT INTO task_event (task_id, sequence, kind, detail, at) VALUES (?, ?, ?, ?, ?)`,
 			taskID, sequence, kind, detail, encodeTime(now))
 		return err
 	})
 	if err != nil {
+		var moved *TaskMovedError
+		if errors.As(err, &moved) {
+			return TaskEvent{}, err
+		}
 		return TaskEvent{}, fmt.Errorf("store: appending an event to task %s: %w", taskID, err)
 	}
 	return TaskEvent{TaskID: taskID, Sequence: sequence, Kind: kind, Detail: detail, At: now}, nil

@@ -62,7 +62,7 @@ func TestMigrationPreservesRowsAndAddsUnknownColumn(t *testing.T) {
 	ctx := context.Background()
 	s := openStore(t)
 	run := seedRun(t, s)
-	if _, err := s.AppendRound(ctx, Round{RunID: run.ID, Stage: "review", Number: 1, Summary: "first"}); err != nil {
+	if _, err := s.AppendRound(ctx, Round{RunID: run.ID, Stage: "review", Number: 1, Summary: "firstaaaaaaa"}); err != nil {
 		t.Fatalf("AppendRound: %v", err)
 	}
 
@@ -83,7 +83,7 @@ func TestMigrationPreservesRowsAndAddsUnknownColumn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Rounds after migrating: %v", err)
 	}
-	if len(rounds) != 1 || rounds[0].Summary != "first" {
+	if len(rounds) != 1 || rounds[0].Summary != "firstaaaaaaa" {
 		t.Fatalf("the migration changed the rounds: %+v", rounds)
 	}
 
@@ -454,5 +454,89 @@ func TestMigrateAcceptsADatabaseRecordedWithoutDigests(t *testing.T) {
 	edited := extend(editStatements(last, `ALTER TABLE run ADD COLUMN scratch TEXT`))
 	if err := migrate(ctx, s.write, edited); !errors.Is(err, ErrSchemaChanged) {
 		t.Fatalf("migrate accepted an in-place edit on a database recorded without digests: %v", err)
+	}
+}
+
+// taskBlockersMigration names the migration that adds the blocker column and
+// the attempt and cleanup tables.
+const taskBlockersMigration = "task blockers, attempts and cleanup records"
+
+// Migration 14's column reads back unknown for a row written before it. The
+// database is taken back to the shape the migration before it left, a task
+// is written there with the columns migration 1 declared, the way an earlier
+// build wrote one, and the shipped migration is then applied over it: the
+// task carries no blocker, no attempt, and no cleanup record, and its
+// session_ref is not read. The control is a task this build creates with a
+// blocker, which reads it back.
+func TestATaskFromBeforeTheBlockerColumnReadsUnknown(t *testing.T) {
+	ctx := context.Background()
+	s := openStore(t)
+	var blockers migration
+	for _, m := range schema {
+		if m.name == taskBlockersMigration {
+			blockers = m
+		}
+	}
+	if blockers.version == 0 {
+		t.Fatalf("the shipped schema has no migration named %q", taskBlockersMigration)
+	}
+
+	// Back to the shape migration 13 left. A migration may not do this, which
+	// is why it is done here by hand and not through one.
+	for _, stmt := range []string{
+		`DROP TABLE task_cleanup`, `DROP TABLE task_attempt`, `DROP INDEX task_branch`,
+		`ALTER TABLE task DROP COLUMN blocker_task`,
+	} {
+		if _, err := s.write.ExecContext(ctx, stmt); err != nil {
+			t.Fatalf("rolling the schema back: %s: %v", stmt, err)
+		}
+	}
+	if _, err := s.write.ExecContext(ctx, `DELETE FROM schema_migration WHERE version = ?`, blockers.version); err != nil {
+		t.Fatalf("forgetting the migration: %v", err)
+	}
+	if _, err := s.write.ExecContext(ctx, `
+		INSERT INTO task (id, shape, project, mode, worktree_path, session_ref, run_id, pull_request, created_at)
+		VALUES ('oldaaaaaaaaa', 'delivery', 'one', 'interactive', '/worktrees/old', 'pane-old', NULL, NULL, ?)`,
+		encodeTime(nowUTC())); err != nil {
+		t.Fatalf("writing a row the way an earlier build did: %v", err)
+	}
+	if err := migrate(ctx, s.write, schema); err != nil {
+		t.Fatalf("applying the shipped migration over the old row: %v", err)
+	}
+
+	old, err := s.Task(ctx, "oldaaaaaaaaa")
+	if err != nil {
+		t.Fatalf("Task: %v", err)
+	}
+	if old.BlockerTask.IsKnown() {
+		t.Fatalf("an old row reads a blocker: %v", old.BlockerTask)
+	}
+	if attempts, err := s.TaskAttempts(ctx, "oldaaaaaaaaa"); err != nil || len(attempts) != 0 {
+		t.Fatalf("an old row has attempts %v (%v)", attempts, err)
+	}
+	if _, err := s.TaskCleanup(ctx, "oldaaaaaaaaa"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("an old row has a cleanup record: %v", err)
+	}
+	snap, err := s.TaskSnapshot(ctx, "oldaaaaaaaaa")
+	if err != nil || len(snap.Attempts) != 0 || snap.Cleanup.IsKnown() || len(snap.Runs) != 0 {
+		t.Fatalf("an old row's snapshot is %+v (%v)", snap, err)
+	}
+
+	seedTask(t, s, "blockeraaaaa")
+	control, err := s.CreateTask(ctx, Task{
+		ID: "newaaaaaaaaa", Shape: TaskDelivery, Project: "one", Mode: "interactive", WorktreePath: "/worktrees/new",
+	}, Disposition{Blocker: Known("blockeraaaaa")})
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	if got := control.BlockerTask.Or(""); got != "blockeraaaaa" {
+		t.Fatalf("a task created with a blocker reads it back as %q", got)
+	}
+	var session Optional[string]
+	if err := s.read.QueryRowContext(ctx, `SELECT session_ref FROM task WHERE id = 'newaaaaaaaaa'`).Scan(&session); err != nil {
+		t.Fatalf("reading task.session_ref: %v", err)
+	}
+	if session.IsKnown() {
+		t.Fatalf("this build wrote task.session_ref = %v", session)
 	}
 }

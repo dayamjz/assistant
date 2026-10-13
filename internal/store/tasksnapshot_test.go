@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -38,7 +40,7 @@ func TestTheTaskStateTableTakesNoRows(t *testing.T) {
 	principles.Cite(t, principles.P14)
 	ctx := context.Background()
 	s := openStore(t)
-	task := seedTask(t, s, "task-1")
+	task := seedTask(t, s, "taskaaaaaaab")
 
 	err := insertTaskStateRow(ctx, s.write, task.ID)
 	if err == nil {
@@ -62,7 +64,7 @@ func TestTheTaskStateSealEmptiesARowAnEarlierBuildWrote(t *testing.T) {
 	principles.Cite(t, principles.P14)
 	ctx := context.Background()
 	s := openStore(t)
-	task := seedTask(t, s, "task-1")
+	task := seedTask(t, s, "taskaaaaaaab")
 
 	if _, err := s.write.ExecContext(ctx, `DROP TRIGGER task_state_is_not_a_record`); err != nil {
 		t.Fatalf("dropping the seal: %v", err)
@@ -104,16 +106,62 @@ func TestTheTaskStateSealEmptiesARowAnEarlierBuildWrote(t *testing.T) {
 	}
 }
 
+// seedBranchTask creates an independent task on repo-1's topic branch,
+// anchored to the newest task already on it, and begins its first attempt,
+// since a task with no attempt is attributed no run by its branch.
+// tick lets the clock move between two records whose order a test rests on,
+// since CreateRun, CreateTask and BeginTaskAttempt stamp their own time and
+// take none. It waits past the coarsest clock the module builds for: Windows
+// advances its system time in steps of up to about 16 milliseconds, so two
+// stamps 2 milliseconds apart there can read equal and the cutoff comparison
+// would then be settled by the tie rather than by the order the test made.
+func tick() { time.Sleep(25 * time.Millisecond) }
+
 func seedBranchTask(t *testing.T, s *Store, id string) Task {
+	t.Helper()
+	task := createBranchTask(t, s, id, Disposition{Observed: newestOnBranch(t, s, "repo-1", "topic")})
+	beginAttempt(t, s, id, 0)
+	return task
+}
+
+// createBranchTask creates a delivery task on repo-1's topic branch with d.
+func createBranchTask(t *testing.T, s *Store, id string, d Disposition) Task {
 	t.Helper()
 	task, err := s.CreateTask(context.Background(), Task{
 		ID: id, Shape: TaskDelivery, Project: "one", Mode: "interactive", WorktreePath: "/worktrees/" + id,
 		RepositoryID: Known("repo-1"), Branch: Known("topic"),
-	})
+	}, d)
 	if err != nil {
-		t.Fatalf("CreateTask: %v", err)
+		t.Fatalf("CreateTask %s: %v", id, err)
 	}
 	return task
+}
+
+// newestOnBranch is the highest Row among the tasks of one repository and
+// branch, read the way an intake reads it: off the task listing.
+func newestOnBranch(t *testing.T, s *Store, repo, branch string) int64 {
+	t.Helper()
+	tasks, err := s.Tasks(context.Background())
+	if err != nil {
+		t.Fatalf("Tasks: %v", err)
+	}
+	var newest int64
+	for _, task := range tasks {
+		if task.RepositoryID.Or("") == repo && task.Branch.Or("") == branch && task.Row > newest {
+			newest = task.Row
+		}
+	}
+	return newest
+}
+
+// beginAttempt records the next attempt of a task, anchored to expected.
+func beginAttempt(t *testing.T, s *Store, id string, expected int64) TaskAttempt {
+	t.Helper()
+	a, err := s.BeginTaskAttempt(context.Background(), id, expected)
+	if err != nil {
+		t.Fatalf("BeginTaskAttempt %s: %v", id, err)
+	}
+	return a
 }
 
 func extraRun(t *testing.T, s *Store, id, repo, branch string) Run {
@@ -135,20 +183,21 @@ func extraRun(t *testing.T, s *Store, id, repo, branch string) Run {
 }
 
 // Attribution: a run belongs to a task by its repository and branch and by
-// being no older than the task. A run of another branch, of another
-// repository, or from before the task is not the task's. The branch-less task
-// is the positive control for the NULL comparison: it matches no run by branch.
+// being no older than the task's latest attempt. A run of another branch, of
+// another repository, or from before the attempt is not the task's. The
+// branch-less task is the positive control for the NULL comparison: it matches
+// no run by branch, with or without an attempt.
 func TestASnapshotAttributesRunsByBranchAndAge(t *testing.T) {
 	ctx := context.Background()
 	s := openStore(t)
 	before := seedRun(t, s) // repo-1, topic, run-1: older than the task below
-	time.Sleep(2 * time.Millisecond)
-	task := seedBranchTask(t, s, "task-1")
-	time.Sleep(2 * time.Millisecond)
+	tick()
+	task := seedBranchTask(t, s, "taskaaaaaaab")
+	tick()
 	mine := extraRun(t, s, "run-mine", "repo-1", "topic")
-	extraRun(t, s, "run-other-branch", "repo-1", "elsewhere")
+	extraRun(t, s, "run-other-branch", "repo-1", "elsewhereaaa")
 	extraRun(t, s, "run-other-repo", "repo-2", "topic")
-	investigation := seedTask(t, s, "task-2")
+	investigation := seedTask(t, s, "taskaaaaaaac")
 
 	snap, err := s.TaskSnapshot(ctx, task.ID)
 	if err != nil {
@@ -157,13 +206,18 @@ func TestASnapshotAttributesRunsByBranchAndAge(t *testing.T) {
 	if len(snap.Runs) != 1 || snap.Runs[0].ID != mine.ID {
 		t.Fatalf("the task was attributed %v, want only %s (and not the older %s)", runIDs(snap.Runs), mine.ID, before.ID)
 	}
-	if snap.Task.ID != task.ID || len(snap.Events) != 1 {
-		t.Fatalf("the snapshot's task and history are wrong: %+v", snap)
+	if snap.Task.ID != task.ID || len(snap.Events) != 2 || len(snap.Attempts) != 1 {
+		t.Fatalf("the snapshot's task, history and attempts are wrong: %+v", snap)
 	}
 
 	none, err := s.TaskSnapshot(ctx, investigation.ID)
 	if err != nil || len(none.Runs) != 0 {
 		t.Fatalf("a task with no branch was attributed %v (%v)", runIDs(none.Runs), err)
+	}
+	beginAttempt(t, s, investigation.ID, 0)
+	none, err = s.TaskSnapshot(ctx, investigation.ID)
+	if err != nil || len(none.Runs) != 0 {
+		t.Fatalf("a task with no branch and an attempt was attributed %v (%v)", runIDs(none.Runs), err)
 	}
 
 	// A run the task names directly is its own whatever branch it ran.
@@ -189,15 +243,15 @@ func runIDs(runs []Run) []string {
 func TestASnapshotCarriesTheHoldsThatNameTheTaskOrItsRuns(t *testing.T) {
 	ctx := context.Background()
 	s := openStore(t)
-	task := seedBranchTask(t, s, "task-1")
-	time.Sleep(2 * time.Millisecond)
+	task := seedBranchTask(t, s, "taskaaaaaaab")
+	tick()
 	mine := extraRun(t, s, "run-mine", "repo-1", "topic")
-	other := extraRun(t, s, "run-other", "repo-1", "elsewhere")
+	other := extraRun(t, s, "run-other", "repo-1", "elsewhereaaa")
 
 	for _, h := range []Hold{
 		{Key: "on-task", Subject: "task", TaskID: Known(task.ID)},
 		{Key: "on-run", Subject: "run", RunID: Known(mine.ID)},
-		{Key: "elsewhere", Subject: "other", RunID: Known(other.ID)},
+		{Key: "elsewhereaaa", Subject: "other", RunID: Known(other.ID)},
 	} {
 		if _, err := s.RegisterHold(ctx, h); err != nil {
 			t.Fatalf("RegisterHold %s: %v", h.Key, err)
@@ -229,11 +283,11 @@ func TestTaskSnapshotsListNewestFirstAndRefuseUnknownTasks(t *testing.T) {
 	if all, err := s.TaskSnapshots(ctx); err != nil || len(all) != 0 {
 		t.Fatalf("a fresh store lists (%d, %v)", len(all), err)
 	}
-	seedTask(t, s, "task-1")
-	time.Sleep(2 * time.Millisecond)
-	seedTask(t, s, "task-2")
+	seedTask(t, s, "taskaaaaaaab")
+	tick()
+	seedTask(t, s, "taskaaaaaaac")
 	all, err := s.TaskSnapshots(ctx)
-	if err != nil || len(all) != 2 || all[0].Task.ID != "task-2" || all[1].Task.ID != "task-1" {
+	if err != nil || len(all) != 2 || all[0].Task.ID != "taskaaaaaaac" || all[1].Task.ID != "taskaaaaaaab" {
 		t.Fatalf("TaskSnapshots = %d snapshots, %v", len(all), err)
 	}
 }
@@ -249,7 +303,7 @@ func TestForgettingARepositoryIsRefusedWhileATaskWorksOnOne(t *testing.T) {
 	if _, err := s.TransitionRun(ctx, run.ID, []RunStatus{RunPending}, RunTerminated); err != nil {
 		t.Fatalf("TransitionRun: %v", err)
 	}
-	seedBranchTask(t, s, "task-1")
+	seedBranchTask(t, s, "taskaaaaaaab")
 
 	if _, err := s.ForgetRepository(ctx, run.RepositoryID); !errors.Is(err, ErrRepositoryInUse) {
 		t.Fatalf("ForgetRepository = %v, want ErrRepositoryInUse", err)
@@ -265,5 +319,144 @@ func TestForgettingARepositoryIsRefusedWhileATaskWorksOnOne(t *testing.T) {
 	}
 	if _, err := control.ForgetRepository(ctx, cr.RepositoryID); err != nil {
 		t.Fatalf("with no task naming the repository the removal was refused: %v", err)
+	}
+}
+
+// The attribution cutoff is the attempt boundary and not the task's creation.
+// A task queued behind a live task on the same branch has no attempt, so the
+// blocker's running run is not attributed to it; once its own attempt begins,
+// a run newer than that is its and a run older than its latest attempt is
+// not. The control is the blocker, whose attribution does not move.
+func TestAttributionIsCutOffAtTheLatestAttempt(t *testing.T) {
+	principles.Cite(t, principles.P8)
+	ctx := context.Background()
+	s := openStore(t)
+	seedRun(t, s) // creates repo-1 and an older run on topic
+	blocker := seedBranchTask(t, s, "blockeraaaaa")
+	tick()
+	live := extraRun(t, s, "run-live", "repo-1", "topic")
+	if _, err := s.TransitionRun(ctx, live.ID, []RunStatus{RunPending}, RunRunning); err != nil {
+		t.Fatalf("TransitionRun: %v", err)
+	}
+	queued := createBranchTask(t, s, "queuedaaaaaa", Disposition{Blocker: Known(blocker.ID), Observed: blocker.Row})
+	if got := queued.BlockerTask.Or(""); got != blocker.ID {
+		t.Fatalf("the queued task records blocker %q, want %s", got, blocker.ID)
+	}
+
+	snap, err := s.TaskSnapshot(ctx, queued.ID)
+	if err != nil {
+		t.Fatalf("TaskSnapshot: %v", err)
+	}
+	if len(snap.Runs) != 0 || len(snap.Attempts) != 0 {
+		t.Fatalf("a task with no attempt was attributed %v by its branch", runIDs(snap.Runs))
+	}
+	if events := snap.Events; len(events) != 1 || events[0].Kind != OpeningEventKind {
+		t.Fatalf("a queued task's history is %+v, want the opening event alone", events)
+	}
+
+	tick()
+	first := beginAttempt(t, s, queued.ID, 0)
+	tick()
+	mine := extraRun(t, s, "run-mine", "repo-1", "topic")
+	snap, err = s.TaskSnapshot(ctx, queued.ID)
+	if err != nil || len(snap.Runs) != 1 || snap.Runs[0].ID != mine.ID {
+		t.Fatalf("after its attempt began the task was attributed %v (%v), want only %s", runIDs(snap.Runs), err, mine.ID)
+	}
+
+	// A relaunch moves the cutoff: the run from the first attempt is no
+	// longer the task's, and one made after the relaunch is.
+	tick()
+	beginAttempt(t, s, queued.ID, first.Sequence)
+	snap, err = s.TaskSnapshot(ctx, queued.ID)
+	if err != nil || len(snap.Runs) != 0 {
+		t.Fatalf("after a relaunch the task is still attributed %v (%v)", runIDs(snap.Runs), err)
+	}
+	tick()
+	again := extraRun(t, s, "run-again", "repo-1", "topic")
+	snap, err = s.TaskSnapshot(ctx, queued.ID)
+	if err != nil || len(snap.Runs) != 1 || snap.Runs[0].ID != again.ID || len(snap.Attempts) != 2 {
+		t.Fatalf("after a relaunch the task was attributed %v (%v), want only %s", runIDs(snap.Runs), err, again.ID)
+	}
+
+	// The control: the blocker's own attribution is unmoved by any of it,
+	// since its attempt is where it was.
+	control, err := s.TaskSnapshot(ctx, blocker.ID)
+	if err != nil {
+		t.Fatalf("TaskSnapshot: %v", err)
+	}
+	if want := []string{again.ID, mine.ID, live.ID}; !slices.Equal(runIDs(control.Runs), want) {
+		t.Fatalf("the blocker is attributed %v, want %v", runIDs(control.Runs), want)
+	}
+}
+
+// The snapshot carries the cleanup record once one is written and reports it
+// unknown before, and the resolver reads nothing from it in this build.
+func TestASnapshotCarriesTheCleanupRecord(t *testing.T) {
+	ctx := context.Background()
+	s := openStore(t)
+	task := seedTask(t, s, "taskaaaaaaab")
+	before, err := s.TaskSnapshot(ctx, task.ID)
+	if err != nil || before.Cleanup.IsKnown() {
+		t.Fatalf("a task cleanup has not reached carries a cleanup record: %+v (%v)", before.Cleanup, err)
+	}
+	written, err := s.RecordTaskCleanup(ctx, TaskCleanup{
+		TaskID: task.ID, Proof: CleanupProofRemoteBranch, Examined: []string{"abc", "def"},
+	})
+	if err != nil {
+		t.Fatalf("RecordTaskCleanup: %v", err)
+	}
+	removed := time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC)
+	if err := s.MarkCleanupRemoved(ctx, task.ID, removed); err != nil {
+		t.Fatalf("MarkCleanupRemoved: %v", err)
+	}
+	written.RemovedAt = Known(removed)
+	after, err := s.TaskSnapshot(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("TaskSnapshot: %v", err)
+	}
+	got, ok := after.Cleanup.Get()
+	if !ok || !reflect.DeepEqual(got, written) {
+		t.Fatalf("the snapshot carries cleanup %+v (known=%v), want %+v", got, ok, written)
+	}
+}
+
+// The snapshot carries the merge record of an attributed run once the read
+// that ended the run wrote it, through the accessor that owns the write, and
+// carries none for a run that ended any other way or for a run that is not
+// the task's.
+func TestASnapshotCarriesTheMergeRecordsOfItsRuns(t *testing.T) {
+	ctx := context.Background()
+	s := openStore(t)
+	seedRun(t, s)
+	task := seedBranchTask(t, s, "taskaaaaaaab")
+	tick()
+	mine := extraRun(t, s, "run-mine", "repo-1", "topic")
+	other := extraRun(t, s, "run-other", "repo-1", "elsewhereaaa")
+	for _, id := range []string{mine.ID, other.ID} {
+		if _, err := s.TransitionRun(ctx, id, []RunStatus{RunPending}, RunRunning); err != nil {
+			t.Fatalf("TransitionRun: %v", err)
+		}
+	}
+
+	before, err := s.TaskSnapshot(ctx, task.ID)
+	if err != nil || len(before.MergeRecords) != 0 {
+		t.Fatalf("a task whose run is still running carries merge records %+v (%v)", before.MergeRecords, err)
+	}
+	read := PullRequestRead{PullRequest: 7, Head: "0123abc", End: PullRequestMerged}
+	for _, id := range []string{mine.ID, other.ID} {
+		if _, err := s.TransitionRunOnPullRequest(ctx, id, []RunStatus{RunRunning}, RunPassed, read, HoldClosure{}); err != nil {
+			t.Fatalf("TransitionRunOnPullRequest %s: %v", id, err)
+		}
+	}
+	want, found, err := s.MergeRecord(ctx, mine.ID)
+	if err != nil || !found {
+		t.Fatalf("MergeRecord: %v, %v", found, err)
+	}
+	after, err := s.TaskSnapshot(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("TaskSnapshot: %v", err)
+	}
+	if len(after.MergeRecords) != 1 || !reflect.DeepEqual(after.MergeRecords[0], want) {
+		t.Fatalf("the snapshot carries merge records %+v, want only %+v", after.MergeRecords, want)
 	}
 }
