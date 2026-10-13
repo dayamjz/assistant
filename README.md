@@ -5,17 +5,20 @@
 Assistant is meant to do two things you currently do by hand. Today it does one
 of them: it puts a validation gate in front of your remote, so no change reaches
 a shared branch until it has been independently reviewed, tested, documented,
-and linted. The other is planned and not built: running a fleet of coding agents
-in parallel, each in its own isolated copy of a repository. The product
-requirements describe both halves and why they belong in one tool, but no fleet
-module (tasks, sessions, a supervisor) exists in this repository yet. The gate
-is what you can run now. [`docs/operators.md`](docs/operators.md) covers using
-it next to your CI and forge.
+and linted. The other half — a fleet of coding agents in parallel, each in its
+own isolated copy — has partial cores on main (`internal/tasks`,
+`internal/supervisor`, `internal/taskstate`, and a worker process API in
+`internal/agents`) but is not kickoff-capable: nothing outside tests creates a
+task, nothing isolates a copy for a worker, nothing starts a real worker in
+production, and nothing runs the supervisor loop. The gate is what you can run
+now. [`docs/operators.md`](docs/operators.md) covers using it next to your CI
+and forge. [`docs/fleet-implementation-foundation.md`](docs/fleet-implementation-foundation.md)
+is the checked-in evaluation and build order for finishing the fleet.
 
 ## Status
 
 Early. The product requirements are settled and checked in at
-[`docs/prd.html`](docs/prd.html). Twenty-three pieces exist so far, and the
+[`docs/prd.html`](docs/prd.html). Twenty-six pieces exist so far, and the
 binary can be driven. The execution
 engine in `internal/graph` is the first: the graph builder with its
 construction-time checks, an executor with halt points and bounded cycles, and
@@ -113,6 +116,15 @@ as a process against the fixture's subject, organized by PRD principle rather
 than by feature, with every check carrying the counterfeit observations it must
 reject so no assertion that cannot fail may ship, and three tables accounting
 for the principles, the planted conditions and the fixture's open questions.
+The twenty-fourth is `internal/taskstate`, which answers what is true of a task
+now by resolving append-only records on every read rather than storing a
+summary. The twenty-fifth is `internal/tasks`, intake and queueing: `Create`
+records a task with its disposition and `Release` dispatches a queued successor
+when its blocker clears, with no production caller of Create yet. The
+twenty-sixth is `internal/supervisor`, the pure classifier and stop-guard
+predicate with no I/O loop behind them. Isolation, dispatch, session provider,
+wake queue, and the live supervisor loop remain open work; see
+[`docs/fleet-implementation-foundation.md`](docs/fleet-implementation-foundation.md).
 
 So `assistant` builds and runs. A run can be started, reported on, answered and
 carried on across separate invocations, with the service restarted in between,
@@ -155,11 +167,13 @@ purpose. Pushing to it is how you consent to having that change validated,
 fixed, pushed, and turned into a pull request. Your ordinary `git push` keeps
 working as it always did. This is the half that exists.
 
-**Parallel work you can watch.** Planned, not built. The specification has every
-worker running in a real terminal you can attach to, read, and type into, with a
-direct intervention in a worker's terminal being authoritative. Nothing in this
-repository starts or supervises such workers yet; the store has task records, the
-service can list them, and nothing outside tests creates one.
+**Parallel work you can watch.** Specified, partially scaffolded, not
+kickoff-capable. The specification has every worker running in a real terminal
+you can attach to, read, and type into, with a direct intervention in a
+worker's terminal being authoritative. Intake, resolve-on-read state, a pure
+supervisor core, and a worker process API exist; nothing outside tests creates
+a task, nothing isolates and launches a worker, and nothing runs the
+supervisor loop. `assistant tasks` lists resolved state when rows exist.
 
 ## What it is not
 
@@ -174,7 +188,7 @@ service can list them, and nothing outside tests creates one.
 | --- | --- |
 | `cmd/assistant` | The binary. The process boundary and nothing else: it hands the command surface what it needs and exits with the code that comes back. |
 | `cmd/fixture` | Builds the fixture repository into a directory you name. `scripts/build-fixture.sh DIR` runs it. |
-| `internal/agents` | The only package that starts an agent process: the run and fix roles, the stage-body form of the agent that is not a route to a fixer session, the capability declaration every adapter is held to, the Claude Code adapter, fallback resolution, the review shape and the evidence demand it carries, and invocation records. |
+| `internal/agents` | The only package that starts an agent process: the run and fix roles, the stage-body form of the agent that is not a route to a fixer session, the capability declaration every adapter is held to, the Claude Code adapter, fallback resolution, the review shape and the evidence demand it carries, invocation records, and the worker process API (`OpenWorker`) no shipped adapter declares yet. |
 | `internal/agents/route` | The typed-graph answer to one question about a type: can a caller holding it reach a fixer session. The general form of the P4 check, asked by `internal/agents` and `internal/stages`. |
 | `internal/agents/standin` | The scripted agent the tests outside `internal/agents` run against: the test binary re-executed as the agent process, read by the production adapter. |
 | `internal/checkpoints` | The durable `graph.CheckpointStore` over `internal/store`: a run's checkpoint history, appends anchored to what the caller observed, and the fork that copies a run's history up to a point into a new run. |
@@ -199,8 +213,12 @@ service can list them, and nothing outside tests creates one.
 | `internal/service` | The background service: it holds the home's lock, binds the socket, recovers the runs it finds, and owns every run that is executing. |
 | `internal/stages` | Where the nine stage bodies live. A stage without one holds a placeholder that validates nothing and holds for a decision; `Implemented` says which stages have a body. |
 | `internal/store` | The only package that opens the database: the schema, its additive migrations, and typed accessors for repositories, runs, stages, rounds, a run's anchored checkpoint history, tasks, task state and events, holds and the closed set of who resolved each one, and the gate ownership index. |
+| `internal/supervisor` | The pure core of fleet supervision: wake classification (P9's table half) and the stop-guard predicate (P10's inputs), with no I/O, no queue, and no loop. |
+| `internal/tasks` | Fleet intake and queueing: Create with disposition, Release of a cleared blocker, anchored history moves. No production Create caller; isolation and launch are later issues. |
+| `internal/taskstate` | Resolve-on-read answers for what is true of a task now; Progress is derived here for the supervisor's absorb rule. |
 | `internal/vcs` | The only package that invokes git: typed operations over repositories, worktrees, refs, diffs, and remotes. |
 | `docs/prd.html` | The product requirements. The specification this code answers to. |
+| `docs/fleet-implementation-foundation.md` | Post-#118 evaluation of gate vs fleet maturity and the build order for a kickoff-capable fleet. |
 
 ## Development
 
