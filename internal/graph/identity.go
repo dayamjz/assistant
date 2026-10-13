@@ -15,11 +15,13 @@ import (
 // was.
 //
 // The digest covers, per index, the edge's endpoints, its guard, whether it is
-// a back edge, and the bound it declares. Endpoints, guard, and back-edge
+// a back edge, the bound it declares, and whether it is exempt from
+// convergence as Edge.Answered. Endpoints, guard, and back-edge
 // status are what make a count and a fingerprint belong to one edge. The bound
 // is in for a different reason: it is the value the count is compared against,
 // so a bound that changed between the count accruing and the comparison fires
-// early or late with nothing to say it did.
+// early or late with nothing to say it did. The exemption is in for the same
+// reason: it decides whether the fingerprint is compared at all.
 //
 // It covers nothing else. Nodes and state keys are outside it, and a
 // checkpoint's position and state are checked against them separately. Node
@@ -35,8 +37,15 @@ func edgeDigest(edges []Edge, back []bool) string {
 		isBack := i < len(back) && back[i]
 		// Every string is quoted, so no combination of names, keys, or values
 		// can be run together into the rendering of another edge.
-		rendered = append(rendered, fmt.Sprintf("%d %q %q rounds=%d back=%t %s\n",
-			i, e.From, e.To, e.Rounds, isBack, guardDigest(e.Guard))...)
+		// Answered is rendered only when set, so a graph that marks no edge
+		// digests exactly as it did before the field existed and its runs
+		// resume across the upgrade.
+		answered := ""
+		if e.Answered {
+			answered = " answered"
+		}
+		rendered = append(rendered, fmt.Sprintf("%d %q %q rounds=%d back=%t %s%s\n",
+			i, e.From, e.To, e.Rounds, isBack, guardDigest(e.Guard), answered)...)
 	}
 	sum := sha256.Sum256(rendered)
 	return hex.EncodeToString(sum[:])

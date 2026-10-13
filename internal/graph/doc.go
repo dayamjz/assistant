@@ -84,6 +84,12 @@
 // no change at all, which catches work that reports success without doing
 // anything; neither counter would notice that before exhausting itself.
 //
+// A back edge marked Edge.Answered is exempt from the convergence check and
+// from nothing else. The build admits the mark only on an edge every traversal
+// of which follows an answer at a halt point, so a round that changed nothing
+// there is a round someone asked for and then sees, not a loop nobody is
+// driving; its round limit and the step budget still bound it.
+//
 // All three have to survive a resume intact, and intact means more than the
 // counts. A count is meaningless without the bound it is compared against and
 // the edge it accrued on, so a checkpoint's Counters carry those too: the

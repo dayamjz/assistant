@@ -136,6 +136,20 @@ type Edge struct {
 	// admits three further executions of that node. Reaching it parks the run
 	// rather than continuing.
 	Rounds int
+	// Answered exempts a back edge from the convergence check, and from that
+	// bound alone: Rounds is still required and still parks, and the run-wide
+	// step budget still counts every node. It is for a cycle a person drives,
+	// where a round that changed nothing is that person's to see and answer
+	// rather than a loop nobody is driving.
+	//
+	// The build checks that this is what the edge is, rather than taking the
+	// flag at its word: an Answered edge must be a back edge, its From node
+	// must not be the start node, and every edge entering its From node must
+	// leave a halt point and be guarded on that halt point's answer key. So
+	// every traversal of it follows an answer someone gave at a halt point.
+	// What the build cannot check is that the guard's value is one only a
+	// person gives, because the graph does not know who answers.
+	Answered bool
 }
 
 // clone returns a copy of the edge with its guard detached.

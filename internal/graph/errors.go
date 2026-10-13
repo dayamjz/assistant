@@ -19,7 +19,9 @@ const (
 	// the halt point that asks for it, and declares no merge rule.
 	RuleSingleWriter Rule = "single-writer"
 	// RuleBoundedCycle is PRD section 7 rule 2: every back edge carries a
-	// bound at construction time.
+	// bound at construction time. It also covers Edge.Answered, the one
+	// exemption from a bound, which the build admits only where every
+	// traversal follows an answer at a halt point.
 	RuleBoundedCycle Rule = "bounded-cycle"
 	// RuleJoinCycle is PRD section 7 rule 3: a cycle that passes through a
 	// join must include that join's fork.

@@ -604,7 +604,7 @@ func (e *Executor) checkEdgeBounds(cp *Checkpoint, edge int) (Status, string) {
 			"the edge from %q to %q reached its bound of %d rounds",
 			declared.From, declared.To, declared.Rounds)
 	}
-	if e.graph.back[edge] {
+	if e.graph.back[edge] && !declared.Answered {
 		fingerprint := cp.State.fingerprint()
 		if prev := cp.Counters.Fingerprints[edge]; prev != "" && prev == fingerprint {
 			return StatusConverged, fmt.Sprintf(

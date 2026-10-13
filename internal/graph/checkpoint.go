@@ -27,6 +27,7 @@ const (
 	// StatusBudgetExhausted means the run reached its run-wide step budget.
 	StatusBudgetExhausted
 	// StatusConverged means a round crossed a back edge without changing state.
+	// A back edge marked Edge.Answered never produces it.
 	StatusConverged
 )
 

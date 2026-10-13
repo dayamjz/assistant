@@ -491,6 +491,41 @@ func (c *checker) checkBoundedCycles() {
 				"edge %d from %q to %q closes a cycle and declares no bound; every back edge must carry one",
 				i, e.From, e.To)
 		}
+		if e.Answered {
+			c.checkAnswered(i, e)
+		}
+	}
+}
+
+// checkAnswered refuses an edge marked Answered unless every traversal of it
+// follows an answer at a halt point, which is the only thing that earns an
+// exemption from the convergence check: it must be a back edge, it must not
+// leave the start node, and every edge entering the node it leaves must leave
+// a halt point and be guarded on that halt point's answer key.
+func (c *checker) checkAnswered(i int, e Edge) {
+	if !c.back[i] {
+		c.refuse(RuleBoundedCycle,
+			"edge %d from %q to %q is marked answered and closes no cycle, so there is no convergence check to exempt it from",
+			i, e.From, e.To)
+		return
+	}
+	if e.From == c.b.start {
+		c.refuse(RuleBoundedCycle,
+			"edge %d from %q to %q is marked answered and leaves the start node, which a run enters without any answer",
+			i, e.From, e.To)
+		return
+	}
+	for _, in := range c.b.edges {
+		if in.To != e.From {
+			continue
+		}
+		halt := c.b.nodes[c.index[in.From]].Halt
+		if halt == nil || in.Guard == nil || in.Guard.Key != halt.Into {
+			c.refuse(RuleBoundedCycle,
+				"edge %d from %q to %q is marked answered, and %q is entered from %q without an answer at a halt point guarding the way in",
+				i, e.From, e.To, e.From, in.From)
+			return
+		}
 	}
 }
 
