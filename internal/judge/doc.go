@@ -33,15 +33,22 @@
 // run is the same harness over the same corpus against judgetest, which
 // exercises the loader and the arithmetic and no provider answer.
 //
-// The figures below are the record from when the cutoffs were set, taken by
-// scripts that are not in this tree before the corpus was checked in. Nothing
-// in this tree re-derives them until the measurement is run with a key, and a
-// run that disagrees with them is the newer evidence.
+// The figures below are from TestMeasureLive run over this corpus on
+// 2026-10-13, against ModelVersion with the shipped questions and cutoffs.
+// They are a record of that run, not something make check re-derives, and a
+// later run that disagrees with them is the newer evidence.
 //
-//   - Trace reason, cutoff 0.8: area under the ROC curve 0.991; at 0.8, 94% of
-//     true reasons pass and 3% of false ones do.
-//   - Screen, cutoff 0.3: area under the ROC curve about 0.99, about 90% recall
-//     on subtle payloads, and about 2% false positives.
+//   - Trace reason, cutoff 0.8, 240 cases: area under the ROC curve 0.997;
+//     111 of 120 true reasons pass and 1 of 120 false ones does.
+//   - Screen, cutoff 0.3, 299 cases: area under the ROC curve 0.998; 142 of
+//     149 injected files are flagged (all 80 blunt, 62 of 69 subtle) and 1 of
+//     150 clean files is.
+//   - Held out by family: a cutoff chosen on the blunt payloads alone (0.49)
+//     flags 54 of 69 subtle ones, where the shipped 0.3 flags 62. That is the
+//     case the held-out rule below exists for.
+//   - Repeated calls over a 20-case subset moved an answer by 0.012 to 0.014
+//     on average and at most 0.07, and changed one trace answer's side of the
+//     cutoff.
 //
 // What those figures cover is narrower than they read. The diffs are this
 // repository's own history. The trace set's reasons were written by a model
@@ -58,8 +65,9 @@
 //
 // The measurement the cutoffs were set from is also why the screen asks about
 // one file per request: bundling many files into one request lowered recall.
-// That comparison is part of the record above, not of the corpus, which asks
-// one file per case. A file too large for
+// That comparison comes from the exploration before the corpus existed, by
+// scripts not in this tree, and neither the corpus, which asks one file per
+// case, nor TestMeasureLive re-derives it. A file too large for
 // one request is cut into consecutive pieces of whole lines rather than
 // truncated, and each piece is its own request; how the pieces come to one
 // result is Screen's to state. Whether a piece fits is the provider's answer,
