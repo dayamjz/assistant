@@ -620,6 +620,12 @@ func (e *Executor) checkEdgeBounds(cp *Checkpoint, edge int) (Status, string) {
 // at its round bound, so the answer is refused while the decision is still
 // open instead of being recorded and then parked away by checkEdgeBounds.
 //
+// It applies to every answer AnswerWith takes, at every halt point of every
+// graph, and not only to the requested-round cycle internal/pipeline built it
+// for: any halt point whose answered state selects a bounded edge that is
+// already spent has that answer refused. Before it existed such an answer was
+// recorded and the run parked; now the decision stays open for another one.
+//
 // The route is the edge next selects from the halt point over the answered
 // state, before the halt point's node has run. That is exact for an edge whose
 // guard reads the answer or detail key, or any key the node does not write,
