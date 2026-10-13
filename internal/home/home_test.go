@@ -64,7 +64,10 @@ func TestEveryPathIsUnderTheRoot(t *testing.T) {
 		"worktree":     h.Worktree("repo", "run"),
 		"evidence":     h.Evidence("run"),
 		"evidence log": h.EvidenceLog("run", "test"),
-		"task":         h.Task("task"),
+		"task":         taskPath(t, h, validTaskID),
+		"task copy":    copyPath(t, h, validTaskID),
+		"instance":     h.InstanceFile(),
+		"beacon":       h.Beacon(),
 		"queue":        h.Queue(),
 		"stage log":    h.StageLog("run", "review"),
 		"service log":  h.ServiceLog(),
@@ -232,6 +235,26 @@ func TestRotationKeepsWritingToTheSameFile(t *testing.T) {
 	if !os.SameFile(held, current) {
 		t.Fatal("the log rotated onto a different file, so a held descriptor writes to an orphan")
 	}
+}
+
+// taskPath composes a task's directory, failing the test on a refusal.
+func taskPath(t *testing.T, h *home.Home, id string) string {
+	t.Helper()
+	path, err := h.Task(id)
+	if err != nil {
+		t.Fatalf("composing the task path for %q: %v", id, err)
+	}
+	return path
+}
+
+// copyPath composes a task's copy, failing the test on a refusal.
+func copyPath(t *testing.T, h *home.Home, id string) string {
+	t.Helper()
+	path, err := h.TaskCopy(id)
+	if err != nil {
+		t.Fatalf("composing the task copy path for %q: %v", id, err)
+	}
+	return path
 }
 
 // open returns a home at root, failing the test rather than the caller.

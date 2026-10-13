@@ -221,6 +221,15 @@ func TestReadingIsServedWhoeverIsAsking(t *testing.T) {
 		if health.Home != h.Root() {
 			t.Fatalf("the service reports home %s, want %s", health.Home, h.Root())
 		}
+		// PRD section 8 has the service write its instance identity once at
+		// start, so the file names the same process the health answer does.
+		written, err := os.ReadFile(h.InstanceFile())
+		if err != nil {
+			t.Fatalf("reading the instance file: %v", err)
+		}
+		if got := strings.TrimSpace(string(written)); got != health.Instance {
+			t.Fatalf("the instance file names %q, the service answers as %q", got, health.Instance)
+		}
 		var tasks machine.Tasks
 		if err := running.client.Call(t.Context(), ipc.MethodTasksList, machine.TaskRequest{}, &tasks); err != nil {
 			t.Fatalf("listing tasks: %v", err)
