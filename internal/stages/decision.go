@@ -49,22 +49,18 @@ func (d decisionRun) active() bool { return d.mode.RunsChecks() }
 // for and the operator's environment held a key.
 func (d decisionRun) sends() bool { return d.active() && d.client.HasKey() }
 
-// checked is one check's outcome for one path: the client's result, or why
-// the path's diff could not be read and so nothing was asked.
+// checked is one check's outcome for one path. A path whose diff could not be
+// read carries judge.Unasked, so it is reported and recorded like any other
+// failure rather than skipped.
 type checked struct {
 	path   string
 	reason string
 	result judge.Result
-	// unread is why nothing was asked about this path, empty when it was.
-	unread string
 }
 
 // failure returns why this check did not produce an answer, and false when it
 // produced one.
 func (c checked) failure() (string, bool) {
-	if c.unread != "" {
-		return c.unread, true
-	}
 	failure, detail, isFailed := c.result.Failed()
 	if !isFailed {
 		return "", false
@@ -76,7 +72,7 @@ func (c checked) failure() (string, bool) {
 // request. The reviewer is shown the whole diff, excluded paths included, so
 // the excluded ones are screened too.
 func (d decisionRun) screen(ctx context.Context, shown []string) []checked {
-	return d.each(ctx, shown, func(ctx context.Context, path, diff string) judge.Result {
+	return d.each(ctx, shown, judge.CheckScreen, func(ctx context.Context, path, diff string) judge.Result {
 		return d.client.Screen(ctx, path, diff)
 	})
 }
@@ -98,7 +94,7 @@ func (d decisionRun) traces(ctx context.Context, touched []string, traced []find
 	out := make([]checked, len(asked))
 	d.parallel(len(asked), func(i int) {
 		t := asked[i]
-		out[i] = d.ask(ctx, t.Path, func(ctx context.Context, path, diff string) judge.Result {
+		out[i] = d.ask(ctx, t.Path, judge.CheckTrace, func(ctx context.Context, path, diff string) judge.Result {
 			return d.client.Trace(ctx, path, t.Reason, diff)
 		})
 		out[i].reason = t.Reason
@@ -108,19 +104,20 @@ func (d decisionRun) traces(ctx context.Context, touched []string, traced []find
 
 // each asks one question per path, in parallel up to decisionConcurrency, and
 // returns the outcomes in the order of paths.
-func (d decisionRun) each(ctx context.Context, paths []string,
+func (d decisionRun) each(ctx context.Context, paths []string, check judge.Check,
 	ask func(context.Context, string, string) judge.Result) []checked {
 	out := make([]checked, len(paths))
-	d.parallel(len(paths), func(i int) { out[i] = d.ask(ctx, paths[i], ask) })
+	d.parallel(len(paths), func(i int) { out[i] = d.ask(ctx, paths[i], check, ask) })
 	return out
 }
 
-// ask reads one path's diff and puts it to the model.
-func (d decisionRun) ask(ctx context.Context, path string,
+// ask reads one path's diff and puts it to the model as check. A diff that
+// cannot be read sends nothing and yields judge.Unasked for check.
+func (d decisionRun) ask(ctx context.Context, path string, check judge.Check,
 	ask func(context.Context, string, string) judge.Result) checked {
 	diff, err := d.repo.DiffPath(ctx, d.from, d.head, path)
 	if err != nil {
-		return checked{path: path, unread: "the path's diff could not be read: " + err.Error()}
+		return checked{path: path, result: judge.Unasked(check, path, "the path's diff could not be read: "+err.Error())}
 	}
 	return checked{path: path, result: ask(ctx, path, diff)}
 }
@@ -152,9 +149,7 @@ func (d decisionRun) screenFindings(outcomes []checked) []findings.Finding {
 	for _, c := range outcomes {
 		if why, isFailed := c.failure(); isFailed {
 			notRun = append(notRun, c.path+" ("+why+")")
-			if c.unread == "" {
-				d.record(c.result, "")
-			}
+			d.record(c.result, "")
 			continue
 		}
 		if !c.result.Fired() {
@@ -184,9 +179,7 @@ func (d decisionRun) traceFindings(outcomes []checked) ([]findings.Trace, []find
 	for _, c := range outcomes {
 		if why, isFailed := c.failure(); isFailed {
 			notRun = append(notRun, c.path+" ("+why+")")
-			if c.unread == "" {
-				d.record(c.result, "")
-			}
+			d.record(c.result, "")
 			continue
 		}
 		if c.result.Fired() {

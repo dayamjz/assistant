@@ -27,6 +27,11 @@ const (
 	FailureCancelled Failure = "cancelled"
 	// FailureStatus is a response whose status was not a success.
 	FailureStatus Failure = "status"
+	// FailureDiffUnreadable is a path whose diff the caller could not read,
+	// so there was nothing to put to the model and nothing was sent. The
+	// caller builds it with Unasked, so the evaluation record counts the path
+	// rather than losing it.
+	FailureDiffUnreadable Failure = "diff-unreadable"
 	// FailureUnreadable is a successful response the program cannot read as
 	// an answer to the question asked: malformed, missing the answer, of
 	// another type, out of the range zero to one, or answered by a model
@@ -93,6 +98,13 @@ func (r Result) Model() string { return ModelVersion }
 // when nothing was sent, which is how a caller can show that a missing key or
 // an empty question sent nothing.
 func (r Result) Requests() int { return r.requests }
+
+// Unasked is the result for a path the caller could not ask about because it
+// could not read the path's diff. Nothing was sent, so it carries no
+// probability and counts no request; detail says why the read failed.
+func Unasked(c Check, path, detail string) Result {
+	return failed(c, path, FailureDiffUnreadable, detail, 0)
+}
 
 // failed builds a failure result.
 func failed(c Check, path string, f Failure, detail string, requests int) Result {
