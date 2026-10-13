@@ -69,6 +69,16 @@ validated as its own run, and the pull request stage reports which base the run
 validated against so a reviewer can see when that differs from where the pull
 request merges.
 
+## What a pass does not cover
+
+Review reads your change before the test, lint, and checks stages run. When
+one of those stages takes a fix round, the code that round changes reaches the
+push without being reviewed again: the push stage asks only that the head
+descends from a reviewed commit. The judge-path rule holds such a round only
+when it touches a test, CI, or lint file, not when it changes other code. PRD
+section 14 lists this as an open question (issue #63). Until it is settled,
+read the commits the pipeline added after review before you merge.
+
 ## Hosted reviewers
 
 Hosted review bots such as Copilot or CodeRabbit can comment on the pull request
