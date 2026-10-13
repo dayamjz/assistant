@@ -34,11 +34,16 @@ run stands and what stops one.
 The gate is not your CI (PRD section 12 lists "Being your CI" as a permanent
 non-goal). Keep the forge's required checks on the pull request as the shared
 outer check. The last stage reads the checks registered on the pull request's
-head and reports what the code host says at that moment. It does not poll: when
-checks are still running it holds. `checks_timeout` is the setting meant to bound
-that wait, but nothing in this build applies it yet, so a held run waits until a
-person or a later segment reads the checks again. A pass there does not say the
-checks stayed green, and it is not a merge decision.
+head. While checks are still running, or none are registered yet, the run waits
+rather than holding: the stage re-reads the checks about once a minute and
+reports what they settle on. `checks_timeout` (global-only, default `168h`)
+bounds that wait, and when it elapses the run holds for you rather than ending.
+The timeout starts when the stage first finds the checks unsettled, starts again
+whenever your base branch advances on the upstream, and is kept across a service
+restart, so resuming a run does not reset it. A check or base read that fails
+outright stops the stage instead of waiting through it; running `assistant` on
+the branch again resumes it into the same wait. A pass does not say the checks stayed green,
+and it is not a merge decision.
 
 A repository with no CI at all must say so by setting `no_ci` in its trusted
 configuration. Without that declaration an empty list of checks is not treated

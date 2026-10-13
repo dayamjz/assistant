@@ -551,6 +551,11 @@ func (s *Service) driverFor(ctx context.Context) (*driver, error) {
 // the same one every repository this service opens is opened with and the one
 // the bodies that persist or report a command's text apply at those
 // boundaries.
+//
+// The checks body is handed this service's store as the record its wait on a
+// pull request's checks is measured from, because checks_timeout has to
+// survive the segment that began waiting: a resume after a restart or a
+// walked-away caller re-enters the same wait rather than beginning another.
 func (s *Service) topologyFor(built *driver, resolved runResolution) (*topology, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -565,7 +570,7 @@ func (s *Service) topologyFor(built *driver, resolved runResolution) (*topology,
 		forge.NewGitHubHost(redactor),
 		redactor,
 		vcs.WithRedactor(redactor),
-	).WithJudge(s.judge)
+	).WithJudge(s.judge).WithChecksWaits(s.store)
 	// The fix seam is built here, beside the stage seam and deliberately apart
 	// from it. It carries the one thing a stage body may not have: a route to
 	// the run's fixer role, which internal/runs hands out per run and which

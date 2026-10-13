@@ -3,6 +3,7 @@ package stages
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/config"
@@ -10,6 +11,7 @@ import (
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/judge"
 	"github.com/dayamjz/assistant/internal/redact"
+	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/vcs"
 )
 
@@ -175,6 +177,45 @@ type StageDeps struct {
 	// and so already on Config. A nil client is a client with no key, so an
 	// unwired StageDeps sends nothing.
 	judge *judge.Client
+	// waits is the durable record the checks body measures PRD section 10's
+	// checks_timeout from. It is build-scoped for the reason every adapter
+	// here is: one service holds one store and every run's wait is a row in
+	// it keyed by the run, so one record serves every run of the service.
+	//
+	// It is unexported on the same terms as judge: which record a wait is
+	// kept in is the wiring's decision. A nil record is a checks body that
+	// cannot wait, and it refuses rather than holding on the first unsettled
+	// read, because a hold there would be a timeout of zero nobody configured.
+	waits ChecksWaits
+	// clock is how the checks body tells the time and paces its re-reads. Its
+	// zero value is the wall clock and a minute between reads; only this
+	// package's own tests set anything else.
+	clock checksClock
+}
+
+// ChecksWaits is the durable record of when a run's checks stage began
+// waiting, and the one route the checks body has to it. internal/store's
+// ArmChecksWait and EndChecksWait are the implementation, and own the
+// re-arming rule: a wait read against the base it was armed against is kept,
+// and one read against another base is re-armed at that instant.
+//
+// It is an interface because a stage body opens no database, per the rule
+// that internal/store is the only package that does; internal/service hands
+// over the store it already opened.
+type ChecksWaits interface {
+	// ArmChecksWait returns the run's wait after observing the base branch
+	// at base at the instant at, beginning or re-arming it as store states.
+	ArmChecksWait(ctx context.Context, run, base string, at time.Time) (store.ChecksWait, error)
+	// EndChecksWait removes the run's wait, so the next one begins afresh.
+	EndChecksWait(ctx context.Context, run string) error
+}
+
+// WithChecksWaits returns these dependencies with the record the checks body
+// measures checks_timeout from. internal/service is what calls it, with the
+// store it opened for the home.
+func (d StageDeps) WithChecksWaits(w ChecksWaits) StageDeps {
+	d.waits = w
+	return d
 }
 
 // WithJudge returns these dependencies with the decision-model client the

@@ -504,4 +504,29 @@ var schema = []migration{
 			`CREATE INDEX decision_followup_answer ON decision_followup(answer, seq)`,
 		},
 	},
+	{
+		version: 12,
+		name:    "checks wait",
+		statements: []string{
+			// PRD section 10's checks_timeout is an idle timeout re-armed
+			// whenever the base branch advances, so what it is measured from
+			// has to outlive the segment that began waiting: a restart, or a
+			// caller walking away, resumes the checks stage, and a wait that
+			// began again on every resume would never elapse. One row per run,
+			// rewritten in place, and it is authoritative for that one fact.
+			//
+			// It is not a run's position. Where a run stands is its checkpoint
+			// history, and nothing here says which node a run is at; it says
+			// when the checks stage of a run began waiting and against which
+			// base commit. The run column carries no foreign key, for the
+			// decision_answer table's reason: the row is keyed by the
+			// identifier the stage was handed, and what that names is
+			// internal/store's run table's business rather than this one's.
+			`CREATE TABLE checks_wait (
+				run      TEXT PRIMARY KEY,
+				base     TEXT NOT NULL,
+				armed_at TEXT NOT NULL
+			) STRICT`,
+		},
+	},
 }
