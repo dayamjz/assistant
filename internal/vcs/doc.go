@@ -48,7 +48,11 @@
 // list's scope: a variable outside them, one that only tunes a timeout or a
 // transport's TLS settings, is absent because it is out of scope rather than
 // because it was missed. The list is written by hand, so a variable a later
-// git introduces is not removed until it is added there.
+// git introduces is not removed until it is added there. StripRedirecting
+// applies that one list to an environment a caller is building for a process
+// this package does not start, which is how internal/agents keeps a worker's
+// own git in the copy the worker runs in; it removes the names on the list and
+// proves nothing about the directory.
 //
 // Three keeps are deliberate, and each is this package's trust policy rather
 // than a claim about what git does with them.

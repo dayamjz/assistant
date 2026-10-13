@@ -37,6 +37,7 @@ const (
 	helperBytesVar  = "AGENTS_HELPER_BYTES"
 	helperPidVar    = "AGENTS_HELPER_PIDFILE"
 	helperEchoVar   = "AGENTS_HELPER_ECHO"
+	helperGoVar     = "AGENTS_HELPER_GO"
 )
 
 // helperModeFlag carries the stand-in agent's mode on its command line, for
@@ -122,6 +123,30 @@ func helperMain(mode string) {
 	case "env":
 		// Report the value of one environment variable, as the result.
 		fmt.Print(helperEnvelope(os.Getenv(os.Getenv(helperEchoVar)), helperSession()))
+	case "worker-echo-when":
+		// A worker that reads nothing until the file named in helperGoVar
+		// exists, then copies its standard input to its standard output
+		// until the input closes. It is how a test fills the input pipe and
+		// then watches what order the bytes come out in.
+		for {
+			if _, err := os.Stat(os.Getenv(helperGoVar)); err == nil {
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		_, _ = io.Copy(os.Stdout, os.Stdin)
+	case "worker-environment":
+		// The worker shape of "environment": print the whole environment
+		// as one line, then read standard input until it is closed, which is
+		// what a worker does. It takes its mode from the command line because
+		// a worker's command line is the configured entry's own words.
+		encoded, err := json.Marshal(os.Environ())
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "encoding the environment: "+err.Error())
+			os.Exit(8)
+		}
+		fmt.Println(string(encoded))
+		_, _ = io.Copy(io.Discard, os.Stdin)
 	case "error-envelope":
 		// A result envelope in which the agent reports its own failure.
 		fmt.Print(helperErrorEnvelope(os.Getenv(helperResultVar)))
@@ -329,6 +354,17 @@ func newRunner(t *testing.T, opts ...agents.ClaudeOption) agents.Runner {
 		t.Fatalf("building a runner over the stand-in agent: %v", err)
 	}
 	return runner
+}
+
+// newWorkerRunner builds a Runner that declares worker sessions, over the
+// scripted stand-in, with a short grace so termination does not wait on the
+// real one. The stand-in's worker answers no line unless script says so,
+// which is enough for a probe that asks only whether the mechanism is there.
+func newWorkerRunner(t *testing.T, opts ...agents.ClaudeOption) agents.Runner {
+	t.Helper()
+	return standin.NewWorker(t, standin.Script{}, append([]agents.ClaudeOption{
+		agents.WithTerminationGrace(300 * time.Millisecond),
+	}, opts...)...).Runner()
 }
 
 // invocation is a valid Invocation in a directory the test owns, with the

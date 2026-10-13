@@ -33,6 +33,23 @@ const (
 	// capability has: nothing in this package is asked to suppress anything,
 	// so there is nothing here for a second one to sit at.
 	CapabilitySuppressProjectInstructions Capability = "suppress_project_instructions"
+	// CapabilityWorkerSessions is an adapter that can be started as a
+	// long-lived process driven over its standard input, which is what a
+	// task's worker is: it is given a directory and instructions, it is sent
+	// text afterwards, and it is ended by whoever started it rather than by
+	// answering. WorkerRunner carries the mechanism and OpenWorker is the one
+	// route to it. It is on the fixer side of P4: a worker has memory for as
+	// long as it runs, takes no purpose, and can be told nothing that names a
+	// review shape, because WorkerSpec has no shape at all.
+	//
+	// No adapter this build ships declares it. The scripted adapter the tests
+	// run against does, so the conformance suite can hold the mechanism to the
+	// declaration and a layer built on workers can run against the stand-in;
+	// the Claude Code adapter's declaration is a change of its own, made when
+	// the invocation mode it runs as a worker in is known and a probe can
+	// check it. Until then nothing here can launch a real worker, and this
+	// row says so rather than implying a fleet runs.
+	CapabilityWorkerSessions Capability = "worker_sessions"
 )
 
 // capabilitySpec is one row of the capability table: the capability, and how
@@ -55,6 +72,10 @@ var capabilityTable = []capabilitySpec{
 		return ok
 	}},
 	{CapabilitySuppressProjectInstructions, nil},
+	{CapabilityWorkerSessions, func(r Runner) bool {
+		_, ok := r.(WorkerRunner)
+		return ok
+	}},
 }
 
 // spec returns the capability's row, and false when c names none.

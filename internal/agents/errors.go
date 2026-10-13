@@ -63,6 +63,11 @@ var (
 	// entry: an adapter that lies about itself is not something to route
 	// around quietly.
 	ErrAdapterDeclaration = errors.New("agents: an adapter's capability declaration does not match what it is")
+	// ErrWorkerEnded is returned by Worker.Send when the worker's process is
+	// no longer running: it exited on its own, or Close ended it. Text sent
+	// to a process that is gone would be lost, so the send is refused rather
+	// than reported as delivered.
+	ErrWorkerEnded = errors.New("agents: the worker is no longer running")
 )
 
 // CapabilityError reports a path refused because the adapter has not declared
