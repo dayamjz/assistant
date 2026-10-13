@@ -116,9 +116,17 @@ func (h *Home) EvidenceLog(runID, stage string) string {
 	return filepath.Join(h.Evidence(runID), stage+".log")
 }
 
-// Task is where one task's records live: its instructions, its report, its
-// state, and its events.
-func (h *Home) Task(id string) string { return filepath.Join(h.root, "tasks", id) }
+// InstanceFile is the service's instance identity, which WriteInstance writes
+// once at start. PRD section 8 lists it beside the lock and says it is not
+// state: it names the process that wrote it and proves nothing about
+// readiness.
+func (h *Home) InstanceFile() string { return filepath.Join(h.root, "instance") }
+
+// Beacon is the supervisor's liveness beacon. PRD section 8 has the supervisor
+// loop write it and says it is not state. This package composes the path and
+// nothing here writes or reads it: what the beacon holds is the supervisor's
+// to define.
+func (h *Home) Beacon() string { return filepath.Join(h.root, "beacon") }
 
 // Queue is the durable wake queue.
 func (h *Home) Queue() string { return filepath.Join(h.root, "queue") }

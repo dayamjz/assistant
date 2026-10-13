@@ -1,7 +1,8 @@
 // Package home owns the one root everything lives under, which PRD section 8
 // calls the on-disk layout: where the database, the socket, the lock, the gate
-// repositories, the isolated copies, the evidence, the task records, the wake
-// queue, and the logs sit relative to that root.
+// repositories, the isolated copies, the evidence, the task records and each
+// task's copy, the instance file, the beacon, the wake queue, and the logs sit
+// relative to that root.
 //
 // It exists so that no other package spells a path. A layout every caller
 // derives for itself is one every caller can derive differently, and the
@@ -41,6 +42,39 @@
 // for as two homes; Open resolves symbolic links to close the first of those
 // and nothing here closes the rest.
 //
+// # A probe of the lock is a lock taken for an instant
+//
+// LockState answers whether the lock is held, and it answers by taking the
+// lock and letting go, because an operating-system lock offers no read-only
+// query on every platform the module builds for. Its contract is the answers
+// its doc comment states and nothing past them, and four gaps in it are worth
+// naming here. The instant it holds the lock is visible to an Acquire with a
+// wait of zero racing it, which is refused as if a service held the home. The
+// same instant is visible to a second probe, so two probes overlapping make
+// the second answer Held with no service running, and Held is the direction a
+// wrong answer must not go in; a lone Held is therefore not evidence of a live
+// service, Held counts as live only beside a beacon whose instance matches the
+// instance file, and a reader with a lone Held probes once more before acting.
+// The lock is per open handle, so the probe answers Held from inside the
+// process that holds the lock, and a supervisor asking about itself learns
+// only that its own service holds it. And Held names no holder: which process
+// holds the lock is a question the instance file and the beacon exist to
+// answer together, and this package only composes those paths and writes the
+// first. A root that is not there answers Unknown rather than Free, so a wrong
+// home path cannot read as a home with no service; Unknown otherwise comes
+// mostly from a lock file the caller cannot open for writing.
+//
+// # A task identifier is one rule, applied before any path is composed
+//
+// Every path under tasks/ is composed from an identifier ValidTaskID accepted,
+// and that rule is the only one: a fixed-length identifier from a closed
+// alphabet, refused rather than corrected when it is anything else, with the
+// names Windows reserves refused on every platform. Task and TaskCopy refuse
+// what it refuses, so a traversal element or a separator cannot reach a path.
+// The rule is applied to a string and not to a filesystem: it says an
+// identifier is one path element, and nothing about whether the directory it
+// names exists, is empty, or belongs to the task that claims it.
+//
 // # The service log is bounded, and rotation truncates in place
 //
 // PRD section 8 makes logs/service.log a bounded lifecycle log with rotation,
@@ -62,5 +96,19 @@
 // It does not create a home as a side effect of being asked where one is. Open
 // answers about a root whether or not it exists, and Create is a separate act,
 // so a command that only reads cannot bring a home into existence by looking at
-// it.
+// it. LockState keeps the same rule: a home with no lock file is reported as
+// one and not given a lock file by the asking.
+//
+// It does not read the instance file or write the beacon. WriteInstance is the
+// one write here beyond the lock and the log, and it writes a file that is not
+// state: PRD section 8 makes a published identifier no proof of readiness, and
+// no reader of that file exists in this build. A service start that cannot
+// write it is still refused, within the write's own bound of about two
+// seconds, because a home whose instance file names a process other than the
+// one holding its lock is the reading the supervisor's liveness must never be
+// given. The write sweeps the temporary files an earlier write left behind in
+// a crash, on the strength of the lock the caller holds; a crash in the
+// window between making a temporary file and renaming it leaves one until the
+// next write. The beacon's content is the supervisor's to define, and this
+// package says only where it goes.
 package home
