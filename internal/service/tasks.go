@@ -78,7 +78,13 @@ func (s *Service) branchInGate(ctx context.Context, repository store.Repository,
 // exclusion, so the branch stays live and the task the run was attributed to
 // resolves from the replacement the moment it exists. A release between the
 // two writes would read the gap as the blocker having failed and dispatch a
-// successor onto a branch its worker is still pushing to. The third moment
+// successor onto a branch its worker is still pushing to. The one push that
+// does call it is the one whose replacement run could not be created after
+// the displaced run was terminated: the branch is then idle, and the call
+// runs after the exclusion is given back. No test here drives that path,
+// because making the create fail after the terminate needs a fault in the
+// run table that only SQL written in internal/store could plant; the call
+// is the same releaseQueued the three settled sites take. The third moment
 // the design names, a merge record or a cleanup record being written, is not
 // a call site here, because nothing in this build resolves a state from
 // either (#107, #108).

@@ -350,7 +350,7 @@ func (s *Service) cancel(ctx context.Context, req machine.CancelRequest) (machin
 		return machine.Run{}, err
 	}
 	// The run finished, so a task queued behind the one it was attributed to
-	// may have cleared; tasks.go names this as one of the four sites.
+	// may have cleared; tasks.go names this among the sites that release.
 	s.releaseQueued(ctx)
 	return s.view(ctx, req.Run)
 }
