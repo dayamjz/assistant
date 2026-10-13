@@ -79,7 +79,8 @@ func (r *Reader) All(ctx context.Context) ([]Resolved, error) {
 
 func (r *Reader) resolve(ctx context.Context, snap store.TaskSnapshot) Resolution {
 	in := Inputs{
-		Task: snap.Task, Runs: snap.Runs, Holds: snap.Holds, Events: snap.Events, Process: Unobserved,
+		Task: snap.Task, Runs: snap.Runs, Holds: snap.Holds, Events: snap.Events,
+		MergeRecords: snap.MergeRecords, Cleanup: snap.Cleanup, Process: Unobserved,
 	}
 	if n := len(snap.Attempts); n > 0 && r.probe != nil {
 		if ref, ok := snap.Attempts[n-1].SessionRef.Get(); ok {

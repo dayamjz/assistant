@@ -42,8 +42,8 @@ func (p CleanupProof) String() string { return string(p) }
 
 // TaskCleanup is PRD section 8's cleanup record: written once per task,
 // recording the cleanup check it was made from. PRD section 6's Complete is
-// derived from it, by internal/taskstate once it reads this tier; this
-// package records it and decides nothing from it.
+// derived from it, by internal/taskstate's terminal tier; this package
+// records it and decides nothing from it.
 //
 // RemovedAt is the one revision the record takes, and it takes it once. The
 // proof is recorded before the copy is removed and the removal is marked

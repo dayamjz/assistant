@@ -84,10 +84,9 @@
 // every attributed run, read in the snapshot's own transaction through the
 // same column list and scanner Store.MergeRecord uses, so the records and the
 // runs they are keyed by are one consistent read; and the task's cleanup
-// record. Nothing reads either off the snapshot in this build. The resolver's
-// terminal tier (#107) is the consumer, and which attributed run's merge
-// record makes a task Landed is its question: the snapshot carries all of
-// them rather than deciding.
+// record. The resolver's terminal tier, internal/taskstate, is the consumer,
+// and which attributed run's merge record makes a task Landed is its
+// question: the snapshot carries all of them rather than deciding.
 //
 // # The wake queue and the markers it is written with
 //

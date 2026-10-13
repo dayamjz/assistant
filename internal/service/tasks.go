@@ -67,12 +67,16 @@ func (s *Service) branchInGate(ctx context.Context, repository store.Repository,
 
 // releaseQueued dispatches every queued task whose blocker has cleared, and
 // logs what came of each. It is called when a run finishes and when the
-// service opens, which are the two moments this build knows a blocker can
-// have cleared: a task resolves Failed from a run that failed or was ended,
-// and Reported from an entry a worker appended while no service watched. A
+// service opens, which are the moments this build knows a blocker can have
+// cleared: a task resolves Failed from a run that failed or was ended,
+// Reported from an entry a worker appended while no service watched, and
+// Landed from the merge record the checks-hold closure writes. A
 // run finishes at four sites in this package and three call it: settle, for
 // a segment that ended the run; cancel, for an ending through the protocol;
-// and the checks-hold closure, for a run its pull request's state ended. The
+// and the checks-hold closure, for a run its pull request's state ended.
+// The merge record is written by internal/runs' PassOnMerge, which only
+// settle and that closure reach, so every record is followed by a call here
+// and a blocker Landed is observed by it. The
 // fourth, claimPush terminating the run a new push supersedes, does not: it
 // ends that run only to create the branch's next one under the same
 // exclusion, so the branch stays live and the task the run was attributed to
@@ -84,10 +88,10 @@ func (s *Service) branchInGate(ctx context.Context, repository store.Repository,
 // runs after the exclusion is given back. The create fails in driverFor as
 // well as in the store, which is how stranded_internal_test.go reaches the
 // path: a hand-built service whose driver does the terminate and whose
-// catalog resolves no agent for the create. The third moment
-// the design names, a merge record or a cleanup record being written, is not
-// a call site here, because nothing in this build resolves a state from
-// either (#107, #108).
+// catalog resolves no agent for the create. The cleanup record, which moves
+// a Landed task to Complete, has no writer in this build (#108), so no site
+// writes one and none calls this after one; a blocker Landed has already
+// cleared, so the record's writer owes this call nothing for the release.
 //
 // It reports to the log and not to a caller, on the terms reclaimCopy gives:
 // the run has settled by the time this runs, so there is no answer a failure

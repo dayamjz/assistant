@@ -92,16 +92,15 @@
 // pass releases at most one of them onto the branch and none waits on a
 // later one.
 //
-// A blocker clears when it resolves Failed or Reported. Ready never clears,
-// because a Ready task's branch still carries an open pull request. Landed
-// and Complete are the states that would clear a blocker past Ready, and
-// neither is resolved in this build: #107 derives Landed from the merge
-// record PR #113's merge_record holds and Complete from the cleanup record,
-// so until then a blocker that reaches Ready holds its successors, and a
-// merge record on its run changes nothing here. Clears' doc states both
-// consequences, including the one Failed carries: it is not terminal in the
-// lifecycle, so a relaunch (#94) must re-run this floor and queue itself when
-// a live task now holds the branch.
+// A blocker clears when it resolves Failed, Reported, Landed or Complete.
+// Ready never clears, because a Ready task's branch still carries an open
+// pull request; what moves it past Ready is the merge record of a run
+// attributed to it, which internal/taskstate resolves as Landed, and the
+// cleanup record after that, which it resolves as Complete. Both are terminal
+// for the task, so a successor dispatched onto the branch shares it with
+// nothing live. Clears' doc states the consequence Failed carries: it is not
+// terminal in the lifecycle, so a relaunch (#94) must re-run this floor and
+// queue itself when a live task now holds the branch.
 //
 // # No caller in this build
 //
@@ -111,10 +110,13 @@
 // consequence for the end-to-end harness is recorded in internal/journey's
 // coverage: no journey walk can create a task, so what the binary is driven
 // through there is written through internal/store. Release does have a
-// caller: internal/service calls it when a run finishes and when it opens,
-// which are two of the three moments the design names; the third, when a
-// merge record or a cleanup record is written, is #107's and #108's, since
-// nothing here resolves what those records mean yet. A run a new push
+// caller: internal/service calls it when a run finishes and when it opens.
+// A merge record is written only at two of those finishes, internal/service's
+// settle for a run whose checks stage read the merge and its checks-hold
+// closure for one read at recovery or before a resume, and both call Release
+// after the transaction that writes it, so a blocker Landed is observed by
+// that call; the cleanup record has no writer in this build (#108) and so no
+// call after it, and a task it would move is already cleared as Landed. A run a new push
 // supersedes is the one finish that does not call it, because that push
 // creates the branch's next run under the same exclusion and the branch
 // never stops being live; internal/service's tasks.go says why.
