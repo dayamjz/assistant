@@ -129,9 +129,10 @@
 // GIT_DIR a caller put in the spec is removed too. What that buys is exactly
 // what the list buys internal/vcs and no more: the names on it, and not a
 // variable a later git introduces until it is added there. It is not the
-// isolation proof P11 asks for before a worker launches. This package starts
-// a worker where it is told and asks nothing about the directory, and that
-// proof has no owner in this repository yet.
+// isolation proof P11 asks for before a worker launches, and no test here
+// claims that principle: this package starts a worker where it is told and
+// asks nothing about the directory, so P11 stays declared unclaimed in
+// internal/principles until that proof has an owner.
 //
 // The process group is the handle's to report and nobody's here to register.
 // Which task a worker belongs to is not a fact this package holds, so Worker

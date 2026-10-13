@@ -88,8 +88,12 @@ func TestOpenWorkerConsultsTheDeclarationBeforeTheMechanism(t *testing.T) {
 // which is the residual gap the package documentation names, and which is
 // what shows the worker's absence of it is the builder's doing rather than
 // the parent's.
+//
+// This is the "can be pointed at its own repository" half of PRD principle
+// P11 and it does not claim the principle: P11 is a launch refused until the
+// directory is proven an isolated copy, and nothing here asks about the
+// directory, so the principle stays declared unclaimed in internal/principles.
 func TestTheWorkerEnvironmentCarriesNoRedirectingGitVariable(t *testing.T) {
-	principles.Cite(t, principles.P11)
 	elsewhere := filepath.Join(t.TempDir(), "elsewhere.git")
 	t.Setenv("GIT_DIR", elsewhere)
 	t.Setenv("GIT_WORK_TREE", t.TempDir())
