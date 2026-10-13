@@ -276,7 +276,7 @@ flowchart TB
     <div class="card card-border bg-base-200">
       <div class="card-body">
         <h3 class="card-title text-sm">One supervision loop</h3>
-        <p class="text-xs opacity-90">The watcher that notices a stalled worker is the watcher that notices a run held at a decision. Neither can be running while the other is not.</p>
+        <p class="text-xs opacity-90">The supervisor that notices a stalled worker is the supervisor that notices a run held at a decision. Neither can be running while the other is not.</p>
       </div>
     </div>
   </div>
@@ -399,7 +399,7 @@ flowchart TB
         Supervision costs nothing until something is actionable
       </div>
       <div class="collapse-content text-sm opacity-90 space-y-2">
-        <p>A cheap non-model watcher classifies every wake. It absorbs a wake only on positive evidence that work is genuinely proceeding: an active validation stage attributed to that task's branch, or a live process signal from its terminal. Absence of evidence surfaces; it never absorbs.</p>
+        <p>A cheap non-model supervisor classifies every wake. It absorbs a wake only on positive evidence that work is genuinely proceeding: an active validation stage attributed to that task's branch, or a live process signal from its terminal. Absence of evidence surfaces; it never absorbs.</p>
         <p><b>Prevents:</b> two opposite failures. Waking a model on every heartbeat makes a fleet unaffordable. Absorbing wakes on a timer makes a finished or crashed worker invisible.</p>
       </div>
     </div>
@@ -933,8 +933,10 @@ flowchart TD
     empty check list green was never applied, and the record says a merge ended it and that the
     checks were not settled. A pull request closed without merging ends the run as failed, with the
     reason recorded as "pull request closed without merging". Neither adds an outcome: the outcome
-    row in section 9 is unchanged. A run ended by its pull request being merged reads
-    <code>passed</code>.
+    row in section 9 is unchanged. The read that ends a run on a merge writes exactly one record,
+    the merge record in section 8's data model: the pull request, the head read, and when. The run's
+    <code>passed</code> is derived from that record, and so is the task's Landed in section 6;
+    neither stores the fact again.
   </p>
 
   <h3 class="text-xl font-semibold mb-3">What passing the gate means</h3>
@@ -1008,11 +1010,11 @@ stateDiagram-v2
     </pre>
   </div>
   <p class="mb-6 opacity-90">
-    Paused is a worker's own declared external wait, entered only on the worker's own say-so and
-    shown to you as what the worker said it is waiting on; the checks stage's wait is not shown as
-    Paused, and a hold is never Paused. Landed and Complete are terminal facts the program records
-    once each: Landed when it has read the merge from the code host, Complete when cleanup has
-    proved what it needs to. Neither is inferred from a run.
+    Paused is a worker's own declared external wait, entered only on the worker's own say-so; the
+    checks stage's wait is not shown as Paused, and a hold is never Paused. Landed and Complete are
+    terminal facts the program records once each: Landed is derived from the one merge record the
+    code-host read writes, the same record the run's <code>passed</code> is derived from, and
+    Complete is the cleanup proof, recorded once the same way. Neither is inferred from a run.
   </p>
 
   <div class="grid gap-4 md:grid-cols-2 mb-8">
@@ -1021,8 +1023,8 @@ stateDiagram-v2
         <h4 class="card-title text-base">Delivery task</h4>
         <ul class="text-sm opacity-90 list-disc pl-5 space-y-1">
           <li>Deliverable is a change to a project.</li>
-          <li>Works on its own branch in its own isolated copy: a full clone of the gate's bare repository under its task directory, at <code>tasks/&lt;id&gt;/copy</code>, with an <code>assistant</code> remote pointing at the gate.</li>
-          <li>Reaches a shared branch only through the gate, and by one path: the worker pushes to <code>assistant</code> the way a person does, so admission and the run start through the hooks the gate already installs. There is no second admission path, and a branch created inside the copy reaches the gate only by that push.</li>
+          <li>Works on its own branch in its own isolated copy: a full clone of your primary checkout, the upstream the gate already knows, under its task directory at <code>tasks/&lt;id&gt;/copy</code>, with an <code>assistant</code> remote pointing at the gate's bare repository.</li>
+          <li>Reaches a shared branch only through the gate: the worker pushes to <code>assistant</code> the way a person does, so admission and the run start through the hooks the gate already installs. Every push that reaches the gate goes through the hooks it installs, so those pushes have one admission path. A push the worker makes to any other remote is not seen by the gate, and nothing here prevents it.</li>
           <li>Its isolated copy is protected; cleanup refuses on unlanded work.</li>
         </ul>
       </div>
@@ -1033,7 +1035,7 @@ stateDiagram-v2
         <ul class="text-sm opacity-90 list-disc pl-5 space-y-1">
           <li>Deliverable is a self-contained report with evidence.</li>
           <li>Creates no branch, pushes nothing, opens no pull request.</li>
-          <li>Its isolated copy is cut the same way, a full clone under its task directory, and is declared scratch and discardable.</li>
+          <li>Its isolated copy is at <code>tasks/&lt;id&gt;/copy</code>, is cut the same way, is declared scratch and discardable, and carries no <code>assistant</code> remote because it pushes nothing.</li>
           <li>Can be promoted to a delivery task in place, keeping its context.</li>
         </ul>
       </div>
@@ -1068,7 +1070,7 @@ stateDiagram-v2
   </div>
   <p class="mb-4 opacity-90">The state resolver answers in a fixed precedence:</p>
   <ol class="list-decimal pl-6 space-y-1.5 mb-4 opacity-90">
-    <li>A terminal record the program wrote once for this task: Landed, the merge proof read from the code host, or Complete, the cleanup proof. This outranks a run, because a passed run resolves Ready forever and only a record of what happened after it can move a task past that.</li>
+    <li>A terminal record the program wrote once for this task: Landed, derived from the merge record the code-host read writes, or Complete, the cleanup proof. This outranks a run, because a passed run resolves Ready forever and only a record of what happened after it can move a task past that. A terminal record is final for the task. A run attributed to the same branch afterwards does not displace it. Work that continues after Landed is a new task.</li>
     <li>A validation run attributed to this task's own branch, whether active or finished. This outranks everything below, because a worker handed off to the gate stops writing to its own log.</li>
     <li>A live process signal from the task's terminal.</li>
     <li>The event log, and only when its most recent event maps to a recognized state.</li>
@@ -1169,7 +1171,7 @@ flowchart TD
         <tr><td><b>The live cycle</b></td><td>Active</td><td>The coordinator holds exactly one supervision wait whenever work is in flight, resumed as the last action of every turn.</td></tr>
         <tr><td><b>Arm verification</b></td><td>Active</td><td>Starting the service confirms its supervisor is genuinely alive: the service writes its instance identity to a fresh beacon file, the probe checks that the same instance holds the home's lock, and the result is an honest started, attached, or failed. An unexplained exit of the loop is a typed failure, not silence.</td></tr>
         <tr><td><b>Pull guard</b></td><td>Passive</td><td>Ordinary commands warn when work is in flight and the supervisor has stopped, which the beacon and the lock probe decide, or when queued wakes are waiting to be drained.</td></tr>
-        <tr><td><b>Stop guard</b></td><td>Push</td><td>The guard acts through a hook the coordinator's host invokes at turn end, which runs the command section 9 names beside <code>assistant gate</code>. When the coordinator tries to end a turn while work is in flight and the service holding this home's lock is not a live supervisor, the turn is blocked until the host supplies a re-entry signal. It is never forced into a counted follow-up turn: a turn count is a bound nothing here owns, so without a host-supplied re-entry signal the only safe reading is blocked.</td></tr>
+        <tr><td><b>Stop guard</b></td><td>Push</td><td>The guard acts through a hook the coordinator's host invokes at turn end, which runs the command section 9 names beside <code>assistant gate</code>. When the coordinator tries to end a turn while work is in flight and no live supervisor holds this home's lock, the turn is blocked until the host supplies a re-entry signal; the host defines that signal, not this program. It is never forced into a counted follow-up turn: a turn count is a bound nothing here owns, so without a host-supplied re-entry signal the only safe reading is blocked.</td></tr>
       </tbody>
     </table>
   </div>
@@ -1180,7 +1182,9 @@ flowchart TD
         A pattern-matched process kill reaches services belonging to other homes on the same machine,
         and the supervisor is a loop inside one of them. Repair goes through the home-scoped owner
         path, which restarts the loop in place inside the service recorded in this home's beacon and
-        holding its lock, and signals nothing else. Command shapes that violate this should be refused before they run, not
+        holding its lock, and signals nothing else. The binary contains no pattern kill, and repair is
+        an in-process restart. The rule that bad command shapes are refused is not implemented by
+        this. Command shapes that violate this should be refused before they run, not
         cleaned up after.
       </p>
     </div>
@@ -1409,7 +1413,7 @@ flowchart TD
     </div>
   </div>
   <p class="mb-8 opacity-90">
-    Use halt-before. It is strictly simpler, and it makes P6 easier to hold because a paused run has
+    Use halt-before. It is strictly simpler, and it makes P6 easier to hold because a halted run has
     performed no partial side effects that a resume might repeat.
   </p>
 
@@ -1615,6 +1619,7 @@ flowchart TB
   </div>
   <ul class="list-disc pl-6 space-y-1.5 mb-8 opacity-90">
     <li>A push returns immediately. The notification hands off and exits; the service owns everything long-running.</li>
+    <li>The run start fetches the submitted commit from the gate's bare repository, where the push landed, into the run's isolated copy. It never reads a person's working copy, and never a task's copy, for that commit: what a run validates is what was pushed.</li>
     <li>Exactly one service owns a home. It takes an exclusive operating-system lock before recovery and before binding its socket, so the lock cannot go stale even after a hard kill.</li>
     <li>Admission runs before any reference in the gate changes, so a refusal happens before mutation rather than after.</li>
     <li>Pushes to the same branch serialize, and a new push supersedes the run in progress. Different branches run concurrently.</li>
@@ -1689,7 +1694,8 @@ flowchart TB
   <h3 class="text-xl font-semibold mb-3">Data model</h3>
   <p class="mb-4 opacity-90">
     The important part is not the field list; it is which records are authoritative and which are
-    history. One record is both, and it is called out below.
+    history. One record is both, and it is called out below. A record marked Authoritative is the
+    one place its fact is read from. Appended means rows are added and never edited.
   </p>
   <div class="overflow-x-auto rounded-box border border-base-content/10 bg-base-100 mb-4">
     <table class="table table-sm">
@@ -1703,8 +1709,9 @@ flowchart TB
         <tr><td><b>task</b></td><td>Authoritative</td><td>Shape, project, mode, isolated copy path, session reference, linked run, linked pull request.</td></tr>
         <tr><td><b>task state</b></td><td>Resolved on read</td><td>Not a stored row. A resolution with its source attached, computed on each read from the records that own its facts, as of one consistent read of them; section 6 says what it rests on. Distinct from the event log, per P8.</td></tr>
         <tr><td><b>task event</b></td><td>History</td><td>Append-only. Every append is a wake.</td></tr>
-        <tr><td><b>wake</b></td><td>Authoritative, appended</td><td>The durable wake queue, one row per actionable wake, written in the same transaction as the detector markers it advances and drained by the coordinator. A table here and not a directory, so a wake and its markers are one write.</td></tr>
-        <tr><td><b>terminal fact</b></td><td>Authoritative</td><td>Landed, the merge proof read from the code host, and Complete, the cleanup proof. Each is written once by the program and read by the state resolver in the tier above the run tier.</td></tr>
+        <tr><td><b>wake</b></td><td>Authoritative, appended</td><td>The durable wake queue, one row per actionable wake, written in the same transaction as the detector markers it advances and drained by the coordinator. A table here and not a directory, so a wake and its markers are one write. Draining acknowledges a row and never deletes it: drained rows are kept, and a row is actionable until acknowledged.</td></tr>
+        <tr><td><b>merge record</b></td><td>Authoritative, appended</td><td>Append-only and written once, by the code-host read that ends a run on a merge: the pull request, the head read, and when. The code host owns the merge; this is the program's record that it saw it. The run's <code>passed</code> on a merge and the task's Landed are both derived from this one record, and neither stores the fact again.</td></tr>
+        <tr><td><b>cleanup record</b></td><td>Authoritative, appended</td><td>Append-only and written once, recording the cleanup check it was made from. The task's Complete is derived from it. With the merge record it is what section 6's resolver reads in the tier above the run tier.</td></tr>
         <tr><td><b>hold</b></td><td>Authoritative</td><td>A decision waiting on you, with a stable key. Idempotent to register. Closed only by an explicit resolution, recorded with who made it, never by the surrounding work finishing. The one resolution the service makes itself is for the hold the checks stage raises when <code>checks_timeout</code> elapses: when the pull request that hold waits on is read as merged or closed, the question it asked no longer exists, and the service records that reading as the resolution and itself as the resolver. Every other hold keeps the rule.</td></tr>
         <tr><td><b>agent invocation</b></td><td>History</td><td>Purpose, agent, model, timing, failure category, token usage. Never prompts, outputs, diffs, or credentials.</td></tr>
       </tbody>
@@ -1777,7 +1784,7 @@ flowchart TB
   worktrees/&lt;repo&gt;/&lt;run&gt; disposable isolated copies, removed when a run ends
   evidence/&lt;run&gt;         test evidence, deliberately outside the isolated copy
   tasks/&lt;id&gt;/            per-task records: instructions, report, events
-  tasks/&lt;id&gt;/copy        the task's isolated copy, a full clone of the gate with an assistant remote
+  tasks/&lt;id&gt;/copy        the task's isolated copy, a full clone of your checkout with an assistant remote
   logs/&lt;run&gt;/&lt;stage&gt;.log per-stage logs, the authoritative full output
   logs/service.log       bounded lifecycle log with rotation</code></pre>
   </div>
@@ -1786,7 +1793,7 @@ flowchart TB
     <li><b>The full log is the authority.</b> What appears in findings, streams, and prompts is a bounded projection with an explicit marker naming what was omitted and how to read the rest.</li>
     <li><b>Log rotation truncates in place.</b> A service or child process holding an open descriptor keeps writing to the bounded file rather than to an orphaned inode.</li>
     <li><b>Records precede directories.</b> Insert the run row before creating its directory, so a directory with no row is always safe to remove.</li>
-    <li><b>Nothing under <code>tasks/</code> is state.</b> A task's state is resolved on read, per P8 and section 6, so no file there holds it. The durable wake queue is a table in <code>state.db</code>, not a directory.</li>
+    <li><b>Nothing under <code>tasks/</code> is state.</b> A task's state is resolved on read, per P8 and section 6, so no file there holds it, and no file in a task's records holds it. The durable wake queue is a table in <code>state.db</code>, not a directory.</li>
   </ul>
 
   <h3 class="text-xl font-semibold mb-3">Two boundaries that are easy to get wrong</h3>
@@ -2057,8 +2064,8 @@ flowchart TB
         <tr><td><code>no_ci</code></td><td><code>false</code></td><td>A positive declaration that this repository has no checks. Only this makes an empty check list count as green.</td></tr>
         <tr><td><code>allow_pushed_commands</code></td><td><code>false</code></td><td>The opt-out that lets the pushed branch set commands and agent selection. It is itself readable only from the trusted copy, so a branch cannot enable it for itself.</td></tr>
         <tr><td><code>checks_timeout</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code>168h</code></td><td>Idle timeout, re-armed whenever the base branch advances. On elapse the run holds rather than ending, and that hold is the one section 11's recovery step 3 applies to.</td></tr>
-        <tr><td><code>escalation_window</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code>30m</code></td><td>How long a terminal may stay unchanged, with positive evidence of progress, before the supervisor surfaces it anyway. The default is chosen conservatively and is unmeasured; the limits table bounds it on both sides.</td></tr>
-        <tr><td><code>recheck_window</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code>2h</code></td><td>How long a declared external wait may sit idle before it surfaces, so a forgotten wait cannot stay invisible. The default is chosen conservatively and is unmeasured; the limits table bounds it on both sides.</td></tr>
+        <tr><td><code>escalation_window</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code>30m</code></td><td>How long a terminal may stay unchanged, with positive evidence of progress, before the supervisor surfaces it anyway. The default is chosen, not measured; the limits table bounds it on both sides, and those bounds are chosen, not measured.</td></tr>
+        <tr><td><code>recheck_window</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code>2h</code></td><td>How long a declared external wait may sit idle before it surfaces, so a forgotten wait cannot stay invisible. The default is chosen, not measured; the limits table bounds it on both sides, and those bounds are chosen, not measured.</td></tr>
         <tr><td><code>session_reuse</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code>true</code></td><td>One durable fixer session per run. Review turns are always fresh regardless, per P4.</td></tr>
         <tr><td><code>decision_model</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code>evaluate</code></td><td>The mode of the checks in section 5, "Checks a decision model may add": <code>evaluate</code>, <code>enforce</code>, or <code>off</code>. They run against the one supported provider, and only where the provider's key is in the operator's environment, never in a configuration file; with the key present they send the changed lines of every reviewed file to that provider.</td></tr>
         <tr><td><code>commit.fix_message</code></td><td><code>fix: {summary}</code></td><td>Subject line for fix commits. <code>{summary}</code> is the single required substitution, replaced by the agent's summary of the fix; a template without it is invalid. The template, the agent's summary, and the rendered result are each validated for length and for characters that could disguise content before anything is staged.</td></tr>
@@ -2093,10 +2100,10 @@ flowchart TB
         <tr><td>Run budget ceiling</td><td><code class="prd-num">100000</code></td><td><code>run_budget</code>. The budget exists to bound a run, so it is itself bounded.</td></tr>
         <tr><td>Per-stage fix round ceiling</td><td><code class="prd-num">100</code></td><td>Any <code>fix_rounds.*</code> value.</td></tr>
         <tr><td>Checks idle timeout ceiling</td><td><code>8760h</code></td><td><code>checks_timeout</code>.</td></tr>
-        <tr><td>Escalation window floor</td><td><code>1m</code></td><td><code>escalation_window</code>. Below this the supervisor would surface a worker that is merely thinking.</td></tr>
-        <tr><td>Escalation window ceiling</td><td><code>24h</code></td><td><code>escalation_window</code>. Above this a stalled worker is invisible for a working day.</td></tr>
-        <tr><td>Recheck window floor</td><td><code>1m</code></td><td><code>recheck_window</code>. Below this a declared wait is not silenced at all.</td></tr>
-        <tr><td>Recheck window ceiling</td><td><code>168h</code></td><td><code>recheck_window</code>. Above this a forgotten wait outlives the checks timeout.</td></tr>
+        <tr><td>Escalation window floor</td><td><code>1m</code></td><td><code>escalation_window</code>. Chosen, not measured.</td></tr>
+        <tr><td>Escalation window ceiling</td><td><code>24h</code></td><td><code>escalation_window</code>. Above this a stalled worker is invisible for a day. Chosen, not measured.</td></tr>
+        <tr><td>Recheck window floor</td><td><code>1m</code></td><td><code>recheck_window</code>. Chosen, not measured.</td></tr>
+        <tr><td>Recheck window ceiling</td><td><code>168h</code></td><td><code>recheck_window</code>. Above this a forgotten wait is invisible for a week. Chosen, not measured.</td></tr>
       </tbody>
     </table>
   </div>
