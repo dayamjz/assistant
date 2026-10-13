@@ -13,6 +13,4 @@ package principles
 //
 // Check refuses a row whose principle a test does turn out to cite, so a row
 // cannot outlive the gap it describes.
-var unclaimed = map[Principle]string{
-	P12: "Nothing here removes an isolated copy. internal/gate's removal is about a gate repository, not about proving a worker's work landed.",
-}
+var unclaimed = map[Principle]string{}

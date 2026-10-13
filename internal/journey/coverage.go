@@ -245,7 +245,11 @@ func Coverage() []Established {
 				"so a green P11 does not read as no worker launches unproven."},
 		{principles.P12, ReachNone,
 			"Nothing here removes an isolated copy. The binary's eject removes a gate, which is a " +
-				"different question. internal/principles declares this gap."},
+				"different question. What is claimed is claimed at package reach and is the proof's " +
+				"refusal half only: internal/vcs's Incorporated reports a conflict and anything it " +
+				"cannot compute as an error and never as false, and internal/safety's Incorporation " +
+				"fails closed on an unreadable fact with a result that is no proof. Nothing there " +
+				"removes a copy; that decision is #108's."},
 		{principles.P13, ReachNone,
 			"Every answer this harness reads back carries run identifiers, stage names and home paths, " +
 				"so the principle does not hold on this surface today and a test claiming it here would " +
