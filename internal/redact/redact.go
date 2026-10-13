@@ -19,6 +19,22 @@
 // enough to see which host and which path the URL named, which is what a
 // diagnostic needs.
 //
+// A bearer credential in an HTTP Authorization value, which is the shape an
+// API key takes on its way to a hosted service: the token in
+// "Authorization: Bearer TOKEN", and in "Bearer TOKEN" wherever it stands
+// alone, is replaced and the word Bearer is kept, so a reader can still see a
+// credential was there. An Authorization value under any other scheme loses
+// everything after the header name to the end of its line, because this
+// package cannot tell which part of an unknown scheme is the secret. The
+// decision-model client in internal/judge is the caller this shape was added
+// for; it builds no error from its own header, and this is the owner that
+// removes one wherever text carrying it reaches an error, a log, or a record.
+//
+// A bare "Bearer" counts only when what follows is at least eight characters
+// a token may be made of, so prose such as "the bearer of" stays as written.
+// A shorter token is the residual gap of that rule, and so is a token split
+// across lines.
+//
 // The exception is a scheme whose userinfo is a login name rather than a
 // secret, and it is narrow: ssh and git carry no password, so ssh://git@host
 // loses nothing by keeping its user and a reader loses the account the
@@ -27,12 +43,13 @@
 //
 // # What it does not do
 //
-// It does not find a credential that is not in a URL. An API token in an
-// environment variable, a private key in a file, and a password a command
-// printed on its own are all outside what this recognizes, and nothing here
-// reports that it looked. PRD section 8 asks for removal from URLs, errors,
-// and anything persisted; this covers the URL shape wherever it appears in
-// that text, and the residual gap is every other shape.
+// It does not find a credential in any other shape. An API token in an
+// environment variable's assignment, a private key in a file, and a password
+// a command printed on its own are all outside what this recognizes, and
+// nothing here reports that it looked. PRD section 8 asks for removal from
+// URLs, errors, and anything persisted; this covers the URL and bearer shapes
+// wherever they appear in that text, and the residual gap is every other
+// shape.
 //
 // It does not parse. Text arriving here is an error message, a command line,
 // or a log line, and a URL inside one is surrounded by prose that no URL
@@ -72,6 +89,16 @@ var loginSchemes = map[string]bool{
 // at sign later in the URL cannot be mistaken for one.
 var credentialed = regexp.MustCompile(`(?i)\b([a-z][a-z0-9+.\-]*)://([^/?#@\s]*)@`)
 
+// authorization matches an Authorization header's value to the end of its
+// line, whatever its scheme. The name is matched without regard to case,
+// because HTTP header names are case-insensitive and a log may print either.
+var authorization = regexp.MustCompile(`(?i)\b(authorization)(\s*[:=]\s*)[^\r\n]+`)
+
+// bearer matches a bearer token standing on its own. Its token is at least
+// eight characters from the set RFC 6750 allows a bearer token, so the word in
+// ordinary prose is left alone.
+var bearer = regexp.MustCompile(`(?i)\b(bearer)\s+[A-Za-z0-9\-._~+/]{8,}=*`)
+
 // Redactor removes credentials from text. It holds nothing, so the zero value
 // is usable and safe for concurrent use, which internal/vcs requires of a
 // Redactor because a repository calls it from whichever invocation failed.
@@ -82,10 +109,12 @@ type Redactor struct{}
 // the choice reversible if this ever needs configuring.
 func New() Redactor { return Redactor{} }
 
-// Redact returns s with the credential in every URL-shaped run replaced by
-// Marker. Text holding no URL comes back unchanged, and so does a URL with no
+// Redact returns s with every credential it recognizes replaced by Marker: the
+// userinfo of every URL-shaped run, and every bearer or Authorization value.
+// Text holding neither comes back unchanged, and so does a URL with no
 // userinfo, so it is safe to call on anything.
 func (Redactor) Redact(s string) string {
+	s = redactAuthorization(s)
 	if !strings.Contains(s, "@") {
 		return s
 	}
@@ -96,5 +125,28 @@ func (Redactor) Redact(s string) string {
 			return match
 		}
 		return scheme + "://" + Marker + "@"
+	})
+}
+
+// redactAuthorization replaces every Authorization value and every bearer
+// token in s. An Authorization value is replaced whole, keeping the word
+// Bearer when that was its scheme so the replacement still says what kind of
+// credential stood there; a bearer token outside a header is replaced on its
+// own.
+func redactAuthorization(s string) string {
+	lower := strings.ToLower(s)
+	if !strings.Contains(lower, "bearer") && !strings.Contains(lower, "authorization") {
+		return s
+	}
+	s = authorization.ReplaceAllStringFunc(s, func(match string) string {
+		parts := authorization.FindStringSubmatch(match)
+		value := strings.TrimSpace(match[len(parts[1])+len(parts[2]):])
+		if scheme, _, ok := strings.Cut(value, " "); ok && strings.EqualFold(scheme, "bearer") {
+			return parts[1] + parts[2] + scheme + " " + Marker
+		}
+		return parts[1] + parts[2] + Marker
+	})
+	return bearer.ReplaceAllStringFunc(s, func(match string) string {
+		return bearer.FindStringSubmatch(match)[1] + " " + Marker
 	})
 }

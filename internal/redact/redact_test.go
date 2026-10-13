@@ -92,3 +92,56 @@ func TestTheStoreAcceptsThisRedactor(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = s.Close() })
 }
+
+// The bearer shape is the one a hosted service's API key travels in, and it
+// has to be gone wherever it appears: as a header line, as a bare token, and
+// inside an error message that quotes either.
+func TestABearerCredentialDoesNotSurvive(t *testing.T) {
+	t.Parallel()
+	const token = "ts_live_0123456789abcdef"
+	for _, text := range []string{
+		"Authorization: Bearer " + token,
+		"authorization: bearer " + token,
+		"AUTHORIZATION:Bearer " + token + "\r\nContent-Type: application/json",
+		"request failed with header Authorization=Bearer " + token + " attached",
+		"Bearer " + token,
+		`Post "https://api.example.invalid/v1": sent Bearer ` + token + `: connection reset`,
+		"Authorization: Basic " + token,
+		"Authorization: token " + token,
+	} {
+		got := redact.New().Redact(text)
+		if strings.Contains(got, token) {
+			t.Errorf("redacting %q left the token in %q", text, got)
+		}
+		if !strings.Contains(got, redact.Marker) {
+			t.Errorf("redacting %q produced %q, which carries no marker", text, got)
+		}
+	}
+}
+
+// The header's name and the scheme stay, so a diagnostic still says what kind
+// of credential stood there, and a following header line is untouched because
+// the value ends at its line.
+func TestABearerRedactionKeepsTheSchemeAndTheNextLine(t *testing.T) {
+	t.Parallel()
+	got := redact.New().Redact("Authorization: Bearer abcdefgh12345678\nContent-Type: application/json")
+	if want := "Authorization: Bearer " + redact.Marker + "\nContent-Type: application/json"; got != want {
+		t.Fatalf("Redact = %q, want %q", got, want)
+	}
+	if again := redact.New().Redact(got); again != got {
+		t.Fatalf("redacting a redacted header changed it again: %q", again)
+	}
+}
+
+// Prose that uses the word is not a credential, so it is left as written.
+func TestTheWordBearerInProseIsLeftAlone(t *testing.T) {
+	t.Parallel()
+	for _, text := range []string{
+		"the bearer of this note",
+		"Bearer tokens are sent in a header.",
+	} {
+		if got := redact.New().Redact(text); got != text {
+			t.Fatalf("Redact(%q) = %q, want it unchanged", text, got)
+		}
+	}
+}
