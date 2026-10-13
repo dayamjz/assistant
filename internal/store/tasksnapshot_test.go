@@ -40,7 +40,7 @@ func TestTheTaskStateTableTakesNoRows(t *testing.T) {
 	principles.Cite(t, principles.P14)
 	ctx := context.Background()
 	s := openStore(t)
-	task := seedTask(t, s, "task-1")
+	task := seedTask(t, s, "taskaaaaaaab")
 
 	err := insertTaskStateRow(ctx, s.write, task.ID)
 	if err == nil {
@@ -64,7 +64,7 @@ func TestTheTaskStateSealEmptiesARowAnEarlierBuildWrote(t *testing.T) {
 	principles.Cite(t, principles.P14)
 	ctx := context.Background()
 	s := openStore(t)
-	task := seedTask(t, s, "task-1")
+	task := seedTask(t, s, "taskaaaaaaab")
 
 	if _, err := s.write.ExecContext(ctx, `DROP TRIGGER task_state_is_not_a_record`); err != nil {
 		t.Fatalf("dropping the seal: %v", err)
@@ -184,12 +184,12 @@ func TestASnapshotAttributesRunsByBranchAndAge(t *testing.T) {
 	s := openStore(t)
 	before := seedRun(t, s) // repo-1, topic, run-1: older than the task below
 	time.Sleep(2 * time.Millisecond)
-	task := seedBranchTask(t, s, "task-1")
+	task := seedBranchTask(t, s, "taskaaaaaaab")
 	time.Sleep(2 * time.Millisecond)
 	mine := extraRun(t, s, "run-mine", "repo-1", "topic")
-	extraRun(t, s, "run-other-branch", "repo-1", "elsewhere")
+	extraRun(t, s, "run-other-branch", "repo-1", "elsewhereaaa")
 	extraRun(t, s, "run-other-repo", "repo-2", "topic")
-	investigation := seedTask(t, s, "task-2")
+	investigation := seedTask(t, s, "taskaaaaaaac")
 
 	snap, err := s.TaskSnapshot(ctx, task.ID)
 	if err != nil {
@@ -235,15 +235,15 @@ func runIDs(runs []Run) []string {
 func TestASnapshotCarriesTheHoldsThatNameTheTaskOrItsRuns(t *testing.T) {
 	ctx := context.Background()
 	s := openStore(t)
-	task := seedBranchTask(t, s, "task-1")
+	task := seedBranchTask(t, s, "taskaaaaaaab")
 	time.Sleep(2 * time.Millisecond)
 	mine := extraRun(t, s, "run-mine", "repo-1", "topic")
-	other := extraRun(t, s, "run-other", "repo-1", "elsewhere")
+	other := extraRun(t, s, "run-other", "repo-1", "elsewhereaaa")
 
 	for _, h := range []Hold{
 		{Key: "on-task", Subject: "task", TaskID: Known(task.ID)},
 		{Key: "on-run", Subject: "run", RunID: Known(mine.ID)},
-		{Key: "elsewhere", Subject: "other", RunID: Known(other.ID)},
+		{Key: "elsewhereaaa", Subject: "other", RunID: Known(other.ID)},
 	} {
 		if _, err := s.RegisterHold(ctx, h); err != nil {
 			t.Fatalf("RegisterHold %s: %v", h.Key, err)
@@ -275,11 +275,11 @@ func TestTaskSnapshotsListNewestFirstAndRefuseUnknownTasks(t *testing.T) {
 	if all, err := s.TaskSnapshots(ctx); err != nil || len(all) != 0 {
 		t.Fatalf("a fresh store lists (%d, %v)", len(all), err)
 	}
-	seedTask(t, s, "task-1")
+	seedTask(t, s, "taskaaaaaaab")
 	time.Sleep(2 * time.Millisecond)
-	seedTask(t, s, "task-2")
+	seedTask(t, s, "taskaaaaaaac")
 	all, err := s.TaskSnapshots(ctx)
-	if err != nil || len(all) != 2 || all[0].Task.ID != "task-2" || all[1].Task.ID != "task-1" {
+	if err != nil || len(all) != 2 || all[0].Task.ID != "taskaaaaaaac" || all[1].Task.ID != "taskaaaaaaab" {
 		t.Fatalf("TaskSnapshots = %d snapshots, %v", len(all), err)
 	}
 }
@@ -295,7 +295,7 @@ func TestForgettingARepositoryIsRefusedWhileATaskWorksOnOne(t *testing.T) {
 	if _, err := s.TransitionRun(ctx, run.ID, []RunStatus{RunPending}, RunTerminated); err != nil {
 		t.Fatalf("TransitionRun: %v", err)
 	}
-	seedBranchTask(t, s, "task-1")
+	seedBranchTask(t, s, "taskaaaaaaab")
 
 	if _, err := s.ForgetRepository(ctx, run.RepositoryID); !errors.Is(err, ErrRepositoryInUse) {
 		t.Fatalf("ForgetRepository = %v, want ErrRepositoryInUse", err)
@@ -324,13 +324,13 @@ func TestAttributionIsCutOffAtTheLatestAttempt(t *testing.T) {
 	ctx := context.Background()
 	s := openStore(t)
 	seedRun(t, s) // creates repo-1 and an older run on topic
-	blocker := seedBranchTask(t, s, "blocker")
+	blocker := seedBranchTask(t, s, "blockeraaaaa")
 	time.Sleep(2 * time.Millisecond)
 	live := extraRun(t, s, "run-live", "repo-1", "topic")
 	if _, err := s.TransitionRun(ctx, live.ID, []RunStatus{RunPending}, RunRunning); err != nil {
 		t.Fatalf("TransitionRun: %v", err)
 	}
-	queued := createBranchTask(t, s, "queued", Disposition{Blocker: Known(blocker.ID), Observed: blocker.Row})
+	queued := createBranchTask(t, s, "queuedaaaaaa", Disposition{Blocker: Known(blocker.ID), Observed: blocker.Row})
 	if got := queued.BlockerTask.Or(""); got != blocker.ID {
 		t.Fatalf("the queued task records blocker %q, want %s", got, blocker.ID)
 	}
@@ -386,7 +386,7 @@ func TestAttributionIsCutOffAtTheLatestAttempt(t *testing.T) {
 func TestASnapshotCarriesTheCleanupRecord(t *testing.T) {
 	ctx := context.Background()
 	s := openStore(t)
-	task := seedTask(t, s, "task-1")
+	task := seedTask(t, s, "taskaaaaaaab")
 	before, err := s.TaskSnapshot(ctx, task.ID)
 	if err != nil || before.Cleanup.IsKnown() {
 		t.Fatalf("a task cleanup has not reached carries a cleanup record: %+v (%v)", before.Cleanup, err)
@@ -415,10 +415,10 @@ func TestASnapshotCarriesTheMergeRecordsOfItsRuns(t *testing.T) {
 	ctx := context.Background()
 	s := openStore(t)
 	seedRun(t, s)
-	task := seedBranchTask(t, s, "task-1")
+	task := seedBranchTask(t, s, "taskaaaaaaab")
 	time.Sleep(2 * time.Millisecond)
 	mine := extraRun(t, s, "run-mine", "repo-1", "topic")
-	other := extraRun(t, s, "run-other", "repo-1", "elsewhere")
+	other := extraRun(t, s, "run-other", "repo-1", "elsewhereaaa")
 	for _, id := range []string{mine.ID, other.ID} {
 		if _, err := s.TransitionRun(ctx, id, []RunStatus{RunPending}, RunRunning); err != nil {
 			t.Fatalf("TransitionRun: %v", err)

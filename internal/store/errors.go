@@ -284,6 +284,12 @@ var ErrAttemptSessionRecorded = errors.New("store: the attempt already names a s
 // from.
 var ErrCleanupRecorded = errors.New("store: the task already has a cleanup record")
 
+// ErrCleanupRemoved is returned by MarkCleanupRemoved when the task's cleanup
+// record already says when the copy was removed. The removal happens once,
+// so a second mark is a caller re-reporting what the record already holds
+// rather than a fact to overwrite.
+var ErrCleanupRemoved = errors.New("store: the cleanup record already records the copy's removal")
+
 // ErrUnknownCleanupProof is what a read of a cleanup record returns when its
 // proof column holds a value outside the closed set CleanupProof defines, and
 // what RecordTaskCleanup returns when asked to record one. The set is closed,

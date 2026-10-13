@@ -17,7 +17,7 @@ import (
 func TestANewTaskOpensItsHistory(t *testing.T) {
 	ctx := context.Background()
 	s := openStore(t)
-	task := seedTask(t, s, "task-1")
+	task := seedTask(t, s, "taskaaaaaaab")
 
 	events, err := s.TaskEvents(ctx, task.ID, 0, 0)
 	if err != nil {
@@ -35,7 +35,7 @@ func TestANewTaskOpensItsHistory(t *testing.T) {
 func TestTaskEventsPaginateInAppendOrder(t *testing.T) {
 	ctx := context.Background()
 	s := openStore(t)
-	task := seedTask(t, s, "task-1")
+	task := seedTask(t, s, "taskaaaaaaab")
 
 	for i := 3; i <= 6; i++ {
 		e, err := s.AppendTaskEvent(ctx, task.ID, fmt.Sprintf("kind-%d", i), "")
@@ -66,7 +66,7 @@ func TestTaskAccessorsRefuseIncompleteRecords(t *testing.T) {
 	ctx := context.Background()
 	s := openStore(t)
 
-	complete := Task{ID: "task-1", Shape: TaskDelivery, Project: "one", Mode: "interactive", WorktreePath: "/worktrees/task-1"}
+	complete := Task{ID: "taskaaaaaaab", Shape: TaskDelivery, Project: "one", Mode: "interactive", WorktreePath: "/worktrees/task-1"}
 	cases := map[string]func(Task) Task{
 		"no identifier":               func(t Task) Task { t.ID = ""; return t },
 		"unknown shape":               func(t Task) Task { t.Shape = "something"; return t },
@@ -87,14 +87,14 @@ func TestTaskAccessorsRefuseIncompleteRecords(t *testing.T) {
 	// A repository alone is an investigation task working in one with no
 	// branch of its own (PRD section 6), so it is a complete record.
 	alone := complete
-	alone.ID, alone.Shape, alone.RepositoryID = "task-2", TaskInvestigation, Known("repo-1")
+	alone.ID, alone.Shape, alone.RepositoryID = "taskaaaaaaac", TaskInvestigation, Known("repo-1")
 	if _, err := s.CreateTask(ctx, alone, Disposition{}); err != nil {
 		t.Fatalf("CreateTask refused a task naming a repository alone: %v", err)
 	}
-	if _, err := s.AppendTaskEvent(ctx, "task-1", " ", ""); err == nil {
+	if _, err := s.AppendTaskEvent(ctx, "taskaaaaaaab", " ", ""); err == nil {
 		t.Fatal("AppendTaskEvent accepted an event with no kind")
 	}
-	if _, err := s.AppendTaskEvent(ctx, "no-such-task", "started", ""); !errors.Is(err, ErrNotFound) {
+	if _, err := s.AppendTaskEvent(ctx, "nosuchtaskaa", "started", ""); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("AppendTaskEvent on a missing task = %v, want ErrNotFound", err)
 	}
 }
@@ -103,7 +103,7 @@ func TestTaskLinksStartUnknown(t *testing.T) {
 	ctx := context.Background()
 	s := openStore(t)
 	run := seedRun(t, s)
-	task := seedTask(t, s, "task-1")
+	task := seedTask(t, s, "taskaaaaaaab")
 
 	if task.RunID.IsKnown() || task.PullRequest.IsKnown() || task.BlockerTask.IsKnown() {
 		t.Fatalf("a new task reports links it does not have: %+v", task)
@@ -121,7 +121,7 @@ func TestTaskLinksStartUnknown(t *testing.T) {
 	if id, known := got.RunID.Get(); !known || id != run.ID {
 		t.Fatalf("the run link came back as %q (known=%v)", id, known)
 	}
-	if err := s.SetTaskRun(ctx, "no-such-task", run.ID); !errors.Is(err, ErrNotFound) {
+	if err := s.SetTaskRun(ctx, "nosuchtaskaa", run.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("SetTaskRun on a missing task: %v", err)
 	}
 }
@@ -131,7 +131,7 @@ func TestTaskLinksStartUnknown(t *testing.T) {
 func TestConcurrentWritersKeepEveryWrite(t *testing.T) {
 	ctx := context.Background()
 	s := openStore(t)
-	task := seedTask(t, s, "task-1")
+	task := seedTask(t, s, "taskaaaaaaab")
 
 	const writers = 8
 	const each = 12
@@ -206,7 +206,7 @@ func TestAnAnchoredAppendIsRefusedOnceTheHistoryMoved(t *testing.T) {
 	principles.Cite(t, principles.P6)
 	ctx := context.Background()
 	s := openStore(t)
-	task := seedTask(t, s, "task-1") // opening event 1, dispatched 2
+	task := seedTask(t, s, "taskaaaaaaab") // opening event 1, dispatched 2
 
 	e, err := s.AppendTaskEventAfter(ctx, task.ID, 2, "started", "")
 	if err != nil || e.Sequence != 3 {
@@ -223,7 +223,7 @@ func TestAnAnchoredAppendIsRefusedOnceTheHistoryMoved(t *testing.T) {
 	if _, err := s.AppendTaskEventAfter(ctx, task.ID, 0, "started", ""); !errors.Is(err, ErrTaskMoved) {
 		t.Fatalf("an append anchored to zero = %v, want ErrTaskMoved", err)
 	}
-	if _, err := s.AppendTaskEventAfter(ctx, "no-such-task", 0, "started", ""); !errors.Is(err, ErrNotFound) {
+	if _, err := s.AppendTaskEventAfter(ctx, "nosuchtaskaa", 0, "started", ""); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("an anchored append to a missing task = %v, want ErrNotFound", err)
 	}
 	events, err := s.TaskEvents(ctx, task.ID, 0, 0)
@@ -240,7 +240,7 @@ func TestTwoAnchoredAppendsAfterOneTipLandOne(t *testing.T) {
 	principles.Cite(t, principles.P6)
 	ctx := context.Background()
 	s := openStore(t)
-	task := seedTask(t, s, "task-1") // events 1 and 2
+	task := seedTask(t, s, "taskaaaaaaab") // events 1 and 2
 
 	wins, losses := raceTwo(t, func() error {
 		_, err := s.AppendTaskEventAfter(ctx, task.ID, 2, "started", "")
@@ -254,7 +254,7 @@ func TestTwoAnchoredAppendsAfterOneTipLandOne(t *testing.T) {
 		t.Fatalf("after the race the history has %d events (%v), want 3", len(events), err)
 	}
 
-	control := seedTask(t, s, "task-2")
+	control := seedTask(t, s, "taskaaaaaaac")
 	wins, losses = raceTwo(t, func() error {
 		_, err := s.AppendTaskEvent(ctx, control.ID, "started", "")
 		return err

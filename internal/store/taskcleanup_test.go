@@ -15,7 +15,7 @@ import (
 func TestACleanupRecordIsWrittenOnce(t *testing.T) {
 	ctx := context.Background()
 	s := openStore(t)
-	task := seedTask(t, s, "task-1")
+	task := seedTask(t, s, "taskaaaaaaab")
 
 	if _, err := s.TaskCleanup(ctx, task.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("a task cleanup has not reached = %v, want ErrNotFound", err)
@@ -60,7 +60,7 @@ func TestACleanupRecordIsWrittenOnce(t *testing.T) {
 func TestACleanupRecordKeepsAnEmptyExaminationAndNoRemovalApart(t *testing.T) {
 	ctx := context.Background()
 	s := openStore(t)
-	task := seedTask(t, s, "task-1")
+	task := seedTask(t, s, "taskaaaaaaab")
 	written, err := s.RecordTaskCleanup(ctx, TaskCleanup{TaskID: task.ID, Proof: CleanupProofDefaultBranch})
 	if err != nil {
 		t.Fatalf("RecordTaskCleanup: %v", err)
@@ -79,7 +79,7 @@ func TestACleanupRecordKeepsAnEmptyExaminationAndNoRemovalApart(t *testing.T) {
 func TestACleanupRowOutsideTheSetIsRefusedOnRead(t *testing.T) {
 	ctx := context.Background()
 	s := openStore(t)
-	task := seedTask(t, s, "task-1")
+	task := seedTask(t, s, "taskaaaaaaab")
 	if _, err := s.write.ExecContext(ctx, `
 		INSERT INTO task_cleanup (task_id, proof, examined, recorded_at, removed_at)
 		VALUES (?, 'guessed', '[]', ?, NULL)`, task.ID, encodeTime(nowUTC())); err != nil {
@@ -98,5 +98,35 @@ func TestACleanupRowOutsideTheSetIsRefusedOnRead(t *testing.T) {
 	}
 	if CleanupProof("guessed").Recognized() {
 		t.Fatal("a proof nobody defined is Recognized")
+	}
+}
+
+// The removal is marked once, after the proof: a mark with no record is
+// refused, the first mark stands, and a second is refused with the first
+// still in place.
+func TestACleanupRemovalIsMarkedOnceAfterTheProof(t *testing.T) {
+	ctx := context.Background()
+	s := openStore(t)
+	task := seedTask(t, s, "taskaaaaaaab")
+	removed := time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC)
+
+	if err := s.MarkCleanupRemoved(ctx, task.ID, removed); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("a removal marked before the proof = %v, want ErrNotFound", err)
+	}
+	if _, err := s.RecordTaskCleanup(ctx, TaskCleanup{TaskID: task.ID, Proof: CleanupProofRemoteBranch}); err != nil {
+		t.Fatalf("RecordTaskCleanup: %v", err)
+	}
+	if err := s.MarkCleanupRemoved(ctx, task.ID, removed); err != nil {
+		t.Fatalf("MarkCleanupRemoved: %v", err)
+	}
+	if err := s.MarkCleanupRemoved(ctx, task.ID, removed.Add(time.Hour)); !errors.Is(err, ErrCleanupRemoved) {
+		t.Fatalf("a second mark = %v, want ErrCleanupRemoved", err)
+	}
+	got, err := s.TaskCleanup(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("TaskCleanup: %v", err)
+	}
+	if at, ok := got.RemovedAt.Get(); !ok || !at.Equal(removed) {
+		t.Fatalf("the record's removal is %v (known=%v), want the first mark at %v", at, ok, removed)
 	}
 }

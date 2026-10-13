@@ -16,7 +16,7 @@ func TestAttemptsAreAnchoredToTheLatestSeen(t *testing.T) {
 	principles.Cite(t, principles.P6)
 	ctx := context.Background()
 	s := openStore(t)
-	task := seedTask(t, s, "task-1")
+	task := seedTask(t, s, "taskaaaaaaab")
 
 	if got, err := s.TaskAttempts(ctx, task.ID); err != nil || len(got) != 0 {
 		t.Fatalf("a new task has attempts %v (%v)", got, err)
@@ -41,7 +41,7 @@ func TestAttemptsAreAnchoredToTheLatestSeen(t *testing.T) {
 	if _, err := s.BeginTaskAttempt(ctx, task.ID, 0); !errors.Is(err, ErrTaskMoved) {
 		t.Fatalf("a zero anchor on a task with attempts = %v, want ErrTaskMoved", err)
 	}
-	if _, err := s.BeginTaskAttempt(ctx, "no-such-task", 0); !errors.Is(err, ErrNotFound) {
+	if _, err := s.BeginTaskAttempt(ctx, "nosuchtaskaa", 0); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("an attempt of a missing task = %v, want ErrNotFound", err)
 	}
 
@@ -62,7 +62,7 @@ func TestTwoCallersCannotBothBeginTheNextAttempt(t *testing.T) {
 	principles.Cite(t, principles.P6)
 	ctx := context.Background()
 	s := openStore(t)
-	task := seedTask(t, s, "task-1")
+	task := seedTask(t, s, "taskaaaaaaab")
 	first, err := s.BeginTaskAttempt(ctx, task.ID, 0)
 	if err != nil {
 		t.Fatalf("BeginTaskAttempt: %v", err)
@@ -119,7 +119,7 @@ func raceTwo(t *testing.T, write func() error) (wins, losses int) {
 func TestAnAttemptsSessionIsFilledOnce(t *testing.T) {
 	ctx := context.Background()
 	s := openStore(t)
-	task := seedTask(t, s, "task-1")
+	task := seedTask(t, s, "taskaaaaaaab")
 	a, err := s.BeginTaskAttempt(ctx, task.ID, 0)
 	if err != nil {
 		t.Fatalf("BeginTaskAttempt: %v", err)

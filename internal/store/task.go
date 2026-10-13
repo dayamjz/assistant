@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/dayamjz/assistant/internal/home"
 )
 
 // TaskShape is which of the two task shapes a task is. PRD section 12 gives a
@@ -142,13 +144,18 @@ func scanTask(sc scanner) (Task, error) {
 // decided cannot be overtaken between the two. A known blocker must exist and
 // must not be the task itself.
 //
-// The identifier is checked for being non-empty and nothing more here. The
-// validator that fixes what a task identifier may contain, and the copy path
-// it computes from one, is internal/home's (#102), which does not exist in
-// this build; CreateTask is where that check belongs once it does.
+// The identifier is checked by internal/home's ValidTaskID, the one validator
+// of a task identifier, because the identifier names the task's directory
+// under the home and this record is where it is first written; a refusal
+// wraps home.ErrTaskID. A non-zero d.Observed on a task that names no branch
+// is a caller's mistake rather than a move, since such a task has no set of
+// branch tasks to have observed, and it is refused before anything is read.
 func (s *Store) CreateTask(ctx context.Context, t Task, d Disposition) (Task, error) {
-	if strings.TrimSpace(t.ID) == "" {
-		return Task{}, fmt.Errorf("store: task has no identifier")
+	if err := home.ValidTaskID(t.ID); err != nil {
+		return Task{}, fmt.Errorf("store: task %q: %w", t.ID, err)
+	}
+	if !t.Branch.IsKnown() && d.Observed != 0 {
+		return Task{}, fmt.Errorf("store: task %s names no branch, so it cannot have observed branch task %d", t.ID, d.Observed)
 	}
 	switch t.Shape {
 	case TaskDelivery, TaskInvestigation:

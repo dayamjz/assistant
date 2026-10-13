@@ -57,6 +57,13 @@ type TaskSnapshot struct {
 // newer run made for one is attributed to both. Two tasks on one branch at
 // once is what the intake's disposition exists to prevent, and this read does
 // not re-check it.
+//
+// A task recorded before migration 14 has no attempt row, so after it such a
+// task is attributed nothing by its branch where it was attributed by its
+// creation time before: only the run it names directly remains its. No task
+// in this repository's production paths had been created when the cutoff
+// moved, so no record changes meaning; a database that did hold one would
+// read the task's runs as not its until an attempt is begun for it.
 func (s *Store) TaskSnapshot(ctx context.Context, id string) (TaskSnapshot, error) {
 	var out TaskSnapshot
 	err := s.snapshotTx(ctx, func(q querier) error {

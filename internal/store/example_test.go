@@ -111,7 +111,7 @@ func ExampleStore_AppendTaskEvent() {
 	defer cleanup()
 
 	task, err := s.CreateTask(ctx, store.Task{
-		ID: "task-1", Shape: store.TaskInvestigation, Project: "one",
+		ID: "taskaaaaaaab", Shape: store.TaskInvestigation, Project: "one",
 		Mode: "headless", WorktreePath: "/worktrees/task-1",
 	}, store.Disposition{})
 	if err != nil {

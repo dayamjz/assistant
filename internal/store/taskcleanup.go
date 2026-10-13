@@ -44,6 +44,14 @@ func (p CleanupProof) String() string { return string(p) }
 // recording the cleanup check it was made from. PRD section 6's Complete is
 // derived from it, by internal/taskstate once it reads this tier; this
 // package records it and decides nothing from it.
+//
+// RemovedAt is the one revision the record takes, and it takes it once. The
+// proof is recorded before the copy is removed and the removal is marked
+// after, because a crash between the two must not lose the proof (P6): a
+// record with a proof and no removal says exactly what happened, that the
+// work was proven landed and the copy may still be standing, and a cleanup
+// resuming reads that rather than proving it again or removing a copy it
+// cannot account for.
 type TaskCleanup struct {
 	// TaskID names the task.
 	TaskID string `json:"task_id"`
@@ -56,8 +64,8 @@ type TaskCleanup struct {
 	// RecordedAt is when the record was written.
 	RecordedAt time.Time `json:"recorded_at"`
 	// RemovedAt is when the isolated copy was removed on the strength of the
-	// proof, and unknown when the proof was recorded and the copy left
-	// standing.
+	// proof, and unknown until MarkCleanupRemoved records it: a proof with
+	// the copy still standing, or a removal not yet marked.
 	RemovedAt Optional[time.Time] `json:"removed_at"`
 }
 
@@ -112,6 +120,34 @@ func (s *Store) RecordTaskCleanup(ctx context.Context, c TaskCleanup) (TaskClean
 		return TaskCleanup{}, fmt.Errorf("store: recording the cleanup of task %s: %w", c.TaskID, err)
 	}
 	return s.TaskCleanup(ctx, c.TaskID)
+}
+
+// MarkCleanupRemoved records when the task's isolated copy was removed, on
+// the cleanup record already written for it. It is refused with ErrNotFound,
+// wrapped, when the task has no cleanup record, because a removal with no
+// proof behind it is the thing P12 forbids and the record would say the
+// proof came first; and with ErrCleanupRemoved when the record already holds
+// a removal, so the first mark stands. Those two and this write are one
+// transaction, and it is the only revision the record takes.
+func (s *Store) MarkCleanupRemoved(ctx context.Context, taskID string, at time.Time) error {
+	if strings.TrimSpace(taskID) == "" {
+		return fmt.Errorf("store: a cleanup removal names no task")
+	}
+	return s.inTx(ctx, func(tx *sql.Tx) error {
+		var removed Optional[string]
+		err := tx.QueryRowContext(ctx, `SELECT removed_at FROM task_cleanup WHERE task_id = ?`, taskID).Scan(&removed)
+		if err != nil {
+			return fmt.Errorf("store: marking the cleanup of task %s removed: %w", taskID, errNoRows(err))
+		}
+		if removed.IsKnown() {
+			return fmt.Errorf("store: marking the cleanup of task %s removed: %w", taskID, ErrCleanupRemoved)
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE task_cleanup SET removed_at = ? WHERE task_id = ?`,
+			encodeTime(at), taskID); err != nil {
+			return fmt.Errorf("store: marking the cleanup of task %s removed: %w", taskID, err)
+		}
+		return nil
+	})
 }
 
 // TaskCleanup returns a task's cleanup record, or ErrNotFound when none has

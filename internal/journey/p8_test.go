@@ -60,7 +60,7 @@ func TestAnEventLogIsNotCurrentState(t *testing.T) {
 	j := inClone(t)
 	written := records(t, j)
 
-	const id, branch = "journey-task", "journey/p8"
+	const id, branch = "journeytaska", "journey/p8"
 	if _, err := written.UpsertRepository(t.Context(), store.Repository{
 		ID: "p8-repo", WorkingPath: t.TempDir(), UpstreamURL: "https://example.test/p8.git", DefaultBranch: "main",
 	}); err != nil {
