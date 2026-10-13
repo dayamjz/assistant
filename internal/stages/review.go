@@ -214,6 +214,22 @@ func reviewChange(ctx context.Context, deps StageDeps, in pipeline.Input) (pipel
 		return pipeline.Output{}, err
 	}
 	change, err := readChange(ctx, repo, facts, deps.Config.IgnorePatterns)
+	return reviewRead(ctx, deps, repo, facts, change, err)
+}
+
+// reviewRead is everything a review does once the change has been read, and it
+// is one function for the two callers that review: this stage over the whole
+// change, and the push stage over the commits this run authored after that
+// review, which push.go's reviewLaterCommits owns. Sharing it is what keeps
+// the second review from being a weaker one: the evidence demand, the scope
+// lens, the judge lens, the decision-model checks and every refusal below
+// apply to both, because there is one copy of each.
+//
+// err is what readChange returned. It is handled here rather than by the
+// caller because a change too large to read is a report rather than an error,
+// and the judge lens has to be added to that report too.
+func reviewRead(ctx context.Context, deps StageDeps, repo *vcs.Repository, facts reviewFacts,
+	change reviewChangeSet, err error) (pipeline.Output, error) {
 	// The judge lens is read off the change unfiltered, and it is added to
 	// every report this body returns from here on, including the ones that
 	// review nothing: a change the ignore patterns exclude whole is exactly
@@ -339,6 +355,23 @@ type reviewFacts struct {
 	// fixSummary is the sanitized account the last fix round wrote, empty when
 	// no round has run.
 	fixSummary string
+	// since is set only for the push stage's review of the commits this run
+	// authored after the review stage read the change, and it is the commit
+	// that review read. The change is then measured from it rather than from
+	// where the branch left its base, so what is reviewed is what no review
+	// has read yet.
+	since string
+	// laterRounds is what the fix rounds after the review stage said they
+	// changed, one entry per stage whose last round left a summary. It is set
+	// only alongside since, and it reaches the reviewer as claims.
+	laterRounds []laterRound
+}
+
+// laterRound is one stage's account of the last fix round it took after the
+// review stage had read the change.
+type laterRound struct {
+	stage   pipeline.Stage
+	summary string
 }
 
 // rereview reports whether this execution is verifying a fix round's work.
@@ -411,12 +444,19 @@ type reviewChangeSet struct {
 }
 
 // readChange derives the change from the run's isolated copy.
+//
+// A review of later commits is measured from the commit the review stage read
+// instead, which the push stage has established the head descends from before
+// it asks.
 func readChange(ctx context.Context, repo *vcs.Repository, f reviewFacts, ignore config.PatternSet) (reviewChangeSet, error) {
-	base := baseRevision(ctx, repo, f.base)
-	from, err := repo.MergeBase(ctx, base, f.head)
-	if err != nil {
-		return reviewChangeSet{}, fmt.Errorf("stages: the review stage cannot locate where %s left %s: %w",
-			f.head, base, err)
+	from := f.since
+	if from == "" {
+		base := baseRevision(ctx, repo, f.base)
+		var err error
+		if from, err = repo.MergeBase(ctx, base, f.head); err != nil {
+			return reviewChangeSet{}, fmt.Errorf("stages: the review stage cannot locate where %s left %s: %w",
+				f.head, base, err)
+		}
 	}
 	changed, err := repo.ChangedFiles(ctx, from, f.head)
 	if err != nil {
@@ -637,7 +677,7 @@ func unreviewed(ctx context.Context, f reviewFacts, err error) (pipeline.Output,
 	}
 	var invocation *agents.InvocationError
 	if !errors.As(err, &invocation) {
-		return pipeline.Output{}, fmt.Errorf("stages: the review stage could not run for run %s: %w", f.run, err)
+		return pipeline.Output{}, fmt.Errorf("stages: the review could not run for run %s: %w", f.run, err)
 	}
 	return pipeline.Output{Report: findings.Report{
 		Summary: "The reviewer did not come back with a review of this change, so nothing was established about it.",
