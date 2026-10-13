@@ -289,10 +289,15 @@ Each has cost this repository more than one round of review.
   before launch. A fixer reports nothing that can clear a stage: the one
   finding it may return is an `ask` in `FixOutput.Holds`, anything else is
   `ErrFixerFinding`, and the stage node adds those holds to the stage's next
-  report itself, so no stage body can drop one. Read its `doc.go` before
-  changing the loop or the holds, and
-  for the residual gaps: the requested fix round PRD section 5's hold offers is
-  not wired, and convergence is over the whole state.
+  report itself, so no stage body can drop one. A hold's `fix` answer is a
+  second bounded cycle through the stage's request node, its `FixRequest`
+  riding as the hold's `Halt.Detail`, and it always holds again after. It
+  exists only at the stage table's requestable stages, the ones before push,
+  and its edge back is `graph.Edge.Answered`, exempt from convergence and
+  from no other bound. Read its
+  `doc.go` before changing the loop or the holds, and for the residual gaps: no
+  review reads what a person left unselected, and convergence is over the whole
+  state.
 - `internal/runs` owns two things: the table of a run's status changes, and the
   one durable fixer session a run keeps. Both are anchored rather than
   convention. A status move is `store.TransitionRun`, which reads and writes in

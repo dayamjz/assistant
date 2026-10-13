@@ -44,17 +44,19 @@ func TestParseStageRoundTripsAndRefusesAnythingElse(t *testing.T) {
 }
 
 // TestEveryStageHasItsOwnKeys checks the per-stage half of the schema: the
-// three keys every stage has, the fix summary and the held key only the five
-// stages that take fix rounds have, and no key shared between two stages.
+// six keys every stage has, and no key shared between two stages. The fix
+// summary and the held key belong to every stage because a person may ask for
+// a fix round at any stage's hold, and the request key is where that request
+// lands.
 func TestEveryStageHasItsOwnKeys(t *testing.T) {
 	declared := make(map[Key]bool, len(Keys()))
 	for _, key := range Keys() {
 		declared[key] = true
 	}
-	withRounds := map[Stage]bool{StageRebase: true, StageReview: true, StageTest: true, StageLint: true, StageCI: true}
 	seen := make(map[Key]Stage)
 	for _, stage := range Order() {
-		for _, key := range []Key{stage.ReportKey(), stage.OutcomeKey(), stage.AnswerKey()} {
+		for _, key := range []Key{stage.ReportKey(), stage.OutcomeKey(), stage.AnswerKey(),
+			stage.FixKey(), stage.HeldKey(), stage.RequestKey()} {
 			if !declared[key] {
 				t.Errorf("%s names key %q, which the schema does not declare", stage, key)
 			}
@@ -62,12 +64,6 @@ func TestEveryStageHasItsOwnKeys(t *testing.T) {
 				t.Errorf("key %q belongs to both %s and %s", key, other, stage)
 			}
 			seen[key] = stage
-		}
-		if got := declared[stage.FixKey()]; got != withRounds[stage] {
-			t.Errorf("%s declares a fix summary key: %v, want %v", stage, got, withRounds[stage])
-		}
-		if got := declared[stage.HeldKey()]; got != withRounds[stage] {
-			t.Errorf("%s declares a held key: %v, want %v", stage, got, withRounds[stage])
 		}
 	}
 }

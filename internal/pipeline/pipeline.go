@@ -156,6 +156,7 @@ func New(o Options) (*Pipeline, error) {
 // wired by this one function, so the shape of a stage is the same for all nine
 // and a stage cannot be given an arrangement of its own.
 func wire(b *graph.Builder, stage Stage, impl Implementation, fixer Fixer, rounds int, next string) error {
+	requests := fixer.NewBody != nil && stage.Requestable()
 	if impl.NewBody == nil {
 		return fmt.Errorf("%w: %s", ErrMissingStage, stage)
 	}
@@ -165,8 +166,48 @@ func wire(b *graph.Builder, stage Stage, impl Implementation, fixer Fixer, round
 	if err := checkDeclared("stage "+stage.String(), "writes", impl.Writes, declaredStageWrites); err != nil {
 		return err
 	}
-	b.Node(stageNode(stage, impl, rounds > 0))
-	b.Node(holdNode(stage))
+	b.Node(stageNode(stage, impl, rounds > 0 || requests))
+	b.Node(holdNode(stage, requests))
+	if requests {
+		// PRD section 5's Fix action at a hold: the stage's fixer runs one
+		// round over what the person selected and the stage runs again. It is
+		// built only at a requestable stage, one before push, because only
+		// there does the stage's re-run hold before the round's commit leaves
+		// the run's copy. That is a second cycle through the stage, so both
+		// of its edges carry RequestedFixRounds, and the edge in reaches the
+		// bound first for the reason the automatic entry does: every return
+		// follows an entry it counted.
+		//
+		// The edge back is graph.Edge.Answered: every traversal follows the
+		// person's answer at the hold, which internal/graph checks at build,
+		// so a round that changed nothing returns to the hold for them to see
+		// rather than parking the run on convergence. RequestedFixRounds and
+		// the run-wide budget still bound it.
+		//
+		// The edge in is guarded on the answer key rather than on the
+		// outcome the hold node writes from it. Both say the same thing once
+		// the node has run, and the answer is the one graph.Executor.Answer
+		// can read before it has, which is what lets it refuse an answer
+		// asking for a round past the bound while the decision is still open
+		// instead of recording it and parking the run.
+		//
+		// They are the first edges of the stage's block, which is what keeps
+		// every back edge's index inside the stage's own range; doc.go has the
+		// arithmetic and TestBackEdgeIndicesNeverCrossStagesAcrossConfigurations
+		// pins it.
+		b.Node(requestNode(stage, fixer))
+		b.Edge(graph.Edge{
+			From:   stage.HoldNode(),
+			To:     stage.RequestNode(),
+			Rounds: RequestedFixRounds,
+			Guard: &graph.Guard{
+				Key:   string(stage.AnswerKey()),
+				Op:    graph.OpEquals,
+				Value: graph.TextValue(string(OutcomeFixRequested)),
+			},
+		})
+		b.Edge(graph.Edge{From: stage.RequestNode(), To: stage.Node(), Rounds: RequestedFixRounds, Answered: true})
+	}
 
 	// A stage that found something a person must decide holds. A stage that
 	// found only fix-eligible findings goes to its fixer, and to the same hold

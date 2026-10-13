@@ -219,6 +219,10 @@ func (s *Service) respond(ctx context.Context, req machine.RespondRequest) (mach
 	if err != nil {
 		return machine.Run{}, err
 	}
+	detail, err := s.fixRequestFor(ctx, record.ID, req)
+	if err != nil {
+		return machine.Run{}, err
+	}
 	if _, err := built.runs.Release(ctx, record.ID); err != nil {
 		return machine.Run{}, err
 	}
@@ -227,12 +231,66 @@ func (s *Service) respond(ctx context.Context, req machine.RespondRequest) (mach
 	// once the answer is accepted; observe.go says what that record is.
 	stage, paths, mark := s.heldPaths(ctx, record.ID)
 	answered, err := s.advance(ctx, record.ID, func(ctx context.Context) (graph.Result, error) {
-		return topo.executor.Answer(ctx, record.ID, req.Answer)
+		return topo.executor.AnswerWith(ctx, record.ID, req.Answer, detail)
 	})
 	if err == nil {
 		s.recordAnswered(record.ID, stage, req.Answer, paths, mark)
 	}
 	return answered, err
+}
+
+// fixRequestFor is the detail an answer carries to the graph: the encoded fix
+// request when the answer asks for a fix round, and nothing otherwise.
+//
+// A fix answer is checked against the held stage's recorded report here,
+// before anything is recorded, with the same pipeline.FixRequest.Select the
+// request node applies, so a request selecting a finding the stage never
+// reported is refused to the caller with the decision still open rather than
+// failing the run once the round starts. A request given with any other answer
+// is refused too: it would otherwise be an instruction nobody acted on.
+// internal/graph refuses both shapes again, so this is the early half and not
+// the only one.
+func (s *Service) fixRequestFor(ctx context.Context, runID string, req machine.RespondRequest) (string, error) {
+	if req.Answer != string(pipeline.OutcomeFixRequested) {
+		if req.Fix != nil {
+			return "", fmt.Errorf("%w: a fix request travels with the %q answer and run %s was answered %q",
+				graph.ErrDetailNotAccepted, pipeline.OutcomeFixRequested, runID, req.Answer)
+		}
+		return "", nil
+	}
+	if req.Fix == nil {
+		return "", fmt.Errorf("%w: run %s was answered %q with nothing selected to fix",
+			pipeline.ErrEmptyFixRequest, runID, req.Answer)
+	}
+	cp, err := s.checkpoints.Latest(ctx, runID)
+	if err != nil {
+		return "", fmt.Errorf("service: reading where run %s holds: %w", runID, err)
+	}
+	stage, ok := heldStage(cp.Position)
+	if !ok {
+		return "", fmt.Errorf("service: run %s holds at %q, which is no stage's hold", runID, cp.Position)
+	}
+	if err := pipeline.CheckRequestable(stage); err != nil {
+		return "", fmt.Errorf("run %s: %w", runID, err)
+	}
+	report, err := pipeline.StageReport(cp.State, stage)
+	if err != nil {
+		return "", err
+	}
+	if _, err := req.Fix.Select(report); err != nil {
+		return "", err
+	}
+	return req.Fix.Encode()
+}
+
+// heldStage is the stage whose hold a run stands at.
+func heldStage(position string) (pipeline.Stage, bool) {
+	for _, stage := range pipeline.Order() {
+		if position == stage.HoldNode() {
+			return stage, true
+		}
+	}
+	return pipeline.StageInvalid, false
 }
 
 // cancel ends a run. It records the ending in the run's slot and cancels the

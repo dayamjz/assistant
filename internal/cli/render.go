@@ -11,6 +11,7 @@ import (
 	"github.com/dayamjz/assistant/internal/gate"
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
+	"github.com/dayamjz/assistant/internal/pipeline"
 )
 
 // readOut writes an answer for a person.
@@ -190,6 +191,15 @@ func readOutDecision(w io.Writer, d machine.Decision) {
 		}
 		writef(w, "Options: %s\n", strings.Join(options, ", "))
 		writef(w, "Answer with: assistant --answer %s\n", options[0])
+		for _, option := range d.Detailed {
+			if option == string(pipeline.OutcomeFixRequested) {
+				writef(w, "Ask for a fix round with: assistant --answer %s --select <finding>,... "+
+					"[--note <text>] [--finding <text>]\n", printable(option))
+				writef(w, "Only the findings holding the stage are listed below. --select takes any "+
+					"finding the stage reported; every one, with its identifier, is under "+
+					"active_run.stages[].report.findings in: assistant --json status\n")
+			}
+		}
 	}
 	for _, finding := range d.Findings {
 		writef(w, "\n  [%s] %s %s\n", printable(string(finding.Action)), printable(string(finding.Severity)), printable(finding.ID))

@@ -27,6 +27,7 @@ const (
 	// StatusBudgetExhausted means the run reached its run-wide step budget.
 	StatusBudgetExhausted
 	// StatusConverged means a round crossed a back edge without changing state.
+	// A back edge marked Edge.Answered never produces it.
 	StatusConverged
 )
 
@@ -138,6 +139,11 @@ type Decision struct {
 	Options []string `json:"options,omitempty"`
 	// Into is the state key the answer is written to.
 	Into string `json:"into"`
+	// Detailed is the answers that must come with a detail, which
+	// Executor.AnswerWith writes into the halt point's Halt.Detail key. It is
+	// empty for a halt point that takes none, and a checkpoint written before
+	// it existed reads back that way.
+	Detailed []string `json:"detailed,omitempty"`
 }
 
 // equals reports whether two decisions are the same question in the same place.
@@ -148,11 +154,16 @@ func (d *Decision) equals(other *Decision) bool {
 	if d.Node != other.Node || d.Question != other.Question || d.Into != other.Into {
 		return false
 	}
-	if len(d.Options) != len(other.Options) {
+	return sameStrings(d.Options, other.Options) && sameStrings(d.Detailed, other.Detailed)
+}
+
+// sameStrings reports whether two lists hold the same strings in the same order.
+func sameStrings(a, b []string) bool {
+	if len(a) != len(b) {
 		return false
 	}
-	for i := range d.Options {
-		if d.Options[i] != other.Options[i] {
+	for i := range a {
+		if a[i] != b[i] {
 			return false
 		}
 	}
@@ -166,6 +177,7 @@ func (d *Decision) clone() *Decision {
 	}
 	out := *d
 	out.Options = append([]string(nil), d.Options...)
+	out.Detailed = append([]string(nil), d.Detailed...)
 	return &out
 }
 

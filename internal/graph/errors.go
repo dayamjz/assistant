@@ -19,7 +19,9 @@ const (
 	// the halt point that asks for it, and declares no merge rule.
 	RuleSingleWriter Rule = "single-writer"
 	// RuleBoundedCycle is PRD section 7 rule 2: every back edge carries a
-	// bound at construction time.
+	// bound at construction time. It also covers Edge.Answered, the one
+	// exemption from a bound, which the build admits only where every
+	// traversal follows an answer at a halt point.
 	RuleBoundedCycle Rule = "bounded-cycle"
 	// RuleJoinCycle is PRD section 7 rule 3: a cycle that passes through a
 	// join must include that join's fork.
@@ -165,6 +167,18 @@ var (
 	// rather than halted at it; a checkpoint that arrives from a store already
 	// standing at such a halt point meets it too.
 	ErrBudgetSpent = errors.New("graph: the run-wide step budget leaves no step for the halted node")
+	// ErrRoundsSpent is returned when an answer would send a run along an
+	// edge out of its halt point that has already reached its round bound.
+	// Nothing is written and the decision stays open, so a different answer
+	// can still be given; Executor.Answer says where the route it checks is
+	// exact.
+	ErrRoundsSpent = errors.New("graph: the answer's route has reached its round bound")
+	// ErrDetailNotAccepted is returned when an answer carries a detail and the
+	// halt point does not take one with that answer. Nothing is written.
+	ErrDetailNotAccepted = errors.New("graph: the halt point accepts no detail with this answer")
+	// ErrDetailRequired is returned when an answer the halt point takes a
+	// detail with arrives without one. Nothing is written.
+	ErrDetailRequired = errors.New("graph: the halt point requires a detail with this answer")
 	// ErrBudgetChanged is returned when a run is advanced by an executor
 	// configured with a run-wide step budget other than the one the run
 	// recorded. The run is bounded by what it recorded, so the difference

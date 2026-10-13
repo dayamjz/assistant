@@ -177,6 +177,31 @@ func (c *checker) checkHalt(n Node) {
 		c.refuse(RuleDeclaredKey, "the halt point on node %q writes its answer into state key %q, which declares %s rather than text",
 			n.Name, n.Halt.Into, spec.Kind)
 	}
+	if n.Halt.Detail != "" {
+		detail, ok := c.keyIndex[n.Halt.Detail]
+		switch {
+		case n.Halt.Detail == n.Halt.Into:
+			c.refuse(RuleWellFormed, "the halt point on node %q writes its answer and its detail into the same state key %q",
+				n.Name, n.Halt.Into)
+		case !ok:
+			c.refuse(RuleDeclaredKey, "the halt point on node %q writes its detail into state key %q, which the graph does not declare",
+				n.Name, n.Halt.Detail)
+		case detail.Kind != KindText:
+			c.refuse(RuleDeclaredKey, "the halt point on node %q writes its detail into state key %q, which declares %s rather than text",
+				n.Name, n.Halt.Detail, detail.Kind)
+		}
+	}
+	switch {
+	case n.Halt.Detail != "" && len(n.Halt.Detailed) == 0:
+		c.refuse(RuleWellFormed, "the halt point on node %q declares a detail key and no answer that comes with a detail", n.Name)
+	case n.Halt.Detail == "" && len(n.Halt.Detailed) > 0:
+		c.refuse(RuleWellFormed, "the halt point on node %q names answers that come with a detail and no key to write one into", n.Name)
+	}
+	for _, opt := range n.Halt.Detailed {
+		if len(n.Halt.Options) > 0 && !answerAllowed(n.Halt.Options, opt) {
+			c.refuse(RuleWellFormed, "the halt point on node %q takes a detail with %q, which is not one of its options", n.Name, opt)
+		}
+	}
 	seen := make(map[string]struct{}, len(n.Halt.Options))
 	for _, opt := range n.Halt.Options {
 		if opt == "" {
@@ -319,6 +344,12 @@ func (c *checker) checkSingleWriter() {
 			writers[n.Halt.Into] = appendWriter(writers[n.Halt.Into], n.Name)
 			answers[n.Halt.Into] = appendWriter(answers[n.Halt.Into], n.Name)
 		}
+		// A detail key is held to an answer key's rules, so it is checked as
+		// one: one halt point, no other writer, no merge rule.
+		if n.Halt != nil && n.Halt.Detail != "" && n.Halt.Detail != n.Halt.Into {
+			writers[n.Halt.Detail] = appendWriter(writers[n.Halt.Detail], n.Name)
+			answers[n.Halt.Detail] = appendWriter(answers[n.Halt.Detail], n.Name)
+		}
 	}
 	names := make([]string, 0, len(writers))
 	for key := range writers {
@@ -460,6 +491,41 @@ func (c *checker) checkBoundedCycles() {
 				"edge %d from %q to %q closes a cycle and declares no bound; every back edge must carry one",
 				i, e.From, e.To)
 		}
+		if e.Answered {
+			c.checkAnswered(i, e)
+		}
+	}
+}
+
+// checkAnswered refuses an edge marked Answered unless every traversal of it
+// follows an answer at a halt point, which is the only thing that earns an
+// exemption from the convergence check: it must be a back edge, it must not
+// leave the start node, and every edge entering the node it leaves must leave
+// a halt point and be guarded on that halt point's answer key.
+func (c *checker) checkAnswered(i int, e Edge) {
+	if !c.back[i] {
+		c.refuse(RuleBoundedCycle,
+			"edge %d from %q to %q is marked answered and closes no cycle, so there is no convergence check to exempt it from",
+			i, e.From, e.To)
+		return
+	}
+	if e.From == c.b.start {
+		c.refuse(RuleBoundedCycle,
+			"edge %d from %q to %q is marked answered and leaves the start node, which a run enters without any answer",
+			i, e.From, e.To)
+		return
+	}
+	for _, in := range c.b.edges {
+		if in.To != e.From {
+			continue
+		}
+		halt := c.b.nodes[c.index[in.From]].Halt
+		if halt == nil || in.Guard == nil || in.Guard.Key != halt.Into {
+			c.refuse(RuleBoundedCycle,
+				"edge %d from %q to %q is marked answered, and %q is entered from %q without an answer at a halt point guarding the way in",
+				i, e.From, e.To, e.From, in.From)
+			return
+		}
 	}
 }
 
@@ -514,6 +580,10 @@ func (c *checker) graph() *Graph {
 		if n.Halt != nil {
 			writes[n.Halt.Into] = struct{}{}
 			g.answers[n.Halt.Into] = n.Name
+			if n.Halt.Detail != "" {
+				writes[n.Halt.Detail] = struct{}{}
+				g.answers[n.Halt.Detail] = n.Name
+			}
 		}
 		g.writes[i] = writes
 	}

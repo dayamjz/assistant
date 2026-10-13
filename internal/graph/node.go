@@ -64,6 +64,23 @@ type Halt struct {
 	// run at this halt point, so an answer never outlives the decision it
 	// answered.
 	Into string
+	// Detail, when set, is the state key an account accompanying the answer is
+	// written to: what the person asked for beyond which option they chose,
+	// supplied with Executor.AnswerWith. It is held to every rule Into is held
+	// to - declared KindText, written only by this halt point, no merge rule,
+	// never pre-seeded, cleared whenever the run stops here - so a detail
+	// never outlives the answer it came with either. What the text means is
+	// the reader's business: this package stores it and validates nothing in
+	// it. A halt point that declares none refuses a detail rather than
+	// dropping it.
+	Detail string
+	// Detailed is the answers that come with a detail, and it is required
+	// exactly when Detail is set. Such an answer given without one is refused,
+	// and a detail given with any other answer is refused, so a detail is
+	// never written where nothing will read it and an answer that needs one
+	// never arrives without it. Each must be one of Options when Options is
+	// non-empty.
+	Detailed []string
 }
 
 // Stateless adapts a Body that holds no per-run state into a NewBody
@@ -82,6 +99,7 @@ func (n Node) clone() Node {
 	if n.Halt != nil {
 		h := *n.Halt
 		h.Options = append([]string(nil), n.Halt.Options...)
+		h.Detailed = append([]string(nil), n.Halt.Detailed...)
 		out.Halt = &h
 	}
 	return out

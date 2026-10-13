@@ -237,24 +237,35 @@
 //
 // The arithmetic is worth writing out, because a conclusion a reader cannot
 // check is worth no more than no conclusion. Every stage is wired by wire,
-// which emits five edges for a stage whose round limit is zero, and those five
-// plus the fix node's return when it is above zero, the return first. So today
-// a back-edge index is five times the stage's position plus the number of
-// earlier stages taking rounds. At most four stages sit before any one of them
-// and can take rounds, so a stage's index stays within four of five times its
-// position and cannot reach five times the next stage's. The ranges two stages
-// draw from are disjoint, whatever pair of configurations they come from.
+// which emits five edges for every stage, the fix node's return before them
+// when the stage's round limit is above zero, and before that the two edges of
+// the requested-round cycle when the pipeline was given a fixer and the stage
+// is requestable, whose second is that cycle's back edge. Which stages are
+// requestable is the stage table's, not the configuration's, so with a fixer
+// given a stage's block has a fixed part, five edges plus two at a
+// requestable stage, and a configured part, the one fix return. A stage's
+// block starts at the sum of the earlier stages' fixed parts plus the number
+// of earlier stages taking rounds, at most four. Its back edges sit at most
+// two past that start at a requestable stage, whose fixed part is seven, and
+// at the start itself at any other, whose fixed part is five. Either way every
+// back edge of a stage stays below the sum of the fixed parts up to and
+// including it, which is where the next stage's block starts before any
+// configured edge, so the ranges two stages draw from are disjoint, whatever
+// pair of round limits they come from.
 //
-// The emission order settles the formula and not the conclusion. Moving the
-// return below the other five edges would add the same constant to every
-// back-edge index, because one function wires all nine stages, and a constant
-// added to every index leaves index-to-stage injective. So the conclusion
-// survives any placement of that edge within a stage's block. It is the
+// A pipeline with a fixer and one without differ in their fixed parts, so
+// their indices do not line up and nothing above says they do. They differ in
+// their edges too, so internal/graph's edge digest refuses a checkpoint
+// carried from one to the other, which is the paragraph after next.
+//
+// The emission order settles the formula and not the conclusion so long as
+// every back edge stays within the slots ahead of its block's fixed five: a
+// constant added to every index leaves index-to-stage injective. It is the
 // uniqueness that TestBackEdgeIndicesNeverCrossStagesAcrossConfigurations
 // pins, over every combination of which stages take rounds, and not the order;
 // what would break it is a stage table admitting more than five stages that
-// take rounds, where the earlier-stage count could carry one stage's index
-// onto another's.
+// take rounds, or a back edge moved later in its block, where one stage's
+// index could land in the next one's range.
 //
 // The claim withdrawn there was that a fingerprint read from the wrong slot
 // could defeat convergence, and it is worth saying why that counts as a
@@ -341,7 +352,8 @@
 //
 // The hold's options are exactly the outcomes a person may give a held stage,
 // so the hold node records the answer as the stage's outcome and translates
-// nothing. The graph refuses an answer outside the options, clears the answer
+// nothing. Asking for a fix round is one of them when a fixer was given, and
+// the section on bounds below says what it routes to. The graph refuses an answer outside the options, clears the answer
 // key on every checkpoint that stands at a halt point without running it,
 // whether the run halted there for the decision or a bound parked it in front
 // of one, and refuses a run whose initial state already holds an answer, so a
@@ -429,15 +441,41 @@
 // A bound that stops a run parks it, and internal/graph parks a run rather
 // than halting it for a decision: no park is answered. A run its own budget
 // parked is moved onto a new one with graph.Executor.AdoptBudget, and a run a
-// round limit or convergence parked is taken further by forking it. PRD
-// section 5's hold offers four actions, and only three of them are reachable
-// here. Approve, skip, and cancel are hold answers. A
-// requested fix round is not offered at all: it would be a second entry into
-// the same bounded cycle, and the bound it would need could never fire before
-// the bound on the round the loop already counts, which is a guard that exists
-// and never runs. So a person who wants a round the automatic loop would not
-// take does it by forking the run. That is a real gap against section 5's hold
-// table, and closing it needs a bound section 10 does not declare.
+// round limit or convergence parked is taken further by forking it.
+//
+// PRD section 5's hold offers four actions, and all four are hold answers
+// here at a stage before push whenever the pipeline was given a fixer; the
+// holds of push, pr, and ci offer three. The stage table's requestable column
+// owns that line, and the reason is the promise the round makes: the stage
+// re-runs and holds again so the person sees the result. Push is the stage
+// that forwards a commit, so re-running it would push the round's commit
+// before anyone saw it, and pr and ci run after push, so a round's commit
+// there would never be pushed. A request at those holds is refused, by
+// CheckRequestable with ErrFixNotRequestable at the surface and by
+// internal/graph as an answer the hold does not offer. Approve, skip, and cancel
+// are recorded as the stage's outcome. Fix is OutcomeFixRequested, and it is
+// not a second entry into the automatic loop: it is a cycle of its own, from
+// the hold through the stage's request node back to the stage, bounded by
+// RequestedFixRounds on both edges, with the person's FixRequest carried as
+// the hold's graph.Halt.Detail. Every round it runs leaves a hold for the
+// stage's next execution, so the stage holds again after it; the judge rule
+// reaches it through the fixer's own holds, as it reaches an automatic round.
+// An answer asking for one more round than the bound is refused by
+// graph.Executor.Answer while the decision is open, rather than recorded and
+// parked, because the edge in is guarded on the answer itself.
+//
+// What that leaves, stated rather than implied. The request is the person's
+// selection, notes, and own findings, and the fixer is told what was left
+// unselected; what PRD section 5 says a later review does with that history,
+// not re-reporting what a person already decided, is not done: no review
+// reads it. Convergence does not apply to the requested cycle: its edge back
+// is graph.Edge.Answered, which internal/graph admits only because every
+// traversal follows the person's answer at the hold. A requested round that
+// changed nothing therefore returns to the hold, which says so, rather than
+// parking the run, so approve, skip, and cancel stay open; RequestedFixRounds
+// and the run-wide budget are what bound it. "Changed nothing" is measured as
+// the request node measures it, over the keys the fixer writes, and not over
+// the whole state.
 //
 // Convergence is computed over the whole state, which is internal/graph's
 // definition and not this package's. Two things a round writes therefore

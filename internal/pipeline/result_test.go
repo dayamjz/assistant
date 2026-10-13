@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -156,10 +157,11 @@ func TestReadStageResultIsRefusedWithoutTheDeclaration(t *testing.T) {
 	}
 }
 
-// A stage that takes automatic fix rounds has a fix key and a stage that does
-// not has none, so the keys a caller declares differ by stage. Declaring one
+// Every key StageResultKeys names is one the schema holds, and declaring a key
 // the schema does not hold is refused when the pipeline is built, which is
-// what keeps this from being a convention.
+// what keeps this from being a convention. The refused key is one
+// StageResultKeys itself names for a Stage that names no stage, so the
+// refusal is of the function's own output rather than of a key made up here.
 func TestStageResultKeysCoverOnlyWhatTheSchemaHolds(t *testing.T) {
 	t.Parallel()
 	for _, stage := range Order() {
@@ -173,10 +175,14 @@ func TestStageResultKeysCoverOnlyWhatTheSchemaHolds(t *testing.T) {
 
 	c := newCalls()
 	all := recordingStages(c)
-	// The intent stage takes no fix rounds, so its fix key is not in the
-	// schema and a stage declaring it is refused rather than reading nothing.
-	set(&all, StagePush, recording(c, []Key{StageIntent.FixKey()}, nil, nil))
-	if _, err := New(Options{Stages: all, Rounds: rounds(0), Budget: 200}); err == nil {
-		t.Fatal("a stage declared a fix key for a stage that takes no fix rounds and the pipeline built")
+	set(&all, StagePush, recording(c, StageResultKeys(Stage(200)), nil, nil))
+	if _, err := New(Options{Stages: all, Rounds: rounds(0), Budget: 200}); !errors.Is(err, ErrUndeclaredKey) {
+		t.Fatalf("a stage declared the result keys of a stage that does not exist and building returned %v, "+
+			"want ErrUndeclaredKey", err)
+	}
+	// The positive control: the same declaration for a real stage builds.
+	set(&all, StagePush, recording(c, StageResultKeys(StageIntent), nil, nil))
+	if _, err := New(Options{Stages: all, Rounds: rounds(0), Budget: 200}); err != nil {
+		t.Fatalf("a stage declared the result keys of the intent stage and building failed: %v", err)
 	}
 }

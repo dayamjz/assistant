@@ -64,8 +64,9 @@ import (
 //
 // Descent alone would forward lines no review read. Review's own fix round is
 // re-reviewed, because the review stage runs again after it and its report
-// revision is the commit that round made; a fix round of the test or lint
-// stage is re-verified only by its own check, and the head it leaves descends
+// revision is the commit that round made; an automatic round of the test or
+// lint stage, or a round a person asked for at the test, document, or lint
+// stage's hold, is re-verified only by its own stage, and the head it leaves descends
 // from the reviewed commit while carrying the round's work. PRD section 14
 // records the decision that closes this: when the head is not the reviewed
 // commit, this stage reviews the commits between the two before anything is
@@ -254,13 +255,16 @@ func pushVerifiedCommit(ctx context.Context, deps StageDeps, in pipeline.Input) 
 
 // fixingAfterReview is the stages that can author a commit between the review
 // stage reading the change and this stage forwarding it: every stage after
-// review and before push that takes automatic fix rounds. It is derived from
-// the stage table rather than listed, so the table stays the one owner of
-// both the order and which stages take rounds.
+// review and before push. Each is pipeline.Stage.Requestable, so a person may
+// ask for a round at its hold, and some also take automatic rounds; both
+// kinds write the stage's fix key, last write winning, so what this stage
+// reads there is the account of that stage's last round of either kind. A
+// stage that took no round leaves the key empty and contributes no claim, so
+// the list is every such stage rather than a guess at which ones took rounds.
 func fixingAfterReview() []pipeline.Stage {
 	var out []pipeline.Stage
 	for _, stage := range pipeline.Order() {
-		if stage > pipeline.StageReview && stage < pipeline.StagePush && stage.TakesFixRounds() {
+		if stage > pipeline.StageReview && stage < pipeline.StagePush {
 			out = append(out, stage)
 		}
 	}

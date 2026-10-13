@@ -1,6 +1,9 @@
 package machine
 
-import "github.com/dayamjz/assistant/internal/gate"
+import (
+	"github.com/dayamjz/assistant/internal/gate"
+	"github.com/dayamjz/assistant/internal/pipeline"
+)
 
 // The request bodies. internal/ipc carries a method's parameters as written
 // and owns no part of their shape, so they are owned here alongside the
@@ -86,6 +89,15 @@ type RespondRequest struct {
 	// Answer is one of the options the decision offered. An answer outside
 	// them is refused by internal/graph rather than interpreted here.
 	Answer string `json:"answer"`
+	// Fix is what a fix round is to resolve, and it travels with the
+	// pipeline.OutcomeFixRequested answer and no other: PRD section 5's
+	// selection, notes, and the person's own findings. The record is
+	// internal/pipeline's, so this composes it rather than restating it.
+	//
+	// It carries no field saying who asked. Who resolved a hold is derived
+	// from the surface, never read from a request, which internal/ipc's
+	// Request.HoldResolver states.
+	Fix *pipeline.FixRequest `json:"fix,omitempty"`
 }
 
 // CancelRequest ends a run.

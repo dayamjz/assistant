@@ -217,6 +217,7 @@ assistant service start        # start the background service for this home
 git push assistant BRANCH      # hand a branch to the gate, which starts a run
 assistant                      # attach to this branch's run, or start one
 assistant --answer approved    # answer the decision it is holding on
+assistant --answer fix --select ID --note TEXT   # ask for one fix round there
 assistant status               # repository, gate, service, run, branch
 assistant --json status        # the same answer as one structured document
 assistant doctor               # can a run start at all, and what stops one

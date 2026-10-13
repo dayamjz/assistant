@@ -336,5 +336,6 @@ func decisionFor(n Node) *Decision {
 		Question: n.Halt.Question,
 		Options:  append([]string(nil), n.Halt.Options...),
 		Into:     n.Halt.Into,
+		Detailed: append([]string(nil), n.Halt.Detailed...),
 	}
 }

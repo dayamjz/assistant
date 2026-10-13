@@ -164,8 +164,10 @@ func applyFixRound(ctx context.Context, deps FixDeps, in pipeline.FixInput) (pip
 		return pipeline.FixOutput{}, err
 	}
 	if len(in.Findings) == 0 {
-		// The pipeline routes a round only for a stage that reported
-		// fix-eligible findings, so this is unreachable through it. It is
+		// The pipeline routes an automatic round only for a stage that
+		// reported fix-eligible findings, and a requested one only for a
+		// request pipeline.FixRequest.Select found something in, so this is
+		// unreachable through it. It is
 		// answered rather than assumed away because the alternative is an
 		// agent asked to fix an empty list, which would be an invocation with
 		// nothing to do and an answer nobody could check.
@@ -195,7 +197,7 @@ func applyFixRound(ctx context.Context, deps FixDeps, in pipeline.FixInput) (pip
 			"stages: opening the fixer of run %s for its %s fix round: %w", facts.run, in.Stage, err)
 	}
 
-	prompt := fixPrompt(facts, in, judgeFixGuidance(deps.Config.JudgePaths, in.Stage))
+	prompt := fixPrompt(facts, in, judgeFixGuidance(deps.Config.JudgePaths, in))
 	if len(prompt) > agents.MaxPromptBytes {
 		return pipeline.FixOutput{}, fmt.Errorf(
 			"stages: asking for the %s stage's fixes would take a prompt of %d bytes, and one "+
@@ -240,7 +242,7 @@ func applyFixRound(ctx context.Context, deps FixDeps, in pipeline.FixInput) (pip
 		return pipeline.FixOutput{Summary: nothingChanged(in.Stage, summary)}, nil
 	}
 
-	holds, err := judgeRound(ctx, copied, deps.Config.JudgePaths, in.Stage, before, committed)
+	holds, err := judgeRound(ctx, copied, deps.Config.JudgePaths, in, before, committed)
 	if err != nil {
 		return pipeline.FixOutput{}, err
 	}
@@ -360,6 +362,7 @@ func fixPrompt(f fixFacts, in pipeline.FixInput, judge string) string {
 			"account as a claim rather than as something already done.")
 	}
 	section("Resolve these findings:\n" + renderFindings(in.Findings))
+	section(requestedSection(in.Requested))
 	section(judge)
 	section("Edit the files in this working copy and nothing else. Do not commit: what you " +
 		"change is committed for you. Do not push, and do not change git configuration or " +
@@ -367,6 +370,28 @@ func fixPrompt(f fixFacts, in pipeline.FixInput, judge string) string {
 		"That line becomes the commit subject, so write it as one: say what changed, not that " +
 		"you were asked to change it. If you could not fix something, say which and why, and " +
 		"leave those files alone rather than guessing.")
+	return b.String()
+}
+
+// requestedSection is what a person added when they asked for this round at
+// the stage's hold: their notes, quoted as theirs, and the findings they left
+// unselected, which the fixer is told to leave alone. It is empty for an
+// automatic round.
+func requestedSection(r *pipeline.Requested) string {
+	if r == nil {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("A person asked for this round at the stage's hold and chose the findings above. ")
+	if r.Notes != "" {
+		b.WriteString("Their notes, in their own words:\n" + r.Notes + "\n")
+	} else {
+		b.WriteString("They added no notes.\n")
+	}
+	if len(r.Unselected) > 0 {
+		b.WriteString("\nThey deliberately left these out of the round. Do not act on them:\n" +
+			renderFindings(r.Unselected))
+	}
 	return b.String()
 }
 

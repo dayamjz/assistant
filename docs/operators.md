@@ -29,6 +29,27 @@ document, lint, push, pull request, and checks. Each stage that cannot decide
 holds for a person, and `assistant status` and `assistant doctor` say where a
 run stands and what stops one.
 
+## Answering a hold
+
+`assistant --answer approved`, `skipped`, or `cancelled` answers the decision a
+run is holding on. At a stage before push you can also ask for one fix round:
+
+```
+assistant --answer fix --select ID[,ID...] [--note TEXT] [--finding TEXT]
+```
+
+The stage runs again after the round and holds again, so you see the result
+before anything is pushed. A round that changed nothing says so and returns to
+the hold. At most three rounds can be asked for at one stage in one run. The
+push, pull request, and checks holds do not offer a fix round: push forwards a
+commit, so a round there would be pushed before you saw it, and a round after
+push would leave a commit nothing pushes.
+
+The hold lists only the findings that are holding the stage. `--select` takes
+the identifier of any finding the stage reported, including a fix or note
+finding the hold does not list. `assistant --json status` lists every one, with
+its identifier, under `active_run.stages[].report.findings`.
+
 ## Keep your CI required
 
 The gate is not your CI (PRD section 12 lists "Being your CI" as a permanent
@@ -93,8 +114,9 @@ request merges.
 
 ## What a pass does not cover
 
-Review reads your change before the test, lint, and checks stages run. When the
-test or lint stage takes a fix round after review, the push stage reviews the
+Review reads your change before the test, lint, and checks stages run. When a
+fix round commits code after review, either an automatic one at the test or lint
+stage or one you ask for at the test, document, or lint hold, the push stage reviews the
 commits between the reviewed one and the head before it pushes anything, and
 holds unless that review raises nothing but notes (PRD section 14, decision 7).
 Two things that review does not cover:

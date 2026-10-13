@@ -40,6 +40,12 @@ import (
 // out. Review's own fix round is not in it, because the review stage re-reads
 // that round's work, and neither is rebase's, which precedes review.
 //
+// A round a person asks for at a stage's hold is in it at every stage, review
+// and rebase included, because PRD section 5 holds that round to the same
+// rule: asking for a round is not approving an edit to a check. internal/
+// pipeline runs it through the same Fix and marks it with
+// pipeline.FixInput.Requested, which is what judged reads.
+//
 // PRD section 5 also names the document stage's in-pass edits. The document
 // stage in this build commits nothing and writes no head: it runs the
 // configured command in the run's copy and reports what the command said. So
@@ -149,11 +155,21 @@ func (e judgeEdit) where() string {
 	return e.change.Path
 }
 
+// judged reports whether the judge rule holds this round. It holds every
+// automatic round the pipeline authors after the review stage has read the
+// change, and every round a person asked for at a hold, at whichever stage:
+// PRD section 5 has a requested round "held to the same rule", and a person
+// asking for a round is not the same as a person approving an edit to a
+// check, which is what the hold puts in front of them.
+func judged(in pipeline.FixInput) bool {
+	return in.Requested != nil || judgedAfterReview(in.Stage)
+}
+
 // judgedAfterReview reports whether a fix round of this stage is a commit the
-// pipeline authors after the review stage has read the change, which is the
-// set the judge rule holds. Review's own rounds are re-reviewed and the
-// rebase stage's precede review, so neither is. It is read off the pipeline's
-// order rather than listed, so the answer follows the one owner of it.
+// pipeline authors after the review stage has read the change. Review's own
+// rounds are re-reviewed and the rebase stage's precede review, so neither is.
+// It is read off the pipeline's order rather than listed, so the answer
+// follows the one owner of it.
 func judgedAfterReview(stage pipeline.Stage) bool {
 	reviewAt, stageAt := -1, -1
 	for i, s := range pipeline.Order() {
@@ -176,9 +192,10 @@ func judgedAfterReview(stage pipeline.Stage) bool {
 // none, because whether it touched a judge path is then unknown and a person
 // is who resolves an unknown here. A cancelled run is returned as the error it
 // is: nobody would answer the hold.
-func judgeRound(ctx context.Context, repo *vcs.Repository, judge config.PatternSet, stage pipeline.Stage,
+func judgeRound(ctx context.Context, repo *vcs.Repository, judge config.PatternSet, in pipeline.FixInput,
 	before, committed string) ([]findings.Finding, error) {
-	if len(judge) == 0 || !judgedAfterReview(stage) {
+	stage := in.Stage
+	if len(judge) == 0 || !judged(in) {
 		return nil, nil
 	}
 	changed, err := repo.ChangedFiles(ctx, before, committed)
@@ -216,8 +233,8 @@ func judgeRound(ctx context.Context, repo *vcs.Repository, judge config.PatternS
 // judgeFixGuidance is the sentence the fixer is told about the judge paths. It
 // is a courtesy: the hold judgeRound raises does not depend on it being read.
 // It is empty where the rule does not apply to this round.
-func judgeFixGuidance(judge config.PatternSet, stage pipeline.Stage) string {
-	if len(judge) == 0 || !judgedAfterReview(stage) {
+func judgeFixGuidance(judge config.PatternSet, in pipeline.FixInput) string {
+	if len(judge) == 0 || !judged(in) {
 		return ""
 	}
 	return "The files matching these patterns decide whether a check passes, and they are not " +
