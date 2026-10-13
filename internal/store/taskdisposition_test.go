@@ -1,0 +1,127 @@
+package store
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	"github.com/dayamjz/assistant/internal/principles"
+)
+
+// A task is recorded with its disposition in one transaction: an independent
+// task opens with queued and dispatched, a queued task with queued alone and
+// its blocker named. The control for atomicity is a fault planted at the
+// database on the second event: with it, nothing is recorded, not the task row
+// and not the opening event, so a kill between the two writes cannot strand a
+// task with no disposition.
+func TestCreateTaskRecordsTheDispositionOrNothing(t *testing.T) {
+	ctx := context.Background()
+	s := openStore(t)
+	seedRun(t, s) // repo-1
+
+	blocker := createBranchTask(t, s, "blocker", Disposition{})
+	events, err := s.TaskEvents(ctx, blocker.ID, 0, 0)
+	if err != nil || len(events) != 2 || events[0].Kind != OpeningEventKind || events[1].Kind != DispatchedEventKind {
+		t.Fatalf("an independent task's history is %+v (%v), want queued then dispatched", events, err)
+	}
+	if blocker.BlockerTask.IsKnown() {
+		t.Fatalf("an independent task names a blocker: %+v", blocker)
+	}
+
+	queued := createBranchTask(t, s, "queued", Disposition{Blocker: Known(blocker.ID), Observed: blocker.Row})
+	events, err = s.TaskEvents(ctx, queued.ID, 0, 0)
+	if err != nil || len(events) != 1 || events[0].Kind != OpeningEventKind {
+		t.Fatalf("a queued task's history is %+v (%v), want queued alone", events, err)
+	}
+	if got := queued.BlockerTask.Or(""); got != blocker.ID {
+		t.Fatalf("the queued task names blocker %q, want %s", got, blocker.ID)
+	}
+
+	// The fault: the dispatch event cannot be written. The task row and the
+	// opening event were written before it in the same transaction, and both
+	// must be gone.
+	if _, err := s.write.ExecContext(ctx, `
+		CREATE TRIGGER fault BEFORE INSERT ON task_event WHEN NEW.kind = 'dispatched'
+		BEGIN SELECT RAISE(ABORT, 'planted fault'); END`); err != nil {
+		t.Fatalf("planting the fault: %v", err)
+	}
+	if _, err := s.CreateTask(ctx, Task{
+		ID: "stranded", Shape: TaskDelivery, Project: "one", Mode: "interactive", WorktreePath: "/worktrees/stranded",
+	}, Disposition{}); err == nil {
+		t.Fatal("CreateTask succeeded past the planted fault, so the control shows nothing")
+	}
+	if _, err := s.Task(ctx, "stranded"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("the task row survived the failed dispatch: %v", err)
+	}
+	if events, err := s.TaskEvents(ctx, "stranded", 0, 0); err != nil || len(events) != 0 {
+		t.Fatalf("the opening event survived the failed dispatch: %+v (%v)", events, err)
+	}
+}
+
+// The disposition is anchored to the newest task of the branch the caller
+// saw. A newer task on the branch means the decision was made without seeing
+// it, so the creation is refused with a *TaskMovedError naming the row that
+// stands, and nothing is written. The control is the same creation anchored
+// to that row, which is accepted.
+func TestCreateTaskIsRefusedWhenTheBranchMoved(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	ctx := context.Background()
+	s := openStore(t)
+	seedRun(t, s)
+
+	first := createBranchTask(t, s, "first", Disposition{})
+	second := createBranchTask(t, s, "second", Disposition{Blocker: Known(first.ID), Observed: first.Row})
+
+	_, err := s.CreateTask(ctx, Task{
+		ID: "stale", Shape: TaskDelivery, Project: "one", Mode: "interactive", WorktreePath: "/worktrees/stale",
+		RepositoryID: Known("repo-1"), Branch: Known("topic"),
+	}, Disposition{Blocker: Known(first.ID), Observed: first.Row})
+	var moved *TaskMovedError
+	if !errors.As(err, &moved) || !errors.Is(err, ErrTaskMoved) {
+		t.Fatalf("a creation anchored to a superseded task = %v, want *TaskMovedError", err)
+	}
+	if moved.Task != "stale" || moved.Anchor != AnchoredBranch || moved.Expected != first.Row || moved.Stands != second.Row {
+		t.Fatalf("the refusal names %+v, want the branch standing at %d against an anchor of %d", moved, second.Row, first.Row)
+	}
+	if _, err := s.Task(ctx, "stale"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("the refused creation wrote a task: %v", err)
+	}
+	if _, err := s.CreateTask(ctx, Task{
+		ID: "stale", Shape: TaskDelivery, Project: "one", Mode: "interactive", WorktreePath: "/worktrees/stale",
+		RepositoryID: Known("repo-1"), Branch: Known("topic"),
+	}, Disposition{Blocker: Known(second.ID), Observed: second.Row}); err != nil {
+		t.Fatalf("the same creation anchored to the newest task was refused: %v", err)
+	}
+
+	// Another branch is another set: its newest is nothing, so the anchor is
+	// zero, and the first branch's tasks do not count against it.
+	if _, err := s.CreateTask(ctx, Task{
+		ID: "elsewhere", Shape: TaskDelivery, Project: "one", Mode: "interactive", WorktreePath: "/worktrees/elsewhere",
+		RepositoryID: Known("repo-1"), Branch: Known("other"),
+	}, Disposition{}); err != nil {
+		t.Fatalf("a task on an empty branch anchored to zero was refused: %v", err)
+	}
+	// A task with no branch has no set, so any anchor but zero is a position
+	// nothing stands at.
+	if _, err := s.CreateTask(ctx, Task{
+		ID: "loose", Shape: TaskInvestigation, Project: "one", Mode: "interactive", WorktreePath: "/worktrees/loose",
+	}, Disposition{Observed: first.Row}); !errors.Is(err, ErrTaskMoved) {
+		t.Fatalf("a branch-less task anchored to a row = %v, want ErrTaskMoved", err)
+	}
+}
+
+// A blocker is a task that exists and is not the one being created.
+func TestCreateTaskRefusesABlockerItCannotRecord(t *testing.T) {
+	ctx := context.Background()
+	s := openStore(t)
+	base := Task{ID: "task-1", Shape: TaskDelivery, Project: "one", Mode: "interactive", WorktreePath: "/worktrees/task-1"}
+	if _, err := s.CreateTask(ctx, base, Disposition{Blocker: Known("task-1")}); err == nil {
+		t.Fatal("a task was accepted as its own blocker")
+	}
+	if _, err := s.CreateTask(ctx, base, Disposition{Blocker: Known("never")}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("a blocker that does not exist = %v, want ErrNotFound", err)
+	}
+	if _, err := s.Task(ctx, base.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("a refused creation wrote the task: %v", err)
+	}
+}

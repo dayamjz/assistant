@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -17,27 +18,40 @@ import (
 type TaskSnapshot struct {
 	// Task is the task record.
 	Task Task
+	// Attempts are the task's attempts in sequence order, and empty for a
+	// task never launched. The last one is the attempt whose start is the
+	// attribution cutoff and whose session is the one a terminal probe asks
+	// about.
+	Attempts []TaskAttempt
 	// Runs are the runs attributed to the task, newest first: those of the
-	// task's own repository and branch created at or after the task was, plus
-	// the run the task names directly, if any. A task with neither a branch
-	// nor a named run has none.
+	// task's own repository and branch created at or after its latest attempt
+	// began, plus the run the task names directly, if any. A task with no
+	// attempt is attributed nothing by its branch, so a task queued behind
+	// another on the same branch does not inherit the blocker's runs. A task
+	// with neither a branch nor a named run has none.
 	Runs []Run
 	// Holds are the holds, open or resolved, that name the task or one of
 	// Runs, oldest first.
 	Holds []Hold
 	// Events are the task's whole history in append order.
 	Events []TaskEvent
+	// Cleanup is the task's cleanup record, and unknown while none has been
+	// written. It is carried for the resolver's terminal tier (#107) and
+	// read by nothing in this build.
+	Cleanup Optional[TaskCleanup]
 }
 
 // TaskSnapshot reads one task and the records its state is resolved from, as
 // of a single point in time. It returns ErrNotFound for an unknown task.
 //
-// Attribution by branch and creation time is a heuristic and says so: two
-// tasks on one branch share their runs, so a newer run made for one can be
-// attributed to the other. A task
-// relaunched in place after an earlier run of the same branch would be
-// outranked by that older run's status until a newer run exists. The creation
-// time is the cutoff because nothing in this build records an attempt marker.
+// Attribution by branch is a heuristic and says so. The cutoff is the start
+// of the task's latest attempt, which is what keeps a queued task from
+// inheriting the runs of the task it waits behind and a relaunched task from
+// being outranked by a run from before the relaunch; what it does not do is
+// tell two tasks apart whose attempts are both live on one branch, where a
+// newer run made for one is attributed to both. Two tasks on one branch at
+// once is what the intake's disposition exists to prevent, and this read does
+// not re-check it.
 func (s *Store) TaskSnapshot(ctx context.Context, id string) (TaskSnapshot, error) {
 	var out TaskSnapshot
 	err := s.snapshotTx(ctx, func(q querier) error {
@@ -116,12 +130,21 @@ func (s *Store) snapshotTx(ctx context.Context, fn func(q querier) error) error 
 func snapshotOf(ctx context.Context, q querier, task Task) (TaskSnapshot, error) {
 	snap := TaskSnapshot{Task: task}
 
-	// A NULL on either side of an equality is not true, so a task with no
-	// branch matches no run by branch.
-	rows, err := q.QueryContext(ctx, runColumns+` FROM run
-		WHERE (repository_id = ? AND branch = ? AND created_at >= ?) OR id = ?
-		ORDER BY created_at DESC, id DESC`,
-		task.RepositoryID, task.Branch, encodeTime(task.CreatedAt), task.RunID)
+	attempts, err := taskAttemptsOf(ctx, q, task.ID)
+	if err != nil {
+		return TaskSnapshot{}, err
+	}
+	snap.Attempts = attempts
+
+	// A task with no attempt is attributed nothing by its branch, so only the
+	// run it names is read. With one, a NULL on either side of an equality is
+	// not true, so a task with no branch still matches no run by branch.
+	query, args := runColumns+` FROM run WHERE id = ?`, []any{task.RunID}
+	if n := len(attempts); n > 0 {
+		query = runColumns + ` FROM run WHERE (repository_id = ? AND branch = ? AND created_at >= ?) OR id = ?`
+		args = []any{task.RepositoryID, task.Branch, encodeTime(attempts[n-1].StartedAt), task.RunID}
+	}
+	rows, err := q.QueryContext(ctx, query+` ORDER BY created_at DESC, id DESC`, args...)
 	if err != nil {
 		return TaskSnapshot{}, err
 	}
@@ -139,8 +162,15 @@ func snapshotOf(ctx context.Context, q querier, task Task) (TaskSnapshot, error)
 		return TaskSnapshot{}, err
 	}
 
-	query := holdColumns + ` FROM hold WHERE task_id = ?`
-	args := []any{task.ID}
+	switch cleanup, err := taskCleanupOf(ctx, q, task.ID); {
+	case err == nil:
+		snap.Cleanup = Known(cleanup)
+	case !errors.Is(err, ErrNotFound):
+		return TaskSnapshot{}, err
+	}
+
+	query = holdColumns + ` FROM hold WHERE task_id = ?`
+	args = []any{task.ID}
 	if len(snap.Runs) > 0 {
 		marks := make([]string, len(snap.Runs))
 		for i, r := range snap.Runs {

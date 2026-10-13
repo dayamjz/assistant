@@ -89,7 +89,7 @@ func TestForgettingARepositoryIsRefusedWhileATaskNamesOneOfItsRuns(t *testing.T)
 	if _, err := s.CreateTask(ctx, Task{
 		ID: "task-1", Shape: TaskDelivery, Project: "one", Mode: "local", WorktreePath: "/copies/one",
 		RunID: Known(run.ID),
-	}); err != nil {
+	}, Disposition{}); err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
 
@@ -127,7 +127,7 @@ func TestTasksAreListedNewestFirst(t *testing.T) {
 	for _, id := range []string{"task-1", "task-2"} {
 		if _, err := s.CreateTask(ctx, Task{
 			ID: id, Shape: TaskDelivery, Project: "one", Mode: "local", WorktreePath: "/copies/" + id,
-		}); err != nil {
+		}, Disposition{}); err != nil {
 			t.Fatalf("CreateTask %s: %v", id, err)
 		}
 	}

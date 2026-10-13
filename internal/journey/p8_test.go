@@ -74,8 +74,13 @@ func TestAnEventLogIsNotCurrentState(t *testing.T) {
 		WorktreePath: j.Dir(),
 		RepositoryID: store.Known("p8-repo"),
 		Branch:       store.Known(branch),
-	}); err != nil {
+	}, store.Disposition{}); err != nil {
 		t.Fatalf("recording the task: %v", err)
+	}
+	// A run is attributed to a task by its branch only from the task's latest
+	// attempt onwards, so the task is launched once before the run below.
+	if _, err := written.BeginTaskAttempt(t.Context(), id, 0); err != nil {
+		t.Fatalf("recording the task's attempt: %v", err)
 	}
 
 	// The worker's own history. The last thing it appended says it is waiting

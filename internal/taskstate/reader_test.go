@@ -36,17 +36,34 @@ func openStore(t *testing.T) *store.Store {
 	return s
 }
 
+// newTask creates an independent task and, when it works on a branch, begins
+// its first attempt, because a task with no attempt is attributed no run by
+// its branch. The attempt is what every test here that finishes a run on the
+// branch rests on.
 func newTask(t *testing.T, s *store.Store, id string, withBranch bool) store.Task {
 	t.Helper()
 	task := store.Task{ID: id, Shape: store.TaskDelivery, Project: "one", Mode: "interactive", WorktreePath: "/w/" + id}
 	if withBranch {
 		task.RepositoryID, task.Branch = store.Known(repo), store.Known(branch)
 	}
-	task, err := s.CreateTask(context.Background(), task)
+	task, err := s.CreateTask(context.Background(), task, store.Disposition{})
 	if err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
+	if withBranch {
+		beginAttempt(t, s, id, 0)
+	}
 	return task
+}
+
+// beginAttempt records the next attempt of a task, anchored to expected.
+func beginAttempt(t *testing.T, s *store.Store, id string, expected int64) store.TaskAttempt {
+	t.Helper()
+	a, err := s.BeginTaskAttempt(context.Background(), id, expected)
+	if err != nil {
+		t.Fatalf("BeginTaskAttempt: %v", err)
+	}
+	return a
 }
 
 func appendEvents(t *testing.T, s *store.Store, id string, kinds ...string) {
@@ -131,8 +148,8 @@ func TestAnEventLogIsNotCurrentState(t *testing.T) {
 	if got.State != Ready || got.Source != SourceRun {
 		t.Fatalf("resolved %s from %s, want ready from the run", got.State, got.Source)
 	}
-	// Opening event is 1: started 2, handed-off 3, decision-open 4.
-	if want := []int64{4}; !slices.Equal(seqs(got), want) {
+	// Opening event is 1, dispatched 2: started 3, handed-off 4, decision-open 5.
+	if want := []int64{5}; !slices.Equal(seqs(got), want) {
 		t.Fatalf("superseded = %v, want %v", seqs(got), want)
 	}
 	if s0 := got.Superseded[0]; s0.Kind != "decision-open" || s0.Claimed != Held || s0.By != SourceRun {
@@ -170,8 +187,8 @@ func TestSupersededComesFromTheWholeLogThroughTheStore(t *testing.T) {
 	finishRun(t, s, "run-1")
 
 	got := resolveTask(t, s, task.ID)
-	// 1 opening, 2 open, 3 closed, 4 open, 5 note.
-	if want := []int64{4}; !slices.Equal(seqs(got), want) {
+	// 1 opening, 2 dispatched, 3 open, 4 closed, 5 open, 6 note.
+	if want := []int64{5}; !slices.Equal(seqs(got), want) {
 		t.Fatalf("superseded = %v, want only the decision still open, %v", seqs(got), want)
 	}
 }
@@ -199,19 +216,44 @@ func TestTheAnswerDoesNotDependOnWriteOrder(t *testing.T) {
 	}
 }
 
-// A task nobody has touched resolves from its opening event, and a task with no
-// branch is not attributed another task's run.
-func TestAttributionAndTheOpeningEvent(t *testing.T) {
+// A task nobody has touched resolves from the events its intake appended: an
+// independent task from its dispatch, a task queued behind another from its
+// opening event. A task with no branch is not attributed another task's run,
+// and neither is a task queued on the same branch as a live one: the blocker's
+// run is the blocker's, and the queued task resolves Queued rather than
+// inheriting the blocker's validation.
+func TestAttributionAndTheOpeningEvents(t *testing.T) {
 	s := openStore(t)
 	newTask(t, s, "delivery", true)
 	newTask(t, s, "investigation", false)
+	queued := store.Task{ID: "queued", Shape: store.TaskDelivery, Project: "one", Mode: "interactive", WorktreePath: "/w/queued",
+		RepositoryID: store.Known(repo), Branch: store.Known(branch)}
+	delivery, err := s.Task(context.Background(), "delivery")
+	if err != nil {
+		t.Fatalf("Task: %v", err)
+	}
+	if _, err := s.CreateTask(context.Background(), queued,
+		store.Disposition{Blocker: store.Known("delivery"), Observed: delivery.Row}); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
 	finishRun(t, s, "run-1")
 
-	if got := resolveTask(t, s, "investigation"); got.State != Queued || got.Source != SourceEvent {
-		t.Fatalf("an investigation task resolved to %s from %s, want queued from its opening event", got.State, got.Source)
+	if got := resolveTask(t, s, "investigation"); got.State != Dispatched || got.Source != SourceEvent {
+		t.Fatalf("an investigation task resolved to %s from %s, want dispatched from its intake", got.State, got.Source)
 	}
 	if got := resolveTask(t, s, "delivery"); got.State != Ready || got.Source != SourceRun {
 		t.Fatalf("the delivery task resolved to %s from %s", got.State, got.Source)
+	}
+	if got := resolveTask(t, s, "queued"); got.State != Queued || got.Source != SourceEvent {
+		t.Fatalf("the task queued behind it resolved to %s from %s, want queued from its opening event", got.State, got.Source)
+	}
+	// Once the queued task's own attempt begins, a run newer than that is its.
+	beginAttempt(t, s, "queued", 0)
+	time.Sleep(2 * time.Millisecond)
+	finishRun(t, s, "run-2")
+	if got := resolveTask(t, s, "queued"); got.State != Ready || got.Source != SourceRun || got.Basis.RunID != "run-2" {
+		t.Fatalf("after its attempt began the queued task resolved to %s from %s (run %s), want ready from run-2",
+			got.State, got.Source, got.Basis.RunID)
 	}
 }
 
@@ -226,17 +268,22 @@ func TestAnUnknownTaskIsNotFound(t *testing.T) {
 	}
 }
 
-// The probe is asked only about tasks that have a session, and what it says
-// reaches the tier above the log and below the run.
+// The probe is asked only about tasks whose latest attempt has a session, and
+// what it says reaches the tier above the log and below the run. A task with
+// an attempt and no session yet is not probed either: that is the record of a
+// launch that has not come up.
 func TestTheReaderConsultsTheProbeForTasksWithASession(t *testing.T) {
 	ctx := context.Background()
 	s := openStore(t)
 	newTask(t, s, "withsession", false)
 	newTask(t, s, "nosession", false)
+	newTask(t, s, "notyet", false)
 	appendEvents(t, s, "withsession", "started")
-	if err := s.SetTaskSession(ctx, "withsession", "pane-1"); err != nil {
-		t.Fatalf("SetTaskSession: %v", err)
+	first := beginAttempt(t, s, "withsession", 0)
+	if err := s.SetAttemptSession(ctx, "withsession", first.Sequence, "pane-1"); err != nil {
+		t.Fatalf("SetAttemptSession: %v", err)
 	}
+	beginAttempt(t, s, "notyet", 0)
 
 	var asked []string
 	live := true
@@ -259,8 +306,11 @@ func TestTheReaderConsultsTheProbeForTasksWithASession(t *testing.T) {
 	if got, _ := r.Task(ctx, "nosession"); got.Basis.Process != Unobserved {
 		t.Fatalf("a task with no session was probed: %+v", got.Basis)
 	}
+	if got, _ := r.Task(ctx, "notyet"); got.Basis.Process != Unobserved {
+		t.Fatalf("a task whose attempt has no session yet was probed: %+v", got.Basis)
+	}
 	all, err := r.All(ctx)
-	if err != nil || len(all) != 2 {
+	if err != nil || len(all) != 3 {
 		t.Fatalf("All = %v, %v", all, err)
 	}
 	if want := []string{"pane-1", "pane-1", "pane-1"}; !slices.Equal(asked, want) {

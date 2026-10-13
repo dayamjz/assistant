@@ -90,7 +90,7 @@ func seedTask(t *testing.T, s *Store, id string) Task {
 		Project:      "one",
 		Mode:         "interactive",
 		WorktreePath: "/worktrees/" + id,
-	})
+	}, Disposition{})
 	if err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}

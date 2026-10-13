@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -19,9 +20,22 @@ const (
 )
 
 // Task is the authoritative record of one worker's assignment.
+//
+// It carries no session reference. Which session an attempt of the task had is
+// the attempt's record (TaskAttempt.SessionRef), and the session_ref column
+// migration 1 gave this table is neither written nor read by this build: a
+// migration may not remove a column, so it stays declared and holds NULL for
+// every task created here. One record of that fact is P14's rule, and the
+// attempt is the one that knows when the session began.
 type Task struct {
 	// ID is the caller's identifier for the task.
 	ID string `json:"id"`
+	// Row is the position the store inserted the record at. The store
+	// assigns it, it increases with every task created in a store, and it is
+	// never reused because nothing here removes a task. It is what a caller
+	// anchors a CreateTask against: the highest Row it saw among the tasks of
+	// the same repository and branch.
+	Row int64 `json:"row"`
 	// Shape is which of the two shapes this task is.
 	Shape TaskShape `json:"shape"`
 	// Project is what the task is for.
@@ -33,23 +47,30 @@ type Task struct {
 	// field; recording it is what lets a cleanup proof name what it refused to
 	// remove.
 	WorktreePath string `json:"worktree_path"`
-	// SessionRef points at the terminal session, if one exists yet.
-	SessionRef Optional[string] `json:"session_ref"`
 	// RunID names the validation run the task produced, if it has produced
 	// one.
 	RunID Optional[string] `json:"run_id"`
 	// PullRequest names the pull request the task produced, if any.
 	PullRequest Optional[string] `json:"pull_request"`
-	// RepositoryID names the repository whose branch the task works on. It is
-	// unknown for an investigation task, which has no branch, and for a task
-	// recorded before the column existed.
+	// RepositoryID names the repository the task works in. It is unknown for
+	// a task recorded before the column existed and for an investigation task
+	// that names none; an investigation task may name one with no branch.
 	RepositoryID Optional[string] `json:"repository_id"`
-	// Branch is the branch the task works on. Together with RepositoryID it is
-	// how a validation run is attributed to the task: a run of that branch
-	// created at or after CreatedAt is this task's. It is set when the task is
-	// created and never moves, and it is unknown on the same terms as
-	// RepositoryID.
+	// Branch is the branch the task works on, and a task that names one names
+	// RepositoryID too. Together they are how a validation run is attributed
+	// to the task: a run of that branch created at or after the task's latest
+	// attempt began is this task's, and a task with no attempt is attributed
+	// no run by its branch. It is set when the task is created and never
+	// moves, and it is unknown for an investigation task and for a task
+	// recorded before the column existed.
 	Branch Optional[string] `json:"branch"`
+	// BlockerTask names the task this one was queued behind at intake, when
+	// it was: PRD section 6's "overlaps live work". It is unknown for an
+	// independent task and for a task recorded before the column existed, so
+	// the record understates rather than fabricating independence. It is set
+	// at creation and never moves; whether the blocker has cleared is
+	// resolved from the blocker's own records, never stored here.
+	BlockerTask Optional[string] `json:"blocker_task"`
 	// CreatedAt is when the task was recorded.
 	CreatedAt time.Time `json:"created_at"`
 }
@@ -59,14 +80,36 @@ type Task struct {
 // kind means is internal/taskstate's table, which has a row for this one.
 const OpeningEventKind = "queued"
 
-const taskColumns = `SELECT id, shape, project, mode, worktree_path, session_ref, run_id, pull_request,
-	repository_id, branch, created_at`
+// DispatchedEventKind is the kind of the event CreateTask appends second, for
+// a task created with no blocker: PRD section 6's "Intake --> Dispatched:
+// independent". As with OpeningEventKind, the store records the word and
+// internal/taskstate's table is what gives it a meaning.
+const DispatchedEventKind = "dispatched"
+
+// Disposition is what an intake decided about a task it is creating: whether
+// it is queued behind another task, and what the intake had seen when it
+// decided that.
+type Disposition struct {
+	// Blocker is the task this one is queued behind, or unknown for an
+	// independent task. A known blocker must be an existing task other than
+	// the one being created.
+	Blocker Optional[string]
+	// Observed is the highest Task.Row the caller saw among the tasks of the
+	// same repository and branch, and zero when it saw none. CreateTask is
+	// refused with ErrTaskMoved when a newer task of that branch exists,
+	// because the decision Blocker records was made without seeing it. A
+	// task with no branch has no such set, and for it Observed must be zero.
+	Observed int64
+}
+
+const taskColumns = `SELECT rowid, id, shape, project, mode, worktree_path, run_id, pull_request,
+	repository_id, branch, blocker_task, created_at`
 
 func scanTask(sc scanner) (Task, error) {
 	var t Task
 	var shape, created string
-	if err := sc.Scan(&t.ID, &shape, &t.Project, &t.Mode, &t.WorktreePath, &t.SessionRef, &t.RunID,
-		&t.PullRequest, &t.RepositoryID, &t.Branch, &created); err != nil {
+	if err := sc.Scan(&t.Row, &t.ID, &shape, &t.Project, &t.Mode, &t.WorktreePath, &t.RunID,
+		&t.PullRequest, &t.RepositoryID, &t.Branch, &t.BlockerTask, &created); err != nil {
 		return Task{}, err
 	}
 	t.Shape = TaskShape(shape)
@@ -77,15 +120,33 @@ func scanTask(sc scanner) (Task, error) {
 	return t, nil
 }
 
-// CreateTask records a new task and its opening event, in one transaction.
+// CreateTask records a new task with the disposition its intake decided, in
+// one transaction: the task row, its opening event of kind OpeningEventKind,
+// and, for a task with no blocker, a second event of kind
+// DispatchedEventKind. A task is therefore never recorded without its
+// disposition, and a failure anywhere records nothing.
 //
 // It records no state: what a task's state is gets resolved from the records
 // that own the facts, by internal/taskstate, on every read (P8, P14). The
-// opening event of kind OpeningEventKind is history, and is what lets a task
-// that nothing else has touched resolve from the event log rather than from
-// nothing. A task naming a branch must name its repository too, and the
-// reverse, because attribution needs both.
-func (s *Store) CreateTask(ctx context.Context, t Task) (Task, error) {
+// events are history, and are what let a task that nothing else has touched
+// resolve from the event log rather than from nothing.
+//
+// Two rules are checked before anything is written. A task naming a branch
+// must name its repository, because attribution needs both; a task may name a
+// repository alone, which is an investigation task working in one with no
+// branch of its own. And the disposition is anchored: d.Observed is the
+// highest Row the caller saw among the tasks of the same repository and
+// branch, and the creation is refused with a *TaskMovedError wrapping
+// ErrTaskMoved when a newer task of that branch exists, decided in the same
+// transaction as the insert, so an intake that read the branch and then
+// decided cannot be overtaken between the two. A known blocker must exist and
+// must not be the task itself.
+//
+// The identifier is checked for being non-empty and nothing more here. The
+// validator that fixes what a task identifier may contain, and the copy path
+// it computes from one, is internal/home's (#102), which does not exist in
+// this build; CreateTask is where that check belongs once it does.
+func (s *Store) CreateTask(ctx context.Context, t Task, d Disposition) (Task, error) {
 	if strings.TrimSpace(t.ID) == "" {
 		return Task{}, fmt.Errorf("store: task has no identifier")
 	}
@@ -98,29 +159,67 @@ func (s *Store) CreateTask(ctx context.Context, t Task) (Task, error) {
 	if strings.TrimSpace(t.WorktreePath) == "" {
 		return Task{}, fmt.Errorf("store: task %s has no isolated copy path", t.ID)
 	}
-	if t.RepositoryID.IsKnown() != t.Branch.IsKnown() {
-		return Task{}, fmt.Errorf("store: task %s names a repository or a branch without the other", t.ID)
+	if t.Branch.IsKnown() && !t.RepositoryID.IsKnown() {
+		return Task{}, fmt.Errorf("store: task %s names a branch without a repository", t.ID)
+	}
+	if blocker, ok := d.Blocker.Get(); ok && blocker == t.ID {
+		return Task{}, fmt.Errorf("store: task %s is named as its own blocker", t.ID)
 	}
 
 	now := nowUTC()
 	err := s.inTx(ctx, func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO task (id, shape, project, mode, worktree_path, session_ref, run_id, pull_request,
-				repository_id, branch, created_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			t.ID, string(t.Shape), t.Project, t.Mode, t.WorktreePath,
-			t.SessionRef, t.RunID, t.PullRequest, t.RepositoryID, t.Branch, encodeTime(now)); err != nil {
+		if blocker, ok := d.Blocker.Get(); ok {
+			if err := taskExists(ctx, tx, blocker); err != nil {
+				return fmt.Errorf("blocker %s: %w", blocker, err)
+			}
+		}
+		var stands int64
+		if err := tx.QueryRowContext(ctx,
+			`SELECT COALESCE(MAX(rowid), 0) FROM task WHERE repository_id = ? AND branch = ?`,
+			t.RepositoryID, t.Branch).Scan(&stands); err != nil {
 			return err
 		}
-		_, err := tx.ExecContext(ctx,
-			`INSERT INTO task_event (task_id, sequence, kind, detail, at) VALUES (?, 1, ?, ?, ?)`,
-			t.ID, OpeningEventKind, "recorded", encodeTime(now))
-		return err
+		if stands != d.Observed {
+			return &TaskMovedError{Task: t.ID, Anchor: AnchoredBranch, Expected: d.Observed, Stands: stands}
+		}
+		if _, err := tx.ExecContext(ctx, `
+			INSERT INTO task (id, shape, project, mode, worktree_path, run_id, pull_request,
+				repository_id, branch, blocker_task, created_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			t.ID, string(t.Shape), t.Project, t.Mode, t.WorktreePath,
+			t.RunID, t.PullRequest, t.RepositoryID, t.Branch, d.Blocker, encodeTime(now)); err != nil {
+			return err
+		}
+		kinds := []string{OpeningEventKind}
+		if !d.Blocker.IsKnown() {
+			kinds = append(kinds, DispatchedEventKind)
+		}
+		for i, kind := range kinds {
+			if _, err := tx.ExecContext(ctx,
+				`INSERT INTO task_event (task_id, sequence, kind, detail, at) VALUES (?, ?, ?, ?, ?)`,
+				t.ID, int64(i+1), kind, "recorded", encodeTime(now)); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 	if err != nil {
+		var moved *TaskMovedError
+		if errors.As(err, &moved) {
+			return Task{}, err
+		}
 		return Task{}, fmt.Errorf("store: creating task %s: %w", t.ID, err)
 	}
 	return s.Task(ctx, t.ID)
+}
+
+// taskExists answers ErrNotFound for a task identifier no row carries.
+func taskExists(ctx context.Context, q querier, id string) error {
+	var one int
+	if err := q.QueryRowContext(ctx, `SELECT 1 FROM task WHERE id = ?`, id).Scan(&one); err != nil {
+		return errNoRows(err)
+	}
+	return nil
 }
 
 // Task returns the task with the given identifier, or ErrNotFound.
@@ -161,11 +260,6 @@ func (s *Store) Tasks(ctx context.Context) ([]Task, error) {
 		return nil, fmt.Errorf("store: listing tasks: %w", err)
 	}
 	return out, nil
-}
-
-// SetTaskSession records the terminal session the task is attached to.
-func (s *Store) SetTaskSession(ctx context.Context, id, sessionRef string) error {
-	return s.updateTask(ctx, id, "session_ref", sessionRef)
 }
 
 // SetTaskRun links the task to the validation run it produced.

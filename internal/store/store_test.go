@@ -34,7 +34,7 @@ func TestReopeningKeepsEverything(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TaskEvents: %v", err)
 	}
-	if len(history) != 2 || history[1].Kind != "started" {
+	if len(history) != 3 || history[2].Kind != "started" {
 		t.Fatalf("the task history did not survive reopening: %+v", history)
 	}
 	open, err := again.OpenHolds(ctx)
@@ -68,6 +68,22 @@ func TestAccessorsRefuseAfterClose(t *testing.T) {
 		"TaskEvents":   func() error { _, err := s.TaskEvents(ctx, "task-1", 0, 0); return err },
 		"OpenHolds":    func() error { _, err := s.OpenHolds(ctx); return err },
 		"AppendEvent":  func() error { _, err := s.AppendTaskEvent(ctx, "task-1", "kind", ""); return err },
+		"AppendTaskEventAfter": func() error {
+			_, err := s.AppendTaskEventAfter(ctx, "task-1", 1, "kind", "")
+			return err
+		},
+		"CreateTask": func() error {
+			_, err := s.CreateTask(ctx, Task{ID: "t", Shape: TaskDelivery, WorktreePath: "/w"}, Disposition{})
+			return err
+		},
+		"BeginTaskAttempt":  func() error { _, err := s.BeginTaskAttempt(ctx, "task-1", 0); return err },
+		"SetAttemptSession": func() error { return s.SetAttemptSession(ctx, "task-1", 1, "pane") },
+		"TaskAttempts":      func() error { _, err := s.TaskAttempts(ctx, "task-1"); return err },
+		"RecordTaskCleanup": func() error {
+			_, err := s.RecordTaskCleanup(ctx, TaskCleanup{TaskID: "task-1", Proof: CleanupProofRemoteBranch})
+			return err
+		},
+		"TaskCleanup": func() error { _, err := s.TaskCleanup(ctx, "task-1"); return err },
 		"AppendGraphCheckpoint": func() error {
 			_, err := s.AppendGraphCheckpoint(ctx, "run-1", "", 0, []byte("cp"))
 			return err

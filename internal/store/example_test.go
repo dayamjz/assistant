@@ -113,7 +113,7 @@ func ExampleStore_AppendTaskEvent() {
 	task, err := s.CreateTask(ctx, store.Task{
 		ID: "task-1", Shape: store.TaskInvestigation, Project: "one",
 		Mode: "headless", WorktreePath: "/worktrees/task-1",
-	})
+	}, store.Disposition{})
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -132,6 +132,7 @@ func ExampleStore_AppendTaskEvent() {
 
 	// Output:
 	// 1 queued
-	// 2 started
-	// 3 blocked
+	// 2 dispatched
+	// 3 started
+	// 4 blocked
 }

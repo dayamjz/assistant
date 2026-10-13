@@ -14,10 +14,11 @@ type Reader struct {
 }
 
 // NewReader returns a Reader over s. probe reports the liveness of a task's
-// terminal session by its reference; it is called only for a task that has
-// one, and a nil probe means no task's terminal is ever observed. It is a
-// function and not an interface because its consumers are this package's
-// process tier and the session module that does not exist yet.
+// terminal session by its reference, which is the session of the task's
+// latest attempt; it is called only for a task whose latest attempt has one,
+// and a nil probe means no task's terminal is ever observed. It is a function
+// and not an interface because its consumers are this package's process tier
+// and the session module that does not exist yet.
 //
 // The probe runs after the store has been read, outside its transaction, so
 // the liveness it reports is as of the probe and may be stale by the time the
@@ -67,11 +68,13 @@ func (r *Reader) All(ctx context.Context) ([]Resolved, error) {
 }
 
 func (r *Reader) resolve(ctx context.Context, snap store.TaskSnapshot) Resolution {
-	liveness := Unobserved
-	if ref, ok := snap.Task.SessionRef.Get(); ok && r.probe != nil {
-		liveness = r.probe(ctx, ref)
+	in := Inputs{
+		Task: snap.Task, Runs: snap.Runs, Holds: snap.Holds, Events: snap.Events, Process: Unobserved,
 	}
-	return Resolve(Inputs{
-		Task: snap.Task, Runs: snap.Runs, Holds: snap.Holds, Events: snap.Events, Process: liveness,
-	})
+	if n := len(snap.Attempts); n > 0 && r.probe != nil {
+		if ref, ok := snap.Attempts[n-1].SessionRef.Get(); ok {
+			in.Process = r.probe(ctx, ref)
+		}
+	}
+	return Resolve(in)
 }
