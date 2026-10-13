@@ -217,7 +217,7 @@ func TestARelaunchReusesTheStandingCopyAndASecondPassDoesNotRelaunchAgain(t *tes
 	sub.restart.reconcileTasks(ctx)
 	sub.restart.work.Wait()
 
-	_, launched, ok := sub.restart.sessionOf(sub.task)
+	provider, launched, ok := sub.restart.sessionOf(sub.task)
 	if !ok {
 		t.Fatal("the restarted service holds no session after the relaunch")
 	}
@@ -246,22 +246,16 @@ func TestARelaunchReusesTheStandingCopyAndASecondPassDoesNotRelaunchAgain(t *tes
 		t.Fatalf("after the relaunch the task resolves %+v, want Running from the live terminal the restarted service holds", got)
 	}
 	// The worker read the instructions file and then the note, which is
-	// not in the file.
+	// not in the file. The wait is on the worker's output, which it prints
+	// after recording the note's line, so the record is read once and after
+	// it is complete; polling the record while the worker reads is what
+	// standin.Agent.Calls says ends a worker on Windows.
+	waitCaptured(t, provider, launched, noteReadReply)
 	var worker standin.Call
-	deadline := time.Now().Add(30 * time.Second)
-	for {
-		for _, call := range sub.restartA.Calls() {
-			if call.Worker {
-				worker = call
-			}
+	for _, call := range sub.restartA.Calls() {
+		if call.Worker {
+			worker = call
 		}
-		if len(worker.Lines) > 0 && strings.Contains(strings.Join(worker.Lines, "\n"), "This is attempt 2 of this task") {
-			break
-		}
-		if !time.Now().Before(deadline) {
-			t.Fatalf("the relaunched worker never read the note; it read %v", worker.Lines)
-		}
-		time.Sleep(time.Millisecond)
 	}
 	text := strings.Join(worker.Lines, "\n")
 	if !strings.Contains(text, "git rev-parse --show-toplevel") || !strings.Contains(text, "This is attempt 2 of this task") {

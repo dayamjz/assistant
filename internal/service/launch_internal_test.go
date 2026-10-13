@@ -43,11 +43,40 @@ func newLaunchSubject(t *testing.T, agent *standin.Agent) *launchSubject {
 }
 
 // workerStandIn is the worker-capable stand-in with a greeting, so a launch
-// that started a process shows it through Capture.
+// that started a process shows it through Capture, and one exchange that
+// answers the program's relaunch note, so a test can wait on the worker's
+// output for the note having been read rather than on its record, which
+// standin.Agent.Calls says not to poll while a worker reads.
 func workerStandIn(t *testing.T) *standin.Agent {
 	t.Helper()
-	return standin.NewWorker(t, standin.Script{Worker: &standin.WorkerScript{Greeting: "worker ready"}},
-		agents.WithTerminationGrace(2*time.Second))
+	return standin.NewWorker(t, standin.Script{Worker: &standin.WorkerScript{
+		Greeting:  "worker ready",
+		Exchanges: []standin.Exchange{{Contains: "This is attempt", Reply: noteReadReply}},
+	}}, agents.WithTerminationGrace(2*time.Second))
+}
+
+// noteReadReply is what the stand-in worker prints once it has read the
+// relaunch note's first line, which is the line the capture is waited on.
+const noteReadReply = "the relaunch note was read"
+
+// waitCaptured polls the provider's in-memory Capture until the session's
+// output carries want.
+func waitCaptured(t *testing.T, p session.Provider, s *session.Session, want string) {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		got, err := p.Capture(s)
+		if err != nil {
+			t.Fatalf("Capture: %v", err)
+		}
+		if strings.Contains(got.Text, want) {
+			return
+		}
+		if !time.Now().Before(deadline) {
+			t.Fatalf("the capture never carried %q; it is:\n%s", want, got.Text)
+		}
+		time.Sleep(time.Millisecond)
+	}
 }
 
 // waitLiveness polls the provider until the reference probes want.

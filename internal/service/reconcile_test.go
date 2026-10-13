@@ -51,28 +51,6 @@ func (blockingTerminals) Capture(context.Context, string) (session.Capture, erro
 	return session.Capture{}, errors.New("never reached: nothing probes live")
 }
 
-// waitWorkers polls the stand-in's record until n workers have been
-// started, and returns them in the order they were recorded.
-func waitWorkers(t *testing.T, agent *standin.Agent, n int) []standin.Call {
-	t.Helper()
-	deadline := time.Now().Add(launchWait)
-	for {
-		var workers []standin.Call
-		for _, call := range agent.Calls() {
-			if call.Worker {
-				workers = append(workers, call)
-			}
-		}
-		if len(workers) >= n {
-			return workers
-		}
-		if !time.Now().Before(deadline) {
-			t.Fatalf("the stand-in recorded %d workers, want %d", len(workers), n)
-		}
-		time.Sleep(time.Millisecond)
-	}
-}
-
 // waitSession polls the service until it holds a session for the task.
 func waitSession(t *testing.T, running *service.Service, id string) (session.Provider, *session.Session) {
 	t.Helper()
@@ -157,13 +135,25 @@ func TestARestartWithAProbeRelaunchesADeadTerminalInPlace(t *testing.T) {
 		if got := taskState(t, running.client, id); got.State != taskstate.Dispatched || got.Source != taskstate.SourceEvent {
 			t.Fatalf("after the relaunch the task resolves %s from %s, want Dispatched from its new attempt", got.State, got.Source)
 		}
-		workers := waitWorkers(t, agent, 1)
+		// The worker prints this once it has read the note's first line,
+		// after recording it, so the record is complete when it is read
+		// once below; it is read while the worker is up, because Close ends
+		// it, and polling the record while it reads is what
+		// standin.Agent.Calls says ends a worker on Windows.
+		waitCapture(t, provider, launched, "the relaunch note was read")
+		var workers []standin.Call
+		for _, call := range agent.Calls() {
+			if call.Worker {
+				workers = append(workers, call)
+			}
+		}
+		if len(workers) != 1 {
+			t.Fatalf("the stand-in recorded %d workers, want the relaunched one", len(workers))
+		}
 		if workers[0].Dir != resolvedCopy(t, h, id) {
 			t.Errorf("the relaunched worker was started in %s, want the standing copy %s", workers[0].Dir, resolvedCopy(t, h, id))
 		}
-		// Read while the worker is up: Close ends it, and a worker that is
-		// gone reads nothing more.
-		read = strings.Join(waitWorkerLines(t, agent, "This is attempt 2 of this task").Lines, "\n")
+		read = strings.Join(workers[0].Lines, "\n")
 	})
 	if first == second {
 		t.Fatalf("the relaunch reused the first attempt's reference %s", first)

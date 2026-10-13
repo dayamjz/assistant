@@ -36,8 +36,13 @@ func workerAgent(t *testing.T) (*agents.Catalog, *standin.Agent) {
 			Reply: standin.Reviewed("the change reads cleanly"),
 		}},
 		Worker: &standin.WorkerScript{
-			Greeting:  "worker ready",
-			Exchanges: []standin.Exchange{{Contains: "status", Reply: "still working on it"}},
+			Greeting: "worker ready",
+			Exchanges: []standin.Exchange{
+				{Contains: "status", Reply: "still working on it"},
+				// The relaunch note's first line, answered so a test waits on
+				// the worker's output for the note rather than on its record.
+				{Contains: "This is attempt", Reply: "the relaunch note was read"},
+			},
 		},
 	}, agents.WithTerminationGrace(2*time.Second))
 	return agents.NewCatalog(fixedFactory{runner: agent.Runner()}), agent
