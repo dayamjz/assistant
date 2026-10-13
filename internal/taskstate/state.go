@@ -14,7 +14,7 @@ type State string
 // The states a resolution can name. Landed and Complete are in the lifecycle
 // and are deliberately absent: they are resolved from the merge record and
 // the cleanup record in the tier above the run tier, which this build does not
-// read (the package comment says what each waits on), so a state that could
+// read (the package comment says what that waits on), so a state that could
 // not be established is not declared rather than declared and never produced.
 // Unknown is the resolver declining to say.
 const (

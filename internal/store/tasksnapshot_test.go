@@ -406,3 +406,44 @@ func TestASnapshotCarriesTheCleanupRecord(t *testing.T) {
 		t.Fatalf("the snapshot carries cleanup %+v (known=%v), want %+v", got, ok, written)
 	}
 }
+
+// The snapshot carries the merge record of an attributed run once the read
+// that ended the run wrote it, through the accessor that owns the write, and
+// carries none for a run that ended any other way or for a run that is not
+// the task's.
+func TestASnapshotCarriesTheMergeRecordsOfItsRuns(t *testing.T) {
+	ctx := context.Background()
+	s := openStore(t)
+	seedRun(t, s)
+	task := seedBranchTask(t, s, "task-1")
+	time.Sleep(2 * time.Millisecond)
+	mine := extraRun(t, s, "run-mine", "repo-1", "topic")
+	other := extraRun(t, s, "run-other", "repo-1", "elsewhere")
+	for _, id := range []string{mine.ID, other.ID} {
+		if _, err := s.TransitionRun(ctx, id, []RunStatus{RunPending}, RunRunning); err != nil {
+			t.Fatalf("TransitionRun: %v", err)
+		}
+	}
+
+	before, err := s.TaskSnapshot(ctx, task.ID)
+	if err != nil || len(before.MergeRecords) != 0 {
+		t.Fatalf("a task whose run is still running carries merge records %+v (%v)", before.MergeRecords, err)
+	}
+	read := PullRequestRead{PullRequest: 7, Head: "0123abc", End: PullRequestMerged}
+	for _, id := range []string{mine.ID, other.ID} {
+		if _, err := s.TransitionRunOnPullRequest(ctx, id, []RunStatus{RunRunning}, RunPassed, read, HoldClosure{}); err != nil {
+			t.Fatalf("TransitionRunOnPullRequest %s: %v", id, err)
+		}
+	}
+	want, found, err := s.MergeRecord(ctx, mine.ID)
+	if err != nil || !found {
+		t.Fatalf("MergeRecord: %v, %v", found, err)
+	}
+	after, err := s.TaskSnapshot(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("TaskSnapshot: %v", err)
+	}
+	if len(after.MergeRecords) != 1 || !reflect.DeepEqual(after.MergeRecords[0], want) {
+		t.Fatalf("the snapshot carries merge records %+v, want only %+v", after.MergeRecords, want)
+	}
+}

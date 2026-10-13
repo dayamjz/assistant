@@ -35,9 +35,14 @@ type TaskSnapshot struct {
 	Holds []Hold
 	// Events are the task's whole history in append order.
 	Events []TaskEvent
+	// MergeRecords are the merge records of Runs, in Runs' order, for every
+	// attributed run whose pull request's read ended it; a run with none is
+	// absent. They are carried for the resolver's terminal tier (#107), which
+	// derives Landed from one of them, and read by nothing in this build.
+	MergeRecords []MergeRecord
 	// Cleanup is the task's cleanup record, and unknown while none has been
-	// written. It is carried for the resolver's terminal tier (#107) and
-	// read by nothing in this build.
+	// written. It is carried for the same tier and read by nothing in this
+	// build.
 	Cleanup Optional[TaskCleanup]
 }
 
@@ -160,6 +165,21 @@ func snapshotOf(ctx context.Context, q querier, task Task) (TaskSnapshot, error)
 	_ = rows.Close()
 	if err != nil {
 		return TaskSnapshot{}, err
+	}
+
+	// One read for every attributed run's merge record, inside the same
+	// transaction as the runs, through the column list and scanner
+	// Store.MergeRecord reads with. A run's record is keyed by the run, so
+	// which records are the task's follows from which runs are.
+	for _, r := range snap.Runs {
+		record, err := scanMergeRecord(q.QueryRowContext(ctx, mergeRecordColumns+` FROM merge_record WHERE run = ?`, r.ID))
+		switch {
+		case isNoRows(err):
+			continue
+		case err != nil:
+			return TaskSnapshot{}, err
+		}
+		snap.MergeRecords = append(snap.MergeRecords, record)
 	}
 
 	switch cleanup, err := taskCleanupOf(ctx, q, task.ID); {

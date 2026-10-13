@@ -71,20 +71,20 @@
 // read by this build: it stays declared because a migration may not remove a
 // column, and holds NULL for every task created here.
 //
-// # What the terminal tier reads, and what it waits on
+// # What the terminal tier reads
 //
 // PRD section 6 resolves Landed and Complete from two records written once:
-// the merge record the code-host read writes when it ends a run on a merge,
-// and the cleanup record. TaskSnapshot carries the cleanup record now, read
-// by nothing until the resolver's terminal tier lands (#107). It does not yet
-// carry the merge record, because that record is PR #113's to define: as of
-// its head 920182c that pull request records the merge on the run's own row,
-// as pull_request_end, and declares no merge_record table, so the shape
-// TaskSnapshot would carry is not settled until #113 merges. Carrying it is
-// the one seam this package leaves open, with #113 as its consumer and #107
-// reading what it carries; nothing here creates a merge table of its own,
-// because a second record of a merge the run row already holds is the P14
-// failure.
+// the merge record, which migration 13's merge_record table holds and
+// TransitionRunOnPullRequest writes in the transaction that moves the run,
+// and the cleanup record, which migration 14's task_cleanup table holds and
+// RecordTaskCleanup writes. TaskSnapshot carries both: the merge record of
+// every attributed run, read in the snapshot's own transaction through the
+// same column list and scanner Store.MergeRecord uses, so the records and the
+// runs they are keyed by are one consistent read; and the task's cleanup
+// record. Nothing reads either off the snapshot in this build. The resolver's
+// terminal tier (#107) is the consumer, and which attributed run's merge
+// record makes a task Landed is its question: the snapshot carries all of
+// them rather than deciding.
 //
 // # The gate ownership index
 //

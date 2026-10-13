@@ -56,10 +56,11 @@
 //     its blocker's runs, but two tasks whose attempts are both live on one
 //     branch still share the runs made after the later attempt began.
 //   - The terminal tier PRD section 6 puts above the run tier is not here.
-//     The cleanup record reaches Resolve's caller on the snapshot and is not
-//     read; the merge record waits on PR #113's shape, which is the seam
-//     internal/store's package comment names; and Landed and Complete stay
-//     undeclared until #107 reads both. The ordering rules this package
+//     The merge records of the attributed runs and the task's cleanup record
+//     both reach Resolve's caller on the snapshot and neither is read, so
+//     Landed and Complete stay undeclared until #107 reads them; Inputs has
+//     no field for either on purpose, since a field nothing reads would read
+//     as a tier that exists. The ordering rules this package
 //     states for its own kinds, "relaunched" then "dispatched" and the
 //     closed detail of "isolation-refused", are owed by their writers (#94
 //     and #98) and checked by nothing here: the store appends any text, and
