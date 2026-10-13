@@ -521,7 +521,7 @@ flowchart LR
         <tr><td class="prd-num">4</td><td><b>Test</b></td><td>Targeted validation of this change and this intent, not a full suite. If no targeted check can establish the intent, the stage must write one, verify manually with recorded evidence, or report that sufficient evidence is not possible.</td><td class="prd-num">3</td></tr>
         <tr><td class="prd-num">5</td><td><b>Document</b></td><td>Updates documentation the change made stale, then reports only what it could not resolve. Runs after tests so it documents code known to work. Scope is limited to what this change affected.</td><td class="opacity-60">in pass</td></tr>
         <tr><td class="prd-num">6</td><td><b>Lint</b></td><td>Static analysis. Last among local checks so it does not churn over code that may still change.</td><td class="prd-num">3</td></tr>
-        <tr><td class="prd-num">7</td><td><b>Push</b></td><td>Forwards the exact verified commit, and only after confirming the update will not discard commits already on the target. Requires a durable record that a completed review approved a commit this one descends from.</td><td class="opacity-60">none</td></tr>
+        <tr><td class="prd-num">7</td><td><b>Push</b></td><td>Forwards the exact verified commit, and only after confirming the update will not discard commits already on the target. Requires a durable record that a completed review approved a commit this one descends from. When the head is not that commit, a fresh review of the commits between them must raise nothing but notes before anything is pushed (section 14, decision 7).</td><td class="opacity-60">none</td></tr>
         <tr><td class="prd-num">8</td><td><b>Pull request</b></td><td>Creates or updates the pull request. Body is written for a reviewer who was not present: what changed, what was checked, what the risks are, what the pipeline had to fix.</td><td class="opacity-60">none</td></tr>
         <tr><td class="prd-num">9</td><td><b>Checks</b></td><td>Watches your CI and mergeability, fixes failures, resolves conflicts. The only stage that talks to the outside world for validation.</td><td class="prd-num">3</td></tr>
       </tbody>
@@ -902,7 +902,7 @@ flowchart TD
     test the change edited is reported as an edit, not detected as a weakening; that judgment is the
     reviewer's. And the rule stops the pipeline changing the judge after review, not changing the
     code. A test or lint round's edits to the rest of the code are reviewed before anything is
-    pushed, which section 14's sixth decision records; a checks round runs after the push and is
+    pushed, which section 14's seventh decision records; a checks round runs after the push and is
     not.
   </p>
 
