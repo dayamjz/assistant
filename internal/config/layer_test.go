@@ -96,6 +96,7 @@ func TestParseAcceptsTheWholeSchema(t *testing.T) {
 		"escalation_window": "15m",
 		"recheck_window": "3h",
 		"stall_inspection_count": 5,
+		"relaunch_attempts": 3,
 		"commit": {"fix_message": "fix(gate): {summary}"},
 		"allow_pushed_commands": true
 	}`
@@ -214,6 +215,10 @@ func TestParseRefusalsNameTheKeyAndValue(t *testing.T) {
 		{"stall inspection count fractional", `{"stall_inspection_count": 1.5}`, KeyStallInspectionCount, "1.5"},
 		{"stall inspection count under the floor", `{"stall_inspection_count": 0}`, KeyStallInspectionCount, "0"},
 		{"stall inspection count over the ceiling", `{"stall_inspection_count": 101}`, KeyStallInspectionCount, "101"},
+		{"relaunch attempts negative", `{"relaunch_attempts": -1}`, KeyRelaunchAttempts, "-1"},
+		{"relaunch attempts fractional", `{"relaunch_attempts": 1.5}`, KeyRelaunchAttempts, "1.5"},
+		{"relaunch attempts over the ceiling", `{"relaunch_attempts": 21}`, KeyRelaunchAttempts, "21"},
+		{"relaunch attempts not a number", `{"relaunch_attempts": "2"}`, KeyRelaunchAttempts, `"2"`},
 		{"decision model misspelled", `{"decision_model": "Evaluate"}`, KeyDecisionModel, `"Evaluate"`},
 		{"decision model not a string", `{"decision_model": false}`, KeyDecisionModel, "false"},
 		{"decision model as a cutoff", `{"decision_model": "0.5"}`, KeyDecisionModel, `"0.5"`},

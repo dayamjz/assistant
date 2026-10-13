@@ -88,9 +88,12 @@ const (
 	RefusedNotIsolated IsolationRefusal = "not-isolated"
 	// RefusedCopyMissing is the resolved path does not exist. A dispatch
 	// never produces it, because it cuts the copy when its path is absent
-	// and asserts the path that is there; internal/tasks' Promote does,
-	// for a task whose copy is gone when the promotion reaches it, because
-	// a promotion cuts nothing and asserts the copy that already stands.
+	// and asserts the path that is there; a relaunch does, because PRD
+	// section 11 relaunches in that same copy and a copy that no longer
+	// stands is refused rather than replaced by a fresh clone, and so does
+	// internal/tasks' Promote, for a task whose copy is gone when the
+	// promotion reaches it, because a promotion cuts nothing and asserts
+	// the copy that already stands.
 	RefusedCopyMissing IsolationRefusal = "copy-missing"
 	// RefusedWrongShape is the resolved path is a repository of its own and
 	// distinct from the primary, and is not the shape the task's shape gives

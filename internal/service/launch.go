@@ -68,14 +68,19 @@ import (
 // writes an event to say Running: that would be a second record of a fact
 // the process tier owns.
 //
-// One launch per attempt per service. A restart holds no session and no
-// slot, so it dispatches the task again, which is a new attempt that
-// observes and asserts the standing copy, and launches that attempt: by the
-// record's lights that is PRD section 11's relaunch in place, with the same
-// copy and the same instructions. The earlier attempt's process, if it is
-// still running, is an orphan the new service holds no handle to and does
-// not end; its reference probes Unobserved while it stands and Dead once it
-// is gone, and the sweep that would account for it is #112's.
+// One launch per attempt per service, and a launched task is never
+// dispatched again. A restart holds no session and no slot, and what it
+// does about a task whose latest attempt names a session is reconcile.go's
+// question and not dispatch's: the terminal is probed, a dead one is
+// relaunched in place by relaunch.go as a new attempt over the standing
+// copy with the same instructions plus a note, and an unobserved one is
+// left alone, which is PRD section 11's ambiguous liveness. dispatchDue
+// passes such a task over and dispatchClaimed refuses it with
+// errTaskLaunched, so a restart cannot start a second worker beside one it
+// cannot see. The earlier attempt's process, if it is still running, is an
+// orphan the new service holds no handle to and does not end; its reference
+// probes Unobserved while it stands and Dead once it is gone, and the sweep
+// that would account for it is #112's.
 //
 // # An adapter without worker sessions dispatches and never launches
 //
@@ -115,7 +120,7 @@ func (s *Service) launchTask(ctx context.Context, d dispatched) (*session.Sessio
 	launched, err := built.sessions.Create(ctx, session.Spec{
 		TaskID:       d.id,
 		Isolation:    fresh,
-		Instructions: string(instructions),
+		Instructions: string(instructions) + d.note,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("service: launching task %s attempt %d: %w", d.id, d.attempt, err)
@@ -142,23 +147,37 @@ func (s *Service) launchTask(ctx context.Context, d dispatched) (*session.Sessio
 // proof. A refusal is recorded on the terms refuseIsolation states, anchored
 // to the history the dispatch was decided from.
 func (s *Service) assertAtLaunch(ctx context.Context, d dispatched) (tasks.Isolation, error) {
+	return s.assertCopy(ctx, d.id, d.attempt, d.anchor, d.proof.Copy, d.want)
+}
+
+// assertCopy is the one assertion a dispatch, a launch and a relaunch share:
+// it observes the directory at copyPath through internal/vcs and asserts it
+// through tasks.AssertIsolated under agents.WorkerEnvironment(os.Environ(),
+// nil), which is the environment a worker is started with, and returns the
+// proof. A path that is not a repository, or an assertion that refuses, is
+// recorded as the task's "isolation-refused" event on refuseIsolation's
+// terms, against the attempt and anchored to the history sequence given,
+// and reported as the typed *isolationRefused. Every other failure is a
+// failure of the read and records nothing.
+func (s *Service) assertCopy(ctx context.Context, id string, attempt, anchor int64, copyPath string,
+	want tasks.Expectation) (tasks.Isolation, error) {
 	env := agents.WorkerEnvironment(os.Environ(), nil)
-	obs, err := vcs.Observe(ctx, d.proof.Copy, vcs.WithRedactor(redact.New()))
+	obs, err := vcs.Observe(ctx, copyPath, vcs.WithRedactor(redact.New()))
 	if err != nil {
 		if errors.Is(err, vcs.ErrNotARepository) {
-			return tasks.Isolation{}, s.refuseIsolation(ctx, d.id, d.attempt, d.anchor, taskstate.RefusedNotIsolated, err)
+			return tasks.Isolation{}, s.refuseIsolation(ctx, id, attempt, anchor, taskstate.RefusedNotIsolated, err)
 		}
-		return tasks.Isolation{}, fmt.Errorf("service: observing the copy of task %s at launch: %w", d.id, err)
+		return tasks.Isolation{}, fmt.Errorf("service: observing the copy of task %s: %w", id, err)
 	}
-	fresh, err := tasks.AssertIsolated(obs, env, d.want)
+	proof, err := tasks.AssertIsolated(obs, env, want)
 	if err != nil {
 		reason, refused := tasks.Refusal(err)
 		if !refused {
-			return tasks.Isolation{}, fmt.Errorf("service: asserting the copy of task %s at launch: %w", d.id, err)
+			return tasks.Isolation{}, fmt.Errorf("service: asserting the copy of task %s: %w", id, err)
 		}
-		return tasks.Isolation{}, s.refuseIsolation(ctx, d.id, d.attempt, d.anchor, reason, err)
+		return tasks.Isolation{}, s.refuseIsolation(ctx, id, attempt, anchor, reason, err)
 	}
-	return fresh, nil
+	return proof, nil
 }
 
 // sessionOf reports the session this service launched for a task and the

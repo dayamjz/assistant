@@ -41,10 +41,11 @@ type Acknowledger struct{ name string }
 func AcknowledgedByCoordinator() Acknowledger { return Acknowledger{name: "coordinator"} }
 
 // AcknowledgedByProgram is an acknowledgement the program made itself, for a
-// row no coordinator will handle: a wake a later wake on the same task
-// superseded, which reconciliation at start (#94) closes so the queue does
-// not hold a coordinator to work that has moved on. It has no producer in
-// this build either, and the comment on its producer will say which rows.
+// row no coordinator will handle: a wake about a session the program's own
+// relaunch replaced, which internal/service's relaunch closes so the queue
+// does not hold a coordinator to work that has moved on. That relaunch is
+// its one producer, and it acknowledges exactly the terminal-gone rows whose
+// marker names the superseded session; every other row stays queued.
 func AcknowledgedByProgram() Acknowledger { return Acknowledger{name: "program"} }
 
 // String renders who acknowledged, or "nobody" for the zero Acknowledger, so

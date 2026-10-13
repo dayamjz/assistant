@@ -70,7 +70,7 @@ func Resolve(in Inputs) Resolution {
 		out.Basis.Process = in.Process
 	}
 	if n := len(events); n > 0 {
-		out.Basis.EventSequence = events[n-1].Sequence
+		out.Basis.EventSequence, out.Basis.EventKind = events[n-1].Sequence, events[n-1].Kind
 	}
 
 	run, ok := newest(in.Runs)

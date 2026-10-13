@@ -10,3 +10,7 @@ import "github.com/dayamjz/assistant/internal/session"
 func (s *Service) SessionOf(id string) (session.Provider, *session.Session, bool) {
 	return s.sessionOf(id)
 }
+
+// ReconcileProbeBound is the bound one read of the fleet at reconciliation
+// is held to, exposed so a test can hold Open to it.
+const ReconcileProbeBound = reconcileProbeBound

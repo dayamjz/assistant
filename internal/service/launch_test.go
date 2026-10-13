@@ -1,7 +1,6 @@
 package service_test
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -37,8 +36,13 @@ func workerAgent(t *testing.T) (*agents.Catalog, *standin.Agent) {
 			Reply: standin.Reviewed("the change reads cleanly"),
 		}},
 		Worker: &standin.WorkerScript{
-			Greeting:  "worker ready",
-			Exchanges: []standin.Exchange{{Contains: "status", Reply: "still working on it"}},
+			Greeting: "worker ready",
+			Exchanges: []standin.Exchange{
+				{Contains: "status", Reply: "still working on it"},
+				// The relaunch note's first line, answered so a test waits on
+				// the worker's output for the note rather than on its record.
+				{Contains: "This is attempt", Reply: "the relaunch note was read"},
+			},
 		},
 	}, agents.WithTerminationGrace(2*time.Second))
 	return agents.NewCatalog(fixedFactory{runner: agent.Runner()}), agent
@@ -283,61 +287,5 @@ func TestAnAdapterWithoutWorkerSessionsDispatchesAndNeverLaunches(t *testing.T) 
 	}
 	if task, err := records.Task(t.Context(), id); err != nil || !task.StartSnapshot.IsKnown() {
 		t.Fatalf("the dispatch did not reach proven: %+v, %v", task, err)
-	}
-}
-
-// A restart relaunches: the new service holds no slot and no session, so it
-// dispatches the task again, which is a new attempt over the standing copy,
-// and launches that attempt with a new reference. The first attempt keeps
-// its own reference, which the new service's provider probes by identity
-// alone and never Live: here Dead, because the first service's Close ended
-// its worker, and Unobserved had it survived. The task still resolves
-// Dispatched throughout.
-func TestARestartRelaunchesTheTaskAsANewAttempt(t *testing.T) {
-	h := newHome(t)
-	subject := newSubject(t)
-	quietMaintenance(t, subject)
-	repository := recordRepository(t, h, subject)
-	id := recordDispatchedTask(t, h, repository, store.TaskDelivery, "task/one")
-
-	var first session.Reference
-	o, _ := workerOptions(t, h)
-	withServiceOptions(t, o, func(running serviceUnderTest) {
-		provider, launched := launchedSession(t, running.service, id)
-		first = launched.Reference()
-		waitCapture(t, provider, launched, "worker ready")
-	})
-	homeIsFree(t, h)
-
-	var second session.Reference
-	o, _ = workerOptions(t, h)
-	withServiceOptions(t, o, func(running serviceUnderTest) {
-		provider, launched := launchedSession(t, running.service, id)
-		second = launched.Reference()
-		waitCapture(t, provider, launched, "worker ready")
-		if got := taskState(t, running.client, id); got.State != taskstate.Dispatched {
-			t.Fatalf("after the relaunch the task resolves %s", got.State)
-		}
-		probe := provider.Probe(context.Background(), first.String())
-		if probe.Liveness == taskstate.Live {
-			t.Fatalf("the new provider probes the first attempt's reference %+v, which it holds no handle for", probe)
-		}
-		if probe.Liveness != taskstate.Dead {
-			t.Fatalf("the first service's Close ended its worker, so its reference should probe Dead; it probes %+v", probe)
-		}
-	})
-	if first == second {
-		t.Fatalf("the relaunch reused the first attempt's reference %s", first)
-	}
-
-	records := openRecords(t, h)
-	defer func() { _ = records.Close() }()
-	attempts, err := records.TaskAttempts(t.Context(), id)
-	if err != nil || len(attempts) != 2 {
-		t.Fatalf("the task has attempts %+v (%v), want one per service", attempts, err)
-	}
-	if attempts[0].SessionRef.Or("") != first.String() || attempts[1].SessionRef.Or("") != second.String() {
-		t.Fatalf("the attempts carry %+v and %+v, want %s then %s",
-			attempts[0].SessionRef, attempts[1].SessionRef, first, second)
 	}
 }

@@ -106,12 +106,12 @@ func New(d Deps) (*Queue, error) {
 // branch shares it with nothing live, and work that continues on it is a
 // new task by the PRD's own rule.
 //
-// Failed is not terminal in the lifecycle: a relaunch (#94) moves a Failed
-// task back to Dispatched. Clearing on it therefore lets a successor and a
-// relaunched blocker share a branch, which is why the relaunch must re-run
-// the same floor Create applies and queue itself when a live task now holds
-// the branch. Nothing here enforces that on the relaunch; it is #94's
-// contract.
+// Failed is not terminal in the lifecycle: internal/service's relaunch
+// moves a Failed task back to Dispatched. Clearing on it therefore lets a
+// successor and a relaunched blocker share a branch, which is why the
+// relaunch re-runs the same floor Create applies, through HoldsBranch, and
+// refuses itself when a live task now holds the branch. That it does is
+// that package's contract and its test; nothing here enforces it.
 func Clears(s taskstate.State) bool {
 	switch s {
 	case taskstate.Failed, taskstate.Reported, taskstate.Landed, taskstate.Complete:

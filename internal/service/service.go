@@ -154,9 +154,12 @@ type Options struct {
 	// come from the same place.
 	Forge forge.Host
 	// Terminals is what the supervisor loop observes a task's terminal
-	// through. Nil, which is what the product passes until the session
-	// hookup lands, runs the loop degraded: every terminal is Unobserved
-	// and every in-flight task surfaces, on supervise.go's terms.
+	// through, and what every task reader this service builds probes
+	// through, reconciliation's included. Nil, which is what the product
+	// passes until the session hookup lands, runs the loop degraded: every
+	// terminal is Unobserved and every in-flight task surfaces, on
+	// supervise.go's terms, and reconciliation relaunches nothing, on
+	// reconcile.go's.
 	Terminals Terminals
 	// hooks are the seams this package's tests drive the loop through. They
 	// are here rather than on the Service because the loop starts inside
@@ -209,6 +212,12 @@ type Service struct {
 	// forge is the code host, settled at Open from Options.Forge; checkshold.go
 	// is the one reader of it outside the stage dependencies.
 	forge forge.Host
+	// terminals is Options.Terminals: the one seam a task's terminal is
+	// observed through, which the supervisor loop probes and captures
+	// through and every task reader this service builds probes through, so
+	// the loop, the task surface and reconciliation cannot disagree about a
+	// terminal. Nil means no terminal is observed anywhere.
+	terminals Terminals
 	// queue is internal/tasks' intake and release over this service's store,
 	// built at Open from the branch gate and the gate repositories this
 	// service knows; tasks.go says which of its entries this service calls.
@@ -377,6 +386,7 @@ func Open(ctx context.Context, o Options) (*Service, error) {
 		build:      o.Build,
 		catalog:    o.Catalog,
 		newFixer:   o.NewFixer,
+		terminals:  o.Terminals,
 		registry:   newRegistry(),
 		topologies: make(map[string]*topology),
 		advancing:  make(map[string]*slot),
