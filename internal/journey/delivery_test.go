@@ -74,6 +74,11 @@ func (d delivered) edited(stage pipeline.Stage, change func(*machine.Stage)) del
 // does not have, so the push stage has an update to make and the remote's
 // branch moving is the evidence it made it.
 //
+// The run is asserted to end checks-passed, which internal/machine defines as
+// the run having walked the gate to its end with each stage cleared, skipped
+// ones included. It names the run's terminal state, and no code-host checks
+// ran here because the checks stage is skipped.
+//
 // The P6 cite covers the push path only: the commit forwarded from the run's
 // isolated copy to the upstream remote lands. It does not cover the lease or
 // the refusal against a remote that moved, which p6_anchor_test.go drives at
