@@ -121,6 +121,10 @@ func OpenAIFactory(opts ...OpenAIOption) Factory {
 // Name returns "openai".
 func (f *openaiFactory) Name() string { return OpenAIName }
 
+// AutoEligible reports false: PRD section 12 defers adapters beyond Claude
+// Code, so this one resolves only when an entry names it.
+func (f *openaiFactory) AutoEligible() bool { return false }
+
 // New reports whether OpenAI can be run here, and returns a Runner when
 // it can.
 //

@@ -1204,3 +1204,58 @@ func firstHoldingStages(t *testing.T) (holds, next pipeline.Stage) {
 	}
 	return holding[0], holding[1]
 }
+
+// doctor reports an adapter that resolves on PATH but that auto never chooses, against its
+// real CLI on its own row, apart from the agent row that names what a run
+// would use. The PATH holds git, claude and cursor and nothing else, so the
+// rows are established rather than being whatever this machine has installed.
+// It stays serial because PATH is process state.
+func TestDoctorSeparatesANamedOnlyRunnableAgentFromTheAutoEligibleOne(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("building a PATH that holds named executables needs a script this test cannot portably make on windows")
+	}
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatalf("resolving git: %v", err)
+	}
+	bin := t.TempDir()
+	if err := os.Symlink(realGit, filepath.Join(bin, "git")); err != nil {
+		t.Fatalf("planting git on the probe PATH: %v", err)
+	}
+	t.Setenv("PATH", bin)
+	h := newHome(t)
+	subject := newSubject(t)
+
+	plant := func(name string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+			t.Fatalf("planting %s: %v", name, err)
+		}
+	}
+
+	// Only a named-only adapter is runnable: no agent can be chosen, and the
+	// named-only row says what is there instead of the agent row claiming it.
+	plant("cursor")
+	report := decodeDoctor(t, run(t, h, subject, "--json", "doctor").stdout)
+	agentRow, found := findCheck(report, "agent")
+	if !found || agentRow.OK {
+		t.Fatalf("doctor accepts an agent when only a named-only adapter is on PATH: %+v", agentRow)
+	}
+	namedOnly, found := findCheck(report, "named-only agents")
+	if !found || namedOnly.OK || namedOnly.Blocking || !strings.Contains(namedOnly.Detail, "cursor") {
+		t.Fatalf("doctor does not report cursor as a named-only runnable adapter: %+v", namedOnly)
+	}
+
+	// With claude present too, the agent row names claude and cursor stays on
+	// its own row.
+	plant("claude")
+	report = decodeDoctor(t, run(t, h, subject, "--json", "doctor").stdout)
+	agentRow, _ = findCheck(report, "agent")
+	if !agentRow.OK || agentRow.Detail != "claude" {
+		t.Fatalf("doctor's agent row is %+v, want claude", agentRow)
+	}
+	namedOnly, _ = findCheck(report, "named-only agents")
+	if namedOnly.OK || !strings.Contains(namedOnly.Detail, "cursor") || strings.Contains(namedOnly.Detail, "claude") {
+		t.Fatalf("named-only row is %+v, want cursor and not claude", namedOnly)
+	}
+}

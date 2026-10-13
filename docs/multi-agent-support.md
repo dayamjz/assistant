@@ -31,10 +31,13 @@ As of this update, `assistant` supports multiple LLM providers through a pluggab
 ### Auto-Detection (Default)
 
 By default, `assistant` uses `"auto"` which tries agents in this order:
-1. Cursor (most common in Cursor environments)
-2. Claude (full-featured)
-3. OpenAI
-4. Grok
+1. Claude
+
+`auto` considers only the adapters PRD section 12 puts in phase one, and Claude
+Code is the only one. Cursor, OpenAI, and Grok run only when named in `agent`.
+`assistant doctor` lists any that resolve on PATH under "named-only agents".
+None of the adapters, Claude included, is tested against its real CLI in this
+repository; the conformance suite drives a test helper binary for all of them.
 
 ```yaml
 # .assistant.yaml
@@ -62,7 +65,8 @@ agent:
   - openai
 ```
 
-The first runnable agent in the list will be used.
+The first runnable agent in the list will be used. Naming a named-only adapter
+here is the way to select it.
 
 ## CLI Binary Requirements
 
@@ -95,7 +99,7 @@ This will report which agents are available in your environment.
 ### Agent Resolution
 
 1. Read `agent` config key (defaults to `["auto"]`)
-2. If `"auto"`, expand to full catalog in priority order
+2. If `"auto"`, expand to the auto-eligible adapters in catalog order (Claude)
 3. For each agent name:
    - Check if the binary exists on PATH
    - If yes, use that agent
@@ -171,7 +175,7 @@ The binary exists but fails when invoked.
 
 ### Wrong agent selected
 
-Auto-detection picked an agent you don't want.
+Auto-detection picked an agent you don't want (it only picks Claude).
 
 **Solution**: Explicitly configure the agent:
 ```yaml

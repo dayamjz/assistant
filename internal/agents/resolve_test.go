@@ -28,9 +28,13 @@ type stubFactory struct {
 	declares  []agents.Capability
 	sessions  bool
 	args      []string
+	// namedOnly makes the factory decline AutoEligible.
+	namedOnly bool
 }
 
 func (f *stubFactory) Name() string { return f.name }
+
+func (f *stubFactory) AutoEligible() bool { return !f.namedOnly }
 
 func (f *stubFactory) New(_ context.Context, args []string) (agents.Runner, error) {
 	if !f.available {
@@ -195,7 +199,7 @@ func TestCatalogReplacesAnAdapterRatherThanHoldingTwo(t *testing.T) {
 
 func TestDefaultCatalogHoldsTheClaudeAdapter(t *testing.T) {
 	names := agents.DefaultCatalog().Names()
-	want := []string{agents.CursorName, agents.ClaudeName, agents.OpenAIName, agents.GrokName}
+	want := []string{agents.ClaudeName, agents.CursorName, agents.OpenAIName, agents.GrokName}
 	if len(names) != len(want) {
 		t.Fatalf("the default catalog holds %d adapters, want %d", len(names), len(want))
 	}
