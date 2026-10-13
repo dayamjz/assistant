@@ -88,6 +88,100 @@
 // and which attributed run's merge record makes a task Landed is its
 // question: the snapshot carries all of them rather than deciding.
 //
+// # The wake queue and the markers it is written with
+//
+// PRD section 8's wake is the durable wake queue: a table here and not a
+// directory, migration 15's wake table, authoritative and appended. A row is
+// actionable until it is acknowledged and is kept afterwards, which the
+// table's triggers enforce: no column but the acknowledgement may change,
+// an acknowledgement is written once, and no row is deleted. Beside it the
+// wake_marker table holds PRD section 5's detector markers, one row per
+// task rewritten in place: the last capture digest, the change epoch, the
+// last event sequence seen, the surfaced flag, the window start, the stall
+// repetition count and the unobserved-since instant. It is the comparison
+// base for the loop's next pass and not the task's state; nothing resolves
+// a state from it, and it is one row per task rather than one per detector
+// because the markers advance together in the one transaction the wake is
+// written in, and one row is what that transaction touches.
+//
+// Section 5 says an actionable wake is written in the same transaction as
+// the markers it advances, and that is a shape here rather than a rule:
+// AppendWakeWithMarkers is the only accessor that appends a wake and it
+// advances the markers in the same transaction, so no marker can move past
+// a surfaced wake that was not recorded. AdvanceWakeMarkers is the absorbed
+// pass, markers and no wake, which section 5's flowchart also has. The one
+// column this package derives rather than records is the change epoch,
+// bumped in that transaction whenever the digest written differs from the
+// one before; it is what lets a terminal kind's marker tell a screen that
+// returned to an earlier value from a replay of the earlier surface.
+//
+// The idempotency key is the task, the kind and the marker together, as a
+// uniqueness constraint. A replayed detection against a queued row is one
+// wake, answered WakeAlreadyQueued; the same key against an acknowledged
+// row is ErrWakeHandled, refused with the markers, because a marker that
+// did not advance for a new surface is the loop's defect and not a wake to
+// drop. Which component keeps a second surface distinct is the loop's to
+// compose and WakeRequest's doc says what each kind's marker has to carry;
+// this package checks only that the kind and the marker are non-empty, and
+// that is the residual gap: a marker composed without its monotonic
+// component is accepted, and the defect shows only as ErrWakeHandled after
+// the first row is acknowledged. The kind is recorded as a word for the
+// same reason the event kind is: what it means is internal/supervisor's
+// table, this package imports neither it nor internal/taskstate, and the
+// loop passes supervisor.Kind values as strings.
+//
+// Draining is a read. DrainWakes returns the queued rows oldest first under
+// a batch limit and acknowledges none, so delivery is at least once by
+// construction and every consumer is idempotent over a row's identifier: a
+// consumer that handled a wake and did not acknowledge it, because it
+// crashed or ended its turn between the two, is handed the same row again.
+// AcknowledgeWakes is the one revision a row takes, a batch that checks
+// every identifier and then writes every row in one transaction, so an
+// unknown identifier or a row already acknowledged refuses the batch with a
+// *WakeIDError and writes nothing, and a subset acknowledged leaves the rest
+// queued. UnacknowledgedWakes is the queue's half of PRD section 5's "work
+// is in flight": how many queued rows each task has, which
+// internal/supervisor's in-flight table reads beside the resolved states.
+// Which states are in flight is that table's and not this package's.
+//
+// Who acknowledged is an Acknowledger, closed on Resolver's terms and for
+// Resolver's reason: a struct with one unexported field, so no text a
+// caller was handed decodes into one, and the member a surface records is
+// decided in source at that surface. There is no member meaning a person,
+// because no surface here witnesses one and the queue is the coordinator's.
+// Neither member has a producer in this build. AcknowledgedByCoordinator's
+// producer is the two machine-interface rows that drain and acknowledge the
+// queue, and those are not added before the worker set #91 produces exists:
+// a method that exists and admits a task worker to the coordinator's queue
+// is worse than one that does not, so the rows wait on that set, and with
+// them the derivation internal/ipc will make from the surface the way
+// Request.HoldResolver does. AcknowledgedByProgram's producer is
+// reconciliation at start (#94), for rows a later wake superseded. This
+// records and does not gate: every member closes a row on the same terms.
+//
+// # A read-only open
+//
+// OpenReadOnly is for a caller that has to read the record without being the
+// service that owns it: PRD section 5's stop guard and pull guard, deciding
+// whether work is in flight while the service holding the home's lock may be
+// gone. It applies no migration, takes no writer connection, and refuses
+// every write with ErrReadOnly, which inTx answers because there is no pool
+// a write could go through. It takes no redactor, because the redactor
+// guards the two URL columns on their way in and a handle that writes
+// nothing never reaches them; what any read returns of those columns is the
+// redacted text the writer stored. Its callers, the guards, read the queued
+// wakes and the in-flight counts, neither of which carries a repository URL,
+// so no read path they take through this handle returns one to a hook's
+// log. What it cannot read it reports as an
+// *UnreadableError matching ErrUnreadable, with the cause beneath it: a file
+// missing or not a database, a schema behind this build (ErrSchemaBehind),
+// ahead of it, recorded differently, or a connection without the settings
+// the guarantees above rest on. That one typed result is what a caller feeds
+// a reading it could not take, which for the stop guard is unknown and never
+// none. A database recorded by a build that wrote no migration digests reads
+// as unreadable too, because the read-only open adds no column; the service
+// that writes it adds one at its next open, and the reader follows.
+//
 // # The gate ownership index
 //
 // GateBinding is the one record here that exists to answer a question another

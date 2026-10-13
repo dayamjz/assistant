@@ -128,9 +128,6 @@ func (h *Home) InstanceFile() string { return filepath.Join(h.root, "instance") 
 // to define.
 func (h *Home) Beacon() string { return filepath.Join(h.root, "beacon") }
 
-// Queue is the durable wake queue.
-func (h *Home) Queue() string { return filepath.Join(h.root, "queue") }
-
 // StageLog is one stage's log, which PRD section 8 makes the authoritative
 // full output of that stage. What travels in findings, streams, and prompts is
 // a bounded projection of this file.
@@ -148,7 +145,13 @@ func (h *Home) ServiceLog() string { return filepath.Join(h.root, "logs", "servi
 // from the root it is given and creates it, so this package saying where a
 // gate repository goes would make that path have two owners, which is the
 // thing P14 forbids. gate.Spec takes the root for that reason.
-var directories = []string{"worktrees", "evidence", "tasks", "queue", "logs"}
+//
+// queue is absent too. PRD section 8 makes the durable wake queue a table in
+// the database and not a directory, and its layout has no queue row. A home
+// created by a build that listed one keeps an empty queue/ directory that
+// nothing reads, and nothing here removes it: Create makes directories and
+// removes none.
+var directories = []string{"worktrees", "evidence", "tasks", "logs"}
 
 // Create makes the home root and the directories under it, and is safe to run
 // against a home that already exists.
