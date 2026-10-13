@@ -119,6 +119,11 @@ type Status struct {
 	Branch *Branch `json:"branch,omitempty"`
 	// ActiveRun is the run this branch has in flight, absent when it has none.
 	ActiveRun *Run `json:"active_run,omitempty"`
+	// Supervision is the pull guard's finding, which a status computes from
+	// the home's files and lock even when the service is down, because
+	// reporting that the service is down is this command's job. It is absent
+	// when the guard was not computed.
+	Supervision *Supervision `json:"supervision,omitempty"`
 	// Detail names what could not be reported and why, and is empty when
 	// everything was.
 	Detail string `json:"detail,omitempty"`
@@ -362,6 +367,11 @@ type Task struct {
 type Tasks struct {
 	// Tasks are the records with their resolved states.
 	Tasks []Task `json:"tasks"`
+	// Supervision is the pull guard's finding over the fleet listed, computed
+	// by the service that answered. A command that lists fleet work reads it
+	// from the service, so with the service down there is no answer and no
+	// warning in it; the status command is the one that warns then.
+	Supervision *Supervision `json:"supervision,omitempty"`
 }
 
 // Lifecycle is the answer to a request that stops or restarts the service.
