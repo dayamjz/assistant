@@ -45,17 +45,24 @@ type Identity struct {
 	Epoch    uint64
 }
 
-// Beacon is what the beacon file said, as #105's reader decoded it. A beacon
-// that could not be read is the zero value, whose WrittenAt is zero, and
-// Assess blocks on it.
+// Beacon is what the beacon file said, as DecodeBeacon read it. A beacon that
+// could not be read is the zero value, whose WrittenAt is zero, and Assess
+// blocks on it. Sequence is read by nothing in Assess: it is what lets arm
+// verification tell a beacon written after it asked from one that was
+// already there.
 type Beacon struct {
 	Identity
+	// Sequence counts the writer's writes, from one, within one writer. A
+	// later write by the same writer has a larger sequence; across writers
+	// it says nothing, which is why the epoch sits beside it.
+	Sequence uint64
 	// WrittenAt is the wall-clock time the loop wrote the beacon.
 	WrittenAt time.Time
 }
 
-// Freshness is how a beacon's age is judged. Both are values #105 computes
-// from its key and its constant; this package owns neither number.
+// Freshness is how a beacon's age is judged. FreshnessFor derives both from
+// the configured interval and this package's constants; a caller that fills
+// them in by hand is judging by numbers nothing configured.
 type Freshness struct {
 	// Window is how old a beacon may be and still count as live. A beacon
 	// written exactly Window ago is stale.
@@ -102,6 +109,17 @@ const (
 	// is wedged or stopped, whether or not its process lives.
 	StopBeaconStale StopReason = "beacon-stale"
 )
+
+// stopReasons is the closed set, in the order Assess checks them.
+var stopReasons = []StopReason{
+	StopNothingInFlight, StopSupervised, StopInFlightUnknown, StopLockUnknown, StopLockFree,
+	StopNoBeacon, StopInstanceMismatch, StopEpochMismatch, StopBeaconAhead, StopBeaconStale,
+}
+
+// StopReasons returns every reason, in the order Assess checks them. The
+// result is a copy. It exists so a reader of the set, the vocabulary test in
+// internal/machine among them, derives it rather than keeping a second list.
+func StopReasons() []StopReason { return append([]StopReason(nil), stopReasons...) }
 
 // StopVerdict is Assess's answer: whether the coordinator may end its turn,
 // and why. Allowed is derived from Reason and never set beside it, so the

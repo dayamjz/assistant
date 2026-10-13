@@ -265,6 +265,28 @@ func decodeChecksTimeout(k Key, v any) (any, error) {
 	return d, nil
 }
 
+// decodeSupervisionBeaconInterval accepts a Go duration string such as "10s",
+// on decodeChecksTimeout's terms about numbers, and refuses one outside the
+// floor and the ceiling rather than clamping it, because a value the operator
+// did not get is a value the operator should see refused.
+func decodeSupervisionBeaconInterval(k Key, v any) (any, error) {
+	s, err := asString(k, v)
+	if err != nil {
+		return nil, keyErr(k, v, `expected a duration string such as "10s"`)
+	}
+	d, parseErr := time.ParseDuration(s)
+	if parseErr != nil {
+		return nil, keyErr(k, v, "not a duration: "+parseErr.Error())
+	}
+	if d < MinSupervisionBeaconInterval {
+		return nil, keyErr(k, v, "a beacon interval must be at least "+MinSupervisionBeaconInterval.String())
+	}
+	if d > MaxSupervisionBeaconInterval {
+		return nil, keyErr(k, v, "a beacon interval may be at most "+MaxSupervisionBeaconInterval.String())
+	}
+	return d, nil
+}
+
 // decodeDecisionModel accepts one of the three decision-model modes, spelled
 // exactly. Any other text is refused rather than read as the default, because
 // a misspelled mode is a mode the operator did not get.

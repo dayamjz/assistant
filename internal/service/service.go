@@ -23,6 +23,7 @@ import (
 	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/runs"
+	"github.com/dayamjz/assistant/internal/session"
 	"github.com/dayamjz/assistant/internal/stages"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/tasks"
@@ -222,10 +223,19 @@ type Service struct {
 	advancing  map[string]*slot
 	// isolated holds, per task, the proof dispatch.go ended at, or the zero
 	// value for a dispatch in flight or one that ended without a proof. It is
-	// this service's memory and nothing durable:
-	// the proof is for #91's launch seam, and a restart dispatches the task
-	// again. dispatch.go owns it and isolationOf is its one reader.
+	// this service's memory and nothing durable: launch.go takes the proof
+	// as the value it re-asserts before it starts a worker, and a restart
+	// dispatches the task again. dispatch.go owns it and isolationOf is its
+	// one reader.
 	isolated map[string]tasks.Isolation
+	// launched holds, per task, the terminal session launch.go started for
+	// the attempt this service dispatched: one session per attempt, and one
+	// attempt per task per service, so one entry per task. It is this
+	// service's memory, like the slot above: the attempt's record carries
+	// the session's reference and nothing durable carries the handle, so a
+	// service that restarts holds none of these and relaunches. Close ends
+	// every session here, and launch.go owns the map.
+	launched map[string]*session.Session
 	// betweenAttemptReadAndClaim runs in a dispatch after the attempts have
 	// been read and before the attempt is claimed. It is nil in production
 	// and set only by this package's tests, which use it to hold two
@@ -276,6 +286,13 @@ type Service struct {
 type driver struct {
 	agent agents.Resolution
 	runs  *runs.Service
+	// sessions is the terminal session provider launch.go starts a task's
+	// worker through. It is built over the resolved runner before
+	// containRunner wraps it, because the wrapper carries no worker arm on
+	// purpose - contain.go says why a worker is not registered as a stage -
+	// so the one route to a worker is the unwrapped agent, and this is the
+	// one place that agent is held unwrapped.
+	sessions session.Provider
 }
 
 // topology is one resolved configuration's pipeline and executor. Every run
@@ -348,6 +365,7 @@ func Open(ctx context.Context, o Options) (*Service, error) {
 		topologies: make(map[string]*topology),
 		advancing:  make(map[string]*slot),
 		isolated:   make(map[string]tasks.Isolation),
+		launched:   make(map[string]*session.Session),
 		starting:   make(map[branchKey]*branchGate),
 		stopping:   make(chan struct{}),
 	}
@@ -501,6 +519,14 @@ func (s *Service) Close() error {
 		s.cancelAdvancing()
 		s.stopWork()
 		s.work.Wait()
+		// The workers this service launched are ended here, after the work
+		// that could record against them and before the store they were
+		// recorded in closes. What that ends is exactly the sessions this
+		// service's provider created and still holds, on the terms
+		// session.Provider.Close states; a worker an earlier service of this
+		// home launched is no session of this one and goes on, which
+		// launch.go states.
+		errs = append(errs, s.closeSessions()...)
 		if s.events != nil {
 			errs = append(errs, s.events.Close())
 		}
@@ -577,6 +603,9 @@ func (s *Service) driverFor(ctx context.Context) (*driver, error) {
 	if err != nil {
 		return nil, err
 	}
+	// The session provider is built over the agent as resolved, before the
+	// wrapper below takes its worker arm away; driver.sessions says why.
+	sessions := session.NewPipe(s.home, resolution.Runner)
 	// Every invocation of a run passes through the resolved runner or the
 	// fixer it opens, so wrapping here is what registers each one's process
 	// group with the containment registry for as long as it runs; contain.go
@@ -590,7 +619,7 @@ func (s *Service) driverFor(ctx context.Context) (*driver, error) {
 	if err != nil {
 		return nil, err
 	}
-	s.built = &driver{agent: resolution, runs: runService}
+	s.built = &driver{agent: resolution, runs: runService, sessions: sessions}
 	s.log.Printf("resolved agent %s for runs of this service", resolution.Name)
 	return s.built, nil
 }

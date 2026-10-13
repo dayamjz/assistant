@@ -155,26 +155,30 @@ func TestConcurrentDispatchOfOneTaskClaimsOneAttempt(t *testing.T) {
 }
 
 // A dispatch that reaches proven ends with the proof in the service's slot
-// for the task and nowhere else, and nothing launches: the slot is what #91's
-// launch seam will take. A second dispatch of the same task through the slot
-// is refused there, so one service begins one attempt per task it proved,
-// and the slot is this service's memory: a service that holds none for the
-// task reads it as not dispatched here.
+// for the task and nowhere else, and the dispatch itself launches nothing:
+// the launch is dispatchDue's next step over what the dispatch returned, and
+// launch_internal_test.go drives it. A second dispatch of the same task
+// through the slot is refused there, so one service begins one attempt per
+// task it proved, and the slot is this service's memory: a service that
+// holds none for the task reads it as not dispatched here.
 func TestADispatchEndsWithTheProofInTheServicesSlot(t *testing.T) {
 	subject := newDispatchSubject(t)
 	ctx := t.Context()
 	if _, held := subject.service.isolationOf(subject.task); held {
 		t.Fatal("the service holds a slot for a task nothing dispatched")
 	}
-	proof, err := subject.service.dispatchTask(ctx, subject.task)
+	d, err := subject.service.dispatchTask(ctx, subject.task)
 	if err != nil {
 		t.Fatalf("dispatching: %v", err)
 	}
-	if !proof.Proven() {
+	if !d.proof.Proven() {
 		t.Fatal("the dispatch returned a value AssertIsolated did not produce")
 	}
+	if d.id != subject.task || d.attempt != 1 || d.anchor == 0 || d.instructions == "" {
+		t.Fatalf("the dispatch returned %+v, want the task, attempt 1, the anchor and the instructions file", d)
+	}
 	held, ok := subject.service.isolationOf(subject.task)
-	if !ok || !held.Proven() || held.Copy != proof.Copy || held.Branch != "task/one" {
+	if !ok || !held.Proven() || held.Copy != d.proof.Copy || held.Branch != "task/one" {
 		t.Fatalf("the slot holds %+v, %v; want the proof the dispatch returned", held, ok)
 	}
 	if _, err := subject.service.dispatchTask(ctx, subject.task); err == nil {
@@ -182,7 +186,7 @@ func TestADispatchEndsWithTheProofInTheServicesSlot(t *testing.T) {
 	}
 	attempts, err := subject.records.TaskAttempts(ctx, subject.task)
 	if err != nil || len(attempts) != 1 || attempts[0].SessionRef.IsKnown() {
-		t.Fatalf("the task has attempts %+v (%v), want one with no session, because nothing launched", attempts, err)
+		t.Fatalf("the task has attempts %+v (%v), want one with no session, because the dispatch alone launches nothing", attempts, err)
 	}
 	// The proof is in memory and not in any record: the task row carries
 	// the copy's snapshot and the attempt, and neither says proven.

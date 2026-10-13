@@ -387,8 +387,10 @@ Each has cost this repository more than one round of review.
   `*IsolationError` naming the comparison; only it sets `Isolation`'s
   unexported field, `Refusal` is the one mapping from a comparison to
   `taskstate`'s refusal token, `internal/session`'s `Create` is what takes an
-  `Isolation` to start a worker and no service path reaches it yet, and its
-  P11 citation claims the assertion refuses and nothing about launch. Until
+  `Isolation` to start a worker and `internal/service`'s launch is what
+  reaches it, with a proof asserted again at launch; its own P11 citation
+  claims the assertion refuses and nothing about launch, and
+  `internal/service`'s claims the launch edge. Until
   #91's worker set exists, "own branch, only through the gate" is
   instruction text and nothing enforces which ref a worker's push may move;
   its `doc.go` carries that sentence. Every lifecycle move there is an appended event, never a state
@@ -447,7 +449,10 @@ Each has cost this repository more than one round of review.
   refuses an unproven `tasks.Isolation` with `ErrUnproven` and then asks the
   resolved runner for a worker through `agents.OpenWorker`, so only the
   scripted adapter answers it in this build and the real adapter's worker
-  mode is #95 line K. Three things there are mechanism rather than rule.
+  mode is #95 line K. Its one caller is `internal/service`'s `launch.go`,
+  which hands it a proof asserted again at launch rather than dispatch's;
+  `Create` itself re-derives nothing. Three things there are mechanism
+  rather than rule.
   `Probe` answers `taskstate.Liveness`, that package's word, with a typed
   `Reason`, and the `reasons` table is the one place a reason's liveness is
   decided: `Live` only through a handle this provider holds whose process
@@ -516,13 +521,16 @@ Each has cost this repository more than one round of review.
   reported for being wrong through the ordinary review path. Read its `doc.go`
   before changing what fires, and for the residual gaps: the granularity is the
   path rather than the line, and a trace's reason is recorded, not verified.
-- `internal/home` owns the on-disk layout PRD section 8 gives one root, and the
-  exclusive lock that makes a home have exactly one service. No other package
-  spells a path under the root, with one deliberate exception: `internal/gate`
-  composes `<home>/repos/<id>.git` itself, so this package does not. A task's
-  paths (`Task`, `TaskCopy`, `TaskInstructions`, `TaskReport`) are all composed
-  here from an identifier `ValidTaskID` accepted, and the report's evidence
-  copy sits beside the copy so cleanup leaves it. The wake
+- `internal/home` owns the on-disk layout PRD section 8 gives one root, the
+  exclusive lock that makes a home have exactly one service, its probe
+  `LockState`, and the instance file on both sides, `WriteInstance` and
+  `ReadInstance`. No other package spells a path under the root, with one
+  deliberate exception: `internal/gate` composes `<home>/repos/<id>.git`
+  itself, so this package does not; the beacon's path is here and its content
+  is `internal/supervisor`'s. A task's paths (`Task`, `TaskCopy`,
+  `TaskInstructions`, `TaskReport`) are all composed here from an identifier
+  `ValidTaskID` accepted, and the report's evidence copy sits beside the copy
+  so cleanup leaves it. The wake
   queue is not in the layout at all: it is `internal/store`'s table, so no
   path to a `queue/` is composed and `Create` makes none, while an older home
   keeps an empty one nothing reads. The lock is
@@ -548,8 +556,31 @@ Each has cost this repository more than one round of review.
   its `doc.go` for the measurement and the gaps: the record does not yet keep
   what the run did with a path afterwards, and nothing proposes turning a
   check off.
+- `internal/supervisor` is the pure core of PRD section 5's supervision and
+  performs no I/O: the wake classifier, `Assess`, the in-flight table, the
+  beacon's fixed-size record and its codec, and the two durations derived from
+  the one configured interval, `config.KeySupervisionBeaconInterval`, through
+  `FreshnessFor` and `FirstBeaconWait`; staleness and the first-beacon wait are
+  named multiples and never rows of their own. `GuardOf` is the pull guard's
+  predicate and expects the instance file's identity and the beacon's own
+  epoch, which its doc states; `ArmOf` is arm verification's decision over
+  one look. Its subpackage `feed` is the I/O edge: the beacon `Writer`, which
+  nothing calls until #100's loop, `ReadBeacon` with its one retry on a torn
+  read, `Observe` over the files, the lock and `store.OpenReadOnly`, `Guard`,
+  and `VerifyArm`. P10 is cited once, in `feed`'s test, through a lock a
+  second process holds, the real writer and the real instance file. The
+  `supervision.assert` ipc row waits on #91's worker set and is not in the
+  method table. Read both `doc.go` files for the residual gaps: no epoch is
+  compared outside the stop hook, the checksum authenticates nothing, and the
+  in-flight read outside the service resolves with no probe and no advancing
+  answer.
 - `internal/machine` owns the shapes a structured answer takes, the three exit
-  codes, and the outcome vocabulary. It composes records rather than restating
+  codes, the outcome vocabulary, and the P13 phrase table in `vocabulary.go`,
+  which `SupervisionOf` is the one translation into; the forbidden set its
+  test holds every phrase to is derived from the owners by
+  `internal/machine/vocabtest`, which `internal/cli` runs over what the pull
+  guard printed, and a caller pairs `Assert` with `Control`. The table covers
+  the pull guard's phrases only; #110 extends it to every renderer. It composes records rather than restating
   them: a run is a `store.Run`, a report is a `findings.Report`, so no wire
   shape becomes a second owner of a record. `Outcome` is a closed set, and one
   translation answers for a run: `Run.Decide` takes a `Standing`, which is the
@@ -625,12 +656,23 @@ Each has cost this repository more than one round of review.
   claim, the copy is a `vcs.Clone` of the primary shaped for the task's
   shape, `tasks.AssertIsolated` is run under `agents.WorkerEnvironment`, both
   snapshots are recorded, a refusal is the `isolation-refused` event carrying
-  `taskstate`'s token, and a proof is held only in the service's memory for
-  #91's launch seam; nothing launches. A path already standing at the copy's
-  path is asserted and never removed. The environment half of P11 is only as
-  strong as every launch path building its environment through
-  `agents.WorkerEnvironment`, which is the contract #91's launch seam takes
-  along with the proof; no second strip list exists or should.
+  `taskstate`'s token, and a proof is held in the service's memory for
+  `launch.go`, which follows a proven dispatch in the same pass: it observes
+  and asserts the copy again under the same environment, refusing exactly as
+  dispatch does, creates the terminal session through `session.Create` over
+  the service's `session.Pipe` - built in `driverFor` on the resolved agent
+  before `containRunner` takes its worker arm away - and records
+  `Session.Reference()` on the attempt through `store.SetAttemptSession`.
+  The probe is not wired into the service's reader, so a launched task still
+  resolves Dispatched and nothing writes an event to say otherwise; an
+  adapter without `worker_sessions` dispatches and never launches, with the
+  `*agents.CapabilityError` logged and nothing recorded; a restart relaunches
+  as a new attempt and the earlier process is an orphan nothing here ends;
+  and `Close` ends only the sessions this service created. A path already
+  standing at the copy's path is asserted and never removed. The environment
+  half of P11 is only as strong as every launch path building its
+  environment through `agents.WorkerEnvironment`, which both assertions and
+  the worker's start do; no second strip list exists or should.
 - `internal/cli` is the command surface, and its verb table is PRD section 9's
   table and nothing else. A verb that section does not describe is a finding to
   raise against the specification, not a row to add: `cli_test.go` holds both

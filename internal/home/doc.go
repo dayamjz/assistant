@@ -107,16 +107,19 @@
 // it. LockState keeps the same rule: a home with no lock file is reported as
 // one and not given a lock file by the asking.
 //
-// It does not read the instance file or write the beacon. WriteInstance is the
-// one write here beyond the lock and the log, and it writes a file that is not
-// state: PRD section 8 makes a published identifier no proof of readiness, and
-// no reader of that file exists in this build. A service start that cannot
-// write it is still refused, within the write's own bound of about two
-// seconds, because a home whose instance file names a process other than the
-// one holding its lock is the reading the supervisor's liveness must never be
-// given. The write sweeps the temporary files an earlier write left behind in
-// a crash, on the strength of the lock the caller holds; a crash in the
-// window between making a temporary file and renaming it leaves one until the
-// next write. The beacon's content is the supervisor's to define, and this
-// package says only where it goes.
+// It does not write the beacon. WriteInstance is the one write here beyond
+// the lock and the log, and ReadInstance is its one reader, so the file's
+// format is decoded where it is written; what it holds is not state: PRD
+// section 8 makes a published identifier no proof of readiness, and
+// internal/supervisor/feed reads it beside the lock probe and the beacon to
+// decide liveness, never alone. A service start that cannot write it is
+// still refused, within the write's own bound of about two seconds, because
+// a home whose instance file names a process other than the one holding its
+// lock is the reading the supervisor's liveness must never be given. The
+// write sweeps the temporary files an earlier write left behind in a crash,
+// on the strength of the lock the caller holds; a crash in the window
+// between making a temporary file and renaming it leaves one until the next
+// write. The beacon's content is internal/supervisor's to define and
+// internal/supervisor/feed's to read and write, and this package says only
+// where it goes.
 package home

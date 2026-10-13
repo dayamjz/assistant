@@ -6,8 +6,9 @@
 // blocker has cleared. AssertIsolated is the pure half of P11, described
 // below. Dispatching, cutting a copy and asserting it are internal/service's,
 // which composes this package's assertion with internal/vcs; launching a
-// worker is internal/session's Create over the proof made here, which no
-// service path reaches yet, and nothing in this package does any of them.
+// worker is internal/session's Create over the proof made here, which
+// internal/service's launch reaches with a proof it asserts again at launch,
+// and nothing in this package does any of them.
 // Cleaner.CleanUp and Cleaner.CleanUpRun are the cleanup decision over a
 // task's copy and a run's copy, described below, and Cleaner.StoreReport
 // stores an investigation's report with the holds it surfaced; promotion is
@@ -37,8 +38,8 @@
 // The assertion is the proof and not the gate. Isolation's unexported field
 // is set only here, so the launch seam that takes one, internal/session's
 // Create, cannot be handed a value nobody asserted: internal/service's
-// dispatch produces an Isolation and holds it in memory for that seam, the
-// wiring from the one to the other is a later change, and a worker started
+// dispatch produces an Isolation and holds it in memory, its launch asserts
+// the copy again and hands Create that fresh proof, and a worker started
 // through internal/agents directly is still started where it is told, which
 // Isolation's doc states. The second check is detection, obeyed by an
 // obedient worker and ignored by any other, and Expect's doc says so.
