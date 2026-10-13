@@ -47,6 +47,10 @@ type Config struct {
 	// fresh regardless, per P4, which is the reviewing caller's rule and not
 	// enforced by this field.
 	SessionReuse bool
+	// DecisionModel is the mode of the decision-model checks PRD section 5
+	// describes. Whether a request is sent at all also needs the provider's
+	// key in the operator's environment, which this package never reads.
+	DecisionModel DecisionModel
 	// CommitFixMessage is the subject line template for fix commits. Render it
 	// with RenderFixMessage.
 	CommitFixMessage string
@@ -136,11 +140,40 @@ const (
 	DefaultChecksTimeout = 168 * time.Hour
 	// DefaultSessionReuse keeps one durable fixer session per run.
 	DefaultSessionReuse = true
+	// DefaultDecisionModel is the decision-model mode a run gets when the
+	// operator's file sets none: the checks run where the key is present and
+	// what they find is a note.
+	DefaultDecisionModel = DecisionEvaluate
 	// DefaultCommitFixMessage is the subject line template for fix commits.
 	// PRD section 10 records the default as "a template" without giving its
 	// text; this is that text, and it is a conventional-commit subject.
 	DefaultCommitFixMessage = "fix: " + FixMessagePlaceholder
 )
+
+// DecisionModel is the mode of the decision-model checks. The three values
+// below are the whole set: decoding refuses any other text, so a Config from
+// Resolve holds one of them. A Config assembled by hand may hold the empty
+// string, and RunsChecks reports false for it as for any value outside the
+// set, so a mode nobody chose sends nothing.
+type DecisionModel string
+
+const (
+	// DecisionEvaluate runs both checks and makes every result a note, so
+	// nothing they say holds a run.
+	DecisionEvaluate DecisionModel = "evaluate"
+	// DecisionEnforce runs both checks as DecisionEvaluate does, except that a
+	// file the screen flags becomes an ask.
+	DecisionEnforce DecisionModel = "enforce"
+	// DecisionOff runs neither check and sends nothing.
+	DecisionOff DecisionModel = "off"
+)
+
+// RunsChecks reports whether this mode asks for the checks to run. It is true
+// for DecisionEvaluate and DecisionEnforce and false for everything else,
+// DecisionOff and the zero value included.
+func (m DecisionModel) RunsChecks() bool {
+	return m == DecisionEvaluate || m == DecisionEnforce
+}
 
 // FixMessagePlaceholder is the one substitution a fix commit subject template
 // may contain, and must contain. It is replaced by the agent's summary of the
