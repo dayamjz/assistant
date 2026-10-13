@@ -68,7 +68,6 @@ func TestEveryPathIsUnderTheRoot(t *testing.T) {
 		"task copy":    copyPath(t, h, validTaskID),
 		"instance":     h.InstanceFile(),
 		"beacon":       h.Beacon(),
-		"queue":        h.Queue(),
 		"stage log":    h.StageLog("run", "review"),
 		"service log":  h.ServiceLog(),
 	}
@@ -123,6 +122,12 @@ func TestOpenDoesNotCreateAnythingAndCreateIsWhatDoes(t *testing.T) {
 		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("Create made %s", path)
 		}
+	}
+	// The durable wake queue is a table in the database and PRD section 8's
+	// layout has no queue row, so Create makes no queue/ and this package
+	// composes no path to one.
+	if _, err := os.Stat(filepath.Join(root, "queue")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Create made a queue directory: %v", err)
 	}
 }
 

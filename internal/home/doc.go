@@ -1,8 +1,12 @@
 // Package home owns the one root everything lives under, which PRD section 8
 // calls the on-disk layout: where the database, the socket, the lock, the gate
 // repositories, the isolated copies, the evidence, the task records and each
-// task's copy, the instance file, the beacon, the wake queue, and the logs sit
-// relative to that root.
+// task's copy, the instance file, the beacon, and the logs sit relative to
+// that root. The durable wake queue is not among them: PRD section 8 makes
+// it a table in the database, internal/store's wake table, and not a
+// directory, so this package composes no path to one and Create makes none.
+// A home created by a build that listed a queue directory keeps an empty one
+// that nothing reads.
 //
 // It exists so that no other package spells a path. A layout every caller
 // derives for itself is one every caller can derive differently, and the
