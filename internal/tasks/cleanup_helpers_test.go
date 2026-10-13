@@ -174,6 +174,15 @@ func (s *cleanupSubject) record(t *testing.T, shape store.TaskShape, branch stor
 // package under test.
 func (s *cleanupSubject) snapshot(t *testing.T, id, copyPath string) {
 	t.Helper()
+	if err := s.store.SetTaskStartSnapshot(context.Background(), id, readSnapshot(t, copyPath)); err != nil {
+		t.Fatalf("SetTaskStartSnapshot: %v", err)
+	}
+}
+
+// readSnapshot reads what the copy holds now, through git directly, in the
+// shape a dispatch records as the task's start snapshot.
+func readSnapshot(t *testing.T, copyPath string) store.CopySnapshot {
+	t.Helper()
 	snap := store.CopySnapshot{Head: rawGit(t, copyPath, "rev-parse", "HEAD"), Refs: []store.SnapshotRef{}}
 	if out, err := tryRawGit(copyPath, "symbolic-ref", "--short", "-q", "HEAD"); err == nil {
 		snap.Branch = strings.TrimSpace(out)
@@ -189,9 +198,7 @@ func (s *cleanupSubject) snapshot(t *testing.T, id, copyPath string) {
 		}
 		snap.Refs = append(snap.Refs, store.SnapshotRef{Name: fields[0], Commit: commit})
 	}
-	if err := s.store.SetTaskStartSnapshot(context.Background(), id, snap); err != nil {
-		t.Fatalf("SetTaskStartSnapshot: %v", err)
-	}
+	return snap
 }
 
 // tryRawGit runs git and returns its combined output and error, for a

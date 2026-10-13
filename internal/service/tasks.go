@@ -17,8 +17,9 @@ import (
 // the per-branch exclusion is holdBranch, the same gate a run start takes, so
 // an intake deciding a branch's disposition and a push deciding its run do not
 // interleave; and whether a branch is already in the gate is read off the
-// gate repository the run's copies are cut from. The state reader is the one
-// the task surface reads through, advancing fact included.
+// gate repository the run's copies are cut from, and where that gate stands
+// is gatePathOf, the same answer a dispatch cuts a copy against. The state
+// reader is the one the task surface reads through, advancing fact included.
 //
 // Nothing in this build calls the queue's intake: PRD section 9's table has
 // no verb that creates a task, and internal/tasks' doc says so. What this
@@ -32,6 +33,7 @@ func (s *Service) newQueue() (*tasks.Queue, error) {
 			return s.holdBranch(ctx, branchKey{repository: repository, branch: branch})
 		},
 		BranchInGate: s.branchInGate,
+		GatePath:     s.gatePathOf,
 	})
 }
 

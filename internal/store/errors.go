@@ -281,7 +281,10 @@ var ErrAttemptSessionRecorded = errors.New("store: the attempt already names a s
 // ErrCleanupRecorded is returned by RecordTaskCleanup when the task already
 // has a cleanup record. PRD section 8 says the record is written once, so a
 // second write is refused rather than overwriting the proof the first was made
-// from.
+// from. TransitionTaskShape returns it too, for a task whose copy a cleanup
+// has claimed: a promotion of that task would move a copy proven on an
+// investigation's terms under a delivery task, so the claim is read in the
+// transaction that would flip the shape.
 var ErrCleanupRecorded = errors.New("store: the task already has a cleanup record")
 
 // ErrCleanupRemoved is returned by MarkCleanupRemoved when the task's cleanup
@@ -402,11 +405,14 @@ var ErrSchemaBehind = errors.New("store: database schema is behind this build an
 var ErrPrimarySnapshotRecorded = errors.New("store: the attempt already has a primary snapshot")
 
 // ErrTaskShapeMoved is returned by RecordTaskCleanup when the task's shape is
-// not the one the cleanup was decided for. The shape decides what a cleanup
+// not the one the cleanup was decided for, and by TransitionTaskShape when
+// it is not the one the transition is from. The shape decides what a cleanup
 // may skip, so a record decided over one shape and written against another
 // would remove a delivery copy on an investigation copy's terms; the
 // comparison is made in the transaction that claims the record, which is why
 // a caller passes the shape it decided from rather than reading it again.
+// The transition reads the same row under the same serialization, which is
+// what makes a second promotion of one task refuse here.
 var ErrTaskShapeMoved = errors.New("store: the task's shape is not the one the cleanup was decided for")
 
 // ErrTaskReportStored is returned by StoreTaskReport when the task already

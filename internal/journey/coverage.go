@@ -252,7 +252,10 @@ func Coverage() []Established {
 				"launch asserts the copy again before Create, and a copy retargeted between dispatch " +
 				"and launch is refused there and not launched; its relaunch at service start asserts " +
 				"the standing copy through the same function, and a copy that became the primary " +
-				"checkout is refused there with no worker started. A worker started through internal/agents " +
+				"checkout is refused there with no worker started. internal/tasks' promotion cites it too, at " +
+				"package reach: the standing copy is asserted before and after it is shaped, a copy " +
+				"pointed at the primary's .git is refused before the primary is written to, and the " +
+				"refusal is recorded. A worker started through internal/agents " +
 				"directly is still started where it is told, so a green P11 does not read as no worker " +
 				"launches unproven."},
 		{principles.P12, ReachNone,
@@ -281,7 +284,8 @@ func Coverage() []Established {
 		{principles.P14, ReachNone,
 			"One owner per fact is a property of the source rather than of a run, so driving a journey " +
 				"establishes nothing about it. internal/principles and internal/pipeline's schema test " +
-				"claim it."},
+				"claim it, and internal/store's shape transition test claims it for a task's shape, " +
+				"repository and branch: one row, flipped in one write."},
 	}
 }
 
