@@ -218,8 +218,13 @@ func Coverage() []Established {
 				"protocol over the test is skipped rather than passing and nothing about P8 is " +
 				"established there."},
 		{principles.P9, ReachNone,
-			"Nothing in this repository supervises, so there is no wake to classify. " +
-				"internal/principles declares this gap."},
+			"Not driven here: P9 is cited by internal/supervisor's own matrix test, not by this " +
+				"harness, and for the table only. Every wake kind crossed with evidence present and absent is held to an " +
+				"oracle written from the PRD's flowchart. Evidence derivation is internal/taskstate's, " +
+				"and the window and surfaced computation is the loop's, which does not exist yet; " +
+				"whether a stalled run record or a timer ever reaches the classifier as evidence is " +
+				"established by neither, and the kind for an authenticated check result has no " +
+				"producer in this build, so its rows test a path nothing walks."},
 		{principles.P10, ReachNone,
 			"There is no coordinator and no watcher here, so no turn ends. internal/principles declares " +
 				"this gap."},
