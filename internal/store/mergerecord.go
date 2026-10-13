@@ -95,15 +95,15 @@ type PullRequestRead struct {
 // no column for it and Store.MergeRecord is the one read.
 type MergeRecord struct {
 	// Run is the run the read ended.
-	Run string
+	Run string `json:"run"`
 	// PullRequest is the pull request's number on the code host.
-	PullRequest int
+	PullRequest int `json:"pull_request"`
 	// Head is the commit the pull request's head stood at when it was read.
-	Head string
+	Head string `json:"head"`
 	// End is which state ended the run.
-	End PullRequestEnd
+	End PullRequestEnd `json:"end"`
 	// RecordedAt is when the row was written, which is when the run moved.
-	RecordedAt time.Time
+	RecordedAt time.Time `json:"recorded_at"`
 }
 
 // HoldClosure is a hold to close in the same transaction as the run's move,

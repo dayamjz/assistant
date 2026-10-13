@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dayamjz/assistant/internal/findings"
 	"github.com/dayamjz/assistant/internal/graph"
@@ -561,5 +562,35 @@ func TestTheNextActionSurvivesTheWire(t *testing.T) {
 	}
 	if back.Outcome != answer.Outcome || back.Advancing != answer.Advancing {
 		t.Fatalf("the round trip changed the answer: %s advancing=%v", back.Outcome, back.Advancing)
+	}
+}
+
+// The merge record travels on a run under the same snake_case member names
+// as the record itself, so a caller decoding an answer reads it by the names
+// store.Run's own fields use rather than Go's.
+func TestTheMergeRecordTravelsInSnakeCase(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 10, 13, 15, 0, 0, 0, time.UTC)
+	answer := machine.Run{
+		Record:      store.Run{ID: "abc"},
+		MergeRecord: &store.MergeRecord{Run: "abc", PullRequest: 7, Head: "0123abc", End: store.PullRequestMerged, RecordedAt: at},
+	}
+	encoded, err := json.Marshal(answer)
+	if err != nil {
+		t.Fatalf("encoding: %v", err)
+	}
+	var decoded struct {
+		MergeRecord map[string]any `json:"merge_record"`
+	}
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("decoding: %v", err)
+	}
+	for _, name := range []string{"run", "pull_request", "head", "end", "recorded_at"} {
+		if _, ok := decoded.MergeRecord[name]; !ok {
+			t.Errorf("the merge record carries no %q member: %s", name, encoded)
+		}
+	}
+	if got := decoded.MergeRecord["end"]; got != "merged" {
+		t.Errorf("the end travels as %v, want merged", got)
 	}
 }

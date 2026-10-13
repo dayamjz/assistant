@@ -71,7 +71,7 @@ func references(t *testing.T, root, name string) []string {
 			return err
 		}
 		if d.IsDir() {
-			if base := d.Name(); base != root && (strings.HasPrefix(base, ".") || base == "testdata") {
+			if base := d.Name(); path != root && (strings.HasPrefix(base, ".") || base == "testdata") {
 				return filepath.SkipDir
 			}
 			return nil

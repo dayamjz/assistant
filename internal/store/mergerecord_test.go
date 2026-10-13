@@ -320,3 +320,52 @@ func TestTheMergeRecordMigrationReachesAnOlderDatabase(t *testing.T) {
 		t.Fatalf("the migrated run records %+v, %v and stands %s", record, found, ended.Status)
 	}
 }
+
+// The closure is written in the transaction that writes the merge record,
+// and not in one of its own before or after it: a merge record already in
+// the table for the held run makes the record's INSERT fail on the primary
+// key after the hold has been registered and resolved inside the
+// transaction, and the whole of it rolls back, leaving the run held and no
+// hold row at all. The refused-status cases cannot show this, because they
+// refuse before any hold write; a closure written in a second transaction
+// would pass them and fail here.
+func TestTheHoldClosureRollsBackWithARefusedMergeRecord(t *testing.T) {
+	ctx := context.Background()
+	s := openStore(t)
+	running := runningRun(t, s)
+	held, err := s.TransitionRun(ctx, running.ID, []RunStatus{RunRunning}, RunHeld)
+	if err != nil {
+		t.Fatalf("running to held: %v", err)
+	}
+	// Seeded by hand: no accessor writes a record for a run that has not
+	// moved, which is the property this test leans on.
+	err = s.inTx(ctx, func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `
+			INSERT INTO merge_record (run, pull_request, head, pull_request_end, recorded_at)
+			VALUES (?, ?, ?, ?, ?)`, held.ID, 7, "0123abc", string(PullRequestMerged), encodeTime(nowUTC()))
+		return err
+	})
+	if err != nil {
+		t.Fatalf("seeding a merge record: %v", err)
+	}
+	closing := HoldClosure{
+		Hold:       Hold{Key: "run/" + held.ID + "/checks-timeout", RunID: Known(held.ID), Subject: "checks_timeout elapsed"},
+		Resolution: "pull request 7 read as merged",
+		By:         ResolvedByProgram(),
+	}
+	_, err = s.TransitionRunOnPullRequest(ctx, held.ID, []RunStatus{RunHeld}, RunPassed,
+		PullRequestRead{PullRequest: 7, Head: "0123abc", End: PullRequestMerged}, closing)
+	if err == nil {
+		t.Fatal("a second merge record for the run was written")
+	}
+	stood, err := s.Run(ctx, held.ID)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if stood.Status != RunHeld {
+		t.Fatalf("the refused transaction moved the run to %s", stood.Status)
+	}
+	if _, err := s.Hold(ctx, closing.Hold.Key); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("the hold survived the refused transaction: %v; the closure was written outside it", err)
+	}
+}

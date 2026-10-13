@@ -417,7 +417,8 @@ Each has cost this repository more than one round of review.
   stage raised at `checks_timeout` elapse is resumed, at recovery and at a
   response, and only that hold, which `stages.ChecksTimeoutHeld` identifies
   from the recorded report; it is the one producer of
-  `store.ResolvedByProgram`, and a test there counts the call sites. The
+  `store.ResolvedByProgram`, and a test there counts every identifier
+  reference to it. The
   live wait's own re-read is the checks body's, and `settle` turns what that
   body wrote under `pipeline.KeyPullRequestEnd` into the record's move and
   its merge record, so no stage body decides a run's status; the resolution

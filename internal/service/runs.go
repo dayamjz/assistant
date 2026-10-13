@@ -847,7 +847,7 @@ func (s *Service) reconcile(ctx context.Context, runID string) (store.Run, error
 // longest of them reaches a decision. The one thing done here before serving
 // is PRD section 11's step 3: a run held on an elapsed checks wait has its
 // pull request re-read, which is one provider call per such run under
-// checksHoldReadBound of its own, and the service does not serve until each
+// ChecksHoldReadBound of its own, and the service does not serve until each
 // has answered or run out, so opening takes up to that bound times the number
 // of such holds. A read that ran out is not read, and the hold stands. A run
 // that was waiting on checks when the service stopped is not re-read here,

@@ -144,9 +144,12 @@ type Options struct {
 	// re-reads a run's pull request through before resuming the hold the
 	// checks stage raised when checks_timeout elapsed. Zero means GitHub over
 	// the gh command line, which the product passes; a test passes a double
-	// that answers only the shapes the GitHub adapter can. It is one host for
-	// both readers on purpose, so what a stage read and what the service
-	// re-reads come from the same place.
+	// whose answers and refusals are shapes the GitHub host and adapter
+	// produce: Open refuses only an argument it cannot use, and a provider
+	// command line that cannot be run surfaces from a read as a *forge.Refusal
+	// with forge.ReasonUnavailable, never from Open. It is one host for both
+	// readers on purpose, so what a stage read and what the service re-reads
+	// come from the same place.
 	Forge forge.Host
 }
 

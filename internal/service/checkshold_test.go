@@ -3,6 +3,7 @@ package service_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"sync"
@@ -25,10 +26,12 @@ import (
 // service that serves one repository.
 type scriptedHost struct {
 	provider *scriptedProvider
-	// failOpen makes Open refuse the way the GitHub host refuses when the
-	// provider command line cannot be resolved: with an error and no
-	// provider. It is read under the provider's lock so a test can set it
-	// while the service runs.
+	// failOpen makes Open refuse the one way the GitHub host's Open refuses,
+	// with an error wrapping forge.ErrInvalidArgument and no provider: that
+	// host refuses an argument it cannot use and nothing else, since a
+	// provider command line that cannot be run surfaces from a read, as the
+	// scripted provider's unavailable does. It is read under the provider's
+	// lock so a test can set it while the service runs.
 	failOpen *bool
 }
 
@@ -40,7 +43,7 @@ func (h scriptedHost) Open(repository string) (forge.Provider, error) {
 	failing := h.failOpen != nil && *h.failOpen
 	h.provider.mu.Unlock()
 	if failing {
-		return nil, errors.New("forge: the provider command line could not be resolved")
+		return nil, fmt.Errorf("forge: repository %w", forge.ErrInvalidArgument)
 	}
 	return h.provider, nil
 }
@@ -59,8 +62,11 @@ type scriptedProvider struct {
 	state forge.PullRequestState
 	gets  int
 	// refuse makes every read of the pull request the refusal the GitHub
-	// adapter returns for a provider that ran, answered, and refused.
-	refuse bool
+	// adapter returns for a provider that ran, answered, and refused, and
+	// unavailable the one it returns for a provider command line that could
+	// not be run at all, which is where a missing gh surfaces.
+	refuse      bool
+	unavailable bool
 	// deadlines records, per read, whether the context the read ran under
 	// carried a deadline, which is what a bounded read looks like from the
 	// provider's side.
@@ -95,13 +101,17 @@ func (p *scriptedProvider) Get(ctx context.Context, number int) (forge.PullReque
 	reads := p.gets
 	_, bounded := ctx.Deadline()
 	p.deadlines = append(p.deadlines, bounded)
-	state, refuse, hook := p.state, p.refuse, p.onGet
+	state, refuse, unavailable, hook := p.state, p.refuse, p.unavailable, p.onGet
 	p.mu.Unlock()
 	if hook != nil {
 		hook(reads)
 	}
 	if err := ctx.Err(); err != nil {
 		return forge.PullRequest{}, err
+	}
+	if unavailable {
+		return forge.PullRequest{}, &forge.Refusal{Reason: forge.ReasonUnavailable, Op: "get",
+			Detail: "the provider command line could not be run"}
 	}
 	if refuse {
 		return forge.PullRequest{}, &forge.Refusal{Reason: forge.ReasonRejected, Op: "get",
@@ -469,9 +479,10 @@ func TestAHoldOnAPersonsDecisionIsNeverReRead(t *testing.T) {
 
 // A pull request that could not be read leaves the hold to the person, by
 // recovery and by an answer alike, and a person's answer is then taken: a
-// host that cannot open a provider and a provider that refuses the read are
-// each a typed answer the service logs and treats as not read, never an error
-// that stops a person answering their own hold over a code host that is down.
+// host that cannot open a provider, a provider command line that cannot be
+// run, and a provider that refuses the read are each a typed answer the
+// service logs and treats as not read, never an error that stops a person
+// answering their own hold over a code host that is down.
 // The control is the merged state those same runs would otherwise have been
 // ended on: once the host answers again, the next look ends the run.
 func TestAPullRequestThatCannotBeReadLeavesTheHoldToThePerson(t *testing.T) {
@@ -481,6 +492,11 @@ func TestAPullRequestThatCannotBeReadLeavesTheHoldToThePerson(t *testing.T) {
 		fail func(c checksHoldSubject, failing bool)
 	}{
 		{"the host cannot open a provider", func(c checksHoldSubject, failing bool) { c.setFailOpen(failing) }},
+		{"the provider command line cannot be run", func(c checksHoldSubject, failing bool) {
+			c.provider.mu.Lock()
+			defer c.provider.mu.Unlock()
+			c.provider.unavailable = failing
+		}},
 		{"the provider refuses the read", func(c checksHoldSubject, failing bool) {
 			c.provider.mu.Lock()
 			defer c.provider.mu.Unlock()
