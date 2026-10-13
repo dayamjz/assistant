@@ -58,7 +58,10 @@
 // waiting. The record names one blocker, the claimed task while it is live
 // and otherwise the floor's, and Release re-runs the floor before it
 // dispatches, so a task is dispatched past neither: a claim of overlap and a
-// live task on the branch are both waited on when both apply.
+// live task on the branch are both waited on when both apply. Among tasks
+// queued on one branch the earlier, by task row, holds the later, so one
+// pass releases at most one of them onto the branch and none waits on a
+// later one.
 //
 // A blocker clears when it resolves Failed or Reported. Ready never clears,
 // because a Ready task's branch still carries an open pull request. Landed

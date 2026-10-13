@@ -343,7 +343,9 @@ Each has cost this repository more than one round of review.
   `store.AppendTaskEventAfter` anchored to the sequence the resolution it
   decided from had read. It learns a state only through `taskstate`, so the
   live set and the clear condition (`Live`, `Clears`) are predicates over a
-  `State`, `Unknown` is live, and a queued task whose claim a higher tier
+  `State`, `Unknown` is live, `Release` re-runs the floor before it
+  dispatches (an earlier queued task on a branch holds a later one, so one
+  pass releases one task per branch), and a queued task whose claim a higher tier
   overrode is refused with `*OutrankedError` rather than appended past; it
   reads that off `Resolution.Superseded`, never the history's tail. Ids are
   `home`'s rule, the shape is `store.TaskShape` decoded at the edge, and the

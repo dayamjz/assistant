@@ -175,7 +175,8 @@ func TestIntakeRefusesAMalformedRequest(t *testing.T) {
 	if _, err := f.queue.Create(context.Background(), delivery("neveraaaaaaa")); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("an unknown overlap = %v, want store.ErrNotFound", err)
 	}
-	for _, bad := range []string{"a~b", "a^b", "a:b", "a?b", "a*b", "a[b", "a\\b", "a@{b", "/a", "a/", ".a", "a.lock", "a\x01b", "a b"} {
+	for _, bad := range []string{"a~b", "a^b", "a:b", "a?b", "a*b", "a[b", "a\\b", "a@{b", "/a", "a/", ".a", "a.lock", "a\x01b", "a b",
+		"@", "a//b", "a/.b", "a./b", "a.lock/b", "a."} {
 		req := delivery("")
 		req.Branch = bad
 		if _, err := f.queue.Create(context.Background(), req); !errors.Is(err, ErrRequest) {

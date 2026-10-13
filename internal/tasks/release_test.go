@@ -3,6 +3,7 @@ package tasks
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/principles"
@@ -322,9 +323,9 @@ func TestReleaseWaitsOnBothTheClaimAndTheFloor(t *testing.T) {
 		_ = y
 	})
 
-	// Two tasks queued on one branch do not hold each other: once the
-	// blocker clears the first is released and the second waits on it.
-	t.Run("a queued task holds nothing", func(t *testing.T) {
+	// Two tasks queued on one branch: the earlier holds the later, so once
+	// the blocker clears the first is released and the second waits on it.
+	t.Run("an earlier queued task holds a later one", func(t *testing.T) {
 		f := newFixture(t)
 		blocker, first := queuedPair(t, f)
 		second := f.create(t, delivery(""))
@@ -340,4 +341,68 @@ func TestReleaseWaitsOnBothTheClaimAndTheFloor(t *testing.T) {
 		}
 		_ = blocker
 	})
+}
+
+// Two tasks on one branch each queued behind a live claim elsewhere: when
+// both claims clear in one pass, the earlier task is released and the later
+// waits on it, because the earlier holds the branch by intake order and a
+// task released in a pass holds it too. The later is released on the next
+// pass. Without that rule one pass would dispatch both onto one branch.
+func TestOnePassReleasesOneTaskPerBranch(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	elsewhere := func(t *testing.T, branchName string) string {
+		t.Helper()
+		req := delivery("")
+		req.Branch = branchName
+		z := f.create(t, req)
+		f.beginAttempt(t, z.Task.ID)
+		return z.Task.ID
+	}
+	z1, z2 := elsewhere(t, "o1"), elsewhere(t, "o2")
+	t1 := f.create(t, delivery(z1))
+	t2 := f.create(t, delivery(z2))
+	if t1.Cause != CauseClaimed || t2.Cause != CauseClaimed || t1.Task.Row >= t2.Task.Row {
+		t.Fatalf("the two tasks were recorded as %+v and %+v, want both queued behind their claims in order", t1, t2)
+	}
+	for i, branchName := range []string{"o1", "o2"} {
+		if _, err := f.store.CreateRun(ctx, store.Run{
+			ID: fmt.Sprintf("run-z%d", i+1), RepositoryID: repo, Branch: branchName, SubmittedHead: "aaaa", Base: "bbbb",
+			Intent: "validate", IntentSource: "push", ConfigDigest: "cfg",
+			Build: store.Build{Version: "v0", Revision: "0123456789abcdef", Go: "go1.25.0"},
+		}); err != nil {
+			t.Fatalf("CreateRun: %v", err)
+		}
+		if _, err := f.store.TransitionRun(ctx, fmt.Sprintf("run-z%d", i+1), []store.RunStatus{store.RunPending}, store.RunFailed); err != nil {
+			t.Fatalf("TransitionRun: %v", err)
+		}
+	}
+	outcomes, err := f.queue.Release(ctx)
+	if err != nil || len(outcomes) != 2 {
+		t.Fatalf("Release = %+v (%v), want two outcomes", outcomes, err)
+	}
+	byTask := map[string]Outcome{}
+	for _, o := range outcomes {
+		byTask[o.Task] = o
+	}
+	if got := byTask[t1.Task.ID]; got.Result != Released {
+		t.Fatalf("the earlier task got %+v, want released", got)
+	}
+	if got := byTask[t2.Task.ID]; got.Result != Waiting || got.Holding != t1.Task.ID {
+		t.Fatalf("the later task got %+v, want waiting on the earlier, %s", got, t1.Task.ID)
+	}
+	if n := f.dispatchedEvents(t, t2.Task.ID); n != 0 {
+		t.Fatalf("one pass dispatched the later task too: %d dispatched entries", n)
+	}
+	if got := f.release(t, t2.Task.ID); got.Result != Waiting || got.Holding != t1.Task.ID {
+		t.Fatalf("with the earlier task dispatched the later got %+v, want waiting on it", got)
+	}
+	// Once the earlier task clears the later is released.
+	if _, err := f.store.BeginTaskAttempt(ctx, t1.Task.ID, 0); err != nil {
+		t.Fatalf("BeginTaskAttempt: %v", err)
+	}
+	f.runOn(t, "run-t1", store.RunFailed)
+	if got := f.release(t, t2.Task.ID); got.Result != Released {
+		t.Fatalf("with the earlier task cleared the later got %+v, want released", got)
+	}
 }

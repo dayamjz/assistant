@@ -302,8 +302,8 @@ func (q *Queue) writeInstructions(id, text string) (string, error) {
 // deliberately does not copy; it is the subset that would otherwise reach
 // BranchInGate as a for-each-ref pattern or git as an option: an option
 // prefix, whitespace or a control byte, the glob and revision characters
-// ~ ^ : ? * [ \, a ".." or "@{" element, a leading or trailing slash, a
-// leading dot and a ".lock" suffix. A name past this check can still be one
+// ~ ^ : ? * [ \, a ".." or "@{" element, a bare "@", and a component that is
+// empty, begins or ends with a dot, or ends in ".lock". A name past this check can still be one
 // git refuses, and that refusal then arrives from the gate read as an error
 // rather than as a task recorded under a name no branch can carry.
 func branchNameRefusal(branch string) string {
@@ -320,6 +320,14 @@ func branchNameRefusal(branch string) string {
 	for _, r := range branch {
 		if r < 0x20 || r == 0x7f || r == ' ' {
 			return "carries whitespace or a control character"
+		}
+	}
+	if branch == "@" {
+		return "is not a branch name git accepts"
+	}
+	for _, component := range strings.Split(branch, "/") {
+		if component == "" || strings.HasPrefix(component, ".") || strings.HasSuffix(component, ".") || strings.HasSuffix(component, ".lock") {
+			return "has a component git refuses in a reference name"
 		}
 	}
 	return ""

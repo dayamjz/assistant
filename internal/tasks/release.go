@@ -76,12 +76,14 @@ type Outcome struct {
 // leaves out today. A blocker that cleared is not the whole of it: the floor
 // Create applies is run again here, from the same read, and a task whose
 // repository and branch another task still holds stays Waiting on that task.
-// Holding is a live task that is not itself queued; a queued task waits its
-// own turn and holds nothing, or two tasks queued on one branch would each
-// wait on the other. That is what lets the record name one blocker while a
-// claim of overlap and the floor are both honoured. A chain of queued tasks
-// releases one link per call, since a successor's blocker is read as it
-// stood before this call's writes.
+// What holds a branch at release is a live task that is not itself queued, a
+// queued task with a lower Task.Row, which is earlier in intake order, and a
+// task this same pass released. The order is strict, so two tasks queued on
+// one branch never wait on each other: the earlier holds the later, and the
+// later is released on a pass after the earlier was. That is what lets the
+// record name one blocker while a claim of overlap and the floor are both
+// honoured, and what keeps one pass from releasing two tasks onto one branch.
+// A chain of queued tasks therefore releases one link per call.
 //
 // It returns an error only when the records could not be read or an append
 // failed for a reason other than the anchor; the outcomes gathered before
@@ -96,6 +98,7 @@ func (q *Queue) Release(ctx context.Context) ([]Outcome, error) {
 		byID[r.Record.ID] = r
 	}
 	var out []Outcome
+	released := map[string]bool{}
 	for _, r := range resolved {
 		blocker, queued := r.Record.BlockerTask.Get()
 		if !queued {
@@ -123,7 +126,7 @@ func (q *Queue) Release(ctx context.Context) ([]Outcome, error) {
 			out = append(out, o)
 			continue
 		}
-		if holder, held := holdsBranch(r, resolved); held {
+		if holder, held := holdsBranch(r, resolved, released); held {
 			o.Result, o.Holding, o.HoldingState = Waiting, holder.Record.ID, holder.State.State
 			out = append(out, o)
 			continue
@@ -140,6 +143,7 @@ func (q *Queue) Release(ctx context.Context) ([]Outcome, error) {
 			return out, err
 		default:
 			o.Result, o.Event = Released, event
+			released[r.Record.ID] = true
 		}
 		out = append(out, o)
 	}
@@ -147,9 +151,10 @@ func (q *Queue) Release(ctx context.Context) ([]Outcome, error) {
 }
 
 // holdsBranch is the floor at release: the newest task other than r on r's
-// repository and branch that is live and not itself queued, if there is one.
-// A task with no branch is held by nothing.
-func holdsBranch(r taskstate.Resolved, resolved []taskstate.Resolved) (taskstate.Resolved, bool) {
+// repository and branch that holds it, if there is one. A task holds r when
+// it is live and not itself queued, when it is queued with a lower row than
+// r, or when this pass released it. A task with no branch is held by nothing.
+func holdsBranch(r taskstate.Resolved, resolved []taskstate.Resolved, released map[string]bool) (taskstate.Resolved, bool) {
 	branch, ok := r.Record.Branch.Get()
 	if !ok {
 		return taskstate.Resolved{}, false
@@ -161,7 +166,10 @@ func holdsBranch(r taskstate.Resolved, resolved []taskstate.Resolved) (taskstate
 			other.Record.Branch.Or("") != branch {
 			continue
 		}
-		if !Live(other.State.State) || other.State.State == taskstate.Queued {
+		holds := released[other.Record.ID] ||
+			(Live(other.State.State) && other.State.State != taskstate.Queued) ||
+			(other.State.State == taskstate.Queued && other.Record.Row < r.Record.Row)
+		if !holds {
 			continue
 		}
 		if !found || other.Record.Row > holder.Record.Row {
