@@ -1,13 +1,17 @@
 // Package tasks is PRD section 8's tasks module as far as this build takes
-// it: intake, queueing, and the P11 isolation assertion. Create records a
+// it: intake, queueing, the P11 isolation assertion, the P12 cleanup
+// decision and the stored report it verifies against. Create records a
 // task with the disposition PRD section 6 gives it at intake, Queued behind a
 // blocker or Dispatched, and Release dispatches a queued task once its
 // blocker has cleared. AssertIsolated is the pure half of P11, described
 // below. Dispatching, cutting a copy and asserting it are internal/service's,
 // which composes this package's assertion with internal/vcs; launching a
 // worker is internal/session's Create over the proof made here, which no
-// service path reaches yet, and nothing in this package does any of them;
-// promotion and cleanup proofs are later still.
+// service path reaches yet, and nothing in this package does any of them.
+// Cleaner.CleanUp and Cleaner.CleanUpRun are the cleanup decision over a
+// task's copy and a run's copy, described below, and Cleaner.StoreReport
+// stores an investigation's report with the holds it surfaced; promotion is
+// later still.
 //
 // # The isolation assertion
 //
@@ -48,6 +52,55 @@
 // a worker with the gate as its remote can move any branch the gate holds.
 // The second check and the instructions are what a worker is told; this
 // package and the gate enforce neither.
+//
+// # The cleanup decision
+//
+// P12 says removing an isolated copy requires positive proof that its work
+// is reachable from a remote branch, or its pull request merged with a head
+// containing the work, or its content is already present in an up-to-date
+// default branch, that anything inconclusive refuses, and that a refusal
+// means stop and investigate rather than a flag. CleanUp is that decision
+// over a task's copy and CleanUpRun over a run's, one decision with two
+// removals: a task's copy is a clone whose work is everything its local
+// references and HEAD reach, read through vcs.Inventory, and removing it is
+// removing a directory, which is this package's own, behind the proof
+// value; a run's copy is a linked worktree whose work is the commit HEAD
+// stands on, removed through the non-discarding vcs.RemoveWorktree. The
+// three proofs are proof.go's, each read fresh from the upstream the
+// repository record names and never from the gate, each fetching the tip it
+// compares against by identifier, and each recording the commits it
+// examined, which is P6 applied to a removal; the content proof is
+// internal/safety's Incorporation over internal/vcs's Incorporated, and the
+// merged-pull-request proof reads the code host through internal/forge by
+// the number the run's merge record names, holding the pull request's base
+// to the default branch the upstream confirms and its head to the head the
+// merge was recorded at. A fetch that fails, a provider that cannot answer,
+// a state nobody recognizes and a comparison that cannot be computed are
+// each an attempt the refusal reports and never a proof.
+//
+// The proof is Removal, a value whose field only the decision sets, which
+// both removal functions require, on the terms Isolation sets for the
+// launch: a caller can ask for a cleanup and cannot hand one a proof, and
+// the request types carry no field that stands for one, which a test walks
+// their types to hold. The record is the claim: store.TaskCleanup and
+// store.RunCleanup are written with the proof before the removal and marked
+// after, so a crash between the two leaves a record a second call completes,
+// and a task's record is anchored to the shape the decision was made over.
+// The pre-removal recheck is the inventory unchanged, and a task copy is
+// examined only once its terminal probed Dead, because a running worker's
+// whole life is otherwise the window between the proof and the removal.
+//
+// An investigation copy answers to PRD section 11 first: its report must be
+// stored, through StoreReport, which parses it with findings.ParseReport so
+// P3 applies and registers every ask finding as a hold in the transaction
+// that stores the row, and every hold the store recorded with the report
+// must have a row; an open hold does not block, because it survives in the
+// store. It then skips the proofs only as scratch, when its inventory equals
+// the snapshot its dispatch recorded and its record names no run and no
+// pull request, on store.CleanupProofScratch; anything else holds it to the
+// three like a delivery copy. A fix finding in the report is recorded as
+// evidence and reaches no fixer, and a hold keeps the worker's words as
+// evidence for a surface to translate rather than relay (P13).
 //
 // # Every lifecycle move here is an appended event, anchored
 //
@@ -129,11 +182,15 @@
 // settle for a run whose checks stage read the merge and its checks-hold
 // closure for one read at recovery or before a resume, and both call Release
 // after the transaction that writes it, so a blocker Landed is observed by
-// that call; the cleanup record has no writer in this build (#108) and so no
-// call after it, and a task it would move is already cleared as Landed. A run a new push
-// supersedes is the one finish that does not call it, because that push
-// creates the branch's next run under the same exclusion and the branch
-// never stops being live; internal/service's tasks.go says why.
+// that call; the cleanup record's writer is CleanUp, which internal/service
+// calls after the same two finishes for the task the merge record landed and
+// after a report is stored for an investigation task, and no call to Release
+// follows it, because a task it would move is already cleared as Landed. A
+// run a new push supersedes is the one finish that does not call it, because
+// that push creates the branch's next run under the same exclusion and the
+// branch never stops being live; internal/service's tasks.go says why.
+// CleanUp has the callers internal/service's cleanup.go names and no verb or
+// protocol method, on Create's terms.
 //
 // # Residual gaps
 //
@@ -175,4 +232,37 @@
 //     the gate under repos/ and the copy under tasks/ as siblings, so a copy
 //     containing the gate is unrepresentable today. If that layout changes,
 //     the primary rule, which refuses all three, is the stricter template.
+//   - A task copy is cleaned up only once its terminal probed Dead, and the
+//     probe is not wired into internal/service's reader (#91's last PR), so
+//     the service passes taskstate.Unobserved and every task copy refuses
+//     with ReasonTerminalUnobserved today. Closing the session through the
+//     provider first is not done here either, because the service holds no
+//     sessions on this base. The probe's wiring is what turns those calls
+//     into removals, and nothing here changes when it lands.
+//   - vcs.RemoveWorktreeDiscardingChanges is exported and reachable by any
+//     importer, as is os.RemoveAll, so only this package calling either
+//     behind a Removal is convention; no type stops another package from
+//     removing a copy it never proved.
+//   - A caller states the terminal's liveness, and one that states Dead of
+//     a terminal it never probed is indistinguishable from one that did.
+//   - Ignored files are invisible to vcs.Inventory and so to the dirty and
+//     untracked refusals; a file git is configured to ignore goes with the
+//     copy.
+//   - The record claims the shape, and the removal follows the record: a
+//     promotion (#109) that lands between the two moves a copy proven on an
+//     investigation's terms out from under a delivery task. The promotion's
+//     own transition is where that is refused, by reading the cleanup
+//     record, and nothing here does it.
+//   - The default branch is confirmed by commit, the upstream's HEAD
+//     standing on the branch the record names; a second branch at the same
+//     commit passes that confirmation.
+//   - The references a proof fetches under refs/assistant/cleanup/ are
+//     deleted best effort; one left in the gate's repository or in a kept
+//     clone is read by nothing and overwritten by the next check.
+//   - A task copy's refusal is returned and recorded nowhere, because the
+//     surface that would show it is #110's; a run copy's is recorded on the
+//     run's cleanup record. Who answers a task's hold is #91's surface.
+//   - The evidence copy of a report is written after the row, so a crash
+//     between the two leaves a stored report with no copy. The row is the
+//     source and nothing reads the copy.
 package tasks
