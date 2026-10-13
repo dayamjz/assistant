@@ -17,10 +17,9 @@ import "github.com/dayamjz/assistant/internal/taskstate"
 // such a task under the guard until the person has been told is not its
 // state but the queue, which InFlightOf reads beside this table.
 //
-// Landed and Complete are not States yet (#107 adds them, resolved from the
-// merge and cleanup records); when they land, both belong on the not-in-flight
-// side for the same reason as Ready, and the test will refuse the build until
-// they are placed.
+// Landed and Complete, resolved from the merge record and the cleanup
+// record, are not in flight on state alone for Ready's reason: the work has
+// landed, and what waits, if anything, is a person.
 var inFlightByState = map[taskstate.State]bool{
 	taskstate.Queued:     true,
 	taskstate.Dispatched: true,
@@ -30,7 +29,9 @@ var inFlightByState = map[taskstate.State]bool{
 	taskstate.Unknown:    true,
 	taskstate.Held:       false,
 	taskstate.Ready:      false,
+	taskstate.Landed:     false,
 	taskstate.Reported:   false,
+	taskstate.Complete:   false,
 	taskstate.Failed:     false,
 }
 

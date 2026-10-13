@@ -60,8 +60,8 @@
 // person has been told is a queued wake row, which store.UnacknowledgedWakes
 // counts and InFlightOf reads beside the states. The table is closed in
 // both directions by its test, which derives the set from
-// taskstate.States() and fails on a state with no row, so Landed and
-// Complete (#107) cannot land unplaced. A state the table does not decide
+// taskstate.States() and fails on a state with no row, so a state added
+// later cannot land unplaced; Landed and Complete sit beside Ready. A state the table does not decide
 // is read as unknown and never as none. The hook that takes the two reads,
 // through store.OpenReadOnly, is #105's.
 //

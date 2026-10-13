@@ -25,7 +25,9 @@ func TestEveryStateIsDecidedInFlightOrNot(t *testing.T) {
 		taskstate.Unknown:    true,
 		taskstate.Held:       false,
 		taskstate.Ready:      false,
+		taskstate.Landed:     false,
 		taskstate.Reported:   false,
+		taskstate.Complete:   false,
 		taskstate.Failed:     false,
 	}
 	states := taskstate.States()
@@ -46,7 +48,7 @@ func TestEveryStateIsDecidedInFlightOrNot(t *testing.T) {
 			t.Errorf("StateInFlight(%q) = %t, want %t", s, got, want)
 		}
 	}
-	for _, counterfeit := range []taskstate.State{"", "landed", "complete", "Running"} {
+	for _, counterfeit := range []taskstate.State{"", "merged", "Running"} {
 		if counterfeit.Recognized() {
 			t.Fatalf("%q is a State now; place it in the table and the oracle", counterfeit)
 		}
@@ -86,6 +88,9 @@ func TestInFlightOfReadsTheStatesAndTheQueueTogether(t *testing.T) {
 		"a ready task beside a queued one": {
 			states: map[string]taskstate.State{"a": taskstate.Ready, "b": taskstate.Queued}, want: supervisor.InFlightSome,
 		},
+		"a landed and a complete task": {
+			states: map[string]taskstate.State{"a": taskstate.Landed, "b": taskstate.Complete}, want: supervisor.InFlightNone,
+		},
 		"a task known only by its queued wake": {
 			unacknowledged: map[string]int{"gone": 2}, want: supervisor.InFlightSome,
 		},
@@ -93,7 +98,7 @@ func TestInFlightOfReadsTheStatesAndTheQueueTogether(t *testing.T) {
 			states: map[string]taskstate.State{"a": taskstate.Unknown}, want: supervisor.InFlightSome,
 		},
 		"a state outside the table beside a running one": {
-			states: map[string]taskstate.State{"a": taskstate.Running, "b": "landed"}, want: supervisor.InFlightUnknown,
+			states: map[string]taskstate.State{"a": taskstate.Running, "b": "merged"}, want: supervisor.InFlightUnknown,
 		},
 	}
 	for name, c := range cases {

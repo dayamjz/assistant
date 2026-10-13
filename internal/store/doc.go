@@ -166,7 +166,13 @@
 // whether work is in flight while the service holding the home's lock may be
 // gone. It applies no migration, takes no writer connection, and refuses
 // every write with ErrReadOnly, which inTx answers because there is no pool
-// a write could go through. What it cannot read it reports as an
+// a write could go through. It takes no redactor, because the redactor
+// guards the two URL columns on their way in and a handle that writes
+// nothing never reaches them; what any read returns of those columns is the
+// redacted text the writer stored. Its callers, the guards, read the queued
+// wakes and the in-flight counts, neither of which carries a repository URL,
+// so no read path they take through this handle returns one to a hook's
+// log. What it cannot read it reports as an
 // *UnreadableError matching ErrUnreadable, with the cause beneath it: a file
 // missing or not a database, a schema behind this build (ErrSchemaBehind),
 // ahead of it, recorded differently, or a connection without the settings
