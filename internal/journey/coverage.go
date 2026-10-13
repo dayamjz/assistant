@@ -171,7 +171,8 @@ func Coverage() []Established {
 				"names as discarded exactly the commit somebody else landed and states internal/safety's " +
 				"remedy, and that the remote still holds that commit. What the lease walk does not " +
 				"establish is held at package reach: that following the remedy makes the decision allow " +
-				"a fast-forward, which no surface here drives a run through. Both walks need a service and a run, so they are skipped rather " +
+				"a fast-forward, which no surface here drives a run through. Both walks need a " +
+				"service and a run, so they are skipped rather " +
 				"than passing where internal/ipc reads no peer credentials or no local socket " +
 				"transport exists. The pull request and checks stages are skipped on both, because no " +
 				"record here names a repository on a code host and this fixture has none for " +
