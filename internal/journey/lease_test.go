@@ -1,6 +1,7 @@
 package journey_test
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"path/filepath"
@@ -182,8 +183,11 @@ type leased struct {
 	observed string
 	// advanced is the commit somebody else landed while the run was held.
 	advanced string
-	// submitted is the commit the run would have forwarded.
-	submitted string
+	// forwarded is the commit the run would have forwarded: the head the
+	// lint stage last checked, which is the last stage before push that can
+	// move it. It is read off the answer rather than taken to be the commit
+	// the working copy held, because the rebase stage may rewrite that.
+	forwarded string
 	// pushFindings is what the push stage held with.
 	pushFindings []findings.Finding
 	// after is where the branch stood on the remote once the push stage had
@@ -265,7 +269,7 @@ func TestAPushOverARemoteThatMovedUnderTheRunIsRefused(t *testing.T) {
 
 	subject := ownSubject(t, true)
 	observed := leased{observed: subject.remoteBranch(t)}
-	observed.submitted = subject.commit(t, "lease.md", "A change the remote has not seen.\n",
+	subject.commit(t, "lease.md", "A change the remote has not seen.\n",
 		"add a change the remote has not seen")
 
 	agent := standin.New(t, standin.Script{Steps: []standin.Step{{
@@ -310,6 +314,11 @@ func TestAPushOverARemoteThatMovedUnderTheRunIsRefused(t *testing.T) {
 	observed.stops = stops
 	if run.Decision != nil {
 		observed.pushFindings = run.Decision.Findings
+	}
+	for _, v := range run.Stages {
+		if v.Stage == pipeline.StageLint.String() && v.Report != nil {
+			observed.forwarded = v.Report.Revision
+		}
 	}
 	observed.after = subject.remoteBranch(t)
 	if observed.advanced == "" {
@@ -380,7 +389,19 @@ func TestAPushOverARemoteThatMovedUnderTheRunIsRefused(t *testing.T) {
 				},
 			},
 			{
-				States: "the remote's branch still stands at the commit somebody else landed",
+				States:  "the remote's branch still stands at the commit somebody else landed",
+				Absence: true,
+				Possible: func(l leased) error {
+					switch l.forwarded {
+					case "":
+						return errors.New("the run reports no head it would have forwarded, so whether a " +
+							"push could have moved the remote is not established")
+					case l.advanced, l.observed:
+						return fmt.Errorf("the head the run would have forwarded is %s, which the remote "+
+							"already held, so a push would have left nothing to see", l.forwarded)
+					}
+					return nil
+				},
 				Holds: func(l leased) error {
 					if l.after != l.advanced {
 						return fmt.Errorf("the remote's branch stands at %s, and the commit somebody else landed "+
@@ -417,7 +438,7 @@ func TestAPushOverARemoteThatMovedUnderTheRunIsRefused(t *testing.T) {
 				})
 			}},
 			{Named: "the run's commit was forced over the one somebody else landed", Break: func(l leased) leased {
-				l.after = l.submitted
+				l.after = l.forwarded
 				return l
 			}},
 			{Named: "the remote was rewound to where the run observed it", Break: func(l leased) leased {
