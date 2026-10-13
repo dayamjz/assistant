@@ -40,12 +40,12 @@ func (f *fixture) release(t *testing.T, task string) Outcome {
 	return Outcome{}
 }
 
-// The clear condition. A blocker at Ready holds its successor, and so does a
-// merge record on its run, because nothing in this build resolves Landed from
-// it; that is #107's tier, and this is the test that flips when it lands.
-// Failed and Reported clear, and a release is idempotent: a second call finds
-// nothing to do.
-func TestReleaseClearsOnFailedAndReportedAndNotOnReady(t *testing.T) {
+// The clear condition. A blocker at Ready holds its successor; a merge record
+// on its run, written through the store's one accessor for it, resolves the
+// blocker Landed and clears it, so the successor is released. Failed and
+// Reported clear, and a release is idempotent: a second call finds nothing to
+// do.
+func TestReleaseClearsOnFailedReportedAndLandedAndNotOnReady(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("ready holds", func(t *testing.T) {
@@ -60,10 +60,15 @@ func TestReleaseClearsOnFailedAndReportedAndNotOnReady(t *testing.T) {
 		}
 	})
 
-	t.Run("a merge record does not clear yet", func(t *testing.T) {
+	t.Run("a merge record clears", func(t *testing.T) {
 		f := newFixture(t)
 		blocker, successor := queuedPair(t, f)
 		f.runOn(t, "run-1", store.RunRunning)
+		// Control: before the record the blocker holds, so the release below
+		// is the record's doing and not a successor nothing held.
+		if got := f.release(t, successor); got.Result != Waiting {
+			t.Fatalf("a successor of a Validating blocker got %+v, want waiting", got)
+		}
 		if _, err := f.store.TransitionRunOnPullRequest(ctx, "run-1", []store.RunStatus{store.RunRunning}, store.RunPassed,
 			store.PullRequestRead{PullRequest: 7, Head: "aaaa", End: store.PullRequestMerged}, store.HoldClosure{}); err != nil {
 			t.Fatalf("recording the merge: %v", err)
@@ -71,14 +76,31 @@ func TestReleaseClearsOnFailedAndReportedAndNotOnReady(t *testing.T) {
 		if _, ended, err := f.store.MergeRecord(ctx, "run-1"); err != nil || !ended {
 			t.Fatalf("the merge record was not written: %v", err)
 		}
-		// The resolver has no Landed yet, so the blocker is Ready and holds.
-		// When #107 reads the record this becomes Landed and the successor
-		// is released; both halves of that are the change to make here.
-		if state := f.resolve(t, blocker).State; state != taskstate.Ready {
-			t.Fatalf("the blocker with a merge record resolves %s; if that is landed, Clears and this test both move", state)
+		if state := f.resolve(t, blocker); state.State != taskstate.Landed || state.Source != taskstate.SourceRecord {
+			t.Fatalf("the blocker with a merge record resolves %s from %s, want landed from the record", state.State, state.Source)
 		}
-		if got := f.release(t, successor); got.Result != Waiting {
-			t.Fatalf("a successor of a merged-but-not-yet-Landed blocker got %+v, want waiting", got)
+		got := f.release(t, successor)
+		if got.Result != Released || got.Blocker != blocker || got.BlockerState != taskstate.Landed {
+			t.Fatalf("a successor of a Landed blocker got %+v, want released", got)
+		}
+		if state := f.resolve(t, successor); state.State != taskstate.Dispatched {
+			t.Fatalf("the released successor resolves %s", state.State)
+		}
+	})
+
+	t.Run("a closed pull request fails the blocker and clears", func(t *testing.T) {
+		f := newFixture(t)
+		blocker, successor := queuedPair(t, f)
+		f.runOn(t, "run-1", store.RunRunning)
+		if _, err := f.store.TransitionRunOnPullRequest(ctx, "run-1", []store.RunStatus{store.RunRunning}, store.RunFailed,
+			store.PullRequestRead{PullRequest: 7, Head: "aaaa", End: store.PullRequestClosed}, store.HoldClosure{}); err != nil {
+			t.Fatalf("recording the close: %v", err)
+		}
+		if state := f.resolve(t, blocker); state.State != taskstate.Failed || state.Source != taskstate.SourceRun {
+			t.Fatalf("the blocker whose pull request closed resolves %s from %s, want failed from the run", state.State, state.Source)
+		}
+		if got := f.release(t, successor); got.Result != Released || got.BlockerState != taskstate.Failed {
+			t.Fatalf("a successor of a blocker whose pull request closed got %+v, want released", got)
 		}
 	})
 

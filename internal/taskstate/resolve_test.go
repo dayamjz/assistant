@@ -265,8 +265,11 @@ func TestTheStateSetIsClosed(t *testing.T) {
 			t.Errorf("%q is in States and not Recognized", s)
 		}
 	}
-	if State("landed").Recognized() || State("complete").Recognized() {
-		t.Fatal("a state this build cannot establish is declared")
+	if !Landed.Recognized() || !Complete.Recognized() {
+		t.Fatal("the two terminal states are not in the set")
+	}
+	if State("merged").Recognized() || State("cleaned").Recognized() {
+		t.Fatal("a word outside the set is recognized")
 	}
 	got := States()
 	got[0] = "tampered"

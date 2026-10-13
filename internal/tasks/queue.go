@@ -75,17 +75,17 @@ func New(d Deps) (*Queue, error) {
 }
 
 // Clears reports whether a blocker in this state no longer holds the tasks
-// queued behind it: PRD section 6's "blocker clears". It is true of Failed and
-// Reported and of nothing else this build resolves.
+// queued behind it: PRD section 6's "blocker clears". It is true of Failed,
+// Reported, Landed and Complete, and of nothing else.
 //
 // Ready never clears. A Ready task has a passed run and an open pull request,
 // so its branch is still live, and a successor dispatched onto it would share
-// that branch's runs with it. What moves a task past Ready is Landed, derived
-// from the merge record, and Complete, from the cleanup record; neither is a
-// state internal/taskstate resolves yet (#107), so a blocker that reaches
-// Ready holds its successors until that tier exists, and a merge record on
-// its run changes nothing here today. When #107 declares them they belong in
-// this set, and the test that seeds a merge record is the one that flips.
+// that branch's runs with it. What moves a task past Ready is Landed, which
+// internal/taskstate derives from the merge record of a run attributed to
+// the task, and Complete, from that and the cleanup record; both are
+// terminal for the task (PRD section 6), so a successor dispatched onto the
+// branch shares it with nothing live, and work that continues on it is a
+// new task by the PRD's own rule.
 //
 // Failed is not terminal in the lifecycle: a relaunch (#94) moves a Failed
 // task back to Dispatched. Clearing on it therefore lets a successor and a
@@ -94,7 +94,11 @@ func New(d Deps) (*Queue, error) {
 // the branch. Nothing here enforces that on the relaunch; it is #94's
 // contract.
 func Clears(s taskstate.State) bool {
-	return s == taskstate.Failed || s == taskstate.Reported
+	switch s {
+	case taskstate.Failed, taskstate.Reported, taskstate.Landed, taskstate.Complete:
+		return true
+	}
+	return false
 }
 
 // Live reports whether a task in this state holds its branch against a new

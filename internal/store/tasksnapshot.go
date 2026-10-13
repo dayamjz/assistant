@@ -41,12 +41,11 @@ type TaskSnapshot struct {
 	// the scanner Store.MergeRecord shares, because Store.MergeRecord reads
 	// outside any transaction and a record read there could belong to a run
 	// the snapshot did not see. They are carried for the resolver's terminal
-	// tier (#107), which derives Landed from one of them, and read by nothing
-	// in this build.
+	// tier, internal/taskstate, which derives Landed from one of them.
 	MergeRecords []MergeRecord
 	// Cleanup is the task's cleanup record, and unknown while none has been
-	// written. It is carried for the same tier and read by nothing in this
-	// build.
+	// written. It is carried for the same tier, which derives Complete from
+	// it.
 	Cleanup Optional[TaskCleanup]
 }
 

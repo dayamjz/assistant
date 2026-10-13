@@ -11,12 +11,16 @@ import (
 // a closed set: a word outside States is not a State this package produces.
 type State string
 
-// The states a resolution can name. Landed and Complete are in the lifecycle
-// and are deliberately absent: they are resolved from the merge record and
-// the cleanup record in the tier above the run tier, which this build does not
-// read (the package comment says what that waits on), so a state that could
-// not be established is not declared rather than declared and never produced.
-// Unknown is the resolver declining to say.
+// The states a resolution can name. Landed and Complete are the two PRD
+// section 6 resolves from the terminal records the program writes once each,
+// in the tier above the run tier: Landed from the merge record of a run
+// attributed to the task, Complete from the task's cleanup record on top of
+// that. The merge record has a producer in this build, internal/runs'
+// PassOnMerge; the cleanup record has none yet (#108), and the rule that
+// reads it is here so its writer inherits a consumer. Complete is resolved
+// for a delivery task only: for an investigation task it is not reachable in
+// this build, and the package comment says why. Unknown is the resolver
+// declining to say.
 const (
 	Queued     State = "queued"
 	Dispatched State = "dispatched"
@@ -25,13 +29,15 @@ const (
 	Paused     State = "paused"
 	Validating State = "validating"
 	Ready      State = "ready"
+	Landed     State = "landed"
 	Reported   State = "reported"
+	Complete   State = "complete"
 	Failed     State = "failed"
 	Unknown    State = "unknown"
 )
 
 var states = []State{
-	Queued, Dispatched, Running, Held, Paused, Validating, Ready, Reported, Failed, Unknown,
+	Queued, Dispatched, Running, Held, Paused, Validating, Ready, Landed, Reported, Complete, Failed, Unknown,
 }
 
 // States returns the closed set in the order above. The result is a copy.
@@ -46,6 +52,10 @@ type Source string
 
 // The sources. SourceNone accompanies Unknown when no tier had anything to say.
 const (
+	// SourceRecord is the terminal tier: a merge record of an attributed
+	// run, or that and the task's cleanup record. It outranks every run,
+	// because PRD section 6 makes a terminal record final for the task.
+	SourceRecord  Source = "record"
 	SourceRun     Source = "run"
 	SourceProcess Source = "process"
 	SourceEvent   Source = "event"
@@ -84,6 +94,13 @@ type Inputs struct {
 	// Events are the task's whole history, in any order; Resolve orders them
 	// by sequence itself.
 	Events []store.TaskEvent
+	// MergeRecords are the merge records of Runs, in any order. A record
+	// naming a run outside Runs is not the task's and is not read, so a
+	// caller that hands the resolver another task's record changes nothing.
+	MergeRecords []store.MergeRecord
+	// Cleanup is the task's cleanup record, and unknown while none has been
+	// written.
+	Cleanup store.Optional[store.TaskCleanup]
 	// Process is what the terminal looked like, as of when it was asked.
 	Process Liveness
 	// Advancing is whether the service is executing the newest of Runs now:
@@ -114,7 +131,8 @@ type Resolution struct {
 	// Running from SourceProcess with a Live terminal. Every other answer is
 	// no progress, including a run the service says it is advancing while
 	// the record says it has settled: the record decided the state, and a
-	// slot that disagrees with it is not evidence.
+	// slot that disagrees with it is not evidence. A terminal record is
+	// never progress: nothing is proceeding on a task that has landed.
 	Progress bool `json:"progress"`
 	// Superseded lists the events that claim something a higher source
 	// overrode: a decision still open in the log, and the newest event when it
@@ -145,6 +163,15 @@ type Basis struct {
 	RunID        string          `json:"run_id"`
 	RunStatus    store.RunStatus `json:"run_status"`
 	RunUpdatedAt time.Time       `json:"run_updated_at"`
+	// LandedRun names the attributed run whose merge record established
+	// Landed, the newest attributed run with a record reading merged, and
+	// is empty when no attributed run has one.
+	LandedRun string `json:"landed_run"`
+	// CleanupRecorded is whether the task has a cleanup record, and
+	// CleanupRemoved whether that record carries a removal. Both are false
+	// for a task cleanup has not reached.
+	CleanupRecorded bool `json:"cleanup_recorded"`
+	CleanupRemoved  bool `json:"cleanup_removed"`
 	// EventSequence is the highest event sequence read, zero for an empty log.
 	EventSequence int64 `json:"event_sequence"`
 	// Process is the liveness that was read.
