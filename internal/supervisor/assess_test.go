@@ -36,11 +36,11 @@ func TestAssessAllowsOnlyASupervisedFleetOrAnEmptyOne(t *testing.T) {
 		supervisor.InFlightUnknown: {"in flight unknown", supervisor.StopInFlightUnknown},
 		supervisor.InFlight(7):     {"in flight outside the set", supervisor.StopInFlightUnknown},
 	}
-	locks := map[supervisor.Lock]fault{
-		supervisor.LockHeld:    {"lock held", ""},
-		supervisor.LockFree:    {"lock free", supervisor.StopLockFree},
-		supervisor.LockUnknown: {"lock unknown", supervisor.StopLockUnknown},
-		supervisor.Lock(9):     {"lock outside the set", supervisor.StopLockUnknown},
+	locks := map[home.LockState]fault{
+		home.LockHeld:     {"lock held", ""},
+		home.LockFree:     {"lock free", supervisor.StopLockFree},
+		home.LockUnknown:  {"lock unknown", supervisor.StopLockUnknown},
+		home.LockState(9): {"lock outside the set", supervisor.StopLockUnknown},
 	}
 	instances := map[string]fault{
 		expect.Instance: {"instance matches", ""},
@@ -70,10 +70,10 @@ func TestAssessAllowsOnlyASupervisedFleetOrAnEmptyOne(t *testing.T) {
 						cells++
 						name := fmt.Sprintf("%s, %s, %s, %s, %s", f1.name, f2.name, f3.name, f4.name, f5.name)
 						beacon := supervisor.Beacon{Identity: supervisor.Identity{Instance: instance, Epoch: epoch}, WrittenAt: writtenAt}
-						got := supervisor.Assess(inFlight, beacon, lock, expect, fresh, now)
+						got := supervisor.Assess(inFlight, beacon, home.LockReading{State: lock}, expect, fresh, now)
 
 						// P10's sentence, as the oracle for Allowed.
-						supervised := lock == supervisor.LockHeld && !writtenAt.IsZero() &&
+						supervised := lock == home.LockHeld && !writtenAt.IsZero() &&
 							instance == expect.Instance && instance != "" && epoch == expect.Epoch &&
 							!writtenAt.After(now.Add(fresh.Ahead)) && now.Sub(writtenAt) < fresh.Window
 						want := inFlight == supervisor.InFlightNone || (inFlight == supervisor.InFlightSome && supervised)
@@ -121,39 +121,49 @@ func TestTheZeroValuesBlock(t *testing.T) {
 		t.Error("a zero verdict allows")
 	}
 	var inFlight supervisor.InFlight
-	var lock supervisor.Lock
-	if inFlight != supervisor.InFlightUnknown || lock != supervisor.LockUnknown {
-		t.Errorf("the zero readings are %s and %s, want unknown and unknown", inFlight, lock)
+	var lock home.LockReading
+	if inFlight != supervisor.InFlightUnknown || lock.State != home.LockUnknown {
+		t.Errorf("the zero readings are %s and %s, want unknown and unknown", inFlight, lock.State)
 	}
 	got := supervisor.Assess(inFlight, supervisor.Beacon{}, lock, supervisor.Identity{}, supervisor.Freshness{}, now)
 	if got.Allowed() {
 		t.Errorf("all zero inputs allowed: %+v", got)
 	}
+	live := supervisor.Beacon{Identity: expect, WrittenAt: now}
+	for _, state := range []home.LockState{home.LockUnknown, home.LockState(9)} {
+		got := supervisor.Assess(supervisor.InFlightSome, live, home.LockReading{State: state}, expect, fresh, now)
+		if got.Allowed() || got.Reason != supervisor.StopLockUnknown {
+			t.Errorf("lock state %d beside an otherwise live supervisor: %+v, want blocked as lock unknown", state, got)
+		}
+	}
 	empty := supervisor.Beacon{WrittenAt: now}
-	if got := supervisor.Assess(supervisor.InFlightSome, empty, supervisor.LockHeld, supervisor.Identity{}, fresh, now); got.Allowed() {
+	if got := supervisor.Assess(supervisor.InFlightSome, empty, home.LockReading{State: home.LockHeld}, supervisor.Identity{}, fresh, now); got.Allowed() {
 		t.Errorf("an empty instance matched an empty expectation: %+v", got)
 	}
 }
 
-// Lock restates internal/home's LockState because this package imports
-// nothing that does I/O, and the two must not drift: same values, same
-// order, same zero, same words.
-func TestTheLockVocabularyIsHomes(t *testing.T) {
+// The reason is the first failing check in Assess's stated order, so a cell
+// with two adjacent faults names the earlier one: lock before instance,
+// instance before epoch, epoch before the beacon's timestamp.
+func TestTheReasonIsTheFirstFailingCheckInOrder(t *testing.T) {
 	t.Parallel()
-	pairs := []struct {
-		theirs home.LockState
-		ours   supervisor.Lock
+	held := home.LockReading{State: home.LockHeld}
+	cases := []struct {
+		name   string
+		beacon supervisor.Beacon
+		lock   home.LockReading
+		want   supervisor.StopReason
 	}{
-		{home.LockUnknown, supervisor.LockUnknown},
-		{home.LockFree, supervisor.LockFree},
-		{home.LockHeld, supervisor.LockHeld},
+		{"lock free and instance mismatch", supervisor.Beacon{Identity: supervisor.Identity{Instance: "svc-2", Epoch: expect.Epoch}, WrittenAt: now},
+			home.LockReading{State: home.LockFree}, supervisor.StopLockFree},
+		{"instance mismatch and epoch mismatch", supervisor.Beacon{Identity: supervisor.Identity{Instance: "svc-2", Epoch: expect.Epoch + 1}, WrittenAt: now},
+			held, supervisor.StopInstanceMismatch},
+		{"epoch mismatch and beacon stale", supervisor.Beacon{Identity: supervisor.Identity{Instance: expect.Instance, Epoch: expect.Epoch + 1}, WrittenAt: now.Add(-time.Hour)},
+			held, supervisor.StopEpochMismatch},
 	}
-	for _, p := range pairs {
-		if int(p.theirs) != int(p.ours) || p.theirs.String() != p.ours.String() {
-			t.Errorf("home.%s (%d) and supervisor.%s (%d) disagree", p.theirs, p.theirs, p.ours, p.ours)
+	for _, c := range cases {
+		if got := supervisor.Assess(supervisor.InFlightSome, c.beacon, c.lock, expect, fresh, now); got.Reason != c.want {
+			t.Errorf("%s: reason %s, want %s", c.name, got.Reason, c.want)
 		}
-	}
-	if home.LockState(len(pairs)).String() != "unknown" || supervisor.Lock(len(pairs)).String() != "unknown" {
-		t.Errorf("one side has a fourth value this test does not pair")
 	}
 }

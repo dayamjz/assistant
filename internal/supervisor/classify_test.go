@@ -3,6 +3,7 @@ package supervisor_test
 import (
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -243,14 +244,15 @@ func TestAbsenceOfEvidenceSurfacesWhereverEvidenceCouldAbsorb(t *testing.T) {
 	}
 }
 
-// A classifier that absorbs on elapsed time alone fails the matrix: here
-// one that absorbs every evidence-gated kind while its window is open,
-// which is a timer standing in for proof. And one that honours the surfaced
-// flag for a terminal gone fails it too, because that would silence a dead
-// worker after its first surface. Both are the real classifier with one
-// rule relaxed, so what the matrix catches is the relaxation and not an
-// unrelated shape.
-func TestTheMatrixRejectsATimerAndASilencedDeadTerminal(t *testing.T) {
+// Three classifiers, each the real one with one rule relaxed, fail the
+// matrix at the cell the relaxation breaks, so what the matrix catches is
+// named and not merely counted. A timer absorbs every evidence-gated kind
+// while its window is open, which is time standing in for proof. A silencer
+// honours the surfaced flag for a terminal gone, which would leave a dead
+// worker quiet after its first surface. And a non-escalator never surfaces
+// an unchanged terminal with evidence once the escalation window has
+// elapsed, which is the loop that never escalates in the issue's B1.
+func TestTheMatrixRejectsATimerASilencedDeadTerminalAndANonEscalator(t *testing.T) {
 	t.Parallel()
 	timer := func(w supervisor.Wake, e supervisor.Evidence, win supervisor.WindowState, s bool, st supervisor.Stall) supervisor.Verdict {
 		if row, ok := supervisor.Lookup(w.Kind()); ok && row.Class == supervisor.ClassEvidence && win == open {
@@ -264,9 +266,29 @@ func TestTheMatrixRejectsATimerAndASilencedDeadTerminal(t *testing.T) {
 		}
 		return supervisor.Classify(w, e, win, s, st)
 	}
-	for name, c := range map[string]classifier{"absorbs on an open window alone": timer, "silences a surfaced terminal gone": silenced} {
-		if wrong := runMatrix(t, c); len(wrong) == 0 {
-			t.Errorf("a classifier that %s passed the matrix, so the matrix cannot fail on it", name)
+	nonEscalator := func(w supervisor.Wake, e supervisor.Evidence, win supervisor.WindowState, s bool, st supervisor.Stall) supervisor.Verdict {
+		if w.Kind() == supervisor.KindTerminalUnchanged && e == proof {
+			return supervisor.Verdict{Level: supervisor.Absorb, Reason: supervisor.ReasonProgress}
+		}
+		return supervisor.Classify(w, e, win, s, st)
+	}
+	cases := []struct {
+		name   string
+		c      classifier
+		broken cell
+	}{
+		{"absorbs on an open window alone", timer, cell{supervisor.KindPlainEvent, absent, open, false}},
+		{"silences a surfaced terminal gone", silenced, cell{supervisor.KindTerminalGone, absent, open, true}},
+		{"never escalates on an elapsed window with evidence", nonEscalator, cell{supervisor.KindTerminalUnchanged, proof, elapsed, false}},
+	}
+	for _, c := range cases {
+		wrong := runMatrix(t, c.c)
+		if len(wrong) == 0 {
+			t.Errorf("a classifier that %s passed the matrix, so the matrix cannot fail on it", c.name)
+			continue
+		}
+		if !slices.ContainsFunc(wrong, func(line string) bool { return strings.HasPrefix(line, c.broken.String()+":") }) {
+			t.Errorf("a classifier that %s failed the matrix, but not at %s:\n%s", c.name, c.broken, strings.Join(wrong, "\n"))
 		}
 	}
 }

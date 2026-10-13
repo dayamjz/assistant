@@ -11,8 +11,11 @@
 // Assess takes now injected, because freshness is a wall-clock comparison
 // across processes and the clock has to come from the caller.
 //
-// The package imports internal/taskstate and the standard library and
-// nothing else. The loop that computes the inputs, writes the queue and the
+// Classify and Assess perform no I/O. The package's direct imports are
+// internal/taskstate, internal/home for its lock vocabulary, and the
+// standard library; importing a type is not performing I/O, and home's
+// LockReading is taken as an input so that vocabulary has one owner. The
+// loop that computes the inputs, writes the queue and the
 // markers and the beacon is #100's and lives in internal/service; the
 // durable tables are #99's in internal/store; the beacon's shape, its reader
 // and the in-flight table are #105's; the hook that runs Assess at turn end
@@ -68,9 +71,6 @@
 //
 //   - KindCheckResult has no producer in this build. Its row says so, and
 //     the matrix rows over it test a path nothing walks.
-//   - Lock restates internal/home's LockState because this package imports
-//     nothing that does I/O. A test pins the two vocabularies to each
-//     other; the translation between them is the hook's and is not here.
 //   - A kind that closes a decision is read as an event with no decision
 //     verb, on taskstate's terms that a close claims no state. Whether a
 //     close should surface on its own is not decided here.

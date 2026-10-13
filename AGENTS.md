@@ -325,8 +325,9 @@ Each has cost this repository more than one round of review.
 - `internal/supervisor` is the pure core of PRD section 5's supervision:
   `Classify` is the wake flowchart as a function and `Assess` is the stop
   guard's predicate, both over typed inputs the caller computed, with no
-  clock, key, file or record read here; it imports `internal/taskstate` and
-  the standard library only. The loop, the queue, the beacon and the hook are
+  clock, key, file or record read here; its direct imports are
+  `internal/taskstate`, `internal/home` for its lock vocabulary, and the
+  standard library, and neither function performs I/O. The loop, the queue, the beacon and the hook are
   elsewhere. Three things there are mechanism rather than rule. Evidence is
   `taskstate.Resolution.Progress` and `EvidenceOf` reads that field alone,
   so nothing here re-derives from `Basis`. An event wake exists only through
@@ -340,9 +341,8 @@ Each has cost this repository more than one round of review.
   runs two counterfeit classifiers to show it can fail. It cites P9 for the
   table only and never P10: `Assess`'s inputs are stated there, not produced
   by the real lock and files. Read its `doc.go` for the residual gaps: the
-  check-result kind has no producer, `Lock` restates `home.LockState` with a
-  test pinning the two, the repetition count is read for the unchanged
-  terminal alone, and freshness blocks falsely across a suspend or a clock
+  check-result kind has no producer, the repetition count is read for the
+  unchanged terminal alone, and freshness blocks falsely across a suspend or a clock
   jump by design.
 - `internal/checkpoints` is the durable `graph.CheckpointStore`, and the only
   place outside `internal/graph` that serializes a `graph.Checkpoint`. It

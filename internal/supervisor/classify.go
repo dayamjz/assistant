@@ -155,9 +155,12 @@ func (v Verdict) Surfaces() bool { return v.Level != Absorb }
 // surfaced=true decides exactly as with it false, which is what keeps a
 // caller passing the flag for a dead terminal from silencing it after its
 // first surface. Never absorbing on elapsed time alone is the shape of the
-// table rather than a check: no rule here absorbs on a window, and the one
-// rule that reads a window to absorb, the declared wait, rests on the
-// worker's own declaration and not on time passing.
+// table rather than a check: no rule here absorbs because time has passed.
+// Two rules read an open window to absorb, and neither rests on the window
+// alone. The declared wait rests on the worker's own declaration. The
+// surfaced-once case absorbs with no evidence, and it rests on the surface
+// already made plus the window still being open: a deliberate, bounded
+// exception, and the escalation window is what ends it.
 func Classify(wake Wake, evidence Evidence, window WindowState, surfaced bool, stall Stall) Verdict {
 	row, ok := Lookup(wake.kind)
 	if !ok || wake.unrecognized {

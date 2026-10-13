@@ -216,8 +216,8 @@ func Coverage() []Established {
 				"protocol over the test is skipped rather than passing and nothing about P8 is " +
 				"established there."},
 		{principles.P9, ReachNone,
-			"Not driven here. internal/supervisor's matrix cites P9 at package reach for the " +
-				"table only: every wake kind crossed with evidence present and absent is held to an " +
+			"Not driven here: P9 is cited by internal/supervisor's own matrix test, not by this " +
+				"harness, and for the table only. Every wake kind crossed with evidence present and absent is held to an " +
 				"oracle written from the PRD's flowchart. Evidence derivation is internal/taskstate's, " +
 				"and the window and surfaced computation is the loop's, which does not exist yet; " +
 				"whether a stalled run record or a timer ever reaches the classifier as evidence is " +

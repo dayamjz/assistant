@@ -1,6 +1,10 @@
 package supervisor
 
-import "time"
+import (
+	"time"
+
+	"github.com/dayamjz/assistant/internal/home"
+)
 
 // InFlight is whether any task is in flight, as the hook or the guard read
 // it. The set is closed, and the zero value is InFlightUnknown so that a
@@ -27,40 +31,6 @@ func (f InFlight) String() string {
 		return "none"
 	case InFlightSome:
 		return "some"
-	default:
-		return "unknown"
-	}
-}
-
-// Lock is what a probe of the home's lock said. It is internal/home's
-// LockState vocabulary restated here, with the same three values in the same
-// order and the same zero, because this package imports nothing that does
-// I/O and that type lives beside the probe; the hook translates one to the
-// other, and a test pins the two vocabularies to each other so they cannot
-// drift. The zero value is LockUnknown so that a reading nobody filled in is
-// not read as held.
-type Lock int
-
-// The three lock readings.
-const (
-	// LockUnknown is a probe that could not establish anything. Assess
-	// blocks on it.
-	LockUnknown Lock = iota
-	// LockFree is a lock no process held at the instant of the probe.
-	LockFree
-	// LockHeld is a lock some open handle held at that instant. On its own
-	// it is not evidence of a live supervisor, which is why Assess reads it
-	// only beside a beacon whose identity matches.
-	LockHeld
-)
-
-// String names the reading for a report, in the words internal/home uses.
-func (l Lock) String() string {
-	switch l {
-	case LockFree:
-		return "free"
-	case LockHeld:
-		return "held"
 	default:
 		return "unknown"
 	}
@@ -112,7 +82,7 @@ const (
 	// be taken.
 	StopInFlightUnknown StopReason = "in-flight-unknown"
 	// StopLockUnknown is a probe of the lock that could not establish
-	// anything.
+	// anything, or a reading outside internal/home's set.
 	StopLockUnknown StopReason = "lock-unknown"
 	// StopLockFree is a lock no process holds: the service that wrote the
 	// beacon is gone, however fresh the beacon.
@@ -148,7 +118,9 @@ func (v StopVerdict) Allowed() bool {
 // Assess decides whether a coordinator may end a turn, P10's stop guard as
 // a function over what the hook read. It is pure except that now is
 // injected: freshness is a wall-clock comparison across processes, so the
-// clock has to come from the caller.
+// clock has to come from the caller. lock is internal/home's own reading,
+// taken by the caller's probe; this function performs no probe and reads
+// only its State, which keeps one owner for that vocabulary.
 //
 // The answer is allowed in exactly two cases: nothing is in flight, or work
 // is in flight and a live supervisor holds this home, which means every one
@@ -167,7 +139,7 @@ func (v StopVerdict) Allowed() bool {
 // 5 says live means, while a lone held lock may be another probe's instant;
 // internal/home's LockState states that gap and the consumer rule, and this
 // function applies the rule rather than closing the gap.
-func Assess(inFlight InFlight, beacon Beacon, lock Lock, expect Identity, fresh Freshness, now time.Time) StopVerdict {
+func Assess(inFlight InFlight, beacon Beacon, lock home.LockReading, expect Identity, fresh Freshness, now time.Time) StopVerdict {
 	switch inFlight {
 	case InFlightNone:
 		return StopVerdict{Reason: StopNothingInFlight}
@@ -175,9 +147,9 @@ func Assess(inFlight InFlight, beacon Beacon, lock Lock, expect Identity, fresh 
 	default:
 		return StopVerdict{Reason: StopInFlightUnknown}
 	}
-	switch lock {
-	case LockHeld:
-	case LockFree:
+	switch lock.State {
+	case home.LockHeld:
+	case home.LockFree:
 		return StopVerdict{Reason: StopLockFree}
 	default:
 		return StopVerdict{Reason: StopLockUnknown}
