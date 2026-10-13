@@ -325,8 +325,14 @@ Each has cost this repository more than one round of review.
   a caller writes for itself. A third follows from the second: no frame here has
   a field for who resolved a hold, and `Request.HoldResolver` derives the answer
   from the surface rather than reading it, so a caller cannot claim a person
-  decided. Read its `doc.go` for where state may still be collapsed into a gap
-  marker and why that is not the strict rule relaxed.
+  decided; `Request.WakeAcknowledger` is the same rule for the wake queue.
+  Whether a peer is a task's worker is a second relation over the same
+  `Credentials`, decided by the handler from `internal/session`'s worker group
+  set and never a third access class: the rows whose answer turns on it
+  (`task.event`, `wakes.*`, `supervision.assert`, `gate.admit`) say so, and
+  `ErrWorker` and `ErrNotWorker` are its two refusals. Read its `doc.go` for
+  where state may still be collapsed into a gap marker and why that is not the
+  strict rule relaxed.
 - `internal/pipeline` is the nine stages as a graph definition, not a second
   executor: `internal/graph` owns execution, halting, and all three bounds. P2
   is structural there rather than checked. A `Stages` is nine named fields, so
@@ -490,7 +496,15 @@ Each has cost this repository more than one round of review.
   `Capture` is the worker's bounded tail plus `Digest` over `Normalize`, an
   output stream and not a screen, with the rules derived from what the
   stand-in emits and the real adapter's format stated unknown; the
-  comparison is the supervisor's. Read its `doc.go` for the restart answer
+  comparison is the supervisor's. `Workers` is the set of live worker groups,
+  keyed by the process group a worker leads and naming its task, and `Pipe`
+  is its one producer: `Create` joins the group and the membership ends with
+  the process or with `Close`, the join is unexported, and `Member` reads the
+  worker's done signal, so nothing a caller states is a membership. It is
+  the authority input every worker-to-program path derives a task from and it
+  is not `internal/service`'s containment registry, which answers a different
+  question; its doc says why one map may not answer both. Read its `doc.go`
+  for the restart answer
   and the residual gaps: nothing ends an orphan, the record-first window
   leaves a process no record names until #112's sweep, the route walk does
   not see behind an interface-typed field, and on a platform without a
@@ -638,7 +652,17 @@ Each has cost this repository more than one round of review.
   itself, and it has a producer now: `containRunner` wraps the resolved agent
   so every invocation and fix round registers its group for exactly the
   process's lifetime, while the configured commands and the provider command
-  still register nothing, which `doc.go` states rather than implies. A push is the one
+  still register nothing, which `doc.go` states rather than implies. A task's
+  worker is placed by the other relation over the same credentials, the
+  worker group set `internal/session` holds, and `workers.go` owns that
+  derivation (credentials, then the peer's process group read as containment
+  reads it, then the set) and the four methods that turn on it: `task.event`
+  admits only a worker and holds the kind to `taskstate`'s writer column,
+  `wakes.list`, `wakes.acknowledge` and `supervision.assert` refuse one.
+  `admit_workers.go` owns the rule a worker's push is held to - only its
+  task's branch, forward, never a deletion - and why that is admission's
+  decision and not `internal/safety`'s; a person's push meets it nowhere, and
+  on Windows no peer is placed at all, which both files state as a limit. A push is the one
   caller that does not wait: `gate.notify` records the runs and walks each on a
   goroutine of the service's, and a new push supersedes the branch's run in the
   record, which is the whole of what that word buys: `doc.go` says nothing

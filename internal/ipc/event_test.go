@@ -20,6 +20,7 @@ func TestClassifyIsWrittenDownHere(t *testing.T) {
 		"run.findings":     ipc.ClassState,
 		"hold.state":       ipc.ClassState,
 		"task.state":       ipc.ClassState,
+		"task.event":       ipc.ClassState,
 		"stream.gap":       ipc.ClassControl,
 		"service.stopping": ipc.ClassControl,
 	}

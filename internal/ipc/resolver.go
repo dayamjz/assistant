@@ -33,3 +33,25 @@ import "github.com/dayamjz/assistant/internal/store"
 func (Request) HoldResolver() store.Resolver {
 	return store.ResolvedByMachineInterface()
 }
+
+// WakeAcknowledger returns who an acknowledgement carried by a request on
+// this protocol is recorded as having come from, which is always
+// [store.AcknowledgedByCoordinator].
+//
+// It is HoldResolver's rule applied to the queue. MethodWakesAcknowledge is
+// the coordinator's: the handler refuses a task's worker from the caller's
+// credentials, and a coordinator acting under PRD section 9's authority is
+// the one caller left. So, as with a hold, what has to hold is what a call
+// may say about itself, and the two mechanisms are the same: no frame this
+// package defines carries an acknowledger, so there is no field to write one
+// into, and the receiver is unnamed because nothing in the request reaches
+// the answer. A body that carried an acknowledger field would be decoded by
+// the handler into a shape that has none and ignored.
+//
+// The vocabulary is internal/store's, per P14, and that package says why the
+// set has no member meaning a person: no surface here witnesses one, and the
+// queue is the coordinator's. This package chooses which member the protocol
+// may produce and owns no part of what the members mean.
+func (Request) WakeAcknowledger() store.Acknowledger {
+	return store.AcknowledgedByCoordinator()
+}

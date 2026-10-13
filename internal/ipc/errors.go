@@ -35,6 +35,17 @@ var (
 	// inside an active validation stage. A validating agent may inspect, fix,
 	// and return its own stage, and nothing else.
 	ErrContained = sentinelFor(CodeContained)
+	// ErrWorker reports a request refused because its peer is a task's
+	// worker, placed there by the kernel's credentials through the worker
+	// group set the service holds, and the request is one a worker may not
+	// make: the coordinator's queue, arm verification, a push outside the
+	// rule a worker's push is held to, or a history entry only the program
+	// appends. The message says which.
+	ErrWorker = sentinelFor(CodeWorker)
+	// ErrNotWorker reports a request refused because it is one only a task's
+	// worker may make and the peer is inside no worker group, so there is no
+	// task to attribute it to.
+	ErrNotWorker = sentinelFor(CodeNotWorker)
 	// ErrUnavailable reports that a fact the service needed to decide the
 	// request could not be established. It fails closed, so this is a refusal
 	// rather than a request served on an assumption.
@@ -85,6 +96,10 @@ const (
 	CodeUnidentifiedPeer Code = "unidentified-peer"
 	// CodeContained maps to ErrContained.
 	CodeContained Code = "contained"
+	// CodeWorker maps to ErrWorker.
+	CodeWorker Code = "worker"
+	// CodeNotWorker maps to ErrNotWorker.
+	CodeNotWorker Code = "not-worker"
 	// CodeUnavailable maps to ErrUnavailable.
 	CodeUnavailable Code = "unavailable"
 	// CodeSubscriberStalled maps to ErrSubscriberStalled. The service reports
@@ -139,6 +154,8 @@ var codeRows = []struct {
 	{CodeInvalidRequest, "ipc: invalid request"},
 	{CodeUnidentifiedPeer, "ipc: peer could not be identified"},
 	{CodeContained, "ipc: refused, caller is contained by an active validation stage"},
+	{CodeWorker, "ipc: refused, caller is a task's worker"},
+	{CodeNotWorker, "ipc: refused, caller is not a task's worker"},
 	{CodeUnavailable, "ipc: a fact this request depends on could not be established"},
 	{CodeSubscriberStalled, "ipc: subscriber stalled"},
 	{CodeEventUndeliverable, "ipc: event cannot be delivered on this connection"},

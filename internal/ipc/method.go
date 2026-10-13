@@ -47,6 +47,32 @@ const (
 	// MethodTaskGet reports one task with its resolved current state and the
 	// revision that state is current as of.
 	MethodTaskGet Method = "task.get"
+	// MethodTaskEvent appends an event to the history of the task the caller
+	// is the worker of. The task is never named in the request: it is the
+	// one whose worker group the caller's credentials place it in, so a
+	// caller outside every worker group is refused and no caller can write
+	// to another task's history. It is restricted on the same terms as every
+	// method that moves a record, and the kinds it accepts are the ones
+	// internal/taskstate's table gives a worker as their writer.
+	MethodTaskEvent Method = "task.event"
+	// MethodWakesList drains the durable wake queue for the coordinator: it
+	// returns the queued wakes, oldest first, and acknowledges none, so a
+	// row stays actionable until MethodWakesAcknowledge names it. It is the
+	// coordinator's and refused for a task's worker, which the handler
+	// decides from the caller's credentials against the worker group set.
+	MethodWakesList Method = "wakes.list"
+	// MethodWakesAcknowledge records that the coordinator handled the named
+	// wakes. Who acknowledged is never in the request: it is derived from
+	// this surface by Request.WakeAcknowledger, the way Request.HoldResolver
+	// derives who resolved a hold. Refused for a task's worker on
+	// MethodWakesList's terms.
+	MethodWakesAcknowledge Method = "wakes.acknowledge"
+	// MethodSupervisionAssert is PRD section 5's arm verification over the
+	// socket: it answers whether the supervisor loop of the service that
+	// holds this home is live, as the closed set internal/supervisor's Arm
+	// carries. It is the coordinator's session start's and refused for a
+	// task's worker on MethodWakesList's terms.
+	MethodSupervisionAssert Method = "supervision.assert"
 	// MethodServiceStop stops the service.
 	MethodServiceStop Method = "service.stop"
 	// MethodServiceRestart restarts the service.
@@ -69,6 +95,15 @@ const (
 
 // Access says whether a method is available to a caller that is running inside
 // an active validation stage.
+//
+// It is the whole of what the server decides about a caller. A second
+// relation, whether the caller is a task's worker, is decided by the handler
+// from the same Credentials and is not a third class here: the methods that
+// refuse a worker, and the one that admits only a worker, each say so in
+// their own doc, and internal/service's worker group set is the input. The
+// table stays about containment because a class that meant "coordinator
+// only" would need that set as an input of this package, which owns no
+// process this service started.
 type Access uint8
 
 const (
@@ -116,6 +151,10 @@ var specs = []Spec{
 	{MethodStageReport, KindRequest, AccessOpen, "Return a stage result from the agent running it."},
 	{MethodTasksList, KindRequest, AccessOpen, "List fleet work with its resolved current state."},
 	{MethodTaskGet, KindRequest, AccessOpen, "Read one task and the revision it is current as of."},
+	{MethodTaskEvent, KindRequest, AccessRestricted, "Append an event to the history of the task the caller is the worker of."},
+	{MethodWakesList, KindRequest, AccessRestricted, "Drain the wake queue: list the queued wakes, acknowledging none."},
+	{MethodWakesAcknowledge, KindRequest, AccessRestricted, "Record that the coordinator handled the named wakes."},
+	{MethodSupervisionAssert, KindRequest, AccessRestricted, "Verify that the supervisor loop of this home's service is live."},
 	{MethodServiceStop, KindRequest, AccessRestricted, "Stop the service."},
 	{MethodServiceRestart, KindRequest, AccessRestricted, "Restart the service."},
 	{MethodEventsSubscribe, KindStream, AccessOpen, "Open the event stream."},
