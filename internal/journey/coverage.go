@@ -229,10 +229,13 @@ func Coverage() []Established {
 			"There is no coordinator and no watcher here, so no turn ends. internal/principles declares " +
 				"this gap."},
 		{principles.P11, ReachNone,
-			"internal/agents starts a worker where it is told and strips the redirecting git variables " +
-				"from its environment, which is the 'pointed at its own repository' half; nothing refuses " +
-				"a launch whose directory is not an isolated copy, and no walk here starts a worker. " +
-				"internal/principles declares this gap."},
+			"No walk here starts a worker, so nothing here reaches it. internal/tasks' own tests " +
+				"establish it at package reach and only the assertion half: AssertIsolated refuses a " +
+				"real observation of every shape the principle names and passes a proper clone of " +
+				"either task shape, and internal/agents strips the redirecting git variables from a " +
+				"worker's environment. The launch edge is #91's seam, which will take the Isolation the " +
+				"assertion returns; until it lands a worker started through internal/agents is started " +
+				"where it is told, so a green P11 does not read as no worker launches unproven."},
 		{principles.P12, ReachNone,
 			"Nothing here removes an isolated copy. The binary's eject removes a gate, which is a " +
 				"different question. internal/principles declares this gap."},

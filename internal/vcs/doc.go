@@ -150,6 +150,15 @@
 // working copy. Whether any of it may proceed is the safety module's question,
 // not this one's.
 //
+// Clone creates a repository, as InitBare does, and refuses a destination
+// that already exists; what it promises is the remote set the caller named
+// and nothing about the copy's remote-tracking references or branch
+// configuration. Observe reads what a directory is as a repository, under
+// this package's own environment, and so answers what the copy on disk is
+// and never what a process started with some other environment would see
+// there; StripRedirecting is the operation on that environment, and
+// internal/tasks composes the two into its isolation assertion.
+//
 // # Errors
 //
 // A failed invocation returns a *CommandError naming the operation, the
