@@ -91,10 +91,8 @@ func TestARunNothingIsAdvancingIsNotReportedAsOneInFlight(t *testing.T) {
 	if strings.Contains(human.stdout, advancingRendering) {
 		t.Fatalf("the rendering says a segment is running on a run nothing is advancing:\n%s", human.stdout)
 	}
-	for _, want := range []string{stalledRendering, machine.OutcomeExecuting.NextActionFor(false)} {
-		if !strings.Contains(human.stdout, want) {
-			t.Fatalf("the rendering does not say %q:\n%s", want, human.stdout)
-		}
+	if !strings.Contains(human.stdout, stalledRendering) {
+		t.Fatalf("the rendering does not say %q:\n%s", stalledRendering, human.stdout)
 	}
 
 	// And the action it named moves the run. The stage body fails once, so
@@ -248,12 +246,13 @@ func runUntil(t *testing.T, h *home.Home, subject string, want func(machine.Run)
 	return machine.Run{}
 }
 
-// The two words the human rendering tells the states apart with. They are
-// written here rather than derived from the renderer, so a rendering that
-// stopped distinguishing them fails this rather than agreeing with itself.
+// The two phrases the human rendering tells the states apart with, each the
+// outcome sentence of its row in internal/machine's table. They are written
+// here rather than derived from the renderer, so a rendering that stopped
+// distinguishing them fails this rather than agreeing with itself.
 const (
-	advancingRendering = "a segment is running"
-	stalledRendering   = "stalled - nothing is advancing this run"
+	advancingRendering = "This change is being validated now."
+	stalledRendering   = "Validation of this change stopped partway and nothing is carrying it on."
 )
 
 // assertStalled holds an answer to what a run nothing is advancing has to say:

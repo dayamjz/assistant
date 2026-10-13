@@ -96,6 +96,13 @@ func (s *Service) storeTaskReport(ctx context.Context, taskID, raw string) (task
 	if err != nil {
 		return tasks.StoredReport{}, err
 	}
+	// The report's holds are registered in the store's transaction, and
+	// each is published as it was returned: a hold already registered under
+	// its key comes back as it stands, resolved or not, and that is what
+	// travels.
+	for _, h := range stored.Holds {
+		s.publishHoldState(h)
+	}
 	s.logCleanup(s.cleaner.CleanUp(ctx, tasks.TaskCopy{Task: taskID, Terminal: taskstate.Unobserved}))
 	return stored, nil
 }

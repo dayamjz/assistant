@@ -2,12 +2,13 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
-	"fmt"
 
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
+	"github.com/dayamjz/assistant/internal/store"
 )
 
 // watch is the fleet view: everything in flight, everything waiting on you.
@@ -69,19 +70,50 @@ func (in *invocation) report(v any) {
 	readOut(in.env.Stdout, v)
 }
 
-// eventLine renders one event for a person. The payload is another package's
-// record travelling as written, so what is printed is its type, its revision,
-// and the payload rather than this package's account of it.
+// eventLine renders one event for a person, through internal/machine's
+// phrase table: the fleet view speaks the same vocabulary the fleet listing
+// does, because a stream is a sequence of the states that listing shows and a
+// second vocabulary for it would be a second owner of the same phrases. The
+// type and the revision are mechanics and are the structured rendering's.
 //
-// It goes through the same escaping every other line a person reads does. The
-// payload is a record encoded by encoding/json, which carries a run's intent -
-// text a person or a driving agent supplied - and which escapes U+0000 through
-// U+001F and leaves U+007F and the C1 range as they stand, so this is the pass
-// that keeps the last of them off a terminal that would act on them.
+// Each payload is the record its owner published - a store.Run for a run, a
+// machine.Task for a task, a store.Hold for a hold - and is read as that
+// type. A payload that does not read as its type, an event of a type this
+// build names but nothing produces, and a type this build does not know all
+// read as the one row for an update the view cannot describe; the stream's
+// own two control events have rows of their own; and output arriving as
+// activity is said to have arrived and is not relayed.
+//
+// The words that are not the table's go through the same escaping every
+// other line a person reads does: a branch, a project, a hold's subject and
+// what a worker said it is waiting on are text a person or an agent wrote.
 func eventLine(event ipc.Event) string {
-	if len(event.Payload) == 0 {
-		return fmt.Sprintf("%s (revision %d)", printable(string(event.Type)), event.Revision)
+	switch event.Type {
+	case ipc.TypeRunState:
+		var run store.Run
+		if err := json.Unmarshal(event.Payload, &run); err != nil {
+			return machine.PhraseUnfamiliarUpdate.String()
+		}
+		return printable(run.Branch) + ": " + printable(machine.RecordPhrase(run).String())
+	case ipc.TypeTaskState:
+		var task machine.Task
+		if err := json.Unmarshal(event.Payload, &task); err != nil {
+			return machine.PhraseUnfamiliarUpdate.String()
+		}
+		return printable(task.Record.Project) + ": " + printable(machine.TaskPhrase(task).String())
+	case ipc.TypeHoldState:
+		var hold store.Hold
+		if err := json.Unmarshal(event.Payload, &hold); err != nil {
+			return machine.PhraseUnfamiliarUpdate.String()
+		}
+		return printable(machine.HoldPhrase(hold).String())
+	case ipc.TypeGap:
+		return machine.PhraseUpdatesMissed.String()
+	case ipc.TypeServiceStopping:
+		return machine.PhraseServiceStopping.String()
 	}
-	return fmt.Sprintf("%s (revision %d) %s",
-		printable(string(event.Type)), event.Revision, printable(string(event.Payload)))
+	if ipc.Classify(event.Type) == ipc.ClassActivity {
+		return machine.PhraseActivity.String()
+	}
+	return machine.PhraseUnfamiliarUpdate.String()
 }

@@ -368,6 +368,14 @@ type Task struct {
 	Record store.Task `json:"record"`
 	// State is the resolved current state, with its source.
 	State taskstate.Resolution `json:"state"`
+	// Waiting is what the worker said it is waiting on, and is empty unless
+	// State is Paused. PRD section 6 never shows that state as a word: it is
+	// translated to the worker's own declared wait, which is the detail of
+	// the history entry the resolution's basis names, so this is the one
+	// worker's text an answer about a task carries. The resolution itself
+	// carries no event text, on its own terms, and the service that answers
+	// fills this from the same read the state was resolved from.
+	Waiting string `json:"waiting,omitempty"`
 }
 
 // Tasks is the answer to a request for fleet work.

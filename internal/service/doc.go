@@ -400,6 +400,28 @@
 // Options.Terminals is the seam the terminal reading arrives through, nil
 // in this build, which runs the loop degraded to surface everything.
 //
+// # Three state events have a producer here, and publish.go owns two
+//
+// Subscribers learn that a run moved from runs.go's publishRunState, that a
+// task's resolved state moved from the supervisor loop's pass, and that a
+// hold opened or closed from the two sites that write one, and all three
+// draw their revision from the one counter on this service, so a consumer
+// orders them against each other. publish.go owns the second and third and
+// says why the pass is the one reader that publishes a task: a task's state
+// is resolved and never stored, so a change is a comparison between two
+// resolutions, and the pass resolves every task anyway. The comparison is
+// taskstate.Basis equality, kept per task in this service's memory, so a
+// change is published once and not on every pass, within one beacon interval
+// of being made, and a restart publishes every task again to subscribers who
+// all attached fresh. A hold is published as the store returned it, at
+// storeTaskReport for the holds a report registers and after the checks-hold
+// closure for the one the program resolves. What travels is the record, a
+// store.Hold, which store.Resolver's design keeps from carrying who resolved
+// it: the wire understates the resolver, as that package says the record
+// itself does. The task payload is machine.Task, composed through taskView
+// for the publisher and for the task surface alike, so a paused worker's
+// declared wait reaches both the same way.
+//
 // # What this package does not do
 //
 // It does not implement a stage. The nine bodies are internal/stages', and

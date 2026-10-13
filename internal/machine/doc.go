@@ -42,16 +42,31 @@
 //
 // P13 makes what a person reads name the outcome, the consequence and the
 // next decision, with no task identifier, path, stage name, state label or
-// watcher's word in it. The phrases that do that are the constants in
-// vocabulary.go, and Phrases lists them so a test can hold every one to the
-// rule, with the forbidden words derived from the packages that own them
-// rather than kept in a list beside the phrases. Supervision is the one
-// answer built from that table today, through SupervisionOf, which is the
-// only translation from internal/supervisor's verdict to a phrase. The
-// table covers the pull guard's text and no other renderer's: the human
-// rendering in internal/cli still prints run identifiers, stage names and
-// home paths, which is #110's, and the vocabulary test claims P13 for the
-// phrases here alone.
+// watcher's word in it. The rows that do that are the Phrase values in
+// phrases.go, each three sentences in three fields so the required wording
+// is structural, and TablePhrases lists every one so a test can hold it to
+// the rule, with the forbidden words derived from the packages that own them
+// rather than kept in a list beside the phrases. One table holds every row:
+// the pull guard's three, exported as strings in vocabulary.go and reached
+// through SupervisionOf; a row per taskstate.State, with the domain derived
+// from that package so a state added there fails until it is phrased, and
+// two translations TaskPhrase makes - Paused is never the word but what the
+// worker said it is waiting on, carried on Task.Waiting, and Unknown after a
+// note the program appended is NoWordYet rather than a failure; a row per
+// Outcome, with OutcomeExecuting split three ways on the facts NextActionOf
+// reads, through RunPhrase and Run.Phrase; the two hold rows; the kept and
+// removed rows for a run's cleanup record; the stream's own rows; and the
+// status rows. No task row carries an outcome word, because PRD section 6
+// makes a task's state its own vocabulary and a task with no run has no
+// outcome. The vocabulary test cites P13 for the rows here, and which of
+// internal/cli's renderers speak through them is that package's enumeration.
+//
+// What a row does not promise: it is what a person reads and not the
+// mechanism, so the next decision a row names is the person's and the next
+// action a driving agent reads stays on Run.NextAction, in that agent's
+// terms; the two are written for different readers and are not held equal.
+// RecordPhrase reads a record alone and says which two readings it cannot
+// make.
 //
 // Blocking calls and relaying verbatim are not shapes, so they are not here.
 // A call blocks because the service advances the run before it answers, and a

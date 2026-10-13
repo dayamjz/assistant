@@ -438,6 +438,10 @@ func (s *Service) pass(c *incarnation) passReport {
 		report.Err = err
 		return report
 	}
+	// The pass is the one reader that publishes a task's state, on
+	// publish.go's terms: every task whose basis moved since the last
+	// publication, once, from the resolution the pass is about to decide on.
+	s.publishTaskChanges(observed)
 	ctx, cancel = s.sup.bound(c.ctx)
 	unacknowledged, err := s.store.UnacknowledgedWakes(ctx)
 	cancel()

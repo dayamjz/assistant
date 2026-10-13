@@ -198,17 +198,18 @@ func (s *Service) listRuns(ctx context.Context, req machine.RunsRequest) (machin
 //
 // The state is resolved by internal/taskstate from the records that own the
 // facts, not read from a stored copy and not taken from the event log, which
-// P8 and P14 make the only two ways to get it wrong. No session module exists
-// in this build, so no terminal is observed and the resolver's process tier
-// stays out of the answer.
+// P8 and P14 make the only two ways to get it wrong. Each task is composed
+// through taskView, which is also what the supervisor loop publishes, so a
+// paused worker's declared wait reaches the answer here on the same terms it
+// reaches the stream.
 func (s *Service) listTasks(ctx context.Context) (machine.Tasks, error) {
-	resolved, err := s.tasks().All(ctx)
+	observed, err := s.tasks().Observe(ctx)
 	if err != nil {
 		return machine.Tasks{}, err
 	}
-	out := machine.Tasks{Tasks: make([]machine.Task, 0, len(resolved))}
-	for _, r := range resolved {
-		out.Tasks = append(out.Tasks, machine.Task{Record: r.Record, State: r.State})
+	out := machine.Tasks{Tasks: make([]machine.Task, 0, len(observed))}
+	for _, o := range observed {
+		out.Tasks = append(out.Tasks, taskView(o))
 	}
 	supervision := s.supervision(ctx)
 	out.Supervision = &supervision
@@ -243,13 +244,14 @@ func GlobalConfig(path string) (config.Config, error) {
 	return cfg, err
 }
 
-// task reports one piece of fleet work with its resolved current state.
+// task reports one piece of fleet work with its resolved current state,
+// composed through taskView on listTasks' terms.
 func (s *Service) task(ctx context.Context, req machine.TaskRequest) (machine.Task, error) {
-	r, err := s.tasks().Resolved(ctx, req.Task)
+	o, err := s.tasks().ObserveTask(ctx, req.Task)
 	if err != nil {
 		return machine.Task{}, err
 	}
-	return machine.Task{Record: r.Record, State: r.State}, nil
+	return taskView(o), nil
 }
 
 // tasks is the resolver over the service's store, built through reader with
