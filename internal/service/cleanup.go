@@ -6,7 +6,6 @@ import (
 
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/tasks"
-	"github.com/dayamjz/assistant/internal/taskstate"
 )
 
 // Where the cleanup decision is called from, and with what.
@@ -34,13 +33,21 @@ import (
 // worker that would file a report is #91's, and the method is here so the
 // site exists before the producer does, which its test drives in process.
 //
-// Both task-copy sites pass taskstate.Unobserved as the terminal, because
-// the probe is not wired into this service's reader (#91's last PR), and
-// internal/tasks examines a task copy only once its terminal probed Dead.
-// Every task copy therefore refuses today with ReasonTerminalUnobserved,
-// which is the refusal P12 asks for over a copy a worker may still be
-// writing to, and is logged here as what it is; wiring the probe is what
-// turns these calls into removals, and nothing here changes when it lands.
+// Both task-copy sites hand internal/tasks the terminal's liveness as the
+// service's task reader resolved it, Basis.Process of the resolution the
+// site reads the task through, so the liveness a cleanup decides on is the
+// one producer's answer, the provider's probe through the service's
+// Terminals, and never a second read: a site that read the launched map or
+// probed on its own would be a second owner of the fact a person sees on
+// the task surface. internal/tasks examines a task copy only once that
+// liveness is Dead, so a landed delivery task whose worker is still running
+// refuses with ReasonTerminalLive and keeps its copy, one whose terminal
+// could not be observed refuses with ReasonTerminalUnobserved, and one whose
+// worker is gone is examined and removed on P12's proof. What the probe does
+// not close is the window after it: the liveness is as of the read, and a
+// worker that starts writing in the copy between the read and the removal
+// is caught only by internal/tasks' inventory re-read, which that package
+// states the reach of.
 //
 // A refusal is a typed result internal/tasks returns, and these sites have
 // no caller to return it to, so it goes to the log. For a run's copy the
@@ -83,20 +90,27 @@ func (s *Service) cleanUpLanded(ctx context.Context, record store.Run) {
 		if r.State.Basis.LandedRun != record.ID || r.Record.Shape != store.TaskDelivery {
 			continue
 		}
-		s.logCleanup(s.cleaner.CleanUp(ctx, tasks.TaskCopy{Task: r.Record.ID, Terminal: taskstate.Unobserved}))
+		s.logCleanup(s.cleaner.CleanUp(ctx, tasks.TaskCopy{Task: r.Record.ID, Terminal: r.State.Basis.Process}))
 	}
 }
 
 // storeTaskReport stores an investigation task's report through
 // internal/tasks and then asks for its copy's cleanup, which is the
 // investigation half of the lifecycle's Complete edge. It returns what the
-// store refused; the cleanup's answer goes to the log on this file's terms.
+// store refused; the cleanup's answer goes to the log on this file's terms,
+// and a task whose terminal could not be read after the report was stored
+// is a cleanup not asked for rather than one asked with a stated liveness.
 func (s *Service) storeTaskReport(ctx context.Context, taskID, raw string) (tasks.StoredReport, error) {
 	stored, err := s.cleaner.StoreReport(ctx, taskID, raw)
 	if err != nil {
 		return tasks.StoredReport{}, err
 	}
-	s.logCleanup(s.cleaner.CleanUp(ctx, tasks.TaskCopy{Task: taskID, Terminal: taskstate.Unobserved}))
+	resolved, err := s.tasks().Resolved(ctx, taskID)
+	if err != nil {
+		s.log.Printf("the isolated copy of task %s was not cleaned up: its terminal could not be read: %v", taskID, err)
+		return stored, nil
+	}
+	s.logCleanup(s.cleaner.CleanUp(ctx, tasks.TaskCopy{Task: taskID, Terminal: resolved.State.Basis.Process}))
 	return stored, nil
 }
 

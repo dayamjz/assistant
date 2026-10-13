@@ -104,11 +104,14 @@
 // string. It is the attempt's session reference: the caller records it
 // through store.SetAttemptSession, once, after Create returns, and nowhere
 // else, and internal/service's launch is that caller. No file under the
-// home holds it, and this package writes no record;
-// taskstate's Reader already probes by that reference, so the one record
-// serves both. A reference whose home marker is another home's probes
-// Unobserved here, never Dead, so a colliding task identifier in a second
-// home on the same machine cannot be relaunched over from this one.
+// home holds it, and this package writes no record. The one record serves
+// every reader: taskstate's Reader probes by that reference, and
+// internal/service's terminal hookup, its Terminals over this provider,
+// probes and captures by it, through Probe and Pipe.CaptureReference, which
+// answer out of one held set, so the reference a probe answers Live for is
+// the one a capture reads. A reference whose home marker is another home's
+// probes Unobserved here, never Dead, so a colliding task identifier in a
+// second home on the same machine cannot be relaunched over from this one.
 //
 // The start time is read per platform: Linux from the process's stat entry,
 // macOS from the kernel's process table, Windows from the process's

@@ -100,9 +100,9 @@ type CleanupReason string
 
 const (
 	// ReasonTerminalUnobserved is the task's terminal was not observed, so
-	// whether a worker is still writing to the copy is unknown. It is the
-	// reason every task copy refuses with until the terminal probe is wired
-	// into the service's reader (#91's last PR), and the caller that passes
+	// whether a worker is still writing to the copy is unknown: the probe
+	// could not say, which internal/session's reasons list, or the caller
+	// observed nothing at all, and a caller that passes
 	// taskstate.Unobserved is saying exactly that.
 	ReasonTerminalUnobserved CleanupReason = "terminal-unobserved"
 	// ReasonTerminalLive is the task's terminal is live, so a worker may
@@ -292,9 +292,9 @@ type TaskCopy struct {
 	Task string
 	// Terminal is what the task's terminal looked like when the caller
 	// asked, which must be taskstate.Dead for the copy to be examined at
-	// all. The service passes taskstate.Unobserved until the probe is wired
-	// into its reader, and every task copy refuses with
-	// ReasonTerminalUnobserved until then; doc.go states the gap.
+	// all. The service passes the liveness its own task reader resolved,
+	// which is the session provider's probe through its terminal seam, and
+	// this package believes what it is handed; doc.go states that gap.
 	Terminal taskstate.Liveness
 }
 

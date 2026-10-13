@@ -192,3 +192,45 @@ func p2runner(t *testing.T) agents.Runner {
 	t.Helper()
 	return standin.NewWorker(t, standin.Script{}).Runner()
 }
+
+// CaptureReference is Capture addressed by the reference the record holds:
+// for a session this provider holds it reads the same bytes and digest the
+// handle reads, so what a probe answers Live for is what a capture reads;
+// a reference held by no provider, the same reference through a restarted
+// provider, and a closed session are ErrNotHeld; and a cancelled context is
+// refused before the read.
+func TestCaptureReferenceReadsTheHeldSession(t *testing.T) {
+	sub := newSubject(t)
+	p, _ := provider(t, sub.home, workerScript())
+	s := create(t, p, sub.spec("begin"))
+	ref := s.Reference().String()
+	waitCapture(t, p, s, "worker ready")
+
+	byHandle, err := p.Capture(s)
+	if err != nil {
+		t.Fatalf("Capture: %v", err)
+	}
+	byReference, err := p.CaptureReference(context.Background(), ref)
+	if err != nil || byReference != byHandle {
+		t.Fatalf("CaptureReference answered %+v (%v), want the handle's %+v", byReference, err, byHandle)
+	}
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := p.CaptureReference(cancelled, ref); !errors.Is(err, context.Canceled) {
+		t.Errorf("a capture under a cancelled context answered %v, want the context's error", err)
+	}
+	other := session.Reference{Home: session.HomeMarker(sub.home), Task: sub.id, PID: 1 << 30, Start: 1}
+	if _, err := p.CaptureReference(context.Background(), other.String()); !errors.Is(err, session.ErrNotHeld) {
+		t.Errorf("a capture of a reference nobody holds answered %v, want ErrNotHeld", err)
+	}
+	restarted := session.NewPipe(sub.home, p2runner(t))
+	if _, err := restarted.CaptureReference(context.Background(), ref); !errors.Is(err, session.ErrNotHeld) {
+		t.Errorf("a restarted provider captured another provider's session by reference: %v", err)
+	}
+	if err := p.Close(s); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if _, err := p.CaptureReference(context.Background(), ref); !errors.Is(err, session.ErrNotHeld) {
+		t.Errorf("a closed session was captured by reference: %v", err)
+	}
+}

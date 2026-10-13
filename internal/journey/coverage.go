@@ -212,7 +212,8 @@ func Coverage() []Established {
 				"through internal/store, since nothing here dispatches a worker and no verb or method " +
 				"creates a task - internal/tasks' intake is a library entry with no caller in this build, so " +
 				"no journey walk can create one - so what is driven is the " +
-				"reading and not the writing; no terminal is observed, so the process tier is not reached. Reading it reaches no method " +
+				"reading and not the writing; the planted task has no attempt and no session reference, so the " +
+				"service's probe has nothing to ask and the process tier is not reached. Reading it reaches no method " +
 				"internal/ipc restricts, so no platform refuses it for want of peer credentials, but it " +
 				"is asked of a service, so on a platform with no local socket transport to serve this " +
 				"protocol over the test is skipped rather than passing and nothing about P8 is " +
@@ -222,14 +223,16 @@ func Coverage() []Established {
 				"internal/supervisor's matrix test cites it for the table only: every wake kind " +
 				"crossed with evidence present and absent is held to an oracle written from the PRD's " +
 				"flowchart. internal/service's loop tests cite it for the loop's half, through Open " +
-				"and the real store with a scripted terminal double: a running record nothing " +
+				"and the real store: with a scripted terminal double, a running record nothing " +
 				"advances surfaces, an unchanged live screen absorbs until the escalation window " +
-				"elapses under an injected clock and an absorbed pass moves no window start, the " +
+				"elapses under an injected clock and an absorbed pass moves no window start, and the " +
 				"terminal-ish wait surfaces once and again after a real change and not after a " +
-				"redraw, and a loop with no provider surfaces every in-flight task. Evidence " +
-				"derivation is internal/taskstate's, no walk here reaches a worker, and the kind for " +
-				"an authenticated check result has no producer in this build, so its rows test a " +
-				"path nothing walks."},
+				"redraw; and through the product's own terminal seam over the service's session " +
+				"provider, a worker the service launched is absorbed on its unchanged live screen " +
+				"and surfaced as terminal gone once it has exited. Evidence derivation is " +
+				"internal/taskstate's, no walk here reaches a worker, and the kind for an " +
+				"authenticated check result has no producer in this build, so its rows test a path " +
+				"nothing walks."},
 		{principles.P10, ReachNone,
 			"Not driven here: no coordinator ends a turn in this build, and no verb or method runs the " +
 				"guard. P10 is cited by internal/supervisor/feed's test, for the predicate fed from the " +
@@ -269,8 +272,12 @@ func Coverage() []Established {
 				"failure; and internal/service's tests drive the same decision from its run-copy site, " +
 				"reclaimCopy, where a pushed branch passes at once and an unlanded commit keeps the copy " +
 				"with the refusal on the run's answer. The task-copy sites, after a merge record lands " +
-				"a delivery task and after an investigation's report is stored, refuse today on an " +
-				"unobserved terminal, which internal/service's own test holds."},
+				"a delivery task and after an investigation's report is stored, pass the terminal as " +
+				"the service's own reader probed it through its session provider: internal/service's " +
+				"test drives the landed site over a worker it launched, which keeps the copy with the " +
+				"live refusal while the worker runs and removes it on the proof once the worker is " +
+				"gone, and a service with no terminal seam, which Open never builds, refuses as " +
+				"unobserved."},
 		{principles.P13, ReachNone,
 			"Every answer this harness reads back carries run identifiers, stage names and home paths, " +
 				"so the principle does not hold on this surface today and a test claiming it here would " +

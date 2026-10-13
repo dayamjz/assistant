@@ -115,16 +115,18 @@ import (
 // ignores its context is still bounded here, at the cost of a goroutine that
 // returns when the probe does, which is stated rather than closed.
 //
-// # What the probe is today
+// # What the probe is
 //
-// The probe is Options.Terminals' Probe, the one seam a terminal is observed
-// through, reached through the service's one reader constructor, which the
-// task surface, the queue and the supervisor loop share, so what
+// The probe is the service's Terminals' Probe, the one seam a terminal is
+// observed through, reached through the service's one reader constructor,
+// which the task surface, the queue and the supervisor loop share, so what
 // reconciliation sees of a terminal is what a person listing tasks sees and
-// what the loop acts on. In production Terminals is nil until the session
-// hookup wires the provider into it, so production reconciliation reads
-// every terminal Unobserved and relaunches nothing; the tests inject a
-// Terminals over the stand-in and establish the rest.
+// what the loop acts on. In production that is the service's own session
+// provider, on terminals.go's terms: a service that restarts holds no
+// session, so every reference it finds is answered by identity, Dead for a
+// worker whose process is gone and Unobserved for one still present, which
+// is exactly the reading the two relaunch rows and the ambiguous-liveness
+// row are keyed on. A test may pass a double on Options.Terminals instead.
 //
 // # Residual gaps
 //
@@ -243,8 +245,9 @@ func decideReconciliation(r taskstate.Resolution, attempts []store.TaskAttempt, 
 
 // boundedProbe wraps the Terminals' probe so that one answer costs at most
 // reconcileProbeTimeout and none is asked once bound has ended, on the terms
-// the opening comment's bound section states. It is nil when the service has
-// no Terminals, so the reader observes nothing rather than asking a bound of
+// the opening comment's bound section states. It is nil for a Service with
+// no Terminals, which Open never produces and this package's tests build by
+// hand, so such a reader observes nothing rather than asking a bound of
 // nothing.
 func (s *Service) boundedProbe(bound context.Context) func(ctx context.Context, sessionRef string) taskstate.Liveness {
 	terminals := s.terminals
@@ -274,7 +277,7 @@ func (s *Service) boundedProbe(bound context.Context) func(ctx context.Context, 
 // every task it does not settle is read again at the next start.
 func (s *Service) reconcileTasks(ctx context.Context) {
 	if s.terminals == nil {
-		s.log.Printf("reconciliation: no terminal provider is wired into this service, so every terminal reads unobserved and nothing is relaunched")
+		s.log.Printf("reconciliation: this service has no terminal seam, so every terminal reads unobserved and nothing is relaunched")
 	}
 	queued, err := s.store.DrainWakes(ctx, reconcileDrainLimit)
 	switch {
