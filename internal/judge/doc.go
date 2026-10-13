@@ -20,28 +20,46 @@
 //
 // # The measurement behind the cutoffs
 //
-// Both cutoffs were measured on jev-1.13.0, against labeled sets kept outside
-// this repository and drawn from this repository's own data; the sets are not
-// here, so the figures below are a record of that measurement and not
-// something a reader can re-run from this tree.
+// The labeled sets both cutoffs were set from are checked in under
+// testdata/corpus, one file per check, and testdata/corpus/README.md says how
+// each was built and how to run the measurement. The measurement is
+// TestMeasureLive in measure_live_test.go: it puts every case through a
+// Client, so it measures the shipped questions, ModelVersion, and cutoffs
+// rather than a copy, and reports per check the area under the ROC curve, the
+// pass rates at the shipped cutoff, the screen's rates by payload family and
+// template, a held-out split by family, and the spread between repeated
+// calls. It is built only with the judgelive tag and refuses to run without
+// a key, so make check and CI never reach the provider; what make check does
+// run is the same harness over the same corpus against judgetest, which
+// exercises the loader and the arithmetic and no provider answer.
+//
+// The figures below are the record from when the cutoffs were set, taken by
+// scripts that are not in this tree before the corpus was checked in. Nothing
+// in this tree re-derives them until the measurement is run with a key, and a
+// run that disagrees with them is the newer evidence.
 //
 //   - Trace reason, cutoff 0.8: area under the ROC curve 0.991; at 0.8, 94% of
 //     true reasons pass and 3% of false ones do.
 //   - Screen, cutoff 0.3: area under the ROC curve about 0.99, about 90% recall
 //     on subtle payloads, and about 2% false positives.
 //
-// What those figures cover is narrower than they read. The screen's labeled
-// payloads were written by the people building it, so its recall is measured
-// on plain attempts somebody thought to write and says nothing about text
-// written to evade this question. And the trace set's false reasons were
-// written by a model, not collected from reviewers. The screen is a tripwire
-// for plain attempts to address the reviewer, not a security boundary and
-// not a defense against prompt injection: a file it does not flag is not
-// shown to be free of such text, and nothing here keeps the reviewer from
-// reading what it flags.
+// What those figures cover is narrower than they read. The diffs are this
+// repository's own history. The trace set's reasons were written by a model
+// with the diff in view, and its false reasons are honest descriptions of
+// another change to the same file, not adversarial ones and not collected
+// from reviewers, so the set has one kind of failure and no held-out split by
+// kind. Every screen payload was written by the people building the check,
+// so its recall is measured on plain attempts somebody thought to write and
+// says nothing about text written to evade this question. The screen is a
+// tripwire for plain attempts to address the reviewer, not a security
+// boundary and not a defense against prompt injection: a file it does not
+// flag is not shown to be free of such text, and nothing here keeps the
+// reviewer from reading what it flags.
 //
-// The same measurement is why the screen asks about one file per request:
-// bundling many files into one request lowered recall. A file too large for
+// The measurement the cutoffs were set from is also why the screen asks about
+// one file per request: bundling many files into one request lowered recall.
+// That comparison is part of the record above, not of the corpus, which asks
+// one file per case. A file too large for
 // one request is cut into consecutive pieces of whole lines rather than
 // truncated, and each piece is its own request; how the pieces come to one
 // result is Screen's to state. Whether a piece fits is the provider's answer,
@@ -53,7 +71,9 @@
 //
 // A change to a question, the version, or a cutoff has to beat the one it
 // replaces on held-out examples, on the terms PRD section 5 sets; this package
-// owns where those values live, and that section owns the rule.
+// owns where those values live and the corpus they are measured on, and that
+// section owns the rule, including that the scorer and testdata/corpus are
+// not edited in the same change.
 //
 // # A failed call is never an answer
 //
