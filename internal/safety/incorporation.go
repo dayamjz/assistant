@@ -111,7 +111,11 @@ func (r *IncorporationRefusal) Unwrap() []error {
 //
 // Every revision is resolved before the comparison, and the result names
 // what was resolved, so a reference that moves after the check does not
-// change what the result says was examined.
+// change what the result says was examined. The mechanism then resolves the
+// tip and every commit again, by design: the identifiers this package passes
+// are revisions to it like any other, so the local-resolve guarantee holds
+// on both sides of the interface, and nothing may optimize that second
+// resolve away.
 func (g *Guard) Incorporation(ctx context.Context, commits []string, into string) (IncorporationResult, error) {
 	refuse := func(detail string, cause error) (IncorporationResult, error) {
 		return IncorporationResult{}, &IncorporationRefusal{
