@@ -121,6 +121,10 @@ func CursorFactory(opts ...CursorOption) Factory {
 // Name returns "cursor".
 func (f *cursorFactory) Name() string { return CursorName }
 
+// AutoEligible reports false: PRD section 12 defers adapters beyond Claude
+// Code, so this one resolves only when an entry names it.
+func (f *cursorFactory) AutoEligible() bool { return false }
+
 // New reports whether Cursor can be run here, and returns a Runner when
 // it can.
 //
