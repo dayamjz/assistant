@@ -823,10 +823,13 @@ func (s *Service) settle(ctx context.Context, runID string, result graph.Result)
 		// run in it. Whether this status is one no move leads out of is
 		// internal/runs' fact and is asked there rather than decided from
 		// which move was chosen above.
-		s.reclaimCopy(ctx, moved)
+		s.reclaimed(ctx, moved)
 		// A run that finished may have cleared a task queued behind the one
 		// it was attributed to; tasks.go says what the release does about
-		// that and what it reports.
+		// that and what it reports. A run its pull request's merge ended
+		// has landed the task it was attributed to, whose copy cleanup.go
+		// decides about first.
+		s.cleanUpLanded(ctx, moved)
 		s.releaseQueued(ctx)
 	}
 	s.publishRunState(ctx, runID)
@@ -1294,12 +1297,25 @@ func (s *Service) report(ctx context.Context, runID string, result *graph.Result
 	if err != nil {
 		return machine.Run{}, err
 	}
+	// What became of the run's copy is the cleanup record, composed on the
+	// same terms as the merge record: present exactly when the decision
+	// wrote one, and the one place status reads that a copy was kept.
+	cleanup, err := s.store.RunCleanup(ctx, runID)
+	switch {
+	case err == nil:
+	case errors.Is(err, store.ErrNotFound):
+	default:
+		return machine.Run{}, err
+	}
 	standing := machine.Standing{
 		Record:    record.Status,
 		Execution: machine.ExecutionUnrecorded(),
 		Advancing: result == nil && s.isAdvancing(runID),
 	}
 	answer := machine.Run{Record: record}
+	if cleanup.Run != "" {
+		answer.Cleanup = &cleanup
+	}
 	if ended {
 		standing.PullRequestEnd = merge.End
 		answer.MergeRecord = &merge

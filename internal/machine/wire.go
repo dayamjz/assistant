@@ -247,6 +247,13 @@ type Run struct {
 	// record composed rather than restated, and the passed outcome above is
 	// derived from it.
 	MergeRecord *store.MergeRecord `json:"merge_record,omitempty"`
+	// Cleanup is PRD section 8's cleanup record for this run's isolated
+	// copy, present exactly when the cleanup decision wrote one: the proof
+	// the copy was removed on, or the reason it was kept, with what it
+	// examined. It is the record composed rather than restated, on
+	// MergeRecord's terms, and it is where a surface learns that a local
+	// copy was kept because its work is not yet safely elsewhere.
+	Cleanup *store.RunCleanup `json:"cleanup,omitempty"`
 	// AnswerNotApplied says, on the answer to a response, why the answer the
 	// request carried was not applied to the run: the hold it answered was
 	// closed by the service first, on a re-read of the run's pull request,
