@@ -84,12 +84,29 @@ service rather than to the command that started it. To stop waiting, run
 superseded can also keep reading the checks until they settle or the timeout
 elapses, when the service had not yet registered it at the moment of the push.
 
+Every read of the wait reads the pull request itself before the checks, by the
+number the pull request stage recorded. A pull request the code host reports as
+merged ends the wait and the run: the run reads `passed`, and its checks stage
+report says the checks were not read to a verdict and that the `no_ci` rule was
+not applied, because a merge completes the run without validating it. A pull
+request reported as closed without merging ends the run as `failed`, with the
+reason `pull request closed without merging`. An open pull request, one in a
+state this build does not recognize, and one the host would not describe all
+keep the run waiting.
+
+The hold the elapsed timeout leaves is re-read the same way before it is
+resumed: at service startup, and again when you answer it. A pull request found
+merged or closed by then closes that hold with a resolution the service records
+as its own, naming the state it read, and ends the run as above; the answer you
+gave is not applied, and the command reports the run as it ended. No other hold
+is re-read. A hold on your decision about a finding is yours to answer, whatever
+the pull request's state.
+
 If a check or base read fails outright, the stage stops instead of waiting
 through the failure, and the run's outcome reads `executing (stalled - nothing
 is advancing this run)`. Running `assistant` on the branch again resumes it into
-the same wait. Before resuming, nothing re-reads the pull request, so a pull
-request that was merged or closed in the meantime does not complete the run. PRD
-section 11 asks for that, and this build does not do it yet.
+the same wait, and the first read of that resumed wait reads the pull request
+like every other.
 
 A repository with no CI at all must say so by setting `no_ci` in its trusted
 configuration. Without that declaration an empty list of checks is not treated
@@ -113,7 +130,8 @@ set `allow_pushed_commands`. That opt-out cannot be set from a pushed branch.
 
 The gate opens or updates one pull request per branch and never merges it. This
 build has no merge step: its outcome vocabulary has `passed` for a merged pull
-request, but nothing in the build records a merge. Merge order, stacked pull
+request, and what produces it is a pull request someone merged while the checks
+stage waited on it, or while the hold that wait left was standing. Merge order, stacked pull
 requests, and queueing belong to the forge or to merge-queue tooling you already
 use, and the binary has no stack view. If you stack branches, each is pushed and
 validated as its own run, and the pull request stage reports which base the run

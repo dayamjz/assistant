@@ -529,4 +529,24 @@ var schema = []migration{
 			) STRICT`,
 		},
 	},
+	{
+		version: 13,
+		name:    "run ended by its pull request",
+		statements: []string{
+			// Which state of the run's pull request ended the run, when one
+			// did: PRD section 5's "Waiting on checks" completes a run whose
+			// pull request was read as merged and fails one whose pull
+			// request was read as closed, and the record has to say which
+			// rather than leave a reader to infer it from a checkpoint that
+			// still stands at the checks stage. The value is the closed set
+			// store.PullRequestEnd names, written in the same transaction as
+			// the status it goes with.
+			//
+			// Nullable and without a default, so a run ended any other way,
+			// and a run recorded before the column existed, read back
+			// unknown rather than as a fabricated "not ended by its pull
+			// request".
+			`ALTER TABLE run ADD COLUMN pull_request_end TEXT`,
+		},
+	},
 }

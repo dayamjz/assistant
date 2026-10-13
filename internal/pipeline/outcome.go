@@ -267,6 +267,20 @@ func ReadStageResult(r Reader, stage Stage) (StageResult, error) {
 	return out, nil
 }
 
+// PullRequestEnd returns the text the CI stage wrote under KeyPullRequestEnd:
+// which state of the pull request ended its wait, as the store's vocabulary
+// spells it, or the empty string when nothing did. It carries the text rather
+// than the store's type because this package does not own that vocabulary;
+// the reader that acts on it turns it into one and refuses what it cannot.
+func PullRequestEnd(s graph.State) string {
+	v, ok := s.Get(string(KeyPullRequestEnd))
+	if !ok {
+		return ""
+	}
+	text, _ := v.Text()
+	return text
+}
+
 // Cancelled reports whether a person cancelled the run at a hold.
 func Cancelled(s graph.State) bool {
 	v, ok := s.Get(string(KeyCancelled))

@@ -103,6 +103,20 @@ const (
 	KeyPullRequest Key = "pull_request"
 	// KeyChecks is the checks verdict the CI stage reached.
 	KeyChecks Key = "checks"
+	// KeyPullRequestEnd is which state of the pull request ended the CI
+	// stage's wait on its checks, when one did: PRD section 5's "Waiting on
+	// checks" has the stage read the pull request before the checks on every
+	// read, and a positively read merged or closed state ends the wait. The
+	// value is the text of the store's closed vocabulary for what ended a
+	// run, store.PullRequestEnd, and it is empty for every run whose wait
+	// ended any other way.
+	//
+	// It is a fact the stage read and not a verdict on the run. What a run
+	// so ended becomes - passed on a merge, failed on a close - is decided
+	// where the run's record is written, which is internal/service's settle
+	// reading this key, on the same terms as KeyCancelled; the stage body
+	// writes what it read and decides nothing about the record.
+	KeyPullRequestEnd Key = "pull_request.end"
 	// KeyDecisionChecks is the review stage's record of what the
 	// decision-model checks did over the change - the mode, the model version,
 	// and how many files or traces each check covered - which the pull
@@ -177,6 +191,7 @@ var sharedKeys = []keySpec{
 	{KeyPushed, graph.KindText, graph.MergeNone, ownerStage},
 	{KeyPullRequest, graph.KindText, graph.MergeNone, ownerStage},
 	{KeyChecks, graph.KindText, graph.MergeNone, ownerStage},
+	{KeyPullRequestEnd, graph.KindText, graph.MergeNone, ownerStage},
 	// The review takes fix rounds and writes this on every execution, so it
 	// carries the anchor's merge rule for the anchor's reason: the last write
 	// is the record of the review the run finally stood on.

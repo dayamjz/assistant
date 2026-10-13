@@ -39,20 +39,22 @@ const (
 	// has no body for cannot have cleared by passing: it held, so a person
 	// approved or skipped it, and the report says which stage by stage.
 	OutcomeChecksPassed Outcome = "checks-passed"
-	// OutcomePassed is a change that merged or closed.
+	// OutcomePassed is a change that merged. PRD section 9's outcome row
+	// gives it that one meaning, and section 5's "Waiting on checks" gives it
+	// its one producer: a run whose pull request was read as merged while the
+	// checks stage waited on its checks, or at the hold that wait left when
+	// checks_timeout elapsed, ends with store.PullRequestMerged recorded on
+	// its row beside the passed status, and that pair is what reads as this.
 	//
-	// Nothing in this build produces it. No record here says a pull request
-	// merged: store.Run carries the pull request the run opened and not its
-	// state, and the stage that watches checks and mergeability has no body
-	// yet. Naming it anyway is deliberate, on the same terms as
-	// store.ResolvedByPerson: the vocabulary an agent is written against is
-	// the whole set, and a member that appears later must not be a member a
-	// driving agent has never seen.
+	// It says the run is complete and not that it was newly validated. The
+	// checks were not read to a verdict, and the rule that only a no_ci
+	// declaration makes an empty check list green was never applied; the
+	// checks stage's own report says so, and nothing here merges.
 	OutcomePassed Outcome = "passed"
 	// OutcomeFailed is a run that ended without a verdict on the change: a
-	// bound parked it, or a stage could not run at all. It is terminal and
-	// carries a next action, because PRD section 9 makes failure loud rather
-	// than silent.
+	// bound parked it, a stage could not run at all, or its pull request was
+	// closed without being merged. It is terminal and carries a next action,
+	// because PRD section 9 makes failure loud rather than silent.
 	OutcomeFailed Outcome = "failed"
 	// OutcomeCancelled is a run a person ended at a hold. It is terminal, and
 	// the work is not undone: the run stopped.
@@ -216,6 +218,13 @@ type Standing struct {
 	// Record is the run's recorded status, which is authoritative about
 	// whether the run is finished with.
 	Record store.RunStatus
+	// PullRequestEnd is which state of the run's pull request ended the run,
+	// as the record carries it in store.Run.PullRequestEnd, and the zero
+	// value for a run its pull request did not end. It is read with Record
+	// and travels beside it because it is the same row's answer to one
+	// question Record alone cannot settle: a passed record is checks-passed
+	// unless a merge ended the run, and only the record says whether one did.
+	PullRequestEnd store.PullRequestEnd
 	// Execution is where the run's execution stands.
 	Execution Execution
 	// Advancing is whether a segment of the run was executing when the answer
@@ -237,7 +246,11 @@ type Standing struct {
 //
 // A completed run is checks-passed rather than passed because nothing here
 // merges: the gate stops at the end, and PRD section 9 makes that the point at
-// which a driving agent asks the person. A run that ended without a verdict is
+// which a driving agent asks the person. The one passed record that reads as
+// passed is one whose row records that a merge ended it, which is Standing's
+// PullRequestEnd and the record's own fact rather than an inference from a
+// checkpoint that still stands at the checks stage. A run that ended without
+// a verdict is
 // cancelled when a person ended it and failed when a bound parked it, which is
 // the difference between the two things a terminated record covers; the reason
 // on a parked run says which bound. A parked run is terminal here even though
@@ -255,6 +268,9 @@ type Standing struct {
 func OutcomeOf(s Standing) Outcome {
 	switch s.Record {
 	case store.RunPassed:
+		if s.PullRequestEnd == store.PullRequestMerged {
+			return OutcomePassed
+		}
 		return OutcomeChecksPassed
 	case store.RunFailed:
 		return OutcomeFailed
@@ -294,7 +310,7 @@ func NextActionOf(s Standing) string {
 // rather than a sentence for the cases somebody remembered.
 var nextActions = map[Outcome]string{
 	OutcomeChecksPassed: "The gate is done with this change. Ask the person whether to merge it.",
-	OutcomePassed:       "Nothing. The change is merged or closed.",
+	OutcomePassed:       "Nothing. The change is merged.",
 	OutcomeFailed:       "Read the reason. A run a bound parked is taken further by forking it or by giving it more budget; a run that could not proceed needs the failure fixed and a fresh run.",
 	OutcomeCancelled:    "Nothing was undone. Start a fresh run when the change is ready again.",
 	OutcomeDecision:     "Answer the decision to carry the run on.",

@@ -21,6 +21,12 @@ import (
 type move struct {
 	from []store.RunStatus
 	to   store.RunStatus
+	// end is which state of the run's pull request this move records as what
+	// ended the run, for the two moves a pull request's state makes. It is
+	// written with the status, in one transaction, so a run never reads as
+	// ended by its pull request without the status that goes with it or the
+	// reverse. The zero value records none and is every other row.
+	end store.PullRequestEnd
 }
 
 // The legal moves. A run is created pending, runs, and ends in exactly one of
@@ -37,11 +43,30 @@ var (
 		from: []store.RunStatus{store.RunPending, store.RunRunning, store.RunHeld},
 		to:   store.RunTerminated,
 	}
+	// The two moves a run's pull request makes, per PRD section 5's "Waiting
+	// on checks". Each is legal from running, which is the checks stage's
+	// wait reading the pull request, and from held, which is the hold that
+	// wait leaves when checks_timeout elapses and the service re-reads the
+	// pull request before resuming it. No other hold is an origin here in
+	// any other sense: the row says what the record may move from, and PRD
+	// section 11 says which hold the service may re-read, which is
+	// internal/service's rule.
+	movePassOnMerge = move{
+		from: []store.RunStatus{store.RunRunning, store.RunHeld},
+		to:   store.RunPassed,
+		end:  store.PullRequestMerged,
+	}
+	moveFailOnClose = move{
+		from: []store.RunStatus{store.RunRunning, store.RunHeld},
+		to:   store.RunFailed,
+		end:  store.PullRequestClosed,
+	}
 
 	// moves is every row above. It exists so that "no move leads out of a
 	// terminal status" is read off the table rather than restated as a second
 	// list that could disagree with it.
-	moves = []move{moveStart, moveHold, moveRelease, movePass, moveFail, moveTerminate}
+	moves = []move{moveStart, moveHold, moveRelease, movePass, moveFail, moveTerminate,
+		movePassOnMerge, moveFailOnClose}
 )
 
 // Start records that a pending run has begun.
@@ -81,6 +106,26 @@ func (s *Service) Fail(ctx context.Context, id string) (store.Run, error) {
 	return s.apply(ctx, id, moveFail)
 }
 
+// PassOnMerge records that a run ended because its pull request was read as
+// merged, which PRD section 5 makes complete and not newly validated: the
+// record carries store.PullRequestMerged beside the passed status, and
+// machine.OutcomeOf reads the two together as the passed outcome rather than
+// as checks-passed. It is legal from running and from held, for the reason
+// the row gives.
+func (s *Service) PassOnMerge(ctx context.Context, id string) (store.Run, error) {
+	return s.apply(ctx, id, movePassOnMerge)
+}
+
+// FailOnClose records that a run ended because its pull request was read as
+// closed without being merged. The record carries store.PullRequestClosed
+// beside the failed status, which is the reason PRD section 5 has recorded:
+// "pull request closed without merging" is what that end renders as. It is a
+// verdict on the change on the same terms as Fail, and legal from the same
+// two statuses as PassOnMerge.
+func (s *Service) FailOnClose(ctx context.Context, id string) (store.Run, error) {
+	return s.apply(ctx, id, moveFailOnClose)
+}
+
 // Terminate records that a run ended without reaching a verdict, which is what
 // a cancellation and a supersession leave behind. It is legal from every
 // status a run can still be in and from none it cannot, so a run cancelled
@@ -106,7 +151,13 @@ func (s *Service) Terminate(ctx context.Context, id string) (store.Run, error) {
 func (s *Service) apply(ctx context.Context, id string, m move) (store.Run, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	r, err := s.store.TransitionRun(ctx, id, m.from, m.to)
+	var r store.Run
+	var err error
+	if m.end != "" {
+		r, err = s.store.TransitionRunOnPullRequest(ctx, id, m.from, m.to, m.end)
+	} else {
+		r, err = s.store.TransitionRun(ctx, id, m.from, m.to)
+	}
 	if err != nil {
 		return store.Run{}, err
 	}

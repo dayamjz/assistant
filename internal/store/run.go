@@ -115,6 +115,14 @@ type Run struct {
 	// column existed and for one refused before an agent answered for it, so
 	// the record understates here too.
 	ResolvedAgent Optional[string] `json:"resolved_agent"`
+	// PullRequestEnd is which state of the run's pull request ended the run,
+	// when one did: merged, which completed it without validating it, or
+	// closed, which failed it. It is known only for a run ended that way, and
+	// it is written in the same transaction as the status it moved to, by
+	// TransitionRunOnPullRequest, so the two describe one ending. Every other
+	// run reads it back unknown, as does a run recorded before the column
+	// existed.
+	PullRequestEnd Optional[PullRequestEnd] `json:"pull_request_end"`
 	// CreatedAt is when the run was recorded, which PRD section 8 requires to
 	// precede the creation of its directory.
 	CreatedAt time.Time `json:"created_at"`
@@ -236,6 +244,36 @@ func (s *Store) RunsForRepository(ctx context.Context, repositoryID string) ([]R
 // so a caller can report the state it found rather than only that it was
 // surprised.
 func (s *Store) TransitionRun(ctx context.Context, id string, from []RunStatus, to RunStatus) (Run, error) {
+	return s.transitionRun(ctx, id, from, to, "")
+}
+
+// TransitionRunOnPullRequest is TransitionRun for a run its pull request's
+// state ended: it moves the run to a status on TransitionRun's terms and
+// records end as what ended it, in the one transaction, so a reader never
+// finds a run that moved with no end recorded or an end recorded on a run that
+// did not move. It refuses an end outside the closed set with
+// ErrUnknownPullRequestEnd, and the zero end with it too, because this
+// accessor exists to record one.
+//
+// A run already in the status it is being moved to is left as it stands, end
+// included, on TransitionRun's terms: nothing is written and no error is
+// returned, so a caller retrying after a commit it did not see reports what
+// that commit established rather than overwriting it.
+//
+// What a status and an end together mean is not decided here. internal/runs
+// says which statuses a pull request's state may end a run in and which end
+// goes with which; this package records the pair it is handed.
+func (s *Store) TransitionRunOnPullRequest(ctx context.Context, id string, from []RunStatus, to RunStatus, end PullRequestEnd) (Run, error) {
+	if !end.Recognized() {
+		return Run{}, fmt.Errorf("store: run %s: %w: %q", id, ErrUnknownPullRequestEnd, end)
+	}
+	return s.transitionRun(ctx, id, from, to, end)
+}
+
+// transitionRun is the one transaction behind both transitions. An end that
+// is the zero value leaves the pull_request_end column as it stands; any other
+// is written with the status.
+func (s *Store) transitionRun(ctx context.Context, id string, from []RunStatus, to RunStatus, end PullRequestEnd) (Run, error) {
 	if !to.Recognized() {
 		return Run{}, fmt.Errorf("store: run %s: %q is not a run status", id, to)
 	}
@@ -259,9 +297,13 @@ func (s *Store) TransitionRun(ctx context.Context, id string, from []RunStatus, 
 		if !slices.Contains(from, current.Status) {
 			return &RunStatusError{Run: id, Expected: slices.Clone(from), Actual: current.Status, To: to}
 		}
-		if _, err := tx.ExecContext(ctx,
-			`UPDATE run SET status = ?, updated_at = ? WHERE id = ?`,
-			string(to), encodeTime(nowUTC()), id); err != nil {
+		update, args := `UPDATE run SET status = ?, updated_at = ? WHERE id = ?`,
+			[]any{string(to), encodeTime(nowUTC()), id}
+		if end != "" {
+			update, args = `UPDATE run SET status = ?, updated_at = ?, pull_request_end = ? WHERE id = ?`,
+				[]any{string(to), encodeTime(nowUTC()), string(end), id}
+		}
+		if _, err := tx.ExecContext(ctx, update, args...); err != nil {
 			return fmt.Errorf("store: moving run %s to %s: %w", id, to, err)
 		}
 		// Read back rather than assembling the answer, so what a caller is
@@ -387,19 +429,19 @@ const runColumns = `SELECT
 	id, repository_id, branch, submitted_head, base, current_head, status,
 	approved_commit, push_binding, pull_request, fixer_session, intent, intent_source,
 	build_version, build_revision, build_modified, build_go, config_digest,
-	config_rejections, resolved_agent,
+	config_rejections, resolved_agent, pull_request_end,
 	created_at, updated_at`
 
 func scanRun(sc scanner) (Run, error) {
 	var r Run
 	var status, created, updated string
 	var modified int
-	var rejections Optional[string]
+	var rejections, end Optional[string]
 	if err := sc.Scan(
 		&r.ID, &r.RepositoryID, &r.Branch, &r.SubmittedHead, &r.Base, &r.CurrentHead, &status,
 		&r.ApprovedCommit, &r.PushBinding, &r.PullRequest, &r.FixerSession, &r.Intent, &r.IntentSource,
 		&r.Build.Version, &r.Build.Revision, &modified, &r.Build.Go, &r.ConfigDigest,
-		&rejections, &r.ResolvedAgent,
+		&rejections, &r.ResolvedAgent, &end,
 		&created, &updated,
 	); err != nil {
 		return Run{}, err
@@ -408,6 +450,9 @@ func scanRun(sc scanner) (Run, error) {
 	r.Build.Modified = modified != 0
 	var err error
 	if r.ConfigRejections, err = rejectionsValue(rejections); err != nil {
+		return Run{}, err
+	}
+	if r.PullRequestEnd, err = pullRequestEndValue(end, "pull_request_end"); err != nil {
 		return Run{}, err
 	}
 	if r.CreatedAt, err = decodeTime(created); err != nil {

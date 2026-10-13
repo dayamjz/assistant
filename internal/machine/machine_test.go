@@ -157,6 +157,39 @@ func TestATerminalRecordDecidesOverWhereExecutionStopped(t *testing.T) {
 	}
 }
 
+// A passed record reads as passed only when the record itself says a merge
+// ended the run, which is PRD section 9's one meaning for the word; the same
+// record with no end, or a run its pull request closed, reads as it did. The
+// first case is the control for the rest: it is the only one that moves.
+func TestOnlyARecordedMergeReadsAsPassed(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name   string
+		record store.RunStatus
+		end    store.PullRequestEnd
+		want   machine.Outcome
+	}{
+		{"passed on a merge", store.RunPassed, store.PullRequestMerged, machine.OutcomePassed},
+		{"control: passed with no end", store.RunPassed, "", machine.OutcomeChecksPassed},
+		{"failed on a close", store.RunFailed, store.PullRequestClosed, machine.OutcomeFailed},
+		{"control: failed with no end", store.RunFailed, "", machine.OutcomeFailed},
+	}
+	for _, c := range cases {
+		standing := machine.Standing{
+			Record:         c.record,
+			PullRequestEnd: c.end,
+			Execution:      machine.ExecutionAt(graph.StatusHalted, graph.State{}),
+		}
+		got := machine.OutcomeOf(standing)
+		if got != c.want {
+			t.Fatalf("a run %s reports %s, want %s", c.name, got, c.want)
+		}
+		if !got.Terminal() {
+			t.Fatalf("a run %s reports %s, which is not terminal", c.name, got)
+		}
+	}
+}
+
 // Every status internal/store defines has an answer here, so a run this
 // package cannot interpret is never one a caller is invited to drive.
 func TestEveryRecordedStatusHasAnOutcome(t *testing.T) {

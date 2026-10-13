@@ -226,7 +226,10 @@ type Run struct {
 	// Position is the node that has not run, empty exactly when the run
 	// completed.
 	Position string `json:"position,omitempty"`
-	// Reason explains a parked run, and is empty otherwise.
+	// Reason explains a run that ended without a verdict on the change: which
+	// bound parked it, or, for a run its pull request ended by closing
+	// without a merge, the reason the record carries for that. It is empty
+	// otherwise.
 	Reason string `json:"reason,omitempty"`
 	// Steps is how many node executions the run has spent.
 	Steps int `json:"steps"`

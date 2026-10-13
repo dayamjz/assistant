@@ -139,6 +139,15 @@ type Options struct {
 	// the recorder this service gives it, so a test can point the client at a
 	// stand-in provider. The product passes none.
 	Judge []judge.Option
+	// Forge is the code host every run of this service reaches: the one the
+	// pull request and checks bodies are handed, and the one this service
+	// re-reads a run's pull request through before resuming the hold the
+	// checks stage raised when checks_timeout elapsed. Zero means GitHub over
+	// the gh command line, which the product passes; a test passes a double
+	// that answers only the shapes the GitHub adapter can. It is one host for
+	// both readers on purpose, so what a stage read and what the service
+	// re-reads come from the same place.
+	Forge forge.Host
 }
 
 // Service is one home's background service.
@@ -183,6 +192,9 @@ type Service struct {
 	// It is built once at Open, from the key in the operator's environment,
 	// with the recorder that feeds the store's decision-model record.
 	judge *judge.Client
+	// forge is the code host, settled at Open from Options.Forge; checkshold.go
+	// is the one reader of it outside the stage dependencies.
+	forge forge.Host
 
 	// mu guards the lazily built driver and topologies, the set of runs being
 	// advanced, and the branch gates. It is never held across a run's
@@ -301,6 +313,13 @@ func Open(ctx context.Context, o Options) (*Service, error) {
 		stopping:   make(chan struct{}),
 	}
 	s.stopCtx, s.stopCancel = context.WithCancel(context.WithoutCancel(ctx))
+	s.forge = o.Forge
+	if s.forge == nil {
+		// Built with its own redactor because the redactor is otherwise
+		// chosen per topology; both are redact.New, which internal/redact
+		// makes the one owner of what is removed.
+		s.forge = forge.NewGitHubHost(redact.New())
+	}
 	if s.catalog == nil {
 		// The shipped adapters are built with the recorder that feeds the
 		// store's agent invocation history, so a run's cost is recorded
@@ -556,6 +575,9 @@ func (s *Service) driverFor(ctx context.Context) (*driver, error) {
 // pull request's checks is measured from, because checks_timeout has to
 // survive the segment that began waiting: a resume after a restart or a
 // walked-away caller re-enters the same wait rather than beginning another.
+// It is handed the service's one code host too, so the pull request it reads
+// while it waits and the one this service re-reads at the hold that wait
+// leaves are read through the same adapter.
 func (s *Service) topologyFor(built *driver, resolved runResolution) (*topology, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -567,7 +589,7 @@ func (s *Service) topologyFor(built *driver, resolved runResolution) (*topology,
 		agents.NewStageAgent(built.agent.Runner),
 		s.home,
 		resolved.cfg,
-		forge.NewGitHubHost(redactor),
+		s.forge,
 		redactor,
 		vcs.WithRedactor(redactor),
 	).WithJudge(s.judge).WithChecksWaits(s.store)

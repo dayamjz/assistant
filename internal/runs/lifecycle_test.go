@@ -32,6 +32,10 @@ var transitions = []struct {
 		[]store.RunStatus{store.RunRunning}},
 	{"Terminate", (*runs.Service).Terminate, store.RunTerminated,
 		[]store.RunStatus{store.RunPending, store.RunRunning, store.RunHeld}},
+	{"PassOnMerge", (*runs.Service).PassOnMerge, store.RunPassed,
+		[]store.RunStatus{store.RunRunning, store.RunHeld}},
+	{"FailOnClose", (*runs.Service).FailOnClose, store.RunFailed,
+		[]store.RunStatus{store.RunRunning, store.RunHeld}},
 }
 
 // Every move against every status a run can be in. A move is either one the
@@ -125,6 +129,44 @@ func TestARunHeldAndReleasedRunsAgainAndCanStillPass(t *testing.T) {
 		}
 		if after.Status != step.want {
 			t.Fatalf("%s left the run %s, want %s", step.name, after.Status, step.want)
+		}
+	}
+}
+
+// The two moves a pull request's state makes record which state it was, with
+// the status, so the record says what ended the run. The control is the plain
+// Pass and Fail rows on runs of their own: those record no end, so an end read
+// back here is the move's own write.
+func TestAMoveMadeByThePullRequestRecordsWhichStateMadeIt(t *testing.T) {
+	ctx := t.Context()
+	s, _ := openStore(t)
+	svc := service(t, s, resolution(standin.New(t, standin.Script{})), false)
+	for _, tc := range []struct {
+		name string
+		call func(context.Context, string) (store.Run, error)
+		want store.RunStatus
+		end  store.PullRequestEnd
+	}{
+		{"PassOnMerge", svc.PassOnMerge, store.RunPassed, store.PullRequestMerged},
+		{"FailOnClose", svc.FailOnClose, store.RunFailed, store.PullRequestClosed},
+		{"control: Pass", svc.Pass, store.RunPassed, ""},
+		{"control: Fail", svc.Fail, store.RunFailed, ""},
+	} {
+		run := seedRun(t, s, svc, "run-"+tc.name)
+		place(t, svc, run.ID, store.RunRunning)
+		after, err := tc.call(ctx, run.ID)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.name, err)
+		}
+		if after.Status != tc.want {
+			t.Fatalf("%s left the run %s, want %s", tc.name, after.Status, tc.want)
+		}
+		end, known := after.PullRequestEnd.Get()
+		if tc.end == "" && known {
+			t.Fatalf("%s recorded the end %s on a run its pull request did not end", tc.name, end)
+		}
+		if tc.end != "" && (!known || end != tc.end) {
+			t.Fatalf("%s recorded the end %v, want %s", tc.name, after.PullRequestEnd, tc.end)
 		}
 	}
 }
