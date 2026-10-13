@@ -188,13 +188,29 @@ func (inv Invocation) Validate() error {
 	default:
 		return &invocationFieldError{field: "Shape", reason: "unrecognized shape " + inv.Shape.String()}
 	}
-	if inv.Dir == "" {
+	if err := validateDir(inv.Dir); err != nil {
+		return err
+	}
+	return validateEnv(inv.Env)
+}
+
+// validateDir is the rule a working directory is held to, shared by an
+// Invocation and a WorkerSpec: required, and absolute.
+func validateDir(dir string) error {
+	if dir == "" {
 		return &invocationFieldError{field: "Dir", reason: "a working directory is required"}
 	}
-	if !filepath.IsAbs(inv.Dir) {
-		return &invocationFieldError{field: "Dir", reason: "must be absolute, got " + inv.Dir}
+	if !filepath.IsAbs(dir) {
+		return &invocationFieldError{field: "Dir", reason: "must be absolute, got " + dir}
 	}
-	for name := range inv.Env {
+	return nil
+}
+
+// validateEnv is the rule per-invocation environment variables are held to,
+// shared the same way: a name is non-empty and carries no = or NUL, and a
+// value carries no NUL.
+func validateEnv(env map[string]string) error {
+	for name := range env {
 		switch {
 		case name == "":
 			return &invocationFieldError{field: "Env", reason: "an environment variable name may not be empty"}
@@ -202,7 +218,7 @@ func (inv Invocation) Validate() error {
 			return &invocationFieldError{field: "Env", reason: "environment variable name " + name + " contains = or NUL"}
 		}
 	}
-	for name, value := range inv.Env {
+	for name, value := range env {
 		if strings.ContainsRune(value, 0) {
 			return &invocationFieldError{field: "Env", reason: "the value of " + name + " contains NUL"}
 		}

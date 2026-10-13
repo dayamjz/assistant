@@ -46,13 +46,32 @@ type Agent struct {
 // separate account taken off the wire.
 func New(tb testing.TB, script Script, opts ...agents.ClaudeOption) *Agent {
 	tb.Helper()
-	return newAgent(tb, script, handshakeFlag, opts...)
+	return newAgent(tb, script, handshakeFlag, agents.ClaudeFactory, opts...)
 }
 
-// newAgent is New with the handshake flag as a parameter, so a test can build
-// an Agent over a binary that does not answer the handshake and prove the
-// check below actually refuses one.
-func newAgent(tb testing.TB, script Script, probeFlag string, opts ...agents.ClaudeOption) *Agent {
+// NewWorker is New over agents.ScriptedFactory instead of the Claude Code
+// factory: the Runner it hands back declares worker sessions as well as
+// resumable ones, so a test reaches a worker through agents.OpenWorker and a
+// one-shot invocation exactly as it would through New. The worker that
+// starts is this binary, answering as Script.Worker says.
+//
+// It is a second constructor rather than an option on New because which
+// adapter reads the stand-in is a fact a test holds: a test of the shipped
+// adapter asks for the shipped adapter, and a test that needs a worker asks
+// for the one adapter in this build that carries one.
+func NewWorker(tb testing.TB, script Script, opts ...agents.ClaudeOption) *Agent {
+	tb.Helper()
+	return newAgent(tb, script, handshakeFlag, agents.ScriptedFactory, opts...)
+}
+
+// factory is what newAgent builds the Runner with: ClaudeFactory for New and
+// ScriptedFactory for NewWorker, both of which take the same options.
+type factory func(opts ...agents.ClaudeOption) agents.Factory
+
+// newAgent is New with the handshake flag and the factory as parameters, so a
+// test can build an Agent over a binary that does not answer the handshake
+// and prove the check below actually refuses one.
+func newAgent(tb testing.TB, script Script, probeFlag string, build factory, opts ...agents.ClaudeOption) *Agent {
 	tb.Helper()
 	self, err := os.Executable()
 	if err != nil {
@@ -61,7 +80,7 @@ func newAgent(tb testing.TB, script Script, probeFlag string, opts ...agents.Cla
 	control := prepare(tb, script)
 	verify(tb, self, probeFlag)
 
-	runner, err := agents.ClaudeFactory(slices.Concat(opts, []agents.ClaudeOption{agents.WithBinary(self)})...).
+	runner, err := build(slices.Concat(opts, []agents.ClaudeOption{agents.WithBinary(self)})...).
 		New(tb.Context(), []string{controlFlag + control})
 	if err != nil {
 		tb.Fatalf("standin: building a runner over this test binary: %v", err)
@@ -185,6 +204,13 @@ func (a *Agent) Runner() agents.Runner { return a.runner }
 func (a *Agent) Arguments() []string { return []string{controlFlag + a.control} }
 
 // Calls returns what the stand-in processes recorded, in arrival order.
+//
+// A worker's record is the one exception to "complete or absent": it is
+// written when the worker starts and rewritten whole as each line arrives, so
+// a worker's Call is complete as of some line it read and may be behind the
+// worker when read. A test that needs a line to be there waits for it rather
+// than reading once after a send returned, since a send returns when the
+// bytes were written and not when the worker recorded them.
 //
 // A stand-in records what it was asked before it replies and before it holds,
 // so a call is here once its stand-in got that far, which an invocation still
