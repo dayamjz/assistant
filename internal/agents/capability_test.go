@@ -3,6 +3,7 @@ package agents_test
 import (
 	"errors"
 	"fmt"
+	"os"
 	"reflect"
 	"runtime"
 	"slices"
@@ -65,6 +66,77 @@ var probes = []probe{{
 		}
 		if refusal.Capability != agents.CapabilityResumableSessions {
 			t.Errorf("the refusal names %q, want %q", refusal.Capability, agents.CapabilityResumableSessions)
+		}
+		if refusal.Agent != r.Name() {
+			t.Errorf("the refusal names agent %q, want %q", refusal.Agent, r.Name())
+		}
+	},
+}, {
+	capability: agents.CapabilityWorkerSessions,
+	declared: func(t testing.TB, r agents.Runner) {
+		t.Helper()
+		if _, ok := r.(agents.WorkerRunner); !ok {
+			t.Errorf("%s declares %s and is no WorkerRunner, so nothing can start a worker on it",
+				r.Name(), agents.CapabilityWorkerSessions)
+			return
+		}
+		// The mechanism, not the type: a worker is started in a directory,
+		// is sent a line, and is ended, through the route a caller takes.
+		// What the worker says in between is the script's business and is
+		// not asserted here; that it is a live, driveable, endable process
+		// in a group of its own is the whole of what the declaration claims.
+		dir, err := os.MkdirTemp("", "conform-worker-")
+		if err != nil {
+			t.Fatalf("making a directory for the worker: %v", err)
+		}
+		defer os.RemoveAll(dir)
+		worker, err := agents.OpenWorker(t.Context(), r, agents.WorkerSpec{
+			Dir: dir, Instructions: "conformance: a worker is being started",
+		})
+		if err != nil {
+			t.Errorf("%s declares %s and OpenWorker could not start one: %v",
+				r.Name(), agents.CapabilityWorkerSessions, err)
+			return
+		}
+		defer worker.Close()
+		if worker.Group() <= 0 {
+			t.Errorf("%s started a worker in group %d, want a positive identifier", r.Name(), worker.Group())
+		}
+		select {
+		case <-worker.Done():
+			t.Errorf("%s's worker ended on its own before it was sent anything, so it is not long-lived", r.Name())
+			return
+		default:
+		}
+		if err := worker.Send(t.Context(), "conformance: a line after the instructions"); err != nil {
+			t.Errorf("%s's worker refused a line while running: %v", r.Name(), err)
+		}
+		worker.Close()
+		select {
+		case <-worker.Done():
+		default:
+			t.Errorf("%s's worker is not done after Close returned", r.Name())
+		}
+	},
+	undeclared: func(t testing.TB, r agents.Runner) {
+		t.Helper()
+		if _, ok := r.(agents.WorkerRunner); ok {
+			t.Errorf("%s has not declared %s and carries the mechanism anyway",
+				r.Name(), agents.CapabilityWorkerSessions)
+		}
+		dir, err := os.MkdirTemp("", "conform-worker-")
+		if err != nil {
+			t.Fatalf("making a directory for the worker: %v", err)
+		}
+		defer os.RemoveAll(dir)
+		_, err = agents.OpenWorker(t.Context(), r, agents.WorkerSpec{Dir: dir, Instructions: "anything"})
+		var refusal *agents.CapabilityError
+		if !errors.As(err, &refusal) {
+			t.Fatalf("%s has not declared %s and OpenWorker answered %v, want a *CapabilityError",
+				r.Name(), agents.CapabilityWorkerSessions, err)
+		}
+		if refusal.Capability != agents.CapabilityWorkerSessions {
+			t.Errorf("the refusal names %q, want %q", refusal.Capability, agents.CapabilityWorkerSessions)
 		}
 		if refusal.Agent != r.Name() {
 			t.Errorf("the refusal names agent %q, want %q", refusal.Agent, r.Name())
@@ -191,6 +263,31 @@ func TestAnAdapterWithoutSessionsConformsToItsDeclaration(t *testing.T) {
 	conform(t, (&stubFactory{name: "sessionless", available: true}).runner())
 }
 
+// TestTheScriptedAdapterConformsToItsDeclaration runs the suite against the
+// one adapter in this build that declares worker sessions, built over the
+// stand-in, so the worker probe is exercised against a real process rather
+// than left as a pair nothing reaches.
+func TestTheScriptedAdapterConformsToItsDeclaration(t *testing.T) {
+	conform(t, newWorkerRunner(t))
+}
+
+// What the scripted adapter declares is a fact about it too: both mechanisms,
+// and not suppression. The second half holds for the reason the shipped
+// adapter's does.
+func TestWhatTheScriptedAdapterDeclares(t *testing.T) {
+	declared := newWorkerRunner(t).Capabilities()
+	want := []agents.Capability{agents.CapabilityResumableSessions, agents.CapabilityWorkerSessions}
+	if got := declared.List(); !slices.Equal(got, want) {
+		t.Errorf("the scripted adapter declares %v, want exactly %v", got, want)
+	}
+	if slices.Contains(agents.DefaultCatalog().Names(), agents.ScriptedName) {
+		t.Errorf("the scripted adapter is in the default catalog, and no real agent answers its worker path")
+	}
+	if agents.ScriptedFactory().AutoEligible() {
+		t.Error("the scripted adapter is auto-eligible, so \"auto\" could resolve a worker nothing real answers")
+	}
+}
+
 // What the shipped adapter declares is a fact about it, so it is asserted
 // rather than derived. Claude Code has resumable sessions, and it has no
 // instruction-suppression mechanism, so a run configured to suppress a
@@ -276,6 +373,22 @@ func TestResolveRefusesAnAdapterWhoseDeclarationDoesNotMatchWhatItIs(t *testing.
 			name:      "quiet",
 			available: true,
 			sessions:  true,
+		},
+		want: "does not declare it",
+	}, {
+		name: "declares workers it cannot start",
+		factory: &stubFactory{
+			name:      "worker-boaster",
+			available: true,
+			declares:  []agents.Capability{agents.CapabilityWorkerSessions},
+		},
+		want: "carries no mechanism",
+	}, {
+		name: "starts workers it did not declare",
+		factory: &stubFactory{
+			name:      "quiet-worker",
+			available: true,
+			workers:   true,
 		},
 		want: "does not declare it",
 	}, {

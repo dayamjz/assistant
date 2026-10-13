@@ -27,7 +27,10 @@ type stubFactory struct {
 	available bool
 	declares  []agents.Capability
 	sessions  bool
-	args      []string
+	// workers says whether the runner carries the worker mechanism, on the
+	// same terms as sessions.
+	workers bool
+	args    []string
 	// namedOnly makes the factory decline AutoEligible.
 	namedOnly bool
 }
@@ -48,8 +51,13 @@ func (f *stubFactory) New(_ context.Context, args []string) (agents.Runner, erro
 // test asking about a declaration rather than about resolution.
 func (f *stubFactory) runner() agents.Runner {
 	base := &stubRunner{name: f.name, declared: agents.Declare(f.declares...)}
-	if f.sessions {
+	switch {
+	case f.sessions && f.workers:
+		return &sessionWorkerStubRunner{sessionStubRunner: &sessionStubRunner{stubRunner: base}}
+	case f.sessions:
 		return &sessionStubRunner{stubRunner: base}
+	case f.workers:
+		return &workerStubRunner{stubRunner: base}
 	}
 	return base
 }
@@ -85,6 +93,27 @@ func (r *sessionStubRunner) Fixer(context.Context, string) (agents.Fixer, error)
 // with. It is a sentinel so a test asserts on reaching the mechanism rather
 // than on the wording of a message.
 var errStubSessionReached = errors.New("the stub adapter opens no session")
+
+// workerStubRunner carries the worker mechanism and refuses to start one, on
+// the terms sessionStubRunner gives for a session: a stub worker would have
+// to hand a test a handle over no process, and a handle that answers without
+// a process behind it is the fake this repository has paid for once. What a
+// test reads from the refusal is that OpenWorker got past the declaration.
+type workerStubRunner struct{ *stubRunner }
+
+func (r *workerStubRunner) Start(context.Context, agents.WorkerSpec) (agents.Worker, error) {
+	return nil, errStubWorkerReached
+}
+
+// sessionWorkerStubRunner carries both mechanisms.
+type sessionWorkerStubRunner struct{ *sessionStubRunner }
+
+func (r *sessionWorkerStubRunner) Start(context.Context, agents.WorkerSpec) (agents.Worker, error) {
+	return nil, errStubWorkerReached
+}
+
+// errStubWorkerReached is what a stub adapter's worker mechanism answers with.
+var errStubWorkerReached = errors.New("the stub adapter starts no worker")
 
 func TestResolvePicksTheFirstAvailableAndReportsWhichOneItWas(t *testing.T) {
 	first := &stubFactory{name: "first", available: false}

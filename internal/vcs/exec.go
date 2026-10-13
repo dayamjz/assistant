@@ -217,22 +217,32 @@ var nonInteractive = [][2]string{
 	{"LC_ALL", "C"},
 }
 
-// envFor builds the environment for one invocation from base, which is
-// normally os.Environ(). It removes the variables named by redirectingVars and
-// redirectingPrefixes, then applies the settings in nonInteractive, overriding
-// any inherited value, and writes the ssh command from ssh, which is the value
-// WithSSHCommand set.
-func envFor(base []string, ssh string) []string {
-	drop := make(map[string]struct{}, len(redirectingVars)+len(nonInteractive))
+// StripRedirecting returns env without the variables that would point a git
+// started under it at a repository, a configuration, a program, or a stream
+// other than the one its arguments and working directory name: the list is
+// redirectingVars and redirectingPrefixes above, and this is the one owner of
+// it, per P14. An entry with no "=" is dropped as well, since it names no
+// variable.
+//
+// It exists for a caller that starts a process this package does not: a
+// coding agent run in a working copy will invoke git itself, and a GIT_DIR it
+// inherited from a hook or from the service that launched it would make every
+// one of those invocations act on the other repository while the agent
+// believes it is in its own. internal/agents applies it to the environment
+// it builds for a worker. What it buys that caller is exactly what the list
+// buys this package: the removed names are the ones on the list and no
+// others, and a variable a later git introduces is not removed until it is
+// added there. It is not a proof that the directory the process runs in is
+// an isolated copy, which is a different question with a different owner.
+//
+// The result is a new slice in env's order; env itself is not modified.
+func StripRedirecting(env []string) []string {
+	drop := make(map[string]struct{}, len(redirectingVars))
 	for _, k := range redirectingVars {
 		drop[k] = struct{}{}
 	}
-	for _, kv := range nonInteractive {
-		drop[kv[0]] = struct{}{}
-	}
-
-	out := make([]string, 0, len(base)+len(nonInteractive)+1)
-	for _, entry := range base {
+	out := make([]string, 0, len(env))
+	for _, entry := range env {
 		name, _, ok := strings.Cut(entry, "=")
 		if !ok {
 			continue
@@ -241,6 +251,29 @@ func envFor(base []string, ssh string) []string {
 			continue
 		}
 		if hasAnyPrefix(name, redirectingPrefixes) {
+			continue
+		}
+		out = append(out, entry)
+	}
+	return out
+}
+
+// envFor builds the environment for one invocation from base, which is
+// normally os.Environ(). It removes the variables named by redirectingVars and
+// redirectingPrefixes through StripRedirecting, then applies the settings in
+// nonInteractive, overriding any inherited value, and writes the ssh command
+// from ssh, which is the value WithSSHCommand set.
+func envFor(base []string, ssh string) []string {
+	drop := make(map[string]struct{}, len(nonInteractive))
+	for _, kv := range nonInteractive {
+		drop[kv[0]] = struct{}{}
+	}
+
+	stripped := StripRedirecting(base)
+	out := make([]string, 0, len(stripped)+len(nonInteractive)+1)
+	for _, entry := range stripped {
+		name, _, _ := strings.Cut(entry, "=")
+		if _, skip := drop[name]; skip {
 			continue
 		}
 		out = append(out, entry)

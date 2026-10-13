@@ -157,6 +157,7 @@ func (f *claudeFactory) New(ctx context.Context, args []string) (Runner, error) 
 		return nil, fmt.Errorf("%s is not runnable: %w", f.settings.bin, err)
 	}
 	return &claudeRunner{
+		name:     ClaudeName,
 		settings: f.settings,
 		resolved: resolved,
 		extra:    slices.Clone(args),
@@ -165,13 +166,18 @@ func (f *claudeFactory) New(ctx context.Context, args []string) (Runner, error) 
 
 // claudeRunner runs prompts through one Claude Code installation.
 type claudeRunner struct {
+	// name is what every record and refusal names as the agent. It is
+	// ClaudeName here, and the scripted adapter, which runs its one-shot
+	// invocations through this same type, gives it its own name so a record it
+	// produces does not read as Claude Code's.
+	name     string
 	settings claudeSettings
 	resolved string
 	extra    []string
 }
 
-// Name returns "claude".
-func (r *claudeRunner) Name() string { return ClaudeName }
+// Name returns the adapter's name, "claude" for this factory's runners.
+func (r *claudeRunner) Name() string { return r.name }
 
 // Capabilities is what this adapter declares.
 //
@@ -342,7 +348,7 @@ func (r *claudeRunner) invoke(ctx context.Context, purpose Purpose, inv Invocati
 	// becomes of it.
 	record := Record{
 		Purpose: purpose,
-		Agent:   ClaudeName,
+		Agent:   r.name,
 		Model:   inv.Model,
 		Session: s.use(),
 		Started: time.Now(),
@@ -364,7 +370,7 @@ func (r *claudeRunner) invoke(ctx context.Context, purpose Purpose, inv Invocati
 		}
 		return Result{}, reference, &InvocationError{
 			Purpose:  purpose,
-			Agent:    ClaudeName,
+			Agent:    r.name,
 			Failure:  category,
 			ExitCode: code,
 			Message:  message,

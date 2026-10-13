@@ -1,12 +1,16 @@
 package standin
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strings"
 	"time"
+
+	"github.com/dayamjz/assistant/internal/agents"
 )
 
 // The stand-in takes everything it needs from its command line, and nothing
@@ -72,8 +76,17 @@ func Main() {
 	if !ok {
 		return
 	}
+	if !slices.Contains(args, printFlag) {
+		os.Exit(serveWorker(control, args))
+	}
 	os.Exit(serve(control, args))
 }
+
+// printFlag is the flag the adapter puts on every one-shot invocation and on
+// no worker. Its absence is how this process knows it was started as a
+// worker, which is what the wire carries: an interactive agent is one started
+// without it.
+const printFlag = "--print"
 
 // flagValue is the value of the first argument with this prefix, and whether
 // there was one.
@@ -139,6 +152,71 @@ func serve(control string, args []string) int {
 		return ExitUnscripted
 	}
 	return emit(script.Steps[step].Reply, call)
+}
+
+// serveWorker runs this process as a worker: it records itself, greets, then
+// reads standard input line by line until it is closed, answering each line as
+// the script's exchanges say and rewriting its record as each arrives.
+//
+// It exits when its input closes, which is what the adapter's Close does
+// first, and it is otherwise ended by the tree termination that follows; a
+// worker that ignored both would be a worker the test wrote, and there is no
+// exchange for that.
+func serveWorker(control string, args []string) int {
+	script, err := readScript(control)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "standin: "+err.Error())
+		return exitNoScript
+	}
+	dir, _ := os.Getwd()
+	call := Call{Args: args, Dir: dir, Step: -1, Worker: true}
+	seq, err := claimCall(control, call)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "standin: "+err.Error())
+		return exitNoRecord
+	}
+	call.Seq = seq
+
+	worker := script.Worker
+	if worker == nil {
+		worker = &WorkerScript{}
+	}
+	if worker.Greeting != "" {
+		if _, err := fmt.Fprintln(os.Stdout, worker.Greeting); err != nil {
+			fmt.Fprintln(os.Stderr, "standin: writing the greeting: "+err.Error())
+			return exitNoOutput
+		}
+	}
+	scanner := bufio.NewScanner(os.Stdin)
+	scanner.Buffer(make([]byte, 0, 64<<10), agents.MaxPromptBytes+1)
+	for scanner.Scan() {
+		line := scanner.Text()
+		call.Lines = append(call.Lines, line)
+		if err := record(callsPath(control), call); err != nil {
+			fmt.Fprintln(os.Stderr, "standin: "+err.Error())
+			return exitNoRecord
+		}
+		answered := false
+		for _, exchange := range worker.Exchanges {
+			if !exchange.answers(line) {
+				continue
+			}
+			if _, err := fmt.Fprintln(os.Stdout, exchange.Reply); err != nil {
+				fmt.Fprintln(os.Stderr, "standin: writing a reply: "+err.Error())
+				return exitNoOutput
+			}
+			answered = true
+			break
+		}
+		if !answered {
+			fmt.Fprintf(os.Stderr, "standin: no exchange of the script answers this line: %s\n", shorten(line))
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		fmt.Fprintln(os.Stderr, "standin: reading a line: "+err.Error())
+		return exitNoStdin
+	}
+	return worker.Exit
 }
 
 // readScript reads the script the Agent wrote for this control directory.
