@@ -5,11 +5,15 @@ import (
 	"errors"
 	"flag"
 	"strings"
+	"time"
 
 	"github.com/dayamjz/assistant/internal/findings"
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/pipeline"
+	"github.com/dayamjz/assistant/internal/service"
+	"github.com/dayamjz/assistant/internal/supervisor"
+	"github.com/dayamjz/assistant/internal/supervisor/feed"
 )
 
 // attachOrStart is the command with no verb: attach to this branch's active
@@ -228,25 +232,41 @@ func reportStatus(ctx context.Context, in *invocation) (any, error) {
 			// for, and about the only thing that could have told it.
 			return nil, err
 		}
-		return in.localStatus(working, err), nil
+		return in.localStatus(ctx, working, err), nil
 	}
 	return status, nil
 }
 
 // localStatus is what a status reports when the service did not answer: the
-// home, the working copy the command was run in, and why the service is not
-// there.
+// home, the working copy the command was run in, why the service is not
+// there, and the pull guard's finding.
 //
 // It reports less than a served status rather than reading the records the
 // service owns, and it reads the working copy no further than the path,
 // because everything else about a status has one owner and this is not it.
-func (in *invocation) localStatus(working string, cause error) machine.Status {
-	return machine.Status{
+// The one record it does read is the in-flight set, through
+// internal/supervisor/feed's read-only open, because PRD section 5's pull
+// guard is owed by a command whose job includes reporting the service is
+// down, and that is this one. The guard judges freshness by the operator's
+// own supervision_beacon_interval; an operator file that does not parse
+// leaves the guard uncomputed, with the parse error in Detail, rather than
+// judged by a default the operator did not set.
+func (in *invocation) localStatus(ctx context.Context, working string, cause error) machine.Status {
+	status := machine.Status{
 		Home:    in.home.Root(),
 		Service: machine.Service{Socket: in.home.Socket(), Detail: cause.Error()},
 		Branch:  &machine.Branch{WorkingPath: working},
 		Detail:  "the service is not running, so the repository, gate, branch, and run state it owns were not read",
 	}
+	cfg, err := service.GlobalConfig(in.home.ConfigFile())
+	if err != nil {
+		status.Detail += "; whether work is under way unwatched was not decided, because the configuration did not resolve: " + err.Error()
+		return status
+	}
+	verdict := feed.Guard(ctx, in.home, supervisor.FreshnessFor(cfg.SupervisionBeaconInterval), time.Now())
+	supervision := machine.SupervisionOf(verdict)
+	status.Supervision = &supervision
+	return status
 }
 
 // listRuns reports recent runs, newest first, or one run in full when it is
