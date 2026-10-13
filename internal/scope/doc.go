@@ -69,10 +69,19 @@
 // owns why, and owns what a caller does when a run legitimately reaches it
 // with nothing left to ask about.
 //
-// What the claim is not is verified. This package does not read the intent or
-// the reason for sense, so a reviewer that writes a false reason for a path
-// silences the note for that path. The lens turns an untraced change into a
-// note; it does not adjudicate a trace.
+// What the claim is not is verified here. This package does not read the
+// intent or the reason for sense, so a reviewer that writes a false reason for
+// a path silences the note for that path. The lens turns an untraced change
+// into a note; it does not adjudicate a trace.
+//
+// Where a decision model checked a trace, ObserveChecked takes the traces it
+// did not confirm, and those silence nothing: the path gets the ordinary
+// untraced note, which also quotes the reason and says the changes did not
+// bear it out. The check is internal/judge's and the wiring is the review
+// stage's; this package only refuses to count a trace it is told was not
+// confirmed, and it can add a note that way but never remove one. A trace
+// nobody checked, or whose check could not run, still silences its path on
+// the reviewer's word alone.
 //
 // # The rest of what it does not promise
 //
