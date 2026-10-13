@@ -22,6 +22,10 @@ type migration struct {
 // the list grows.
 const sealCheckpointTableMigration = "seal the one-row checkpoint"
 
+// sealTaskStateTableMigration names the migration that empties and seals the
+// task_state table, for the reason sealCheckpointTableMigration is a constant.
+const sealTaskStateTableMigration = "task attribution and seal the stored task state"
+
 // schema is the migration list this package applies. Adding a column means
 // appending a migration whose ALTER TABLE names a nullable column with no
 // default, so rows written before it reads back unknown; migrate refuses
@@ -416,6 +420,41 @@ var schema = []migration{
 				recorded_at TEXT NOT NULL
 			) STRICT`,
 			`CREATE INDEX decision_answer_run ON decision_answer(run, seq)`,
+		},
+	},
+	{
+		version: 10,
+		name:    sealTaskStateTableMigration,
+		statements: []string{
+			// PRD section 6 resolves a task's state deterministically from the
+			// records that own the facts: the run attributed to the task's
+			// branch, the process signal, and the event log. A table holding
+			// that answer is the rewritten summary PRD section 8 calls the P14
+			// failure, so internal/taskstate computes it on every read and
+			// this table stops being one. It is sealed rather than dropped for
+			// migration 6's reason: a migration may not remove a table.
+			//
+			// Attribution needs what a run is attributed by. Both columns are
+			// nullable with no default, so a task recorded before them reads
+			// back unknown: an investigation task has no branch, and the
+			// record understates for an old row.
+			`ALTER TABLE task ADD COLUMN repository_id TEXT`,
+			`ALTER TABLE task ADD COLUMN branch TEXT`,
+			`CREATE INDEX run_branch ON run(repository_id, branch, created_at)`,
+			// A task_state row written by an earlier build is a second answer
+			// to a question that now has none stored, so it goes, as the
+			// checkpoint row did in migration 6. No code path in this
+			// repository wrote one outside tests. As there, only INSERT is
+			// refused: with the table empty UPDATE and DELETE have nothing to
+			// act on, and extending the trigger to them would only freeze a
+			// row written before the seal. Like that seal, it does not guard
+			// against a later migration that drops the trigger.
+			`DELETE FROM task_state`,
+			`CREATE TRIGGER task_state_is_not_a_record
+				BEFORE INSERT ON task_state
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a task''s state is resolved by internal/taskstate, and the task_state table is not a record');
+				END`,
 		},
 	},
 }
