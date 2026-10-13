@@ -28,9 +28,9 @@ type Config struct {
 	// ReviewPathRules is extra review guidance scoped to paths, in declared
 	// order.
 	ReviewPathRules []PathRule
-	// JudgePaths are the patterns naming the files that decide whether a
-	// check passes: tests, lint configuration, and CI workflow definitions.
-	// PRD section 5's "A check does not judge its own edits" is the rule they
+	// JudgePaths are the patterns naming the files the repository treats as
+	// deciding whether a check passes. A file counts only if a pattern here
+	// matches it; nothing else about it is consulted. PRD section 5's "A check does not judge its own edits" is the rule they
 	// feed, and internal/stages applies it. An empty set turns that rule off.
 	JudgePaths PatternSet
 	// DocumentOwnership says which document owns which subject. Subjects are
@@ -307,9 +307,15 @@ func checkSubjectText(what, s string) error {
 }
 
 // defaultJudgePatterns is the default of KeyJudgePaths, as PRD section 10's
-// schema row writes it: the common conventions for where tests, test data,
-// CI workflows, and lint configuration live. That row owns the list; this is
-// its text, compiled by the one matcher.
+// schema row writes it. That row owns the list; this is its text, compiled by
+// the one matcher. It selects what these sixteen patterns match and nothing
+// more: Go and Python test files by the names listed, *.test.* and *.spec.*
+// files, anything under a test, tests, __tests__, or testdata directory,
+// GitHub Actions workflows, golangci-lint and ESLint configuration, ruff.toml,
+// and a file named Makefile. Other conventions are not in it - a GitLab CI
+// file, a Java *Test.java, a conftest.py outside a tests directory, or a
+// jest.config.* - and a repository that keeps checks in such files names
+// them in its trusted copy.
 var defaultJudgePatterns = []string{
 	"*_test.go",
 	"*_test.py",
