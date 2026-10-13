@@ -837,8 +837,12 @@ flowchart TD
 
   <h3 class="text-xl font-semibold mb-3">What you do at a hold</h3>
   <p class="mb-4 opacity-90">
-    A hold offers four actions, and they are the same whether you act through the terminal interface
-    or an agent acts through the machine interface.
+    A hold offers up to four actions, and they are the same whether you act through the terminal
+    interface or an agent acts through the machine interface. Approve, skip, and cancel are offered
+    at every hold. Fix is offered at the six stages before push, intent through lint, and not at
+    push, pull request, or checks, for the reason section 14 decision 8 records: a round at push
+    would push its result before you saw it, and a round at the two stages after push would leave
+    a commit nothing pushes.
   </p>
   <div class="overflow-x-auto rounded-box border border-base-content/10 bg-base-100 mb-6">
     <table class="table table-sm table-zebra">
@@ -852,10 +856,11 @@ flowchart TD
     </table>
   </div>
   <p class="mb-8 opacity-90">
-    What the fixer receives for a round is the selection you made, your notes, your own findings, and
-    a sanitized history of earlier rounds including which findings you deliberately left unselected.
-    A later review uses that history to avoid re-reporting something you already decided about,
-    unless the code now presents a materially different issue.
+    What the fixer receives for a round is the selection you made, your notes, your own findings,
+    the findings you left unselected in that round's report, and the previous round's summary.
+    History does not accumulate beyond that: a finding you left unselected in an earlier round can
+    be reported again by a later review, and you decide about it again. That fails toward you, since
+    nothing is hidden, and the cost is your attention. No review reads this history.
   </p>
 
   <h3 class="text-xl font-semibold mb-3">A check does not judge its own edits</h3>
@@ -904,6 +909,31 @@ flowchart TD
     code. A test or lint round's edits to the rest of the code are reviewed before anything is
     pushed, which section 14's seventh decision records; a checks round runs after the push and is
     not.
+  </p>
+
+  <h3 class="text-xl font-semibold mb-3">Waiting on checks</h3>
+  <p class="mb-4 opacity-90">
+    The checks stage waits for the checks on the pull request's head to settle, and that wait is
+    not a hold: while it lasts the run is executing and something is advancing it, so the run reads
+    as running, and a task attributed to it reads as validating. Section 6's lifecycle word Paused
+    is a worker's own declared wait and is not this one. Only when <code>checks_timeout</code>
+    elapses does the stage hold, which is section 10's "on elapse the run holds rather than ending",
+    and that hold is the one section 11's recovery step 3 re-reads the pull request before resuming.
+  </p>
+  <p class="mb-4 opacity-90">
+    Every read of the wait, including the first after a restart, reads the pull request's state
+    before it reads the checks, by the pull request's recorded identifier and never through a
+    lookup that cannot return a merged or closed pull request. Only a pull request the provider
+    positively reports as merged or closed ends the wait. A state that is open, unrecognized, or
+    not read leaves the run waiting, or held once the timeout has elapsed.
+  </p>
+  <p class="mb-8 opacity-90">
+    A run that ends because its pull request was merged is complete, not newly validated: its
+    checks were not read to a verdict, the rule that only a <code>no_ci</code> declaration makes an
+    empty check list green was never applied, and the record says a merge ended it and that the
+    checks were not settled. A pull request closed without merging ends the run as failed, with the
+    reason recorded as "pull request closed without merging". Neither adds an outcome: the outcome
+    row in section 9 is unchanged.
   </p>
 
   <h3 class="text-xl font-semibold mb-3">What passing the gate means</h3>
@@ -1024,7 +1054,7 @@ stateDiagram-v2
       <thead><tr><th class="w-40">Record</th><th class="w-32">Shape</th><th>Answers</th></tr></thead>
       <tbody>
         <tr><td><b>Event log</b></td><td>Append-only</td><td>What has happened to this task, in order. Each append is a wake. Never read its tail to decide what is true now.</td></tr>
-        <tr><td><b>State record</b></td><td>Authoritative, one owner</td><td>What is true now. Resolved deterministically, with the source of the answer attached.</td></tr>
+        <tr><td><b>State record</b></td><td>Resolved on read, not stored</td><td>What is true now. A resolution with the source of the answer attached, computed on each read from the records that own its facts, and determined as of one consistent read of them. Nothing stores it: a stored copy would be a second record of facts that already have an owner, per P14.</td></tr>
       </tbody>
     </table>
   </div>
@@ -1039,6 +1069,20 @@ stateDiagram-v2
     An event that closes a decision is decision-only: it never becomes current state, and its text
     never leaks into the state detail. If the log's last event says a decision is open but the
     validation run has moved past it, the resolver reports that event as superseded.
+  </p>
+  <p class="mb-4 opacity-90">
+    Which run belongs to a task has no owner row. A run is attributed by repository, branch, and
+    being no older than the task, and the resolution names the run it chose, so a reader can see
+    what the answer rested on.
+  </p>
+  <p class="mb-8 opacity-90">
+    Task state is its own vocabulary and not a second rendering of a run's outcome. The outcome
+    translation in section 9 answers the person driving one run; task state answers the fleet view,
+    and the two are not required to agree word for word. A test pins that every run status maps to
+    a task state; it does not pin the words to the outcome set, so a run a person cancelled reads
+    <code>cancelled</code> as an outcome and Failed as a task state. The lifecycle's Landed and
+    Complete are not resolved in this build, because no record here holds the merge fact or the
+    cleanup proof they need.
   </p>
 
   <h3 class="text-xl font-semibold mb-3">Supervision</h3>
@@ -1469,7 +1513,7 @@ flowchart TB
   you["You"] <--> ag["Coordinator agent<br />conversation, intake, judgment"]
   ag -->|"typed commands only"| pr["Coordinator program<br />state, guards, refusals"]
   pr -->|"structured results and refusals"| ag
-  pr --> st[("Authoritative state")]
+  pr --> st[("Records, one owner each")]
   pr --> gate["The gate"]
   pr --> fleet["Workers and sessions"]
   ag -.->|"cannot reach directly"| st
@@ -1586,7 +1630,7 @@ flowchart TB
         <tr><td><b>tasks</b></td><td>Task records, the two shapes, intake, queueing, promotion, cleanup proofs.</td><td>Create, dispatch, promote, complete, clean up.</td></tr>
         <tr><td><b>session</b></td><td>Terminal session provider abstraction: create, capture, send, probe, close.</td><td>One interface; the default provider is the reference implementation.</td></tr>
         <tr><td><b>supervisor</b></td><td>Wake classification, the durable queue, liveness beacons, the stop guard.</td><td>Classify a wake; drain the queue; assert supervision is live.</td></tr>
-        <tr><td><b>taskstate</b></td><td>The authoritative current-state resolver. Read-only and free of side effects.</td><td>One call in, one state plus source plus detail out.</td></tr>
+        <tr><td><b>taskstate</b></td><td>The current-state resolver. Computes a task's state on each read and stores nothing. Read-only and free of side effects.</td><td>One call in, one state plus source plus detail out.</td></tr>
 
         <tr class="bg-base-200"><td colspan="3" class="font-semibold text-xs uppercase tracking-wider opacity-70">Shared</td></tr>
         <tr><td><b>agents</b></td><td>Adapters for each coding agent, fallback ordering, retries, session reuse, structured output.</td><td>Run a prompt with an optional schema; return output, text, usage, session.</td></tr>
@@ -1640,9 +1684,9 @@ flowchart TB
         <tr><td><b>round</b></td><td>History</td><td>One row per stage execution. Findings, which findings were selected and by whom, the exact payload sent to the fixer, and the one-line summary. This is what the pull request narrative is generated from.</td></tr>
         <tr><td><b>checkpoint history</b></td><td>Authoritative, appended</td><td>One entry per position a run has stood in: state, the node it has not yet run, the status it stood in, the decision it is halted on when it is halted, the bound accounting, and, on an entry a fork produced, the entry it was copied from. Appended after every node and never revised. The entry with the highest sequence is where the run stands, and it is the only record that answers that.</td></tr>
         <tr><td><b>task</b></td><td>Authoritative</td><td>Shape, project, mode, isolated copy path, session reference, linked run, linked pull request.</td></tr>
-        <tr><td><b>task state</b></td><td>Authoritative</td><td>The current state, resolved. Distinct from the event log, per P8.</td></tr>
+        <tr><td><b>task state</b></td><td>Resolved on read</td><td>Not a stored row. A resolution with its source attached, computed on each read from the records that own its facts, as of one consistent read of them; section 6 says what it rests on. Distinct from the event log, per P8.</td></tr>
         <tr><td><b>task event</b></td><td>History</td><td>Append-only. Every append is a wake.</td></tr>
-        <tr><td><b>hold</b></td><td>Authoritative</td><td>A decision waiting on you, with a stable key. Idempotent to register. Closed only by an explicit resolution, never by the surrounding work finishing.</td></tr>
+        <tr><td><b>hold</b></td><td>Authoritative</td><td>A decision waiting on you, with a stable key. Idempotent to register. Closed only by an explicit resolution, recorded with who made it, never by the surrounding work finishing. The one resolution the service makes itself is for the hold the checks stage raises when <code>checks_timeout</code> elapses: when the pull request that hold waits on is read as merged or closed, the question it asked no longer exists, and the service records that reading as the resolution and itself as the resolver. Every other hold keeps the rule.</td></tr>
         <tr><td><b>agent invocation</b></td><td>History</td><td>Purpose, agent, model, timing, failure category, token usage. Never prompts, outputs, diffs, or credentials.</td></tr>
       </tbody>
     </table>
@@ -1686,7 +1730,9 @@ flowchart TB
       <p class="text-sm opacity-90">
         A hold is closed only by an explicit resolution, and that resolution carries who made it,
         drawn from a closed set of values. The set is closed, so there is no free-text alternative
-        that could grow into an unaudited one. The value meaning a person decided cannot be produced
+        that could grow into an unaudited one. The program itself is a member of that set, for the
+        one resolution the data model lets it make on a fact it re-read, with nobody deciding
+        anything. The value meaning a person decided cannot be produced
         by any path an agent reaches, on any surface. An agent driving the machine interface resolves
         holds with the same options and the same authority as you, per section 9; what it cannot do
         is produce a record saying a person decided.
@@ -1750,7 +1796,11 @@ flowchart TB
           Publishing never blocks the executor. Anything dropped collapses into one sticky gap
           marker that is delivered ahead of queued payload, so a consumer learns it is missing
           something before it acts on what follows. Every state event carries a monotonic revision,
-          and every subscription opens in the gap state so attaching always reconciles first.
+          a delivery counter the publishing service holds for as long as it runs and increments per
+          event it publishes. It orders delivery within that life and is not state: a restart begins
+          a new sequence, and every subscription opens in the gap state, including one opened after
+          a restart, so attaching always reconciles from a full read before applying a delta. A
+          task's state is read, never reconstructed from its events.
         </p>
       </div>
     </div>
@@ -1984,7 +2034,7 @@ flowchart TB
         <tr><td><code>suppress_project_instructions</code></td><td><code>false</code></td><td>For a repository whose own instructions would give a validating agent an operator identity. If any resolved agent lacks a verified suppression mechanism, the run fails before launching it.</td></tr>
         <tr><td><code>no_ci</code></td><td><code>false</code></td><td>A positive declaration that this repository has no checks. Only this makes an empty check list count as green.</td></tr>
         <tr><td><code>allow_pushed_commands</code></td><td><code>false</code></td><td>The opt-out that lets the pushed branch set commands and agent selection. It is itself readable only from the trusted copy, so a branch cannot enable it for itself.</td></tr>
-        <tr><td><code>checks_timeout</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code>168h</code></td><td>Idle timeout, re-armed whenever the base branch advances. On elapse the run holds rather than ending.</td></tr>
+        <tr><td><code>checks_timeout</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code>168h</code></td><td>Idle timeout, re-armed whenever the base branch advances. On elapse the run holds rather than ending, and that hold is the one section 11's recovery step 3 applies to.</td></tr>
         <tr><td><code>session_reuse</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code>true</code></td><td>One durable fixer session per run. Review turns are always fresh regardless, per P4.</td></tr>
         <tr><td><code>decision_model</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code>evaluate</code></td><td>The mode of the checks in section 5, "Checks a decision model may add": <code>evaluate</code>, <code>enforce</code>, or <code>off</code>. They run against the one supported provider, and only where the provider's key is in the operator's environment, never in a configuration file; with the key present they send the changed lines of every reviewed file to that provider.</td></tr>
         <tr><td><code>commit.fix_message</code></td><td><code>fix: {summary}</code></td><td>Subject line for fix commits. <code>{summary}</code> is the single required substitution, replaced by the agent's summary of the fix; a template without it is invalid. The template, the agent's summary, and the rendered result are each validated for length and for characters that could disguise content before anything is staged.</td></tr>
@@ -2036,9 +2086,9 @@ flowchart TB
   <h3 class="text-xl font-semibold mb-3">Service restart</h3>
   <p class="mb-3 opacity-90">On startup, after taking the exclusive lock and before serving anything:</p>
   <ol class="list-decimal pl-6 space-y-1.5 mb-6 opacity-90">
-    <li>Complete runs whose recorded pull request is already merged or closed.</li>
+    <li>End runs whose recorded pull request is already merged or closed, on the terms section 5's "Waiting on checks" gives: merged completes the run, and closed without merging fails it with the reason recorded.</li>
     <li>Resume only fully recorded holds whose isolated copy and stage history both validate. An ambiguous or partially recorded active run fails closed rather than resuming on a guess.</li>
-    <li>Before resuming a hold that waits on external checks, re-read the pull request. Merged or closed completes the stale hold; open, unknown, or unreachable stays held.</li>
+    <li>Before resuming the hold the checks stage raised when <code>checks_timeout</code> elapsed, and only that hold, re-read the pull request by its recorded identifier, never through a lookup that cannot return a merged or closed pull request. A pull request positively read as merged or closed closes that hold by an explicit resolution the service records, naming itself as the resolver and the state it read, and the run ends as section 5's "Waiting on checks" says for that state. Open, unrecognized, or not read stays held. A hold that waits on a person's decision about a finding is not re-read: the pull request's state must not answer a question a person was asked.</li>
     <li>Mark every other stale active run failed, with the reason recorded.</li>
     <li>Reap orphaned agent processes, remove isolated copies no run owns, and never touch one whose run is still active.</li>
     <li>Clear any waiting-on-a-person marker so a recovered failed run is not displayed as still waiting.</li>
@@ -2129,13 +2179,13 @@ flowchart TB
           <li>All nine stages. Cutting one breaks P2.</li>
           <li>Findings with three actions and the fail-closed default.</li>
           <li>The fix loop with all three bounds.</li>
-          <li>Holds, the four actions, and durable resume.</li>
+          <li>Holds, their actions (up to four, per section 5), and durable resume.</li>
           <li>The graph layer with halt points and checkpoints.</li>
           <li>The data-loss rules in full. This is not phaseable.</li>
           <li>The configuration trust boundary in full. Also not phaseable.</li>
           <li><b>Claude Code</b> as the only agent adapter, behind the full adapter interface. It has a native output schema and resumable sessions, so the structured-output and session-reuse paths are exercised properly rather than stubbed.</li>
           <li><b>One</b> forge adapter.</li>
-          <li>Fleet: <b>both task shapes</b>, dispatch, isolation assertion, the authoritative state record, cleanup proofs, and promotion from investigation to delivery.</li>
+          <li>Fleet: <b>both task shapes</b>, dispatch, isolation assertion, the state resolver, cleanup proofs, and promotion from investigation to delivery.</li>
           <li>Decision holds raised by an investigation, and the cleanup check that refuses without them.</li>
           <li>The watcher, the durable queue, and the stop guard.</li>
           <li>The terminal interface and the machine interface.</li>
@@ -2185,10 +2235,11 @@ flowchart TB
     <div class="min-w-0">
       <p class="font-semibold mb-1">The one thing to build first</p>
       <p class="text-sm opacity-90">
-        Before the graph layer, before the fleet, build the authoritative state record and its
-        resolver. It needs no new infrastructure, it is the smallest change in this document, and it
-        removes an entire class of wrong behavior: acting on a stale event because the tail of a log
-        was mistaken for the truth. Everything else in the orchestrator reads from it.
+        Before the graph layer, before the fleet, build the state resolver, which computes the
+        state record on each read and stores nothing. It needs no new infrastructure, it is the
+        smallest change in this document, and it removes an entire class of wrong behavior: acting
+        on a stale event because the tail of a log was mistaken for the truth. Everything else in
+        the orchestrator reads from it.
       </p>
     </div>
   </div>
