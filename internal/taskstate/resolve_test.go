@@ -340,11 +340,12 @@ func TestARelaunchIsANoteUntilTheDispatchFollowsIt(t *testing.T) {
 	}
 }
 
-// Every kind names its writer, the four kinds that record the program's own
+// Every kind names its writer, the five kinds that record the program's own
 // decisions are the program's alone, and the rest are the worker's.
 func TestTheWriterColumnKeepsTheProgramsKindsFromAWorker(t *testing.T) {
 	programOnly := map[string]bool{
 		store.OpeningEventKind: true, store.DispatchedEventKind: true, "isolation-refused": true, "relaunched": true,
+		store.PromotedEventKind: true,
 	}
 	for _, row := range Kinds() {
 		switch {

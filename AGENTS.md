@@ -161,7 +161,11 @@ Each has cost this repository more than one round of review.
   `StoreTaskReport` in the transaction that registers the holds derived from
   it, with the parsed report opaque and the hold keys the one fact the row
   holds about it. `RecordTaskCleanup` takes the shape it was decided for and
-  refuses `ErrTaskShapeMoved` in the claiming transaction.
+  refuses `ErrTaskShapeMoved` in the claiming transaction, and
+  `TransitionTaskShape`, promotion's one write, flips shape, repository and
+  branch with the `promoted` entry in one anchored transaction, one way
+  only, and refuses `ErrCleanupRecorded` by reading the claim the same way,
+  so the two writes have exactly one loser in either order.
   `ForgetHoldForTest` takes the test and is a counterfeit builder for the hold
   rule's refusal case, never a production path.
   A schema change is a new migration appended to `schema.go`, never an edit to
@@ -384,8 +388,9 @@ Each has cost this repository more than one round of review.
   which `doc.go` says. Read its `doc.go` for the residual gaps, and for why PRD
   section 8's "task state" row is read as a resolution rather than a row.
 - `internal/tasks` is PRD section 8's tasks module as far as this build takes
-  it: intake, queueing, and the P11 assertion, with dispatch and the copy in
-  `internal/service` and the launch in `internal/session`. `Expect` computes
+  it: intake, queueing, the P11 assertion, the P12 cleanup decision and
+  promotion, with dispatch and the copy in `internal/service` and the launch
+  in `internal/session`. `Expect` computes
   a task's `Expectation` and its second-check shell line from one call, and
   `AssertIsolated` compares a real `vcs.Observation` against it by file
   identity, never by string, with an exact remote set per shape and a typed
@@ -445,7 +450,22 @@ Each has cost this repository more than one round of review.
   `doc.go` lists the gaps: a stated liveness is believed, the window after
   the read is covered by the inventory re-read alone, the discarding
   worktree removal stays reachable, ignored files are invisible, and a
-  promotion between the record and the removal is #109's to refuse.
+  promoted copy holding nothing main lacks passes the content proof like a
+  fresh delivery copy.
+  `Promote` is PRD section 5's promotion, a library entry on `Create`'s
+  terms (no verb, no method: #95 line E) and the one place this package
+  writes into a copy. The flip is first and is `store.TransitionTaskShape`
+  anchored to the resolution's event sequence, under the branch exclusion,
+  from the closed table `Promotable`; branch and repository come from the
+  request and are held to intake's branch rule and the floor, which refuses
+  `*BranchHeldError` rather than queueing a running task; the report is a
+  pointer to its row; the copy is then asserted (so a copy reaching the
+  primary is never written to), shaped with the gate remote and the branch
+  at HEAD, and asserted again, with a refusal recorded as
+  `isolation-refused` anchored to the `promoted` entry. Read `promote.go`'s
+  opening comment and `doc.go` before changing the order, and for the gaps:
+  the copy side is never repeated, the environment asserted is the
+  request's, and the `promoted` note resolves Unknown at the event tier.
 - `internal/session` is PRD section 8's terminal session provider, and the
   word means a terminal session, never the conversation session
   `internal/agents` keeps for a fixer: `Provider` is the five operations and
