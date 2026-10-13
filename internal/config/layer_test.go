@@ -91,6 +91,7 @@ func TestParseAcceptsTheWholeSchema(t *testing.T) {
 		"checks_timeout": "30m",
 		"session_reuse": false,
 		"decision_model": "enforce",
+		"supervision_beacon_interval": "30s",
 		"commit": {"fix_message": "fix(gate): {summary}"},
 		"allow_pushed_commands": true
 	}`
@@ -190,6 +191,10 @@ func TestParseRefusalsNameTheKeyAndValue(t *testing.T) {
 		{"duration unparseable", `{"checks_timeout": "a while"}`, KeyChecksTimeout, `"a while"`},
 		{"duration not positive", `{"checks_timeout": "0s"}`, KeyChecksTimeout, `"0s"`},
 		{"duration over the limit", `{"checks_timeout": "9000h"}`, KeyChecksTimeout, `"9000h"`},
+		{"beacon interval as a number", `{"supervision_beacon_interval": 10}`, KeySupervisionBeaconInterval, "10"},
+		{"beacon interval unparseable", `{"supervision_beacon_interval": "soon"}`, KeySupervisionBeaconInterval, `"soon"`},
+		{"beacon interval under the floor", `{"supervision_beacon_interval": "500ms"}`, KeySupervisionBeaconInterval, `"500ms"`},
+		{"beacon interval over the ceiling", `{"supervision_beacon_interval": "11m"}`, KeySupervisionBeaconInterval, `"11m"`},
 		{"decision model misspelled", `{"decision_model": "Evaluate"}`, KeyDecisionModel, `"Evaluate"`},
 		{"decision model not a string", `{"decision_model": false}`, KeyDecisionModel, "false"},
 		{"decision model as a cutoff", `{"decision_model": "0.5"}`, KeyDecisionModel, `"0.5"`},

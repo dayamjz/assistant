@@ -226,8 +226,14 @@ func Coverage() []Established {
 				"established by neither, and the kind for an authenticated check result has no " +
 				"producer in this build, so its rows test a path nothing walks."},
 		{principles.P10, ReachNone,
-			"There is no coordinator and no watcher here, so no turn ends. internal/principles declares " +
-				"this gap."},
+			"Not driven here: no coordinator ends a turn in this build, and no verb or method runs the " +
+				"guard. P10 is cited by internal/supervisor/feed's test, for the predicate fed from the " +
+				"real mechanism: a lock a second process holds, a beacon the real writer wrote, an " +
+				"instance file internal/home wrote and a database the read-only open reads. A stale " +
+				"beacon blocks with the holder alive, a fresh one blocks with the lock free, and the " +
+				"positive control allows. What that test does not reach is the hook at turn end, which " +
+				"is #106's, and a loop that writes the beacon, which is #100's; today nothing writes " +
+				"one, so a fleet with work in flight reads unsupervised, which is the case."},
 		{principles.P11, ReachNone,
 			"No walk here starts a worker, so nothing here reaches it. internal/tasks' own tests " +
 				"establish it at package reach and only the assertion half: AssertIsolated refuses a " +
@@ -247,8 +253,10 @@ func Coverage() []Established {
 		{principles.P13, ReachNone,
 			"Every answer this harness reads back carries run identifiers, stage names and home paths, " +
 				"so the principle does not hold on this surface today and a test claiming it here would " +
-				"be claiming the opposite of what was observed. internal/principles declares the gap and " +
-				"says the same thing."},
+				"be claiming the opposite of what was observed. internal/machine's vocabulary test cites " +
+				"it for the pull guard's phrases alone, with the forbidden set derived from the owners; " +
+				"#110 extends that table to every renderer, and until it lands the claim reaches no " +
+				"further than those phrases."},
 		{principles.P14, ReachNone,
 			"One owner per fact is a property of the source rather than of a run, so driving a journey " +
 				"establishes nothing about it. internal/principles and internal/pipeline's schema test " +

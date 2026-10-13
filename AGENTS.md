@@ -478,10 +478,13 @@ Each has cost this repository more than one round of review.
   reported for being wrong through the ordinary review path. Read its `doc.go`
   before changing what fires, and for the residual gaps: the granularity is the
   path rather than the line, and a trace's reason is recorded, not verified.
-- `internal/home` owns the on-disk layout PRD section 8 gives one root, and the
-  exclusive lock that makes a home have exactly one service. No other package
-  spells a path under the root, with one deliberate exception: `internal/gate`
-  composes `<home>/repos/<id>.git` itself, so this package does not. The wake
+- `internal/home` owns the on-disk layout PRD section 8 gives one root, the
+  exclusive lock that makes a home have exactly one service, its probe
+  `LockState`, and the instance file on both sides, `WriteInstance` and
+  `ReadInstance`. No other package spells a path under the root, with one
+  deliberate exception: `internal/gate` composes `<home>/repos/<id>.git`
+  itself, so this package does not; the beacon's path is here and its content
+  is `internal/supervisor`'s. The wake
   queue is not in the layout at all: it is `internal/store`'s table, so no
   path to a `queue/` is composed and `Create` makes none, while an older home
   keeps an empty one nothing reads. The lock is
@@ -507,8 +510,31 @@ Each has cost this repository more than one round of review.
   its `doc.go` for the measurement and the gaps: the record does not yet keep
   what the run did with a path afterwards, and nothing proposes turning a
   check off.
+- `internal/supervisor` is the pure core of PRD section 5's supervision and
+  performs no I/O: the wake classifier, `Assess`, the in-flight table, the
+  beacon's fixed-size record and its codec, and the two durations derived from
+  the one configured interval, `config.KeySupervisionBeaconInterval`, through
+  `FreshnessFor` and `FirstBeaconWait`; staleness and the first-beacon wait are
+  named multiples and never rows of their own. `GuardOf` is the pull guard's
+  predicate and expects the instance file's identity and the beacon's own
+  epoch, which its doc states; `ArmOf` is arm verification's decision over
+  one look. Its subpackage `feed` is the I/O edge: the beacon `Writer`, which
+  nothing calls until #100's loop, `ReadBeacon` with its one retry on a torn
+  read, `Observe` over the files, the lock and `store.OpenReadOnly`, `Guard`,
+  and `VerifyArm`. P10 is cited once, in `feed`'s test, through a lock a
+  second process holds, the real writer and the real instance file. The
+  `supervision.assert` ipc row waits on #91's worker set and is not in the
+  method table. Read both `doc.go` files for the residual gaps: no epoch is
+  compared outside the stop hook, the checksum authenticates nothing, and the
+  in-flight read outside the service resolves with no probe and no advancing
+  answer.
 - `internal/machine` owns the shapes a structured answer takes, the three exit
-  codes, and the outcome vocabulary. It composes records rather than restating
+  codes, the outcome vocabulary, and the P13 phrase table in `vocabulary.go`,
+  which `SupervisionOf` is the one translation into; the forbidden set its
+  test holds every phrase to is derived from the owners by
+  `internal/machine/vocabtest`, which `internal/cli` runs over what the pull
+  guard printed, and a caller pairs `Assert` with `Control`. The table covers
+  the pull guard's phrases only; #110 extends it to every renderer. It composes records rather than restating
   them: a run is a `store.Run`, a report is a `findings.Report`, so no wire
   shape becomes a second owner of a record. `Outcome` is a closed set, and one
   translation answers for a run: `Run.Decide` takes a `Standing`, which is the

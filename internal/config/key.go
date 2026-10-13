@@ -67,6 +67,25 @@ const (
 	// checks PRD section 5 describes. It is global-only, so a repository can
 	// turn the checks neither on, off, nor into enforce, in either copy.
 	KeyDecisionModel Key = "decision_model"
+	// KeySupervisionBeaconInterval is "supervision_beacon_interval": how
+	// often the supervisor loop rewrites its liveness beacon. It is
+	// global-only, because the loop is the service's and a repository has no
+	// standing over how the operator's machine supervises its fleet.
+	//
+	// It is the one row the two supervision durations derive from, which is
+	// the reading of PRD section 10's "every count or duration is a row"
+	// taken here: a beacon is stale at internal/supervisor's
+	// StalenessMultiple times this interval, and arm verification waits
+	// FirstBeaconWaitMultiple times it for the first beacon. Both are
+	// derived rather than chosen, so neither is a second row that could be
+	// set apart from the interval it is a multiple of. The default and both
+	// limits are chosen, not measured. It is not a loop bound: it stops
+	// nothing and parks nothing.
+	//
+	// PRD section 10's schema table and its limits table have no row for
+	// this key or its bounds; that is raised as a finding and not closed
+	// here.
+	KeySupervisionBeaconInterval Key = "supervision_beacon_interval"
 	// KeyCommitFixMessage is "commit.fix_message": the fix commit subject
 	// template.
 	KeyCommitFixMessage Key = "commit.fix_message"
@@ -160,6 +179,8 @@ var specs = []spec{
 		func(c *Config, v any) { c.SessionReuse = v.(bool) }},
 	{KeyDecisionModel, TrustGlobal, DefaultDecisionModel, decodeDecisionModel,
 		func(c *Config, v any) { c.DecisionModel = v.(DecisionModel) }},
+	{KeySupervisionBeaconInterval, TrustGlobal, DefaultSupervisionBeaconInterval, decodeSupervisionBeaconInterval,
+		func(c *Config, v any) { c.SupervisionBeaconInterval = v.(time.Duration) }},
 	{KeyCommitFixMessage, TrustPushed, DefaultCommitFixMessage, decodeFixMessage,
 		func(c *Config, v any) { c.CommitFixMessage = v.(string) }},
 	{KeyAllowPushedCommands, TrustTrusted, false, decodeBool,

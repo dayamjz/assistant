@@ -8,11 +8,14 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/redact"
+	"github.com/dayamjz/assistant/internal/supervisor"
+	"github.com/dayamjz/assistant/internal/supervisor/feed"
 	"github.com/dayamjz/assistant/internal/taskstate"
 	"github.com/dayamjz/assistant/internal/vcs"
 )
@@ -207,7 +210,37 @@ func (s *Service) listTasks(ctx context.Context) (machine.Tasks, error) {
 	for _, r := range resolved {
 		out.Tasks = append(out.Tasks, machine.Task{Record: r.Record, State: r.State})
 	}
+	supervision := s.supervision(ctx)
+	out.Supervision = &supervision
 	return out, nil
+}
+
+// supervision is the pull guard over this home, computed for an answer the
+// service gives about its fleet. The in-flight reading is this service's own,
+// through the resolver that knows which runs it is driving; the beacon, the
+// instance file and the lock are read the way a command with the service
+// down reads them, through internal/supervisor/feed, so the two surfaces
+// differ in that one input and not in the predicate. The lock probe answers
+// Held from inside the process that holds it, which is this one, so what the
+// guard adds here is whether a loop under this instance is writing a fresh
+// beacon; in this build no loop writes one, and a fleet with work in flight
+// is reported unsupervised, which is the case.
+func (s *Service) supervision(ctx context.Context) machine.Supervision {
+	inFlight, _ := feed.InFlightFrom(ctx, s.store, s.tasks())
+	verdict := feed.GuardWith(ctx, s.home, inFlight, supervisor.FreshnessFor(s.cfg.SupervisionBeaconInterval), time.Now())
+	return machine.SupervisionOf(verdict)
+}
+
+// GlobalConfig resolves the operator's own configuration file alone, with
+// the schema defaults for everything it leaves unset and no repository
+// layer, which is what the service itself resolves at start for its
+// service-scoped decisions. It is exported for the one command that acts
+// with the service down and needs a global-only value, the status command's
+// pull guard, so that reading the operator's file has one owner. A missing
+// file is the defaults; a file that does not parse is an error.
+func GlobalConfig(path string) (config.Config, error) {
+	_, cfg, _, err := resolveConfig(path)
+	return cfg, err
 }
 
 // task reports one piece of fleet work with its resolved current state.

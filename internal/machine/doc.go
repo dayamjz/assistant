@@ -38,6 +38,21 @@
 // Outcomes are here as the closed set Outcome, with the table on that type
 // saying which of them this build can produce.
 //
+// # The vocabulary a person is spoken to in
+//
+// P13 makes what a person reads name the outcome, the consequence and the
+// next decision, with no task identifier, path, stage name, state label or
+// watcher's word in it. The phrases that do that are the constants in
+// vocabulary.go, and Phrases lists them so a test can hold every one to the
+// rule, with the forbidden words derived from the packages that own them
+// rather than kept in a list beside the phrases. Supervision is the one
+// answer built from that table today, through SupervisionOf, which is the
+// only translation from internal/supervisor's verdict to a phrase. The
+// table covers the pull guard's text and no other renderer's: the human
+// rendering in internal/cli still prints run identifiers, stage names and
+// home paths, which is #110's, and the vocabulary test claims P13 for the
+// phrases here alone.
+//
 // Blocking calls and relaying verbatim are not shapes, so they are not here.
 // A call blocks because the service advances the run before it answers, and a
 // call that advanced one answers where that run stopped rather than while it

@@ -103,3 +103,26 @@ func (h *Home) WriteInstance(id string) error {
 	_ = os.Remove(name)
 	return fmt.Errorf("home: publishing the instance file after %d attempts: %w", instanceRenameAttempts, err)
 }
+
+// ReadInstance reads the identity WriteInstance published: the file's one
+// line, without its terminator. It is the one reader of that file, so the
+// format WriteInstance writes is decoded in the package that writes it.
+//
+// What it answers is which process wrote the file, and nothing about whether
+// that process still serves: PRD section 8 makes the published identifier no
+// proof of readiness, and the lock probe and the beacon are what a liveness
+// check reads beside it. A file that is missing, that cannot be read, that is
+// empty, or that holds more than one line is an error rather than an
+// identity, the last because a second line would be a second identity and
+// nothing here chooses between them.
+func (h *Home) ReadInstance() (string, error) {
+	raw, err := os.ReadFile(h.InstanceFile())
+	if err != nil {
+		return "", fmt.Errorf("home: reading the instance file: %w", err)
+	}
+	text := strings.TrimSuffix(string(raw), "\n")
+	if text == "" || strings.ContainsAny(text, "\r\n") {
+		return "", fmt.Errorf("%w: %s holds %q, not one line", ErrInstanceID, h.InstanceFile(), string(raw))
+	}
+	return text, nil
+}
