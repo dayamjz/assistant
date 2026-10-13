@@ -44,7 +44,7 @@ func Drives() []Drove {
 		gateBirth  = "TestNothingOutsideTheGateChoosesWhatRunsOnAPushToIt"
 		branch     = "TestTheBranchUnderValidationChoosesNothingThatRuns"
 		trustedDoc = "TestATrustedConfigurationThatCannotBeReadIsNotFallenBackFrom"
-		anchor     = "TestAnUpdateIsAnchoredToWhatTheRunObservedRatherThanToAFreshRead"
+		lease      = "TestAPushOverARemoteThatMovedUnderTheRunIsRefused"
 		ownership  = "TestACopiedProjectDirectoryDoesNotOwnTheGateItInherited"
 		checks     = "TestAnEmptyCheckListIsNotAPass"
 	)
@@ -71,19 +71,19 @@ func Drives() []Drove {
 		noTemplateHookPath
 
 	// The document and lint conditions are undriven for one reason, stated
-	// once: each stage's body runs only the command the run's resolved
-	// configuration names, and no run here reaches either stage with one.
-	// The P7 branch run's trusted document does name commands, but the
-	// convergence bound parks that run at the test stage, before the
-	// document or lint stage is reached; every other run's resolution names
-	// none, so each holds for a person without reading the branch, and there
-	// is no finding to compare against what was planted.
+	// once: no run here reaches either stage over the scenario that plants
+	// the condition with a command configured. The P7 branch run's trusted
+	// document names commands, but the convergence bound parks that run at
+	// the test stage first. The walks that reach the push stage configure
+	// commands.lint in the home and walk the walkable subject, which plants
+	// neither condition, and no run here configures a document command.
 	const noConfiguredCommand = "The stage this condition names runs only the command the run's " +
-		"resolved configuration names, and no run here reaches this stage with one: the one run " +
-		"whose trusted document names commands is parked at the test stage first, and every other " +
-		"run's resolution names none, so the stage holds for a person without reading the branch. " +
+		"resolved configuration names, and no run here reaches this stage over this condition's " +
+		"scenario with one: the one run whose trusted document names commands is parked at the " +
+		"test stage first, the walks that configure a lint command in the home walk the walkable " +
+		"subject, which plants nothing for it to find, and no run configures a document command. " +
 		"There is no finding to compare against what was planted. It becomes drivable when a run " +
-		"carrying a configured command reaches the stage."
+		"over this condition's scenario reaches the stage carrying a configured command."
 	return []Drove{
 		{"refusal-finding-action-missing", ReachPackage, findings,
 			"The planted bytes go through the production adapter and internal/findings, on the entry " +
@@ -142,10 +142,21 @@ func Drives() []Drove {
 			"half, for the read rather than the parse; no run is driven over this scenario, and " +
 			"internal/service takes the same path for both failures."},
 
-		{"refusal-remote-advanced-out-of-band", ReachPackage, anchor,
-			"internal/safety over internal/vcs's own reads, with the advance planted between the " +
-				"observation and the decision. The delivery walk pushes through the binary on a remote nobody " +
-				"advanced, so no run here meets the advance."},
+		{"refusal-remote-advanced-out-of-band", ReachBinary, lease,
+			"A run through the binary is held between the rebase stage's observation and the push " +
+				"stage's decision, at the first hold stages.Holding gives there, and the advance is " +
+				"planted then by AdvanceRemoteOutOfBand. The push stage holds on the refusal, which is " +
+				"held to the reason the condition records, to the two substrings of its message the " +
+				"push stage relays, and to an anchor naming the commit the run observed; the remote " +
+				"is read back and still holds the landed commit. The remote and the second clone are " +
+				"a copy of the walkable scenario's, made by the same git commands the fixture's " +
+				"builder runs, because this scenario's trusted document configures commands.test " +
+				"over a branch planted to fail it and a run over it is parked at the test stage " +
+				"first. Not established through the binary: the rest of the message, the commits " +
+				"Refusal.Discarded names, and the remedy, because the push stage's report relays " +
+				"the refusal's detail rather than its message and no surface here re-runs a run " +
+				"onto its new upstream. TestAnUpdateIsAnchoredToWhatTheRunObservedRatherThanToAFreshRead " +
+				"holds all three at package reach, over internal/safety and this scenario itself."},
 
 		{"refusal-copied-working-copy-removal", ReachPackage, ownership,
 			"gate.Remove against the copy, with the binary's own removal driven alongside to establish " +
@@ -159,8 +170,8 @@ func Drives() []Drove {
 				"stage's body asks one and fails because the run's record names no repository there."},
 
 		{"stage-logic-bug", ReachNone, "",
-			"One walk takes the review stage against a stand-in scripted to answer a clean review, " +
-				"and the scenario it walks plants no bug, so there is no finding to compare against " +
+			"Three walks take the review stage against a stand-in scripted to answer a clean review, " +
+				"and the scenario they walk plants no bug, so there is no finding to compare against " +
 				"what was planted. It becomes drivable when a walk takes the stage over this " +
 				"condition's subject with the planted finding scripted - and what it establishes " +
 				"then is " +

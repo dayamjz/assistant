@@ -35,10 +35,14 @@ type invocationRole struct {
 // TestTheReviewerNeverCertifiesItsOwnPrescription drives PRD principle P4 at
 // package reach.
 //
-// The binary cannot reach it. Only the delivery walk launches an agent, as the
-// reviewer, and it does not assert the session split, so no run makes an
-// invocation this test could assert over, and a harness that drove a run
-// and found no session would be reporting that nothing happened.
+// The binary does not reach it. Three walks launch a reviewer and two a
+// fixer, and the later-commit walk reads one review invocation carrying no
+// session while the run's record holds the fixer session it could have
+// continued. That is one invocation of one route, not the split: what this
+// needs is a re-review after fix rounds that continued a session, asserted
+// over every invocation, and no run here makes that sequence, because the
+// later-commit walk's one fix round opens its session rather than continuing
+// one.
 //
 // Section 13 writes the test as a structural assertion over invocation
 // records rather than a behavioural one, and this is that: a review, two fix

@@ -108,26 +108,41 @@ func Coverage() []Established {
 				"with the finding that produced " +
 				"it, every one of those findings reports itself as holding for a person, and none is one " +
 				"a fixer may take. The planted agent output is driven at package reach as well, because " +
-				"exactly one walk launches an agent, as the reviewer, and the report it answers is a " +
-				"scripted clean one that reaches findings.ParseReviewReport; every other walk skips " +
-				"the review stage, so no report an agent wrote reaches those runs. " +
+				"the walks that launch a reviewer answer it from a script rather than from the planted " +
+				"bytes: three take the review stage with a scripted clean report, and one of them has " +
+				"the push stage's review of later commits answered with a scripted ask that holds the " +
+				"push, both reaching findings.ParseReviewReport; every other walk skips the review " +
+				"stage, so no report an agent wrote reaches those runs. " +
 				"The run half starts a run through a method internal/ipc restricts, so on a platform where " +
 				"that package reads no local socket peer credentials it is skipped rather than passing, and " +
 				"the package-reach half over the planted agent output is the whole of what is established " +
 				"there."},
 		{principles.P4, ReachPackage,
-			"The binary reaches an agent in exactly one walk, the delivery walk, which launches the " +
-				"reviewer through the production adapter; that walk does not assert the P4 session " +
-				"split, and every other walk skips the review stage. What " +
+			"The binary launches a reviewer in three walks, through the production adapter, and a " +
+				"fixer in two. One of them observes that the push stage's review of later commits " +
+				"carried no session, which is one invocation off the wire rather than the P4 split: " +
+				"the split is that no route hands a review a fixer's session, and a walk cannot " +
+				"enumerate routes, so none here cites P4 and every other walk skips the review stage. What " +
 				"is driven is the production adapter over the stand-in, which is where the type split " +
 				"lives and where an invocation record can be read off the wire."},
-		{principles.P5, ReachNone,
-			"One run here takes the review stage against a stand-in scripted to answer a clean review " +
-				"and passes it, but that establishes the stage is reached and answered, not P5: the " +
-				"push that follows lands the reviewed commit itself, so no commit written after the " +
-				"review exists for the push stage to re-review, and no fix round is taken for a " +
-				"review to re-check. Every other run asks to skip the stage. internal/stages' own tests " +
-				"claim P5 against the body directly; this harness adds nothing to that."},
+		{principles.P5, ReachBinary,
+			"Driven through the binary for the push stage's review of commits a fix round wrote after " +
+				"the review, which is PRD section 14's seventh decision. A run's lint stage takes an " +
+				"automatic fix round after the review stage passed, the push stage asks the reviewer " +
+				"about the commits between the reviewed one and the head, measured from the reviewed " +
+				"commit, carrying no session although the run's record holds the fixer session it could " +
+				"have continued, and holds with that review's finding, and the remote's " +
+				"branch does not move. The round's commit is the configured lint command's own edit, " +
+				"committed by the product's fix body: the stand-in fixer prints and cannot write a " +
+				"working copy, so no commit here is an edit an agent made. Both reviews are scripted, " +
+				"the first clean and the second with one ask finding, so what is established is that " +
+				"the second review is asked for, framed and obeyed, not that it would find anything. " +
+				"Not driven here: a later review that approves and lets the push through, a test " +
+				"stage's round, a round a person asked for at a hold, and the review stage re-checking " +
+				"its own fix round; internal/stages' own tests claim those against the bodies. The walk " +
+				"starts a run through a method internal/ipc restricts, so on a platform where that " +
+				"package reads no local socket peer credentials it is skipped rather than passing, and " +
+				"nothing about P5 is established there."},
 		{principles.P6, ReachBinary,
 			"The service is killed at every boundary a real run reaches and the run is driven to its " +
 				"end afterwards, which is P6's own stated verification criterion; the criterion is every " +
@@ -145,14 +160,21 @@ func Coverage() []Established {
 				"that it stands at the same stage and still offers what it offered, which a checkpoint " +
 				"round trip can lose; that it offers something nobody was offered is not claimed, " +
 				"because internal/pipeline gives every hold the same fixed rendering and internal/graph " +
-				"copies it through, so no run can report one. The lease anchor and " +
-				"the refusal against a remote that advanced out of band are driven at package reach: " +
-				"the one run here that pushes takes the delivery path on a remote nobody advanced, so " +
-				"it establishes that the push stage forwards the submitted commit and moves the " +
-				"remote's branch to it, on a stand-in reviewer scripted clean, and says nothing about " +
-				"the lease or the refusal. That run needs a service and a run, so it is skipped rather " +
+				"copies it through, so no run can report one. Two runs here reach " +
+				"the push stage's decision on a stand-in reviewer scripted clean. The delivery walk's " +
+				"remote is one nobody advanced, and it establishes that the push stage forwards the " +
+				"submitted commit and moves the remote's branch to it. The lease walk's remote is " +
+				"advanced out of band, by internal/fixture's real push from a second clone, while the " +
+				"run is held between the rebase stage's observation and the push stage's decision, and " +
+				"it establishes that the push stage holds on a would-discard refusal whose anchor is " +
+				"the commit the run observed rather than where the branch stood at the decision, and " +
+				"that the remote still holds the commit somebody else landed. What the lease walk does " +
+				"not establish is held at package reach: that the refusal names the commits it would " +
+				"drop, which the push stage's report does not relay, and that incorporating the " +
+				"advance makes the same decision allow a fast-forward, which no surface here drives " +
+				"a run through. Both walks need a service and a run, so they are skipped rather " +
 				"than passing where internal/ipc reads no peer credentials or no local socket " +
-				"transport exists. The pull request and checks stages are skipped on it, because no " +
+				"transport exists. The pull request and checks stages are skipped on both, because no " +
 				"record here names a repository on a code host and this fixture has none for " +
 				"internal/forge to address. The killed run, and the contention check beside it, are " +
 				"driven through methods internal/ipc restricts, so on a platform where that package reads " +
