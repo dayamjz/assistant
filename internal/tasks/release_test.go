@@ -257,3 +257,87 @@ func TestNewRefusesAMissingDependency(t *testing.T) {
 		}
 	}
 }
+
+// A claim of overlap and the floor both apply: the task claims Z, on another
+// branch, while live Y holds its own branch. One blocker is recorded, the
+// live claim, and the floor is re-run at release, so the task waits on
+// whichever of the two is still live and is dispatched only once both have
+// cleared.
+func TestReleaseWaitsOnBothTheClaimAndTheFloor(t *testing.T) {
+	ctx := context.Background()
+	failOn := func(t *testing.T, f *fixture, id, branch string) {
+		t.Helper()
+		if _, err := f.store.CreateRun(ctx, store.Run{
+			ID: id, RepositoryID: repo, Branch: branch, SubmittedHead: "aaaa", Base: "bbbb",
+			Intent: "validate", IntentSource: "push", ConfigDigest: "cfg",
+			Build: store.Build{Version: "v0", Revision: "0123456789abcdef", Go: "go1.25.0"},
+		}); err != nil {
+			t.Fatalf("CreateRun: %v", err)
+		}
+		if _, err := f.store.TransitionRun(ctx, id, []store.RunStatus{store.RunPending}, store.RunFailed); err != nil {
+			t.Fatalf("TransitionRun: %v", err)
+		}
+	}
+	setUp := func(t *testing.T) (f *fixture, y, z, task string) {
+		t.Helper()
+		f = newFixture(t)
+		yc := f.create(t, delivery(""))
+		other := delivery("")
+		other.Branch = "other"
+		zc := f.create(t, other)
+		f.beginAttempt(t, yc.Task.ID)
+		if _, err := f.store.BeginTaskAttempt(ctx, zc.Task.ID, 0); err != nil {
+			t.Fatalf("BeginTaskAttempt: %v", err)
+		}
+		got := f.create(t, delivery(zc.Task.ID))
+		if got.Cause != CauseClaimed || got.Task.BlockerTask.Or("") != zc.Task.ID {
+			t.Fatalf("the task was recorded as %+v, want queued behind the live claim", got)
+		}
+		return f, yc.Task.ID, zc.Task.ID, got.Task.ID
+	}
+
+	t.Run("claim cleared, floor live", func(t *testing.T) {
+		f, y, z, task := setUp(t)
+		failOn(t, f, "run-z", "other")
+		if got := f.release(t, task); got.Result != Waiting || got.Holding != y || got.BlockerState != taskstate.Failed {
+			t.Fatalf("with the claim cleared and the branch held got %+v, want waiting on %s", got, y)
+		}
+		failOn(t, f, "run-y", branch)
+		if got := f.release(t, task); got.Result != Released {
+			t.Fatalf("with both cleared got %+v, want released", got)
+		}
+		_ = z
+	})
+
+	t.Run("floor cleared, claim live", func(t *testing.T) {
+		f, y, z, task := setUp(t)
+		failOn(t, f, "run-y", branch)
+		if got := f.release(t, task); got.Result != Waiting || got.Holding != z || got.HoldingState != taskstate.Dispatched {
+			t.Fatalf("with the branch free and the claim live got %+v, want waiting on %s", got, z)
+		}
+		failOn(t, f, "run-z", "other")
+		if got := f.release(t, task); got.Result != Released {
+			t.Fatalf("with both cleared got %+v, want released", got)
+		}
+		_ = y
+	})
+
+	// Two tasks queued on one branch do not hold each other: once the
+	// blocker clears the first is released and the second waits on it.
+	t.Run("a queued task holds nothing", func(t *testing.T) {
+		f := newFixture(t)
+		blocker, first := queuedPair(t, f)
+		second := f.create(t, delivery(""))
+		if second.Task.BlockerTask.Or("") != first {
+			t.Fatalf("the second was queued behind %q, want the first, %s", second.Task.BlockerTask.Or(""), first)
+		}
+		f.runOn(t, "run-1", store.RunFailed)
+		if got := f.release(t, first); got.Result != Released {
+			t.Fatalf("the first got %+v, want released past the queued second", got)
+		}
+		if got := f.release(t, second.Task.ID); got.Result != Waiting || got.Holding != first {
+			t.Fatalf("the second got %+v, want waiting on the now-dispatched first", got)
+		}
+		_ = blocker
+	})
+}

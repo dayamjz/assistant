@@ -41,7 +41,8 @@ type Request struct {
 	// task's live work, or empty for a claim of independence. A named task is
 	// queued behind, whatever its state; the floor Create applies can queue a
 	// task past a claim of independence but never dispatch one past a claim
-	// of overlap.
+	// of overlap: the record holds one blocker, and when both apply Release
+	// waits on whichever is still live before it dispatches.
 	Overlaps string
 }
 
@@ -88,7 +89,10 @@ type Created struct {
 // and the creation is anchored to the newest task row the read saw, so an
 // intake that read the branch cannot be overtaken between the two (P6). A
 // claim of overlap on any task is honoured as given, including a task that
-// has already cleared, which Release then dispatches past.
+// has already cleared, which Release then dispatches past. The record names
+// one blocker: the claimed task while it is live, otherwise the floor's, and
+// Release re-runs the floor before it dispatches, so a claim and the floor
+// are both waited on when both apply.
 //
 // A delivery task's branch must be a task's to take: a branch no task has
 // ever worked on that already exists in the gate, or already has a run, is a
@@ -128,8 +132,8 @@ func (q *Queue) Create(ctx context.Context, req Request) (Created, error) {
 		if branch == "" {
 			return Created{}, fmt.Errorf("%w: a delivery task names a branch", ErrRequest)
 		}
-		if strings.HasPrefix(branch, "-") || strings.ContainsAny(branch, " \t\n") || strings.Contains(branch, "..") {
-			return Created{}, fmt.Errorf("%w: %q is not a branch name a task can be given", ErrRequest, branch)
+		if reason := branchNameRefusal(branch); reason != "" {
+			return Created{}, fmt.Errorf("%w: branch %q %s", ErrRequest, branch, reason)
 		}
 	case store.TaskInvestigation:
 		if branch != "" {
@@ -200,46 +204,59 @@ func (q *Queue) Create(ctx context.Context, req Request) (Created, error) {
 	return Created{Task: created, Cause: cause, BlockerState: blockerState, Instructions: instructions}, nil
 }
 
-// dispose decides a new task's disposition from the tasks it read: the floor
-// first, then the coordinator's claim.
+// dispose decides a new task's disposition from the tasks it read. The claim
+// is checked first, so an unknown one is refused whatever the branch holds;
+// then one blocker is chosen, since the record holds one: the claimed task
+// while it is live, otherwise the newest live task on the branch, otherwise
+// the claimed task as given. Release re-checks the branch before it
+// dispatches, which is what keeps the choice from dropping the other.
 func (q *Queue) dispose(ctx context.Context, task store.Task, claim string, repository store.Repository,
 	resolved []taskstate.Resolved) (store.Disposition, Cause, taskstate.State, error) {
 	var d store.Disposition
-	if branch, ok := task.Branch.Get(); ok {
-		var onBranch []taskstate.Resolved
-		for _, r := range resolved {
-			if r.Record.RepositoryID == task.RepositoryID && r.Record.Branch.Or("") == branch {
-				onBranch = append(onBranch, r)
+	var claimed *taskstate.Resolved
+	if claim != "" {
+		for i := range resolved {
+			if resolved[i].Record.ID == claim {
+				claimed = &resolved[i]
+				break
 			}
 		}
-		if len(onBranch) == 0 {
+		if claimed == nil {
+			return d, "", "", fmt.Errorf("tasks: the task %q claimed as overlapping: %w", claim, store.ErrNotFound)
+		}
+	}
+	var floor *taskstate.Resolved
+	if branch, ok := task.Branch.Get(); ok {
+		onBranch := 0
+		for i := range resolved {
+			r := &resolved[i]
+			if r.Record.RepositoryID != task.RepositoryID || r.Record.Branch.Or("") != branch {
+				continue
+			}
+			onBranch++
+			d.Observed = max(d.Observed, r.Record.Row)
+			if Live(r.State.State) && (floor == nil || r.Record.Row > floor.Record.Row) {
+				floor = r
+			}
+		}
+		if onBranch == 0 {
 			if err := q.refuseAPersonsBranch(ctx, repository, branch); err != nil {
 				return d, "", "", err
 			}
 		}
-		var live *taskstate.Resolved
-		for i := range onBranch {
-			r := &onBranch[i]
-			d.Observed = max(d.Observed, r.Record.Row)
-			if Live(r.State.State) && (live == nil || r.Record.Row > live.Record.Row) {
-				live = r
-			}
-		}
-		if live != nil {
-			d.Blocker = store.Known(live.Record.ID)
-			return d, CauseFloor, live.State.State, nil
-		}
 	}
-	if claim == "" {
-		return d, CauseIndependent, "", nil
+	switch {
+	case claimed != nil && Live(claimed.State.State):
+		d.Blocker = store.Known(claim)
+		return d, CauseClaimed, claimed.State.State, nil
+	case floor != nil:
+		d.Blocker = store.Known(floor.Record.ID)
+		return d, CauseFloor, floor.State.State, nil
+	case claimed != nil:
+		d.Blocker = store.Known(claim)
+		return d, CauseClaimed, claimed.State.State, nil
 	}
-	for _, r := range resolved {
-		if r.Record.ID == claim {
-			d.Blocker = store.Known(claim)
-			return d, CauseClaimed, r.State.State, nil
-		}
-	}
-	return d, "", "", fmt.Errorf("tasks: the task %q claimed as overlapping: %w", claim, store.ErrNotFound)
+	return d, CauseIndependent, "", nil
 }
 
 // refuseAPersonsBranch refuses a branch that exists in the gate or has a run.
@@ -278,6 +295,34 @@ func (q *Queue) writeInstructions(id, text string) (string, error) {
 		return "", fmt.Errorf("tasks: writing the instructions of task %s: %w", id, err)
 	}
 	return path, nil
+}
+
+// branchNameRefusal says why a branch name is refused, or nothing when it is
+// not. It is not git's reference-name rule, which git owns and internal/vcs
+// deliberately does not copy; it is the subset that would otherwise reach
+// BranchInGate as a for-each-ref pattern or git as an option: an option
+// prefix, whitespace or a control byte, the glob and revision characters
+// ~ ^ : ? * [ \, a ".." or "@{" element, a leading or trailing slash, a
+// leading dot and a ".lock" suffix. A name past this check can still be one
+// git refuses, and that refusal then arrives from the gate read as an error
+// rather than as a task recorded under a name no branch can carry.
+func branchNameRefusal(branch string) string {
+	switch {
+	case strings.HasPrefix(branch, "-"):
+		return "would be read as an option"
+	case strings.ContainsAny(branch, "~^:?*[\\"):
+		return "carries a character git refuses in a reference name"
+	case strings.Contains(branch, ".."), strings.Contains(branch, "@{"):
+		return "carries a revision element"
+	case strings.HasPrefix(branch, "/"), strings.HasSuffix(branch, "/"), strings.HasPrefix(branch, "."), strings.HasSuffix(branch, ".lock"):
+		return "is not a branch name git accepts"
+	}
+	for _, r := range branch {
+		if r < 0x20 || r == 0x7f || r == ' ' {
+			return "carries whitespace or a control character"
+		}
+	}
+	return ""
 }
 
 // decodeShape reads a shape off the wire, refusing text outside the closed

@@ -69,8 +69,9 @@
 // Every path under tasks/ is composed from an identifier ValidTaskID accepted,
 // and that rule is the only one: a fixed-length identifier from a closed
 // alphabet, refused rather than corrected when it is anything else, with the
-// names Windows reserves refused on every platform. Task and TaskCopy refuse
-// what it refuses, so a traversal element or a separator cannot reach a path.
+// names Windows reserves refused on every platform. Task, TaskCopy and
+// TaskInstructions refuse what it refuses, so a traversal element or a
+// separator cannot reach a path.
 // The rule is applied to a string and not to a filesystem: it says an
 // identifier is one path element, and nothing about whether the directory it
 // names exists, is empty, or belongs to the task that claims it.

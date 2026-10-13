@@ -16,7 +16,9 @@ const (
 	// Released is the task was dispatched: its blocker had cleared and the
 	// dispatched entry was appended.
 	Released Result = "released"
-	// Waiting is the task stays queued because its blocker is live.
+	// Waiting is the task stays queued: its blocker is live, or its blocker
+	// cleared and another task still holds its branch. Outcome.Holding names
+	// which.
 	Waiting Result = "waiting"
 	// Refused is nothing was appended and Outcome.Err says why: the task's
 	// state was decided above the event tier (*OutrankedError), its history
@@ -34,6 +36,12 @@ type Outcome struct {
 	// BlockerState is the blocker's state as this release read it, and empty
 	// when the blocker could not be read.
 	BlockerState taskstate.State
+	// Holding names the task a Waiting task waits on: the blocker while it is
+	// live, otherwise the task that holds the branch, which the floor at
+	// release found. HoldingState is that task's state. Both are empty
+	// unless Result is Waiting.
+	Holding      string
+	HoldingState taskstate.State
 	// Result says what was done.
 	Result Result
 	// Err is the typed refusal when Result is Refused, and nil otherwise.
@@ -65,8 +73,15 @@ type Outcome struct {
 //
 // Whether a blocker has cleared is Clears, read off the blocker's resolution
 // from the same read as the queued task's; Clears' doc says what that set
-// leaves out today. A chain of queued tasks releases one link per call, since
-// a successor's blocker is read as it stood before this call's writes.
+// leaves out today. A blocker that cleared is not the whole of it: the floor
+// Create applies is run again here, from the same read, and a task whose
+// repository and branch another task still holds stays Waiting on that task.
+// Holding is a live task that is not itself queued; a queued task waits its
+// own turn and holds nothing, or two tasks queued on one branch would each
+// wait on the other. That is what lets the record name one blocker while a
+// claim of overlap and the floor are both honoured. A chain of queued tasks
+// releases one link per call, since a successor's blocker is read as it
+// stood before this call's writes.
 //
 // It returns an error only when the records could not be read or an append
 // failed for a reason other than the anchor; the outcomes gathered before
@@ -104,7 +119,12 @@ func (q *Queue) Release(ctx context.Context) ([]Outcome, error) {
 		}
 		o.BlockerState = b.State.State
 		if !Clears(b.State.State) {
-			o.Result = Waiting
+			o.Result, o.Holding, o.HoldingState = Waiting, blocker, b.State.State
+			out = append(out, o)
+			continue
+		}
+		if holder, held := holdsBranch(r, resolved); held {
+			o.Result, o.Holding, o.HoldingState = Waiting, holder.Record.ID, holder.State.State
 			out = append(out, o)
 			continue
 		}
@@ -124,6 +144,31 @@ func (q *Queue) Release(ctx context.Context) ([]Outcome, error) {
 		out = append(out, o)
 	}
 	return out, nil
+}
+
+// holdsBranch is the floor at release: the newest task other than r on r's
+// repository and branch that is live and not itself queued, if there is one.
+// A task with no branch is held by nothing.
+func holdsBranch(r taskstate.Resolved, resolved []taskstate.Resolved) (taskstate.Resolved, bool) {
+	branch, ok := r.Record.Branch.Get()
+	if !ok {
+		return taskstate.Resolved{}, false
+	}
+	var holder taskstate.Resolved
+	found := false
+	for _, other := range resolved {
+		if other.Record.ID == r.Record.ID || other.Record.RepositoryID != r.Record.RepositoryID ||
+			other.Record.Branch.Or("") != branch {
+			continue
+		}
+		if !Live(other.State.State) || other.State.State == taskstate.Queued {
+			continue
+		}
+		if !found || other.Record.Row > holder.Record.Row {
+			holder, found = other, true
+		}
+	}
+	return holder, found
 }
 
 // claimsQueued reports whether the resolution overrode a queued claim: its

@@ -35,9 +35,14 @@ type fixture struct {
 type keyedExclusion struct {
 	mu    sync.Mutex
 	locks map[string]*sync.Mutex
-	// taken counts how many holds were taken, so a test can tell the queue
-	// asked for one.
+	// taken counts how many holds were asked for, so a test can tell the
+	// queue asked for one.
 	taken int
+	// arrived is closed once expect callers have asked for a hold, so a test
+	// can keep the first caller between its read and its write until the
+	// second is queued at the exclusion.
+	expect  int
+	arrived chan struct{}
 }
 
 func (k *keyedExclusion) hold(_ context.Context, repository, branch string) (func(), error) {
@@ -49,6 +54,9 @@ func (k *keyedExclusion) hold(_ context.Context, repository, branch string) (fun
 		k.locks[key] = m
 	}
 	k.taken++
+	if k.arrived != nil && k.taken == k.expect {
+		close(k.arrived)
+	}
 	k.mu.Unlock()
 	m.Lock()
 	return m.Unlock, nil

@@ -175,8 +175,24 @@ func TestIntakeRefusesAMalformedRequest(t *testing.T) {
 	if _, err := f.queue.Create(context.Background(), delivery("neveraaaaaaa")); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("an unknown overlap = %v, want store.ErrNotFound", err)
 	}
+	for _, bad := range []string{"a~b", "a^b", "a:b", "a?b", "a*b", "a[b", "a\\b", "a@{b", "/a", "a/", ".a", "a.lock", "a\x01b", "a b"} {
+		req := delivery("")
+		req.Branch = bad
+		if _, err := f.queue.Create(context.Background(), req); !errors.Is(err, ErrRequest) {
+			t.Errorf("branch %q: Create = %v, want ErrRequest", bad, err)
+		}
+	}
 	if tasks, _ := f.store.Tasks(context.Background()); len(tasks) != 0 {
 		t.Fatalf("a refused intake recorded %d tasks", len(tasks))
+	}
+	// An unknown overlap is refused on a live branch too, where the floor
+	// would otherwise have decided without looking at the claim.
+	f.create(t, delivery(""))
+	if _, err := f.queue.Create(context.Background(), delivery("neveraaaaaaa")); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("an unknown overlap on a live branch = %v, want store.ErrNotFound", err)
+	}
+	if tasks, _ := f.store.Tasks(context.Background()); len(tasks) != 1 {
+		t.Fatalf("a refused intake on a live branch recorded a task: %d tasks", len(tasks))
 	}
 }
 
@@ -216,11 +232,31 @@ func TestTwoIntakesOnOneBranchDispatchOne(t *testing.T) {
 
 	t.Run("under the exclusion", func(t *testing.T) {
 		f := newFixture(t)
-		results := race(func() error { _, err := f.queue.Create(ctx, delivery("")); return err })
+		// The first caller is held between its read and its write until the
+		// second has asked for the exclusion, so the second is queued at the
+		// exclusion while the first's decision is still unwritten: only the
+		// exclusion keeps the second from reading an empty branch too.
+		f.exclusion.expect, f.exclusion.arrived = 2, make(chan struct{})
+		f.queue.betweenReadAndWrite = func() { <-f.exclusion.arrived }
+		var causes [2]Cause
+		var i int
+		results := race(func() error {
+			got, err := f.queue.Create(ctx, delivery(""))
+			if err != nil {
+				return err
+			}
+			f.exclusion.mu.Lock()
+			causes[i], i = got.Cause, i+1
+			f.exclusion.mu.Unlock()
+			return nil
+		})
 		for _, err := range results {
 			if err != nil {
 				t.Fatalf("an intake under the exclusion failed: %v", err)
 			}
+		}
+		if (causes != [2]Cause{CauseIndependent, CauseFloor}) && (causes != [2]Cause{CauseFloor, CauseIndependent}) {
+			t.Fatalf("the two intakes were %v, want one independent and one queued by the floor", causes)
 		}
 		dispatched, queued := f.countDispositions(t)
 		if dispatched != 1 || queued != 1 {
