@@ -1785,6 +1785,8 @@ flowchart TB
   evidence/&lt;run&gt;         test evidence, deliberately outside the isolated copy
   tasks/&lt;id&gt;/            per-task records: instructions, report, events
   tasks/&lt;id&gt;/copy        the task's isolated copy, a full clone of your checkout with an assistant remote
+  instance               the service's instance identity, written once by the service at start; not state
+  beacon                 the supervisor's liveness beacon, written by the supervisor loop; not state
   logs/&lt;run&gt;/&lt;stage&gt;.log per-stage logs, the authoritative full output
   logs/service.log       bounded lifecycle log with rotation</code></pre>
   </div>
