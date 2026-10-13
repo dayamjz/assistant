@@ -152,6 +152,7 @@ func (s *Service) closeChecksHoldIfPullRequestEnded(ctx context.Context, record 
 	}
 	s.log.Printf("run %s ended as %s: pull request %s was read as %s at the checks hold", record.ID, moved.Status, number, read.End)
 	s.reclaimCopy(ctx, moved)
+	s.releaseQueued(ctx)
 	s.publishRunState(ctx, record.ID)
 	return read.End, nil
 }

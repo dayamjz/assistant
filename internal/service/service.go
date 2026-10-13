@@ -25,6 +25,7 @@ import (
 	"github.com/dayamjz/assistant/internal/runs"
 	"github.com/dayamjz/assistant/internal/stages"
 	"github.com/dayamjz/assistant/internal/store"
+	"github.com/dayamjz/assistant/internal/tasks"
 	"github.com/dayamjz/assistant/internal/vcs"
 )
 
@@ -198,6 +199,10 @@ type Service struct {
 	// forge is the code host, settled at Open from Options.Forge; checkshold.go
 	// is the one reader of it outside the stage dependencies.
 	forge forge.Host
+	// queue is internal/tasks' intake and release over this service's store,
+	// built at Open from the branch gate and the gate repositories this
+	// service knows; tasks.go says which of its entries this service calls.
+	queue *tasks.Queue
 
 	// mu guards the lazily built driver and topologies, the set of runs being
 	// advanced, and the branch gates. It is never held across a run's
@@ -377,6 +382,9 @@ func (s *Service) openParts(ctx context.Context, o Options) error {
 	}
 	s.store = records
 	s.checkpoints = checkpoints.New(records)
+	if s.queue, err = s.newQueue(); err != nil {
+		return err
+	}
 
 	if s.log, err = s.home.OpenLog(0); err != nil {
 		return err

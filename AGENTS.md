@@ -322,6 +322,27 @@ Each has cost this repository more than one round of review.
   `internal/store` only returns the facts, through `TaskSnapshot`, and learns
   no meaning. Read its `doc.go` for the residual gaps, and for why PRD section
   8's "task state" row is read as a resolution rather than a row.
+- `internal/tasks` is PRD section 8's tasks module as far as this build takes
+  it: intake and queueing, with dispatch, copies and the P11 assertion left to
+  later work. Every lifecycle move there is an appended event, never a state
+  column: `Create` writes the disposition through `store.CreateTask`, anchored
+  to the newest task row it saw on the branch and under the service's branch
+  exclusion, and `Release` appends `dispatched` through
+  `store.AppendTaskEventAfter` anchored to the sequence the resolution it
+  decided from had read. It learns a state only through `taskstate`, so the
+  live set and the clear condition (`Live`, `Clears`) are predicates over a
+  `State`, `Unknown` is live, and a queued task whose claim a higher tier
+  overrode is refused with `*OutrankedError` rather than appended past; it
+  reads that off `Resolution.Superseded`, never the history's tail. Ids are
+  `home`'s rule, the shape is `store.TaskShape` decoded at the edge, and the
+  copy path is `home.TaskCopy`, recorded as a reservation. `Create` has no
+  caller in this build, by design: PRD section 9 has no verb that creates a
+  task, and adding one is a finding. `Release` is called from
+  `internal/service` at every site a run finishes and at open. Read its
+  `doc.go` before changing the floor or the clear condition, and for the
+  residual gaps: Ready never clears and Landed/Complete are not resolved yet,
+  so a blocker at Ready holds until #107; Failed is not terminal, so a relaunch
+  must re-run the floor; a person's push on a task's branch is outside it.
 - `internal/checkpoints` is the durable `graph.CheckpointStore`, and the only
   place outside `internal/graph` that serializes a `graph.Checkpoint`. It
   exists as its own package because `internal/store` must not learn what a

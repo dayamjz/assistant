@@ -349,6 +349,9 @@ func (s *Service) cancel(ctx context.Context, req machine.CancelRequest) (machin
 	if _, err := built.runs.Terminate(ctx, req.Run); err != nil {
 		return machine.Run{}, err
 	}
+	// The run finished, so a task queued behind the one it was attributed to
+	// may have cleared; tasks.go names this as one of the four sites.
+	s.releaseQueued(ctx)
 	return s.view(ctx, req.Run)
 }
 
@@ -800,6 +803,10 @@ func (s *Service) settle(ctx context.Context, runID string, result graph.Result)
 		// internal/runs' fact and is asked there rather than decided from
 		// which move was chosen above.
 		s.reclaimCopy(ctx, moved)
+		// A run that finished may have cleared a task queued behind the one
+		// it was attributed to; tasks.go says what the release does about
+		// that and what it reports.
+		s.releaseQueued(ctx)
 	}
 	s.publishRunState(ctx, runID)
 	return nil
@@ -896,6 +903,10 @@ func (s *Service) recover(ctx context.Context) {
 			s.continueRun(settled.ID)
 		}
 	}
+	// A blocker may have cleared while no service was serving the home, so
+	// the queued tasks are released once the records are reconciled, before
+	// anything is served.
+	s.releaseQueued(ctx)
 }
 
 // continueRun resumes an interrupted run in the background, so neither

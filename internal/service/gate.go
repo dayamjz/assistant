@@ -343,6 +343,7 @@ func (s *Service) claimPush(ctx context.Context, built *driver, repository, bran
 			superseded = active.ID
 			s.signalCancellation(active.ID)
 			s.publishRunState(ctx, active.ID)
+			s.releaseQueued(ctx)
 		}
 	}
 	record, err := s.create(ctx, run{

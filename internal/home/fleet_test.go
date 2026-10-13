@@ -117,6 +117,9 @@ func TestATaskIdentifierIsOneRuleAndIsRefusedRatherThanSanitized(t *testing.T) {
 		if _, err := open(t, t.TempDir()).TaskCopy(id); !errors.Is(err, home.ErrTaskID) {
 			t.Fatalf("TaskCopy composed a path from the %s identifier %q: %v", name, id, err)
 		}
+		if _, err := open(t, t.TempDir()).TaskInstructions(id); !errors.Is(err, home.ErrTaskID) {
+			t.Fatalf("TaskInstructions composed a path from the %s identifier %q: %v", name, id, err)
+		}
 	}
 	// The reserved-name refusal is its own rule rather than a consequence of
 	// the length rule, so a reserved name is refused as one and not as the
@@ -137,6 +140,9 @@ func TestATaskCopyIsUnderTheTaskDirectory(t *testing.T) {
 	}
 	if got, want := copyPath(t, h, validTaskID), filepath.Join(task, "copy"); got != want {
 		t.Fatalf("TaskCopy = %q, want %q", got, want)
+	}
+	if got, err := h.TaskInstructions(validTaskID); err != nil || got != filepath.Join(task, "instructions.md") {
+		t.Fatalf("TaskInstructions = %q (%v), want the file under the task directory", got, err)
 	}
 	if h.InstanceFile() != filepath.Join(h.Root(), "instance") {
 		t.Fatalf("InstanceFile = %q", h.InstanceFile())
