@@ -55,7 +55,10 @@
 // would dispatch onto a branch whose worker may still be there. A queued
 // task's Created and Outcome both carry the blocker's state, so a task stuck
 // behind an Unknown blocker is visible to the coordinator rather than merely
-// waiting.
+// waiting. The record names one blocker, the claimed task while it is live
+// and otherwise the floor's, and Release re-runs the floor before it
+// dispatches, so a task is dispatched past neither: a claim of overlap and a
+// live task on the branch are both waited on when both apply.
 //
 // A blocker clears when it resolves Failed or Reported. Ready never clears,
 // because a Ready task's branch still carries an open pull request. Landed
@@ -76,10 +79,13 @@
 // consequence for the end-to-end harness is recorded in internal/journey's
 // coverage: no journey walk can create a task, so what the binary is driven
 // through there is written through internal/store. Release does have a
-// caller: internal/service calls it at every site a run finishes and when it
-// opens, which are two of the three moments the design names; the third,
-// when a merge record or a cleanup record is written, is #107's and #108's,
-// since nothing here resolves what those records mean yet.
+// caller: internal/service calls it when a run finishes and when it opens,
+// which are two of the three moments the design names; the third, when a
+// merge record or a cleanup record is written, is #107's and #108's, since
+// nothing here resolves what those records mean yet. A run a new push
+// supersedes is the one finish that does not call it, because that push
+// creates the branch's next run under the same exclusion and the branch
+// never stops being live; internal/service's tasks.go says why.
 //
 // # Residual gaps
 //

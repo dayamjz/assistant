@@ -338,7 +338,9 @@ Each has cost this repository more than one round of review.
   copy path is `home.TaskCopy`, recorded as a reservation. `Create` has no
   caller in this build, by design: PRD section 9 has no verb that creates a
   task, and adding one is a finding. `Release` is called from
-  `internal/service` at every site a run finishes and at open. Read its
+  `internal/service` when a run finishes and at open, except where a push
+  supersedes a run, since that push creates the branch's next run under the
+  same exclusion and the branch stays live. Read its
   `doc.go` before changing the floor or the clear condition, and for the
   residual gaps: Ready never clears and Landed/Complete are not resolved yet,
   so a blocker at Ready holds until #107; Failed is not terminal, so a relaunch

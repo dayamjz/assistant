@@ -1,8 +1,11 @@
 package service_test
 
 import (
+	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/dayamjz/assistant/internal/gate"
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
@@ -118,6 +121,67 @@ func TestOpeningTheServiceReleasesATaskWhoseBlockerClearedMeanwhile(t *testing.T
 		got := taskState(t, running.client, successor)
 		if got.State != taskstate.Dispatched || got.Source != taskstate.SourceEvent {
 			t.Fatalf("after open the successor resolves %s from %s, want dispatched from its release", got.State, got.Source)
+		}
+	})
+}
+
+// A push that supersedes the blocker's run does not release the successor.
+// The branch's run is terminated and its replacement created under one
+// exclusion, and no release runs between the two: the blocker resolves from
+// the replacement run the moment it exists, so the successor stays Queued
+// rather than being dispatched onto a branch whose worker is still pushing
+// to it.
+func TestAPushSupersedingTheBlockersRunDoesNotReleaseTheSuccessor(t *testing.T) {
+	requiresIdentifiedPeer(t)
+	h := newHome(t)
+	subject := newSubject(t)
+	repository := recordRepository(t, h, subject)
+	blocker, successor := queuedBehindABlocker(t, h, repository)
+	gateID := func() string {
+		records := openRecords(t, h)
+		defer func() { _ = records.Close() }()
+		binding, err := records.GateBinding(t.Context(), subject)
+		if err != nil {
+			t.Fatalf("reading the gate binding: %v", err)
+		}
+		return binding.GateID
+	}()
+	first := git(t, subject, "rev-parse", "HEAD")
+	if err := writeFile(filepath.Join(subject, "second.txt"), "a second version\n"); err != nil {
+		t.Fatalf("writing the second version: %v", err)
+	}
+	git(t, subject, "add", "-A")
+	git(t, subject, "commit", "--quiet", "-m", "the second version")
+	second := git(t, subject, "rev-parse", "HEAD")
+
+	withService(t, h, func(running serviceUnderTest) {
+		push := func(old, head string) machine.Notification {
+			var out machine.Notification
+			if err := running.client.Call(t.Context(), ipc.MethodGateNotify, machine.GateRequest{
+				Gate: gateID, Updates: []gate.RefUpdate{{Old: old, New: head, Ref: "refs/heads/work"}},
+			}, &out); err != nil {
+				t.Fatalf("notifying the push of %s: %v", head, err)
+			}
+			return out
+		}
+		one := push(strings.Repeat("0", 40), first)
+		if len(one.Started) != 1 {
+			t.Fatalf("the first push started %+v", one.Started)
+		}
+		if got := taskState(t, running.client, blocker); got.Source != taskstate.SourceRun {
+			t.Fatalf("after the first push the blocker resolves %s from %s, want from its run", got.State, got.Source)
+		}
+		two := push(first, second)
+		if len(two.Started) != 1 || two.Started[0].Superseded != one.Started[0].Run {
+			t.Fatalf("the second push started %+v, want one run superseding %s", two.Started, one.Started[0].Run)
+		}
+		if got := taskState(t, running.client, blocker); got.Source != taskstate.SourceRun || got.Basis.RunID != two.Started[0].Run {
+			t.Fatalf("after the second push the blocker resolves %s from %s on run %s, want the replacement run",
+				got.State, got.Source, got.Basis.RunID)
+		}
+		got := taskState(t, running.client, successor)
+		if got.State != taskstate.Queued || got.Source != taskstate.SourceEvent {
+			t.Fatalf("after the superseding push the successor resolves %s from %s, want still queued", got.State, got.Source)
 		}
 	})
 }

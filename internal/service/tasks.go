@@ -22,7 +22,7 @@ import (
 //
 // Nothing in this build calls the queue's intake: PRD section 9's table has
 // no verb that creates a task, and internal/tasks' doc says so. What this
-// service calls is Release, from the two sites releaseQueued names.
+// service calls is Release, from the sites releaseQueued names.
 func (s *Service) newQueue() (*tasks.Queue, error) {
 	return tasks.New(tasks.Deps{
 		Home:   s.home,
@@ -70,13 +70,18 @@ func (s *Service) branchInGate(ctx context.Context, repository store.Repository,
 // service opens, which are the two moments this build knows a blocker can
 // have cleared: a task resolves Failed from a run that failed or was ended,
 // and Reported from an entry a worker appended while no service watched. A
-// run finishes at four sites in this package and each calls it: settle, for
+// run finishes at four sites in this package and three call it: settle, for
 // a segment that ended the run; cancel, for an ending through the protocol;
-// claimPush, for a run a new push superseded; and the checks-hold closure,
-// for a run its pull request's state ended. The third moment the design
-// names, a merge record or a cleanup record being written, is not a call
-// site here, because nothing in this build resolves a state from either
-// (#107, #108).
+// and the checks-hold closure, for a run its pull request's state ended. The
+// fourth, claimPush terminating the run a new push supersedes, does not: it
+// ends that run only to create the branch's next one under the same
+// exclusion, so the branch stays live and the task the run was attributed to
+// resolves from the replacement the moment it exists. A release between the
+// two writes would read the gap as the blocker having failed and dispatch a
+// successor onto a branch its worker is still pushing to. The third moment
+// the design names, a merge record or a cleanup record being written, is not
+// a call site here, because nothing in this build resolves a state from
+// either (#107, #108).
 //
 // It reports to the log and not to a caller, on the terms reclaimCopy gives:
 // the run has settled by the time this runs, so there is no answer a failure
