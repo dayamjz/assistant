@@ -117,6 +117,12 @@ const (
 	// reading this key, on the same terms as KeyCancelled; the stage body
 	// writes what it read and decides nothing about the record.
 	KeyPullRequestEnd Key = "pull_request.end"
+	// KeyPullRequestEndHead is the commit the pull request's head stood at in
+	// the read that wrote KeyPullRequestEnd, as the provider reported it. It
+	// is the "head read" of PRD section 8's merge record, which the service
+	// writes from these two keys and the recorded number when it settles the
+	// run; it is empty whenever KeyPullRequestEnd is.
+	KeyPullRequestEndHead Key = "pull_request.end_head"
 	// KeyDecisionChecks is the review stage's record of what the
 	// decision-model checks did over the change - the mode, the model version,
 	// and how many files or traces each check covered - which the pull
@@ -192,6 +198,7 @@ var sharedKeys = []keySpec{
 	{KeyPullRequest, graph.KindText, graph.MergeNone, ownerStage},
 	{KeyChecks, graph.KindText, graph.MergeNone, ownerStage},
 	{KeyPullRequestEnd, graph.KindText, graph.MergeNone, ownerStage},
+	{KeyPullRequestEndHead, graph.KindText, graph.MergeNone, ownerStage},
 	// The review takes fix rounds and writes this on every execution, so it
 	// carries the anchor's merge rule for the anchor's reason: the last write
 	// is the record of the review the run finally stood on.

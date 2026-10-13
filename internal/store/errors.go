@@ -71,12 +71,12 @@ var ErrNoResolver = errors.New("store: a hold resolution records who made it")
 // into a fact about the resolution.
 var ErrUnknownResolver = errors.New("store: hold resolver is outside the closed set")
 
-// ErrUnknownPullRequestEnd is what a read of a run returns when its
-// pull_request_end column holds a value outside the closed set PullRequestEnd
-// defines, and what TransitionRunOnPullRequest returns when asked to record
-// one. The set is closed, so a row outside it was not written by this
-// package's accessors, and reading it back as "no end was recorded" would turn
-// a row nobody can account for into a fact about how the run ended.
+// ErrUnknownPullRequestEnd is what a read of a merge record returns when its
+// end column holds a value outside the closed set PullRequestEnd defines, and
+// what TransitionRunOnPullRequest returns when asked to record one. The set
+// is closed, so a row outside it was not written by this package's accessor,
+// and reading it back as "no end was recorded" would turn a row nobody can
+// account for into a fact about how the run ended.
 var ErrUnknownPullRequestEnd = errors.New("store: pull request end is outside the closed set")
 
 // ErrRunStatus is the class every *RunStatusError belongs to. It is returned

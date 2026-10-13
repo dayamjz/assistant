@@ -263,6 +263,13 @@ func pullRequestEnd(out pipeline.Output) string {
 	return text
 }
 
+// pullRequestEndHead is what the body wrote under
+// pipeline.KeyPullRequestEndHead.
+func pullRequestEndHead(out pipeline.Output) string {
+	text, _ := out.Writes[pipeline.KeyPullRequestEndHead].Text()
+	return text
+}
+
 func (r *checksRun) mustRun(t *testing.T) findings.Report {
 	t.Helper()
 	report, err := r.run(t.Context(), t, false)
@@ -630,6 +637,9 @@ func TestAMergedPullRequestEndsTheWaitWithoutReadingTheChecks(t *testing.T) {
 	}
 	if got := pullRequestEnd(out); got != string(store.PullRequestMerged) {
 		t.Fatalf("the body wrote %q under the pull request end, want merged", got)
+	}
+	if got := pullRequestEndHead(out); got != "0123abc" {
+		t.Fatalf("the body wrote %q as the head it read the merge at, want the provider's head", got)
 	}
 	if r.provider.gets != 4 || r.provider.reads != 3 {
 		t.Fatalf("the body read the pull request %d times and the checks %d times, want 4 and 3: "+

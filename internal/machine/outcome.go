@@ -43,8 +43,9 @@ const (
 	// gives it that one meaning, and section 5's "Waiting on checks" gives it
 	// its one producer: a run whose pull request was read as merged while the
 	// checks stage waited on its checks, or at the hold that wait left when
-	// checks_timeout elapsed, ends with store.PullRequestMerged recorded on
-	// its row beside the passed status, and that pair is what reads as this.
+	// checks_timeout elapsed, ends with PRD section 8's merge record written
+	// beside its passed status, and that pair is what reads as this. The
+	// outcome is derived from the record on every read and stored nowhere.
 	//
 	// It says the run is complete and not that it was newly validated. The
 	// checks were not read to a verdict, and the rule that only a no_ci
@@ -219,11 +220,13 @@ type Standing struct {
 	// whether the run is finished with.
 	Record store.RunStatus
 	// PullRequestEnd is which state of the run's pull request ended the run,
-	// as the record carries it in store.Run.PullRequestEnd, and the zero
-	// value for a run its pull request did not end. It is read with Record
-	// and travels beside it because it is the same row's answer to one
-	// question Record alone cannot settle: a passed record is checks-passed
-	// unless a merge ended the run, and only the record says whether one did.
+	// read off the run's merge record, store.MergeRecord, and the zero value
+	// for a run that has none. It is read with Record and travels beside it
+	// because it answers the one question Record alone cannot settle: a
+	// passed record is checks-passed unless a merge ended the run, and only
+	// the merge record says whether one did. PRD section 8 derives the run's
+	// passed from that record, so this is a read of it and never a copy
+	// stored elsewhere.
 	PullRequestEnd store.PullRequestEnd
 	// Execution is where the run's execution stands.
 	Execution Execution
@@ -247,9 +250,9 @@ type Standing struct {
 // A completed run is checks-passed rather than passed because nothing here
 // merges: the gate stops at the end, and PRD section 9 makes that the point at
 // which a driving agent asks the person. The one passed record that reads as
-// passed is one whose row records that a merge ended it, which is Standing's
-// PullRequestEnd and the record's own fact rather than an inference from a
-// checkpoint that still stands at the checks stage. A run that ended without
+// passed is one whose merge record says a merge ended it, which is Standing's
+// PullRequestEnd, read off that record rather than inferred from a checkpoint
+// that still stands at the checks stage. A run that ended without
 // a verdict is
 // cancelled when a person ended it and failed when a bound parked it, which is
 // the difference between the two things a terminated record covers; the reason

@@ -32,10 +32,19 @@ var transitions = []struct {
 		[]store.RunStatus{store.RunRunning}},
 	{"Terminate", (*runs.Service).Terminate, store.RunTerminated,
 		[]store.RunStatus{store.RunPending, store.RunRunning, store.RunHeld}},
-	{"PassOnMerge", (*runs.Service).PassOnMerge, store.RunPassed,
+	{"PassOnMerge", onPullRequest((*runs.Service).PassOnMerge, store.PullRequestMerged), store.RunPassed,
 		[]store.RunStatus{store.RunRunning, store.RunHeld}},
-	{"FailOnClose", (*runs.Service).FailOnClose, store.RunFailed,
+	{"FailOnClose", onPullRequest((*runs.Service).FailOnClose, store.PullRequestClosed), store.RunFailed,
 		[]store.RunStatus{store.RunRunning, store.RunHeld}},
+}
+
+// onPullRequest is one of the two pull request moves with the read it needs
+// supplied, so the table can drive it like the others.
+func onPullRequest(call func(*runs.Service, context.Context, string, store.PullRequestRead, store.HoldClosure) (store.Run, error),
+	end store.PullRequestEnd) func(*runs.Service, context.Context, string) (store.Run, error) {
+	return func(svc *runs.Service, ctx context.Context, id string) (store.Run, error) {
+		return call(svc, ctx, id, store.PullRequestRead{PullRequest: 7, Head: "0123abc", End: end}, store.HoldClosure{})
+	}
 }
 
 // Every move against every status a run can be in. A move is either one the
@@ -133,22 +142,30 @@ func TestARunHeldAndReleasedRunsAgainAndCanStillPass(t *testing.T) {
 	}
 }
 
-// The two moves a pull request's state makes record which state it was, with
-// the status, so the record says what ended the run. The control is the plain
-// Pass and Fail rows on runs of their own: those record no end, so an end read
-// back here is the move's own write.
-func TestAMoveMadeByThePullRequestRecordsWhichStateMadeIt(t *testing.T) {
+// The two moves a pull request's state makes write the merge record with the
+// status, so the record says what ended the run, and each refuses a read of
+// the other end, so the row and the record cannot disagree. The control is
+// the plain Pass and Fail rows on runs of their own: those write no record,
+// so a record read back here is the move's own write.
+func TestAMoveMadeByThePullRequestWritesTheMergeRecord(t *testing.T) {
 	ctx := t.Context()
 	s, _ := openStore(t)
 	svc := service(t, s, resolution(standin.New(t, standin.Script{})), false)
+	read := func(end store.PullRequestEnd) store.PullRequestRead {
+		return store.PullRequestRead{PullRequest: 7, Head: "0123abc", End: end}
+	}
 	for _, tc := range []struct {
 		name string
 		call func(context.Context, string) (store.Run, error)
 		want store.RunStatus
 		end  store.PullRequestEnd
 	}{
-		{"PassOnMerge", svc.PassOnMerge, store.RunPassed, store.PullRequestMerged},
-		{"FailOnClose", svc.FailOnClose, store.RunFailed, store.PullRequestClosed},
+		{"PassOnMerge", func(ctx context.Context, id string) (store.Run, error) {
+			return svc.PassOnMerge(ctx, id, read(store.PullRequestMerged), store.HoldClosure{})
+		}, store.RunPassed, store.PullRequestMerged},
+		{"FailOnClose", func(ctx context.Context, id string) (store.Run, error) {
+			return svc.FailOnClose(ctx, id, read(store.PullRequestClosed), store.HoldClosure{})
+		}, store.RunFailed, store.PullRequestClosed},
 		{"control: Pass", svc.Pass, store.RunPassed, ""},
 		{"control: Fail", svc.Fail, store.RunFailed, ""},
 	} {
@@ -161,13 +178,24 @@ func TestAMoveMadeByThePullRequestRecordsWhichStateMadeIt(t *testing.T) {
 		if after.Status != tc.want {
 			t.Fatalf("%s left the run %s, want %s", tc.name, after.Status, tc.want)
 		}
-		end, known := after.PullRequestEnd.Get()
-		if tc.end == "" && known {
-			t.Fatalf("%s recorded the end %s on a run its pull request did not end", tc.name, end)
+		record, found, err := s.MergeRecord(ctx, run.ID)
+		if err != nil {
+			t.Fatalf("MergeRecord: %v", err)
 		}
-		if tc.end != "" && (!known || end != tc.end) {
-			t.Fatalf("%s recorded the end %v, want %s", tc.name, after.PullRequestEnd, tc.end)
+		if tc.end == "" && found {
+			t.Fatalf("%s wrote a merge record on a run its pull request did not end: %+v", tc.name, record)
 		}
+		if tc.end != "" && (!found || record.End != tc.end || record.PullRequest != 7) {
+			t.Fatalf("%s wrote the merge record %+v, %v; want end %s", tc.name, record, found, tc.end)
+		}
+	}
+	crossed := seedRun(t, s, svc, "run-crossed")
+	place(t, svc, crossed.ID, store.RunRunning)
+	if _, err := svc.PassOnMerge(ctx, crossed.ID, read(store.PullRequestClosed), store.HoldClosure{}); err == nil {
+		t.Fatal("PassOnMerge accepted a read of a closed pull request")
+	}
+	if stood, _ := s.Run(ctx, crossed.ID); stood.Status != store.RunRunning {
+		t.Fatalf("the refused move left the run %s", stood.Status)
 	}
 }
 

@@ -48,13 +48,16 @@
 // a person was asked. A run that was waiting on checks when the service
 // stopped is continued rather than re-read here: the first read of the
 // resumed wait reads the pull request itself, which is step 1 and the checks
-// body's.
+// body's. Recovery step 1 for a still-running wait is therefore a resume into
+// the stage body, which makes its own read, and not a recover-time forge read.
 //
-// The record of such an ending is the run's own row: internal/runs' two pull
-// request moves write store.Run.PullRequestEnd with the status, and settle
-// makes the same two moves for the live wait from what the checks body wrote
-// under pipeline.KeyPullRequestEnd, so a stage body decides nothing about a
-// run's status and the record, not a checkpoint still standing at the checks
+// The record of such an ending is PRD section 8's merge record, written once:
+// internal/runs' two pull request moves write it with the status in one
+// transaction, settle makes the same two moves for the live wait from what
+// the checks body wrote under pipeline.KeyPullRequestEnd and its head key,
+// and report reads that record to derive the run's passed, so a stage body
+// decides nothing about a run's status, the run's own row stores the fact
+// nowhere, and the record, not a checkpoint still standing at the checks
 // stage, says what ended the run.
 //
 // # Blocking calls, and the one slot per run that makes them safe

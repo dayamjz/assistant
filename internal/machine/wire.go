@@ -241,6 +241,19 @@ type Run struct {
 	// Stages is what became of each of the nine, in the order a run takes
 	// them.
 	Stages []Stage `json:"stages,omitempty"`
+	// MergeRecord is PRD section 8's merge record for this run, present
+	// exactly when a code-host read ended the run on its pull request's
+	// state: the pull request, the head read, which end, and when. It is the
+	// record composed rather than restated, and the passed outcome above is
+	// derived from it.
+	MergeRecord *store.MergeRecord `json:"merge_record,omitempty"`
+	// AnswerNotApplied says, on the answer to a response, why the answer the
+	// request carried was not applied to the run: the hold it answered was
+	// closed by the service first, on a re-read of the run's pull request,
+	// and the run reported here is the run as it then ended. It is empty on
+	// every answer whose request carried no answer and on every response
+	// whose answer was taken.
+	AnswerNotApplied string `json:"answer_not_applied,omitempty"`
 	// Proposals are notes raised about this run from records across runs of
 	// its repository, read when this answer was built: today, PRD section 5's
 	// proposal to turn a decision-model check off. They are not any stage's

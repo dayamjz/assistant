@@ -381,9 +381,9 @@ Each has cost this repository more than one round of review.
   unexported for that reason, so a surface elsewhere has no assignment site for
   one that disagrees with the outcome beside it; build an answer through
   `Decide` rather than filling the fields in. `OutcomePassed` has one
-  producer: a passed record whose row says a merge ended it,
-  `store.Run.PullRequestEnd`, which only `internal/runs`' two pull request
-  moves write and which `Standing` carries beside the status. It
+  producer: a passed record beside PRD section 8's merge record,
+  `store.MergeRecord`, which only `internal/runs`' two pull request moves
+  write, once, and which `Standing` carries as the end read off it. It
   does not own the outcome set: the PRD's outcome row does, and
   `internal/outcomes` fails the build when the two come apart, so the constant
   block's order is that row's order rather than a free choice.
@@ -419,8 +419,9 @@ Each has cost this repository more than one round of review.
   from the recorded report; it is the one producer of
   `store.ResolvedByProgram`, and a test there counts the call sites. The
   live wait's own re-read is the checks body's, and `settle` turns what that
-  body wrote under `pipeline.KeyPullRequestEnd` into the record's move, so
-  no stage body decides a run's status. A segment that ends without settling leaves a run
+  body wrote under `pipeline.KeyPullRequestEnd` into the record's move and
+  its merge record, so no stage body decides a run's status; the resolution
+  of that hold and the move are one store transaction. A segment that ends without settling leaves a run
   something can resume and nothing is resuming, which is the stall PRD section 9
   calls worse than an error; `carryOn` is what stops that persisting, and it
   decides from what ended the segment rather than from the run. It also reads

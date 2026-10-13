@@ -25,11 +25,22 @@ import (
 // service that serves one repository.
 type scriptedHost struct {
 	provider *scriptedProvider
+	// failOpen makes Open refuse the way the GitHub host refuses when the
+	// provider command line cannot be resolved: with an error and no
+	// provider. It is read under the provider's lock so a test can set it
+	// while the service runs.
+	failOpen *bool
 }
 
 func (h scriptedHost) Open(repository string) (forge.Provider, error) {
 	if repository == "" {
 		return nil, forge.ErrInvalidArgument
+	}
+	h.provider.mu.Lock()
+	failing := h.failOpen != nil && *h.failOpen
+	h.provider.mu.Unlock()
+	if failing {
+		return nil, errors.New("forge: the provider command line could not be resolved")
 	}
 	return h.provider, nil
 }
@@ -47,6 +58,17 @@ type scriptedProvider struct {
 	mu    sync.Mutex
 	state forge.PullRequestState
 	gets  int
+	// refuse makes every read of the pull request the refusal the GitHub
+	// adapter returns for a provider that ran, answered, and refused.
+	refuse bool
+	// deadlines records, per read, whether the context the read ran under
+	// carried a deadline, which is what a bounded read looks like from the
+	// provider's side.
+	deadlines []bool
+	// onGet runs on each read, outside the lock, before the answer, with the
+	// count of reads so far; a test uses it to act while a read is in
+	// flight.
+	onGet func(reads int)
 }
 
 func (p *scriptedProvider) set(state forge.PullRequestState) {
@@ -61,14 +83,31 @@ func (p *scriptedProvider) reads() int {
 	return p.gets
 }
 
-func (p *scriptedProvider) Get(ctx context.Context, number int) (forge.PullRequest, error) {
+func (p *scriptedProvider) boundedReads() []bool {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	return append([]bool(nil), p.deadlines...)
+}
+
+func (p *scriptedProvider) Get(ctx context.Context, number int) (forge.PullRequest, error) {
+	p.mu.Lock()
 	p.gets++
+	reads := p.gets
+	_, bounded := ctx.Deadline()
+	p.deadlines = append(p.deadlines, bounded)
+	state, refuse, hook := p.state, p.refuse, p.onGet
+	p.mu.Unlock()
+	if hook != nil {
+		hook(reads)
+	}
 	if err := ctx.Err(); err != nil {
 		return forge.PullRequest{}, err
 	}
-	return forge.PullRequest{Number: number, State: p.state, HeadCommit: "0123abc"}, nil
+	if refuse {
+		return forge.PullRequest{}, &forge.Refusal{Reason: forge.ReasonRejected, Op: "get",
+			Detail: "the provider refused to describe the pull request"}
+	}
+	return forge.PullRequest{Number: number, State: state, HeadCommit: "0123abc"}, nil
 }
 
 func (p *scriptedProvider) Checks(ctx context.Context, _ int) (forge.ChecksReport, error) {
@@ -102,6 +141,14 @@ type checksHoldSubject struct {
 	home     *home.Home
 	subject  string
 	provider *scriptedProvider
+	failOpen *bool
+}
+
+// setFailOpen makes or unmakes the host refuse to open a provider.
+func (c checksHoldSubject) setFailOpen(failing bool) {
+	c.provider.mu.Lock()
+	defer c.provider.mu.Unlock()
+	*c.failOpen = failing
 }
 
 // checksTimeoutUnderTest is the checks_timeout the home is configured with.
@@ -123,7 +170,8 @@ func newChecksHoldSubject(t *testing.T) checksHoldSubject {
 	if err := os.WriteFile(h.ConfigFile(), []byte(`{"checks_timeout": "`+checksTimeoutUnderTest+`"}`+"\n"), 0o600); err != nil {
 		t.Fatalf("writing the home's configuration: %v", err)
 	}
-	return checksHoldSubject{home: h, subject: subject, provider: &scriptedProvider{state: forge.PullRequestStateOpen}}
+	return checksHoldSubject{home: h, subject: subject,
+		provider: &scriptedProvider{state: forge.PullRequestStateOpen}, failOpen: new(bool)}
 }
 
 // options opens the service on this subject: the real checks body behind
@@ -134,7 +182,7 @@ func newChecksHoldSubject(t *testing.T) checksHoldSubject {
 func (c checksHoldSubject) options(t *testing.T, holdAtIntent bool) service.Options {
 	t.Helper()
 	opts := options(t, c.home)
-	opts.Forge = scriptedHost{provider: c.provider}
+	opts.Forge = scriptedHost{provider: c.provider, failOpen: c.failOpen}
 	opts.NewStages = func(deps stages.StageDeps) pipeline.Stages {
 		all := stages.All(deps)
 		for _, stage := range pipeline.Order() {
@@ -249,8 +297,9 @@ func TestRecoveryEndsAnElapsedChecksHoldWhosePullRequestWasMerged(t *testing.T) 
 		if run.Outcome != machine.OutcomePassed {
 			t.Fatalf("after recovery the run reads %s, want passed: %+v", run.Outcome, run)
 		}
-		if end, _ := run.Record.PullRequestEnd.Get(); end != store.PullRequestMerged {
-			t.Fatalf("the record says %v ended the run, want merged", run.Record.PullRequestEnd)
+		if run.MergeRecord == nil || run.MergeRecord.End != store.PullRequestMerged ||
+			run.MergeRecord.PullRequest != 7 || run.MergeRecord.Head != "0123abc" || run.MergeRecord.Run != runID {
+			t.Fatalf("the merge record is %+v, want the read that ended the run", run.MergeRecord)
 		}
 		if run.Decision != nil {
 			t.Fatal("a run its pull request ended still offers a decision")
@@ -266,11 +315,33 @@ func TestRecoveryEndsAnElapsedChecksHoldWhosePullRequestWasMerged(t *testing.T) 
 	if c.provider.reads() != before+1 {
 		t.Fatalf("recovery read the pull request %d times, want once", c.provider.reads()-before)
 	}
+	if bounded := c.provider.boundedReads(); !bounded[len(bounded)-1] {
+		t.Fatal("recovery's read ran under no deadline, so a provider that never answers would hold Open")
+	}
 	hold, filed := readHold(t, c.home, runID)
 	if !filed {
 		t.Fatal("recovery ended the run without recording the hold it closed")
 	}
 	mustBeResolvedByTheProgram(t, hold, "merged")
+	if record := readMergeRecord(t, c.home, runID); record == nil || record.End != store.PullRequestMerged {
+		t.Fatalf("the store holds the merge record %+v, want the merge", record)
+	}
+}
+
+// readMergeRecord reads a run's merge record off the store, nil when there is
+// none.
+func readMergeRecord(t *testing.T, h *home.Home, runID string) *store.MergeRecord {
+	t.Helper()
+	records := openRecords(t, h)
+	defer func() { _ = records.Close() }()
+	record, found, err := records.MergeRecord(t.Context(), runID)
+	if err != nil {
+		t.Fatalf("reading the merge record of run %s: %v", runID, err)
+	}
+	if !found {
+		return nil
+	}
+	return &record
 }
 
 // Answering the same hold re-reads the pull request before the answer is
@@ -292,8 +363,11 @@ func TestRespondingToAnElapsedChecksHoldReReadsThePullRequestFirst(t *testing.T)
 		if run.Reason != "pull request closed without merging" {
 			t.Fatalf("the run's reason is %q, want the one PRD section 5 fixes", run.Reason)
 		}
-		if end, _ := run.Record.PullRequestEnd.Get(); end != store.PullRequestClosed {
-			t.Fatalf("the record says %v ended the run, want closed", run.Record.PullRequestEnd)
+		if run.MergeRecord == nil || run.MergeRecord.End != store.PullRequestClosed {
+			t.Fatalf("the merge record is %+v, want the close", run.MergeRecord)
+		}
+		if !strings.Contains(run.AnswerNotApplied, "already closed") {
+			t.Fatalf("the answer says %q about the answer it did not apply, want that the pull request had already closed", run.AnswerNotApplied)
 		}
 		if view := stageView(t, run, pipeline.StageCI); view.Outcome != pipeline.OutcomeHeld {
 			t.Fatalf("the answer was applied to the checks stage, which now reads %s", view.Outcome)
@@ -334,8 +408,8 @@ func TestOnlyAMergedOrClosedPullRequestClosesTheChecksHold(t *testing.T) {
 				if run.Outcome != machine.OutcomeChecksPassed {
 					t.Fatalf("a %s pull request answered %s, want the answer applied and the run checks-passed", tc.name, run.Outcome)
 				}
-				if run.Record.PullRequestEnd.IsKnown() {
-					t.Fatalf("the record says %v ended the run", run.Record.PullRequestEnd)
+				if run.MergeRecord != nil || run.AnswerNotApplied != "" {
+					t.Fatalf("the run carries a merge record %+v or an unapplied answer %q", run.MergeRecord, run.AnswerNotApplied)
 				}
 				if _, filed := readHold(t, c.home, runID); filed {
 					t.Fatal("a hold was recorded as closed by the program for a pull request that did not end the run")
@@ -390,5 +464,157 @@ func TestAHoldOnAPersonsDecisionIsNeverReRead(t *testing.T) {
 		if view := stageView(t, run, pipeline.StageCI); view.Report == nil || !strings.Contains(view.Report.Summary, "merged") {
 			t.Fatalf("the checks stage does not report the merge it read: %+v", view.Report)
 		}
+	})
+}
+
+// A pull request that could not be read leaves the hold to the person, by
+// recovery and by an answer alike, and a person's answer is then taken: a
+// host that cannot open a provider and a provider that refuses the read are
+// each a typed answer the service logs and treats as not read, never an error
+// that stops a person answering their own hold over a code host that is down.
+// The control is the merged state those same runs would otherwise have been
+// ended on: once the host answers again, the next look ends the run.
+func TestAPullRequestThatCannotBeReadLeavesTheHoldToThePerson(t *testing.T) {
+	requiresIdentifiedPeer(t)
+	for _, tc := range []struct {
+		name string
+		fail func(c checksHoldSubject, failing bool)
+	}{
+		{"the host cannot open a provider", func(c checksHoldSubject, failing bool) { c.setFailOpen(failing) }},
+		{"the provider refuses the read", func(c checksHoldSubject, failing bool) {
+			c.provider.mu.Lock()
+			defer c.provider.mu.Unlock()
+			c.provider.refuse = failing
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newChecksHoldSubject(t)
+			var runID string
+			withServiceOptions(t, c.options(t, false), func(running serviceUnderTest) {
+				runID = startAtChecksHold(t, c, running.client).Record.ID
+			})
+			c.provider.set(forge.PullRequestStateMerged)
+			tc.fail(c, true)
+
+			withServiceOptions(t, c.options(t, false), func(running serviceUnderTest) {
+				held := runByID(t, running.client, runID)
+				if held.Outcome != machine.OutcomeDecision {
+					t.Fatalf("after recovery with %s the run reads %s, want the hold left standing", tc.name, held.Outcome)
+				}
+				if _, filed := readHold(t, c.home, runID); filed {
+					t.Fatal("a hold was recorded as closed by the program on a pull request that was not read")
+				}
+				// Answering is not blocked by the failure: the answer is
+				// taken and the run goes on.
+				run := answer(t, running.client, runID, string(pipeline.OutcomeApproved))
+				if run.Outcome != machine.OutcomeChecksPassed || run.AnswerNotApplied != "" {
+					t.Fatalf("answering while %s answered %s with %q, want the answer applied", tc.name, run.Outcome, run.AnswerNotApplied)
+				}
+			})
+
+			// The control: the same failure lifted ends a fresh run's hold.
+			tc.fail(c, false)
+			c.provider.set(forge.PullRequestStateOpen)
+			other := newChecksHoldSubject(t)
+			other.provider, other.failOpen = c.provider, c.failOpen
+			var otherID string
+			withServiceOptions(t, other.options(t, false), func(running serviceUnderTest) {
+				otherID = startAtChecksHold(t, other, running.client).Record.ID
+			})
+			c.provider.set(forge.PullRequestStateMerged)
+			withServiceOptions(t, other.options(t, false), func(running serviceUnderTest) {
+				if run := runByID(t, running.client, otherID); run.Outcome != machine.OutcomePassed {
+					t.Fatalf("with the host answering again the run reads %s, want passed", run.Outcome)
+				}
+			})
+		})
+	}
+}
+
+// The resolution and the run's move are one transaction. A hold already
+// resolved by the program while the run is still held is left as it stands
+// and the move still happens, which repairs a record left that way; and a
+// move refused because a person answered the hold between the read and the
+// write rolls the resolution back with it, so no hold row says the program
+// resolved a hold on a run a person resumed.
+func TestTheHoldClosureAndTheMoveAreOneTransaction(t *testing.T) {
+	requiresIdentifiedPeer(t)
+	t.Run("a hold already resolved is left and the run still moves", func(t *testing.T) {
+		c := newChecksHoldSubject(t)
+		var runID string
+		withServiceOptions(t, c.options(t, false), func(running serviceUnderTest) {
+			runID = startAtChecksHold(t, c, running.client).Record.ID
+		})
+		records := openRecords(t, c.home)
+		key := service.ChecksHoldKey(runID)
+		if _, err := records.RegisterHold(t.Context(), store.Hold{Key: key, RunID: store.Known(runID), Subject: "left behind"}); err != nil {
+			t.Fatalf("RegisterHold: %v", err)
+		}
+		if _, err := records.ResolveHold(t.Context(), key, "an earlier reading", store.ResolvedByProgram()); err != nil {
+			t.Fatalf("ResolveHold: %v", err)
+		}
+		if err := records.Close(); err != nil {
+			t.Fatalf("closing the store: %v", err)
+		}
+		c.provider.set(forge.PullRequestStateMerged)
+
+		withServiceOptions(t, c.options(t, false), func(running serviceUnderTest) {
+			if run := runByID(t, running.client, runID); run.Outcome != machine.OutcomePassed {
+				t.Fatalf("the run reads %s, want passed: the move was not made because the hold was already resolved", run.Outcome)
+			}
+		})
+		hold, _ := readHold(t, c.home, runID)
+		if resolution, _ := hold.Resolution.Get(); resolution != "an earlier reading" {
+			t.Fatalf("the earlier resolution was rewritten: %+v", hold)
+		}
+	})
+
+	t.Run("a move refused by a person's answer rolls the resolution back", func(t *testing.T) {
+		c := newChecksHoldSubject(t)
+		withServiceOptions(t, c.options(t, false), func(running serviceUnderTest) {
+			runID := startAtChecksHold(t, c, running.client).Record.ID
+			c.provider.set(forge.PullRequestStateMerged)
+			// While the first answer's read is in flight, a second answer
+			// cancels the run; its own read, the second, finds the pull
+			// request open and the cancel is taken. The first read then
+			// answers merged, and the move it asks for finds the run no
+			// longer held.
+			type answered struct {
+				run machine.Run
+				err error
+			}
+			cancelled := make(chan answered, 1)
+			second := dial(t, running.service)
+			before := c.provider.reads()
+			c.provider.onGet = func(reads int) {
+				if reads != before+1 {
+					return
+				}
+				c.provider.set(forge.PullRequestStateOpen)
+				var run machine.Run
+				err := second.Call(context.Background(), ipc.MethodRunRespond,
+					machine.RespondRequest{Run: runID, Answer: string(pipeline.OutcomeCancelled)}, &run)
+				cancelled <- answered{run, err}
+				c.provider.set(forge.PullRequestStateMerged)
+			}
+			var first machine.Run
+			err := running.client.Call(t.Context(), ipc.MethodRunRespond,
+				machine.RespondRequest{Run: runID, Answer: string(pipeline.OutcomeApproved)}, &first)
+			if got := <-cancelled; got.err != nil || got.run.Outcome != machine.OutcomeCancelled {
+				t.Fatalf("the cancel answered %s, %v, want cancelled", got.run.Outcome, got.err)
+			}
+			if err == nil {
+				t.Fatalf("the overtaken answer was answered %s, want a refusal: the run was cancelled under it", first.Outcome)
+			}
+			if c.provider.reads() != before+2 {
+				t.Fatalf("the pull request was read %d times, want the two answers' reads", c.provider.reads()-before)
+			}
+			if _, filed := readHold(t, c.home, runID); filed {
+				t.Fatal("the refused move left a hold saying the program resolved it on a run a person ended")
+			}
+			if record := readMergeRecord(t, c.home, runID); record != nil {
+				t.Fatalf("the refused move left a merge record: %+v", record)
+			}
+		})
 	})
 }

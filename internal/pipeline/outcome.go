@@ -267,13 +267,20 @@ func ReadStageResult(r Reader, stage Stage) (StageResult, error) {
 	return out, nil
 }
 
-// PullRequestEnd returns the text the CI stage wrote under KeyPullRequestEnd:
-// which state of the pull request ended its wait, as the store's vocabulary
-// spells it, or the empty string when nothing did. It carries the text rather
-// than the store's type because this package does not own that vocabulary;
-// the reader that acts on it turns it into one and refuses what it cannot.
-func PullRequestEnd(s graph.State) string {
-	v, ok := s.Get(string(KeyPullRequestEnd))
+// PullRequestEnd returns what the CI stage wrote under KeyPullRequestEnd and
+// KeyPullRequestEndHead: which state of the pull request ended its wait, as
+// the store's vocabulary spells it, and the head it was read at, or two empty
+// strings when nothing did. It carries text rather than the store's type
+// because this package does not own that vocabulary; the reader that acts on
+// it turns it into one and refuses what it cannot.
+func PullRequestEnd(s graph.State) (end, head string) {
+	return textOf(s, KeyPullRequestEnd), textOf(s, KeyPullRequestEndHead)
+}
+
+// textOf reads a text key off a state, empty when the state does not declare
+// it.
+func textOf(s graph.State, key Key) string {
+	v, ok := s.Get(string(key))
 	if !ok {
 		return ""
 	}

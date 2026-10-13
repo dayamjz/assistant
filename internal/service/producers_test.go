@@ -13,38 +13,57 @@ import (
 
 // store.ResolvedByProgram has exactly one producer in this repository, the
 // checks-hold closer in this package, which is what store's own doc comment
-// on it claims. A second call site would be a second place the program
-// decides a hold without a person, which PRD section 8 gives it for one hold
+// on it claims. A second reference would be a second place the program could
+// decide a hold without a person, which PRD section 8 gives it for one hold
 // and no other, so this reads every non-test source file in the module and
-// counts them.
+// counts every reference to the name: a call, a function value taken and
+// called elsewhere, a dot-imported or unqualified use, all alike, and not
+// only a call through a selector. internal/store's own file holds the
+// declaration and the one unqualified use that lists the closed set, and is
+// the one other file allowed.
 //
 // It reads source rather than a type graph because the question is who
-// calls a function, which no executable interface answers; the positive
+// refers to a function, which no executable interface answers; the positive
 // control is the same scan finding store.ResolvedByMachineInterface where
 // internal/ipc is documented to produce it, so a scan that stopped seeing
-// calls fails rather than reporting a guarantee it no longer checks.
+// references fails rather than reporting a guarantee it no longer checks.
+//
+// The residual gap is what a source scan cannot see: a reference assembled
+// at run time, such as reflection on the exported name, and a file excluded
+// from the build by a constraint this scan does not evaluate, which it
+// counts anyway and so errs toward refusing. Nothing here reads a built
+// binary.
 func TestOnlyTheChecksHoldCloserProducesAProgramResolution(t *testing.T) {
 	t.Parallel()
 	root := moduleRoot(t)
-	program := callSites(t, root, "ResolvedByProgram")
-	if want := []string{filepath.Join("internal", "service", "checkshold.go")}; !equalSets(program, want) {
-		t.Fatalf("store.ResolvedByProgram is produced in %v, want only %v", program, want)
+	program := references(t, root, "ResolvedByProgram")
+	want := []string{
+		filepath.Join("internal", "service", "checkshold.go"),
+		filepath.Join("internal", "store", "resolver.go"),
 	}
-	machineInterface := callSites(t, root, "ResolvedByMachineInterface")
+	if !equalSets(program, want) {
+		t.Fatalf("store.ResolvedByProgram is referred to in %v, want only %v", program, want)
+	}
+	machineInterface := references(t, root, "ResolvedByMachineInterface")
 	if len(machineInterface) == 0 {
-		t.Fatal("the scan found no producer of store.ResolvedByMachineInterface, which internal/ipc produces; " +
+		t.Fatal("the scan found no reference to store.ResolvedByMachineInterface, which internal/ipc produces; " +
 			"the scan sees nothing, so the count above establishes nothing")
 	}
 	for _, file := range machineInterface {
-		if !strings.HasPrefix(file, filepath.Join("internal", "ipc")+string(filepath.Separator)) {
-			t.Fatalf("store.ResolvedByMachineInterface is produced in %s, outside internal/ipc", file)
+		inIPC := strings.HasPrefix(file, filepath.Join("internal", "ipc")+string(filepath.Separator))
+		inStore := file == filepath.Join("internal", "store", "resolver.go")
+		if !inIPC && !inStore {
+			t.Fatalf("store.ResolvedByMachineInterface is referred to in %s, outside internal/ipc", file)
 		}
 	}
 }
 
-// callSites returns every non-test Go file under root, relative to it, that
-// calls a function of the given name through a selector such as store.Name.
-func callSites(t *testing.T, root, name string) []string {
+// references returns every non-test Go file under root, relative to it, that
+// refers to the given name: as a selector such as store.Name, or as a bare
+// identifier, which is a dot import, an unqualified use inside the declaring
+// package, or the declaration itself. A declaration counts, because a package
+// that declares a second function of the name would be a second producer.
+func references(t *testing.T, root, name string) []string {
 	t.Helper()
 	var files []string
 	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
@@ -66,11 +85,11 @@ func callSites(t *testing.T, root, name string) []string {
 		}
 		found := false
 		ast.Inspect(parsed, func(n ast.Node) bool {
-			call, ok := n.(*ast.CallExpr)
-			if !ok {
-				return true
-			}
-			if selector, ok := call.Fun.(*ast.SelectorExpr); ok && selector.Sel.Name == name {
+			// A selector's Sel is itself an *ast.Ident, so one case covers
+			// store.Name, a dot-imported Name, and the declaring package's
+			// own Name; a field or method of the same name on another type
+			// would count too, which errs toward refusing.
+			if ident, ok := n.(*ast.Ident); ok && ident.Name == name {
 				found = true
 			}
 			return true

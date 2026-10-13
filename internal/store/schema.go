@@ -531,22 +531,47 @@ var schema = []migration{
 	},
 	{
 		version: 13,
-		name:    "run ended by its pull request",
+		name:    "merge record",
 		statements: []string{
-			// Which state of the run's pull request ended the run, when one
-			// did: PRD section 5's "Waiting on checks" completes a run whose
-			// pull request was read as merged and fails one whose pull
-			// request was read as closed, and the record has to say which
-			// rather than leave a reader to infer it from a checkpoint that
-			// still stands at the checks stage. The value is the closed set
-			// store.PullRequestEnd names, written in the same transaction as
-			// the status it goes with.
+			// PRD section 8's merge record: append-only and written once, by
+			// the code-host read that ends a run on a merge - the pull
+			// request, the head read, and when. The code host owns the merge;
+			// this is the program's record that it saw it. The run's passed
+			// on a merge and a task's Landed are both derived from this one
+			// row, and neither stores the fact again, which is why the run
+			// table gains no column for it. The same row, in the closed
+			// vocabulary store.PullRequestEnd, records a pull request read as
+			// closed without a merge, which PRD section 5 has fail the run:
+			// one read, one record, whichever end it saw.
 			//
-			// Nullable and without a default, so a run ended any other way,
-			// and a run recorded before the column existed, read back
-			// unknown rather than as a fabricated "not ended by its pull
-			// request".
-			`ALTER TABLE run ADD COLUMN pull_request_end TEXT`,
+			// One row per run, written in the transaction that moves the
+			// run's status, so neither exists without the other. The run
+			// column carries no foreign key, for the decision_answer table's
+			// reason: the row is keyed by the identifier the service holds,
+			// and what that names is the run table's business.
+			`CREATE TABLE merge_record (
+				run              TEXT PRIMARY KEY,
+				pull_request     INTEGER NOT NULL,
+				head             TEXT NOT NULL,
+				pull_request_end TEXT NOT NULL,
+				recorded_at      TEXT NOT NULL
+			) STRICT`,
+			// Written once means written once. Unlike the checkpoint and
+			// task_state seals, which refuse INSERT on an emptied table, this
+			// table takes its rows and refuses the two verbs that would make
+			// a row say something other than what the read saw. Like those
+			// seals, it does not guard against a later migration that drops
+			// the trigger.
+			`CREATE TRIGGER merge_record_is_written_once
+				BEFORE UPDATE ON merge_record
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a merge record is written once by the read that made it and is not updated');
+				END`,
+			`CREATE TRIGGER merge_record_is_not_removed
+				BEFORE DELETE ON merge_record
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a merge record is written once by the read that made it and is not deleted');
+				END`,
 		},
 	},
 }

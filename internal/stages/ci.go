@@ -97,15 +97,17 @@ import (
 //
 // Only a state the provider positively reports as merged or closed ends the
 // wait. The stage then ends its wait row, records which under
-// pipeline.KeyPullRequestEnd, and reports what it read: a merge is reported
+// pipeline.KeyPullRequestEnd with the head it read at under
+// pipeline.KeyPullRequestEndHead, and reports what it read: a merge is reported
 // as complete and not newly validated, because the checks were not read to a
 // verdict and the rule that only a no_ci declaration makes an empty check
 // list green was never applied; a close is reported as the checks not having
 // been read to a verdict. Neither report carries a finding, so in the
 // pipeline's vocabulary the stage passed, which is true of the stage: nothing
 // it read needs anything done about it. What the run becomes is not this
-// body's to decide, and it decides nothing: internal/service reads the key
-// when it settles the record, and PRD section 5 says a merge passes the run
+// body's to decide, and it decides nothing: internal/service reads the two
+// keys and the recorded number when it settles the record, writes PRD section
+// 8's merge record from them, and PRD section 5 says a merge passes the run
 // and a close fails it with the reason "pull request closed without merging".
 // The report says what was read, not what the record will say.
 //
@@ -211,7 +213,7 @@ func CI(deps StageDeps) pipeline.Implementation {
 			pipeline.KeyForgeRepository, pipeline.KeyPullRequest,
 			pipeline.KeyRepository, pipeline.KeyRun, pipeline.KeyBase,
 		},
-		Writes: []pipeline.Key{pipeline.KeyPullRequestEnd},
+		Writes: []pipeline.Key{pipeline.KeyPullRequestEnd, pipeline.KeyPullRequestEndHead},
 		NewBody: func() pipeline.Body {
 			return func(ctx context.Context, in pipeline.Input) (pipeline.Output, error) {
 				return runChecks(ctx, deps, in)
@@ -301,7 +303,8 @@ func runChecks(ctx context.Context, deps StageDeps, in pipeline.Input) (pipeline
 			return pipeline.Output{
 				Report: pullRequestEndedReport(end, pr),
 				Writes: map[pipeline.Key]graph.Value{
-					pipeline.KeyPullRequestEnd: graph.TextValue(string(end)),
+					pipeline.KeyPullRequestEnd:     graph.TextValue(string(end)),
+					pipeline.KeyPullRequestEndHead: graph.TextValue(pr.HeadCommit),
 				},
 			}, nil
 		}
@@ -371,10 +374,9 @@ func readPullRequestEnd(ctx context.Context, provider forge.Provider, number int
 		return pr, store.PullRequestMerged, nil
 	case forge.PullRequestStateClosed:
 		return pr, store.PullRequestClosed, nil
-	case forge.PullRequestStateOpen, forge.PullRequestStateUnknown:
-		return pr, "", nil
 	default:
-		// A state added to forge without being classified here is waited
+		// Open, the zero state forge maps an unrecognized word onto, and any
+		// state added to forge without being classified here are all waited
 		// through, on the same terms as an unrecognized verdict: only a
 		// positively read merged or closed state ends a wait.
 		return pr, "", nil
