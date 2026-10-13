@@ -168,7 +168,8 @@ func TestKeysAreTheWholeSchemaAndUnique(t *testing.T) {
 		KeyFixRoundsReview, KeyFixRoundsRebase, KeyFixRoundsTest, KeyFixRoundsLint, KeyFixRoundsChecks,
 		KeyRunBudget, KeyIgnorePatterns, KeyReviewPathRules, KeyJudgePaths, KeyDocumentOwnership,
 		KeySuppressProjectInstructions, KeyNoCI, KeyChecksTimeout, KeySessionReuse,
-		KeyDecisionModel, KeySupervisionBeaconInterval, KeyCommitFixMessage, KeyAllowPushedCommands,
+		KeyDecisionModel, KeySupervisionBeaconInterval, KeyEscalationWindow, KeyRecheckWindow,
+		KeyStallInspectionCount, KeyCommitFixMessage, KeyAllowPushedCommands,
 	} {
 		if !seen[k] {
 			t.Errorf("%s is missing from Keys()", k)

@@ -33,9 +33,10 @@
 //
 // # The writer
 //
-// Writer is the beacon's one writer, and nothing in this build calls it: the
-// supervisor loop that will, from its own select so that a wedged loop
-// cannot keep a fresh beacon, is #100's. Each write is one WriteAt of the
+// Writer is the beacon's one writer, and its one caller is internal/service's
+// supervisor loop, from its own select so that a wedged loop cannot keep a
+// fresh beacon; that package's watchdog reads the beacon through ReadBeacon
+// and never writes it. Each write is one WriteAt of the
 // whole record at offset zero through a handle kept open, so the file is
 // never truncated and never renamed, and a reader on any platform the
 // module builds for can open it beside the writer.

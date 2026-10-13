@@ -18,7 +18,7 @@
 // I/O edge is the subpackage feed: it reads the beacon file, the instance
 // file, the lock probe and the database, and hands what it found to the
 // predicates here. The loop that computes the inputs, writes the queue and
-// the markers and the beacon is #100's and lives in internal/service; the
+// the markers and the beacon lives in internal/service, in supervise.go; the
 // durable tables and their accessors are internal/store's; the hook that
 // runs Assess at turn end is #106's. This split is the one internal/graph
 // draws: the engine has no git, no network and no agent in it, and the
@@ -98,8 +98,10 @@
 // derivation; whether the window and the surfaced flag are computed so that
 // a window can elapse at all is the loop's. A loop that advanced the window
 // start on every absorbed pass would absorb on elapsed time with this table
-// unchanged, and nothing here can see it; #100's loop test under an injected
-// clock is the other half of P9 and cites it there. P10 is not cited here
+// unchanged, and nothing here can see it; internal/service's loop test under
+// an injected clock is the other half of P9 and cites it there, and reads
+// the window start out of the markers after each absorbed pass. P10 is not
+// cited here
 // at all: Assess's inputs are stated by its tests rather than produced by
 // the real lock, beacon and instance file, and a test over stated values
 // cannot show that the real mechanism produces the shapes it checks. feed's
@@ -132,7 +134,9 @@
 //     function's.
 //   - GuardOf compares no epoch, by design stated on it: a loop replaced in
 //     place under the same instance reads as live to the pull guard, which
-//     is what it is. ArmOf compares none either.
+//     is what it is. ArmOf compares none either. The watchdog in
+//     internal/service does compare it, against the incarnation it started,
+//     through IsFresh and its own reading of the identity.
 //   - The beacon's checksum says a record was written whole and nothing
 //     about who wrote it.
 package supervisor

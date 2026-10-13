@@ -187,7 +187,10 @@ func (w WakeRequest) validate() error {
 // marker can move past a surfaced wake that was not recorded. The anchor
 // AppendTaskEventAfter takes is not taken here, because one loop per service
 // writes a task's markers and a pass that lost a race to itself has nothing
-// to decide again.
+// to decide again. What is taken is the incarnation: the write is refused
+// with ErrStaleIncarnation, markers included, when inc is not the current
+// one, decided inside the same transaction, so a loop the watchdog replaced
+// writes nothing however late it unwedges.
 //
 // A row with the same task, kind and marker that is still queued is the same
 // wake, replayed: the answer is WakeAlreadyQueued, the markers are advanced
@@ -197,7 +200,7 @@ func (w WakeRequest) validate() error {
 // surface is a defect in the loop and not a wake to drop. A task that does
 // not exist is ErrNotFound, wrapped, and a request or an advance that is
 // malformed is refused before anything is read.
-func (s *Store) AppendWakeWithMarkers(ctx context.Context, w WakeRequest, advance MarkerAdvance) (WakeAppend, error) {
+func (s *Store) AppendWakeWithMarkers(ctx context.Context, inc Incarnation, w WakeRequest, advance MarkerAdvance) (WakeAppend, error) {
 	if err := w.validate(); err != nil {
 		return WakeAppend{}, err
 	}
@@ -206,6 +209,9 @@ func (s *Store) AppendWakeWithMarkers(ctx context.Context, w WakeRequest, advanc
 	}
 	var out WakeAppend
 	err := s.inTx(ctx, func(tx *sql.Tx) error {
+		if err := fenceIncarnation(ctx, tx, inc); err != nil {
+			return err
+		}
 		if err := taskExists(ctx, tx, w.TaskID); err != nil {
 			return err
 		}
@@ -253,13 +259,18 @@ func (s *Store) AppendWakeWithMarkers(ctx context.Context, w WakeRequest, advanc
 // AdvanceWakeMarkers rewrites a task's markers with no wake, which is what an
 // absorbed pass does: PRD section 5's "advance markers, no model turn". It
 // derives the change epoch on WakeMarkers' terms and returns the row as
-// written. A task that does not exist is ErrNotFound, wrapped.
-func (s *Store) AdvanceWakeMarkers(ctx context.Context, taskID string, advance MarkerAdvance) (WakeMarkers, error) {
+// written. A task that does not exist is ErrNotFound, wrapped, and an
+// incarnation that is not the current one is ErrStaleIncarnation, decided in
+// the same transaction, on AppendWakeWithMarkers's terms.
+func (s *Store) AdvanceWakeMarkers(ctx context.Context, inc Incarnation, taskID string, advance MarkerAdvance) (WakeMarkers, error) {
 	if err := advance.validate(taskID); err != nil {
 		return WakeMarkers{}, err
 	}
 	var out WakeMarkers
 	err := s.inTx(ctx, func(tx *sql.Tx) error {
+		if err := fenceIncarnation(ctx, tx, inc); err != nil {
+			return err
+		}
 		if err := taskExists(ctx, tx, taskID); err != nil {
 			return err
 		}

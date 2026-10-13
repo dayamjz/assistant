@@ -152,6 +152,15 @@ type Options struct {
 	// readers on purpose, so what a stage read and what the service re-reads
 	// come from the same place.
 	Forge forge.Host
+	// Terminals is what the supervisor loop observes a task's terminal
+	// through. Nil, which is what the product passes until the session
+	// hookup lands, runs the loop degraded: every terminal is Unobserved
+	// and every in-flight task surfaces, on supervise.go's terms.
+	Terminals Terminals
+	// hooks are the seams this package's tests drive the loop through. They
+	// are here rather than on the Service because the loop starts inside
+	// Open; supervise.go says what each is, and the product sets none.
+	hooks supervisionHooks
 }
 
 // Service is one home's background service.
@@ -249,6 +258,13 @@ type Service struct {
 	closeOnce  sync.Once
 	closeErr   error
 	work       sync.WaitGroup
+	// sup is the supervisor loop's state: its beacon writer, its watchdog's
+	// done channel, and what Close reads. It is nil until startSupervision,
+	// which Open runs after recovery, and it is deliberately not registered
+	// under work, because Close waits for it a bounded grace and for work
+	// without bound; supervise.go owns the loop and Close's doc owns the
+	// exception.
+	sup *supervision
 }
 
 // driver is what a run needs that depends on an agent being runnable and does
@@ -377,6 +393,14 @@ func Open(ctx context.Context, o Options) (*Service, error) {
 		return nil, err
 	}
 	s.recover(ctx)
+	// The supervisor loop starts after recovery and before the caller
+	// serves, so a run recovery continued is under supervision before the
+	// first request arrives and the beacon is being written before anything
+	// reads it.
+	if err := s.startSupervision(o.hooks, o.Terminals); err != nil {
+		_ = s.Close()
+		return nil, err
+	}
 	return s, nil
 }
 
@@ -481,6 +505,18 @@ func (s *Service) Stop(restarting bool) {
 // ordered is its registration, which stopWork closes off under the mutex
 // startWork registers under. Waiting first and refusing after would leave the
 // interleaving where work is registered against a database this then closes.
+//
+// The supervisor loop is the one piece of work Close does not wait for
+// without bound. A loop wedged inside a provider call that ignores its
+// context cannot be ended, and a Close that waited for it would hold the
+// store open and the lock taken for as long as the wedge lasts, which turns
+// a wedged loop into an unstoppable service holding the home. So Close
+// waits CloseGrace for the loop and its watchdog, and then abandons them
+// with ErrSupervisionAbandoned in its result and goes on to close the store
+// and release the lock. What makes that safe is the incarnation fence
+// supervise.go states: the abandoned goroutine is refused at every write it
+// could still make. The residual gap is the goroutine itself, which runs on
+// inside this process until the wedged call returns or the process ends.
 func (s *Service) Close() error {
 	s.closeOnce.Do(func() {
 		s.Stop(false)
@@ -494,6 +530,7 @@ func (s *Service) Close() error {
 		s.cancelAdvancing()
 		s.stopWork()
 		s.work.Wait()
+		errs = append(errs, s.stopSupervision())
 		if s.events != nil {
 			errs = append(errs, s.events.Close())
 		}

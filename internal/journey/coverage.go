@@ -218,22 +218,29 @@ func Coverage() []Established {
 				"protocol over the test is skipped rather than passing and nothing about P8 is " +
 				"established there."},
 		{principles.P9, ReachNone,
-			"Not driven here: P9 is cited by internal/supervisor's own matrix test, not by this " +
-				"harness, and for the table only. Every wake kind crossed with evidence present and absent is held to an " +
-				"oracle written from the PRD's flowchart. Evidence derivation is internal/taskstate's, " +
-				"and the window and surfaced computation is the loop's, which does not exist yet; " +
-				"whether a stalled run record or a timer ever reaches the classifier as evidence is " +
-				"established by neither, and the kind for an authenticated check result has no " +
-				"producer in this build, so its rows test a path nothing walks."},
+			"Not driven here: P9 is cited in two packages, neither of them this harness. " +
+				"internal/supervisor's matrix test cites it for the table only: every wake kind " +
+				"crossed with evidence present and absent is held to an oracle written from the PRD's " +
+				"flowchart. internal/service's loop tests cite it for the loop's half, through Open " +
+				"and the real store with a scripted terminal double: a running record nothing " +
+				"advances surfaces, an unchanged live screen absorbs until the escalation window " +
+				"elapses under an injected clock and an absorbed pass moves no window start, the " +
+				"terminal-ish wait surfaces once and again after a real change and not after a " +
+				"redraw, and a loop with no provider surfaces every in-flight task. Evidence " +
+				"derivation is internal/taskstate's, no walk here reaches a worker, and the kind for " +
+				"an authenticated check result has no producer in this build, so its rows test a " +
+				"path nothing walks."},
 		{principles.P10, ReachNone,
 			"Not driven here: no coordinator ends a turn in this build, and no verb or method runs the " +
 				"guard. P10 is cited by internal/supervisor/feed's test, for the predicate fed from the " +
 				"real mechanism: a lock a second process holds, a beacon the real writer wrote, an " +
 				"instance file internal/home wrote and a database the read-only open reads. A stale " +
 				"beacon blocks with the holder alive, a fresh one blocks with the lock free, and the " +
-				"positive control allows. What that test does not reach is the hook at turn end, which " +
-				"is #106's, and a loop that writes the beacon, which is #100's; today nothing writes " +
-				"one, so a fleet with work in flight reads unsupervised, which is the case."},
+				"positive control allows. internal/service's wedge test cites it for the loop: a " +
+				"capture that ignores its context stops the beacon, the watchdog replaces the " +
+				"incarnation and the replaced one's writes are fenced, so one incarnation writes the " +
+				"beacon at a time. What neither reaches is the hook at turn end, which is #106's: no " +
+				"coordinator ends a turn in this build, so the guard's push layer is unexercised."},
 		{principles.P11, ReachNone,
 			"No walk here starts a worker, so nothing here reaches it. internal/tasks' own tests " +
 				"establish it at package reach and only the assertion half: AssertIsolated refuses a " +

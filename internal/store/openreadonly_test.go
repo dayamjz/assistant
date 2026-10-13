@@ -18,7 +18,7 @@ func TestOpenReadOnlyReadsTheRecordAndRefusesEveryWrite(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.db")
 	w := openStoreAt(t, path)
 	task := seedTask(t, w, "taskaaaaaaab").ID
-	appended, err := w.AppendWakeWithMarkers(ctx, WakeRequest{TaskID: task, Kind: "hold-opened", Marker: "hold-1"},
+	appended, err := w.AppendWakeWithMarkers(ctx, incarnationOf(t, w), WakeRequest{TaskID: task, Kind: "hold-opened", Marker: "hold-1"},
 		MarkerAdvance{EventSequence: 1})
 	if err != nil {
 		t.Fatalf("AppendWakeWithMarkers: %v", err)
@@ -44,7 +44,7 @@ func TestOpenReadOnlyReadsTheRecordAndRefusesEveryWrite(t *testing.T) {
 	if err := r.AcknowledgeWakes(ctx, []int64{appended.Wake.ID}, AcknowledgedByProgram()); !errors.Is(err, ErrReadOnly) {
 		t.Fatalf("a read-only acknowledgement = %v, want ErrReadOnly", err)
 	}
-	if _, err := r.AppendWakeWithMarkers(ctx, WakeRequest{TaskID: task, Kind: "hold-opened", Marker: "hold-2"},
+	if _, err := r.AppendWakeWithMarkers(ctx, incarnationOf(t, w), WakeRequest{TaskID: task, Kind: "hold-opened", Marker: "hold-2"},
 		MarkerAdvance{}); !errors.Is(err, ErrReadOnly) {
 		t.Fatalf("a read-only append = %v, want ErrReadOnly", err)
 	}

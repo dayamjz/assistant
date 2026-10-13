@@ -170,7 +170,12 @@ Each has cost this repository more than one round of review.
   directory, appended and sealed so acknowledging is a row's one revision;
   `AppendWakeWithMarkers` is the only way a wake lands and it advances the
   task's `wake_marker` row in the same transaction, deriving the change epoch
-  there, so a kind is a word it records and `internal/supervisor` owns. A
+  there, so a kind is a word it records and `internal/supervisor` owns. Both
+  it and `AdvanceWakeMarkers` take an `Incarnation`, which only
+  `BeginIncarnation` produces, and refuse one that is not the current row of
+  `supervisor_incarnation` with `ErrStaleIncarnation` inside the same
+  transaction: the store owns which loop incarnation is current, and that is
+  the fence `internal/service`'s repair in place rests on. A
   drain is a read, delivery is at least once, and `OpenReadOnly` is the open
   a reader with no service takes, answering `ErrUnreadable` for what it
   cannot read. It also holds the run checkpoint history the durability layer needs,
@@ -518,11 +523,14 @@ Each has cost this repository more than one round of review.
   named multiples and never rows of their own. `GuardOf` is the pull guard's
   predicate and expects the instance file's identity and the beacon's own
   epoch, which its doc states; `ArmOf` is arm verification's decision over
-  one look. Its subpackage `feed` is the I/O edge: the beacon `Writer`, which
-  nothing calls until #100's loop, `ReadBeacon` with its one retry on a torn
+  one look; `IsFresh` is the one freshness predicate, which the readers and
+  `internal/service`'s watchdog share. Its subpackage `feed` is the I/O edge:
+  the beacon `Writer`, whose one caller is `internal/service`'s loop,
+  `ReadBeacon` with its one retry on a torn
   read, `Observe` over the files, the lock and `store.OpenReadOnly`, `Guard`,
-  and `VerifyArm`. P10 is cited once, in `feed`'s test, through a lock a
-  second process holds, the real writer and the real instance file. The
+  and `VerifyArm`. P10 is cited in `feed`'s test, through a lock a
+  second process holds, the real writer and the real instance file, and in
+  `internal/service`'s wedge test for the loop replaced in place. The
   `supervision.assert` ipc row waits on #91's worker set and is not in the
   method table. Read both `doc.go` files for the residual gaps: no epoch is
   compared outside the stop hook, the checksum authenticates nothing, and the
@@ -609,6 +617,28 @@ Each has cost this repository more than one round of review.
   strong as every launch path building its environment through
   `agents.WorkerEnvironment`, which is the contract #91's launch seam takes
   along with the proof; no second strip list exists or should.
+  It is also where PRD section 5's supervisor loop lives, in `supervise.go`,
+  started by `Open` after recovery and before the caller serves. The loop
+  runs as incarnations fenced by `store.BeginIncarnation`: every wake append
+  and marker advance is decided against the current epoch in its own
+  transaction, and the beacon, written only from the loop's own `select`
+  through `feed.Writer`, is written under the same mutex the epoch is bumped
+  under. A pass reads the records, then the slot, then the provider, through
+  `Terminals`, a seam nothing implements yet, so the loop runs degraded with
+  every terminal `Unobserved` and surfaces everything; classification is
+  `supervisor.Classify` over inputs `decide` composes from the markers, and a
+  capture reaches a marker as its digest only, through `internal/redact`. The
+  watchdog reads the beacon the guards read, replaces an incarnation whose
+  beacon is stale or whose goroutine returned after one interval's delay, and
+  never writes the beacon; its delay is not one of `internal/graph`'s bounds
+  and carries no counter, so do not add one. `Close` waits `CloseGrace` for the
+  supervision and then abandons it with `ErrSupervisionAbandoned`, the one
+  exception to its wait on `work`, which the fence makes safe. Read
+  `supervise.go`'s header before changing any of that, and for the residual
+  gaps: an abandoned goroutine runs on in the process, a wedged watchdog is
+  detected by readers and not repaired, provider-wide surfaces once per
+  outage only while the newest affected task stays the same, and the verdict's
+  level is not recorded on the wake row.
 - `internal/cli` is the command surface, and its verb table is PRD section 9's
   table and nothing else. A verb that section does not describe is a finding to
   raise against the specification, not a row to add: `cli_test.go` holds both

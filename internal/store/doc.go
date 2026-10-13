@@ -130,6 +130,20 @@
 // table, this package imports neither it nor internal/taskstate, and the
 // loop passes supervisor.Kind values as strings.
 //
+// Both writes are fenced by the supervisor loop's incarnation. Migration
+// 17's supervisor_incarnation is one row, rewritten in place, holding the
+// epoch of the loop incarnation that may write the queue and the markers
+// now; BeginIncarnation makes the next epoch current and hands back an
+// Incarnation whose field is unexported, so a value is obtained only there,
+// and AppendWakeWithMarkers and AdvanceWakeMarkers refuse one that is not
+// the current epoch with ErrStaleIncarnation, decided inside the transaction
+// that would write. That is what lets internal/service replace a wedged
+// loop with the old goroutine still running: it can unwedge and write
+// nothing. The store owns which incarnation is current and the beacon file
+// cites the epoch; a reader comparing the two reads this row through
+// CurrentIncarnation. It is one row rather than a history because the
+// question is present tense, and the epoch only grows across restarts.
+//
 // Draining is a read. DrainWakes returns the queued rows oldest first under
 // a batch limit and acknowledges none, so delivery is at least once by
 // construction and every consumer is idempotent over a row's identifier: a
