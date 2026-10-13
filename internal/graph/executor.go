@@ -221,7 +221,24 @@ func (e *Executor) Resume(ctx context.Context, run string) (Result, error) {
 // refused rather than consumed. It returns an error wrapping ErrBudgetChanged,
 // before that, when this executor's budget is not the one the run recorded, on
 // the same terms as Resume.
+//
+// It returns an error wrapping ErrRoundsSpent, before the claim is written,
+// when the answer selects a route out of the halt point whose round bound is
+// already reached; routeSpent says how that route is found and where finding
+// it is exact. The decision stays open for the same reason: an answer that
+// could only be parked away is refused rather than consumed.
 func (e *Executor) Answer(ctx context.Context, run, answer string) (Result, error) {
+	return e.AnswerWith(ctx, run, answer, "")
+}
+
+// AnswerWith is Answer with a detail accompanying the answer, which is written
+// into the halt point's Halt.Detail key alongside the answer in the same claim.
+// An empty detail is no detail. A non-empty one given with an answer the halt
+// point does not list in Halt.Detailed is refused with ErrDetailNotAccepted,
+// because a detail dropped silently is an instruction nobody acted on, and an
+// answer it does list given with no detail is refused with ErrDetailRequired.
+// Both are refused before anything is written, so the decision stays open.
+func (e *Executor) AnswerWith(ctx context.Context, run, answer, detail string) (Result, error) {
 	cp, err := e.load(ctx, run)
 	if err != nil {
 		return Result{}, err
@@ -241,8 +258,23 @@ func (e *Executor) Answer(ctx context.Context, run, answer string) (Result, erro
 	if !ok {
 		return Result{}, &CheckpointError{Field: "position", Detail: fmt.Sprintf("names no node: %q", cp.Position)}
 	}
+	takesDetail := node.Halt != nil && len(node.Halt.Detailed) > 0 && answerAllowed(node.Halt.Detailed, answer)
+	if detail != "" && !takesDetail {
+		return Result{}, fmt.Errorf("%w: run %q, halt point %q, answer %q", ErrDetailNotAccepted, run, node.Name, answer)
+	}
+	if detail == "" && takesDetail {
+		return Result{}, fmt.Errorf("%w: run %q, halt point %q, answer %q", ErrDetailRequired, run, node.Name, answer)
+	}
 	acc := e.accessFor(node, cp.State.Clone())
 	if err := acc.Set(cp.Decision.Into, TextValue(answer)); err != nil {
+		return Result{}, err
+	}
+	if node.Halt != nil && node.Halt.Detail != "" {
+		if err := acc.Set(node.Halt.Detail, TextValue(detail)); err != nil {
+			return Result{}, err
+		}
+	}
+	if err := e.routeSpent(cp, acc.work); err != nil {
 		return Result{}, err
 	}
 	cp.State = acc.work
@@ -584,6 +616,35 @@ func (e *Executor) checkEdgeBounds(cp *Checkpoint, edge int) (Status, string) {
 	return StatusRunning, ""
 }
 
+// routeSpent refuses an answer whose route out of the halt point is already
+// at its round bound, so the answer is refused while the decision is still
+// open instead of being recorded and then parked away by checkEdgeBounds.
+//
+// The route is the edge next selects from the halt point over the answered
+// state, before the halt point's node has run. That is exact for an edge whose
+// guard reads the answer or detail key, or any key the node does not write,
+// because the node cannot change what the guard reads. A guard over a key the
+// node writes is evaluated on the value from before it runs, so for such an
+// edge this can select a different route than the run then takes; a bounded
+// edge chosen that way is not refused here and is parked by checkEdgeBounds as
+// before. Nothing here inspects which kind of guard it is.
+func (e *Executor) routeSpent(cp Checkpoint, answered State) error {
+	idx, ok := e.graph.index[cp.Position]
+	if !ok {
+		return nil
+	}
+	_, edge := e.next(answered, idx)
+	if edge < 0 {
+		return nil
+	}
+	declared := e.graph.edges[edge]
+	if declared.Rounds > 0 && cp.Counters.Traversals[edge] >= declared.Rounds {
+		return fmt.Errorf("%w: run %q, the edge from %q to %q reached its bound of %d rounds",
+			ErrRoundsSpent, cp.Run, declared.From, declared.To, declared.Rounds)
+	}
+	return nil
+}
+
 // next selects the edge leaving the node at idx. Outgoing edges are evaluated
 // in declaration order and the first whose guard passes is taken; a nil guard
 // always passes. A node that declares any outgoing edge declares an
@@ -667,6 +728,9 @@ func (e *Executor) persist(ctx context.Context, cp *Checkpoint) error {
 	if idx, ok := e.graph.index[cp.Position]; ok && cp.Status != StatusRunning {
 		if node := e.graph.nodes[idx]; node.Halt != nil {
 			cp.State.set(node.Halt.Into, TextValue(""))
+			if node.Halt.Detail != "" {
+				cp.State.set(node.Halt.Detail, TextValue(""))
+			}
 		}
 	}
 	anchor := cp.ID()

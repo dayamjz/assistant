@@ -177,6 +177,31 @@ func (c *checker) checkHalt(n Node) {
 		c.refuse(RuleDeclaredKey, "the halt point on node %q writes its answer into state key %q, which declares %s rather than text",
 			n.Name, n.Halt.Into, spec.Kind)
 	}
+	if n.Halt.Detail != "" {
+		detail, ok := c.keyIndex[n.Halt.Detail]
+		switch {
+		case n.Halt.Detail == n.Halt.Into:
+			c.refuse(RuleWellFormed, "the halt point on node %q writes its answer and its detail into the same state key %q",
+				n.Name, n.Halt.Into)
+		case !ok:
+			c.refuse(RuleDeclaredKey, "the halt point on node %q writes its detail into state key %q, which the graph does not declare",
+				n.Name, n.Halt.Detail)
+		case detail.Kind != KindText:
+			c.refuse(RuleDeclaredKey, "the halt point on node %q writes its detail into state key %q, which declares %s rather than text",
+				n.Name, n.Halt.Detail, detail.Kind)
+		}
+	}
+	switch {
+	case n.Halt.Detail != "" && len(n.Halt.Detailed) == 0:
+		c.refuse(RuleWellFormed, "the halt point on node %q declares a detail key and no answer that comes with a detail", n.Name)
+	case n.Halt.Detail == "" && len(n.Halt.Detailed) > 0:
+		c.refuse(RuleWellFormed, "the halt point on node %q names answers that come with a detail and no key to write one into", n.Name)
+	}
+	for _, opt := range n.Halt.Detailed {
+		if len(n.Halt.Options) > 0 && !answerAllowed(n.Halt.Options, opt) {
+			c.refuse(RuleWellFormed, "the halt point on node %q takes a detail with %q, which is not one of its options", n.Name, opt)
+		}
+	}
 	seen := make(map[string]struct{}, len(n.Halt.Options))
 	for _, opt := range n.Halt.Options {
 		if opt == "" {
@@ -318,6 +343,12 @@ func (c *checker) checkSingleWriter() {
 		if n.Halt != nil && n.Halt.Into != "" {
 			writers[n.Halt.Into] = appendWriter(writers[n.Halt.Into], n.Name)
 			answers[n.Halt.Into] = appendWriter(answers[n.Halt.Into], n.Name)
+		}
+		// A detail key is held to an answer key's rules, so it is checked as
+		// one: one halt point, no other writer, no merge rule.
+		if n.Halt != nil && n.Halt.Detail != "" && n.Halt.Detail != n.Halt.Into {
+			writers[n.Halt.Detail] = appendWriter(writers[n.Halt.Detail], n.Name)
+			answers[n.Halt.Detail] = appendWriter(answers[n.Halt.Detail], n.Name)
 		}
 	}
 	names := make([]string, 0, len(writers))
@@ -514,6 +545,10 @@ func (c *checker) graph() *Graph {
 		if n.Halt != nil {
 			writes[n.Halt.Into] = struct{}{}
 			g.answers[n.Halt.Into] = n.Name
+			if n.Halt.Detail != "" {
+				writes[n.Halt.Detail] = struct{}{}
+				g.answers[n.Halt.Detail] = n.Name
+			}
 		}
 		g.writes[i] = writes
 	}
