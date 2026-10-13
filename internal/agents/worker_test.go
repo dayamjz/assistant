@@ -213,7 +213,9 @@ func TestNoRouteFromAWorkerHandleToAFixerSession(t *testing.T) {
 // The worker entry point is on the fixer side of the split by its types: Start
 // takes no purpose, and a WorkerSpec has no field a shape, a purpose or a
 // session could be named in, so a worker cannot be told it is a review in
-// either of the ways an Invocation can.
+// either of the ways an Invocation can. The field scan is a naming check and
+// nothing more; the route walk above is the evidence that the handle reaches
+// no session, and this holds only the shape of the entry point's signature.
 func TestAWorkerCannotBeGivenAPurposeOrAShape(t *testing.T) {
 	t.Parallel()
 	principles.Cite(t, principles.P4)
@@ -361,5 +363,59 @@ func TestInstructionsAreDeliveredBeforeAnythingSent(t *testing.T) {
 			t.Fatalf("the worker recorded %s, waited for three lines", calls)
 		}
 		time.Sleep(time.Millisecond)
+	}
+}
+
+// A send its context cut off keeps its place: the bytes already in the pipe
+// are followed by the rest of that write, a send made while it is pending
+// waits behind it and writes nothing when its own context ends first, and a
+// send made once it has drained follows it whole. The worker here reads
+// nothing until told, so the first send fills the pipe and blocks, and what
+// comes out afterwards is the order the pipe holds.
+func TestASendCutOffByItsContextKeepsItsPlaceInTheOrder(t *testing.T) {
+	runner, err := agents.ScriptedFactory(
+		agents.WithBinary(helperBinary(t)),
+		agents.WithTerminationGrace(300*time.Millisecond),
+	).New(t.Context(), []string{helperModeFlag + "worker-echo-when"})
+	if err != nil {
+		t.Fatalf("building the scripted runner over the helper: %v", err)
+	}
+	proceed := filepath.Join(t.TempDir(), "go")
+	spec := workerSpec(t)
+	spec.Instructions = "instructions"
+	spec.Env = map[string]string{helperGoVar: proceed}
+	worker, err := agents.OpenWorker(t.Context(), runner, spec)
+	if err != nil {
+		t.Fatalf("starting the worker: %v", err)
+	}
+	defer worker.Close()
+
+	// Far more than a pipe buffers, so the write cannot finish until the
+	// worker reads.
+	first := strings.Repeat("a", 1<<20)
+	ctx, cancel := context.WithTimeout(t.Context(), 300*time.Millisecond)
+	err = worker.Send(ctx, first)
+	cancel()
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("a send the worker does not read answered %v, want the context's deadline", err)
+	}
+
+	ctx, cancel = context.WithTimeout(t.Context(), 300*time.Millisecond)
+	err = worker.Send(ctx, "second, which must not jump the queue")
+	cancel()
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("a send behind a pending one answered %v, want the context's deadline", err)
+	}
+
+	if err := os.WriteFile(proceed, nil, 0o600); err != nil {
+		t.Fatalf("telling the worker to read: %v", err)
+	}
+	if err := worker.Send(t.Context(), "third"); err != nil {
+		t.Fatalf("a send once the pending write can drain failed: %v", err)
+	}
+	got := awaitWorkerOutput(t, worker, "third\n")
+	if want := "instructions\n" + first + "\nthird\n"; got != want {
+		t.Errorf("the worker read %d bytes in an order other than instructions, first, third; "+
+			"it contains the second send: %t", len(got), strings.Contains(got, "second"))
 	}
 }

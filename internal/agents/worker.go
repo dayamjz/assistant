@@ -97,15 +97,26 @@ func (s WorkerSpec) Validate() error {
 //
 // A Worker is safe for concurrent use. Sends are serialized against each
 // other and against the instructions, so text arrives in the order it was
-// sent.
+// sent, and a send that ctx cut off keeps its place in that order: the next
+// send waits for it to drain or for the input to close before writing
+// anything. What that costs is stated on Send.
 type Worker interface {
 	// Send delivers text on the worker's standard input, followed by a
 	// newline when text does not end in one, because a worker reads lines.
 	// It returns once the text has been written, or ErrWorkerEnded when the
 	// process is no longer running, so nothing is reported delivered to a
-	// process that is gone. ctx bounds the write: a worker that is not
+	// process that is gone. ctx bounds the wait: a worker that is not
 	// reading its input holds the write until it does, and a caller that
-	// cannot wait that long ends it through ctx.
+	// cannot wait that long ends its wait through ctx.
+	//
+	// A send ctx ended returns ctx's error and leaves the write pending,
+	// because the bytes already in the pipe cannot be taken back and the
+	// rest must follow them or a later send would interleave with them. So
+	// the pending write is drained first by whatever comes next: a later
+	// Send waits on it under its own ctx and writes nothing until it has
+	// drained, and Close ends it by closing the input. A worker that never
+	// reads therefore turns every later Send into a wait that only its own
+	// ctx or Close ends, which is the worker's doing and is visible as such.
 	Send(ctx context.Context, text string) error
 
 	// Capture returns the most recent output the worker has written on
@@ -182,8 +193,12 @@ type procWorker struct {
 	done chan struct{}
 
 	// sendMu serializes writes to standard input, the instructions among
-	// them.
-	sendMu sync.Mutex
+	// them. pending is the write a ctx cut off and left in flight, nil when
+	// there is none; it is read under sendMu, and whoever takes sendMu next
+	// drains it before writing, which is what keeps the order of sends the
+	// order of bytes on the pipe.
+	sendMu  sync.Mutex
+	pending chan error
 	// closeOnce makes Close idempotent, and closeMu guards the stdin close
 	// against a concurrent Send.
 	closeOnce sync.Once
@@ -204,14 +219,16 @@ func startWorker(ctx context.Context, spec procSpec, instructions string) (*proc
 		return nil, fmt.Errorf("opening the worker's standard input: %w", err)
 	}
 	out := &tailWriter{limit: spec.maxOut}
-	// One writer for both streams: os/exec serializes writes to a writer it
-	// was given for both, so the interleaving Capture reports is the order the
-	// bytes were read in.
+	// One writer for both streams, guarded by its own mutex, so what Capture
+	// reports is the order the writes reached it.
 	cmd.Stdout = out
 	cmd.Stderr = out
 	cmd.WaitDelay = spec.grace
 	setProcessGroup(cmd)
 
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
@@ -244,12 +261,22 @@ func (w *procWorker) Send(ctx context.Context, text string) error {
 }
 
 // write puts text, newline-terminated, on standard input. It refuses once the
-// process is gone or standard input has been closed, and it gives up when ctx
-// ends while the write is still pending, in which case the bytes may have been
-// partly delivered and the worker is left as it was.
+// process is gone or standard input has been closed. When ctx ends while the
+// write is still in flight it returns ctx's error and leaves the write
+// pending, on the terms Worker.Send states; the next write drains it first.
 func (w *procWorker) write(ctx context.Context, text string) error {
 	w.sendMu.Lock()
 	defer w.sendMu.Unlock()
+	if w.pending != nil {
+		select {
+		case <-w.pending:
+			w.pending = nil
+		case <-w.done:
+			return ErrWorkerEnded
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 	select {
 	case <-w.done:
 		return ErrWorkerEnded
@@ -290,8 +317,10 @@ func (w *procWorker) write(ctx context.Context, text string) error {
 		}
 		return nil
 	case <-w.done:
+		w.pending = written
 		return ErrWorkerEnded
 	case <-ctx.Done():
+		w.pending = written
 		return ctx.Err()
 	}
 }

@@ -106,12 +106,14 @@ func advancingRun(ctx context.Context) string {
 //
 // It carries no worker arm on purpose, and that is the one place the shape is
 // not preserved: an agents.WorkerRunner wrapped here is no WorkerRunner
-// afterwards, so agents.OpenWorker on the wrapped agent is refused as a
-// declaration the wrapper does not back. A worker is not a validation stage.
-// It pushes to the gate the way a person does, and a worker registered here
-// would have every push refused ErrContained before admission, so a worker is
-// obtained from the agent this wraps and registered in a set of whoever owns
-// the task, never in this registry.
+// afterwards, and the wrapper's declaration says so, dropping
+// agents.CapabilityWorkerSessions from what the agent declared so that the
+// pair agents.Resolve holds every adapter to still agrees. agents.OpenWorker
+// on the wrapped agent is therefore refused as undeclared, by name. A worker
+// is not a validation stage. It pushes to the gate the way a person does, and
+// a worker registered here would have every push refused ErrContained before
+// admission, so a worker is obtained from the agent this wraps and registered
+// in a set of whoever owns the task, never in this registry.
 func (s *Service) containRunner(r agents.Runner) agents.Runner {
 	wrapped := containedRunner{inner: r, registry: s.registry}
 	if sessions, ok := r.(agents.SessionRunner); ok {
@@ -126,8 +128,19 @@ type containedRunner struct {
 	registry *registry
 }
 
-func (c containedRunner) Name() string                      { return c.inner.Name() }
-func (c containedRunner) Capabilities() agents.Capabilities { return c.inner.Capabilities() }
+func (c containedRunner) Name() string { return c.inner.Name() }
+
+// Capabilities is the wrapped agent's declaration less worker sessions, which
+// this wrapper does not carry; containRunner says why.
+func (c containedRunner) Capabilities() agents.Capabilities {
+	var kept []agents.Capability
+	for _, capability := range c.inner.Capabilities().List() {
+		if capability != agents.CapabilityWorkerSessions {
+			kept = append(kept, capability)
+		}
+	}
+	return agents.Declare(kept...)
+}
 
 func (c containedRunner) Run(ctx context.Context, purpose agents.Purpose, inv agents.Invocation) (
 	agents.Result, error) {

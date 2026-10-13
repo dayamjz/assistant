@@ -222,7 +222,10 @@ func Coverage() []Established {
 			"There is no coordinator and no watcher here, so no turn ends. internal/principles declares " +
 				"this gap."},
 		{principles.P11, ReachNone,
-			"Nothing here launches a worker into an isolated copy. internal/principles declares this gap."},
+			"internal/agents starts a worker where it is told and strips the redirecting git variables " +
+				"from its environment, which is the 'pointed at its own repository' half; nothing refuses " +
+				"a launch whose directory is not an isolated copy, and no walk here starts a worker. " +
+				"internal/principles declares this gap."},
 		{principles.P12, ReachNone,
 			"Nothing here removes an isolated copy. The binary's eject removes a gate, which is a " +
 				"different question. internal/principles declares this gap."},

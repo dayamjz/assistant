@@ -37,6 +37,7 @@ const (
 	helperBytesVar  = "AGENTS_HELPER_BYTES"
 	helperPidVar    = "AGENTS_HELPER_PIDFILE"
 	helperEchoVar   = "AGENTS_HELPER_ECHO"
+	helperGoVar     = "AGENTS_HELPER_GO"
 )
 
 // helperModeFlag carries the stand-in agent's mode on its command line, for
@@ -122,6 +123,18 @@ func helperMain(mode string) {
 	case "env":
 		// Report the value of one environment variable, as the result.
 		fmt.Print(helperEnvelope(os.Getenv(os.Getenv(helperEchoVar)), helperSession()))
+	case "worker-echo-when":
+		// A worker that reads nothing until the file named in helperGoVar
+		// exists, then copies its standard input to its standard output
+		// until the input closes. It is how a test fills the input pipe and
+		// then watches what order the bytes come out in.
+		for {
+			if _, err := os.Stat(os.Getenv(helperGoVar)); err == nil {
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		_, _ = io.Copy(os.Stdout, os.Stdin)
 	case "worker-environment":
 		// The worker shape of "environment": print the whole environment
 		// as one line, then read standard input until it is closed, which is

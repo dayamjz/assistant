@@ -20,9 +20,9 @@ import (
 // ErrContained before admission.
 //
 // Two halves hold that. containRunner grows no worker arm: wrapping a
-// WorkerRunner yields a Runner that is no WorkerRunner, so a worker started
-// through the wrapped agent is unsayable and the one obtained from the
-// unwrapped agent registers nothing here. And the restricted check, asked
+// WorkerRunner yields a Runner that is no WorkerRunner and declares none, so
+// a worker started through the wrapped agent is refused by name and the one
+// obtained from the unwrapped agent registers nothing here. And the restricted check, asked
 // about the worker's own process, answers not contained while a stage is
 // running; the control is the same question answered contained once the
 // worker's group is registered the way a stage's is, which is what shows the
@@ -43,10 +43,18 @@ func TestAWorkerIsNotContainedAndTheWrapperOffersNoWorker(t *testing.T) {
 	if _, ok := wrapped.(agents.SessionRunner); !ok {
 		t.Fatal("wrapping lost the session mechanism agents.Resolve vouched for")
 	}
+	if wrapped.Capabilities().Has(agents.CapabilityWorkerSessions) {
+		t.Fatal("the wrapper declares worker sessions and carries no worker, which is the disagreement " +
+			"agents.Resolve refuses an adapter for")
+	}
+	if !wrapped.Capabilities().Has(agents.CapabilityResumableSessions) {
+		t.Fatal("the wrapper dropped the session declaration along with the worker one")
+	}
 	_, err := agents.OpenWorker(t.Context(), wrapped, agents.WorkerSpec{Dir: t.TempDir(), Instructions: "work"})
-	if !errors.Is(err, agents.ErrAdapterDeclaration) {
-		t.Fatalf("OpenWorker on the wrapped agent answered %v, want the declaration refusal: the "+
-			"wrapper declares what the agent declares and carries no worker", err)
+	var refusal *agents.CapabilityError
+	if !errors.As(err, &refusal) || refusal.Capability != agents.CapabilityWorkerSessions {
+		t.Fatalf("OpenWorker on the wrapped agent answered %v, want a *CapabilityError naming %s",
+			err, agents.CapabilityWorkerSessions)
 	}
 
 	worker, err := agents.OpenWorker(t.Context(), resolved, agents.WorkerSpec{Dir: t.TempDir(), Instructions: "work"})

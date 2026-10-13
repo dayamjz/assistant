@@ -253,9 +253,9 @@ Each has cost this repository more than one round of review.
   `vcs.StripRedirecting`, which owns what redirects git. The handle reports
   its process group and registers it nowhere; `internal/service`'s
   `containRunner` has no worker arm, because a worker's push is what the gate
-  admits. No shipped adapter declares `worker_sessions`; `ScriptedFactory`,
-  which `standin.NewWorker` builds, is the declarer the conformance suite
-  holds to the mechanism. Reading agent output is `internal/findings`' job and
+  admits. No shipped adapter declares `worker_sessions`; `ScriptedFactory` is the
+  declarer the conformance suite holds to the mechanism, and
+  `standin.NewWorker` is how a test gets a runner built from it. Reading agent output is `internal/findings`' job and
   never a second parser here; the one choice this package makes is `Shape`, and
   `ShapeReview` is the only one carrying a `findings.Demand`, which
   `Invocation.Validate` requires there and refuses everywhere else. Read its
