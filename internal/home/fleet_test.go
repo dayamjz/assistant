@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -79,20 +80,25 @@ func TestATaskIdentifierIsOneRuleAndIsRefusedRatherThanSanitized(t *testing.T) {
 		t.Fatalf("a hand-written identifier in the format is refused: %v", err)
 	}
 	refused := map[string]string{
-		"empty":                     "",
-		"traversal":                 "..",
-		"traversal with padding":    "..abcdefghij",
-		"dot":                       ".abcdefghij2",
-		"separator":                 "abcde/ghij23",
-		"backslash":                 "abcde\\ghij23",
-		"absolute unix path":        "/abcdefghij2",
-		"absolute windows path":     "c:\\abcdefghi",
-		"too short":                 "abcdefghij2",
-		"too long":                  "abcdefghij234",
-		"upper case":                "ABCDEFGHIJ23",
-		"digit outside base32":      "abcdefghij01",
-		"space":                     "abcdefghij 2",
-		"non-ascii":                 "abcdefghijé2",
+		"empty":                  "",
+		"traversal":              "..",
+		"traversal with padding": "..abcdefghij",
+		"dot":                    ".abcdefghij2",
+		"separator":              "abcde/ghij23",
+		"backslash":              "abcde\\ghij23",
+		"absolute unix path":     "/abcdefghij2",
+		"absolute windows path":  "c:\\abcdefghi",
+		"too short":              "abcdefghij2",
+		"too long":               "abcdefghij234",
+		"upper case":             "ABCDEFGHIJ23",
+		"digit outside base32":   "abcdefghij01",
+		"space":                  "abcdefghij 2",
+		"non-ascii":              "abcdefghijé2",
+		// The bare reserved names are what the reserved-name rule alone
+		// discriminates, since nothing else in the rule refuses "con". The
+		// two dotted rows below are refused by the dot being outside the
+		// alphabet as well, so they show the rule reaches an extension but
+		// would not catch the reserved-name check being deleted.
 		"reserved con":              "con",
 		"reserved nul":              "NUL",
 		"reserved com1":             "com1",
@@ -202,32 +208,38 @@ func TestTheLockProbeSeesAHolderInAnotherProcess(t *testing.T) {
 	probe(t, h, home.LockFree)
 }
 
-// A home that was never created, or never served, has no lock file. The probe
-// says Free with a detail naming that, and it leaves no lock file behind,
-// because a probe is a read and a read may not bring a home into being.
+// A home that was never served has no lock file. The probe says Free with a
+// detail naming that, and it leaves no lock file behind, because a probe is a
+// read and a read may not bring a home into being. A home that was never
+// created is a different answer: its root is not there, and that is Unknown,
+// so a wrong home path cannot read as a home with no service.
 func TestTheLockProbeNeverCreatesTheLockFile(t *testing.T) {
 	t.Parallel()
-	for name, h := range map[string]*home.Home{
-		"never created": open(t, filepath.Join(t.TempDir(), "home")),
-		"never served":  created(t),
-	} {
-		reading, err := h.LockState(t.Context())
-		if err != nil {
-			t.Fatalf("probing a home %s: %v", name, err)
-		}
-		if reading.State != home.LockFree {
-			t.Fatalf("a home %s probed as %v, want free", name, reading.State)
-		}
-		if !strings.Contains(reading.Detail, "no lock file") {
-			t.Fatalf("a home %s answered free with the detail %q, which does not say the lock file is missing", name, reading.Detail)
-		}
-		if _, err := os.Stat(h.LockFile()); !errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("probing a home %s created %s (%v)", name, h.LockFile(), err)
-		}
+	h := created(t)
+	reading, err := h.LockState(t.Context())
+	if err != nil {
+		t.Fatalf("probing a home never served: %v", err)
+	}
+	if reading.State != home.LockFree {
+		t.Fatalf("a home never served probed as %v, want free", reading.State)
+	}
+	if !strings.Contains(reading.Detail, "no lock file") {
+		t.Fatalf("a home never served answered free with the detail %q, which does not say the lock file is missing", reading.Detail)
+	}
+	if _, err := os.Stat(h.LockFile()); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("probing a home never served created %s (%v)", h.LockFile(), err)
+	}
+	absent := open(t, filepath.Join(t.TempDir(), "home"))
+	reading, err = absent.LockState(t.Context())
+	if err == nil || reading.State != home.LockUnknown {
+		t.Fatalf("a home never created probed as (%+v, %v), want unknown with the error", reading, err)
+	}
+	if _, err := os.Stat(absent.Root()); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("probing a home never created made its root (%v)", err)
 	}
 	// The detail is the no-lock-file case's alone: a home that has been
 	// served answers Free without it.
-	h := created(t)
+	h = created(t)
 	held, err := h.Acquire(t.Context(), 0)
 	if err != nil {
 		t.Fatalf("taking the lock: %v", err)
@@ -235,7 +247,7 @@ func TestTheLockProbeNeverCreatesTheLockFile(t *testing.T) {
 	if err := held.Release(); err != nil {
 		t.Fatalf("releasing the lock: %v", err)
 	}
-	reading, err := h.LockState(t.Context())
+	reading, err = h.LockState(t.Context())
 	if err != nil || reading.State != home.LockFree || reading.Detail != "" {
 		t.Fatalf("a served home probed as (%+v, %v), want free with no detail", reading, err)
 	}
@@ -264,6 +276,39 @@ func TestTheLockProbeAnswersUnknownAndNeverFreeWhenItCannotAsk(t *testing.T) {
 	reading, err = created(t).LockState(done)
 	if err == nil || reading.State != home.LockUnknown {
 		t.Fatalf("probing under a done context answered (%+v, %v), want unknown with the error", reading, err)
+	}
+}
+
+// A root the caller cannot read, and a lock file the caller cannot open for
+// writing, each answer Unknown. Both rest on file permissions denying the
+// caller, which is not something every platform or every user can be denied:
+// Windows does not honour a mode bit as a denial, and root reads and writes
+// through one, so the test skips there and says why rather than passing on
+// nothing.
+func TestTheLockProbeAnswersUnknownForAHomeItCannotRead(t *testing.T) {
+	t.Parallel()
+	if runtime.GOOS == "windows" {
+		t.Skip("a permission bit does not deny the caller on windows, so an unreadable root cannot be arranged here")
+	}
+	if os.Geteuid() == 0 {
+		t.Skip("running as root, which a permission bit does not deny, so an unreadable root cannot be arranged here")
+	}
+	unreadable := created(t)
+	if err := os.Chmod(unreadable.Root(), 0); err != nil {
+		t.Fatalf("making the root unreadable: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(unreadable.Root(), 0o700) })
+	reading, err := unreadable.LockState(t.Context())
+	if err == nil || reading.State != home.LockUnknown {
+		t.Fatalf("probing an unreadable root answered (%+v, %v), want unknown with the error", reading, err)
+	}
+	unwritable := created(t)
+	if err := os.WriteFile(unwritable.LockFile(), nil, 0o400); err != nil {
+		t.Fatalf("standing a read-only lock file: %v", err)
+	}
+	reading, err = unwritable.LockState(t.Context())
+	if err == nil || reading.State != home.LockUnknown {
+		t.Fatalf("probing a lock file the caller cannot write answered (%+v, %v), want unknown with the error", reading, err)
 	}
 }
 
@@ -317,12 +362,28 @@ func TestTheInstanceFileIsReadableWhileTheLockIsHeld(t *testing.T) {
 			t.Fatalf("the write left %s behind", entry.Name())
 		}
 	}
+	// A temporary file a crashed predecessor left between making it and
+	// renaming it is swept by the next write, on the strength of the lock
+	// this test holds.
+	stale := filepath.Join(h.Root(), "instance-stale.tmp")
+	if err := os.WriteFile(stale, []byte("crashed\n"), 0o600); err != nil {
+		t.Fatalf("planting a stale temporary file: %v", err)
+	}
+	if err := h.WriteInstance("third"); err != nil {
+		t.Fatalf("writing the instance file beside a stale temporary file: %v", err)
+	}
+	if _, err := os.Stat(stale); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the write left the stale temporary file in place (%v)", err)
+	}
+	if got := readInstance(t, h); got != "third\n" {
+		t.Fatalf("the instance file holds %q, want the third identity", got)
+	}
 	for _, bad := range []string{"", "two\nlines", "cr\r"} {
 		if err := h.WriteInstance(bad); !errors.Is(err, home.ErrInstanceID) {
 			t.Fatalf("WriteInstance(%q) = %v, want ErrInstanceID", bad, err)
 		}
 	}
-	if got := readInstance(t, h); got != "second\n" {
+	if got := readInstance(t, h); got != "third\n" {
 		t.Fatalf("a refused write changed the instance file to %q", got)
 	}
 }

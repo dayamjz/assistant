@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -21,6 +22,14 @@ var ErrInstanceID = errors.New("home: invalid instance identity")
 const (
 	instanceRenameAttempts = 100
 	instanceRenamePoll     = 20 * time.Millisecond
+)
+
+// instanceTempName is the os.CreateTemp pattern a write builds the file
+// under, and instanceTempPattern is the glob that finds every file so named,
+// which is how a write sweeps what a crashed predecessor left.
+const (
+	instanceTempName    = "instance-*.tmp"
+	instanceTempPattern = "instance-*.tmp"
 )
 
 // WriteInstance writes the service's instance identity to InstanceFile, which
@@ -41,12 +50,28 @@ const (
 // The file is not state. It says which process wrote it and nothing about
 // whether that process is still serving: PRD section 8 makes publishing an
 // identifier no proof of readiness, and the lock probe is what answers whether
-// any process holds the home.
+// any process holds the home. A caller that cannot write it still refuses to
+// start, which is the strict stance: an instance file naming some earlier
+// process beside a lock this one holds is the reading a liveness check must
+// never be handed, and the retry bound of about two seconds is what a start
+// may spend on it.
+//
+// Temporary files an earlier write left behind, by a crash between making one
+// and renaming it, are removed first. That sweep rests on the lock: the one
+// process that may write this file is the one holding the home, so a
+// temporary file not this write's is nobody's. A crash in the same window of
+// this write leaves one until the next write; nothing reads it as the
+// identity, since only the renamed file is.
 func (h *Home) WriteInstance(id string) error {
 	if id == "" || strings.ContainsAny(id, "\r\n") {
 		return fmt.Errorf("%w: %q", ErrInstanceID, id)
 	}
-	tmp, err := os.CreateTemp(h.root, "instance-*.tmp")
+	if stale, err := filepath.Glob(filepath.Join(h.root, instanceTempPattern)); err == nil {
+		for _, path := range stale {
+			_ = os.Remove(path)
+		}
+	}
+	tmp, err := os.CreateTemp(h.root, instanceTempName)
 	if err != nil {
 		return fmt.Errorf("home: writing the instance file: %w", err)
 	}

@@ -290,6 +290,12 @@ func Open(ctx context.Context, o Options) (*Service, error) {
 	// start, after it holds the lock, so that a process outside this one can
 	// read which service last took the home. Nothing in this build reads it
 	// back; the file says who wrote it and proves nothing about readiness.
+	// A write that fails, or that is still refused at the end of its own
+	// retry bound of about two seconds, still refuses the start: the file is
+	// not state, but a home whose instance file names an earlier process
+	// beside a lock this one holds is a reading a liveness check must never
+	// be given, so the strict stance is to not serve rather than to serve
+	// under another process's name.
 	if err := o.Home.WriteInstance(instance); err != nil {
 		_ = lock.Release()
 		return nil, err
