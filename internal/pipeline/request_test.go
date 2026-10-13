@@ -241,3 +241,120 @@ func TestAFixRequestIsResolvedAgainstTheStagesReport(t *testing.T) {
 		t.Fatalf("an unreadable request came to %v", err)
 	}
 }
+
+// A requested round that changes nothing returns to the hold rather than
+// parking the run, so approve, skip, and cancel stay open, which PRD section
+// 14's eighth decision promises. Every round the bound admits is asked for
+// and none changes anything, which is the case convergence would otherwise
+// park on: from the second round on, the stage's report and everything else
+// the round leaves are what the round before left.
+//
+// The hold after each says the round changed nothing. The approval at the end
+// is the positive control that the hold is a live decision and not a park
+// reported as one.
+func TestARequestedRoundThatChangesNothingReturnsToTheHold(t *testing.T) {
+	c := newCalls()
+	all := recordingStages(c)
+	set(&all, StageLint, recording(c, nil, nil, func(Input, int) (Output, error) {
+		return Output{Report: findings.Report{Summary: "one", Findings: []findings.Finding{
+			{ID: "decide", Action: findings.ActionAsk, Description: "decide this"},
+		}}}, nil
+	}))
+	p := build(t, Options{
+		Stages: all,
+		Fixer: recordingFixer(c, nil, nil, func(FixInput, int) (FixOutput, error) {
+			return FixOutput{Summary: "changed nothing"}, nil
+		}),
+		Rounds: rounds(0),
+		Budget: 200,
+	})
+	exec, _ := start(t, p, complete())
+	request := encodedRequest(t, FixRequest{Selected: []string{"decide"}})
+	for i := range RequestedFixRounds {
+		result, err := exec.AnswerWith(context.Background(), "run", string(OutcomeFixRequested), request)
+		if err != nil {
+			t.Fatalf("requested round %d: %v", i+1, err)
+		}
+		if result.Status != graph.StatusHalted || result.Position != StageLint.HoldNode() {
+			t.Fatalf("after no-op requested round %d the run is %s at %q (%s), want held at the lint stage",
+				i+1, result.Status, result.Position, result.Reason)
+		}
+		report := recordedReport(t, result.State, StageLint)
+		said := false
+		for _, f := range report.Findings {
+			said = said || (f.Holds() && strings.Contains(f.Description, "changed nothing in the run's state"))
+		}
+		if !said {
+			t.Fatalf("the hold after no-op round %d does not say the round changed nothing: %+v", i+1, report.Findings)
+		}
+	}
+	if n := c.fixCount(StageLint); n != RequestedFixRounds {
+		t.Fatalf("the fixer ran %d times, want %d", n, RequestedFixRounds)
+	}
+	done, err := exec.Answer(context.Background(), "run", string(OutcomeApproved))
+	if err != nil {
+		t.Fatalf("approving after the no-op rounds: %v", err)
+	}
+	if done.Status != graph.StatusCompleted {
+		t.Fatalf("after approving, the run is %s", done.Status)
+	}
+}
+
+// A fix round can be asked for only at a stage before push. Push forwards a
+// commit, so a round there would be pushed by the stage's re-run before the
+// person saw it, and pr and ci run after push, so a round's commit there
+// would never be pushed; PRD section 5 promises the person sees the result.
+// The graph is asked rather than a list: no request node exists at those
+// stages, their holds do not offer the round, an answer asking for one there
+// is refused while the hold stays open, and CheckRequestable names why. Every
+// stage before push is the positive control, so a pipeline that offered no
+// round anywhere fails here.
+func TestAFixRoundCanBeRequestedOnlyBeforePush(t *testing.T) {
+	c := newCalls()
+	all := recordingStages(c)
+	set(&all, StagePush, recording(c, nil, nil, func(Input, int) (Output, error) {
+		return Output{Report: findings.Report{Summary: "one", Findings: []findings.Finding{
+			{ID: "decide", Action: findings.ActionAsk, Description: "decide this"},
+		}}}, nil
+	}))
+	p := build(t, Options{Stages: all, Fixer: recordingFixer(c, nil, nil, nil), Rounds: rounds(0), Budget: 200})
+	g := p.Graph()
+	for _, stage := range Order() {
+		_, hasNode := g.Node(stage.RequestNode())
+		hold, ok := g.Node(stage.HoldNode())
+		if !ok {
+			t.Fatalf("the %s stage has no hold node", stage)
+		}
+		offers := false
+		for _, option := range hold.Halt.Options {
+			offers = offers || option == string(OutcomeFixRequested)
+		}
+		before := stage < StagePush
+		if hasNode != before || offers != before || stage.Requestable() != before {
+			t.Errorf("%s: request node %v, hold offers a round %v, requestable %v; want %v for all three",
+				stage, hasNode, offers, stage.Requestable(), before)
+		}
+		err := CheckRequestable(stage)
+		if before && err != nil {
+			t.Errorf("%s: CheckRequestable refused a stage before push: %v", stage, err)
+		}
+		if !before && !errors.Is(err, ErrFixNotRequestable) {
+			t.Errorf("%s: CheckRequestable came to %v, want ErrFixNotRequestable", stage, err)
+		}
+	}
+
+	exec, held := start(t, p, complete())
+	if held.Position != StagePush.HoldNode() {
+		t.Fatalf("the run stopped at %q, want the push stage's hold", held.Position)
+	}
+	request := encodedRequest(t, FixRequest{Selected: []string{"decide"}})
+	if _, err := exec.AnswerWith(context.Background(), "run", string(OutcomeFixRequested), request); !errors.Is(err, graph.ErrAnswerNotAllowed) {
+		t.Fatalf("a fix round asked for at push came to %v, want graph.ErrAnswerNotAllowed", err)
+	}
+	if n := c.fixCount(StagePush); n != 0 {
+		t.Fatalf("a refused request ran the fixer %d times", n)
+	}
+	if done, err := exec.Answer(context.Background(), "run", string(OutcomeApproved)); err != nil || done.Status != graph.StatusCompleted {
+		t.Fatalf("approving after the refused request came to %v, %v", done.Status, err)
+	}
+}

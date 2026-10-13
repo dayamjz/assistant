@@ -36,7 +36,23 @@ var (
 	// ErrUnusableFixRequest is returned for a request that cannot be read, or
 	// that adds a finding of its own with no description.
 	ErrUnusableFixRequest = errors.New("pipeline: the fix request cannot be used")
+	// ErrFixNotRequestable is returned for a fix request at the hold of a
+	// stage that is not Stage.Requestable: push, pr, or ci. Such a hold does
+	// not offer the round, so internal/graph would refuse the answer as well;
+	// this is the refusal that names why.
+	ErrFixNotRequestable = errors.New("pipeline: a fix round cannot be requested at this stage's hold")
 )
+
+// CheckRequestable refuses a fix request at a stage whose hold does not offer
+// one, with ErrFixNotRequestable. It is the check a surface answering a hold
+// makes before anything is recorded.
+func CheckRequestable(stage Stage) error {
+	if stage.Requestable() {
+		return nil
+	}
+	return fmt.Errorf("%w: the %s stage runs at or after push, where a requested round's result "+
+		"would be pushed before you saw it or never pushed at all", ErrFixNotRequestable, stage)
+}
 
 // FixRequest is what a person asks for when they answer a stage's hold with a
 // fix round: PRD section 5's selection, notes, and findings of their own.

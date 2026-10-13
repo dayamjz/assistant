@@ -239,24 +239,28 @@
 // check is worth no more than no conclusion. Every stage is wired by wire,
 // which emits five edges for every stage, the fix node's return before them
 // when the stage's round limit is above zero, and before that the two edges of
-// the requested-round cycle when the pipeline was given a fixer, whose second
-// is that cycle's back edge. Whether a fixer was given is the same for every
-// stage of one pipeline, so call the per-stage base seven with one and five
-// without. A stage's block then starts at the base times its position plus the
-// number of earlier stages taking rounds, and its back edges sit at most two
-// past that start. At most four stages sit before any one of them and can take
-// rounds, so every back edge of a stage stays within six of the base times its
-// position and cannot reach the base times the next stage's. The ranges two
-// stages draw from are disjoint, whatever pair of round limits they come from.
+// the requested-round cycle when the pipeline was given a fixer and the stage
+// is requestable, whose second is that cycle's back edge. Which stages are
+// requestable is the stage table's, not the configuration's, so with a fixer
+// given a stage's block has a fixed part, five edges plus two at a
+// requestable stage, and a configured part, the one fix return. A stage's
+// block starts at the sum of the earlier stages' fixed parts plus the number
+// of earlier stages taking rounds, at most four. Its back edges sit at most
+// two past that start at a requestable stage, whose fixed part is seven, and
+// at the start itself at any other, whose fixed part is five. Either way every
+// back edge of a stage stays below the sum of the fixed parts up to and
+// including it, which is where the next stage's block starts before any
+// configured edge, so the ranges two stages draw from are disjoint, whatever
+// pair of round limits they come from.
 //
-// A pipeline with a fixer and one without differ in base, so their indices do
-// not line up and nothing above says they do. They differ in their edges too,
-// so internal/graph's edge digest refuses a checkpoint carried from one to the
-// other, which is the paragraph after next.
+// A pipeline with a fixer and one without differ in their fixed parts, so
+// their indices do not line up and nothing above says they do. They differ in
+// their edges too, so internal/graph's edge digest refuses a checkpoint
+// carried from one to the other, which is the paragraph after next.
 //
 // The emission order settles the formula and not the conclusion so long as
-// every back edge stays within the first three slots of its block: adding one
-// constant to every index leaves index-to-stage injective. It is the
+// every back edge stays within the slots ahead of its block's fixed five: a
+// constant added to every index leaves index-to-stage injective. It is the
 // uniqueness that TestBackEdgeIndicesNeverCrossStagesAcrossConfigurations
 // pins, over every combination of which stages take rounds, and not the order;
 // what would break it is a stage table admitting more than five stages that
@@ -440,7 +444,15 @@
 // round limit or convergence parked is taken further by forking it.
 //
 // PRD section 5's hold offers four actions, and all four are hold answers
-// here whenever the pipeline was given a fixer. Approve, skip, and cancel
+// here at a stage before push whenever the pipeline was given a fixer; the
+// holds of push, pr, and ci offer three. The stage table's requestable column
+// owns that line, and the reason is the promise the round makes: the stage
+// re-runs and holds again so the person sees the result. Push is the stage
+// that forwards a commit, so re-running it would push the round's commit
+// before anyone saw it, and pr and ci run after push, so a round's commit
+// there would never be pushed. A request at those holds is refused, by
+// CheckRequestable with ErrFixNotRequestable at the surface and by
+// internal/graph as an answer the hold does not offer. Approve, skip, and cancel
 // are recorded as the stage's outcome. Fix is OutcomeFixRequested, and it is
 // not a second entry into the automatic loop: it is a cycle of its own, from
 // the hold through the stage's request node back to the stage, bounded by
@@ -456,13 +468,14 @@
 // selection, notes, and own findings, and the fixer is told what was left
 // unselected; what PRD section 5 says a later review does with that history,
 // not re-reporting what a person already decided, is not done: no review
-// reads it. Convergence applies to the requested cycle too: a requested round
-// that leaves the run's state exactly as the previous requested round at that
-// stage left it parks the run, rather than holding it, and a park is not
-// answered, so the person forks the run to go on. And the
-// requested round at a stage after the push stage commits to the run's copy
-// and nothing in this build pushes that commit, as with the checks stage's
-// automatic rounds.
+// reads it. Convergence does not apply to the requested cycle: its edge back
+// is graph.Edge.Answered, which internal/graph admits only because every
+// traversal follows the person's answer at the hold. A requested round that
+// changed nothing therefore returns to the hold, which says so, rather than
+// parking the run, so approve, skip, and cancel stay open; RequestedFixRounds
+// and the run-wide budget are what bound it. "Changed nothing" is measured as
+// the request node measures it, over the keys the fixer writes, and not over
+// the whole state.
 //
 // Convergence is computed over the whole state, which is internal/graph's
 // definition and not this package's. Two things a round writes therefore

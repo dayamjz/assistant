@@ -156,7 +156,7 @@ func New(o Options) (*Pipeline, error) {
 // wired by this one function, so the shape of a stage is the same for all nine
 // and a stage cannot be given an arrangement of its own.
 func wire(b *graph.Builder, stage Stage, impl Implementation, fixer Fixer, rounds int, next string) error {
-	requests := fixer.NewBody != nil
+	requests := fixer.NewBody != nil && stage.Requestable()
 	if impl.NewBody == nil {
 		return fmt.Errorf("%w: %s", ErrMissingStage, stage)
 	}
@@ -170,11 +170,19 @@ func wire(b *graph.Builder, stage Stage, impl Implementation, fixer Fixer, round
 	b.Node(holdNode(stage, requests))
 	if requests {
 		// PRD section 5's Fix action at a hold: the stage's fixer runs one
-		// round over what the person selected and the stage runs again. That
-		// is a second cycle through the stage, so both of its edges carry
-		// RequestedFixRounds, and the edge in reaches the bound first for the
-		// reason the automatic entry does: every return follows an entry it
-		// counted.
+		// round over what the person selected and the stage runs again. It is
+		// built only at a requestable stage, one before push, because only
+		// there does the stage's re-run hold before the round's commit leaves
+		// the run's copy. That is a second cycle through the stage, so both
+		// of its edges carry RequestedFixRounds, and the edge in reaches the
+		// bound first for the reason the automatic entry does: every return
+		// follows an entry it counted.
+		//
+		// The edge back is graph.Edge.Answered: every traversal follows the
+		// person's answer at the hold, which internal/graph checks at build,
+		// so a round that changed nothing returns to the hold for them to see
+		// rather than parking the run on convergence. RequestedFixRounds and
+		// the run-wide budget still bound it.
 		//
 		// The edge in is guarded on the answer key rather than on the
 		// outcome the hold node writes from it. Both say the same thing once
@@ -198,7 +206,7 @@ func wire(b *graph.Builder, stage Stage, impl Implementation, fixer Fixer, round
 				Value: graph.TextValue(string(OutcomeFixRequested)),
 			},
 		})
-		b.Edge(graph.Edge{From: stage.RequestNode(), To: stage.Node(), Rounds: RequestedFixRounds})
+		b.Edge(graph.Edge{From: stage.RequestNode(), To: stage.Node(), Rounds: RequestedFixRounds, Answered: true})
 	}
 
 	// A stage that found something a person must decide holds. A stage that

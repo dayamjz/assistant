@@ -234,7 +234,14 @@ func fixNode(stage Stage, fixer Fixer) graph.Node {
 //
 // The round always leaves one hold behind, requestedHold, so the stage holds
 // again after it executes whatever its own report says: PRD section 5 has the
-// stage re-run and hold again so the person sees the result. The fixer's own
+// stage re-run and hold again so the person sees the result. That is true
+// only because wire builds this node for a stage before push and for no other
+// (Stage.Requestable): such a stage's re-run commits nothing outside the
+// run's copy, and the push stage later forwards what the round committed. A
+// round that changed no key its fixer writes says so in that hold; it returns
+// to the hold rather than parking, because the edge back to the stage is
+// graph.Edge.Answered, exempt from convergence and still bounded by
+// RequestedFixRounds. The fixer's own
 // holds travel with it, which is how the judge rule reaches this round on the
 // same terms it reaches an automatic one: decided from the commit the round
 // made, by whatever fix body the pipeline was given.
@@ -244,7 +251,7 @@ func fixNode(stage Stage, fixer Fixer) graph.Node {
 // hold applies FixRequest.Select before it answers, so a request reaching
 // here has already passed the same rule once.
 func requestNode(stage Stage, fixer Fixer) graph.Node {
-	reads := union(fixer.Reads, stage.ReportKey(), stage.FixKey(), stage.RequestKey())
+	reads := union(append(append([]Key(nil), fixer.Reads...), fixer.Writes...), stage.ReportKey(), stage.FixKey(), stage.RequestKey())
 	writes := union(fixer.Writes, stage.FixKey(), stage.HeldKey())
 	declared := keySet(fixer.Reads)
 	permitted := keySet(fixer.Writes)
@@ -304,7 +311,11 @@ func requestNode(stage Stage, fixer Fixer) graph.Node {
 				if err != nil {
 					return err
 				}
-				held, err := encodeHolds(stage, append(out.Holds, requestedHold(stage, out.Summary)))
+				changed, err := changesState(r, permitted, out.Writes)
+				if err != nil {
+					return err
+				}
+				held, err := encodeHolds(stage, append(out.Holds, requestedHold(stage, out.Summary, changed)))
 				if err != nil {
 					return err
 				}
@@ -323,19 +334,50 @@ func requestNode(stage Stage, fixer Fixer) graph.Node {
 // requestedHold is the ask a requested round leaves for the stage's next
 // execution, which is what makes the stage hold again after it. It quotes what
 // the round said it did as the round's own account rather than as a result.
-func requestedHold(stage Stage, summary string) findings.Finding {
+//
+// changed is whether the round wrote any key its fixer declares to a value
+// other than the one it held, which is changesState's answer; a round that did
+// not is said to have changed nothing in the run's state, which is all that
+// comparison establishes. Nothing here has been pushed: the stage is before
+// push, so the push stage forwards the round's commit only after this hold is
+// answered.
+func requestedHold(stage Stage, summary string, changed bool) findings.Finding {
 	account := strings.TrimSpace(summary)
 	if account == "" {
 		account = "nothing"
+	}
+	effect := ""
+	if !changed {
+		effect = " The round changed nothing in the run's state: every key its fixer writes holds " +
+			"what it held before."
 	}
 	return findings.Finding{
 		Severity: findings.SeverityInfo,
 		Action:   findings.ActionAsk,
 		Description: fmt.Sprintf("You asked for a fix round at the %s stage's hold, and this is the "+
-			"stage's report after it. It holds so you see the result: approve accepts it as it "+
-			"stands, and you can ask for another round, skip, or cancel. What the round said it "+
-			"did, in its own words: %s", stage, account),
+			"stage's report after it. It holds so you see the result before anything is pushed: "+
+			"approve accepts it as it stands, and you can ask for another round, skip, or cancel.%s "+
+			"What the round said it did, in its own words: %s", stage, effect, account),
 	}
+}
+
+// changesState reports whether any of a fixer's writes would change the value
+// its key holds. A key the fixer may not write is not judged here: applyWrites
+// refuses it, and that refusal is the answer that matters.
+func changesState(r graph.Reader, permitted map[Key]struct{}, writes map[Key]graph.Value) (bool, error) {
+	for key, value := range writes {
+		if _, ok := permitted[key]; !ok {
+			continue
+		}
+		current, err := r.Get(string(key))
+		if err != nil {
+			return false, err
+		}
+		if !current.Equal(value) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // encodeHolds renders what a fix round raised for its stage's next execution.

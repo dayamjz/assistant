@@ -262,6 +262,9 @@ func (s *Service) fixRequestFor(ctx context.Context, runID string, req machine.R
 	if !ok {
 		return "", fmt.Errorf("service: run %s holds at %q, which is no stage's hold", runID, cp.Position)
 	}
+	if err := pipeline.CheckRequestable(stage); err != nil {
+		return "", fmt.Errorf("run %s: %w", runID, err)
+	}
 	report, err := pipeline.StageReport(cp.State, stage)
 	if err != nil {
 		return "", err

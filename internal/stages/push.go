@@ -249,10 +249,12 @@ func pushVerifiedCommit(ctx context.Context, deps StageDeps, in pipeline.Input) 
 
 // fixingAfterReview is the stages that can author a commit between the review
 // stage reading the change and this stage forwarding it: every stage after
-// review and before push, because each takes either automatic fix rounds or,
-// at its hold, a round a person asks for, and either kind leaves its account
-// in the stage's fix key. It is derived from the stage order rather than
-// listed, so internal/pipeline stays the one owner of that order.
+// review and before push. Each is pipeline.Stage.Requestable, so a person may
+// ask for a round at its hold, and some also take automatic rounds; both
+// kinds write the stage's fix key, last write winning, so what this stage
+// reads there is the account of that stage's last round of either kind. A
+// stage that took no round leaves the key empty and contributes no claim, so
+// the list is every such stage rather than a guess at which ones took rounds.
 func fixingAfterReview() []pipeline.Stage {
 	var out []pipeline.Stage
 	for _, stage := range pipeline.Order() {

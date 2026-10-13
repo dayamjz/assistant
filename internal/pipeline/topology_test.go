@@ -272,9 +272,16 @@ func TestBackEdgeIndicesNeverCrossStagesAcrossConfigurations(t *testing.T) {
 			Budget: 100,
 		})
 		owners := backEdgeOwners(t, p.Graph())
-		// One per stage taking automatic rounds, and one per stage for the
-		// rounds a person may ask for at its hold, since a fixer was given.
-		if want := len(taking) + len(Order()); len(owners) != want {
+		// One per stage taking automatic rounds, and one per requestable
+		// stage for the rounds a person may ask for at its hold, since a
+		// fixer was given.
+		requestable := 0
+		for _, stage := range Order() {
+			if stage.Requestable() {
+				requestable++
+			}
+		}
+		if want := len(taking) + requestable; len(owners) != want {
 			t.Errorf("configuration %q has %d back edges, want %d", name, len(owners), want)
 		}
 		for i, stage := range owners {

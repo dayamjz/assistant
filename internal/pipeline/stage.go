@@ -58,33 +58,41 @@ type stageSpec struct {
 	// round. The five stages that have one are exactly the five fields
 	// config.FixRounds declares.
 	rounds func(*config.FixRounds) *int
+	// requestable says a person may ask for a fix round at this stage's hold,
+	// PRD section 5's Fix action. It is exactly the stages before push. A
+	// requested round re-runs its stage and holds again so the person sees the
+	// result, and push is the stage that forwards a commit: re-running it
+	// would forward the round's commit before the person saw it, and a round
+	// at pr or ci, which run after it, leaves a commit nothing in this build
+	// pushes.
+	requestable bool
 }
 
 // stageTable is the pipeline: nine rows, in the fixed order a run takes them.
 var stageTable = []stageSpec{
 	{StageIntent, "intent",
-		func(s *Stages) *Implementation { return &s.Intent }, nil},
+		func(s *Stages) *Implementation { return &s.Intent }, nil, true},
 	{StageRebase, "rebase",
 		func(s *Stages) *Implementation { return &s.Rebase },
-		func(r *config.FixRounds) *int { return &r.Rebase }},
+		func(r *config.FixRounds) *int { return &r.Rebase }, true},
 	{StageReview, "review",
 		func(s *Stages) *Implementation { return &s.Review },
-		func(r *config.FixRounds) *int { return &r.Review }},
+		func(r *config.FixRounds) *int { return &r.Review }, true},
 	{StageTest, "test",
 		func(s *Stages) *Implementation { return &s.Test },
-		func(r *config.FixRounds) *int { return &r.Test }},
+		func(r *config.FixRounds) *int { return &r.Test }, true},
 	{StageDocument, "document",
-		func(s *Stages) *Implementation { return &s.Document }, nil},
+		func(s *Stages) *Implementation { return &s.Document }, nil, true},
 	{StageLint, "lint",
 		func(s *Stages) *Implementation { return &s.Lint },
-		func(r *config.FixRounds) *int { return &r.Lint }},
+		func(r *config.FixRounds) *int { return &r.Lint }, true},
 	{StagePush, "push",
-		func(s *Stages) *Implementation { return &s.Push }, nil},
+		func(s *Stages) *Implementation { return &s.Push }, nil, false},
 	{StagePR, "pr",
-		func(s *Stages) *Implementation { return &s.PR }, nil},
+		func(s *Stages) *Implementation { return &s.PR }, nil, false},
 	{StageCI, "ci",
 		func(s *Stages) *Implementation { return &s.CI },
-		func(r *config.FixRounds) *int { return &r.Checks }},
+		func(r *config.FixRounds) *int { return &r.Checks }, false},
 }
 
 // spec returns the stage's row, and false when s names no stage.
@@ -149,8 +157,18 @@ func (s Stage) HoldNode() string { return "hold:" + s.String() }
 func (s Stage) FixNode() string { return "fix:" + s.String() }
 
 // RequestNode returns the name of the graph node that runs a fix round a
-// person asked for at this stage's hold. The node exists for every stage
-// whenever the pipeline was given a fixer, whatever the stage's automatic
-// round limit is, because asking for a round is the person's call and not the
-// configuration's.
+// person asked for at this stage's hold. The node exists for every requestable
+// stage whenever the pipeline was given a fixer, whatever the stage's
+// automatic round limit is, because asking for a round is the person's call
+// and not the configuration's.
 func (s Stage) RequestNode() string { return "request:" + s.String() }
+
+// Requestable reports whether a person may ask for a fix round at this
+// stage's hold, which the stage table answers: the stages before push. A hold
+// at any other stage does not offer the round, and a request there is refused
+// with ErrFixNotRequestable by the surface answering it and by internal/graph
+// as an answer the hold does not offer.
+func (s Stage) Requestable() bool {
+	row, ok := s.spec()
+	return ok && row.requestable
+}
