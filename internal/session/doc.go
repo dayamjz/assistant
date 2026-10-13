@@ -132,6 +132,15 @@
 //
 // # Residual gaps
 //
+//   - The proof is as of its assertion, not of the launch. Create refuses an
+//     unproven Isolation and does not re-derive a proven one, so between
+//     the assertion the service's dispatch made and Create the copy can be
+//     retargeted, by a remote added or a link swapped under it, and this
+//     package would launch into it. The service hookup that calls Create is
+//     to re-run vcs.Observe and tasks.AssertIsolated at launch and hand
+//     Create the proof that read produced, rather than accept the
+//     point-in-time proof plus the second check's detection; that is the
+//     hookup's to do, and nothing here does it.
 //   - Nothing bounds how long an orphan goes on executing, and nothing here
 //     ends one: Close ends the sessions this provider holds and no other.
 //   - On Windows, Close delivers what agents' tree termination delivers
