@@ -341,14 +341,17 @@ func checkSubjectText(what, s string) error {
 
 // defaultJudgePatterns is the default of KeyJudgePaths, as PRD section 10's
 // schema row writes it. That row owns the list; this is its text, compiled by
-// the one matcher. It selects what these sixteen patterns match and nothing
-// more: Go and Python test files by the names listed, *.test.* and *.spec.*
-// files, anything under a test, tests, __tests__, or testdata directory,
-// GitHub Actions workflows, golangci-lint and ESLint configuration, ruff.toml,
-// and a file named Makefile. Other conventions are not in it - a GitLab CI
-// file, a Java *Test.java, a conftest.py outside a tests directory, or a
-// jest.config.* - and a repository that keeps checks in such files names
-// them in its trusted copy.
+// the one matcher. It selects what these twenty-six patterns match and nothing
+// more: Go and Python test files by the names listed, Java and Kotlin files
+// named *Test, *.test.* and *.spec.* files, anything under a test, tests,
+// __tests__, or testdata directory or a src/test directory, GitHub Actions
+// workflows and a .gitlab-ci.yml, golangci-lint and ESLint configuration,
+// ruff.toml, a file named Makefile, and the pytest, tox, jest, vitest and mocha
+// configuration files named. Other conventions are not in it - CI files for
+// other hosts, a Java or Kotlin test class not named *Test, pytest settings
+// kept in pyproject.toml or setup.cfg, or a build file such as pom.xml or
+// build.gradle - and a repository that keeps checks in such files names them
+// in its trusted copy.
 var defaultJudgePatterns = []string{
 	"*_test.go",
 	"*_test.py",
@@ -366,6 +369,16 @@ var defaultJudgePatterns = []string{
 	"eslint.config.*",
 	"ruff.toml",
 	"Makefile",
+	".gitlab-ci.yml",
+	"*Test.java",
+	"*Test.kt",
+	"**/src/test/**",
+	"conftest.py",
+	"pytest.ini",
+	"tox.ini",
+	"jest.config.*",
+	"vitest.config.*",
+	".mocharc*",
 }
 
 // defaultJudgePaths is defaultJudgePatterns compiled. A pattern there that
