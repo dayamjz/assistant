@@ -60,24 +60,53 @@ import (
 // revision is refused too, because a comparison against nothing is a check
 // that passes by looking at nothing.
 //
-// What the check does not establish is that the reviewed commit is still what
-// a person would approve of. This stage asks only for descent. Review's own
-// fix round is re-reviewed, because the review stage runs again after it and
-// its report revision is the commit that round made. A fix round of the test,
-// lint, or checks stage is not: it is re-verified by its own check re-running,
-// and the head it leaves descends from the reviewed commit while carrying
-// lines no review read, which this stage forwards. PRD section 14 records
-// whether those commits should be reviewed as an open question. What does
-// apply to them is the judge rule in judge.go, and it is narrower than a
-// review: such a round may not change a judge path without the stage holding
-// for a person, and its edits to any other path reach this stage unreviewed.
+// # Commits written after the review (P5)
+//
+// Descent alone would forward lines no review read. Review's own fix round is
+// re-reviewed, because the review stage runs again after it and its report
+// revision is the commit that round made; a fix round of the test or lint
+// stage is re-verified only by its own check, and the head it leaves descends
+// from the reviewed commit while carrying the round's work. PRD section 14
+// records the decision that closes this: when the head is not the reviewed
+// commit, this stage reviews the commits between the two before anything is
+// pushed, in a fresh session, as author code, with each stage's last round
+// summary handed over as a claim. reviewLaterCommits is that review and it is
+// the review stage's own, reviewRead, measured from the reviewed commit.
+//
+// A review of them that is anything but notes holds the stage with the
+// review's findings and pushes nothing. A clean one lets the push proceed, and
+// the head is then what pipeline.KeyApproved records, because a completed
+// review has now read every commit in it. A head that is the reviewed commit
+// costs no second review.
+//
+// The decision-model checks come with reviewRead and only ever add, on the
+// terms decision.go states: a check that cannot run, on a failed call or an
+// unreadable answer, leaves a note that holds nothing, so a clean agent
+// review still lets the push proceed, and only a flag in the enforce mode,
+// which is an ask, can hold it.
+//
+// What this does not establish:
+//   - A person approving the review stage's hold approved the commit that
+//     stage read, not the later commits. Those are reviewed here like any
+//     other, and a person is asked again only if that review raises something.
+//   - The checks stage's fix rounds run after this stage and are not reviewed
+//     here. Nothing in this build pushes the commits they make.
+//   - A judge path a later round deleted, which judge.go already held that
+//     round's stage for, is reported again by this review's judge lens: it
+//     cannot tell which edits a person already accepted, so it asks again
+//     rather than assuming.
+//   - The rounds' summaries reach the reviewer as the last round of each stage
+//     wrote them; earlier rounds of the same stage are represented only by the
+//     diff, because the fix key holds one summary.
 //
 // # No fix rounds
 //
 // This stage takes no fix rounds. It either works or it doesn't. A push that
 // would discard commits, a target that moved, or a head that isn't descended
 // from the reviewed commit are all refusals, and none of them is fixable by
-// the run.
+// the run. A fix finding the review of later commits raises holds here as
+// well, because internal/pipeline sends a finding at a stage with no fixer to
+// a person.
 //
 // # Where the line between an error and a finding falls
 //
@@ -90,15 +119,21 @@ import (
 // and the update cannot proceed: that is a finding, not an error. The run holds
 // for a person to decide what to do next.
 func Push(deps StageDeps) pipeline.Implementation {
+	reads := append([]pipeline.Key{
+		pipeline.KeyRepository,
+		pipeline.KeyRun,
+		pipeline.KeyBranch,
+		pipeline.KeyBase,
+		pipeline.KeyHead,
+		pipeline.KeyPushAnchor,
+		pipeline.KeyIntent,
+		pipeline.KeyIntentSupplied,
+	}, pipeline.StageResultKeys(pipeline.StageReview)...)
+	for _, stage := range fixingAfterReview() {
+		reads = append(reads, stage.FixKey())
+	}
 	return pipeline.Implementation{
-		Reads: append([]pipeline.Key{
-			pipeline.KeyRepository,
-			pipeline.KeyRun,
-			pipeline.KeyBranch,
-			pipeline.KeyBase,
-			pipeline.KeyHead,
-			pipeline.KeyPushAnchor,
-		}, pipeline.StageResultKeys(pipeline.StageReview)...),
+		Reads:  reads,
 		Writes: []pipeline.Key{pipeline.KeyPushed, pipeline.KeyApproved},
 		NewBody: func() pipeline.Body {
 			return func(ctx context.Context, in pipeline.Input) (pipeline.Output, error) {
@@ -158,6 +193,24 @@ func pushVerifiedCommit(ctx context.Context, deps StageDeps, in pipeline.Input) 
 		return anchorForAnotherTarget(facts, target), nil
 	}
 
+	// Commits this run wrote after the review are reviewed before anything is
+	// pushed, and only when there are some: a head that is the reviewed commit
+	// costs no second review. It comes after the refusals that need no agent
+	// and before the target is read, so the decision below is made on a read
+	// taken after the review rather than before it.
+	approved := facts.reviewedCommit
+	var later []findings.Finding
+	if facts.head != facts.reviewedCommit {
+		out, err := reviewLaterCommits(ctx, deps, repo, facts)
+		if err != nil {
+			return pipeline.Output{}, err
+		}
+		if !out.Report.Normalize().AllNotes() {
+			return laterCommitsNotApproved(facts, out.Report), nil
+		}
+		approved, later = facts.head, out.Report.Findings
+	}
+
 	// The target has to be in the local repository for the reachability
 	// comparisons internal/safety makes, and it is fetched rather than assumed
 	// because the run may never have had a reason to hold it.
@@ -188,13 +241,78 @@ func pushVerifiedCommit(ctx context.Context, deps StageDeps, in pipeline.Input) 
 			decision.Proposed(), decision.Target(), err)
 	}
 
+	report := pushedReport(decision)
+	report.Findings = append(report.Findings, later...)
 	return pipeline.Output{
-		Report: pushedReport(decision),
+		Report: report,
 		Writes: map[pipeline.Key]graph.Value{
 			pipeline.KeyPushed:   graph.TextValue(decision.Proposed()),
-			pipeline.KeyApproved: graph.TextValue(facts.reviewedCommit),
+			pipeline.KeyApproved: graph.TextValue(approved),
 		},
 	}, nil
+}
+
+// fixingAfterReview is the stages that can author a commit between the review
+// stage reading the change and this stage forwarding it: every stage after
+// review and before push that takes automatic fix rounds. It is derived from
+// the stage table rather than listed, so the table stays the one owner of
+// both the order and which stages take rounds.
+func fixingAfterReview() []pipeline.Stage {
+	var out []pipeline.Stage
+	for _, stage := range pipeline.Order() {
+		if stage > pipeline.StageReview && stage < pipeline.StagePush && stage.TakesFixRounds() {
+			out = append(out, stage)
+		}
+	}
+	return out
+}
+
+// reviewLaterCommits reviews the commits between the one the review stage read
+// and the head this stage would forward, which is PRD principle P5 applied to
+// the fix rounds that ran after review.
+//
+// It is the review stage's own review, reviewRead, measured from the reviewed
+// commit rather than from where the branch left its base, so every rule that
+// review is held to applies here unchanged. P4 holds for the same reason it
+// holds there: the agent is the StageAgent this stage was handed, which runs
+// with no session, and nothing of the rounds crosses but the commits and what
+// each stage's last round wrote in its fix key, which reaches the reviewer as
+// claims.
+//
+// The caller has established that the head descends from the reviewed commit,
+// so the change measured here is exactly the commits no review has read.
+func reviewLaterCommits(ctx context.Context, deps StageDeps, repo *vcs.Repository, facts pushState) (pipeline.Output, error) {
+	review := reviewFacts{
+		repository:  facts.repository,
+		run:         facts.run,
+		branch:      facts.branch,
+		base:        facts.base,
+		head:        facts.head,
+		intent:      facts.intent,
+		supplied:    facts.supplied,
+		since:       facts.reviewedCommit,
+		laterRounds: facts.laterRounds,
+	}
+	change, err := readChange(ctx, repo, review, deps.Config.IgnorePatterns)
+	return reviewRead(ctx, deps, repo, review, change, err)
+}
+
+// laterCommitsNotApproved is the report for commits this run authored after
+// its review that the review of them did not approve as they stand.
+//
+// Every finding that review reported is carried over as it was, so a fix or
+// an ask the reviewer raised is what holds this stage: it takes no fix rounds,
+// and internal/pipeline holds a stage with no fixer for any finding that is
+// not a note. A summary saying what was not pushed and why is the one thing
+// added.
+func laterCommitsNotApproved(facts pushState, review findings.Report) pipeline.Output {
+	review.Summary = fmt.Sprintf(
+		"%s carries commits this run's own fix rounds wrote after the review read %s, and the "+
+			"review of those commits did not approve them as they stand, so nothing was pushed. "+
+			"Approving at this hold advances the run without pushing; skipping records the stage "+
+			"as skipped; cancelling ends the run. The review said: %s",
+		facts.head, facts.reviewedCommit, review.Summary)
+	return pipeline.Output{Report: review}
 }
 
 // leaseFor is the lease a decision has to be performed under.
@@ -501,6 +619,13 @@ type pushState struct {
 	// anchorRecorded says whether the run recorded one at all.
 	anchor         safety.Observation
 	anchorRecorded bool
+	// intent and supplied are what the review of later commits frames the
+	// change with, on the same terms the review stage does.
+	intent   string
+	supplied bool
+	// laterRounds is what the last fix round of each stage between review and
+	// push said it changed, for the stages whose round left an account.
+	laterRounds []laterRound
 }
 
 // readPushState reads the run's state, the review stage's result, and the
@@ -516,6 +641,7 @@ func readPushState(state pipeline.Reader) (pushState, error) {
 		{pipeline.KeyBranch, &facts.branch},
 		{pipeline.KeyBase, &facts.base},
 		{pipeline.KeyHead, &facts.head},
+		{pipeline.KeyIntent, &facts.intent},
 	}
 	for _, entry := range toRead {
 		v, err := state.Get(entry.key)
@@ -523,6 +649,21 @@ func readPushState(state pipeline.Reader) (pushState, error) {
 			return pushState{}, err
 		}
 		*entry.target, _ = v.Text()
+	}
+	facts.intent = strings.TrimSpace(facts.intent)
+	supplied, err := state.Get(pipeline.KeyIntentSupplied)
+	if err != nil {
+		return pushState{}, err
+	}
+	facts.supplied, _ = supplied.Bool()
+	for _, stage := range fixingAfterReview() {
+		v, err := state.Get(stage.FixKey())
+		if err != nil {
+			return pushState{}, err
+		}
+		if summary, _ := v.Text(); strings.TrimSpace(summary) != "" {
+			facts.laterRounds = append(facts.laterRounds, laterRound{stage: stage, summary: strings.TrimSpace(summary)})
+		}
 	}
 
 	// A review completes two ways, and this is where the two become one fact.

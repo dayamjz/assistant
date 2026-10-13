@@ -76,13 +76,18 @@ request merges.
 
 ## What a pass does not cover
 
-Review reads your change before the test, lint, and checks stages run. When
-one of those stages takes a fix round, the code that round changes reaches the
-push without being reviewed again: the push stage asks only that the head
-descends from a reviewed commit. The judge-path rule holds such a round only
-when it touches a test, CI, or lint file, not when it changes other code. PRD
-section 14 lists this as an open question (issue #63). Until it is settled,
-read the commits the pipeline added after review before you merge.
+Review reads your change before the test, lint, and checks stages run. When the
+test or lint stage takes a fix round after review, the push stage reviews the
+commits between the reviewed one and the head before it pushes anything, and
+holds unless that review raises nothing but notes (PRD section 14, decision 7).
+Two things that review does not cover:
+
+- The checks stage's fix rounds. That stage runs after the push, so nothing
+  reviews the commits its rounds make, and nothing in this build pushes them.
+- Earlier rounds' own accounts. The reviewer of the later commits is handed
+  each stage's last fix summary as a claim to check. A stage that took more
+  than one round is represented by its last summary, and its earlier rounds
+  only by the diff.
 
 ## Hosted reviewers
 
