@@ -134,8 +134,9 @@ func ClaudeFactory(opts ...ClaudeOption) Factory {
 // Name returns "claude".
 func (f *claudeFactory) Name() string { return ClaudeName }
 
-// ProvenAgainstRealCLI reports true: this is the phase-one adapter PRD section 12 names.
-func (f *claudeFactory) ProvenAgainstRealCLI() bool { return true }
+// AutoEligible reports true: Claude Code is the phase-one adapter PRD section
+// 12 names, so "auto" may choose it. It is not evidence about the real CLI.
+func (f *claudeFactory) AutoEligible() bool { return true }
 
 // New reports whether Claude Code can be run here, and returns a Runner when
 // it can.

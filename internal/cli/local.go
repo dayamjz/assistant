@@ -260,7 +260,7 @@ func doctor(ctx context.Context, in *invocation) (any, error) {
 	} else {
 		add(machine.Check{Name: "agent", OK: true, Blocking: true, Detail: resolution.Name})
 	}
-	add(unprovenAgents(ctx, catalog))
+	add(namedOnlyAgents(ctx, catalog))
 
 	add(codeHost())
 	add(stageBodies())
@@ -279,26 +279,28 @@ func doctor(ctx context.Context, in *invocation) (any, error) {
 	return report, nil
 }
 
-// unprovenAgents reports the adapters that resolve on this machine but whose
-// envelope has not been checked against the real CLI, separately from the
-// "agent" check so that a runnable proven agent is never confused with one that
-// merely has a binary on PATH. Which adapters are unproven is the catalog's
-// declaration, not a list here. It never blocks and never changes what "auto"
-// resolves; naming one of these in the agent key still selects it.
-func unprovenAgents(ctx context.Context, catalog *agents.Catalog) machine.Check {
+// namedOnlyAgents reports the adapters that resolve on this machine but that
+// "auto" never chooses, separately from the "agent" check so that the agent a
+// run would use is never confused with one that merely has a binary on PATH.
+// Which adapters auto may choose is the catalog's declaration, not a list
+// here. It never blocks and never changes what "auto" resolves; naming one of
+// these in the agent key still selects it.
+func namedOnlyAgents(ctx context.Context, catalog *agents.Catalog) machine.Check {
 	var found []string
 	for _, standing := range catalog.Survey(ctx) {
-		if !standing.Proven && standing.Runnable {
+		if !standing.AutoEligible && standing.Runnable {
 			found = append(found, standing.Name)
 		}
 	}
 	if len(found) == 0 {
-		return machine.Check{Name: "unproven agents", OK: true, Detail: "no adapter whose envelope is unproven against its real CLI resolves here"}
+		return machine.Check{Name: "named-only agents", OK: true,
+			Detail: "no adapter that auto never chooses resolves here"}
 	}
 	return machine.Check{
-		Name: "unproven agents",
-		Detail: strings.Join(found, ", ") + " resolve on this machine but are not proven against their real CLIs; " +
-			"auto never chooses them, and a run uses one only when the agent key names it",
+		Name: "named-only agents",
+		Detail: strings.Join(found, ", ") + " resolve on this machine, but PRD section 12 defers them, so " +
+			"auto never chooses them and a run uses one only when the agent key names it; nothing here " +
+			"has checked them against their real CLIs",
 	}
 }
 

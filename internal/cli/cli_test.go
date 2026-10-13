@@ -1205,12 +1205,12 @@ func firstHoldingStages(t *testing.T) (holds, next pipeline.Stage) {
 	return holding[0], holding[1]
 }
 
-// doctor reports an adapter that resolves on PATH but is unproven against its
+// doctor reports an adapter that resolves on PATH but that auto never chooses, against its
 // real CLI on its own row, apart from the agent row that names what a run
 // would use. The PATH holds git, claude and cursor and nothing else, so the
 // rows are established rather than being whatever this machine has installed.
 // It stays serial because PATH is process state.
-func TestDoctorSeparatesAnUnprovenRunnableAgentFromTheProvenOne(t *testing.T) {
+func TestDoctorSeparatesANamedOnlyRunnableAgentFromTheAutoEligibleOne(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("building a PATH that holds named executables needs a script this test cannot portably make on windows")
 	}
@@ -1233,17 +1233,17 @@ func TestDoctorSeparatesAnUnprovenRunnableAgentFromTheProvenOne(t *testing.T) {
 		}
 	}
 
-	// Only an unproven adapter is runnable: no agent can be chosen, and the
-	// unproven row says what is there instead of the agent row claiming it.
+	// Only a named-only adapter is runnable: no agent can be chosen, and the
+	// named-only row says what is there instead of the agent row claiming it.
 	plant("cursor")
 	report := decodeDoctor(t, run(t, h, subject, "--json", "doctor").stdout)
 	agentRow, found := findCheck(report, "agent")
 	if !found || agentRow.OK {
-		t.Fatalf("doctor accepts an agent when only an unproven adapter is on PATH: %+v", agentRow)
+		t.Fatalf("doctor accepts an agent when only a named-only adapter is on PATH: %+v", agentRow)
 	}
-	unproven, found := findCheck(report, "unproven agents")
-	if !found || unproven.OK || unproven.Blocking || !strings.Contains(unproven.Detail, "cursor") {
-		t.Fatalf("doctor does not report cursor as an unproven runnable adapter: %+v", unproven)
+	namedOnly, found := findCheck(report, "named-only agents")
+	if !found || namedOnly.OK || namedOnly.Blocking || !strings.Contains(namedOnly.Detail, "cursor") {
+		t.Fatalf("doctor does not report cursor as a named-only runnable adapter: %+v", namedOnly)
 	}
 
 	// With claude present too, the agent row names claude and cursor stays on
@@ -1254,8 +1254,8 @@ func TestDoctorSeparatesAnUnprovenRunnableAgentFromTheProvenOne(t *testing.T) {
 	if !agentRow.OK || agentRow.Detail != "claude" {
 		t.Fatalf("doctor's agent row is %+v, want claude", agentRow)
 	}
-	unproven, _ = findCheck(report, "unproven agents")
-	if unproven.OK || !strings.Contains(unproven.Detail, "cursor") || strings.Contains(unproven.Detail, "claude") {
-		t.Fatalf("unproven row is %+v, want cursor and not claude", unproven)
+	namedOnly, _ = findCheck(report, "named-only agents")
+	if namedOnly.OK || !strings.Contains(namedOnly.Detail, "cursor") || strings.Contains(namedOnly.Detail, "claude") {
+		t.Fatalf("named-only row is %+v, want cursor and not claude", namedOnly)
 	}
 }

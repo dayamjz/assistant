@@ -28,13 +28,13 @@ type stubFactory struct {
 	declares  []agents.Capability
 	sessions  bool
 	args      []string
-	// unproven makes the factory decline ProvenAgainstRealCLI.
-	unproven bool
+	// namedOnly makes the factory decline AutoEligible.
+	namedOnly bool
 }
 
 func (f *stubFactory) Name() string { return f.name }
 
-func (f *stubFactory) ProvenAgainstRealCLI() bool { return !f.unproven }
+func (f *stubFactory) AutoEligible() bool { return !f.namedOnly }
 
 func (f *stubFactory) New(_ context.Context, args []string) (agents.Runner, error) {
 	if !f.available {

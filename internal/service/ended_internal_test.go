@@ -350,7 +350,7 @@ type fixedRunner struct{ runner agents.Runner }
 
 func (f fixedRunner) Name() string { return f.runner.Name() }
 
-func (f fixedRunner) ProvenAgainstRealCLI() bool { return true }
+func (f fixedRunner) AutoEligible() bool { return true }
 
 func (f fixedRunner) New(context.Context, []string) (agents.Runner, error) { return f.runner, nil }
 

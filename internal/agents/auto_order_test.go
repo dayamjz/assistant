@@ -37,15 +37,15 @@ func TestAutoPicksClaudeWhenSeveralAdaptersAreOnPath(t *testing.T) {
 	}
 }
 
-func TestAutoNeverPicksAnUnprovenAdapter(t *testing.T) {
+func TestAutoNeverPicksANamedOnlyAdapter(t *testing.T) {
 	plantOnPath(t, agents.CursorName, agents.OpenAIName, agents.GrokName)
 	_, err := agents.Resolve(t.Context(), []string{agents.AutoEntry}, agents.DefaultCatalog())
 	if err == nil {
-		t.Fatal("auto resolved an adapter with only unproven adapters on PATH")
+		t.Fatal("auto resolved an adapter with only named-only adapters on PATH")
 	}
 }
 
-func TestAnExplicitUnprovenAdapterStillResolves(t *testing.T) {
+func TestAnExplicitNamedOnlyAdapterStillResolves(t *testing.T) {
 	plantOnPath(t, agents.CursorName, agents.ClaudeName)
 	for _, entry := range []string{agents.CursorName, "cursor --model x"} {
 		got, err := agents.Resolve(t.Context(), []string{entry}, agents.DefaultCatalog())
@@ -57,7 +57,7 @@ func TestAnExplicitUnprovenAdapterStillResolves(t *testing.T) {
 		}
 	}
 	// An explicit fallback list may mix: the absent named one is passed over,
-	// and auto inside the list still skips unproven adapters.
+	// and auto inside the list still skips named-only adapters.
 	got, err := agents.Resolve(t.Context(), []string{"openai", agents.AutoEntry}, agents.DefaultCatalog())
 	if err != nil {
 		t.Fatalf("fallback list refused: %v", err)
@@ -67,7 +67,10 @@ func TestAnExplicitUnprovenAdapterStillResolves(t *testing.T) {
 	}
 }
 
-func TestOnlyClaudeIsDeclaredProven(t *testing.T) {
+// TestOnlyClaudeIsDeclaredAutoEligible pins the declaration PRD section 12
+// implies. It shows what each factory declares, not that any adapter's parsing
+// matches its real CLI: nothing in this repository drives a real CLI.
+func TestOnlyClaudeIsDeclaredAutoEligible(t *testing.T) {
 	plantOnPath(t, agents.CursorName, agents.ClaudeName, agents.OpenAIName, agents.GrokName)
 	standings := agents.DefaultCatalog().Survey(t.Context())
 	if len(standings) != 4 || standings[0].Name != agents.ClaudeName {
@@ -77,23 +80,23 @@ func TestOnlyClaudeIsDeclaredProven(t *testing.T) {
 		if !s.Runnable {
 			t.Errorf("%s is on PATH and the survey says it is not runnable: %v", s.Name, s.Err)
 		}
-		if want := s.Name == agents.ClaudeName; s.Proven != want {
-			t.Errorf("%s proven=%v, want %v", s.Name, s.Proven, want)
+		if want := s.Name == agents.ClaudeName; s.AutoEligible != want {
+			t.Errorf("%s auto-eligible=%v, want %v", s.Name, s.AutoEligible, want)
 		}
 	}
 }
 
-func TestAutoSkipsAnUnprovenFactoryInACustomCatalog(t *testing.T) {
-	unproven := &stubFactory{name: "first", available: true, unproven: true}
-	proven := &stubFactory{name: "second", available: true}
-	got, err := agents.Resolve(t.Context(), []string{agents.AutoEntry}, agents.NewCatalog(unproven, proven))
+func TestAutoSkipsANamedOnlyFactoryInACustomCatalog(t *testing.T) {
+	namedOnly := &stubFactory{name: "first", available: true, namedOnly: true}
+	eligible := &stubFactory{name: "second", available: true}
+	got, err := agents.Resolve(t.Context(), []string{agents.AutoEntry}, agents.NewCatalog(namedOnly, eligible))
 	if err != nil {
 		t.Fatalf("auto refused: %v", err)
 	}
 	if got.Name != "second" {
-		t.Errorf("auto resolved %q, want the proven \"second\"", got.Name)
+		t.Errorf("auto resolved %q, want the auto-eligible \"second\"", got.Name)
 	}
-	if unproven.args != nil {
-		t.Error("auto built the unproven adapter")
+	if namedOnly.args != nil {
+		t.Error("auto built the named-only adapter")
 	}
 }

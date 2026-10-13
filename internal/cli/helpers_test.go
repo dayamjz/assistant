@@ -322,7 +322,7 @@ type fixedFactory struct{ runner agents.Runner }
 
 func (f fixedFactory) Name() string { return f.runner.Name() }
 
-func (f fixedFactory) ProvenAgainstRealCLI() bool { return true }
+func (f fixedFactory) AutoEligible() bool { return true }
 
 func (f fixedFactory) New(context.Context, []string) (agents.Runner, error) { return f.runner, nil }
 
@@ -334,7 +334,7 @@ type unrunnableFactory struct{}
 
 func (unrunnableFactory) Name() string { return "unrunnable" }
 
-func (unrunnableFactory) ProvenAgainstRealCLI() bool { return true }
+func (unrunnableFactory) AutoEligible() bool { return true }
 
 func (unrunnableFactory) New(context.Context, []string) (agents.Runner, error) {
 	return nil, errors.New("this adapter is not installed on this machine")

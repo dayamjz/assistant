@@ -260,7 +260,7 @@ type fixedFactory struct{ runner agents.Runner }
 
 func (f fixedFactory) Name() string { return f.runner.Name() }
 
-func (f fixedFactory) ProvenAgainstRealCLI() bool { return true }
+func (f fixedFactory) AutoEligible() bool { return true }
 
 func (f fixedFactory) New(context.Context, []string) (agents.Runner, error) { return f.runner, nil }
 

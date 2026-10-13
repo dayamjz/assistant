@@ -158,18 +158,19 @@
 // # Resolution happens before work starts
 //
 // Resolve takes the ordered list from the agent configuration key, expands
-// "auto" to the catalog's proven adapters in its own order, and returns the first entry that yields a
+// "auto" to the catalog's auto-eligible adapters in its own order, and
+// returns the first entry that yields a
 // Runner along with everything it passed over and why. Resolving nothing is a
 // refusal wrapping ErrNoAgent, which is what keeps a run from starting and
 // reporting command-only validation as a pass.
 //
-// "auto" is limited to adapters whose factory declares ProvenAgainstRealCLI,
-// because the conformance suite drives a test helper binary and not the real
-// CLIs, so an adapter that resolves on PATH is not thereby known to emit the
-// envelope its parser reads. Only the Claude adapter declares it (PRD section
-// 12 makes Claude Code the only phase-one adapter); the others resolve when an
-// entry names them. The declaration is not verified here, and nothing in this
-// repository probes a real CLI.
+// "auto" is limited to adapters whose factory declares AutoEligible. Only
+// the Claude adapter declares it, because PRD section 12 makes Claude Code the
+// only phase-one adapter; the others resolve when an entry names them. That is
+// a scope decision, not a verification: the conformance suite drives a test
+// helper binary for every adapter, nothing in this repository drives a real
+// CLI, and so for no adapter, Claude included, does resolving on PATH show
+// that the CLI emits the envelope its parser reads.
 //
 // Availability is one thing: the named executable resolves to a file this
 // process may execute. An installation that resolves and then fails on its
