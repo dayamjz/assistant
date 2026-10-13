@@ -289,6 +289,15 @@ func (s *Store) RepositoryRemovable(ctx context.Context, id string) error {
 // forgotten. It is one function so that the question asked before a removal
 // and the check made inside it cannot answer differently.
 func refuseUnlessForgettable(ctx context.Context, tx *sql.Tx, id string, runIDs []string) error {
+	// A task attributed to the repository by its branch resolves from its
+	// runs, so removing them would leave it resolving from its log alone.
+	var taskID string
+	switch err := tx.QueryRowContext(ctx, `SELECT id FROM task WHERE repository_id = ? LIMIT 1`, id).Scan(&taskID); {
+	case err == nil:
+		return fmt.Errorf("%w: task %s works on a branch of repository %s", ErrRepositoryInUse, taskID, id)
+	case !errors.Is(err, sql.ErrNoRows):
+		return fmt.Errorf("store: checking which tasks work on repository %s: %w", id, err)
+	}
 	for _, runID := range runIDs {
 		if err := refuseIfRunIsHeldByATask(ctx, tx, id, runID); err != nil {
 			return err

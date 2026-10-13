@@ -310,6 +310,13 @@ Each has cost this repository more than one round of review.
   residual gaps: one fixer per run is bounded by one service, and a handle
   already handed out is not revoked. A run's position across a restart is not
   this package's: that is `internal/checkpoints`.
+- `internal/taskstate` resolves a task's state from the records that own its
+  facts, on every read, and stores nothing: `Resolve` is the PRD section 6
+  precedence and `kind.go` is the one owner of what an event kind means. The
+  `task_state` table is sealed (migration 10) and must never get an accessor.
+  `internal/store` only returns the facts, through `TaskSnapshot`, and learns
+  no meaning. Read its `doc.go` for the residual gaps, and for why PRD section
+  8's "task state" row is read as a resolution rather than a row.
 - `internal/checkpoints` is the durable `graph.CheckpointStore`, and the only
   place outside `internal/graph` that serializes a `graph.Checkpoint`. It
   exists as its own package because `internal/store` must not learn what a

@@ -254,11 +254,8 @@ func readOutTasks(w io.Writer, tasks machine.Tasks) {
 }
 
 func readOutTask(w io.Writer, task machine.Task) {
-	state := task.State.State
-	if state == "" {
-		state = "no state recorded"
-	}
-	writef(w, "%s  %-10s %-16s %s\n", task.Record.ID, task.Record.Shape, state, task.Record.Project)
+	writef(w, "%s  %-10s %-12s %-8s %s\n", task.Record.ID, task.Record.Shape,
+		task.State.State, task.State.Source, task.Record.Project)
 }
 
 func readOutDoctor(w io.Writer, report machine.Doctor) {

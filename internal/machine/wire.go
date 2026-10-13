@@ -8,6 +8,7 @@ import (
 	"github.com/dayamjz/assistant/internal/graph"
 	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/store"
+	"github.com/dayamjz/assistant/internal/taskstate"
 )
 
 // Version is what --version answers. It is a shape of its own so that the
@@ -330,15 +331,15 @@ type Runs struct {
 	Runs []store.Run `json:"runs"`
 }
 
-// Task is one piece of fleet work with its resolved current state. PRD
-// section 8 makes the resolved state a record of its own, distinct from the
-// append-only event log, per P8; this carries both records rather than
-// deriving one from the other.
+// Task is one piece of fleet work with its resolved current state. The state
+// is internal/taskstate's resolution of the records that own the facts, not a
+// stored copy and not the event log, per P8 and P14; the resolution carries the
+// source that decided it.
 type Task struct {
 	// Record is the task record.
 	Record store.Task `json:"record"`
-	// State is the authoritative resolved current state.
-	State store.TaskState `json:"state"`
+	// State is the resolved current state, with its source.
+	State taskstate.Resolution `json:"state"`
 }
 
 // Tasks is the answer to a request for fleet work.
