@@ -50,6 +50,9 @@ func TestStatusWarnsWhenWorkIsInFlightAndNothingWatchesIt(t *testing.T) {
 	if status.Supervision.Reason != supervisor.StopLockFree {
 		t.Fatalf("the guard's reason is %s, want lock-free with no service", status.Supervision.Reason)
 	}
+	if status.Supervision.Warning != machine.PhraseServiceDown {
+		t.Fatalf("with no service the warning is %q, want the one whose next decision is starting the service", status.Supervision.Warning)
+	}
 	vocabtest.Assert(t, status.Supervision.Warning)
 
 	plain := run(t, h, subject, "status")
