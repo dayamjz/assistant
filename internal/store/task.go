@@ -40,14 +40,52 @@ type Task struct {
 	RunID Optional[string] `json:"run_id"`
 	// PullRequest names the pull request the task produced, if any.
 	PullRequest Optional[string] `json:"pull_request"`
+	// RepositoryID names the repository whose branch the task works on. It is
+	// unknown for an investigation task, which has no branch, and for a task
+	// recorded before the column existed.
+	RepositoryID Optional[string] `json:"repository_id"`
+	// Branch is the branch the task works on. Together with RepositoryID it is
+	// how a validation run is attributed to the task: a run of that branch
+	// created at or after CreatedAt is this task's. It is set when the task is
+	// created and never moves, and it is unknown on the same terms as
+	// RepositoryID.
+	Branch Optional[string] `json:"branch"`
 	// CreatedAt is when the task was recorded.
 	CreatedAt time.Time `json:"created_at"`
 }
 
-// CreateTask records a new task and its opening state, in one transaction. A
-// task always has a resolvable current state, so there is no window in which
-// TaskState reports ErrNotFound for a task that exists.
-func (s *Store) CreateTask(ctx context.Context, t Task, state, source string) (Task, error) {
+// OpeningEventKind is the kind of the event CreateTask appends as a task's
+// first entry. The store records the word and decides nothing about it: what a
+// kind means is internal/taskstate's table, which has a row for this one.
+const OpeningEventKind = "queued"
+
+const taskColumns = `SELECT id, shape, project, mode, worktree_path, session_ref, run_id, pull_request,
+	repository_id, branch, created_at`
+
+func scanTask(sc scanner) (Task, error) {
+	var t Task
+	var shape, created string
+	if err := sc.Scan(&t.ID, &shape, &t.Project, &t.Mode, &t.WorktreePath, &t.SessionRef, &t.RunID,
+		&t.PullRequest, &t.RepositoryID, &t.Branch, &created); err != nil {
+		return Task{}, err
+	}
+	t.Shape = TaskShape(shape)
+	var err error
+	if t.CreatedAt, err = decodeTime(created); err != nil {
+		return Task{}, err
+	}
+	return t, nil
+}
+
+// CreateTask records a new task and its opening event, in one transaction.
+//
+// It records no state: what a task's state is gets resolved from the records
+// that own the facts, by internal/taskstate, on every read (P8, P14). The
+// opening event of kind OpeningEventKind is history, and is what lets a task
+// that nothing else has touched resolve from the event log rather than from
+// nothing. A task naming a branch must name its repository too, and the
+// reverse, because attribution needs both.
+func (s *Store) CreateTask(ctx context.Context, t Task) (Task, error) {
 	if strings.TrimSpace(t.ID) == "" {
 		return Task{}, fmt.Errorf("store: task has no identifier")
 	}
@@ -60,26 +98,23 @@ func (s *Store) CreateTask(ctx context.Context, t Task, state, source string) (T
 	if strings.TrimSpace(t.WorktreePath) == "" {
 		return Task{}, fmt.Errorf("store: task %s has no isolated copy path", t.ID)
 	}
-	if strings.TrimSpace(state) == "" {
-		return Task{}, fmt.Errorf("store: task %s has no opening state", t.ID)
-	}
-	if strings.TrimSpace(source) == "" {
-		return Task{}, fmt.Errorf("store: task %s does not say where its opening state came from", t.ID)
+	if t.RepositoryID.IsKnown() != t.Branch.IsKnown() {
+		return Task{}, fmt.Errorf("store: task %s names a repository or a branch without the other", t.ID)
 	}
 
 	now := nowUTC()
 	err := s.inTx(ctx, func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO task (id, shape, project, mode, worktree_path, session_ref, run_id, pull_request, created_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			INSERT INTO task (id, shape, project, mode, worktree_path, session_ref, run_id, pull_request,
+				repository_id, branch, created_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			t.ID, string(t.Shape), t.Project, t.Mode, t.WorktreePath,
-			t.SessionRef, t.RunID, t.PullRequest, encodeTime(now)); err != nil {
+			t.SessionRef, t.RunID, t.PullRequest, t.RepositoryID, t.Branch, encodeTime(now)); err != nil {
 			return err
 		}
-		_, err := tx.ExecContext(ctx, `
-			INSERT INTO task_state (task_id, state, source, detail, revision, resolved_at)
-			VALUES (?, ?, ?, ?, 1, ?)`,
-			t.ID, state, source, Unknown[string](), encodeTime(now))
+		_, err := tx.ExecContext(ctx,
+			`INSERT INTO task_event (task_id, sequence, kind, detail, at) VALUES (?, 1, ?, ?, ?)`,
+			t.ID, OpeningEventKind, "recorded", encodeTime(now))
 		return err
 	})
 	if err != nil {
@@ -93,33 +128,22 @@ func (s *Store) Task(ctx context.Context, id string) (Task, error) {
 	if err := s.live(); err != nil {
 		return Task{}, err
 	}
-	var t Task
-	var shape, created string
-	err := s.read.QueryRowContext(ctx, `
-		SELECT id, shape, project, mode, worktree_path, session_ref, run_id, pull_request, created_at
-		FROM task WHERE id = ?`, id).
-		Scan(&t.ID, &shape, &t.Project, &t.Mode, &t.WorktreePath, &t.SessionRef, &t.RunID, &t.PullRequest, &created)
+	t, err := scanTask(s.read.QueryRowContext(ctx, taskColumns+` FROM task WHERE id = ?`, id))
 	if err != nil {
 		return Task{}, fmt.Errorf("store: reading task %s: %w", id, errNoRows(err))
-	}
-	t.Shape = TaskShape(shape)
-	if t.CreatedAt, err = decodeTime(created); err != nil {
-		return Task{}, fmt.Errorf("store: reading task %s: %w", id, err)
 	}
 	return t, nil
 }
 
 // Tasks returns every task, newest first. PRD section 9's fleet view lists
-// them with their resolved current state, which is TaskState's to answer for
-// each one: this returns the records and says nothing about where any of them
+// them with their resolved current state, which is internal/taskstate's to
+// answer for each one: this returns the records and says nothing about where any of them
 // stands, per P8.
 func (s *Store) Tasks(ctx context.Context) ([]Task, error) {
 	if err := s.live(); err != nil {
 		return nil, err
 	}
-	rows, err := s.read.QueryContext(ctx, `
-		SELECT id, shape, project, mode, worktree_path, session_ref, run_id, pull_request, created_at
-		FROM task ORDER BY created_at DESC, id DESC`)
+	rows, err := s.read.QueryContext(ctx, taskColumns+` FROM task ORDER BY created_at DESC, id DESC`)
 	if err != nil {
 		return nil, fmt.Errorf("store: listing tasks: %w", err)
 	}
@@ -127,14 +151,8 @@ func (s *Store) Tasks(ctx context.Context) ([]Task, error) {
 
 	var out []Task
 	for rows.Next() {
-		var t Task
-		var shape, created string
-		if err := rows.Scan(&t.ID, &shape, &t.Project, &t.Mode, &t.WorktreePath,
-			&t.SessionRef, &t.RunID, &t.PullRequest, &created); err != nil {
-			return nil, fmt.Errorf("store: listing tasks: %w", err)
-		}
-		t.Shape = TaskShape(shape)
-		if t.CreatedAt, err = decodeTime(created); err != nil {
+		t, err := scanTask(rows)
+		if err != nil {
 			return nil, fmt.Errorf("store: listing tasks: %w", err)
 		}
 		out = append(out, t)

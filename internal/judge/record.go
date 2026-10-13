@@ -34,11 +34,14 @@ type Record struct {
 	Finding string
 }
 
-// Recorder keeps answers. It returns nothing, so recording is best-effort by
-// the shape of the seam: an implementation that cannot keep a row drops it,
-// and the record understates rather than holding a run up.
+// Recorder keeps answers. It returns why it could not keep one, so a caller
+// can say the record lost a row rather than leaving that in a log: the review
+// stage names every answer it could not record in a note. Recording is still
+// best-effort - a row the recorder could not keep is not retried, and nothing
+// is held up for it - and the record then understates, which that note is
+// what makes visible.
 type Recorder interface {
-	RecordAnswer(Record)
+	RecordAnswer(Record) error
 }
 
 // RecordOf is the record of r as asked for run at stage, with finding the
@@ -55,11 +58,12 @@ func RecordOf(run, stage string, r Result, finding string) Record {
 	return rec
 }
 
-// Record hands rec to the client's recorder, and drops it when the client was
-// built without one. A nil client drops it too.
-func (c *Client) Record(rec Record) {
+// Record hands rec to the client's recorder and returns why it could not keep
+// it. A client built without a recorder, and a nil client, keep nothing and
+// report nothing lost, because nothing was asked to keep it.
+func (c *Client) Record(rec Record) error {
 	if c == nil || c.recorder == nil {
-		return
+		return nil
 	}
-	c.recorder.RecordAnswer(rec)
+	return c.recorder.RecordAnswer(rec)
 }

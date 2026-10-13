@@ -105,6 +105,19 @@ func (s Stage) spec() (stageSpec, bool) {
 	return stageSpec{}, false
 }
 
+// At returns the field of s that holds stage's implementation, and nil for a
+// value that names no stage. It reads the stage table, so a caller that walks
+// Order with it reaches all nine fields without naming any, and a caller
+// wrapping every stage's body - internal/service records each execution's
+// timing that way - cannot miss one.
+func (s *Stages) At(stage Stage) *Implementation {
+	row, ok := stage.spec()
+	if !ok {
+		return nil
+	}
+	return row.implementation(s)
+}
+
 // Order returns the nine stages in the order a run takes them. The result is a
 // copy, so a caller cannot reorder the pipeline by writing to it.
 func Order() []Stage {

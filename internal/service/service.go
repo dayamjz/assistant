@@ -583,8 +583,8 @@ func (s *Service) topologyFor(built *driver, resolved runResolution) (*topology,
 		vcs.WithRedactor(redactor),
 	)
 	pipe, err := pipeline.New(pipeline.Options{
-		Stages:                      s.newStages(deps),
-		Fixer:                       s.newFixer(fixDeps),
+		Stages:                      s.observeStages(s.newStages(deps)),
+		Fixer:                       s.observeFixer(s.newFixer(fixDeps), fixDeps.Copy),
 		Rounds:                      resolved.cfg.FixRounds,
 		Budget:                      resolved.cfg.RunBudget,
 		Adapter:                     built.agent.Capabilities,

@@ -226,9 +226,17 @@ func (s *Service) respond(ctx context.Context, req machine.RespondRequest) (mach
 	if _, err := built.runs.Release(ctx, record.ID); err != nil {
 		return machine.Run{}, err
 	}
-	return s.advance(ctx, record.ID, func(ctx context.Context) (graph.Result, error) {
+	// The held findings' paths are read before the answer moves the run, and
+	// recorded as what followed the decision-model answers about them only
+	// once the answer is accepted; observe.go says what that record is.
+	stage, paths, mark := s.heldPaths(ctx, record.ID)
+	answered, err := s.advance(ctx, record.ID, func(ctx context.Context) (graph.Result, error) {
 		return topo.executor.AnswerWith(ctx, record.ID, req.Answer, detail)
 	})
+	if err == nil {
+		s.recordAnswered(record.ID, stage, req.Answer, paths, mark)
+	}
+	return answered, err
 }
 
 // fixRequestFor is the detail an answer carries to the graph: the encoded fix
@@ -1175,6 +1183,9 @@ func (s *Service) report(ctx context.Context, runID string, result *graph.Result
 		Advancing: result == nil && s.isAdvancing(runID),
 	}
 	answer := machine.Run{Record: record}
+	// The proposal is read off the store as it stands now and never comes
+	// from graph state; decision.go says why.
+	answer.Proposals = s.proposals(ctx, record)
 	if result == nil {
 		latest, err := s.checkpoints.Latest(ctx, runID)
 		if err != nil {
@@ -1217,6 +1228,22 @@ func (s *Service) report(ctx context.Context, runID string, result *graph.Result
 	// with the outcome beside it.
 	answer = answer.Decide(standing)
 	answer.Stages = stageViews(result.State)
+	// When each stage executed is the store's history rather than the
+	// checkpoint's. It describes the run and decides nothing about it, so a
+	// history that cannot be read leaves the stages without times and the
+	// service log saying why, rather than failing an answer whose outcome,
+	// position, and decision were all read. Nothing on the answer says the
+	// times are missing, which is the residual gap: a stage with no
+	// executions reads the same as one whose executions were not read.
+	executions, err := s.store.StageExecutions(ctx, runID)
+	if err != nil {
+		s.log.Printf("reporting run %s without stage times: %v", runID, err)
+		executions = nil
+	}
+	times := stageTimes(executions)
+	for i := range answer.Stages {
+		answer.Stages[i].Executions = times[answer.Stages[i].Stage]
+	}
 	// The record decides before the checkpoint does, which is machine.OutcomeOf's
 	// rule applied to the decision as well as to the outcome: a run ended from
 	// outside its own execution has a terminal record and a checkpoint that

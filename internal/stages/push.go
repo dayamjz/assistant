@@ -80,6 +80,12 @@ import (
 // review has now read every commit in it. A head that is the reviewed commit
 // costs no second review.
 //
+// The decision-model checks come with reviewRead and only ever add, on the
+// terms decision.go states: a check that cannot run, on a failed call or an
+// unreadable answer, leaves a note that holds nothing, so a clean agent
+// review still lets the push proceed, and only a flag in the enforce mode,
+// which is an ask, can hold it.
+//
 // What this does not establish:
 //   - A person approving the review stage's hold approved the commit that
 //     stage read, not the later commits. Those are reviewed here like any
