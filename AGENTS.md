@@ -565,9 +565,9 @@ Each has cost this repository more than one round of review.
   nothing about review quality, and every row carries whether it was reached
   through the binary or
   through the package that owns the mechanism, because a run there still
-  reaches no review, no push, and no code host: `internal/service` builds every
+  reaches no code host, and review and push only in the delivery walk: `internal/service` builds every
   run an isolated copy and resolves its repository configuration now, so what
-  keeps the reviewing agent out is the walks themselves - every one asks to
+  keeps the reviewing agent out is the walks themselves - every one but the delivery walk asks to
   skip the review stage, whose body would launch the agent the harness
   scripts to answer nothing - while the pull request body fails because the
   run's record names no repository on the code host, so every walk skips that

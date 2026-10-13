@@ -35,8 +35,9 @@ type invocationRole struct {
 // TestTheReviewerNeverCertifiesItsOwnPrescription drives PRD principle P4 at
 // package reach.
 //
-// The binary cannot reach it. No stage body launches an agent in this build,
-// so a run makes no invocation to assert over, and a harness that drove a run
+// The binary cannot reach it. Only the delivery walk launches an agent, as the
+// reviewer, and it does not assert the session split, so no run makes an
+// invocation this test could assert over, and a harness that drove a run
 // and found no session would be reporting that nothing happened.
 //
 // Section 13 writes the test as a structural assertion over invocation
