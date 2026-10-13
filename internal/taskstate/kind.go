@@ -86,10 +86,14 @@ const (
 	// stands inside the gate repository, or the environment the worker would
 	// launch with points git at another repository.
 	RefusedNotIsolated IsolationRefusal = "not-isolated"
-	// RefusedCopyMissing is the resolved path does not exist. No path in
-	// this build produces it: a dispatch cuts the copy when its path is
-	// absent and asserts the path that is there, so a missing copy is cut
-	// rather than refused.
+	// RefusedCopyMissing is the resolved path does not exist. A dispatch
+	// never produces it, because it cuts the copy when its path is absent
+	// and asserts the path that is there; a relaunch does, because PRD
+	// section 11 relaunches in that same copy and a copy that no longer
+	// stands is refused rather than replaced by a fresh clone, and so does
+	// internal/tasks' Promote, for a task whose copy is gone when the
+	// promotion reaches it, because a promotion cuts nothing and asserts
+	// the copy that already stands.
 	RefusedCopyMissing IsolationRefusal = "copy-missing"
 	// RefusedWrongShape is the resolved path is a repository of its own and
 	// distinct from the primary, and is not the shape the task's shape gives
@@ -134,12 +138,18 @@ func decodeIsolationRefusal(detail string) error {
 // Unknown from SourceNone, so the program that appends it appends
 // "dispatched" after it, in the same decision. "isolation-refused" claims
 // Failed and carries one of IsolationRefusals as its detail, checked by the
-// row's decoder before it is appended.
+// row's decoder before it is appended. "promoted" is a note too, appended by
+// store.TransitionTaskShape in the transaction that flips a task's shape,
+// and nothing follows it: the worker it tells is already running, and what
+// it is doing is the process tier's to answer, so a promoted task whose
+// newest event this is resolves Unknown at the event tier, as it does after
+// any note, until the worker's next entry.
 var kinds = []Row{
 	{Kind: store.OpeningEventKind, Role: RoleState, State: Queued, Writer: WriterProgram},
 	{Kind: store.DispatchedEventKind, Role: RoleState, State: Dispatched, Writer: WriterProgram},
 	{Kind: "isolation-refused", Role: RoleState, State: Failed, Writer: WriterProgram, Detail: decodeIsolationRefusal},
 	{Kind: "relaunched", Role: RoleNote, Writer: WriterProgram},
+	{Kind: store.PromotedEventKind, Role: RoleNote, Writer: WriterProgram},
 	{Kind: "started", Role: RoleState, State: Running, Writer: WriterWorker},
 	{Kind: "working", Role: RoleState, State: Running, Writer: WriterWorker},
 	{Kind: "waiting-external", Role: RoleState, State: Paused, Writer: WriterWorker},

@@ -332,6 +332,11 @@ type Cleaner struct {
 	// by this package's tests, which use it to change the copy inside the
 	// window and to stand in for a crash there.
 	betweenProofAndRemoval func()
+	// betweenDecisionAndClaim runs after a task copy's proof is decided and
+	// before the record claims it. It is nil in production and set only by
+	// this package's tests, which use it to hold a cleanup at the point
+	// where a promotion of the same task is held, so the two claims race.
+	betweenDecisionAndClaim func()
 }
 
 // NewCleaner builds a Cleaner, refusing with ErrIncomplete when any
@@ -459,6 +464,9 @@ func (c *Cleaner) CleanUp(ctx context.Context, req TaskCopy) (Cleanup, error) {
 	if !inventoryEqual(inv, again) {
 		return refuse(ReasonCopyChanged, "the copy's references, HEAD, tree or stash changed while the proof was being read",
 			inventoryCommits(again), nil)
+	}
+	if c.betweenDecisionAndClaim != nil {
+		c.betweenDecisionAndClaim()
 	}
 	record, err = c.store.RecordTaskCleanup(ctx, store.TaskCleanup{
 		TaskID: task.ID, Proof: removal.proof, Examined: removal.examined,

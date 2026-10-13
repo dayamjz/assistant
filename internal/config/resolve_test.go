@@ -71,6 +71,9 @@ func TestResolveWithNoConfigurationYieldsDefaults(t *testing.T) {
 	if c.StallInspectionCount != 3 {
 		t.Errorf("StallInspectionCount = %d, want 3", c.StallInspectionCount)
 	}
+	if c.RelaunchAttempts != 2 {
+		t.Errorf("RelaunchAttempts = %d, want 2", c.RelaunchAttempts)
+	}
 	if c.DecisionModel != DecisionEvaluate || !c.DecisionModel.RunsChecks() {
 		t.Errorf("DecisionModel = %q, want evaluate, which runs the checks", c.DecisionModel)
 	}
@@ -395,7 +398,8 @@ func TestParseRefusesGlobalOnlyKeysInARepositoryFile(t *testing.T) {
 // and they resolve to those values.
 func TestGlobalLayerSetsGlobalOnlyKeys(t *testing.T) {
 	global := mustParse(t, OriginGlobal, `{"checks_timeout": "30m", "session_reuse": false, "supervision_beacon_interval": "30s",
-		"escalation_window": "1m", "recheck_window": "168h", "stall_inspection_count": 1}`)
+		"escalation_window": "1m", "recheck_window": "168h", "stall_inspection_count": 1,
+		"relaunch_attempts": 0}`)
 	res := resolve(t, global, Absent(OriginPushed))
 	if res.Config.EscalationWindow != time.Minute || res.Config.RecheckWindow != 168*time.Hour || res.Config.StallInspectionCount != 1 {
 		t.Errorf("the supervision rows resolved to %v, %v and %d, want the global values at their floors and ceiling",
@@ -403,6 +407,9 @@ func TestGlobalLayerSetsGlobalOnlyKeys(t *testing.T) {
 	}
 	if res.Config.ChecksTimeout != 30*time.Minute {
 		t.Errorf("ChecksTimeout = %v, want the global value", res.Config.ChecksTimeout)
+	}
+	if res.Config.RelaunchAttempts != 0 {
+		t.Errorf("RelaunchAttempts = %d, want the global zero, which is a value an operator may choose", res.Config.RelaunchAttempts)
 	}
 	if res.Config.SupervisionBeaconInterval != 30*time.Second {
 		t.Errorf("SupervisionBeaconInterval = %v, want the global value", res.Config.SupervisionBeaconInterval)
@@ -415,12 +422,13 @@ func TestGlobalLayerSetsGlobalOnlyKeys(t *testing.T) {
 	}
 }
 
-// The new class refuses exactly its seven keys and no eighth: every other key
-// still parses in a repository file, from either repository origin.
+// The global-only class refuses exactly its keys and no other: every other key still
+// parses in a repository file, from either repository origin.
 func TestRepositoryFileStillAcceptsEveryOtherKey(t *testing.T) {
 	globalOnly := map[Key]bool{
 		KeyChecksTimeout: true, KeySessionReuse: true, KeyDecisionModel: true, KeySupervisionBeaconInterval: true,
 		KeyEscalationWindow: true, KeyRecheckWindow: true, KeyStallInspectionCount: true,
+		KeyRelaunchAttempts: true,
 	}
 	docs := map[Key]string{
 		KeyAgent:                       `{"agent": "claude"}`,
@@ -449,6 +457,7 @@ func TestRepositoryFileStillAcceptsEveryOtherKey(t *testing.T) {
 		KeyEscalationWindow:            `{"escalation_window": "10m"}`,
 		KeyRecheckWindow:               `{"recheck_window": "1h"}`,
 		KeyStallInspectionCount:        `{"stall_inspection_count": 2}`,
+		KeyRelaunchAttempts:            `{"relaunch_attempts": 1}`,
 	}
 	// Every schema key is covered, so a key added without a decision about its
 	// class fails here rather than going untested.
@@ -485,7 +494,7 @@ func TestTrustGlobalIsAssignedToExactlyTheGlobalOnlyKeys(t *testing.T) {
 			global = append(global, k)
 		}
 	}
-	want := "checks_timeout,session_reuse,decision_model,supervision_beacon_interval,escalation_window,recheck_window,stall_inspection_count"
+	want := "checks_timeout,session_reuse,decision_model,supervision_beacon_interval,escalation_window,recheck_window,stall_inspection_count,relaunch_attempts"
 	if got := strings.Join(keyStrings(global), ","); got != want {
 		t.Errorf("TrustGlobal keys = %q, want %s", got, want)
 	}

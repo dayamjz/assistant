@@ -66,6 +66,14 @@ import (
 // is what keeps there from being two. That is the residual gap, and it is
 // the same one internal/runs names for its branch gate.
 //
+// A dispatch is of a task that was never launched. A task whose latest
+// attempt names a terminal session is passed over and refused with
+// errTaskLaunched, because what to do about a launched worker whose service
+// restarted is PRD section 11's question and not this file's: reconcile.go
+// reads the terminal, relaunches it in place when it is gone, and leaves it
+// alone when the reading is ambiguous, which a second dispatch here would
+// not.
+//
 // A retry after a crash is a new attempt of the same task, and it finds
 // whatever the crashed one left at the path. A path already standing there is
 // observed and asserted exactly as a fresh clone is, and is never removed or
@@ -119,6 +127,15 @@ import (
 // this package asks for a dispatch yet, and a type nothing consumes answers
 // to nobody.
 var errTaskNotDispatched = errors.New("service: the task does not resolve dispatched, so there is nothing to dispatch")
+
+// errTaskLaunched reports a dispatch asked of a task whose latest attempt
+// already names a terminal session: it was launched, and whether that
+// terminal is gone is reconciliation's question, answered by reconcile.go's
+// table from a probe, never by dispatching again. A second dispatch would
+// start a second worker in the copy beside one that may still be there,
+// which is PRD section 11's two supervisors for one task. Nothing is
+// recorded.
+var errTaskLaunched = errors.New("service: the task's latest attempt already runs in a terminal session, so a restart is a relaunch question and not a dispatch")
 
 // errTaskRecord reports a task record a dispatch cannot cut a copy from as
 // recorded: no repository, a reserved copy path that is not home.TaskCopy, or
@@ -194,6 +211,19 @@ func (s *Service) dispatchDue(ctx context.Context) {
 		if _, held := s.isolationOf(r.Record.ID); held {
 			continue
 		}
+		// The slot is taken for the service's lifetime, so a task that is a
+		// relaunch question is passed over before the slot rather than
+		// refused behind it, where it would keep a relaunch out too.
+		// dispatchClaimed makes the same refusal for a caller below this.
+		attempts, err := s.store.TaskAttempts(ctx, r.Record.ID)
+		if err != nil {
+			s.log.Printf("dispatching: the attempts of task %s could not be read: %v", r.Record.ID, err)
+			continue
+		}
+		if _, launched := latestSession(attempts); launched {
+			s.log.Printf("task %s was not dispatched here: %v", r.Record.ID, errTaskLaunched)
+			continue
+		}
 		d, err := s.dispatchTask(ctx, r.Record.ID)
 		switch {
 		case err == nil:
@@ -232,6 +262,11 @@ type dispatched struct {
 	want         tasks.Expectation
 	instructions string
 	anchor       int64
+	// note is text the launch appends to the instructions after the file's
+	// own, and empty for a first launch. A relaunch fills it with PRD
+	// section 11's note about what already happened; relaunch.go owns the
+	// text.
+	note string
 }
 
 // dispatchTask dispatches one task, on the terms this file's opening comment
@@ -304,37 +339,12 @@ func (s *Service) dispatchClaimed(ctx context.Context, id string) (dispatched, e
 			resolved.State.State, resolved.State.Source)
 	}
 	record := resolved.Record
-	repositoryID, ok := record.RepositoryID.Get()
-	if !ok {
-		return dispatched{}, fmt.Errorf("%w: task %s names no repository to cut a copy of", errTaskRecord, id)
-	}
-	repository, err := s.store.Repository(ctx, repositoryID)
-	if err != nil {
-		return dispatched{}, fmt.Errorf("service: reading the repository task %s works in: %w", id, err)
-	}
-	copyPath, err := s.home.TaskCopy(id)
+	e, err := s.expectationOf(ctx, record)
 	if err != nil {
 		return dispatched{}, err
 	}
-	if filepath.Clean(record.WorktreePath) != copyPath {
-		return dispatched{}, fmt.Errorf("%w: task %s reserved its copy at %s and this home puts it at %s",
-			errTaskRecord, id, record.WorktreePath, copyPath)
-	}
-	instructions, err := s.home.TaskInstructions(id)
-	if err != nil {
-		return dispatched{}, err
-	}
-	if _, err := os.Stat(instructions); err != nil {
-		return dispatched{}, fmt.Errorf("%w: task %s has no instructions file at %s: %w", errTaskRecord, id, instructions, err)
-	}
-	gatePath, err := s.gatePathOf(ctx, repository)
-	if err != nil {
-		return dispatched{}, err
-	}
-	want, secondCheck, err := tasks.Expect(s.home, id, record.Shape, gatePath, repository.WorkingPath, record.Branch.Or(""))
-	if err != nil {
-		return dispatched{}, fmt.Errorf("%w: task %s: %w", errTaskRecord, id, err)
-	}
+	repository, copyPath, instructions, gatePath, want, secondCheck :=
+		e.repository, e.copyPath, e.instructions, e.gatePath, e.want, e.secondCheck
 
 	// The claim. The anchor is the highest attempt read now, through the
 	// attempts rather than the snapshot's copy of them, so what is anchored
@@ -346,6 +356,9 @@ func (s *Service) dispatchClaimed(ctx context.Context, id string) (dispatched, e
 	var latest int64
 	for _, a := range attempts {
 		latest = max(latest, a.Sequence)
+	}
+	if _, launched := latestSession(attempts); launched {
+		return dispatched{}, fmt.Errorf("%w: task %s attempt %d", errTaskLaunched, id, latest)
 	}
 	if s.betweenAttemptReadAndClaim != nil {
 		s.betweenAttemptReadAndClaim()
@@ -406,6 +419,62 @@ func (s *Service) dispatchClaimed(ctx context.Context, id string) (dispatched, e
 		id: id, proof: proof, attempt: attempt.Sequence, want: want, instructions: instructions,
 		anchor: resolved.State.Basis.EventSequence,
 	}, nil
+}
+
+// expectation is what a task's copy is asserted against and launched with,
+// derived from the task's record: the repository it works in, the copy path
+// the record reserved, its instructions file, the gate repository its one
+// remote must resolve to, and tasks.Expect's expectation and second check.
+// Dispatch and relaunch derive it through expectationOf, so the two cannot
+// read the record differently.
+type expectation struct {
+	repository   store.Repository
+	copyPath     string
+	instructions string
+	gatePath     string
+	want         tasks.Expectation
+	secondCheck  string
+}
+
+// expectationOf derives the expectation from a task's record, refusing with
+// errTaskRecord a record that names no repository, reserved its copy
+// somewhere other than home.TaskCopy, has no instructions file, or that
+// tasks.Expect refuses. It reads and writes nothing of the task's.
+func (s *Service) expectationOf(ctx context.Context, record store.Task) (expectation, error) {
+	id := record.ID
+	repositoryID, ok := record.RepositoryID.Get()
+	if !ok {
+		return expectation{}, fmt.Errorf("%w: task %s names no repository to cut a copy of", errTaskRecord, id)
+	}
+	repository, err := s.store.Repository(ctx, repositoryID)
+	if err != nil {
+		return expectation{}, fmt.Errorf("service: reading the repository task %s works in: %w", id, err)
+	}
+	copyPath, err := s.home.TaskCopy(id)
+	if err != nil {
+		return expectation{}, err
+	}
+	if filepath.Clean(record.WorktreePath) != copyPath {
+		return expectation{}, fmt.Errorf("%w: task %s reserved its copy at %s and this home puts it at %s",
+			errTaskRecord, id, record.WorktreePath, copyPath)
+	}
+	instructions, err := s.home.TaskInstructions(id)
+	if err != nil {
+		return expectation{}, err
+	}
+	if _, err := os.Stat(instructions); err != nil {
+		return expectation{}, fmt.Errorf("%w: task %s has no instructions file at %s: %w", errTaskRecord, id, instructions, err)
+	}
+	gatePath, err := s.gatePathOf(ctx, repository)
+	if err != nil {
+		return expectation{}, err
+	}
+	want, secondCheck, err := tasks.Expect(s.home, id, record.Shape, gatePath, repository.WorkingPath, record.Branch.Or(""))
+	if err != nil {
+		return expectation{}, fmt.Errorf("%w: task %s: %w", errTaskRecord, id, err)
+	}
+	return expectation{repository: repository, copyPath: copyPath, instructions: instructions, gatePath: gatePath,
+		want: want, secondCheck: secondCheck}, nil
 }
 
 // gatePathOf is the gate repository of a repository, which a task's copy

@@ -358,6 +358,32 @@
 // written, a crash leaves a process no record names, which internal/session
 // states and the same sweep closes.
 //
+// # A restart reconciles the fleet, and relaunches a dead terminal in place
+//
+// PRD section 11's fleet reconciliation runs inside recover, after the runs
+// are reconciled and before anything is served: the queued wakes are drained
+// as input, every task of this home is read with its terminal probed under a
+// bound, and a terminal gone with the work not landed is relaunched in the
+// copy it stood in. reconcile.go owns the table, which is keyed on the
+// resolved state, the source that decided it and the probed liveness, and
+// the bound, which is what keeps Open from hanging with the lock held behind
+// a provider that never answers; relaunch.go owns the one relaunch, which
+// decides from a read of its own, re-runs internal/tasks' floor, re-probes
+// before it claims the attempt through store.BeginTaskAttempt, appends the
+// relaunched note and the dispatched entry, asserts the standing copy
+// through the assertion dispatch and launch share, and acknowledges as the
+// program the wakes about the session it replaced; it writes no wake and no
+// marker itself, because both are supervise.go's loop's, under its fence,
+// and the loop's terminal-gone row is what tells a person about a terminal
+// this pass did not relaunch. The launch of a claimed
+// attempt goes to a goroutine under startWork, so "before serving anything"
+// is a property of the claim. A launched task is never dispatched again,
+// which dispatch.go states: without a probe, which is production until
+// #91's last PR, every terminal reads Unobserved and a restart leaves a
+// launched task alone, on PRD section 11's ambiguous-liveness row. Both
+// files state what the mechanism does not establish, a dead terminal not
+// being proof that nothing still writes in the copy among it.
+//
 // The one change the fleet work makes to the run path is beside it, in
 // copy.go. A run's copy used to be cut after a fetch of the submitted commit
 // from the working copy, on every run; a commit a task's worker pushes from

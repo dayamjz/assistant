@@ -161,7 +161,11 @@ Each has cost this repository more than one round of review.
   `StoreTaskReport` in the transaction that registers the holds derived from
   it, with the parsed report opaque and the hold keys the one fact the row
   holds about it. `RecordTaskCleanup` takes the shape it was decided for and
-  refuses `ErrTaskShapeMoved` in the claiming transaction.
+  refuses `ErrTaskShapeMoved` in the claiming transaction, and
+  `TransitionTaskShape`, promotion's one write, flips shape, repository and
+  branch with the `promoted` entry in one anchored transaction, one way
+  only, and refuses `ErrCleanupRecorded` by reading the claim the same way,
+  so the two writes have exactly one loser in either order.
   `ForgetHoldForTest` takes the test and is a counterfeit builder for the hold
   rule's refusal case, never a production path.
   A schema change is a new migration appended to `schema.go`, never an edit to
@@ -390,8 +394,9 @@ Each has cost this repository more than one round of review.
   which `doc.go` says. Read its `doc.go` for the residual gaps, and for why PRD
   section 8's "task state" row is read as a resolution rather than a row.
 - `internal/tasks` is PRD section 8's tasks module as far as this build takes
-  it: intake, queueing, and the P11 assertion, with dispatch and the copy in
-  `internal/service` and the launch in `internal/session`. `Expect` computes
+  it: intake, queueing, the P11 assertion, the P12 cleanup decision and
+  promotion, with dispatch and the copy in `internal/service` and the launch
+  in `internal/session`. `Expect` computes
   a task's `Expectation` and its second-check shell line from one call, and
   `AssertIsolated` compares a real `vcs.Observation` against it by file
   identity, never by string, with an exact remote set per shape and a typed
@@ -449,8 +454,22 @@ Each has cost this repository more than one round of review.
   until the probe is wired, so every task copy refuses today, and its
   `doc.go` lists that with the other gaps: the discarding worktree removal
   stays reachable, a stated liveness is believed, ignored files are
-  invisible, and a promotion between the record and the removal is #109's
-  to refuse.
+  invisible, and a promoted copy holding nothing main lacks passes the
+  content proof like a fresh delivery copy.
+  `Promote` is PRD section 5's promotion, a library entry on `Create`'s
+  terms (no verb, no method: #95 line E) and the one place this package
+  writes into a copy. The flip is first and is `store.TransitionTaskShape`
+  anchored to the resolution's event sequence, under the branch exclusion,
+  from the closed table `Promotable`; branch and repository come from the
+  request and are held to intake's branch rule and the floor, which refuses
+  `*BranchHeldError` rather than queueing a running task; the report is a
+  pointer to its row; the copy is then asserted (so a copy reaching the
+  primary is never written to), shaped with the gate remote and the branch
+  at HEAD, and asserted again, with a refusal recorded as
+  `isolation-refused` anchored to the `promoted` entry. Read `promote.go`'s
+  opening comment and `doc.go` before changing the order, and for the gaps:
+  the copy side is never repeated, the environment asserted is the
+  request's, and the `promoted` note resolves Unknown at the event tier.
 - `internal/session` is PRD section 8's terminal session provider, and the
   word means a terminal session, never the conversation session
   `internal/agents` keeps for a fixer: `Provider` is the five operations and
@@ -695,16 +714,38 @@ Each has cost this repository more than one round of review.
   the service's `session.Pipe` - built in `driverFor` on the resolved agent
   before `containRunner` takes its worker arm away - and records
   `Session.Reference()` on the attempt through `store.SetAttemptSession`.
-  The probe is not wired into the service's reader, so a launched task still
-  resolves Dispatched and nothing writes an event to say otherwise; an
+  Every task reader is built through `reader`, probing through
+  `Options.Terminals`, the one seam a terminal is observed through, which
+  is nil in production until the session hookup, so a launched task still
+  resolves Dispatched there and nothing writes an event to say otherwise; an
   adapter without `worker_sessions` dispatches and never launches, with the
-  `*agents.CapabilityError` logged and nothing recorded; a restart relaunches
-  as a new attempt and the earlier process is an orphan nothing here ends;
-  and `Close` ends only the sessions this service created. A path already
-  standing at the copy's path is asserted and never removed. The environment
-  half of P11 is only as strong as every launch path building its
-  environment through `agents.WorkerEnvironment`, which both assertions and
-  the worker's start do; no second strip list exists or should.
+  `*agents.CapabilityError` logged and nothing recorded; and `Close` ends
+  only the sessions this service created. A path already standing at the
+  copy's path is asserted and never removed. The environment half of P11 is
+  only as strong as every launch path building its environment through
+  `agents.WorkerEnvironment`, which every assertion and the worker's start
+  do; no second strip list exists or should. A launched task is never
+  dispatched again: what a restart does about it is `reconcile.go`'s, PRD
+  section 11's fleet reconciliation inside `recover`, after the runs and
+  before `releaseQueued`. The table `reconcileRow` is keyed on the resolved
+  state, its source and the probed liveness, and its test derives the
+  domain from `taskstate.States`, `Sources` and `Livenesses`; only Unknown
+  from the process tier and Failed relaunch, and only with a dead terminal.
+  The synchronous half is bounded, per probe and per read, and takes the
+  anchored attempt claim; the launch goes to a goroutine under `startWork`.
+  `relaunch.go`'s `relaunchTask` is the one relaunch: it decides from its
+  own read, re-runs `tasks.HoldsBranch`, re-probes before the claim, claims
+  through `store.BeginTaskAttempt`, appends `relaunched` then `dispatched`,
+  asserts the standing copy through the `assertCopy` dispatch and launch
+  share and never cuts one, and acknowledges as the program only the
+  terminal-gone wakes about the session it replaced, matched through the
+  loop's own marker composer. `relaunch_attempts` is a global-only row read
+  only there, a task-level bound and not a loop bound, and `key.go` says
+  why. Reconciliation writes no wake and no marker: the queue and the
+  markers are the loop's, under its fence, and the loop's terminal-gone row
+  is what tells the person about a terminal this pass did not relaunch.
+  `reconcile.go` states what a dead terminal does not prove about the copy,
+  since no sweep exists.
   It is also where PRD section 5's supervisor loop lives, in `supervise.go`,
   started by `Open` after recovery and before the caller serves. The loop
   runs as incarnations fenced by `store.BeginIncarnation`: every wake append

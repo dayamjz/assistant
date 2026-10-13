@@ -264,17 +264,30 @@ func TestTwoReleasesOfOneTaskDispatchOnce(t *testing.T) {
 func TestNewRefusesAMissingDependency(t *testing.T) {
 	f := newFixture(t)
 	whole := Deps{Home: f.home, Store: f.store, Reader: taskstate.NewReader(f.store, nil, nil),
-		Exclude: f.exclusion.hold, BranchInGate: f.queue.inGate}
+		Exclude: f.exclusion.hold, BranchInGate: f.queue.inGate, GatePath: f.queue.gatePath}
 	if _, err := New(whole); err != nil {
 		t.Fatalf("New with every dependency: %v", err)
 	}
-	for name, d := range map[string]Deps{
-		"home":      {Store: whole.Store, Reader: whole.Reader, Exclude: whole.Exclude, BranchInGate: whole.BranchInGate},
-		"store":     {Home: whole.Home, Reader: whole.Reader, Exclude: whole.Exclude, BranchInGate: whole.BranchInGate},
-		"reader":    {Home: whole.Home, Store: whole.Store, Exclude: whole.Exclude, BranchInGate: whole.BranchInGate},
-		"exclusion": {Home: whole.Home, Store: whole.Store, Reader: whole.Reader, BranchInGate: whole.BranchInGate},
-		"gate":      {Home: whole.Home, Store: whole.Store, Reader: whole.Reader, Exclude: whole.Exclude},
-	} {
+	without := func(drop string) Deps {
+		d := whole
+		switch drop {
+		case "home":
+			d.Home = nil
+		case "store":
+			d.Store = nil
+		case "reader":
+			d.Reader = nil
+		case "exclusion":
+			d.Exclude = nil
+		case "gate":
+			d.BranchInGate = nil
+		case "gate locator":
+			d.GatePath = nil
+		}
+		return d
+	}
+	for _, name := range []string{"home", "store", "reader", "exclusion", "gate", "gate locator"} {
+		d := without(name)
 		if _, err := New(d); !errors.Is(err, ErrIncomplete) {
 			t.Errorf("New without the %s = %v, want ErrIncomplete", name, err)
 		}

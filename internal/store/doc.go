@@ -178,15 +178,16 @@
 // caller was handed decodes into one, and the member a surface records is
 // decided in source at that surface. There is no member meaning a person,
 // because no surface here witnesses one and the queue is the coordinator's.
-// Neither member has a producer in this build. AcknowledgedByCoordinator's
-// producer is the two machine-interface rows that drain and acknowledge the
-// queue, and those are not added before the worker set #91 produces exists:
-// a method that exists and admits a task worker to the coordinator's queue
-// is worse than one that does not, so the rows wait on that set, and with
-// them the derivation internal/ipc will make from the surface the way
-// Request.HoldResolver does. AcknowledgedByProgram's producer is
-// reconciliation at start (#94), for rows a later wake superseded. This
-// records and does not gate: every member closes a row on the same terms.
+// AcknowledgedByCoordinator has no producer in this build: its producer is
+// the two machine-interface rows that drain and acknowledge the queue, and
+// those are not added before the worker set #91 produces exists, because a
+// method that exists and admits a task worker to the coordinator's queue is
+// worse than one that does not, so the rows wait on that set, and with them
+// the derivation internal/ipc will make from the surface the way
+// Request.HoldResolver does. AcknowledgedByProgram's one producer is
+// internal/service's relaunch, for the terminal-gone rows about the session
+// it replaced. This records and does not gate: every member closes a row on
+// the same terms.
 //
 // # A read-only open
 //

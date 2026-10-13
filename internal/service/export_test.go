@@ -16,6 +16,10 @@ func (s *Service) SessionOf(id string) (session.Provider, *session.Session, bool
 	return s.sessionOf(id)
 }
 
+// ReconcileProbeBound is the bound one read of the fleet at reconciliation
+// is held to, exposed so a test can hold Open to it.
+const ReconcileProbeBound = reconcileProbeBound
+
 // WorkerOf exposes the worker-set derivation to this package's external
 // tests, so a test can ask which task a process group's worker is from the
 // same credentials the handlers derive it from. It exists only in the

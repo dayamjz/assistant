@@ -227,6 +227,15 @@ func (a *Agent) Arguments() []string { return []string{controlFlag + a.control} 
 //
 // Each record is complete or absent; there is nothing partial to read, and a
 // record that cannot be decoded is fatal rather than skipped.
+//
+// A worker rewrites its record after every line it reads, by renaming a new
+// file over the old one, and a reader here holds the old one open while it
+// decodes it. On a platform where a file another process holds open cannot
+// be replaced, that rename fails and the worker exits with exitNoRecord
+// rather than go on unrecorded, so a test that polls a worker's record while
+// the worker is still reading its lines can end the worker it is waiting
+// on. Synchronize on the worker's output, through the provider's Capture
+// and a scripted Exchange, and read the record once afterwards.
 func (a *Agent) Calls() []Call {
 	a.tb.Helper()
 	calls, err := readCalls(a.control)

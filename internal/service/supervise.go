@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime/debug"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -431,7 +432,7 @@ func (s *Service) pass(c *incarnation) passReport {
 		return obs.Liveness
 	}
 	ctx, cancel := s.sup.bound(c.ctx)
-	observed, err := taskstate.NewReader(s.store, probe, s.isAdvancing).Observe(ctx)
+	observed, err := s.reader(probe).Observe(ctx)
 	cancel()
 	if err != nil {
 		report.Err = err
@@ -642,7 +643,7 @@ func decide(o observation, cfg config.Config, now time.Time, providerWideSurface
 			since = now
 		}
 		d.advance.UnobservedSince = store.Known(since)
-		marker := fmt.Sprintf("terminal-gone:%s:%s:%s", o.gone, o.ref, since.UTC().Format(time.RFC3339Nano))
+		marker := terminalGoneMarker(o.gone, o.ref, since)
 		if o.gone == goneProviderWide && *providerWideSurfaced {
 			return d
 		}
@@ -697,6 +698,32 @@ func decide(o observation, cfg config.Config, now time.Time, providerWideSurface
 		}
 	}
 	return d
+}
+
+// terminalGoneMarker composes a terminal-gone wake's marker: the case, the
+// session reference and the unobserved-since instant, which is what
+// internal/store's WakeRequest states the loop composes for that kind. It
+// is the one composer, and terminalGoneAbout beside it is the one reader of
+// the composition, for the relaunch that acknowledges the rows about a
+// session it replaced.
+func terminalGoneMarker(g gone, ref string, since time.Time) string {
+	return fmt.Sprintf("terminal-gone:%s:%s:%s", g, ref, since.UTC().Format(time.RFC3339Nano))
+}
+
+// terminalGoneAbout reports whether a terminal-gone marker this loop
+// composed names the session reference: the reference sits between the
+// case and the instant, and a marker composed any other way is not matched.
+func terminalGoneAbout(marker, ref string) bool {
+	rest, ok := strings.CutPrefix(marker, "terminal-gone:")
+	if !ok {
+		return false
+	}
+	for _, g := range []gone{goneDead, goneUnobservable, goneProviderWide} {
+		if strings.HasPrefix(rest, string(g)+":"+ref+":") {
+			return true
+		}
+	}
+	return false
 }
 
 // carry is the markers as they stand, as the advance a pass starts from.

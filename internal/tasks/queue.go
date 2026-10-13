@@ -22,6 +22,12 @@ type Exclude func(ctx context.Context, repository, branch string) (release func(
 // is what knows a repository's gate; this package never opens one.
 type BranchInGate func(ctx context.Context, repository store.Repository, branch string) (bool, error)
 
+// GatePath answers where the repository's gate repository stands, which a
+// delivery copy names as its one remote and must stand outside of.
+// internal/service is the producer, from the gate binding the repository's
+// working path is recorded under; this package never opens the gate.
+type GatePath func(ctx context.Context, repository store.Repository) (string, error)
+
 // Deps is what a Queue is built from. Every field is required.
 type Deps struct {
 	// Home says where a task's instructions and its copy go.
@@ -36,25 +42,36 @@ type Deps struct {
 	Exclude Exclude
 	// BranchInGate answers whether a branch is already in the gate.
 	BranchInGate BranchInGate
+	// GatePath answers where a repository's gate repository stands, which
+	// Promote points a promoted copy's remote at.
+	GatePath GatePath
 }
 
 // ErrIncomplete is returned by New when a dependency is missing.
 var ErrIncomplete = errors.New("tasks: a dependency is missing")
 
-// Queue is intake and release over one store. It is safe for concurrent use:
-// what serializes two intakes of one branch is Exclude, and what serializes
-// two releases of one task is the anchor on its history.
+// Queue is intake, release and promotion over one store. It is safe for
+// concurrent use: what serializes two intakes or two promotions of one
+// branch is Exclude, and what serializes two releases or two promotions of
+// one task is the anchor on its history.
 type Queue struct {
-	home   *home.Home
-	store  *store.Store
-	reader *taskstate.Reader
-	hold   Exclude
-	inGate BranchInGate
-	// betweenReadAndWrite runs after an intake or a release has read the
-	// records it decides from and before it writes. It is nil in production
-	// and set only by this package's tests, which use it to hold two callers
-	// at the point where their decisions are made and their writes are not.
+	home     *home.Home
+	store    *store.Store
+	reader   *taskstate.Reader
+	hold     Exclude
+	inGate   BranchInGate
+	gatePath GatePath
+	// betweenReadAndWrite runs after an intake, a release or a promotion
+	// has read the records it decides from and before it writes. It is nil
+	// in production and set only by this package's tests, which use it to
+	// hold two callers at the point where their decisions are made and
+	// their writes are not.
 	betweenReadAndWrite func()
+	// betweenFlipAndCopy runs after a promotion has flipped the task's
+	// shape and before it writes into the copy. It is nil in production and
+	// set only by this package's tests, which use it to stand in for a
+	// crash there.
+	betweenFlipAndCopy func()
 }
 
 // New builds a Queue, refusing with ErrIncomplete when any dependency is nil.
@@ -70,8 +87,10 @@ func New(d Deps) (*Queue, error) {
 		return nil, fmt.Errorf("%w: no branch exclusion", ErrIncomplete)
 	case d.BranchInGate == nil:
 		return nil, fmt.Errorf("%w: no gate reader", ErrIncomplete)
+	case d.GatePath == nil:
+		return nil, fmt.Errorf("%w: no gate locator", ErrIncomplete)
 	}
-	return &Queue{home: d.Home, store: d.Store, reader: d.Reader, hold: d.Exclude, inGate: d.BranchInGate}, nil
+	return &Queue{home: d.Home, store: d.Store, reader: d.Reader, hold: d.Exclude, inGate: d.BranchInGate, gatePath: d.GatePath}, nil
 }
 
 // Clears reports whether a blocker in this state no longer holds the tasks
@@ -87,12 +106,12 @@ func New(d Deps) (*Queue, error) {
 // branch shares it with nothing live, and work that continues on it is a
 // new task by the PRD's own rule.
 //
-// Failed is not terminal in the lifecycle: a relaunch (#94) moves a Failed
-// task back to Dispatched. Clearing on it therefore lets a successor and a
-// relaunched blocker share a branch, which is why the relaunch must re-run
-// the same floor Create applies and queue itself when a live task now holds
-// the branch. Nothing here enforces that on the relaunch; it is #94's
-// contract.
+// Failed is not terminal in the lifecycle: internal/service's relaunch
+// moves a Failed task back to Dispatched. Clearing on it therefore lets a
+// successor and a relaunched blocker share a branch, which is why the
+// relaunch re-runs the same floor Create applies, through HoldsBranch, and
+// refuses itself when a live task now holds the branch. That it does is
+// that package's contract and its test; nothing here enforces it.
 func Clears(s taskstate.State) bool {
 	switch s {
 	case taskstate.Failed, taskstate.Reported, taskstate.Landed, taskstate.Complete:
