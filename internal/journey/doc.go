@@ -25,10 +25,10 @@
 // # Reach is part of every claim
 //
 // internal/stages has bodies for all nine stages, and no run here carries the
-// pull request body through a launch; only the delivery walk carries the review
-// body through one. The review body launches the agent this harness resolves,
-// which the default journey scripts to answer nothing, so every walk but the
-// delivery walk asks to skip that stage rather than stopping at an
+// pull request body through a launch; only the three walks that reach the push
+// stage's decision carry the review body through one. The review body launches the agent this harness resolves,
+// which the default journey scripts to answer nothing, so every walk but those
+// three asks to skip that stage rather than stopping at an
 // ask recording a review that never happened. The pull request body opens a
 // provider for the repository the run's record names on the code host, and no
 // record here names one, so a run that reaches it fails rather than reaching

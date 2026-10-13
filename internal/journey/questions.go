@@ -71,9 +71,11 @@ func Settlements() []Settlement {
 				"other commit before a finding is reached.",
 			Exercised: "The delivery half is driven: a copy of this binary standing on PATH under the " +
 				"agent's name answers a scripted invocation, and a run resolves its agent off that PATH. " +
-				"The selection half has nothing to select. Only the delivery walk reaches an agent, " +
-				"as a reviewer scripted clean; every other walk skips the review stage, so no " +
-				"planted report reaches a run, and the " +
+				"The selection half is driven for scripted answers: the later-review walk's one run " +
+				"asks for a review, fix rounds and a review of later commits, and the stand-in tells " +
+				"them apart by prompt landmark alone. No planted report reaches a run, because every " +
+				"walk that takes the review stage walks the walkable subject with a scripted answer and " +
+				"every other walk skips the stage, so the " +
 				"planted responses are driven through internal/findings and the production adapter " +
 				"instead.",
 		},
@@ -102,9 +104,15 @@ func Settlements() []Settlement {
 				"CopyGatedWorkingCopy is called after an initialization through the binary has succeeded " +
 				"against the original working copy and before anything is asked of the copy, so the " +
 				"copy inherits a remote a real gate wrote.",
-			Exercised: "The copy's timing is driven through the binary. The advance's timing is driven at " +
-				"package reach around a safety.Guard this harness holds: the one run here that pushes " +
-				"does so on a remote nobody advanced, so no run meets an advance.",
+			Exercised: "Both are driven through the binary. In a run, the point between the observation " +
+				"and the decision is a hold: the rebase stage takes the observation and the push stage " +
+				"makes the decision, so the lease walk lands the advance at the first hold " +
+				"stages.Holding gives between those two stages, before answering it, and the run " +
+				"cannot move while it waits there. The same placement is also driven at package reach " +
+				"around a safety.Guard this harness holds, where the remedy is driven too. The walk " +
+				"lands the advance on a copy of the walkable scenario's remote rather than on this " +
+				"condition's scenario, whose trusted document parks a run at the test stage before " +
+				"any such hold.",
 		},
 		{
 			Question: "question-checks-timeout-observation",
