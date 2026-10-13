@@ -69,12 +69,16 @@ type TaskCleanup struct {
 	RemovedAt Optional[time.Time] `json:"removed_at"`
 }
 
-// RecordTaskCleanup writes a task's cleanup record and returns it as stored.
-// The record is written once: a task that already has one is refused with
-// ErrCleanupRecorded and the first record stands. A proof outside the closed
-// set is refused with ErrUnknownCleanupProof, and a task that does not exist
-// with ErrNotFound, wrapped. RecordedAt is assigned here; the caller supplies
-// the proof, what it examined, and whether the copy was removed.
+// RecordTaskCleanup writes a task's cleanup record, the proof half of it, and
+// returns it as stored. The record is written once: a task that already has
+// one is refused with ErrCleanupRecorded and the first record stands. A proof
+// outside the closed set is refused with ErrUnknownCleanupProof, a task that
+// does not exist with ErrNotFound, wrapped, and a record carrying a RemovedAt
+// with ErrCleanupRemovalFirst: the removal is MarkCleanupRemoved's, after the
+// proof is on disk, and this is the only shape the record is written in, so
+// no path records a removal without a proof already recorded ahead of it.
+// RecordedAt is assigned here; the caller supplies the proof and what it
+// examined.
 //
 // Nothing in this build calls it outside its tests. The writer is the cleanup
 // check (#108), and PRD section 8 fixes the record's shape independently of
@@ -86,6 +90,9 @@ func (s *Store) RecordTaskCleanup(ctx context.Context, c TaskCleanup) (TaskClean
 	if !c.Proof.Recognized() {
 		return TaskCleanup{}, fmt.Errorf("store: task %s: %w: %q", c.TaskID, ErrUnknownCleanupProof, c.Proof)
 	}
+	if c.RemovedAt.IsKnown() {
+		return TaskCleanup{}, fmt.Errorf("store: task %s: %w", c.TaskID, ErrCleanupRemovalFirst)
+	}
 	examined := c.Examined
 	if examined == nil {
 		examined = []string{}
@@ -95,10 +102,6 @@ func (s *Store) RecordTaskCleanup(ctx context.Context, c TaskCleanup) (TaskClean
 		return TaskCleanup{}, fmt.Errorf("store: task %s: encoding the examined commits: %w", c.TaskID, err)
 	}
 	now := nowUTC()
-	var removed Optional[string]
-	if at, ok := c.RemovedAt.Get(); ok {
-		removed = Known(encodeTime(at))
-	}
 	err = s.inTx(ctx, func(tx *sql.Tx) error {
 		if err := taskExists(ctx, tx, c.TaskID); err != nil {
 			return err
@@ -112,8 +115,8 @@ func (s *Store) RecordTaskCleanup(ctx context.Context, c TaskCleanup) (TaskClean
 		}
 		_, err := tx.ExecContext(ctx, `
 			INSERT INTO task_cleanup (task_id, proof, examined, recorded_at, removed_at)
-			VALUES (?, ?, ?, ?, ?)`,
-			c.TaskID, string(c.Proof), string(encoded), encodeTime(now), removed)
+			VALUES (?, ?, ?, ?, NULL)`,
+			c.TaskID, string(c.Proof), string(encoded), encodeTime(now))
 		return err
 	})
 	if err != nil {
@@ -128,10 +131,15 @@ func (s *Store) RecordTaskCleanup(ctx context.Context, c TaskCleanup) (TaskClean
 // proof behind it is the thing P12 forbids and the record would say the
 // proof came first; and with ErrCleanupRemoved when the record already holds
 // a removal, so the first mark stands. Those two and this write are one
-// transaction, and it is the only revision the record takes.
+// transaction, and it is the only revision the record takes, which is why a
+// zero at is refused before anything is read: the one revision may not record
+// a time nobody observed.
 func (s *Store) MarkCleanupRemoved(ctx context.Context, taskID string, at time.Time) error {
 	if strings.TrimSpace(taskID) == "" {
 		return fmt.Errorf("store: a cleanup removal names no task")
+	}
+	if at.IsZero() {
+		return fmt.Errorf("store: marking the cleanup of task %s removed: the removal has no time", taskID)
 	}
 	return s.inTx(ctx, func(tx *sql.Tx) error {
 		var removed Optional[string]

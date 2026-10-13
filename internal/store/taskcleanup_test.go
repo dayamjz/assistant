@@ -31,19 +31,31 @@ func TestACleanupRecordIsWrittenOnce(t *testing.T) {
 	}
 
 	removed := time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC)
+	if _, err := s.RecordTaskCleanup(ctx, TaskCleanup{
+		TaskID: task.ID, Proof: CleanupProofMergedPullRequest, RemovedAt: Known(removed),
+	}); !errors.Is(err, ErrCleanupRemovalFirst) {
+		t.Fatalf("a first write carrying a removal = %v, want ErrCleanupRemovalFirst", err)
+	}
+	if _, err := s.TaskCleanup(ctx, task.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatal("a refused write left a record behind")
+	}
 	written, err := s.RecordTaskCleanup(ctx, TaskCleanup{
-		TaskID: task.ID, Proof: CleanupProofMergedPullRequest, Examined: []string{"abc", "def"}, RemovedAt: Known(removed),
+		TaskID: task.ID, Proof: CleanupProofMergedPullRequest, Examined: []string{"abc", "def"},
 	})
 	if err != nil {
 		t.Fatalf("RecordTaskCleanup: %v", err)
 	}
 	if written.Proof != CleanupProofMergedPullRequest || !reflect.DeepEqual(written.Examined, []string{"abc", "def"}) ||
-		written.RecordedAt.IsZero() || !written.RemovedAt.Or(time.Time{}).Equal(removed) {
+		written.RecordedAt.IsZero() || written.RemovedAt.IsKnown() {
 		t.Fatalf("the record came back as %+v", written)
 	}
+	if err := s.MarkCleanupRemoved(ctx, task.ID, removed); err != nil {
+		t.Fatalf("MarkCleanupRemoved: %v", err)
+	}
+	written.RemovedAt = Known(removed)
 	read, err := s.TaskCleanup(ctx, task.ID)
 	if err != nil || !reflect.DeepEqual(read, written) {
-		t.Fatalf("TaskCleanup = %+v, %v; the write returned %+v", read, err, written)
+		t.Fatalf("TaskCleanup = %+v, %v; want the proof with its removal marked, %+v", read, err, written)
 	}
 
 	_, err = s.RecordTaskCleanup(ctx, TaskCleanup{TaskID: task.ID, Proof: CleanupProofRemoteBranch})
@@ -115,6 +127,12 @@ func TestACleanupRemovalIsMarkedOnceAfterTheProof(t *testing.T) {
 	}
 	if _, err := s.RecordTaskCleanup(ctx, TaskCleanup{TaskID: task.ID, Proof: CleanupProofRemoteBranch}); err != nil {
 		t.Fatalf("RecordTaskCleanup: %v", err)
+	}
+	if err := s.MarkCleanupRemoved(ctx, task.ID, time.Time{}); err == nil {
+		t.Fatal("a removal with no time was recorded")
+	}
+	if got, err := s.TaskCleanup(ctx, task.ID); err != nil || got.RemovedAt.IsKnown() {
+		t.Fatalf("the refused mark wrote a removal: %+v, %v", got, err)
 	}
 	if err := s.MarkCleanupRemoved(ctx, task.ID, removed); err != nil {
 		t.Fatalf("MarkCleanupRemoved: %v", err)

@@ -290,6 +290,13 @@ var ErrCleanupRecorded = errors.New("store: the task already has a cleanup recor
 // rather than a fact to overwrite.
 var ErrCleanupRemoved = errors.New("store: the cleanup record already records the copy's removal")
 
+// ErrCleanupRemovalFirst is returned by RecordTaskCleanup when the record it
+// is handed already says when the copy was removed. The record is two
+// writes in a fixed order, the proof and then the removal mark, so a first
+// write that carries a removal would be a record of a removal that preceded
+// its proof.
+var ErrCleanupRemovalFirst = errors.New("store: a cleanup record is written with its proof and marked removed afterwards")
+
 // ErrUnknownCleanupProof is what a read of a cleanup record returns when its
 // proof column holds a value outside the closed set CleanupProof defines, and
 // what RecordTaskCleanup returns when asked to record one. The set is closed,

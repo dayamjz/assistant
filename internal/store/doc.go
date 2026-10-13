@@ -18,8 +18,11 @@
 // authoritative: each has one owner and one row, rewritten in place. A round,
 // a task event, and a task attempt are history: appended, never revised, and
 // no answer to any present-tense question. A task's cleanup record is the one
-// PRD section 8 calls appended and written once: one row, never revised, and
-// what section 6's Complete is derived from once internal/taskstate reads it.
+// PRD section 8 calls appended and written once: one row, written with its
+// proof and taking exactly one revision afterwards, the mark of when the copy
+// was removed, in that order and never the reverse; TaskCleanup's doc says
+// why the two are separate writes. It is what section 6's Complete is derived
+// from once internal/taskstate reads it.
 //
 // A run's graph checkpoint history is the one record here that is appended,
 // never revised, and still answers one. What P8 forbids is inferring what is
