@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/dayamjz/assistant/internal/vcs"
 )
 
 // WorkerRunner is a Runner that can be started as a long-lived process driven
@@ -401,4 +403,23 @@ func (w *tailWriter) snapshot() (string, int64) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return string(w.buf), w.dropped
+}
+
+// WorkerEnvironment is the environment a worker is started with, built from
+// base, which a runner's is os.Environ() unless it was built with another,
+// with extra applied over it and the variables that would point git at
+// another repository removed afterwards through vcs.StripRedirecting. It is
+// the one builder of that environment: every WorkerRunner this package ships
+// starts its worker under exactly this, and a launcher asserting what a
+// worker would inherit asks this rather than deriving a second answer.
+//
+// What it does not know is which base a particular runner was built with.
+// A caller holding a Runner cannot read that base back, so a launcher
+// computing the environment to assert passes the base it believes the runner
+// has, and the assertion is of that base: for a runner built without
+// WithEnvironment the two are os.Environ() and agree, and for one built with
+// it the caller is responsible for passing the same slice. Nothing here
+// records the result, because a value in it may be a credential.
+func WorkerEnvironment(base []string, extra map[string]string) []string {
+	return vcs.StripRedirecting(environment(base, extra))
 }

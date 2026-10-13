@@ -154,8 +154,14 @@ func TestAPushSupersedingTheBlockersRunDoesNotReleaseTheSuccessor(t *testing.T) 
 	git(t, subject, "commit", "--quiet", "-m", "the second version")
 	second := git(t, subject, "rev-parse", "HEAD")
 
+	// A push lands its objects and the branch in the gate before the
+	// notification runs, and the run's reference is written from the gate's
+	// own object at creation, so each notification below is preceded by what
+	// the push it reports would have left there.
+	gatePath := gateRepositoryOf(t, h, subject)
 	withService(t, h, func(running serviceUnderTest) {
 		push := func(old, head string) machine.Notification {
+			git(t, gatePath, "fetch", "--quiet", subject, "+"+head+":refs/heads/work")
 			var out machine.Notification
 			if err := running.client.Call(t.Context(), ipc.MethodGateNotify, machine.GateRequest{
 				Gate: gateID, Updates: []gate.RefUpdate{{Old: old, New: head, Ref: "refs/heads/work"}},

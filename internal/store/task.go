@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -75,6 +76,11 @@ type Task struct {
 	BlockerTask Optional[string] `json:"blocker_task"`
 	// CreatedAt is when the task was recorded.
 	CreatedAt time.Time `json:"created_at"`
+	// StartSnapshot is what the task's isolated copy held when its latest
+	// dispatch proved the copy isolated, and unknown until a dispatch has.
+	// SetTaskStartSnapshot writes it; CopySnapshot says what it holds and
+	// what it does not claim.
+	StartSnapshot Optional[CopySnapshot] `json:"start_snapshot"`
 }
 
 // OpeningEventKind is the kind of the event CreateTask appends as a task's
@@ -105,19 +111,27 @@ type Disposition struct {
 }
 
 const taskColumns = `SELECT rowid, id, shape, project, mode, worktree_path, run_id, pull_request,
-	repository_id, branch, blocker_task, created_at`
+	repository_id, branch, blocker_task, created_at, start_snapshot`
 
 func scanTask(sc scanner) (Task, error) {
 	var t Task
 	var shape, created string
+	var snapshot Optional[string]
 	if err := sc.Scan(&t.Row, &t.ID, &shape, &t.Project, &t.Mode, &t.WorktreePath, &t.RunID,
-		&t.PullRequest, &t.RepositoryID, &t.Branch, &t.BlockerTask, &created); err != nil {
+		&t.PullRequest, &t.RepositoryID, &t.Branch, &t.BlockerTask, &created, &snapshot); err != nil {
 		return Task{}, err
 	}
 	t.Shape = TaskShape(shape)
 	var err error
 	if t.CreatedAt, err = decodeTime(created); err != nil {
 		return Task{}, err
+	}
+	if encoded, ok := snapshot.Get(); ok {
+		var decoded CopySnapshot
+		if err := json.Unmarshal([]byte(encoded), &decoded); err != nil {
+			return Task{}, fmt.Errorf("column start_snapshot: %w", err)
+		}
+		t.StartSnapshot = Known(decoded)
 	}
 	return t, nil
 }

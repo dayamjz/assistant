@@ -68,24 +68,38 @@ type Row struct {
 // an "isolation-refused" event, so the reason travels in the history in a
 // word this package defines rather than in the asserting code's prose.
 //
-// The producer is the dispatch (#98); nothing in this build appends the kind.
-// Adding a reason is adding a row here, where the kind's decoder reads it.
+// The producer is internal/service's dispatch, which maps the comparison
+// internal/tasks' assertion failed on to one of these through tasks.Refusal
+// and appends the kind anchored to the resolution it dispatched from. Adding
+// a reason is adding a row here, where the kind's decoder reads it, and a
+// case to that mapping.
 type IsolationRefusal string
 
 const (
 	// RefusedPrimaryCheckout is the resolved path is the primary checkout
-	// itself, which no worker may work in.
+	// itself, inside it, or containing it, which no worker may work in.
 	RefusedPrimaryCheckout IsolationRefusal = "primary-checkout"
 	// RefusedNotIsolated is the resolved path is not a repository of its own:
-	// it does not exist as a repository, or it is a linked copy that the tool
+	// it does not exist as a repository, it is a linked copy that the tool
 	// can be pointed back at its own repository through, which P11 says is
-	// not proof on its own.
+	// not proof on its own, it is not the copy the task was reserved, it
+	// stands inside the gate repository, or the environment the worker would
+	// launch with points git at another repository.
 	RefusedNotIsolated IsolationRefusal = "not-isolated"
-	// RefusedCopyMissing is the resolved path does not exist.
+	// RefusedCopyMissing is the resolved path does not exist. No path in
+	// this build produces it: a dispatch cuts the copy when its path is
+	// absent and asserts the path that is there, so a missing copy is cut
+	// rather than refused.
 	RefusedCopyMissing IsolationRefusal = "copy-missing"
+	// RefusedWrongShape is the resolved path is a repository of its own and
+	// distinct from the primary, and is not the shape the task's shape gives
+	// it: its remote set is not exactly the one that shape has, or its HEAD
+	// is not on the task's branch for a delivery task or not detached for an
+	// investigation task.
+	RefusedWrongShape IsolationRefusal = "wrong-shape"
 )
 
-var isolationRefusals = []IsolationRefusal{RefusedPrimaryCheckout, RefusedNotIsolated, RefusedCopyMissing}
+var isolationRefusals = []IsolationRefusal{RefusedPrimaryCheckout, RefusedNotIsolated, RefusedCopyMissing, RefusedWrongShape}
 
 // IsolationRefusals returns the closed set, in the order above. The result is
 // a copy.
