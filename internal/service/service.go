@@ -27,7 +27,6 @@ import (
 	"github.com/dayamjz/assistant/internal/stages"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/tasks"
-	"github.com/dayamjz/assistant/internal/taskstate"
 	"github.com/dayamjz/assistant/internal/vcs"
 )
 
@@ -142,15 +141,6 @@ type Options struct {
 	// the recorder this service gives it, so a test can point the client at a
 	// stand-in provider. The product passes none.
 	Judge []judge.Option
-	// probe is the terminal probe the service's task reader is built with,
-	// which reconcile.go reads every task's terminal through at start and
-	// the task surface reads through afterwards. It is nil in production:
-	// until #91's last PR wires the session provider's Probe here, every
-	// terminal reads Unobserved and reconciliation relaunches nothing, which
-	// reconcile.go states. It is unexported because its one producer today
-	// is this package's tests, which inject a probe over the stand-in through
-	// export_test.go; a production producer is that PR's to add.
-	probe func(ctx context.Context, sessionRef string) taskstate.Liveness
 	// Forge is the code host every run of this service reaches: the one the
 	// pull request and checks bodies are handed, and the one this service
 	// re-reads a run's pull request through before resuming the hold the
@@ -163,6 +153,18 @@ type Options struct {
 	// readers on purpose, so what a stage read and what the service re-reads
 	// come from the same place.
 	Forge forge.Host
+	// Terminals is what the supervisor loop observes a task's terminal
+	// through, and what every task reader this service builds probes
+	// through, reconciliation's included. Nil, which is what the product
+	// passes until the session hookup lands, runs the loop degraded: every
+	// terminal is Unobserved and every in-flight task surfaces, on
+	// supervise.go's terms, and reconciliation relaunches nothing, on
+	// reconcile.go's.
+	Terminals Terminals
+	// hooks are the seams this package's tests drive the loop through. They
+	// are here rather than on the Service because the loop starts inside
+	// Open; supervise.go says what each is, and the product sets none.
+	hooks supervisionHooks
 }
 
 // Service is one home's background service.
@@ -210,9 +212,12 @@ type Service struct {
 	// forge is the code host, settled at Open from Options.Forge; checkshold.go
 	// is the one reader of it outside the stage dependencies.
 	forge forge.Host
-	// probe is Options.probe, the terminal probe reader builds every task
-	// reader with; nil means no terminal is observed.
-	probe func(ctx context.Context, sessionRef string) taskstate.Liveness
+	// terminals is Options.Terminals: the one seam a task's terminal is
+	// observed through, which the supervisor loop probes and captures
+	// through and every task reader this service builds probes through, so
+	// the loop, the task surface and reconciliation cannot disagree about a
+	// terminal. Nil means no terminal is observed anywhere.
+	terminals Terminals
 	// queue is internal/tasks' intake and release over this service's store,
 	// built at Open from the branch gate and the gate repositories this
 	// service knows; tasks.go says which of its entries this service calls.
@@ -272,6 +277,13 @@ type Service struct {
 	closeOnce  sync.Once
 	closeErr   error
 	work       sync.WaitGroup
+	// sup is the supervisor loop's state: its beacon writer, its watchdog's
+	// done channel, and what Close reads. It is nil until startSupervision,
+	// which Open runs after recovery, and it is deliberately not registered
+	// under work, because Close waits for it a bounded grace and for work
+	// without bound; supervise.go owns the loop and Close's doc owns the
+	// exception.
+	sup *supervision
 }
 
 // driver is what a run needs that depends on an agent being runnable and does
@@ -370,7 +382,7 @@ func Open(ctx context.Context, o Options) (*Service, error) {
 		build:      o.Build,
 		catalog:    o.Catalog,
 		newFixer:   o.NewFixer,
-		probe:      o.probe,
+		terminals:  o.Terminals,
 		registry:   newRegistry(),
 		topologies: make(map[string]*topology),
 		advancing:  make(map[string]*slot),
@@ -409,6 +421,14 @@ func Open(ctx context.Context, o Options) (*Service, error) {
 		return nil, err
 	}
 	s.recover(ctx)
+	// The supervisor loop starts after recovery and before the caller
+	// serves, so a run recovery continued is under supervision before the
+	// first request arrives and the beacon is being written before anything
+	// reads it.
+	if err := s.startSupervision(o.hooks, o.Terminals); err != nil {
+		_ = s.Close()
+		return nil, err
+	}
 	return s, nil
 }
 
@@ -513,6 +533,18 @@ func (s *Service) Stop(restarting bool) {
 // ordered is its registration, which stopWork closes off under the mutex
 // startWork registers under. Waiting first and refusing after would leave the
 // interleaving where work is registered against a database this then closes.
+//
+// The supervisor loop is the one piece of work Close does not wait for
+// without bound. A loop wedged inside a provider call that ignores its
+// context cannot be ended, and a Close that waited for it would hold the
+// store open and the lock taken for as long as the wedge lasts, which turns
+// a wedged loop into an unstoppable service holding the home. So Close
+// waits CloseGrace for the loop and its watchdog, and then abandons them
+// with ErrSupervisionAbandoned in its result and goes on to close the store
+// and release the lock. What makes that safe is the incarnation fence
+// supervise.go states: the abandoned goroutine is refused at every write it
+// could still make. The residual gap is the goroutine itself, which runs on
+// inside this process until the wedged call returns or the process ends.
 func (s *Service) Close() error {
 	s.closeOnce.Do(func() {
 		s.Stop(false)
@@ -526,6 +558,7 @@ func (s *Service) Close() error {
 		s.cancelAdvancing()
 		s.stopWork()
 		s.work.Wait()
+		errs = append(errs, s.stopSupervision())
 		// The workers this service launched are ended here, after the work
 		// that could record against them and before the store they were
 		// recorded in closes. What that ends is exactly the sessions this

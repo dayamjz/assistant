@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 func mustParse(t *testing.T, origin Origin, doc string) Layer {
@@ -92,8 +93,10 @@ func TestParseAcceptsTheWholeSchema(t *testing.T) {
 		"session_reuse": false,
 		"decision_model": "enforce",
 		"supervision_beacon_interval": "30s",
+		"escalation_window": "15m",
+		"recheck_window": "3h",
+		"stall_inspection_count": 5,
 		"relaunch_attempts": 3,
-		"unobserved_tolerance": "20m",
 		"commit": {"fix_message": "fix(gate): {summary}"},
 		"allow_pushed_commands": true
 	}`
@@ -132,6 +135,9 @@ func TestParseAcceptsTheWholeSchema(t *testing.T) {
 	}
 	if len(c.DocumentOwnership) != 1 || c.DocumentOwnership[0].Document != "docs/prd.html" {
 		t.Errorf("DocumentOwnership = %+v", c.DocumentOwnership)
+	}
+	if c.EscalationWindow != 15*time.Minute || c.RecheckWindow != 3*time.Hour || c.StallInspectionCount != 5 {
+		t.Errorf("supervision rows = %v, %v, %d", c.EscalationWindow, c.RecheckWindow, c.StallInspectionCount)
 	}
 	if !c.SuppressProjectInstructions || !c.NoCI || c.SessionReuse || !c.AllowPushedCommands {
 		t.Errorf("flags = %+v", c)
@@ -197,14 +203,22 @@ func TestParseRefusalsNameTheKeyAndValue(t *testing.T) {
 		{"beacon interval unparseable", `{"supervision_beacon_interval": "soon"}`, KeySupervisionBeaconInterval, `"soon"`},
 		{"beacon interval under the floor", `{"supervision_beacon_interval": "500ms"}`, KeySupervisionBeaconInterval, `"500ms"`},
 		{"beacon interval over the ceiling", `{"supervision_beacon_interval": "11m"}`, KeySupervisionBeaconInterval, `"11m"`},
+		{"escalation window as a number", `{"escalation_window": 30}`, KeyEscalationWindow, "30"},
+		{"escalation window unparseable", `{"escalation_window": "later"}`, KeyEscalationWindow, `"later"`},
+		{"escalation window under the floor", `{"escalation_window": "59s"}`, KeyEscalationWindow, `"59s"`},
+		{"escalation window over the ceiling", `{"escalation_window": "1441m"}`, KeyEscalationWindow, `"1441m"`},
+		{"recheck window as a number", `{"recheck_window": 2}`, KeyRecheckWindow, "2"},
+		{"recheck window unparseable", `{"recheck_window": "eventually"}`, KeyRecheckWindow, `"eventually"`},
+		{"recheck window under the floor", `{"recheck_window": "59s"}`, KeyRecheckWindow, `"59s"`},
+		{"recheck window over the ceiling", `{"recheck_window": "169h"}`, KeyRecheckWindow, `"169h"`},
+		{"stall inspection count not a number", `{"stall_inspection_count": "3"}`, KeyStallInspectionCount, `"3"`},
+		{"stall inspection count fractional", `{"stall_inspection_count": 1.5}`, KeyStallInspectionCount, "1.5"},
+		{"stall inspection count under the floor", `{"stall_inspection_count": 0}`, KeyStallInspectionCount, "0"},
+		{"stall inspection count over the ceiling", `{"stall_inspection_count": 101}`, KeyStallInspectionCount, "101"},
 		{"relaunch attempts negative", `{"relaunch_attempts": -1}`, KeyRelaunchAttempts, "-1"},
 		{"relaunch attempts fractional", `{"relaunch_attempts": 1.5}`, KeyRelaunchAttempts, "1.5"},
 		{"relaunch attempts over the ceiling", `{"relaunch_attempts": 21}`, KeyRelaunchAttempts, "21"},
 		{"relaunch attempts not a number", `{"relaunch_attempts": "2"}`, KeyRelaunchAttempts, `"2"`},
-		{"unobserved tolerance as a number", `{"unobserved_tolerance": 60}`, KeyUnobservedTolerance, "60"},
-		{"unobserved tolerance unparseable", `{"unobserved_tolerance": "later"}`, KeyUnobservedTolerance, `"later"`},
-		{"unobserved tolerance under the floor", `{"unobserved_tolerance": "500ms"}`, KeyUnobservedTolerance, `"500ms"`},
-		{"unobserved tolerance over the ceiling", `{"unobserved_tolerance": "169h"}`, KeyUnobservedTolerance, `"169h"`},
 		{"decision model misspelled", `{"decision_model": "Evaluate"}`, KeyDecisionModel, `"Evaluate"`},
 		{"decision model not a string", `{"decision_model": false}`, KeyDecisionModel, "false"},
 		{"decision model as a cutoff", `{"decision_model": "0.5"}`, KeyDecisionModel, `"0.5"`},

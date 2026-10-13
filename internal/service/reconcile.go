@@ -2,9 +2,7 @@ package service
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/dayamjz/assistant/internal/store"
@@ -21,13 +19,14 @@ import (
 // the same instructions plus a note, ambiguous liveness is left alone, and
 // queued wakes are drained before anything else. This file is that pass as
 // the service runs it, inside recover, after the runs are reconciled and
-// before anything is served. "Before serving anything" is a property of the
-// claim and not of the launch: the synchronous half reads the records,
-// probes each terminal under a bound and takes the anchored attempt claim
-// for every relaunch it decides; the launch of each claimed attempt goes to
-// a goroutine registered through startWork, as a continued run does, so a
-// home with several dead terminals comes back serving after the claims and
-// Close still waits for every launch it started.
+// before anything is served, and before supervise.go's loop begins. "Before
+// serving anything" is a property of the claim and not of the launch: the
+// synchronous half reads the records, probes each terminal under a bound and
+// takes the anchored attempt claim for every relaunch it decides; the launch
+// of each claimed attempt goes to a goroutine registered through startWork,
+// as a continued run does, so a home with several dead terminals comes back
+// serving after the claims and Close still waits for every launch it
+// started.
 //
 // # The table
 //
@@ -58,14 +57,37 @@ import (
 // attempt rows, because a worker that fails the same way every start is a
 // retry nobody bounded. The bound is read on both relaunch rows and not on
 // the Failed row alone: a worker that crashes with no run is the same
-// unbounded retry otherwise. Both reach a person through the wake queue,
-// once. The first case is the rule stated and no more: a refusal is
-// recorded on an attempt that has no session, the reader probes the latest
-// attempt only, and a dead terminal with no run outranks the log, so no
-// record this build writes reaches the table as Failed from the event tier
-// with a dead terminal. A refused copy's task reads Failed from the refusal
-// with nothing to probe, the table leaves it, and the refusal reaches a
-// person through the log and the task surface, as a dispatch's does.
+// unbounded retry otherwise. The first case is the rule stated and no more:
+// a refusal is recorded on an attempt that has no session, the reader
+// probes the latest attempt only, and a dead terminal with no run outranks
+// the log, so no record this build writes reaches the table as Failed from
+// the event tier with a dead terminal. A refused copy's task reads Failed
+// from the refusal with nothing to probe, the table leaves it, and the
+// refusal reaches a person through the log and the task surface, as a
+// dispatch's does.
+//
+// # A surface is the loop's wake, not a second one
+//
+// This file writes no wake and no marker. The wake queue and the detector
+// markers are supervise.go's: every row and every marker is written by the
+// supervisor loop under its incarnation fence, which this pass runs before
+// and cannot hold, and the loop surfaces a terminal that is dead or that
+// could not be observed as a terminal-gone wake, once per reference and
+// case, on its first pass after this one. So a task this pass decides to
+// surface rather than relaunch is told to the person by that row, and what
+// this pass adds is the reason it was not relaunched, in the service log; a
+// second row for the same dead terminal would be a second owner of one
+// fact. The one row this pass's relaunch does write to is the
+// acknowledgement: a terminal-gone wake about the session a relaunch
+// replaced is handled, and relaunch.go acknowledges it as the program
+// through the loop's own composition of the marker, terminalGoneAbout.
+//
+// For the same reason an unobserved terminal has no tolerance here: PRD
+// section 11's ambiguous liveness is left alone by this pass, the loop
+// surfaces it at once as unobservable and keeps the unobserved-since marker
+// that says how long, and a tolerance counted here would be a second owner
+// of that marker and a second surface for the same silence. The row the
+// issue proposed for it, unobserved_tolerance, is therefore not a row.
 //
 // # Queued
 //
@@ -74,39 +96,14 @@ import (
 // of whether a blocker has cleared; a Queued task has no terminal to probe
 // and no copy to relaunch into.
 //
-// # Unobserved has a bound
-//
-// A probe that was asked and could not answer is Unobserved, and so is a
-// provider that is down, and a fleet left silently unrelaunched for as long
-// as that lasts is the stall PRD section 9 calls worse than an error. So the
-// pass keeps "unobserved since" in the task's wake markers, the row
-// internal/store's WakeMarkers carries for it: it is started on the first
-// pass that could not observe an in-flight task's terminal, cleared on the
-// first that could, and once it is older than unobserved_tolerance the task
-// surfaces once, as a terminal-gone wake whose marker names the session and
-// the moment the silence began. The same marker on a later pass is the same
-// wake, which the queue drops as a replay while it is queued and refuses
-// once it is acknowledged, so a person hears once per silence. "In flight"
-// is internal/supervisor's table, read through StateInFlight, so this file
-// is not a second owner of it. A reference whose home marker is another
-// home's probes Unobserved through internal/session, never Dead, so a
-// colliding task identifier in a second home on the same machine is never
-// relaunched over from this one.
-//
-// Nothing is marked when the service has no probe. Unobserved then means
-// nobody asked, and a tolerance counted from that would surface every task
-// of a build that cannot ask; a terminal is unobserved for this file's
-// purposes only once a probe was asked about it.
-//
 // # Wake rows at start
 //
 // Draining is consuming the queued rows as input, not acting on them from
 // here: the coordinator is the queue's consumer. What the service does
 // acknowledge, as store.AcknowledgedByProgram, is exactly the rows its own
 // relaunch superseded: a terminal-gone row for the session reference the
-// relaunch replaced, which relaunch.go matches by the reference the marker
-// begins with. Every other row stays queued for the coordinator, including a
-// row composed some other way, which is the safe direction.
+// relaunch replaced. Every other row stays queued for the coordinator,
+// including a row composed some other way, which is the safe direction.
 //
 // # The bound
 //
@@ -120,13 +117,14 @@ import (
 //
 // # What the probe is today
 //
-// The probe reaches this file through the service's one reader constructor,
-// which the task surface and the queue share, so what reconciliation sees of
-// a terminal is what a person listing tasks sees. In production the probe is
-// nil until #91's last PR wires the session provider's Probe into the
-// service, so production reconciliation reads every terminal Unobserved and
-// relaunches nothing; the tests inject a probe over the stand-in and
-// establish the rest.
+// The probe is Options.Terminals' Probe, the one seam a terminal is observed
+// through, reached through the service's one reader constructor, which the
+// task surface, the queue and the supervisor loop share, so what
+// reconciliation sees of a terminal is what a person listing tasks sees and
+// what the loop acts on. In production Terminals is nil until the session
+// hookup wires the provider into it, so production reconciliation reads
+// every terminal Unobserved and relaunches nothing; the tests inject a
+// Terminals over the stand-in and establish the rest.
 //
 // # Residual gaps
 //
@@ -153,6 +151,10 @@ import (
 //     refusal with no terminal to probe, exactly as a dispatch's refusal
 //     does today, and reaches a person through the log and the task
 //     surface rather than the wake queue.
+//   - A task this pass surfaces rather than relaunches is told to the
+//     person by the loop's terminal-gone row and nothing else: that row
+//     says the terminal is gone and not that the program declined to
+//     relaunch it, which is in the service log only.
 
 // reconcileProbeTimeout bounds one probe of one terminal. Chosen, not
 // measured: a provider answers from a process table in far less, and a task
@@ -202,21 +204,19 @@ func reconcileRow(state taskstate.State, source taskstate.Source, process taskst
 
 // reconcileDecision is what decideReconciliation made of one task: the
 // action, the words for the log and for the relaunched note, and for a
-// surface the component its wake marker carries.
+// surface which rule turned the relaunch into one.
 type reconcileDecision struct {
 	action reconcileAction
 	reason string
 	// surfaced names why the task surfaces rather than relaunches, and is
-	// empty for every other action. It is the marker's last component.
+	// empty for every other action.
 	surfaced string
 }
 
-// The surface components, which with the session reference compose a
-// terminal-gone wake's marker on relaunch.go's terms.
+// The two surface rules.
 const (
 	surfacedIsolationRefused = "isolation-refused"
 	surfacedRelaunchBound    = "relaunch-bound"
-	surfacedUnobserved       = "unobserved"
 )
 
 // decideReconciliation applies the table to a resolution and then the two
@@ -241,16 +241,17 @@ func decideReconciliation(r taskstate.Resolution, attempts []store.TaskAttempt, 
 		reason: fmt.Sprintf("its terminal is gone and it resolves %s from its %s", r.State, r.Source)}
 }
 
-// boundedProbe wraps the service's probe so that one answer costs at most
+// boundedProbe wraps the Terminals' probe so that one answer costs at most
 // reconcileProbeTimeout and none is asked once bound has ended, on the terms
 // the opening comment's bound section states. It is nil when the service has
-// no probe, so the reader observes nothing rather than asking a bound of
+// no Terminals, so the reader observes nothing rather than asking a bound of
 // nothing.
 func (s *Service) boundedProbe(bound context.Context) func(ctx context.Context, sessionRef string) taskstate.Liveness {
-	probe := s.probe
-	if probe == nil {
+	terminals := s.terminals
+	if terminals == nil {
 		return nil
 	}
+	probe := func(ctx context.Context, ref string) taskstate.Liveness { return terminals.Probe(ctx, ref).Liveness }
 	return func(_ context.Context, ref string) taskstate.Liveness {
 		if bound.Err() != nil {
 			return taskstate.Unobserved
@@ -272,8 +273,8 @@ func (s *Service) boundedProbe(bound context.Context) func(ctx context.Context, 
 // reports to the log and not to a caller: recover has nobody to answer, and
 // every task it does not settle is read again at the next start.
 func (s *Service) reconcileTasks(ctx context.Context) {
-	if s.probe == nil {
-		s.log.Printf("reconciliation: no terminal probe is wired into this service, so every terminal reads unobserved and nothing is relaunched")
+	if s.terminals == nil {
+		s.log.Printf("reconciliation: no terminal provider is wired into this service, so every terminal reads unobserved and nothing is relaunched")
 	}
 	queued, err := s.store.DrainWakes(ctx, reconcileDrainLimit)
 	switch {
@@ -289,24 +290,19 @@ func (s *Service) reconcileTasks(ctx context.Context) {
 		s.log.Printf("reconciliation: the tasks could not be read: %v", err)
 		return
 	}
-	now := time.Now()
 	for _, r := range fleet {
 		attempts, err := s.store.TaskAttempts(ctx, r.Record.ID)
 		if err != nil {
 			s.log.Printf("reconciliation: the attempts of task %s could not be read: %v", r.Record.ID, err)
 			continue
 		}
-		ref, observed := latestSession(attempts)
 		decision := decideReconciliation(r.State, attempts, s.cfg.RelaunchAttempts)
 		switch decision.action {
 		case reconcileRelaunch:
 			s.relaunchAtStart(ctx, r.Record.ID)
 		case reconcileSurface:
-			s.surfaceTerminalGone(ctx, r.Record.ID, ref, "died:"+decision.surfaced, decision.reason, store.Unknown[time.Time]())
-		default:
-			if observed && s.probe != nil {
-				s.trackUnobserved(ctx, r, ref, now)
-			}
+			s.log.Printf("task %s is not relaunched (%s); the supervisor's terminal-gone wake is what tells the coordinator",
+				r.Record.ID, decision.reason)
 		}
 	}
 }
@@ -364,87 +360,10 @@ func (s *Service) launchInBackground(d dispatched) {
 	}()
 }
 
-// trackUnobserved keeps the task's unobserved-since marker and surfaces the
-// task once past the tolerance, on the terms the opening comment states. It
-// is asked only for a task whose latest attempt has a session and only when
-// a probe was asked about it.
-func (s *Service) trackUnobserved(ctx context.Context, r taskstate.Resolved, ref string, now time.Time) {
-	id := r.Record.ID
-	markers, _, err := s.store.WakeMarkers(ctx, id)
-	if err != nil {
-		s.log.Printf("reconciliation: the markers of task %s could not be read: %v", id, err)
-		return
-	}
-	since, unobservedBefore := markers.UnobservedSince.Get()
-	inFlight, decided := supervisor.StateInFlight(r.State.State)
-	unobservedNow := r.State.Basis.Process == taskstate.Unobserved && decided && inFlight
-	switch {
-	case unobservedNow && !unobservedBefore:
-		if _, err := s.store.AdvanceWakeMarkers(ctx, id, carry(markers, store.Known(now))); err != nil {
-			s.log.Printf("reconciliation: the unobserved-since marker of task %s could not be written: %v", id, err)
-		}
-	case unobservedNow && now.Sub(since) > s.cfg.UnobservedTolerance:
-		s.surfaceTerminalGone(ctx, id, ref, surfacedUnobserved+":"+since.UTC().Format(time.RFC3339),
-			fmt.Sprintf("its terminal has been unobserved since %s, longer than unobserved_tolerance %s",
-				since.UTC().Format(time.RFC3339), s.cfg.UnobservedTolerance), markers.UnobservedSince)
-	case !unobservedNow && unobservedBefore:
-		if _, err := s.store.AdvanceWakeMarkers(ctx, id, carry(markers, store.Unknown[time.Time]())); err != nil {
-			s.log.Printf("reconciliation: the unobserved-since marker of task %s could not be cleared: %v", id, err)
-		}
-	}
-}
-
-// carry is the task's markers as they stand, with the unobserved-since
-// column replaced, so a write from here moves that column and nothing the
-// supervisor loop owns.
-func carry(m store.WakeMarkers, unobservedSince store.Optional[time.Time]) store.MarkerAdvance {
-	return store.MarkerAdvance{
-		CaptureDigest:    m.CaptureDigest,
-		EventSequence:    m.EventSequence,
-		Surfaced:         m.Surfaced,
-		WindowStart:      m.WindowStart,
-		StallRepetitions: m.StallRepetitions,
-		UnobservedSince:  unobservedSince,
-	}
-}
-
-// surfaceTerminalGone appends one terminal-gone wake for the task, whose
-// marker is the session reference and the component, and carries the
-// markers with the unobserved-since column given. A marker already queued is
-// the same wake and a marker already acknowledged is one the person has
-// heard, so neither appends; both are the "once" the opening comment states.
-func (s *Service) surfaceTerminalGone(ctx context.Context, id, ref, component, reason string,
-	unobservedSince store.Optional[time.Time]) {
-	markers, _, err := s.store.WakeMarkers(ctx, id)
-	if err != nil {
-		s.log.Printf("reconciliation: the markers of task %s could not be read: %v", id, err)
-		return
-	}
-	out, err := s.store.AppendWakeWithMarkers(ctx, store.WakeRequest{
-		TaskID: id, Kind: string(supervisor.KindTerminalGone), Marker: terminalGoneMarker(ref, component),
-	}, carry(markers, unobservedSince))
-	switch {
-	case errors.Is(err, store.ErrWakeHandled):
-		s.log.Printf("task %s is not relaunched (%s), and the coordinator has already been told", id, reason)
-	case err != nil:
-		s.log.Printf("task %s is not relaunched (%s), and surfacing it failed: %v", id, reason, err)
-	case out.Disposition == store.WakeAppended:
-		s.log.Printf("task %s is not relaunched (%s), and was surfaced as wake %d", id, reason, out.Wake.ID)
-	default:
-		s.log.Printf("task %s is not relaunched (%s), and wake %d already stands for it", id, reason, out.Wake.ID)
-	}
-}
-
-// terminalGoneMarker composes a terminal-gone wake's marker: the session
-// reference, then the component that says which case it was, which is what
-// internal/store's WakeRequest states the loop composes for that kind. The
-// reference comes first so that a relaunch can find every row about the
-// session it superseded by the prefix supersededBy matches.
-func terminalGoneMarker(ref, component string) string { return ref + ":" + component }
-
 // supersededBy reports whether a queued wake is about the session a relaunch
-// replaced: a terminal-gone row of the task whose marker begins with that
-// reference. A row composed another way is not matched and stays queued.
+// replaced: a terminal-gone row of the task whose marker, as the loop
+// composes it, names that reference. A row composed another way is not
+// matched and stays queued.
 func supersededBy(w store.Wake, id, ref string) bool {
-	return w.TaskID == id && w.Kind == string(supervisor.KindTerminalGone) && strings.HasPrefix(w.Marker, ref+":")
+	return w.TaskID == id && w.Kind == string(supervisor.KindTerminalGone) && terminalGoneAbout(w.Marker, ref)
 }

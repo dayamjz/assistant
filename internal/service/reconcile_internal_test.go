@@ -2,6 +2,7 @@ package service
 
 import (
 	"testing"
+	"time"
 
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/taskstate"
@@ -132,20 +133,25 @@ func TestTheRelaunchBoundCountsRelaunchesFromAttemptRows(t *testing.T) {
 	}
 }
 
-// A superseded wake is a terminal-gone row of the task whose marker begins
-// with the replaced session's reference; a row of another task, another
-// kind, or a marker composed another way is not.
+// A superseded wake is a terminal-gone row of the task whose marker, as the
+// supervisor loop composes it, names the replaced session's reference, in
+// any of the three gone cases; a row of another task, another kind, another
+// reference, or a marker composed another way is not.
 func TestASupersededWakeIsMatchedByTaskKindAndReference(t *testing.T) {
 	const ref = "terminal1:0123456789abcdef0123456789abcdef:taskaaaaaaaa:42:7"
-	gone := store.Wake{TaskID: "taskaaaaaaaa", Kind: "terminal-gone", Marker: terminalGoneMarker(ref, "died")}
-	if !supersededBy(gone, "taskaaaaaaaa", ref) {
-		t.Fatal("the row written for the replaced session is not matched")
+	since := time.Unix(1_700_000_000, 0)
+	for _, g := range []gone{goneDead, goneUnobservable, goneProviderWide} {
+		row := store.Wake{TaskID: "taskaaaaaaaa", Kind: "terminal-gone", Marker: terminalGoneMarker(g, ref, since)}
+		if !supersededBy(row, "taskaaaaaaaa", ref) {
+			t.Fatalf("the %s row written for the replaced session is not matched: %s", g, row.Marker)
+		}
 	}
 	for name, w := range map[string]store.Wake{
-		"another task":  {TaskID: "taskbbbbbbbb", Kind: "terminal-gone", Marker: terminalGoneMarker(ref, "died")},
-		"another kind":  {TaskID: "taskaaaaaaaa", Kind: "hold-opened", Marker: terminalGoneMarker(ref, "died")},
-		"another ref":   {TaskID: "taskaaaaaaaa", Kind: "terminal-gone", Marker: terminalGoneMarker(ref+"1", "died")},
-		"ref not first": {TaskID: "taskaaaaaaaa", Kind: "terminal-gone", Marker: "died:" + ref},
+		"another task":  {TaskID: "taskbbbbbbbb", Kind: "terminal-gone", Marker: terminalGoneMarker(goneDead, ref, since)},
+		"another kind":  {TaskID: "taskaaaaaaaa", Kind: "hold-opened", Marker: terminalGoneMarker(goneDead, ref, since)},
+		"another ref":   {TaskID: "taskaaaaaaaa", Kind: "terminal-gone", Marker: terminalGoneMarker(goneDead, ref+"1", since)},
+		"ref not named": {TaskID: "taskaaaaaaaa", Kind: "terminal-gone", Marker: "terminal-gone:dead:" + ref},
+		"other shape":   {TaskID: "taskaaaaaaaa", Kind: "terminal-gone", Marker: ref + ":dead"},
 	} {
 		if supersededBy(w, "taskaaaaaaaa", ref) {
 			t.Errorf("%s is matched as superseded: %+v", name, w)

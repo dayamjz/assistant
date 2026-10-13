@@ -350,7 +350,10 @@
 // before it claims the attempt through store.BeginTaskAttempt, appends the
 // relaunched note and the dispatched entry, asserts the standing copy
 // through the assertion dispatch and launch share, and acknowledges as the
-// program the wakes about the session it replaced. The launch of a claimed
+// program the wakes about the session it replaced; it writes no wake and no
+// marker itself, because both are supervise.go's loop's, under its fence,
+// and the loop's terminal-gone row is what tells a person about a terminal
+// this pass did not relaunch. The launch of a claimed
 // attempt goes to a goroutine under startWork, so "before serving anything"
 // is a property of the claim. A launched task is never dispatched again,
 // which dispatch.go states: without a probe, which is production until
@@ -370,6 +373,17 @@
 // ensureCopy reads it from the gate and from nowhere else. copy.go's opening
 // comment keeps the argument for one path that always runs and says where
 // the fetch went and what it used to rest on.
+//
+// # The supervisor loop is here, and supervise.go owns it
+//
+// PRD section 5's supervisor is a loop inside the service, and supervise.go
+// is that loop: incarnations fenced by the store's epoch, a watchdog that
+// replaces one whose beacon went stale and never writes the beacon itself,
+// a pass that reads the records, then the slot, then the provider, and the
+// bounded wait Close gives it. Its header owns the design and the residual
+// gaps, Close's doc owns the one exception to the wait on work, and
+// Options.Terminals is the seam the terminal reading arrives through, nil
+// in this build, which runs the loop degraded to surface everything.
 //
 // # What this package does not do
 //

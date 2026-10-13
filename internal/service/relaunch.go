@@ -89,11 +89,11 @@ const relaunchedKind = "relaunched"
 // Nothing is recorded.
 var errRelaunchNotDue = errors.New("service: the task is not one reconciliation relaunches")
 
-// errRelaunchUnprobed reports a relaunch asked of a service with no terminal
-// probe. A relaunch rests on a dead reading this service made itself, and a
-// service that cannot ask has none; it refuses rather than relaunching on a
-// reading somebody else reported.
-var errRelaunchUnprobed = errors.New("service: no terminal probe is wired into this service, so a terminal cannot be read as dead")
+// errRelaunchUnprobed reports a relaunch asked of a service with no
+// Terminals. A relaunch rests on a dead reading this service made itself,
+// and a service that cannot ask has none; it refuses rather than relaunching
+// on a reading somebody else reported.
+var errRelaunchUnprobed = errors.New("service: no terminal provider is wired into this service, so a terminal cannot be read as dead")
 
 // errRelaunchNotDead reports a re-probe immediately before the claim that
 // did not answer Dead: the terminal came back, or could not be observed
@@ -141,7 +141,7 @@ func (s *Service) relaunchTask(ctx context.Context, id string) (relaunched, erro
 
 // relaunchClaimed is relaunchTask once the in-memory slot is taken.
 func (s *Service) relaunchClaimed(ctx context.Context, id string) (relaunched, error) {
-	if s.probe == nil {
+	if s.terminals == nil {
 		return relaunched{}, errRelaunchUnprobed
 	}
 	bound, cancel := context.WithTimeout(ctx, reconcileProbeBound)

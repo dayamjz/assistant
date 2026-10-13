@@ -56,15 +56,22 @@ type Config struct {
 	// its liveness beacon. The staleness window and the first-beacon wait
 	// are internal/supervisor's multiples of it, never values of their own.
 	SupervisionBeaconInterval time.Duration
+	// EscalationWindow is how long a terminal may stay unchanged, with
+	// positive evidence of progress, before the supervisor surfaces it
+	// anyway. The loop measures it from the marker's window start.
+	EscalationWindow time.Duration
+	// RecheckWindow is how long a declared external wait may sit idle before
+	// it surfaces, measured the same way.
+	RecheckWindow time.Duration
+	// StallInspectionCount is how many surfaces of the same unchanged screen
+	// precede the one that demands a deeper inspection, read by the loop into
+	// supervisor.Stall.InspectAt.
+	StallInspectionCount int
 	// RelaunchAttempts is how many times reconciliation at service start
 	// relaunches a task that resolves Failed with its terminal gone, counted
 	// from its attempt rows, before surfacing it instead. KeyRelaunchAttempts
 	// says why it is a task-level bound and not a loop bound.
 	RelaunchAttempts int
-	// UnobservedTolerance is how long a task's terminal may stay unobserved
-	// by a probe that was asked before reconciliation surfaces the task once.
-	// It is a duration and not a loop bound; KeyUnobservedTolerance says so.
-	UnobservedTolerance time.Duration
 	// DecisionModel is the mode of the decision-model checks PRD section 5
 	// describes. Whether a request is sent at all also needs the provider's
 	// key in the operator's environment, which this package never reads.
@@ -164,18 +171,24 @@ const (
 	// at the staleness multiple, long enough that an idle service writes
 	// almost nothing.
 	DefaultSupervisionBeaconInterval = 10 * time.Second
+	// DefaultEscalationWindow is PRD section 10's default for how long an
+	// unchanged terminal with evidence of progress is absorbed. Chosen, not
+	// measured.
+	DefaultEscalationWindow = 30 * time.Minute
+	// DefaultRecheckWindow is PRD section 10's default for how long a
+	// declared external wait sits before it surfaces. Chosen, not measured.
+	DefaultRecheckWindow = 2 * time.Hour
+	// DefaultStallInspectionCount is how many surfaces of one unchanged
+	// screen precede the one that demands a deeper inspection. Chosen, not
+	// measured: the third surface of the same screen is a stall the first
+	// two looks did not resolve.
+	DefaultStallInspectionCount = 3
 	// DefaultRelaunchAttempts is how many relaunches of a Failed task
 	// reconciliation makes on its own when the operator's file says nothing.
 	// Chosen, not measured: two restarts of a worker whose run failed is
 	// enough to get past a transient and few enough that a worker which fails
 	// the same way every time reaches a person within the hour.
 	DefaultRelaunchAttempts = 2
-	// DefaultUnobservedTolerance is how long an unobserved terminal is
-	// tolerated when the operator's file says nothing. Chosen, not measured:
-	// long enough that a provider which is slow to come back does not wake a
-	// person, short enough that a provider which never comes back is noticed
-	// within the hour.
-	DefaultUnobservedTolerance = time.Hour
 	// DefaultDecisionModel is the decision-model mode a run gets when the
 	// operator's file sets none: the checks run where the key is present and
 	// what they find is a note.
@@ -265,14 +278,6 @@ const (
 	// choose. Above the ceiling a worker that fails the same way every time
 	// is restarted for days before a person hears. Chosen, not measured.
 	MaxRelaunchAttempts = 20
-	// MinUnobservedTolerance is the shortest unobserved tolerance. Below it a
-	// provider that is merely slow to answer would surface every task it
-	// serves. Chosen, not measured.
-	MinUnobservedTolerance = time.Second
-	// MaxUnobservedTolerance is the longest unobserved tolerance. Above it a
-	// provider that never comes back leaves a fleet silent for more than a
-	// week. Chosen, not measured.
-	MaxUnobservedTolerance = 168 * time.Hour
 	// MinSupervisionBeaconInterval is the shortest beacon interval. Below it
 	// the loop would spend its passes rewriting the beacon. Chosen, not
 	// measured.
@@ -281,6 +286,26 @@ const (
 	// stopped supervisor is invisible for most of an hour at the staleness
 	// multiple. Chosen, not measured.
 	MaxSupervisionBeaconInterval = 10 * time.Minute
+	// MinEscalationWindow is PRD section 10's floor for escalation_window.
+	// Chosen, not measured.
+	MinEscalationWindow = time.Minute
+	// MaxEscalationWindow is PRD section 10's ceiling for escalation_window:
+	// above it a stalled worker is invisible for a day. Chosen, not measured.
+	MaxEscalationWindow = 24 * time.Hour
+	// MinRecheckWindow is PRD section 10's floor for recheck_window. Chosen,
+	// not measured.
+	MinRecheckWindow = time.Minute
+	// MaxRecheckWindow is PRD section 10's ceiling for recheck_window: above
+	// it a forgotten wait is invisible for a week. Chosen, not measured.
+	MaxRecheckWindow = 168 * time.Hour
+	// MinStallInspectionCount is the floor for stall_inspection_count: at one
+	// every surface of a stall demands an inspection, and zero would make the
+	// count mean nothing. Chosen, not measured.
+	MinStallInspectionCount = 1
+	// MaxStallInspectionCount is the ceiling for stall_inspection_count:
+	// above it a stall surfaces more often than anyone would read before an
+	// inspection is demanded. Chosen, not measured.
+	MaxStallInspectionCount = 100
 )
 
 // ReservedAgentFlags are agent flags configuration may not set, because each

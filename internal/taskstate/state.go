@@ -192,7 +192,10 @@ type Basis struct {
 	// tier decided, it is the kind whose row decided, so a reader that must
 	// tell one event-tier Failed from another, such as a refusal the
 	// isolation assertion recorded from a worker's own report, reads it here
-	// rather than reading the log's tail itself (P8).
+	// rather than reading the log's tail itself (P8). Resolve is its one
+	// writer, and fills it from the same Inputs.Events the state was
+	// resolved from, inside the same call; nothing reads the newest event
+	// on its own to fill it later.
 	EventKind string `json:"event_kind"`
 	// Process is the liveness that was read.
 	Process Liveness `json:"process"`

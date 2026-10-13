@@ -23,18 +23,24 @@ import (
 	"github.com/dayamjz/assistant/internal/taskstate"
 )
 
-// providerProbe is the probe a service would be given once #91's last PR
-// wires it: the liveness the service's own session provider answers, built
-// through driverFor so the provider is the one the launches go through. A
-// service that cannot resolve an agent observes nothing.
-func providerProbe(s *Service) func(ctx context.Context, ref string) taskstate.Liveness {
-	return func(ctx context.Context, ref string) taskstate.Liveness {
-		built, err := s.driverFor(ctx)
-		if err != nil {
-			return taskstate.Unobserved
-		}
-		return built.sessions.Probe(ctx, ref).Liveness
+// providerTerminals is the Terminals a service would be given once the
+// session hookup wires it: the service's own provider, reached through
+// driverFor so it is the one the launches go through. Probe answers from
+// the provider; Capture is not addressable by reference through this
+// double and answers an error, which is this terminal's and not the
+// provider's. A service that cannot resolve an agent observes nothing.
+type providerTerminals struct{ s *Service }
+
+func (p providerTerminals) Probe(ctx context.Context, ref string) session.Observation {
+	built, err := p.s.driverFor(ctx)
+	if err != nil {
+		return session.Observation{Liveness: taskstate.Unobserved, Reason: session.ReasonUnreadable, Detail: err.Error()}
 	}
+	return built.sessions.Probe(ctx, ref)
+}
+
+func (p providerTerminals) Capture(context.Context, string) (session.Capture, error) {
+	return session.Capture{}, errors.New("this double captures nothing by reference")
 }
 
 // relaunchSubject is a launchSubject whose first attempt's worker was
@@ -55,7 +61,7 @@ func newRelaunchSubject(t *testing.T) *relaunchSubject {
 	t.Helper()
 	ctx := t.Context()
 	sub := newLaunchSubject(t, workerStandIn(t))
-	sub.service.probe = providerProbe(sub.service)
+	sub.service.terminals = providerTerminals{sub.service}
 	d, err := sub.service.dispatchTask(ctx, sub.task)
 	if err != nil {
 		t.Fatalf("dispatching: %v", err)
@@ -85,7 +91,7 @@ func restartedService(t *testing.T, sub *launchSubject) (*Service, *standin.Agen
 		catalog: agents.NewCatalog(fixedRunner{runner: agent.Runner()}), registry: newRegistry(),
 	}
 	s.cfg = sub.service.cfg
-	s.probe = providerProbe(s)
+	s.terminals = providerTerminals{s}
 	s.stopCtx, s.stopCancel = context.WithCancel(context.Background())
 	t.Cleanup(func() {
 		s.stopWork()
@@ -402,8 +408,9 @@ func TestARelaunchWaitsOnALiveTaskHoldingTheBranch(t *testing.T) {
 // new attempt is the attribution cutoff, so the task reads Dispatched from
 // its new attempt rather than Failed from the old run, and a second pass of
 // reconciliation does not relaunch it again. Past relaunch_attempts the task
-// surfaces instead, once, as a terminal-gone wake naming the bound, with no
-// attempt begun; a later pass finds the wake queued and appends no second.
+// is not relaunched: no attempt is begun, and the pass writes no wake of
+// its own, because the terminal-gone row that tells the person is the
+// supervisor loop's and this hand-built service runs no loop.
 func TestAFailedRunIsRelaunchedUpToTheBoundAndThenSurfaced(t *testing.T) {
 	sub := newRelaunchSubject(t)
 	ctx := t.Context()
@@ -463,17 +470,13 @@ func TestAFailedRunIsRelaunchedUpToTheBoundAndThenSurfaced(t *testing.T) {
 	if attempts, err := sub.records.TaskAttempts(ctx, sub.task); err != nil || len(attempts) != 2 {
 		t.Fatalf("the task was relaunched past the bound: %+v (%v)", attempts, err)
 	}
-	wakes, err := sub.records.TaskWakes(ctx, sub.task)
-	if err != nil || len(wakes) != 1 {
-		t.Fatalf("the task has wakes %+v (%v), want the one surface", wakes, err)
+	if wakes, err := sub.records.TaskWakes(ctx, sub.task); err != nil || len(wakes) != 0 {
+		t.Fatalf("reconciliation wrote a wake of its own: %+v (%v); the loop owns the queue", wakes, err)
 	}
-	want := terminalGoneMarker(launched.Reference().String(), "died:"+surfacedRelaunchBound)
-	if wakes[0].Kind != string(supervisor.KindTerminalGone) || wakes[0].Marker != want || !wakes[0].Queued() {
-		t.Fatalf("the surface is %+v, want a queued terminal-gone wake with marker %s", wakes[0], want)
-	}
-	sub.restart.reconcileTasks(ctx)
-	if wakes, err := sub.records.TaskWakes(ctx, sub.task); err != nil || len(wakes) != 1 {
-		t.Fatalf("a later pass surfaced the task again: %+v (%v)", wakes, err)
+	// Below the slot, which the earlier relaunch holds: the table itself
+	// refuses a relaunch past the bound.
+	if _, err := sub.restart.relaunchClaimed(ctx, sub.task); !errors.Is(err, errRelaunchNotDue) {
+		t.Fatalf("a relaunch past the bound answered %v, want not due", err)
 	}
 }
 
@@ -485,16 +488,23 @@ func TestARelaunchAcknowledgesOnlyTheWakesItSuperseded(t *testing.T) {
 	sub := newRelaunchSubject(t)
 	ctx := t.Context()
 	ref := sub.first.Reference().String()
+	// The rows the loop would have written, composed the way it composes
+	// them and under an incarnation as its writes are.
+	inc, err := sub.records.BeginIncarnation(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
 	append := func(kind, marker string) store.Wake {
 		t.Helper()
-		out, err := sub.records.AppendWakeWithMarkers(ctx, store.WakeRequest{TaskID: sub.task, Kind: kind, Marker: marker}, store.MarkerAdvance{})
+		out, err := sub.records.AppendWakeWithMarkers(ctx, inc, store.WakeRequest{TaskID: sub.task, Kind: kind, Marker: marker}, store.MarkerAdvance{})
 		if err != nil {
 			t.Fatal(err)
 		}
 		return out.Wake
 	}
-	superseded := append(string(supervisor.KindTerminalGone), terminalGoneMarker(ref, "died"))
-	otherSession := append(string(supervisor.KindTerminalGone), terminalGoneMarker(ref+"0", "died"))
+	since := time.Now()
+	superseded := append(string(supervisor.KindTerminalGone), terminalGoneMarker(goneDead, ref, since))
+	otherSession := append(string(supervisor.KindTerminalGone), terminalGoneMarker(goneDead, ref+"0", since))
 	otherKind := append(string(supervisor.KindHoldOpened), "hold:one")
 
 	if _, err := sub.restart.relaunchTask(ctx, sub.task); err != nil {
@@ -569,7 +579,7 @@ func TestATaskWhoseSessionIsAnotherHomesIsNotReconciled(t *testing.T) {
 	}
 	agent := workerStandIn(t)
 	s := &Service{home: h, store: records, log: log, catalog: agents.NewCatalog(fixedRunner{runner: agent.Runner()}), registry: newRegistry()}
-	s.probe = providerProbe(s)
+	s.terminals = providerTerminals{s}
 	s.stopCtx, s.stopCancel = context.WithCancel(context.Background())
 	t.Cleanup(s.stopCancel)
 
@@ -598,7 +608,7 @@ func TestATaskWhoseSessionIsAnotherHomesIsNotReconciled(t *testing.T) {
 func TestWithoutAProbeNothingIsRelaunchedOrDispatchedAgain(t *testing.T) {
 	sub := newRelaunchSubject(t)
 	ctx := t.Context()
-	sub.restart.probe = nil
+	sub.restart.terminals = nil
 	sub.restart.reconcileTasks(ctx)
 	sub.restart.dispatchDue(ctx)
 	sub.restart.work.Wait()

@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"fmt"
 	"slices"
 	"sort"
 	"strings"
@@ -305,26 +306,57 @@ func decodeRelaunchAttempts(k Key, v any) (any, error) {
 	return n, nil
 }
 
-// decodeUnobservedTolerance accepts a Go duration string such as "1h", on
-// decodeChecksTimeout's terms about numbers, and refuses one outside the
-// floor and the ceiling rather than clamping it, for the beacon interval's
-// reason.
-func decodeUnobservedTolerance(k Key, v any) (any, error) {
+// decodeBoundedDuration accepts a Go duration string on decodeChecksTimeout's
+// terms about numbers, and refuses one outside the floor and the ceiling
+// rather than clamping it, for decodeSupervisionBeaconInterval's reason: a
+// value the operator did not get is a value the operator should see refused.
+// what names the duration in the refusal, and example is the shape named
+// when the value is not a string at all.
+func decodeBoundedDuration(k Key, v any, what, example string, floor, ceiling time.Duration) (any, error) {
 	s, err := asString(k, v)
 	if err != nil {
-		return nil, keyErr(k, v, `expected a duration string such as "1h"`)
+		return nil, keyErr(k, v, `expected a duration string such as "`+example+`"`)
 	}
 	d, parseErr := time.ParseDuration(s)
 	if parseErr != nil {
 		return nil, keyErr(k, v, "not a duration: "+parseErr.Error())
 	}
-	if d < MinUnobservedTolerance {
-		return nil, keyErr(k, v, "an unobserved tolerance must be at least "+MinUnobservedTolerance.String())
+	if d < floor {
+		return nil, keyErr(k, v, what+" must be at least "+floor.String())
 	}
-	if d > MaxUnobservedTolerance {
-		return nil, keyErr(k, v, "an unobserved tolerance may be at most "+MaxUnobservedTolerance.String())
+	if d > ceiling {
+		return nil, keyErr(k, v, what+" may be at most "+ceiling.String())
 	}
 	return d, nil
+}
+
+// decodeEscalationWindow is decodeBoundedDuration between
+// MinEscalationWindow and MaxEscalationWindow.
+func decodeEscalationWindow(k Key, v any) (any, error) {
+	return decodeBoundedDuration(k, v, "an escalation window", "30m", MinEscalationWindow, MaxEscalationWindow)
+}
+
+// decodeRecheckWindow is decodeBoundedDuration between MinRecheckWindow and
+// MaxRecheckWindow.
+func decodeRecheckWindow(k Key, v any) (any, error) {
+	return decodeBoundedDuration(k, v, "a recheck window", "2h", MinRecheckWindow, MaxRecheckWindow)
+}
+
+// decodeStallInspectionCount accepts an integer between
+// MinStallInspectionCount and MaxStallInspectionCount, and refuses one
+// outside rather than clamping it.
+func decodeStallInspectionCount(k Key, v any) (any, error) {
+	n, err := asInt(k, v)
+	if err != nil {
+		return nil, err
+	}
+	if n < MinStallInspectionCount {
+		return nil, keyErr(k, v, fmt.Sprintf("a stall inspection count must be at least %d", MinStallInspectionCount))
+	}
+	if n > MaxStallInspectionCount {
+		return nil, keyErr(k, v, fmt.Sprintf("a stall inspection count may be at most %d", MaxStallInspectionCount))
+	}
+	return n, nil
 }
 
 // decodeDecisionModel accepts one of the three decision-model modes, spelled

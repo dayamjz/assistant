@@ -223,8 +223,8 @@ func (s *Service) listTasks(ctx context.Context) (machine.Tasks, error) {
 // differ in that one input and not in the predicate. The lock probe answers
 // Held from inside the process that holds it, which is this one, so what the
 // guard adds here is whether a loop under this instance is writing a fresh
-// beacon; in this build no loop writes one, and a fleet with work in flight
-// is reported unsupervised, which is the case.
+// beacon, which supervise.go's loop does from its own select; a fleet with
+// work in flight reads unsupervised exactly while that loop is not writing.
 func (s *Service) supervision(ctx context.Context) machine.Supervision {
 	inFlight, _ := feed.InFlightFrom(ctx, s.store, s.tasks())
 	verdict := feed.GuardWith(ctx, s.home, inFlight, supervisor.FreshnessFor(s.cfg.SupervisionBeaconInterval), time.Now())
@@ -253,10 +253,10 @@ func (s *Service) task(ctx context.Context, req machine.TaskRequest) (machine.Ta
 }
 
 // tasks is the resolver over the service's store, built through reader with
-// the service's probe under the per-task bound alone, so a provider that
-// does not answer costs a read reconcileProbeTimeout per task and never
-// hangs it. In production the probe is nil and no task's terminal is
-// observed, which reconcile.go states. Whether a run is advancing is this
+// the probe of the service's Terminals under the per-task bound alone, so a
+// provider that does not answer costs a read reconcileProbeTimeout per task
+// and never hangs it. In production Terminals is nil and no task's terminal
+// is observed, which reconcile.go states. Whether a run is advancing is this
 // service's own fact, read off the slot map the way report reads it, so a
 // task's resolution can say whether its validation is being driven and not
 // only that a run is recorded as running.
@@ -264,9 +264,10 @@ func (s *Service) tasks() *taskstate.Reader { return s.reader(s.boundedProbe(con
 
 // reader is the one constructor of a task reader in this service: every
 // reader is built here, over the service's store and its advancing fact, with
-// whichever probe the caller bounded. The task surface, the queue and
-// reconciliation therefore differ in the bound on the probe and in nothing
-// else, so two readers cannot disagree about which terminal a task has.
+// whichever probe the caller bounded. The task surface, the queue,
+// reconciliation and the supervisor loop therefore differ in the bound on
+// the probe and in nothing else, so two readers cannot disagree about which
+// terminal a task has.
 func (s *Service) reader(probe func(ctx context.Context, sessionRef string) taskstate.Liveness) *taskstate.Reader {
 	return taskstate.NewReader(s.store, probe, s.isAdvancing)
 }

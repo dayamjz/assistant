@@ -69,15 +69,17 @@
 // come from outside the store. Inputs.Advancing is the service's slot map,
 // which internal/service hands NewReader; Inputs.Process is the session
 // provider's probe. Neither is as of the snapshot: both are asked after the
-// records were read, outside the store's transaction, and the gap is stated
-// on NewReader. The one disagreement that matters, a slot that still says
+// records were read, outside the store's transaction, the slot before the
+// probe, and the gap is stated on NewReader. The one disagreement that matters, a slot that still says
 // advancing while the record says the run settled, is no progress, because
 // the record decided the state and the slot is not evidence about it.
 //
 // # Residual gaps
 //
 //   - The process tier's producer, internal/session's Probe, is not wired:
-//     the service still builds its Reader with a nil probe, so the tier is
+//     the service still builds the Reader its task surface answers from
+//     with a nil probe, and its supervisor loop's Reader asks a seam nothing
+//     implements yet, so the tier is
 //     exercised by Resolve's tests, a scripted probe, and internal/session's
 //     own run of a Reader over the real provider on the stand-in, and reaches
 //     no task a person lists until the wiring lands (#91's last PR). A

@@ -2,6 +2,7 @@ package service_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -16,15 +17,38 @@ import (
 	"github.com/dayamjz/assistant/internal/taskstate"
 )
 
-// probeOver is a terminal probe over a provider of this home built on the
+// pipeTerminals is a Terminals over a provider of this home built on the
 // stand-in's runner. It holds no session, so it answers every reference by
 // identity alone, which is exactly what a restarted service's own provider
 // answers before it launches anything: Dead for a process that is gone,
 // Unobserved for one that is present and unheld, and Unobserved for another
-// home's reference.
-func probeOver(h *home.Home, agent *standin.Agent) func(ctx context.Context, ref string) taskstate.Liveness {
-	pipe := session.NewPipe(h, agent.Runner())
-	return func(ctx context.Context, ref string) taskstate.Liveness { return pipe.Probe(ctx, ref).Liveness }
+// home's reference. It captures nothing by reference.
+type pipeTerminals struct{ pipe *session.Pipe }
+
+func terminalsOver(h *home.Home, agent *standin.Agent) pipeTerminals {
+	return pipeTerminals{pipe: session.NewPipe(h, agent.Runner())}
+}
+
+func (p pipeTerminals) Probe(ctx context.Context, ref string) session.Observation {
+	return p.pipe.Probe(ctx, ref)
+}
+
+func (p pipeTerminals) Capture(context.Context, string) (session.Capture, error) {
+	return session.Capture{}, errors.New("this double captures nothing by reference")
+}
+
+// blockingTerminals is a provider that never answers a probe until the
+// context ends, and then answers Unobserved: the shape a provider that
+// hangs takes behind a bound.
+type blockingTerminals struct{}
+
+func (blockingTerminals) Probe(ctx context.Context, _ string) session.Observation {
+	<-ctx.Done()
+	return session.Observation{Liveness: taskstate.Unobserved, Reason: session.ReasonUnreadable, Detail: ctx.Err().Error()}
+}
+
+func (blockingTerminals) Capture(context.Context, string) (session.Capture, error) {
+	return session.Capture{}, errors.New("never reached: nothing probes live")
 }
 
 // waitWorkers polls the stand-in's record until n workers have been
@@ -99,15 +123,22 @@ func TestARestartWithAProbeRelaunchesADeadTerminalInPlace(t *testing.T) {
 	first := launchedAndEnded(t, h, id)
 
 	// What the supervisor loop would have queued about the dead session,
-	// and one wake that is not about it.
+	// composed the way supervise.go composes a terminal-gone marker and
+	// written under an incarnation as the loop writes, and one wake that is
+	// not about it.
 	records := openRecords(t, h)
-	gone, err := records.AppendWakeWithMarkers(t.Context(), store.WakeRequest{
-		TaskID: id, Kind: string(supervisor.KindTerminalGone), Marker: first.String() + ":died",
+	inc, err := records.BeginIncarnation(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	gone, err := records.AppendWakeWithMarkers(t.Context(), inc, store.WakeRequest{
+		TaskID: id, Kind: string(supervisor.KindTerminalGone),
+		Marker: "terminal-gone:dead:" + first.String() + ":" + time.Now().UTC().Format(time.RFC3339Nano),
 	}, store.MarkerAdvance{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	hold, err := records.AppendWakeWithMarkers(t.Context(), store.WakeRequest{
+	hold, err := records.AppendWakeWithMarkers(t.Context(), inc, store.WakeRequest{
 		TaskID: id, Kind: string(supervisor.KindHoldOpened), Marker: "hold:one",
 	}, store.MarkerAdvance{})
 	if err != nil {
@@ -116,7 +147,7 @@ func TestARestartWithAProbeRelaunchesADeadTerminalInPlace(t *testing.T) {
 	_ = records.Close()
 
 	o, agent := workerOptions(t, h)
-	o = service.WithProbe(o, probeOver(h, agent))
+	o.Terminals = terminalsOver(h, agent)
 	var second session.Reference
 	var read string
 	withServiceOptions(t, o, func(running serviceUnderTest) {
@@ -227,33 +258,31 @@ func TestARestartWithoutAProbeLeavesALaunchedTaskAlone(t *testing.T) {
 }
 
 // A provider that never answers: Open returns within the bound with the
-// task's terminal Unobserved, no attempt is begun, and the task surfaces
-// once after the unobserved tolerance, as a terminal-gone wake naming the
-// session and the moment the silence began; a further start finds the wake
-// queued and appends no second.
-func TestABlockingProviderLeavesOpenWithinTheBoundAndSurfacesOnce(t *testing.T) {
+// task's terminal Unobserved, no attempt is begun and no worker started,
+// across two starts. What tells the person about the silence is the
+// supervisor loop's terminal-gone row, which it writes as unobservable with
+// the unobserved-since marker; reconciliation writes none of its own.
+func TestABlockingProviderLeavesOpenWithinTheBoundAndRelaunchesNothing(t *testing.T) {
 	h := newHome(t)
 	subject := newSubject(t)
 	quietMaintenance(t, subject)
 	repository := recordRepository(t, h, subject)
 	id := recordDispatchedTask(t, h, repository, store.TaskDelivery, "task/one")
 	first := launchedAndEnded(t, h, id)
-	if err := os.WriteFile(h.ConfigFile(), []byte(`{"unobserved_tolerance": "1s"}`+"\n"), 0o600); err != nil {
+	// A short beacon interval, so the loop's own bounded probes and Close's
+	// grace are short too; the loop is not what this test is about.
+	if err := os.WriteFile(h.ConfigFile(), []byte(`{"supervision_beacon_interval": "1s"}`+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	blocking := func(ctx context.Context, _ string) taskstate.Liveness {
-		<-ctx.Done()
-		return taskstate.Unobserved
-	}
 
-	open := func(pass int) time.Duration {
-		t.Helper()
+	for pass := 1; pass <= 2; pass++ {
 		o, agent := workerOptions(t, h)
-		o = service.WithProbe(o, blocking)
+		o.Terminals = blockingTerminals{}
 		started := time.Now()
-		var elapsed time.Duration
 		withServiceOptions(t, o, func(running serviceUnderTest) {
-			elapsed = time.Since(started)
+			if elapsed := time.Since(started); elapsed > service.ReconcileProbeBound {
+				t.Fatalf("pass %d: Open took %s behind a blocking provider, over the bound %s", pass, elapsed, service.ReconcileProbeBound)
+			}
 			if got := taskState(t, running.client, id); got.Basis.Process != taskstate.Unobserved || got.State != taskstate.Dispatched {
 				t.Fatalf("pass %d: the task resolves %+v, want Dispatched with its terminal unobserved", pass, got)
 			}
@@ -267,51 +296,11 @@ func TestABlockingProviderLeavesOpenWithinTheBoundAndSurfacesOnce(t *testing.T) 
 			}
 		})
 		homeIsFree(t, h)
-		return elapsed
-	}
-	wakesOf := func() []store.Wake {
-		t.Helper()
-		records := openRecords(t, h)
-		defer func() { _ = records.Close() }()
-		wakes, err := records.TaskWakes(t.Context(), id)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return wakes
-	}
-
-	if elapsed := open(1); elapsed > service.ReconcileProbeBound {
-		t.Fatalf("Open took %s behind a blocking provider, over the bound %s", elapsed, service.ReconcileProbeBound)
 	}
 	records := openRecords(t, h)
-	markers, found, err := records.WakeMarkers(t.Context(), id)
-	_ = records.Close()
-	if err != nil || !found || !markers.UnobservedSince.IsKnown() {
-		t.Fatalf("after the first pass the markers are %+v, %v (%v), want unobserved-since set", markers, found, err)
-	}
-	if wakes := wakesOf(); len(wakes) != 0 {
-		t.Fatalf("the first pass surfaced the task before the tolerance: %+v", wakes)
-	}
-	since, _ := markers.UnobservedSince.Get()
-
-	// The second pass starts more than a second after the marker was set,
-	// since the first pass's probes alone cost that; nothing here sleeps.
-	open(2)
-	wakes := wakesOf()
-	if len(wakes) != 1 {
-		t.Fatalf("after the second pass the task has wakes %+v, want one surface", wakes)
-	}
-	want := first.String() + ":unobserved:" + since.UTC().Format(time.RFC3339)
-	if wakes[0].Kind != string(supervisor.KindTerminalGone) || wakes[0].Marker != want || !wakes[0].Queued() {
-		t.Fatalf("the surface is %+v, want a queued terminal-gone wake with marker %s", wakes[0], want)
-	}
-	open(3)
-	if wakes := wakesOf(); len(wakes) != 1 {
-		t.Fatalf("the third pass surfaced the task again: %+v", wakes)
-	}
-	records = openRecords(t, h)
 	defer func() { _ = records.Close() }()
-	if attempts, err := records.TaskAttempts(t.Context(), id); err != nil || len(attempts) != 1 {
+	attempts, err := records.TaskAttempts(t.Context(), id)
+	if err != nil || len(attempts) != 1 || attempts[0].SessionRef.Or("") != first.String() {
 		t.Fatalf("an unobserved terminal was relaunched: %+v (%v)", attempts, err)
 	}
 }

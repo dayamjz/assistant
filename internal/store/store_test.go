@@ -76,6 +76,11 @@ func TestAccessorsRefuseAfterClose(t *testing.T) {
 			_, err := s.CreateTask(ctx, Task{ID: "taskaaaaaaab", Shape: TaskDelivery, WorktreePath: "/w"}, Disposition{})
 			return err
 		},
+		"BeginIncarnation": func() error { _, err := s.BeginIncarnation(ctx); return err },
+		"CurrentIncarnation": func() error {
+			_, _, _, err := s.CurrentIncarnation(ctx)
+			return err
+		},
 		"BeginTaskAttempt":  func() error { _, err := s.BeginTaskAttempt(ctx, "taskaaaaaaab", 0); return err },
 		"SetAttemptSession": func() error { return s.SetAttemptSession(ctx, "taskaaaaaaab", 1, "pane") },
 		"TaskAttempts":      func() error { _, err := s.TaskAttempts(ctx, "taskaaaaaaab"); return err },
