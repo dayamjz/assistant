@@ -233,9 +233,10 @@ func Coverage() []Established {
 				"establish it at package reach and only the assertion half: AssertIsolated refuses a " +
 				"real observation of every shape the principle names and passes a proper clone of " +
 				"either task shape, and internal/agents strips the redirecting git variables from a " +
-				"worker's environment. The launch edge is #91's seam, which will take the Isolation the " +
-				"assertion returns; until it lands a worker started through internal/agents is started " +
-				"where it is told, so a green P11 does not read as no worker launches unproven."},
+				"worker's environment, and internal/session's Create refuses an Isolation the assertion did " +
+				"not produce before it asks for a worker. A worker started through internal/agents " +
+				"directly is still started where it is told, and no service path reaches Create yet, " +
+				"so a green P11 does not read as no worker launches unproven."},
 		{principles.P12, ReachNone,
 			"Nothing here removes an isolated copy. The binary's eject removes a gate, which is a " +
 				"different question. internal/principles declares this gap."},

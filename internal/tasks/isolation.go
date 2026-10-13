@@ -18,10 +18,10 @@ import (
 // copy is not proof on its own when the tool can be pointed at its own
 // repository. This file is the assertion half of that: a pure comparison of
 // what a directory was observed to be against what a task's copy must be,
-// with a typed refusal naming the comparison that failed. The launch half,
-// a seam that cannot start a worker without the value this assertion returns,
-// is #91's and does not exist yet; its absence is stated on Isolation rather
-// than implied away.
+// with a typed refusal naming the comparison that failed. The launch half
+// is internal/session's Create, which refuses an Isolation this assertion
+// did not produce before it asks for a worker; what this file states about
+// that seam is on Isolation.
 //
 // # Why file identity
 //
@@ -160,8 +160,8 @@ type Expectation struct {
 // letter case or a volume written another way, passes the assertion and
 // fails the line. A worker that does not run it, or
 // runs it and ignores a non-zero status, is not stopped by it; what stops a
-// worker is the assertion this program makes before it launches, and only
-// once #91's seam takes the Isolation that assertion returns.
+// worker is the assertion this program makes before it launches, which
+// internal/session's Create takes as the value it cannot start without.
 func Expect(h *home.Home, id string, shape store.TaskShape, gatePath, primary, branch string) (Expectation, string, error) {
 	copyPath, err := h.TaskCopy(id)
 	if err != nil {
@@ -240,12 +240,14 @@ func (e Expectation) validate() error {
 // the zero value is not a proof and reports false, so a seam that takes an
 // Isolation can refuse one nobody asserted.
 //
-// It is for #91's launch seam, which will take it as the value a worker
-// cannot be started without. Nothing in this build takes it yet: a worker
-// started today through internal/agents is started where it is told, and
-// P11's launch edge is open until that seam lands. The exported fields are
-// what was proven, as resolved; a consumer compares against them rather than
-// re-deriving.
+// internal/session's Create takes it as the value a worker cannot be
+// started without, and refuses one Proven reports false. That is the launch
+// edge as far as this build takes it: internal/agents itself still starts a
+// worker where it is told, so the edge holds for a launch through
+// internal/session and nothing here closes a launch that bypasses it, and
+// the service's wiring from dispatch to that Create is a later change. The
+// exported fields are what was proven, as resolved; a consumer compares
+// against them rather than re-deriving.
 type Isolation struct {
 	// Copy is the copy's path with every symbolic link resolved, the
 	// directory a launch taking this proof would use.

@@ -3,9 +3,9 @@
 // task with the disposition PRD section 6 gives it at intake, Queued behind a
 // blocker or Dispatched, and Release dispatches a queued task once its
 // blocker has cleared. AssertIsolated is the pure half of P11, described
-// below. Dispatch, cutting a copy and launching a worker are #104 and #91,
-// and nothing here does any of them; promotion and cleanup proofs are later
-// still.
+// below. Dispatch and cutting a copy are #104, launching a worker is
+// internal/session's Create over the proof made here, and nothing in this
+// package does any of them; promotion and cleanup proofs are later still.
 //
 // # The isolation assertion
 //
@@ -29,11 +29,11 @@
 // environment and answers what the copy is, never what a worker would see.
 //
 // The assertion is the proof and not the gate. Isolation's unexported field
-// is set only here, so a launch seam that takes one cannot be handed a value
-// nobody asserted, and that seam is #91's: nothing in this build takes an
-// Isolation, and a worker started through internal/agents today is started
-// where it is told. The second check is detection, obeyed by an obedient
-// worker and ignored by any other, and Expect's doc says so.
+// is set only here, so the launch seam that takes one, internal/session's
+// Create, cannot be handed a value nobody asserted; a worker started through
+// internal/agents directly is still started where it is told, which
+// Isolation's doc states. The second check is detection, obeyed by an
+// obedient worker and ignored by any other, and Expect's doc says so.
 //
 // # Every lifecycle move here is an appended event, anchored
 //

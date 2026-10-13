@@ -352,9 +352,9 @@ Each has cost this repository more than one round of review.
   its second-check shell line from one call, and `AssertIsolated` compares a
   real `vcs.Observation` against it by file identity, never by string, with
   an exact remote set per shape and a typed `*IsolationError` naming the
-  comparison; only it sets `Isolation`'s unexported field, nothing in this
-  build takes one, and its P11 citation claims the assertion refuses and
-  nothing about launch. Every lifecycle move there is an appended event, never a state
+  comparison; only it sets `Isolation`'s unexported field,
+  `internal/session`'s `Create` is what takes one, and its P11 citation
+  claims the assertion refuses and nothing about launch. Every lifecycle move there is an appended event, never a state
   column: `Create` writes the disposition through `store.CreateTask`, anchored
   to the newest task row it saw on the branch and under the service's branch
   exclusion, and `Release` appends `dispatched` through
@@ -379,6 +379,34 @@ Each has cost this repository more than one round of review.
   finishes in `internal/service` that write the record both call `Release`);
   Failed is not terminal, so a relaunch must re-run the floor; a
   person's push on a task's branch is outside it.
+- `internal/session` is PRD section 8's terminal session provider, and the
+  word means a terminal session, never the conversation session
+  `internal/agents` keeps for a fixer: `Provider` is the five operations and
+  nothing else, there is no capability table here, and an optional behaviour
+  a later provider has is a row in `internal/agents`' table with its probe
+  and declarer. `Pipe` is the reference provider and starts nothing: `Create`
+  refuses an unproven `tasks.Isolation` with `ErrUnproven` and then asks the
+  resolved runner for a worker through `agents.OpenWorker`, so only the
+  scripted adapter answers it in this build and the real adapter's worker
+  mode is #95 line K. Three things there are mechanism rather than rule.
+  `Probe` answers `taskstate.Liveness`, that package's word, with a typed
+  `Reason`, and the `reasons` table is the one place a reason's liveness is
+  decided: `Live` only through a handle this provider holds whose process
+  has not exited, `Dead` only where absence is proven (exited, no such
+  process, start time differs), everything else `Unobserved`, a probe error
+  among it; the test applies that rule to the table and to a counterfeit.
+  The identity is the attempt's session reference, a `Reference` of home
+  marker, task, pid and start time encoded in one closed format, recorded by
+  the caller through `store.SetAttemptSession` and nowhere else, with no
+  file under the home; another home's reference probes `Unobserved` here.
+  `Capture` is the worker's bounded tail plus `Digest` over `Normalize`, an
+  output stream and not a screen, with the rules derived from what the
+  stand-in emits and the real adapter's format stated unknown; the
+  comparison is the supervisor's. Read its `doc.go` for the restart answer
+  and the residual gaps: nothing ends an orphan, the record-first window
+  leaves a process no record names until #112's sweep, the route walk does
+  not see behind an interface-typed field, and on a platform without a
+  start-time read an unheld reference is never `Dead`.
 - `internal/supervisor` is the pure core of PRD section 5's supervision:
   `Classify` is the wake flowchart as a function and `Assess` is the stop
   guard's predicate, both over typed inputs the caller computed, with no

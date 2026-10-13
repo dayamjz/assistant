@@ -1,0 +1,199 @@
+package session
+
+import (
+	"context"
+	"errors"
+	"fmt"
+
+	"github.com/dayamjz/assistant/internal/agents"
+	"github.com/dayamjz/assistant/internal/tasks"
+	"github.com/dayamjz/assistant/internal/taskstate"
+)
+
+// ErrUnproven is returned by Create for an Isolation whose Proven reports
+// false: nothing was asserted about the path, so nothing is launched in it.
+var ErrUnproven = errors.New("session: the isolation was not proven by tasks.AssertIsolated")
+
+// ErrNotHeld is returned by Capture, Send and Close for a Session this
+// provider did not create or no longer holds, so an operation on another
+// provider's handle, or on one already closed, is refused rather than
+// answered about some other process.
+var ErrNotHeld = errors.New("session: the provider does not hold this session")
+
+// ErrIdentity is returned by Create when the worker started and its identity
+// could not be read on a platform that can read one: the process ended
+// before it was looked at, or the read failed. The worker is ended before
+// the refusal, so no session this provider cannot name goes on running.
+var ErrIdentity = errors.New("session: the worker's identity could not be read after it started")
+
+// Provider is PRD section 8's terminal session provider: the five operations
+// and nothing else. Pipe is the reference implementation and the only one in
+// this build; a second provider implements these five and adds any optional
+// behaviour it has as a row in internal/agents' capability table, never as a
+// method here.
+type Provider interface {
+	// Create starts one worker in the proven isolated copy, with the
+	// instructions on its standard input, and returns the handle. It refuses
+	// an unproven Isolation with ErrUnproven before anything starts, a task
+	// identifier home.ValidTaskID refuses with that package's error, and
+	// whatever agents.OpenWorker refuses with that package's error wrapped.
+	// The caller records Session.Reference through store.SetAttemptSession.
+	Create(ctx context.Context, spec Spec) (*Session, error)
+
+	// Capture returns the session's retained output and a digest over its
+	// normalized stream, on the terms Capture states. ErrNotHeld for a
+	// session this provider does not hold.
+	Capture(s *Session) (Capture, error)
+
+	// Send delivers text on the worker's standard input, newline-terminated,
+	// on the terms agents.Worker.Send states for ctx and for a worker that
+	// has ended. ErrNotHeld for a session this provider does not hold.
+	Send(ctx context.Context, s *Session, text string) error
+
+	// Probe answers what the terminal named by a stored reference looks like
+	// now, from what this provider can see, on the terms the package
+	// documentation states. It never fails: every answer it cannot give is
+	// Unobserved with the Reason saying why. ref is the encoded reference as
+	// store.TaskAttempt.SessionRef holds it.
+	Probe(ctx context.Context, ref string) Observation
+
+	// Close ends the session's worker and releases the handle; a later Probe
+	// of its reference answers by identity alone. It returns once the
+	// process tree has been ended on the terms agents.Worker.Close states,
+	// and ErrNotHeld for a session this provider does not hold, which a
+	// second Close is.
+	Close(s *Session) error
+}
+
+// Spec is what a session is created with.
+type Spec struct {
+	// TaskID is the task the session belongs to, which the reference
+	// embeds. It must satisfy home.ValidTaskID.
+	TaskID string
+	// Isolation is the proof the copy was asserted isolated. Create refuses
+	// one Proven reports false.
+	Isolation tasks.Isolation
+	// Instructions is what the worker is told first, on the terms
+	// agents.WorkerSpec.Instructions states.
+	Instructions string
+}
+
+// Session is the handle to one terminal session a provider created and
+// holds. It is a handle and nothing else: it exposes the reference and no
+// route to the worker, the runner, or anything that starts an agent, which
+// the route walk in the tests holds it to.
+type Session struct {
+	ref    Reference
+	owner  *Pipe
+	worker agents.Worker
+}
+
+// Reference is the session's identity, which the caller records as the
+// attempt's session reference.
+func (s *Session) Reference() Reference { return s.ref }
+
+// Capture is what Provider.Capture hands back.
+type Capture struct {
+	// Text is the retained output, the most recent of it, interleaved from
+	// both streams in the order it was read, within the agents runner's
+	// output limit.
+	Text string
+	// Dropped is how many bytes of earlier output fell off the front to keep
+	// Text within the limit; zero means Text is everything.
+	Dropped int64
+	// Digest is Digest(Text): a hash over the normalized stream, equal for
+	// two captures whose normalized text is equal. It is over the retained
+	// window only.
+	Digest string
+}
+
+// Reason is why a probe answered what it did. The set is closed, and the
+// table in reasons is the one place a Reason's Liveness is decided.
+type Reason string
+
+// The reasons. Their liveness is stated beside each and decided by the table
+// below, which the tests hold to the rule the package documentation states.
+const (
+	// ReasonHeld is Live: this provider holds the session and its agent
+	// process has not exited.
+	ReasonHeld Reason = "held"
+	// ReasonExited is Dead: this provider holds the session and its agent
+	// process has exited.
+	ReasonExited Reason = "exited"
+	// ReasonAbsent is Dead: no process has the reference's identifier.
+	ReasonAbsent Reason = "absent"
+	// ReasonReplaced is Dead: the process with the reference's identifier
+	// started at a different time, so it is another process given the same
+	// number.
+	ReasonReplaced Reason = "replaced"
+	// ReasonUnheld is Unobserved: a process with the reference's identifier
+	// and start time is present, and this provider holds no handle to it,
+	// so nothing can be captured from or sent to it.
+	ReasonUnheld Reason = "unheld"
+	// ReasonForeignHome is Unobserved: the reference carries another home's
+	// marker, and this home answers nothing about another home's sessions.
+	ReasonForeignHome Reason = "foreign-home"
+	// ReasonMalformed is Unobserved: the reference could not be decoded.
+	ReasonMalformed Reason = "malformed"
+	// ReasonUnreadable is Unobserved: the start time could not be read, on
+	// this platform at all or for this process, or the reference recorded
+	// none, so presence of the identifier proves nothing.
+	ReasonUnreadable Reason = "unreadable"
+)
+
+// reasons is the closed set in order, each with its liveness. It is the one
+// owner of the mapping; Observation is built from it and nowhere else.
+var reasons = []struct {
+	reason   Reason
+	liveness taskstate.Liveness
+}{
+	{ReasonHeld, taskstate.Live},
+	{ReasonExited, taskstate.Dead},
+	{ReasonAbsent, taskstate.Dead},
+	{ReasonReplaced, taskstate.Dead},
+	{ReasonUnheld, taskstate.Unobserved},
+	{ReasonForeignHome, taskstate.Unobserved},
+	{ReasonMalformed, taskstate.Unobserved},
+	{ReasonUnreadable, taskstate.Unobserved},
+}
+
+// Reasons returns the closed set in table order. The result is a copy.
+func Reasons() []Reason {
+	out := make([]Reason, len(reasons))
+	for i, row := range reasons {
+		out[i] = row.reason
+	}
+	return out
+}
+
+// Liveness is the taskstate word this reason maps to. A reason outside the
+// table is Unobserved, so a Reason nobody wrote a row for cannot read as
+// Dead or Live.
+func (r Reason) Liveness() taskstate.Liveness {
+	for _, row := range reasons {
+		if row.reason == r {
+			return row.liveness
+		}
+	}
+	return taskstate.Unobserved
+}
+
+// String renders the reason.
+func (r Reason) String() string { return string(r) }
+
+// Observation is a probe's answer: the liveness, which is the taskstate word
+// a Reader consumes, the reason, and a detail in words for a log.
+type Observation struct {
+	// Liveness is Reason.Liveness(), carried so a caller reads one field.
+	Liveness taskstate.Liveness
+	// Reason is why.
+	Reason Reason
+	// Detail says what was seen, for a person. It never carries output.
+	Detail string
+}
+
+// observe builds an Observation from the table, so a Liveness is never set
+// by hand.
+func observe(reason Reason, format string, args ...any) Observation {
+	return Observation{Liveness: reason.Liveness(), Reason: reason, Detail: fmt.Sprintf(format, args...)}
+}
