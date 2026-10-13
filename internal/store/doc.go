@@ -14,7 +14,7 @@
 //
 // The important part of the data model is not the field list; it is which
 // records answer what is true now and which record what happened. A repository,
-// a run, a stage result, a task, a task state, a hold, and a gate binding are
+// a run, a stage result, a task, a hold, and a gate binding are
 // authoritative: each has one owner and one row, rewritten in place. A round
 // and a task event are history: appended, never revised, and no answer to any
 // present-tense question.
@@ -53,14 +53,24 @@
 // is the asking package's, and what this record buys it is the list of working
 // copies worth asking about.
 //
+// A task's state is not a record here at all. PRD section 8 lists "task state"
+// as authoritative, and this package reads that as a record's worth of answer
+// rather than a row: the facts a state is made of already have owners (the run
+// row, the hold row, the task row, the event log), and a stored summary of
+// them is a second record that goes stale unseen. internal/taskstate resolves
+// the answer from them on every read, and TaskSnapshot is the one consistent
+// read it takes them through. Migration 1's task_state table is still
+// declared, because a migration may not remove one, and migration 10 empties
+// it and seals it with a trigger on the same terms as the checkpoint table
+// above: it has no accessor and none may be added.
+//
 // P8 says reading the last line of an event log to decide what is true now is
 // always wrong. Three things here make that mistake harder to write than to
-// avoid. A task's state lives in its own table with its own accessor, so
-// learning it is a different call from reading its history. TaskEvent carries a
-// kind and a detail and no state field, so the newest event has no state in it
-// to misread. And there is no accessor that returns the newest event alone,
-// because that call's shape is the defect: it reads as though it answers what
-// is true now.
+// avoid. Learning a task's state is a different package's call from reading its
+// history. TaskEvent carries a kind and a detail and no state field, so the
+// newest event has no state in it to misread. And there is no accessor that
+// returns the newest event alone, because that call's shape is the defect: it
+// reads as though it answers what is true now.
 //
 // What that does not do is stop a determined caller from inventing the same
 // mistake out of TaskEvents and its own logic. The measure is a shape that
@@ -221,9 +231,8 @@
 // and begins its transactions in immediate mode, so writers queue in the pool
 // rather than contending for the database lock, and a read-modify-write done
 // inside one transaction cannot interleave with another writer's. That is what
-// makes the sequence AppendTaskEvent assigns dense with no duplicates, and the
-// revisions SetTaskState assigns strictly increasing, under any number of
-// concurrent callers. It is also what makes AppendGraphCheckpoint's anchor
+// makes the sequence AppendTaskEvent assigns dense with no duplicates under any
+// number of concurrent callers. It is also what makes AppendGraphCheckpoint's anchor
 // decision and the sequence it assigns one step rather than two, which is the
 // whole of what that accessor is for. The reader pool is unbounded and carries
 // queries only.
