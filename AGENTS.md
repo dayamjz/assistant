@@ -338,8 +338,14 @@ Each has cost this repository more than one round of review.
   precedence and `kind.go` is the one owner of what an event kind means. The
   `task_state` table is sealed (migration 10) and must never get an accessor.
   `internal/store` only returns the facts, through `TaskSnapshot`, and learns
-  no meaning. Read its `doc.go` for the residual gaps, and for why PRD section
-  8's "task state" row is read as a resolution rather than a row.
+  no meaning. The terminal tier, `SourceRecord`, outranks every run and is
+  derived: `Landed` from the merge record of an attributed run and `Complete`
+  from that and the cleanup record's removal, for a delivery task; nothing
+  there reads a code host or writes a record, and no event kind is named
+  `landed` or `complete`. `Complete` for an investigation task is unreachable
+  until a record holds its stored report, and `doc.go` says so rather than
+  approximating it. Read its `doc.go` for the residual gaps, and for why PRD
+  section 8's "task state" row is read as a resolution rather than a row.
 - `internal/tasks` is PRD section 8's tasks module as far as this build takes
   it: intake, queueing, and the P11 assertion, with dispatch, copies and the
   launch left to #104 and #91. `Expect` computes a task's `Expectation` and
@@ -368,9 +374,11 @@ Each has cost this repository more than one round of review.
   supersedes a run, since that push creates the branch's next run under the
   same exclusion and the branch stays live. Read its
   `doc.go` before changing the floor or the clear condition, and for the
-  residual gaps: Ready never clears and Landed/Complete are not resolved yet,
-  so a blocker at Ready holds until #107; Failed is not terminal, so a relaunch
-  must re-run the floor; a person's push on a task's branch is outside it.
+  residual gaps: Ready never clears and only a merge record moves a blocker
+  past it (`Clears` is Failed, Reported, Landed and Complete, and the two
+  finishes in `internal/service` that write the record both call `Release`);
+  Failed is not terminal, so a relaunch must re-run the floor; a
+  person's push on a task's branch is outside it.
 - `internal/supervisor` is the pure core of PRD section 5's supervision:
   `Classify` is the wake flowchart as a function and `Assess` is the stop
   guard's predicate, both over typed inputs the caller computed, with no

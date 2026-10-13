@@ -13,6 +13,43 @@
 // its doc comment is the contract; kind.go is the one owner of what an event
 // kind means.
 //
+// # The terminal tier
+//
+// PRD section 6 puts one tier above the run: a terminal record the program
+// wrote once. Landed is derived from the merge record of a run attributed to
+// the task, the record store.TransitionRunOnPullRequest writes in the
+// transaction that ends the run, and Complete from that and the task's
+// cleanup record with its removal marked. Both reach Resolve on the snapshot
+// and nothing here writes either; the merge record's producer is
+// internal/runs' PassOnMerge, reached from internal/service where the checks
+// stage read the pull request as merged and from its checks-hold closure,
+// and this package adds no reader of the code host. That closure runs at
+// recovery and before a held run is resumed, so a merge that happens after
+// checks_timeout elapsed is recorded when the service next looks, and a
+// task reads Ready until then; the window is the closure's doc's to state
+// (internal/service's checkshold.go), not a gap in the resolution. Whoever
+// opened the pull request, the record is the proof: a pull request a
+// person opened by hand on the task's branch, validated by a run attributed
+// to the task and read as merged, lands the task. Where more than one
+// attributed run has a merged record, the newest is the one named.
+//
+// A terminal record is final. Every run in the snapshot is read below it, so
+// a run attributed later, by branch or named by the task's own row, does not
+// displace it; work that continues after Landed is a new task, which is what
+// internal/tasks' floor rests on when it treats Landed and Complete as
+// cleared. No event kind is named landed or complete, and a worker's event by
+// either name is a word with no row, which answers nothing (P8).
+//
+// Complete for an investigation task is not reachable in this build. PRD
+// section 5's edge asks for a stored report and registered holds before the
+// cleanup proof, and no record here holds a stored report: the report-ready
+// event is a worker's claim, which is history, and a hold row names a task
+// without saying which report it was registered from. Rather than derive
+// Complete from an approximation of those facts, the tier declines, and an
+// investigation task with a removed copy stays Reported. The record that
+// settles it is a later issue's, and the test that pins today's answer is the
+// one that moves when it lands.
+//
 // The package is read-only and takes no clock. Resolve is pure, and Reader
 // only calls store accessors that read.
 //
@@ -55,12 +92,14 @@
 //     That closes the relaunch gap and keeps a queued task from inheriting
 //     its blocker's runs, but two tasks whose attempts are both live on one
 //     branch still share the runs made after the later attempt began.
-//   - The terminal tier PRD section 6 puts above the run tier is not here.
-//     The merge records of the attributed runs and the task's cleanup record
-//     both reach Resolve's caller on the snapshot and neither is read, so
-//     Landed and Complete stay undeclared until #107 reads them; Inputs has
-//     no field for either on purpose, since a field nothing reads would read
-//     as a tier that exists. The ordering rules this package
+//   - The cleanup record has no writer in this build (#108), so Complete is
+//     reached today only by store.RecordTaskCleanup and
+//     store.MarkCleanupRemoved called from a test; the rule that reads it is
+//     here so the writer inherits a consumer rather than defining one.
+//   - A merge record reading closed lands nothing and is not read here: the
+//     run it ended is failed, and the run tier says so. The record's reason
+//     is not carried into the detail.
+//   - The ordering rules this package
 //     states for its own kinds, "relaunched" then "dispatched" and the
 //     closed detail of "isolation-refused", are owed by their writers (#94
 //     and #98) and checked by nothing here: the store appends any text, and

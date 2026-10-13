@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"fmt"
 	"slices"
+	"time"
 
 	"github.com/dayamjz/assistant/internal/store"
 )
@@ -24,16 +25,31 @@ var runStates = map[store.RunStatus]State{
 // Resolve answers what is true of a task now, from the records that own the
 // facts, in PRD section 6's fixed precedence and first match wins:
 //
-//  1. The newest attributed run, whatever its status: SourceRun. A run that
+//  1. A terminal record: SourceRecord. A task is Landed when the merge
+//     record of a run in Runs reads merged; where more than one does, the
+//     newest such run is the one named in Basis.LandedRun. A delivery task
+//     is Complete when it is Landed and its cleanup record carries a
+//     removal, and Complete outranks Landed. Nothing else reaches this tier:
+//     a cleanup record on a task that has not landed is a disk reclamation
+//     and leaves the state to the tiers below, a record naming a run outside
+//     Runs is not the task's, and a merge record reading closed is read by
+//     the run tier through the run's own status. An investigation task has
+//     no Complete here, because the facts PRD section 5 asks for on its edge
+//     (a stored report and registered holds) have no record in this build;
+//     the package comment states that gap. A terminal record is final: a
+//     newer run in Runs, attributed by branch or named by the task, does not
+//     displace it, which is PRD section 6's "work that continues after
+//     Landed is a new task".
+//  2. The newest attributed run, whatever its status: SourceRun. A run that
 //     is pending or running reads as Validating, held as Held, passed as
 //     Ready, failed or terminated as Failed. A status outside the run
 //     vocabulary reads as Unknown from SourceRun and does not fall through,
 //     because a run exists and the log is exactly what it outranks.
-//  2. The terminal: Live reads as Running, positive evidence. Dead with no run
+//  3. The terminal: Live reads as Running, positive evidence. Dead with no run
 //     reads as Unknown from SourceProcess and does not fall through to the
 //     log, because a stale event is what a dead terminal must not be trusted
 //     for. Unobserved skips the tier.
-//  3. The log: only when its most recent event's kind has a row in this
+//  4. The log: only when its most recent event's kind has a row in this
 //     package's table that claims a state, or says a decision is open (Held).
 //     A kind that closes a decision, a note, an unrecognized kind, or an empty
 //     log reads as Unknown from SourceNone.
@@ -57,9 +73,22 @@ func Resolve(in Inputs) Resolution {
 		out.Basis.EventSequence = events[n-1].Sequence
 	}
 
-	switch run, ok := newest(in.Runs); {
-	case ok:
+	run, ok := newest(in.Runs)
+	if ok {
 		out.Basis.RunID, out.Basis.RunStatus, out.Basis.RunUpdatedAt = run.ID, run.Status, run.UpdatedAt
+	}
+	landed, isLanded := landedRun(in.Runs, in.MergeRecords)
+	if isLanded {
+		out.Basis.LandedRun = landed.ID
+	}
+	if cleanup, known := in.Cleanup.Get(); known {
+		out.Basis.CleanupRecorded, out.Basis.CleanupRemoved = true, cleanup.RemovedAt.IsKnown()
+	}
+
+	switch {
+	case isLanded:
+		out.State, out.Source, out.Detail = fromRecords(in.Task, landed, in.MergeRecords, in.Cleanup)
+	case ok:
 		out.State, out.Source, out.Detail = fromRun(run, in.Holds)
 	case in.Process == Live:
 		out.State, out.Source = Running, SourceProcess
@@ -71,7 +100,7 @@ func Resolve(in Inputs) Resolution {
 		out.State, out.Source, out.Detail = fromEvents(events)
 	}
 
-	if out.Source == SourceRun || out.Source == SourceProcess {
+	if out.Source == SourceRecord || out.Source == SourceRun || out.Source == SourceProcess {
 		out.Superseded = supersededBy(events, out.State, out.Source)
 	}
 	out.Progress = (out.State == Validating && out.Source == SourceRun && in.Advancing) ||
@@ -89,6 +118,46 @@ func newest(runs []store.Run) (store.Run, bool) {
 		}
 	}
 	return best, len(runs) > 0
+}
+
+// landedRun picks, on newest's terms, the newest of runs whose merge record
+// in records reads merged. A record naming a run outside runs is not
+// consulted, and a record reading closed lands nothing.
+func landedRun(runs []store.Run, records []store.MergeRecord) (store.Run, bool) {
+	var merged []store.Run
+	for _, r := range runs {
+		if rec, ok := recordOf(records, r.ID); ok && rec.End == store.PullRequestMerged {
+			merged = append(merged, r)
+		}
+	}
+	return newest(merged)
+}
+
+// recordOf finds the merge record naming the run, if any.
+func recordOf(records []store.MergeRecord, runID string) (store.MergeRecord, bool) {
+	for _, rec := range records {
+		if rec.Run == runID {
+			return rec, true
+		}
+	}
+	return store.MergeRecord{}, false
+}
+
+// fromRecords is the terminal tier, entered only for a task that has landed:
+// Complete when the task is a delivery task whose cleanup record carries a
+// removal, otherwise Landed. The detail names the records and never a
+// worker's text.
+func fromRecords(task store.Task, landed store.Run, records []store.MergeRecord,
+	cleanup store.Optional[store.TaskCleanup]) (State, Source, store.Optional[string]) {
+	rec, _ := recordOf(records, landed.ID)
+	if c, ok := cleanup.Get(); ok && task.Shape == store.TaskDelivery {
+		if removedAt, removed := c.RemovedAt.Get(); removed {
+			return Complete, SourceRecord, store.Known(fmt.Sprintf(
+				"pull request %d of run %s was read as merged and the isolated copy was removed at %s",
+				rec.PullRequest, landed.ID, removedAt.UTC().Format(time.RFC3339)))
+		}
+	}
+	return Landed, SourceRecord, store.Known(fmt.Sprintf("pull request %d of run %s was read as merged", rec.PullRequest, landed.ID))
 }
 
 func fromRun(run store.Run, holds []store.Hold) (State, Source, store.Optional[string]) {
