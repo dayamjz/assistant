@@ -16,6 +16,7 @@ import (
 	"github.com/dayamjz/assistant/internal/agents/standin"
 	"github.com/dayamjz/assistant/internal/cli"
 	"github.com/dayamjz/assistant/internal/home"
+	"github.com/dayamjz/assistant/internal/judge"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/redact"
@@ -28,6 +29,9 @@ import (
 // test opens resolves instead of whatever agent is installed on the machine
 // running the tests, and as the command a gate's hooks invoke.
 func TestMain(m *testing.M) {
+	// The decision-model key is the operator's consent to send changed lines
+	// to a third party, so a test must never inherit one from whoever runs it.
+	_ = os.Unsetenv(judge.KeyVariable)
 	standin.Main()
 	hookMain()
 	os.Exit(m.Run())

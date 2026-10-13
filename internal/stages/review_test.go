@@ -17,6 +17,7 @@ import (
 	"github.com/dayamjz/assistant/internal/findings"
 	"github.com/dayamjz/assistant/internal/graph"
 	"github.com/dayamjz/assistant/internal/home"
+	"github.com/dayamjz/assistant/internal/judge"
 	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/redact"
@@ -1110,6 +1111,7 @@ func script(reply standin.Reply) standin.Script {
 type setup struct {
 	options pipeline.Options
 	git     []vcs.Option
+	judge   *judge.Client
 }
 
 // option configures the run a review test drives.
@@ -1119,6 +1121,11 @@ type option func(*setup)
 // serves them.
 func withRounds(rounds config.FixRounds, fixer pipeline.Fixer) option {
 	return func(s *setup) { s.options.Rounds, s.options.Fixer = rounds, fixer }
+}
+
+// withJudge gives the review stage this decision-model client.
+func withJudge(c *judge.Client) option {
+	return func(s *setup) { s.judge = c }
 }
 
 // withGit opens the run's isolated copy with these options, which is how a
@@ -1204,7 +1211,8 @@ func prepare(t *testing.T, s *subject, sc standin.Script, cfg config.Config, sta
 	for _, opt := range opts {
 		opt(&cfgured)
 	}
-	deps := stages.NewStageDeps(agents.NewStageAgent(agent.Runner()), s.home, cfg, nil, redact.New(), cfgured.git...)
+	deps := stages.NewStageDeps(agents.NewStageAgent(agent.Runner()), s.home, cfg, nil, redact.New(), cfgured.git...).
+		WithJudge(cfgured.judge)
 
 	all := pipeline.ConstantStages("nothing to report")
 	all.Review = stages.Review(deps)

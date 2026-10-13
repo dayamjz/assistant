@@ -6,6 +6,7 @@ import (
 
 	"github.com/dayamjz/assistant/internal/agents/standin"
 	"github.com/dayamjz/assistant/internal/journey"
+	"github.com/dayamjz/assistant/internal/judge"
 )
 
 // TestMain lets this binary act as the executables the product resolves by
@@ -18,6 +19,9 @@ import (
 // them rather than letting this binary run its own test suite as somebody's
 // agent.
 func TestMain(m *testing.M) {
+	// The decision-model key is the operator's consent to send changed lines
+	// to a third party, so a test must never inherit one from whoever runs it.
+	_ = os.Unsetenv(judge.KeyVariable)
 	standin.Main()
 	journey.ActAsShim()
 	code := m.Run()

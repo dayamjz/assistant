@@ -79,6 +79,27 @@ import (
 // lens not having run is a fact about the review, and a silent skip would read
 // exactly like a change whose every path was accounted for.
 //
+// # The decision-model checks
+//
+// PRD section 5's "Checks a decision model may add" are applied here, after
+// the reviewer has answered, and decision.go owns how. Whether they run is the
+// run's config.DecisionModel and whether the service's client holds a key: in
+// evaluate or enforce with a key, every file the reviewer was shown - the
+// excluded ones included, because the reviewer is shown the whole diff - is
+// screened one file per request, and every trace naming a touched path is put
+// to the model with that path's diff before scope.ObserveChecked counts it. A
+// trace the model does not confirm silences nothing; a file the screen flags
+// is a note, or an ask in enforce. With the mode off nothing is sent and
+// nothing is said; with no key nothing is sent and one note says so. A check
+// that cannot run holds nothing and is named in a note, in every mode.
+//
+// The trace check is skipped when the scope lens does not apply, because the
+// reviewer was asked for no traces. The screen runs after the review rather
+// than before it, so what it protects is the person's reading of the verdict
+// and not the reviewer's exposure. A review that came back unusable, or a
+// change too large to review, holds for a person already, and neither check
+// runs over it.
+//
 // # Where the line between an error and a finding falls
 //
 // A stage body returns an error only when the stage could not run at all, and
@@ -137,7 +158,9 @@ import (
 //     reported like any other.
 //   - The evidence set is the reviewer's own claim, and no path here is
 //     resolved against a filesystem. internal/findings owns that limit.
-//   - A trace is recorded and not verified. internal/scope owns that limit.
+//   - A trace is recorded and, unless a decision model checked it, not
+//     verified. internal/scope owns that limit, and internal/judge owns what a
+//     model's check is worth.
 func Review(deps StageDeps) pipeline.Implementation {
 	return pipeline.Implementation{
 		Reads: []pipeline.Key{
@@ -215,7 +238,28 @@ func reviewChange(ctx context.Context, deps StageDeps, in pipeline.Input) (pipel
 	}
 
 	report := result.Report
-	report.Findings = append(report.Findings, observeScope(scoped, report.Traced, scopeErr)...)
+	decide := decisionRun{mode: deps.Config.DecisionModel, client: deps.judge, repo: repo,
+		run: facts.run, from: change.from, head: facts.head}
+	var unconfirmed []findings.Trace
+	switch {
+	case decide.sends():
+		shown := append(append([]string(nil), change.touched...), change.excluded...)
+		report.Findings = append(report.Findings, decide.screenFindings(decide.screen(ctx, shown))...)
+		if scopeErr == nil {
+			var notes []findings.Finding
+			unconfirmed, notes = decide.traceFindings(decide.traces(ctx, change.touched, report.Traced))
+			report.Findings = append(report.Findings, notes...)
+		}
+		if errors.Is(ctx.Err(), context.Canceled) {
+			// The run is being stopped, and the checks' failures were that
+			// rather than the provider's; a report built from them would be
+			// answered by nobody.
+			return pipeline.Output{}, ctx.Err()
+		}
+	case decide.active():
+		report.Findings = append(report.Findings, noKeyNote())
+	}
+	report.Findings = append(report.Findings, observeScope(scoped, report.Traced, unconfirmed, scopeErr)...)
 	return pipeline.Output{Report: report}, nil
 }
 
@@ -376,6 +420,10 @@ func changedPaths(changed []vcs.FileChange) []string {
 // as a note saying so, because a silent skip reads exactly like a change every
 // path of which was accounted for.
 //
+// unconfirmed is the traces a decision model answered and did not confirm,
+// which the lens counts as accounting for nothing; decisionRun owns which
+// those are, and a trace whose check could not run is never among them.
+//
 // refused is the refusal scope.Guidance already gave for this change, so the
 // prompt the reviewer saw and the notes reported here agree about whether the
 // lens applied. Observe is asked again rather than assumed, and its own
@@ -390,9 +438,9 @@ func changedPaths(changed []vcs.FileChange) []string {
 // that everywhere else in this stage holds it for a person.
 // findings.NormalizeFindings derives one instead, checked against every
 // identifier the report already carries.
-func observeScope(c scope.Change, traced []findings.Trace, refused error) []findings.Finding {
+func observeScope(c scope.Change, traced, unconfirmed []findings.Trace, refused error) []findings.Finding {
 	if refused == nil {
-		notes, err := scope.Observe(c, traced)
+		notes, err := scope.ObserveChecked(c, traced, unconfirmed)
 		if err == nil {
 			return notes
 		}

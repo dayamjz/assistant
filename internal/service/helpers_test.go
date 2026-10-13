@@ -16,6 +16,7 @@ import (
 	"github.com/dayamjz/assistant/internal/gate"
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/ipc"
+	"github.com/dayamjz/assistant/internal/judge"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/redact"
@@ -28,6 +29,9 @@ import (
 // agent before it can start a run, and a test that reached the operator's real
 // agent would be running whatever happens to be installed.
 func TestMain(m *testing.M) {
+	// The decision-model key is the operator's consent to send changed lines
+	// to a third party, so a test must never inherit one from whoever runs it.
+	_ = os.Unsetenv(judge.KeyVariable)
 	standin.Main()
 	os.Exit(m.Run())
 }
