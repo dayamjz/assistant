@@ -253,12 +253,14 @@ func doctor(ctx context.Context, in *invocation) (any, error) {
 		Detail:   serviceDetail(service),
 	})
 
-	resolution, err := agents.Resolve(ctx, in.resolvedAgents(), agents.DefaultCatalog())
+	catalog := agents.DefaultCatalog()
+	resolution, err := agents.Resolve(ctx, in.resolvedAgents(), catalog)
 	if err != nil {
 		add(machine.Check{Name: "agent", Blocking: true, Detail: err.Error()})
 	} else {
 		add(machine.Check{Name: "agent", OK: true, Blocking: true, Detail: resolution.Name})
 	}
+	add(namedOnlyAgents(ctx, catalog))
 
 	add(codeHost())
 	add(stageBodies())
@@ -275,6 +277,31 @@ func doctor(ctx context.Context, in *invocation) (any, error) {
 		report.Detail = "a run cannot start: " + strings.Join(blocking, ", ")
 	}
 	return report, nil
+}
+
+// namedOnlyAgents reports the adapters that resolve on this machine but that
+// "auto" never chooses, separately from the "agent" check so that the agent a
+// run would use is never confused with one that merely has a binary on PATH.
+// Which adapters auto may choose is the catalog's declaration, not a list
+// here. It never blocks and never changes what "auto" resolves; naming one of
+// these in the agent key still selects it.
+func namedOnlyAgents(ctx context.Context, catalog *agents.Catalog) machine.Check {
+	var found []string
+	for _, standing := range catalog.Survey(ctx) {
+		if !standing.AutoEligible && standing.Runnable {
+			found = append(found, standing.Name)
+		}
+	}
+	if len(found) == 0 {
+		return machine.Check{Name: "named-only agents", OK: true,
+			Detail: "no adapter that auto never chooses resolves here"}
+	}
+	return machine.Check{
+		Name: "named-only agents",
+		Detail: strings.Join(found, ", ") + " resolve on this machine, but PRD section 12 defers them, so " +
+			"auto never chooses them and a run uses one only when the agent key names it; nothing here " +
+			"has checked them against their real CLIs",
+	}
 }
 
 // gateCheck establishes what a run needs of this working copy: the gate it is

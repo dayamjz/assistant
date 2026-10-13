@@ -215,7 +215,7 @@ func TestWhatTheShippedAdapterDeclares(t *testing.T) {
 
 	// Test that all adapters are in the default catalog
 	names := agents.DefaultCatalog().Names()
-	wantNames := []string{agents.CursorName, agents.ClaudeName, agents.OpenAIName, agents.GrokName}
+	wantNames := []string{agents.ClaudeName, agents.CursorName, agents.OpenAIName, agents.GrokName}
 	if !slices.Equal(names, wantNames) {
 		t.Errorf("this build ships adapters %v, want %v", names, wantNames)
 	}
