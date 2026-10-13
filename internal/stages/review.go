@@ -10,6 +10,7 @@ import (
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/findings"
+	"github.com/dayamjz/assistant/internal/judge"
 	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/scope"
 	"github.com/dayamjz/assistant/internal/vcs"
@@ -141,12 +142,17 @@ import (
 // body sees one run and reads no history, so it cannot see a class recurring
 // and reports nothing about one. No seam for it ships either, on this
 // package's rule that surface answers to a consumer that exists: whoever
-// builds that reading owns deciding where the history is read from.
+// builds that reading owns deciding where the history is read from. The
+// proposal to turn a decision-model check off is the same kind of reading,
+// and it is internal/service's for that reason: it is raised on the run's
+// answer from the store, never into this stage's report, which is graph
+// state the convergence bound fingerprints.
 //
 // # What it does not establish
 //
-// It writes no state key, and in particular it does not write
-// pipeline.KeyApproved. PRD section 5 has the push stage require a durable
+// It writes one state key, pipeline.KeyDecisionChecks, which is the record
+// of what the decision-model checks did and nothing about the verdict, and in
+// particular it does not write pipeline.KeyApproved. PRD section 5 has the push stage require a durable
 // record that a completed review approved a commit this one descends from, and
 // a review completes two ways: this body's report can pass on its own, or a
 // person can approve at the stage's hold. Only the first is visible here, so a
@@ -188,6 +194,7 @@ func Review(deps StageDeps) pipeline.Implementation {
 			pipeline.StageReview.ReportKey(),
 			pipeline.StageReview.FixKey(),
 		},
+		Writes: []pipeline.Key{pipeline.KeyDecisionChecks},
 		NewBody: func() pipeline.Body {
 			return func(ctx context.Context, in pipeline.Input) (pipeline.Output, error) {
 				return reviewChange(ctx, deps, in)
@@ -228,15 +235,21 @@ func reviewRead(ctx context.Context, deps StageDeps, repo *vcs.Repository, facts
 	// review nothing: a change the ignore patterns exclude whole is exactly
 	// the change that must not delete a judge file unseen.
 	judged := judgeEdits(deps.Config.JudgePaths, change.changes)
+	// What the decision-model checks did is written on every report from here
+	// on too, as not having run until they do.
+	mode := deps.Config.DecisionModel
+	tooLarge := decisionChecks{Mode: string(mode), Why: "the change was too large to review, so the " +
+		"review did not reach the checks"}
 	if err != nil {
 		if errors.Is(err, vcs.ErrOutputTooLarge) {
-			return withJudged(tooLargeToReview(change, "The change at "+facts.head+" could not be read "+
-				"from git in one piece: "+err.Error()+"."), judged), nil
+			return finish(tooLargeToReview(change, "The change at "+facts.head+" could not be read "+
+				"from git in one piece: "+err.Error()+"."), judged, tooLarge), nil
 		}
 		return pipeline.Output{}, err
 	}
 	if len(change.touched) == 0 {
-		return withJudged(nothingToReview(change), judged), nil
+		return finish(nothingToReview(change), judged, decisionChecks{Mode: string(mode),
+			Why: "the change left nothing to review, so the review did not reach the checks"}), nil
 	}
 
 	demand := findings.Demand{Revision: facts.head, Touched: change.touched}
@@ -254,9 +267,9 @@ func reviewRead(ctx context.Context, deps StageDeps, repo *vcs.Repository, facts
 	prompt := reviewPrompt(deps.Config, facts, change, evidence, scopeGuidance,
 		judgeReviewGuidance(judged, change.excluded))
 	if len(prompt) > agents.MaxPromptBytes {
-		return withJudged(tooLargeToReview(change, "Reviewing "+facts.head+" would take a prompt of "+
+		return finish(tooLargeToReview(change, "Reviewing "+facts.head+" would take a prompt of "+
 			strconv.Itoa(len(prompt))+" bytes, and one invocation may carry "+
-			strconv.Itoa(agents.MaxPromptBytes)+"."), judged), nil
+			strconv.Itoa(agents.MaxPromptBytes)+"."), judged, tooLarge), nil
 	}
 
 	result, err := deps.Agent.Run(ctx, agents.PurposeReview, agents.Invocation{
@@ -270,21 +283,34 @@ func reviewRead(ctx context.Context, deps StageDeps, repo *vcs.Repository, facts
 		if err != nil {
 			return out, err
 		}
-		return withJudged(out, judged), nil
+		return finish(out, judged, decisionChecks{Mode: string(mode), Why: "the reviewer returned " +
+			"no review this build could use, so the review did not reach the checks"}), nil
 	}
 
 	report := result.Report
-	decide := decisionRun{mode: deps.Config.DecisionModel, client: deps.judge, repo: repo,
+	// One review is one allowance of requests, shared by both checks: the
+	// screen asks first, so on a change over the bound it is the trace check
+	// that goes without.
+	decide := decisionRun{mode: mode, client: deps.judge.ForReview(), repo: repo,
 		run: facts.run, from: change.from, head: facts.head}
 	var unconfirmed []findings.Trace
+	checks := decisionChecks{Mode: string(mode)}
 	switch {
 	case decide.sends():
+		checks.Model = judge.ModelVersion
 		shown := append(append([]string(nil), change.touched...), change.excluded...)
-		report.Findings = append(report.Findings, decide.screenFindings(decide.screen(ctx, shown))...)
+		screened := decide.screen(ctx, shown)
+		checks.Screen = coverageOf(screened)
+		report.Findings = append(report.Findings, decide.screenFindings(screened)...)
 		if scopeErr == nil {
 			var notes []findings.Finding
-			unconfirmed, notes = decide.traceFindings(decide.traces(ctx, change.touched, report.Traced))
+			traced := decide.traces(ctx, change.touched, report.Traced)
+			checks.Trace = coverageOf(traced)
+			unconfirmed, notes = decide.traceFindings(traced)
 			report.Findings = append(report.Findings, notes...)
+		} else {
+			checks.TraceWhy = "the scope lens did not apply to this change, so the reviewer was asked " +
+				"for no traces"
 		}
 		if errors.Is(ctx.Err(), context.Canceled) {
 			// The run is being stopped, and the checks' failures were that
@@ -293,18 +319,23 @@ func reviewRead(ctx context.Context, deps StageDeps, repo *vcs.Repository, facts
 			return pipeline.Output{}, ctx.Err()
 		}
 	case decide.active():
+		checks.Why = "no key for the provider is in " + judge.KeyVariable + " in the operator's " +
+			"environment, so nothing was sent"
 		report.Findings = append(report.Findings, noKeyNote())
+	default:
+		checks.Why = "the decision-model mode is " + string(mode) + ", so nothing was sent"
 	}
 	report.Findings = append(report.Findings, observeScope(scoped, report.Traced, unconfirmed, scopeErr)...)
-	return withJudged(pipeline.Output{Report: report}, judged), nil
+	return finish(pipeline.Output{Report: report}, judged, checks), nil
 }
 
-// withJudged adds the judge lens's findings to a report this stage built. It
-// is one function so that every report the body returns after reading the
-// change goes through it, whichever path produced the report.
-func withJudged(out pipeline.Output, judged []judgeEdit) pipeline.Output {
+// finish adds the judge lens's findings to a report this stage built and
+// writes the record of what the decision-model checks did. It is one function
+// so that every report the body returns after reading the change goes through
+// it, whichever path produced the report.
+func finish(out pipeline.Output, judged []judgeEdit, checks decisionChecks) pipeline.Output {
 	out.Report.Findings = append(out.Report.Findings, judgeReviewFindings(judged)...)
-	return out
+	return withDecisionChecks(out, checks)
 }
 
 // reviewFacts is what the run's own state says about the change under review.

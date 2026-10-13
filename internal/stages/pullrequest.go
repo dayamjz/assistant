@@ -84,6 +84,15 @@ const titleLimit = 72
 // create-or-update rule while other work is being written against that seam.
 // The disagreement does reach the run's record as a note in the meantime.
 //
+// # What the decision-model checks did
+//
+// The body records PRD section 5's "The run records what ran" in its own
+// subsection of what was checked: the mode, the model version, and how many
+// files or traces each check covered, from the review stage's
+// pipeline.KeyDecisionChecks. It is the review's record and not one rebuilt
+// here, and a run whose review wrote none says so rather than reading as a
+// run with the checks off.
+//
 // # What the body does not carry: how many attempts it took
 //
 // PRD "what passing the gate means" says the pull request records what was
@@ -188,6 +197,7 @@ func pullRequestReads() []pipeline.Key {
 		pipeline.KeySubmitted,
 		pipeline.KeyHead,
 		pipeline.KeyPushed,
+		pipeline.KeyDecisionChecks,
 	}
 	for _, stage := range pipeline.Order() {
 		reads = append(reads, pipeline.StageResultKeys(stage)...)
@@ -208,6 +218,10 @@ type runFacts struct {
 	head            string
 	pushed          string
 	stages          []pipeline.StageResult
+	// decision is the review's record of what the decision-model checks did,
+	// and decided says whether the review wrote one.
+	decision decisionChecks
+	decided  bool
 }
 
 // submitPullRequest is the stage body.
@@ -289,6 +303,13 @@ func readRunFacts(state pipeline.Reader) (runFacts, error) {
 		return runFacts{}, err
 	}
 	facts.supplied, _ = suppliedValue.Bool()
+	decided, err := state.Get(pipeline.KeyDecisionChecks)
+	if err != nil {
+		return runFacts{}, err
+	}
+	if facts.decision, facts.decided, err = readDecisionChecks(decided); err != nil {
+		return runFacts{}, fmt.Errorf("stages: reading the review's decision-model record: %w", err)
+	}
 	for _, stage := range pipeline.Order() {
 		result, err := pipeline.ReadStageResult(state, stage)
 		if err != nil {
@@ -484,7 +505,42 @@ func whatWasChecked(facts runFacts) string {
 	for _, result := range facts.stages {
 		sections = append(sections, "### "+result.Stage.String(), stageSection(result))
 	}
+	sections = append(sections, "### Decision-model checks", decisionSection(facts))
 	return join(sections...)
+}
+
+// decisionSection is PRD section 5's "The run records what ran": the mode,
+// whether each check ran, on which model version, and how many files or
+// traces it covered, so a pass from a machine with the checks on reads
+// differently from one without. It renders the review's record of the checks
+// and nothing else, so a run whose review did not write one says that rather
+// than a mode this stage would have to infer.
+func decisionSection(facts runFacts) string {
+	if !facts.decided {
+		return "The review stage recorded nothing about the decision-model checks, because it did not " +
+			"read the change in this run, so no decision-model check ran over it."
+	}
+	d := facts.decision
+	mode := "Mode: `" + d.Mode + "`."
+	if d.Why != "" {
+		return join(mode, "Neither check ran: "+d.Why+".")
+	}
+	lines := []string{"Model version: `" + d.Model + "`"}
+	lines = append(lines, coverageLine("Screen for text aimed at the reviewer", "file(s)", d.Screen, ""))
+	lines = append(lines, coverageLine("Check of the review's trace reasons", "trace(s)", d.Trace, d.TraceWhy))
+	return join(mode, bullets(lines))
+}
+
+// coverageLine says what one check covered, or that it did not run and why.
+func coverageLine(name, unit string, c *checkCoverage, why string) string {
+	if c == nil {
+		if why == "" {
+			why = "the review recorded no reason"
+		}
+		return name + ": did not run, because " + why + "."
+	}
+	return fmt.Sprintf("%s: ran over %d %s; the model answered for %d and fired on %d.",
+		name, c.Asked, unit, c.Answered, c.Fired)
 }
 
 // stageSection renders one stage's account of itself.

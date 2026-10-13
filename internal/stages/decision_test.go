@@ -307,16 +307,24 @@ func TestEveryAnswerIsRecordedWithTheFindingItProduced(t *testing.T) {
 	}
 }
 
-// records is a judge.Recorder that keeps what it is handed.
+// records is a judge.Recorder that keeps what it is handed, except what
+// refuse turns down, the way a store refusing a row would.
 type records struct {
-	mu   sync.Mutex
-	rows []judge.Record
+	mu     sync.Mutex
+	rows   []judge.Record
+	refuse func(judge.Record) error
 }
 
-func (r *records) RecordAnswer(rec judge.Record) {
+func (r *records) RecordAnswer(rec judge.Record) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.refuse != nil {
+		if err := r.refuse(rec); err != nil {
+			return err
+		}
+	}
 	r.rows = append(r.rows, rec)
+	return nil
 }
 
 func (r *records) all() []judge.Record {
