@@ -143,8 +143,8 @@ Each has cost this repository more than one round of review.
   anywhere else; add a typed operation there instead. Its package comment states
   the two rules it applies to every invocation and the residual gaps in them.
   `StripRedirecting` is the one list of what points git at another repository,
-  and `Observe` is taken under this package's own environment, so an
-  `Observation` says what a copy on disk is and never what a worker's
+  and `Observe` is taken under this package's own environment, so a
+  `vcs.Observation` says what a copy on disk is and never what a worker's
   environment would make git see there; a check on that environment derives
   from `StripRedirecting` rather than carrying a second list. `Clone` promises
   the remote set the caller named and refuses a destination that exists.

@@ -210,13 +210,25 @@ func TestAssertIsolatedRefusesEverythingButAnIsolatedCopy(t *testing.T) {
 		}
 	})
 
-	t.Run("the assistant remote spelled as a file URL with a trailing separator passes", func(t *testing.T) {
+	t.Run("the assistant remote spelled as a file URL with a trailing separator passes both checks", func(t *testing.T) {
 		s := isolationSubject(t)
 		s.deliveryClone(t, "topic")
 		rawGit(t, s.copy, "remote", "set-url", gate.RemoteName, "file://"+filepath.ToSlash(s.gate)+"/")
-		want, _ := s.expect(t, store.TaskDelivery, "topic")
+		want, command := s.expect(t, store.TaskDelivery, "topic")
 		if _, err := AssertIsolated(observe(t, s.copy), cleanEnv(), want); err != nil {
 			t.Fatalf("a file URL naming the gate was refused: %v", err)
+		}
+		// The line the worker runs reads the URL the same way, so what the
+		// program proves is not what the worker's own check then refuses.
+		sh, err := exec.LookPath("sh")
+		if err != nil {
+			t.Skip("no sh on PATH to run the second check with")
+		}
+		cmd := exec.Command(sh, "-c", command)
+		cmd.Dir = s.copy
+		cmd.Env = cleanEnv()
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Errorf("the second check failed in the copy under the file URL spelling: %v\n%s", err, out)
 		}
 	})
 

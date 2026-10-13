@@ -149,8 +149,14 @@
 //     that reaches an Isolation already returned; the second check is the
 //     only thing that runs afterwards, and it is detection by a worker that
 //     chooses to run it.
-//   - The second check compares the remote URL as a string against the gate
-//     path as Expect was given it, without the file:// and trailing-separator
-//     normalization AssertIsolated applies, so a copy the assertion passes
-//     under one of those spellings fails its own second check.
+//   - The second check compares the remote URL as a string, after the same
+//     file:// and trailing-separator normalization AssertIsolated applies,
+//     and cannot compare by identity: a gate spelled through a symbolic link,
+//     or with letter case or a volume written another way, passes the
+//     assertion and fails the line.
+//   - The gate comparison refuses a copy equal to or inside the gate
+//     repository and not one containing it, because the home layout keeps
+//     the gate under repos/ and the copy under tasks/ as siblings, so a copy
+//     containing the gate is unrepresentable today. If that layout changes,
+//     the primary rule, which refuses all three, is the stricter template.
 package tasks
