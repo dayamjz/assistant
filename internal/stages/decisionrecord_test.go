@@ -1,10 +1,10 @@
 package stages_test
 
 import (
-	"context"
 	"errors"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/agents/standin"
@@ -68,11 +68,12 @@ func TestAReviewOverTheRequestBoundNamesWhatDidNotRunAndHoldsNothing(t *testing.
 	}
 }
 
-// An answer the record refuses is named in a note on the run's report, and
-// the review's findings are what they would be had it been kept. The control
-// is the same review with a recorder that keeps everything, which says
-// nothing about the record.
-func TestAnAnswerTheRecordRefusesIsNamedOnTheReport(t *testing.T) {
+// An answer the record refuses is reported in a note on the run's report, and
+// the review's findings are what they would be had it been kept. The note's
+// text is fixed - the service log names what was lost - so it carries neither
+// the path nor the store's error. The control is the same review with a
+// recorder that keeps everything, which says nothing about the record.
+func TestAnAnswerTheRecordRefusesIsReportedOnTheRun(t *testing.T) {
 	t.Parallel()
 	review := func(rec *records) reviewed {
 		provider := judgetest.New(t, judgetest.Always(judgetest.Answer(0.01)))
@@ -88,14 +89,14 @@ func TestAnAnswerTheRecordRefusesIsNamedOnTheReport(t *testing.T) {
 	}}
 	lost := review(refusing)
 	// One answer of each check was about the refused path, and each check
-	// names its own.
-	notes := withDescription(lost.report(), "could not keep 1 answer(s)")
+	// says so in its own note.
+	notes := withDescription(lost.report(), "could not keep every answer")
 	if len(notes) != 2 {
-		t.Fatalf("the refused answers are not named one note per check: %+v", lost.report().Findings)
+		t.Fatalf("the refused answers are not reported one note per check: %+v", lost.report().Findings)
 	}
 	for _, n := range notes {
-		if n.Action != findings.ActionNote || !strings.Contains(n.Description, readmePath) ||
-			!strings.Contains(n.Description, "database is locked") {
+		if n.Action != findings.ActionNote || strings.Contains(n.Description, "database is locked") ||
+			strings.Contains(n.Description, readmePath) {
 			t.Fatalf("a note on the refused answers is %+v", n)
 		}
 	}
@@ -113,84 +114,70 @@ func TestAnAnswerTheRecordRefusesIsNamedOnTheReport(t *testing.T) {
 	assertNoWeaker(t, kept.report(), lost.report())
 }
 
-// history is a judge.History answering from fixed firings per check, or with
-// an error.
-type history struct {
-	firings map[judge.Check][]judge.RunFirings
-	err     error
-}
-
-func (h history) Firings(_ context.Context, _ string, check judge.Check) ([]judge.RunFirings, error) {
-	return h.firings[check], h.err
-}
-
-// silent is n earlier runs in which a check fired with nothing following.
-func silent(n int) []judge.RunFirings {
-	out := make([]judge.RunFirings, n)
-	for i := range out {
-		out[i] = judge.RunFirings{Run: "run-" + strconv.Itoa(i+1), Fired: 1}
-	}
-	return out
-}
-
-// A check that fired in each of the window's runs with nothing ever following
-// is proposed off in a note naming the window and the runs, and the note
-// holds nothing and changes no mode. The rule's edges are the controls: one
-// run short of the window proposes nothing, and one firing something followed
-// anywhere in the window proposes nothing either. A record that cannot be read
-// is said rather than read as silence.
-func TestACheckFiringWithNothingFollowingIsProposedOffAndNeverTurnedOff(t *testing.T) {
+// The decision-model checks keep text that varies between fix rounds out of
+// the review's report, so the convergence bound still fires. The loop runs
+// for real: a review that keeps reporting the same fix-eligible finding, a
+// fix round that changes nothing, the checks on, and a record that refuses
+// every answer with an error sentence that differs on every call - the shape
+// a store failing under load has, and the text the lost-answer note used to
+// carry. The run converges after its second round rather than spending its
+// round limit.
+//
+// The control is the same loop with the review's own report carrying text
+// that differs each round, which runs to the round limit: it shows this loop
+// is one the bound reads the report of, so a note quoting the record's error
+// would have defeated it in the same way.
+func TestTheDecisionChecksLeaveAFixLoopThatChangedNothingConvergent(t *testing.T) {
 	t.Parallel()
-	followedOnce := silent(10)
-	followedOnce[6].Followed = 1
-	cases := []struct {
-		name     string
-		history  history
-		proposed int
-		readErr  bool
+	const limit = 5
+	for _, c := range []struct {
+		name    string
+		varying bool
+		want    graph.Status
 	}{
-		{"ten silent runs", history{firings: map[judge.Check][]judge.RunFirings{judge.CheckScreen: silent(12)}}, 1, false},
-		{"nine silent runs", history{firings: map[judge.Check][]judge.RunFirings{judge.CheckScreen: silent(9)}}, 0, false},
-		{"one firing followed", history{firings: map[judge.Check][]judge.RunFirings{judge.CheckScreen: followedOnce}}, 0, false},
-		{"an unreadable record", history{err: errors.New("database is locked")}, 0, true},
-	}
-	for _, c := range cases {
+		{"with the checks' text fixed", false, graph.StatusConverged},
+		{"with the review's own text varying", true, graph.StatusRoundsExhausted},
+	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
-			provider := judgetest.New(t, judgetest.Always(judgetest.Answer(0.01)))
 			s := newSubject(t)
-			cfg := mode(config.DecisionEvaluate)
-			got := run(t, s, script(standin.Report(cleanReview(s))), cfg, s.start(),
-				withJudge(decided(provider, judge.WithHistory(c.history))))
-			proposals := withDescription(got.report(), "Proposal: the decision model's")
-			if len(proposals) != c.proposed {
-				t.Fatalf("%d proposal(s), want %d: %+v", len(proposals), c.proposed, got.report().Findings)
+			reviewWith := func(words string) findings.Report {
+				r := cleanReview(s)
+				r.Findings = []findings.Finding{{
+					ID: "sum-loses-the-last-element", Severity: findings.SeverityError, Action: findings.ActionFix,
+					Location: findings.Location{Path: totalPath, Line: 4}, Description: words,
+				}}
+				return r
 			}
-			for _, p := range proposals {
-				if p.Action != findings.ActionNote {
-					t.Fatalf("a proposal holds: %+v", p)
+			sc := script(standin.Report(reviewWith("The loop stops one element early.")))
+			if c.varying {
+				var steps []standin.Step
+				for i := range limit + 2 {
+					steps = append(steps, standin.Step{Times: 1,
+						Reply: standin.Report(reviewWith("The loop stops one element early, round " + strconv.Itoa(i) + "."))})
 				}
-				_, window, _ := strings.Cut(p.Description, "are the window: ")
-				window, _, _ = strings.Cut(window, ". Check them")
-				var want []string
-				for _, f := range silent(10) {
-					want = append(want, f.Run)
-				}
-				if window != strings.Join(want, ", ") {
-					t.Fatalf("the proposal names the window %q, want the ten newest runs", window)
-				}
-				if !strings.Contains(p.Description, "10 most recent finished runs") ||
-					!strings.Contains(p.Description, "decision_model") {
-					t.Fatalf("the proposal does not name the window or the setting: %q", p.Description)
-				}
+				sc = standin.Script{Steps: steps}
 			}
-			// Both checks ran, so an unreadable record is said once for each.
-			if read := withDescription(got.report(), "could not be read"); (len(read) == 2) != c.readErr ||
-				(!c.readErr && len(read) != 0) {
-				t.Fatalf("an unreadable record was reported %d time(s): %+v", len(read), got.report().Findings)
+			calls := 0
+			var mu sync.Mutex
+			rec := &records{refuse: func(judge.Record) error {
+				mu.Lock()
+				defer mu.Unlock()
+				calls++
+				return errors.New("database is locked after " + strconv.Itoa(calls) + " attempts")
+			}}
+			provider := judgetest.New(t, judgetest.Always(judgetest.Answer(0.01)))
+			got := run(t, s, sc, mode(config.DecisionEvaluate), s.start(),
+				withJudge(decided(provider, judge.WithRecorder(rec))),
+				withRounds(config.FixRounds{Review: limit}, summarizingFixer("nothing needed changing")))
+			if got.result.Status != c.want {
+				t.Fatalf("the run ended %s (%q), want %s", got.result.Status, got.result.Reason, c.want)
 			}
-			if cfg.DecisionModel != config.DecisionEvaluate || got.outcome() != pipeline.OutcomePassed {
-				t.Fatalf("the review came to %s in mode %s", got.outcome(), cfg.DecisionModel)
+			if calls < 4 {
+				t.Fatalf("the record refused %d answers, so the error text never had a chance to vary", calls)
+			}
+			if len(withDescription(got.report(), "could not keep every answer")) != 2 {
+				t.Fatalf("the lost answers are not reported: %+v", got.report().Findings)
 			}
 		})
 	}

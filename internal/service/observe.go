@@ -47,7 +47,10 @@ import (
 //     run's report says so: the answer rows are the record the review names a
 //     loss of, and these are not. A dropped follow-up understates what
 //     followed, which leans toward the proposal to turn a check off; that
-//     proposal is a note and never changes the mode.
+//     proposal is a note and never changes the mode. A run that ended before
+//     anything could follow would lean the same way, which is why the
+//     proposal counts only passed runs and leaves failed and terminated ones
+//     out; decision.go says what that costs.
 //   - A later finding at the path counts whatever produced it, including the
 //     decision-model checks of a later review re-flagging the same file, so
 //     the record can overstate what followed an answer. That leans away from

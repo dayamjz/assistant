@@ -399,8 +399,9 @@ var schema = []migration{
 			// fixed in internal/judge for a given model version.
 			//
 			// What the run did with the path afterwards, which section 5
-			// also asks this record to keep, is migration 10's
-			// decision_followup rather than a column here.
+			// also asks this record to keep, has no column yet: nothing
+			// writes it, and a column nothing writes would read as recorded
+			// and empty. Adding it is a later migration.
 			`CREATE TABLE decision_answer (
 				seq         INTEGER PRIMARY KEY,
 				run         TEXT NOT NULL,

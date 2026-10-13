@@ -1,7 +1,5 @@
 package judge
 
-import "context"
-
 // Record is one answer as PRD section 5 has it kept: which run and stage
 // asked, which check, about which path, of which model version, what came
 // back, the cutoff it was compared against, and the finding it produced.
@@ -68,38 +66,4 @@ func (c *Client) Record(rec Record) error {
 		return nil
 	}
 	return c.recorder.RecordAnswer(rec)
-}
-
-// RunFirings is one earlier run in which a check fired: how many of its
-// answers to the check produced a finding, and how many of those anything the
-// run did next followed - a later finding at the path, a fix round touching
-// it, or a person's answer at a hold over it.
-type RunFirings struct {
-	// Run is the run.
-	Run string
-	// Fired is how many answers produced a finding.
-	Fired int
-	// Followed is how many of those anything followed.
-	Followed int
-}
-
-// History reads the record back for the one question the review stage asks
-// of it: where did this check fire before, and did anything follow.
-type History interface {
-	// Firings returns the finished runs of the repository run validates,
-	// other than run itself, in which check produced at least one finding,
-	// newest first. A run still in progress is left out, because what
-	// follows an answer in it may not have happened yet.
-	Firings(ctx context.Context, run string, check Check) ([]RunFirings, error)
-}
-
-// Firings asks the client's history where check fired before run, and
-// reports false when the client was built without one, which is a client that
-// has no record to read rather than a record that is empty.
-func (c *Client) Firings(ctx context.Context, run string, check Check) ([]RunFirings, bool, error) {
-	if c == nil || c.history == nil {
-		return nil, false, nil
-	}
-	firings, err := c.history.Firings(ctx, run, check)
-	return firings, true, err
 }

@@ -136,6 +136,12 @@ func readOutRun(w io.Writer, r machine.Run) {
 			writef(w, "  %-9s %s%s%s\n", stage.Stage, outcomeWord(stage), timing(stage), fixNote(stage))
 		}
 	}
+	if len(r.Proposals) > 0 {
+		writeln(w, "\nProposals")
+		for _, p := range r.Proposals {
+			writef(w, "  %s\n", printable(p.Description))
+		}
+	}
 	if r.Decision != nil {
 		readOutDecision(w, *r.Decision)
 	}

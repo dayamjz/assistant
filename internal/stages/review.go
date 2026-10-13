@@ -139,11 +139,14 @@ import (
 // "Recurring findings become a proposal, never a rule" is a reading across
 // runs of one repository: a class of finding that keeps coming back is raised
 // as a note proposing a path-scoped review rule for a person to accept. This
-// body reads no history of findings, so it cannot see a class recurring and
-// reports nothing about one. The one history it does read is the
-// decision-model record, through judge.Client.Firings, and only for the
-// proposal decision.go raises to turn a check off; that seam answers to that
-// proposal and is not a reading of findings.
+// body sees one run and reads no history, so it cannot see a class recurring
+// and reports nothing about one. No seam for it ships either, on this
+// package's rule that surface answers to a consumer that exists: whoever
+// builds that reading owns deciding where the history is read from. The
+// proposal to turn a decision-model check off is the same kind of reading,
+// and it is internal/service's for that reason: it is raised on the run's
+// answer from the store, never into this stage's report, which is graph
+// state the convergence bound fingerprints.
 //
 // # What it does not establish
 //
@@ -283,14 +286,12 @@ func reviewChange(ctx context.Context, deps StageDeps, in pipeline.Input) (pipel
 		screened := decide.screen(ctx, shown)
 		checks.Screen = coverageOf(screened)
 		report.Findings = append(report.Findings, decide.screenFindings(screened)...)
-		ran := []judge.Check{judge.CheckScreen}
 		if scopeErr == nil {
 			var notes []findings.Finding
 			traced := decide.traces(ctx, change.touched, report.Traced)
 			checks.Trace = coverageOf(traced)
 			unconfirmed, notes = decide.traceFindings(traced)
 			report.Findings = append(report.Findings, notes...)
-			ran = append(ran, judge.CheckTrace)
 		} else {
 			checks.TraceWhy = "the scope lens did not apply to this change, so the reviewer was asked " +
 				"for no traces"
@@ -301,7 +302,6 @@ func reviewChange(ctx context.Context, deps StageDeps, in pipeline.Input) (pipel
 			// answered by nobody.
 			return pipeline.Output{}, ctx.Err()
 		}
-		report.Findings = append(report.Findings, decide.proposals(ctx, ran...)...)
 	case decide.active():
 		checks.Why = "no key for the provider is in " + judge.KeyVariable + " in the operator's " +
 			"environment, so nothing was sent"

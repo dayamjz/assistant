@@ -237,6 +237,12 @@ type Run struct {
 	// Stages is what became of each of the nine, in the order a run takes
 	// them.
 	Stages []Stage `json:"stages,omitempty"`
+	// Proposals are notes raised about this run from records across runs of
+	// its repository, read when this answer was built: today, PRD section 5's
+	// proposal to turn a decision-model check off. They are not any stage's
+	// findings and never part of the run's state, so they hold nothing and
+	// the same run can carry one on one reading and not on a later one.
+	Proposals []findings.Finding `json:"proposals,omitempty"`
 	// NotApplied names the run-starting inputs a request carried that this
 	// run was not built from, by the field of StartRequest each came in on.
 	//

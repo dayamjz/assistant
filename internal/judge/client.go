@@ -82,7 +82,6 @@ type Client struct {
 	http     *http.Client
 	redactor redact.Redactor
 	recorder Recorder
-	history  History
 	maxPiece int
 	// perReview and perFile are the request bounds; allowance is what is
 	// left of perReview for the one review a client from ForReview serves,
@@ -135,10 +134,6 @@ func WithTimeout(d time.Duration) Option {
 // WithRecorder gives the client the recorder Record forwards to. Without one,
 // Record drops what it is handed.
 func WithRecorder(r Recorder) Option { return func(c *Client) { c.recorder = r } }
-
-// WithHistory gives the client the history Firings reads. Without one, Firings
-// reports that there is no record to read.
-func WithHistory(h History) Option { return func(c *Client) { c.history = h } }
 
 // WithBounds replaces MaxRequestsPerReview and MaxRequestsPerFile with
 // perReview and perFile; a value that is not positive leaves its bound as it

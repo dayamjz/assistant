@@ -317,7 +317,7 @@ func Open(ctx context.Context, o Options) (*Service, error) {
 		lookup = os.LookupEnv
 	}
 	s.judge = judge.FromEnvironment(lookup,
-		append(append([]judge.Option(nil), o.Judge...), judge.WithRecorder(decisionRecorder{s}), judge.WithHistory(decisionRecorder{s}))...)
+		append(append([]judge.Option(nil), o.Judge...), judge.WithRecorder(decisionRecorder{s}))...)
 	if err := s.openParts(ctx, o); err != nil {
 		_ = s.Close()
 		return nil, err

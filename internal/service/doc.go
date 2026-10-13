@@ -282,7 +282,9 @@
 // path a decision-model answer was about. topologyFor wraps every stage body
 // and the fix body to write them, and they never enter graph state, because a
 // time there would defeat the convergence bound. observe.go owns both and
-// their residual gaps.
+// their residual gaps. The proposal to turn a decision-model check off is
+// read from that record onto a run's answer, machine.Run.Proposals, and kept
+// out of graph state for the same reason; decision.go owns the rule.
 //
 // It reads a repository's own configuration per run, on PRD section 10's
 // terms, and layers.go owns the mechanism: the trusted copy from the default

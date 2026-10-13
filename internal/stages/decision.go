@@ -230,103 +230,30 @@ func bounded(c checked) bool {
 	return isFailed && failure == judge.FailureOverBound
 }
 
-// lostNote is the one note per check naming the answers to it the record
-// could not keep, and nothing when it kept them all. The review's findings are
+// lostNote is the one note per check saying the record could not keep every
+// answer to it, and nothing when it kept them all. The review's findings are
 // what they would be either way; what the note says is that the evaluation
 // record understates this review, which before it only the service log said.
+//
+// Its text is fixed on purpose. The note lands in the review's report, which
+// is graph state the convergence bound fingerprints, so a count, a path list,
+// or a store's error sentence here would let a refusal that varies between
+// two fix rounds that changed nothing keep the loop from converging. Which
+// answers were lost and why is the service log's, where the recorder writes
+// each one.
 func lostNote(check judge.Check, lost []string) []findings.Finding {
 	if len(lost) == 0 {
 		return nil
 	}
-	sort.Strings(lost)
 	return []findings.Finding{{
 		Severity: findings.SeverityInfo,
 		Action:   findings.ActionNote,
-		Description: "The decision-model record could not keep " + strconv.Itoa(len(lost)) + " answer(s) " +
-			"of the " + checkName(check) + " from this review, so the record kept for deciding whether " +
-			"the checks earn their place " +
-			"understates what they said here: " + strings.Join(lost, "; ") + ". The review's findings " +
-			"are as they would be had the record kept them. This is informational and holds nothing.",
+		Description: "The decision-model record could not keep every answer of the " + checkName(check) +
+			" from this review, so the record kept for deciding whether the checks earn their place " +
+			"understates what they said here; the service log names each answer it lost and why. The " +
+			"review's findings are as they would be had the record kept them. This is informational " +
+			"and holds nothing.",
 	}}
-}
-
-// proposalWindow is how many of a check's most recent firing runs the
-// proposal to turn it off reads. It is deliberately conservative: a check
-// that fired in fewer finished runs of the repository than this is never
-// proposed off, and one is proposed off only when nothing followed any of its
-// firings in every one of them, so a single firing a person or a later stage
-// acted on anywhere in the window keeps the proposal back. It was not
-// measured; it is a count large enough that its firings going unanswered run
-// after run is a pattern rather than a quiet week.
-const proposalWindow = 10
-
-// proposals reads the record of earlier runs for each check named, and
-// returns a note proposing to turn the checks off for each that fired, over
-// the window, with nothing ever following. It is PRD section 5's "Turning a
-// check off is proposed, never applied", on the terms of "Recurring findings
-// become a proposal, never a rule": it names the window and the runs, it is a
-// note and holds nothing, and nothing in this build changes the mode because
-// of it.
-//
-// A record that cannot be read is said in a note rather than treated as a
-// check that never fired, since the two would otherwise look alike.
-func (d decisionRun) proposals(ctx context.Context, checks ...judge.Check) []findings.Finding {
-	var out []findings.Finding
-	for _, check := range checks {
-		firings, ok, err := d.client.Firings(ctx, d.run, check)
-		if !ok {
-			continue
-		}
-		if err != nil {
-			if ctx.Err() != nil {
-				continue
-			}
-			out = append(out, findings.Finding{
-				Severity: findings.SeverityInfo,
-				Action:   findings.ActionNote,
-				Description: "Whether the record shows the decision model's " + checkName(check) +
-					" firing with nothing following could not be read (" + err.Error() + "), so no " +
-					"proposal to turn it off was considered. This is informational and holds nothing.",
-			})
-			continue
-		}
-		if proposal, ok := proposeOff(check, firings); ok {
-			out = append(out, proposal)
-		}
-	}
-	return out
-}
-
-// proposeOff is the rule: the check's proposalWindow most recent firing runs,
-// and only when there are that many and nothing followed any firing in any of
-// them, a note naming the window and the runs.
-func proposeOff(check judge.Check, firings []judge.RunFirings) (findings.Finding, bool) {
-	if len(firings) < proposalWindow {
-		return findings.Finding{}, false
-	}
-	window := firings[:proposalWindow]
-	runs := make([]string, 0, len(window))
-	fired := 0
-	for _, f := range window {
-		if f.Followed > 0 || f.Fired <= 0 {
-			return findings.Finding{}, false
-		}
-		fired += f.Fired
-		runs = append(runs, f.Run)
-	}
-	return findings.Finding{
-		Severity: findings.SeverityInfo,
-		Action:   findings.ActionNote,
-		Description: "Proposal: the decision model's " + checkName(check) + " fired " + strconv.Itoa(fired) +
-			" time(s) across the " + strconv.Itoa(proposalWindow) + " most recent finished runs of this " +
-			"repository in which it fired, and nothing followed any of those firings - no later finding " +
-			"at the path, no fix round touching it, and no person's answer at a hold over it. Those runs " +
-			"are the window: " + strings.Join(runs, ", ") + ". Check them rather than taking the count " +
-			"on faith. If the check is not earning its place here, the operator can turn the checks off " +
-			"by setting decision_model to off in the global configuration, which is one setting for both " +
-			"checks. Nothing here changes it: the mode changes only when the operator changes it. This " +
-			"is informational and holds nothing.",
-	}, true
 }
 
 // checkName is how a note names a check.

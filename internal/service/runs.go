@@ -1125,6 +1125,9 @@ func (s *Service) report(ctx context.Context, runID string, result *graph.Result
 		Advancing: result == nil && s.isAdvancing(runID),
 	}
 	answer := machine.Run{Record: record}
+	// The proposal is read off the store as it stands now and never comes
+	// from graph state; decision.go says why.
+	answer.Proposals = s.proposals(ctx, record)
 	if result == nil {
 		latest, err := s.checkpoints.Latest(ctx, runID)
 		if err != nil {
@@ -1168,11 +1171,16 @@ func (s *Service) report(ctx context.Context, runID string, result *graph.Result
 	answer = answer.Decide(standing)
 	answer.Stages = stageViews(result.State)
 	// When each stage executed is the store's history rather than the
-	// checkpoint's, and a history that is there and cannot be read is a
-	// failure to report rather than a run whose stages never ran.
+	// checkpoint's. It describes the run and decides nothing about it, so a
+	// history that cannot be read leaves the stages without times and the
+	// service log saying why, rather than failing an answer whose outcome,
+	// position, and decision were all read. Nothing on the answer says the
+	// times are missing, which is the residual gap: a stage with no
+	// executions reads the same as one whose executions were not read.
 	executions, err := s.store.StageExecutions(ctx, runID)
 	if err != nil {
-		return machine.Run{}, fmt.Errorf("service: reading when run %s's stages executed: %w", runID, err)
+		s.log.Printf("reporting run %s without stage times: %v", runID, err)
+		executions = nil
 	}
 	times := stageTimes(executions)
 	for i := range answer.Stages {
