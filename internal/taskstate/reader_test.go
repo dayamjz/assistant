@@ -99,7 +99,7 @@ func finishRun(t *testing.T, s *store.Store, id string) {
 
 func resolveTask(t *testing.T, s *store.Store, id string) Resolution {
 	t.Helper()
-	got, err := NewReader(s, nil).Task(context.Background(), id)
+	got, err := NewReader(s, nil, nil).Task(context.Background(), id)
 	if err != nil {
 		t.Fatalf("Task: %v", err)
 	}
@@ -259,10 +259,10 @@ func TestAttributionAndTheOpeningEvents(t *testing.T) {
 
 func TestAnUnknownTaskIsNotFound(t *testing.T) {
 	s := openStore(t)
-	if _, err := NewReader(s, nil).Task(context.Background(), "nope"); !errors.Is(err, store.ErrNotFound) {
+	if _, err := NewReader(s, nil, nil).Task(context.Background(), "nope"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("Task = %v, want store.ErrNotFound", err)
 	}
-	all, err := NewReader(s, nil).All(context.Background())
+	all, err := NewReader(s, nil, nil).All(context.Background())
 	if err != nil || len(all) != 0 {
 		t.Fatalf("All on an empty store = %v, %v", all, err)
 	}
@@ -294,7 +294,7 @@ func TestTheReaderConsultsTheProbeForTasksWithASession(t *testing.T) {
 		}
 		return Dead
 	}
-	r := NewReader(s, probe)
+	r := NewReader(s, probe, nil)
 	got, err := r.Task(ctx, "withsession")
 	if err != nil || got.State != Running || got.Source != SourceProcess {
 		t.Fatalf("live terminal: %+v, %v", got, err)
@@ -362,7 +362,7 @@ func TestResolvingChangesNothing(t *testing.T) {
 	}
 
 	before := fingerprint(t, s)
-	r := NewReader(s, func(context.Context, string) Liveness { return Live })
+	r := NewReader(s, func(context.Context, string) Liveness { return Live }, nil)
 	for range 3 {
 		if _, err := r.All(ctx); err != nil {
 			t.Fatalf("All: %v", err)
@@ -392,7 +392,7 @@ func TestARecordAndItsStateComeFromOneRead(t *testing.T) {
 	appendEvents(t, s, "a", "started")
 	finishRun(t, s, "run-1")
 
-	r := NewReader(s, nil)
+	r := NewReader(s, nil, nil)
 	all, err := r.All(ctx)
 	if err != nil || len(all) != 2 {
 		t.Fatalf("All = %v, %v", all, err)
@@ -411,5 +411,41 @@ func TestARecordAndItsStateComeFromOneRead(t *testing.T) {
 	}
 	if _, err := r.Resolved(ctx, "nope"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("Resolved of a missing task = %v", err)
+	}
+}
+
+// The advancing fact is asked about the newest attributed run and reaches
+// Progress. It is asked about nothing when no run is attributed, and a nil
+// function means nothing is ever advancing.
+func TestTheReaderAsksWhetherTheNewestRunIsAdvancing(t *testing.T) {
+	ctx := context.Background()
+	s := openStore(t)
+	newTask(t, s, "t1", true)
+	newTask(t, s, "t2", false)
+	if _, err := s.CreateRun(ctx, store.Run{
+		ID: "run-1", RepositoryID: repo, Branch: branch, SubmittedHead: "aaaa", Base: "bbbb",
+		Intent: "validate", IntentSource: "push", ConfigDigest: "cfg",
+		Build: store.Build{Version: "v0", Revision: "0123456789abcdef", Go: "go1.25.0"},
+	}); err != nil {
+		t.Fatalf("CreateRun: %v", err)
+	}
+	if _, err := s.TransitionRun(ctx, "run-1", []store.RunStatus{store.RunPending}, store.RunRunning); err != nil {
+		t.Fatalf("TransitionRun: %v", err)
+	}
+
+	var asked []string
+	advancing := func(runID string) bool { asked = append(asked, runID); return true }
+	got, err := NewReader(s, nil, advancing).Task(ctx, "t1")
+	if err != nil || got.State != Validating || !got.Progress || !got.Basis.Advancing {
+		t.Fatalf("an advancing run resolved to %+v, %v, want validating with progress", got, err)
+	}
+	if got, _ := NewReader(s, nil, advancing).Task(ctx, "t2"); got.Progress || got.Basis.Advancing {
+		t.Fatalf("a task with no run reports progress: %+v", got)
+	}
+	if want := []string{"run-1"}; !slices.Equal(asked, want) {
+		t.Fatalf("advancing was asked about %v, want %v", asked, want)
+	}
+	if got, _ := NewReader(s, nil, nil).Task(ctx, "t1"); got.State != Validating || got.Progress {
+		t.Fatalf("with no advancing function the run reports progress: %+v", got)
 	}
 }

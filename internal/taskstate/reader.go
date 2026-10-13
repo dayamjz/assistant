@@ -9,22 +9,32 @@ import (
 // Reader resolves tasks out of a store. It holds no state of its own beyond
 // what it was built with, so every call reads the records afresh.
 type Reader struct {
-	store *store.Store
-	probe func(ctx context.Context, sessionRef string) Liveness
+	store     *store.Store
+	probe     func(ctx context.Context, sessionRef string) Liveness
+	advancing func(runID string) bool
 }
 
-// NewReader returns a Reader over s. probe reports the liveness of a task's
-// terminal session by its reference, which is the session of the task's
-// latest attempt; it is called only for a task whose latest attempt has one,
-// and a nil probe means no task's terminal is ever observed. It is a function
-// and not an interface because its consumers are this package's process tier
-// and the session module that does not exist yet.
+// NewReader returns a Reader over s.
 //
-// The probe runs after the store has been read, outside its transaction, so
-// the liveness it reports is as of the probe and may be stale by the time the
-// answer is read.
-func NewReader(s *store.Store, probe func(ctx context.Context, sessionRef string) Liveness) *Reader {
-	return &Reader{store: s, probe: probe}
+// probe reports the liveness of a task's terminal session by its reference,
+// which is the session of the task's latest attempt; it is called only for a
+// task whose latest attempt has one, and a nil probe means no task's terminal
+// is ever observed. advancing reports whether the service is executing a run
+// now, by the run's identifier; it is asked about the newest attributed run
+// only, and a nil advancing means no run is ever advancing. Both are functions
+// and not interfaces because their consumers are this package's tiers and the
+// two modules that answer them: the session provider for the probe, and the
+// service's slot map for advancing.
+//
+// Both run after the store has been read, outside its transaction, so neither
+// answer is as of the snapshot. The liveness is as of the probe and may be
+// stale by the time the answer is read. The advancing fact is as of the slot
+// map, so a run that settled between the snapshot and the question can be
+// reported advancing by the slot and settled by the record; Resolve reads the
+// record for the state and treats the disagreement as no progress, which is
+// stated on Resolution.Progress.
+func NewReader(s *store.Store, probe func(ctx context.Context, sessionRef string) Liveness, advancing func(runID string) bool) *Reader {
+	return &Reader{store: s, probe: probe, advancing: advancing}
 }
 
 // Resolved is a task record with the state resolved from the same read, so the
@@ -75,6 +85,9 @@ func (r *Reader) resolve(ctx context.Context, snap store.TaskSnapshot) Resolutio
 		if ref, ok := snap.Attempts[n-1].SessionRef.Get(); ok {
 			in.Process = r.probe(ctx, ref)
 		}
+	}
+	if run, ok := newest(snap.Runs); ok && r.advancing != nil {
+		in.Advancing = r.advancing(run.ID)
 	}
 	return Resolve(in)
 }
