@@ -52,7 +52,8 @@ func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 		set.StringVar(&answer, "answer", "", "answer the decision the run is holding on")
 		set.BoolVar(&cancel, "cancel", false, "end this branch's run, wherever it stands")
 		set.StringVar(&skip, "skip", "", "comma-separated stages this one run does not take")
-		set.StringVar(&selected, "select", "", "with --answer fix: comma-separated findings of the held stage for the round to resolve")
+		set.StringVar(&selected, "select", "", "with --answer fix: comma-separated identifiers of findings the held stage reported, for the round to resolve; "+
+			"the hold lists only the findings holding it, and every finding with its identifier is under active_run.stages[].report.findings in assistant --json status")
 		set.StringVar(&note, "note", "", "with --answer fix: a note for the fixer")
 		set.Var(&own, "finding", "with --answer fix: a finding of your own for the round to resolve; may be repeated")
 	}); err != nil {
