@@ -526,7 +526,10 @@ Each has cost this repository more than one round of review.
   snapshots are recorded, a refusal is the `isolation-refused` event carrying
   `taskstate`'s token, and a proof is held only in the service's memory for
   #91's launch seam; nothing launches. A path already standing at the copy's
-  path is asserted and never removed.
+  path is asserted and never removed. The environment half of P11 is only as
+  strong as every launch path building its environment through
+  `agents.WorkerEnvironment`, which is the contract #91's launch seam takes
+  along with the proof; no second strip list exists or should.
 - `internal/cli` is the command surface, and its verb table is PRD section 9's
   table and nothing else. A verb that section does not describe is a finding to
   raise against the specification, not a row to add: `cli_test.go` holds both

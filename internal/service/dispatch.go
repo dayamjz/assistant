@@ -94,7 +94,10 @@ import (
 // WorkerEnvironment's doc states the gap for a runner built with another.
 // Because that builder strips the redirecting variables, the assertion's
 // environment comparison cannot fail on this path, and nothing here claims it
-// can.
+// can. The environment half of P11 is therefore only as strong as every
+// launch path building its environment through agents.WorkerEnvironment,
+// which is the contract #91's launch seam takes along with the proof; no
+// second strip list exists, and none should.
 //
 // # The second check
 //
