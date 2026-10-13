@@ -52,9 +52,11 @@ import (
 //     proposal counts only passed runs and leaves failed and terminated ones
 //     out; decision.go says what that costs.
 //   - A later finding at the path counts whatever produced it, including the
-//     decision-model checks of a later review re-flagging the same file, so
-//     the record can overstate what followed an answer. That leans away from
-//     the proposal, which is the direction a conservative rule wants.
+//     decision-model checks of a later review re-flagging the same file - the
+//     push stage's review of commits written after review is one, since it
+//     runs the review stage's own read - so the record can overstate what
+//     followed an answer. That leans away from the proposal, which is the
+//     direction a conservative rule wants.
 //   - A finding names a path only through its location; one that names the
 //     path only in its text is not a follow-up of it.
 //   - Only what a body returns is read. The holds internal/pipeline adds to a
