@@ -347,14 +347,18 @@ Each has cost this repository more than one round of review.
   approximating it. Read its `doc.go` for the residual gaps, and for why PRD
   section 8's "task state" row is read as a resolution rather than a row.
 - `internal/tasks` is PRD section 8's tasks module as far as this build takes
-  it: intake, queueing, and the P11 assertion, with dispatch, copies and the
-  launch left to #104 and #91. `Expect` computes a task's `Expectation` and
-  its second-check shell line from one call, and `AssertIsolated` compares a
-  real `vcs.Observation` against it by file identity, never by string, with
-  an exact remote set per shape and a typed `*IsolationError` naming the
-  comparison; only it sets `Isolation`'s unexported field, nothing in this
-  build takes one, and its P11 citation claims the assertion refuses and
-  nothing about launch. Every lifecycle move there is an appended event, never a state
+  it: intake, queueing, and the P11 assertion, with dispatch and the copy in
+  `internal/service` and the launch left to #91. `Expect` computes a task's
+  `Expectation` and its second-check shell line from one call, and
+  `AssertIsolated` compares a real `vcs.Observation` against it by file
+  identity, never by string, with an exact remote set per shape and a typed
+  `*IsolationError` naming the comparison; only it sets `Isolation`'s
+  unexported field, `Refusal` is the one mapping from a comparison to
+  `taskstate`'s refusal token, nothing in this build takes an `Isolation` to
+  start a worker, and its P11 citation claims the assertion refuses and
+  nothing about launch. Until #91's worker set exists, "own branch, only
+  through the gate" is instruction text and nothing enforces which ref a
+  worker's push may move; its `doc.go` carries that sentence. Every lifecycle move there is an appended event, never a state
   column: `Create` writes the disposition through `store.CreateTask`, anchored
   to the newest task row it saw on the branch and under the service's branch
   exclusion, and `Release` appends `dispatched` through
@@ -510,7 +514,19 @@ Each has cost this repository more than one round of review.
   composed by `config.ResolveRun` - and refuses the run before anything
   launches when the trusted copy cannot be read or the composed document pins
   a different agent than the operator's. Read `doc.go` for that, including
-  how a resume resolves fresh and what decides its resumability.
+  how a resume resolves fresh and what decides its resumability. It builds
+  every run an isolated copy, a worktree of the gate's bare repository at the
+  run's own `refs/assistant/runs/<id>`, which `create` writes right after the
+  row: from the gate's own object for a push, by a fetch from the working copy
+  for a start or a rerun. `ensureCopy` reads that reference and never the
+  working copy, and `copy.go`'s header says why the fetch moved there. It is
+  also where a task is dispatched, in `dispatch.go`: the attempt row is the
+  claim, the copy is a `vcs.Clone` of the primary shaped for the task's
+  shape, `tasks.AssertIsolated` is run under `agents.WorkerEnvironment`, both
+  snapshots are recorded, a refusal is the `isolation-refused` event carrying
+  `taskstate`'s token, and a proof is held only in the service's memory for
+  #91's launch seam; nothing launches. A path already standing at the copy's
+  path is asserted and never removed.
 - `internal/cli` is the command surface, and its verb table is PRD section 9's
   table and nothing else. A verb that section does not describe is a finding to
   raise against the specification, not a row to add: `cli_test.go` holds both

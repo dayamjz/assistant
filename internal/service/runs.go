@@ -926,7 +926,9 @@ func (s *Service) recover(ctx context.Context) {
 	}
 	// A blocker may have cleared while no service was serving the home, so
 	// the queued tasks are released once the records are reconciled, before
-	// anything is served.
+	// anything is served. Every task that then resolves Dispatched is
+	// dispatched, which for one a service died part way through dispatching
+	// is the retry dispatch.go describes.
 	s.releaseQueued(ctx)
 }
 

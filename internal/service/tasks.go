@@ -111,4 +111,8 @@ func (s *Service) releaseQueued(ctx context.Context) {
 	if err != nil {
 		s.log.Printf("releasing queued tasks: %v", err)
 	}
+	// A released task resolves Dispatched, and a task intake recorded as
+	// independent did from the start; dispatch.go cuts and proves each one's
+	// copy, once per service, from here.
+	s.dispatchDue(ctx)
 }

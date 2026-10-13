@@ -77,8 +77,8 @@ type Created struct {
 // Create is intake: it records a new task with the disposition PRD section 6
 // gives it, Queued behind a blocker or Dispatched, and writes its
 // instructions. It cuts no copy and launches nothing; the copy path it records
-// is a reservation, home.TaskCopy, that the dispatch's isolation assertion
-// (#98) decides whether to honour.
+// is a reservation, home.TaskCopy, that internal/service's dispatch cuts and
+// asserts.
 //
 // The disposition is the coordinator's claim with one mechanical floor. A
 // delivery task whose repository and branch equal a live task's is queued
