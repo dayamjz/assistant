@@ -7,10 +7,10 @@ import (
 )
 
 // Pattern is one compiled path pattern. It is the single matcher this product
-// uses, shared by ignore patterns and by path-scoped review rules, so that a
-// path means the same thing to both. PRD section 10 requires one documented
-// matcher and requires that a wildcard never cross a path separator; the rules
-// below are that documentation.
+// uses, shared by ignore patterns, path-scoped review rules, and judge paths,
+// so that a path means the same thing to all three. PRD section 10 requires
+// one documented matcher and requires that a wildcard never cross a path
+// separator; the rules below are that documentation.
 //
 // A pattern is matched against a repository-relative slash-separated path.
 //

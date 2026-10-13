@@ -166,7 +166,7 @@ func TestKeysAreTheWholeSchemaAndUnique(t *testing.T) {
 	for _, k := range []Key{
 		KeyAgent, KeyCommandsTest, KeyCommandsLint, KeyCommandsFormat,
 		KeyFixRoundsReview, KeyFixRoundsRebase, KeyFixRoundsTest, KeyFixRoundsLint, KeyFixRoundsChecks,
-		KeyRunBudget, KeyIgnorePatterns, KeyReviewPathRules, KeyDocumentOwnership,
+		KeyRunBudget, KeyIgnorePatterns, KeyReviewPathRules, KeyJudgePaths, KeyDocumentOwnership,
 		KeySuppressProjectInstructions, KeyNoCI, KeyChecksTimeout, KeySessionReuse,
 		KeyCommitFixMessage, KeyAllowPushedCommands,
 	} {

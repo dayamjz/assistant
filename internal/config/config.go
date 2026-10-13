@@ -28,6 +28,11 @@ type Config struct {
 	// ReviewPathRules is extra review guidance scoped to paths, in declared
 	// order.
 	ReviewPathRules []PathRule
+	// JudgePaths are the patterns naming the files that decide whether a
+	// check passes: tests, lint configuration, and CI workflow definitions.
+	// PRD section 5's "A check does not judge its own edits" is the rule they
+	// feed, and internal/stages applies it. An empty set turns that rule off.
+	JudgePaths PatternSet
 	// DocumentOwnership says which document owns which subject. Subjects are
 	// unique across the list.
 	DocumentOwnership []Ownership
@@ -174,6 +179,8 @@ const (
 	MaxPathRulePaths = 64
 	// MaxGuidanceRunes is the length of one review rule's guidance text.
 	MaxGuidanceRunes = 4096
+	// MaxJudgePaths is the number of judge path patterns.
+	MaxJudgePaths = 512
 	// MaxOwnership is the number of document ownership entries.
 	MaxOwnership = 512
 	// MaxSubjectRunes is the length of an ownership subject or document path.
@@ -298,3 +305,42 @@ func checkSubjectText(what, s string) error {
 	}
 	return nil
 }
+
+// defaultJudgePatterns is the default of KeyJudgePaths, as PRD section 10's
+// schema row writes it: the common conventions for where tests, test data,
+// CI workflows, and lint configuration live. That row owns the list; this is
+// its text, compiled by the one matcher.
+var defaultJudgePatterns = []string{
+	"*_test.go",
+	"*_test.py",
+	"test_*.py",
+	"*.test.*",
+	"*.spec.*",
+	"**/test/**",
+	"**/tests/**",
+	"**/__tests__/**",
+	"**/testdata/**",
+	".github/workflows/**",
+	".golangci.yml",
+	".golangci.yaml",
+	".eslintrc*",
+	"eslint.config.*",
+	"ruff.toml",
+	"Makefile",
+}
+
+// defaultJudgePaths is defaultJudgePatterns compiled. A pattern there that
+// the matcher refused would be a defect in this file rather than input, so it
+// panics at package initialization, where every test of this package meets
+// it, instead of quietly shortening the default.
+var defaultJudgePaths = func() PatternSet {
+	out := make(PatternSet, 0, len(defaultJudgePatterns))
+	for _, s := range defaultJudgePatterns {
+		p, err := ParsePattern(s)
+		if err != nil {
+			panic("config: the default judge path " + quote(s) + " does not compile: " + err.Error())
+		}
+		out = append(out, p)
+	}
+	return out
+}()
