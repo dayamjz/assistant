@@ -120,6 +120,10 @@ func GrokFactory(opts ...GrokOption) Factory {
 // Name returns "grok".
 func (f *grokFactory) Name() string { return GrokName }
 
+// AutoEligible reports false: PRD section 12 defers adapters beyond Claude
+// Code, so this one resolves only when an entry names it.
+func (f *grokFactory) AutoEligible() bool { return false }
+
 // New reports whether Grok can be run here, and returns a Runner when it can.
 //
 // What availability means here is exactly one thing: the named executable
