@@ -69,10 +69,20 @@ func ResolvedByPerson() Resolver { return Resolver{name: "person"} }
 func ResolvedByMachineInterface() Resolver { return Resolver{name: "machine-interface"} }
 
 // ResolvedByProgram is a resolution the program made on a fact it re-read, with
-// nobody deciding anything. PRD section 11 has one: on restart, a hold waiting
-// on external checks whose pull request has since merged or closed is completed
-// rather than resumed. Recording that as a person's decision, or as a caller's,
-// is the misattribution this vocabulary exists to prevent.
+// nobody deciding anything. PRD section 8 gives the service exactly one: the
+// hold the checks stage raises when checks_timeout elapses is closed, before it
+// is resumed, when the service re-reads the run's pull request and finds it
+// positively merged or closed. The question that hold asked - what to do about
+// a wait that ran out - no longer exists, so the service records the state it
+// read as the resolution and itself as the resolver, and the run then ends as
+// PRD section 5's "Waiting on checks" says for that state. Recording that as a
+// person's decision, or as a caller's, is the misattribution this vocabulary
+// exists to prevent.
+//
+// It has one producer, internal/service, and a test there holds it to that.
+// Every other hold keeps PRD section 8's rule, and in particular a hold on a
+// person's decision about a finding is never closed this way: the pull
+// request's state must not answer a question a person was asked.
 func ResolvedByProgram() Resolver { return Resolver{name: "program"} }
 
 // String renders who resolved, or "nobody" for the zero Resolver, so a

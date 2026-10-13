@@ -236,6 +236,16 @@ func (s *Store) RunsForRepository(ctx context.Context, repositoryID string) ([]R
 // so a caller can report the state it found rather than only that it was
 // surprised.
 func (s *Store) TransitionRun(ctx context.Context, id string, from []RunStatus, to RunStatus) (Run, error) {
+	return s.transitionRun(ctx, id, from, to, nil)
+}
+
+// transitionRun is the one transaction behind both transitions. also, when it
+// is not nil, runs inside the transaction after the status has moved and
+// before the row is read back, with the instant the move was stamped with, so
+// a record that has to describe the same ending as the move is written under
+// the same commit. It does not run when nothing moved.
+func (s *Store) transitionRun(ctx context.Context, id string, from []RunStatus, to RunStatus,
+	also func(tx *sql.Tx, now string) error) (Run, error) {
 	if !to.Recognized() {
 		return Run{}, fmt.Errorf("store: run %s: %q is not a run status", id, to)
 	}
@@ -259,10 +269,16 @@ func (s *Store) TransitionRun(ctx context.Context, id string, from []RunStatus, 
 		if !slices.Contains(from, current.Status) {
 			return &RunStatusError{Run: id, Expected: slices.Clone(from), Actual: current.Status, To: to}
 		}
+		now := encodeTime(nowUTC())
 		if _, err := tx.ExecContext(ctx,
 			`UPDATE run SET status = ?, updated_at = ? WHERE id = ?`,
-			string(to), encodeTime(nowUTC()), id); err != nil {
+			string(to), now, id); err != nil {
 			return fmt.Errorf("store: moving run %s to %s: %w", id, to, err)
+		}
+		if also != nil {
+			if err := also(tx, now); err != nil {
+				return err
+			}
 		}
 		// Read back rather than assembling the answer, so what a caller is
 		// handed is the row as it now stands and not this function's account

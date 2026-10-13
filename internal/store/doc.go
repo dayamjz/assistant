@@ -156,7 +156,9 @@
 // speaks for, so a surface that derived ResolvedByMachineInterface and then
 // named ResolvedByPerson in source would be recorded as it asked. No caller
 // here does: the value has no producer in this repository outside the tests
-// that hold this rule, and nothing in production resolves a hold yet.
+// that hold this rule. The one production resolution is internal/service's,
+// recorded as ResolvedByProgram for the one hold PRD section 8 lets the
+// service close itself, and that resolver's own comment says which.
 //
 // This records and does not gate, which PRD section 8 states as a requirement
 // rather than an aside. Nothing here reads a resolver to decide whether a
