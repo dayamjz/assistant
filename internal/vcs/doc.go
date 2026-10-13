@@ -131,9 +131,26 @@
 // incorporation checks, and the refuse-when-unverifiable path are policy and
 // belong to internal/safety, the module named in PRD section 8. This package
 // exposes the mechanism that policy needs - reading a remote ref, resolving a
-// commit, and comparing two commits - and stops there. It exposes all of it:
-// *Repository satisfies safety.Git in full, and that package's own test fails
-// the build if either side drifts.
+// commit, comparing two commits, and answering whether a set of commits is
+// already present in a tip by content - and stops there. It exposes all of
+// it: *Repository satisfies safety.Git in full, and that package's own test
+// fails the build if either side drifts.
+//
+// Incorporated is the content answer, and it is defined by its result and
+// not by how it is reached: integrating these commits into this tip changes
+// nothing. A conflict, a revision that does not resolve, and a git that
+// cannot answer are each ErrInconclusive and never false, because the
+// caller is a cleanup proof under PRD principle P12 and a false reading as
+// "not landed" would be a refusal while an error reading as false would be
+// a proof. Whether the tip is an up-to-date default branch is not a question
+// this package answers; a caller fetches the tip, re-reads it with
+// RemoteRefs, and passes the identifier it checked.
+//
+// Inventory is the other read a cleanup decision needs: what a working copy
+// holds that could be work, as PRD section 5 defines a task copy's work.
+// Its one exclusion, remote-tracking references, is stated on the type with
+// its reason. It reports and decides nothing; the comparison against a
+// dispatch's start snapshot and against a proof belongs to the caller.
 //
 // Push is mechanism on the same terms, and it is the one operation here that
 // changes a remote. It performs one reference update under a lease and decides
@@ -178,5 +195,10 @@
 // # Requirements
 //
 // A git binary on PATH, or one named with WithGitBinary. The commands and
-// options used here need git 2.36 or newer.
+// options used here need git 2.36 or newer, and nothing here checks that
+// floor: an older git fails at whichever invocation it does not understand,
+// as a *CommandError. Incorporated is the one operation that needs more,
+// 2.38, and it checks its own floor before running and refuses with
+// ErrUnsupportedGit below it, because its answer is one a caller removes a
+// copy on and a git that misread the request must not produce one.
 package vcs

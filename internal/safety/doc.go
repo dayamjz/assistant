@@ -1,13 +1,35 @@
-// Package safety owns one question: may this branch update proceed, and on
-// what anchor. It is the policy layer over internal/vcs, which provides the
-// mechanism and deliberately implements none of this. PRD principle P6 is the
-// contract, and PRD section 5's push stage is where it is used.
+// Package safety owns two questions. The first is whether a branch update may
+// proceed, and on what anchor: PRD principle P6 is the contract and PRD
+// section 5's push stage is where it is used. The second is whether a set of
+// commits is already incorporated in a tip, failing closed: the git half of
+// PRD principle P12's content proof, which a cleanup decision reads before an
+// isolated copy may be removed. Both are policy over internal/vcs, which
+// provides the mechanism and deliberately implements none of this.
 //
-// Nothing here moves a reference or pushes. A caller receives a Decision or a
-// *Refusal, and performing the update is its own job. What gets a caller out
-// of a refusal is stated here too, by Refusal.Remedy for the reasons that have
-// one, so a caller reporting a refusal relays that text, where it states one,
-// rather than writing a remedy of its own.
+// Nothing here moves a reference, pushes, or removes anything. A caller
+// receives a Decision or a *Refusal for the first question, and performing
+// the update is its own job. What gets a caller out of a refusal is stated
+// here too, by Refusal.Remedy for the reasons that have one, so a caller
+// reporting a refusal relays that text, where it states one, rather than
+// writing a remedy of its own. For the second question a caller receives an
+// IncorporationResult or an *IncorporationRefusal, and what it does with a
+// result that is not a proof is its own decision, made elsewhere.
+//
+// # The two questions are kept apart
+//
+// Guard.Incorporation sits beside Guard.Decide and shares nothing with it but
+// the mechanism. Its refusal is its own type and matches ErrNotEstablished,
+// never ErrRefused, so a caller cannot read a cleanup stop as a push refusal
+// or the reverse; the positive control in this package's tests shows Decide's
+// refusals still match ErrRefused and not the new sentinel. It has no reason
+// vocabulary of its own: an inconclusive comparison is one fact that could
+// not be established, and a second name for that would be a second owner of
+// ReasonUnverifiable's meaning. What the result carries is the identifiers
+// examined, resolved at the time of the check, so a recorded proof says which
+// commits were checked against which tip and not against which name. Whether
+// that tip is an up-to-date default branch is the caller's to establish by
+// fetching it and passing what it fetched; this package checks content, not
+// freshness.
 //
 // # The anchor is an observation, not a commit identifier
 //

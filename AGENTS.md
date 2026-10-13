@@ -142,6 +142,10 @@ Each has cost this repository more than one round of review.
 - `internal/vcs` is the only package that invokes git. Do not shell out to git
   anywhere else; add a typed operation there instead. Its package comment states
   the two rules it applies to every invocation and the residual gaps in them.
+  `Incorporated` is defined by its result, not by how git reaches it, and a
+  non-nil error from it is never a clean `false`; `Inventory` is the work set a
+  cleanup compares and excludes remote-tracking refs because a proof's own fetch
+  writes them. Neither decides anything and nothing there removes a clone.
   `StripRedirecting` is the one list of what points git at another repository,
   and `Observe` is taken under this package's own environment, so a
   `vcs.Observation` says what a copy on disk is and never what a worker's
@@ -178,7 +182,10 @@ Each has cost this repository more than one round of review.
   seals it with a trigger instead; a drop would mean weakening `verifyAdditive`,
   which is what protects every other table's rows. Read its `doc.go` before
   changing any of that.
-- `internal/safety` owns whether a branch update may proceed and on what anchor.
+- `internal/safety` owns two questions: whether a branch update may proceed and
+  on what anchor, and whether a set of commits is already incorporated in a tip,
+  which is the git half of P12's content proof and fails closed through its own
+  `IncorporationRefusal` matching `ErrNotEstablished` and never `ErrRefused`.
   `internal/vcs` stays mechanism only, so a lease, an incorporation check, or a
   force decision belongs in `internal/safety` even when it would be shorter to
   write at the git call. Its anchor is an `Observation`, and only `Guard.Observe`

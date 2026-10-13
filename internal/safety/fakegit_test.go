@@ -38,6 +38,19 @@ type fakeGit struct {
 	// mergeBaseErr and commitsErr fail those comparisons when set.
 	mergeBaseErr error
 	commitsErr   error
+	// incorporated is the answer Incorporated gives once both sides resolve,
+	// and incorporatedErr fails it instead when set. The real mechanism
+	// returns an answer or an error wrapping vcs.ErrInconclusive and never
+	// both, and this fake keeps to that shape.
+	incorporated    bool
+	incorporatedErr error
+	// examined records what Incorporated was asked, so a test can assert
+	// that the result names what was passed to the mechanism and nothing
+	// else.
+	examined struct {
+		commits []string
+		into    string
+	}
 
 	// reads counts the remote reads performed, so a test can assert that a
 	// decision was taken against a read of its own and not against the
@@ -216,6 +229,27 @@ func (f *fakeGit) CommitsNotIn(_ context.Context, have, incorporated string) ([]
 		}
 	}
 	return f.recentFirst(in), nil
+}
+
+// Incorporated resolves both sides the way the real operation does, so a
+// commit the history does not hold is an error wrapping vcs.ErrInconclusive
+// and vcs.ErrRefNotFound rather than an answer, and otherwise returns the
+// answer the test stated. It records what it was asked.
+func (f *fakeGit) Incorporated(ctx context.Context, commits []string, into string) (bool, error) {
+	f.examined.commits = append([]string(nil), commits...)
+	f.examined.into = into
+	if len(commits) == 0 {
+		return false, fmt.Errorf("fakegit: no commits: %w", vcs.ErrInvalidArgument)
+	}
+	for _, rev := range append([]string{into}, commits...) {
+		if _, err := f.ResolveCommit(ctx, rev); err != nil {
+			return false, fmt.Errorf("%w: %w", vcs.ErrInconclusive, err)
+		}
+	}
+	if f.incorporatedErr != nil {
+		return false, fmt.Errorf("%w: %w", vcs.ErrInconclusive, f.incorporatedErr)
+	}
+	return f.incorporated, nil
 }
 
 // recentFirst orders a set of commits the way git rev-list prints one, most

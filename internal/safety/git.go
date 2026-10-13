@@ -25,8 +25,13 @@ import (
 // landed: internal/vcs owns that operation, as it owns every git invocation,
 // and this package still adds none of its own.
 //
+// Incorporated is the second question this package asks of the mechanism,
+// for the incorporation check beside the branch update decision. It is the
+// one method here whose answer is about content rather than reachability,
+// and vcs.Incorporated owns what that answer means.
+//
 // A compile-time assertion in this package's tests fails the build if any of
-// the four signatures drifts from what *vcs.Repository provides, so the claim
+// the five signatures drifts from what *vcs.Repository provides, so the claim
 // above is checked rather than asserted.
 type Git interface {
 	// RemoteRefs reads the references a remote advertises, without changing
@@ -58,4 +63,9 @@ type Git interface {
 	// already contains everything have does, so replacing have with
 	// incorporated loses no commit.
 	CommitsNotIn(ctx context.Context, have, incorporated string) ([]string, error)
+	// Incorporated reports whether integrating commits into the commit named
+	// by into would change nothing, on vcs.Incorporated's terms: a non-nil
+	// error is never a clean false, and every error matches
+	// vcs.ErrInconclusive. Both arguments are resolved locally.
+	Incorporated(ctx context.Context, commits []string, into string) (bool, error)
 }
