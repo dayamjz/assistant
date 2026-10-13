@@ -120,20 +120,16 @@
 //     failed call it got; internal/service builds its one client with the
 //     recorder that writes the store's decision-model record, so in this
 //     build no request leaves the machine without its answer being handed to
-//     that record. Writing the row is best-effort by the shape of the seam: a
-//     row the store refuses is logged and dropped, and the record then
-//     understates.
-//   - The record keeps each answer and the finding it produced. It does not
-//     yet keep what the run did with that path afterwards - whether review, a
-//     fix round, or a person's answer at a hold touched it - which PRD
-//     section 5 asks for, and nothing here proposes turning a check off from
-//     that record. Both are left for a follow-up.
-//   - Nothing records on the pull request which checks ran.
+//     that record. Writing the row is best-effort: a row the store refuses is
+//     not retried, and the record then understates, which the review stage
+//     names in a note on the run's report.
 //   - The model's answer is a judgment with no evidence behind it. A screen
 //     that does not flag a file says nothing about the file being safe, and
 //     the screen runs beside the review rather than before it, so the
 //     reviewer has already read what it flags.
-//   - A request is bounded by the client's timeout and the run's context, and
-//     not otherwise: a review of a change touching many files makes at least
-//     one request per file.
+//   - A review's fan-out is bounded by MaxRequestsPerReview, and one file's
+//     screen by MaxRequestsPerFile, only for a client from ForReview; a
+//     client serving no review is bounded per file and not in total. Which
+//     paths go unasked when a review reaches its bound follows the order
+//     requests were taken, not a ranking of the paths.
 package judge

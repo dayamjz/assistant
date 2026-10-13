@@ -32,6 +32,12 @@ const (
 	// caller builds it with Unasked, so the evaluation record counts the path
 	// rather than losing it.
 	FailureDiffUnreadable Failure = "diff-unreadable"
+	// FailureOverBound is a check a request bound refused: the review had
+	// spent its MaxRequestsPerReview, or one file's screen would have taken
+	// more than MaxRequestsPerFile. A file refused part-way is not screened
+	// in part: the pieces already answered unflagged are not reported as the
+	// file being clean.
+	FailureOverBound Failure = "over-bound"
 	// FailureUnreadable is a successful response the program cannot read as
 	// an answer to the question asked: malformed, missing the answer, of
 	// another type, out of the range zero to one, or answered by a model

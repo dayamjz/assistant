@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -224,7 +225,7 @@ func TestTheScreenSplitsALargeFileAndLeavesNothingOut(t *testing.T) {
 		}
 		return judgetest.Answer(0.1)
 	})
-	r := client(provider, judge.WithMaxPiece(4096)).Screen(t.Context(), "big.txt", long)
+	r := client(provider, judge.WithMaxPiece(4096), judge.WithBounds(0, 64)).Screen(t.Context(), "big.txt", long)
 	if p, ok := r.Probability(); !ok || p != 0.1 || r.Fired() {
 		t.Fatalf("a large clean file came to (%v, %v), fired %v", p, ok, r.Fired())
 	}
@@ -308,6 +309,86 @@ func TestAClientDoesNotFormatItsKey(t *testing.T) {
 		if strings.Contains(text, key) {
 			t.Fatalf("a formatted client carries its key: %s", text)
 		}
+	}
+}
+
+// A file whose screen would take more requests than one file may is not
+// screened at all, and sends nothing, rather than being screened in part; a
+// file that fits the same bound is screened in full, which is the control
+// that the bound is what refused the first.
+func TestAFileOverTheRequestBoundIsNotScreenedInPart(t *testing.T) {
+	t.Parallel()
+	var b strings.Builder
+	for i := range 30 {
+		fmt.Fprintf(&b, "+line %03d\n", i)
+	}
+	long := b.String()
+	provider := judgetest.New(t, judgetest.Always(judgetest.Answer(0.01)))
+	over := client(provider, judge.WithMaxPiece(100), judge.WithBounds(0, 2)).Screen(t.Context(), "f.txt", long)
+	assertFailed(t, over, judge.FailureOverBound)
+	if provider.Count() != 0 || over.Requests() != 0 {
+		t.Fatalf("a file over the bound sent %d request(s)", provider.Count())
+	}
+	fits := client(provider, judge.WithMaxPiece(100), judge.WithBounds(0, 8)).Screen(t.Context(), "f.txt", long)
+	if _, ok := fits.Probability(); !ok || fits.Requests() != provider.Count() || provider.Count() < 3 {
+		t.Fatalf("a file inside the bound came to %+v after %d request(s)", fits, provider.Count())
+	}
+
+	// Halving a piece the provider refused counts against the same bound.
+	var large strings.Builder
+	for i := range 400 {
+		fmt.Fprintf(&large, "+line %03d\n", i)
+	}
+	halving := judgetest.New(t, judgetest.Always(judgetest.TooLarge()))
+	cut := client(halving, judge.WithBounds(0, 3)).Screen(t.Context(), "f.txt", large.String())
+	assertFailed(t, cut, judge.FailureOverBound)
+	if halving.Count() != 3 || cut.Requests() != 3 {
+		t.Fatalf("a file whose pieces kept being cut sent %d request(s), want the bound of 3", halving.Count())
+	}
+}
+
+// A client for one review sends no more requests than the review's bound,
+// across every check and every goroutine, and each check the bound refused
+// fails as over the bound with nothing sent. The same files asked through a
+// client serving no review all go out, which is the control.
+func TestAReviewSendsNoMoreThanItsBound(t *testing.T) {
+	t.Parallel()
+	provider := judgetest.New(t, judgetest.Always(judgetest.Answer(0.01)))
+	review := client(provider, judge.WithBounds(3, 0)).ForReview()
+	results := make([]judge.Result, 6)
+	var wg sync.WaitGroup
+	for i := range 5 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			results[i] = review.Screen(t.Context(), fmt.Sprintf("f%d.go", i), diff)
+		}()
+	}
+	wg.Wait()
+	results[5] = review.Trace(t.Context(), "f0.go", "adds a line", diff)
+	if provider.Count() != 3 {
+		t.Fatalf("a review bounded at 3 sent %d requests", provider.Count())
+	}
+	over := 0
+	for _, r := range results {
+		if failure, _, isFailed := r.Failed(); isFailed {
+			assertFailed(t, r, judge.FailureOverBound)
+			if failure == judge.FailureOverBound && r.Requests() == 0 {
+				over++
+			}
+		}
+	}
+	if over != 3 {
+		t.Fatalf("%d checks were refused by the bound, want 3: %+v", over, results)
+	}
+
+	control := judgetest.New(t, judgetest.Always(judgetest.Answer(0.01)))
+	unbounded := client(control, judge.WithBounds(3, 0))
+	for i := range 5 {
+		unbounded.Screen(t.Context(), fmt.Sprintf("f%d.go", i), diff)
+	}
+	if control.Count() != 5 {
+		t.Fatalf("a client serving no review sent %d of 5 requests", control.Count())
 	}
 }
 

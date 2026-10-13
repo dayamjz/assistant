@@ -314,7 +314,15 @@
 // The decision-model record PRD section 5 asks for is here on the same terms,
 // as AppendDecisionAnswer and DecisionAnswers: one row per answer or failed
 // call, appended and never revised, with no column a question, a diff, a
-// reason, or a key could land in. It keeps the answer and the finding it
-// produced, and not yet what the run did with that path afterwards, which
-// section 5 also asks for; internal/judge states that gap.
+// reason, or a key could land in. What the run did with that path afterwards
+// is AppendDecisionFollowUp: one row per answer it follows, of a closed set of
+// kinds, so an answer with no row is one nothing followed and the answer rows
+// are untouched. DecisionFirings reads the two back per run of a repository,
+// and decides nothing from them. Who writes the follow-ups, and the gaps in
+// what they catch, is internal/service's observe.go.
+//
+// StageExecution is history on the same terms: one row per execution of a
+// stage's body, with its start and end, written once both are known. It is
+// not stage_result's duration, which is one rewritten row per stage and is
+// written by nothing in this build.
 package store
