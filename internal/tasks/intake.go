@@ -303,9 +303,10 @@ func (q *Queue) writeInstructions(id, text string) (string, error) {
 // BranchInGate as a for-each-ref pattern or git as an option: an option
 // prefix, whitespace or a control byte, the glob and revision characters
 // ~ ^ : ? * [ \, a ".." or "@{" element, a bare "@", and a component that is
-// empty, begins or ends with a dot, or ends in ".lock". A name past this check can still be one
-// git refuses, and that refusal then arrives from the gate read as an error
-// rather than as a task recorded under a name no branch can carry.
+// empty, begins or ends with a dot, or ends in ".lock". A name past this
+// check can still be one git refuses, and that refusal then arrives from the
+// gate read as an error rather than as a task recorded under a name no branch
+// can carry.
 func branchNameRefusal(branch string) string {
 	switch {
 	case strings.HasPrefix(branch, "-"):
