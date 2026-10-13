@@ -135,6 +135,16 @@ func ParseStage(name string) (Stage, bool) {
 	return StageInvalid, false
 }
 
+// TakesFixRounds reports whether the stage is one of the five that take
+// automatic fix rounds, which is the stage table's answer and not a list kept
+// beside it. Whether a given pipeline builds the stage a fixer is a question
+// for its configured limit; this says only whether a limit governs it at all,
+// and so whether the stage has a fix key a round can leave a summary in.
+func (s Stage) TakesFixRounds() bool {
+	row, ok := s.spec()
+	return ok && row.rounds != nil
+}
+
 // Node returns the name of the graph node that runs this stage.
 func (s Stage) Node() string { return s.String() }
 

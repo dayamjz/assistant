@@ -75,8 +75,9 @@ import (
 //     an edit, a note, and not detected as a weakening. That judgment is the
 //     reviewer's, in a finding of its own.
 //   - The rule stops the pipeline changing the judge after review, not changing
-//     the code: a fix round's edits outside the judge paths still reach the
-//     push stage without a review, which PRD section 14 lists as open.
+//     the code. A test or lint round's edits outside the judge paths are
+//     reviewed at the push stage before they are pushed, which push.go owns;
+//     a checks round's are not, because that stage runs after the push.
 //   - The fixer is told the judge paths are not its to change. Nothing depends
 //     on it listening, and nothing here prevents the edit: the hold is what
 //     follows from it.

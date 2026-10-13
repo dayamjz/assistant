@@ -72,10 +72,23 @@ func reviewRole() string {
 
 // reviewSubject says what is being reviewed: the branch, the commit, where the
 // change is measured from, and which of its paths are outside review.
+//
+// A review of later commits says what it is measured against differently,
+// because the commit it starts from is not where the branch left its base: it
+// is the commit an earlier review of this run already read, and everything
+// after it is what no review has read.
 func reviewSubject(f reviewFacts, change reviewChangeSet) string {
 	var b strings.Builder
-	b.WriteString("The change under review is commit " + f.head + " on branch " + f.branch +
-		", measured against " + change.from + ", which is where this branch left " + f.base + ".\n")
+	if f.since != "" {
+		b.WriteString("The change under review is commit " + f.head + " on branch " + f.branch +
+			", measured against " + change.from + ". An earlier review of this run read " +
+			change.from + "; the commits after it were written by this run's own automatic fix " +
+			"rounds after that review, and no review has read them. They are what you are " +
+			"reviewing, and nothing is pushed until you have.\n")
+	} else {
+		b.WriteString("The change under review is commit " + f.head + " on branch " + f.branch +
+			", measured against " + change.from + ", which is where this branch left " + f.base + ".\n")
+	}
 	b.WriteString("It touches " + strconv.Itoa(len(change.touched)) + " path(s) that are in scope for review.")
 	if len(change.excluded) > 0 {
 		b.WriteString("\n\nThe repository's configuration excludes " + strconv.Itoa(len(change.excluded)) +
@@ -155,6 +168,9 @@ func reviewRules(cfg config.Config, touched []string) string {
 // body for every execution, so the only thing that crosses is what is written
 // here.
 func reviewPriorRound(f reviewFacts) string {
+	if f.since != "" {
+		return reviewLaterRounds(f)
+	}
 	if !f.rereview() {
 		return ""
 	}
@@ -181,6 +197,33 @@ func reviewPriorRound(f reviewFacts) string {
 			}
 			b.WriteString(strings.TrimSpace(found.Description) + "\n")
 		}
+	}
+	return b.String()
+}
+
+// reviewLaterRounds is P5 for the push stage's review of the commits a later
+// stage's fix rounds wrote: those commits are author code, and what the rounds
+// said about them is a claim to check.
+//
+// It is always present for that review, because the review exists only when
+// such commits do. What it quotes is each stage's last summary, because that
+// is what the run keeps: a stage's fix key is overwritten by every round, so a
+// stage that took three rounds is represented by the third one's account, and
+// the diff is what shows the other two.
+func reviewLaterRounds(f reviewFacts) string {
+	var b strings.Builder
+	b.WriteString("Every commit you are reviewing was written by an automatic fix round of a " +
+		"stage that ran after the review, to make that stage's own check pass. Treat it as " +
+		"author code: it gets the same reading as code a person wrote, and it is the " +
+		"least-reviewed code in this change precisely because it looks like housekeeping. A " +
+		"check passing after the round is not evidence that the round was right; a round can " +
+		"make a check pass by changing what the code does.\n\n")
+	b.WriteString("You have no memory of those rounds, and what follows is not evidence that " +
+		"anything was resolved. It is what the rounds said they changed, and your job includes " +
+		"checking it against the diff.\n")
+	for _, round := range f.laterRounds {
+		b.WriteString("\nWhat the last fix round of the " + round.stage.String() +
+			" stage says it changed, in its own words:\n\n" + round.summary + "\n")
 	}
 	return b.String()
 }
