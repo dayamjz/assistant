@@ -10,6 +10,7 @@ import (
 	"github.com/dayamjz/assistant/internal/gate"
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/store"
+	"github.com/dayamjz/assistant/internal/taskstate"
 	"github.com/dayamjz/assistant/internal/vcs"
 )
 
@@ -18,10 +19,10 @@ import (
 // copy is not proof on its own when the tool can be pointed at its own
 // repository. This file is the assertion half of that: a pure comparison of
 // what a directory was observed to be against what a task's copy must be,
-// with a typed refusal naming the comparison that failed. The launch half,
-// a seam that cannot start a worker without the value this assertion returns,
-// is #91's and does not exist yet; its absence is stated on Isolation rather
-// than implied away.
+// with a typed refusal naming the comparison that failed. The launch half
+// is internal/session's Create, which refuses an Isolation this assertion
+// did not produce before it asks for a worker; what this file states about
+// that seam is on Isolation.
 //
 // # Why file identity
 //
@@ -160,8 +161,8 @@ type Expectation struct {
 // letter case or a volume written another way, passes the assertion and
 // fails the line. A worker that does not run it, or
 // runs it and ignores a non-zero status, is not stopped by it; what stops a
-// worker is the assertion this program makes before it launches, and only
-// once #91's seam takes the Isolation that assertion returns.
+// worker is the assertion this program makes before it launches, which
+// internal/session's Create takes as the value it cannot start without.
 func Expect(h *home.Home, id string, shape store.TaskShape, gatePath, primary, branch string) (Expectation, string, error) {
 	copyPath, err := h.TaskCopy(id)
 	if err != nil {
@@ -240,12 +241,15 @@ func (e Expectation) validate() error {
 // the zero value is not a proof and reports false, so a seam that takes an
 // Isolation can refuse one nobody asserted.
 //
-// It is for #91's launch seam, which will take it as the value a worker
-// cannot be started without. Nothing in this build takes it yet: a worker
-// started today through internal/agents is started where it is told, and
-// P11's launch edge is open until that seam lands. The exported fields are
-// what was proven, as resolved; a consumer compares against them rather than
-// re-deriving.
+// internal/session's Create takes it as the value a worker cannot be
+// started without, and refuses one Proven reports false. internal/service's
+// dispatch produces one and holds it in memory for that seam, and the wiring
+// from the one to the other is a later change. That is the launch edge as
+// far as this build takes it: internal/agents itself still starts a worker
+// where it is told, so the edge holds for a launch through internal/session
+// and nothing here closes a launch that bypasses it. The
+// exported fields are what was proven, as resolved; a consumer compares
+// against them rather than re-deriving.
 type Isolation struct {
 	// Copy is the copy's path with every symbolic link resolved, the
 	// directory a launch taking this proof would use.
@@ -534,4 +538,32 @@ func headWords(obs vcs.Observation) string {
 		return "detached"
 	}
 	return "on " + obs.Branch
+}
+
+// Refusal maps a refused assertion to the closed reason internal/taskstate
+// gives an "isolation-refused" event, so the history carries a word that
+// package defines rather than this one's prose. It is the one owner of that
+// mapping, and ok is false for an error that is no *IsolationError.
+//
+// ComparisonPrimary is RefusedPrimaryCheckout. ComparisonRemotes and
+// ComparisonHead are RefusedWrongShape: the copy is a repository of its own
+// and distinct from the primary, and its remote set or its HEAD is not the
+// one its shape gives it. Every other comparison is RefusedNotIsolated: the
+// copy is not the one reserved, is a linked worktree, stands inside the gate
+// repository, or would be launched under an environment that points git at
+// another repository. RefusedCopyMissing is never answered here, because an
+// assertion is made of a path something was observed at.
+func Refusal(err error) (reason taskstate.IsolationRefusal, ok bool) {
+	var refused *IsolationError
+	if !errors.As(err, &refused) {
+		return "", false
+	}
+	switch refused.Comparison {
+	case ComparisonPrimary:
+		return taskstate.RefusedPrimaryCheckout, true
+	case ComparisonRemotes, ComparisonHead:
+		return taskstate.RefusedWrongShape, true
+	default:
+		return taskstate.RefusedNotIsolated, true
+	}
 }

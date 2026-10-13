@@ -76,14 +76,17 @@
 //
 // # Residual gaps
 //
-//   - The process tier has no producer in this build: no session provider
-//     exists, so every Reader built today passes a nil probe and the tier is
-//     exercised by Resolve's tests and a scripted probe alone. When a probe
-//     exists its answer is as of the probe, taken after the records were
-//     read, and a terminal may change afterwards. Live means the agent
-//     process is running; a probe that cannot tell an agent from the shell
-//     left in its pane would answer Live for a worker that has gone, which
-//     is the probe's gap to close and not this package's.
+//   - The process tier's producer, internal/session's Probe, is not wired:
+//     the service still builds its Reader with a nil probe, so the tier is
+//     exercised by Resolve's tests, a scripted probe, and internal/session's
+//     own run of a Reader over the real provider on the stand-in, and reaches
+//     no task a person lists until the wiring lands (#91's last PR). A
+//     probe's answer is as of the probe, taken after the records were read,
+//     and a terminal may change afterwards. Live means the agent process is
+//     running; a probe that cannot tell an agent from the shell left in its
+//     pane would answer Live for a worker that has gone, which is the
+//     probe's gap to close and not this package's, and internal/session's
+//     doc says how its provider answers it.
 //   - The advancing fact is as of the slot map, read after the snapshot, so
 //     Progress can be false for a run that began advancing after the read
 //     and the answer is as of neither moment exactly.
@@ -101,8 +104,9 @@
 //     is not carried into the detail.
 //   - The ordering rules this package
 //     states for its own kinds, "relaunched" then "dispatched" and the
-//     closed detail of "isolation-refused", are owed by their writers (#94
-//     and #98) and checked by nothing here: the store appends any text, and
+//     closed detail of "isolation-refused", are owed by their writers (#94,
+//     and internal/service's dispatch) and checked by nothing here: the
+//     store appends any text, and
 //     Row.Detail is the decoder a writer calls before appending, not a gate
 //     at the append.
 //   - Row.Writer says who may append a kind and refuses nothing itself. The

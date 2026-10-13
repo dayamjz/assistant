@@ -356,14 +356,19 @@ Each has cost this repository more than one round of review.
   approximating it. Read its `doc.go` for the residual gaps, and for why PRD
   section 8's "task state" row is read as a resolution rather than a row.
 - `internal/tasks` is PRD section 8's tasks module as far as this build takes
-  it: intake, queueing, and the P11 assertion, with dispatch, copies and the
-  launch left to #104 and #91. `Expect` computes a task's `Expectation` and
-  its second-check shell line from one call, and `AssertIsolated` compares a
-  real `vcs.Observation` against it by file identity, never by string, with
-  an exact remote set per shape and a typed `*IsolationError` naming the
-  comparison; only it sets `Isolation`'s unexported field, nothing in this
-  build takes one, and its P11 citation claims the assertion refuses and
-  nothing about launch. Every lifecycle move there is an appended event, never a state
+  it: intake, queueing, and the P11 assertion, with dispatch and the copy in
+  `internal/service` and the launch in `internal/session`. `Expect` computes
+  a task's `Expectation` and its second-check shell line from one call, and
+  `AssertIsolated` compares a real `vcs.Observation` against it by file
+  identity, never by string, with an exact remote set per shape and a typed
+  `*IsolationError` naming the comparison; only it sets `Isolation`'s
+  unexported field, `Refusal` is the one mapping from a comparison to
+  `taskstate`'s refusal token, `internal/session`'s `Create` is what takes an
+  `Isolation` to start a worker and no service path reaches it yet, and its
+  P11 citation claims the assertion refuses and nothing about launch. Until
+  #91's worker set exists, "own branch, only through the gate" is
+  instruction text and nothing enforces which ref a worker's push may move;
+  its `doc.go` carries that sentence. Every lifecycle move there is an appended event, never a state
   column: `Create` writes the disposition through `store.CreateTask`, anchored
   to the newest task row it saw on the branch and under the service's branch
   exclusion, and `Release` appends `dispatched` through
@@ -388,6 +393,34 @@ Each has cost this repository more than one round of review.
   finishes in `internal/service` that write the record both call `Release`);
   Failed is not terminal, so a relaunch must re-run the floor; a
   person's push on a task's branch is outside it.
+- `internal/session` is PRD section 8's terminal session provider, and the
+  word means a terminal session, never the conversation session
+  `internal/agents` keeps for a fixer: `Provider` is the five operations and
+  nothing else, there is no capability table here, and an optional behaviour
+  a later provider has is a row in `internal/agents`' table with its probe
+  and declarer. `Pipe` is the reference provider and starts nothing: `Create`
+  refuses an unproven `tasks.Isolation` with `ErrUnproven` and then asks the
+  resolved runner for a worker through `agents.OpenWorker`, so only the
+  scripted adapter answers it in this build and the real adapter's worker
+  mode is #95 line K. Three things there are mechanism rather than rule.
+  `Probe` answers `taskstate.Liveness`, that package's word, with a typed
+  `Reason`, and the `reasons` table is the one place a reason's liveness is
+  decided: `Live` only through a handle this provider holds whose process
+  has not exited, `Dead` only where absence is proven (exited, no such
+  process, start time differs), everything else `Unobserved`, a probe error
+  among it; the test applies that rule to the table and to a counterfeit.
+  The identity is the attempt's session reference, a `Reference` of home
+  marker, task, pid and start time encoded in one closed format, recorded by
+  the caller through `store.SetAttemptSession` and nowhere else, with no
+  file under the home; another home's reference probes `Unobserved` here.
+  `Capture` is the worker's bounded tail plus `Digest` over `Normalize`, an
+  output stream and not a screen, with the rules derived from what the
+  stand-in emits and the real adapter's format stated unknown; the
+  comparison is the supervisor's. Read its `doc.go` for the restart answer
+  and the residual gaps: nothing ends an orphan, the record-first window
+  leaves a process no record names until #112's sweep, the route walk does
+  not see behind an interface-typed field, and on a platform without a
+  start-time read an unheld reference is never `Dead`.
 - `internal/supervisor` is the pure core of PRD section 5's supervision:
   `Classify` is the wake flowchart as a function and `Assess` is the stop
   guard's predicate, both over typed inputs the caller computed, with no
@@ -553,7 +586,22 @@ Each has cost this repository more than one round of review.
   composed by `config.ResolveRun` - and refuses the run before anything
   launches when the trusted copy cannot be read or the composed document pins
   a different agent than the operator's. Read `doc.go` for that, including
-  how a resume resolves fresh and what decides its resumability.
+  how a resume resolves fresh and what decides its resumability. It builds
+  every run an isolated copy, a worktree of the gate's bare repository at the
+  run's own `refs/assistant/runs/<id>`, which `create` writes right after the
+  row: from the gate's own object for a push, by a fetch from the working copy
+  for a start or a rerun. `ensureCopy` reads that reference and never the
+  working copy, and `copy.go`'s header says why the fetch moved there. It is
+  also where a task is dispatched, in `dispatch.go`: the attempt row is the
+  claim, the copy is a `vcs.Clone` of the primary shaped for the task's
+  shape, `tasks.AssertIsolated` is run under `agents.WorkerEnvironment`, both
+  snapshots are recorded, a refusal is the `isolation-refused` event carrying
+  `taskstate`'s token, and a proof is held only in the service's memory for
+  #91's launch seam; nothing launches. A path already standing at the copy's
+  path is asserted and never removed. The environment half of P11 is only as
+  strong as every launch path building its environment through
+  `agents.WorkerEnvironment`, which is the contract #91's launch seam takes
+  along with the proof; no second strip list exists or should.
 - `internal/cli` is the command surface, and its verb table is PRD section 9's
   table and nothing else. A verb that section does not describe is a finding to
   raise against the specification, not a row to add: `cli_test.go` holds both

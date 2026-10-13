@@ -142,13 +142,15 @@
 // about what it is overwriting, and where that expectation came from is
 // internal/safety's question. Nothing here deletes a remote reference at all.
 //
-// Two local operations write as well. Fetch writes references in the local
+// Local operations write as well. Fetch writes references in the local
 // repository, and a refspec beginning with + tells git to update one even when
 // that is not a fast-forward; a caller passing such a refspec has chosen that.
-// CommitAll records the working copy as a commit and moves the branch or
-// detached HEAD it was made on, and nothing else here moves a branch in a
-// working copy. Whether any of it may proceed is the safety module's question,
-// not this one's.
+// UpdateRef writes one full reference name at a commit already in the
+// repository and fetches nothing. CommitAll records the working copy as a
+// commit and moves the branch or detached HEAD it was made on;
+// SwitchToNewBranch and Detach move HEAD itself, to a new branch or to no
+// branch, and nothing else here moves a branch in a working copy. Whether any
+// of it may proceed is the safety module's question, not this one's.
 //
 // Clone creates a repository, as InitBare does, and refuses a destination
 // that already exists; what it promises is the remote set the caller named

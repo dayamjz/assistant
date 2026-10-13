@@ -181,3 +181,32 @@ func TestAWorkerAgentStillAnswersOneShotInvocations(t *testing.T) {
 		t.Errorf("a one-shot invocation recorded itself as a worker: %s", call)
 	}
 }
+
+// An exchange that ends the worker exits it after the reply, with the
+// script's status, while its input is still open: Done closes without a
+// Close, which is the shape of an agent that finished on its own.
+func TestAnEndingExchangeExitsTheWorkerAfterItsReply(t *testing.T) {
+	agent := NewWorker(t, Script{Worker: &WorkerScript{
+		Exchanges: []Exchange{{Contains: "finish", Reply: "all done", Ends: true}},
+		Exit:      0,
+	}})
+	worker, err := agents.OpenWorker(t.Context(), agent.Runner(), agents.WorkerSpec{
+		Dir: t.TempDir(), Instructions: "begin",
+	})
+	if err != nil {
+		t.Fatalf("starting the worker: %v", err)
+	}
+	defer worker.Close()
+	if err := worker.Send(t.Context(), "finish now"); err != nil {
+		t.Fatalf("sending the ending line: %v", err)
+	}
+	waitForOutput(t, worker, "all done")
+	select {
+	case <-worker.Done():
+	case <-time.After(30 * time.Second):
+		t.Fatal("the worker did not exit after the ending exchange")
+	}
+	if err := worker.Send(t.Context(), "anything"); !errors.Is(err, agents.ErrWorkerEnded) {
+		t.Errorf("a send after the worker ended answered %v, want ErrWorkerEnded", err)
+	}
+}

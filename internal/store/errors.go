@@ -395,3 +395,8 @@ func (e *UnreadableError) Unwrap() []error { return []error{ErrUnreadable, e.Err
 // and reading a schema that lacks a table an accessor selects from would
 // fail per call rather than once at the open.
 var ErrSchemaBehind = errors.New("store: database schema is behind this build and a read-only open cannot migrate it")
+
+// ErrPrimarySnapshotRecorded is returned by RecordPrimarySnapshot when the
+// task's attempt already has a primary snapshot: the record is of one read,
+// written once, and the first stands.
+var ErrPrimarySnapshotRecorded = errors.New("store: the attempt already has a primary snapshot")

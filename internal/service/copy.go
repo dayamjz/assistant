@@ -42,18 +42,35 @@ import (
 //
 // A push to the gate puts the commit there, and a run started any other way
 // does not: assistant start reads a working copy and records the commit it is
-// standing on, which the gate repository has never seen. So the commit is
-// fetched from the working copy the repository record names, every time,
-// rather than only when it is missing. One path that always runs is worth more
-// than a conditional that is exercised on one of the two ways a run starts:
-// the fetch is cheap when the commit is already there, and a build where it is
-// wrong is wrong for every run rather than for the half nobody tested.
+// standing on, which the gate repository has never seen. The commit used to be
+// fetched from the working copy here, on every run, whichever way the run
+// started. For a run a push started from a clone the working copy has never
+// seen - a task's worker pushes from its own copy - that fetch asked the
+// working copy for a commit it does not hold, and the run went on only
+// because of a property of git this package does not own: a fetch whose
+// wanted object the repository already holds writes the reference without
+// transferring it, so the gate's own copy of the pushed object answered a
+// fetch addressed at the working copy. The working copy was still contacted,
+// and the run rested on that short-circuit and on the working copy standing
+// where the record says.
 //
-// It is fetched by commit and not by branch. The branch tip and the commit the
+// So the fetch moved to where a run is created, which is the one place that
+// knows where the commit is. create writes the run's reference in the gate
+// repository right after it writes the row, from the gate's own object for a
+// push, which already landed the commit there, and by a fetch from the
+// working copy for a start or a rerun. What this file keeps is the one path
+// that always runs: every run's reference is written at creation, by one
+// function, and this reads it from the gate and nowhere else, with no
+// conditional on where the commit came from and nothing contacted. One source
+// here is worth more than a conditional exercised on one of the ways a run
+// starts, for the same reason the unconditional fetch was: a build where it
+// is wrong is wrong for every run rather than for the half nobody tested.
+//
+// It is written by commit and not by branch. The branch tip and the commit the
 // run records are the same thing for about as long as it takes to record it,
-// and a fetch by name would quietly validate whatever the branch had moved to
-// instead. Nothing here reads the working copy for anything else, and the
-// fetch writes nothing in it.
+// and a reference taken by name would quietly validate whatever the branch had
+// moved to instead. Nothing here reads the working copy at all, and the fetch
+// create makes writes nothing in it.
 //
 // # The upstream remote
 //
@@ -106,6 +123,13 @@ import (
 // Both facts it locates the copy from are the record's, for the reason begin
 // takes them from the record: the path a body opens and the path this reclaims
 // are derived from the same row, so they cannot disagree.
+//
+// The commit is read from the gate repository, under the reference create
+// wrote for the run, and the copy is refused rather than cut when that
+// reference is absent or names another commit: a reference the row does not
+// vouch for is not the commit the run was recorded to validate. The working
+// copy is not read here; this file's opening comment says where the fetch
+// went.
 func (s *Service) ensureCopy(ctx context.Context, record store.Run) error {
 	path := s.home.Worktree(record.RepositoryID, record.ID)
 	if standing, err := copyStanding(ctx, path); err != nil {
@@ -127,15 +151,59 @@ func (s *Service) ensureCopy(ctx context.Context, record store.Run) error {
 				upstreamRemote, record.ID, err)
 		}
 	}
+	held, err := bare.ResolveCommit(ctx, submittedRef(record.ID))
+	if err != nil {
+		return fmt.Errorf("service: the gate repository holds no %s for run %s, so the commit it validates "+
+			"is not there to cut a copy from: %w", submittedRef(record.ID), record.ID, err)
+	}
+	if held != record.SubmittedHead {
+		return fmt.Errorf("service: %s in the gate repository is %s and run %s was recorded to validate %s; "+
+			"the copy is refused rather than cut at either", submittedRef(record.ID), held, record.ID, record.SubmittedHead)
+	}
+	if _, err := bare.AddWorktree(ctx, vcs.WorktreeSpec{Path: path, Commit: held}); err != nil {
+		return fmt.Errorf("service: creating the isolated copy for run %s at %s: %w", record.ID, path, err)
+	}
+	return nil
+}
+
+// recordSubmittedCommit writes the run's reference in the gate repository at
+// the commit the run was recorded to validate, right after create wrote the
+// row, which is the order PRD section 8 gives a record and the thing it names.
+//
+// Where the commit comes from is the one conditional on how a run started,
+// and it is here and nowhere else. A push landed the commit in the gate
+// before the notification ran, so for a push the reference is written at the
+// object already there and nothing is fetched; a start and a rerun record a
+// commit the gate has never seen, so for those it is fetched by commit from
+// the working copy the repository record names, which is the fetch ensureCopy
+// used to make. Either way the reference is the same name at the same commit,
+// so ensureCopy reads one thing. A fetch by commit from a working copy asks
+// for a commit that working copy holds, which is what a start and a rerun
+// record and what a worker's push does not; the push path is why this is not
+// an unconditional fetch, and this file's opening comment says what that
+// fetch used to rest on there.
+func (s *Service) recordSubmittedCommit(ctx context.Context, record store.Run, heldByGate bool) error {
+	repository, err := s.store.Repository(ctx, record.RepositoryID)
+	if err != nil {
+		return fmt.Errorf("service: reading the repository run %s is of: %w", record.ID, err)
+	}
+	bare, err := s.gateRepositoryOf(ctx, repository, record.ID)
+	if err != nil {
+		return err
+	}
+	if heldByGate {
+		if err := bare.UpdateRef(ctx, submittedRef(record.ID), record.SubmittedHead); err != nil {
+			return fmt.Errorf("service: recording the commit run %s validates in the gate repository: %w",
+				record.ID, err)
+		}
+		return nil
+	}
 	if err := bare.Fetch(ctx, vcs.FetchSpec{
 		Remote:   repository.WorkingPath,
 		Refspecs: []string{"+" + record.SubmittedHead + ":" + submittedRef(record.ID)},
 	}); err != nil {
 		return fmt.Errorf("service: bringing the commit run %s validates into the gate repository: %w",
 			record.ID, err)
-	}
-	if _, err := bare.AddWorktree(ctx, vcs.WorktreeSpec{Path: path, Commit: record.SubmittedHead}); err != nil {
-		return fmt.Errorf("service: creating the isolated copy for run %s at %s: %w", record.ID, path, err)
 	}
 	return nil
 }
@@ -170,8 +238,8 @@ func (s *Service) gateRepositoryOf(ctx context.Context, repository store.Reposit
 
 // submittedRef is the name the gate repository holds a run's submitted commit
 // under. It is named for the run so that two runs cannot write each other's,
-// and it is what keeps the commit reachable between the fetch that brings it
-// in and the worktree that checks it out.
+// and it is what keeps the commit reachable between the write that records it
+// at creation and the worktree that checks it out.
 func submittedRef(runID string) string { return "refs/assistant/runs/" + runID }
 
 // upstreamRemote is the name the run's copy reaches the upstream under.

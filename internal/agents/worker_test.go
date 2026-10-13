@@ -154,7 +154,9 @@ func TestTheWorkerEnvironmentCarriesNoRedirectingGitVariable(t *testing.T) {
 	}
 	// The worker's environment is the parent's, as StripRedirecting leaves
 	// it, plus the spec's own: nothing kept is lost and nothing removed
-	// arrives.
+	// arrives. It is also exactly what WorkerEnvironment computes from the
+	// same inputs, which is what lets a launcher assert the environment a
+	// worker will get without a second builder.
 	got := read(t, workerEnv)
 	stripped := read(t, vcs.StripRedirecting(os.Environ()))
 	for name := range stripped {
@@ -166,6 +168,9 @@ func TestTheWorkerEnvironmentCarriesNoRedirectingGitVariable(t *testing.T) {
 		if _, kept := stripped[name]; !kept && name != "AGENTS_A_VARIABLE_THE_SPEC" {
 			t.Errorf("the worker was given %s, which the builder removes", name)
 		}
+	}
+	if computed := read(t, agents.WorkerEnvironment(os.Environ(), spec.Env)); !reflect.DeepEqual(computed, got) {
+		t.Errorf("WorkerEnvironment computes %v, and the worker was started with %v", computed, got)
 	}
 	for _, name := range []string{"GIT_DIR", "GIT_WORK_TREE", "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0"} {
 		if value, ok := got[name]; ok {
