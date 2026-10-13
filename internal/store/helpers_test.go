@@ -96,3 +96,16 @@ func seedTask(t *testing.T, s *Store, id string) Task {
 	}
 	return task
 }
+
+// incarnationOf begins a supervisor incarnation on s and returns it, which
+// is what a loop write needs to pass the fence. Each call begins the next
+// one, so a value from an earlier call is stale from then on; a test that
+// needs to show the fence firing keeps the earlier value on purpose.
+func incarnationOf(t *testing.T, s *Store) Incarnation {
+	t.Helper()
+	inc, err := s.BeginIncarnation(context.Background())
+	if err != nil {
+		t.Fatalf("BeginIncarnation: %v", err)
+	}
+	return inc
+}

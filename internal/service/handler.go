@@ -223,8 +223,8 @@ func (s *Service) listTasks(ctx context.Context) (machine.Tasks, error) {
 // differ in that one input and not in the predicate. The lock probe answers
 // Held from inside the process that holds it, which is this one, so what the
 // guard adds here is whether a loop under this instance is writing a fresh
-// beacon; in this build no loop writes one, and a fleet with work in flight
-// is reported unsupervised, which is the case.
+// beacon, which supervise.go's loop does from its own select; a fleet with
+// work in flight reads unsupervised exactly while that loop is not writing.
 func (s *Service) supervision(ctx context.Context) machine.Supervision {
 	inFlight, _ := feed.InFlightFrom(ctx, s.store, s.tasks())
 	verdict := feed.GuardWith(ctx, s.home, inFlight, supervisor.FreshnessFor(s.cfg.SupervisionBeaconInterval), time.Now())

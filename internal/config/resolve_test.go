@@ -62,6 +62,15 @@ func TestResolveWithNoConfigurationYieldsDefaults(t *testing.T) {
 	if c.SupervisionBeaconInterval != 10*time.Second {
 		t.Errorf("SupervisionBeaconInterval = %v, want 10s", c.SupervisionBeaconInterval)
 	}
+	if c.EscalationWindow != 30*time.Minute {
+		t.Errorf("EscalationWindow = %v, want 30m", c.EscalationWindow)
+	}
+	if c.RecheckWindow != 2*time.Hour {
+		t.Errorf("RecheckWindow = %v, want 2h", c.RecheckWindow)
+	}
+	if c.StallInspectionCount != 3 {
+		t.Errorf("StallInspectionCount = %d, want 3", c.StallInspectionCount)
+	}
 	if c.DecisionModel != DecisionEvaluate || !c.DecisionModel.RunsChecks() {
 		t.Errorf("DecisionModel = %q, want evaluate, which runs the checks", c.DecisionModel)
 	}
@@ -350,6 +359,9 @@ func TestParseRefusesGlobalOnlyKeysInARepositoryFile(t *testing.T) {
 		{KeyChecksTimeout, `{"checks_timeout": "1h"}`},
 		{KeySessionReuse, `{"session_reuse": false}`},
 		{KeySupervisionBeaconInterval, `{"supervision_beacon_interval": "30s"}`},
+		{KeyEscalationWindow, `{"escalation_window": "10m"}`},
+		{KeyRecheckWindow, `{"recheck_window": "1h"}`},
+		{KeyStallInspectionCount, `{"stall_inspection_count": 2}`},
 	}
 	for _, c := range cases {
 		for _, origin := range []Origin{OriginTrusted, OriginPushed} {
@@ -382,8 +394,13 @@ func TestParseRefusesGlobalOnlyKeysInARepositoryFile(t *testing.T) {
 // The accepting side of the same rule: the operator's own file sets both keys
 // and they resolve to those values.
 func TestGlobalLayerSetsGlobalOnlyKeys(t *testing.T) {
-	global := mustParse(t, OriginGlobal, `{"checks_timeout": "30m", "session_reuse": false, "supervision_beacon_interval": "30s"}`)
+	global := mustParse(t, OriginGlobal, `{"checks_timeout": "30m", "session_reuse": false, "supervision_beacon_interval": "30s",
+		"escalation_window": "1m", "recheck_window": "168h", "stall_inspection_count": 1}`)
 	res := resolve(t, global, Absent(OriginPushed))
+	if res.Config.EscalationWindow != time.Minute || res.Config.RecheckWindow != 168*time.Hour || res.Config.StallInspectionCount != 1 {
+		t.Errorf("the supervision rows resolved to %v, %v and %d, want the global values at their floors and ceiling",
+			res.Config.EscalationWindow, res.Config.RecheckWindow, res.Config.StallInspectionCount)
+	}
 	if res.Config.ChecksTimeout != 30*time.Minute {
 		t.Errorf("ChecksTimeout = %v, want the global value", res.Config.ChecksTimeout)
 	}
@@ -398,10 +415,13 @@ func TestGlobalLayerSetsGlobalOnlyKeys(t *testing.T) {
 	}
 }
 
-// The new class refuses exactly its four keys and no fifth: every other key still
-// parses in a repository file, from either repository origin.
+// The new class refuses exactly its seven keys and no eighth: every other key
+// still parses in a repository file, from either repository origin.
 func TestRepositoryFileStillAcceptsEveryOtherKey(t *testing.T) {
-	globalOnly := map[Key]bool{KeyChecksTimeout: true, KeySessionReuse: true, KeyDecisionModel: true, KeySupervisionBeaconInterval: true}
+	globalOnly := map[Key]bool{
+		KeyChecksTimeout: true, KeySessionReuse: true, KeyDecisionModel: true, KeySupervisionBeaconInterval: true,
+		KeyEscalationWindow: true, KeyRecheckWindow: true, KeyStallInspectionCount: true,
+	}
 	docs := map[Key]string{
 		KeyAgent:                       `{"agent": "claude"}`,
 		KeyCommandsTest:                `{"commands": {"test": "go test ./..."}}`,
@@ -426,6 +446,9 @@ func TestRepositoryFileStillAcceptsEveryOtherKey(t *testing.T) {
 		KeySessionReuse:                `{"session_reuse": false}`,
 		KeyDecisionModel:               `{"decision_model": "off"}`,
 		KeySupervisionBeaconInterval:   `{"supervision_beacon_interval": "30s"}`,
+		KeyEscalationWindow:            `{"escalation_window": "10m"}`,
+		KeyRecheckWindow:               `{"recheck_window": "1h"}`,
+		KeyStallInspectionCount:        `{"stall_inspection_count": 2}`,
 	}
 	// Every schema key is covered, so a key added without a decision about its
 	// class fails here rather than going untested.
@@ -462,8 +485,9 @@ func TestTrustGlobalIsAssignedToExactlyTheGlobalOnlyKeys(t *testing.T) {
 			global = append(global, k)
 		}
 	}
-	if got := strings.Join(keyStrings(global), ","); got != "checks_timeout,session_reuse,decision_model,supervision_beacon_interval" {
-		t.Errorf("TrustGlobal keys = %q, want checks_timeout, session_reuse, decision_model, and supervision_beacon_interval", got)
+	want := "checks_timeout,session_reuse,decision_model,supervision_beacon_interval,escalation_window,recheck_window,stall_inspection_count"
+	if got := strings.Join(keyStrings(global), ","); got != want {
+		t.Errorf("TrustGlobal keys = %q, want %s", got, want)
 	}
 	if TrustGlobal.String() != "global-only" {
 		t.Errorf("TrustGlobal.String() = %q", TrustGlobal.String())

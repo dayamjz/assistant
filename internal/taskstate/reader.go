@@ -27,7 +27,9 @@ type Reader struct {
 // service's slot map for advancing.
 //
 // Both run after the store has been read, outside its transaction, so neither
-// answer is as of the snapshot. The liveness is as of the probe and may be
+// answer is as of the snapshot, and they run in a fixed order: the records,
+// then the slot, then the probe, which is the order P8's "one consistent
+// read" is approximated in. The liveness is as of the probe and may be
 // stale by the time the answer is read. The advancing fact is as of the slot
 // map, so a run that settled between the snapshot and the question can be
 // reported advancing by the slot and settled by the record; Resolve reads the
@@ -66,29 +68,58 @@ func (r *Reader) Resolved(ctx context.Context, id string) (Resolved, error) {
 // All resolves every task, newest task first, each with its record, from
 // records read in a single transaction.
 func (r *Reader) All(ctx context.Context) ([]Resolved, error) {
-	snaps, err := r.store.TaskSnapshots(ctx)
+	observed, err := r.Observe(ctx)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]Resolved, 0, len(snaps))
-	for _, snap := range snaps {
-		out = append(out, Resolved{Record: snap.Task, State: r.resolve(ctx, snap)})
+	out := make([]Resolved, 0, len(observed))
+	for _, o := range observed {
+		out = append(out, Resolved{Record: o.Snapshot.Task, State: o.State})
 	}
 	return out, nil
 }
 
+// Observed is a task's snapshot with the state resolved from it, for a
+// reader that needs the records the state was derived from beside the state:
+// the supervisor loop in internal/service, which reads the events past its
+// marker and the open holds out of the same read the state came from rather
+// than from a second read that could see a different log (P8).
+type Observed struct {
+	// Snapshot is every record the state was resolved from, as one read.
+	Snapshot store.TaskSnapshot
+	// State is what Resolve made of it.
+	State Resolution
+}
+
+// Observe resolves every task, newest task first, and returns each with the
+// snapshot it was resolved from. It reads what All reads and nothing more;
+// All is Observe with the snapshot reduced to the task record.
+func (r *Reader) Observe(ctx context.Context) ([]Observed, error) {
+	snaps, err := r.store.TaskSnapshots(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Observed, 0, len(snaps))
+	for _, snap := range snaps {
+		out = append(out, Observed{Snapshot: snap, State: r.resolve(ctx, snap)})
+	}
+	return out, nil
+}
+
+// resolve asks the two live inputs in the order NewReader states, the slot
+// before the probe, and resolves.
 func (r *Reader) resolve(ctx context.Context, snap store.TaskSnapshot) Resolution {
 	in := Inputs{
 		Task: snap.Task, Runs: snap.Runs, Holds: snap.Holds, Events: snap.Events,
 		MergeRecords: snap.MergeRecords, Cleanup: snap.Cleanup, Process: Unobserved,
 	}
+	if run, ok := newest(snap.Runs); ok && r.advancing != nil {
+		in.Advancing = r.advancing(run.ID)
+	}
 	if n := len(snap.Attempts); n > 0 && r.probe != nil {
 		if ref, ok := snap.Attempts[n-1].SessionRef.Get(); ok {
 			in.Process = r.probe(ctx, ref)
 		}
-	}
-	if run, ok := newest(snap.Runs); ok && r.advancing != nil {
-		in.Advancing = r.advancing(run.ID)
 	}
 	return Resolve(in)
 }

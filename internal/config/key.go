@@ -86,6 +86,29 @@ const (
 	// this key or its bounds; that is raised as a finding and not closed
 	// here.
 	KeySupervisionBeaconInterval Key = "supervision_beacon_interval"
+	// KeyEscalationWindow is "escalation_window": how long a terminal may
+	// stay unchanged, with positive evidence of progress, before the
+	// supervisor surfaces it anyway, PRD section 10's row. It is global-only
+	// for KeySupervisionBeaconInterval's reason: the loop is the service's.
+	// The default and both limits are chosen, not measured, and refused
+	// rather than clamped. It is not a loop bound: it stops nothing and parks
+	// nothing, it only decides when an absorbed stall surfaces.
+	KeyEscalationWindow Key = "escalation_window"
+	// KeyRecheckWindow is "recheck_window": how long a declared external wait
+	// may sit idle before it surfaces, so a forgotten wait cannot stay
+	// invisible, PRD section 10's row. Global-only, bounded and refused on
+	// the same terms as KeyEscalationWindow, and not a loop bound either.
+	KeyRecheckWindow Key = "recheck_window"
+	// KeyStallInspectionCount is "stall_inspection_count": how many times the
+	// same unchanged screen may surface before the next surface demands a
+	// deeper inspection, PRD section 11's "after enough repetitions". It is
+	// global-only on the same terms as the two windows, and it is a level on
+	// a verdict rather than a bound: internal/supervisor's Stall says it stops
+	// nothing. The default and both limits are chosen, not measured.
+	//
+	// PRD section 10's schema table and its limits table have no row for
+	// this key or its bounds; that is #95 line I and not closed here.
+	KeyStallInspectionCount Key = "stall_inspection_count"
 	// KeyCommitFixMessage is "commit.fix_message": the fix commit subject
 	// template.
 	KeyCommitFixMessage Key = "commit.fix_message"
@@ -181,6 +204,12 @@ var specs = []spec{
 		func(c *Config, v any) { c.DecisionModel = v.(DecisionModel) }},
 	{KeySupervisionBeaconInterval, TrustGlobal, DefaultSupervisionBeaconInterval, decodeSupervisionBeaconInterval,
 		func(c *Config, v any) { c.SupervisionBeaconInterval = v.(time.Duration) }},
+	{KeyEscalationWindow, TrustGlobal, DefaultEscalationWindow, decodeEscalationWindow,
+		func(c *Config, v any) { c.EscalationWindow = v.(time.Duration) }},
+	{KeyRecheckWindow, TrustGlobal, DefaultRecheckWindow, decodeRecheckWindow,
+		func(c *Config, v any) { c.RecheckWindow = v.(time.Duration) }},
+	{KeyStallInspectionCount, TrustGlobal, DefaultStallInspectionCount, decodeStallInspectionCount,
+		func(c *Config, v any) { c.StallInspectionCount = v.(int) }},
 	{KeyCommitFixMessage, TrustPushed, DefaultCommitFixMessage, decodeFixMessage,
 		func(c *Config, v any) { c.CommitFixMessage = v.(string) }},
 	{KeyAllowPushedCommands, TrustTrusted, false, decodeBool,
