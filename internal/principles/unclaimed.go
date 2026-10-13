@@ -14,7 +14,6 @@ package principles
 // Check refuses a row whose principle a test does turn out to cite, so a row
 // cannot outlive the gap it describes.
 var unclaimed = map[Principle]string{
-	P9: "There is no wake classifier in this repository. Supervision is the orchestrator's, and nothing here supervises.",
 	P10: "There is no coordinator and no watcher here, so no turn ends. " +
 		"internal/home's lock gives a home one service, which is a different question from whether a healthy watcher holds it.",
 	P11: "Nothing here launches a worker into an isolated copy. internal/gate asks who a working copy belongs to, which is a different question.",
