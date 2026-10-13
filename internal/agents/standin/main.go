@@ -159,9 +159,10 @@ func serve(control string, args []string) int {
 // the script's exchanges say and rewriting its record as each arrives.
 //
 // It exits when its input closes, which is what the adapter's Close does
-// first, and it is otherwise ended by the tree termination that follows; a
-// worker that ignored both would be a worker the test wrote, and there is no
-// exchange for that.
+// first, or after a reply whose exchange says Ends, which is the agent
+// finishing on its own; it is otherwise ended by the tree termination that
+// follows Close, and a worker that ignored all of that would be a worker the
+// test wrote, for which there is no exchange.
 func serveWorker(control string, args []string) int {
 	script, err := readScript(control)
 	if err != nil {
@@ -206,6 +207,9 @@ func serveWorker(control string, args []string) int {
 				return exitNoOutput
 			}
 			answered = true
+			if exchange.Ends {
+				return worker.Exit
+			}
 			break
 		}
 		if !answered {

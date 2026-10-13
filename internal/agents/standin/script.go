@@ -74,6 +74,12 @@ type Exchange struct {
 	// Reply is printed on standard output, followed by a newline, for a line
 	// this exchange answers.
 	Reply string `json:"reply"`
+	// Ends makes the worker exit, with WorkerScript.Exit, once it has
+	// printed Reply, without waiting for its input to close. It is how a
+	// script says the agent finished on its own, which is a shape a real
+	// worker produces and the one a liveness probe has to tell from a
+	// worker that was ended by its caller.
+	Ends bool `json:"ends,omitempty"`
 }
 
 // answers reports whether this exchange accepts the line.
