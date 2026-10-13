@@ -32,7 +32,7 @@ func surface(t *testing.T, s *Store, task, digest string, repetition int64) Wake
 	if m.CaptureDigest != Known(digest) {
 		epoch++ // the store will bump it in the same write; the loop knows the rule
 	}
-	out, err := s.AppendWakeWithMarkers(ctx, WakeRequest{
+	out, err := s.AppendWakeWithMarkers(ctx, incarnationOf(t, s), WakeRequest{
 		TaskID: task, Kind: "terminal-unchanged", Marker: terminalMarker(digest, epoch, repetition),
 	}, MarkerAdvance{CaptureDigest: Known(digest), Surfaced: true, StallRepetitions: repetition})
 	if err != nil {
@@ -79,7 +79,7 @@ func TestAScreenReturningToAnEarlierValueIsANewSurface(t *testing.T) {
 	other := seedTask(t, s, "taskaaaaaaac").ID
 	var last WakeAppend
 	for _, digest := range []string{"A", "B", "A"} {
-		last, err = s.AppendWakeWithMarkers(ctx, WakeRequest{TaskID: other, Kind: "terminal-unchanged", Marker: digest},
+		last, err = s.AppendWakeWithMarkers(ctx, incarnationOf(t, s), WakeRequest{TaskID: other, Kind: "terminal-unchanged", Marker: digest},
 			MarkerAdvance{CaptureDigest: Known(digest)})
 		if err != nil {
 			t.Fatalf("counterfeit append: %v", err)
@@ -126,7 +126,7 @@ func TestAReplayedDetectionIsOneWake(t *testing.T) {
 	}
 
 	s = openStoreAt(t, path)
-	again, err := s.AppendWakeWithMarkers(ctx, WakeRequest{TaskID: task, Kind: first.Wake.Kind, Marker: first.Wake.Marker},
+	again, err := s.AppendWakeWithMarkers(ctx, incarnationOf(t, s), WakeRequest{TaskID: task, Kind: first.Wake.Kind, Marker: first.Wake.Marker},
 		MarkerAdvance{CaptureDigest: Known("A"), Surfaced: true, StallRepetitions: 1, EventSequence: 4})
 	if err != nil {
 		t.Fatalf("the replay: %v", err)
@@ -153,7 +153,7 @@ func TestAWakeConflictingWithAHandledRowIsRefused(t *testing.T) {
 	if err := s.AcknowledgeWakes(ctx, []int64{first.Wake.ID}, AcknowledgedByProgram()); err != nil {
 		t.Fatalf("AcknowledgeWakes: %v", err)
 	}
-	_, err := s.AppendWakeWithMarkers(ctx, WakeRequest{TaskID: task, Kind: first.Wake.Kind, Marker: first.Wake.Marker},
+	_, err := s.AppendWakeWithMarkers(ctx, incarnationOf(t, s), WakeRequest{TaskID: task, Kind: first.Wake.Kind, Marker: first.Wake.Marker},
 		MarkerAdvance{CaptureDigest: Known("A"), Surfaced: true, StallRepetitions: 9})
 	if !errors.Is(err, ErrWakeHandled) {
 		t.Fatalf("the same key after an acknowledgement = %v, want ErrWakeHandled", err)
@@ -182,7 +182,7 @@ func TestAWakeAndItsMarkersAreOneWrite(t *testing.T) {
 			if _, err := s.write.ExecContext(ctx, fault); err != nil {
 				t.Fatalf("planting the fault: %v", err)
 			}
-			_, err := s.AppendWakeWithMarkers(ctx, WakeRequest{TaskID: task, Kind: "terminal-unchanged", Marker: "B@2#1"},
+			_, err := s.AppendWakeWithMarkers(ctx, incarnationOf(t, s), WakeRequest{TaskID: task, Kind: "terminal-unchanged", Marker: "B@2#1"},
 				MarkerAdvance{CaptureDigest: Known("B"), Surfaced: true, StallRepetitions: 1})
 			if err == nil || !strings.Contains(err.Error(), "planted fault") {
 				t.Fatalf("the append succeeded past the planted fault (%v), so the control shows nothing", err)
@@ -392,20 +392,20 @@ func TestAWakeIsRecordedWithoutTheStoreReadingItsKind(t *testing.T) {
 		"no marker": {TaskID: task, Kind: "hold-opened"},
 		"no task":   {Kind: "hold-opened", Marker: "m"},
 	} {
-		if _, err := s.AppendWakeWithMarkers(ctx, req, MarkerAdvance{}); err == nil {
+		if _, err := s.AppendWakeWithMarkers(ctx, incarnationOf(t, s), req, MarkerAdvance{}); err == nil {
 			t.Errorf("a wake with %s was accepted", name)
 		}
 	}
-	if _, err := s.AppendWakeWithMarkers(ctx, WakeRequest{TaskID: "neveraaaaaaa", Kind: "hold-opened", Marker: "m"},
+	if _, err := s.AppendWakeWithMarkers(ctx, incarnationOf(t, s), WakeRequest{TaskID: "neveraaaaaaa", Kind: "hold-opened", Marker: "m"},
 		MarkerAdvance{}); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("a wake for a task that does not exist = %v, want ErrNotFound", err)
 	}
-	out, err := s.AppendWakeWithMarkers(ctx, WakeRequest{TaskID: task, Kind: "a-kind-this-build-never-heard-of", Marker: "m"},
+	out, err := s.AppendWakeWithMarkers(ctx, incarnationOf(t, s), WakeRequest{TaskID: task, Kind: "a-kind-this-build-never-heard-of", Marker: "m"},
 		MarkerAdvance{})
 	if err != nil || out.Disposition != WakeAppended {
 		t.Fatalf("a wake of a kind the store has no table for = %s (%v), want appended", out.Disposition, err)
 	}
-	if _, err := s.AdvanceWakeMarkers(ctx, task, MarkerAdvance{EventSequence: -1}); err == nil {
+	if _, err := s.AdvanceWakeMarkers(ctx, incarnationOf(t, s), task, MarkerAdvance{EventSequence: -1}); err == nil {
 		t.Error("a negative event sequence was accepted")
 	}
 }
@@ -435,7 +435,7 @@ func TestMarkersAreRewrittenInPlaceWithTheEpochDerived(t *testing.T) {
 		{MarkerAdvance{CaptureDigest: Known("A")}, 3},
 	}
 	for i, step := range steps {
-		m, err := s.AdvanceWakeMarkers(ctx, task, step.advance)
+		m, err := s.AdvanceWakeMarkers(ctx, incarnationOf(t, s), task, step.advance)
 		if err != nil {
 			t.Fatalf("step %d: %v", i, err)
 		}

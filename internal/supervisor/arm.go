@@ -84,7 +84,7 @@ func ArmOf(asked Beacon, obs Observation, fresh Freshness, now time.Time, waitOv
 	}
 	readable := !obs.Beacon.WrittenAt.IsZero()
 	matching := readable && obs.Beacon.Instance == obs.Instance
-	if matching && isFresh(obs.Beacon, fresh, now) {
+	if matching && IsFresh(obs.Beacon, fresh, now) {
 		if !asked.WrittenAt.IsZero() && asked.Instance == obs.Instance && obs.Beacon.Sequence <= asked.Sequence {
 			return Arm{Outcome: ArmAttached, Sequence: obs.Beacon.Sequence}, true
 		}
@@ -103,9 +103,12 @@ func ArmOf(asked Beacon, obs Observation, fresh Freshness, now time.Time, waitOv
 	}
 }
 
-// isFresh is Assess's freshness reading of a beacon on its own: not ahead of
-// now past the tolerance, and younger than the window.
-func isFresh(b Beacon, fresh Freshness, now time.Time) bool {
+// IsFresh is Assess's freshness reading of a beacon on its own: not ahead of
+// now past the tolerance, and younger than the window. It is the one
+// predicate the readers of a beacon and the loop's own watchdog judge a
+// beacon by, so a watchdog cannot read as live a beacon the stop guard would
+// read as stale.
+func IsFresh(b Beacon, fresh Freshness, now time.Time) bool {
 	age := now.Sub(b.WrittenAt)
 	if age < 0 && -age > fresh.Ahead {
 		return false

@@ -776,6 +776,33 @@ var schema = []migration{
 	},
 	{
 		version: 17,
+		name:    "supervisor incarnation",
+		statements: []string{
+			// The incarnation epoch of the supervisor loop PRD section 5
+			// puts inside the service: one row, rewritten in place, holding
+			// the epoch of the loop that may currently write the wake queue
+			// and the markers. It is the fence #100 puts on repair in place:
+			// a loop the watchdog replaced is still a goroutine nothing can
+			// end, and every write it makes afterwards is decided against
+			// this row in the transaction that would make it, so a replaced
+			// loop that unwedges does nothing. The beacon file carries the
+			// same epoch, and this row is the owner of which one is current;
+			// the beacon cites it.
+			//
+			// It is one row rather than a history because the question it
+			// answers is present tense, which one is current now, and a
+			// history would be read at its tail to answer it (P8). The epoch
+			// only grows, across restarts of the service too, so a beacon
+			// written by an earlier process reads behind it.
+			`CREATE TABLE supervisor_incarnation (
+				id         INTEGER PRIMARY KEY CHECK (id = 1),
+				epoch      INTEGER NOT NULL,
+				started_at TEXT NOT NULL
+			) STRICT`,
+		},
+	},
+	{
+		version: 18,
 		name:    "run cleanup records and stored task reports",
 		statements: []string{
 			// The cleanup record of a run's isolated copy, on task_cleanup's

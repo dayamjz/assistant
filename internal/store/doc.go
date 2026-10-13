@@ -89,7 +89,7 @@
 // question: the snapshot carries all of them rather than deciding.
 //
 // Two records beside them are written by the same cleanup decision, and
-// migration 17 holds both. RunCleanup is a run's copy's cleanup record on
+// migration 18 holds both. RunCleanup is a run's copy's cleanup record on
 // TaskCleanup's terms, with one column more: a refusal, the decision's own
 // word for why a copy was kept, which is the one state a row is revised out
 // of and which internal/machine composes into a run's answer. TaskReport is
@@ -144,6 +144,20 @@
 // same reason the event kind is: what it means is internal/supervisor's
 // table, this package imports neither it nor internal/taskstate, and the
 // loop passes supervisor.Kind values as strings.
+//
+// Both writes are fenced by the supervisor loop's incarnation. Migration
+// 17's supervisor_incarnation is one row, rewritten in place, holding the
+// epoch of the loop incarnation that may write the queue and the markers
+// now; BeginIncarnation makes the next epoch current and hands back an
+// Incarnation whose field is unexported, so a value is obtained only there,
+// and AppendWakeWithMarkers and AdvanceWakeMarkers refuse one that is not
+// the current epoch with ErrStaleIncarnation, decided inside the transaction
+// that would write. That is what lets internal/service replace a wedged
+// loop with the old goroutine still running: it can unwedge and write
+// nothing. The store owns which incarnation is current and the beacon file
+// cites the epoch; a reader comparing the two reads this row through
+// CurrentIncarnation. It is one row rather than a history because the
+// question is present tense, and the epoch only grows across restarts.
 //
 // Draining is a read. DrainWakes returns the queued rows oldest first under
 // a batch limit and acknowledges none, so delivery is at least once by
