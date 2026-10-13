@@ -3,7 +3,9 @@ package safety_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/safety"
@@ -688,8 +690,8 @@ func TestFakeMergeBaseAnswersWithTheNearestCommonAncestor(t *testing.T) {
 // the remedy says is refused, and once anchored to a fresh observation, which
 // it says is a fast-forward.
 //
-// The positive control is the refusal for a moved target that loses nothing:
-// it states no remedy, so an implementation answering every refusal with the
+// The positive control is the ReasonTargetMoved refusal for a moved target
+// that loses nothing: it states no remedy, so an implementation answering every refusal with the
 // same text fails here.
 func TestTheWouldDiscardRemedyGetsTheCallerOutOfTheRefusal(t *testing.T) {
 	t.Parallel()
@@ -737,5 +739,47 @@ func TestTheWouldDiscardRemedyGetsTheCallerOutOfTheRefusal(t *testing.T) {
 	}
 	if !decision.Allowed() || decision.Kind() != safety.KindFastForward {
 		t.Fatalf("after the remedy the decision is %v (allowed %t), want a fast-forward", decision.Kind(), decision.Allowed())
+	}
+}
+
+// TestDiscardedTextIsBoundedAndErrorRendersThroughIt holds the one bound on how
+// many discarded commits a refusal names. A list at the bound is named whole;
+// one past it names the first MaxDiscardedNamed in the field's order and counts
+// the rest, and Error carries exactly that rendering, so a caller relaying
+// either reports the same bounded text.
+//
+// The positive control is the list at the bound: a rendering that always
+// appended a count, or always truncated, fails there.
+func TestDiscardedTextIsBoundedAndErrorRendersThroughIt(t *testing.T) {
+	t.Parallel()
+	commits := func(n int) []string {
+		out := make([]string, n)
+		for i := range out {
+			out[i] = fmt.Sprintf("c%02d", n-i)
+		}
+		return out
+	}
+
+	atBound := &safety.Refusal{Reason: safety.ReasonWouldDiscard, Target: target, Discarded: commits(safety.MaxDiscardedNamed)}
+	if got, want := atBound.DiscardedText(), strings.Join(atBound.Discarded, ", "); got != want {
+		t.Fatalf("at the bound, DiscardedText = %q, want every commit named: %q", got, want)
+	}
+
+	over := &safety.Refusal{Reason: safety.ReasonWouldDiscard, Target: target, Discarded: commits(safety.MaxDiscardedNamed + 3)}
+	want := strings.Join(over.Discarded[:safety.MaxDiscardedNamed], ", ") + ", and 3 more"
+	if got := over.DiscardedText(); got != want {
+		t.Fatalf("past the bound, DiscardedText = %q, want %q", got, want)
+	}
+	if got := over.Error(); !strings.HasSuffix(got, "; would discard "+want) {
+		t.Fatalf("Error = %q, want it to end with the bounded rendering %q", got, want)
+	}
+	for _, unnamed := range over.Discarded[safety.MaxDiscardedNamed:] {
+		if strings.Contains(over.Error(), unnamed) {
+			t.Fatalf("Error names %s, which is past the bound", unnamed)
+		}
+	}
+
+	if got := (&safety.Refusal{Reason: safety.ReasonTargetMoved, Target: target}).DiscardedText(); got != "" {
+		t.Fatalf("with nothing discarded, DiscardedText = %q, want empty", got)
 	}
 }

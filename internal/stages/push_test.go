@@ -2,6 +2,7 @@ package stages_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -122,9 +123,10 @@ func TestThePushStageRefusesWhenTheBranchMovedSinceTheRunObservedIt(t *testing.T
 // somebody else landed, and what gets the run past them. The stage relays both
 // from the refusal internal/safety returned rather than restating them.
 //
-// Two commits arrive out of band, so the relayed list is held to the order
-// and the full identifiers Refusal.Discarded carries, most recent first, and
-// not merely to containing them.
+// Two commits arrive out of band, so the relayed list is held to its order and
+// to full identifiers, not merely to containing them. The order expected is
+// the one internal/vcs's CommitsNotIn states, most recent first, which
+// Refusal.Discarded keeps; this stage adds none of its own.
 //
 // The positive control is a branch that moved without anything being lost:
 // the refusal is target-moved, Discarded is empty and no remedy is stated, so
@@ -139,18 +141,8 @@ func TestThePushStageRelaysTheCommitsARefusalWouldDiscardAndItsRemedy(t *testing
 	}
 
 	run := newPushRun(t)
-	other := t.TempDir()
-	git(t, other, "clone", "--quiet", run.upstream, other)
-	git(t, other, "checkout", "--quiet", "-b", "topic", run.baseCommit)
-	write(t, other, "first.txt", "landed first\n")
-	git(t, other, "add", ".")
-	git(t, other, "commit", "--quiet", "-m", "landed first")
-	first := git(t, other, "rev-parse", "HEAD")
-	write(t, other, "second.txt", "landed second\n")
-	git(t, other, "add", ".")
-	git(t, other, "commit", "--quiet", "-m", "landed second")
-	second := git(t, other, "rev-parse", "HEAD")
-	git(t, other, "push", "--quiet", "origin", "topic")
+	landed := run.landOutOfBand(t, "topic", 2)
+	first, second := landed[1], landed[0]
 
 	refused := refusedDescription(t, run.mustPush(t))
 	if got := lineAfter(refused, "reason: "); got != string(safety.ReasonWouldDiscard) {
@@ -186,6 +178,51 @@ func TestThePushStageRelaysTheCommitsARefusalWouldDiscardAndItsRemedy(t *testing
 			t.Fatalf("a refusal that discards nothing carries %q:\n%s", absent, moved)
 		}
 	}
+}
+
+// TestThePushStageBoundsTheDiscardedCommitsItRelays lands more commits out of
+// band than internal/safety names, and holds the report to safety's bounded
+// rendering: the most recent safety.MaxDiscardedNamed named, the rest counted,
+// and nothing past the bound appearing anywhere in the description. The bound
+// is safety's, so the stage is held to relaying it rather than to a cap of its
+// own.
+func TestThePushStageBoundsTheDiscardedCommitsItRelays(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	run := newPushRun(t)
+	landed := run.landOutOfBand(t, "topic", safety.MaxDiscardedNamed+2)
+
+	refused := refusedDescription(t, run.mustPush(t))
+	want := strings.Join(landed[:safety.MaxDiscardedNamed], ", ") + ", and 2 more"
+	if got := lineAfter(refused, "discarded: "); got != want {
+		t.Fatalf("the refusal relays the discarded commits as %q, want %q:\n%s", got, want, refused)
+	}
+	if !strings.Contains(refused, "would discard "+want) {
+		t.Fatalf("the refusal's message does not carry the bounded list %q:\n%s", want, refused)
+	}
+	for _, unnamed := range landed[safety.MaxDiscardedNamed:] {
+		if strings.Contains(refused, unnamed) {
+			t.Fatalf("the refusal names %s, which is past safety's bound:\n%s", unnamed, refused)
+		}
+	}
+}
+
+// landOutOfBand puts n commits on a branch of the upstream, cut from the
+// base, from a checkout of its own, and returns them most recent first.
+func (r *pushRun) landOutOfBand(t *testing.T, branch string, n int) []string {
+	t.Helper()
+	other := t.TempDir()
+	git(t, other, "clone", "--quiet", r.upstream, other)
+	git(t, other, "checkout", "--quiet", "-b", branch, r.baseCommit)
+	landed := make([]string, n)
+	for i := range n {
+		name := fmt.Sprintf("landed-%02d.txt", i)
+		write(t, other, name, "landed out of band\n")
+		git(t, other, "add", name)
+		git(t, other, "commit", "--quiet", "-m", "landed "+name)
+		landed[n-1-i] = git(t, other, "rev-parse", "HEAD")
+	}
+	git(t, other, "push", "--quiet", "origin", branch)
+	return landed
 }
 
 // refusedDescription is the description of the push-refused finding a report
