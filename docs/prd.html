@@ -669,7 +669,110 @@ flowchart LR
     <li>Being guidance, it is strengthened the way review is strengthened anywhere, through
       path-scoped review rules. No key in the configuration schema turns it off, and turning it off
       would not skip a stage, because it is not one.</li>
+    <li>A reviewer's reason for tracing a path is recorded in its own words and, on its own, never
+      checked, so a false reason silences the note for that path. Where a decision model is
+      available, the reason is checked against the changes it claims to explain. The next
+      subsection owns that check.</li>
   </ul>
+
+  <h3 class="text-xl font-semibold mb-3">Checks a decision model may add</h3>
+  <p class="mb-4 opacity-90">
+    A decision model is a hosted classifier that answers a typed question about a piece of text with
+    a probability, not with generated text. Two checks may use one. They augment review and never
+    bring a run down: what they find can add scrutiny, and what they fail to do changes nothing.
+    They run by default wherever the operator has supplied the provider's key.
+  </p>
+  <ul class="list-disc pl-6 space-y-1.5 mb-4 opacity-90">
+    <li><b>A trace's reason is checked against the path's changes.</b> Each trace the review reports
+      for a touched path is put to the model together with that path's changed lines: does the reason
+      describe what these lines do? A trace the model does not confirm silences nothing. Its path
+      gets the scope lens's ordinary untraced note, which also quotes the reason and says the changes
+      did not bear it out. The check reads the reason against the lines, not against the intent, so
+      it says nothing about whether the change was asked for.</li>
+    <li><b>Pushed content is screened for text aimed at the reviewer.</b> The changed lines of every
+      file the reviewer is shown are put to the model one file at a time: does this add text that
+      addresses a reviewing agent and tries to steer its verdict, suppress its findings, or make it
+      act? A file the model flags is reported next to whatever the reviewer found, naming the file,
+      so a person reading the report reads that file too. The screen runs beside the review rather
+      than before it, so the reviewer has already read the content; what it protects is the
+      person's reading of the verdict, not the reviewer's exposure.</li>
+  </ul>
+
+  <div class="overflow-x-auto rounded-box border border-base-content/10 bg-base-100 mb-4">
+    <table class="table table-sm table-zebra">
+      <thead><tr><th class="w-32">Mode</th><th>What the checks do</th></tr></thead>
+      <tbody>
+        <tr><td><code>evaluate</code></td><td>The default. Both checks run and every result is a <code>note</code>, including a flagged file, so nothing they say holds a run. Every answer is recorded, which is what this mode is for: it lets a person decide from evidence whether the checks earn their place.</td></tr>
+        <tr><td><code>enforce</code></td><td>As <code>evaluate</code>, except that a file the screen flags becomes an <code>ask</code> and the review stage holds for a person. The trace check stays note-only in every mode, because the scope lens it feeds blocks nothing.</td></tr>
+        <tr><td><code>off</code></td><td>Neither check runs and nothing is sent to the provider.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div role="alert" class="alert alert-warning alert-soft mb-4 items-start">
+    <div class="min-w-0">
+      <p class="font-semibold mb-1">An answer may only add, and a failure may not block</p>
+      <p class="text-sm opacity-90">
+        A model's answer can add a <code>note</code>, or in <code>enforce</code> an <code>ask</code>.
+        It can never remove a finding, lower an action, pass a stage, skip a stage, or decide that
+        something needs less review. That last one is the permanent non-goal in section 12: a
+        classifier's guess must never weaken what a pass means. The answer is a judgment with no
+        evidence behind it, so it never stands in for a citation, and the findings these checks
+        produce are built by the program rather than parsed from an agent's report.
+      </p>
+      <p class="text-sm opacity-90 mt-2">
+        A check that cannot run never holds a run, in any mode. A missing key, a request that errors
+        or times out, and an answer the program cannot read all leave the run exactly as it would be
+        with the checks off, and the report says which check did not run and why. A failed call is
+        never read as an answer either way. This is not the silent degradation section 12 forbids:
+        what a pass means is set without these checks, so their absence weakens nothing, and it is
+        reported rather than hidden.
+      </p>
+    </div>
+  </div>
+  <ul class="list-disc pl-6 space-y-1.5 mb-4 opacity-90">
+    <li><b>The key is the consent.</b> Running a check sends the changed lines of every reviewed file
+      to a third party with the operator's credentials. The checks therefore run only where the
+      operator has put the provider's key in their environment; without it nothing is sent. The mode
+      is a global-only setting, so a repository cannot turn the checks on, off, or into
+      <code>enforce</code>, in either copy. Like the agent adapters, this is a provider called from
+      your machine with your key; it does not make Assistant a hosted service.</li>
+    <li><b>Every answer is recorded with what happened next.</b> The record keeps the question, the
+      model version, the probability, the cutoff, the finding it produced if any, and what the run
+      did afterward with that path: whether review, a fix round, or a person's answer at a hold
+      touched it. That is enough to say how often each check fired, how often a flagged file was
+      later acted on, and how often a person waved a held file through. Which surface shows it is
+      left to section 9, which this does not extend.</li>
+    <li><b>Turning a check off is proposed, never applied.</b> When the record shows a check firing
+      without anything ever following from it, Assistant may raise a <code>note</code> proposing to
+      turn it off, on the same terms as a recurring finding: the proposal names the window and the
+      runs, and the mode changes only when the operator changes it.</li>
+    <li><b>The questions, the model version, and the cutoffs are fixed in the program.</b> The
+      version is pinned rather than an alias, because a cutoff only means something for the version
+      it was measured on. No configuration key moves a cutoff, since a cutoff set high enough is an
+      off switch.</li>
+    <li><b>A change to a question, the version, or a cutoff has to beat the one it replaces.</b> It
+      is measured on labeled examples the change was not written against, held out by kind of
+      failure rather than at random, because a question rewritten after reading the failures it
+      missed fits those failures and shows nothing about the next kind. It is kept only when it is
+      better by more than the variation between repeated calls, and the scorer and the labeled set
+      are not edited in the same change. Flagged files that people read in <code>evaluate</code> and
+      <code>enforce</code> are how real examples reach that labeled set.</li>
+    <li><b>Nothing is truncated to fit.</b> A file whose changed lines exceed what one request may
+      carry is split into consecutive pieces and every piece is put to the model. Truncating would
+      leave the rest of the file unscreened while the report said it was screened.</li>
+    <li><b>The run records what ran.</b> The mode, whether each check ran, on which model version,
+      and how many files or traces it covered are part of what the pull request records, so a pass
+      from a machine with the checks on is distinguishable from one without.</li>
+  </ul>
+  <p class="mb-8 opacity-90">
+    What neither check establishes: the screen catches text that addresses a reviewer in a way the
+    model recognizes, so it is a tripwire for plain attempts and not a defense against content
+    written to slip past it. It reads changed lines only, not commit messages or the recorded
+    intent. The trace check confirms that a reason describes its lines; a reason that is accurate
+    about lines nobody asked for still passes it. Neither touches the limit in "What the gate does
+    not establish" below, which is about where the intent came from.
+  </p>
 
   <h3 class="text-xl font-semibold mb-3">Recurring findings become a proposal, never a rule</h3>
   <p class="mb-4 opacity-90">
@@ -1443,6 +1546,7 @@ flowchart TB
         <tr><td><b>store</b></td><td>The embedded database, the schema, and its migrations.</td><td>Typed accessors. No caller writes SQL.</td></tr>
         <tr><td><b>ipc</b></td><td>The local protocol, its methods, and its bounded event stream.</td><td>Request and response; subscribe to a stream.</td></tr>
         <tr><td><b>redact</b></td><td>Credential removal from URLs, errors, and anything persisted.</td><td>Redact. Called at every persistence boundary.</td></tr>
+        <tr><td><b>judge</b></td><td>The decision-model client: the fixed questions, the pinned model version, the cutoffs and the measurement behind them, and request splitting.</td><td>Put one typed question to the model; return a probability or a failed call, never a guess.</td></tr>
         <tr><td><b>ui</b></td><td>The terminal interface.</td><td>Attach to a run.</td></tr>
         <tr><td><b>machine</b></td><td>The agent-facing command surface and its output format.</td><td>Structured output, stable exit codes.</td></tr>
       </tbody>
@@ -1769,7 +1873,7 @@ flowchart TB
   trusted -->|"read from here, always"| B["Documentation instructions<br />Path-scoped review rules<br />Instruction suppression<br />No-CI declaration<br />Rerun budget"]
   trusted -->|"read from here, unless you opt out"| C["Test, lint, and format commands<br />Agent selection"]
 
-  global -->|"read from here only"| D["Checks timeout<br />Session reuse"]
+  global -->|"read from here only"| D["Checks timeout<br />Session reuse<br />Decision model"]
 
   C -.->|"opt-in, itself trusted-only"| push
   trusted -->|"unreadable or unparseable"| stop["Abort before launching anything"]
@@ -1833,6 +1937,7 @@ flowchart TB
         <tr><td><code>allow_pushed_commands</code></td><td><code>false</code></td><td>The opt-out that lets the pushed branch set commands and agent selection. It is itself readable only from the trusted copy, so a branch cannot enable it for itself.</td></tr>
         <tr><td><code>checks_timeout</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code>168h</code></td><td>Idle timeout, re-armed whenever the base branch advances. On elapse the run holds rather than ending.</td></tr>
         <tr><td><code>session_reuse</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code>true</code></td><td>One durable fixer session per run. Review turns are always fresh regardless, per P4.</td></tr>
+        <tr><td><code>decision_model</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code>evaluate</code></td><td>The mode of the checks in section 5, "Checks a decision model may add": <code>evaluate</code>, <code>enforce</code>, or <code>off</code>. They run against the one supported provider, and only where the provider's key is in the operator's environment, never in a configuration file; with the key present they send the changed lines of every reviewed file to that provider.</td></tr>
         <tr><td><code>commit.fix_message</code></td><td><code>fix: {summary}</code></td><td>Subject line for fix commits. <code>{summary}</code> is the single required substitution, replaced by the agent's summary of the fix; a template without it is invalid. The template, the agent's summary, and the rendered result are each validated for length and for characters that could disguise content before anything is staged.</td></tr>
       </tbody>
     </table>
@@ -2002,6 +2107,7 @@ flowchart TB
           <li><b>Away mode.</b> Requires the supervision loop to be trustworthy first.</li>
           <li><b>Evidence publishing to a branch.</b> Store evidence locally and link it. Publishing is an optimization.</li>
           <li><b>Review evaluation corpus.</b> A quality tool for when review quality is your bottleneck.</li>
+          <li><b>Decision-model checks.</b> Extra scrutiny that adds a provider dependency and is never part of what a pass means. The review stage has to work without them first.</li>
           <li><b>Fan-out and fan-in in the graph.</b> Nothing in phase one needs parallel nodes. Keep the checker rule; skip the feature.</li>
         </ul>
       </div>
@@ -2069,6 +2175,7 @@ flowchart TB
         <tr><td><b>P13</b></td><td>A static test over every user-facing string: assert the required wording is present and assert the internal vocabulary is absent. Both directions, or it drifts.</td></tr>
         <tr><td><b>P14</b></td><td>A static test asserting each contract appears in its owner and does not appear anywhere else. The negative half is the one that actually holds the line.</td></tr>
         <tr><td><b>Graph</b></td><td>A topology with an unbounded back edge fails to build. Two nodes writing one key with no declared merge rule fails to build. A checkpoint restore re-emits the open decision.</td></tr>
+        <tr><td><b>Decision model</b></td><td>Against a stand-in provider that answers over the wire, every answer from certain-yes to certain-no, plus an error, a timeout, and an unreadable answer, leaves the findings at least as strict as with the model off: nothing removed, nothing lowered, no stage passed that would have held. In <code>evaluate</code> no answer holds a run, and in every mode a failed call, an unreadable answer, or a missing key holds nothing and is reported. With the mode <code>off</code> or no key, no request leaves the machine. A repository layer that sets the key is rejected at parse time.</td></tr>
       </tbody>
     </table>
   </div>
@@ -2148,6 +2255,11 @@ flowchart TB
       common path, the two shapes may be better modeled as one shape with a delivery flag.</li>
     <li><b>The second agent adapter.</b> Not which one, but when. The signal is the first time the
       single adapter's availability blocks a run you needed.</li>
+    <li><b>Whether the decision-model checks pay for themselves.</b> The evaluation record answers
+      this rather than a guess: how often a flagged file or a reason not borne out was followed by
+      anything, and how often a person waved a held file through. If they rarely lead anywhere, turn
+      them off; if they fire wrongly on this kind of code, the fix is a new measurement rather than
+      a looser setting.</li>
   </ul>
 </section>
 
