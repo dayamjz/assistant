@@ -643,4 +643,45 @@ var schema = []migration{
 			) STRICT`,
 		},
 	},
+	{
+		version: 15,
+		name:    "task dispatch snapshots",
+		statements: []string{
+			// What the task's isolated copy held when its dispatch proved it
+			// isolated: every local reference and HEAD, as JSON, the set
+			// PRD section 6's cleanup proof compares a copy against later.
+			// It is one fact about the task's copy, rewritten by each dispatch
+			// that reaches proven, so it describes the latest proven attempt.
+			// It is not state: which lifecycle state the task is in is
+			// resolved by internal/taskstate from other records, and nothing
+			// reads this column to decide one.
+			//
+			// Nullable and without a default, so a task recorded before the
+			// column existed, and a task whose dispatch never reached proven,
+			// both read back unknown rather than as an empty copy.
+			`ALTER TABLE task ADD COLUMN start_snapshot TEXT`,
+			// What the person's primary checkout looked like when a dispatch
+			// read it to cut the task's copy: HEAD, the branch HEAD was on if
+			// any, and every local branch with its commit, as JSON. One row
+			// per attempt of the task, written once and never revised, keyed
+			// by the attempt it was read for. It is a separate record from
+			// start_snapshot because it describes a different repository:
+			// the copy is cut from the primary and is not the primary.
+			//
+			// The claim is only what the primary looked like at dispatch. A
+			// person moves their own checkout legitimately, so a later
+			// difference from this row is evidence of a change and never of
+			// who made it.
+			`CREATE TABLE task_primary_snapshot (
+				task_id     TEXT NOT NULL,
+				attempt     INTEGER NOT NULL,
+				head        TEXT NOT NULL,
+				head_branch TEXT,
+				branches    TEXT NOT NULL,
+				recorded_at TEXT NOT NULL,
+				PRIMARY KEY (task_id, attempt),
+				FOREIGN KEY (task_id, attempt) REFERENCES task_attempt(task_id, sequence)
+			) STRICT`,
+		},
+	},
 }

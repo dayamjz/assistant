@@ -304,3 +304,8 @@ var ErrCleanupRemovalFirst = errors.New("store: a cleanup record is written with
 // it back as some proof it is not would turn a row nobody can account for into
 // a fact about what cleanup established.
 var ErrUnknownCleanupProof = errors.New("store: cleanup proof is outside the closed set")
+
+// ErrPrimarySnapshotRecorded is returned by RecordPrimarySnapshot when the
+// task's attempt already has a primary snapshot: the record is of one read,
+// written once, and the first stands.
+var ErrPrimarySnapshotRecorded = errors.New("store: the attempt already has a primary snapshot")
