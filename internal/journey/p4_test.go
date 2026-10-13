@@ -37,11 +37,12 @@ type invocationRole struct {
 //
 // The binary does not reach it. Three walks launch a reviewer and two a
 // fixer, and the later-commit walk reads one review invocation carrying no
-// session, but a review carrying none is also what a run that never opened a
-// session reports, so finding none says nothing about the split. What this
-// needs is a re-review after fix rounds that did carry a session, asserted
-// over every invocation, and no run here makes that sequence: the later-commit
-// walk's one fix round opens its session rather than continuing one.
+// session while the run's record holds the fixer session it could have
+// continued. That is one invocation of one route, not the split: what this
+// needs is a re-review after fix rounds that continued a session, asserted
+// over every invocation, and no run here makes that sequence, because the
+// later-commit walk's one fix round opens its session rather than continuing
+// one.
 //
 // Section 13 writes the test as a structural assertion over invocation
 // records rather than a behavioural one, and this is that: a review, two fix

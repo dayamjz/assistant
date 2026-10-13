@@ -130,7 +130,8 @@ func Coverage() []Established {
 				"the review, which is PRD section 14's seventh decision. A run's lint stage takes an " +
 				"automatic fix round after the review stage passed, the push stage asks the reviewer " +
 				"about the commits between the reviewed one and the head, measured from the reviewed " +
-				"commit, with no session, and holds with that review's finding, and the remote's " +
+				"commit, carrying no session although the run's record holds the fixer session it could " +
+				"have continued, and holds with that review's finding, and the remote's " +
 				"branch does not move. The round's commit is the configured lint command's own edit, " +
 				"committed by the product's fix body: the stand-in fixer prints and cannot write a " +
 				"working copy, so no commit here is an edit an agent made. Both reviews are scripted, " +

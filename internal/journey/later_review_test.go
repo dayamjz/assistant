@@ -50,6 +50,10 @@ type reviewedLater struct {
 	// laterSession is the session the review of later commits asked to
 	// continue, and laterPrompt is what it was asked.
 	laterSession, laterPrompt string
+	// fixerSession is the durable fixer session the run's record holds, as
+	// the binary's answer relays it: the one session the product could have
+	// handed the review of later commits.
+	fixerSession string
 	// before and after are where the branch stood on the remote around the run.
 	before, after string
 }
@@ -176,6 +180,7 @@ func TestCommitsAFixRoundWroteAfterReviewAreReviewedBeforeThePush(t *testing.T) 
 		"--intent", "deliver a change whose lint round writes after the review")
 	observed.stops, run = walkToPush(t, j, run, func(string) {})
 	observed.stages = run.Stages
+	observed.fixerSession, _ = run.Record.FixerSession.Get()
 	if run.Decision != nil {
 		observed.pushFindings = run.Decision.Findings
 	}
@@ -274,7 +279,15 @@ func TestCommitsAFixRoundWroteAfterReviewAreReviewedBeforeThePush(t *testing.T) 
 				},
 			},
 			{
-				States: "that review carried no session",
+				States:  "that review carried no session, though the run held a fixer session it could have continued",
+				Absence: true,
+				Possible: func(r reviewedLater) error {
+					if r.fixerSession == "" {
+						return errors.New("the run's record holds no fixer session, so there was none the " +
+							"review of the later commits could have continued")
+					}
+					return nil
+				},
 				Holds: func(r reviewedLater) error {
 					if r.laterSession != "" {
 						return fmt.Errorf("the review of the later commits continued session %q", r.laterSession)
@@ -401,7 +414,7 @@ func TestCommitsAFixRoundWroteAfterReviewAreReviewedBeforeThePush(t *testing.T) 
 				return r
 			}},
 			{Named: "the review of the later commits continued the fixer's session", Break: func(r reviewedLater) reviewedLater {
-				r.laterSession = "the fixer's session"
+				r.laterSession = r.fixerSession
 				return r
 			}},
 			{Named: "the review of the later commits was measured from where the branch stood", Break: func(r reviewedLater) reviewedLater {

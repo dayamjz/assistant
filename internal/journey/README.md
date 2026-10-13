@@ -67,7 +67,8 @@ thing each, on a remote of their own copied from the walkable scenario's:
   runs. The automatic fix round launches the stand-in, which changes nothing,
   and the fix body commits what the command wrote, so the head the push stage
   would forward is past the reviewed commit. It asserts the push stage asked
-  for one review of the commits after it, with no session, measured from the
+  for one review of the commits after it, carrying no session although the
+  run's record holds the fixer session it could have continued, measured from the
   reviewed commit and shown the committed line, held with the scripted finding
   that review raised, and moved nothing on the remote. The commit is the
   command's edit, never an agent's: the stand-in prints and cannot write a
