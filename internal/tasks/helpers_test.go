@@ -90,6 +90,9 @@ func newFixture(t *testing.T) *fixture {
 		BranchInGate: func(_ context.Context, r store.Repository, b string) (bool, error) {
 			return f.inGate[r.ID+"\x00"+b], nil
 		},
+		GatePath: func(_ context.Context, r store.Repository) (string, error) {
+			return filepath.Join(root, "repos", r.ID+".git"), nil
+		},
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)
