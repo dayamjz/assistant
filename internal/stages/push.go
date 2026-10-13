@@ -64,8 +64,9 @@ import (
 //
 // Descent alone would forward lines no review read. Review's own fix round is
 // re-reviewed, because the review stage runs again after it and its report
-// revision is the commit that round made; a fix round of the test or lint
-// stage is re-verified only by its own check, and the head it leaves descends
+// revision is the commit that round made; an automatic round of the test or
+// lint stage, or a round a person asked for at the test, document, or lint
+// stage's hold, is re-verified only by its own stage, and the head it leaves descends
 // from the reviewed commit while carrying the round's work. PRD section 14
 // records the decision that closes this: when the head is not the reviewed
 // commit, this stage reviews the commits between the two before anything is
@@ -248,13 +249,14 @@ func pushVerifiedCommit(ctx context.Context, deps StageDeps, in pipeline.Input) 
 
 // fixingAfterReview is the stages that can author a commit between the review
 // stage reading the change and this stage forwarding it: every stage after
-// review and before push that takes automatic fix rounds. It is derived from
-// the stage table rather than listed, so the table stays the one owner of
-// both the order and which stages take rounds.
+// review and before push, because each takes either automatic fix rounds or,
+// at its hold, a round a person asks for, and either kind leaves its account
+// in the stage's fix key. It is derived from the stage order rather than
+// listed, so internal/pipeline stays the one owner of that order.
 func fixingAfterReview() []pipeline.Stage {
 	var out []pipeline.Stage
 	for _, stage := range pipeline.Order() {
-		if stage > pipeline.StageReview && stage < pipeline.StagePush && stage.TakesFixRounds() {
+		if stage > pipeline.StageReview && stage < pipeline.StagePush {
 			out = append(out, stage)
 		}
 	}

@@ -185,9 +185,17 @@ type FixBody func(ctx context.Context, in FixInput) (FixOutput, error)
 type FixInput struct {
 	// Stage names the stage whose findings are being fixed.
 	Stage Stage
-	// Findings are the stage's fix-eligible findings, and nothing else. An ask
-	// finding never reaches here: it holds the stage before the round starts.
+	// Findings are what the round is to resolve. For an automatic round they
+	// are the stage's fix-eligible findings and nothing else: an ask finding
+	// never reaches here, because it holds the stage before the round starts.
+	// For a round a person asked for they are Requested's selection, which
+	// may include an ask, because choosing it is that person's decision.
 	Findings []findings.Finding
+	// Requested is set only for a round a person asked for at the stage's
+	// hold, and says what else they asked: their notes, and the findings they
+	// left unselected. A fix body that treats such a round differently reads
+	// this and nothing else to know it is one.
+	Requested *Requested
 	// Previous is the sanitized summary the last round of this stage's fixer
 	// wrote, empty on the first round. It crosses from one fix round to the
 	// next round of the same stage, and this package routes it nowhere else:
@@ -200,6 +208,19 @@ type FixInput struct {
 	Previous string
 	// State reads exactly the keys the fixer declared.
 	State Reader
+}
+
+// Requested is what a person's fix request adds to a round beyond the findings
+// it resolves.
+type Requested struct {
+	// Notes is what the person wrote for the fixer, empty when they wrote
+	// nothing.
+	Notes string
+	// Unselected is the findings of the stage's report the person did not
+	// select. PRD section 5 has the fixer told which findings were
+	// deliberately left out, so a round does not take on what the person
+	// decided against.
+	Unselected []findings.Finding
 }
 
 // FixOutput is what a fix body returns.
@@ -224,12 +245,13 @@ type FixOutput struct {
 	// is normalized, so a hold cannot collide with a finding the stage itself
 	// reported.
 	//
-	// They reach the stage through Stage.HeldKey, which the fix node writes
-	// every round and the stage node reads wherever a fix node exists. A round
-	// that raises none therefore clears the previous round's, so a hold
-	// applies to the execution verifying the round that raised it and to no
-	// later one. Answering the hold either advances the run past the stage or
-	// ends it, so nothing re-reads a hold once it has been answered.
+	// They reach the stage through Stage.HeldKey, which the fix node and the
+	// request node write every round and the stage node reads wherever either
+	// exists. A round that raises none therefore clears the previous round's,
+	// so a hold applies to the execution verifying the round that raised it
+	// and to no later one. Answering the hold advances the run past the stage,
+	// ends it, or runs another round that writes the key again, so nothing
+	// re-reads a hold once it has been answered.
 	Holds []findings.Finding
 }
 

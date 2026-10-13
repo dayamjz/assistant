@@ -42,6 +42,12 @@ const (
 	// OutcomeCancelled means a person ended the run at this stage's hold. Work
 	// stays recoverable: the run stops, it is not undone.
 	OutcomeCancelled Outcome = "cancelled"
+	// OutcomeFixRequested means a person answered the stage's hold by asking
+	// for a fix round, PRD section 5's Fix action. It stands only while that
+	// round runs: the stage then executes again and records what it found,
+	// and holds again so the person sees the result. The answer carries what
+	// the round is to resolve as a FixRequest, in the hold's detail.
+	OutcomeFixRequested Outcome = "fix"
 )
 
 // holdOptions are the answers a hold accepts, and they are the outcomes a
@@ -49,13 +55,21 @@ const (
 // node records are therefore the same list read twice rather than two lists
 // that could drift: the hold node writes the answer as the outcome and
 // translates nothing.
+//
+// OutcomeFixRequested is offered only by a pipeline that was given a fixer,
+// because without one there is nothing the round could run on; holdAnswers
+// adds it there and nowhere else.
 var holdOptions = []Outcome{OutcomeApproved, OutcomeSkipped, OutcomeCancelled}
 
-// holdAnswers renders the hold options as the graph's answer strings.
-func holdAnswers() []string {
-	out := make([]string, len(holdOptions))
-	for i, o := range holdOptions {
-		out[i] = string(o)
+// holdAnswers renders the hold options as the graph's answer strings, with the
+// requested fix round last when the pipeline can run one.
+func holdAnswers(requests bool) []string {
+	out := make([]string, 0, len(holdOptions)+1)
+	for _, o := range holdOptions {
+		out = append(out, string(o))
+	}
+	if requests {
+		out = append(out, string(OutcomeFixRequested))
 	}
 	return out
 }
@@ -200,9 +214,8 @@ type StageResult struct {
 	// the zero Report, which is not a report of nothing found: Ran is the
 	// field that says which.
 	Report findings.Report
-	// Fix is the sanitized summary the stage's last fix round wrote, empty
-	// when the stage took none and empty for every stage that takes no
-	// automatic fix rounds at all.
+	// Fix is the sanitized summary the stage's last fix round wrote, automatic
+	// or requested at its hold, empty when the stage took none.
 	Fix string
 }
 
@@ -211,20 +224,11 @@ type StageResult struct {
 // these in Implementation.Reads, so the two cannot drift apart: a key added to
 // the result is a key every caller then declares.
 //
-// The set is not the same for every stage. Only a stage that takes automatic
-// fix rounds has a fix key in the schema, so only such a stage has one here,
-// and a caller that declared one for a stage without rounds would be refused
-// when the pipeline is built.
-//
 // A Stage that names no stage yields keys the schema does not hold, so a
 // caller that declares them is refused with ErrUndeclaredKey rather than
 // quietly reading nothing.
 func StageResultKeys(stage Stage) []Key {
-	keys := []Key{stage.ReportKey(), stage.OutcomeKey()}
-	if row, ok := stage.spec(); ok && row.rounds != nil {
-		keys = append(keys, stage.FixKey())
-	}
-	return keys
+	return []Key{stage.ReportKey(), stage.OutcomeKey(), stage.FixKey()}
 }
 
 // ReadStageResult returns what a stage left behind, read through a body's own
@@ -255,13 +259,11 @@ func ReadStageResult(r Reader, stage Stage) (StageResult, error) {
 	}
 	outcomeText, _ := outcome.Text()
 	out.Outcome = Outcome(outcomeText)
-	if row, ok := stage.spec(); ok && row.rounds != nil {
-		fix, err := r.Get(stage.FixKey())
-		if err != nil {
-			return StageResult{}, err
-		}
-		out.Fix, _ = fix.Text()
+	fix, err := r.Get(stage.FixKey())
+	if err != nil {
+		return StageResult{}, err
 	}
+	out.Fix, _ = fix.Text()
 	return out, nil
 }
 

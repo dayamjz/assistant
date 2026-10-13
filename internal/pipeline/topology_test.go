@@ -198,7 +198,7 @@ func TestEveryCycleEdgeCarriesTheStagesRoundLimit(t *testing.T) {
 }
 
 // backEdgeOwners returns, for every edge index the built graph reports as a
-// back edge, the stage whose fix node that edge leaves. The owner is read off
+// back edge, the stage whose fix node or request node that edge leaves. The owner is read off
 // the topology - the node the edge starts at - rather than computed from any
 // formula, so what it reports is what the graph is rather than what a
 // derivation says it should be.
@@ -211,13 +211,13 @@ func backEdgeOwners(t *testing.T, g *graph.Graph) map[int]Stage {
 		}
 		found := false
 		for _, stage := range Order() {
-			if e.From == stage.FixNode() {
+			if e.From == stage.FixNode() || e.From == stage.RequestNode() {
 				owners[i] = stage
 				found = true
 			}
 		}
 		if !found {
-			t.Fatalf("edge %d, %q -> %q, is a back edge leaving no stage's fix node", i, e.From, e.To)
+			t.Fatalf("edge %d, %q -> %q, is a back edge leaving no stage's fix or request node", i, e.From, e.To)
 		}
 	}
 	return owners
@@ -272,8 +272,10 @@ func TestBackEdgeIndicesNeverCrossStagesAcrossConfigurations(t *testing.T) {
 			Budget: 100,
 		})
 		owners := backEdgeOwners(t, p.Graph())
-		if len(owners) != len(taking) {
-			t.Errorf("configuration %q has %d back edges, want %d", name, len(owners), len(taking))
+		// One per stage taking automatic rounds, and one per stage for the
+		// rounds a person may ask for at its hold, since a fixer was given.
+		if want := len(taking) + len(Order()); len(owners) != want {
+			t.Errorf("configuration %q has %d back edges, want %d", name, len(owners), want)
 		}
 		for i, stage := range owners {
 			if previous, seen := owner[i]; seen && previous != stage {

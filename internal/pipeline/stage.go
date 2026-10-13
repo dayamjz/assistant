@@ -135,16 +135,6 @@ func ParseStage(name string) (Stage, bool) {
 	return StageInvalid, false
 }
 
-// TakesFixRounds reports whether the stage is one of the five that take
-// automatic fix rounds, which is the stage table's answer and not a list kept
-// beside it. Whether a given pipeline builds the stage a fixer is a question
-// for its configured limit; this says only whether a limit governs it at all,
-// and so whether the stage has a fix key a round can leave a summary in.
-func (s Stage) TakesFixRounds() bool {
-	row, ok := s.spec()
-	return ok && row.rounds != nil
-}
-
 // Node returns the name of the graph node that runs this stage.
 func (s Stage) Node() string { return s.String() }
 
@@ -157,3 +147,10 @@ func (s Stage) HoldNode() string { return "hold:" + s.String() }
 // fix-eligible findings. The node exists only when the stage takes automatic
 // fix rounds and its configured limit is at least one.
 func (s Stage) FixNode() string { return "fix:" + s.String() }
+
+// RequestNode returns the name of the graph node that runs a fix round a
+// person asked for at this stage's hold. The node exists for every stage
+// whenever the pipeline was given a fixer, whatever the stage's automatic
+// round limit is, because asking for a round is the person's call and not the
+// configuration's.
+func (s Stage) RequestNode() string { return "request:" + s.String() }

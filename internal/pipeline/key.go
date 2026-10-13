@@ -191,15 +191,22 @@ func (s Stage) AnswerKey() Key { return Key("answer." + s.String()) }
 
 // FixKey is where the fixer's sanitized summary of the last round lands. It
 // carries that summary from one fix round to the next round of the same stage,
-// and it exists only for the stages that take automatic fix rounds.
+// whether the round was automatic or one a person asked for at the stage's
+// hold, so every stage has one.
 func (s Stage) FixKey() Key { return Key("fix." + s.String()) }
 
 // HeldKey is where the holds the last fix round of this stage raised land,
-// encoded as a JSON list of findings. The fix node writes it every round,
-// empty when the round raised none, and the stage node reads it on the
-// execution that verifies that round and adds what it holds to the stage's
-// report. It exists only for the stages that take automatic fix rounds.
+// encoded as a JSON list of findings. The fix node and the request node write
+// it every round, empty when an automatic round raised none, and the stage
+// node reads it on the execution that verifies that round and adds what it
+// holds to the stage's report.
 func (s Stage) HeldKey() Key { return Key("held." + s.String()) }
+
+// RequestKey is where what a person asked for with a fix round at this stage's
+// hold lands: the encoded FixRequest. It is the hold's graph.Halt.Detail key,
+// so it belongs to that halt point alone on the same terms as AnswerKey, and
+// the graph clears it whenever the run stops there.
+func (s Stage) RequestKey() Key { return Key("request." + s.String()) }
 
 // schema is every key the pipeline declares, built once from the shared table
 // and the nine stages. It is the one place a key's declaration is looked up.
@@ -222,10 +229,12 @@ func buildSchema() map[Key]keySpec {
 		add(keySpec{row.stage.ReportKey(), graph.KindText, graph.MergeNone, ownerPipeline})
 		add(keySpec{row.stage.OutcomeKey(), graph.KindText, graph.MergeLastWriteWins, ownerPipeline})
 		add(keySpec{row.stage.AnswerKey(), graph.KindText, graph.MergeNone, ownerPipeline})
-		if row.rounds != nil {
-			add(keySpec{row.stage.FixKey(), graph.KindText, graph.MergeNone, ownerPipeline})
-			add(keySpec{row.stage.HeldKey(), graph.KindText, graph.MergeNone, ownerPipeline})
-		}
+		// Both a stage's fix node and its request node write these, which is
+		// what the merge rule is for: each write is the latest round's
+		// account, whichever kind of round it was.
+		add(keySpec{row.stage.FixKey(), graph.KindText, graph.MergeLastWriteWins, ownerPipeline})
+		add(keySpec{row.stage.HeldKey(), graph.KindText, graph.MergeLastWriteWins, ownerPipeline})
+		add(keySpec{row.stage.RequestKey(), graph.KindText, graph.MergeNone, ownerPipeline})
 	}
 	return out
 }

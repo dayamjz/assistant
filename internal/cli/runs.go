@@ -6,8 +6,10 @@ import (
 	"flag"
 	"strings"
 
+	"github.com/dayamjz/assistant/internal/findings"
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
+	"github.com/dayamjz/assistant/internal/pipeline"
 )
 
 // attachOrStart is the command with no verb: attach to this branch's active
@@ -26,6 +28,13 @@ import (
 // taking a selection; an agent driving the same gate needs the same decision
 // with the same options, so it supplies the answer as a parameter of the same
 // command rather than through a verb the specification does not describe.
+//
+// PRD section 5's Fix action is the answer "fix", and what the round is to
+// resolve rides on the same command as three more flags: --select names
+// findings of the held stage's report, --note is free text for the fixer, and
+// --finding, which may be repeated, is a finding of the caller's own. They are
+// read only with --answer fix and refused with anything else, because an
+// instruction given and then ignored is worse than one refused.
 func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 	var (
 		intent       string
@@ -33,6 +42,9 @@ func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 		answer       string
 		skip         string
 		cancel       bool
+		selected     string
+		note         string
+		own          repeated
 	)
 	if err := in.parseFlags("", func(set *flag.FlagSet) {
 		set.StringVar(&intent, "intent", "", "what this change sets out to do, in your own terms")
@@ -40,10 +52,20 @@ func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 		set.StringVar(&answer, "answer", "", "answer the decision the run is holding on")
 		set.BoolVar(&cancel, "cancel", false, "end this branch's run, wherever it stands")
 		set.StringVar(&skip, "skip", "", "comma-separated stages this one run does not take")
+		set.StringVar(&selected, "select", "", "with --answer fix: comma-separated findings of the held stage for the round to resolve")
+		set.StringVar(&note, "note", "", "with --answer fix: a note for the fixer")
+		set.Var(&own, "finding", "with --answer fix: a finding of your own for the round to resolve; may be repeated")
 	}); err != nil {
 		return nil, err
 	}
 	answered := flagWasSet(in.flags, "answer")
+	fixing := answered && answer == string(pipeline.OutcomeFixRequested)
+	for _, name := range []string{"select", "note", "finding"} {
+		if flagWasSet(in.flags, name) && !fixing {
+			return nil, usagef("--%s says what a fix round resolves, and it is read only with --answer %s",
+				name, pipeline.OutcomeFixRequested)
+		}
+	}
 	if answered && strings.TrimSpace(answer) == "" {
 		return nil, usagef("--answer was given an empty answer; it takes one of the options the decision offered")
 	}
@@ -75,7 +97,16 @@ func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 		return in.endRun(ctx, working)
 	}
 	if answered {
-		return in.answerDecision(ctx, working, answer)
+		var request *pipeline.FixRequest
+		if fixing {
+			request = &pipeline.FixRequest{Selected: splitList(selected), Notes: note}
+			for _, text := range own {
+				request.Findings = append(request.Findings, findings.Finding{
+					Severity: findings.SeverityWarning, Action: findings.ActionFix, Description: text,
+				})
+			}
+		}
+		return in.answerDecision(ctx, working, answer, request)
 	}
 	in.progressf("starting or attaching to the run for this branch; this blocks while the run advances")
 	var run machine.Run
@@ -117,14 +148,18 @@ func actingOnTheRunInFlight(answering, cancel bool) string {
 // answerDecision answers the branch's active run. The run is found the same
 // way attaching finds it, so a caller does not have to name an identifier it
 // was never shown.
-func (in *invocation) answerDecision(ctx context.Context, working, answer string) (any, error) {
+//
+// request is what a fix answer asks the round to resolve, nil for every other
+// answer. Whether it selects anything the held stage reported is the
+// service's to check, against the report it holds.
+func (in *invocation) answerDecision(ctx context.Context, working, answer string, request *pipeline.FixRequest) (any, error) {
 	active, err := in.activeRun(ctx, working, "answer")
 	if err != nil {
 		return nil, err
 	}
 	in.progressf("answering %s with %q; this blocks until the run needs another decision", active, answer)
 	var run machine.Run
-	err = in.callService(ctx, ipc.MethodRunRespond, machine.RespondRequest{Run: active, Answer: answer}, &run)
+	err = in.callService(ctx, ipc.MethodRunRespond, machine.RespondRequest{Run: active, Answer: answer, Fix: request}, &run)
 	return run, err
 }
 
@@ -283,6 +318,19 @@ func listTasks(ctx context.Context, in *invocation) (any, error) {
 
 // splitList reads a comma-separated flag value, dropping empty entries so that
 // an empty flag is no entries rather than one empty one.
+// repeated is a flag that may be given more than once, each value kept in the
+// order it was given.
+type repeated []string
+
+// String renders the values for the flag package's usage text.
+func (r *repeated) String() string { return strings.Join(*r, "; ") }
+
+// Set adds one value.
+func (r *repeated) Set(value string) error {
+	*r = append(*r, value)
+	return nil
+}
+
 func splitList(value string) []string {
 	var out []string
 	for _, part := range strings.Split(value, ",") {
