@@ -25,6 +25,9 @@ var (
 	// ErrRemoteNotFound is returned when a repository has no remote of the
 	// requested name.
 	ErrRemoteNotFound = errors.New("vcs: no such remote")
+	// ErrDestinationExists is returned by Clone when something is already at
+	// the destination, whatever it is. Nothing is written.
+	ErrDestinationExists = errors.New("vcs: the clone destination already exists")
 	// ErrDetachedHead is returned by HeadBranch when HEAD is not on a branch.
 	ErrDetachedHead = errors.New("vcs: HEAD is not on a branch")
 	// ErrNoMergeBase is returned when two commits have no common ancestor.

@@ -13,13 +13,18 @@ import (
 // developer's own git configuration cannot change what a test proves. It
 // returns the path of that file so a test can append settings to it.
 //
+// The file also turns git's automatic maintenance off for every repository a
+// test builds under it, so no git a test started detaches to collect objects
+// and outlives the test's temporary directory (#119). It is set here, once,
+// rather than at each call site that creates a repository.
+//
 // It deliberately does not go through the package under test: a fixture built
 // with the code being tested cannot show that code wrong.
 func gitEnvironment(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
 	cfg := filepath.Join(home, "gitconfig")
-	writeFile(t, cfg, "[user]\n\tname = Test\n\temail = test@example.invalid\n[init]\n\tdefaultBranch = main\n")
+	writeFile(t, cfg, "[user]\n\tname = Test\n\temail = test@example.invalid\n[init]\n\tdefaultBranch = main\n[gc]\n\tauto = 0\n[maintenance]\n\tauto = false\n")
 	t.Setenv("GIT_CONFIG_GLOBAL", cfg)
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 	return cfg
