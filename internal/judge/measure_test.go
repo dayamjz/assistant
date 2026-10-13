@@ -381,3 +381,50 @@ func TestAMalformedCorpusIsRefused(t *testing.T) {
 		}
 	}
 }
+
+// The harness counts a case as fired by the shipped cutoff and no other. Every
+// answer here sits just inside or just outside its own check's cutoff - 0.4
+// and 0.25 around the screen's 0.3, 0.7 and 0.85 around the trace's 0.8 - so
+// a harness that read any other cutoff, a constant 0.5 included, would put at
+// least one side on the wrong side. Answers far from both cutoffs, as the
+// end-to-end test uses, cannot tell those harnesses apart.
+func TestTheMeasurementFiresByTheShippedCutoff(t *testing.T) {
+	t.Parallel()
+	known := labels(t)
+	for _, side := range []struct {
+		name          string
+		screen, trace float64
+		fires         bool
+	}{
+		{"inside", 0.4, 0.7, true},
+		{"outside", 0.25, 0.85, false},
+	} {
+		provider := judgetest.New(t, func(r judgetest.Request) judgetest.Reply {
+			if _, ok := known[questionKey(r.Path, r.Reason, r.Diff)]; !ok {
+				t.Errorf("the measurement asked a question the corpus does not hold: %s", r.Path)
+				return judgetest.Status(500)
+			}
+			if r.Reason != "" {
+				return judgetest.Answer(side.trace)
+			}
+			return judgetest.Answer(side.screen)
+		})
+		reports, err := measure(t.Context(),
+			judge.New("ts_test_key_0123456789abcdef", judge.WithEndpoint(provider.URL())),
+			bothChecks(measureOptions{}), io.Discard)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, r := range reports {
+			for _, c := range []rates{r.pos, r.neg} {
+				want := 0
+				if side.fires {
+					want = c.answered
+				}
+				if c.answered == 0 || c.fired != want {
+					t.Fatalf("%s %s: %d of %d fired, want %d", side.name, r.check, c.fired, c.answered, want)
+				}
+			}
+		}
+	}
+}
