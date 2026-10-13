@@ -105,6 +105,13 @@ var (
 	// hand meets it once. It refuses a shape, not a lie: a well-formed report
 	// saying something false passes here.
 	ErrUnusableReport = errors.New("pipeline: a stage's report did not validate")
+	// ErrFixerFinding is returned when a fix body returns a hold whose action,
+	// once normalized, is not ask. A fixer may raise a hold on its own work
+	// and nothing else: a note or a fix finding from the role that made the
+	// change would be the fixer reporting on the stage it just changed, which
+	// P4 keeps it from. The step fails and none of the round's writes are
+	// applied.
+	ErrFixerFinding = errors.New("pipeline: a fix round raised a hold that is not an ask")
 	// ErrBadReport is returned when a stage's recorded report cannot be read
 	// back out of state. It is refused rather than read as an empty report,
 	// which would present a stage that found something as one that found

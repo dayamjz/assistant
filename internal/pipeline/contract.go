@@ -209,6 +209,28 @@ type FixOutput struct {
 	Summary string
 	// Writes are the state writes the fixer asks for, at most one per key.
 	Writes map[Key]graph.Value
+	// Holds are what this round's own work raises for a person: findings the
+	// fixer's caller derived from what the round did, which the stage's next
+	// execution reports alongside its own findings, so the stage holds after
+	// the round whatever its own report says.
+	//
+	// A hold is the one finding a fixer may return, and it may only be an
+	// ask. Each is normalized, so a missing or unrecognized action becomes ask
+	// under P3, and one that is still not an ask fails the step with
+	// ErrFixerFinding. An ask can hold the stage and can never clear it, which
+	// is why returning one does not breach P4's split: the role that made the
+	// change still cannot say whether it is good, only that a person has to
+	// look. Identifiers are dropped and assigned again when the stage's report
+	// is normalized, so a hold cannot collide with a finding the stage itself
+	// reported.
+	//
+	// They reach the stage through Stage.HeldKey, which the fix node writes
+	// every round and the stage node reads wherever a fix node exists. A round
+	// that raises none therefore clears the previous round's, so a hold
+	// applies to the execution verifying the round that raised it and to no
+	// later one. Answering the hold either advances the run past the stage or
+	// ends it, so nothing re-reads a hold once it has been answered.
+	Holds []findings.Finding
 }
 
 // Reader gives a body read access to exactly the state keys its

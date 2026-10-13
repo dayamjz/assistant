@@ -53,7 +53,20 @@
 // Fixing is a separate contract. P4 keeps reviewing and fixing apart with
 // separate memory, and that lives in the type split rather than in a rule
 // callers follow: an Implementation cannot fix and a Fixer cannot report
-// findings.
+// findings that could clear anything.
+//
+// The one finding a fix round may return is a hold, FixOutput.Holds: an ask
+// about the round's own work that the stage's next execution reports with its
+// own findings, so the stage holds after the round whatever its body says. An
+// ask can hold a stage and never clear one, so this narrows nothing P4 asks;
+// anything else is refused with ErrFixerFinding. It is the route PRD section
+// 5's "A check does not judge its own edits" takes, and it is here rather than
+// in the bodies that verify a round because a hold a body had to remember to
+// read is a hold a body can forget. The fix node writes Stage.HeldKey every
+// round and the stage node adds what it holds before normalizing, so neither
+// a stage body nor its absence can drop one. Deciding what to raise needs the
+// commit a round made, which is git, and that stays with the fixer this
+// package is handed.
 //
 // The two halves are also constructed on different terms. A stage body is
 // built fresh for every execution of the stage, so a stage that takes fix

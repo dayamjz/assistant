@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/dayamjz/assistant/internal/findings"
 	"github.com/dayamjz/assistant/internal/graph"
 )
 
@@ -12,8 +13,17 @@ import (
 // and writes are the implementation's declarations plus the keys this adapter
 // needs: it reads what decides whether the stage runs at all, and it writes
 // the stage's report and outcome, which no implementation may write.
-func stageNode(stage Stage, impl Implementation) graph.Node {
-	reads := union(impl.Reads, KeySkip, KeyDiffEmpty)
+//
+// fixed says the stage has a fix node. Such a stage also reads the holds its
+// last fix round raised and reports them with its own findings, which is
+// what makes a hold a round raised independent of the stage's
+// implementation: a body cannot leave one out, because it never handles it.
+func stageNode(stage Stage, impl Implementation, fixed bool) graph.Node {
+	adapterReads := []Key{KeySkip, KeyDiffEmpty}
+	if fixed {
+		adapterReads = append(adapterReads, stage.HeldKey())
+	}
+	reads := union(impl.Reads, adapterReads...)
 	writes := union(impl.Writes, stage.ReportKey(), stage.OutcomeKey())
 	declared := keySet(impl.Reads)
 	permitted := keySet(impl.Writes)
@@ -52,6 +62,13 @@ func stageNode(stage Stage, impl Implementation) graph.Node {
 				}
 				if err != nil {
 					return err
+				}
+				if fixed {
+					held, err := readHolds(r, stage)
+					if err != nil {
+						return err
+					}
+					out.Report.Findings = append(out.Report.Findings, held...)
 				}
 				// Normalizing here is where P3 lands for every stage at once:
 				// a finding with a missing, empty, or unrecognized action
@@ -141,7 +158,7 @@ func holdNode(stage Stage) graph.Node {
 // what the fixer declared.
 func fixNode(stage Stage, fixer Fixer) graph.Node {
 	reads := union(fixer.Reads, stage.ReportKey(), stage.FixKey())
-	writes := union(fixer.Writes, stage.FixKey())
+	writes := union(fixer.Writes, stage.FixKey(), stage.HeldKey())
 	declared := keySet(fixer.Reads)
 	permitted := keySet(fixer.Writes)
 	return graph.Node{
@@ -183,13 +200,73 @@ func fixNode(stage Stage, fixer Fixer) graph.Node {
 				if err != nil {
 					return err
 				}
+				held, err := encodeHolds(stage, out.Holds)
+				if err != nil {
+					return err
+				}
 				if err := w.Set(string(stage.FixKey()), graph.TextValue(out.Summary)); err != nil {
+					return err
+				}
+				if err := w.Set(string(stage.HeldKey()), graph.TextValue(held)); err != nil {
 					return err
 				}
 				return applyWrites(w, permitted, "the fixer for "+stage.String(), out.Writes)
 			}
 		},
 	}
+}
+
+// encodeHolds renders what a fix round raised for its stage's next execution.
+// Every hold is normalized first, so P3 makes a missing or unrecognized action
+// an ask, and anything that is still not an ask is refused: a fixer may hold
+// its stage and may say nothing else about it. Identifiers are dropped, because
+// the stage's report assigns them when it is normalized and a fixer's own
+// could collide with one the stage reported. A round that raised nothing is
+// the empty string, which is what clears the last round's holds.
+func encodeHolds(stage Stage, holds []findings.Finding) (string, error) {
+	if len(holds) == 0 {
+		return "", nil
+	}
+	normalized := make([]findings.Finding, len(holds))
+	for i, hold := range findings.NormalizeFindings(holds) {
+		if !hold.Holds() {
+			return "", fmt.Errorf("%w: the %s stage's fix round raised %q with action %q",
+				ErrFixerFinding, stage, hold.Description, hold.Action)
+		}
+		if hold.Description == "" {
+			// The stage's report would refuse it later with ErrUnusableReport,
+			// blaming the stage for what its fixer raised. It is refused here,
+			// where the round that raised it is the one named.
+			return "", fmt.Errorf("%w: the %s stage's fix round raised a hold with no description",
+				ErrFixerFinding, stage)
+		}
+		hold.ID = ""
+		normalized[i] = hold
+	}
+	encoded, err := json.Marshal(normalized)
+	if err != nil {
+		return "", fmt.Errorf("pipeline: record the holds the %s stage's fix round raised: %w", stage, err)
+	}
+	return string(encoded), nil
+}
+
+// readHolds reads what the last fix round of a stage raised. A value that
+// cannot be read back is refused rather than read as no holds, because that
+// would present a round that raised a hold as one that raised nothing.
+func readHolds(r graph.Reader, stage Stage) ([]findings.Finding, error) {
+	value, err := r.Get(string(stage.HeldKey()))
+	if err != nil {
+		return nil, err
+	}
+	text, _ := value.Text()
+	if text == "" {
+		return nil, nil
+	}
+	var held []findings.Finding
+	if err := json.Unmarshal([]byte(text), &held); err != nil {
+		return nil, fmt.Errorf("%w: %s: the holds its last fix round raised: %w", ErrBadReport, stage, err)
+	}
+	return held, nil
 }
 
 // union renders one node's declaration: the keys an implementation declared

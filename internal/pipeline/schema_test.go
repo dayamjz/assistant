@@ -44,8 +44,8 @@ func TestParseStageRoundTripsAndRefusesAnythingElse(t *testing.T) {
 }
 
 // TestEveryStageHasItsOwnKeys checks the per-stage half of the schema: the
-// three keys every stage has, the fix summary only the five stages that take
-// fix rounds have, and no key shared between two stages.
+// three keys every stage has, the fix summary and the held key only the five
+// stages that take fix rounds have, and no key shared between two stages.
 func TestEveryStageHasItsOwnKeys(t *testing.T) {
 	declared := make(map[Key]bool, len(Keys()))
 	for _, key := range Keys() {
@@ -65,6 +65,9 @@ func TestEveryStageHasItsOwnKeys(t *testing.T) {
 		}
 		if got := declared[stage.FixKey()]; got != withRounds[stage] {
 			t.Errorf("%s declares a fix summary key: %v, want %v", stage, got, withRounds[stage])
+		}
+		if got := declared[stage.HeldKey()]; got != withRounds[stage] {
+			t.Errorf("%s declares a held key: %v, want %v", stage, got, withRounds[stage])
 		}
 	}
 }
