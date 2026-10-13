@@ -64,6 +64,26 @@ func migrate(ctx context.Context, db *sql.DB, ms []migration) error {
 	if err != nil {
 		return err
 	}
+	if err := compareApplied(applied, ms); err != nil {
+		return err
+	}
+	for _, m := range ms {
+		if _, ok := applied[m.version]; ok {
+			continue
+		}
+		if err := applyMigration(ctx, db, m); err != nil {
+			return &MigrationError{Version: m.version, Name: m.name, Err: err}
+		}
+	}
+	return nil
+}
+
+// compareApplied refuses a recorded migration this build does not have
+// (ErrSchemaAhead) or one that differs from this build's copy
+// (ErrSchemaChanged), on the terms the package comment states. It says
+// nothing about a migration this build has and the database lacks, which
+// migrate goes on to apply and verifyMigrated refuses.
+func compareApplied(applied map[int]migrationRecord, ms []migration) error {
 	byVersion := make(map[int]migration, len(ms))
 	for _, m := range ms {
 		byVersion[m.version] = m
@@ -84,12 +104,37 @@ func migrate(ctx context.Context, db *sql.DB, ms []migration) error {
 				ErrSchemaChanged, version, known.name, recorded, statementsDigest(known))
 		}
 	}
+	return nil
+}
+
+// verifyMigrated is the read-only half of migrate: it reads what the database
+// records and refuses, without applying anything, a database whose recorded
+// migrations differ from ms on compareApplied's terms or that lacks one ms
+// has (ErrSchemaBehind). A database with no migration table at all is behind
+// too: it was never opened by a writer.
+func verifyMigrated(ctx context.Context, db *sql.DB, ms []migration) error {
+	if err := checkMigrationList(ms); err != nil {
+		return err
+	}
+	var tables int
+	if err := db.QueryRowContext(ctx,
+		`SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'schema_migration'`,
+	).Scan(&tables); err != nil {
+		return fmt.Errorf("store: reading the catalog: %w", err)
+	}
+	if tables == 0 {
+		return fmt.Errorf("%w: it has no migration table", ErrSchemaBehind)
+	}
+	applied, err := appliedMigrations(ctx, db)
+	if err != nil {
+		return err
+	}
+	if err := compareApplied(applied, ms); err != nil {
+		return err
+	}
 	for _, m := range ms {
-		if _, ok := applied[m.version]; ok {
-			continue
-		}
-		if err := applyMigration(ctx, db, m); err != nil {
-			return &MigrationError{Version: m.version, Name: m.name, Err: err}
+		if _, ok := applied[m.version]; !ok {
+			return fmt.Errorf("%w: migration %d (%s) has not been applied", ErrSchemaBehind, m.version, m.name)
 		}
 	}
 	return nil

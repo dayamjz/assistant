@@ -160,7 +160,16 @@ Each has cost this repository more than one round of review.
   repository on purpose, because no surface here witnesses a person; the record
   understates who decided rather than overstating it. It records and does not
   gate, so nothing may branch on the value to decide whether a resolution may
-  proceed. It also holds the run checkpoint history the durability layer needs,
+  proceed. `Acknowledger` is the same shape for the wake queue, with no member
+  meaning a person and, in this build, no producer: the ipc rows that would
+  derive it wait on #91's worker set. The queue is `wake`, a table and never a
+  directory, appended and sealed so acknowledging is a row's one revision;
+  `AppendWakeWithMarkers` is the only way a wake lands and it advances the
+  task's `wake_marker` row in the same transaction, deriving the change epoch
+  there, so a kind is a word it records and `internal/supervisor` owns. A
+  drain is a read, delivery is at least once, and `OpenReadOnly` is the open
+  a reader with no service takes, answering `ErrUnreadable` for what it
+  cannot read. It also holds the run checkpoint history the durability layer needs,
   which is the only record of a run's position: opaque payloads indexed by run
   and sequence, with the anchor a property of the request that no column holds.
   The one-row `checkpoint` migration 1 created was the second record the PRD
@@ -401,7 +410,12 @@ Each has cost this repository more than one round of review.
   the kind table, enumerates the kinds so a row without an oracle fails, and
   runs two counterfeit classifiers to show it can fail. It cites P9 for the
   table only and never P10: `Assess`'s inputs are stated there, not produced
-  by the real lock and files. Read its `doc.go` for the residual gaps: the
+  by the real lock and files. `inflight.go` is the one owner of which states
+  owe a supervision cycle: a closed table over `taskstate.States()` that its
+  test derives from that function, so a new state fails until placed, and
+  `InFlightOf` reads it beside `store.UnacknowledgedWakes`, because a hold
+  nobody has been told about is in flight whatever its state says. Read its
+  `doc.go` for the residual gaps: the
   check-result kind has no producer, the repetition count is read for the
   unchanged terminal alone, and freshness blocks falsely across a suspend or a clock
   jump by design.
@@ -431,7 +445,10 @@ Each has cost this repository more than one round of review.
 - `internal/home` owns the on-disk layout PRD section 8 gives one root, and the
   exclusive lock that makes a home have exactly one service. No other package
   spells a path under the root, with one deliberate exception: `internal/gate`
-  composes `<home>/repos/<id>.git` itself, so this package does not. The lock is
+  composes `<home>/repos/<id>.git` itself, so this package does not. The wake
+  queue is not in the layout at all: it is `internal/store`'s table, so no
+  path to a `queue/` is composed and `Create` makes none, while an older home
+  keeps an empty one nothing reads. The lock is
   an operating-system lock rather than a file naming a process, because the
   property PRD section 8 asks for is that it cannot go stale after a hard kill.
   Read its `doc.go` for the residual gaps: an advisory lock binds only the

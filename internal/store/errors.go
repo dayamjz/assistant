@@ -305,6 +305,97 @@ var ErrCleanupRemovalFirst = errors.New("store: a cleanup record is written with
 // a fact about what cleanup established.
 var ErrUnknownCleanupProof = errors.New("store: cleanup proof is outside the closed set")
 
+// ErrNoAcknowledger is returned by AcknowledgeWakes when the acknowledgement
+// names nobody, which is the zero Acknowledger. A wake's acknowledgement
+// records who made it, so one with nobody attached is refused rather than
+// stored as one nobody can account for afterwards.
+var ErrNoAcknowledger = errors.New("store: a wake acknowledgement records who made it")
+
+// ErrUnknownAcknowledger is what a read of a wake returns when its
+// acknowledged_by column holds a value outside the closed set Acknowledger
+// defines. The set is closed, so a row outside it was not written by this
+// package's accessor, and reporting it as "nobody was recorded" would turn a
+// row nobody can account for into a fact about the acknowledgement.
+var ErrUnknownAcknowledger = errors.New("store: wake acknowledger is outside the closed set")
+
+// ErrWakeHandled is returned by AppendWakeWithMarkers when the wake it was
+// asked to append has the task, kind and marker of a row already
+// acknowledged. A replay of a detection whose row is still queued is one
+// wake and reads back as already queued; the same key arriving after the row
+// was handled means the marker the loop composed did not advance for a
+// surface that is new, which is a defect in the marker and not a wake to
+// ignore. Nothing is written, the markers included.
+var ErrWakeHandled = errors.New("store: a wake with this task, kind and marker was already acknowledged")
+
+// ErrWakeUnknown is the reason a *WakeIDError carries when AcknowledgeWakes
+// was given an identifier no wake row has. Nothing in the batch is written.
+var ErrWakeUnknown = errors.New("store: no wake has this identifier")
+
+// ErrWakeAcknowledged is the reason a *WakeIDError carries when
+// AcknowledgeWakes was given a wake already acknowledged. The first
+// acknowledgement stands and nothing in the batch is written, so a caller
+// retrying a batch whose commit it did not see learns that the commit landed
+// rather than writing over who acknowledged.
+var ErrWakeAcknowledged = errors.New("store: wake is already acknowledged")
+
+// WakeIDError reports a refused acknowledgement and names the identifier that
+// refused it and why, so a caller reports the row it tripped on rather than
+// only that the batch failed.
+type WakeIDError struct {
+	// ID is the wake identifier the batch named.
+	ID int64
+	// Reason is ErrWakeUnknown or ErrWakeAcknowledged.
+	Reason error
+}
+
+// Error names the identifier and the reason.
+func (e *WakeIDError) Error() string {
+	return fmt.Sprintf("store: acknowledging wake %d: %v", e.ID, e.Reason)
+}
+
+// Unwrap makes the error match its Reason.
+func (e *WakeIDError) Unwrap() error { return e.Reason }
+
+// ErrReadOnly is returned by every accessor that writes when the store was
+// opened by OpenReadOnly. A read-only store has no writer connection at all,
+// so the refusal is this package's own condition rather than whatever the
+// driver would say.
+var ErrReadOnly = errors.New("store: the store is open read-only")
+
+// ErrUnreadable is the class every *UnreadableError belongs to: OpenReadOnly
+// could not read the database as one this build's accessors can answer
+// from. It is the typed result a caller feeds a reading that could not be
+// taken, which for the stop guard means unknown and never none.
+var ErrUnreadable = errors.New("store: the database cannot be read")
+
+// UnreadableError reports why OpenReadOnly could not read a database: the
+// file is missing or not a database, its schema is behind this build, which
+// a read-only open may not migrate, ahead of it, or recorded differently, or
+// a connection did not come back carrying the settings the package comment's
+// guarantees rest on.
+type UnreadableError struct {
+	// Path is the absolute path that was opened.
+	Path string
+	// Err is what went wrong.
+	Err error
+}
+
+// Error names the path and what went wrong.
+func (e *UnreadableError) Error() string {
+	return fmt.Sprintf("store: %s cannot be read: %v", e.Path, e.Err)
+}
+
+// Unwrap makes every unreadable database match ErrUnreadable, and the
+// underlying cause match too through Is and As.
+func (e *UnreadableError) Unwrap() []error { return []error{ErrUnreadable, e.Err} }
+
+// ErrSchemaBehind is returned, wrapped in an *UnreadableError, by
+// OpenReadOnly when the database lacks a migration this build has. A
+// read-only open applies nothing, so it cannot bring the database forward,
+// and reading a schema that lacks a table an accessor selects from would
+// fail per call rather than once at the open.
+var ErrSchemaBehind = errors.New("store: database schema is behind this build and a read-only open cannot migrate it")
+
 // ErrPrimarySnapshotRecorded is returned by RecordPrimarySnapshot when the
 // task's attempt already has a primary snapshot: the record is of one read,
 // written once, and the first stands.
