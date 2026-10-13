@@ -274,3 +274,126 @@ func TestTheStateSetIsClosed(t *testing.T) {
 		t.Fatal("States returned its own storage")
 	}
 }
+
+// Progress is derived in Resolve and nowhere else, and it is true in exactly
+// two cases: a validating answer from a run the service is advancing, and a
+// running answer from a live terminal. A running run nothing is advancing is
+// no progress; a settled run the slot still calls advancing is no progress,
+// because the record decided the state; a live terminal a run outranks is no
+// progress, because the terminal did not answer.
+func TestProgressRestsOnPositiveEvidenceOnly(t *testing.T) {
+	running := []store.Run{runIn("r", store.RunRunning, 1)}
+	passed := []store.Run{runIn("r", store.RunPassed, 1)}
+	cases := []struct {
+		name      string
+		runs      []store.Run
+		proc      Liveness
+		advancing bool
+		state     State
+		progress  bool
+	}{
+		{"running run, advancing", running, Unobserved, true, Validating, true},
+		{"running run, not advancing", running, Unobserved, false, Validating, false},
+		{"running run, live terminal, not advancing", running, Live, false, Validating, false},
+		{"passed run the slot calls advancing", passed, Unobserved, true, Ready, false},
+		{"held run the slot calls advancing", []store.Run{runIn("r", store.RunHeld, 1)}, Unobserved, true, Held, false},
+		{"live terminal, no run", nil, Live, false, Running, true},
+		{"live terminal, no run, advancing says nothing", nil, Live, true, Running, true},
+		{"dead terminal", nil, Dead, true, Unknown, false},
+		{"log alone", nil, Unobserved, true, Running, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := Resolve(Inputs{Task: store.Task{ID: "t"}, Runs: c.runs, Events: log("", "started"), Process: c.proc, Advancing: c.advancing})
+			if got.State != c.state || got.Progress != c.progress {
+				t.Fatalf("resolved %s with progress %v, want %s with progress %v", got.State, got.Progress, c.state, c.progress)
+			}
+			if got.Basis.Advancing != c.advancing {
+				t.Fatalf("the basis records advancing %v, want %v", got.Basis.Advancing, c.advancing)
+			}
+		})
+	}
+}
+
+// relaunched is a note: as the newest event it resolves Unknown from no
+// source, which is why its row says dispatched must follow it, and with the
+// dispatch appended the task resolves Dispatched. isolation-refused claims
+// Failed.
+func TestARelaunchIsANoteUntilTheDispatchFollowsIt(t *testing.T) {
+	got := resolve(log("", "failed", "relaunched"), nil, Unobserved)
+	if got.State != Unknown || got.Source != SourceNone {
+		t.Fatalf("a relaunch at the tail resolved to %s from %s, want unknown from none", got.State, got.Source)
+	}
+	got = resolve(log("", "failed", "relaunched", store.DispatchedEventKind), nil, Unobserved)
+	if got.State != Dispatched || got.Source != SourceEvent {
+		t.Fatalf("a dispatch after the relaunch resolved to %s from %s, want dispatched from the event", got.State, got.Source)
+	}
+	got = resolve(log(string(RefusedNotIsolated), store.DispatchedEventKind, "isolation-refused"), nil, Unobserved)
+	if got.State != Failed || got.Source != SourceEvent {
+		t.Fatalf("an isolation refusal resolved to %s from %s, want failed from the event", got.State, got.Source)
+	}
+	if strings.Contains(got.Detail.Or(""), string(RefusedNotIsolated)) {
+		t.Fatalf("the refusal's reason reached the detail: %q", got.Detail.Or(""))
+	}
+}
+
+// Every kind names its writer, the four kinds that record the program's own
+// decisions are the program's alone, and the rest are the worker's.
+func TestTheWriterColumnKeepsTheProgramsKindsFromAWorker(t *testing.T) {
+	programOnly := map[string]bool{
+		store.OpeningEventKind: true, store.DispatchedEventKind: true, "isolation-refused": true, "relaunched": true,
+	}
+	for _, row := range Kinds() {
+		switch {
+		case row.Writer != WriterProgram && row.Writer != WriterWorker:
+			t.Errorf("kind %q names writer %q, which is neither the program nor the worker", row.Kind, row.Writer)
+		case programOnly[row.Kind] && row.Writer != WriterProgram:
+			t.Errorf("kind %q may be appended by a worker", row.Kind)
+		case !programOnly[row.Kind] && row.Writer != WriterWorker:
+			t.Errorf("kind %q is the program's alone, which no row was meant to be", row.Kind)
+		}
+	}
+	for kind := range programOnly {
+		if _, ok := Lookup(kind); !ok {
+			t.Errorf("kind %q has no row", kind)
+		}
+	}
+}
+
+// isolation-refused carries a closed reason in its detail, checked by the
+// row's own decoder; every other kind's detail is free text and has none.
+func TestTheIsolationRefusalIsAClosedSet(t *testing.T) {
+	row, ok := Lookup("isolation-refused")
+	if !ok || row.Detail == nil {
+		t.Fatal("isolation-refused has no detail decoder")
+	}
+	for _, r := range IsolationRefusals() {
+		if !r.Recognized() {
+			t.Errorf("%q is in IsolationRefusals and not Recognized", r)
+		}
+		if err := row.Detail(string(r)); err != nil {
+			t.Errorf("the decoder refused %q: %v", r, err)
+		}
+		if got, err := ParseIsolationRefusal(string(r)); err != nil || got != r {
+			t.Errorf("ParseIsolationRefusal(%q) = %q, %v", r, got, err)
+		}
+	}
+	for _, text := range []string{"", "the copy is fine", "PRIMARY-CHECKOUT"} {
+		if err := row.Detail(text); err == nil {
+			t.Errorf("the decoder accepted %q", text)
+		}
+		if _, err := ParseIsolationRefusal(text); err == nil {
+			t.Errorf("ParseIsolationRefusal accepted %q", text)
+		}
+	}
+	for _, other := range Kinds() {
+		if other.Kind != "isolation-refused" && other.Detail != nil {
+			t.Errorf("kind %q has a detail decoder nobody specified", other.Kind)
+		}
+	}
+	got := IsolationRefusals()
+	got[0] = "tampered"
+	if IsolationRefusals()[0] == "tampered" {
+		t.Fatal("IsolationRefusals returned its own storage")
+	}
+}

@@ -15,7 +15,7 @@ func TestReopeningKeepsEverything(t *testing.T) {
 
 	s := openStoreAt(t, path)
 	run := seedRun(t, s)
-	task := seedTask(t, s, "task-1")
+	task := seedTask(t, s, "taskaaaaaaab")
 	if _, err := s.AppendTaskEvent(ctx, task.ID, "started", "stage review"); err != nil {
 		t.Fatalf("AppendTaskEvent: %v", err)
 	}
@@ -34,7 +34,7 @@ func TestReopeningKeepsEverything(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TaskEvents: %v", err)
 	}
-	if len(history) != 2 || history[1].Kind != "started" {
+	if len(history) != 3 || history[2].Kind != "started" {
 		t.Fatalf("the task history did not survive reopening: %+v", history)
 	}
 	open, err := again.OpenHolds(ctx)
@@ -64,10 +64,26 @@ func TestAccessorsRefuseAfterClose(t *testing.T) {
 		"CreateRun":    func() error { _, err := s.CreateRun(ctx, completeRun()); return err },
 		"StageResult":  func() error { _, err := s.StageResult(ctx, "run-1", "review"); return err },
 		"Rounds":       func() error { _, err := s.Rounds(ctx, "run-1"); return err },
-		"TaskSnapshot": func() error { _, err := s.TaskSnapshot(ctx, "task-1"); return err },
-		"TaskEvents":   func() error { _, err := s.TaskEvents(ctx, "task-1", 0, 0); return err },
+		"TaskSnapshot": func() error { _, err := s.TaskSnapshot(ctx, "taskaaaaaaab"); return err },
+		"TaskEvents":   func() error { _, err := s.TaskEvents(ctx, "taskaaaaaaab", 0, 0); return err },
 		"OpenHolds":    func() error { _, err := s.OpenHolds(ctx); return err },
-		"AppendEvent":  func() error { _, err := s.AppendTaskEvent(ctx, "task-1", "kind", ""); return err },
+		"AppendEvent":  func() error { _, err := s.AppendTaskEvent(ctx, "taskaaaaaaab", "kind", ""); return err },
+		"AppendTaskEventAfter": func() error {
+			_, err := s.AppendTaskEventAfter(ctx, "taskaaaaaaab", 1, "kind", "")
+			return err
+		},
+		"CreateTask": func() error {
+			_, err := s.CreateTask(ctx, Task{ID: "taskaaaaaaab", Shape: TaskDelivery, WorktreePath: "/w"}, Disposition{})
+			return err
+		},
+		"BeginTaskAttempt":  func() error { _, err := s.BeginTaskAttempt(ctx, "taskaaaaaaab", 0); return err },
+		"SetAttemptSession": func() error { return s.SetAttemptSession(ctx, "taskaaaaaaab", 1, "pane") },
+		"TaskAttempts":      func() error { _, err := s.TaskAttempts(ctx, "taskaaaaaaab"); return err },
+		"RecordTaskCleanup": func() error {
+			_, err := s.RecordTaskCleanup(ctx, TaskCleanup{TaskID: "taskaaaaaaab", Proof: CleanupProofRemoteBranch})
+			return err
+		},
+		"TaskCleanup": func() error { _, err := s.TaskCleanup(ctx, "taskaaaaaaab"); return err },
 		"AppendGraphCheckpoint": func() error {
 			_, err := s.AppendGraphCheckpoint(ctx, "run-1", "", 0, []byte("cp"))
 			return err
