@@ -253,12 +253,14 @@ func doctor(ctx context.Context, in *invocation) (any, error) {
 		Detail:   serviceDetail(service),
 	})
 
-	resolution, err := agents.Resolve(ctx, in.resolvedAgents(), agents.DefaultCatalog())
+	catalog := agents.DefaultCatalog()
+	resolution, err := agents.Resolve(ctx, in.resolvedAgents(), catalog)
 	if err != nil {
 		add(machine.Check{Name: "agent", Blocking: true, Detail: err.Error()})
 	} else {
 		add(machine.Check{Name: "agent", OK: true, Blocking: true, Detail: resolution.Name})
 	}
+	add(unprovenAgents(ctx, catalog))
 
 	add(codeHost())
 	add(stageBodies())
@@ -275,6 +277,29 @@ func doctor(ctx context.Context, in *invocation) (any, error) {
 		report.Detail = "a run cannot start: " + strings.Join(blocking, ", ")
 	}
 	return report, nil
+}
+
+// unprovenAgents reports the adapters that resolve on this machine but whose
+// envelope has not been checked against the real CLI, separately from the
+// "agent" check so that a runnable proven agent is never confused with one that
+// merely has a binary on PATH. Which adapters are unproven is the catalog's
+// declaration, not a list here. It never blocks and never changes what "auto"
+// resolves; naming one of these in the agent key still selects it.
+func unprovenAgents(ctx context.Context, catalog *agents.Catalog) machine.Check {
+	var found []string
+	for _, standing := range catalog.Survey(ctx) {
+		if !standing.Proven && standing.Runnable {
+			found = append(found, standing.Name)
+		}
+	}
+	if len(found) == 0 {
+		return machine.Check{Name: "unproven agents", OK: true, Detail: "no adapter whose envelope is unproven against its real CLI resolves here"}
+	}
+	return machine.Check{
+		Name: "unproven agents",
+		Detail: strings.Join(found, ", ") + " resolve on this machine but are not proven against their real CLIs; " +
+			"auto never chooses them, and a run uses one only when the agent key names it",
+	}
 }
 
 // gateCheck establishes what a run needs of this working copy: the gate it is

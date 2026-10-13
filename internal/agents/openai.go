@@ -121,6 +121,9 @@ func OpenAIFactory(opts ...OpenAIOption) Factory {
 // Name returns "openai".
 func (f *openaiFactory) Name() string { return OpenAIName }
 
+// ProvenAgainstRealCLI reports false: no probe of the real CLI is recorded, and the conformance suite drives a test helper binary rather than that CLI.
+func (f *openaiFactory) ProvenAgainstRealCLI() bool { return false }
+
 // New reports whether OpenAI can be run here, and returns a Runner when
 // it can.
 //

@@ -1204,3 +1204,58 @@ func firstHoldingStages(t *testing.T) (holds, next pipeline.Stage) {
 	}
 	return holding[0], holding[1]
 }
+
+// doctor reports an adapter that resolves on PATH but is unproven against its
+// real CLI on its own row, apart from the agent row that names what a run
+// would use. The PATH holds git, claude and cursor and nothing else, so the
+// rows are established rather than being whatever this machine has installed.
+// It stays serial because PATH is process state.
+func TestDoctorSeparatesAnUnprovenRunnableAgentFromTheProvenOne(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("building a PATH that holds named executables needs a script this test cannot portably make on windows")
+	}
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatalf("resolving git: %v", err)
+	}
+	bin := t.TempDir()
+	if err := os.Symlink(realGit, filepath.Join(bin, "git")); err != nil {
+		t.Fatalf("planting git on the probe PATH: %v", err)
+	}
+	t.Setenv("PATH", bin)
+	h := newHome(t)
+	subject := newSubject(t)
+
+	plant := func(name string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(bin, name), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+			t.Fatalf("planting %s: %v", name, err)
+		}
+	}
+
+	// Only an unproven adapter is runnable: no agent can be chosen, and the
+	// unproven row says what is there instead of the agent row claiming it.
+	plant("cursor")
+	report := decodeDoctor(t, run(t, h, subject, "--json", "doctor").stdout)
+	agentRow, found := findCheck(report, "agent")
+	if !found || agentRow.OK {
+		t.Fatalf("doctor accepts an agent when only an unproven adapter is on PATH: %+v", agentRow)
+	}
+	unproven, found := findCheck(report, "unproven agents")
+	if !found || unproven.OK || unproven.Blocking || !strings.Contains(unproven.Detail, "cursor") {
+		t.Fatalf("doctor does not report cursor as an unproven runnable adapter: %+v", unproven)
+	}
+
+	// With claude present too, the agent row names claude and cursor stays on
+	// its own row.
+	plant("claude")
+	report = decodeDoctor(t, run(t, h, subject, "--json", "doctor").stdout)
+	agentRow, _ = findCheck(report, "agent")
+	if !agentRow.OK || agentRow.Detail != "claude" {
+		t.Fatalf("doctor's agent row is %+v, want claude", agentRow)
+	}
+	unproven, _ = findCheck(report, "unproven agents")
+	if unproven.OK || !strings.Contains(unproven.Detail, "cursor") || strings.Contains(unproven.Detail, "claude") {
+		t.Fatalf("unproven row is %+v, want cursor and not claude", unproven)
+	}
+}

@@ -7,8 +7,11 @@ import (
 )
 
 // AutoEntry is the configuration value that means "resolve whatever is
-// runnable". It expands to the catalog's own order, so a repository that names
-// no agent gets the same ordered fallback every other repository would.
+// runnable and proven". It expands to the catalog's proven adapters in the
+// catalog's own order, so a repository that names no agent gets the same
+// ordered fallback every other repository would. An adapter whose factory
+// does not declare ProvenAgainstRealCLI is never chosen by it (PRD section 12
+// makes Claude Code the only phase-one adapter).
 const AutoEntry = "auto"
 
 // Factory builds the Runner for one coding agent and decides whether that
@@ -23,10 +26,19 @@ type Factory interface {
 	// here. args are the words the configuration entry carried after the name,
 	// which are passed to the agent ahead of the flags the run manages itself.
 	New(ctx context.Context, args []string) (Runner, error)
+	// ProvenAgainstRealCLI reports whether this adapter's envelope parsing has
+	// been exercised against the real CLI it drives, rather than only against
+	// the test helper binary the conformance suite uses. "auto" resolves only
+	// adapters that answer true; any other adapter is reachable by being named
+	// in an entry. The answer is a declaration kept with the adapter, and
+	// nothing here verifies it: it is true only for an adapter whose real CLI
+	// somebody has probed, and flipping it is the act of recording that probe.
+	ProvenAgainstRealCLI() bool
 }
 
-// Catalog is the set of agent adapters this build has, in the order "auto"
-// tries them. A Catalog is built once and read concurrently afterwards; Add
+// Catalog is the set of agent adapters this build has. "auto" tries the
+// proven ones among them in this order; an unproven one is reachable only when
+// an entry names it. A Catalog is built once and read concurrently afterwards; Add
 // must not be called while a Resolve is in flight.
 type Catalog struct {
 	factories []Factory
@@ -70,9 +82,11 @@ func WithCatalogRecorder(r Recorder) CatalogOption {
 }
 
 // DefaultCatalog returns the adapters this build ships, in the order "auto"
-// tries them. The order is: Cursor (most common in this environment), Claude
-// (full-featured with sessions), OpenAI, and Grok. All implement the core
-// Runner interface, and Claude additionally supports resumable sessions.
+// tries them: Claude, then Cursor, OpenAI, and Grok. Only Claude is proven
+// against its real CLI, so "auto" resolves it alone; the other three are
+// reachable by naming them in the agent key until each has been probed. All
+// implement the core Runner interface, and Claude and Cursor additionally
+// declare resumable sessions.
 //
 // Options apply to every adapter in the returned catalog and to nothing
 // else; DefaultCatalog with none behaves as it always has.
@@ -94,8 +108,8 @@ func DefaultCatalog(opts ...CatalogOption) *Catalog {
 		grok = append(grok, WithGrokRecorder(s.recorder))
 	}
 	return NewCatalog(
-		CursorFactory(cursor...),
 		ClaudeFactory(claude...),
+		CursorFactory(cursor...),
 		OpenAIFactory(openai...),
 		GrokFactory(grok...),
 	)
@@ -121,6 +135,43 @@ func (c *Catalog) Names() []string {
 	out := make([]string, 0, len(c.factories))
 	for _, f := range c.factories {
 		out = append(out, f.Name())
+	}
+	return out
+}
+
+// provenNames returns the names "auto" expands to: the registered adapters
+// that declare ProvenAgainstRealCLI, in catalog order.
+func (c *Catalog) provenNames() []string {
+	var out []string
+	for _, f := range c.factories {
+		if f.ProvenAgainstRealCLI() {
+			out = append(out, f.Name())
+		}
+	}
+	return out
+}
+
+// Standing is what one catalog adapter looks like on this machine, for a
+// surface that reports adapters rather than resolving one.
+type Standing struct {
+	// Name is the adapter's name.
+	Name string
+	// Proven is the factory's ProvenAgainstRealCLI declaration.
+	Proven bool
+	// Runnable is whether the factory built a Runner with no extra flags.
+	Runnable bool
+	// Err says why it is not runnable, and is nil when Runnable.
+	Err error
+}
+
+// Survey asks every registered adapter, in catalog order, whether it is
+// runnable here. It builds a Runner per adapter and keeps none, and it
+// resolves nothing: Resolve alone decides what a run uses.
+func (c *Catalog) Survey(ctx context.Context) []Standing {
+	out := make([]Standing, 0, len(c.factories))
+	for _, f := range c.factories {
+		_, err := f.New(ctx, nil)
+		out = append(out, Standing{Name: f.Name(), Proven: f.ProvenAgainstRealCLI(), Runnable: err == nil, Err: err})
 	}
 	return out
 }
@@ -165,8 +216,9 @@ type Resolution struct {
 //
 // An entry is a name optionally followed by flags, in the form
 // internal/config's agent key already validated: "claude", or
-// "claude --model x". The single entry "auto" expands, in place, to every
-// adapter the catalog holds in catalog order.
+// "claude --model x". The entry "auto" expands, in place, to every proven
+// adapter the catalog holds in catalog order; unproven adapters are tried only
+// when named.
 //
 // Entries are tried in order and the first that yields a Runner wins. An entry
 // naming an adapter this build does not have, and an entry whose adapter
@@ -234,15 +286,15 @@ func Resolve(ctx context.Context, entries []string, catalog *Catalog) (Resolutio
 	return Resolution{}, &ResolutionError{Tried: skipped}
 }
 
-// expand replaces every "auto" entry with the catalog's own order, leaving
-// every other entry as written. An empty list expands to nothing, so a caller
+// expand replaces every "auto" entry with the catalog's proven adapters in the
+// catalog's own order, leaving every other entry as written. An empty list expands to nothing, so a caller
 // that configured no agent at all gets the same refusal as one whose agents
 // were all unavailable, with "no agent was configured" as the reason.
 func expand(entries []string, catalog *Catalog) []string {
 	out := make([]string, 0, len(entries))
 	for _, entry := range entries {
 		if strings.TrimSpace(entry) == AutoEntry {
-			out = append(out, catalog.Names()...)
+			out = append(out, catalog.provenNames()...)
 			continue
 		}
 		out = append(out, entry)

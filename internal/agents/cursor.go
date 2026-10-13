@@ -121,6 +121,9 @@ func CursorFactory(opts ...CursorOption) Factory {
 // Name returns "cursor".
 func (f *cursorFactory) Name() string { return CursorName }
 
+// ProvenAgainstRealCLI reports false: no probe of the real CLI is recorded, and the conformance suite drives a test helper binary rather than that CLI.
+func (f *cursorFactory) ProvenAgainstRealCLI() bool { return false }
+
 // New reports whether Cursor can be run here, and returns a Runner when
 // it can.
 //

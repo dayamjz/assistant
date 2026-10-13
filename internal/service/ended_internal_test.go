@@ -350,6 +350,8 @@ type fixedRunner struct{ runner agents.Runner }
 
 func (f fixedRunner) Name() string { return f.runner.Name() }
 
+func (f fixedRunner) ProvenAgainstRealCLI() bool { return true }
+
 func (f fixedRunner) New(context.Context, []string) (agents.Runner, error) { return f.runner, nil }
 
 // A run a push supersedes is ended by the same seam a cancel is, so it is not
