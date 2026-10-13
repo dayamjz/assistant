@@ -30,6 +30,7 @@ fmt:
 
 vet:
 	$(GO) vet ./...
+	$(GO) vet -tags judgelive ./internal/judge
 
 # golangci-lint is required, not best-effort. Degrading to `go vet` alone when
 # it is missing, or accepting a binary from the wrong major series that cannot
