@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,13 +10,16 @@ import (
 
 	"github.com/dayamjz/assistant/internal/forge"
 	"github.com/dayamjz/assistant/internal/home"
+	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/tasks"
+	"github.com/dayamjz/assistant/internal/taskstate"
 )
 
 // cleanupService is a service built by hand with what the two task-copy
-// cleanup sites read: the store, the home, the log and the cleaner. No
+// cleanup sites read: the store, the home, the log and the cleaner, and no
+// terminal seam, so its reader resolves every terminal Unobserved. No
 // socket is bound and no run is driven, because the sites are reached from
 // a run's settling and from a report's storing, and what is established
 // here is the call and what it says, not the walk that reaches it.
@@ -60,9 +64,10 @@ func serviceLog(t *testing.T, h *home.Home) string {
 }
 
 // A merge record written for a run attributed to a delivery task is what
-// calls the task copy's cleanup, which refuses today with the terminal
-// unobserved, as the site passes it; a run no merge record landed calls
-// nothing, and a task the run is not attributed to is not touched.
+// calls the task copy's cleanup, with the terminal as the service's reader
+// resolved it, which for a service with no terminal seam is Unobserved and
+// refuses as such; a run no merge record landed calls nothing, and a task
+// the run is not attributed to is not touched.
 func TestAMergeRecordCallsTheLandedTasksCleanup(t *testing.T) {
 	s, records, h := cleanupService(t)
 	ctx := context.Background()
@@ -121,8 +126,9 @@ func TestAMergeRecordCallsTheLandedTasksCleanup(t *testing.T) {
 }
 
 // Storing an investigation task's report goes through internal/tasks, which
-// registers its holds, and then calls the copy's cleanup, which refuses
-// today with the terminal unobserved.
+// registers its holds, and then calls the copy's cleanup with the terminal
+// as the service's reader resolved it after the store, which for a service
+// with no terminal seam is Unobserved and refuses as such.
 func TestStoringAReportCallsTheInvestigationsCleanup(t *testing.T) {
 	s, records, h := cleanupService(t)
 	ctx := context.Background()
@@ -148,5 +154,89 @@ func TestStoringAReportCallsTheInvestigationsCleanup(t *testing.T) {
 	}
 	if _, err := s.storeTaskReport(ctx, "lookedaaaaaa", `{"summary":"again"}`); err == nil {
 		t.Fatal("a second report was stored")
+	}
+}
+
+// PRD principle P12 at the task-copy site, with the terminal read through
+// the product's own seam: a landed delivery task whose worker is still
+// running keeps its copy with the live refusal, because the service's
+// reader probed the launched session Live through the provider that holds
+// it, and nothing here stated a liveness; once the worker has been ended
+// the same reader resolves the terminal Dead by identity, the site examines
+// the copy on the proof and removes it, and the task resolves Complete from
+// the cleanup record. The site is cleanUpLanded, reached as settle reaches
+// it, with the merge record written for a run attributed to the task.
+func TestATaskCopyIsKeptWhileItsWorkerRunsAndRemovedOnceItIsDead(t *testing.T) {
+	principles.Cite(t, principles.P12)
+	ctx := t.Context()
+	sub := newLaunchSubject(t, workerStandIn(t))
+	s := sub.service
+	s.terminals = heldTerminals{s}
+	s.forge = forge.NewGitHubHost(redact.New(), forge.WithBinary(filepath.Join(t.TempDir(), "absent-gh")))
+	var err error
+	if s.cleaner, err = tasks.NewCleaner(tasks.CleanupDeps{Home: s.home, Store: s.store, Forge: s.forge}); err != nil {
+		t.Fatalf("building the cleaner: %v", err)
+	}
+	d, err := s.dispatchTask(ctx, sub.task)
+	if err != nil {
+		t.Fatalf("dispatching: %v", err)
+	}
+	launched, err := s.launchTask(ctx, d)
+	if err != nil {
+		t.Fatalf("launching: %v", err)
+	}
+	provider, _, _ := s.sessionOf(sub.task)
+	waitCaptured(t, provider, launched, "worker ready")
+
+	// A run attributed to the task, landed by its merge record.
+	build, err := store.CurrentBuild()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sub.records.CreateRun(ctx, store.Run{
+		ID: "run-landed", RepositoryID: "subject", Branch: "task/one", SubmittedHead: "aaaa", Base: "bbbb",
+		Intent: "validate", IntentSource: "push", ConfigDigest: "cfg", Build: build,
+	}); err != nil {
+		t.Fatalf("recording the run: %v", err)
+	}
+	if _, err := sub.records.TransitionRun(ctx, "run-landed", []store.RunStatus{store.RunPending}, store.RunRunning); err != nil {
+		t.Fatal(err)
+	}
+	landed, err := sub.records.TransitionRunOnPullRequest(ctx, "run-landed", []store.RunStatus{store.RunRunning}, store.RunPassed,
+		store.PullRequestRead{PullRequest: 7, Head: "aaaa", End: store.PullRequestMerged}, store.HoldClosure{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.tasks().Task(ctx, sub.task); err != nil || got.State != taskstate.Landed || got.Basis.Process != taskstate.Live {
+		t.Fatalf("the task resolves %+v (%v), want Landed with its terminal live", got, err)
+	}
+
+	// The worker runs: the copy is kept with the live refusal.
+	s.cleanUpLanded(ctx, landed)
+	if log := serviceLog(t, s.home); !strings.Contains(log, "isolated copy of task "+sub.task+" is left standing ("+string(tasks.ReasonTerminalLive)+")") {
+		t.Fatalf("the cleanup over a live worker did not refuse as live: %s", log)
+	}
+	if _, err := os.Stat(sub.copy); err != nil {
+		t.Fatalf("the copy of a task whose worker runs was touched: %v", err)
+	}
+	if _, err := sub.records.TaskCleanup(ctx, sub.task); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("a cleanup record was written over a live worker: %v", err)
+	}
+
+	// The worker is ended: the same seam reads Dead, and the copy is
+	// examined and removed on the proof.
+	for _, err := range s.closeSessions() {
+		t.Fatalf("ending the worker: %v", err)
+	}
+	waitLiveness(t, provider, launched.Reference().String(), taskstate.Dead)
+	s.cleanUpLanded(ctx, landed)
+	if log := serviceLog(t, s.home); !strings.Contains(log, "isolated copy of task "+sub.task+": "+string(tasks.CleanupRemoved)+" on ") {
+		t.Fatalf("the cleanup over a dead terminal did not remove the copy: %s", log)
+	}
+	if _, err := os.Stat(sub.copy); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the copy still stands after its removal was logged: %v", err)
+	}
+	if got, err := s.tasks().Task(ctx, sub.task); err != nil || got.State != taskstate.Complete {
+		t.Fatalf("the task resolves %+v (%v), want Complete from the cleanup record", got, err)
 	}
 }

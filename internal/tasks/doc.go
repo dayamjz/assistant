@@ -292,12 +292,16 @@
 //     containing the gate is unrepresentable today. If that layout changes,
 //     the primary rule, which refuses all three, is the stricter template.
 //   - A task copy is cleaned up only once its terminal probed Dead, and the
-//     probe is not wired into internal/service's reader (#91's last PR), so
-//     the service passes taskstate.Unobserved and every task copy refuses
-//     with ReasonTerminalUnobserved today. Closing the session through the
-//     provider first is not done here either, because the service holds no
-//     sessions on this base. The probe's wiring is what turns those calls
-//     into removals, and nothing here changes when it lands.
+//     probe is internal/service's: its sites pass the liveness its own task
+//     reader resolved through the session provider, so a landed task whose
+//     worker still runs keeps its copy with ReasonTerminalLive and one
+//     whose worker is gone is examined. Closing the session through the
+//     provider first, which #108 offered as the other route, is not done:
+//     a cleanup never ends a worker, and a live refusal is retried at the
+//     next site rather than forced. The liveness is as of the service's
+//     read, and the window between it and the removal is covered by the
+//     inventory re-read alone, which does not see a worker that writes
+//     nothing git tracks.
 //   - vcs.RemoveWorktreeDiscardingChanges is exported and reachable by any
 //     importer, as is os.RemoveAll, so only this package calling either
 //     behind a Removal is convention; no type stops another package from

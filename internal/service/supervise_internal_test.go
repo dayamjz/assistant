@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/redact"
@@ -174,6 +175,16 @@ func loopHome(t *testing.T) (*home.Home, *store.Store) {
 // records handed in are closed first, because one service owns the home.
 func openLoop(t *testing.T, h *home.Home, records *store.Store, terminals Terminals, clock *fakeClock) *loopSubject {
 	t.Helper()
+	return openLoopWith(t, h, records, terminals, clock, nil)
+}
+
+// openLoopWith is openLoop with the catalog the service resolves its agent
+// from, for a test whose loop reads a worker the service launched; nil is
+// the product's default catalog, which launches nothing. A nil terminals is
+// the product's own wiring, the service's provider.
+func openLoopWith(t *testing.T, h *home.Home, records *store.Store, terminals Terminals, clock *fakeClock,
+	catalog *agents.Catalog) *loopSubject {
+	t.Helper()
 	if err := records.Close(); err != nil {
 		t.Fatalf("closing the records: %v", err)
 	}
@@ -198,7 +209,7 @@ func openLoop(t *testing.T, h *home.Home, records *store.Store, terminals Termin
 	}
 	running, err := Open(t.Context(), Options{
 		Home: h, NewStages: stages.All, NewFixer: stages.Fix, Build: build, LockWait: -1,
-		Terminals: terminals, hooks: hooks,
+		Terminals: terminals, hooks: hooks, Catalog: catalog,
 	})
 	if err != nil {
 		if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
@@ -219,6 +230,23 @@ func (l *loopSubject) pass(t *testing.T) passReport {
 		t.Fatal("the loop did not take a pass: it is not idle in its select")
 	}
 	return l.nextPass(t)
+}
+
+// freshPass is pass over a drained report channel: the reports of passes
+// the ticker already made are discarded first, so the report returned is of
+// a pass that began after the test's last step, whichever of the kick and
+// the ticker started it.
+func (l *loopSubject) freshPass(t *testing.T) passReport {
+	t.Helper()
+	for {
+		select {
+		case <-l.passes:
+			continue
+		default:
+		}
+		break
+	}
+	return l.pass(t)
 }
 
 // nextPass waits for the next pass report, whichever incarnation made it.
@@ -762,44 +790,109 @@ func TestEscalationAtTheWindowUnderAnInjectedClock(t *testing.T) {
 	}
 }
 
-// With no provider wired the loop runs degraded: a task with a session
-// surfaces terminal gone as unobservable, a task without one surfaces its
-// unchanged empty screen for want of evidence, nothing absorbs, and a
-// Complete task with no session produces no wake at all.
-func TestANilProviderSurfacesEveryInFlightTaskAndAbsorbsNothing(t *testing.T) {
+// PRD principle P9, the loop's half through the product's own terminal
+// seam rather than a double: the service launches a worker at open, the
+// loop probes it through the service's provider and captures its output
+// through the same handle, so a pass over the unchanged live screen absorbs
+// on the positive evidence a Live probe is, within the escalation window;
+// once the worker has finished on its own the same seam reads it Dead, the
+// pass surfaces terminal gone as dead, and the wake row is written. Nothing
+// here states a liveness: every reading is the provider's, and the task
+// reads Running from the process tier while the worker runs.
+func TestTheLoopAbsorbsALiveWorkerAndSurfacesADeadOne(t *testing.T) {
 	principles.Cite(t, principles.P9)
 	h, records := loopHome(t)
 	ctx := t.Context()
-	withSession := plantRunning(t, records, "degradedwith", "pane-unseen").ID
-	withoutSession := plantRunning(t, records, "degradedwout", "").ID
+	id, _ := plantLaunchable(t, h, records)
+	agent := workerStandIn(t)
+	l := openLoopWith(t, h, records, nil, nil, agents.NewCatalog(fixedRunner{runner: agent.Runner()}))
+	defer func() { _ = l.service.Close() }()
+
+	provider, launched, ok := l.service.sessionOf(id)
+	if !ok {
+		t.Fatalf("the service holds no session for task %s after open", id)
+	}
+	ref := launched.Reference().String()
+	// A status line answered means every line sent before it, the
+	// instructions among them, has been read and answered, so the screen
+	// is still from here until something is sent.
+	if err := provider.Send(ctx, launched, "status?"); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	waitCaptured(t, provider, launched, "still working on it")
+	if got, err := l.service.tasks().Task(ctx, id); err != nil || got.State != taskstate.Running || got.Basis.Process != taskstate.Live {
+		t.Fatalf("the launched task resolves %+v (%v), want Running from the live terminal", got, err)
+	}
+
+	// The screen's first reading, then the unchanged one, absorbed. The
+	// ticker makes passes of its own at the interval, so each report read
+	// here is of a pass begun after the step before it.
+	first := l.freshPass(t)
+	if gone := detectionsOf(first, id, supervisor.KindTerminalGone); len(gone) != 0 {
+		t.Fatalf("a live worker was read as terminal gone: %+v", gone)
+	}
+	captured, err := provider.Capture(launched)
+	if err != nil {
+		t.Fatal(err)
+	}
+	markers, has, err := l.records(t).WakeMarkers(ctx, id)
+	if err != nil || !has || markers.CaptureDigest.Or("") != captured.Digest {
+		t.Fatalf("the markers are %+v (has %v, %v), want the live screen's digest %s", markers, has, err, captured.Digest)
+	}
+	second := l.freshPass(t)
+	unchanged := detectionsOf(second, id, supervisor.KindTerminalUnchanged)
+	if len(unchanged) != 1 || unchanged[0].Verdict.Surfaces() {
+		t.Fatalf("the unchanged live screen = %+v, want one terminal-unchanged detection absorbed on the live probe", unchanged)
+	}
+	if gone := detectionsOf(second, id, supervisor.KindTerminalGone); len(gone) != 0 {
+		t.Fatalf("a live worker was read as terminal gone: %+v", gone)
+	}
+
+	// The worker finishes on its own, and the same seam surfaces it.
+	if err := provider.Send(ctx, launched, "finish"); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	waitCaptured(t, provider, launched, "worker finished")
+	waitLiveness(t, provider, ref, taskstate.Dead)
+	// A ticker pass may have surfaced it already, in which case the kicked
+	// pass finds the row standing and makes no second detection; the wake
+	// table is the owner of the fact, so it is what is read.
+	third := l.freshPass(t)
+	if gone := detectionsOf(third, id, supervisor.KindTerminalGone); len(gone) == 1 && !gone[0].Verdict.Surfaces() {
+		t.Fatalf("the finished worker = %+v, want terminal gone surfaced", gone)
+	}
+	rows := wakesOfKind(t, l.records(t), id, supervisor.KindTerminalGone)
+	if len(rows) != 1 || !rows[0].Queued() || !strings.HasPrefix(rows[0].Marker, "terminal-gone:dead:"+ref+":") {
+		t.Fatalf("the terminal-gone wakes = %+v, want one queued row for the dead terminal", rows)
+	}
+	if got, err := l.service.tasks().Task(ctx, id); err != nil || got.State != taskstate.Unknown || got.Source != taskstate.SourceProcess {
+		t.Fatalf("the finished task resolves %+v (%v), want Unknown from the dead terminal", got, err)
+	}
+}
+
+// A Complete task with no session is outside the watched set under the
+// product's own terminal seam: no pass detects anything for it, no wake is
+// written, and a task whose latest attempt names a reference nothing can
+// answer surfaces terminal gone as unobservable, which is the reading a
+// survivor or a foreign reference gets rather than a dead one.
+func TestACompleteTaskProducesNoWakeAndAnUnanswerableReferenceSurfacesAsUnobservable(t *testing.T) {
+	h, records := loopHome(t)
+	ctx := t.Context()
+	unseen := plantRunning(t, records, "unseenaaaaaa", "pane-unseen").ID
 	complete := plantComplete(t, records)
 	l := openLoop(t, h, records, nil, nil)
 	defer func() { _ = l.service.Close() }()
 
 	first := l.nextPass(t)
-	second := l.pass(t)
-	for _, r := range []passReport{first, second} {
-		for task, tr := range r.Tasks {
-			for _, d := range tr.Detections {
-				if !d.Verdict.Surfaces() {
-					t.Fatalf("task %s absorbed %+v with no provider", task, d)
-				}
-			}
-		}
-	}
-	if got := detectionsOf(first, withSession, supervisor.KindTerminalGone); len(got) != 1 ||
+	second := l.freshPass(t)
+	if got := detectionsOf(first, unseen, supervisor.KindTerminalGone); len(got) != 1 ||
 		!strings.HasPrefix(got[0].Marker, "terminal-gone:unobservable:pane-unseen:") {
-		t.Fatalf("the task with a session = %+v, want terminal gone as unobservable", got)
+		t.Fatalf("the task with an unanswerable reference = %+v, want terminal gone as unobservable", got)
 	}
-	if got := detectionsOf(second, withoutSession, supervisor.KindTerminalUnchanged); len(got) != 1 ||
-		got[0].Verdict.Reason != supervisor.ReasonNoEvidence {
-		t.Fatalf("the task without a session = %+v, want its empty screen surfaced for no evidence", got)
-	}
-	if all, err := records.TaskWakes(ctx, complete); err == nil && len(all) != 0 {
-		t.Fatalf("the complete task has wakes: %+v", all)
-	}
-	if got := len(first.Tasks[complete].Detections) + len(second.Tasks[complete].Detections); got != 0 || first.Tasks[complete].Watched {
-		t.Fatalf("the complete task was detected %d times, watched %v; want neither", got, first.Tasks[complete].Watched)
+	for _, r := range []passReport{first, second} {
+		if got := len(r.Tasks[complete].Detections); got != 0 || r.Tasks[complete].Watched {
+			t.Fatalf("the complete task was detected %d times, watched %v; want neither", got, r.Tasks[complete].Watched)
+		}
 	}
 	all, err := l.records(t).TaskWakes(ctx, complete)
 	if err != nil || len(all) != 0 {

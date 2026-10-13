@@ -41,6 +41,26 @@ func newDispatchSubject(t *testing.T) *dispatchSubject {
 		t.Fatalf("opening the store: %v", err)
 	}
 	t.Cleanup(func() { _ = records.Close() })
+	id, copyPath := plantLaunchable(t, h, records)
+	log, err := h.OpenLog(0)
+	if err != nil {
+		t.Fatalf("opening the log: %v", err)
+	}
+	t.Cleanup(func() { _ = log.Close() })
+	s := &Service{home: h, store: records, log: log}
+	return &dispatchSubject{service: s, records: records, task: id, copy: copyPath}
+}
+
+// plantLaunchable records in a home what a dispatch at open needs to cut a
+// copy and launch a worker: a primary checkout with an upstream, its
+// repository record and gate, and one delivery task resolving Dispatched
+// with the instructions file intake writes. It returns the task and its
+// copy path. Automatic git maintenance is turned off in the subject and
+// globally for the test, so no background git process holds a repository
+// a test is about to remove.
+func plantLaunchable(t *testing.T, h *home.Home, records *store.Store) (id, copyPath string) {
+	t.Helper()
+	ctx := t.Context()
 	primary, upstream, _ := heldSubject(t)
 	for _, dir := range []string{primary, upstream} {
 		heldGit(t, dir, "config", "gc.auto", "0")
@@ -65,11 +85,11 @@ func newDispatchSubject(t *testing.T) *dispatchSubject {
 		gate.WithIndex(records)); err != nil {
 		t.Fatalf("initializing the gate: %v", err)
 	}
-	id, err := home.NewTaskID()
+	id, err = home.NewTaskID()
 	if err != nil {
 		t.Fatal(err)
 	}
-	copyPath, err := h.TaskCopy(id)
+	copyPath, err = h.TaskCopy(id)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,13 +109,7 @@ func newDispatchSubject(t *testing.T) *dispatchSubject {
 	if err := os.WriteFile(instructions, []byte("work\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	log, err := h.OpenLog(0)
-	if err != nil {
-		t.Fatalf("opening the log: %v", err)
-	}
-	t.Cleanup(func() { _ = log.Close() })
-	s := &Service{home: h, store: records, log: log}
-	return &dispatchSubject{service: s, records: records, task: id, copy: copyPath}
+	return id, copyPath
 }
 
 // Two dispatchers of one Dispatched task, below the in-memory slot, both

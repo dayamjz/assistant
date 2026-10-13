@@ -78,19 +78,18 @@
 //
 // # Residual gaps
 //
-//   - The process tier's producer, internal/session's Probe, is not wired:
-//     the service still builds the Reader its task surface answers from
-//     with a nil probe, and its supervisor loop's Reader asks a seam nothing
-//     implements yet, so the tier is
-//     exercised by Resolve's tests, a scripted probe, and internal/session's
-//     own run of a Reader over the real provider on the stand-in, and reaches
-//     no task a person lists until the wiring lands (#91's last PR). A
-//     probe's answer is as of the probe, taken after the records were read,
-//     and a terminal may change afterwards. Live means the agent process is
-//     running; a probe that cannot tell an agent from the shell left in its
-//     pane would answer Live for a worker that has gone, which is the
-//     probe's gap to close and not this package's, and internal/session's
-//     doc says how its provider answers it.
+//   - The process tier's producer is internal/session's Probe, reached
+//     through internal/service's terminal seam by every Reader that service
+//     builds, so a launched task reads Running from this tier on the task
+//     surface while its worker runs, and Unknown from it once the worker is
+//     gone with no run attributed. A probe's answer is as of the probe,
+//     taken after the records were read, and a terminal may change
+//     afterwards. Live means the agent process is running; a probe that
+//     cannot tell an agent from the shell left in its pane would answer
+//     Live for a worker that has gone, which is the probe's gap to close
+//     and not this package's, and internal/session's doc says how its
+//     provider answers it. A Reader built with a nil probe, which only a
+//     service built outside Open is, observes no terminal at all.
 //   - The advancing fact is as of the slot map, read after the snapshot, so
 //     Progress can be false for a run that began advancing after the read
 //     and the answer is as of neither moment exactly.
@@ -100,11 +99,12 @@
 //     its blocker's runs, but two tasks whose attempts are both live on one
 //     branch still share the runs made after the later attempt began.
 //   - The cleanup record's writer is internal/tasks' CleanUp, called by
-//     internal/service after a merge record lands a delivery task, and it
-//     examines a task copy only once the terminal probed Dead; with the
-//     probe unwired the service passes Unobserved, so Complete is reached in
-//     production by no task today, and in the tests by the record's
-//     accessors and by internal/tasks' own cleanups.
+//     internal/service after a merge record lands a delivery task with the
+//     terminal as that service's own Reader resolved it, and it examines a
+//     task copy only once that liveness is Dead; so Complete is reached in
+//     production by a landed task whose worker is gone, and a landed task
+//     whose worker still runs, or whose terminal could not be observed,
+//     stays Landed with its copy.
 //   - A merge record reading closed lands nothing and is not read here: the
 //     run it ended is failed, and the run tier says so. The record's reason
 //     is not carried into the detail.
