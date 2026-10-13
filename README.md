@@ -2,15 +2,20 @@
 
 **Run many coding agents at once, and let none of them ship unvalidated work.**
 
-Assistant does two things you currently do by hand. It runs a fleet of coding
-agents in parallel, each in its own isolated copy of a repository, and it puts a
-validation gate in front of your remote so no change reaches a shared branch
-until it has been independently reviewed, tested, documented, and linted.
+Assistant is meant to do two things you currently do by hand. Today it does one
+of them: it puts a validation gate in front of your remote, so no change reaches
+a shared branch until it has been independently reviewed, tested, documented,
+and linted. The other is planned and not built: running a fleet of coding agents
+in parallel, each in its own isolated copy of a repository. The product
+requirements describe both halves and why they belong in one tool, but no fleet
+module (tasks, sessions, a supervisor) exists in this repository yet. The gate
+is what you can run now. [`docs/operators.md`](docs/operators.md) covers using
+it next to your CI and forge.
 
 ## Status
 
 Early. The product requirements are settled and checked in at
-[`docs/prd.html`](docs/prd.html). Twenty-two pieces exist so far, and the
+[`docs/prd.html`](docs/prd.html). Twenty-three pieces exist so far, and the
 binary can be driven. The execution
 engine in `internal/graph` is the first: the graph builder with its
 construction-time checks, an executor with halt points and bounded cycles, and
@@ -145,14 +150,16 @@ the machinery and not the review quality.
 
 ## The two promises
 
-**Parallel work you can watch.** Every worker runs in a real terminal you can
-attach to, read, and type into. If you intervene directly in a worker's
-terminal, that intervention is authoritative.
-
 **Nothing unvalidated is shared.** The gate is a named remote you push to on
 purpose. Pushing to it is how you consent to having that change validated,
 fixed, pushed, and turned into a pull request. Your ordinary `git push` keeps
-working as it always did.
+working as it always did. This is the half that exists.
+
+**Parallel work you can watch.** Planned, not built. The specification has every
+worker running in a real terminal you can attach to, read, and type into, with a
+direct intervention in a worker's terminal being authoritative. Nothing in this
+repository starts or supervises such workers yet; the store has task records, the
+service can list them, and nothing outside tests creates one.
 
 ## What it is not
 

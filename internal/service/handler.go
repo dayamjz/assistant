@@ -13,7 +13,7 @@ import (
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/redact"
-	"github.com/dayamjz/assistant/internal/store"
+	"github.com/dayamjz/assistant/internal/taskstate"
 	"github.com/dayamjz/assistant/internal/vcs"
 )
 
@@ -193,37 +193,35 @@ func (s *Service) listRuns(ctx context.Context, req machine.RunsRequest) (machin
 
 // listTasks reports fleet work with its resolved current state.
 //
-// The state is read per task rather than derived from the task record, because
-// P8 makes the resolved state a record with its own owner and reading it any
-// other way is the failure that principle names.
+// The state is resolved by internal/taskstate from the records that own the
+// facts, not read from a stored copy and not taken from the event log, which
+// P8 and P14 make the only two ways to get it wrong. No session module exists
+// in this build, so no terminal is observed and the resolver's process tier
+// stays out of the answer.
 func (s *Service) listTasks(ctx context.Context) (machine.Tasks, error) {
-	records, err := s.store.Tasks(ctx)
+	resolved, err := s.tasks().All(ctx)
 	if err != nil {
 		return machine.Tasks{}, err
 	}
-	out := machine.Tasks{Tasks: make([]machine.Task, 0, len(records))}
-	for _, record := range records {
-		state, err := s.store.TaskState(ctx, record.ID)
-		if err != nil && !errors.Is(err, store.ErrNotFound) {
-			return machine.Tasks{}, err
-		}
-		out.Tasks = append(out.Tasks, machine.Task{Record: record, State: state})
+	out := machine.Tasks{Tasks: make([]machine.Task, 0, len(resolved))}
+	for _, r := range resolved {
+		out.Tasks = append(out.Tasks, machine.Task{Record: r.Record, State: r.State})
 	}
 	return out, nil
 }
 
 // task reports one piece of fleet work with its resolved current state.
 func (s *Service) task(ctx context.Context, req machine.TaskRequest) (machine.Task, error) {
-	record, err := s.store.Task(ctx, req.Task)
+	r, err := s.tasks().Resolved(ctx, req.Task)
 	if err != nil {
 		return machine.Task{}, err
 	}
-	state, err := s.store.TaskState(ctx, req.Task)
-	if err != nil && !errors.Is(err, store.ErrNotFound) {
-		return machine.Task{}, err
-	}
-	return machine.Task{Record: record, State: state}, nil
+	return machine.Task{Record: r.Record, State: r.State}, nil
 }
+
+// tasks is the resolver over the service's store. No session module exists in
+// this build, so it has no probe and no task's terminal is observed.
+func (s *Service) tasks() *taskstate.Reader { return taskstate.NewReader(s.store, nil) }
 
 // stageReport is how an agent running a stage returns its result. It is the
 // one method a contained caller may reach, because returning its own stage is
