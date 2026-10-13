@@ -57,11 +57,13 @@ thing each, on a remote of their own copied from the walkable scenario's:
   push from a second clone, while the run is held at the first stop
   `stages.Holding` gives between the rebase stage's observation and the push
   stage's decision. It asserts the push stage holds on a would-discard
-  refusal carrying the detail the condition records, that the refusal's anchor
-  is the commit the run observed rather than where the branch stood at the
-  decision, and that the remote still holds the landed commit. The push
-  stage's report relays the refusal's detail and not its whole message, so the
-  commits the refusal would drop and the remedy are held at package reach only.
+  refusal carrying every substring of the message the condition records, that
+  it names as discarded exactly the landed commit and states the remedy
+  `internal/safety` gives, that the refusal's anchor is the commit the run
+  observed rather than where the branch stood at the decision, and that the
+  remote still holds the landed commit. The remedy being followed is held at
+  package reach only, because no surface here re-runs a run onto its new
+  upstream.
 - `TestCommitsAFixRoundWroteAfterReviewAreReviewedBeforeThePush` configures a
   lint command that appends a line to the change and fails the first time it
   runs. The automatic fix round launches the stand-in, which changes nothing,

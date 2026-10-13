@@ -106,6 +106,33 @@ func (r *Refusal) Error() string {
 	return b.String()
 }
 
+// remedies is the one statement of what gets a caller out of a refusal, keyed
+// by its reason. A reason with no row has no remedy stated here.
+var remedies = map[Reason]string{
+	ReasonWouldDiscard: "To keep the commits this would discard, incorporate them: observe the target " +
+		"again, rebase the proposed commit onto the commit that observation found, and submit the " +
+		"result anchored to that new observation. While the target still stands there, the decision " +
+		"over it is a fast-forward.",
+}
+
+// Remedy states what gets a caller out of this refusal, as text it can report
+// without adding to it, or the empty string when no remedy is stated for the
+// reason. Only ReasonWouldDiscard has one. It depends on the reason alone, so
+// two refusals for the same reason state the same remedy.
+//
+// The would-discard remedy is a fresh Guard.Observe and a rebase onto what it
+// found, not a retry: the original anchor no longer describes the target, so
+// Decide refuses it again however the proposed commit changes. What makes the
+// second decision a fast-forward is that the proposed commit then contains
+// the target's commit and the target has not moved since the observation;
+// a target that moves again in between is refused again, as it should be. The
+// remedy text claims no more than that: the fast-forward also rests on Decide's
+// stated precondition that the local repository holds both commits, and a
+// comparison it cannot answer is refused as unverifiable instead.
+func (r *Refusal) Remedy() string {
+	return remedies[r.Reason]
+}
+
 // Unwrap makes every refusal match ErrRefused, so a caller that only needs to
 // know the update did not proceed does not have to enumerate the reasons, and
 // exposes the failure the refusal came from alongside it, so errors.Is against
