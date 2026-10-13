@@ -209,7 +209,9 @@ func Coverage() []Established {
 			"A task whose event log ends on an open decision and whose attributed validation run has " +
 				"passed is reported by the binary as the run's state, from the run, with the decision " +
 				"marked superseded and its text absent from the detail. The task and the run are written " +
-				"through internal/store, since nothing here dispatches a worker, so what is driven is the " +
+				"through internal/store, since nothing here dispatches a worker and no verb or method " +
+				"creates a task - internal/tasks' intake is a library entry with no caller in this build, so " +
+				"no journey walk can create one - so what is driven is the " +
 				"reading and not the writing; no terminal is observed, so the process tier is not reached. Reading it reaches no method " +
 				"internal/ipc restricts, so no platform refuses it for want of peer credentials, but it " +
 				"is asked of a service, so on a platform with no local socket transport to serve this " +

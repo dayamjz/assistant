@@ -322,6 +322,17 @@ func (s *Service) claimPush(ctx context.Context, built *driver, repository, bran
 	if err != nil {
 		return store.Run{}, "", err
 	}
+	// A superseded run with no replacement leaves the branch idle, and a
+	// task queued behind the one it was attributed to has then cleared with
+	// nothing else to release it until the next run settles. Registered
+	// before the release below so it runs after the exclusion is given back,
+	// and only on that one path; tasks.go says why no other push releases.
+	stranded := false
+	defer func() {
+		if stranded {
+			s.releaseQueued(ctx)
+		}
+	}()
 	defer release()
 
 	superseded := ""
@@ -353,6 +364,7 @@ func (s *Service) claimPush(ctx context.Context, built *driver, repository, bran
 		source:     intentSourceAbsent,
 	})
 	if err != nil {
+		stranded = superseded != ""
 		return store.Run{}, "", err
 	}
 	return record, superseded, nil

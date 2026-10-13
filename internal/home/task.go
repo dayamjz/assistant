@@ -111,3 +111,15 @@ func (h *Home) TaskCopy(id string) (string, error) {
 	}
 	return filepath.Join(task, "copy"), nil
 }
+
+// TaskInstructions is the file holding the instructions a task's worker is
+// launched with, under the task's own directory. It is refused on the same
+// terms as Task. What the file holds is internal/tasks', which writes it at
+// intake; this package says only where it goes.
+func (h *Home) TaskInstructions(id string) (string, error) {
+	task, err := h.Task(id)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(task, "instructions.md"), nil
+}
