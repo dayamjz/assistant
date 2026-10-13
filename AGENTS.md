@@ -376,8 +376,10 @@ Each has cost this repository more than one round of review.
   `*IsolationError` naming the comparison; only it sets `Isolation`'s
   unexported field, `Refusal` is the one mapping from a comparison to
   `taskstate`'s refusal token, `internal/session`'s `Create` is what takes an
-  `Isolation` to start a worker and no service path reaches it yet, and its
-  P11 citation claims the assertion refuses and nothing about launch. Until
+  `Isolation` to start a worker and `internal/service`'s launch is what
+  reaches it, with a proof asserted again at launch; its own P11 citation
+  claims the assertion refuses and nothing about launch, and
+  `internal/service`'s claims the launch edge. Until
   #91's worker set exists, "own branch, only through the gate" is
   instruction text and nothing enforces which ref a worker's push may move;
   its `doc.go` carries that sentence. Every lifecycle move there is an appended event, never a state
@@ -414,7 +416,10 @@ Each has cost this repository more than one round of review.
   refuses an unproven `tasks.Isolation` with `ErrUnproven` and then asks the
   resolved runner for a worker through `agents.OpenWorker`, so only the
   scripted adapter answers it in this build and the real adapter's worker
-  mode is #95 line K. Three things there are mechanism rather than rule.
+  mode is #95 line K. Its one caller is `internal/service`'s `launch.go`,
+  which hands it a proof asserted again at launch rather than dispatch's;
+  `Create` itself re-derives nothing. Three things there are mechanism
+  rather than rule.
   `Probe` answers `taskstate.Liveness`, that package's word, with a typed
   `Reason`, and the `reasons` table is the one place a reason's liveness is
   decided: `Live` only through a handle this provider holds whose process
@@ -611,12 +616,23 @@ Each has cost this repository more than one round of review.
   claim, the copy is a `vcs.Clone` of the primary shaped for the task's
   shape, `tasks.AssertIsolated` is run under `agents.WorkerEnvironment`, both
   snapshots are recorded, a refusal is the `isolation-refused` event carrying
-  `taskstate`'s token, and a proof is held only in the service's memory for
-  #91's launch seam; nothing launches. A path already standing at the copy's
-  path is asserted and never removed. The environment half of P11 is only as
-  strong as every launch path building its environment through
-  `agents.WorkerEnvironment`, which is the contract #91's launch seam takes
-  along with the proof; no second strip list exists or should.
+  `taskstate`'s token, and a proof is held in the service's memory for
+  `launch.go`, which follows a proven dispatch in the same pass: it observes
+  and asserts the copy again under the same environment, refusing exactly as
+  dispatch does, creates the terminal session through `session.Create` over
+  the service's `session.Pipe` - built in `driverFor` on the resolved agent
+  before `containRunner` takes its worker arm away - and records
+  `Session.Reference()` on the attempt through `store.SetAttemptSession`.
+  The probe is not wired into the service's reader, so a launched task still
+  resolves Dispatched and nothing writes an event to say otherwise; an
+  adapter without `worker_sessions` dispatches and never launches, with the
+  `*agents.CapabilityError` logged and nothing recorded; a restart relaunches
+  as a new attempt and the earlier process is an orphan nothing here ends;
+  and `Close` ends only the sessions this service created. A path already
+  standing at the copy's path is asserted and never removed. The environment
+  half of P11 is only as strong as every launch path building its
+  environment through `agents.WorkerEnvironment`, which both assertions and
+  the worker's start do; no second strip list exists or should.
   It is also where PRD section 5's supervisor loop lives, in `supervise.go`,
   started by `Open` after recovery and before the caller serves. The loop
   runs as incarnations fenced by `store.BeginIncarnation`: every wake append
