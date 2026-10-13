@@ -84,6 +84,7 @@ func TestParseAcceptsTheWholeSchema(t *testing.T) {
 		"run_budget": 12,
 		"ignore_patterns": ["docs/**", "*.md"],
 		"review": {"path_rules": [{"paths": ["internal/**"], "guidance": "check the contracts"}]},
+		"judge_paths": ["spec/**"],
 		"document": {"ownership": [{"subject": "the schema", "document": "docs/prd.html"}]},
 		"suppress_project_instructions": true,
 		"no_ci": true,
@@ -121,6 +122,9 @@ func TestParseAcceptsTheWholeSchema(t *testing.T) {
 	}
 	if got := c.ReviewPathRules[0].Scope(); got != "internal/**" {
 		t.Errorf("Scope() = %q", got)
+	}
+	if got := strings.Join(c.JudgePaths.Strings(), ","); got != "spec/**" {
+		t.Errorf("JudgePaths = %q, want the document's list replacing the default", got)
 	}
 	if len(c.DocumentOwnership) != 1 || c.DocumentOwnership[0].Document != "docs/prd.html" {
 		t.Errorf("DocumentOwnership = %+v", c.DocumentOwnership)
@@ -334,6 +338,9 @@ func TestParseEnforcesItsBoundsAtTheEdge(t *testing.T) {
 		{"paths in one rule", KeyReviewPathRules, func(n int) string {
 			return `{"review": {"path_rules": [{"paths": ` + pattern(n) + `, "guidance": "g"}]}}`
 		}, MaxPathRulePaths},
+		{"judge path patterns", KeyJudgePaths, func(n int) string {
+			return `{"judge_paths": ` + pattern(n) + `}`
+		}, MaxJudgePaths},
 		{"ownership entries", KeyDocumentOwnership, func(n int) string {
 			return `{"document": {"ownership": ` + owners(n) + `}}`
 		}, MaxOwnership},

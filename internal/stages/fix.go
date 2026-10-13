@@ -51,9 +51,9 @@ type FixDeps struct {
 	// Home is the root the run's isolated copy lives under. A fix body reaches
 	// that copy through Copy, on the same terms a stage body does.
 	Home *home.Home
-	// Config is the run's resolved configuration. The fix path reads one thing
-	// from it, CommitFixMessage, which is the subject a fix commit is recorded
-	// under.
+	// Config is the run's resolved configuration. The fix path reads two
+	// things from it: CommitFixMessage, which is the subject a fix commit is
+	// recorded under, and JudgePaths, which a round after review is held to.
 	Config config.Config
 	// Requires is what the run's fixer path needs of the agent adapter, which
 	// internal/runs answers with Service.FixerRequires. It is carried here
@@ -108,6 +108,17 @@ func (d FixDeps) Copy(ctx context.Context, repositoryID, runID string) (*vcs.Rep
 // its own. Failing here would turn a fix nobody could make into a run that
 // errored, which reads as a defect in the pipeline rather than as the state of
 // the change.
+//
+// # A round after review may not edit the judge
+//
+// A round of a stage after review - test, lint, or checks - is a commit the
+// pipeline authored that no review reads, so it is compared against
+// config.Config.JudgePaths using the paths the commit touched, through
+// vcs.Repository.ChangedFiles, and every judge path it added, changed,
+// deleted, or renamed is raised as an ask in pipeline.FixOutput.Holds. The
+// stage then holds on the execution verifying the round, whatever its own
+// report says, and the fixer's reply decides none of it. judge.go owns the
+// rule and its residual gaps.
 //
 // # What it is not asked to do
 //
@@ -184,7 +195,7 @@ func applyFixRound(ctx context.Context, deps FixDeps, in pipeline.FixInput) (pip
 			"stages: opening the fixer of run %s for its %s fix round: %w", facts.run, in.Stage, err)
 	}
 
-	prompt := fixPrompt(facts, in)
+	prompt := fixPrompt(facts, in, judgeFixGuidance(deps.Config.JudgePaths, in.Stage))
 	if len(prompt) > agents.MaxPromptBytes {
 		return pipeline.FixOutput{}, fmt.Errorf(
 			"stages: asking for the %s stage's fixes would take a prompt of %d bytes, and one "+
@@ -229,9 +240,14 @@ func applyFixRound(ctx context.Context, deps FixDeps, in pipeline.FixInput) (pip
 		return pipeline.FixOutput{Summary: nothingChanged(in.Stage, summary)}, nil
 	}
 
+	holds, err := judgeRound(ctx, copied, deps.Config.JudgePaths, in.Stage, before, committed)
+	if err != nil {
+		return pipeline.FixOutput{}, err
+	}
 	return pipeline.FixOutput{
 		Summary: summary,
 		Writes:  map[pipeline.Key]graph.Value{pipeline.KeyHead: graph.TextValue(committed)},
+		Holds:   holds,
 	}, nil
 }
 
@@ -313,10 +329,13 @@ func readFixState(state pipeline.Reader) (fixFacts, error) {
 // the fixer is, what it is working on, what the change was for, what the
 // previous round claimed, what it must resolve, and what it must not do.
 //
+// judge is the judge-path sentence, empty where the rule does not apply to
+// this round. It is a courtesy to the fixer and nothing depends on it.
+//
 // Every finding is rendered with what the stage said about it and nothing
 // added. A fixer told more than the stage reported would be fixing this
 // package's paraphrase of a finding rather than the finding.
-func fixPrompt(f fixFacts, in pipeline.FixInput) string {
+func fixPrompt(f fixFacts, in pipeline.FixInput, judge string) string {
 	var b strings.Builder
 	section := func(text string) {
 		if strings.TrimSpace(text) == "" {
@@ -341,6 +360,7 @@ func fixPrompt(f fixFacts, in pipeline.FixInput) string {
 			"account as a claim rather than as something already done.")
 	}
 	section("Resolve these findings:\n" + renderFindings(in.Findings))
+	section(judge)
 	section("Edit the files in this working copy and nothing else. Do not commit: what you " +
 		"change is committed for you. Do not push, and do not change git configuration or " +
 		"history.\n\nWhen you are done, reply with one short line saying what you changed. " +

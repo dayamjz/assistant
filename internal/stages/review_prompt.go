@@ -13,6 +13,9 @@ import (
 // scope lens - are written by the packages that do the checking rather than
 // restated here, so a reviewer is never held to a rule nobody stated.
 //
+// judge is the judge lens's question, empty when the change touches no judge
+// path the review covers; judgeReviewGuidance owns it.
+//
 // lens is empty when the scope lens does not apply to this run, which is what
 // scope.Guidance refuses for a run carrying no intent. The section is then
 // absent rather than replaced by a weaker one, and observeScope reports why in
@@ -21,10 +24,10 @@ import (
 // It is one string rather than a template so that what reaches the agent is
 // what a reader of this function sees. The order is deliberate: what the
 // reviewer is, what it is looking at, what the change was for, the two rules
-// its answer is checked against, the repository's own extra rules, what a
-// previous fix round claimed, the shape of the answer, and last the diff,
+// its answer is checked against, the repository's own extra rules, the judge
+// paths the change touched, what a previous fix round claimed, the shape of the answer, and last the diff,
 // which is the only unbounded part.
-func reviewPrompt(cfg config.Config, f reviewFacts, change reviewChangeSet, evidence, lens string) string {
+func reviewPrompt(cfg config.Config, f reviewFacts, change reviewChangeSet, evidence, lens, judge string) string {
 	var b strings.Builder
 	section := func(text string) {
 		if strings.TrimSpace(text) == "" {
@@ -42,6 +45,7 @@ func reviewPrompt(cfg config.Config, f reviewFacts, change reviewChangeSet, evid
 	section(lens)
 	section(evidence)
 	section(reviewRules(cfg, change.touched))
+	section(judge)
 	section(reviewPriorRound(f))
 	section(reviewAnswerShape(lens != ""))
 	section("The change, as a unified diff from " + change.from + " to " + f.head + ":\n\n" + change.diff)

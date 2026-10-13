@@ -286,7 +286,11 @@ Each has cost this repository more than one round of review.
   `suppress_project_instructions` there is no second half, because
   `internal/agents` implements no suppression and so has nothing to refuse at,
   which leaves `New`'s check the only enforcement of PRD section 10's refusal
-  before launch. Read its `doc.go` before changing the loop or the holds, and
+  before launch. A fixer reports nothing that can clear a stage: the one
+  finding it may return is an `ask` in `FixOutput.Holds`, anything else is
+  `ErrFixerFinding`, and the stage node adds those holds to the stage's next
+  report itself, so no stage body can drop one. Read its `doc.go` before
+  changing the loop or the holds, and
   for the residual gaps: the requested fix round PRD section 5's hold offers is
   not wired, and convergence is over the whole state.
 - `internal/runs` owns two things: the table of a run's status changes, and the
@@ -414,7 +418,11 @@ Each has cost this repository more than one round of review.
   implementations from it and `Implemented` reports it, so adding a body is
   adding an entry. `Fix` is the fix path's body: it asks the run's fixer to
   resolve a stage's findings in the isolated copy, commits what changed, and
-  reports the new head, which is the write the convergence bound reads. A body
+  reports the new head, which is the write the convergence bound reads. PRD
+  section 5's judge rule lives in `judge.go`: a round after review whose commit
+  touches `judge_paths` raises a hold, decided from the commit's paths through
+  `internal/vcs` and never from the fixer's reply, and review reports every
+  judge path the change touched, unfiltered by the pushed ignore list. A body
   is handed a `StageDeps` at construction, which carries the adapters that do
   not vary with the run; a fact that does vary is a declared state key in
   `internal/pipeline` instead, because one `All` serves every run of a service.

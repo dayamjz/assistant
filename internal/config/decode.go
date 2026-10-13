@@ -318,6 +318,14 @@ func decodeIgnorePatterns(k Key, v any) (any, error) {
 	return decodePatterns(k, v, "", "ignore patterns", MaxIgnorePatterns)
 }
 
+// decodeJudgePaths accepts the judge path list. An empty list is a
+// legitimate value and turns the judge rule off for the repository whose
+// trusted copy says so; it is distinct from the key being absent, which keeps
+// the default list.
+func decodeJudgePaths(k Key, v any) (any, error) {
+	return decodePatterns(k, v, "", "judge path patterns", MaxJudgePaths)
+}
+
 // decodePathRules accepts the path-scoped review rules, in declared order.
 // Each rule states its own scope and its own guidance, and both are required:
 // guidance with no scope would be repository-wide review guidance wearing a
