@@ -4,7 +4,10 @@
 // contract, and PRD section 5's push stage is where it is used.
 //
 // Nothing here moves a reference or pushes. A caller receives a Decision or a
-// *Refusal, and performing the update is its own job.
+// *Refusal, and performing the update is its own job. What gets a caller out
+// of a refusal is stated here too, by Refusal.Remedy for the reasons that have
+// one, so a caller reporting a refusal relays that text, where it states one,
+// rather than writing a remedy of its own.
 //
 // # The anchor is an observation, not a commit identifier
 //

@@ -146,17 +146,17 @@ func Drives() []Drove {
 			"A run through the binary is held between the rebase stage's observation and the push " +
 				"stage's decision, at the first hold stages.Holding gives there, and the advance is " +
 				"planted then by AdvanceRemoteOutOfBand. The push stage holds on the refusal, which is " +
-				"held to the reason the condition records, to the two substrings of its message the " +
-				"push stage relays, and to an anchor naming the commit the run observed; the remote " +
-				"is read back and still holds the landed commit. The remote and the second clone are " +
-				"a copy of the walkable scenario's, made by the same git commands the fixture's " +
-				"builder runs, because this scenario's trusted document configures commands.test " +
-				"over a branch planted to fail it and a run over it is parked at the test stage " +
-				"first. Not established through the binary: the rest of the message, the commits " +
-				"Refusal.Discarded names, and the remedy, because the push stage's report relays " +
-				"the refusal's detail rather than its message and no surface here re-runs a run " +
-				"onto its new upstream. TestAnUpdateIsAnchoredToWhatTheRunObservedRatherThanToAFreshRead " +
-				"holds all three at package reach, over internal/safety and this scenario itself."},
+				"held to the reason the condition records, to every substring of the message it " +
+				"records, to naming as discarded exactly the commit the colleague landed, to the " +
+				"remedy internal/safety states for would-discard, and to an anchor naming the commit " +
+				"the run observed; the remote is read back and still holds the landed commit. The " +
+				"remote and the second clone are a copy of the walkable scenario's, made by the same " +
+				"git commands the fixture's builder runs, because this scenario's trusted document " +
+				"configures commands.test over a branch planted to fail it and a run over it is parked " +
+				"at the test stage first. Not established through the binary: the remedy working, " +
+				"because no surface here re-runs a run onto its new upstream. " +
+				"TestAnUpdateIsAnchoredToWhatTheRunObservedRatherThanToAFreshRead follows it at package " +
+				"reach, over internal/safety and this scenario itself."},
 
 		{"refusal-copied-working-copy-removal", ReachPackage, ownership,
 			"gate.Remove against the copy, with the binary's own removal driven alongside to establish " +

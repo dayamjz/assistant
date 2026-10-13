@@ -231,14 +231,14 @@ func (l leased) withRefusal(change func(*findings.Finding)) leased {
 //
 // The P6 cite covers this: the anchor the push stage's refusal reports is the
 // commit the run observed rather than where the branch stood at the decision,
-// the refusal is would-discard, and the remote still holds the commit somebody
-// else landed. It does not cover the remedy the condition records, fetching
-// and rebasing onto the advanced branch: no surface here re-runs a run onto
-// its new upstream, and TestAnUpdateIsAnchoredToWhatTheRunObservedRatherThanToAFreshRead
-// drives that half at package reach. Nor does it cover the commits the
-// refusal would drop: the push stage relays the refusal's reason, detail and
-// anchor, but not Refusal.Discarded, so a person at this hold is not told
-// which commit was landed, and that is asserted at package reach only.
+// the refusal is would-discard, its message carries every substring the
+// condition records, it names as discarded exactly the commit somebody else
+// landed, it states the remedy internal/safety gives for would-discard, and
+// the remote still holds the landed commit. What it does not cover is the
+// remedy working: the hold states it, and no surface here re-runs a run onto
+// its new upstream, so following it is driven at package reach, by
+// TestAnUpdateIsAnchoredToWhatTheRunObservedRatherThanToAFreshRead over this
+// condition's scenario and by internal/safety's own remedy test over Decide.
 //
 // The subject is the walkable scenario's remote rather than the
 // remote-advanced scenario's, for the reason ownSubject gives, with the
@@ -252,19 +252,35 @@ func TestAPushOverARemoteThatMovedUnderTheRunIsRefused(t *testing.T) {
 	if err != nil {
 		t.Fatalf("%v", err)
 	}
-	// The substrings of the condition's message the push stage relays: it
-	// reports the refusal's detail, not its whole message, so the rest of the
-	// list is held at package reach. Taken out of the condition rather than
-	// spelled here, so a change to what it records changes what is held.
-	var relayed []string
-	for _, want := range condition.Expect.MessageContains {
-		if want == "holds commits that" || want == "does not contain" {
-			relayed = append(relayed, want)
+	// The substrings the condition records for the refusal's message. The push
+	// stage relays the whole message, so every one is held here. Taken out of
+	// the condition rather than spelled here, so a change to what it records
+	// changes what is held.
+	relayed := condition.Expect.MessageContains
+	if len(relayed) == 0 {
+		t.Fatalf("the condition records no substrings of the refusal's message, so this walk would hold " +
+			"the push stage's refusal to nothing")
+	}
+	// The detail's sentence and the message's frame, told apart so each
+	// counterfeit below removes one half and leaves the other standing.
+	detail := []string{"holds commits that", "does not contain"}
+	var framing []string
+	for _, want := range relayed {
+		if !slices.Contains(detail, want) {
+			framing = append(framing, want)
 		}
 	}
-	if len(relayed) != 2 {
-		t.Fatalf("the condition no longer records the detail substrings this walk holds the push "+
-			"stage's refusal to; it records %q", condition.Expect.MessageContains)
+	if len(framing) == len(relayed) || len(framing) == 0 {
+		t.Fatalf("the condition no longer records both the detail and the message's frame this walk "+
+			"tells apart; it records %q", relayed)
+	}
+	// The remedy is internal/safety's, the one owner of what gets a caller out
+	// of a refusal, and the stage is held to relaying it rather than to a
+	// wording of its own.
+	remedy := (&safety.Refusal{Reason: safety.ReasonWouldDiscard}).Remedy()
+	if remedy == "" {
+		t.Fatalf("internal/safety states no remedy for %s, so there is nothing for the hold to relay",
+			safety.ReasonWouldDiscard)
 	}
 
 	subject := ownSubject(t, true)
@@ -360,7 +376,7 @@ func TestAPushOverARemoteThatMovedUnderTheRunIsRefused(t *testing.T) {
 				},
 			},
 			{
-				States: "the refusal carries the detail the condition records, as far as the push stage relays it",
+				States: "the refusal carries every substring of the message the condition records",
 				Holds: func(l leased) error {
 					f, err := l.refusal()
 					if err != nil {
@@ -368,6 +384,33 @@ func TestAPushOverARemoteThatMovedUnderTheRunIsRefused(t *testing.T) {
 					}
 					if missing := journey.Carries(f.Description, relayed); len(missing) > 0 {
 						return fmt.Errorf("the refusal does not say %q; it said:\n%s", missing, f.Description)
+					}
+					return nil
+				},
+			},
+			{
+				States: "the refusal names as discarded exactly the commit somebody else landed",
+				Holds: func(l leased) error {
+					f, err := l.refusal()
+					if err != nil {
+						return err
+					}
+					if got := lineAfter(f.Description, "discarded: "); got != l.advanced {
+						return fmt.Errorf("the refusal names %q as discarded, and the commit somebody else "+
+							"landed is %s", got, l.advanced)
+					}
+					return nil
+				},
+			},
+			{
+				States: "the refusal states the remedy internal/safety gives for would-discard",
+				Holds: func(l leased) error {
+					f, err := l.refusal()
+					if err != nil {
+						return err
+					}
+					if !strings.Contains(f.Description, remedy) {
+						return fmt.Errorf("the refusal does not state the remedy %q; it said:\n%s", remedy, f.Description)
 					}
 					return nil
 				},
@@ -427,9 +470,31 @@ func TestAPushOverARemoteThatMovedUnderTheRunIsRefused(t *testing.T) {
 			}},
 			{Named: "the refusal's detail is the bare move's sentence", Break: func(l leased) leased {
 				return l.withRefusal(func(f *findings.Finding) {
-					for _, want := range relayed {
+					for _, want := range detail {
 						f.Description = strings.ReplaceAll(f.Description, want, "now stands at")
 					}
+				})
+			}},
+			{Named: "the refusal relayed its detail and not its message", Break: func(l leased) leased {
+				return l.withRefusal(func(f *findings.Finding) {
+					for _, want := range framing {
+						f.Description = strings.ReplaceAll(f.Description, want, "")
+					}
+				})
+			}},
+			{Named: "the refusal named no commit it would discard", Break: func(l leased) leased {
+				return l.withRefusal(func(f *findings.Finding) {
+					f.Description = strings.ReplaceAll(f.Description, "discarded: "+l.advanced+"\n", "")
+				})
+			}},
+			{Named: "the refusal named the commit the run observed as the one discarded", Break: func(l leased) leased {
+				return l.withRefusal(func(f *findings.Finding) {
+					f.Description = strings.ReplaceAll(f.Description, "discarded: "+l.advanced, "discarded: "+l.observed)
+				})
+			}},
+			{Named: "the refusal stated no remedy", Break: func(l leased) leased {
+				return l.withRefusal(func(f *findings.Finding) {
+					f.Description = strings.ReplaceAll(f.Description, remedy, "")
 				})
 			}},
 			{Named: "the anchor was read at the decision", Break: func(l leased) leased {

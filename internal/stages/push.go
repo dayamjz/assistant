@@ -429,22 +429,43 @@ func noApprovalToForward(facts pushState) pipeline.Output {
 // The refusal is a finding rather than an error because the stage ran and
 // checked: what it establishes is that the update may not proceed, which is a
 // fact about the world and a decision for a person.
+//
+// The description relays the refusal rather than interpreting it: its message
+// as Refusal.Error renders it, its reason, the commits Refusal.Discarded names
+// as Refusal.DiscardedText renders them, which keeps the field's order and
+// bounds the list at safety.MaxDiscardedNamed, and the remedy Refusal.Remedy
+// states. The list appears twice, in the message and on its own line, so that
+// line can be read without parsing the message; the bound applies to both. A
+// person at the hold is deciding whether to incorporate what somebody else
+// landed, so the commits are the fact the hold exists to show. Nothing here
+// sorts, filters, or chooses a remedy by reason, so a line is present exactly
+// when the refusal carries it. Every value is a
+// function of the refusal, the target, the head and the anchor, with no time
+// or counter in it, because a report is part of the state the convergence
+// fingerprint reads.
 func pushRefused(facts pushState, target safety.Target, refusal *safety.Refusal) pipeline.Output {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%s\n\nreason: %s\ntarget: %s\nproposed: %s\nanchor: %s\n",
+		refusal.Error(), refusal.Reason, target, facts.head, facts.anchor)
+	if discarded := refusal.DiscardedText(); discarded != "" {
+		fmt.Fprintf(&b, "discarded: %s\n", discarded)
+	}
+	if remedy := refusal.Remedy(); remedy != "" {
+		fmt.Fprintf(&b, "\n%s\n", remedy)
+	}
+	b.WriteString("\nNothing was pushed. Approving at this hold advances the run without pushing, " +
+		"so the branch on the code host stays where it is; skipping records the stage " +
+		"as skipped; cancelling ends the run.")
 	return pipeline.Output{
 		Report: findings.Report{
 			Summary: fmt.Sprintf("The push of %s to %s was refused: %s",
 				facts.head, target, refusal.Detail),
 			Findings: []findings.Finding{
 				{
-					ID:       "push-refused",
-					Severity: findings.SeverityError,
-					Action:   findings.ActionAsk,
-					Description: fmt.Sprintf(
-						"%s\n\nreason: %s\ntarget: %s\nproposed: %s\nanchor: %s\n\n"+
-							"Nothing was pushed. Approving at this hold advances the run without pushing, "+
-							"so the branch on the code host stays where it is; skipping records the stage "+
-							"as skipped; cancelling ends the run.",
-						refusal.Detail, refusal.Reason, target, facts.head, facts.anchor),
+					ID:          "push-refused",
+					Severity:    findings.SeverityError,
+					Action:      findings.ActionAsk,
+					Description: b.String(),
 				},
 			},
 		},

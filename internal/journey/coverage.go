@@ -167,12 +167,12 @@ func Coverage() []Established {
 				"advanced out of band, by internal/fixture's real push from a second clone, while the " +
 				"run is held between the rebase stage's observation and the push stage's decision, and " +
 				"it establishes that the push stage holds on a would-discard refusal whose anchor is " +
-				"the commit the run observed rather than where the branch stood at the decision, and " +
-				"that the remote still holds the commit somebody else landed. What the lease walk does " +
-				"not establish is held at package reach: that the refusal names the commits it would " +
-				"drop, which the push stage's report does not relay, and that incorporating the " +
-				"advance makes the same decision allow a fast-forward, which no surface here drives " +
-				"a run through. Both walks need a service and a run, so they are skipped rather " +
+				"the commit the run observed rather than where the branch stood at the decision, that " +
+				"names as discarded exactly the commit somebody else landed and states internal/safety's " +
+				"remedy, and that the remote still holds that commit. What the lease walk does not " +
+				"establish is held at package reach: that following the remedy makes the decision allow " +
+				"a fast-forward, which no surface here drives a run through. Both walks need a " +
+				"service and a run, so they are skipped rather " +
 				"than passing where internal/ipc reads no peer credentials or no local socket " +
 				"transport exists. The pull request and checks stages are skipped on both, because no " +
 				"record here names a repository on a code host and this fixture has none for " +

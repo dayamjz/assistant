@@ -2,6 +2,7 @@ package safety
 
 import (
 	"errors"
+	"strconv"
 	"strings"
 )
 
@@ -79,7 +80,9 @@ type Refusal struct {
 	// It is not narrowed to commits the run never observed. A refusal means
 	// the anchor no longer describes the target, so the run cannot claim to
 	// have incorporated anything, and this names everything the update would
-	// drop.
+	// drop. Its order is vcs.CommitsNotIn's, most recent first; this package
+	// does not reorder it. It is unbounded, so a caller rendering it uses
+	// DiscardedText rather than joining it.
 	Discarded []string
 	// Detail states what specifically could not be established or what
 	// changed, in a sentence a caller can report without adding to it.
@@ -88,7 +91,27 @@ type Refusal struct {
 	Cause error
 }
 
-// Error renders the refusal with its reason, its target, and its detail.
+// MaxDiscardedNamed is how many of Refusal.Discarded DiscardedText names
+// before it counts the rest, so a refusal over a long-diverged branch renders
+// as bounded text.
+const MaxDiscardedNamed = 20
+
+// DiscardedText renders Refusal.Discarded as text a caller can report without
+// adding to it: the first MaxDiscardedNamed identifiers in the field's order,
+// joined by ", ", followed by ", and K more" when the field holds more. It is
+// the empty string when nothing would be discarded, and, like Error, it must
+// be called on a non-nil *Refusal. Error renders the list through it, so the
+// two cannot disagree about what was named.
+func (r *Refusal) DiscardedText() string {
+	if len(r.Discarded) <= MaxDiscardedNamed {
+		return strings.Join(r.Discarded, ", ")
+	}
+	return strings.Join(r.Discarded[:MaxDiscardedNamed], ", ") +
+		", and " + strconv.Itoa(len(r.Discarded)-MaxDiscardedNamed) + " more"
+}
+
+// Error renders the refusal with its reason, its target, and its detail, and
+// the commits it would discard as DiscardedText renders them.
 func (r *Refusal) Error() string {
 	var b strings.Builder
 	b.WriteString("safety: refused to update ")
@@ -101,9 +124,37 @@ func (r *Refusal) Error() string {
 	b.WriteString(r.Detail)
 	if len(r.Discarded) > 0 {
 		b.WriteString("; would discard ")
-		b.WriteString(strings.Join(r.Discarded, ", "))
+		b.WriteString(r.DiscardedText())
 	}
 	return b.String()
+}
+
+// remedies is the one statement of what gets a caller out of a refusal, keyed
+// by its reason. A reason with no row has no remedy stated here.
+var remedies = map[Reason]string{
+	ReasonWouldDiscard: "To keep the commits this would discard, incorporate them: observe the target " +
+		"again, rebase the proposed commit onto the commit that observation found, and submit the " +
+		"result anchored to that new observation. While the target still stands there, and with " +
+		"its commit fetched into the local repository, the decision over it is a fast-forward.",
+}
+
+// Remedy states what gets a caller out of this refusal, as text it can report
+// without adding to it, or the empty string when no remedy is stated for the
+// reason. Only ReasonWouldDiscard has one. It depends on the reason alone, so
+// two refusals for the same reason state the same remedy.
+//
+// The would-discard remedy is a fresh Guard.Observe and a rebase onto what it
+// found, not a retry: the original anchor no longer describes the target, so
+// Decide refuses it again however the proposed commit changes. What makes the
+// second decision a fast-forward is that the proposed commit then contains
+// the target's commit and the target has not moved since the observation;
+// a target that moves again in between is refused again, as it should be. The
+// fast-forward also rests on Decide's stated precondition that the local
+// repository holds both commits, which the remedy text states as fetching the
+// target's commit; a comparison Decide cannot answer is refused as
+// unverifiable instead. Like Error, it must be called on a non-nil *Refusal.
+func (r *Refusal) Remedy() string {
+	return remedies[r.Reason]
 }
 
 // Unwrap makes every refusal match ErrRefused, so a caller that only needs to

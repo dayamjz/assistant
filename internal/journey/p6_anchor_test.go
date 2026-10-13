@@ -48,9 +48,9 @@ type anchored struct {
 // first two of PRD section 13's tests for principle P6, at package reach.
 //
 // The binary reaches the refusal, in TestAPushOverARemoteThatMovedUnderTheRunIsRefused,
-// but not the remedy, because no surface here re-runs a run onto its new
-// upstream, and not the commits the refusal names, because the push stage's
-// report does not relay them. What is driven here is internal/safety over
+// with its whole message, the commits it names and the remedy it states, but
+// not the remedy being followed, because no surface here re-runs a run onto
+// its new upstream. What is driven here is internal/safety over
 // internal/vcs's own reads of the subject repository, with the out-of-band
 // advance planted by the route internal/fixture states: a real push from a
 // real second clone, made after the observation and before the decision.

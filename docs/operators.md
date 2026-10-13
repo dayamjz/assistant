@@ -45,6 +45,14 @@ push, pull request, and checks holds do not offer a fix round: push forwards a
 commit, so a round there would be pushed before you saw it, and a round after
 push would leave a commit nothing pushes.
 
+A push hold whose finding is `push-refused` with reason `would-discard` means
+the branch moved after the run observed it and now holds commits the run's
+commit does not contain. The finding names those commits, counting rather
+than listing any past a fixed bound, and states the remedy: observe the branch
+again, rebase onto the commit that observation found, and resubmit anchored to
+that new observation. Nothing in this build follows that remedy for you inside
+the held run; approving the hold advances it without pushing.
+
 The hold lists only the findings that are holding the stage. `--select` takes
 the identifier of any finding the stage reported, including a fix or note
 finding the hold does not list. `assistant --json status` lists every one, with

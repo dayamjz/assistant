@@ -2,6 +2,7 @@ package stages_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/redact"
+	"github.com/dayamjz/assistant/internal/safety"
 	"github.com/dayamjz/assistant/internal/stages"
 )
 
@@ -114,6 +116,136 @@ func TestThePushStageRefusesWhenTheBranchMovedSinceTheRunObservedIt(t *testing.T
 		t.Fatalf("the branch stands at %q and the commit that arrived out of band was %q, so the "+
 			"refused push overwrote it", got, arrived)
 	}
+}
+
+// TestThePushStageRelaysTheCommitsARefusalWouldDiscardAndItsRemedy is what a
+// person at the push-refused hold needs in order to decide: which commits
+// somebody else landed, and what gets the run past them. The stage relays both
+// from the refusal internal/safety returned rather than restating them.
+//
+// Two commits arrive out of band, so the relayed list is held to its order and
+// to full identifiers, not merely to containing them. The order expected is
+// the one internal/vcs's CommitsNotIn states, most recent first, which
+// Refusal.Discarded keeps; this stage adds none of its own.
+//
+// The positive control is a branch that moved without anything being lost:
+// the refusal is target-moved, Discarded is empty and no remedy is stated, so
+// the report carries neither line. A stage that printed a discarded line or a
+// remedy for every refusal, or that read the commits from somewhere other than
+// the refusal, fails there.
+func TestThePushStageRelaysTheCommitsARefusalWouldDiscardAndItsRemedy(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	remedy := (&safety.Refusal{Reason: safety.ReasonWouldDiscard}).Remedy()
+	if remedy == "" {
+		t.Fatal("internal/safety states no remedy for would-discard, so there is nothing to relay")
+	}
+
+	run := newPushRun(t)
+	landed := run.landOutOfBand(t, "topic", 2)
+	first, second := landed[1], landed[0]
+
+	refused := refusedDescription(t, run.mustPush(t))
+	if got := lineAfter(refused, "reason: "); got != string(safety.ReasonWouldDiscard) {
+		t.Fatalf("the refusal's reason is %q, want %q:\n%s", got, safety.ReasonWouldDiscard, refused)
+	}
+	if got, want := lineAfter(refused, "discarded: "), second+", "+first; got != want {
+		t.Fatalf("the refusal relays the discarded commits as %q, want %q, the full identifiers most "+
+			"recent first:\n%s", got, want, refused)
+	}
+	for _, want := range []string{
+		"safety: refused to update refs/heads/topic on origin (would-discard)",
+		"would discard " + second + ", " + first,
+		remedy,
+	} {
+		if !strings.Contains(refused, want) {
+			t.Fatalf("the refusal does not carry %q:\n%s", want, refused)
+		}
+	}
+	if got := run.upstreamCommit(t, "refs/heads/topic"); got != second {
+		t.Fatalf("the branch stands at %q, and the commit landed last was %q", got, second)
+	}
+
+	// The control: the branch moved to a commit the head already contains.
+	control := newPushRun(t)
+	git(t, control.source, "push", "--quiet", "origin", control.baseCommit+":refs/heads/topic")
+	moved := refusedDescription(t, control.mustPush(t))
+	if got := lineAfter(moved, "reason: "); got != string(safety.ReasonTargetMoved) {
+		t.Fatalf("the control's reason is %q, want %q, so it does not exercise a refusal with nothing "+
+			"discarded:\n%s", got, safety.ReasonTargetMoved, moved)
+	}
+	for _, absent := range []string{"discarded: ", "would discard ", remedy} {
+		if strings.Contains(moved, absent) {
+			t.Fatalf("a refusal that discards nothing carries %q:\n%s", absent, moved)
+		}
+	}
+}
+
+// TestThePushStageBoundsTheDiscardedCommitsItRelays lands more commits out of
+// band than internal/safety names, and holds the report to safety's bounded
+// rendering: the most recent safety.MaxDiscardedNamed named, the rest counted,
+// and nothing past the bound appearing anywhere in the description. The bound
+// is safety's, so the stage is held to relaying it rather than to a cap of its
+// own.
+func TestThePushStageBoundsTheDiscardedCommitsItRelays(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	run := newPushRun(t)
+	landed := run.landOutOfBand(t, "topic", safety.MaxDiscardedNamed+2)
+
+	refused := refusedDescription(t, run.mustPush(t))
+	want := strings.Join(landed[:safety.MaxDiscardedNamed], ", ") + ", and 2 more"
+	if got := lineAfter(refused, "discarded: "); got != want {
+		t.Fatalf("the refusal relays the discarded commits as %q, want %q:\n%s", got, want, refused)
+	}
+	if !strings.Contains(refused, "would discard "+want) {
+		t.Fatalf("the refusal's message does not carry the bounded list %q:\n%s", want, refused)
+	}
+	for _, unnamed := range landed[safety.MaxDiscardedNamed:] {
+		if strings.Contains(refused, unnamed) {
+			t.Fatalf("the refusal names %s, which is past safety's bound:\n%s", unnamed, refused)
+		}
+	}
+}
+
+// landOutOfBand puts n commits on a branch of the upstream, cut from the
+// base, from a checkout of its own, and returns them most recent first.
+func (r *pushRun) landOutOfBand(t *testing.T, branch string, n int) []string {
+	t.Helper()
+	other := t.TempDir()
+	git(t, other, "clone", "--quiet", r.upstream, other)
+	git(t, other, "checkout", "--quiet", "-b", branch, r.baseCommit)
+	landed := make([]string, n)
+	for i := range n {
+		name := fmt.Sprintf("landed-%02d.txt", i)
+		write(t, other, name, "landed out of band\n")
+		git(t, other, "add", name)
+		git(t, other, "commit", "--quiet", "-m", "landed "+name)
+		landed[n-1-i] = git(t, other, "rev-parse", "HEAD")
+	}
+	git(t, other, "push", "--quiet", "origin", branch)
+	return landed
+}
+
+// refusedDescription is the description of the push-refused finding a report
+// holds, failing the test when it holds none.
+func refusedDescription(t *testing.T, report findings.Report) string {
+	t.Helper()
+	for _, f := range report.Findings {
+		if f.ID == "push-refused" {
+			return f.Description
+		}
+	}
+	t.Fatalf("the push stage did not hold on a refusal: %+v", report)
+	return ""
+}
+
+// lineAfter is the rest of the first line of text that starts with prefix.
+func lineAfter(text, prefix string) string {
+	for line := range strings.Lines(text) {
+		if rest, ok := strings.CutPrefix(line, prefix); ok {
+			return strings.TrimSpace(rest)
+		}
+	}
+	return ""
 }
 
 // TestThePushStageRefusesACommitNoReviewApproved is the other half of what PRD
