@@ -11,17 +11,42 @@
 // Assess takes now injected, because freshness is a wall-clock comparison
 // across processes and the clock has to come from the caller.
 //
-// Classify and Assess perform no I/O. The package's direct imports are
+// Nothing in this package performs I/O. Its direct imports are
 // internal/taskstate, internal/home for its lock vocabulary, and the
 // standard library; importing a type is not performing I/O, and home's
 // LockReading is taken as an input so that vocabulary has one owner. The
-// loop that computes the inputs, writes the queue and the
-// markers and the beacon is #100's and lives in internal/service; the
-// durable tables and their accessors are internal/store's; the beacon's
-// shape and its reader are #105's; the hook that runs Assess at turn end
-// is #106's. This split is the one internal/graph draws: the engine has no
-// git, no network and no agent in it, and the supervisor's core has no clock,
-// no store and no provider.
+// I/O edge is the subpackage feed: it reads the beacon file, the instance
+// file, the lock probe and the database, and hands what it found to the
+// predicates here. The loop that computes the inputs, writes the queue and
+// the markers and the beacon is #100's and lives in internal/service; the
+// durable tables and their accessors are internal/store's; the hook that
+// runs Assess at turn end is #106's. This split is the one internal/graph
+// draws: the engine has no git, no network and no agent in it, and the
+// supervisor's core has no clock, no store and no file.
+//
+// # The beacon, and what derives from one configured interval
+//
+// The beacon's shape is this package's: EncodeBeacon lays it out as one
+// fixed-size record, a length, a checksum, the instance, the incarnation
+// epoch, a sequence and the write time, and DecodeBeacon reads one back or
+// answers ErrBeaconUnreadable for anything that is not exactly one whole
+// record, which is what a torn read comes back as. The one configured
+// duration is config.KeySupervisionBeaconInterval; the staleness window is
+// StalenessMultiple intervals and the first-beacon wait is
+// FirstBeaconWaitMultiple intervals, derived through FreshnessFor and
+// FirstBeaconWait rather than configured apart, and BeaconAheadTolerance is
+// the one constant beside them. All three numbers are chosen, not measured.
+//
+// # The three readers of Assess
+//
+// GuardOf is the pull guard: Assess over an Observation, expecting the
+// instance the instance file names and the beacon's own epoch, because a
+// command outside the service holds no incarnation to expect. ArmOf is arm
+// verification's decision over one look, settled or not, with the closed
+// Arm vocabulary PRD section 5's row names and the beacon's sequence on the
+// answer, which is what tells attached from a beacon written since. The stop
+// hook will call Assess itself with the epoch it was told, and that is the
+// one reader that compares epochs.
 //
 // # What is mechanism rather than rule
 //
@@ -62,8 +87,8 @@
 // both directions by its test, which derives the set from
 // taskstate.States() and fails on a state with no row, so a state added
 // later cannot land unplaced; Landed and Complete sit beside Ready. A state the table does not decide
-// is read as unknown and never as none. The hook that takes the two reads,
-// through store.OpenReadOnly, is #105's.
+// is read as unknown and never as none. feed.Observe takes the two reads,
+// through store.OpenReadOnly.
 //
 // # What the matrix establishes and what it does not
 //
@@ -77,8 +102,9 @@
 // clock is the other half of P9 and cites it there. P10 is not cited here
 // at all: Assess's inputs are stated by its tests rather than produced by
 // the real lock, beacon and instance file, and a test over stated values
-// cannot show that the real mechanism produces the shapes it checks. #105
-// cites it once, through the real files.
+// cannot show that the real mechanism produces the shapes it checks. feed's
+// test cites it once, through the real files, a lock a second process holds
+// and the read-only open.
 //
 // # Residual gaps
 //
@@ -104,4 +130,9 @@
 //     another probe's instant; internal/home states that gap, and the
 //     reader's remedy, probing once more, is the reader's and not this
 //     function's.
+//   - GuardOf compares no epoch, by design stated on it: a loop replaced in
+//     place under the same instance reads as live to the pull guard, which
+//     is what it is. ArmOf compares none either.
+//   - The beacon's checksum says a record was written whole and nothing
+//     about who wrote it.
 package supervisor

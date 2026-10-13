@@ -52,6 +52,10 @@ type Config struct {
 	// fresh regardless, per P4, which is the reviewing caller's rule and not
 	// enforced by this field.
 	SessionReuse bool
+	// SupervisionBeaconInterval is how often the supervisor loop rewrites
+	// its liveness beacon. The staleness window and the first-beacon wait
+	// are internal/supervisor's multiples of it, never values of their own.
+	SupervisionBeaconInterval time.Duration
 	// DecisionModel is the mode of the decision-model checks PRD section 5
 	// describes. Whether a request is sent at all also needs the provider's
 	// key in the operator's environment, which this package never reads.
@@ -145,6 +149,12 @@ const (
 	DefaultChecksTimeout = 168 * time.Hour
 	// DefaultSessionReuse keeps one durable fixer session per run.
 	DefaultSessionReuse = true
+	// DefaultSupervisionBeaconInterval is how often the supervisor loop
+	// rewrites its beacon when the operator's file says nothing. Chosen, not
+	// measured: short enough that a stopped loop is noticed within a minute
+	// at the staleness multiple, long enough that an idle service writes
+	// almost nothing.
+	DefaultSupervisionBeaconInterval = 10 * time.Second
 	// DefaultDecisionModel is the decision-model mode a run gets when the
 	// operator's file sets none: the checks run where the key is present and
 	// what they find is a note.
@@ -228,6 +238,14 @@ const (
 	MaxFixRounds = 100
 	// MaxChecksTimeout is the longest idle timeout for checks.
 	MaxChecksTimeout = 8760 * time.Hour
+	// MinSupervisionBeaconInterval is the shortest beacon interval. Below it
+	// the loop would spend its passes rewriting the beacon. Chosen, not
+	// measured.
+	MinSupervisionBeaconInterval = time.Second
+	// MaxSupervisionBeaconInterval is the longest beacon interval. Above it a
+	// stopped supervisor is invisible for most of an hour at the staleness
+	// multiple. Chosen, not measured.
+	MaxSupervisionBeaconInterval = 10 * time.Minute
 )
 
 // ReservedAgentFlags are agent flags configuration may not set, because each

@@ -142,6 +142,10 @@ Each has cost this repository more than one round of review.
 - `internal/vcs` is the only package that invokes git. Do not shell out to git
   anywhere else; add a typed operation there instead. Its package comment states
   the two rules it applies to every invocation and the residual gaps in them.
+  `Incorporated` is defined by its result, not by how git reaches it, and a
+  non-nil error from it is never a clean `false`; `Inventory` is the work set a
+  cleanup compares and excludes remote-tracking refs because a proof's own fetch
+  writes them. Neither decides anything and nothing there removes a clone.
   `StripRedirecting` is the one list of what points git at another repository,
   and `Observe` is taken under this package's own environment, so a
   `vcs.Observation` says what a copy on disk is and never what a worker's
@@ -178,7 +182,10 @@ Each has cost this repository more than one round of review.
   seals it with a trigger instead; a drop would mean weakening `verifyAdditive`,
   which is what protects every other table's rows. Read its `doc.go` before
   changing any of that.
-- `internal/safety` owns whether a branch update may proceed and on what anchor.
+- `internal/safety` owns two questions: whether a branch update may proceed and
+  on what anchor, and whether a set of commits is already incorporated in a tip,
+  which is the git half of P12's content proof and fails closed through its own
+  `IncorporationRefusal` matching `ErrNotEstablished` and never `ErrRefused`.
   `internal/vcs` stays mechanism only, so a lease, an incorporation check, or a
   force decision belongs in `internal/safety` even when it would be shorter to
   write at the git call. Its anchor is an `Observation`, and only `Guard.Observe`
@@ -476,10 +483,13 @@ Each has cost this repository more than one round of review.
   reported for being wrong through the ordinary review path. Read its `doc.go`
   before changing what fires, and for the residual gaps: the granularity is the
   path rather than the line, and a trace's reason is recorded, not verified.
-- `internal/home` owns the on-disk layout PRD section 8 gives one root, and the
-  exclusive lock that makes a home have exactly one service. No other package
-  spells a path under the root, with one deliberate exception: `internal/gate`
-  composes `<home>/repos/<id>.git` itself, so this package does not. The wake
+- `internal/home` owns the on-disk layout PRD section 8 gives one root, the
+  exclusive lock that makes a home have exactly one service, its probe
+  `LockState`, and the instance file on both sides, `WriteInstance` and
+  `ReadInstance`. No other package spells a path under the root, with one
+  deliberate exception: `internal/gate` composes `<home>/repos/<id>.git`
+  itself, so this package does not; the beacon's path is here and its content
+  is `internal/supervisor`'s. The wake
   queue is not in the layout at all: it is `internal/store`'s table, so no
   path to a `queue/` is composed and `Create` makes none, while an older home
   keeps an empty one nothing reads. The lock is
@@ -505,8 +515,31 @@ Each has cost this repository more than one round of review.
   its `doc.go` for the measurement and the gaps: the record does not yet keep
   what the run did with a path afterwards, and nothing proposes turning a
   check off.
+- `internal/supervisor` is the pure core of PRD section 5's supervision and
+  performs no I/O: the wake classifier, `Assess`, the in-flight table, the
+  beacon's fixed-size record and its codec, and the two durations derived from
+  the one configured interval, `config.KeySupervisionBeaconInterval`, through
+  `FreshnessFor` and `FirstBeaconWait`; staleness and the first-beacon wait are
+  named multiples and never rows of their own. `GuardOf` is the pull guard's
+  predicate and expects the instance file's identity and the beacon's own
+  epoch, which its doc states; `ArmOf` is arm verification's decision over
+  one look. Its subpackage `feed` is the I/O edge: the beacon `Writer`, which
+  nothing calls until #100's loop, `ReadBeacon` with its one retry on a torn
+  read, `Observe` over the files, the lock and `store.OpenReadOnly`, `Guard`,
+  and `VerifyArm`. P10 is cited once, in `feed`'s test, through a lock a
+  second process holds, the real writer and the real instance file. The
+  `supervision.assert` ipc row waits on #91's worker set and is not in the
+  method table. Read both `doc.go` files for the residual gaps: no epoch is
+  compared outside the stop hook, the checksum authenticates nothing, and the
+  in-flight read outside the service resolves with no probe and no advancing
+  answer.
 - `internal/machine` owns the shapes a structured answer takes, the three exit
-  codes, and the outcome vocabulary. It composes records rather than restating
+  codes, the outcome vocabulary, and the P13 phrase table in `vocabulary.go`,
+  which `SupervisionOf` is the one translation into; the forbidden set its
+  test holds every phrase to is derived from the owners by
+  `internal/machine/vocabtest`, which `internal/cli` runs over what the pull
+  guard printed, and a caller pairs `Assert` with `Control`. The table covers
+  the pull guard's phrases only; #110 extends it to every renderer. It composes records rather than restating
   them: a run is a `store.Run`, a report is a `findings.Report`, so no wire
   shape becomes a second owner of a record. `Outcome` is a closed set, and one
   translation answers for a run: `Run.Decide` takes a `Standing`, which is the

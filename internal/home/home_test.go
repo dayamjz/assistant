@@ -281,3 +281,27 @@ func created(t *testing.T) *home.Home {
 	}
 	return h
 }
+
+// ReadInstance reads back what WriteInstance published, and refuses a file
+// that is not one line, so the format has one owner on both sides.
+func TestReadInstanceReadsWhatWriteInstancePublished(t *testing.T) {
+	t.Parallel()
+	h := created(t)
+	if _, err := h.ReadInstance(); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a home never served read as %v, want the not-exist error", err)
+	}
+	if err := h.WriteInstance("0123456789abcdef"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := h.ReadInstance(); err != nil || got != "0123456789abcdef" {
+		t.Fatalf("ReadInstance = (%q, %v)", got, err)
+	}
+	for name, raw := range map[string]string{"empty": "", "two lines": "a\nb\n", "only a newline": "\n"} {
+		if err := os.WriteFile(h.InstanceFile(), []byte(raw), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := h.ReadInstance(); !errors.Is(err, home.ErrInstanceID) {
+			t.Errorf("%s: read as %v, want ErrInstanceID", name, err)
+		}
+	}
+}

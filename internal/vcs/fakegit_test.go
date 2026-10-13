@@ -32,6 +32,7 @@ const (
 	fakeGitHoldOn  = "VCS_TEST_FAKE_GIT_HOLD_PIPES_ON"
 	fakeGitStallOn = "VCS_TEST_FAKE_GIT_STALL_ON"
 	fakeGitHolder  = "VCS_TEST_FAKE_GIT_PIPE_HOLDER"
+	fakeGitVersion = "VCS_TEST_FAKE_GIT_VERSION"
 )
 
 // pipeHold is how long the grandchild keeps the pipes it inherited open. It
@@ -104,6 +105,14 @@ func fakeGitMain() int {
 
 	joined := strings.Join(args, " ")
 	switch {
+	case slices.Contains(args, "--version"):
+		// The version line is what the floor check reads, in the shape git
+		// prints it. A test that sets none gets an empty line, which the
+		// check has to refuse rather than read as adequate.
+		if v := os.Getenv(fakeGitVersion); v != "" {
+			os.Stdout.WriteString("git version " + v + "\n")
+		}
+		return 0
 	case strings.Contains(joined, "--is-bare-repository"),
 		strings.Contains(joined, "--is-inside-work-tree"):
 		os.Stdout.WriteString("true\n")

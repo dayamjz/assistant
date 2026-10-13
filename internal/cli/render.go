@@ -85,6 +85,7 @@ func readOutStatus(w io.Writer, s machine.Status) {
 			writef(w, "Gate       %s\n", s.Gate.Detail)
 		}
 	}
+	readOutSupervision(w, s.Supervision)
 	if s.ActiveRun != nil {
 		writeln(w)
 		readOutRun(w, *s.ActiveRun)
@@ -95,6 +96,16 @@ func readOutStatus(w io.Writer, s machine.Status) {
 		return
 	}
 	writeln(w, "No run is in flight for this branch.")
+}
+
+// readOutSupervision prints the pull guard's warning when there is one. The
+// phrase is internal/machine's and is printed as it stands, so what a person
+// reads here is what the vocabulary test there held to P13.
+func readOutSupervision(w io.Writer, s *machine.Supervision) {
+	if s == nil || s.Warning == "" {
+		return
+	}
+	writeln(w, s.Warning)
 }
 
 func readOutService(w io.Writer, s machine.Service) {
@@ -257,6 +268,7 @@ func readOutRuns(w io.Writer, runs machine.Runs) {
 }
 
 func readOutTasks(w io.Writer, tasks machine.Tasks) {
+	readOutSupervision(w, tasks.Supervision)
 	if len(tasks.Tasks) == 0 {
 		writeln(w, "No fleet work is recorded.")
 		return
