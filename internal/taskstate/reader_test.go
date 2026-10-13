@@ -330,3 +330,36 @@ func TestResolvingChangesNothing(t *testing.T) {
 		t.Fatal("the fingerprint did not move on a write, so the equality above showed nothing")
 	}
 }
+
+// A listing and a single read agree, and each carries the record from the very
+// snapshot its state was resolved from: the state's task is the record's task.
+// The two tasks resolve differently, so pairing them wrongly would be seen.
+func TestARecordAndItsStateComeFromOneRead(t *testing.T) {
+	ctx := context.Background()
+	s := openStore(t)
+	newTask(t, s, "a", true)
+	newTask(t, s, "b", false)
+	appendEvents(t, s, "a", "started")
+	finishRun(t, s, "run-1")
+
+	r := NewReader(s, nil)
+	all, err := r.All(ctx)
+	if err != nil || len(all) != 2 {
+		t.Fatalf("All = %v, %v", all, err)
+	}
+	for _, listed := range all {
+		if listed.Record.ID != listed.State.TaskID {
+			t.Fatalf("record %s paired with the state of %s", listed.Record.ID, listed.State.TaskID)
+		}
+		one, err := r.Resolved(ctx, listed.Record.ID)
+		if err != nil || !reflect.DeepEqual(one, listed) {
+			t.Fatalf("Resolved(%s) = %+v, %v; the listing says %+v", listed.Record.ID, one, err, listed)
+		}
+	}
+	if all[0].State.State == all[1].State.State {
+		t.Fatalf("both tasks resolved to %s, so pairing them wrongly would show nothing", all[0].State.State)
+	}
+	if _, err := r.Resolved(ctx, "nope"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("Resolved of a missing task = %v", err)
+	}
+}

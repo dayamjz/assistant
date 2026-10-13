@@ -26,26 +26,42 @@ func NewReader(s *store.Store, probe func(ctx context.Context, sessionRef string
 	return &Reader{store: s, probe: probe}
 }
 
+// Resolved is a task record with the state resolved from the same read, so the
+// record and the state never come from different points in time.
+type Resolved struct {
+	// Record is the task record as the snapshot read it.
+	Record store.Task `json:"record"`
+	// State is what Resolve made of that snapshot.
+	State Resolution `json:"state"`
+}
+
 // Task resolves one task. It returns store.ErrNotFound, wrapped, for a task
 // that does not exist. It reads and writes nothing else.
 func (r *Reader) Task(ctx context.Context, id string) (Resolution, error) {
-	snap, err := r.store.TaskSnapshot(ctx, id)
-	if err != nil {
-		return Resolution{}, err
-	}
-	return r.resolve(ctx, snap), nil
+	got, err := r.Resolved(ctx, id)
+	return got.State, err
 }
 
-// All resolves every task, newest task first, from records read in a single
-// transaction.
-func (r *Reader) All(ctx context.Context) ([]Resolution, error) {
+// Resolved resolves one task and returns its record from the same snapshot.
+// It fails as Task does.
+func (r *Reader) Resolved(ctx context.Context, id string) (Resolved, error) {
+	snap, err := r.store.TaskSnapshot(ctx, id)
+	if err != nil {
+		return Resolved{}, err
+	}
+	return Resolved{Record: snap.Task, State: r.resolve(ctx, snap)}, nil
+}
+
+// All resolves every task, newest task first, each with its record, from
+// records read in a single transaction.
+func (r *Reader) All(ctx context.Context) ([]Resolved, error) {
 	snaps, err := r.store.TaskSnapshots(ctx)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]Resolution, 0, len(snaps))
+	out := make([]Resolved, 0, len(snaps))
 	for _, snap := range snaps {
-		out = append(out, r.resolve(ctx, snap))
+		out = append(out, Resolved{Record: snap.Task, State: r.resolve(ctx, snap)})
 	}
 	return out, nil
 }

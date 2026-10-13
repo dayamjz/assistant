@@ -237,3 +237,33 @@ func TestTaskSnapshotsListNewestFirstAndRefuseUnknownTasks(t *testing.T) {
 		t.Fatalf("TaskSnapshots = %d snapshots, %v", len(all), err)
 	}
 }
+
+// A task attributed to a repository by its branch resolves from that
+// repository's runs, so forgetting the repository is refused while one names it
+// even though the task names no run. The control is that the same removal
+// succeeds once nothing names the repository.
+func TestForgettingARepositoryIsRefusedWhileATaskWorksOnOne(t *testing.T) {
+	ctx := context.Background()
+	s := openStore(t)
+	run := seedRun(t, s)
+	if _, err := s.TransitionRun(ctx, run.ID, []RunStatus{RunPending}, RunTerminated); err != nil {
+		t.Fatalf("TransitionRun: %v", err)
+	}
+	seedBranchTask(t, s, "task-1")
+
+	if _, err := s.ForgetRepository(ctx, run.RepositoryID); !errors.Is(err, ErrRepositoryInUse) {
+		t.Fatalf("ForgetRepository = %v, want ErrRepositoryInUse", err)
+	}
+	if _, err := s.Run(ctx, run.ID); err != nil {
+		t.Fatalf("the refused removal took the run anyway: %v", err)
+	}
+
+	control := openStore(t)
+	cr := seedRun(t, control)
+	if _, err := control.TransitionRun(ctx, cr.ID, []RunStatus{RunPending}, RunTerminated); err != nil {
+		t.Fatalf("TransitionRun: %v", err)
+	}
+	if _, err := control.ForgetRepository(ctx, cr.RepositoryID); err != nil {
+		t.Fatalf("with no task naming the repository the removal was refused: %v", err)
+	}
+}

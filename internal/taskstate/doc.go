@@ -43,6 +43,8 @@
 //   - Only a run's own open hold supplies the detail of a Held answer. A hold
 //     that names the task while its run is not held does not make the task
 //     Held.
+//   - Two tasks on one branch share their runs, so a newer same-branch run
+//     made for another task can outrank a task's own run.
 //   - Landed and Complete are not resolvable and are not declared States.
 //   - A Reader loads a task's whole log for each read.
 package taskstate

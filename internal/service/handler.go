@@ -199,40 +199,24 @@ func (s *Service) listRuns(ctx context.Context, req machine.RunsRequest) (machin
 // in this build, so no terminal is observed and the resolver's process tier
 // stays out of the answer.
 func (s *Service) listTasks(ctx context.Context) (machine.Tasks, error) {
-	records, err := s.store.Tasks(ctx)
-	if err != nil {
-		return machine.Tasks{}, err
-	}
 	resolved, err := s.tasks().All(ctx)
 	if err != nil {
 		return machine.Tasks{}, err
 	}
-	// Both reads are newest task first, but they are two reads: pair by
-	// identifier and drop a task one of them has not seen yet.
-	byID := make(map[string]taskstate.Resolution, len(resolved))
+	out := machine.Tasks{Tasks: make([]machine.Task, 0, len(resolved))}
 	for _, r := range resolved {
-		byID[r.TaskID] = r
-	}
-	out := machine.Tasks{Tasks: make([]machine.Task, 0, len(records))}
-	for _, record := range records {
-		if state, ok := byID[record.ID]; ok {
-			out.Tasks = append(out.Tasks, machine.Task{Record: record, State: state})
-		}
+		out.Tasks = append(out.Tasks, machine.Task{Record: r.Record, State: r.State})
 	}
 	return out, nil
 }
 
 // task reports one piece of fleet work with its resolved current state.
 func (s *Service) task(ctx context.Context, req machine.TaskRequest) (machine.Task, error) {
-	state, err := s.tasks().Task(ctx, req.Task)
+	r, err := s.tasks().Resolved(ctx, req.Task)
 	if err != nil {
 		return machine.Task{}, err
 	}
-	record, err := s.store.Task(ctx, req.Task)
-	if err != nil {
-		return machine.Task{}, err
-	}
-	return machine.Task{Record: record, State: state}, nil
+	return machine.Task{Record: r.Record, State: r.State}, nil
 }
 
 // tasks is the resolver over the service's store. No session module exists in

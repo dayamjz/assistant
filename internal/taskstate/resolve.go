@@ -1,6 +1,7 @@
 package taskstate
 
 import (
+	"cmp"
 	"fmt"
 	"slices"
 
@@ -45,7 +46,7 @@ var runStates = map[store.RunStatus]State{
 // only when a higher source decided. See Resolution.Superseded.
 func Resolve(in Inputs) Resolution {
 	events := slices.Clone(in.Events)
-	slices.SortFunc(events, func(a, b store.TaskEvent) int { return int(a.Sequence - b.Sequence) })
+	slices.SortFunc(events, func(a, b store.TaskEvent) int { return cmp.Compare(a.Sequence, b.Sequence) })
 
 	out := Resolution{TaskID: in.Task.ID, Basis: Basis{Process: Unobserved}}
 	if in.Process == Live || in.Process == Dead {
@@ -93,18 +94,20 @@ func fromRun(run store.Run, holds []store.Hold) (State, Source, store.Optional[s
 		return Unknown, SourceRun, store.Known(fmt.Sprintf("run %s is in status %q, which has no task state", run.ID, run.Status))
 	}
 	if state == Held {
-		if h, ok := oldestOpen(holds); ok {
+		if h, ok := oldestOpen(holds, run.ID); ok {
 			return state, SourceRun, store.Known(h.Subject)
 		}
 	}
 	return state, SourceRun, store.Known(fmt.Sprintf("run %s is %s", run.ID, run.Status))
 }
 
-func oldestOpen(holds []store.Hold) (store.Hold, bool) {
+// oldestOpen picks the oldest open hold that names the run itself: a hold of
+// another attributed run, or one naming only the task, is not this run's.
+func oldestOpen(holds []store.Hold, runID string) (store.Hold, bool) {
 	var best store.Hold
 	found := false
 	for _, h := range holds {
-		if !h.Open() {
+		if id, ok := h.RunID.Get(); !h.Open() || !ok || id != runID {
 			continue
 		}
 		if !found || h.OpenedAt.Before(best.OpenedAt) || (h.OpenedAt.Equal(best.OpenedAt) && h.Key < best.Key) {

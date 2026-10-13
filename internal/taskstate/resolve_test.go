@@ -73,9 +73,9 @@ func TestTheNewestRunAnswers(t *testing.T) {
 // open, and is the control that the detail comes from openness.
 func TestAHeldRunReportsItsOpenHold(t *testing.T) {
 	held := []store.Run{runIn("r", store.RunHeld, 1)}
-	open := store.Hold{Key: "k", Subject: "approve the push", OpenedAt: epoch}
-	closed := store.Hold{Key: "j", Subject: "an old question", OpenedAt: epoch.Add(-time.Hour),
-		Resolution: store.Known("yes")}
+	open := store.Hold{Key: "k", Subject: "approve the push", RunID: store.Known("r"), OpenedAt: epoch}
+	closed := store.Hold{Key: "j", Subject: "an old question", RunID: store.Known("r"),
+		OpenedAt: epoch.Add(-time.Hour), Resolution: store.Known("yes")}
 	got := Resolve(Inputs{Task: store.Task{ID: "t"}, Runs: held, Holds: []store.Hold{closed, open}})
 	if detail := got.Detail.Or(""); detail != "approve the push" {
 		t.Fatalf("detail = %q, want the open hold's subject", detail)
@@ -83,6 +83,26 @@ func TestAHeldRunReportsItsOpenHold(t *testing.T) {
 	got = Resolve(Inputs{Task: store.Task{ID: "t"}, Runs: held, Holds: []store.Hold{closed}})
 	if detail := got.Detail.Or(""); strings.Contains(detail, "old question") {
 		t.Fatalf("detail %q is a resolved hold's subject", detail)
+	}
+}
+
+// Only the chosen run's own open hold supplies the detail: an older attributed
+// run's hold, which is older and so would win a scan of every hold, and a hold
+// naming only the task are both passed over. The control is the same hold
+// naming the newest run, which is then chosen.
+func TestAHeldRunsDetailIsItsOwnHoldsAndNoOthers(t *testing.T) {
+	runs := []store.Run{runIn("old", store.RunHeld, 1), runIn("new", store.RunHeld, 2)}
+	oldHold := store.Hold{Key: "a", Subject: "the old run's question", RunID: store.Known("old"), OpenedAt: epoch}
+	taskHold := store.Hold{Key: "b", Subject: "a task question", TaskID: store.Known("t"), OpenedAt: epoch}
+	newHold := store.Hold{Key: "c", Subject: "the new run's question", RunID: store.Known("new"), OpenedAt: epoch.Add(time.Hour)}
+
+	got := Resolve(Inputs{Task: store.Task{ID: "t"}, Runs: runs, Holds: []store.Hold{oldHold, taskHold, newHold}})
+	if d := got.Detail.Or(""); d != "the new run's question" {
+		t.Fatalf("detail = %q, want the newest run's own hold", d)
+	}
+	got = Resolve(Inputs{Task: store.Task{ID: "t"}, Runs: runs, Holds: []store.Hold{oldHold, taskHold}})
+	if d := got.Detail.Or(""); strings.Contains(d, "question") {
+		t.Fatalf("detail %q names a hold that is not the chosen run's", d)
 	}
 }
 

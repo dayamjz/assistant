@@ -32,7 +32,9 @@ type TaskSnapshot struct {
 // TaskSnapshot reads one task and the records its state is resolved from, as
 // of a single point in time. It returns ErrNotFound for an unknown task.
 //
-// Attribution by branch and creation time is a heuristic and says so: a task
+// Attribution by branch and creation time is a heuristic and says so: two
+// tasks on one branch share their runs, so a newer run made for one can be
+// attributed to the other. A task
 // relaunched in place after an earlier run of the same branch would be
 // outranked by that older run's status until a newer run exists. The creation
 // time is the cutoff because nothing in this build records an attempt marker.
