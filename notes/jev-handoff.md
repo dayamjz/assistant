@@ -20,10 +20,10 @@ decision record, and not meant to merge into `main`.
 
 ## Next step on reopen
 
-Round 2 (below) found one use that holds up on this repo's data: screening
-pushed diffs for text that tries to steer the review agent. Ask the user
-whether to write a PRD change proposal for it. Everything else tested has
-been ruled out or is unproven.
+Round 3 (below) reversed one verdict: the trace-reason check works once
+the labels are clean. Two uses now hold up on this repo's data, the
+reason check and the injection screen. Ask the user whether to write a
+PRD change proposal for either.
 
 ## API facts checked against the live service
 
@@ -156,6 +156,61 @@ Tested here, each against labels that came from the repo, not from Jev:
 
 Not tested and not a fit here: model routing, moderation, and support
 triage have no consumer in `assistant`.
+
+## Round 3: were we using it wrong?
+
+TypeSafe's own docs (index at https://docs.typesafe.ai/llms.txt) are
+fuller than the press coverage. Their advice: ask narrow single-property
+questions, send only the state a question needs in named fields, write
+structured criteria with `what` / `not_for` / `examples`, set thresholds
+per question from your own labeled data, and pin `jev-1.13.0` rather than
+an alias. The limits are 64k tokens per request and 32k for the state plus
+the longest question. Their jaggedness page lists the failure modes we
+hit: literal reading, indirection, and large state full of irrelevant
+detail.
+
+What changed when re-tested:
+
+1. **Trace-reason check: works. This reverses rounds 1 and 2.** The
+   round 2 labels were commit subjects, which describe a commit rather
+   than a file. With clean labels it is easy for Jev. A subagent wrote one
+   honest sentence per diff for 120 diffs (60 files, two commits each),
+   and each diff was paired with its own sentence and with the sentence
+   for the other diff of the same file, 240 tests in all.
+   - Baseline noul: AUC 0.991, right reason preferred in 118 of 120.
+   - The docs' citation-check recipe (choice supports / contradicts /
+     says_nothing, structured criteria): 0.980. Five narrow questions
+     combined: 0.981. Logistic regression over everything: 0.989.
+   - Word overlap: 0.846. Identifier match: 0.746.
+   - The scores lean toward yes. At 0.5, 21% of false reasons pass. At
+     0.8, 94% of true reasons pass and 3% of false ones. Use about 0.8,
+     and route anything below it to a note, not a block.
+   - Reordering the choice options flipped the top answer in 5 of 240.
+   - Caveat: the false reasons are honest descriptions of another diff to
+     the same file, not lies written to fool Jev, and the reasons were
+     written by a model that had the diff in front of it.
+   - This closes part of the gap `internal/scope/doc.go` admits, that a
+     false trace reason silences a note.
+2. **Scope creep: better, still not separable.** Tested on eight parallel
+   components (five stage bodies, three agent adapters), each intent
+   against each sibling's diff: 8 requested and 26 creep cases.
+   - Original wording: AUC 0.834, and 24 of 26 creep cases at 0.5 or
+     above.
+   - The recipe with trimmed state and structured criteria: AUC 0.885,
+     but creep still reaches 0.93 while requested changes start at 0.87.
+     No cutoff separates them.
+   - Splitting it into two questions (does it implement the named
+     component, does it implement a different one) did worse: 0.623.
+3. **File ranking: a small gain, still unproven.** BM25 shortlist of 20,
+   then one choice question over code snippets, with the full commit
+   message as the task: recall at 5 was 0.48 against BM25's 0.39, at 10
+   0.53 against 0.46 (14 tasks). The shortlist caps it, since only about
+   55% of changed files reach BM25's top 20.
+4. **Prompt tweaks moved little.** On the noisy set, nine variants
+   (`jev-preview`, trimmed diff, string state, no criteria, a choice
+   question, several narrow questions, averaging three calls) all landed
+   between 0.62 and 0.65. The levers that mattered were clean framing of
+   the task and choosing the cutoff from labeled data.
 
 ## Video outline (by chapter)
 
