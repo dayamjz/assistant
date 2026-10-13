@@ -103,8 +103,8 @@ func Settlements() []Settlement {
 				"against the original working copy and before anything is asked of the copy, so the " +
 				"copy inherits a remote a real gate wrote.",
 			Exercised: "The copy's timing is driven through the binary. The advance's timing is driven at " +
-				"package reach around a safety.Guard this harness holds, because no stage body pushes, " +
-				"so a run never observes a remote and never submits an update.",
+				"package reach around a safety.Guard this harness holds: the one run here that pushes " +
+				"does so on a remote nobody advanced, so no run meets an advance.",
 		},
 		{
 			Question: "question-checks-timeout-observation",

@@ -123,10 +123,11 @@ func Coverage() []Established {
 				"is driven is the production adapter over the stand-in, which is where the type split " +
 				"lives and where an invocation record can be read off the wire."},
 		{principles.P5, ReachNone,
-			"The review stage has a body and every run this harness drives asks to skip it: the " +
-				"agent these journeys resolve is scripted to answer nothing, so a taken review " +
-				"would stop at an ask recording that no review happened. No run here reviews " +
-				"anything, and no fix round is taken for one to re-review. internal/stages' own tests " +
+			"One run here takes the review stage against a stand-in scripted to answer a clean review " +
+				"and passes it, but that establishes the stage is reached and answered, not P5: the " +
+				"push that follows lands the reviewed commit itself, so no commit written after the " +
+				"review exists for the push stage to re-review, and no fix round is taken for a " +
+				"review to re-check. Every other run asks to skip the stage. internal/stages' own tests " +
 				"claim P5 against the body directly; this harness adds nothing to that."},
 		{principles.P6, ReachBinary,
 			"The service is killed at every boundary a real run reaches and the run is driven to its " +
@@ -146,8 +147,15 @@ func Coverage() []Established {
 				"round trip can lose; that it offers something nobody was offered is not claimed, " +
 				"because internal/pipeline gives every hold the same fixed rendering and internal/graph " +
 				"copies it through, so no run can report one. The lease anchor and " +
-				"the refusal against a remote that advanced out of band are driven at package reach, " +
-				"because no stage body pushes. The killed run, and the contention check beside it, are " +
+				"the refusal against a remote that advanced out of band are driven at package reach: " +
+				"the one run here that pushes takes the delivery path on a remote nobody advanced, so " +
+				"it establishes that the push stage forwards the submitted commit and moves the " +
+				"remote's branch to it, on a stand-in reviewer scripted clean, and says nothing about " +
+				"the lease or the refusal. That run needs a service and a run, so it is skipped rather " +
+				"than passing where internal/ipc reads no peer credentials or no local socket " +
+				"transport exists. The pull request and checks stages are skipped on it, because no " +
+				"record here names a repository on a code host and this fixture has none for " +
+				"internal/forge to address. The killed run, and the contention check beside it, are " +
 				"driven through methods internal/ipc restricts, so on a platform where that package reads " +
 				"no local socket peer credentials both are skipped rather than passing, and the two " +
 				"package-reach observations are the whole of what is established there."},

@@ -144,7 +144,8 @@ func Drives() []Drove {
 
 		{"refusal-remote-advanced-out-of-band", ReachPackage, anchor,
 			"internal/safety over internal/vcs's own reads, with the advance planted between the " +
-				"observation and the decision. No stage body pushes, so no run proposes an update."},
+				"observation and the decision. The delivery walk pushes through the binary on a remote nobody " +
+				"advanced, so no run here meets the advance."},
 
 		{"refusal-copied-working-copy-removal", ReachPackage, ownership,
 			"gate.Remove against the copy, with the binary's own removal driven alongside to establish " +
@@ -158,12 +159,11 @@ func Drives() []Drove {
 				"stage's body asks one and fails because the run's record names no repository there."},
 
 		{"stage-logic-bug", ReachNone, "",
-			"The review stage has a body, and every run this harness drives asks to skip it: the " +
-				"agent these journeys resolve is scripted to answer nothing, so a taken review " +
-				"would stop at an ask recording that no review happened. No review " +
-				"happens, so there is no finding to compare against what was planted. It becomes " +
-				"drivable when a walk takes the stage against an agent scripted to answer it - and " +
-				"what it establishes then is " +
+			"One walk takes the review stage against a stand-in scripted to answer a clean review, " +
+				"and the scenario it walks plants no bug, so there is no finding to compare against " +
+				"what was planted. It becomes drivable when a walk takes the stage over this " +
+				"condition's subject with the planted finding scripted - and what it establishes " +
+				"then is " +
 				"still bounded by README.md's first limit, because the stand-in answers what a test " +
 				"scripts rather than reading the planted bug."},
 		{"stage-failing-test", ReachBinary, branch,

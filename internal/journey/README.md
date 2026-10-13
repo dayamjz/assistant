@@ -37,6 +37,18 @@ nothing, and the convergence bound parks the run. One walk therefore
 executes trusted commands, opens a fixer session, takes the back edge into a
 fix round, and is parked by a bound, all through the binary.
 
+One more walk takes the delivery path: `TestARunTakesTheDeliveryPathToAPush`
+configures `commands.test` and `commands.lint` in the home, scripts the
+stand-in to answer every review with a clean one, submits a commit the remote
+does not have, and walks the run through review, test, document, lint and push,
+skipping only the pull request and checks stages. It asserts each stage ran,
+that the run stopped only where `stages.Holding` says its configuration holds
+it, that the scripted reviewer was asked and nothing went unscripted, and that
+the remote's branch moved to the submitted commit. It asserts no duration.
+That is the stage machinery reached through the binary against a local remote;
+it is not review quality, the reviewer answered what it was scripted to, and it
+still reaches no code host.
+
 Every other walk stops short, and the same reasons bound them all. The
 review stage's body launches the agent the run resolved over the run's copy,
 and the agent these journeys resolve is the harness's own stand-in, scripted
@@ -53,14 +65,14 @@ and the checks stage holds because there is no code host to ask. Between
 them, that is the reason parts of the product are still not reachable from a
 run today:
 
-- no run launches an agent for review, so no run parses a real review
-  report; the one agent a run here launches is a fix round's, and it is
-  scripted to change nothing;
-- no run pushes, opens a pull request, or reads checks: the rebase body takes
-  its P6 anchor through `internal/safety`'s `Observe` on every run, but every
-  run here holds at the push stage for want of a completed review before a
-  decision or an update is reached, so the push half of `internal/vcs` is
-  never reached by one. A run does
+- the delivery walk is the one run that launches an agent for review, and the
+  reviewer is scripted clean, so no run parses a real review report; the other
+  agent a run here launches is a fix round's, scripted to change nothing;
+- no run opens a pull request or reads checks, and only the delivery walk
+  pushes: the rebase body takes its P6 anchor through `internal/safety`'s
+  `Observe` on every run, but every other run here holds at the push stage for
+  want of a completed review, so the push half of `internal/vcs` is reached by
+  that one walk only, on a remote nobody advanced. A run does
   reach `internal/forge`: it derives its code-host repository specifier
   through `GitHubRepository` and its stages carry the `Host` the service
   built, but every walk here skips the pull request stage, the one body that
