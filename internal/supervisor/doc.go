@@ -17,8 +17,8 @@
 // LockReading is taken as an input so that vocabulary has one owner. The
 // loop that computes the inputs, writes the queue and the
 // markers and the beacon is #100's and lives in internal/service; the
-// durable tables are #99's in internal/store; the beacon's shape, its reader
-// and the in-flight table are #105's; the hook that runs Assess at turn end
+// durable tables and their accessors are internal/store's; the beacon's
+// shape and its reader are #105's; the hook that runs Assess at turn end
 // is #106's. This split is the one internal/graph draws: the engine has no
 // git, no network and no agent in it, and the supervisor's core has no clock,
 // no store and no provider.
@@ -51,6 +51,19 @@
 // A StopVerdict's Allowed is derived from its Reason, so a verdict cannot
 // say allowed beside a reason that blocks. InFlight and Lock have their
 // unknown as the zero value, so a reading nobody filled in blocks.
+//
+// Which tasks are in flight is the closed table in inflight.go, over
+// taskstate.States() and the queue together, which gives PRD section 5's
+// "work is in flight" one owner. A state is in flight when something other
+// than a person moves next, including Unknown; a state whose only waiter is
+// a person is not, and what keeps such a task under the guard until the
+// person has been told is a queued wake row, which store.UnacknowledgedWakes
+// counts and InFlightOf reads beside the states. The table is closed in
+// both directions by its test, which derives the set from
+// taskstate.States() and fails on a state with no row, so a state added
+// later cannot land unplaced; Landed and Complete sit beside Ready. A state the table does not decide
+// is read as unknown and never as none. The hook that takes the two reads,
+// through store.OpenReadOnly, is #105's.
 //
 // # What the matrix establishes and what it does not
 //

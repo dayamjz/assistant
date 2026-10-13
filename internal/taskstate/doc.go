@@ -104,8 +104,9 @@
 //     is not carried into the detail.
 //   - The ordering rules this package
 //     states for its own kinds, "relaunched" then "dispatched" and the
-//     closed detail of "isolation-refused", are owed by their writers (#94
-//     and #98) and checked by nothing here: the store appends any text, and
+//     closed detail of "isolation-refused", are owed by their writers (#94,
+//     and internal/service's dispatch) and checked by nothing here: the
+//     store appends any text, and
 //     Row.Detail is the decoder a writer calls before appending, not a gate
 //     at the append.
 //   - Row.Writer says who may append a kind and refuses nothing itself. The

@@ -10,6 +10,7 @@ import (
 	"github.com/dayamjz/assistant/internal/gate"
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/store"
+	"github.com/dayamjz/assistant/internal/taskstate"
 	"github.com/dayamjz/assistant/internal/vcs"
 )
 
@@ -241,11 +242,12 @@ func (e Expectation) validate() error {
 // Isolation can refuse one nobody asserted.
 //
 // internal/session's Create takes it as the value a worker cannot be
-// started without, and refuses one Proven reports false. That is the launch
-// edge as far as this build takes it: internal/agents itself still starts a
-// worker where it is told, so the edge holds for a launch through
-// internal/session and nothing here closes a launch that bypasses it, and
-// the service's wiring from dispatch to that Create is a later change. The
+// started without, and refuses one Proven reports false. internal/service's
+// dispatch produces one and holds it in memory for that seam, and the wiring
+// from the one to the other is a later change. That is the launch edge as
+// far as this build takes it: internal/agents itself still starts a worker
+// where it is told, so the edge holds for a launch through internal/session
+// and nothing here closes a launch that bypasses it. The
 // exported fields are what was proven, as resolved; a consumer compares
 // against them rather than re-deriving.
 type Isolation struct {
@@ -536,4 +538,32 @@ func headWords(obs vcs.Observation) string {
 		return "detached"
 	}
 	return "on " + obs.Branch
+}
+
+// Refusal maps a refused assertion to the closed reason internal/taskstate
+// gives an "isolation-refused" event, so the history carries a word that
+// package defines rather than this one's prose. It is the one owner of that
+// mapping, and ok is false for an error that is no *IsolationError.
+//
+// ComparisonPrimary is RefusedPrimaryCheckout. ComparisonRemotes and
+// ComparisonHead are RefusedWrongShape: the copy is a repository of its own
+// and distinct from the primary, and its remote set or its HEAD is not the
+// one its shape gives it. Every other comparison is RefusedNotIsolated: the
+// copy is not the one reserved, is a linked worktree, stands inside the gate
+// repository, or would be launched under an environment that points git at
+// another repository. RefusedCopyMissing is never answered here, because an
+// assertion is made of a path something was observed at.
+func Refusal(err error) (reason taskstate.IsolationRefusal, ok bool) {
+	var refused *IsolationError
+	if !errors.As(err, &refused) {
+		return "", false
+	}
+	switch refused.Comparison {
+	case ComparisonPrimary:
+		return taskstate.RefusedPrimaryCheckout, true
+	case ComparisonRemotes, ComparisonHead:
+		return taskstate.RefusedWrongShape, true
+	default:
+		return taskstate.RefusedNotIsolated, true
+	}
 }

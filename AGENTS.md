@@ -160,7 +160,16 @@ Each has cost this repository more than one round of review.
   repository on purpose, because no surface here witnesses a person; the record
   understates who decided rather than overstating it. It records and does not
   gate, so nothing may branch on the value to decide whether a resolution may
-  proceed. It also holds the run checkpoint history the durability layer needs,
+  proceed. `Acknowledger` is the same shape for the wake queue, with no member
+  meaning a person and, in this build, no producer: the ipc rows that would
+  derive it wait on #91's worker set. The queue is `wake`, a table and never a
+  directory, appended and sealed so acknowledging is a row's one revision;
+  `AppendWakeWithMarkers` is the only way a wake lands and it advances the
+  task's `wake_marker` row in the same transaction, deriving the change epoch
+  there, so a kind is a word it records and `internal/supervisor` owns. A
+  drain is a read, delivery is at least once, and `OpenReadOnly` is the open
+  a reader with no service takes, answering `ErrUnreadable` for what it
+  cannot read. It also holds the run checkpoint history the durability layer needs,
   which is the only record of a run's position: opaque payloads indexed by run
   and sequence, with the anchor a property of the request that no column holds.
   The one-row `checkpoint` migration 1 created was the second record the PRD
@@ -347,14 +356,19 @@ Each has cost this repository more than one round of review.
   approximating it. Read its `doc.go` for the residual gaps, and for why PRD
   section 8's "task state" row is read as a resolution rather than a row.
 - `internal/tasks` is PRD section 8's tasks module as far as this build takes
-  it: intake, queueing, and the P11 assertion, with dispatch, copies and the
-  launch left to #104 and #91. `Expect` computes a task's `Expectation` and
-  its second-check shell line from one call, and `AssertIsolated` compares a
-  real `vcs.Observation` against it by file identity, never by string, with
-  an exact remote set per shape and a typed `*IsolationError` naming the
-  comparison; only it sets `Isolation`'s unexported field,
-  `internal/session`'s `Create` is what takes one, and its P11 citation
-  claims the assertion refuses and nothing about launch. Every lifecycle move there is an appended event, never a state
+  it: intake, queueing, and the P11 assertion, with dispatch and the copy in
+  `internal/service` and the launch in `internal/session`. `Expect` computes
+  a task's `Expectation` and its second-check shell line from one call, and
+  `AssertIsolated` compares a real `vcs.Observation` against it by file
+  identity, never by string, with an exact remote set per shape and a typed
+  `*IsolationError` naming the comparison; only it sets `Isolation`'s
+  unexported field, `Refusal` is the one mapping from a comparison to
+  `taskstate`'s refusal token, `internal/session`'s `Create` is what takes an
+  `Isolation` to start a worker and no service path reaches it yet, and its
+  P11 citation claims the assertion refuses and nothing about launch. Until
+  #91's worker set exists, "own branch, only through the gate" is
+  instruction text and nothing enforces which ref a worker's push may move;
+  its `doc.go` carries that sentence. Every lifecycle move there is an appended event, never a state
   column: `Create` writes the disposition through `store.CreateTask`, anchored
   to the newest task row it saw on the branch and under the service's branch
   exclusion, and `Release` appends `dispatched` through
@@ -425,7 +439,12 @@ Each has cost this repository more than one round of review.
   the kind table, enumerates the kinds so a row without an oracle fails, and
   runs two counterfeit classifiers to show it can fail. It cites P9 for the
   table only and never P10: `Assess`'s inputs are stated there, not produced
-  by the real lock and files. Read its `doc.go` for the residual gaps: the
+  by the real lock and files. `inflight.go` is the one owner of which states
+  owe a supervision cycle: a closed table over `taskstate.States()` that its
+  test derives from that function, so a new state fails until placed, and
+  `InFlightOf` reads it beside `store.UnacknowledgedWakes`, because a hold
+  nobody has been told about is in flight whatever its state says. Read its
+  `doc.go` for the residual gaps: the
   check-result kind has no producer, the repetition count is read for the
   unchanged terminal alone, and freshness blocks falsely across a suspend or a clock
   jump by design.
@@ -455,7 +474,10 @@ Each has cost this repository more than one round of review.
 - `internal/home` owns the on-disk layout PRD section 8 gives one root, and the
   exclusive lock that makes a home have exactly one service. No other package
   spells a path under the root, with one deliberate exception: `internal/gate`
-  composes `<home>/repos/<id>.git` itself, so this package does not. The lock is
+  composes `<home>/repos/<id>.git` itself, so this package does not. The wake
+  queue is not in the layout at all: it is `internal/store`'s table, so no
+  path to a `queue/` is composed and `Create` makes none, while an older home
+  keeps an empty one nothing reads. The lock is
   an operating-system lock rather than a file naming a process, because the
   property PRD section 8 asks for is that it cannot go stale after a hard kill.
   Read its `doc.go` for the residual gaps: an advisory lock binds only the
@@ -538,7 +560,22 @@ Each has cost this repository more than one round of review.
   composed by `config.ResolveRun` - and refuses the run before anything
   launches when the trusted copy cannot be read or the composed document pins
   a different agent than the operator's. Read `doc.go` for that, including
-  how a resume resolves fresh and what decides its resumability.
+  how a resume resolves fresh and what decides its resumability. It builds
+  every run an isolated copy, a worktree of the gate's bare repository at the
+  run's own `refs/assistant/runs/<id>`, which `create` writes right after the
+  row: from the gate's own object for a push, by a fetch from the working copy
+  for a start or a rerun. `ensureCopy` reads that reference and never the
+  working copy, and `copy.go`'s header says why the fetch moved there. It is
+  also where a task is dispatched, in `dispatch.go`: the attempt row is the
+  claim, the copy is a `vcs.Clone` of the primary shaped for the task's
+  shape, `tasks.AssertIsolated` is run under `agents.WorkerEnvironment`, both
+  snapshots are recorded, a refusal is the `isolation-refused` event carrying
+  `taskstate`'s token, and a proof is held only in the service's memory for
+  #91's launch seam; nothing launches. A path already standing at the copy's
+  path is asserted and never removed. The environment half of P11 is only as
+  strong as every launch path building its environment through
+  `agents.WorkerEnvironment`, which is the contract #91's launch seam takes
+  along with the proof; no second strip list exists or should.
 - `internal/cli` is the command surface, and its verb table is PRD section 9's
   table and nothing else. A verb that section does not describe is a finding to
   raise against the specification, not a row to add: `cli_test.go` holds both

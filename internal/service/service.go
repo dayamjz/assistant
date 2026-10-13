@@ -216,6 +216,18 @@ type Service struct {
 	// documents this process has seen.
 	topologies map[string]*topology
 	advancing  map[string]*slot
+	// isolated holds, per task, the proof dispatch.go ended at, or the zero
+	// value for a dispatch in flight or one that ended without a proof. It is
+	// this service's memory and nothing durable:
+	// the proof is for #91's launch seam, and a restart dispatches the task
+	// again. dispatch.go owns it and isolationOf is its one reader.
+	isolated map[string]tasks.Isolation
+	// betweenAttemptReadAndClaim runs in a dispatch after the attempts have
+	// been read and before the attempt is claimed. It is nil in production
+	// and set only by this package's tests, which use it to hold two
+	// dispatchers at the point where both have read and neither has written,
+	// on the terms internal/tasks' queue offers its own tests the same hook.
+	betweenAttemptReadAndClaim func()
 	// givingUp is whether Close has stopped taking background work. It is
 	// read and written under mu with the registration itself, which is what
 	// orders a continuation started from a request-serving goroutine against
@@ -331,6 +343,7 @@ func Open(ctx context.Context, o Options) (*Service, error) {
 		registry:   newRegistry(),
 		topologies: make(map[string]*topology),
 		advancing:  make(map[string]*slot),
+		isolated:   make(map[string]tasks.Isolation),
 		starting:   make(map[branchKey]*branchGate),
 		stopping:   make(chan struct{}),
 	}

@@ -3,9 +3,11 @@
 // task with the disposition PRD section 6 gives it at intake, Queued behind a
 // blocker or Dispatched, and Release dispatches a queued task once its
 // blocker has cleared. AssertIsolated is the pure half of P11, described
-// below. Dispatch and cutting a copy are #104, launching a worker is
-// internal/session's Create over the proof made here, and nothing in this
-// package does any of them; promotion and cleanup proofs are later still.
+// below. Dispatching, cutting a copy and asserting it are internal/service's,
+// which composes this package's assertion with internal/vcs; launching a
+// worker is internal/session's Create over the proof made here, which no
+// service path reaches yet, and nothing in this package does any of them;
+// promotion and cleanup proofs are later still.
 //
 // # The isolation assertion
 //
@@ -30,10 +32,22 @@
 //
 // The assertion is the proof and not the gate. Isolation's unexported field
 // is set only here, so the launch seam that takes one, internal/session's
-// Create, cannot be handed a value nobody asserted; a worker started through
-// internal/agents directly is still started where it is told, which
+// Create, cannot be handed a value nobody asserted: internal/service's
+// dispatch produces an Isolation and holds it in memory for that seam, the
+// wiring from the one to the other is a later change, and a worker started
+// through internal/agents directly is still started where it is told, which
 // Isolation's doc states. The second check is detection, obeyed by an
 // obedient worker and ignored by any other, and Expect's doc says so.
+// Refusal maps the comparison a refused assertion failed on to the closed
+// token internal/taskstate gives the isolation-refused event, and is the one
+// owner of that mapping.
+//
+// Until #91's worker set exists, "own branch, only through the gate" is
+// instruction text and nothing enforces which ref a worker's push may move:
+// the gate admits a push on what it is a push of and not on who made it, so
+// a worker with the gate as its remote can move any branch the gate holds.
+// The second check and the instructions are what a worker is told; this
+// package and the gate enforce neither.
 //
 // # Every lifecycle move here is an appended event, anchored
 //

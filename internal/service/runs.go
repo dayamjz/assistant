@@ -55,8 +55,9 @@ func (s *Service) start(ctx context.Context, req machine.StartRequest) (machine.
 		return machine.Run{}, err
 	}
 	// Everything the record is built from is read before the branch is
-	// claimed, so what the claim holds is the decision and the write and not
-	// two git invocations between them.
+	// claimed, so what the claim holds is the decision and the write - the
+	// row, and the one fetch create makes to record the commit in the gate -
+	// and not the reads that precede them.
 	record, created, err := s.claimBranch(ctx, branchKey{repository: repository.ID, branch: branch}, run{
 		repository: repository.ID,
 		branch:     branch,
@@ -528,11 +529,21 @@ type run struct {
 	intent   string
 	source   string
 	supplied bool
+	// heldByGate is whether the gate repository already holds head, which is
+	// true of a commit a push landed there and false of one read off a
+	// working copy, which create then fetches from that working copy. It is
+	// the one place the two ways a run starts are told apart; copy.go says
+	// why that is here and not where the copy is cut.
+	heldByGate bool
 }
 
 // create records a new run. PRD section 8 requires the row to precede the run's
 // directory, and this writes the row: begin builds the directory afterwards,
-// which is the ordering that rule asks for.
+// which is the ordering that rule asks for. The run's reference in the gate
+// repository is written here too, after the row, so the record precedes the
+// reference it names on the same terms; a reference that cannot be written
+// leaves no run standing, because the row is moved to terminated before the
+// failure is reported, and a caller that starts again creates a fresh one.
 func (s *Service) create(ctx context.Context, r run) (store.Run, error) {
 	built, err := s.driverFor(ctx)
 	if err != nil {
@@ -545,7 +556,7 @@ func (s *Service) create(ctx context.Context, r run) (store.Run, error) {
 	if err != nil {
 		return store.Run{}, err
 	}
-	return built.runs.Create(ctx, store.Run{
+	record, err := built.runs.Create(ctx, store.Run{
 		ID:            id,
 		RepositoryID:  r.repository,
 		Branch:        r.branch,
@@ -556,6 +567,16 @@ func (s *Service) create(ctx context.Context, r run) (store.Run, error) {
 		Build:         s.build,
 		ConfigDigest:  s.digest,
 	})
+	if err != nil {
+		return store.Run{}, err
+	}
+	if err := s.recordSubmittedCommit(ctx, record, r.heldByGate); err != nil {
+		if _, ended := built.runs.Terminate(ctx, record.ID); ended != nil {
+			s.log.Printf("run %s could not be ended after its commit could not be recorded in the gate: %v", record.ID, ended)
+		}
+		return store.Run{}, err
+	}
+	return record, nil
 }
 
 // baseCommit is the commit the change is measured against: where this branch
@@ -905,7 +926,9 @@ func (s *Service) recover(ctx context.Context) {
 	}
 	// A blocker may have cleared while no service was serving the home, so
 	// the queued tasks are released once the records are reconciled, before
-	// anything is served.
+	// anything is served. Every task that then resolves Dispatched is
+	// dispatched, which for one a service died part way through dispatching
+	// is the retry dispatch.go describes.
 	s.releaseQueued(ctx)
 }
 
@@ -1116,9 +1139,10 @@ type branchGate struct {
 // The check and the create are one step because they are one decision: a check
 // another caller can win the race to is what leaves a branch with two runs, of
 // which the older is unreachable through every branch-scoped verb and blocks
-// an eject for as long as it stands. Nothing slow runs under the claim - the
-// record's inputs are read before it - so branches do not queue behind each
-// other's git.
+// an eject for as long as it stands. The record's inputs are read before the
+// claim; the one git invocation under it is the fetch create makes to record
+// the commit in the gate, and the gate is one branch's, so what waits on it
+// is a second start of the same branch and not another branch's.
 //
 // The residual gap is the same one internal/runs names for a run's fixer: this
 // is exclusion within one service, and PRD section 8 gives a home one service,

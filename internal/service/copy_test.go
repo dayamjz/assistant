@@ -3,6 +3,7 @@ package service_test
 import (
 	"context"
 	"os"
+	"os/exec"
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/findings"
@@ -71,6 +72,12 @@ func TestARunIsGivenAnIsolatedCopyAndGivesItBack(t *testing.T) {
 	path := h.Worktree(repository.ID, run.id)
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatalf("the copy of run %s is still at %s after the run ended: %v", run.id, path, err)
+	}
+	// The reference create wrote in the gate at the submitted commit goes
+	// with the copy, so the gate holds nothing of a run that ended.
+	gatePath := gateRepositoryOf(t, h, subject)
+	if out, err := exec.Command("git", "-C", gatePath, "rev-parse", "--verify", "--quiet", "refs/assistant/runs/"+run.id).CombinedOutput(); err == nil {
+		t.Fatalf("the reference of run %s is still in the gate after the run ended: %s", run.id, out)
 	}
 }
 

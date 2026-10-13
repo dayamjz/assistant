@@ -282,6 +282,39 @@
 // needs a process-tree walk per platform, and the group is what this service
 // already establishes.
 //
+// # A task is dispatched here, and nothing launches it
+//
+// PRD section 6 moves a task from Dispatched to Running only when isolation
+// is proven, and dispatch.go is the step that proves it: for a task that
+// resolves Dispatched it claims the attempt through store.BeginTaskAttempt,
+// records what the primary checkout looked like, cuts the copy PRD section 5
+// gives the task's shape - a clone of the primary into home.TaskCopy, with
+// the gate as its one remote and the task's branch for a delivery task, with
+// no remote and a detached HEAD for an investigation task - observes it
+// through internal/vcs, asserts it through internal/tasks under the
+// environment internal/agents would start a worker with, and records the
+// copy's own snapshot. A copy that fails the assertion is recorded as an
+// isolation-refused entry carrying internal/taskstate's closed token, and
+// the task resolves Failed from it. A copy that passes leaves the proof in
+// this service's memory, in the slot dispatch.go owns, and that is where the
+// dispatch ends: no worker is started in this build, so a proven task stays
+// Dispatched, and #91's launch seam is what will take the proof. It runs at
+// open, after the queued tasks are released, and after every release, once
+// per task per service; dispatch.go says what a retry after a crash finds
+// and what it may not do to it.
+//
+// The one change the fleet work makes to the run path is beside it, in
+// copy.go. A run's copy used to be cut after a fetch of the submitted commit
+// from the working copy, on every run; a commit a task's worker pushes from
+// its clone is not in the working copy, and the run such a push starts went
+// on only because git writes a reference to an object the repository already
+// holds without transferring it. The reference the copy is cut from is now
+// written when the run is created, by create, from the gate's own object for
+// a push and by a fetch from the working copy for a start or a rerun, and
+// ensureCopy reads it from the gate and from nowhere else. copy.go's opening
+// comment keeps the argument for one path that always runs and says where
+// the fetch went and what it used to rest on.
+//
 // # What this package does not do
 //
 // It does not implement a stage. The nine bodies are internal/stages', and

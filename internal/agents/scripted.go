@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"os/exec"
 	"slices"
-
-	"github.com/dayamjz/assistant/internal/vcs"
 )
 
 // ScriptedName is the name the scripted adapter answers to.
@@ -88,7 +86,7 @@ func (r *scriptedRunner) Start(ctx context.Context, spec WorkerSpec) (Worker, er
 		bin:    r.resolved,
 		args:   slices.Clone(r.extra),
 		dir:    spec.Dir,
-		env:    vcs.StripRedirecting(environment(r.settings.base, spec.Env)),
+		env:    WorkerEnvironment(r.settings.base, spec.Env),
 		grace:  r.settings.grace,
 		maxOut: r.settings.maxOut,
 	}, spec.Instructions)

@@ -362,6 +362,10 @@ func (s *Service) claimPush(ctx context.Context, built *driver, repository, bran
 		head:       head,
 		base:       base,
 		source:     intentSourceAbsent,
+		// The push landed the commit in the gate before this notification
+		// ran, so the run's reference is written at it and nothing is
+		// fetched: the working copy need not hold it and is not asked to.
+		heldByGate: true,
 	})
 	if err != nil {
 		stranded = superseded != ""
