@@ -418,4 +418,28 @@ var schema = []migration{
 			`CREATE INDEX decision_answer_run ON decision_answer(run, seq)`,
 		},
 	},
+	{
+		version: 10,
+		name:    "task attribution and settled-state basis",
+		statements: []string{
+			// A task is attributed to validation runs by the repository and
+			// branch it works on, which is how PRD section 6's first rung
+			// finds "a validation run attributed to this task's own
+			// branch". Both are nullable: a task recorded before this
+			// column existed, or one with no branch, is attributed by its
+			// linked run alone, and a NULL is a fact nobody recorded rather
+			// than an empty branch.
+			`ALTER TABLE task ADD COLUMN repository_id TEXT`,
+			`ALTER TABLE task ADD COLUMN branch TEXT`,
+
+			// What the settled state was derived from, kept as opaque text
+			// this package does not interpret, like a checkpoint payload.
+			// Both are NULL on a row written before this migration, which
+			// reads as not recorded and never as nothing superseded.
+			`ALTER TABLE task_state ADD COLUMN superseded TEXT`,
+			`ALTER TABLE task_state ADD COLUMN basis TEXT`,
+
+			`CREATE INDEX run_branch ON run(repository_id, branch, created_at)`,
+		},
+	},
 }

@@ -38,6 +38,17 @@ type Options struct {
 	// that conversation is recorded on the run so a restarted service
 	// continues it. Without it, every round is session-free.
 	SessionReuse bool
+	// OnMove, when set, is called with the run's identifier after every run
+	// this service creates or moves, once the move has committed and the
+	// service's lock is released. It is how a record derived from run status
+	// hears of a change without this package knowing it exists.
+	//
+	// It is a notification and not a participant: it cannot refuse or undo the
+	// move, a failure inside it is its own to report, and a run moved by
+	// store.TransitionRun directly, or by a process that is not this service,
+	// is not announced. A listener that must not go stale needs a check of its
+	// own for those.
+	OnMove func(ctx context.Context, runID string)
 }
 
 // Service owns the lifecycle of a run's record and the one durable fixer
@@ -51,6 +62,8 @@ type Service struct {
 	store *store.Store
 	agent agents.Resolution
 	reuse bool
+	// onMove is Options.OnMove, or nil.
+	onMove func(ctx context.Context, runID string)
 
 	// mu serializes the two things that must not interleave: handing out a
 	// run's fixer role and ending the run. It is held across the store call
@@ -99,6 +112,7 @@ func New(o Options) (*Service, error) {
 		store:  o.Store,
 		agent:  o.Agent,
 		reuse:  o.SessionReuse,
+		onMove: o.OnMove,
 		fixers: make(map[string]*Fixer),
 	}, nil
 }
@@ -153,5 +167,16 @@ func (s *Service) Create(ctx context.Context, r store.Run) (store.Run, error) {
 		return store.Run{}, fmt.Errorf("%w: run %s is given a fixer session, %q", ErrRunNotNew, r.ID, reference)
 	}
 	r.Status = store.RunPending
-	return s.store.CreateRun(ctx, r)
+	created, err := s.store.CreateRun(ctx, r)
+	if err == nil {
+		s.moved(ctx, created.ID)
+	}
+	return created, err
+}
+
+// moved announces a committed change of a run to Options.OnMove.
+func (s *Service) moved(ctx context.Context, runID string) {
+	if s.onMove != nil {
+		s.onMove(ctx, runID)
+	}
 }

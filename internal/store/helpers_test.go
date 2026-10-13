@@ -90,9 +90,22 @@ func seedTask(t *testing.T, s *Store, id string) Task {
 		Project:      "one",
 		Mode:         "interactive",
 		WorktreePath: "/worktrees/" + id,
-	}, "queued", "intake")
+	}, decideAs("queued", "intake"))
 	if err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
 	return task
+}
+
+// decideAs is the simplest possible decision: it answers the same thing
+// whatever the task's inputs are, which is what a store test wants when the
+// subject is the store's mechanism rather than any resolution.
+func decideAs(state, source string, detail ...Optional[string]) TaskDecision {
+	return func(TaskSnapshot) (TaskStateWrite, error) {
+		w := TaskStateWrite{State: state, Source: source}
+		if len(detail) > 0 {
+			w.Detail = detail[0]
+		}
+		return w, nil
+	}
 }

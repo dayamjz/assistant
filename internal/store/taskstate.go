@@ -24,8 +24,16 @@ type TaskState struct {
 	// Detail is anything the source wants to add. It is unknown when the
 	// source had nothing to add.
 	Detail Optional[string] `json:"detail"`
-	// Revision increases by one on every write, so a reader can tell whether
-	// the state it holds has been superseded.
+	// Superseded and Basis are what the writer attached to the answer, as text
+	// this package stores and does not interpret: what the answer outranked,
+	// and what it was derived from. Both are unknown for a row written before
+	// they existed, which is a different fact from an answer that outranked
+	// nothing.
+	Superseded Optional[string] `json:"superseded"`
+	Basis      Optional[string] `json:"basis"`
+	// Revision increases by one each time the answer changes, so a reader can
+	// tell whether the state it holds has been superseded. A settle that
+	// reaches the same answer does not move it.
 	Revision int64 `json:"revision"`
 	// ResolvedAt is when this state was written.
 	ResolvedAt time.Time `json:"resolved_at"`
@@ -53,55 +61,6 @@ type TaskEvent struct {
 	At time.Time
 }
 
-// SetTaskState writes a task's current state and returns it with the revision
-// it was given. Reading the previous revision and writing the next one happen
-// in one transaction on the single writer connection, so two concurrent writers
-// are never handed the same revision and neither write is lost.
-//
-// This is the only way a task's state changes. Appending an event does not
-// change it, which is what keeps the event log history rather than a second,
-// competing answer to the same question.
-func (s *Store) SetTaskState(ctx context.Context, taskID, state, source string, detail Optional[string]) (TaskState, error) {
-	if strings.TrimSpace(taskID) == "" {
-		return TaskState{}, fmt.Errorf("store: no task named")
-	}
-	if strings.TrimSpace(state) == "" {
-		return TaskState{}, fmt.Errorf("store: task %s: no state given", taskID)
-	}
-	if strings.TrimSpace(source) == "" {
-		return TaskState{}, fmt.Errorf("store: task %s: no source given for state %q", taskID, state)
-	}
-
-	now := nowUTC()
-	var revision int64
-	err := s.inTx(ctx, func(tx *sql.Tx) error {
-		var previous Optional[int64]
-		if err := tx.QueryRowContext(ctx, `SELECT revision FROM task_state WHERE task_id = ?`, taskID).
-			Scan(&previous); err != nil && !isNoRows(err) {
-			return err
-		}
-		revision = previous.Or(0) + 1
-		_, err := tx.ExecContext(ctx, `
-			INSERT INTO task_state (task_id, state, source, detail, revision, resolved_at)
-			VALUES (?, ?, ?, ?, ?, ?)
-			ON CONFLICT(task_id) DO UPDATE SET
-				state       = excluded.state,
-				source      = excluded.source,
-				detail      = excluded.detail,
-				revision    = excluded.revision,
-				resolved_at = excluded.resolved_at`,
-			taskID, state, source, detail, revision, encodeTime(now))
-		return err
-	})
-	if err != nil {
-		return TaskState{}, fmt.Errorf("store: writing the state of task %s: %w", taskID, err)
-	}
-	return TaskState{
-		TaskID: taskID, State: state, Source: source, Detail: detail,
-		Revision: revision, ResolvedAt: now,
-	}, nil
-}
-
 // TaskState returns a task's current state, or ErrNotFound. It is the one
 // answer to what is true now; the events are history and answer nothing.
 func (s *Store) TaskState(ctx context.Context, taskID string) (TaskState, error) {
@@ -111,9 +70,9 @@ func (s *Store) TaskState(ctx context.Context, taskID string) (TaskState, error)
 	var st TaskState
 	var resolved string
 	err := s.read.QueryRowContext(ctx, `
-		SELECT task_id, state, source, detail, revision, resolved_at
+		SELECT task_id, state, source, detail, superseded, basis, revision, resolved_at
 		FROM task_state WHERE task_id = ?`, taskID).
-		Scan(&st.TaskID, &st.State, &st.Source, &st.Detail, &st.Revision, &resolved)
+		Scan(&st.TaskID, &st.State, &st.Source, &st.Detail, &st.Superseded, &st.Basis, &st.Revision, &resolved)
 	if err != nil {
 		return TaskState{}, fmt.Errorf("store: reading the state of task %s: %w", taskID, errNoRows(err))
 	}
@@ -129,30 +88,38 @@ func (s *Store) TaskState(ctx context.Context, taskID string) (TaskState, error)
 //
 // Appending changes no state. PRD section 8 says every append is a wake, and
 // classifying that wake is the supervisor's job; this package records the
-// entry and stops there.
+// entry and stops there. A caller that wants the state to follow the entry
+// uses AppendTaskEventAndSettle.
 func (s *Store) AppendTaskEvent(ctx context.Context, taskID, kind, detail string) (TaskEvent, error) {
-	if strings.TrimSpace(taskID) == "" {
-		return TaskEvent{}, fmt.Errorf("store: no task named")
-	}
-	if strings.TrimSpace(kind) == "" {
-		return TaskEvent{}, fmt.Errorf("store: task %s: event has no kind", taskID)
-	}
-
-	now := nowUTC()
-	var sequence int64
+	var event TaskEvent
 	err := s.inTx(ctx, func(tx *sql.Tx) error {
-		if err := tx.QueryRowContext(ctx,
-			`SELECT COALESCE(MAX(sequence), 0) + 1 FROM task_event WHERE task_id = ?`, taskID).
-			Scan(&sequence); err != nil {
-			return err
-		}
-		_, err := tx.ExecContext(ctx,
-			`INSERT INTO task_event (task_id, sequence, kind, detail, at) VALUES (?, ?, ?, ?, ?)`,
-			taskID, sequence, kind, detail, encodeTime(now))
+		var err error
+		event, err = appendEventInTx(ctx, tx, taskID, kind, detail, nowUTC())
 		return err
 	})
 	if err != nil {
 		return TaskEvent{}, fmt.Errorf("store: appending an event to task %s: %w", taskID, err)
+	}
+	return event, nil
+}
+
+func appendEventInTx(ctx context.Context, tx *sql.Tx, taskID, kind, detail string, now time.Time) (TaskEvent, error) {
+	if strings.TrimSpace(taskID) == "" {
+		return TaskEvent{}, fmt.Errorf("no task named")
+	}
+	if strings.TrimSpace(kind) == "" {
+		return TaskEvent{}, fmt.Errorf("task %s: event has no kind", taskID)
+	}
+	var sequence int64
+	if err := tx.QueryRowContext(ctx,
+		`SELECT COALESCE(MAX(sequence), 0) + 1 FROM task_event WHERE task_id = ?`, taskID).
+		Scan(&sequence); err != nil {
+		return TaskEvent{}, err
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO task_event (task_id, sequence, kind, detail, at) VALUES (?, ?, ?, ?, ?)`,
+		taskID, sequence, kind, detail, encodeTime(now)); err != nil {
+		return TaskEvent{}, err
 	}
 	return TaskEvent{TaskID: taskID, Sequence: sequence, Kind: kind, Detail: detail, At: now}, nil
 }

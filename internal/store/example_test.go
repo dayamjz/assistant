@@ -112,7 +112,7 @@ func ExampleStore_TaskState() {
 	task, err := s.CreateTask(ctx, store.Task{
 		ID: "task-1", Shape: store.TaskInvestigation, Project: "one",
 		Mode: "headless", WorktreePath: "/worktrees/task-1",
-	}, "queued", "intake")
+	}, decide("queued", "intake"))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -135,7 +135,7 @@ func ExampleStore_TaskState() {
 	fmt.Println("actual state:", current.State, "resolved by", current.Source)
 
 	// The owner of the state resolves it, and the revision moves.
-	resolved, err := s.SetTaskState(ctx, task.ID, "running", "supervisor", store.Known("stage review is live"))
+	resolved, err := s.SettleTaskState(ctx, task.ID, decide("running", "supervisor", store.Known("stage review is live")))
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -145,4 +145,16 @@ func ExampleStore_TaskState() {
 	// newest event: blocked
 	// actual state: queued resolved by intake
 	// actual state: running at revision 2
+}
+
+// decide is the simplest possible decision: it answers the same thing whatever
+// the task's inputs are. A real caller decides from the snapshot.
+func decide(state, source string, detail ...store.Optional[string]) store.TaskDecision {
+	return func(store.TaskSnapshot) (store.TaskStateWrite, error) {
+		w := store.TaskStateWrite{State: state, Source: source}
+		if len(detail) > 0 {
+			w.Detail = detail[0]
+		}
+		return w, nil
+	}
 }

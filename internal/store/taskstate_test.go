@@ -43,7 +43,7 @@ func TestAppendingEventsDoesNotChangeState(t *testing.T) {
 
 	// Resolving the state is a separate call with its own source, and it moves
 	// the revision so a reader can tell its copy is stale.
-	resolved, err := s.SetTaskState(ctx, task.ID, "running", "supervisor", Known("stage review is live"))
+	resolved, err := s.SettleTaskState(ctx, task.ID, decideAs("running", "supervisor", Known("stage review is live")))
 	if err != nil {
 		t.Fatalf("SetTaskState: %v", err)
 	}
@@ -59,8 +59,8 @@ func TestAppendingEventsDoesNotChangeState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TaskEvents: %v", err)
 	}
-	if len(events) != 3 {
-		t.Fatalf("got %d events, want 3", len(events))
+	if len(events) != 4 {
+		t.Fatalf("got %d events, want the opening one and 3", len(events))
 	}
 	if events[len(events)-1].Kind != "waiting for review" {
 		t.Fatalf("the last event is %+v", events[len(events)-1])
@@ -87,7 +87,7 @@ func TestTaskStateDetailIsUnknownWhenThereIsNone(t *testing.T) {
 		t.Fatalf("an opening state with no detail reported one: %q", st.Detail)
 	}
 	// An explicitly empty detail is a different fact from no detail at all.
-	if _, err := s.SetTaskState(ctx, task.ID, "running", "supervisor", Known("")); err != nil {
+	if _, err := s.SettleTaskState(ctx, task.ID, decideAs("running", "supervisor", Known(""))); err != nil {
 		t.Fatalf("SetTaskState: %v", err)
 	}
 	st, err = s.TaskState(ctx, task.ID)
@@ -105,7 +105,8 @@ func TestTaskEventsPaginateInAppendOrder(t *testing.T) {
 	s := openStore(t)
 	task := seedTask(t, s, "task-1")
 
-	for i := 1; i <= 5; i++ {
+	// Sequence 1 is the opening entry CreateTask appended.
+	for i := 2; i <= 6; i++ {
 		e, err := s.AppendTaskEvent(ctx, task.ID, fmt.Sprintf("kind-%d", i), "")
 		if err != nil {
 			t.Fatalf("AppendTaskEvent: %v", err)
@@ -114,18 +115,18 @@ func TestTaskEventsPaginateInAppendOrder(t *testing.T) {
 			t.Fatalf("event %d was given sequence %d", i, e.Sequence)
 		}
 	}
-	page, err := s.TaskEvents(ctx, task.ID, 2, 2)
+	page, err := s.TaskEvents(ctx, task.ID, 3, 2)
 	if err != nil {
 		t.Fatalf("TaskEvents: %v", err)
 	}
-	if len(page) != 2 || page[0].Sequence != 3 || page[1].Sequence != 4 {
+	if len(page) != 2 || page[0].Sequence != 4 || page[1].Sequence != 5 {
 		t.Fatalf("the page is %+v", page)
 	}
-	rest, err := s.TaskEvents(ctx, task.ID, 4, 0)
+	rest, err := s.TaskEvents(ctx, task.ID, 5, 0)
 	if err != nil {
 		t.Fatalf("TaskEvents: %v", err)
 	}
-	if len(rest) != 1 || rest[0].Sequence != 5 {
+	if len(rest) != 1 || rest[0].Sequence != 6 {
 		t.Fatalf("the rest is %+v", rest)
 	}
 }
@@ -143,22 +144,41 @@ func TestTaskAccessorsRefuseIncompleteRecords(t *testing.T) {
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {
-			if _, err := s.CreateTask(ctx, mutate(complete), "queued", "intake"); err == nil {
+			if _, err := s.CreateTask(ctx, mutate(complete), decideAs("queued", "intake")); err == nil {
 				t.Fatal("CreateTask accepted an incomplete task")
 			}
 		})
 	}
-	if _, err := s.CreateTask(ctx, complete, "", "intake"); err == nil {
-		t.Fatal("CreateTask accepted a task with no opening state")
+	if _, err := s.CreateTask(ctx, complete, nil); err == nil {
+		t.Fatal("CreateTask accepted a task with no way to decide its opening state")
 	}
-	if _, err := s.CreateTask(ctx, complete, "queued", ""); err == nil {
-		t.Fatal("CreateTask accepted an opening state with no source")
+	if _, err := s.CreateTask(ctx, complete, decideAs("", "intake")); err == nil {
+		t.Fatal("CreateTask accepted a decision with no state")
 	}
-	if _, err := s.CreateTask(ctx, complete, "queued", "intake"); err != nil {
+	if _, err := s.CreateTask(ctx, complete, decideAs("queued", "")); err == nil {
+		t.Fatal("CreateTask accepted a decision with no source")
+	}
+	if _, err := s.Task(ctx, "task-1"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("a refused CreateTask left a task behind: %v", err)
+	}
+	if _, err := s.CreateTask(ctx, complete, decideAs("queued", "intake")); err != nil {
 		t.Fatalf("CreateTask refused a complete task: %v", err)
 	}
-	if _, err := s.SetTaskState(ctx, "task-1", "running", "", Unknown[string]()); err == nil {
-		t.Fatal("SetTaskState accepted a state with no source")
+	before, _ := s.TaskState(ctx, "task-1")
+	if _, err := s.SettleTaskState(ctx, "task-1", decideAs("running", "")); err == nil {
+		t.Fatal("SettleTaskState accepted a decision with no source")
+	}
+	boom := errors.New("the decision failed")
+	if _, err := s.SettleTaskState(ctx, "task-1", func(TaskSnapshot) (TaskStateWrite, error) {
+		return TaskStateWrite{State: "running", Source: "x"}, boom
+	}); !errors.Is(err, boom) {
+		t.Fatalf("a failed decision was reported as %v", err)
+	}
+	if after, _ := s.TaskState(ctx, "task-1"); after != before {
+		t.Fatalf("a refused settle changed the state from %+v to %+v", before, after)
+	}
+	if _, err := s.SettleTaskState(ctx, "no-such-task", decideAs("running", "x")); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("settling an unknown task: %v", err)
 	}
 	if _, err := s.AppendTaskEvent(ctx, "task-1", " ", ""); err == nil {
 		t.Fatal("AppendTaskEvent accepted an event with no kind")
@@ -222,7 +242,7 @@ func TestConcurrentWritersKeepEveryWrite(t *testing.T) {
 				}
 				sequences <- e.Sequence
 
-				st, err := s.SetTaskState(ctx, task.ID, fmt.Sprintf("state-w%d-%d", w, i), "supervisor", Unknown[string]())
+				st, err := s.SettleTaskState(ctx, task.ID, decideAs(fmt.Sprintf("state-w%d-%d", w, i), "supervisor"))
 				if err != nil {
 					failures <- err
 					continue
@@ -241,7 +261,7 @@ func TestConcurrentWritersKeepEveryWrite(t *testing.T) {
 	}
 
 	total := writers * each
-	assertDense(t, "event sequences", sequences, total, 1)
+	assertDense(t, "event sequences", sequences, total, 2)
 	// The opening state written by CreateTask is revision 1, so the concurrent
 	// writes occupy 2 through total+1.
 	assertDense(t, "state revisions", revisions, total, 2)
@@ -250,7 +270,7 @@ func TestConcurrentWritersKeepEveryWrite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TaskEvents: %v", err)
 	}
-	if len(events) != total {
+	if len(events) != total+1 {
 		t.Fatalf("%d events were appended but %d are stored, so a write was lost", total, len(events))
 	}
 

@@ -25,6 +25,7 @@ import (
 	"github.com/dayamjz/assistant/internal/runs"
 	"github.com/dayamjz/assistant/internal/stages"
 	"github.com/dayamjz/assistant/internal/store"
+	"github.com/dayamjz/assistant/internal/taskstate"
 	"github.com/dayamjz/assistant/internal/vcs"
 )
 
@@ -157,8 +158,12 @@ type Service struct {
 	server   *ipc.Server
 
 	checkpoints *checkpoints.Store
-	newStages   func(stages.StageDeps) pipeline.Stages
-	newFixer    func(stages.FixDeps) pipeline.Fixer
+	// settler is the one writer of task state and taskReader the one reader
+	// the handlers answer from. See internal/taskstate for what each owns.
+	settler    *taskstate.Settler
+	taskReader *taskstate.Reader
+	newStages  func(stages.StageDeps) pipeline.Stages
+	newFixer   func(stages.FixDeps) pipeline.Fixer
 	// global is the operator's configuration document as a parsed layer, kept
 	// because every run's resolution composes it with the repository's two
 	// copies; cfg is that layer resolved on its own with the schema defaults,
@@ -322,6 +327,13 @@ func Open(ctx context.Context, o Options) (*Service, error) {
 		_ = s.Close()
 		return nil, err
 	}
+	// Whatever moved while nothing was settling is caught up before anything is
+	// served, and a failure to is a failure to open: a record that cannot be
+	// brought up to date would otherwise be served as current.
+	if err := s.settler.SettleAll(ctx); err != nil {
+		_ = s.Close()
+		return nil, fmt.Errorf("service: settling task state on open: %w", err)
+	}
 	s.recover(ctx)
 	return s, nil
 }
@@ -341,6 +353,10 @@ func (s *Service) openParts(ctx context.Context, o Options) error {
 	}
 	s.store = records
 	s.checkpoints = checkpoints.New(records)
+	// No terminal probe is wired: this build keeps no task session whose
+	// liveness it could ask, so the process rung of PRD section 6 is skipped.
+	s.settler = taskstate.NewSettler(records, nil)
+	s.taskReader = taskstate.NewReader(records, nil)
 
 	if s.log, err = s.home.OpenLog(0); err != nil {
 		return err
@@ -522,6 +538,7 @@ func (s *Service) driverFor(ctx context.Context) (*driver, error) {
 		Store:        s.store,
 		Agent:        resolution,
 		SessionReuse: s.cfg.SessionReuse,
+		OnMove:       s.runMoved,
 	})
 	if err != nil {
 		return nil, err
@@ -612,4 +629,15 @@ func newInstanceID() (string, error) {
 		return "", fmt.Errorf("service: generating a service identifier: %w", err)
 	}
 	return hex.EncodeToString(raw[:]), nil
+}
+
+// runMoved settles the state of every task a run is attributed to, after the
+// run service created or moved it. The move has committed and cannot be
+// refused here, so a failure is logged and the next settle, or the audit that
+// finds the record stale, is what repairs it: this is the best-effort edge of
+// the settled record, not a guarantee.
+func (s *Service) runMoved(ctx context.Context, runID string) {
+	if err := s.settler.SettleForRun(ctx, runID); err != nil {
+		s.log.Printf("could not settle the tasks of run %s: %v", runID, err)
+	}
 }

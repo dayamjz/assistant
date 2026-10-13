@@ -222,7 +222,7 @@
 // rather than contending for the database lock, and a read-modify-write done
 // inside one transaction cannot interleave with another writer's. That is what
 // makes the sequence AppendTaskEvent assigns dense with no duplicates, and the
-// revisions SetTaskState assigns strictly increasing, under any number of
+// revisions SettleTaskState assigns, one per change of answer, strictly increasing under any number of
 // concurrent callers. It is also what makes AppendGraphCheckpoint's anchor
 // decision and the sequence it assigns one step rather than two, which is the
 // whole of what that accessor is for. The reader pool is unbounded and carries

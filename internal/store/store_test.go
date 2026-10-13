@@ -16,8 +16,8 @@ func TestReopeningKeepsEverything(t *testing.T) {
 	s := openStoreAt(t, path)
 	run := seedRun(t, s)
 	task := seedTask(t, s, "task-1")
-	if _, err := s.SetTaskState(ctx, task.ID, "running", "supervisor", Known("stage review")); err != nil {
-		t.Fatalf("SetTaskState: %v", err)
+	if _, err := s.SettleTaskState(ctx, task.ID, decideAs("running", "supervisor", Known("stage review"))); err != nil {
+		t.Fatalf("SettleTaskState: %v", err)
 	}
 	if _, err := s.RegisterHold(ctx, Hold{Key: "k", Subject: "a decision"}); err != nil {
 		t.Fatalf("RegisterHold: %v", err)

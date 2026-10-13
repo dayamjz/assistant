@@ -104,6 +104,15 @@ func (s *Service) Terminate(ctx context.Context, id string) (store.Run, error) {
 // service's lifecycle moves against each other; rounds do not take it, so what
 // that costs is bounded by how often a run changes status.
 func (s *Service) apply(ctx context.Context, id string, m move) (store.Run, error) {
+	r, err := s.applyLocked(ctx, id, m)
+	if err != nil {
+		return store.Run{}, err
+	}
+	s.moved(ctx, id)
+	return r, nil
+}
+
+func (s *Service) applyLocked(ctx context.Context, id string, m move) (store.Run, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	r, err := s.store.TransitionRun(ctx, id, m.from, m.to)

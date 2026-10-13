@@ -177,8 +177,11 @@ func Coverage() []Established {
 				"passing; what is established there is the template initialization, which needs no " +
 				"service, and the package-reach reads of the planted documents."},
 		{principles.P8, ReachBinary,
-			"A task whose event log ends on an open decision and whose resolved state has moved past it " +
-				"is reported by the binary as the resolved state. Reading it reaches no method " +
+			"A task whose event log ends on an open decision and whose validation run has moved past it " +
+				"is reported by the binary as the run's state, from the run, with the open decision " +
+				"marked superseded. The records are written through internal/taskstate's Settler by the " +
+				"test, at the points the service's run hook settles, because nothing in this build " +
+				"creates a task; the service doing those writes itself is not reached. Reading it reaches no method " +
 				"internal/ipc restricts, so no platform refuses it for want of peer credentials, but it " +
 				"is asked of a service, so on a platform with no local socket transport to serve this " +
 				"protocol over the test is skipped rather than passing and nothing about P8 is " +

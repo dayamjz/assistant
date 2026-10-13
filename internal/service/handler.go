@@ -195,7 +195,8 @@ func (s *Service) listRuns(ctx context.Context, req machine.RunsRequest) (machin
 //
 // The state is read per task rather than derived from the task record, because
 // P8 makes the resolved state a record with its own owner and reading it any
-// other way is the failure that principle names.
+// other way is the failure that principle names. It is read through
+// internal/taskstate, which refuses a record it cannot interpret.
 func (s *Service) listTasks(ctx context.Context) (machine.Tasks, error) {
 	records, err := s.store.Tasks(ctx)
 	if err != nil {
@@ -203,11 +204,11 @@ func (s *Service) listTasks(ctx context.Context) (machine.Tasks, error) {
 	}
 	out := machine.Tasks{Tasks: make([]machine.Task, 0, len(records))}
 	for _, record := range records {
-		state, err := s.store.TaskState(ctx, record.ID)
+		current, err := s.taskReader.Current(ctx, record.ID)
 		if err != nil && !errors.Is(err, store.ErrNotFound) {
 			return machine.Tasks{}, err
 		}
-		out.Tasks = append(out.Tasks, machine.Task{Record: record, State: state})
+		out.Tasks = append(out.Tasks, machine.Task{Record: record, State: current.Row})
 	}
 	return out, nil
 }
@@ -218,11 +219,11 @@ func (s *Service) task(ctx context.Context, req machine.TaskRequest) (machine.Ta
 	if err != nil {
 		return machine.Task{}, err
 	}
-	state, err := s.store.TaskState(ctx, req.Task)
+	current, err := s.taskReader.Current(ctx, req.Task)
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
 		return machine.Task{}, err
 	}
-	return machine.Task{Record: record, State: state}, nil
+	return machine.Task{Record: record, State: current.Row}, nil
 }
 
 // stageReport is how an agent running a stage returns its result. It is the
