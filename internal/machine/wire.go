@@ -8,6 +8,7 @@ import (
 	"github.com/dayamjz/assistant/internal/graph"
 	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/store"
+	"github.com/dayamjz/assistant/internal/taskstate"
 )
 
 // Version is what --version answers. It is a shape of its own so that the
@@ -155,6 +156,11 @@ type Stage struct {
 	// Fix is the summary the last fix round of this stage wrote, empty when
 	// there was none.
 	Fix string `json:"fix,omitempty"`
+	// Executions is when each execution of this stage's body started and
+	// ended, in the order they ended, which is internal/store's record. A
+	// stage taking fix rounds has one per execution; a stage that never ran a
+	// body has none.
+	Executions []store.StageExecution `json:"executions,omitempty"`
 }
 
 // Run is one run as a surface reports it: the record, where its execution
@@ -232,6 +238,12 @@ type Run struct {
 	// Stages is what became of each of the nine, in the order a run takes
 	// them.
 	Stages []Stage `json:"stages,omitempty"`
+	// Proposals are notes raised about this run from records across runs of
+	// its repository, read when this answer was built: today, PRD section 5's
+	// proposal to turn a decision-model check off. They are not any stage's
+	// findings and never part of the run's state, so they hold nothing and
+	// the same run can carry one on one reading and not on a later one.
+	Proposals []findings.Finding `json:"proposals,omitempty"`
 	// NotApplied names the run-starting inputs a request carried that this
 	// run was not built from, by the field of StartRequest each came in on.
 	//
@@ -319,15 +331,15 @@ type Runs struct {
 	Runs []store.Run `json:"runs"`
 }
 
-// Task is one piece of fleet work with its resolved current state. PRD
-// section 8 makes the resolved state a record of its own, distinct from the
-// append-only event log, per P8; this carries both records rather than
-// deriving one from the other.
+// Task is one piece of fleet work with its resolved current state. The state
+// is internal/taskstate's resolution of the records that own the facts, not a
+// stored copy and not the event log, per P8 and P14; the resolution carries the
+// source that decided it.
 type Task struct {
 	// Record is the task record.
 	Record store.Task `json:"record"`
-	// State is the authoritative resolved current state.
-	State store.TaskState `json:"state"`
+	// State is the resolved current state, with its source.
+	State taskstate.Resolution `json:"state"`
 }
 
 // Tasks is the answer to a request for fleet work.

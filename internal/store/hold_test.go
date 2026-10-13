@@ -140,9 +140,6 @@ func TestFinishingTheWorkDoesNotCloseAHold(t *testing.T) {
 	if _, err := s.TransitionRun(ctx, run.ID, []RunStatus{RunPending}, RunTerminated); err != nil {
 		t.Fatalf("TransitionRun: %v", err)
 	}
-	if _, err := s.SetTaskState(ctx, task.ID, "complete", "supervisor", Unknown[string]()); err != nil {
-		t.Fatalf("SetTaskState: %v", err)
-	}
 	if _, err := s.AppendTaskEvent(ctx, task.ID, "finished", "worker exited"); err != nil {
 		t.Fatalf("AppendTaskEvent: %v", err)
 	}

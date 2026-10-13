@@ -2,6 +2,7 @@ package stages
 
 import (
 	"context"
+	"encoding/json"
 	"sort"
 	"strconv"
 	"strings"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/findings"
+	"github.com/dayamjz/assistant/internal/graph"
 	"github.com/dayamjz/assistant/internal/judge"
 	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/vcs"
@@ -29,9 +31,9 @@ const decisionConcurrency = 4
 // enforce; a trace the model did not confirm is handed to the scope lens as
 // unconfirmed, which can only add a note. Nothing here removes a finding,
 // lowers an action, or passes a stage. A check that cannot run - no key, a
-// failed call, an unreadable answer, a diff that could not be read - leaves
-// the review exactly as it would be with the checks off and says so in a note,
-// which holds nothing.
+// failed call, an unreadable answer, a diff that could not be read, a request
+// bound the review reached - leaves the review exactly as it would be with
+// the checks off and says so in a note, which holds nothing.
 type decisionRun struct {
 	mode   config.DecisionModel
 	client *judge.Client
@@ -140,24 +142,29 @@ func (d decisionRun) parallel(n int, fn func(int)) {
 }
 
 // screenFindings turns the screen's outcomes into findings: one per flagged
-// file, a note in evaluate and an ask in enforce, and one note naming every
-// file the screen could not answer for. It records every answer, with the
-// action of the finding it produced.
+// file, a note in evaluate and an ask in enforce, one note naming every file
+// the screen could not answer for, one naming every file a request bound kept
+// it from asking about, and one naming every answer the record could not
+// keep. It records every answer, with the action of the finding it produced.
 func (d decisionRun) screenFindings(outcomes []checked) []findings.Finding {
 	var out []findings.Finding
-	var notRun []string
+	var notRun, overBound, lost []string
 	for _, c := range outcomes {
 		if why, isFailed := c.failure(); isFailed {
-			notRun = append(notRun, c.path+" ("+why+")")
-			d.record(c.result, "")
+			if bounded(c) {
+				overBound = append(overBound, c.path+" ("+why+")")
+			} else {
+				notRun = append(notRun, c.path+" ("+why+")")
+			}
+			lost = d.record(lost, c.result, "")
 			continue
 		}
 		if !c.result.Fired() {
-			d.record(c.result, "")
+			lost = d.record(lost, c.result, "")
 			continue
 		}
 		flagged := flaggedFinding(d.mode, c.result)
-		d.record(c.result, string(flagged.Action))
+		lost = d.record(lost, c.result, string(flagged.Action))
 		out = append(out, flagged)
 	}
 	if len(notRun) > 0 {
@@ -165,29 +172,40 @@ func (d decisionRun) screenFindings(outcomes []checked) []findings.Finding {
 			"answer for "+strconv.Itoa(len(notRun))+" file(s), so nothing here says whether they add "+
 			"any: ", notRun))
 	}
-	return out
+	if len(overBound) > 0 {
+		out = append(out, notRunNote("The decision model's screen for text aimed at the reviewer did not "+
+			"run for "+strconv.Itoa(len(overBound))+" file(s), because this review reached a bound on "+
+			"how many requests the checks may send, so nothing here says whether they add any: ", overBound))
+	}
+	return append(out, lostNote(judge.CheckScreen, lost)...)
 }
 
 // traceFindings turns the trace check's outcomes into the traces the model did
-// not confirm, which the scope lens counts as accounting for nothing, and a
-// note naming every trace the check could not answer for. Those count on the
-// reviewer's word, as they would with the check off. It records every answer;
-// an unconfirmed trace's finding is the scope lens's note.
+// not confirm, which the scope lens counts as accounting for nothing, a note
+// naming every trace the check could not answer for, one naming every trace a
+// request bound kept it from asking about, and one naming every answer the
+// record could not keep. The traces it did not check count on the reviewer's
+// word, as they would with the check off. It records every answer; an
+// unconfirmed trace's finding is the scope lens's note.
 func (d decisionRun) traceFindings(outcomes []checked) ([]findings.Trace, []findings.Finding) {
 	var unconfirmed []findings.Trace
-	var notRun []string
+	var notRun, overBound, lost []string
 	for _, c := range outcomes {
 		if why, isFailed := c.failure(); isFailed {
-			notRun = append(notRun, c.path+" ("+why+")")
-			d.record(c.result, "")
+			if bounded(c) {
+				overBound = append(overBound, c.path+" ("+why+")")
+			} else {
+				notRun = append(notRun, c.path+" ("+why+")")
+			}
+			lost = d.record(lost, c.result, "")
 			continue
 		}
 		if c.result.Fired() {
 			unconfirmed = append(unconfirmed, findings.Trace{Path: c.path, Reason: c.reason})
-			d.record(c.result, string(findings.ActionNote))
+			lost = d.record(lost, c.result, string(findings.ActionNote))
 			continue
 		}
-		d.record(c.result, "")
+		lost = d.record(lost, c.result, "")
 	}
 	var out []findings.Finding
 	if len(notRun) > 0 {
@@ -195,7 +213,132 @@ func (d decisionRun) traceFindings(outcomes []checked) ([]findings.Trace, []find
 			strconv.Itoa(len(notRun))+" traced path(s), so those traces count on the reviewer's word, "+
 			"as they would with the check off: ", notRun))
 	}
-	return unconfirmed, out
+	if len(overBound) > 0 {
+		out = append(out, notRunNote("The decision model's check of the review's reasons did not run for "+
+			strconv.Itoa(len(overBound))+" traced path(s), because this review reached a bound on how "+
+			"many requests the checks may send, so those traces count on the reviewer's word, as they "+
+			"would with the check off: ", overBound))
+	}
+	return unconfirmed, append(out, lostNote(judge.CheckTrace, lost)...)
+}
+
+// bounded reports whether a check failed because a request bound refused it,
+// which is reported apart from a provider that did not answer: the first is
+// this build declining to send, the second is a call that went wrong.
+func bounded(c checked) bool {
+	failure, _, isFailed := c.result.Failed()
+	return isFailed && failure == judge.FailureOverBound
+}
+
+// lostNote is the one note per check saying the record could not keep every
+// answer to it, and nothing when it kept them all. The review's findings are
+// what they would be either way; what the note says is that the evaluation
+// record understates this review, which before it only the service log said.
+//
+// Its text is fixed on purpose. The note lands in the review's report, which
+// is graph state the convergence bound fingerprints, so a count, a path list,
+// or a store's error sentence here would let a refusal that varies between
+// two fix rounds that changed nothing keep the loop from converging. Which
+// answers were lost and why is the service log's, where the recorder writes
+// each one.
+func lostNote(check judge.Check, lost []string) []findings.Finding {
+	if len(lost) == 0 {
+		return nil
+	}
+	return []findings.Finding{{
+		Severity: findings.SeverityInfo,
+		Action:   findings.ActionNote,
+		Description: "The decision-model record could not keep every answer of the " + checkName(check) +
+			" from this review, so the record kept for deciding whether the checks earn their place " +
+			"understates what they said here; the service log names each answer it lost and why. The " +
+			"review's findings are as they would be had the record kept them. This is informational " +
+			"and holds nothing.",
+	}}
+}
+
+// checkName is how a note names a check.
+func checkName(check judge.Check) string {
+	switch check {
+	case judge.CheckScreen:
+		return "screen for text aimed at the reviewer"
+	case judge.CheckTrace:
+		return "check of the review's trace reasons"
+	default:
+		return string(check)
+	}
+}
+
+// decisionChecks is the review's record of what the decision-model checks did
+// over this change: PRD section 5's "The run records what ran", which the pull
+// request stage writes into the body so that a pass from a machine with the
+// checks on is distinguishable from one without. It is built by the program
+// from the checks' own results, and the review body writes it on every path
+// that read the change, so a re-review never leaves an earlier execution's
+// record standing.
+type decisionChecks struct {
+	// Mode is the run's decision-model mode.
+	Mode string `json:"mode"`
+	// Model is the model version the checks asked, empty when nothing was
+	// sent.
+	Model string `json:"model,omitempty"`
+	// Why says why neither check ran, empty when the checks were sent.
+	Why string `json:"why,omitempty"`
+	// Screen and Trace are each check's coverage, absent when it did not
+	// run.
+	Screen *checkCoverage `json:"screen,omitempty"`
+	Trace  *checkCoverage `json:"trace,omitempty"`
+	// TraceWhy says why the trace check did not run when the screen did.
+	TraceWhy string `json:"trace_why,omitempty"`
+}
+
+// checkCoverage is how many paths or traces one check covered: put to it,
+// answered by the model, and fired on.
+type checkCoverage struct {
+	Asked    int `json:"asked"`
+	Answered int `json:"answered"`
+	Fired    int `json:"fired"`
+}
+
+// coverageOf counts one check's outcomes.
+func coverageOf(outcomes []checked) *checkCoverage {
+	c := &checkCoverage{Asked: len(outcomes)}
+	for _, o := range outcomes {
+		if _, ok := o.result.Probability(); ok {
+			c.Answered++
+		}
+		if o.result.Fired() {
+			c.Fired++
+		}
+	}
+	return c
+}
+
+// withDecisionChecks writes the record into the review's output.
+func withDecisionChecks(out pipeline.Output, checks decisionChecks) pipeline.Output {
+	encoded, err := json.Marshal(checks)
+	if err != nil {
+		// Strings and integers only: nothing here can fail to encode.
+		panic("stages: encoding the decision-model record: " + err.Error())
+	}
+	if out.Writes == nil {
+		out.Writes = map[pipeline.Key]graph.Value{}
+	}
+	out.Writes[pipeline.KeyDecisionChecks] = graph.TextValue(string(encoded))
+	return out
+}
+
+// readDecisionChecks decodes the record, and reports false when there is
+// none, which is a review that did not run or did not read the change.
+func readDecisionChecks(v graph.Value) (decisionChecks, bool, error) {
+	text, ok := v.Text()
+	if !ok || text == "" {
+		return decisionChecks{}, false, nil
+	}
+	var checks decisionChecks
+	if err := json.Unmarshal([]byte(text), &checks); err != nil {
+		return decisionChecks{}, false, err
+	}
+	return checks, true, nil
 }
 
 // noKeyNote is the one note a review whose checks are asked for gets when the
@@ -250,7 +393,11 @@ func flaggedFinding(mode config.DecisionModel, r judge.Result) findings.Finding 
 	return f
 }
 
-// record hands one answer to the client's recorder.
-func (d decisionRun) record(r judge.Result, finding string) {
-	d.client.Record(judge.RecordOf(d.run, pipeline.StageReview.String(), r, finding))
+// record hands one answer to the client's recorder, and adds it to lost when
+// the recorder could not keep it.
+func (d decisionRun) record(lost []string, r judge.Result, finding string) []string {
+	if err := d.client.Record(judge.RecordOf(d.run, pipeline.StageReview.String(), r, finding)); err != nil {
+		return append(lost, r.Path()+" ("+string(r.Check())+": "+err.Error()+")")
+	}
+	return lost
 }

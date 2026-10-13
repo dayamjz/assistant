@@ -16,8 +16,8 @@ func TestReopeningKeepsEverything(t *testing.T) {
 	s := openStoreAt(t, path)
 	run := seedRun(t, s)
 	task := seedTask(t, s, "task-1")
-	if _, err := s.SetTaskState(ctx, task.ID, "running", "supervisor", Known("stage review")); err != nil {
-		t.Fatalf("SetTaskState: %v", err)
+	if _, err := s.AppendTaskEvent(ctx, task.ID, "started", "stage review"); err != nil {
+		t.Fatalf("AppendTaskEvent: %v", err)
 	}
 	if _, err := s.RegisterHold(ctx, Hold{Key: "k", Subject: "a decision"}); err != nil {
 		t.Fatalf("RegisterHold: %v", err)
@@ -30,12 +30,12 @@ func TestReopeningKeepsEverything(t *testing.T) {
 	if got, err := again.Run(ctx, run.ID); err != nil || got.Build != run.Build {
 		t.Fatalf("the run did not survive reopening: %+v, %v", got, err)
 	}
-	st, err := again.TaskState(ctx, task.ID)
+	history, err := again.TaskEvents(ctx, task.ID, 0, 0)
 	if err != nil {
-		t.Fatalf("TaskState: %v", err)
+		t.Fatalf("TaskEvents: %v", err)
 	}
-	if st.State != "running" || st.Revision != 2 {
-		t.Fatalf("the task state did not survive reopening: %+v", st)
+	if len(history) != 2 || history[1].Kind != "started" {
+		t.Fatalf("the task history did not survive reopening: %+v", history)
 	}
 	open, err := again.OpenHolds(ctx)
 	if err != nil {
@@ -59,15 +59,15 @@ func TestAccessorsRefuseAfterClose(t *testing.T) {
 	}
 
 	checks := map[string]func() error{
-		"Repository":  func() error { _, err := s.Repository(ctx, "repo-1"); return err },
-		"Run":         func() error { _, err := s.Run(ctx, "run-1"); return err },
-		"CreateRun":   func() error { _, err := s.CreateRun(ctx, completeRun()); return err },
-		"StageResult": func() error { _, err := s.StageResult(ctx, "run-1", "review"); return err },
-		"Rounds":      func() error { _, err := s.Rounds(ctx, "run-1"); return err },
-		"TaskState":   func() error { _, err := s.TaskState(ctx, "task-1"); return err },
-		"TaskEvents":  func() error { _, err := s.TaskEvents(ctx, "task-1", 0, 0); return err },
-		"OpenHolds":   func() error { _, err := s.OpenHolds(ctx); return err },
-		"AppendEvent": func() error { _, err := s.AppendTaskEvent(ctx, "task-1", "kind", ""); return err },
+		"Repository":   func() error { _, err := s.Repository(ctx, "repo-1"); return err },
+		"Run":          func() error { _, err := s.Run(ctx, "run-1"); return err },
+		"CreateRun":    func() error { _, err := s.CreateRun(ctx, completeRun()); return err },
+		"StageResult":  func() error { _, err := s.StageResult(ctx, "run-1", "review"); return err },
+		"Rounds":       func() error { _, err := s.Rounds(ctx, "run-1"); return err },
+		"TaskSnapshot": func() error { _, err := s.TaskSnapshot(ctx, "task-1"); return err },
+		"TaskEvents":   func() error { _, err := s.TaskEvents(ctx, "task-1", 0, 0); return err },
+		"OpenHolds":    func() error { _, err := s.OpenHolds(ctx); return err },
+		"AppendEvent":  func() error { _, err := s.AppendTaskEvent(ctx, "task-1", "kind", ""); return err },
 		"AppendGraphCheckpoint": func() error {
 			_, err := s.AppendGraphCheckpoint(ctx, "run-1", "", 0, []byte("cp"))
 			return err

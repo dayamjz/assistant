@@ -102,9 +102,10 @@ func Example() {
 	// rounds recorded: 1 - one finding sent to the fixer
 }
 
-// A task's current state and its history are different records, and only one of
-// them answers what is true now.
-func ExampleStore_TaskState() {
+// A task's history is append-only, and the store records no state beside it:
+// creating a task opens the history with one event, and appending changes
+// nothing else.
+func ExampleStore_AppendTaskEvent() {
 	ctx := context.Background()
 	s, cleanup := openForExample()
 	defer cleanup()
@@ -112,12 +113,10 @@ func ExampleStore_TaskState() {
 	task, err := s.CreateTask(ctx, store.Task{
 		ID: "task-1", Shape: store.TaskInvestigation, Project: "one",
 		Mode: "headless", WorktreePath: "/worktrees/task-1",
-	}, "queued", "intake")
+	})
 	if err != nil {
 		log.Fatal(err)
 	}
-
-	// The worker appends history. None of it changes what is true now.
 	for _, kind := range []string{"started", "blocked"} {
 		if _, err := s.AppendTaskEvent(ctx, task.ID, kind, "worker said so"); err != nil {
 			log.Fatal(err)
@@ -127,22 +126,12 @@ func ExampleStore_TaskState() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	current, err := s.TaskState(ctx, task.ID)
-	if err != nil {
-		log.Fatal(err)
+	for _, e := range events {
+		fmt.Println(e.Sequence, e.Kind)
 	}
-	fmt.Println("newest event:", events[len(events)-1].Kind)
-	fmt.Println("actual state:", current.State, "resolved by", current.Source)
-
-	// The owner of the state resolves it, and the revision moves.
-	resolved, err := s.SetTaskState(ctx, task.ID, "running", "supervisor", store.Known("stage review is live"))
-	if err != nil {
-		log.Fatal(err)
-	}
-	fmt.Println("actual state:", resolved.State, "at revision", resolved.Revision)
 
 	// Output:
-	// newest event: blocked
-	// actual state: queued resolved by intake
-	// actual state: running at revision 2
+	// 1 queued
+	// 2 started
+	// 3 blocked
 }

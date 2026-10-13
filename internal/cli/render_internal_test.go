@@ -5,6 +5,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dayamjz/assistant/internal/findings"
 	"github.com/dayamjz/assistant/internal/graph"
@@ -106,6 +107,33 @@ func TestAControlCharacterInAFixSummaryDoesNotReachTheTerminal(t *testing.T) {
 	for _, line := range strings.Split(strings.TrimRight(rendered, "\n"), "\n") {
 		if strings.Contains(line, "re-ran the tests") && !strings.Contains(line, "rewrote the guard") {
 			t.Fatalf("a line break in the summary broke the line it is part of:\n%s", rendered)
+		}
+	}
+}
+
+// A stage's executions are rendered as how long they took, one execution as
+// its duration and several as their total and their count; a stage that
+// executed nothing says nothing about time, which is the control.
+func TestAStagesDurationIsRenderedFromItsExecutions(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 10, 13, 9, 0, 0, 0, time.UTC)
+	var out bytes.Buffer
+	readOut(&out, machine.Run{
+		Record:  store.Run{ID: "abc", Branch: "work", Status: store.RunRunning},
+		Outcome: machine.OutcomeDecision,
+		Stages: []machine.Stage{
+			{Stage: "intent", Outcome: pipeline.OutcomePassed, Ran: true, Executions: []store.StageExecution{
+				{Stage: "intent", Started: at, Ended: at.Add(1500 * time.Millisecond)}}},
+			{Stage: "review", Outcome: pipeline.OutcomePassed, Ran: true, Executions: []store.StageExecution{
+				{Stage: "review", Started: at, Ended: at.Add(2 * time.Second)},
+				{Stage: "review", Started: at.Add(time.Minute), Ended: at.Add(time.Minute + 3*time.Second)}}},
+			{Stage: "test", Outcome: pipeline.OutcomeSkipped},
+		},
+	})
+	rendered := out.String()
+	for _, want := range []string{"passed in 1.5s\n", "passed in 5s over 2 executions\n", "skipped (did not run)\n"} {
+		if !strings.Contains(rendered, want) {
+			t.Fatalf("the rendering does not say %q:\n%s", want, rendered)
 		}
 	}
 }

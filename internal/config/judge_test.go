@@ -17,6 +17,9 @@ func TestJudgePathsDefaultIsTheSchemaRow(t *testing.T) {
 		"**/test/**", "**/tests/**", "**/__tests__/**", "**/testdata/**",
 		".github/workflows/**", ".golangci.yml", ".golangci.yaml",
 		".eslintrc*", "eslint.config.*", "ruff.toml", "Makefile",
+		".gitlab-ci.yml", "*Test.java", "*Test.kt", "**/src/test/**",
+		"conftest.py", "pytest.ini", "tox.ini", "jest.config.*",
+		"vitest.config.*", ".mocharc*",
 	}
 	got := Defaults().JudgePaths.Strings()
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
@@ -38,6 +41,9 @@ func TestJudgePathsDefaultMatchesTheConventions(t *testing.T) {
 		"ui/__tests__/x.js", "internal/x/testdata/in.json", ".github/workflows/ci.yml",
 		".golangci.yml", ".golangci.yaml", ".eslintrc.json", "eslint.config.mjs",
 		"ruff.toml", "Makefile", "sub/Makefile",
+		".gitlab-ci.yml", "app/src/main/FooTest.java", "FooTest.kt", "mod/src/test/java/Foo.java",
+		"src/test/Foo.java", "conftest.py", "pkg/conftest.py", "pytest.ini", "tox.ini",
+		"jest.config.js", "web/jest.config.ts", "vitest.config.mts", ".mocharc.json", ".mocharc.yml",
 	} {
 		if !judge.Matches(path) {
 			t.Errorf("the default judge paths do not select %q", path)
@@ -46,6 +52,7 @@ func TestJudgePathsDefaultMatchesTheConventions(t *testing.T) {
 	for _, path := range []string{
 		"internal/config/key.go", "README.md", "testing.go", "contest/a.go",
 		".github/CODEOWNERS", "makefile.go", "docs/tests.md",
+		"src/main/Foo.java", "Test.java.txt", "conftest.pyc", "docs/pytest.ini.md", "jest.config",
 	} {
 		if p, ok := judge.Match(path); ok {
 			t.Errorf("the default judge paths select %q through %q", path, p)

@@ -77,10 +77,11 @@ type recorded struct {
 	rows []judge.Record
 }
 
-func (r *recorded) RecordAnswer(rec judge.Record) {
+func (r *recorded) RecordAnswer(rec judge.Record) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.rows = append(r.rows, rec)
+	return nil
 }
 
 func (r *recorded) all() []judge.Record {

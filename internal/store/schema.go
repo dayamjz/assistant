@@ -22,6 +22,10 @@ type migration struct {
 // the list grows.
 const sealCheckpointTableMigration = "seal the one-row checkpoint"
 
+// sealTaskStateTableMigration names the migration that empties and seals the
+// task_state table, for the reason sealCheckpointTableMigration is a constant.
+const sealTaskStateTableMigration = "task attribution and seal the stored task state"
+
 // schema is the migration list this package applies. Adding a column means
 // appending a migration whose ALTER TABLE names a nullable column with no
 // default, so rows written before it reads back unknown; migrate refuses
@@ -416,6 +420,88 @@ var schema = []migration{
 				recorded_at TEXT NOT NULL
 			) STRICT`,
 			`CREATE INDEX decision_answer_run ON decision_answer(run, seq)`,
+		},
+	},
+	{
+		version: 10,
+		name:    sealTaskStateTableMigration,
+		statements: []string{
+			// PRD section 6 resolves a task's state deterministically from the
+			// records that own the facts: the run attributed to the task's
+			// branch, the process signal, and the event log. A table holding
+			// that answer is the rewritten summary PRD section 8 calls the P14
+			// failure, so internal/taskstate computes it on every read and
+			// this table stops being one. It is sealed rather than dropped for
+			// migration 6's reason: a migration may not remove a table.
+			//
+			// Attribution needs what a run is attributed by. Both columns are
+			// nullable with no default, so a task recorded before them reads
+			// back unknown: an investigation task has no branch, and the
+			// record understates for an old row.
+			`ALTER TABLE task ADD COLUMN repository_id TEXT`,
+			`ALTER TABLE task ADD COLUMN branch TEXT`,
+			`CREATE INDEX run_branch ON run(repository_id, branch, created_at)`,
+			// A task_state row written by an earlier build is a second answer
+			// to a question that now has none stored, so it goes, as the
+			// checkpoint row did in migration 6. No code path in this
+			// repository wrote one outside tests. As there, only INSERT is
+			// refused: with the table empty UPDATE and DELETE have nothing to
+			// act on, and extending the trigger to them would only freeze a
+			// row written before the seal. Like that seal, it does not guard
+			// against a later migration that drops the trigger.
+			`DELETE FROM task_state`,
+			`CREATE TRIGGER task_state_is_not_a_record
+				BEFORE INSERT ON task_state
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a task''s state is resolved by internal/taskstate, and the task_state table is not a record');
+				END`,
+		},
+	},
+	{
+		version: 11,
+		name:    "stage executions and decision answer follow-ups",
+		statements: []string{
+			// One row per execution of a stage's body: when it started and
+			// when it ended, appended once the body has returned and never
+			// revised. It is history, so a stage taking fix rounds has a row
+			// per execution and none replaces another.
+			//
+			// It is a table of its own rather than stage_result's duration
+			// column, because that row is one per stage and rewritten, so it
+			// could hold the last execution and not the others; and rather
+			// than round's, because a round carries the finding set, whose
+			// one owner today is the run's graph state, and a writer of
+			// rounds would be a second one. Both columns are NOT NULL because
+			// the row is written only once both times are known: an execution
+			// a hard kill interrupted has no row, and the record understates
+			// rather than holding an end nobody observed.
+			`CREATE TABLE stage_execution (
+				seq        INTEGER PRIMARY KEY,
+				run        TEXT NOT NULL,
+				stage      TEXT NOT NULL,
+				started_at TEXT NOT NULL,
+				ended_at   TEXT NOT NULL
+			) STRICT`,
+			`CREATE INDEX stage_execution_run ON stage_execution(run, seq)`,
+			// What the run did next with a path a decision-model answer was
+			// about: PRD section 5's "every answer is recorded with what
+			// happened next", which migration 9 left without a column. One
+			// row per answer it follows, so an answer with no row is one
+			// nothing followed, and decision_answer itself is untouched.
+			//
+			// kind is the closed set store.FollowUpKind names; detail is what
+			// that kind carries, as handed over: a finding's action, the
+			// commit a fix round made, or the option a person chose at a
+			// hold.
+			`CREATE TABLE decision_followup (
+				seq         INTEGER PRIMARY KEY,
+				answer      INTEGER NOT NULL REFERENCES decision_answer(seq),
+				kind        TEXT NOT NULL,
+				stage       TEXT NOT NULL,
+				detail      TEXT NOT NULL,
+				recorded_at TEXT NOT NULL
+			) STRICT`,
+			`CREATE INDEX decision_followup_answer ON decision_followup(answer, seq)`,
 		},
 	},
 }

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/dayamjz/assistant/internal/findings"
@@ -132,7 +133,13 @@ func readOutRun(w io.Writer, r machine.Run) {
 	if len(r.Stages) > 0 {
 		writeln(w, "\nStages")
 		for _, stage := range r.Stages {
-			writef(w, "  %-9s %s%s\n", stage.Stage, outcomeWord(stage), fixNote(stage))
+			writef(w, "  %-9s %s%s%s\n", stage.Stage, outcomeWord(stage), timing(stage), fixNote(stage))
+		}
+	}
+	if len(r.Proposals) > 0 {
+		writeln(w, "\nProposals")
+		for _, p := range r.Proposals {
+			writef(w, "  %s\n", printable(p.Description))
 		}
 	}
 	if r.Decision != nil {
@@ -247,11 +254,8 @@ func readOutTasks(w io.Writer, tasks machine.Tasks) {
 }
 
 func readOutTask(w io.Writer, task machine.Task) {
-	state := task.State.State
-	if state == "" {
-		state = "no state recorded"
-	}
-	writef(w, "%s  %-10s %-16s %s\n", task.Record.ID, task.Record.Shape, state, task.Record.Project)
+	writef(w, "%s  %-10s %-12s %-8s %s\n", task.Record.ID, task.Record.Shape,
+		task.State.State, task.State.Source, task.Record.Project)
 }
 
 func readOutDoctor(w io.Writer, report machine.Doctor) {
@@ -324,6 +328,25 @@ func outcomeWord(stage machine.Stage) string {
 		return "pending"
 	}
 	return string(stage.Outcome)
+}
+
+// timing says how long a stage's executions took, from the run's record of
+// them, and nothing for a stage that executed no body. A stage that executed
+// more than once, as a stage taking fix rounds does, says how many times and
+// the time across all of them.
+func timing(stage machine.Stage) string {
+	if len(stage.Executions) == 0 {
+		return ""
+	}
+	var total time.Duration
+	for _, e := range stage.Executions {
+		total += e.Duration()
+	}
+	took := total.Round(time.Millisecond).String()
+	if len(stage.Executions) == 1 {
+		return " in " + took
+	}
+	return fmt.Sprintf(" in %s over %d executions", took, len(stage.Executions))
 }
 
 // fixNote reports the last fix round's summary for a stage that had one.
