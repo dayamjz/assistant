@@ -151,13 +151,14 @@ type Expectation struct {
 // the one its shape gives it. Each clause compares what git reports from the
 // current directory with what git reports from the expected copy, so the
 // form git prints a path in on the platform cancels out; the remote URL is
-// compared as a string against the cleaned gate path, after the same two
-// normalizations AssertIsolated applies to it, a leading file:// and a
-// trailing separator removed, so a spelling the assertion passes is one the
-// line passes. What the line cannot do is compare by identity: a gate
-// spelled through a symbolic link, or with letter case or a volume written
-// another way, passes the assertion and fails the line. A worker that does
-// not run it, or
+// compared as a string against the cleaned gate path in slash form, after
+// the normalizations AssertIsolated applies to it, a leading file:// and a
+// trailing separator removed and a separator before a volume with them, and
+// with backslashes turned to slashes on both sides, so a spelling the
+// assertion passes is one the line passes. What the line cannot do is
+// compare by identity: a gate spelled through a symbolic link, or with
+// letter case or a volume written another way, passes the assertion and
+// fails the line. A worker that does not run it, or
 // runs it and ignores a non-zero status, is not stopped by it; what stops a
 // worker is the assertion this program makes before it launches, and only
 // once #91's seam takes the Isolation that assertion returns.
@@ -182,14 +183,19 @@ func secondCheck(e Expectation) string {
 		`test "$(git rev-parse --absolute-git-dir)" = "$(git rev-parse --show-toplevel)/.git"`,
 	}
 	if e.Shape == store.TaskDelivery {
-		// The URL is read as AssertIsolated reads it: a leading file:// and
-		// one trailing separator come off before the comparison, so a
-		// spelling the assertion accepts is one this line accepts.
+		// The URL is read as urlAsPath reads it: a leading file:// comes off,
+		// a separator before a volume with it, and one trailing separator
+		// after; both sides are then put in slash form, since a gate path on
+		// Windows is written with backslashes and the URL git hands back may
+		// not be. A spelling the assertion accepts is then one this line
+		// accepts, up to what a string comparison can see.
 		clauses = append(clauses,
 			`test "$(git remote)" = `+q(gate.RemoteName),
 			`url="$(git remote get-url `+q(gate.RemoteName)+`)"`,
+			`url="$(printf '%s' "$url" | tr '\\' '/')"`,
 			`url="${url#file://}"`,
-			`test "${url%/}" = `+q(filepath.Clean(e.Gate)),
+			`case "$url" in /[A-Za-z]:*) url="${url#/}";; esac`,
+			`test "${url%/}" = `+q(filepath.ToSlash(filepath.Clean(e.Gate))),
 			`test -z "$(git config --get-all remote.`+gate.RemoteName+`.pushurl)"`,
 		)
 	} else {
