@@ -243,13 +243,13 @@ func (e Expectation) validate() error {
 //
 // internal/session's Create takes it as the value a worker cannot be
 // started without, and refuses one Proven reports false. internal/service's
-// dispatch produces one and holds it in memory for that seam, and the wiring
-// from the one to the other is a later change. That is the launch edge as
-// far as this build takes it: internal/agents itself still starts a worker
-// where it is told, so the edge holds for a launch through internal/session
-// and nothing here closes a launch that bypasses it. The
-// exported fields are what was proven, as resolved; a consumer compares
-// against them rather than re-deriving.
+// dispatch produces one and holds it in memory, and its launch produces
+// another, from a second observation at launch, which is the one Create is
+// handed. That is the launch edge as far as this build takes it:
+// internal/agents itself still starts a worker where it is told, so the
+// edge holds for a launch through internal/session and nothing here closes
+// a launch that bypasses it. The exported fields are what was proven, as
+// resolved; a consumer compares against them rather than re-deriving.
 type Isolation struct {
 	// Copy is the copy's path with every symbolic link resolved, the
 	// directory a launch taking this proof would use.

@@ -23,11 +23,12 @@ import (
 // is proven, and ends it with the refusal otherwise. This file is the step
 // between: for a task that resolves Dispatched it cuts the copy PRD section 5
 // gives the task's shape, observes it, asserts it, and either holds the proof
-// or records the refusal. Nothing here launches a worker. The proof it ends at
-// is kept for #91's launch seam, in this service's memory and nowhere else,
-// and is what that seam will take as the value a worker cannot be started
-// without; until it lands, a dispatch that reaches proven has done everything
-// but start the process, and a task stays Dispatched.
+// or records the refusal. Nothing in this file launches a worker. The proof
+// it ends at is kept in this service's memory and nowhere else, and launch.go
+// is what takes it: dispatchDue hands a proven dispatch straight to the
+// launch, which asserts the copy again and starts the worker, so a dispatch
+// that reaches proven is followed by a launch in the same pass. What the
+// launch does and does not move is launch.go's to say.
 //
 // # The copy is a clone of the primary, with the gate as its one remote
 //
@@ -95,9 +96,10 @@ import (
 // Because that builder strips the redirecting variables, the assertion's
 // environment comparison cannot fail on this path, and nothing here claims it
 // can. The environment half of P11 is therefore only as strong as every
-// launch path building its environment through agents.WorkerEnvironment,
-// which is the contract #91's launch seam takes along with the proof; no
-// second strip list exists, and none should.
+// launch path building its environment through agents.WorkerEnvironment:
+// launch.go's second assertion builds it the same way, and the worker is
+// started by a WorkerRunner that builds it the same way again; no second
+// strip list exists, and none should.
 //
 // # The second check
 //
@@ -172,6 +174,13 @@ const secondCheckHeading = "## Isolation check, written by the program at dispat
 // is what keeps a failure that repeats from adding an attempt per run that
 // settles. A task refused resolves Failed from the entry the refusal appended
 // and is kept out by the resolver as well as by the slot.
+//
+// A dispatch that reaches proven is launched in the same pass, through
+// launch.go, and the slot covers the launch as well: a launch that failed is
+// not retried until the next open either, because the attempt it would be
+// launching was dispatch's and a second launch of one attempt would be a
+// second process against one record. What came of the launch is logged, and
+// a refusal of the launch's own assertion is recorded the way dispatch's is.
 func (s *Service) dispatchDue(ctx context.Context) {
 	resolved, err := s.tasks().All(ctx)
 	if err != nil {
@@ -185,21 +194,48 @@ func (s *Service) dispatchDue(ctx context.Context) {
 		if _, held := s.isolationOf(r.Record.ID); held {
 			continue
 		}
-		proof, err := s.dispatchTask(ctx, r.Record.ID)
+		d, err := s.dispatchTask(ctx, r.Record.ID)
 		switch {
 		case err == nil:
-			s.log.Printf("task %s was dispatched: its copy at %s is proven isolated, and nothing launches it in this build",
-				r.Record.ID, proof.Copy)
+			s.log.Printf("task %s was dispatched: its copy at %s is proven isolated", r.Record.ID, d.proof.Copy)
 		case errors.Is(err, store.ErrTaskMoved):
 			s.log.Printf("task %s was not dispatched here: %v", r.Record.ID, err)
+			continue
 		default:
 			s.log.Printf("task %s was not dispatched: %v", r.Record.ID, err)
+			continue
+		}
+		launched, err := s.launchTask(ctx, d)
+		var undeclared *agents.CapabilityError
+		switch {
+		case err == nil:
+			s.log.Printf("task %s attempt %d was launched: its worker runs in terminal session %s",
+				d.id, d.attempt, launched.Reference())
+		case errors.As(err, &undeclared):
+			s.log.Printf("task %s attempt %d was dispatched and not launched, and stays dispatched: %v",
+				d.id, d.attempt, err)
+		default:
+			s.log.Printf("task %s attempt %d was not launched: %v", d.id, d.attempt, err)
 		}
 	}
 }
 
+// dispatched is what a dispatch that reached proven established, and what
+// the launch takes: the proof, the attempt the dispatch claimed, the
+// expectation the copy was asserted against, the instructions file the
+// worker is started with, and the history sequence the dispatch was decided
+// from, which anchors a refusal the launch records.
+type dispatched struct {
+	id           string
+	proof        tasks.Isolation
+	attempt      int64
+	want         tasks.Expectation
+	instructions string
+	anchor       int64
+}
+
 // dispatchTask dispatches one task, on the terms this file's opening comment
-// states, and returns the proof. The order of what it does is the order of
+// states, and returns what it established. The order of what it does is the order of
 // the records it writes: the attempt claims the dispatch, the primary
 // snapshot records what was read, the clone is cut, the copy is observed and
 // asserted, and the copy's snapshot and the proof are written last. A task
@@ -208,14 +244,14 @@ func (s *Service) dispatchDue(ctx context.Context) {
 // claimed first is store.ErrTaskMoved; a copy that fails the assertion is an
 // *isolationRefused, recorded. Every other error is a failure of a read or a
 // write, and leaves the attempt standing for a retry to find what it left.
-func (s *Service) dispatchTask(ctx context.Context, id string) (tasks.Isolation, error) {
+func (s *Service) dispatchTask(ctx context.Context, id string) (dispatched, error) {
 	settle, err := s.claimDispatch(id)
 	if err != nil {
-		return tasks.Isolation{}, err
+		return dispatched{}, err
 	}
-	proof, err := s.dispatchClaimed(ctx, id)
-	settle(proof)
-	return proof, err
+	d, err := s.dispatchClaimed(ctx, id)
+	settle(d.proof)
+	return d, err
 }
 
 // claimDispatch takes the task's slot, so a second pass over the tasks does
@@ -258,46 +294,46 @@ func (s *Service) isolationOf(id string) (tasks.Isolation, bool) {
 }
 
 // dispatchClaimed is dispatchTask once the in-memory slot is taken.
-func (s *Service) dispatchClaimed(ctx context.Context, id string) (tasks.Isolation, error) {
+func (s *Service) dispatchClaimed(ctx context.Context, id string) (dispatched, error) {
 	resolved, err := s.tasks().Resolved(ctx, id)
 	if err != nil {
-		return tasks.Isolation{}, err
+		return dispatched{}, err
 	}
 	if resolved.State.State != taskstate.Dispatched || resolved.State.Source != taskstate.SourceEvent {
-		return tasks.Isolation{}, fmt.Errorf("%w: task %s resolves %s from %s", errTaskNotDispatched, id,
+		return dispatched{}, fmt.Errorf("%w: task %s resolves %s from %s", errTaskNotDispatched, id,
 			resolved.State.State, resolved.State.Source)
 	}
 	record := resolved.Record
 	repositoryID, ok := record.RepositoryID.Get()
 	if !ok {
-		return tasks.Isolation{}, fmt.Errorf("%w: task %s names no repository to cut a copy of", errTaskRecord, id)
+		return dispatched{}, fmt.Errorf("%w: task %s names no repository to cut a copy of", errTaskRecord, id)
 	}
 	repository, err := s.store.Repository(ctx, repositoryID)
 	if err != nil {
-		return tasks.Isolation{}, fmt.Errorf("service: reading the repository task %s works in: %w", id, err)
+		return dispatched{}, fmt.Errorf("service: reading the repository task %s works in: %w", id, err)
 	}
 	copyPath, err := s.home.TaskCopy(id)
 	if err != nil {
-		return tasks.Isolation{}, err
+		return dispatched{}, err
 	}
 	if filepath.Clean(record.WorktreePath) != copyPath {
-		return tasks.Isolation{}, fmt.Errorf("%w: task %s reserved its copy at %s and this home puts it at %s",
+		return dispatched{}, fmt.Errorf("%w: task %s reserved its copy at %s and this home puts it at %s",
 			errTaskRecord, id, record.WorktreePath, copyPath)
 	}
 	instructions, err := s.home.TaskInstructions(id)
 	if err != nil {
-		return tasks.Isolation{}, err
+		return dispatched{}, err
 	}
 	if _, err := os.Stat(instructions); err != nil {
-		return tasks.Isolation{}, fmt.Errorf("%w: task %s has no instructions file at %s: %w", errTaskRecord, id, instructions, err)
+		return dispatched{}, fmt.Errorf("%w: task %s has no instructions file at %s: %w", errTaskRecord, id, instructions, err)
 	}
 	gatePath, err := s.gatePathOf(ctx, repository)
 	if err != nil {
-		return tasks.Isolation{}, err
+		return dispatched{}, err
 	}
 	want, secondCheck, err := tasks.Expect(s.home, id, record.Shape, gatePath, repository.WorkingPath, record.Branch.Or(""))
 	if err != nil {
-		return tasks.Isolation{}, fmt.Errorf("%w: task %s: %w", errTaskRecord, id, err)
+		return dispatched{}, fmt.Errorf("%w: task %s: %w", errTaskRecord, id, err)
 	}
 
 	// The claim. The anchor is the highest attempt read now, through the
@@ -305,7 +341,7 @@ func (s *Service) dispatchClaimed(ctx context.Context, id string) (tasks.Isolati
 	// is what this call saw.
 	attempts, err := s.store.TaskAttempts(ctx, id)
 	if err != nil {
-		return tasks.Isolation{}, err
+		return dispatched{}, err
 	}
 	var latest int64
 	for _, a := range attempts {
@@ -316,24 +352,24 @@ func (s *Service) dispatchClaimed(ctx context.Context, id string) (tasks.Isolati
 	}
 	attempt, err := s.store.BeginTaskAttempt(ctx, id, latest)
 	if err != nil {
-		return tasks.Isolation{}, err
+		return dispatched{}, err
 	}
 
 	// The primary, read only, and recorded before the clone that reads it
 	// again.
 	base, err := s.recordPrimary(ctx, id, attempt.Sequence, repository)
 	if err != nil {
-		return tasks.Isolation{}, err
+		return dispatched{}, err
 	}
 
 	// The copy: whatever stands at the path, or a fresh clone when nothing
 	// does.
 	if _, err := os.Lstat(copyPath); errors.Is(err, os.ErrNotExist) {
 		if err := s.cutTaskCopy(ctx, record, repository.WorkingPath, copyPath, gatePath, base); err != nil {
-			return tasks.Isolation{}, err
+			return dispatched{}, err
 		}
 	} else if err != nil {
-		return tasks.Isolation{}, fmt.Errorf("service: reading the copy of task %s at %s: %w", id, copyPath, err)
+		return dispatched{}, fmt.Errorf("service: reading the copy of task %s at %s: %w", id, copyPath, err)
 	}
 
 	// The observation and the proof.
@@ -341,32 +377,35 @@ func (s *Service) dispatchClaimed(ctx context.Context, id string) (tasks.Isolati
 	obs, err := vcs.Observe(ctx, copyPath, vcs.WithRedactor(redact.New()))
 	if err != nil {
 		if errors.Is(err, vcs.ErrNotARepository) {
-			return tasks.Isolation{}, s.refuseIsolation(ctx, id, attempt.Sequence, resolved.State.Basis.EventSequence,
+			return dispatched{}, s.refuseIsolation(ctx, id, attempt.Sequence, resolved.State.Basis.EventSequence,
 				taskstate.RefusedNotIsolated, err)
 		}
-		return tasks.Isolation{}, fmt.Errorf("service: observing the copy of task %s: %w", id, err)
+		return dispatched{}, fmt.Errorf("service: observing the copy of task %s: %w", id, err)
 	}
 	proof, err := tasks.AssertIsolated(obs, env, want)
 	if err != nil {
 		reason, refused := tasks.Refusal(err)
 		if !refused {
-			return tasks.Isolation{}, fmt.Errorf("service: asserting the copy of task %s: %w", id, err)
+			return dispatched{}, fmt.Errorf("service: asserting the copy of task %s: %w", id, err)
 		}
-		return tasks.Isolation{}, s.refuseIsolation(ctx, id, attempt.Sequence, resolved.State.Basis.EventSequence, reason, err)
+		return dispatched{}, s.refuseIsolation(ctx, id, attempt.Sequence, resolved.State.Basis.EventSequence, reason, err)
 	}
 
 	// The copy's snapshot, then the line the worker is told to run.
 	snapshot, err := copySnapshot(ctx, proof.Copy)
 	if err != nil {
-		return tasks.Isolation{}, fmt.Errorf("service: reading the references of the copy of task %s: %w", id, err)
+		return dispatched{}, fmt.Errorf("service: reading the references of the copy of task %s: %w", id, err)
 	}
 	if err := s.store.SetTaskStartSnapshot(ctx, id, snapshot); err != nil {
-		return tasks.Isolation{}, err
+		return dispatched{}, err
 	}
 	if err := appendSecondCheck(instructions, secondCheck); err != nil {
-		return tasks.Isolation{}, fmt.Errorf("service: writing the second check into the instructions of task %s: %w", id, err)
+		return dispatched{}, fmt.Errorf("service: writing the second check into the instructions of task %s: %w", id, err)
 	}
-	return proof, nil
+	return dispatched{
+		id: id, proof: proof, attempt: attempt.Sequence, want: want, instructions: instructions,
+		anchor: resolved.State.Basis.EventSequence,
+	}, nil
 }
 
 // gatePathOf is the gate repository of a repository, which a task's copy

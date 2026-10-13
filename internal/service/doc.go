@@ -282,7 +282,7 @@
 // needs a process-tree walk per platform, and the group is what this service
 // already establishes.
 //
-// # A task is dispatched here, and nothing launches it
+// # A task is dispatched here, and launched here
 //
 // PRD section 6 moves a task from Dispatched to Running only when isolation
 // is proven, and dispatch.go is the step that proves it: for a task that
@@ -296,12 +296,45 @@
 // copy's own snapshot. A copy that fails the assertion is recorded as an
 // isolation-refused entry carrying internal/taskstate's closed token, and
 // the task resolves Failed from it. A copy that passes leaves the proof in
-// this service's memory, in the slot dispatch.go owns, and that is where the
-// dispatch ends: no worker is started in this build, so a proven task stays
-// Dispatched, and #91's launch seam is what will take the proof. It runs at
-// open, after the queued tasks are released, and after every release, once
-// per task per service; dispatch.go says what a retry after a crash finds
-// and what it may not do to it.
+// this service's memory, in the slot dispatch.go owns, and the dispatch ends
+// there. It runs at open, after the queued tasks are released, and after
+// every release, once per task per service; dispatch.go says what a retry
+// after a crash finds and what it may not do to it.
+//
+// launch.go is the launch half of the same edge, and it follows a proven
+// dispatch in the same pass. It observes and asserts the copy again, under
+// the same agents.WorkerEnvironment, because the slot's proof is as of the
+// dispatch and the copy can have been retargeted since - internal/session
+// names that gap and this is the hookup that closes it to the width of one
+// step; a copy refused there is recorded exactly as a dispatch's refusal is.
+// It then creates the terminal session through session.Provider.Create with
+// the fresh proof and the task's instructions file, and records the
+// session's reference on the attempt dispatch claimed, through
+// store.SetAttemptSession, which is the one record of which terminal an
+// attempt runs in. The provider is this service's, built in driverFor as a
+// session.Pipe over the agent as resolved and before containRunner wraps it,
+// because the wrapper carries no worker arm; the sessions it creates are
+// held per task, one per attempt, and Close ends exactly those and no
+// worker an earlier service of this home started.
+//
+// Four things about the launch are stated rather than implied, and launch.go
+// owns each. The task's resolved state does not move: Running is
+// internal/taskstate's process tier answering from a Live probe, this
+// service still builds its reader with no probe, and nothing here writes an
+// event to say Running, so a launched task resolves Dispatched from the
+// record until the probe is wired, which is #91's last PR. One launch per
+// attempt per service, and a restart dispatches and launches again as a new
+// attempt over the standing copy, which is PRD section 11's relaunch in
+// place by the record's lights; the earlier process, if alive, is an orphan
+// this service holds no handle to and does not end, which #112's sweep is
+// the closer of. An adapter that has not declared worker sessions, which in
+// this build is every shipped adapter, dispatches every task and launches
+// none: the *agents.CapabilityError is logged, the task stays Dispatched
+// with its slot and attempt standing, and no reference is recorded, because
+// internal/taskstate's refusal tokens are about isolation and this is not an
+// isolation failure. And between Create returning and the reference being
+// written, a crash leaves a process no record names, which internal/session
+// states and the same sweep closes.
 //
 // The one change the fleet work makes to the run path is beside it, in
 // copy.go. A run's copy used to be cut after a fetch of the submitted commit

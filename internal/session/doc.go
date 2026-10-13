@@ -103,7 +103,8 @@
 // a marker for the home root and the task identifier, encoded as one opaque
 // string. It is the attempt's session reference: the caller records it
 // through store.SetAttemptSession, once, after Create returns, and nowhere
-// else. No file under the home holds it, and this package writes no record;
+// else, and internal/service's launch is that caller. No file under the
+// home holds it, and this package writes no record;
 // taskstate's Reader already probes by that reference, so the one record
 // serves both. A reference whose home marker is another home's probes
 // Unobserved here, never Dead, so a colliding task identifier in a second
@@ -133,14 +134,15 @@
 // # Residual gaps
 //
 //   - The proof is as of its assertion, not of the launch. Create refuses an
-//     unproven Isolation and does not re-derive a proven one, so between
-//     the assertion the service's dispatch made and Create the copy can be
-//     retargeted, by a remote added or a link swapped under it, and this
-//     package would launch into it. The service hookup that calls Create is
-//     to re-run vcs.Observe and tasks.AssertIsolated at launch and hand
-//     Create the proof that read produced, rather than accept the
-//     point-in-time proof plus the second check's detection; that is the
-//     hookup's to do, and nothing here does it.
+//     unproven Isolation and does not re-derive a proven one, so a caller
+//     holding a proof whose copy was retargeted since, by a remote added or
+//     a link swapped under it, is launched into it. The one caller in this
+//     build, internal/service's launch, re-runs vcs.Observe and
+//     tasks.AssertIsolated at launch and hands Create the proof that read
+//     produced rather than the one its dispatch holds, which narrows the
+//     window on that path to the step between its assertion and the process
+//     starting; nothing here enforces that of a caller, and nothing here
+//     closes the step that remains.
 //   - Nothing bounds how long an orphan goes on executing, and nothing here
 //     ends one: Close ends the sessions this provider holds and no other.
 //   - On Windows, Close delivers what agents' tree termination delivers

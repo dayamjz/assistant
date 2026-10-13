@@ -1,0 +1,254 @@
+package service
+
+import (
+	"errors"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/dayamjz/assistant/internal/agents"
+	"github.com/dayamjz/assistant/internal/agents/standin"
+	"github.com/dayamjz/assistant/internal/config"
+	"github.com/dayamjz/assistant/internal/principles"
+	"github.com/dayamjz/assistant/internal/session"
+	"github.com/dayamjz/assistant/internal/tasks"
+	"github.com/dayamjz/assistant/internal/taskstate"
+)
+
+// launchSubject is a dispatchSubject whose hand-built service can resolve an
+// agent, so launchTask has a driver to build its session provider from. It
+// is built by hand for the reason newDispatchSubject is: what these tests
+// reach is the launch below dispatchDue, with a step between the dispatch
+// and the launch that no protocol method offers.
+type launchSubject struct {
+	*dispatchSubject
+	agent *standin.Agent
+}
+
+// newLaunchSubject builds the subject over the given stand-in, which decides
+// whether the resolved agent carries a worker: standin.NewWorker's does and
+// standin.New's, the shipped adapter's stand-in, does not.
+func newLaunchSubject(t *testing.T, agent *standin.Agent) *launchSubject {
+	t.Helper()
+	sub := newDispatchSubject(t)
+	sub.service.catalog = agents.NewCatalog(fixedRunner{runner: agent.Runner()})
+	sub.service.cfg = config.Defaults()
+	sub.service.registry = newRegistry()
+	t.Cleanup(func() {
+		for _, err := range sub.service.closeSessions() {
+			t.Errorf("closing the sessions: %v", err)
+		}
+	})
+	return &launchSubject{dispatchSubject: sub, agent: agent}
+}
+
+// workerStandIn is the worker-capable stand-in with a greeting, so a launch
+// that started a process shows it through Capture.
+func workerStandIn(t *testing.T) *standin.Agent {
+	t.Helper()
+	return standin.NewWorker(t, standin.Script{Worker: &standin.WorkerScript{Greeting: "worker ready"}},
+		agents.WithTerminationGrace(2*time.Second))
+}
+
+// waitLiveness polls the provider until the reference probes want.
+func waitLiveness(t *testing.T, p session.Provider, ref string, want taskstate.Liveness) session.Observation {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		got := p.Probe(t.Context(), ref)
+		if got.Liveness == want {
+			return got
+		}
+		if !time.Now().Before(deadline) {
+			t.Fatalf("the reference never probed %s; it probes %+v", want, got)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// PRD principle P11, at the launch edge: the copy is asserted again at
+// launch, so a copy retargeted between dispatch's assertion and the launch
+// is refused there and no worker starts in it. The control is the same
+// subject untouched, which launches: the refusal below is the assertion
+// refusing and not the launch failing for some other reason. The retarget is
+// a second remote added to the copy with real git, which the shape's exact
+// remote set refuses with the wrong-shape token; the refusal is recorded as
+// the isolation-refused event the dispatch's own refusal would be, anchored
+// to the same history, the task resolves Failed from it, the attempt keeps
+// no session, and the stand-in recorded no worker. The time-of-check gap
+// that remains is between this assertion and the process starting.
+func TestACopyRetargetedBetweenDispatchAndLaunchIsRefusedAndNotLaunched(t *testing.T) {
+	principles.Cite(t, principles.P11)
+	ctx := t.Context()
+
+	// The control: untouched, the dispatch launches.
+	control := newLaunchSubject(t, workerStandIn(t))
+	d, err := control.service.dispatchTask(ctx, control.task)
+	if err != nil {
+		t.Fatalf("dispatching the control: %v", err)
+	}
+	launched, err := control.service.launchTask(ctx, d)
+	if err != nil {
+		t.Fatalf("launching the control, whose copy was not touched: %v", err)
+	}
+	provider, held, ok := control.service.sessionOf(control.task)
+	if !ok || held != launched {
+		t.Fatalf("the service holds %v, %v for the launched control, want the session launchTask returned", held, ok)
+	}
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		got, err := provider.Capture(launched)
+		if err != nil {
+			t.Fatalf("Capture: %v", err)
+		}
+		if strings.Contains(got.Text, "worker ready") {
+			break
+		}
+		if !time.Now().Before(deadline) {
+			t.Fatalf("the control's worker never greeted; its capture is %q", got.Text)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	attempts, err := control.records.TaskAttempts(ctx, control.task)
+	if err != nil || len(attempts) != 1 || attempts[0].SessionRef.Or("") != launched.Reference().String() {
+		t.Fatalf("the control has attempts %+v (%v), want one carrying %s", attempts, err, launched.Reference())
+	}
+
+	// The subject: retargeted after the dispatch proved it.
+	subject := newLaunchSubject(t, workerStandIn(t))
+	d, err = subject.service.dispatchTask(ctx, subject.task)
+	if err != nil {
+		t.Fatalf("dispatching: %v", err)
+	}
+	_, upstream, _ := heldSubject(t)
+	heldGit(t, subject.copy, "remote", "add", "elsewhere", upstream)
+
+	_, err = subject.service.launchTask(ctx, d)
+	var refused *isolationRefused
+	if !errors.As(err, &refused) || !errors.Is(err, tasks.ErrNotIsolated) {
+		t.Fatalf("the launch answered %v, want the typed isolation refusal", err)
+	}
+	if refused.Reason != taskstate.RefusedWrongShape || refused.Attempt != 1 {
+		t.Fatalf("the refusal is %+v, want wrong-shape on attempt 1", refused)
+	}
+	if _, _, ok := subject.service.sessionOf(subject.task); ok {
+		t.Fatal("the service holds a session for a task whose launch was refused")
+	}
+	resolved, err := subject.service.tasks().Resolved(ctx, subject.task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.State.State != taskstate.Failed || resolved.State.Source != taskstate.SourceEvent {
+		t.Fatalf("the task resolves %s from %s, want Failed from the refusal", resolved.State.State, resolved.State.Source)
+	}
+	events, err := subject.records.TaskEvents(ctx, subject.task, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var refusals int
+	for _, e := range events {
+		if e.Kind == isolationRefusedKind {
+			refusals++
+			if reason, err := taskstate.ParseIsolationRefusal(e.Detail); err != nil || reason != taskstate.RefusedWrongShape {
+				t.Fatalf("the refusal carries %q (%v), want the wrong-shape token", e.Detail, err)
+			}
+		}
+	}
+	if refusals != 1 {
+		t.Fatalf("the task has %d refusals recorded, want one", refusals)
+	}
+	attempts, err = subject.records.TaskAttempts(ctx, subject.task)
+	if err != nil || len(attempts) != 1 || attempts[0].SessionRef.IsKnown() {
+		t.Fatalf("the task has attempts %+v (%v), want the dispatch's one with no session", attempts, err)
+	}
+	for _, call := range subject.agent.Calls() {
+		if call.Worker {
+			t.Fatalf("a worker was started for the refused task: %s", call)
+		}
+	}
+	// The slot keeps the dispatch's proof: a refused launch is not retried
+	// behind it, which is dispatchDue's one attempt per task per service.
+	if held, ok := subject.service.isolationOf(subject.task); !ok || !held.Proven() {
+		t.Fatalf("the slot holds %+v, %v after the refused launch", held, ok)
+	}
+}
+
+// A service resolved to an adapter that has not declared worker sessions
+// dispatches and never launches: the launch is refused with
+// *agents.CapabilityError naming the capability, nothing is recorded, the
+// task stays Dispatched from the record with its proof in the slot, and the
+// attempt keeps no session. The shipped adapter's stand-in is such an
+// adapter in this build.
+func TestARunnerWithoutWorkerSessionsLeavesTheTaskDispatched(t *testing.T) {
+	ctx := t.Context()
+	subject := newLaunchSubject(t, standin.New(t, standin.Script{}))
+	d, err := subject.service.dispatchTask(ctx, subject.task)
+	if err != nil {
+		t.Fatalf("dispatching: %v", err)
+	}
+	_, err = subject.service.launchTask(ctx, d)
+	var undeclared *agents.CapabilityError
+	if !errors.As(err, &undeclared) || undeclared.Capability != agents.CapabilityWorkerSessions {
+		t.Fatalf("the launch answered %v, want a *agents.CapabilityError naming %s", err, agents.CapabilityWorkerSessions)
+	}
+	if errors.Is(err, tasks.ErrNotIsolated) {
+		t.Fatal("an adapter without a worker read as an isolation refusal")
+	}
+	if _, _, ok := subject.service.sessionOf(subject.task); ok {
+		t.Fatal("the service holds a session nothing could have started")
+	}
+	resolved, err := subject.service.tasks().Resolved(ctx, subject.task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.State.State != taskstate.Dispatched || resolved.State.Source != taskstate.SourceEvent {
+		t.Fatalf("the task resolves %s from %s, want Dispatched from the record", resolved.State.State, resolved.State.Source)
+	}
+	events, err := subject.records.TaskEvents(ctx, subject.task, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range events {
+		if e.Kind == isolationRefusedKind {
+			t.Fatalf("a missing capability was recorded as an isolation refusal: %+v", e)
+		}
+	}
+	attempts, err := subject.records.TaskAttempts(ctx, subject.task)
+	if err != nil || len(attempts) != 1 || attempts[0].SessionRef.IsKnown() {
+		t.Fatalf("the task has attempts %+v (%v), want the dispatch's one with no session", attempts, err)
+	}
+	if held, ok := subject.service.isolationOf(subject.task); !ok || !held.Proven() {
+		t.Fatalf("the slot holds %+v, %v, want the dispatch's proof intact", held, ok)
+	}
+}
+
+// closeSessions ends every session the service launched and forgets it: the
+// reference probes Dead through the same provider afterwards, by identity
+// alone, and the service holds no session for the task.
+func TestCloseEndsTheSessionsTheServiceLaunched(t *testing.T) {
+	ctx := t.Context()
+	subject := newLaunchSubject(t, workerStandIn(t))
+	d, err := subject.service.dispatchTask(ctx, subject.task)
+	if err != nil {
+		t.Fatalf("dispatching: %v", err)
+	}
+	launched, err := subject.service.launchTask(ctx, d)
+	if err != nil {
+		t.Fatalf("launching: %v", err)
+	}
+	provider, _, _ := subject.service.sessionOf(subject.task)
+	ref := launched.Reference().String()
+	if got := provider.Probe(ctx, ref); got.Liveness != taskstate.Live {
+		t.Fatalf("before Close the session probes %+v, want Live", got)
+	}
+	for _, err := range subject.service.closeSessions() {
+		t.Fatalf("closing the sessions: %v", err)
+	}
+	if _, _, ok := subject.service.sessionOf(subject.task); ok {
+		t.Fatal("the service still holds the session it closed")
+	}
+	waitLiveness(t, provider, ref, taskstate.Dead)
+	if errs := subject.service.closeSessions(); len(errs) != 0 {
+		t.Fatalf("a second close answered %v, want nothing to close", errs)
+	}
+}

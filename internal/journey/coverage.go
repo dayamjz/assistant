@@ -240,9 +240,12 @@ func Coverage() []Established {
 				"real observation of every shape the principle names and passes a proper clone of " +
 				"either task shape, and internal/agents strips the redirecting git variables from a " +
 				"worker's environment, and internal/session's Create refuses an Isolation the assertion did " +
-				"not produce before it asks for a worker. A worker started through internal/agents " +
-				"directly is still started where it is told, and no service path reaches Create yet, " +
-				"so a green P11 does not read as no worker launches unproven."},
+				"not produce before it asks for a worker. The launch edge is internal/service's, at " +
+				"package reach through that package's own test rather than through this harness: its " +
+				"launch asserts the copy again before Create, and a copy retargeted between dispatch " +
+				"and launch is refused there and not launched. A worker started through internal/agents " +
+				"directly is still started where it is told, so a green P11 does not read as no worker " +
+				"launches unproven."},
 		{principles.P12, ReachNone,
 			"Nothing here removes an isolated copy. The binary's eject removes a gate, which is a " +
 				"different question. What is claimed is claimed at package reach and is the proof's " +
