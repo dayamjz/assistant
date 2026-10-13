@@ -49,11 +49,13 @@ const (
 )
 
 // Arm is arm verification's answer. Reason is set exactly when Outcome is
-// ArmFailed, and Sequence is the beacon's when the outcome rests on one.
+// ArmFailed, and Sequence is the beacon's when the outcome rests on one. It
+// carries wire names because it is the answer the machine interface's
+// supervision.assert gives as it stands, rather than a second shape of it.
 type Arm struct {
-	Outcome  ArmOutcome
-	Reason   ArmReason
-	Sequence uint64
+	Outcome  ArmOutcome `json:"outcome"`
+	Reason   ArmReason  `json:"reason,omitempty"`
+	Sequence uint64     `json:"sequence"`
 }
 
 // ArmOf is arm verification's decision over one look at the home, pure on

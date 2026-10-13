@@ -324,6 +324,12 @@ type driver struct {
 	// the unwrapped agent, and this is the one place that agent is held
 	// unwrapped.
 	sessions *session.Pipe
+	// workers is the worker group set the provider above produces, held
+	// here so a peer can be placed in a task's worker group without
+	// asking the provider's concrete type; workers.go reads it. It is nil
+	// until the driver is built, and a service with no driver has launched
+	// no worker, so nobody is in a worker group before it exists.
+	workers *session.Workers
 }
 
 // topology is one resolved configuration's pipeline and executor. Every run
@@ -677,7 +683,7 @@ func (s *Service) driverFor(ctx context.Context) (*driver, error) {
 	if err != nil {
 		return nil, err
 	}
-	s.built = &driver{agent: resolution, runs: runService, sessions: sessions}
+	s.built = &driver{agent: resolution, runs: runService, sessions: sessions, workers: sessions.Workers()}
 	s.log.Printf("resolved agent %s for runs of this service", resolution.Name)
 	return s.built, nil
 }

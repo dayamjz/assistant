@@ -9,8 +9,8 @@ import (
 	"github.com/dayamjz/assistant/internal/session"
 )
 
-// A caller holding the provider, or a session handle, can reach no fixer
-// session: a terminal session is not a conversation session, and nothing
+// A caller holding the provider, a session handle, or the worker group set
+// can reach no fixer session: a terminal session is not a conversation session, and nothing
 // here feeds P4's. The walk is asked of the static type graph, with
 // agents.Resolution as the positive control, so a walk that stopped
 // inspecting anything fails here instead of reporting the guarantee.
@@ -29,6 +29,8 @@ func TestNoRouteFromTheProviderOrTheHandleToAFixerSession(t *testing.T) {
 		reflect.TypeOf(&session.Pipe{}),
 		reflect.TypeOf(&session.Session{}),
 		reflect.TypeOf(session.Session{}),
+		reflect.TypeOf(&session.Workers{}),
+		reflect.TypeOf(session.Membership{}),
 	} {
 		if found := route.ToFixerSession(root); len(found) != 0 {
 			t.Errorf("%s reaches a fixer session:\n%v", root, found)

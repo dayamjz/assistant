@@ -585,6 +585,8 @@ func TestASentinelRefusalMatchesItselfAtTheClient(t *testing.T) {
 		"payload":       ipc.ErrPayloadTooLarge,
 		"unavailable":   ipc.ErrUnavailable,
 		"contained":     ipc.ErrContained,
+		"worker":        ipc.ErrWorker,
+		"not a worker":  ipc.ErrNotWorker,
 	}
 	for name, sentinel := range sentinels {
 		t.Run(name, func(t *testing.T) {

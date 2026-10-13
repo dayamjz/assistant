@@ -494,6 +494,36 @@ type Notification struct {
 	Ignored []Ignored `json:"ignored,omitempty"`
 }
 
+// Appended is the answer to a worker's task.event: the entry as the history
+// now holds it, which is internal/store's record and not a second shape of
+// it. The task it names is the one the caller's credentials placed it in.
+type Appended struct {
+	// Event is the entry, with the sequence the store assigned it.
+	Event store.TaskEvent `json:"event"`
+}
+
+// Wakes is the answer to a drain of the wake queue: the queued rows, oldest
+// first, as internal/store holds them. Every row is still queued when this is
+// answered, because a drain acknowledges nothing; the coordinator
+// acknowledges what it handled through AcknowledgeRequest, and a row it did
+// not acknowledge is returned by the next drain, which is at-least-once
+// delivery stated on the answer rather than assumed by the reader.
+type Wakes struct {
+	// Wakes are the queued rows, oldest first, at most the requested limit.
+	Wakes []store.Wake `json:"wakes"`
+}
+
+// Acknowledged is the answer to an acknowledgement: which rows were closed
+// and who the record says closed them, which is what the surface derived and
+// not what the caller said.
+type Acknowledged struct {
+	// Wakes are the identifiers the batch closed, as the request named them.
+	Wakes []int64 `json:"wakes"`
+	// By is who the rows record as having acknowledged them, rendered the
+	// way internal/store renders the closed set.
+	By string `json:"by"`
+}
+
 // Check is one thing assistant doctor looked at.
 type Check struct {
 	// Name is what was checked.

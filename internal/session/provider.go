@@ -86,6 +86,9 @@ type Session struct {
 	ref    Reference
 	owner  *Pipe
 	worker agents.Worker
+	// leave takes the worker's group out of the provider's Workers; it is
+	// idempotent and runs when the process ends and when Close ends it.
+	leave func()
 }
 
 // Reference is the session's identity, which the caller records as the

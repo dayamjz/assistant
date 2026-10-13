@@ -27,7 +27,10 @@ import (
 //
 // Authority is decided before this is called. internal/ipc refuses a
 // restricted method to a caller its Ancestry places inside an active
-// validation stage, so nothing here asks who is calling.
+// validation stage, so nothing here asks whether a caller is contained. The
+// one question a handler asks of a caller is the other relation,
+// whether it is a task's worker, and workers.go derives that from the same
+// credentials for the five methods whose answer depends on it.
 func (s *Service) handle(ctx context.Context, req ipc.Request) (json.RawMessage, error) {
 	switch req.Method {
 	case ipc.MethodHealth:
@@ -52,7 +55,9 @@ func (s *Service) handle(ctx context.Context, req ipc.Request) (json.RawMessage,
 	case ipc.MethodRunCancel:
 		return call(ctx, req, s.cancel)
 	case ipc.MethodGateAdmit:
-		return call(ctx, req, s.admit)
+		return call(ctx, req, func(ctx context.Context, r machine.GateRequest) (machine.Admission, error) {
+			return s.admit(ctx, req, r)
+		})
 	case ipc.MethodGateNotify:
 		return call(ctx, req, s.notify)
 	case ipc.MethodStageReport:
@@ -63,6 +68,22 @@ func (s *Service) handle(ctx context.Context, req ipc.Request) (json.RawMessage,
 		})
 	case ipc.MethodTaskGet:
 		return call(ctx, req, s.task)
+	case ipc.MethodTaskEvent:
+		return call(ctx, req, func(ctx context.Context, r machine.TaskEventRequest) (machine.Appended, error) {
+			return s.taskEvent(ctx, req, r)
+		})
+	case ipc.MethodWakesList:
+		return call(ctx, req, func(ctx context.Context, r machine.WakesRequest) (machine.Wakes, error) {
+			return s.listWakes(ctx, req, r)
+		})
+	case ipc.MethodWakesAcknowledge:
+		return call(ctx, req, func(ctx context.Context, r machine.AcknowledgeRequest) (machine.Acknowledged, error) {
+			return s.acknowledgeWakes(ctx, req, r)
+		})
+	case ipc.MethodSupervisionAssert:
+		return call(ctx, req, func(ctx context.Context, _ struct{}) (supervisor.Arm, error) {
+			return s.assertSupervision(ctx, req)
+		})
 	case ipc.MethodServiceStop:
 		return call(ctx, req, func(ctx context.Context, r machine.LifecycleRequest) (machine.Lifecycle, error) {
 			return s.lifecycle(ctx, req, r, false)

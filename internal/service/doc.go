@@ -282,6 +282,28 @@
 // needs a process-tree walk per platform, and the group is what this service
 // already establishes.
 //
+// # A worker is placed by a second relation, and four methods turn on it
+//
+// The other thing the same credentials decide is which task a peer is the
+// worker of. That is internal/session's worker group set, which session.Pipe
+// fills for exactly each worker process's lifetime, and this service reads
+// it through the driver that holds the provider; workers.go owns the
+// derivation - credentials, then the peer's process group read the way
+// containment reads it, then the set - and states it per platform, Windows
+// included, where no peer can be placed because none is identified. It is
+// applied by handlers, not by internal/ipc's access class, and that table
+// says why. task.event admits only a worker and appends to its own task's
+// history, holding the kind to internal/taskstate's writer column so a
+// worker cannot append what the program decides; wakes.list,
+// wakes.acknowledge and supervision.assert are the coordinator's and refuse
+// a worker, with who acknowledged derived by internal/ipc's
+// Request.WakeAcknowledger and read from nothing; and gate.admit holds a
+// worker's push to admit_workers.go's rule, only its task's branch, forward,
+// never a deletion, with the reasoning for its being admission's decision
+// rather than internal/safety's written there. A worker's group is in no
+// stage, so containment passes its push and the rule is what admission asks
+// of it; a person's push meets the rule nowhere.
+//
 // # A task is dispatched here, and launched here
 //
 // PRD section 6 moves a task from Dispatched to Running only when isolation
@@ -463,7 +485,8 @@
 // It does not push, open a pull request, or move any reference. Those are
 // stage bodies' work, behind internal/vcs, internal/safety and internal/forge.
 //
-// It does not decide who resolved a hold. internal/ipc derives that from the
-// surface, and every resolution arriving over this protocol is
-// store.ResolvedByMachineInterface, including one a person typed.
+// It does not decide who resolved a hold, or who acknowledged a wake.
+// internal/ipc derives both from the surface: every resolution arriving over
+// this protocol is store.ResolvedByMachineInterface, including one a person
+// typed, and every acknowledgement is store.AcknowledgedByCoordinator.
 package service

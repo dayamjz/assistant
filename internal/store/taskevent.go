@@ -17,18 +17,22 @@ import (
 // question: a caller that reads the newest event still has to resolve the state through
 // internal/taskstate to learn it. There is deliberately no accessor that returns only the last
 // event.
+//
+// It carries the wire names internal/machine's answers use, because the
+// entry a worker appends through the machine interface is answered as this
+// record rather than as a second shape of it.
 type TaskEvent struct {
 	// TaskID names the task.
-	TaskID string
+	TaskID string `json:"task_id"`
 	// Sequence is the event's position in the task's history, counted from
 	// one, with no gaps.
-	Sequence int64
+	Sequence int64 `json:"sequence"`
 	// Kind is what happened, in the worker's own vocabulary.
-	Kind string
+	Kind string `json:"kind"`
 	// Detail is what the worker said about it.
-	Detail string
+	Detail string `json:"detail"`
 	// At is when it was appended.
-	At time.Time
+	At time.Time `json:"at"`
 }
 
 // AppendTaskEvent adds one entry to a task's history and returns it with the

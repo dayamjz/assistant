@@ -44,6 +44,11 @@ func workerAgent(t *testing.T) (*agents.Catalog, *standin.Agent) {
 				// The relaunch note's first line, answered so a test waits on
 				// the worker's output for the note rather than on its record.
 				{Contains: "This is attempt", Reply: "the relaunch note was read"},
+				// The instructions file's last line, the second check dispatch
+				// appended, answered for the same reason: a test waits on this
+				// reply and then reads the record once, rather than polling
+				// the record while the worker still rewrites it.
+				{Contains: "git rev-parse --show-toplevel", Reply: "the second check was read"},
 				// A worker that finishes on its own, which is the shape a
 				// liveness probe has to tell from one its caller ended.
 				{Contains: "finish", Reply: "worker finished", Ends: true},
@@ -124,34 +129,24 @@ func waitCapture(t *testing.T, p session.Provider, s *session.Session, want stri
 	}
 }
 
-// waitWorkerLines polls the stand-in's record until its one worker has read
-// a line carrying want, and returns that call. The worker rewrites its
-// record as each line arrives, so a line is waited for rather than read once.
-func waitWorkerLines(t *testing.T, agent *standin.Agent, want string) standin.Call {
+// workerCall reads the stand-in's record once and returns its one worker
+// call. It is read after a capture wait on a line the worker replies to, so
+// the record holds that line already; polling the record while the worker
+// is still rewriting it is what standin.Calls' doc warns against, since on
+// a platform where an open file cannot be replaced the poller ends the
+// worker it waits on.
+func workerCall(t *testing.T, agent *standin.Agent) standin.Call {
 	t.Helper()
-	deadline := time.Now().Add(launchWait)
-	for {
-		var workers []standin.Call
-		for _, call := range agent.Calls() {
-			if call.Worker {
-				workers = append(workers, call)
-			}
+	var workers []standin.Call
+	for _, call := range agent.Calls() {
+		if call.Worker {
+			workers = append(workers, call)
 		}
-		if len(workers) > 1 {
-			t.Fatalf("the stand-in recorded %d workers, want one: %s", len(workers), workers)
-		}
-		if len(workers) == 1 {
-			for _, line := range workers[0].Lines {
-				if strings.Contains(line, want) {
-					return workers[0]
-				}
-			}
-		}
-		if !time.Now().Before(deadline) {
-			t.Fatalf("no worker read a line carrying %q; the record is %s", want, workers)
-		}
-		time.Sleep(time.Millisecond)
 	}
+	if len(workers) != 1 {
+		t.Fatalf("the stand-in recorded %d workers, want one: %s", len(workers), workers)
+	}
+	return workers[0]
 }
 
 // launchedSession is the session the service holds for a task, or a fatal
@@ -221,7 +216,8 @@ func TestADispatchedDeliveryTaskIsLaunched(t *testing.T) {
 		if got := listedTask(t, running.client, id); !readsRunning(got) {
 			t.Fatalf("after the launch tasks.list resolves %+v, want Running from the process tier with its terminal live", got)
 		}
-		call := waitWorkerLines(t, agent, "git rev-parse --show-toplevel")
+		waitCapture(t, provider, launched, "the second check was read")
+		call := workerCall(t, agent)
 		if call.Dir != resolvedCopy(t, h, id) {
 			t.Errorf("the worker was started in %s, want the proven copy %s", call.Dir, resolvedCopy(t, h, id))
 		}
@@ -280,7 +276,7 @@ func TestADispatchedDeliveryTaskIsLaunched(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(raw)
-	call := waitWorkerLines(t, agent, "git rev-parse --show-toplevel")
+	call := workerCall(t, agent)
 	var read []string
 	for _, line := range call.Lines {
 		read = append(read, line)
@@ -317,7 +313,8 @@ func TestADispatchedInvestigationTaskIsLaunched(t *testing.T) {
 		if got := taskState(t, running.client, id); !readsRunning(got) {
 			t.Fatalf("after the launch the task resolves %+v, want Running from the process tier", got)
 		}
-		call := waitWorkerLines(t, agent, "git rev-parse --show-toplevel")
+		waitCapture(t, provider, launched, "the second check was read")
+		call := workerCall(t, agent)
 		if call.Dir != resolvedCopy(t, h, id) {
 			t.Errorf("the worker was started in %s, want the proven copy %s", call.Dir, resolvedCopy(t, h, id))
 		}
