@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
@@ -35,6 +36,24 @@ const Endpoint = "https://api.typesafe.ai/v1/systemone"
 
 // DefaultTimeout bounds one request, from sending it to reading its answer.
 const DefaultTimeout = 30 * time.Second
+
+// Bounds on how many requests leave the machine. MaxRequestsPerReview bounds
+// one review's whole fan-out - every screen piece and every trace together -
+// for a client from ForReview. MaxRequestsPerFile bounds one file's screen,
+// counting each piece and each re-ask of a halved piece, so that a file large
+// enough to need more is not screened at all rather than screened in part.
+//
+// Neither was measured. They are round figures chosen so that an ordinary
+// review is far inside them - one request per file and per trace - and so
+// that a review's worst case is bounded in time as well as in count: with the
+// review stage asking four at a time and each request bounded by
+// DefaultTimeout, 128 requests is at most 32 consecutive rounds of timeouts,
+// about sixteen minutes. Eight pieces of maxPieceBytes is half a mebibyte of
+// one file's changed lines.
+const (
+	MaxRequestsPerReview = 128
+	MaxRequestsPerFile   = 8
+)
 
 // Bounds on what one request carries. They are this package's own, not the
 // provider's: the provider states its limit in tokens, and this package does
@@ -63,7 +82,36 @@ type Client struct {
 	http     *http.Client
 	redactor redact.Redactor
 	recorder Recorder
+	history  History
 	maxPiece int
+	// perReview and perFile are the request bounds; allowance is what is
+	// left of perReview for the one review a client from ForReview serves,
+	// and nil on a client that serves none.
+	perReview int
+	perFile   int
+	allowance *allowance
+}
+
+// allowance is how many requests one review may still send. It is shared by
+// every goroutine asking on that review's behalf.
+type allowance struct {
+	of   int
+	left atomic.Int64
+}
+
+// take spends one request and reports whether there was one to spend. A nil
+// allowance is a client serving no review, which only the per-file bound
+// limits.
+func (a *allowance) take() bool {
+	if a == nil {
+		return true
+	}
+	return a.left.Add(-1) >= 0
+}
+
+// over is the failure detail for a request the review's bound refused.
+func (a *allowance) over() string {
+	return "the review reached its bound of " + strconv.Itoa(a.of) + " decision-model requests before this was asked"
 }
 
 // Option configures a Client.
@@ -88,6 +136,47 @@ func WithTimeout(d time.Duration) Option {
 // Record drops what it is handed.
 func WithRecorder(r Recorder) Option { return func(c *Client) { c.recorder = r } }
 
+// WithHistory gives the client the history Firings reads. Without one, Firings
+// reports that there is no record to read.
+func WithHistory(h History) Option { return func(c *Client) { c.history = h } }
+
+// WithBounds replaces MaxRequestsPerReview and MaxRequestsPerFile with
+// perReview and perFile; a value that is not positive leaves its bound as it
+// was. It exists so a test can reach a bound without a change of the size the
+// shipped bounds are set for. Nothing in this build calls it, and no
+// configuration key reaches either bound.
+func WithBounds(perReview, perFile int) Option {
+	return func(c *Client) {
+		if perReview > 0 {
+			c.perReview = perReview
+		}
+		if perFile > 0 {
+			c.perFile = perFile
+		}
+	}
+}
+
+// ForReview returns a client for one review: everything c has, plus one
+// allowance of c's per-review bound that every request the returned client
+// sends draws on, from any goroutine. A request the allowance cannot cover is
+// not sent, and its check fails with FailureOverBound. A nil client returns
+// nil, which is still a client with no key.
+//
+// The allowance is spent in the order requests are taken, so when a review
+// reaches the bound, which paths went unasked follows the order the caller
+// asked in and, for requests asked concurrently, which goroutine got there
+// first. The caller learns which from each Result and is the one to name
+// them.
+func (c *Client) ForReview() *Client {
+	if c == nil {
+		return nil
+	}
+	bounded := *c
+	bounded.allowance = &allowance{of: c.perReview}
+	bounded.allowance.left.Store(int64(c.perReview))
+	return &bounded
+}
+
 // New returns a client that authenticates with key. A key that is empty once
 // trimmed is no key: the client sends nothing and every check fails with
 // FailureNoKey.
@@ -99,6 +188,9 @@ func New(key string, opts ...Option) *Client {
 		http:     &http.Client{},
 		redactor: redact.New(),
 		maxPiece: maxPieceBytes,
+
+		perReview: MaxRequestsPerReview,
+		perFile:   MaxRequestsPerFile,
 	}
 	for _, opt := range opts {
 		opt(c)
@@ -137,6 +229,9 @@ func (c *Client) Trace(ctx context.Context, path, reason, diff string) Result {
 		return failed(CheckTrace, path, FailureTooLarge, "the diff is "+strconv.Itoa(len(diff))+
 			" bytes and one trace check carries at most "+strconv.Itoa(c.maxPiece), 0)
 	}
+	if !c.allowance.take() {
+		return failed(CheckTrace, path, FailureOverBound, c.allowance.over(), 0)
+	}
 	p, failure, detail := c.ask(ctx, CheckTrace, map[string]string{"path": path, "reason": reason, "diff": diff})
 	if failure != "" {
 		return failed(CheckTrace, path, failure, detail, 1)
@@ -162,6 +257,10 @@ func (c *Client) Screen(ctx context.Context, path, diff string) Result {
 		return failed(CheckScreen, path, FailureNothingToAsk, "there were no changed lines to put to the model", 0)
 	}
 	queue := pieces(diff, c.maxPiece)
+	if len(queue) > c.perFile {
+		return failed(CheckScreen, path, FailureOverBound, "the diff is "+strconv.Itoa(len(queue))+
+			" pieces and one file's screen may take at most "+strconv.Itoa(c.perFile)+" requests", 0)
+	}
 	var (
 		requests   int
 		highest    float64
@@ -171,6 +270,14 @@ func (c *Client) Screen(ctx context.Context, path, diff string) Result {
 	for len(queue) > 0 {
 		piece := queue[0]
 		queue = queue[1:]
+		if requests >= c.perFile {
+			return failed(CheckScreen, path, FailureOverBound, "pieces refused as too large were cut "+
+				"until the file needed more than the "+strconv.Itoa(c.perFile)+" requests one file's "+
+				"screen may take", requests)
+		}
+		if !c.allowance.take() {
+			return failed(CheckScreen, path, FailureOverBound, c.allowance.over(), requests)
+		}
 		p, failure, detail := c.ask(ctx, CheckScreen, map[string]string{"path": path, "diff": piece})
 		requests++
 		if failure == FailureTooLarge && len(piece) > minPieceBytes {

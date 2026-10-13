@@ -209,6 +209,10 @@ type runState struct {
 	head            string
 	pushed          string
 	recorded        map[pipeline.Stage]recordedStage
+	// decision is what the review stage wrote at pipeline.KeyDecisionChecks,
+	// taken from a real review's state rather than written here, and the
+	// zero value when the review wrote nothing.
+	decision graph.Value
 }
 
 // recordedStage is what one stage of the run left in state.
@@ -231,6 +235,7 @@ func (r runState) state(t *testing.T) map[pipeline.Key]graph.Value {
 		pipeline.KeySubmitted:       graph.TextValue(r.submitted),
 		pipeline.KeyHead:            graph.TextValue(r.head),
 		pipeline.KeyPushed:          graph.TextValue(r.pushed),
+		pipeline.KeyDecisionChecks:  r.decision,
 	}
 	for stage, recorded := range r.recorded {
 		out[stage.OutcomeKey()] = graph.TextValue(string(recorded.outcome))

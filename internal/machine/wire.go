@@ -155,6 +155,11 @@ type Stage struct {
 	// Fix is the summary the last fix round of this stage wrote, empty when
 	// there was none.
 	Fix string `json:"fix,omitempty"`
+	// Executions is when each execution of this stage's body started and
+	// ended, in the order they ended, which is internal/store's record. A
+	// stage taking fix rounds has one per execution; a stage that never ran a
+	// body has none.
+	Executions []store.StageExecution `json:"executions,omitempty"`
 }
 
 // Run is one run as a surface reports it: the record, where its execution

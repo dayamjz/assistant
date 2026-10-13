@@ -103,6 +103,12 @@ const (
 	KeyPullRequest Key = "pull_request"
 	// KeyChecks is the checks verdict the CI stage reached.
 	KeyChecks Key = "checks"
+	// KeyDecisionChecks is the review stage's record of what the
+	// decision-model checks did over the change - the mode, the model version,
+	// and how many files or traces each check covered - which the pull
+	// request stage writes into the body. Its encoding belongs to
+	// internal/stages, which both writes and reads it.
+	KeyDecisionChecks Key = "decision.checks"
 	// KeySkip names the stages this one run skips. It is a run input, per P2:
 	// a person may skip a stage on purpose for one run, and no standing
 	// configuration may skip one on their behalf, which is why nothing in
@@ -171,6 +177,10 @@ var sharedKeys = []keySpec{
 	{KeyPushed, graph.KindText, graph.MergeNone, ownerStage},
 	{KeyPullRequest, graph.KindText, graph.MergeNone, ownerStage},
 	{KeyChecks, graph.KindText, graph.MergeNone, ownerStage},
+	// The review takes fix rounds and writes this on every execution, so it
+	// carries the anchor's merge rule for the anchor's reason: the last write
+	// is the record of the review the run finally stood on.
+	{KeyDecisionChecks, graph.KindText, graph.MergeLastWriteWins, ownerStage},
 	{KeyCancelled, graph.KindBool, graph.MergeNone, ownerPipeline},
 }
 

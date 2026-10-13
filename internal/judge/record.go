@@ -1,5 +1,7 @@
 package judge
 
+import "context"
+
 // Record is one answer as PRD section 5 has it kept: which run and stage
 // asked, which check, about which path, of which model version, what came
 // back, the cutoff it was compared against, and the finding it produced.
@@ -34,11 +36,14 @@ type Record struct {
 	Finding string
 }
 
-// Recorder keeps answers. It returns nothing, so recording is best-effort by
-// the shape of the seam: an implementation that cannot keep a row drops it,
-// and the record understates rather than holding a run up.
+// Recorder keeps answers. It returns why it could not keep one, so a caller
+// can say the record lost a row rather than leaving that in a log: the review
+// stage names every answer it could not record in a note. Recording is still
+// best-effort - a row the recorder could not keep is not retried, and nothing
+// is held up for it - and the record then understates, which that note is
+// what makes visible.
 type Recorder interface {
-	RecordAnswer(Record)
+	RecordAnswer(Record) error
 }
 
 // RecordOf is the record of r as asked for run at stage, with finding the
@@ -55,11 +60,46 @@ func RecordOf(run, stage string, r Result, finding string) Record {
 	return rec
 }
 
-// Record hands rec to the client's recorder, and drops it when the client was
-// built without one. A nil client drops it too.
-func (c *Client) Record(rec Record) {
+// Record hands rec to the client's recorder and returns why it could not keep
+// it. A client built without a recorder, and a nil client, keep nothing and
+// report nothing lost, because nothing was asked to keep it.
+func (c *Client) Record(rec Record) error {
 	if c == nil || c.recorder == nil {
-		return
+		return nil
 	}
-	c.recorder.RecordAnswer(rec)
+	return c.recorder.RecordAnswer(rec)
+}
+
+// RunFirings is one earlier run in which a check fired: how many of its
+// answers to the check produced a finding, and how many of those anything the
+// run did next followed - a later finding at the path, a fix round touching
+// it, or a person's answer at a hold over it.
+type RunFirings struct {
+	// Run is the run.
+	Run string
+	// Fired is how many answers produced a finding.
+	Fired int
+	// Followed is how many of those anything followed.
+	Followed int
+}
+
+// History reads the record back for the one question the review stage asks
+// of it: where did this check fire before, and did anything follow.
+type History interface {
+	// Firings returns the finished runs of the repository run validates,
+	// other than run itself, in which check produced at least one finding,
+	// newest first. A run still in progress is left out, because what
+	// follows an answer in it may not have happened yet.
+	Firings(ctx context.Context, run string, check Check) ([]RunFirings, error)
+}
+
+// Firings asks the client's history where check fired before run, and
+// reports false when the client was built without one, which is a client that
+// has no record to read rather than a record that is empty.
+func (c *Client) Firings(ctx context.Context, run string, check Check) ([]RunFirings, bool, error) {
+	if c == nil || c.history == nil {
+		return nil, false, nil
+	}
+	firings, err := c.history.Firings(ctx, run, check)
+	return firings, true, err
 }

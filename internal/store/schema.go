@@ -399,9 +399,8 @@ var schema = []migration{
 			// fixed in internal/judge for a given model version.
 			//
 			// What the run did with the path afterwards, which section 5
-			// also asks this record to keep, has no column yet: nothing
-			// writes it, and a column nothing writes would read as recorded
-			// and empty. Adding it is a later migration.
+			// also asks this record to keep, is migration 10's
+			// decision_followup rather than a column here.
 			`CREATE TABLE decision_answer (
 				seq         INTEGER PRIMARY KEY,
 				run         TEXT NOT NULL,
@@ -416,6 +415,53 @@ var schema = []migration{
 				recorded_at TEXT NOT NULL
 			) STRICT`,
 			`CREATE INDEX decision_answer_run ON decision_answer(run, seq)`,
+		},
+	},
+	{
+		version: 10,
+		name:    "stage executions and decision answer follow-ups",
+		statements: []string{
+			// One row per execution of a stage's body: when it started and
+			// when it ended, appended once the body has returned and never
+			// revised. It is history, so a stage taking fix rounds has a row
+			// per execution and none replaces another.
+			//
+			// It is a table of its own rather than stage_result's duration
+			// column, because that row is one per stage and rewritten, so it
+			// could hold the last execution and not the others; and rather
+			// than round's, because a round carries the finding set, whose
+			// one owner today is the run's graph state, and a writer of
+			// rounds would be a second one. Both columns are NOT NULL because
+			// the row is written only once both times are known: an execution
+			// a hard kill interrupted has no row, and the record understates
+			// rather than holding an end nobody observed.
+			`CREATE TABLE stage_execution (
+				seq        INTEGER PRIMARY KEY,
+				run        TEXT NOT NULL,
+				stage      TEXT NOT NULL,
+				started_at TEXT NOT NULL,
+				ended_at   TEXT NOT NULL
+			) STRICT`,
+			`CREATE INDEX stage_execution_run ON stage_execution(run, seq)`,
+			// What the run did next with a path a decision-model answer was
+			// about: PRD section 5's "every answer is recorded with what
+			// happened next", which migration 9 left without a column. One
+			// row per answer it follows, so an answer with no row is one
+			// nothing followed, and decision_answer itself is untouched.
+			//
+			// kind is the closed set store.FollowUpKind names; detail is what
+			// that kind carries, as handed over: a finding's action, the
+			// commit a fix round made, or the option a person chose at a
+			// hold.
+			`CREATE TABLE decision_followup (
+				seq         INTEGER PRIMARY KEY,
+				answer      INTEGER NOT NULL REFERENCES decision_answer(seq),
+				kind        TEXT NOT NULL,
+				stage       TEXT NOT NULL,
+				detail      TEXT NOT NULL,
+				recorded_at TEXT NOT NULL
+			) STRICT`,
+			`CREATE INDEX decision_followup_answer ON decision_followup(answer, seq)`,
 		},
 	},
 }
