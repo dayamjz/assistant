@@ -317,8 +317,6 @@ func listTasks(ctx context.Context, in *invocation) (any, error) {
 	return tasks, err
 }
 
-// splitList reads a comma-separated flag value, dropping empty entries so that
-// an empty flag is no entries rather than one empty one.
 // repeated is a flag that may be given more than once, each value kept in the
 // order it was given.
 type repeated []string
@@ -332,6 +330,8 @@ func (r *repeated) Set(value string) error {
 	return nil
 }
 
+// splitList reads a comma-separated flag value, dropping empty entries so that
+// an empty flag is no entries rather than one empty one.
 func splitList(value string) []string {
 	var out []string
 	for _, part := range strings.Split(value, ",") {

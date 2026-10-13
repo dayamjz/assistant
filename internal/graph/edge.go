@@ -147,8 +147,9 @@ type Edge struct {
 	// must not be the start node, and every edge entering its From node must
 	// leave a halt point and be guarded on that halt point's answer key. So
 	// every traversal of it follows an answer someone gave at a halt point.
-	// What the build cannot check is that the guard's value is one only a
-	// person gives, because the graph does not know who answers.
+	// Any guard operator and value on that key qualifies. What the build
+	// cannot check is that the value is one only a person gives, because the
+	// graph does not know who answers; that rests on who calls Answer.
 	Answered bool
 }
 
