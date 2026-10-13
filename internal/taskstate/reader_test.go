@@ -132,7 +132,7 @@ func tailOnly(events []store.TaskEvent) State {
 func TestAnEventLogIsNotCurrentState(t *testing.T) {
 	principles.Cite(t, principles.P8)
 	s := openStore(t)
-	task := newTask(t, s, "t1", true)
+	task := newTask(t, s, "taaaaaaaaaab", true)
 	appendEvents(t, s, task.ID, "started", "handed-off", "decision-open")
 
 	// Positive control C1: with nothing outranking it the log is honored, and
@@ -182,7 +182,7 @@ func TestAnEventLogIsNotCurrentState(t *testing.T) {
 func TestSupersededComesFromTheWholeLogThroughTheStore(t *testing.T) {
 	principles.Cite(t, principles.P8)
 	s := openStore(t)
-	task := newTask(t, s, "t1", true)
+	task := newTask(t, s, "taaaaaaaaaab", true)
 	appendEvents(t, s, task.ID, "decision-open", "decision-closed", "decision-open", "progress-note")
 	finishRun(t, s, "run-1")
 
@@ -198,15 +198,15 @@ func TestSupersededComesFromTheWholeLogThroughTheStore(t *testing.T) {
 func TestTheAnswerDoesNotDependOnWriteOrder(t *testing.T) {
 	principles.Cite(t, principles.P8)
 	a, b := openStore(t), openStore(t)
-	newTask(t, a, "t1", true)
-	appendEvents(t, a, "t1", "started", "decision-open")
+	newTask(t, a, "taaaaaaaaaab", true)
+	appendEvents(t, a, "taaaaaaaaaab", "started", "decision-open")
 	finishRun(t, a, "run-1")
 
-	newTask(t, b, "t1", true)
+	newTask(t, b, "taaaaaaaaaab", true)
 	finishRun(t, b, "run-1")
-	appendEvents(t, b, "t1", "started", "decision-open")
+	appendEvents(t, b, "taaaaaaaaaab", "started", "decision-open")
 
-	ra, rb := resolveTask(t, a, "t1"), resolveTask(t, b, "t1")
+	ra, rb := resolveTask(t, a, "taaaaaaaaaab"), resolveTask(t, b, "taaaaaaaaaab")
 	ra.Basis.RunUpdatedAt, rb.Basis.RunUpdatedAt = time.Time{}, time.Time{} // the runs were moved at different instants
 	if !reflect.DeepEqual(ra, rb) {
 		t.Fatalf("write order changed the answer:\n%+v\n%+v", ra, rb)
@@ -224,34 +224,34 @@ func TestTheAnswerDoesNotDependOnWriteOrder(t *testing.T) {
 // inheriting the blocker's validation.
 func TestAttributionAndTheOpeningEvents(t *testing.T) {
 	s := openStore(t)
-	newTask(t, s, "delivery", true)
-	newTask(t, s, "investigation", false)
-	queued := store.Task{ID: "queued", Shape: store.TaskDelivery, Project: "one", Mode: "interactive", WorktreePath: "/w/queued",
+	newTask(t, s, "deliveryaaaa", true)
+	newTask(t, s, "inquiryaaaaa", false)
+	queued := store.Task{ID: "queuedaaaaaa", Shape: store.TaskDelivery, Project: "one", Mode: "interactive", WorktreePath: "/w/queued",
 		RepositoryID: store.Known(repo), Branch: store.Known(branch)}
-	delivery, err := s.Task(context.Background(), "delivery")
+	delivery, err := s.Task(context.Background(), "deliveryaaaa")
 	if err != nil {
 		t.Fatalf("Task: %v", err)
 	}
 	if _, err := s.CreateTask(context.Background(), queued,
-		store.Disposition{Blocker: store.Known("delivery"), Observed: delivery.Row}); err != nil {
+		store.Disposition{Blocker: store.Known("deliveryaaaa"), Observed: delivery.Row}); err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
 	finishRun(t, s, "run-1")
 
-	if got := resolveTask(t, s, "investigation"); got.State != Dispatched || got.Source != SourceEvent {
+	if got := resolveTask(t, s, "inquiryaaaaa"); got.State != Dispatched || got.Source != SourceEvent {
 		t.Fatalf("an investigation task resolved to %s from %s, want dispatched from its intake", got.State, got.Source)
 	}
-	if got := resolveTask(t, s, "delivery"); got.State != Ready || got.Source != SourceRun {
+	if got := resolveTask(t, s, "deliveryaaaa"); got.State != Ready || got.Source != SourceRun {
 		t.Fatalf("the delivery task resolved to %s from %s", got.State, got.Source)
 	}
-	if got := resolveTask(t, s, "queued"); got.State != Queued || got.Source != SourceEvent {
+	if got := resolveTask(t, s, "queuedaaaaaa"); got.State != Queued || got.Source != SourceEvent {
 		t.Fatalf("the task queued behind it resolved to %s from %s, want queued from its opening event", got.State, got.Source)
 	}
 	// Once the queued task's own attempt begins, a run newer than that is its.
-	beginAttempt(t, s, "queued", 0)
+	beginAttempt(t, s, "queuedaaaaaa", 0)
 	time.Sleep(2 * time.Millisecond)
 	finishRun(t, s, "run-2")
-	if got := resolveTask(t, s, "queued"); got.State != Ready || got.Source != SourceRun || got.Basis.RunID != "run-2" {
+	if got := resolveTask(t, s, "queuedaaaaaa"); got.State != Ready || got.Source != SourceRun || got.Basis.RunID != "run-2" {
 		t.Fatalf("after its attempt began the queued task resolved to %s from %s (run %s), want ready from run-2",
 			got.State, got.Source, got.Basis.RunID)
 	}
@@ -275,15 +275,15 @@ func TestAnUnknownTaskIsNotFound(t *testing.T) {
 func TestTheReaderConsultsTheProbeForTasksWithASession(t *testing.T) {
 	ctx := context.Background()
 	s := openStore(t)
-	newTask(t, s, "withsession", false)
-	newTask(t, s, "nosession", false)
-	newTask(t, s, "notyet", false)
-	appendEvents(t, s, "withsession", "started")
-	first := beginAttempt(t, s, "withsession", 0)
-	if err := s.SetAttemptSession(ctx, "withsession", first.Sequence, "pane-1"); err != nil {
+	newTask(t, s, "withsessiona", false)
+	newTask(t, s, "nosessionaaa", false)
+	newTask(t, s, "notyetaaaaaa", false)
+	appendEvents(t, s, "withsessiona", "started")
+	first := beginAttempt(t, s, "withsessiona", 0)
+	if err := s.SetAttemptSession(ctx, "withsessiona", first.Sequence, "pane-1"); err != nil {
 		t.Fatalf("SetAttemptSession: %v", err)
 	}
-	beginAttempt(t, s, "notyet", 0)
+	beginAttempt(t, s, "notyetaaaaaa", 0)
 
 	var asked []string
 	live := true
@@ -295,18 +295,18 @@ func TestTheReaderConsultsTheProbeForTasksWithASession(t *testing.T) {
 		return Dead
 	}
 	r := NewReader(s, probe, nil)
-	got, err := r.Task(ctx, "withsession")
+	got, err := r.Task(ctx, "withsessiona")
 	if err != nil || got.State != Running || got.Source != SourceProcess {
 		t.Fatalf("live terminal: %+v, %v", got, err)
 	}
 	live = false
-	if got, _ := r.Task(ctx, "withsession"); got.State != Unknown || got.Source != SourceProcess {
+	if got, _ := r.Task(ctx, "withsessiona"); got.State != Unknown || got.Source != SourceProcess {
 		t.Fatalf("dead terminal with a stale started event resolved to %s from %s", got.State, got.Source)
 	}
-	if got, _ := r.Task(ctx, "nosession"); got.Basis.Process != Unobserved {
+	if got, _ := r.Task(ctx, "nosessionaaa"); got.Basis.Process != Unobserved {
 		t.Fatalf("a task with no session was probed: %+v", got.Basis)
 	}
-	if got, _ := r.Task(ctx, "notyet"); got.Basis.Process != Unobserved {
+	if got, _ := r.Task(ctx, "notyetaaaaaa"); got.Basis.Process != Unobserved {
 		t.Fatalf("a task whose attempt has no session yet was probed: %+v", got.Basis)
 	}
 	all, err := r.All(ctx)
@@ -354,10 +354,10 @@ func fingerprint(t *testing.T, s *store.Store) any {
 func TestResolvingChangesNothing(t *testing.T) {
 	ctx := context.Background()
 	s := openStore(t)
-	newTask(t, s, "t1", true)
-	appendEvents(t, s, "t1", "started", "decision-open")
+	newTask(t, s, "taaaaaaaaaab", true)
+	appendEvents(t, s, "taaaaaaaaaab", "started", "decision-open")
 	finishRun(t, s, "run-1")
-	if _, err := s.RegisterHold(ctx, store.Hold{Key: "h", Subject: "q", TaskID: store.Known("t1")}); err != nil {
+	if _, err := s.RegisterHold(ctx, store.Hold{Key: "h", Subject: "q", TaskID: store.Known("taaaaaaaaaab")}); err != nil {
 		t.Fatalf("RegisterHold: %v", err)
 	}
 
@@ -367,7 +367,7 @@ func TestResolvingChangesNothing(t *testing.T) {
 		if _, err := r.All(ctx); err != nil {
 			t.Fatalf("All: %v", err)
 		}
-		if _, err := r.Task(ctx, "t1"); err != nil {
+		if _, err := r.Task(ctx, "taaaaaaaaaab"); err != nil {
 			t.Fatalf("Task: %v", err)
 		}
 	}
@@ -375,7 +375,7 @@ func TestResolvingChangesNothing(t *testing.T) {
 		t.Fatal("resolving changed what the store reports")
 	}
 
-	appendEvents(t, s, "t1", "progress-note")
+	appendEvents(t, s, "taaaaaaaaaab", "progress-note")
 	if reflect.DeepEqual(before, fingerprint(t, s)) {
 		t.Fatal("the fingerprint did not move on a write, so the equality above showed nothing")
 	}
@@ -387,9 +387,9 @@ func TestResolvingChangesNothing(t *testing.T) {
 func TestARecordAndItsStateComeFromOneRead(t *testing.T) {
 	ctx := context.Background()
 	s := openStore(t)
-	newTask(t, s, "a", true)
-	newTask(t, s, "b", false)
-	appendEvents(t, s, "a", "started")
+	newTask(t, s, "aaaaaaaaaaab", true)
+	newTask(t, s, "aaaaaaaaaaac", false)
+	appendEvents(t, s, "aaaaaaaaaaab", "started")
 	finishRun(t, s, "run-1")
 
 	r := NewReader(s, nil, nil)
@@ -420,8 +420,8 @@ func TestARecordAndItsStateComeFromOneRead(t *testing.T) {
 func TestTheReaderAsksWhetherTheNewestRunIsAdvancing(t *testing.T) {
 	ctx := context.Background()
 	s := openStore(t)
-	newTask(t, s, "t1", true)
-	newTask(t, s, "t2", false)
+	newTask(t, s, "taaaaaaaaaab", true)
+	newTask(t, s, "taaaaaaaaaac", false)
 	if _, err := s.CreateRun(ctx, store.Run{
 		ID: "run-1", RepositoryID: repo, Branch: branch, SubmittedHead: "aaaa", Base: "bbbb",
 		Intent: "validate", IntentSource: "push", ConfigDigest: "cfg",
@@ -435,17 +435,17 @@ func TestTheReaderAsksWhetherTheNewestRunIsAdvancing(t *testing.T) {
 
 	var asked []string
 	advancing := func(runID string) bool { asked = append(asked, runID); return true }
-	got, err := NewReader(s, nil, advancing).Task(ctx, "t1")
+	got, err := NewReader(s, nil, advancing).Task(ctx, "taaaaaaaaaab")
 	if err != nil || got.State != Validating || !got.Progress || !got.Basis.Advancing {
 		t.Fatalf("an advancing run resolved to %+v, %v, want validating with progress", got, err)
 	}
-	if got, _ := NewReader(s, nil, advancing).Task(ctx, "t2"); got.Progress || got.Basis.Advancing {
+	if got, _ := NewReader(s, nil, advancing).Task(ctx, "taaaaaaaaaac"); got.Progress || got.Basis.Advancing {
 		t.Fatalf("a task with no run reports progress: %+v", got)
 	}
 	if want := []string{"run-1"}; !slices.Equal(asked, want) {
 		t.Fatalf("advancing was asked about %v, want %v", asked, want)
 	}
-	if got, _ := NewReader(s, nil, nil).Task(ctx, "t1"); got.State != Validating || got.Progress {
+	if got, _ := NewReader(s, nil, nil).Task(ctx, "taaaaaaaaaab"); got.State != Validating || got.Progress {
 		t.Fatalf("with no advancing function the run reports progress: %+v", got)
 	}
 }

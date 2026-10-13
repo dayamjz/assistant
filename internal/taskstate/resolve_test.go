@@ -296,6 +296,7 @@ func TestProgressRestsOnPositiveEvidenceOnly(t *testing.T) {
 		{"running run, not advancing", running, Unobserved, false, Validating, false},
 		{"running run, live terminal, not advancing", running, Live, false, Validating, false},
 		{"passed run the slot calls advancing", passed, Unobserved, true, Ready, false},
+		{"held run the slot calls advancing", []store.Run{runIn("r", store.RunHeld, 1)}, Unobserved, true, Held, false},
 		{"live terminal, no run", nil, Live, false, Running, true},
 		{"live terminal, no run, advancing says nothing", nil, Live, true, Running, true},
 		{"dead terminal", nil, Dead, true, Unknown, false},

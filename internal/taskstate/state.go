@@ -86,11 +86,11 @@ type Inputs struct {
 	Events []store.TaskEvent
 	// Process is what the terminal looked like, as of when it was asked.
 	Process Liveness
-	// Advancing is whether something is executing the newest of Runs now: the
-	// service's own fact about the slot a run advances in, which no record
-	// holds. It is read only when the run tier answers Validating, and it is
-	// what tells a run that is being driven from one that is merely recorded
-	// as running.
+	// Advancing is whether the service is executing the newest of Runs now:
+	// its own fact about the slot a run advances in, which no record holds.
+	// It is recorded in Basis as asked and used only for Progress, and there
+	// only when the run tier answered Validating; it moves no state, so a
+	// caller that cannot answer passes false and loses nothing but Progress.
 	Advancing bool
 }
 
@@ -149,6 +149,8 @@ type Basis struct {
 	EventSequence int64 `json:"event_sequence"`
 	// Process is the liveness that was read.
 	Process Liveness `json:"process"`
-	// Advancing is the Inputs.Advancing that was read.
+	// Advancing is Inputs.Advancing as it was asked, whether or not the
+	// answer used it: it is recorded so a reader can see what Progress
+	// rested on, and it is used only for Validating from the run tier.
 	Advancing bool `json:"advancing"`
 }
