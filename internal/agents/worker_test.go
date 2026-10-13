@@ -340,8 +340,15 @@ func TestCaptureKeepsTheTailWithinTheLimitAndCountsTheRest(t *testing.T) {
 // newline after them, so a worker reading lines sees every line of them
 // before anything sent afterwards.
 func TestInstructionsAreDeliveredBeforeAnythingSent(t *testing.T) {
+	// Each line the test waits for is answered by the worker, so the wait is
+	// on the worker's output and the record is read once afterwards; a test
+	// that polled the record while the worker still rewrote it ended the
+	// worker on windows-latest, which standin.Calls' doc explains.
 	agent := standin.NewWorker(t, standin.Script{Worker: &standin.WorkerScript{
-		Exchanges: []standin.Exchange{{Contains: "second", Reply: "saw the second line"}},
+		Exchanges: []standin.Exchange{
+			{Contains: "second", Reply: "saw the second line"},
+			{Contains: "third", Reply: "saw the third line"},
+		},
 	}}, agents.WithTerminationGrace(300*time.Millisecond))
 	spec := workerSpec(t)
 	spec.Instructions = "first line of the instructions\nsecond line of the instructions\n"
@@ -354,20 +361,14 @@ func TestInstructionsAreDeliveredBeforeAnythingSent(t *testing.T) {
 	if err := worker.Send(t.Context(), "and a third"); err != nil {
 		t.Fatalf("sending: %v", err)
 	}
-	deadline := time.Now().Add(30 * time.Second)
-	for {
-		calls := agent.Calls()
-		if len(calls) == 1 && len(calls[0].Lines) == 3 {
-			want := []string{"first line of the instructions", "second line of the instructions", "and a third"}
-			if !reflect.DeepEqual(calls[0].Lines, want) {
-				t.Errorf("the worker read %q, want %q", calls[0].Lines, want)
-			}
-			return
-		}
-		if !time.Now().Before(deadline) {
-			t.Fatalf("the worker recorded %s, waited for three lines", calls)
-		}
-		time.Sleep(time.Millisecond)
+	awaitWorkerOutput(t, worker, "saw the third line")
+	calls := agent.Calls()
+	if len(calls) != 1 {
+		t.Fatalf("the stand-in recorded %d calls, want one: %s", len(calls), calls)
+	}
+	want := []string{"first line of the instructions", "second line of the instructions", "and a third"}
+	if !reflect.DeepEqual(calls[0].Lines, want) {
+		t.Errorf("the worker read %q, want %q", calls[0].Lines, want)
 	}
 }
 
