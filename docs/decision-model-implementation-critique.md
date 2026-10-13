@@ -12,36 +12,19 @@ branch `claude/jev-handoff` as `notes/jev-handoff.md` (PR #55). Read that
 before building. The scripts and labeled sets are **not** in this
 repository.
 
-## What the PRD now requires
+## What this reads against
 
-### Decision-model checks (PR #56, section 5)
+The PRD owns the requirements, so they are not restated here. Read them in
+[`docs/prd.html`](prd.html):
 
-Two checks may run beside review, driven by the global-only
-`decision_model` key (`evaluate` | `enforce` | `off`, default
-`evaluate`):
-
-1. **Trace-reason check.** Each path trace a reviewer reports is scored
-   against that path's changed lines. If the model does not confirm the
-   reason, the trace silences nothing and the path gets the scope lens's
-   ordinary untraced note.
-2. **Reviewer-directed text screen.** Each reviewed file's changed lines
-   are screened for text that tries to steer a reviewing agent. Hits are
-   `note` in `evaluate`, `ask` in `enforce`.
-
-A new `judge` module owns the fixed questions, the pinned model version,
-the cutoffs and the measurement behind them, and request splitting.
-Answers may only add scrutiny. A missing key, a failed call, or an
-unreadable answer holds nothing and is reported. With mode `off` or no
-key, no request leaves the machine.
-
-### Judge paths (PR #57, section 5)
-
-`judge_paths` names the files that decide a check's verdict. Trusted-only.
-A pipeline-authored commit after review that adds, changes, deletes, or
-renames a matching path holds with `ask`. Deleting or moving a judge file
-in the author's change holds at review; editing or adding one is a
-`note`. Empty list turns the rule off; a repository value replaces the
-default.
+- Section 5 ([the delivery gate](prd.html#gate)), subsections "Checks a
+  decision model may add" and "A check does not judge its own edits".
+- Section 8, module row `judge`.
+- Section 10 ([configuration](prd.html#config)), schema rows
+  `decision_model` and `judge_paths`, and the judge path limit.
+- Section 13 ([verification](prd.html#verification)), rows "Decision
+  model" and "Judge paths".
+- Section 14 ([decisions](prd.html#decisions)), "What to settle next".
 
 ## What held up in measurement (and what did not)
 
@@ -88,6 +71,11 @@ When implementing:
   should become `off` until an evaluation record has justified the cost.
   That is a PRD change with evidence, not an implementation shortcut.
 
+Decided since: the default stays `evaluate`, and the key is read only from
+a dedicated `ASSISTANT_DECISION_MODEL_KEY`, with no fallback to the
+provider's generic variable. A key set for an unrelated experiment
+therefore starts no review traffic.
+
 ### 3. Do not overclaim the measurements
 
 The PRD's evidence section rests on numbers from sessions whose scripts
@@ -112,7 +100,10 @@ call-to-call variation, without editing the scorer and the labels in the
 same change.
 
 That rule is unenforceable while the labeled sets live only on
-`claude/jev-handoff`. An implementation that hard-codes cutoffs from the
+`claude/jev-handoff`. Decided since: a follow-up lands the labeled sets
+and an offline measurement command in the repository; until it does,
+the cutoffs' documentation says their measurement is not reproducible
+from here. An implementation that hard-codes cutoffs from the
 handoff numbers without a reproducible suite is guessing. Land a fixture
 corpus (or a recorded stand-in suite with fixed answers) in the same
 change that pins a cutoff, or leave cutoffs unexported constants behind
@@ -146,7 +137,8 @@ is a silent third-party call that nobody can turn into a decision about
 `enforce` or `off`.
 
 Do not ship outbound calls in `evaluate` without writing the evaluation
-record in the same change. A note proposing to turn a check off when it
+record in the same change. Decided since: the first implementation PR
+carries the record. A note proposing to turn a check off when it
 never leads anywhere (PRD text) needs that record as input.
 
 ### 7. Failure and absence must look like "checks off," and say so
@@ -157,13 +149,15 @@ body must handle, never a logged warning execution continues past. A
 pass must remain defined without these checks; their absence is reported
 in the stage report where a person reads it.
 
-### 8. Judge-path patterns replace; defaults are Go-heavy
+### 8. Judge-path patterns replace; defaults have gaps
 
 A repository value replaces the default list. An empty list turns the
-rule off. Defaults lean on Go test names, GitHub workflows, and a few
-lint configs. Repositories that are mostly TypeScript, Python, or custom
-layouts will need an explicit trusted-copy list or they inherit a list
-that matches little and protects less than it appears to.
+rule off. The defaults cover Go, Python, and JavaScript test naming,
+common test directories, GitHub workflows, and a few lint configs. They
+miss, for example, GitLab CI files, Java's `*Test.java`, `conftest.py`,
+and `jest.config.*`. Repositories with other layouts need an explicit
+trusted-copy list or they inherit one that protects less than it appears
+to.
 
 When implementing defaults, claim only what the patterns match. Do not
 document them as "all test and CI files." The PRD already states the
