@@ -17,6 +17,15 @@ import (
 // itself is configuration and is not stored here, so a row says when a wait
 // began and never whether it has elapsed; the checks stage decides that from
 // the row, the configured timeout and its own clock.
+//
+// A row is removed only by EndChecksWait, which the checks stage calls when
+// the checks settle and when the wait elapses. A run whose wait ended any
+// other way - its read failed, or it was cancelled or superseded mid-wait -
+// keeps its row, and nothing removes the rows of runs that have finished. For
+// a failed read that is the point: the run resumes into the same wait. For a
+// run that will never resume it is a leak of one small row per run, read by
+// nothing, because a row is keyed by its run and only that run's checks stage
+// reads it.
 type ChecksWait struct {
 	// Run is the run the wait belongs to.
 	Run string

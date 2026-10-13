@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -62,6 +63,11 @@ func (p *checksProvider) Get(context.Context, int) (forge.PullRequest, error) {
 
 func (p *checksProvider) Checks(ctx context.Context, _ int) (forge.ChecksReport, error) {
 	p.reads++
+	// The adapter runs a provider command under ctx, and a command started
+	// under a context that has already ended is killed before it answers.
+	if err := ctx.Err(); err != nil {
+		return forge.ChecksReport{}, err
+	}
 	if p.stall {
 		<-ctx.Done()
 		return forge.ChecksReport{}, ctx.Err()
@@ -248,10 +254,10 @@ func TestTheChecksStageWaitsForRunningChecksAndReportsWhatTheySettleOn(t *testin
 
 // Checks that never settle hold the run once checks_timeout has elapsed, and
 // not before: PRD section 10's "on elapse the run holds rather than ending".
-// A hold is the run left in a person's hands, which is P6's "work the pipeline
-// holds always has a path back into your hands" for a wait that ran out.
+//
+// The read made at the deadline answered, so the report may not say it did
+// not: that confession is only for a read the timeout ran out on.
 func TestChecksThatNeverSettleHoldTheRunWhenTheTimeoutElapses(t *testing.T) {
-	principles.Cite(t, principles.P6)
 	t.Parallel()
 	r := newChecksRun(t)
 
@@ -265,6 +271,18 @@ func TestChecksThatNeverSettleHoldTheRunWhenTheTimeoutElapses(t *testing.T) {
 	}
 	if !strings.Contains(report.Summary, "checks_timeout") {
 		t.Fatalf("the summary does not say the timeout elapsed: %q", report.Summary)
+	}
+	mustNotConfessAnUnansweredRead(t, report)
+}
+
+// unansweredRead is the text an elapsed report carries only when a read made
+// as the wait ran out did not answer in time.
+const unansweredRead = "did not answer in time"
+
+func mustNotConfessAnUnansweredRead(t *testing.T, report findings.Report) {
+	t.Helper()
+	if strings.Contains(report.Summary, unansweredRead) {
+		t.Fatalf("every read answered, and the report says one did not: %q", report.Summary)
 	}
 }
 
@@ -284,6 +302,7 @@ func TestNoRegisteredChecksAreWaitedForUntilTheTimeoutElapses(t *testing.T) {
 	if waited := r.now.Sub(r.start); waited != checksTimeout {
 		t.Fatalf("the stage held after waiting %s, want %s", waited, checksTimeout)
 	}
+	mustNotConfessAnUnansweredRead(t, report)
 }
 
 // A base that advances while the run waits re-arms the timeout. The
@@ -310,6 +329,7 @@ func TestTheBaseAdvancingReArmsTheChecksTimeout(t *testing.T) {
 		t.Fatalf("the stage held after %s, want %s: the base advancing at %s should have re-armed the timeout",
 			r.now.Sub(r.start), want, advanceAt)
 	}
+	mustNotConfessAnUnansweredRead(t, report)
 }
 
 // A segment that ends mid-wait does not reset the timeout. A restart, a caller
@@ -319,7 +339,14 @@ func TestTheBaseAdvancingReArmsTheChecksTimeout(t *testing.T) {
 // The control is a run whose wait was ended between the two segments, which
 // is what a wait that began again on every resume would look like: it waits
 // the whole timeout a second time.
+//
+// This is P6's "work the pipeline holds always has a path back into your
+// hands, including after a crash, a cancellation" for a run waiting on its
+// checks: the segment that ended leaves the run resumable, and the resumed
+// one still reaches the hold that hands it to a person, on the deadline the
+// first one armed.
 func TestResumingTheChecksStageKeepsTheWaitItBegan(t *testing.T) {
+	principles.Cite(t, principles.P6)
 	t.Parallel()
 	for _, tc := range []struct {
 		name     string
@@ -444,9 +471,79 @@ func TestAReadThatDoesNotAnswerCannotOutlastTheChecksTimeout(t *testing.T) {
 			if err != nil {
 				t.Fatalf("a read the timeout ran out on failed the step: %v", err)
 			}
-			if !report.HasHeld() || !hasFinding(report, "ci-running") || !strings.Contains(report.Summary, "had not answered") {
+			if !report.HasHeld() || !hasFinding(report, "ci-running") || !strings.Contains(report.Summary, unansweredRead) {
 				t.Fatalf("a read the timeout ran out on did not hold saying so: %+v", report)
 			}
 		})
+	}
+}
+
+// The read made once the wait has run out is a real read with a bound of its
+// own, so checks that went green in the last interval pass. A body that held
+// on reaching the deadline without reading, or read under a bound already
+// spent, would hold a run whose checks had passed.
+//
+// The never-settling test is the control: the same deadline with the checks
+// still pending holds.
+func TestChecksThatGoGreenAtTheDeadlinePass(t *testing.T) {
+	t.Parallel()
+	r := newChecksRun(t)
+	r.onPause = func(r *checksRun) {
+		if r.now.Sub(r.start) == checksTimeout {
+			r.provider.answer = green
+		}
+	}
+
+	report := r.mustRun(t)
+
+	if report.HasHeld() || !strings.Contains(report.Summary, "passed") {
+		t.Fatalf("checks that went green by the deadline were not passed: %+v", report)
+	}
+	if r.now.Sub(r.start) != checksTimeout {
+		t.Fatalf("the final read was made at %s, want the deadline %s", r.now.Sub(r.start), checksTimeout)
+	}
+}
+
+// An elapsed report is recorded in the run's graph state, which is the
+// convergence fingerprint, so it may not carry when the wait was armed or
+// against which base: two elapses that differ only in those must report the
+// same thing. The two runs here differ in both, because each has its own
+// upstream and its own clock.
+func TestAnElapsedReportDoesNotCarryWhenTheWaitWasArmed(t *testing.T) {
+	t.Parallel()
+	first := newChecksRun(t)
+	second := newChecksRun(t)
+	second.start = first.start.Add(37 * time.Hour)
+	second.now = second.start
+	second.advanceBase(t)
+
+	a, b := first.mustRun(t), second.mustRun(t)
+
+	if !reflect.DeepEqual(a, b) {
+		t.Fatalf("two elapses armed at different instants against different bases reported differently:\n%+v\n%+v", a, b)
+	}
+	if !a.HasHeld() {
+		t.Fatalf("the elapses did not hold, so their equality shows nothing: %+v", a)
+	}
+}
+
+// An elapsed wait is ended, as a settled one is: the hold it leaves is answered
+// by a person, and a row left behind would be found only by a later wait that
+// should begin afresh.
+func TestAnElapsedWaitIsEnded(t *testing.T) {
+	t.Parallel()
+	r := newChecksRun(t)
+	r.mustRun(t)
+
+	// Armed against the base the elapsed wait was armed against, so a row
+	// left behind would be kept rather than re-armed, and this would see it.
+	base := git(t, r.upstream, "rev-parse", "refs/heads/main")
+	later := r.now.Add(time.Hour)
+	wait, err := r.store.ArmChecksWait(t.Context(), "run-1", base, later)
+	if err != nil {
+		t.Fatalf("arming: %v", err)
+	}
+	if !wait.ArmedAt.Equal(later) {
+		t.Fatalf("a wait armed after an elapse began at %s, want a fresh one at %s", wait.ArmedAt, later)
 	}
 }

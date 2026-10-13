@@ -106,11 +106,39 @@ import (
 // armed, each read of the checks and of the base runs under a context that
 // ends when what is left of the wait does, and a read that wait ran out on
 // holds the run as an elapsed wait, saying the read had not answered. The
-// first read of a segment is not bounded that way: it comes before the
-// segment has read the wait, so a provider that never answers it holds the
-// segment until something ends its context. A base read that the wait ran
-// out on also holds rather than re-arming, because whether the base advanced
-// is then unknown, and holding hands that to a person.
+// last pause ends exactly on the deadline, and the read made there is the
+// wait's final one: it gets checksFinalReadBound of its own, so checks that
+// went green in the last interval pass rather than hold, and a base that
+// advanced in it re-arms. The first read of a segment is not bounded that
+// way: it comes before the segment has read the wait, so a provider that
+// never answers it holds the segment until something ends its context. A base
+// read that the wait ran out on holds rather than re-arming, because whether
+// the base advanced is then unknown, and holding hands that to a person.
+//
+// An elapsed wait ends the row, as settled checks do. A wait whose segment
+// ended any other way - a failed read, a cancellation, a supersession - leaves
+// its row behind; internal/store's ChecksWait says what that costs.
+//
+// # Who is waiting, and on whose behalf
+//
+// While the wait lasts the run is executing and something is advancing it, so
+// it reads as running rather than held. Nothing here asks whether the run is
+// still wanted between reads: there is no typed route from a stage body to
+// the run's record, and a body that opened one would be a second reader of
+// the run's status. So a run a newer push superseded and this service never
+// signalled - internal/service's claimPush says when that happens - keeps
+// reading the provider once a minute until its checks settle or checks_timeout
+// elapses. A run that was signalled stops waiting when the signal arrives,
+// because its pauses and its reads all run under the segment's context.
+//
+// # What this does not do
+//
+// PRD section 11 asks recovery, before resuming a hold that waits on external
+// checks, to re-read the pull request and complete the run when it was merged
+// or closed. Nothing does that. A run waiting here is not held, and recovery
+// resumes it into the same wait, which reads only the checks; the hold an
+// elapsed wait leaves is answered by a person like any other, and a pull
+// request merged or closed meanwhile completes nothing.
 //
 // What it does not do is survive a read that fails on its own. A provider
 // that refuses, or an upstream that does not advertise the base branch, fails
@@ -184,13 +212,23 @@ func runChecks(ctx context.Context, deps StageDeps, in pipeline.Input) (pipeline
 	for {
 		readCtx, cancel := ctx, context.CancelFunc(func() {})
 		if armed {
-			readCtx, cancel = context.WithTimeout(ctx, wait.ArmedAt.Add(timeout).Sub(deps.clock.now()))
+			// What is left is measured on the stage's clock and enforced by a
+			// timer on the wall clock, so with the product's clock the two are
+			// one clock. A pause ends exactly on the deadline, which leaves
+			// nothing; the read made there is the wait's final one, and it gets
+			// a bound of its own so that checks which went green in the last
+			// interval are read and passed rather than held.
+			left := wait.ArmedAt.Add(timeout).Sub(deps.clock.now())
+			if left <= 0 {
+				left = checksFinalReadBound
+			}
+			readCtx, cancel = context.WithTimeout(ctx, left)
 		}
 		checksReport, err := provider.Checks(readCtx, facts.pullRequest)
 		if err != nil {
 			cancel()
 			if elapsedDuring(ctx, readCtx) {
-				return pipeline.Output{Report: checksElapsedReport(last, facts.pullRequest, wait, timeout, true)}, nil
+				return w.elapsed(ctx, last, timeout, true)
 			}
 			return pipeline.Output{}, fmt.Errorf("stages: reading checks for pull request %d: %w", facts.pullRequest, err)
 		}
@@ -211,7 +249,7 @@ func runChecks(ctx context.Context, deps StageDeps, in pipeline.Input) (pipeline
 				// The base could not be read before the wait ran out, so
 				// whether it advanced is unknown. Holding is the direction
 				// that hands the question to a person rather than waiting on.
-				return pipeline.Output{Report: checksElapsedReport(result, facts.pullRequest, wait, timeout, true)}, nil
+				return w.elapsed(ctx, result, timeout, true)
 			}
 			return pipeline.Output{}, err
 		}
@@ -220,13 +258,18 @@ func runChecks(ctx context.Context, deps StageDeps, in pipeline.Input) (pipeline
 		deadline := wait.ArmedAt.Add(timeout)
 		now := deps.clock.now()
 		if !now.Before(deadline) {
-			return pipeline.Output{Report: checksElapsedReport(result, facts.pullRequest, wait, timeout, false)}, nil
+			return w.elapsed(ctx, result, timeout, false)
 		}
 		if err := deps.clock.pause(ctx, min(checksPollInterval, deadline.Sub(now))); err != nil {
 			return pipeline.Output{}, fmt.Errorf("stages: waiting on the checks for pull request %d: %w", facts.pullRequest, err)
 		}
 	}
 }
+
+// checksFinalReadBound is how long the read made once the wait has run out may
+// take. It is the poll interval, so the final read is given what any other
+// read in the last minute of a wait would have had.
+const checksFinalReadBound = checksPollInterval
 
 // elapsedDuring reports whether a read failed because what was left of the
 // wait ran out while it was in flight, rather than because the segment ended
@@ -352,6 +395,18 @@ func (w *checksWaiter) end(ctx context.Context) error {
 		return fmt.Errorf("stages: ending the checks wait: %w", err)
 	}
 	return nil
+}
+
+// elapsed ends the run's wait and reports that it ran out. The wait is ended
+// here rather than left for a later read, because the hold this reports is
+// answered by a person and not by this stage running again, so a row left
+// behind would only be found by a wait that should have begun afresh.
+func (w *checksWaiter) elapsed(ctx context.Context, result forge.ChecksResult, timeout time.Duration,
+	unanswered bool) (pipeline.Output, error) {
+	if err := w.end(ctx); err != nil {
+		return pipeline.Output{}, err
+	}
+	return pipeline.Output{Report: checksElapsedReport(result, w.facts.pullRequest, timeout, unanswered)}, nil
 }
 
 // ciFacts are what this stage reads from the run's state.
@@ -496,16 +551,21 @@ func checksResultReport(result forge.ChecksResult, prNumber int) findings.Report
 // holds rather than ending, and a person decides what a wait that ran out
 // means.
 //
-// unanswered says the timeout ran out while a read was in flight, so result is
-// what the read before it saw rather than what the provider says now.
-func checksElapsedReport(result forge.ChecksResult, prNumber int, wait store.ChecksWait, timeout time.Duration,
-	unanswered bool) findings.Report {
+// It names the configured timeout and never when the wait was armed or the
+// base commit it was armed against. The report is recorded in the run's
+// graph state, which is the convergence fingerprint, and an instant there
+// would make two otherwise identical elapses differ; when a wait began is the
+// store's row, and only that.
+//
+// unanswered says a read made once the wait had run out did not answer within
+// its own bound, so result is what the read before it saw rather than what the
+// provider says now.
+func checksElapsedReport(result forge.ChecksResult, prNumber int, timeout time.Duration, unanswered bool) findings.Report {
 	report := findings.Report{Revision: result.HeadCommit}
-	elapsed := fmt.Sprintf("checks_timeout (%s) elapsed on a wait armed at %s against base commit %s",
-		timeout, wait.ArmedAt.UTC().Format(time.RFC3339), wait.Base)
+	elapsed := fmt.Sprintf("checks_timeout (%s) elapsed", timeout)
 	if unanswered {
-		elapsed += ", while a read of the checks or of the base branch had not answered, so what follows is " +
-			"what the read before it saw"
+		elapsed += ", and a read of the checks or of the base branch made as it ran out did not answer in " +
+			"time, so what follows is what the read before it saw"
 	}
 	answers := "Approving carries the run forward before the checks settle; skipping records this stage as " +
 		"skipped; cancelling ends the run."
