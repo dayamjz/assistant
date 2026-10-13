@@ -370,4 +370,52 @@ var schema = []migration{
 			) STRICT`,
 		},
 	},
+	{
+		version: 9,
+		name:    "decision model answers",
+		statements: []string{
+			// PRD section 5's record of the decision-model checks: one row
+			// per answer, or per call that produced none, appended and never
+			// revised. It keeps which run and stage asked, which check, about
+			// which path, of which pinned model version, the probability, the
+			// cutoff it was compared against, why a call failed, and the
+			// action of the finding the answer produced.
+			//
+			// The probability is nullable because a failed call has none,
+			// and a zero there would read as the model having answered
+			// certain-no. finding and failure are empty text rather than
+			// nullable, because their absence is a known fact the recording
+			// caller states: the answer produced no finding, or the call did
+			// not fail.
+			//
+			// It is a table of its own rather than more columns on
+			// agent_invocation because the two record different facts: that
+			// history is a process's cost and names no run or path, and
+			// every column added there for this would be NULL on every
+			// agent row, reading as unknown where it is inapplicable.
+			//
+			// There is no column the question's text, a diff, a reason, or a
+			// key could land in. The question is the check, whose text is
+			// fixed in internal/judge for a given model version.
+			//
+			// What the run did with the path afterwards, which section 5
+			// also asks this record to keep, has no column yet: nothing
+			// writes it, and a column nothing writes would read as recorded
+			// and empty. Adding it is a later migration.
+			`CREATE TABLE decision_answer (
+				seq         INTEGER PRIMARY KEY,
+				run         TEXT NOT NULL,
+				stage       TEXT NOT NULL,
+				check_name  TEXT NOT NULL,
+				path        TEXT NOT NULL,
+				model       TEXT NOT NULL,
+				probability REAL,
+				cutoff      REAL NOT NULL,
+				failure     TEXT NOT NULL,
+				finding     TEXT NOT NULL,
+				recorded_at TEXT NOT NULL
+			) STRICT`,
+			`CREATE INDEX decision_answer_run ON decision_answer(run, seq)`,
+		},
+	},
 }
