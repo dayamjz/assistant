@@ -11,6 +11,8 @@
 package vocabtest
 
 import (
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -69,7 +71,7 @@ func Forbidden(tb testing.TB) []Term {
 	for _, l := range []home.LockState{home.LockUnknown, home.LockFree, home.LockHeld} {
 		add("internal/home's lock states", l.String())
 	}
-	h, err := home.Open(sampleRoot)
+	h, err := home.Open(SampleRoot())
 	if err != nil {
 		tb.Fatalf("vocabtest: opening a sample home: %v", err)
 	}
@@ -81,13 +83,18 @@ func Forbidden(tb testing.TB) []Term {
 	return out
 }
 
-// sampleRoot is an absolute path of the shape a home root has on every
-// platform the module builds for, and sampleTaskID is one identifier in the
-// generator's format.
-const (
-	sampleRoot   = "/home/someone/.assistant"
-	sampleTaskID = "abcdefghij23"
-)
+// sampleTaskID is one identifier in the generator's format.
+const sampleTaskID = "abcdefghij23"
+
+// SampleRoot is the home root the forbidden set's path terms are derived
+// from: an absolute path under the platform's temporary directory, composed
+// rather than written as a literal, because internal/home refuses a root
+// that is not absolute on the platform it runs on and a POSIX literal is not
+// one on Windows. A caller building a phrase that must be caught for its
+// path uses this and not a path of its own.
+func SampleRoot() string {
+	return filepath.Join(os.TempDir(), "someone", home.DirName)
+}
 
 // leaf is the last element of a path composed by internal/home, taken on
 // either separator so the derivation reads the same on every platform.

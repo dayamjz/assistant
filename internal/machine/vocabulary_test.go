@@ -35,7 +35,7 @@ func TestThePhrasesNameOutcomesAndNoMechanics(t *testing.T) {
 	}
 	// The derivation catches a phrase that does carry mechanics, written
 	// in the shape a careless renderer would produce.
-	careless := "Task abcdefghij23 is running under /home/someone/.assistant; the terminal-gone wake surfaced."
+	careless := "Task abcdefghij23 is running under " + vocabtest.SampleRoot() + "; the terminal-gone wake surfaced."
 	if len(vocabtest.Violations(t, careless)) < 4 {
 		t.Fatalf("a phrase carrying a task identifier, a state, a home path and a wake kind was caught %d times: %v",
 			len(vocabtest.Violations(t, careless)), vocabtest.Violations(t, careless))
