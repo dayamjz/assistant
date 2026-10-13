@@ -2251,7 +2251,8 @@ flowchart TB
   <p class="mb-6 opacity-80 max-w-3xl">
     Five decisions were open when this document was first drafted. All five are answered, and the
     rest of the document already reflects them. They are kept here because two of them changed the
-    shape of phase one and a later reader will want to know why.
+    shape of phase one and a later reader will want to know why. The sixth was settled later, when
+    the decision-model checks were measured, and is kept for the same reason.
   </p>
 
   <div class="overflow-x-auto rounded-box border border-base-content/10 bg-base-100 mb-8">
@@ -2284,6 +2285,11 @@ flowchart TB
           <td class="prd-num">5</td>
           <td>Review gets <b>one automatic fix round</b>, over <code>fix</code> findings only.</td>
           <td>Overrides the draft default of zero. Section 5 carries the two conditions that make the round safe: an <code>ask</code> finding never enters it, and the re-review runs in a fresh session treating the fix as author code. Without both, this setting reproduces the exact failure P4 exists to prevent.</td>
+        </tr>
+        <tr>
+          <td class="prd-num">6</td>
+          <td>A decision model answers <b>the two checks in section 5 and nothing else</b>.</td>
+          <td>Every other use proposed for it was measured or reasoned against and rejected. Scope-creep detection: a change spreading into a neighbouring file could not be told apart from one that belonged there. Ranking stale documents: the signal was weak and nothing would read it. Ranking files for the fixer: no better than plain text search, and nothing would read it. Severity triage: there were no labels to measure it on. Blocking an edit on a probability: an answer may only add a finding, and a guess is not evidence. A stop or progress judge in the fix loop: its three bounds are counted, and an answer that moves between calls is not a count. Calling the screen a security boundary: its payloads were written by the people building it, so it is a tripwire for plain attempts and not a defense.</td>
         </tr>
       </tbody>
     </table>
