@@ -59,6 +59,9 @@ func TestResolveWithNoConfigurationYieldsDefaults(t *testing.T) {
 	if c.ChecksTimeout != 168*time.Hour {
 		t.Errorf("ChecksTimeout = %v, want 168h", c.ChecksTimeout)
 	}
+	if c.DecisionModel != DecisionEvaluate || !c.DecisionModel.RunsChecks() {
+		t.Errorf("DecisionModel = %q, want evaluate, which runs the checks", c.DecisionModel)
+	}
 	if c.CommitFixMessage != DefaultCommitFixMessage {
 		t.Errorf("CommitFixMessage = %q", c.CommitFixMessage)
 	}
@@ -388,10 +391,10 @@ func TestGlobalLayerSetsGlobalOnlyKeys(t *testing.T) {
 	}
 }
 
-// The new class refuses exactly two keys and no third: every other key still
+// The new class refuses exactly its three keys and no fourth: every other key still
 // parses in a repository file, from either repository origin.
 func TestRepositoryFileStillAcceptsEveryOtherKey(t *testing.T) {
-	globalOnly := map[Key]bool{KeyChecksTimeout: true, KeySessionReuse: true}
+	globalOnly := map[Key]bool{KeyChecksTimeout: true, KeySessionReuse: true, KeyDecisionModel: true}
 	docs := map[Key]string{
 		KeyAgent:                       `{"agent": "claude"}`,
 		KeyCommandsTest:                `{"commands": {"test": "go test ./..."}}`,
@@ -414,6 +417,7 @@ func TestRepositoryFileStillAcceptsEveryOtherKey(t *testing.T) {
 		KeyAllowPushedCommands:         `{"allow_pushed_commands": true}`,
 		KeyChecksTimeout:               `{"checks_timeout": "1h"}`,
 		KeySessionReuse:                `{"session_reuse": false}`,
+		KeyDecisionModel:               `{"decision_model": "off"}`,
 	}
 	// Every schema key is covered, so a key added without a decision about its
 	// class fails here rather than going untested.
@@ -450,8 +454,8 @@ func TestTrustGlobalIsAssignedToExactlyTheGlobalOnlyKeys(t *testing.T) {
 			global = append(global, k)
 		}
 	}
-	if got := strings.Join(keyStrings(global), ","); got != "checks_timeout,session_reuse" {
-		t.Errorf("TrustGlobal keys = %q, want checks_timeout and session_reuse", got)
+	if got := strings.Join(keyStrings(global), ","); got != "checks_timeout,session_reuse,decision_model" {
+		t.Errorf("TrustGlobal keys = %q, want checks_timeout, session_reuse, and decision_model", got)
 	}
 	if TrustGlobal.String() != "global-only" {
 		t.Errorf("TrustGlobal.String() = %q", TrustGlobal.String())

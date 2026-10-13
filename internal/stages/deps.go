@@ -8,6 +8,7 @@ import (
 	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/forge"
 	"github.com/dayamjz/assistant/internal/home"
+	"github.com/dayamjz/assistant/internal/judge"
 	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/vcs"
 )
@@ -158,11 +159,30 @@ type StageDeps struct {
 	// - internal/redact documents that the zero Redactor works - so an
 	// unwired StageDeps does not quietly skip redaction.
 	//
-	// What it removes is the one shape internal/redact recognizes, a
-	// credential in a URL's userinfo, and nothing else; that package's doc
-	// owns the residual gap, and the test stage's doc restates it where the
-	// record is described.
+	// What it removes is the shapes internal/redact recognizes, a credential
+	// in a URL's userinfo and a bearer or Authorization value, and nothing
+	// else; that package's doc owns the residual gap.
 	redact redact.Redactor
+	// judge is the decision-model client the review body puts its two checks
+	// to. It is build-scoped for the reason every adapter here is: the key is
+	// the operator's and is read once by the service, and the client holds no
+	// per-run state, so one serves every run of the service.
+	//
+	// It is unexported on the same terms as git and redact: which client, and
+	// so whether a key is present and where requests go, is the wiring's
+	// decision. Whether a check runs at all is the run's configured mode,
+	// config.Config.DecisionModel, which is a fact of the run's resolution
+	// and so already on Config. A nil client is a client with no key, so an
+	// unwired StageDeps sends nothing.
+	judge *judge.Client
+}
+
+// WithJudge returns these dependencies with the decision-model client the
+// review body's checks are put to. internal/service is what calls it, with
+// the one client it built from the operator's environment.
+func (d StageDeps) WithJudge(c *judge.Client) StageDeps {
+	d.judge = c
+	return d
 }
 
 // NewStageDeps returns the dependencies a stage body is given.

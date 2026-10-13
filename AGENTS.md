@@ -344,8 +344,21 @@ Each has cost this repository more than one round of review.
 - `internal/redact` is the one owner of credential removal, which
   `internal/store` refuses to open without and `internal/vcs`,
   `internal/forge`, and `internal/stages` take. It recognizes a credential in
-  a URL's userinfo and nothing else, and says so; adding a shape means adding
-  it there, never a second remover at a call site.
+  a URL's userinfo and a bearer or Authorization value and nothing else, and
+  says so; adding a shape means adding it there, never a second remover at a
+  call site.
+- `internal/judge` is the decision-model client for PRD section 5's "Checks a
+  decision model may add": the two fixed questions, the pinned version, the
+  cutoffs and their measurement. A `Result` is a probability or a failure and
+  never both, so a failed call is never read as an answer. The key comes only
+  from `ASSISTANT_DECISION_MODEL_KEY` in the operator's environment, and the mode is the
+  global-only `decision_model` key. The review stage turns answers into
+  findings in `internal/stages`' `decision.go`, which may only add. The screen
+  is a tripwire for plain attempts, not a security boundary. Tests reach the
+  provider over the wire through `internal/judge/judgetest`, never live. Read
+  its `doc.go` for the measurement and the gaps: the record does not yet keep
+  what the run did with a path afterwards, and nothing proposes turning a
+  check off.
 - `internal/machine` owns the shapes a structured answer takes, the three exit
   codes, and the outcome vocabulary. It composes records rather than restating
   them: a run is a `store.Run`, a report is a `findings.Report`, so no wire

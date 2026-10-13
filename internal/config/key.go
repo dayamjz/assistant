@@ -63,6 +63,10 @@ const (
 	// KeySessionReuse is "session_reuse": one durable fixer session per run. It
 	// is global-only, so only the operator's own file may set it.
 	KeySessionReuse Key = "session_reuse"
+	// KeyDecisionModel is "decision_model": the mode of the decision-model
+	// checks PRD section 5 describes. It is global-only, so a repository can
+	// turn the checks neither on, off, nor into enforce, in either copy.
+	KeyDecisionModel Key = "decision_model"
 	// KeyCommitFixMessage is "commit.fix_message": the fix commit subject
 	// template.
 	KeyCommitFixMessage Key = "commit.fix_message"
@@ -154,6 +158,8 @@ var specs = []spec{
 		func(c *Config, v any) { c.ChecksTimeout = v.(time.Duration) }},
 	{KeySessionReuse, TrustGlobal, DefaultSessionReuse, decodeBool,
 		func(c *Config, v any) { c.SessionReuse = v.(bool) }},
+	{KeyDecisionModel, TrustGlobal, DefaultDecisionModel, decodeDecisionModel,
+		func(c *Config, v any) { c.DecisionModel = v.(DecisionModel) }},
 	{KeyCommitFixMessage, TrustPushed, DefaultCommitFixMessage, decodeFixMessage,
 		func(c *Config, v any) { c.CommitFixMessage = v.(string) }},
 	{KeyAllowPushedCommands, TrustTrusted, false, decodeBool,

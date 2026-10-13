@@ -66,8 +66,8 @@
 //     document ownership, instruction suppression, the no-CI declaration, and
 //     the run budget. A pushed branch may never set one.
 //   - TrustGlobal keys are the operator's preferences about how their own
-//     machine behaves rather than facts about a repository: the checks timeout
-//     and session reuse. Only the operator's own file may set one, and a
+//     machine behaves rather than facts about a repository: the checks timeout,
+//     session reuse, and the decision-model mode. Only the operator's own file may set one, and a
 //     repository file carrying one is refused when it is parsed.
 //
 // The fourth class is this package's reading rather than the PRD's wording,

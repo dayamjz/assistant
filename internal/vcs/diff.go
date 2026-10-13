@@ -79,6 +79,38 @@ func (r *Repository) Diff(ctx context.Context, from, to string) (string, error) 
 	return string(out), nil
 }
 
+// DiffPath returns the unified diff from one commit to another restricted to
+// one repository-relative path, as git writes it, with the same options and
+// the same output bound as Diff. A path the two commits do not differ at
+// comes back as the empty string rather than as an error.
+//
+// The path is passed with --literal-pathspecs, so it is matched as written and
+// never read as a pattern: a file named with a wildcard character selects
+// itself and nothing else. An empty path is refused with ErrInvalidArgument rather than passed,
+// because an empty pathspec would select the whole tree and this would then
+// return a diff of everything under a name that promised one file.
+//
+// Restricting to one path also restricts what rename and copy detection can
+// pair it with, so a renamed file's new path reads here as an addition of its
+// whole content rather than as a rename. That is more text than the rename
+// changed, never less.
+func (r *Repository) DiffPath(ctx context.Context, from, to, path string) (string, error) {
+	if strings.TrimSpace(path) == "" {
+		return "", &argumentError{what: "path", value: path, reason: "must name a path to restrict the diff to"}
+	}
+	a, b, err := r.resolvePair(ctx, from, to)
+	if err != nil {
+		return "", err
+	}
+	args := append([]string{"--literal-pathspecs", "diff"}, diffArgs...)
+	args = append(args, a, b, "--", path)
+	out, err := r.run(ctx, "diff-path", args...)
+	if err != nil {
+		return "", err
+	}
+	return string(out), nil
+}
+
 // ChangedFiles lists the paths that differ between two commits, with what
 // happened to each. It reports renames and copies as such, with the earlier
 // path in OldPath, rather than as a deletion and an addition.

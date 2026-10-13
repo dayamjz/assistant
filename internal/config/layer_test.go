@@ -90,6 +90,7 @@ func TestParseAcceptsTheWholeSchema(t *testing.T) {
 		"no_ci": true,
 		"checks_timeout": "30m",
 		"session_reuse": false,
+		"decision_model": "enforce",
 		"commit": {"fix_message": "fix(gate): {summary}"},
 		"allow_pushed_commands": true
 	}`
@@ -134,6 +135,9 @@ func TestParseAcceptsTheWholeSchema(t *testing.T) {
 	}
 	if c.ChecksTimeout.String() != "30m0s" {
 		t.Errorf("ChecksTimeout = %v", c.ChecksTimeout)
+	}
+	if c.DecisionModel != DecisionEnforce {
+		t.Errorf("DecisionModel = %q", c.DecisionModel)
 	}
 	if c.CommitFixMessage != "fix(gate): {summary}" {
 		t.Errorf("CommitFixMessage = %q", c.CommitFixMessage)
@@ -186,6 +190,9 @@ func TestParseRefusalsNameTheKeyAndValue(t *testing.T) {
 		{"duration unparseable", `{"checks_timeout": "a while"}`, KeyChecksTimeout, `"a while"`},
 		{"duration not positive", `{"checks_timeout": "0s"}`, KeyChecksTimeout, `"0s"`},
 		{"duration over the limit", `{"checks_timeout": "9000h"}`, KeyChecksTimeout, `"9000h"`},
+		{"decision model misspelled", `{"decision_model": "Evaluate"}`, KeyDecisionModel, `"Evaluate"`},
+		{"decision model not a string", `{"decision_model": false}`, KeyDecisionModel, "false"},
+		{"decision model as a cutoff", `{"decision_model": "0.5"}`, KeyDecisionModel, `"0.5"`},
 		{"template without a placeholder", `{"commit": {"fix_message": "fix: something"}}`, KeyCommitFixMessage, `"fix: something"`},
 		{"template with a newline", `{"commit": {"fix_message": "fix: {summary}\nbody"}}`, KeyCommitFixMessage, "body"},
 		{"empty agent list", `{"agent": []}`, KeyAgent, "[]"},

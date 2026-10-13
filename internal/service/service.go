@@ -19,6 +19,7 @@ import (
 	"github.com/dayamjz/assistant/internal/graph"
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/ipc"
+	"github.com/dayamjz/assistant/internal/judge"
 	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/runs"
@@ -128,6 +129,16 @@ type Options struct {
 	// LockWait is how long to wait for the home's lock. Zero means
 	// DefaultLockWait, and a negative value asks once and refuses.
 	LockWait time.Duration
+	// Environment is where the decision-model key, judge.KeyVariable, is
+	// looked up, once, when the service opens. Nil means the process
+	// environment through os.LookupEnv, which is the operator's: the key is
+	// never read from a configuration file, and a key put in the environment
+	// after the service opened is not seen until it restarts.
+	Environment func(string) (string, bool)
+	// Judge is further options for the decision-model client, applied before
+	// the recorder this service gives it, so a test can point the client at a
+	// stand-in provider. The product passes none.
+	Judge []judge.Option
 }
 
 // Service is one home's background service.
@@ -168,6 +179,10 @@ type Service struct {
 	instance string
 	catalog  *agents.Catalog
 	registry *registry
+	// judge is the decision-model client every run's review stage is handed.
+	// It is built once at Open, from the key in the operator's environment,
+	// with the recorder that feeds the store's decision-model record.
+	judge *judge.Client
 
 	// mu guards the lazily built driver and topologies, the set of runs being
 	// advanced, and the branch gates. It is never held across a run's
@@ -297,6 +312,12 @@ func Open(ctx context.Context, o Options) (*Service, error) {
 		s.catalog = agents.DefaultCatalog(
 			agents.WithCatalogRecorder(invocationRecorder{s}))
 	}
+	lookup := o.Environment
+	if lookup == nil {
+		lookup = os.LookupEnv
+	}
+	s.judge = judge.FromEnvironment(lookup,
+		append(append([]judge.Option(nil), o.Judge...), judge.WithRecorder(decisionRecorder{s}))...)
 	if err := s.openParts(ctx, o); err != nil {
 		_ = s.Close()
 		return nil, err
@@ -544,7 +565,7 @@ func (s *Service) topologyFor(built *driver, resolved runResolution) (*topology,
 		forge.NewGitHubHost(redactor),
 		redactor,
 		vcs.WithRedactor(redactor),
-	)
+	).WithJudge(s.judge)
 	// The fix seam is built here, beside the stage seam and deliberately apart
 	// from it. It carries the one thing a stage body may not have: a route to
 	// the run's fixer role, which internal/runs hands out per run and which

@@ -1,6 +1,7 @@
 package scope
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/dayamjz/assistant/internal/findings"
@@ -110,6 +111,27 @@ func Guidance(c Change) (string, error) {
 // stage's report, and identifiers are assigned once over the whole set by
 // findings.NormalizeFindings, which owns that fact.
 func Observe(c Change, traces []Trace) ([]findings.Finding, error) {
+	return ObserveChecked(c, traces, nil)
+}
+
+// ObserveChecked is Observe for a review whose traces a decision model was
+// asked about. unconfirmed is the traces the model was asked about and did not
+// confirm: each is matched to a trace in traces by its path and its reason,
+// both trimmed, and a matched trace accounts for nothing. A path left with no
+// other trace gets the ordinary untraced note, which also quotes every
+// unconfirmed reason given for it and says the path's changes did not bear it
+// out.
+//
+// It can only add notes to what Observe returns for the same traces, never
+// remove one: a trace absent from unconfirmed counts exactly as it does in
+// Observe, and an entry of unconfirmed that matches no trace in traces is
+// ignored rather than read as a trace. So a caller passes here only the traces
+// a model answered and did not confirm; a trace whose check could not run is
+// left out of unconfirmed, and counts as it would with no model at all.
+//
+// What a model's answer is worth is internal/judge's to state. This package
+// reads unconfirmed as given and does not weigh it.
+func ObserveChecked(c Change, traces []Trace, unconfirmed []Trace) ([]findings.Finding, error) {
 	if strings.TrimSpace(c.Intent) == "" {
 		return nil, ErrNoIntent
 	}
@@ -118,13 +140,22 @@ func Observe(c Change, traces []Trace) ([]findings.Finding, error) {
 		return nil, ErrNoTouched
 	}
 
+	refuted := make(map[Trace]struct{}, len(unconfirmed))
+	for _, t := range unconfirmed {
+		refuted[trimmed(t)] = struct{}{}
+	}
 	traced := make(map[string]struct{}, len(traces))
+	disputed := make(map[string][]string)
 	for _, t := range traces {
-		path := strings.TrimSpace(t.Path)
-		if path == "" || strings.TrimSpace(t.Reason) == "" {
+		t = trimmed(t)
+		if t.Path == "" || t.Reason == "" {
 			continue
 		}
-		traced[path] = struct{}{}
+		if _, ok := refuted[t]; ok {
+			disputed[t.Path] = append(disputed[t.Path], t.Reason)
+			continue
+		}
+		traced[t.Path] = struct{}{}
 	}
 
 	var out []findings.Finding
@@ -136,10 +167,35 @@ func Observe(c Change, traces []Trace) ([]findings.Finding, error) {
 			Severity:    findings.SeverityInfo,
 			Action:      findings.ActionNote,
 			Location:    findings.Location{Path: path},
-			Description: describe(path, c.Supplied),
+			Description: describe(path, c.Supplied) + notBorneOut(disputed[path]),
 		})
 	}
 	return out, nil
+}
+
+// trimmed is a trace with its path and reason trimmed, which is the form both
+// sides of the unconfirmed match are compared in.
+func trimmed(t Trace) Trace {
+	return Trace{Path: strings.TrimSpace(t.Path), Reason: strings.TrimSpace(t.Reason)}
+}
+
+// notBorneOut is what an untraced note adds for the reasons a decision model
+// did not confirm, and the empty string when there are none. The reasons are
+// quoted with Go's quoting so a control character in reviewer text reaches
+// the person reading the note escaped rather than acting on how it renders.
+func notBorneOut(reasons []string) string {
+	if len(reasons) == 0 {
+		return ""
+	}
+	quoted := make([]string, len(reasons))
+	for i, r := range reasons {
+		quoted[i] = strconv.Quote(r)
+	}
+	return " The review did trace this path, with the reason " + strings.Join(quoted, " and ") +
+		", but a decision model asked whether that reason describes this path's changes " +
+		"did not confirm it: the changes did not bear it out, so the trace accounts for " +
+		"nothing. The model read the reason against the changed lines and not against " +
+		"the intent, and its answer is a judgment with no evidence behind it."
 }
 
 // describe says what an untraced path means, and says it differently for an

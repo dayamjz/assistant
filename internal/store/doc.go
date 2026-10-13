@@ -301,4 +301,11 @@
 // internal/service, which is also where its one softness is owned and stated:
 // the recording interface returns nothing, so a row that cannot be written is
 // dropped and the history understates.
+//
+// The decision-model record PRD section 5 asks for is here on the same terms,
+// as AppendDecisionAnswer and DecisionAnswers: one row per answer or failed
+// call, appended and never revised, with no column a question, a diff, a
+// reason, or a key could land in. It keeps the answer and the finding it
+// produced, and not yet what the run did with that path afterwards, which
+// section 5 also asks for; internal/judge states that gap.
 package store

@@ -265,6 +265,22 @@ func decodeChecksTimeout(k Key, v any) (any, error) {
 	return d, nil
 }
 
+// decodeDecisionModel accepts one of the three decision-model modes, spelled
+// exactly. Any other text is refused rather than read as the default, because
+// a misspelled mode is a mode the operator did not get.
+func decodeDecisionModel(k Key, v any) (any, error) {
+	s, err := asString(k, v)
+	if err != nil {
+		return nil, err
+	}
+	switch m := DecisionModel(s); m {
+	case DecisionEvaluate, DecisionEnforce, DecisionOff:
+		return m, nil
+	default:
+		return nil, keyErr(k, v, `expected "evaluate", "enforce", or "off"`)
+	}
+}
+
 // decodeFixMessage accepts the fix commit subject template. It must contain
 // the summary placeholder, because a template without it renders the same
 // subject for every fix, which makes a history of fix commits unreadable.
