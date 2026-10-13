@@ -643,4 +643,94 @@ var schema = []migration{
 			) STRICT`,
 		},
 	},
+	{
+		version: 15,
+		name:    "durable wake queue and detector markers",
+		statements: []string{
+			// PRD section 8's wake: the durable wake queue, one row per
+			// actionable wake, a table here and not a directory so a wake and
+			// the detector markers it advances are one write. It is
+			// authoritative and appended: a row is actionable until it is
+			// acknowledged, and draining acknowledges a row and never deletes
+			// it, so drained rows are kept.
+			//
+			// kind is a word the supervisor's own table gives a meaning to;
+			// this package records it and decides nothing from it. marker is
+			// the detector's idempotency component, composed by the loop that
+			// observed the wake, and the uniqueness constraint over the task,
+			// the kind and the marker is what turns a replayed detection into
+			// one row rather than two. Which component keeps a legitimate
+			// second surface distinct from a replay is the loop's, and
+			// wake.go says what each kind's marker has to carry.
+			//
+			// handled_at and acknowledged_by are the one revision a row
+			// takes, together and once: the acknowledgement. acknowledged_by
+			// is the closed set acknowledger.go names, and AcknowledgeWakes
+			// is the only accessor that writes either column.
+			`CREATE TABLE wake (
+				id              INTEGER PRIMARY KEY,
+				task_id         TEXT NOT NULL REFERENCES task(id),
+				kind            TEXT NOT NULL,
+				marker          TEXT NOT NULL,
+				created_at      TEXT NOT NULL,
+				handled_at      TEXT,
+				acknowledged_by TEXT,
+				UNIQUE (task_id, kind, marker)
+			) STRICT`,
+			// The rows a drain and an in-flight count read: the actionable
+			// ones, which are the ones not yet acknowledged.
+			`CREATE INDEX wake_unacknowledged ON wake(task_id, id) WHERE handled_at IS NULL`,
+			// Appended means appended. On merge_record's terms, the table
+			// takes its rows and refuses the verbs that would make a row say
+			// something other than what the loop recorded: no column but the
+			// two acknowledgement columns may change, an acknowledged row may
+			// not be acknowledged again, and no row is deleted. Like the
+			// other seals, this does not guard against a later migration
+			// that drops a trigger.
+			`CREATE TRIGGER wake_is_appended
+				BEFORE UPDATE OF id, task_id, kind, marker, created_at ON wake
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a wake is appended by the loop that observed it and is not rewritten');
+				END`,
+			`CREATE TRIGGER wake_is_acknowledged_once
+				BEFORE UPDATE OF handled_at, acknowledged_by ON wake
+				WHEN OLD.handled_at IS NOT NULL
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a wake is acknowledged once and the first acknowledgement stands');
+				END`,
+			`CREATE TRIGGER wake_is_not_removed
+				BEFORE DELETE ON wake
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a wake is kept after it is drained and is not deleted');
+				END`,
+
+			// The detector markers of one task: what the supervisor loop
+			// had observed when it last passed over the task, one row per
+			// task, rewritten in place, and authoritative for that one fact.
+			// It is not the task's state and nothing resolves a state from
+			// it; it is what the next pass compares its observation against.
+			//
+			// change_epoch is the one column this package derives rather
+			// than records: it counts the times the capture digest written
+			// here differed from the one before, in the transaction that
+			// writes the new digest, so a terminal kind's marker has a
+			// component that advances when the screen changes and holds
+			// while it does not. Everything else is what the loop handed
+			// over. The nullable columns are facts the loop may not have: no
+			// capture digest when the terminal could not be captured, no
+			// window while nothing is waiting, no unobserved-since while the
+			// terminal is observed.
+			`CREATE TABLE wake_marker (
+				task_id           TEXT PRIMARY KEY REFERENCES task(id),
+				capture_digest    TEXT,
+				change_epoch      INTEGER NOT NULL,
+				event_sequence    INTEGER NOT NULL,
+				surfaced          INTEGER NOT NULL,
+				window_start      TEXT,
+				stall_repetitions INTEGER NOT NULL,
+				unobserved_since  TEXT,
+				updated_at        TEXT NOT NULL
+			) STRICT`,
+		},
+	},
 }

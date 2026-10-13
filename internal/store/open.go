@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -113,6 +114,60 @@ func Open(ctx context.Context, path string, opts ...Option) (*Store, error) {
 		return nil, err
 	}
 	return s, nil
+}
+
+// OpenReadOnly opens the database at path for reading and brings nothing up
+// to date: it applies no migration, takes no writer connection, and every
+// accessor that writes returns ErrReadOnly. It is for a caller that has to
+// read the record without being the service that owns it, which PRD section
+// 5's stop guard and pull guard are: a hook deciding whether work is in
+// flight while the service holding the home's lock may be gone.
+//
+// It needs no redactor, because the redactor exists for the two URL columns
+// UpsertRepository writes and nothing here writes. What it cannot do, it
+// refuses as an *UnreadableError, which matches ErrUnreadable and the cause
+// beneath it: a file that is missing or not a database, a schema behind this
+// build (ErrSchemaBehind, since a read-only open may not migrate), ahead of
+// it (ErrSchemaAhead), recorded differently (ErrSchemaChanged), or a
+// connection that does not report the settings the package comment's
+// guarantees rest on (ErrSettingNotApplied). That one typed result is what a
+// caller feeds a reading it could not take, and it is distinct from a
+// caller's own mistake, an empty path, which is refused as an ordinary error.
+//
+// The database is opened in the driver's read-only mode, so the file is not
+// created and nothing is written to it. The journal mode is a property of
+// the file and is read back like every other required setting, so a database
+// a writer never opened, which is not yet in WAL mode, is unreadable here
+// rather than read under a mode the package comment does not describe.
+func OpenReadOnly(ctx context.Context, path string) (*Store, error) {
+	if path == "" {
+		return nil, fmt.Errorf("store: no database path given")
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("store: resolving %q: %w", path, err)
+	}
+	unreadable := func(err error) (*Store, error) {
+		return nil, &UnreadableError{Path: abs, Err: err}
+	}
+	if _, err := os.Stat(abs); err != nil {
+		return unreadable(err)
+	}
+	read, err := openPool(ctx, readOnlyDSN(abs), false)
+	if err != nil {
+		return unreadable(err)
+	}
+	if err := verifyMigrated(ctx, read, schema); err != nil {
+		_ = read.Close()
+		return unreadable(err)
+	}
+	return &Store{path: abs, read: read}, nil
+}
+
+// readOnlyDSN is poolDSN's connection string for the reader pool with the
+// driver's read-only mode asked for as well.
+func readOnlyDSN(path string) string {
+	return poolDSN(path, false) + "&mode=ro"
 }
 
 // poolDSN is the connection string for one pool. Its pragmas are the rows of
@@ -249,8 +304,10 @@ func (s *Store) Close() error {
 		s.mu.Lock()
 		s.closed = true
 		s.mu.Unlock()
-		if err := s.write.Close(); err != nil {
-			s.closeErr = err
+		if s.write != nil {
+			if err := s.write.Close(); err != nil {
+				s.closeErr = err
+			}
 		}
 		if err := s.read.Close(); err != nil && s.closeErr == nil {
 			s.closeErr = err
@@ -273,10 +330,16 @@ func (s *Store) live() error {
 
 // inTx runs fn inside one write transaction. Every accessor that changes a row
 // goes through it, so a read-modify-write is atomic against another writer
-// without any accessor having to remember that.
+// without any accessor having to remember that. It is also where a read-only
+// store refuses every write: OpenReadOnly leaves the writer pool absent, so
+// there is no connection a write could go through, and the refusal is
+// ErrReadOnly rather than a nil pool.
 func (s *Store) inTx(ctx context.Context, fn func(tx *sql.Tx) error) error {
 	if err := s.live(); err != nil {
 		return err
+	}
+	if s.write == nil {
+		return ErrReadOnly
 	}
 	tx, err := s.write.BeginTx(ctx, nil)
 	if err != nil {
