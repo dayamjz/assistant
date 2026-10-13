@@ -843,7 +843,7 @@ func plantComplete(t *testing.T, records *store.Store) string {
 	if err := records.SetTaskRun(ctx, id, run.ID); err != nil {
 		t.Fatalf("attributing the run: %v", err)
 	}
-	if _, err := records.RecordTaskCleanup(ctx, store.TaskCleanup{TaskID: id, Proof: store.CleanupProofRemoteBranch}); err != nil {
+	if _, err := records.RecordTaskCleanup(ctx, store.TaskCleanup{TaskID: id, Proof: store.CleanupProofRemoteBranch}, store.TaskDelivery); err != nil {
 		t.Fatalf("recording the cleanup: %v", err)
 	}
 	if err := records.MarkCleanupRemoved(ctx, id, time.Now()); err != nil {

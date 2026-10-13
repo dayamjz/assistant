@@ -155,6 +155,15 @@ Each has cost this repository more than one round of review.
 - `internal/store` is the only package that opens the database and the only one
   that writes SQL. Add a typed accessor there rather than a query elsewhere. Its
   driver is pure Go on purpose, so `make check` needs no cgo on any platform.
+  The cleanup decision's two records beside `task_cleanup` are migration 18's:
+  `run_cleanup`, on the same terms plus a refusal column that is the one
+  state a row is revised out of, and `task_report`, written once by
+  `StoreTaskReport` in the transaction that registers the holds derived from
+  it, with the parsed report opaque and the hold keys the one fact the row
+  holds about it. `RecordTaskCleanup` takes the shape it was decided for and
+  refuses `ErrTaskShapeMoved` in the claiming transaction.
+  `ForgetHoldForTest` takes the test and is a counterfeit builder for the hold
+  rule's refusal case, never a production path.
   A schema change is a new migration appended to `schema.go`, never an edit to
   one that has shipped; the tests number what they append from the shipped list
   rather than spelling a version out. It also owns who resolved a hold:
@@ -215,6 +224,11 @@ Each has cost this repository more than one round of review.
   itself. Read its `doc.go` before changing any of that, and for the residual
   gaps: the confirmation precedes a write and not a read, it is not a lock
   against a later rename, and a GitHub Enterprise upstream yields no specifier.
+  Tests outside the package reach a code host through
+  `internal/forge/forgetest`, a stand-in `gh` answering over the wire and
+  read by the real adapter, scripted with only shapes gh produces, on
+  `internal/judge/judgetest`'s terms; the package's own tests keep their
+  private stand-in for the contract cases it models and `forgetest` does not.
 - `internal/gate` owns the local bare repository a push is validated through:
   where it lives, what it is born with, its hooks, and its identity across a
   move or a copy. It composes `internal/vcs` and builds no command lines, and it
@@ -363,9 +377,11 @@ Each has cost this repository more than one round of review.
   derived: `Landed` from the merge record of an attributed run and `Complete`
   from that and the cleanup record's removal, for a delivery task; nothing
   there reads a code host or writes a record, and no event kind is named
-  `landed` or `complete`. `Complete` for an investigation task is unreachable
-  until a record holds its stored report, and `doc.go` says so rather than
-  approximating it. Read its `doc.go` for the residual gaps, and for why PRD
+  `landed` or `complete`. `Complete` for an investigation task is not
+  resolved: `internal/store` now holds the stored report and its holds, and
+  `internal/tasks` verifies them before the cleanup record, but the snapshot
+  does not carry the report and the tier declines rather than approximating,
+  which `doc.go` says. Read its `doc.go` for the residual gaps, and for why PRD
   section 8's "task state" row is read as a resolution rather than a row.
 - `internal/tasks` is PRD section 8's tasks module as far as this build takes
   it: intake, queueing, and the P11 assertion, with dispatch and the copy in
@@ -407,6 +423,28 @@ Each has cost this repository more than one round of review.
   finishes in `internal/service` that write the record both call `Release`);
   Failed is not terminal, so a relaunch must re-run the floor; a
   person's push on a task's branch is outside it.
+  It is also P12's decision and the only writer of the cleanup record:
+  `Cleaner.CleanUp` over a task's copy and `CleanUpRun` over a run's, one
+  decision with two removals, a clone's directory removed by this package
+  behind the proof and a worktree removed through the non-discarding
+  `vcs.RemoveWorktree`. `Removal` is the proof, with the field only the
+  decision sets and both removal functions require; the three proofs in
+  `proof.go` read the upstream fresh, fetch the tip by identifier, and record
+  what they examined (`store.CleanupProof`, with `CleanupProofScratch` the
+  one case that is no proof of work: an unchanged investigation copy); an
+  inconclusive proof is a `ProofAttempt` on the `*CleanupRefusal`, never a
+  proof, and no remedy names a flag. The record is written before the
+  removal and marked after, anchored to the shape, so a second call
+  completes a crashed one. An investigation copy answers to PRD section 11
+  first through `StoreReport`, which parses with `findings.ParseReport`,
+  registers every ask as a hold in the row's transaction, and keeps a fix
+  finding as evidence that reaches no fixer. A task copy is examined only
+  once its terminal probed `Dead`; `internal/service` passes `Unobserved`
+  until the probe is wired, so every task copy refuses today, and its
+  `doc.go` lists that with the other gaps: the discarding worktree removal
+  stays reachable, a stated liveness is believed, ignored files are
+  invisible, and a promotion between the record and the removal is #109's
+  to refuse.
 - `internal/session` is PRD section 8's terminal session provider, and the
   word means a terminal session, never the conversation session
   `internal/agents` keeps for a fixer: `Provider` is the five operations and
@@ -494,7 +532,10 @@ Each has cost this repository more than one round of review.
   `ReadInstance`. No other package spells a path under the root, with one
   deliberate exception: `internal/gate` composes `<home>/repos/<id>.git`
   itself, so this package does not; the beacon's path is here and its content
-  is `internal/supervisor`'s. The wake
+  is `internal/supervisor`'s. A task's paths (`Task`, `TaskCopy`,
+  `TaskInstructions`, `TaskReport`) are all composed here from an identifier
+  `ValidTaskID` accepted, and the report's evidence copy sits beside the copy
+  so cleanup leaves it. The wake
   queue is not in the layout at all: it is `internal/store`'s table, so no
   path to a `queue/` is composed and `Create` makes none, while an older home
   keeps an empty one nothing reads. The lock is
@@ -584,7 +625,14 @@ Each has cost this repository more than one round of review.
   record, which is the whole of what that word buys: `doc.go` says nothing
   bounds how long the displaced run goes on executing. Both gate methods take an
   identifier and never a working copy, so a caller cannot attach a push to
-  another repository's runs. And whether anything is advancing a run is a third
+  another repository's runs. It is also the caller of `internal/tasks`'
+  cleanup decision and decides nothing of it: `reclaimCopy` asks `CleanUpRun`
+  when a run finishes and returns the typed refusal, which the decision
+  recorded on the run's cleanup record and `report` composes into the run's
+  answer as `machine.Run.Cleanup`; `cleanup.go` calls `CleanUp` for the
+  delivery task a merge record landed and for an investigation task whose
+  report `storeTaskReport` stored, passing `taskstate.Unobserved` until the
+  probe is wired, and no verb or method reaches any of it. And whether anything is advancing a run is a third
   fact neither the record nor the checkpoint holds: it lives in the slot a run
   advances in, `report` reads it rather than inferring it, and it travels as
   `machine.Run.Advancing`. It is also where PRD section 11's step 3 lives:

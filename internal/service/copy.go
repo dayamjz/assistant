@@ -10,6 +10,7 @@ import (
 	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/stages"
 	"github.com/dayamjz/assistant/internal/store"
+	"github.com/dayamjz/assistant/internal/tasks"
 	"github.com/dayamjz/assistant/internal/vcs"
 )
 
@@ -91,26 +92,37 @@ import (
 // principle P1's promise about a person's own origin is untouched: nothing
 // here opens the working copy at all.
 //
-// # Reclaim, and the work it may not throw away
+// # Reclaim is a P12 decision, and the work it may not throw away
 //
 // A copy is removed when its run reaches a terminal status, and a held run
 // keeps its copy, because a hold is answered later and the run resumes in the
 // copy it stopped in.
 //
-// Removal refuses rather than discards. Git will not remove a worktree holding
-// modified or untracked files, and that refusal is taken as the answer: the
-// copy is left standing and the reason recorded. What is in it at that point
-// is whatever the run left - an agent's edits that never reached a commit,
-// output a body wrote - and a run that ended badly is exactly when somebody
-// may want to look at it. P6 says never lose work, and a removal that forced
-// its way past that refusal would be this service deciding, on a run that has
-// already failed, that nothing in it mattered.
+// What removes it is internal/tasks' cleanup decision, the same one a task's
+// copy goes through: PRD principle P12 covers every isolated copy, and a
+// run's copy holds work, the fix rounds' commits, that a failed or terminated
+// run may never have pushed. So reclaimCopy asks tasks.CleanUpRun, which
+// proves the commit the copy stands on is reachable from the upstream's
+// branch, or in the merged pull request the run's merge record names, or
+// present in the default branch by content, and refuses otherwise; a passed
+// run's pushed branch satisfies the first at once. The removal behind the
+// proof is the non-discarding vcs.RemoveWorktree, so a modified or untracked
+// file git finds there is a second refusal behind the first, and ignored
+// files are the residual gap internal/vcs's Inventory names.
 //
-// The cost is that copies accumulate for runs that left changes behind. That
-// is the intended trade and not an oversight: they are under the home, they
-// are named by the run they belong to, and a person can remove one. Nothing
-// here prunes them on a timer, because a timer would be the same decision
-// taken later with less information.
+// A refusal is returned, not logged past. The run has settled by the time
+// it is reached, so the callers that reach it, settle and the checks-hold
+// closure, have no caller of their own to return it to and log it; what
+// makes it more than a log line is that tasks.CleanUpRun records it on the
+// run's cleanup record, store.RunCleanup, which report composes into the
+// run's answer, so status can say a local copy was kept and why. cleanup.go
+// owns that wording and the task-copy call beside it.
+//
+// The cost is that copies accumulate for runs whose work is not yet safely
+// elsewhere. That is the intended trade and not an oversight: they are under
+// the home, they are named by the run they belong to, and a person can
+// remove one. Nothing here prunes them on a timer, because a timer would be
+// the same decision taken later with less information.
 
 // ensureCopy stands up the isolated copy record's run works in, and points the
 // gate repository it is cut from at the repository's upstream.
@@ -269,54 +281,41 @@ func copyStanding(ctx context.Context, path string) (bool, error) {
 	return true, nil
 }
 
-// reclaimCopy removes the isolated copy of a run that has ended.
+// reclaimCopy removes the isolated copy of a run that has ended, through
+// internal/tasks' cleanup decision, and the two references the run holds in
+// the gate repository with it.
 //
-// It reports nothing to the caller. The run has already settled by the time
-// this is reached, so there is no answer a failure here could change, and a
-// copy that outlives its run costs disk rather than correctness. What it does
-// instead is say so in the log, because a copy left standing is a fact about
-// the home that is otherwise only visible by looking.
-//
-// The refusal it expects is git's, on a copy holding modified or untracked
-// files. That copy is kept on purpose; see this file's opening comment.
-func (s *Service) reclaimCopy(ctx context.Context, record store.Run) {
-	path := s.home.Worktree(record.RepositoryID, record.ID)
-	if _, err := os.Stat(path); err == nil {
-		copied, err := vcs.OpenWorktree(ctx, path, vcs.WithRedactor(redact.New()))
-		if err != nil {
-			s.log.Printf("the isolated copy of run %s at %s was not removed: %v", record.ID, path, err)
-			return
-		}
-		if err := copied.RemoveWorktree(ctx, path); err != nil {
-			// The copy is kept on purpose when git refuses it, so the
-			// reference that keeps its commit reachable is kept with it: a
-			// copy standing on an unreachable commit is one a person cannot
-			// use, which is the whole reason it was not removed.
-			s.log.Printf("the isolated copy of run %s is left standing at %s: %v", record.ID, path, err)
-			return
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		s.log.Printf("the isolated copy of run %s at %s was not removed: %v", record.ID, path, err)
-		return
-	}
+// It returns what it could not do. A *tasks.CleanupRefusal is the copy kept,
+// with the reason, recorded by the decision on the run's cleanup record
+// before it is returned; any other error is a record or a repository that
+// could not be read, and nothing was removed. The references are deleted
+// only after the copy is: a copy standing on a refusal needs the reference
+// that keeps its commit reachable, which is the whole reason it was kept.
+func (s *Service) reclaimCopy(ctx context.Context, record store.Run) error {
 	repository, err := s.store.Repository(ctx, record.RepositoryID)
 	if err != nil {
-		s.log.Printf("the submitted reference of run %s was not removed: %v", record.ID, err)
-		return
+		return fmt.Errorf("service: reading the repository run %s is of: %w", record.ID, err)
+	}
+	gatePath, err := s.gatePathOf(ctx, repository)
+	if err != nil {
+		return err
+	}
+	if _, err := s.cleaner.CleanUpRun(ctx, tasks.RunCopy{Run: record, Gate: gatePath}); err != nil {
+		return err
 	}
 	bare, err := s.gateRepositoryOf(ctx, repository, record.ID)
 	if err != nil {
-		s.log.Printf("the submitted reference of run %s was not removed: %v", record.ID, err)
-		return
+		return err
 	}
 	if err := bare.DeleteRef(ctx, submittedRef(record.ID)); err != nil {
-		s.log.Printf("the submitted reference of run %s was not removed: %v", record.ID, err)
+		return fmt.Errorf("service: the submitted reference of run %s was not removed: %w", record.ID, err)
 	}
 	// The trusted-configuration reference is the run's too, written by
 	// resolveRunConfig when the run began or resumed, and it goes with the
 	// run on the same terms. A run that never resolved has none, and deleting
 	// an absent reference is not an error internal/vcs reports.
 	if err := bare.DeleteRef(ctx, trustedRef(record.ID)); err != nil {
-		s.log.Printf("the trusted-configuration reference of run %s was not removed: %v", record.ID, err)
+		return fmt.Errorf("service: the trusted-configuration reference of run %s was not removed: %w", record.ID, err)
 	}
+	return nil
 }

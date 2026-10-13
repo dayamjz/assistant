@@ -322,10 +322,15 @@ func TestRecoveryEndsAnElapsedChecksHoldWhosePullRequestWasMerged(t *testing.T) 
 			t.Fatalf("the checks stage's report was rewritten: %+v", report)
 		}
 	})
-	if c.provider.reads() != before+1 {
-		t.Fatalf("recovery read the pull request %d times, want once", c.provider.reads()-before)
+	// Two reads: the closure's, which ended the run, and the one the run's
+	// copy cleanup makes afterwards for its merged-pull-request proof, which
+	// is a different mechanism over the same record and is held to its own
+	// test in internal/tasks. The closure's is the first of them, and it is
+	// the one whose deadline is this test's to check.
+	if c.provider.reads() != before+2 {
+		t.Fatalf("recovery read the pull request %d times, want the closure's read and the cleanup's", c.provider.reads()-before)
 	}
-	if bounded := c.provider.boundedReads(); !bounded[len(bounded)-1] {
+	if bounded := c.provider.boundedReads(); !bounded[before] {
 		t.Fatal("recovery's read ran under no deadline, so a provider that never answers would hold Open")
 	}
 	hold, filed := readHold(t, c.home, runID)
@@ -466,10 +471,13 @@ func TestAHoldOnAPersonsDecisionIsNeverReRead(t *testing.T) {
 			t.Fatal("the hold on a person's decision was recorded as closed by the program")
 		}
 		// The control: the answer carried the run to the checks stage, whose
-		// own first read found the merge and ended the wait.
-		if run.Outcome != machine.OutcomePassed || c.provider.reads() != 1 {
+		// own first read found the merge and ended the wait. The second read
+		// is the copy cleanup's merged-pull-request proof after the run
+		// settled, a different mechanism over the same record; neither is a
+		// re-read of the hold, which is what this test refuses.
+		if run.Outcome != machine.OutcomePassed || c.provider.reads() != 2 {
 			t.Fatalf("after the answer the run reads %s with the pull request read %d times, want passed after the "+
-				"checks stage's one read", run.Outcome, c.provider.reads())
+				"checks stage's one read and the cleanup's", run.Outcome, c.provider.reads())
 		}
 		if view := stageView(t, run, pipeline.StageCI); view.Report == nil || !strings.Contains(view.Report.Summary, "merged") {
 			t.Fatalf("the checks stage does not report the merge it read: %+v", view.Report)

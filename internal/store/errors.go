@@ -400,3 +400,17 @@ var ErrSchemaBehind = errors.New("store: database schema is behind this build an
 // task's attempt already has a primary snapshot: the record is of one read,
 // written once, and the first stands.
 var ErrPrimarySnapshotRecorded = errors.New("store: the attempt already has a primary snapshot")
+
+// ErrTaskShapeMoved is returned by RecordTaskCleanup when the task's shape is
+// not the one the cleanup was decided for. The shape decides what a cleanup
+// may skip, so a record decided over one shape and written against another
+// would remove a delivery copy on an investigation copy's terms; the
+// comparison is made in the transaction that claims the record, which is why
+// a caller passes the shape it decided from rather than reading it again.
+var ErrTaskShapeMoved = errors.New("store: the task's shape is not the one the cleanup was decided for")
+
+// ErrTaskReportStored is returned by StoreTaskReport when the task already
+// has a stored report. PRD section 11 makes the report the record that
+// survives cleanup, written once, so a second report is refused rather than
+// overwriting the holds the first was registered with.
+var ErrTaskReportStored = errors.New("store: the task already has a stored report")

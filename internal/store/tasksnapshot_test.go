@@ -401,7 +401,7 @@ func TestASnapshotCarriesTheCleanupRecord(t *testing.T) {
 	}
 	written, err := s.RecordTaskCleanup(ctx, TaskCleanup{
 		TaskID: task.ID, Proof: CleanupProofRemoteBranch, Examined: []string{"abc", "def"},
-	})
+	}, TaskDelivery)
 	if err != nil {
 		t.Fatalf("RecordTaskCleanup: %v", err)
 	}

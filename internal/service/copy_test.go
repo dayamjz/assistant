@@ -4,15 +4,19 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"strings"
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/findings"
 	"github.com/dayamjz/assistant/internal/gate"
 	"github.com/dayamjz/assistant/internal/home"
+	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/pipeline"
+	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/stages"
 	"github.com/dayamjz/assistant/internal/store"
+	"github.com/dayamjz/assistant/internal/tasks"
 	"github.com/dayamjz/assistant/internal/vcs"
 )
 
@@ -29,11 +33,19 @@ import (
 // same seam every body opens it by, so what this sees is what a body would
 // have been handed. That it is gone is read after the run has settled, at the
 // path the home names, which is where a copy nobody reclaimed would still be.
+//
+// Giving it back is PRD principle P12's decision, so the branch under
+// validation is pushed to the upstream before the run: the copy stands on
+// that commit, the remote-branch proof finds it reachable from the upstream's
+// branch at once, and the copy is removed on it. The run that follows
+// establishes what that decision does with a copy whose work has not landed.
 func TestARunIsGivenAnIsolatedCopyAndGivesItBack(t *testing.T) {
 	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P12)
 
 	h := newHome(t)
 	subject := newSubject(t)
+	git(t, subject, "push", "--quiet", "origin", "work")
 	repository := recordRepository(t, h, subject)
 
 	seen := make(chan copyObservation, 1)
@@ -72,6 +84,20 @@ func TestARunIsGivenAnIsolatedCopyAndGivesItBack(t *testing.T) {
 	path := h.Worktree(repository.ID, run.id)
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatalf("the copy of run %s is still at %s after the run ended: %v", run.id, path, err)
+	}
+	// The record says what the removal rested on: the remote-branch proof,
+	// over the commit the copy stood on, marked removed after.
+	records := openRecords(t, h)
+	defer func() { _ = records.Close() }()
+	cleanup, err := records.RunCleanup(t.Context(), run.id)
+	if err != nil {
+		t.Fatalf("the removed copy of run %s has no cleanup record: %v", run.id, err)
+	}
+	if cleanup.Proof.Or("") != store.CleanupProofRemoteBranch || !cleanup.RemovedAt.IsKnown() || cleanup.Kept() {
+		t.Fatalf("the cleanup record is %+v, want the remote-branch proof with the removal marked", cleanup)
+	}
+	if len(cleanup.Examined) == 0 || cleanup.Examined[0] != submitted {
+		t.Fatalf("the proof examined %v, want the submitted commit %s first", cleanup.Examined, submitted)
 	}
 	// The reference create wrote in the gate at the submitted commit goes
 	// with the copy, so the gate holds nothing of a run that ended.
@@ -198,4 +224,60 @@ func gateRepositoryOf(t *testing.T, h *home.Home, workingPath string) string {
 		t.Fatalf("locating the gate repository: %v", err)
 	}
 	return repository
+}
+
+// TestACopyWhoseWorkHasNotLandedIsKeptAndStatusSaysSo is the other half of
+// PRD principle P12 at this site: a run whose copy stands on a commit that is
+// on no remote branch, in no merged pull request and absent from the default
+// branch by content keeps its copy, and the refusal reaches the run's answer
+// rather than only the log.
+//
+// The commit the copy stands on is the submitted one, which this subject
+// never pushes to its upstream. That is the same shape a fix round leaves:
+// a commit on the copy's detached HEAD that landed nowhere, and the decision
+// reads the copy's HEAD and not how the commit got there, so what is
+// established here holds for the fix round's commit as it does for this one.
+// What is not driven here is a run that takes a fix round; internal/stages'
+// own tests drive the round, and the P5 journey walk drives one through the
+// binary.
+func TestACopyWhoseWorkHasNotLandedIsKeptAndStatusSaysSo(t *testing.T) {
+	requiresIdentifiedPeer(t)
+	principles.Cite(t, principles.P12)
+
+	h := newHome(t)
+	subject := newSubject(t)
+	repository := recordRepository(t, h, subject)
+
+	var run machine.Run
+	withService(t, h, func(under serviceUnderTest) {
+		started := startRunSkipping(t, under.client, subject, afterIntent()...)
+		run = runByID(t, under.client, started.Record.ID)
+	})
+	if run.Outcome != machine.OutcomeChecksPassed {
+		t.Fatalf("the run reads %s, want checks-passed, so that the copy was reclaimed on a finished run", run.Outcome)
+	}
+	path := h.Worktree(repository.ID, run.Record.ID)
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("the copy of run %s at %s was taken away with its work landed nowhere: %v", run.Record.ID, path, err)
+	}
+	if run.Cleanup == nil || !run.Cleanup.Kept() || run.Cleanup.Refusal.Or("") != string(tasks.ReasonUnproven) {
+		t.Fatalf("the run's answer carries the cleanup record %+v, want a kept copy refused as unproven", run.Cleanup)
+	}
+	submitted := git(t, subject, "rev-parse", "HEAD")
+	if len(run.Cleanup.Examined) != 1 || run.Cleanup.Examined[0] != submitted {
+		t.Fatalf("the refusal examined %v, want the submitted commit %s the copy stands on", run.Cleanup.Examined, submitted)
+	}
+	for _, proof := range []store.CleanupProof{store.CleanupProofRemoteBranch, store.CleanupProofMergedPullRequest, store.CleanupProofDefaultBranch} {
+		if !strings.Contains(run.Cleanup.Detail, string(proof)+":") {
+			t.Fatalf("the refusal's detail %q does not say what the %s proof found", run.Cleanup.Detail, proof)
+		}
+	}
+	if strings.Contains(strings.ToLower(run.Cleanup.Detail), "force") {
+		t.Fatalf("the refusal's detail %q names a flag", run.Cleanup.Detail)
+	}
+	// The reference that keeps the copy's commit reachable is kept with it.
+	gatePath := gateRepositoryOf(t, h, subject)
+	if out, err := exec.Command("git", "-C", gatePath, "rev-parse", "--verify", "--quiet", "refs/assistant/runs/"+run.Record.ID).CombinedOutput(); err != nil {
+		t.Fatalf("the reference of the kept copy of run %s is gone from the gate: %s", run.Record.ID, out)
+	}
 }

@@ -120,6 +120,9 @@ func TestATaskIdentifierIsOneRuleAndIsRefusedRatherThanSanitized(t *testing.T) {
 		if _, err := open(t, t.TempDir()).TaskInstructions(id); !errors.Is(err, home.ErrTaskID) {
 			t.Fatalf("TaskInstructions composed a path from the %s identifier %q: %v", name, id, err)
 		}
+		if _, err := open(t, t.TempDir()).TaskReport(id); !errors.Is(err, home.ErrTaskID) {
+			t.Fatalf("TaskReport composed a path from the %s identifier %q: %v", name, id, err)
+		}
 	}
 	// The reserved-name refusal is its own rule rather than a consequence of
 	// the length rule, so a reserved name is refused as one and not as the
@@ -143,6 +146,11 @@ func TestATaskCopyIsUnderTheTaskDirectory(t *testing.T) {
 	}
 	if got, err := h.TaskInstructions(validTaskID); err != nil || got != filepath.Join(task, "instructions.md") {
 		t.Fatalf("TaskInstructions = %q (%v), want the file under the task directory", got, err)
+	}
+	// The report's evidence copy is beside the copy and not inside it, so
+	// removing the copy leaves it standing.
+	if got, err := h.TaskReport(validTaskID); err != nil || got != filepath.Join(task, "report.md") {
+		t.Fatalf("TaskReport = %q (%v), want the file under the task directory", got, err)
 	}
 	if h.InstanceFile() != filepath.Join(h.Root(), "instance") {
 		t.Fatalf("InstanceFile = %q", h.InstanceFile())

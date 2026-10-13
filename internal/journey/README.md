@@ -111,6 +111,13 @@ run today:
   built, but every walk here skips the pull request stage, the one body that
   would open a provider on that host, so no run asks a code host anything.
 
+Nor does any run here give its copy back: PRD principle P12's decision
+removes a run's copy only on proof that the commit it stands on landed, every
+walk here skips the stages that would land its branch, and so every run's copy
+is kept on an unproven refusal, recorded on the run's cleanup record. The
+decision is driven at package reach, in `internal/tasks` for a task's copy and
+in `internal/service` for a run's.
+
 Where a mechanism cannot be reached through the binary, this harness drives it
 through the package that owns it, against the same fixture, and says so. Every
 row of `Coverage` and of `Drives` carries that distinction as `binary` or

@@ -374,6 +374,21 @@
 // comment keeps the argument for one path that always runs and says where
 // the fetch went and what it used to rest on.
 //
+// # An isolated copy is removed on a proof, or kept and said so
+//
+// PRD principle P12 covers every isolated copy, a run's and a task's, and
+// the decision is internal/tasks' Cleaner: this service calls it and
+// decides nothing of it. A run's copy goes through reclaimCopy when the run
+// finishes, in settle and in the checks-hold closure, and a refusal there is
+// recorded by the decision on the run's cleanup record and composed into
+// the run's answer by report, so status says a local copy was kept rather
+// than only the log. A delivery task's copy is cleaned up at the same two
+// sites when the merge record landed it, and an investigation task's when
+// its report is stored; both pass taskstate.Unobserved for the terminal
+// until the probe is wired into this service's reader, so every task copy
+// refuses today, and cleanup.go owns the three sites and says so. No verb or
+// protocol method calls any of it.
+//
 // # The supervisor loop is here, and supervise.go owns it
 //
 // PRD section 5's supervisor is a loop inside the service, and supervise.go

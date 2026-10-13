@@ -89,9 +89,10 @@ func (s *Service) branchInGate(ctx context.Context, repository store.Repository,
 // well as in the store, which is how stranded_internal_test.go reaches the
 // path: a hand-built service whose driver does the terminate and whose
 // catalog resolves no agent for the create. The cleanup record, which moves
-// a Landed task to Complete, has no writer in this build (#108), so no site
-// writes one and none calls this after one; a blocker Landed has already
-// cleared, so the record's writer owes this call nothing for the release.
+// a Landed task to Complete, is written by internal/tasks' CleanUp, which
+// cleanup.go calls at the same two finishes before this; no call here
+// follows it, because a blocker Landed has already cleared and the record's
+// writer owes this call nothing for the release.
 //
 // It reports to the log and not to a caller, on the terms reclaimCopy gives:
 // the run has settled by the time this runs, so there is no answer a failure

@@ -256,12 +256,21 @@ func Coverage() []Established {
 				"directly is still started where it is told, so a green P11 does not read as no worker " +
 				"launches unproven."},
 		{principles.P12, ReachNone,
-			"Nothing here removes an isolated copy. The binary's eject removes a gate, which is a " +
-				"different question. What is claimed is claimed at package reach and is the proof's " +
-				"refusal half only: internal/vcs's Incorporated reports a conflict and anything it " +
-				"cannot compute as an error and never as false, and internal/safety's Incorporation " +
-				"fails closed on an unreadable fact with a result that is no proof. Nothing there " +
-				"removes a copy; that decision is #108's."},
+			"No walk here reaches the removal of an isolated copy: a run here skips the stages that " +
+				"would land its branch, so its copy is kept on an unproven refusal, and no walk creates " +
+				"a task. The binary's eject removes a gate, which is a different question. What is " +
+				"claimed is claimed at package reach, both halves now. The proof's refusal half: " +
+				"internal/vcs's Incorporated reports a conflict and anything it cannot compute as an " +
+				"error and never as false, and internal/safety's Incorporation fails closed on an " +
+				"unreadable fact with a result that is no proof. The removal half: internal/tasks' " +
+				"CleanUp drives PRD section 13's three cases over a real clone and the stand-in code " +
+				"host the real adapter reads, refusing committed unpushed work, passing a squash merge " +
+				"with the branch deleted through the content check, and refusing a provider lookup " +
+				"failure; and internal/service's tests drive the same decision from its run-copy site, " +
+				"reclaimCopy, where a pushed branch passes at once and an unlanded commit keeps the copy " +
+				"with the refusal on the run's answer. The task-copy sites, after a merge record lands " +
+				"a delivery task and after an investigation's report is stored, refuse today on an " +
+				"unobserved terminal, which internal/service's own test holds."},
 		{principles.P13, ReachNone,
 			"Every answer this harness reads back carries run identifiers, stage names and home paths, " +
 				"so the principle does not hold on this surface today and a test claiming it here would " +
