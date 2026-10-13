@@ -118,6 +118,21 @@
 // a reference this provider does not hold answers Unobserved there, never
 // Dead, because the identifier alone proves nothing.
 //
+// # The worker group set
+//
+// Workers is the set of live worker groups, keyed by the process group a
+// worker leads and naming the task it was created for, and Pipe is its one
+// producer: Create joins the group when the session is created and the
+// membership ends when the worker's process does or Close ends the session.
+// It is the authority input the worker-to-program paths derive a task from:
+// a caller's kernel credentials name a process, the process has a group,
+// and the set says whose worker that group is, so no caller states a task.
+// Reading the group is the platform's question and internal/service's,
+// which asks it the way its containment registry does; this package holds
+// the set and answers only by group. It is deliberately not that registry,
+// and Workers' doc says why: a worker registered as a stage would have every
+// push it makes refused before admission.
+//
 // # Restart
 //
 // Nothing here arranges for the worker to end with the service. A survivor
@@ -152,6 +167,12 @@
 //     identifier is reused by another process started at the same tick on
 //     Linux, or the same microsecond on macOS, would read as present; the
 //     start time narrows the reuse to that coincidence and does not close it.
+//   - The set is as current as the worker's done signal. Member answers
+//     false for a group whose worker has exited before the leave has run,
+//     and a group identifier the operating system reuses for a worker this
+//     provider started replaces the old entry; one reused for a process this
+//     provider did not start is not a member, so nothing is placed by a
+//     number alone.
 //   - The route walk over the handle types reads exported fields and the
 //     results of exported methods, so what Pipe holds in its unexported
 //     fields, the agents.Runner among them, is outside what it inspects, and

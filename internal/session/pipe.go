@@ -14,12 +14,15 @@ import (
 // internal/agents starts. It holds the sessions it created, keyed by their
 // reference, and answers Probe for those from the handle and for every other
 // reference from the process identity alone, on the terms the package
-// documentation states.
+// documentation states. It is also the one producer of the worker group
+// set: every session it creates joins Workers for exactly the worker
+// process's lifetime.
 //
 // A Pipe is safe for concurrent use.
 type Pipe struct {
-	home   string
-	runner agents.Runner
+	home    string
+	runner  agents.Runner
+	workers *Workers
 
 	mu   sync.Mutex
 	held map[string]*Session
@@ -28,10 +31,16 @@ type Pipe struct {
 // NewPipe returns the reference provider for the home h, starting workers
 // through r. r is asked for a worker at Create, through agents.OpenWorker,
 // so an adapter that has not declared worker sessions is refused there and
-// not here.
+// not here. The worker group set is the provider's own, read through
+// Workers.
 func NewPipe(h *home.Home, r agents.Runner) *Pipe {
-	return &Pipe{home: HomeMarker(h), runner: r, held: map[string]*Session{}}
+	return &Pipe{home: HomeMarker(h), runner: r, workers: NewWorkers(), held: map[string]*Session{}}
 }
+
+// Workers is the set of live worker groups this provider has created, on
+// the terms Workers states. It is the same set for the provider's lifetime,
+// so a caller may hold it before any session exists.
+func (p *Pipe) Workers() *Workers { return p.workers }
 
 // Create starts the worker on the terms Provider.Create states.
 func (p *Pipe) Create(ctx context.Context, spec Spec) (*Session, error) {
@@ -65,6 +74,14 @@ func (p *Pipe) Create(ctx context.Context, spec Spec) (*Session, error) {
 		owner:  p,
 		worker: worker,
 	}
+	// The group is a member from here until the process ends: Member reads
+	// the done signal itself, and the goroutine takes the entry out once it
+	// has closed, so the set does not grow with workers that have gone.
+	s.leave = p.workers.join(Membership{Task: spec.TaskID, Group: pid}, worker.Done())
+	go func() {
+		<-worker.Done()
+		s.leave()
+	}()
 	p.mu.Lock()
 	p.held[s.ref.String()] = s
 	p.mu.Unlock()
@@ -146,6 +163,7 @@ func (p *Pipe) Close(s *Session) error {
 		return ErrNotHeld
 	}
 	s.worker.Close()
+	s.leave()
 	return nil
 }
 

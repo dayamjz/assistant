@@ -53,9 +53,9 @@
 //     lock and the instance file on every look; a service that comes up
 //     between looks is seen on the next one, and a lock that is let go and
 //     retaken between looks is not seen at all.
-//   - The supervision.assert method that would let a coordinator's session
-//     start ask for VerifyArm over the socket is not in internal/ipc's table.
-//     It needs the worker-set refusal #91 produces, since a method that
-//     exists and admits a worker is worse than one that does not exist; it
-//     follows #91, and until then VerifyArm is a library entry with no caller.
+//   - VerifyArm's one caller over the socket is internal/service's
+//     supervision.assert, which refuses a task's worker from the worker
+//     group set before it reads anything; a verification from inside the
+//     service that holds the lock reads Held from its own probe, so what it
+//     adds there is whether the loop is writing.
 package feed

@@ -73,6 +73,12 @@ const (
 	TypeHoldState Type = "hold.state"
 	// TypeTaskState is a change to a task's resolved current state.
 	TypeTaskState Type = "task.state"
+	// TypeTaskEvent is an entry appended to a task's history through
+	// MethodTaskEvent. It is state rather than activity because PRD section
+	// 8 makes every append a wake: a consumer that missed one reconciles by
+	// reading the history back, which the gap marker makes it do, and an
+	// overflowing stream may not discard it as progress noise.
+	TypeTaskEvent Type = "task.event"
 
 	// TypeGap says the stream discarded something. It is produced by this
 	// package rather than published, and a consumer that receives one must
@@ -94,6 +100,7 @@ var classes = map[Type]Class{
 	TypeFindings:        ClassState,
 	TypeHoldState:       ClassState,
 	TypeTaskState:       ClassState,
+	TypeTaskEvent:       ClassState,
 	TypeGap:             ClassControl,
 	TypeServiceStopping: ClassControl,
 }

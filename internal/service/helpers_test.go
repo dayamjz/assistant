@@ -2,6 +2,9 @@ package service_test
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +15,7 @@ import (
 
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/agents/standin"
+	"github.com/dayamjz/assistant/internal/cli"
 	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/gate"
 	"github.com/dayamjz/assistant/internal/home"
@@ -33,7 +37,79 @@ func TestMain(m *testing.M) {
 	// to a third party, so a test must never inherit one from whoever runs it.
 	_ = os.Unsetenv(judge.KeyVariable)
 	standin.Main()
+	hookMain()
+	callMain()
 	os.Exit(m.Run())
+}
+
+// hookMain lets this binary act as the command a gate's hooks invoke, on
+// the terms internal/cli's own push tests give it: internal/gate writes the
+// absolute path of the binary that initialized the gate into its hooks, a
+// push therefore reaches this process, and this hands the arguments and the
+// streams straight to cli.Run, which is the product. A test binary is never
+// run with "gate" as its first argument by the testing package.
+func hookMain() {
+	if len(os.Args) < 2 || os.Args[1] != "gate" {
+		return
+	}
+	workingDir, err := os.Getwd()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "the gate hook stand-in cannot resolve the working directory:", err)
+		os.Exit(1)
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "the gate hook stand-in cannot resolve its own path:", err)
+		os.Exit(1)
+	}
+	os.Exit(int(cli.Run(context.Background(), cli.Environment{
+		Args:       os.Args[1:],
+		Stdout:     os.Stdout,
+		Stderr:     os.Stderr,
+		Stdin:      os.Stdin,
+		Getenv:     os.Getenv,
+		WorkingDir: workingDir,
+		Executable: executable,
+		Version:    "assistant (test)",
+	})))
+}
+
+// callVerb is the first argument that makes this binary one client call.
+const callVerb = "ipc-call"
+
+// callMain lets this binary make one call on the protocol and exit, so a
+// test can make a request from a process it placed in a worker's process
+// group: the credentials the service reads are then that process's, which
+// the kernel attributes and the test could not state. It takes the socket,
+// the method and the parameters as JSON, writes the answer to standard
+// output, and on a refusal writes the wire code to standard error and exits
+// non-zero. Nothing here decides anything: it is internal/ipc's client over
+// the arguments it was given.
+func callMain() {
+	if len(os.Args) != 5 || os.Args[1] != callVerb {
+		return
+	}
+	socket, method, params := os.Args[2], os.Args[3], os.Args[4]
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	client, err := ipc.Dial(ctx, socket, ipc.ClientConfig{})
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "dial:", err)
+		os.Exit(2)
+	}
+	defer func() { _ = client.Close() }()
+	var answer json.RawMessage
+	if err := client.Call(ctx, ipc.Method(method), json.RawMessage(params), &answer); err != nil {
+		var wire *ipc.Error
+		if errors.As(err, &wire) {
+			fmt.Fprint(os.Stderr, string(wire.Code))
+			os.Exit(1)
+		}
+		fmt.Fprintln(os.Stderr, "call:", err)
+		os.Exit(2)
+	}
+	fmt.Fprint(os.Stdout, string(answer))
+	os.Exit(0)
 }
 
 // platformIdentifiesPeers reports whether internal/ipc has a read for local

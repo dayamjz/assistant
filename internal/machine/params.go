@@ -143,9 +143,11 @@ type SubscribeRequest struct{}
 // stating exactly. The socket is one home's, so a caller reaching this is a
 // caller that can already start a run through StartRequest; an invented
 // account buys it a run it could have asked for. Both gate methods are
-// declared restricted, which is where containment would refuse a caller inside
-// an active validation stage, but internal/service/doc.go says that registry
-// has no producer in this build, so today that declaration refuses nobody.
+// declared restricted, which is where containment refuses a caller inside an
+// active validation stage. A task's worker is the one pusher whose account
+// is checked against something: its push is held to its own branch, forward,
+// with the standing object read from the gate rather than taken from the
+// account, which internal/service's admission owns.
 type GateRequest struct {
 	// Gate is the gate's identifier, which is what a hook is given and all it
 	// knows. Which working copy it belongs to is the service's to resolve,
@@ -168,4 +170,45 @@ type StageReportRequest struct {
 	Stage string `json:"stage"`
 	// Report is the stage's result, as the stage produced it.
 	Report string `json:"report"`
+}
+
+// TaskEventRequest appends one entry to a task's history from its worker.
+//
+// It names no task. The task is the one whose worker group the caller's
+// credentials place it in, derived by the service from the kernel's answer
+// and never from a field, so a worker cannot write to another task's history
+// and a caller outside every worker group is refused. The kind is held to
+// internal/taskstate's table: only a kind that table gives a worker as its
+// writer is accepted, so "dispatched" and every other program-written kind
+// is refused from this surface.
+type TaskEventRequest struct {
+	// Kind is what happened, in internal/taskstate's vocabulary.
+	Kind string `json:"kind"`
+	// Detail is what the worker says about it. A kind with a closed detail
+	// vocabulary is checked against it before anything is appended.
+	Detail string `json:"detail,omitempty"`
+}
+
+// WakesRequest drains the durable wake queue.
+type WakesRequest struct {
+	// Limit bounds how many queued wakes are returned, oldest first. Zero
+	// means DefaultWakesLimit.
+	Limit int `json:"limit,omitempty"`
+}
+
+// DefaultWakesLimit is how many queued wakes a drain returns when the caller
+// names no bound. A drain is read before every coordinator turn, so the
+// bound keeps one answer inside a frame rather than paging the queue.
+const DefaultWakesLimit = 100
+
+// AcknowledgeRequest records that the coordinator handled queued wakes.
+//
+// It carries no field saying who acknowledged. Who did is derived from the
+// surface, never read from a request, which internal/ipc's
+// Request.WakeAcknowledger states on the same terms as Request.HoldResolver.
+type AcknowledgeRequest struct {
+	// Wakes are the identifiers of the rows a drain returned and the caller
+	// handled. A subset leaves the rest queued; an identifier no wake has,
+	// or one already acknowledged, refuses the whole batch.
+	Wakes []int64 `json:"wakes"`
 }
