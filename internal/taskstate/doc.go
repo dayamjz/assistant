@@ -40,15 +40,17 @@
 // cleared. No event kind is named landed or complete, and a worker's event by
 // either name is a word with no row, which answers nothing (P8).
 //
-// Complete for an investigation task is not reachable in this build. PRD
+// Complete for an investigation task is not resolved in this build. PRD
 // section 5's edge asks for a stored report and registered holds before the
-// cleanup proof, and no record here holds a stored report: the report-ready
-// event is a worker's claim, which is history, and a hold row names a task
-// without saying which report it was registered from. Rather than derive
-// Complete from an approximation of those facts, the tier declines, and an
-// investigation task with a removed copy stays Reported. The record that
-// settles it is a later issue's, and the test that pins today's answer is the
-// one that moves when it lands.
+// cleanup proof, and internal/store now holds both, the task_report row and
+// the holds registered in its transaction, with internal/tasks' CleanUp
+// verifying them before it writes the cleanup record; what this package
+// does not yet do is read the report row, which TaskSnapshot does not carry.
+// Rather than derive Complete from the cleanup record alone, the tier
+// declines, and an investigation task with a removed copy stays Reported.
+// Carrying the report onto the snapshot and reading it here is a change of
+// its own, and the test that pins today's answer is the one that moves when
+// it lands.
 //
 // The package is read-only and takes no clock. Resolve is pure, and Reader
 // only calls store accessors that read.
@@ -95,10 +97,12 @@
 //     That closes the relaunch gap and keeps a queued task from inheriting
 //     its blocker's runs, but two tasks whose attempts are both live on one
 //     branch still share the runs made after the later attempt began.
-//   - The cleanup record has no writer in this build (#108), so Complete is
-//     reached today only by store.RecordTaskCleanup and
-//     store.MarkCleanupRemoved called from a test; the rule that reads it is
-//     here so the writer inherits a consumer rather than defining one.
+//   - The cleanup record's writer is internal/tasks' CleanUp, called by
+//     internal/service after a merge record lands a delivery task, and it
+//     examines a task copy only once the terminal probed Dead; with the
+//     probe unwired the service passes Unobserved, so Complete is reached in
+//     production by no task today, and in the tests by the record's
+//     accessors and by internal/tasks' own cleanups.
 //   - A merge record reading closed lands nothing and is not read here: the
 //     run it ended is failed, and the run tier says so. The record's reason
 //     is not carried into the detail.

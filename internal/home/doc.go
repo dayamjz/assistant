@@ -73,9 +73,12 @@
 // Every path under tasks/ is composed from an identifier ValidTaskID accepted,
 // and that rule is the only one: a fixed-length identifier from a closed
 // alphabet, refused rather than corrected when it is anything else, with the
-// names Windows reserves refused on every platform. Task, TaskCopy and
-// TaskInstructions refuse what it refuses, so a traversal element or a
-// separator cannot reach a path.
+// names Windows reserves refused on every platform. Task, TaskCopy,
+// TaskInstructions and TaskReport refuse what it refuses, so a traversal
+// element or a separator cannot reach a path. TaskReport is the evidence
+// copy of an investigation's report, beside the copy and not inside it, so
+// a cleanup that removes the copy leaves it; the report's source is
+// internal/store's row, and this package says only where the copy goes.
 // The rule is applied to a string and not to a filesystem: it says an
 // identifier is one path element, and nothing about whether the directory it
 // names exists, is empty, or belongs to the task that claims it.

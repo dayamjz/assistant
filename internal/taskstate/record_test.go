@@ -269,16 +269,16 @@ func TestCompleteIsLandedAndRemovedForADeliveryTask(t *testing.T) {
 
 	ready := newTask(t, s, "readyaaaaaaa", true)
 	finishRun(t, s, "run-1")
-	recordCleanup := func(id string) {
+	recordCleanup := func(id string, shape store.TaskShape) {
 		t.Helper()
-		if _, err := s.RecordTaskCleanup(ctx, store.TaskCleanup{TaskID: id, Proof: store.CleanupProofRemoteBranch, Examined: []string{"aaaa"}}); err != nil {
+		if _, err := s.RecordTaskCleanup(ctx, store.TaskCleanup{TaskID: id, Proof: store.CleanupProofRemoteBranch, Examined: []string{"aaaa"}}, shape); err != nil {
 			t.Fatalf("RecordTaskCleanup: %v", err)
 		}
 		if err := s.MarkCleanupRemoved(ctx, id, time.Now()); err != nil {
 			t.Fatalf("MarkCleanupRemoved: %v", err)
 		}
 	}
-	recordCleanup(ready.ID)
+	recordCleanup(ready.ID, store.TaskDelivery)
 	if got := resolveTask(t, s, ready.ID); got.State != Ready || got.Source != SourceRun || !got.Basis.CleanupRemoved {
 		t.Fatalf("a removed copy on a ready task resolved %s from %s (basis %+v), want ready", got.State, got.Source, got.Basis)
 	}
@@ -306,7 +306,7 @@ func TestCompleteIsLandedAndRemovedForADeliveryTask(t *testing.T) {
 	if got := resolveTask(t, s, landed.ID); got.State != Landed {
 		t.Fatalf("before cleanup the task resolved %s, want landed", got.State)
 	}
-	if _, err := s.RecordTaskCleanup(ctx, store.TaskCleanup{TaskID: landed.ID, Proof: store.CleanupProofMergedPullRequest, Examined: []string{"aaaa"}}); err != nil {
+	if _, err := s.RecordTaskCleanup(ctx, store.TaskCleanup{TaskID: landed.ID, Proof: store.CleanupProofMergedPullRequest, Examined: []string{"aaaa"}}, store.TaskDelivery); err != nil {
 		t.Fatalf("RecordTaskCleanup: %v", err)
 	}
 	if got := resolveTask(t, s, landed.ID); got.State != Landed || !got.Basis.CleanupRecorded || got.Basis.CleanupRemoved {
@@ -332,7 +332,7 @@ func TestCompleteIsLandedAndRemovedForADeliveryTask(t *testing.T) {
 	if got := resolveTask(t, s, inquiry.ID); got.State != Reported || got.Source != SourceEvent {
 		t.Fatalf("an investigation with a report entry and a hold resolved %s from %s, want reported", got.State, got.Source)
 	}
-	recordCleanup(inquiry.ID)
+	recordCleanup(inquiry.ID, store.TaskInvestigation)
 	if got := resolveTask(t, s, inquiry.ID); got.State != Reported || got.Source != SourceEvent || !got.Basis.CleanupRemoved {
 		t.Fatalf("an investigation removed resolved %s from %s (basis %+v); Complete needs a stored report, which no record holds",
 			got.State, got.Source, got.Basis)

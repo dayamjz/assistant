@@ -26,9 +26,17 @@ const (
 	// CleanupProofDefaultBranch is the content is already present in an
 	// up-to-date default branch.
 	CleanupProofDefaultBranch CleanupProof = "default-branch"
+	// CleanupProofScratch is the copy holds no work to prove landed: an
+	// investigation copy, which PRD section 5 declares scratch, whose
+	// inventory equals what its dispatch started it with and whose record
+	// names no run and no pull request. It is the one proof that is not one
+	// of P12's three, because P12 asks for proof of work and this copy has
+	// none; a copy with any commit, reference or branch its dispatch did not
+	// give it is held to the three like a delivery copy.
+	CleanupProofScratch CleanupProof = "scratch"
 )
 
-var cleanupProofs = []CleanupProof{CleanupProofRemoteBranch, CleanupProofMergedPullRequest, CleanupProofDefaultBranch}
+var cleanupProofs = []CleanupProof{CleanupProofRemoteBranch, CleanupProofMergedPullRequest, CleanupProofDefaultBranch, CleanupProofScratch}
 
 // CleanupProofs returns the closed set, in the order above. The result is a
 // copy, so a caller cannot add to the set by writing to it.
@@ -80,10 +88,16 @@ type TaskCleanup struct {
 // RecordedAt is assigned here; the caller supplies the proof and what it
 // examined.
 //
-// Nothing in this build calls it outside its tests. The writer is the cleanup
-// check (#108), and PRD section 8 fixes the record's shape independently of
-// when that lands.
-func (s *Store) RecordTaskCleanup(ctx context.Context, c TaskCleanup) (TaskCleanup, error) {
+// shape is the task shape the cleanup was decided for, and the write is
+// anchored to it: the task's shape is read in the same transaction as the
+// insert, on the single writer connection, and a task whose shape is no
+// longer that one is refused with ErrTaskShapeMoved and nothing is written.
+// The shape decides what a cleanup may skip, an investigation copy being
+// scratch where a delivery copy is protected, so a decision read over one
+// shape may not be claimed against another; the write-once row is the claim,
+// and the comparison is made where the claim is. The writer is internal/tasks'
+// CleanUp.
+func (s *Store) RecordTaskCleanup(ctx context.Context, c TaskCleanup, shape TaskShape) (TaskCleanup, error) {
 	if strings.TrimSpace(c.TaskID) == "" {
 		return TaskCleanup{}, fmt.Errorf("store: a cleanup record names no task")
 	}
@@ -103,8 +117,12 @@ func (s *Store) RecordTaskCleanup(ctx context.Context, c TaskCleanup) (TaskClean
 	}
 	now := nowUTC()
 	err = s.inTx(ctx, func(tx *sql.Tx) error {
-		if err := taskExists(ctx, tx, c.TaskID); err != nil {
-			return err
+		var stands string
+		if err := tx.QueryRowContext(ctx, `SELECT shape FROM task WHERE id = ?`, c.TaskID).Scan(&stands); err != nil {
+			return errNoRows(err)
+		}
+		if TaskShape(stands) != shape {
+			return fmt.Errorf("%w: decided for %q and the task is %q", ErrTaskShapeMoved, shape, stands)
 		}
 		var one int
 		switch err := tx.QueryRowContext(ctx, `SELECT 1 FROM task_cleanup WHERE task_id = ?`, c.TaskID).Scan(&one); {

@@ -88,6 +88,21 @@
 // and which attributed run's merge record makes a task Landed is its
 // question: the snapshot carries all of them rather than deciding.
 //
+// Two records beside them are written by the same cleanup decision, and
+// migration 17 holds both. RunCleanup is a run's copy's cleanup record on
+// TaskCleanup's terms, with one column more: a refusal, the decision's own
+// word for why a copy was kept, which is the one state a row is revised out
+// of and which internal/machine composes into a run's answer. TaskReport is
+// PRD section 11's stored report, written once by StoreTaskReport in the
+// transaction that registers the holds derived from it, so a stored report
+// whose decisions were never registered cannot exist through this package;
+// the parsed report is opaque bytes here, and the hold keys are the one
+// fact the row holds about its contents, which is what cleanup verifies.
+// ForgetHoldForTest is the counterfeit builder for that rule's refusal
+// case, takes the test, and has no production caller. RecordTaskCleanup is
+// anchored to the task's shape, read in the transaction that claims the
+// record, on the terms its doc states.
+//
 // # The wake queue and the markers it is written with
 //
 // PRD section 8's wake is the durable wake queue: a table here and not a
