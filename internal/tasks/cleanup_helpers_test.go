@@ -54,7 +54,11 @@ func newCleanupSubject(t *testing.T, script forgetest.Script) *cleanupSubject {
 	cfg := filepath.Join(t.TempDir(), "gitconfig")
 	if err := os.WriteFile(cfg, []byte("[user]\n\tname = Test\n\temail = test@example.invalid\n"+
 		"[init]\n\tdefaultBranch = main\n[gc]\n\tauto = 0\n[maintenance]\n\tauto = false\n"+
-		"[url \""+upstream+"\"]\n\tinsteadOf = "+upstreamURL+"\n"), 0o600); err != nil {
+		// The path is written in slash form. Written as filepath.Join gives
+		// it, a Windows path reached git from this section with every
+		// backslash gone (windows-latest, the first CI run of this file),
+		// and a slash-form path names a local remote on every platform.
+		"[url \""+filepath.ToSlash(upstream)+"\"]\n\tinsteadOf = "+upstreamURL+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("GIT_CONFIG_GLOBAL", cfg)
