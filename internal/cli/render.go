@@ -150,6 +150,9 @@ func readOutRun(w io.Writer, r machine.Run) {
 		writef(w, "Not applied %s - this branch already had a run, and these start one\n",
 			strings.Join(r.NotApplied, ", "))
 	}
+	if r.AnswerNotApplied != "" {
+		writef(w, "Not applied your answer - %s\n", printable(r.AnswerNotApplied))
+	}
 	if r.NextAction() != "" {
 		writef(w, "\nNext: %s\n", r.NextAction())
 	}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dayamjz/assistant/internal/findings"
 	"github.com/dayamjz/assistant/internal/graph"
@@ -153,6 +154,39 @@ func TestATerminalRecordDecidesOverWhereExecutionStopped(t *testing.T) {
 	for _, c := range cases {
 		if got := machine.OutcomeOf(standingAt(c.record, c.status, graph.State{})); got != c.want {
 			t.Fatalf("a run %s reports %s, want %s", c.name, got, c.want)
+		}
+	}
+}
+
+// A passed record reads as passed only when the record itself says a merge
+// ended the run, which is PRD section 9's one meaning for the word; the same
+// record with no end, or a run its pull request closed, reads as it did. The
+// first case is the control for the rest: it is the only one that moves.
+func TestOnlyARecordedMergeReadsAsPassed(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name   string
+		record store.RunStatus
+		end    store.PullRequestEnd
+		want   machine.Outcome
+	}{
+		{"passed on a merge", store.RunPassed, store.PullRequestMerged, machine.OutcomePassed},
+		{"control: passed with no end", store.RunPassed, "", machine.OutcomeChecksPassed},
+		{"failed on a close", store.RunFailed, store.PullRequestClosed, machine.OutcomeFailed},
+		{"control: failed with no end", store.RunFailed, "", machine.OutcomeFailed},
+	}
+	for _, c := range cases {
+		standing := machine.Standing{
+			Record:         c.record,
+			PullRequestEnd: c.end,
+			Execution:      machine.ExecutionAt(graph.StatusHalted, graph.State{}),
+		}
+		got := machine.OutcomeOf(standing)
+		if got != c.want {
+			t.Fatalf("a run %s reports %s, want %s", c.name, got, c.want)
+		}
+		if !got.Terminal() {
+			t.Fatalf("a run %s reports %s, which is not terminal", c.name, got)
 		}
 	}
 }
@@ -528,5 +562,35 @@ func TestTheNextActionSurvivesTheWire(t *testing.T) {
 	}
 	if back.Outcome != answer.Outcome || back.Advancing != answer.Advancing {
 		t.Fatalf("the round trip changed the answer: %s advancing=%v", back.Outcome, back.Advancing)
+	}
+}
+
+// The merge record travels on a run under the same snake_case member names
+// as the record itself, so a caller decoding an answer reads it by the names
+// store.Run's own fields use rather than Go's.
+func TestTheMergeRecordTravelsInSnakeCase(t *testing.T) {
+	t.Parallel()
+	at := time.Date(2026, 10, 13, 15, 0, 0, 0, time.UTC)
+	answer := machine.Run{
+		Record:      store.Run{ID: "abc"},
+		MergeRecord: &store.MergeRecord{Run: "abc", PullRequest: 7, Head: "0123abc", End: store.PullRequestMerged, RecordedAt: at},
+	}
+	encoded, err := json.Marshal(answer)
+	if err != nil {
+		t.Fatalf("encoding: %v", err)
+	}
+	var decoded struct {
+		MergeRecord map[string]any `json:"merge_record"`
+	}
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatalf("decoding: %v", err)
+	}
+	for _, name := range []string{"run", "pull_request", "head", "end", "recorded_at"} {
+		if _, ok := decoded.MergeRecord[name]; !ok {
+			t.Errorf("the merge record carries no %q member: %s", name, encoded)
+		}
+	}
+	if got := decoded.MergeRecord["end"]; got != "merged" {
+		t.Errorf("the end travels as %v, want merged", got)
 	}
 }

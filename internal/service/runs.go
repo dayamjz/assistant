@@ -205,6 +205,27 @@ func (s *Service) respond(ctx context.Context, req machine.RespondRequest) (mach
 	if record.Status != store.RunHeld {
 		return machine.Run{}, fmt.Errorf("service: run %s is %s and is not waiting on an answer", record.ID, record.Status)
 	}
+	// Before the hold the checks stage raised at checks_timeout elapse is
+	// resumed, and only that hold, the pull request is re-read; a positively
+	// read merged or closed state closes the hold and ends the run, and the
+	// answer given here answers a question that no longer exists. What is
+	// returned is the run as it then stands, which says how it ended, and
+	// that the answer was not applied. Anything short of a positive read -
+	// the pull request not read, the record not readable - leaves the hold
+	// to the person and their answer is taken below: checkshold.go says
+	// why, and the one error that reaches here is a write refused after a
+	// positive read.
+	if ended, err := s.closeChecksHoldIfPullRequestEnded(ctx, record); err != nil {
+		return machine.Run{}, err
+	} else if ended != "" {
+		run, err := s.view(ctx, record.ID)
+		if err != nil {
+			return machine.Run{}, err
+		}
+		run.AnswerNotApplied = "the pull request had already " + ended.String() +
+			" when the hold was re-read, so the hold was closed on that and the run ended as reported"
+		return run, nil
+	}
 	built, err := s.driverFor(ctx)
 	if err != nil {
 		return machine.Run{}, err
@@ -730,7 +751,37 @@ func (s *Service) settle(ctx context.Context, runID string, result graph.Result)
 	case result.Status == graph.StatusCompleted && pipeline.Cancelled(result.State):
 		move = built.runs.Terminate
 	case result.Status == graph.StatusCompleted:
-		move = built.runs.Pass
+		// A completed run passed, unless the checks stage recorded that the
+		// pull request's own state ended its wait: PRD section 5 has a merge
+		// complete the run without validating it and a close fail it. The
+		// stage wrote what it read; which move that is, is decided here and
+		// nowhere else, and a word this build cannot read is refused rather
+		// than read as either. The move writes PRD section 8's merge record
+		// from what the stage read and the number the pull request stage
+		// recorded, which is the one record of the ending.
+		endText, head := pipeline.PullRequestEnd(result.State)
+		end := store.PullRequestEnd(endText)
+		if end == "" {
+			move = built.runs.Pass
+			break
+		}
+		_, number, err := recordedPullRequest(result.State)
+		if err != nil {
+			return fmt.Errorf("service: run %s completed on its pull request's state: %w", runID, err)
+		}
+		read := store.PullRequestRead{PullRequest: number, Head: head, End: end}
+		switch end {
+		case store.PullRequestMerged:
+			move = func(ctx context.Context, id string) (store.Run, error) {
+				return built.runs.PassOnMerge(ctx, id, read, store.HoldClosure{})
+			}
+		case store.PullRequestClosed:
+			move = func(ctx context.Context, id string) (store.Run, error) {
+				return built.runs.FailOnClose(ctx, id, read, store.HoldClosure{})
+			}
+		default:
+			return fmt.Errorf("service: run %s completed with %w: %q", runID, store.ErrUnknownPullRequestEnd, end)
+		}
 	case result.Status.Stopped():
 		move = built.runs.Terminate
 	default:
@@ -793,7 +844,15 @@ func (s *Service) reconcile(ctx context.Context, runID string) (store.Run, error
 //
 // Continuing happens on a goroutine of its own, so a home holding several
 // interrupted runs comes back serving immediately rather than after the
-// longest of them reaches a decision.
+// longest of them reaches a decision. The one thing done here before serving
+// is PRD section 11's step 3: a run held on an elapsed checks wait has its
+// pull request re-read, which is one provider call per such run under
+// ChecksHoldReadBound of its own, and the service does not serve until each
+// has answered or run out, so opening takes up to that bound times the number
+// of such holds. A read that ran out is not read, and the hold stands. A run
+// that was waiting on checks when the service stopped is not re-read here,
+// because it is continued, and the first read of the resumed wait reads the
+// pull request itself, which is step 1.
 func (s *Service) recover(ctx context.Context) {
 	repositories, err := s.store.Repositories(ctx)
 	if err != nil {
@@ -807,12 +866,28 @@ func (s *Service) recover(ctx context.Context) {
 			continue
 		}
 		for _, record := range records {
+			if record.Status == store.RunHeld {
+				// PRD section 11's step 3, before serving anything: the one
+				// hold the pull request's state may close is re-read now,
+				// and every other held run is left for the person it waits
+				// on. checkshold.go owns which hold that is. A held record
+				// has nothing to reconcile: it is the checkpoint's halt
+				// already written down.
+				s.closeChecksHoldAtRecovery(ctx, record)
+				continue
+			}
 			if record.Status != store.RunRunning && record.Status != store.RunPending {
 				continue
 			}
 			settled, err := s.reconcile(ctx, record.ID)
 			if err != nil {
 				s.log.Printf("recovery could not reconcile run %s: %v", record.ID, err)
+				continue
+			}
+			if settled.Status == store.RunHeld {
+				// A record a service died between the halt and the record
+				// of was just reconciled to held, and is the same case.
+				s.closeChecksHoldAtRecovery(ctx, settled)
 				continue
 			}
 			if settled.Status != store.RunRunning {
@@ -1177,12 +1252,30 @@ func (s *Service) report(ctx context.Context, runID string, result *graph.Result
 	// no other caller can be advancing it either. A read is the only answer
 	// that can find a segment in flight, and it is the only one that can find
 	// the run standing still with nothing moving it.
+	// PRD section 8 derives the run's passed on a merge from the merge
+	// record, so the answer reads that record here and carries it; nothing
+	// on the run's own row restates it.
+	merge, ended, err := s.store.MergeRecord(ctx, runID)
+	if err != nil {
+		return machine.Run{}, err
+	}
 	standing := machine.Standing{
 		Record:    record.Status,
 		Execution: machine.ExecutionUnrecorded(),
 		Advancing: result == nil && s.isAdvancing(runID),
 	}
 	answer := machine.Run{Record: record}
+	if ended {
+		standing.PullRequestEnd = merge.End
+		answer.MergeRecord = &merge
+		// A run its pull request closed carries the reason the record
+		// renders for that end; a parked run's reason is the checkpoint's,
+		// below, and the two cannot both apply because a run ended by its
+		// pull request was not parked.
+		if merge.End == store.PullRequestClosed {
+			answer.Reason = merge.End.Reason()
+		}
+	}
 	// The proposal is read off the store as it stands now and never comes
 	// from graph state; decision.go says why.
 	answer.Proposals = s.proposals(ctx, record)
@@ -1216,7 +1309,9 @@ func (s *Service) report(ctx context.Context, runID string, result *graph.Result
 	status := result.Status
 	answer.Progress = &status
 	answer.Position = result.Position
-	answer.Reason = result.Reason
+	if result.Reason != "" {
+		answer.Reason = result.Reason
+	}
 	answer.Steps = result.Steps
 	answer.Budget = result.Budget
 	standing.Execution = machine.ExecutionAt(result.Status, result.State)

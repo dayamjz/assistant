@@ -226,7 +226,10 @@ type Run struct {
 	// Position is the node that has not run, empty exactly when the run
 	// completed.
 	Position string `json:"position,omitempty"`
-	// Reason explains a parked run, and is empty otherwise.
+	// Reason explains a run that ended without a verdict on the change: which
+	// bound parked it, or, for a run its pull request ended by closing
+	// without a merge, the reason the record carries for that. It is empty
+	// otherwise.
 	Reason string `json:"reason,omitempty"`
 	// Steps is how many node executions the run has spent.
 	Steps int `json:"steps"`
@@ -238,6 +241,19 @@ type Run struct {
 	// Stages is what became of each of the nine, in the order a run takes
 	// them.
 	Stages []Stage `json:"stages,omitempty"`
+	// MergeRecord is PRD section 8's merge record for this run, present
+	// exactly when a code-host read ended the run on its pull request's
+	// state: the pull request, the head read, which end, and when. It is the
+	// record composed rather than restated, and the passed outcome above is
+	// derived from it.
+	MergeRecord *store.MergeRecord `json:"merge_record,omitempty"`
+	// AnswerNotApplied says, on the answer to a response, why the answer the
+	// request carried was not applied to the run: the hold it answered was
+	// closed by the service first, on a re-read of the run's pull request,
+	// and the run reported here is the run as it then ended. It is empty on
+	// every answer whose request carried no answer and on every response
+	// whose answer was taken.
+	AnswerNotApplied string `json:"answer_not_applied,omitempty"`
 	// Proposals are notes raised about this run from records across runs of
 	// its repository, read when this answer was built: today, PRD section 5's
 	// proposal to turn a decision-model check off. They are not any stage's

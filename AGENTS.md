@@ -380,8 +380,10 @@ Each has cost this repository more than one round of review.
   and writes the outcome, that fact and the next action together. The action is
   unexported for that reason, so a surface elsewhere has no assignment site for
   one that disagrees with the outcome beside it; build an answer through
-  `Decide` rather than filling the fields in. `OutcomePassed` has no producer
-  here, because nothing in this build records that a pull request merged. It
+  `Decide` rather than filling the fields in. `OutcomePassed` has one
+  producer: a passed record beside PRD section 8's merge record,
+  `store.MergeRecord`, which only `internal/runs`' two pull request moves
+  write, once, and which `Standing` carries as the end read off it. It
   does not own the outcome set: the PRD's outcome row does, and
   `internal/outcomes` fails the build when the two come apart, so the constant
   block's order is that row's order rather than a free choice.
@@ -410,7 +412,17 @@ Each has cost this repository more than one round of review.
   another repository's runs. And whether anything is advancing a run is a third
   fact neither the record nor the checkpoint holds: it lives in the slot a run
   advances in, `report` reads it rather than inferring it, and it travels as
-  `machine.Run.Advancing`. A segment that ends without settling leaves a run
+  `machine.Run.Advancing`. It is also where PRD section 11's step 3 lives:
+  `checkshold.go` re-reads a run's pull request before the hold the checks
+  stage raised at `checks_timeout` elapse is resumed, at recovery and at a
+  response, and only that hold, which `stages.ChecksTimeoutHeld` identifies
+  from the recorded report; it is the one producer of
+  `store.ResolvedByProgram`, and a test there counts every identifier
+  reference to it. The
+  live wait's own re-read is the checks body's, and `settle` turns what that
+  body wrote under `pipeline.KeyPullRequestEnd` into the record's move and
+  its merge record, so no stage body decides a run's status; the resolution
+  of that hold and the move are one store transaction. A segment that ends without settling leaves a run
   something can resume and nothing is resuming, which is the stall PRD section 9
   calls worse than an error; `carryOn` is what stops that persisting, and it
   decides from what ended the segment rather than from the run. It also reads

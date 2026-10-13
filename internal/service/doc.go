@@ -35,6 +35,31 @@
 // whose checkpoint says halted is a run waiting on an answer nobody can give,
 // because responding is refused for a run that is not held.
 //
+// One held run is looked at before serving, and it is PRD section 11's step
+// 3: a run holding because checks_timeout elapsed has its pull request
+// re-read by its recorded number, and a pull request positively read as
+// merged or closed closes that hold by a resolution this service records as
+// its own, with the state it read, and ends the run as PRD section 5's
+// "Waiting on checks" says. The same re-read precedes an answer to that
+// hold. checkshold.go owns which hold that is, read off the recorded report
+// through stages.ChecksTimeoutHeld, and it is the one producer of
+// store.ResolvedByProgram; a hold on a person's decision about a finding is
+// never re-read, because the pull request's state must not answer a question
+// a person was asked. A run that was waiting on checks when the service
+// stopped is continued rather than re-read here: the first read of the
+// resumed wait reads the pull request itself, which is step 1 and the checks
+// body's. Recovery step 1 for a still-running wait is therefore a resume into
+// the stage body, which makes its own read, and not a recover-time forge read.
+//
+// The record of such an ending is PRD section 8's merge record, written once:
+// internal/runs' two pull request moves write it with the status in one
+// transaction, settle makes the same two moves for the live wait from what
+// the checks body wrote under pipeline.KeyPullRequestEnd and its head key,
+// and report reads that record to derive the run's passed, so a stage body
+// decides nothing about a run's status, the run's own row stores the fact
+// nowhere, and the record, not a checkpoint still standing at the checks
+// stage, says what ended the run.
+//
 // # Blocking calls, and the one slot per run that makes them safe
 //
 // PRD section 9 has starting and responding block until the run reaches its
