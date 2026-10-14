@@ -17,8 +17,9 @@ import (
 
 // queuedBehindABlocker records, where a coordinator's intake would have, a
 // blocker task on the subject's work branch with its first attempt begun, and
-// a successor queued behind it. Nothing in this build creates a task through
-// the service, so the records are written through internal/store.
+// a successor queued behind it. The records are written through
+// internal/store rather than task.create, so the blocker's attempt is begun
+// without a dispatch; coordinator_unix_test.go drives task.create itself.
 func queuedBehindABlocker(t *testing.T, h *home.Home, repository store.Repository) (blocker, successor string) {
 	t.Helper()
 	records := openRecords(t, h)

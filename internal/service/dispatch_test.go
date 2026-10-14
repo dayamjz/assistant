@@ -18,9 +18,10 @@ import (
 
 // recordDispatchedTask writes, where a coordinator's intake would have, a
 // task that resolves Dispatched: the record with its copy reserved at
-// home.TaskCopy, and the instructions file intake writes after it. Nothing in
-// this build creates a task through the service, so the records are written
-// through internal/store.
+// home.TaskCopy, and the instructions file intake writes after it. It is
+// written through internal/store rather than task.create so the test holds a
+// task that has not yet been dispatched, which task.create's background
+// dispatch would race; coordinator_unix_test.go drives task.create itself.
 func recordDispatchedTask(t *testing.T, h *home.Home, repository store.Repository, shape store.TaskShape, branch string) string {
 	t.Helper()
 	id, err := home.NewTaskID()

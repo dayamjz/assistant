@@ -151,12 +151,14 @@
 // pushes nowhere, and a cleanup holds it to P12's three proofs like any
 // delivery copy.
 //
-// Promote has no caller in this build, on Create's terms: no verb and no
-// local protocol method promotes a task, because a method a worker could
-// call would let an investigation promote itself, which "a report is
-// evidence, not authorization" forbids, and a coordinator-only method is a
-// row PRD section 9's table does not have (#95 line E). internal/journey's
-// coverage says so.
+// Promote's one caller is internal/service's task.promote, on Create's
+// terms: a coordinator-only service method beside PRD section 9's table and
+// not a verb in it (#95 line E). A method a worker could call would let an
+// investigation promote itself, which "a report is evidence, not
+// authorization" forbids, so that service refuses a caller its worker group
+// set places in any task's worker group, from the caller's credentials,
+// before Promote is asked anything. This package does not know who is
+// calling and does not decide it.
 //
 // # Every lifecycle move here is an appended event, anchored
 //
@@ -228,14 +230,16 @@
 // floor, through HoldsBranch, and refuses itself when a live task now holds
 // the branch.
 //
-// # No caller in this build
+// # Who calls it
 //
-// Create is a library entry. No verb, no local protocol method and no
-// command creates a task: PRD section 9's table has no such verb, and adding
-// one is a finding against the specification (#95 line A), not a row. The
-// consequence for the end-to-end harness is recorded in internal/journey's
-// coverage: no journey walk can create a task, so what the binary is driven
-// through there is written through internal/store. Release does have a
+// Create's one caller is internal/service's task.create, the coordinator's
+// service method for creating a task that PRD section 9 puts beside its
+// command table (#95 line A); no verb and no command creates a task, and
+// adding one is a finding against the specification, not a row. That
+// service refuses a caller inside a task's worker group before Create runs,
+// so no worker creates a task. The end-to-end harness still plants the
+// tasks it reads through internal/store, which internal/journey's coverage
+// says. Release does have a
 // caller: internal/service calls it when a run finishes and when it opens.
 // A merge record is written only at two of those finishes, internal/service's
 // settle for a run whose checks stage read the merge and its checks-hold
