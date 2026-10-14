@@ -298,3 +298,110 @@ func TestAHeldTaskSaysItWaitsOnYouAndHowToAnswer(t *testing.T) {
 		t.Errorf("an open hold naming a run reads %q, which points at the task's answer", runHold)
 	}
 }
+
+// Every effect an answer to a task's hold can report reads as a row the
+// table lists, so the vocabulary test holds it, and every effect that does
+// more than close the hold has a row of its own, so two effects whose
+// mechanisms differ cannot share a sentence. The rows are held to what
+// their mechanisms do: a retry started by dispatch claims nothing about
+// carrying on, because a dispatch gives the worker no note about the
+// earlier attempt; a deferred retry promises nothing about the next start,
+// because what that start does depends on why the retry was refused; and a
+// retry the isolation assertion refused says nothing begins it again, which
+// is what the recorded refusal makes true. The domain is AnswerEffects, so
+// an effect added there fails here until it is phrased and listed. The
+// positive control is a row nobody listed, which the membership check must
+// report as missing.
+func TestEveryAnswerEffectReadsAsItsOwnListedRow(t *testing.T) {
+	t.Parallel()
+	vocabtest.Control(t)
+	listed := map[machine.Phrase]bool{}
+	for _, row := range machine.TablePhrases() {
+		listed[row] = true
+	}
+	unlisted := machine.Phrase{Outcome: "Your answer was taken.", Consequence: "Something happened.", Decision: "Nothing to decide."}
+	if listed[unlisted] {
+		t.Fatal("the control row nobody listed reads as listed, so the membership check checks nothing")
+	}
+	// The placeholder subject is the one TablePhrases fills HoldPhrase's rows
+	// with, so an answer that only closed its hold is found in the table.
+	hold := store.Hold{Subject: "a decision", Resolution: store.Known(machine.AnswerRetry)}
+	seen := map[machine.Phrase]machine.AnswerEffect{}
+	for _, effect := range machine.AnswerEffects() {
+		row := machine.TaskAnsweredPhrase(machine.TaskAnswered{Hold: hold, Effect: effect})
+		if !listed[row] {
+			t.Errorf("%s reads %q, which TablePhrases does not list", effect, row)
+		}
+		vocabtest.Assert(t, row.String())
+		if effect == machine.AnswerRecorded {
+			if row != machine.HoldPhrase(hold) {
+				t.Errorf("%s reads %q, want the answered hold's row", effect, row)
+			}
+			continue
+		}
+		if other, dup := seen[row]; dup {
+			t.Errorf("%s and %s read alike: %q", effect, other, row)
+		}
+		seen[row] = effect
+	}
+	phrase := func(e machine.AnswerEffect) string {
+		return machine.TaskAnsweredPhrase(machine.TaskAnswered{Hold: hold, Effect: e}).String()
+	}
+	for effect, rules := range map[machine.AnswerEffect]struct{ says, never []string }{
+		machine.AnswerRedispatched: {
+			says:  []string{"as that copy stands", "told nothing about the earlier attempt"},
+			never: []string{"where it left off", "carries on", "already done"},
+		},
+		machine.AnswerRetryDeferred: {
+			says:  []string{"could not be begun again just now", "may or may not begin it"},
+			never: []string{"is begun again the next time"},
+		},
+		machine.AnswerRetryRefused: {
+			says:  []string{"was not begun again", "did not pass the check", "Nothing begins it again on its own"},
+			never: []string{"next time the service comes up", "just now"},
+		},
+	} {
+		got := phrase(effect)
+		for _, want := range rules.says {
+			if !strings.Contains(got, want) {
+				t.Errorf("%s reads %q, which does not say %q", effect, got, want)
+			}
+		}
+		for _, bad := range rules.never {
+			if strings.Contains(got, bad) {
+				t.Errorf("%s reads %q, which promises %q", effect, got, bad)
+			}
+		}
+	}
+}
+
+// RetryNotBegun is true exactly for the retries that began no work, with
+// the oracle written from each effect's meaning rather than read off the
+// method, and the domain AnswerEffects, so an effect added without a
+// decision here fails.
+func TestRetryNotBegunIsTheRetriesThatStartedNothing(t *testing.T) {
+	t.Parallel()
+	oracle := map[machine.AnswerEffect]bool{
+		machine.AnswerRecorded:      false,
+		machine.AnswerRelaunched:    false,
+		machine.AnswerRedispatched:  false,
+		machine.AnswerRetryDeferred: true,
+		machine.AnswerRetryHeld:     true,
+		machine.AnswerRetryRefused:  true,
+		machine.AnswerStopped:       false,
+	}
+	effects := machine.AnswerEffects()
+	if len(effects) != len(oracle) {
+		t.Errorf("AnswerEffects lists %d effects and the oracle %d", len(effects), len(oracle))
+	}
+	for _, effect := range effects {
+		want, ok := oracle[effect]
+		if !ok {
+			t.Errorf("%s has no entry in the oracle", effect)
+			continue
+		}
+		if got := effect.RetryNotBegun(); got != want {
+			t.Errorf("%s.RetryNotBegun() = %v, want %v", effect, got, want)
+		}
+	}
+}

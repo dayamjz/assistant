@@ -65,7 +65,9 @@
 // the person's answer given with --task and --answer; a row per
 // Outcome, with OutcomeExecuting split three ways on the facts NextActionOf
 // reads, through RunPhrase and Run.Phrase; the hold rows, an open one naming
-// a task saying the same command; the kept and
+// a task saying the same command; a row per AnswerEffect that does more than
+// close a task's hold, through TaskAnsweredPhrase, each claiming only what
+// that effect's doc says the mechanism does; the kept and
 // removed rows for a run's cleanup record; the stream's own rows; the
 // status rows; and the rows for the rest of the command surface - a decision
 // and a fix round's offer, a row per doctor check and result keyed on the
