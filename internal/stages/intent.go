@@ -31,7 +31,11 @@ import (
 // so it is framed the way the PRD frames an inferred intent and for the same
 // reason: a hint read as a requirement makes review flag choices the person
 // made deliberately. A run with no intent text at all carries none, and only
-// that case is reported as absent.
+// that case is reported as absent. The intent internal/service reads off a
+// task for a push by that task's worker arrives as text with no supplied
+// claim, so it is reported as offered: this stage reads the run's state and
+// never the record's intent source, which is the one place that says the
+// text came from a task.
 //
 // So it starts no agent and touches no filesystem: it is a function of the
 // run's state, which is what keeps the side effects of this pipeline at its

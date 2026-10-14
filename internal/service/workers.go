@@ -5,14 +5,19 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"strings"
 	"time"
 
+	"github.com/dayamjz/assistant/internal/gate"
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
+	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/session"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/supervisor"
 	"github.com/dayamjz/assistant/internal/supervisor/feed"
+	"github.com/dayamjz/assistant/internal/tasks"
 	"github.com/dayamjz/assistant/internal/taskstate"
 )
 
@@ -34,8 +39,10 @@ import (
 // taskholds.go's task.respond and catchup.go's catchup.mark are the
 // coordinator's and refuse a worker, task.respond so that no worker answers a
 // hold, its own task's included, and catchup.mark so that no worker moves
-// what a person was shown; and
-// gate.admit holds a worker's push to admit_workers.go's rule. The set is
+// what a person was shown;
+// gate.admit holds a worker's push to admit_workers.go's rule; and
+// gate.notify records the run a worker's push of its own task's branch
+// starts with the task's intent, which pushIntent below decides. The set is
 // internal/session's, produced by session.Pipe.Create for the worker
 // process's lifetime, and this service reaches it through the driver that
 // holds the provider. session.Workers' doc says why it is not a second
@@ -254,4 +261,119 @@ func (s *Service) assertSupervision(ctx context.Context, req ipc.Request) (super
 		return supervisor.Arm{}, err
 	}
 	return feed.VerifyArm(ctx, s.home, s.cfg.SupervisionBeaconInterval, time.Now)
+}
+
+// pushedIntent is the intent a run a push starts is recorded with, and where
+// that intent came from.
+type pushedIntent struct {
+	text   string
+	source string
+}
+
+// noPushedIntent is what every push but a task worker's own carries: no
+// intent, recorded as absent.
+var noPushedIntent = pushedIntent{source: intentSourceAbsent}
+
+// pushIntent decides the intent of the run a push's update starts, from the
+// records and the pusher's credentials and from nothing the push says.
+//
+// A run whose update is a task's own branch, in the repository the gate
+// resolved to, pushed from inside that task's worker group, takes its
+// intent from the task: the task record's project as the first line and the
+// task's instructions, as the coordinator wrote them at intake, as the body.
+// It is recorded under intentSourceTask, never intentSourceSupplied, so the
+// run starts with pipeline.Start.IntentSupplied false and every stage frames
+// it as a hint rather than as acceptance criteria a person stated.
+//
+// Everything else carries no intent, as every push did before: a person's
+// push, a push whose pusher's group could not be read (followed as a
+// person's, which is the path that claims less), and a worker's update to
+// anything but its own task's branch, which admission refuses before this
+// runs. A task record that cannot be read is logged and the run carries no
+// intent, because the intent is a hint the run can do without and a push
+// already admitted cannot be refused from here.
+//
+// The text passes through internal/redact before it is recorded, because it
+// reaches the run record and, through the pull request stage, a code host.
+//
+// Residual gaps: the instructions file is a file under the home that the
+// worker's own user can write, so what it holds when the push arrives is as
+// trustworthy as that directory is against the worker, which is why the
+// intent is a hint and not a contract; and a task's instructions name what
+// the coordinator asked the worker for, which PRD section 5's "what the gate
+// does not establish" leaves where it was: the lens measures the change
+// against that text and never asks where it came from.
+func (s *Service) pushIntent(ctx context.Context, from ipc.Request, found subject, update gate.RefUpdate) pushedIntent {
+	m, worker, err := s.workerPeer(from)
+	if err != nil || !worker {
+		return noPushedIntent
+	}
+	task, err := s.store.Task(ctx, m.Task)
+	if err != nil {
+		s.log.Printf("the worker of task %s pushed %s and the task could not be read, so its run carries no intent: %v",
+			m.Task, update.Ref, err)
+		return noPushedIntent
+	}
+	if task.Shape != store.TaskDelivery || task.RepositoryID.Or("") != found.repository.ID ||
+		task.Branch.Or("") != update.Branch() {
+		return noPushedIntent
+	}
+	return pushedIntent{text: s.taskIntent(task), source: intentSourceTask}
+}
+
+// taskIntent composes a task's intent: its project, then its instructions as
+// intakeInstructions reads them. Instructions that cannot be read leave the
+// project alone, which is logged; intake refuses an empty project, so the
+// text is never empty for a task intake recorded.
+func (s *Service) taskIntent(task store.Task) string {
+	project := strings.TrimSpace(task.Project)
+	body := ""
+	path, err := s.home.TaskInstructions(task.ID)
+	if err == nil {
+		var raw []byte
+		if raw, err = os.ReadFile(path); err == nil {
+			body = intakeInstructions(string(raw))
+		}
+	}
+	if err != nil {
+		s.log.Printf("the instructions of task %s could not be read, so its run's intent is its project alone: %v",
+			task.ID, err)
+	}
+	text := project
+	if body != "" {
+		text = project + "\n\n" + body
+	}
+	return redact.New().Redact(strings.TrimSpace(text))
+}
+
+// intakeInstructions is the part of an instructions file the coordinator
+// wrote at intake: everything before the first section the program appended,
+// the isolation check dispatch appends (secondCheckHeading) or the
+// promotion section internal/tasks appends (tasks.PromotionHeading), each
+// recognized only at the start of a line. Those sections are the program's
+// words to the worker, and they carry a shell line naming paths under the
+// home, so they are not what the work is for and do not reach a code host.
+//
+// What that leaves out is a promoted task's delivery intent, which is in the
+// promotion section: such a task's run carries its project and its
+// investigation instructions. And text the coordinator wrote that happens to
+// begin a line with one of those headings ends its own instructions there,
+// which can only shorten the intent and never add to it.
+func intakeInstructions(text string) string {
+	end := len(text)
+	for _, heading := range []string{secondCheckHeading, tasks.PromotionHeading} {
+		for offset := 0; offset < end; {
+			i := strings.Index(text[offset:], heading)
+			if i < 0 {
+				break
+			}
+			at := offset + i
+			if at == 0 || text[at-1] == '\n' {
+				end = min(end, at)
+				break
+			}
+			offset = at + len(heading)
+		}
+	}
+	return strings.TrimSpace(text[:end])
 }

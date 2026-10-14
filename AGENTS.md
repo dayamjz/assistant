@@ -779,7 +779,11 @@ Each has cost this repository more than one round of review.
   own push does instead of starting a run, the approval hold it raises, and
   the anchored fast-forward an approve answer makes; a person's push meets
   neither, always starting its run, and
-  on Windows no peer is placed at all, which both files state as a limit. Three
+  on Windows no peer is placed at all, which both files state as a limit.
+  The run a worker's push of its own task's branch starts takes the task's
+  project and intake instructions as its intent, recorded under the source
+  `task` and never `supplied`, which `workers.go`'s `pushIntent` decides from
+  the same relation; a person's push carries none. Three
   state events have producers here and `publish.go` owns two: `task.state` is
   published from the supervisor loop's pass, the one reader that resolves
   every task, once per change by `taskstate.Basis` equality and not per pass,

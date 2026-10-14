@@ -311,7 +311,7 @@ func TestPromoteFlipsTheTaskInPlaceAndShapesItsCopy(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !strings.Contains(string(text), "look into the thing") || !strings.Contains(string(text), promotionHeading) ||
+		if !strings.Contains(string(text), "look into the thing") || !strings.Contains(string(text), PromotionHeading) ||
 			!strings.Contains(string(text), "make the change the report found") || !strings.Contains(string(text), line) {
 			t.Errorf("the instructions read:\n%s\nwant the intake text, the heading, the intent and the second check", text)
 		}
