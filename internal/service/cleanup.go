@@ -16,8 +16,9 @@ import (
 // consequence as package reach.
 //
 // A run's copy is reclaimed when the run finishes, in settle and in the
-// checks-hold closure, through reclaimCopy; copy.go says what that decides
-// and what a refusal there becomes.
+// checks-hold closure, through reclaimCopy, after the move that finished it
+// has swept it on runsweep.go's terms; copy.go says what that decides and
+// what a refusal there becomes.
 //
 // A delivery task's copy is cleaned up when a merge record is written for a
 // run attributed to it, which is the same two sites, after the run's own

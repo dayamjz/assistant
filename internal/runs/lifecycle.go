@@ -139,7 +139,8 @@ func (s *Service) Terminate(ctx context.Context, id string) (store.Run, error) {
 	return s.apply(ctx, id, moveTerminate)
 }
 
-// apply makes one move and, when it ends the run, drops the run's fixer role.
+// apply makes one move and, when it ends the run, drops the run's fixer role
+// and then calls OnFinish.
 //
 // Dropping it there rather than on a timer is why the two halves of this
 // service are one service: a run that has ended is a run whose agent
@@ -153,37 +154,74 @@ func (s *Service) Terminate(ctx context.Context, id string) (store.Run, error) {
 // ending. The lock is held across the store call, which serializes this
 // service's lifecycle moves against each other; rounds do not take it, so what
 // that costs is bounded by how often a run changes status.
+//
+// OnFinish is called after that lock is given back and before apply returns,
+// so a caller acting on the ending's return, internal/service reclaiming the
+// run's copy among them, acts after it. What it is decided from is the row
+// store.TransitionRun read back inside the transaction that wrote the move, and
+// the decision is Finished over that row's status, so no second read stands
+// between the ending and the call. Because no row of the table names a
+// terminal status as one it may be made from, a run that row shows finished
+// is finished for good through this package, so OnFinish is never called for
+// a run that is still active or that a later move of this package could make
+// active again. It is called for a move to the status the run already held as
+// well, since that row reads finished just the same; a caller that must act
+// once per ending has to make its act safe to repeat. It is not under the
+// lock, so two endings of one run in flight at once may each call it, and
+// nothing here orders those calls against each other or against a move of
+// another run.
+//
+// What that is not is the reach of store.TransitionRun itself, which doc.go
+// names: another package that calls it with an origin set of its own moves a
+// run without this package, and OnFinish hears nothing of that move.
 func (s *Service) apply(ctx context.Context, id string, m move) (store.Run, error) {
+	r, err := s.locked(func() (store.Run, error) { return s.store.TransitionRun(ctx, id, m.from, m.to) })
+	if err != nil {
+		return store.Run{}, err
+	}
+	s.finish(ctx, r)
+	return r, nil
+}
+
+// locked makes one store move under the lock and drops the run's fixer role
+// when the row it returns is finished, on apply's terms.
+func (s *Service) locked(transition func() (store.Run, error)) (store.Run, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	r, err := s.store.TransitionRun(ctx, id, m.from, m.to)
+	r, err := transition()
 	if err != nil {
 		return store.Run{}, err
 	}
 	if Finished(r.Status) {
-		delete(s.fixers, id)
+		delete(s.fixers, r.ID)
 	}
 	return r, nil
 }
 
+// finish calls OnFinish with r when r is finished, on apply's terms.
+func (s *Service) finish(ctx context.Context, r store.Run) {
+	if s.onFinish != nil && Finished(r.Status) {
+		s.onFinish(ctx, r)
+	}
+}
+
 // applyOnPullRequest is apply for the two rows a pull request's state makes:
 // the move, the merge record, and any hold closure are one store transaction,
-// under the same lock and with the same drop of the fixer role. The row's end
-// is what is recorded; a read naming another end is refused here so the table
-// and the record cannot disagree about which move was made.
+// under the same lock, with the same drop of the fixer role and the same call
+// of OnFinish after it. The row's end is what is recorded; a read naming
+// another end is refused here so the table and the record cannot disagree
+// about which move was made.
 func (s *Service) applyOnPullRequest(ctx context.Context, id string, m move, read store.PullRequestRead, closing store.HoldClosure) (store.Run, error) {
 	if read.End != m.end {
 		return store.Run{}, fmt.Errorf("runs: run %s: a move on a %s pull request was given a read of a %s one", id, m.end, read.End)
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	r, err := s.store.TransitionRunOnPullRequest(ctx, id, m.from, m.to, read, closing)
+	r, err := s.locked(func() (store.Run, error) {
+		return s.store.TransitionRunOnPullRequest(ctx, id, m.from, m.to, read, closing)
+	})
 	if err != nil {
 		return store.Run{}, err
 	}
-	if Finished(r.Status) {
-		delete(s.fixers, id)
-	}
+	s.finish(ctx, r)
 	return r, nil
 }
 

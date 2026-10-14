@@ -9,11 +9,11 @@ import (
 	"github.com/dayamjz/assistant/internal/store"
 )
 
-// Options is everything the run service is built from. Every field is
-// required, because there is no defensible default for any of them: a service
-// with no store records nothing, one with no agent hands out a fixer role
-// nothing can run, and session reuse decides whether a run keeps memory across
-// its fix rounds at all.
+// Options is everything the run service is built from. Every field but OnFinish
+// is required, because there is no defensible default for any of them: a
+// service with no store records nothing, one with no agent hands out a fixer
+// role nothing can run, and session reuse decides whether a run keeps memory
+// across its fix rounds at all.
 type Options struct {
 	// Store is where runs are recorded. It is also where the fixer session
 	// reference lives, on the run's own row.
@@ -38,6 +38,16 @@ type Options struct {
 	// that conversation is recorded on the run so a restarted service
 	// continues it. Without it, every round is session-free.
 	SessionReuse bool
+	// OnFinish, when not nil, is called with the run as the store returned it
+	// from a move that left the run in a status Finished reports, and with
+	// nothing else. It is how a caller acts on a run's ending in the same
+	// place the ending is decided, from the record that transaction read back
+	// rather than from a second read; internal/service sweeps the run's
+	// isolated copy from it. lifecycle.go's apply says when it runs and what
+	// that buys. It returns nothing, because the move it follows has already
+	// committed: whatever it could not do is its own to report, and it cannot
+	// refuse or undo the ending.
+	OnFinish func(ctx context.Context, run store.Run)
 }
 
 // Service owns the lifecycle of a run's record and the one durable fixer
@@ -48,9 +58,10 @@ type Options struct {
 // which is the arrangement PRD section 8's exclusive home lock produces; the
 // package documentation says what a second one over the same store would cost.
 type Service struct {
-	store *store.Store
-	agent agents.Resolution
-	reuse bool
+	store    *store.Store
+	agent    agents.Resolution
+	reuse    bool
+	onFinish func(context.Context, store.Run)
 
 	// mu serializes the two things that must not interleave: handing out a
 	// run's fixer role and ending the run. It is held across the store call
@@ -96,10 +107,11 @@ func New(o Options) (*Service, error) {
 		}
 	}
 	return &Service{
-		store:  o.Store,
-		agent:  o.Agent,
-		reuse:  o.SessionReuse,
-		fixers: make(map[string]*Fixer),
+		store:    o.Store,
+		agent:    o.Agent,
+		reuse:    o.SessionReuse,
+		onFinish: o.OnFinish,
+		fixers:   make(map[string]*Fixer),
 	}, nil
 }
 
