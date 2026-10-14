@@ -462,24 +462,40 @@ func HoldPhrase(h store.Hold) Phrase {
 }
 
 // The rows for an answer to a task's hold that did more than close it: a
-// retry that began the work again, one recorded and not acted on yet, one
-// that raised a further decision, and a stop. A hold whose answer acts on nothing further reads as HoldPhrase's
-// answered row.
+// retry that began the work again where it left off, one that began it
+// again in its copy as it stands, one recorded and not acted on yet, one
+// that raised a further decision, one the check that keeps the work apart
+// refused, and a stop. A hold whose answer acts on nothing further reads as
+// HoldPhrase's answered row. Each row claims only what its effect's doc in
+// wire.go says the mechanism does: the deferred row promises nothing about
+// the next start, because what that start does depends on why the work was
+// not begun now, and the row for a dispatch says nothing
+// about carrying on, because a dispatch gives the worker no note.
 var (
 	phraseRetried = Phrase{
 		Outcome:     "Your answer was taken, and the work was begun again where it left off.",
 		Consequence: "It carries on from what was already done there.",
 		Decision:    "Nothing to decide unless it ends again without finishing, which asks you again.",
 	}
+	phraseRedispatched = Phrase{
+		Outcome:     "Your answer was taken, and the work was begun again in its local copy as that copy stands.",
+		Consequence: "The new worker is told nothing about the earlier attempt or what it may have left there.",
+		Decision:    "Nothing to decide now; run assistant tasks to see how it goes.",
+	}
 	phraseRetryDeferred = Phrase{
 		Outcome:     "Your answer was recorded, and the work could not be begun again just now.",
-		Consequence: "It is begun again the next time the service comes up, if nothing else has moved it by then.",
-		Decision:    "Run assistant service restart to try sooner, or repeat the command with --json to read why.",
+		Consequence: "The service looks at this work again the next time it comes up, and that may or may not begin it.",
+		Decision:    "Repeat the command with --json to read why, and run assistant service restart once that is dealt with.",
 	}
 	phraseRetryHeld = Phrase{
 		Outcome:     "Your answer was recorded, and the work needs one more decision from you before it is begun again.",
 		Consequence: "Nothing here can check that the earlier attempt left no process behind where the work is kept, so it waits on you.",
 		Decision:    "Answer the new decision to begin the work again anyway, or to leave it as it is.",
+	}
+	phraseRetryRefused = Phrase{
+		Outcome:     "Your answer was recorded, and the work was not begun again: its local copy did not pass the check that keeps the work apart.",
+		Consequence: "Nothing begins it again on its own.",
+		Decision:    "Repeat the command with --json to read what the check found, then decide whether to start this work afresh or let it go.",
 	}
 	phraseNotRetried = Phrase{
 		Outcome:     "Your answer was recorded, and the work will not be begun again.",
@@ -495,10 +511,14 @@ func TaskAnsweredPhrase(a TaskAnswered) Phrase {
 	switch a.Effect {
 	case AnswerRelaunched:
 		return phraseRetried
+	case AnswerRedispatched:
+		return phraseRedispatched
 	case AnswerRetryDeferred:
 		return phraseRetryDeferred
 	case AnswerRetryHeld:
 		return phraseRetryHeld
+	case AnswerRetryRefused:
+		return phraseRetryRefused
 	case AnswerStopped:
 		return phraseNotRetried
 	}
@@ -998,7 +1018,7 @@ var PhraseNoReading = Phrase{
 // which is what the vocabulary test walks: the pull guard's three rows, the
 // stop guard's two turn rows, a row per task state, the hold tier's row and
 // NoWordYet, a row per outcome and the three OutcomeExecuting splits into,
-// the three hold rows (open, answered, and open naming a task), the four
+// the three hold rows (open, answered, and open naming a task), the six
 // rows for an answer to a task's hold and the two cleanup rows, the
 // stream's four, the status rows, and the rows for the rest of the command
 // surface: a decision and a fix round's offer, a row per doctor check and
@@ -1032,7 +1052,7 @@ func TablePhrases() []Phrase {
 	out = append(out, phraseRunAdvancing, phraseRunStalled, phraseRunUnrecorded)
 	out = append(out, HoldPhrase(store.Hold{Subject: holdPlaceholder}), HoldPhrase(store.Hold{Subject: holdPlaceholder, Resolution: store.Known("answered")}))
 	out = append(out, HoldPhrase(store.Hold{Subject: holdPlaceholder, TaskID: store.Known("a task")}))
-	out = append(out, phraseRetried, phraseRetryDeferred, phraseRetryHeld, phraseNotRetried)
+	out = append(out, phraseRetried, phraseRedispatched, phraseRetryDeferred, phraseRetryHeld, phraseRetryRefused, phraseNotRetried)
 	out = append(out, phraseCopyKept, phraseCopyRemoved)
 	out = append(out, PhraseUpdatesMissed, PhraseServiceStopping, PhraseWorkerSpoke, PhraseActivity, PhraseUnfamiliarUpdate)
 	out = append(out, PhraseServiceUp, PhraseServiceAbsent, PhraseGated, PhraseUngated, PhraseNoRun, PhraseNoRuns, PhraseNoFleetWork)
