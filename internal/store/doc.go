@@ -103,6 +103,19 @@
 // anchored to the task's shape, read in the transaction that claims the
 // record, on the terms its doc states.
 //
+// # The message record
+//
+// PRD section 8's message record is migration 21's message table: one row
+// per message sent to a task's worker, appended by AppendMessage before the
+// send with its text passed through the redactor Open was given, and sealed
+// on wake's terms. Its three facts are each written once: written or refused
+// by MarkMessageWritten and MarkMessageRefused, which exclude each other,
+// and acknowledged by AcknowledgeMessage, which appends the worker's
+// MessageAcknowledgedEventKind event in the same transaction, so the history
+// and the record cannot disagree. It is the one place delivery is read from
+// (P8). Who sent a message is Sender, closed on Acknowledger's terms, with no
+// member meaning a person.
+//
 // # The wake queue and the markers it is written with
 //
 // PRD section 8's wake is the durable wake queue: a table here and not a

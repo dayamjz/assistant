@@ -423,6 +423,11 @@ const (
 	// hold is answered retry.
 	// NotRelaunched says why and names the hold.
 	AnswerRetryHeld AnswerEffect = "retry-held"
+	// AnswerRetryAtBound is a retry on a stop's hold whose relaunch would
+	// pass relaunch_attempts, which raised the bound's hold for the attempt;
+	// it begins nothing until that hold is answered retry. NotRelaunched
+	// says why and names the hold.
+	AnswerRetryAtBound AnswerEffect = "retry-at-bound"
 	// AnswerStopped is a stop: the task is left where it stopped and
 	// nothing relaunches it.
 	AnswerStopped AnswerEffect = "stopped"
@@ -622,6 +627,39 @@ type TaskRelaunched struct {
 	// Swept is what the sweep of the standing copy did, in the service's
 	// words.
 	Swept string `json:"swept,omitempty"`
+}
+
+// TaskMessaged is the answer to task.message: the message record as the
+// send left it, which is the one place delivery is read from (P8). Delivery
+// is written when the provider's Send returned and refused, with the
+// record's reason, when it did not; whether the worker read it is the
+// acknowledgement the worker appends later, read from the same record.
+type TaskMessaged struct {
+	// Message is the record.
+	Message store.Message `json:"message"`
+	// Delivery is the record's delivery fact.
+	Delivery store.Delivery `json:"delivery"`
+	// SentBy is who the record says sent it, which the surface derived and
+	// not what the caller said.
+	SentBy string `json:"sent_by"`
+}
+
+// TaskStopped is the answer to task.stop: the attempt whose worker was
+// ended, how it was ended, and the hold registered once the probe read its
+// terminal dead. It is answered only after that probe; a stop the probe did
+// not prove is a refusal and no hold is registered.
+type TaskStopped struct {
+	// Task is the task stopped.
+	Task string `json:"task"`
+	// Attempt is the attempt whose worker was ended.
+	Attempt int64 `json:"attempt"`
+	// Session is that attempt's session reference.
+	Session string `json:"session"`
+	// Ended is how the worker was ended, in the service's words.
+	Ended string `json:"ended"`
+	// Hold is the hold the stop registered, open, which a retry answer
+	// relaunches through the anchored relaunch and a stop answer leaves.
+	Hold store.Hold `json:"hold"`
 }
 
 // Wakes is the answer to a drain of the wake queue: the queued rows, oldest

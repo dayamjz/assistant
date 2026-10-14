@@ -146,8 +146,9 @@
 // worker, is not answered here either, and it is not a third access class.
 // The handler decides it, from internal/service's worker group set, for the
 // methods whose answer turns on it: task.event admits only a worker, the
-// wakes methods, supervision.assert and the three coordinator task methods
-// (task.create, task.promote and task.relaunch) refuse one, and gate.admit
+// wakes methods, supervision.assert, task.respond and the coordinator's task
+// methods (task.create, task.promote, task.relaunch, task.message, task.stop
+// and task.interrupt) refuse one, and gate.admit
 // holds a worker's push to a rule. The method table stays about containment because
 // a class meaning "the coordinator only" would need that set as an input of
 // this package, and the set is a fact about processes a service started.
@@ -191,6 +192,8 @@
 // store.AcknowledgedByCoordinator, derived from the surface and read from no
 // frame, so a worker refused the method by the handler and a coordinator
 // admitted to it can say nothing different about who acknowledged.
+// Request.MessageSender is the same rule for a message sent to a worker:
+// store.SentByCoordinator, from the surface and from no frame.
 //
 // # What one connection may hold at once
 //

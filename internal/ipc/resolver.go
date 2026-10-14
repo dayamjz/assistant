@@ -57,3 +57,17 @@ func (Request) HoldResolver() store.Resolver {
 func (Request) WakeAcknowledger() store.Acknowledger {
 	return store.AcknowledgedByCoordinator()
 }
+
+// MessageSender returns who a message carried by a request on this protocol
+// is recorded as having sent it, which is always [store.SentByCoordinator].
+//
+// It is WakeAcknowledger's rule applied to PRD section 6's steering.
+// MethodTaskMessage is the coordinator's: the handler refuses a task's worker
+// from the caller's credentials. What has to hold is what a call may say
+// about itself, and the mechanisms are the same: no frame this package
+// defines carries a sender, and the receiver is unnamed because nothing in
+// the request reaches the answer. internal/store says why the set has no
+// member meaning a person.
+func (Request) MessageSender() store.Sender {
+	return store.SentByCoordinator()
+}
