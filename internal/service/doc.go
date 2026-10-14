@@ -121,7 +121,10 @@
 // touched. What finds it is the sweep runsweep.go asks of a run's copy when
 // the run reaches a final state, on Linux and macOS and only while it is
 // still in the copy; a service that stopped between a run's ending and that
-// sweep leaves it to nothing, which runsweep.go states. On
+// sweep leaves it until the next service's recovery, which sweeps the copy
+// of every run its record shows finished while that copy stands, on
+// runsweep.go's terms. What each sweep came to is recorded on the run and
+// carried in its status answer, which runsweep.go also states. On
 // unix the adapter's forget runs once its termination has finished whether
 // or not the group emptied, so a member this service could not signal loses
 // its record with the rest; a later recovery would have found its leader
@@ -504,7 +507,8 @@
 // decides nothing of it. A run's copy goes through reclaimCopy when the run
 // finishes, in settle and in the checks-hold closure, after the sweep
 // runsweep.go asks of it from inside the move that finished the run, whose
-// answer the decision does not read; a refusal there is
+// answer the decision does not read, so a sweep that did not clear does not
+// keep the copy; a refusal there is
 // recorded by the decision on the run's cleanup record and composed into
 // the run's answer by report, so status says a local copy was kept rather
 // than only the log. A delivery task's copy is cleaned up at the same two

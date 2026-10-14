@@ -890,12 +890,16 @@ func (s *Service) recover(ctx context.Context) {
 		s.log.Printf("recovery could not list repositories: %v", err)
 		return
 	}
+	// The runs as recovery first read them, before any is reconciled: the
+	// ones this record shows finished are what the sweep below is asked of.
+	var read []store.Run
 	for _, repository := range repositories {
 		records, err := s.store.RunsForRepository(ctx, repository.ID)
 		if err != nil {
 			s.log.Printf("recovery could not list the runs of %s: %v", repository.ID, err)
 			continue
 		}
+		read = append(read, records...)
 		for _, record := range records {
 			if record.Status == store.RunHeld {
 				// PRD section 11's step 3, before serving anything: the one
@@ -933,6 +937,14 @@ func (s *Service) recover(ctx context.Context) {
 	// unless its run is still unfinished. reap.go owns the decision and its
 	// outcomes; what it does not reach is stated there and in doc.go.
 	s.reaped = s.reapOrphans(ctx)
+	// A run that was already finished when recovery read it, and whose
+	// isolated copy still stands, may have finished under a service that
+	// stopped between the move and the sweep that move asks, so its copy is
+	// swept now, after its recorded groups were reaped and before the fleet
+	// pass below can launch anything. Whether a run is finished is read off
+	// the record through internal/runs, never off the copy, so no active
+	// run's copy is touched; runsweep.go owns the sweep and what it records.
+	s.sweepFinishedAtRecovery(ctx, read)
 	// PRD section 11's fleet reconciliation, after the runs and before
 	// anything is served: the queued wakes are drained as input, every task
 	// of this home is read with its terminal probed under a bound, and a
@@ -1323,6 +1335,15 @@ func (s *Service) report(ctx context.Context, runID string, result *graph.Result
 	default:
 		return machine.Run{}, err
 	}
+	// What the latest sweep of the run's copy came to is its own record,
+	// composed on the same terms: present exactly when a sweep was recorded.
+	sweep, err := s.store.RunCopySweep(ctx, runID)
+	switch {
+	case err == nil:
+	case errors.Is(err, store.ErrNotFound):
+	default:
+		return machine.Run{}, err
+	}
 	standing := machine.Standing{
 		Record:    record.Status,
 		Execution: machine.ExecutionUnrecorded(),
@@ -1331,6 +1352,9 @@ func (s *Service) report(ctx context.Context, runID string, result *graph.Result
 	answer := machine.Run{Record: record}
 	if cleanup.Run != "" {
 		answer.Cleanup = &cleanup
+	}
+	if sweep.Run != "" {
+		answer.CopySweep = &sweep
 	}
 	if ended {
 		standing.PullRequestEnd = merge.End

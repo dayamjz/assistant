@@ -744,8 +744,12 @@ Each has cost this repository more than one round of review.
   or method reaches any of it. Before any of that a finished run's copy is
   swept: the move that finished the run calls `internal/runs`' `OnFinish`
   with the row it wrote, and `runsweep.go` ends the run's recorded groups and
-  asks `agents.Sweeper` of the copy, logging a sweep that did not clear and
-  blocking nothing; that file owns what the order guarantees and its gaps.
+  asks `agents.Sweeper` of the copy, blocking nothing, and recovery asks the
+  same of every run its record shows finished whose copy still stands, never
+  deciding finished from the copy. What each sweep came to is the run's one
+  `store.RunCopySweep` row, the latest sweep, which `report` composes as
+  `machine.Run.CopySweep`; the reclaim does not read it, on the owner's
+  decision. That file owns what the order guarantees and its gaps.
   And whether anything is advancing a run is a third
   fact neither the record nor the checkpoint holds: it lives in the slot a run
   advances in, `report` reads it rather than inferring it, and it travels as

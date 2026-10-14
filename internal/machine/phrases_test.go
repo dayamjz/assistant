@@ -298,3 +298,21 @@ func TestAHeldTaskSaysItWaitsOnYouAndHowToAnswer(t *testing.T) {
 		t.Errorf("an open hold naming a run reads %q, which points at the task's answer", runHold)
 	}
 }
+
+// A copy sweep record is phrased exactly when it did not establish the copy
+// clear, so a person is spoken to about it only when something the run set
+// going may still be at work there. The set is walked from store's closed
+// set, so an outcome added there is decided here or fails.
+func TestACopySweepIsPhrasedExactlyWhenItDidNotClear(t *testing.T) {
+	t.Parallel()
+	quiet := map[store.SweepOutcome]bool{store.SweepCleared: true, store.SweepNothingStanding: true}
+	for _, outcome := range store.SweepOutcomes() {
+		phrase, ok := machine.CopySweepPhrase(store.RunCopySweep{Outcome: outcome})
+		if ok == quiet[outcome] {
+			t.Errorf("a %s sweep phrased = %v", outcome, ok)
+		}
+		if ok && phrase.Decision == "" {
+			t.Errorf("a %s sweep's row names no decision", outcome)
+		}
+	}
+}
