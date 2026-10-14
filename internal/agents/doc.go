@@ -229,7 +229,10 @@
 // isolated copy a process's working directory resolves under, never on its
 // command line, and the next section's Sweeper is that scan. No runner here
 // is built with it, for the reason Sweep gives, so a stage invocation's
-// detached descendant still outlives the invocation.
+// detached descendant still outlives the invocation; internal/service asks
+// Sweeper of the run's copy once the run reaches a final state, which ends
+// such a descendant then if it is still in the copy, on the platforms with a
+// sweep.
 //
 // # A sweep ends what runs in one copy, on Linux and macOS, and proves nothing elsewhere
 //

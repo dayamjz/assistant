@@ -28,6 +28,14 @@
 // transition retried after a failure that had already committed reports the
 // state it established.
 //
+// A move that leaves a run finished calls Options.OnFinish with the row the
+// move's transaction read back, after the lock and before the move returns,
+// which is how internal/service sweeps a finished run's isolated copy from
+// the record the ending wrote rather than from a read of its own. Because no
+// row leads out of a terminal status, a run that row shows finished is not
+// made active again by this package; lifecycle.go's apply says what the call
+// is not ordered against.
+//
 // What that is not is an enforcement. store.TransitionRun is exported and
 // takes the origin set from its caller, so nothing stops another package from
 // naming a set of its own; the answer is the one internal/store and

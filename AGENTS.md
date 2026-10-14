@@ -395,7 +395,9 @@ Each has cost this repository more than one round of review.
   one durable fixer session a run keeps. Both are anchored rather than
   convention. A status move is `store.TransitionRun`, which reads and writes in
   one transaction against the origin set the caller names, and which statuses
-  are terminal is read off that table rather than listed beside it. The session
+  are terminal is read off that table rather than listed beside it, and a
+  move that leaves a run finished calls `Options.OnFinish` with the row it
+  wrote, outside the lock, never for a move that does not. The session
   reference is on the run's own row and must never move into `internal/pipeline`
   graph state: that state is the convergence fingerprint, and a reference that
   changed across a resume would silently disable the bound.
@@ -734,7 +736,12 @@ Each has cost this repository more than one round of review.
   delivery task a merge record landed and for an investigation task whose
   report `storeTaskReport` stored, passing the terminal's liveness as the
   service's own task reader resolved it, never a second read, and no verb
-  or method reaches any of it. And whether anything is advancing a run is a third
+  or method reaches any of it. Before any of that a finished run's copy is
+  swept: the move that finished the run calls `internal/runs`' `OnFinish`
+  with the row it wrote, and `runsweep.go` ends the run's recorded groups and
+  asks `agents.Sweeper` of the copy, logging a sweep that did not clear and
+  blocking nothing; that file owns what the order guarantees and its gaps.
+  And whether anything is advancing a run is a third
   fact neither the record nor the checkpoint holds: it lives in the slot a run
   advances in, `report` reads it rather than inferring it, and it travels as
   `machine.Run.Advancing`. It is also where PRD section 11's step 3 lives:
