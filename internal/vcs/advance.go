@@ -38,6 +38,18 @@ var ErrBranchMoved = errors.New("vcs: the branch no longer names the commit the 
 // a file written there is what read-tree's own two-tree checks see, and they
 // refuse to overwrite a changed tracked file but are not a lock.
 func (r *Repository) AdvanceBranch(ctx context.Context, branch, from, to string) error {
+	return r.MoveBranch(ctx, branch, from, to, "assistant: approved local landing")
+}
+
+// MoveBranch is AdvanceBranch with the reason the branch's reflog records
+// for the move, on exactly AdvanceBranch's terms otherwise: the
+// compare-and-swap on from, the clean-tree refusal, and the working tree
+// brought along or the branch put back. The reason is the caller's own words
+// and is written as given; it must not be empty or carry a newline.
+func (r *Repository) MoveBranch(ctx context.Context, branch, from, to, reason string) error {
+	if err := checkArg("reason", reason); err != nil {
+		return err
+	}
 	if err := checkArg("branch", branch); err != nil {
 		return err
 	}
@@ -65,7 +77,7 @@ func (r *Repository) AdvanceBranch(ctx context.Context, branch, from, to string)
 				ErrTreeNotClean, branch, r.path, dirty, untracked)
 		}
 	}
-	const message = "assistant: approved local landing"
+	message := reason
 	if _, err := r.run(ctx, "update-ref-advance", "update-ref", "-m", message, "--no-deref", "--end-of-options",
 		name, toID, fromID); err != nil {
 		current, readErr := r.ResolveCommit(ctx, name)
