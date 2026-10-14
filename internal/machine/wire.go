@@ -260,6 +260,16 @@ type Run struct {
 	// MergeRecord's terms, and it is where a surface learns that a local
 	// copy was kept because its work is not yet safely elsewhere.
 	Cleanup *store.RunCleanup `json:"cleanup,omitempty"`
+	// CopySweep is the record of the latest sweep of this run's isolated
+	// copy, present exactly when one was recorded: what it came to, how many
+	// processes it ended and how many kept it from clearing, whether the move
+	// that finished the run or a later recovery asked it, and when. It is the
+	// record composed rather than restated, on Cleanup's terms. It says what
+	// a sweep found when it ran and not whether anything runs in the copy
+	// now, and nothing decides from it: an uncleared sweep does not keep the
+	// copy, whose removal is Cleanup's decision alone. CopySweepPhrase is the
+	// line a person reads for the outcomes that leave them something to do.
+	CopySweep *store.RunCopySweep `json:"copy_sweep,omitempty"`
 	// AnswerNotApplied says, on the answer to a response, why the answer the
 	// request carried was not applied to the run: the hold it answered was
 	// closed by the service first, on a re-read of the run's pull request,
@@ -389,19 +399,24 @@ type TaskAnswered struct {
 	Hold store.Hold `json:"hold"`
 	// Effect is what the answer did beyond closing the hold.
 	Effect AnswerEffect `json:"effect"`
-	// Relaunch is the attempt a retry began, and is nil for every other
-	// effect.
+	// Relaunch is the attempt a retry began, and is nil for every effect
+	// but AnswerRelaunched and AnswerRedispatched.
 	Relaunch *RelaunchBegun `json:"relaunch,omitempty"`
-	// NotRelaunched is why a retry began no attempt now, and is empty for
-	// every effect but AnswerRetryDeferred and AnswerRetryHeld. The
-	// decision stands in the hold's record, and the next reconciliation
-	// reads it, or for a dispatch's hold the next start's dispatch.
+	// NotRelaunched is why a retry began no work now, and is empty for
+	// every effect RetryNotBegun does not report. The answer is recorded on
+	// the hold either way; what it does after that is the effect's to say,
+	// and only AnswerRetryDeferred leaves it to a later start to read.
 	NotRelaunched string `json:"not_relaunched,omitempty"`
 	// Task is the task as it stands after the answer.
 	Task Task `json:"task"`
 }
 
-// AnswerEffect is what answering a task's hold did. The set is closed.
+// AnswerEffect is what answering a task's hold did. The set is closed and
+// AnswerEffects lists it. Each effect says only what the answer itself did
+// or what the mechanism behind it then does for certain: a retry that began
+// work names which kind of start it was, and a retry that began none names
+// the one refusal whose consequence is settled, AnswerRetryRefused, apart
+// from the rest, AnswerRetryDeferred, whose consequence is not.
 type AnswerEffect string
 
 const (
@@ -410,12 +425,25 @@ const (
 	AnswerRecorded AnswerEffect = "recorded"
 	// AnswerRelaunched is a retry on a relaunch hold, the one past
 	// relaunch_attempts or the one a relaunch with no process sweep raised,
-	// that began one attempt through the anchored relaunch, or a retry on
-	// the hold a dispatch over a standing copy with no process sweep raised,
-	// that began one attempt over that copy through the anchored dispatch.
+	// that began one attempt through the anchored relaunch, in the copy as
+	// the earlier worker left it and with the relaunch note telling the new
+	// worker so. The launch follows the answer and is not part of it.
 	AnswerRelaunched AnswerEffect = "relaunched"
+	// AnswerRedispatched is a retry on the hold a dispatch over a standing
+	// copy with no process sweep raised, that began one attempt in that
+	// copy as it stands through the anchored dispatch. A dispatch carries
+	// no note about an earlier attempt, so the new worker is started with
+	// the task's instructions alone and is told nothing of what the crashed
+	// attempt may have left in the copy. The launch follows the answer and
+	// is not part of it.
+	AnswerRedispatched AnswerEffect = "redispatched"
 	// AnswerRetryDeferred is a retry recorded whose relaunch or dispatch was
-	// refused now; NotRelaunched says why.
+	// refused now for a reason other than the two below; NotRelaunched says
+	// why. Nothing about the next start is promised: the reasons it covers
+	// range from a slot another caller holds to a refusal after the claim,
+	// which spends the answer, and the one thing they share is that the
+	// start-time passes read the task again, which may begin it, hold it
+	// again, or leave it.
 	AnswerRetryDeferred AnswerEffect = "retry-deferred"
 	// AnswerRetryHeld is a retry recorded whose relaunch or dispatch was
 	// refused because the platform has no process sweep, which raised a
@@ -428,10 +456,40 @@ const (
 	// it begins nothing until that hold is answered retry. NotRelaunched
 	// says why and names the hold.
 	AnswerRetryAtBound AnswerEffect = "retry-at-bound"
+	// AnswerRetryRefused is a retry recorded whose relaunch or dispatch
+	// began an attempt that the isolation assertion then refused, which
+	// recorded that refusal on the attempt: the task resolves Failed from
+	// it, reconciliation surfaces such a task rather than relaunching it,
+	// and dispatch passes it over, so nothing begins the work again on its
+	// own. NotRelaunched says what the assertion found.
+	AnswerRetryRefused AnswerEffect = "retry-refused"
 	// AnswerStopped is a stop: the task is left where it stopped and
 	// nothing relaunches it.
 	AnswerStopped AnswerEffect = "stopped"
 )
+
+// AnswerEffects is the closed set of AnswerEffect, in declaration order. The
+// result is a copy.
+func AnswerEffects() []AnswerEffect {
+	return []AnswerEffect{
+		AnswerRecorded, AnswerRelaunched, AnswerRedispatched,
+		AnswerRetryDeferred, AnswerRetryHeld, AnswerRetryRefused, AnswerStopped,
+	}
+}
+
+// RetryNotBegun reports whether the effect is a retry a person decided on
+// that began no work: deferred, held on a further decision, or refused by
+// the isolation assertion. It is what a surface reads to tell a caller that
+// the decision was taken and the work did not start, without the caller
+// reading the document. A stop and an answer that only closed a hold asked
+// for no work, and a started retry began some, so neither is reported.
+func (e AnswerEffect) RetryNotBegun() bool {
+	switch e {
+	case AnswerRetryDeferred, AnswerRetryHeld, AnswerRetryRefused:
+		return true
+	}
+	return false
+}
 
 // RelaunchBegun is the attempt a retry began: its position in the task's
 // attempts and the session reference of the attempt it superseded.

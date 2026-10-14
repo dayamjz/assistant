@@ -19,6 +19,7 @@ import (
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/store"
+	"github.com/dayamjz/assistant/internal/tasks"
 	"github.com/dayamjz/assistant/internal/taskstate"
 )
 
@@ -512,8 +513,9 @@ func TestAnUnsupportedSweepHoldsTheRetriedDispatchUntilARetryAnswer(t *testing.T
 // The dispatch's no-sweep hold is answered the way the relaunch holds are,
 // through task.respond's handler: an answer it does not offer is refused
 // and leaves it open, a retry begins one attempt over the standing copy
-// through the anchored dispatch and reports it as a relaunch's retry is,
-// with no superseded session because the crashed attempt recorded none,
+// through the anchored dispatch and reports it as a dispatch begun in the
+// copy as it stands, AnswerRedispatched and not a relaunch's effect, with
+// no superseded session because the crashed attempt recorded none,
 // and a stop leaves the task alone, so the next start's dispatch is
 // refused on the stopped hold and begins nothing.
 func TestTheDispatchNoSweepHoldIsAnsweredRetryOrStop(t *testing.T) {
@@ -537,7 +539,7 @@ func TestTheDispatchNoSweepHoldIsAnsweredRetryOrStop(t *testing.T) {
 	if err != nil {
 		t.Fatalf("answering the dispatch's hold: %v", err)
 	}
-	if retried.Hold.Key != key || retried.Effect != machine.AnswerRelaunched || retried.Relaunch == nil ||
+	if retried.Hold.Key != key || retried.Effect != machine.AnswerRedispatched || retried.Relaunch == nil ||
 		retried.Relaunch.Attempt != 2 || retried.Relaunch.Superseded != "" {
 		t.Fatalf("a retry on the dispatch's hold answered %+v, want attempt 2 begun on %s with nothing superseded", retried, key)
 	}
@@ -560,6 +562,126 @@ func TestTheDispatchNoSweepHoldIsAnsweredRetryOrStop(t *testing.T) {
 	h := dispatchRefusedOn(t, stopped, err, stopKey, 1, before)
 	if h.Open() || h.Resolution.Or("") != machine.AnswerStop {
 		t.Fatalf("the dispatch after a stop was refused on %+v, want the stopped hold", h)
+	}
+}
+
+// A retry whose relaunch or dispatch the isolation assertion refuses
+// reports AnswerRetryRefused, and the refusal it reports is what keeps the
+// work from being begun again: the assertion recorded it on the attempt the
+// retry began, the task resolves Failed from it, and a later start's
+// reconciliation, dispatch and relaunch all leave it, beginning no third
+// attempt. Both paths are driven through task.respond's handler: a relaunch
+// retried on its no-sweep hold after the copy was removed, which the
+// relaunch refuses as missing rather than cutting a fresh one, and a
+// dispatch retried on its no-sweep hold after the standing copy lost its
+// repository, which the assertion refuses as not isolated. A retry refused
+// for any other reason, here a relaunch of the task already in flight in
+// this service, reports AnswerRetryDeferred, begins nothing, and leaves the
+// answer standing, so the relaunch asked once that slot settles begins the
+// attempt. The positive controls are the same retries over an intact copy,
+// which TestTheNoSweepHoldIsAnsweredRetryOrStop and
+// TestTheDispatchNoSweepHoldIsAnsweredRetryOrStop show begin an attempt and
+// report AnswerRelaunched and AnswerRedispatched.
+func TestARetryReportsTheRefusalItMetAndPromisesNoRestartItCannotKeep(t *testing.T) {
+	ctx := t.Context()
+	answer := func(s *Service, task string) machine.TaskAnswered {
+		t.Helper()
+		out, err := s.respondTask(ctx, ipc.Request{}, machine.TaskRespondRequest{Task: task, Answer: machine.AnswerRetry})
+		if err != nil {
+			t.Fatalf("answering task %s's hold retry: %v", task, err)
+		}
+		return out
+	}
+	attemptsOf := func(records *store.Store, task string) int {
+		t.Helper()
+		got, err := records.TaskAttempts(ctx, task)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(got)
+	}
+	refused := func(name string, out machine.TaskAnswered, records *store.Store, task string, token taskstate.IsolationRefusal) {
+		t.Helper()
+		if out.Effect != machine.AnswerRetryRefused || out.Relaunch != nil || out.NotRelaunched == "" {
+			t.Fatalf("%s: the retry answered %+v, want %s with the reason and no attempt reported", name, out, machine.AnswerRetryRefused)
+		}
+		if out.Task.State.State != taskstate.Failed || out.Task.State.Basis.EventKind != isolationRefusedKind {
+			t.Fatalf("%s: the task stands %+v, want Failed from the isolation refusal", name, out.Task.State)
+		}
+		events, err := records.TaskEvents(ctx, task, 0, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if last := events[len(events)-1]; last.Kind != isolationRefusedKind || last.Detail != string(token) {
+			t.Fatalf("%s: the newest entry is %+v, want the %s refusal", name, last, token)
+		}
+	}
+
+	// A relaunch retried after the copy went: refused as missing, recorded.
+	gone := newRelaunchSubject(t)
+	gone.restart.sweepCopy = sweepUnsupported
+	var unswept *relaunchUnswept
+	if _, err := gone.restart.relaunchTask(ctx, gone.task); !errors.As(err, &unswept) {
+		t.Fatalf("the relaunch with no sweep answered %v, want its hold", err)
+	}
+	if err := os.RemoveAll(gone.copy); err != nil {
+		t.Fatal(err)
+	}
+	refused("relaunch", answer(gone.restart, gone.task), gone.records, gone.task, taskstate.RefusedCopyMissing)
+	next, _ := restartedService(t, gone.launchSubject)
+	next.sweepCopy = sweepUnsupported
+	next.reconcileTasks(ctx)
+	if _, err := next.relaunchTask(ctx, gone.task); !errors.Is(err, errRelaunchNotDue) {
+		t.Fatalf("a relaunch after the refused retry answered %v, want not due", err)
+	}
+	if n := attemptsOf(gone.records, gone.task); n != 2 {
+		t.Fatalf("the relaunched task has %d attempts after a later start, want the first and the refused retry", n)
+	}
+
+	// A dispatch retried over a copy that is no longer a repository: refused
+	// as not isolated, recorded.
+	broken, restart := crashedDispatch(t)
+	if _, err := restart.dispatchTask(ctx, broken.task); err == nil {
+		t.Fatal("the dispatch with no sweep went ahead with no answer")
+	}
+	if err := os.RemoveAll(filepath.Join(broken.copy, ".git")); err != nil {
+		t.Fatal(err)
+	}
+	refused("dispatch", answer(restart, broken.task), broken.records, broken.task, taskstate.RefusedNotIsolated)
+	after, _ := restartedService(t, broken)
+	after.sweepCopy = sweepUnsupported
+	after.reconcileTasks(ctx)
+	after.dispatchDue(ctx)
+	if _, err := after.dispatchClaimed(ctx, broken.task); !errors.Is(err, errTaskNotDispatched) {
+		t.Fatalf("a dispatch after the refused retry answered %v, want not dispatched", err)
+	}
+	if n := attemptsOf(broken.records, broken.task); n != 2 {
+		t.Fatalf("the dispatched task has %d attempts after a later start, want the crashed one and the refused retry", n)
+	}
+
+	// Any other refusal is deferred and promises nothing more: here the
+	// slot is in flight, nothing begins, and the answer stands for the
+	// relaunch asked once it settles.
+	busy := newRelaunchSubject(t)
+	busy.restart.sweepCopy = sweepUnsupported
+	if _, err := busy.restart.relaunchTask(ctx, busy.task); !errors.As(err, &unswept) {
+		t.Fatalf("the relaunch with no sweep answered %v, want its hold", err)
+	}
+	settle, err := busy.restart.claimRelaunch(busy.task)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deferred := answer(busy.restart, busy.task)
+	settle(tasks.Isolation{})
+	if deferred.Effect != machine.AnswerRetryDeferred || deferred.Relaunch != nil ||
+		!strings.Contains(deferred.NotRelaunched, errRelaunchInFlight.Error()) {
+		t.Fatalf("a retry while the slot is in flight answered %+v, want %s naming the slot", deferred, machine.AnswerRetryDeferred)
+	}
+	if n := attemptsOf(busy.records, busy.task); n != 1 {
+		t.Fatalf("the deferred retry left %d attempts, want 1", n)
+	}
+	if r, err := busy.restart.relaunchTask(ctx, busy.task); err != nil || r.launch.attempt != 2 {
+		t.Fatalf("the relaunch once the slot settled returned attempt %d (%v), want attempt 2 on the standing answer", r.launch.attempt, err)
 	}
 }
 

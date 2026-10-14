@@ -462,19 +462,30 @@ func HoldPhrase(h store.Hold) Phrase {
 }
 
 // The rows for an answer to a task's hold that did more than close it: a
-// retry that began the work again, one recorded and not acted on yet, one
-// that raised a further decision, and a stop. A hold whose answer acts on nothing further reads as HoldPhrase's
-// answered row.
+// retry that began the work again where it left off, one that began it
+// again in its copy as it stands, one recorded and not acted on yet, one
+// that raised a further decision, one the check that keeps the work apart
+// refused, and a stop. A hold whose answer acts on nothing further reads as
+// HoldPhrase's answered row. Each row claims only what its effect's doc in
+// wire.go says the mechanism does: the deferred row promises nothing about
+// the next start, because what that start does depends on why the work was
+// not begun now, and the row for a dispatch says nothing
+// about carrying on, because a dispatch gives the worker no note.
 var (
 	phraseRetried = Phrase{
 		Outcome:     "Your answer was taken, and the work was begun again where it left off.",
 		Consequence: "It carries on from what was already done there.",
 		Decision:    "Nothing to decide unless it ends again without finishing, which asks you again.",
 	}
+	phraseRedispatched = Phrase{
+		Outcome:     "Your answer was taken, and the work was begun again in its local copy as that copy stands.",
+		Consequence: "The new worker is told nothing about the earlier attempt or what it may have left there.",
+		Decision:    "Nothing to decide now; run assistant tasks to see how it goes.",
+	}
 	phraseRetryDeferred = Phrase{
 		Outcome:     "Your answer was recorded, and the work could not be begun again just now.",
-		Consequence: "It is begun again the next time the service comes up, if nothing else has moved it by then.",
-		Decision:    "Run assistant service restart to try sooner, or repeat the command with --json to read why.",
+		Consequence: "The service looks at this work again the next time it comes up, and that may or may not begin it.",
+		Decision:    "Repeat the command with --json to read why, and run assistant service restart once that is dealt with.",
 	}
 	phraseRetryHeld = Phrase{
 		Outcome:     "Your answer was recorded, and the work needs one more decision from you before it is begun again.",
@@ -485,6 +496,11 @@ var (
 		Outcome:     "Your answer was recorded, and the work needs one more decision from you before it is begun again.",
 		Consequence: "It has already been begun again as many times as the program does on its own.",
 		Decision:    "Answer the new decision to begin the work again anyway, or to leave it as it is.",
+	}
+	phraseRetryRefused = Phrase{
+		Outcome:     "Your answer was recorded, and the work was not begun again: its local copy did not pass the check that keeps the work apart.",
+		Consequence: "Nothing begins it again on its own.",
+		Decision:    "Repeat the command with --json to read what the check found, then decide whether to start this work afresh or let it go.",
 	}
 	phraseNotRetried = Phrase{
 		Outcome:     "Your answer was recorded, and the work will not be begun again.",
@@ -500,12 +516,16 @@ func TaskAnsweredPhrase(a TaskAnswered) Phrase {
 	switch a.Effect {
 	case AnswerRelaunched:
 		return phraseRetried
+	case AnswerRedispatched:
+		return phraseRedispatched
 	case AnswerRetryDeferred:
 		return phraseRetryDeferred
 	case AnswerRetryHeld:
 		return phraseRetryHeld
 	case AnswerRetryAtBound:
 		return phraseRetryAtBound
+	case AnswerRetryRefused:
+		return phraseRetryRefused
 	case AnswerStopped:
 		return phraseNotRetried
 	}
@@ -643,6 +663,31 @@ func CleanupPhrase(c store.RunCleanup) (Phrase, bool) {
 		return phraseCopyKept, true
 	case c.RemovedAt.IsKnown():
 		return phraseCopyRemoved, true
+	default:
+		return Phrase{}, false
+	}
+}
+
+// The copy sweep row, for the record of the latest sweep of a run's local
+// copy that did not establish the copy clear: the platform has no sweep, the
+// sweep could not be made, or it left something it could not end. A cleared
+// sweep and a run with no copy standing have no row, because nothing a person
+// decides turns on either.
+var phraseCopyNotSwept = Phrase{
+	Outcome:     "Something this run set going may still be at work in its local copy after the run ended.",
+	Consequence: "It could keep using this machine or changing the files left there.",
+	Decision:    "Look at what this machine has going and stop anything left in that copy that should not be.",
+}
+
+// CopySweepPhrase is what a person reads about the latest sweep of a run's
+// local copy, and false for an outcome no row phrases: the one line for a
+// sweep that did not establish the copy clear, whichever of the three ways
+// that happened, because what a person does about each is the same. Which
+// way, and the counts, are the structured rendering's.
+func CopySweepPhrase(w store.RunCopySweep) (Phrase, bool) {
+	switch w.Outcome {
+	case store.SweepUnsupported, store.SweepFailed, store.SweepNotCleared:
+		return phraseCopyNotSwept, true
 	default:
 		return Phrase{}, false
 	}
@@ -1063,7 +1108,7 @@ var PhraseNoReading = Phrase{
 // which is what the vocabulary test walks: the pull guard's three rows, the
 // stop guard's two turn rows, a row per task state, the hold tier's row and
 // NoWordYet, a row per outcome and the three OutcomeExecuting splits into,
-// the three hold rows (open, answered, and open naming a task), the four
+// the three hold rows (open, answered, and open naming a task), the six
 // rows for an answer to a task's hold and the two cleanup rows, the
 // stream's four, the status rows, and the rows for the rest of the command
 // surface: a decision and a fix round's offer, a row per doctor check and
@@ -1097,10 +1142,10 @@ func TablePhrases() []Phrase {
 	out = append(out, phraseRunAdvancing, phraseRunStalled, phraseRunUnrecorded)
 	out = append(out, HoldPhrase(store.Hold{Subject: holdPlaceholder}), HoldPhrase(store.Hold{Subject: holdPlaceholder, Resolution: store.Known("answered")}))
 	out = append(out, HoldPhrase(store.Hold{Subject: holdPlaceholder, TaskID: store.Known("a task")}))
-	out = append(out, phraseRetried, phraseRetryDeferred, phraseRetryHeld, phraseRetryAtBound, phraseNotRetried)
+	out = append(out, phraseRetried, phraseRedispatched, phraseRetryDeferred, phraseRetryHeld, phraseRetryAtBound, phraseRetryRefused, phraseNotRetried)
 	out = append(out, phraseMessageUnread, phraseMessageRead, phraseMessageRefused, phraseMessageUnknown,
 		phraseWorkerStopped, PhraseStopUnverified)
-	out = append(out, phraseCopyKept, phraseCopyRemoved)
+	out = append(out, phraseCopyKept, phraseCopyRemoved, phraseCopyNotSwept)
 	out = append(out, PhraseUpdatesMissed, PhraseServiceStopping, PhraseWorkerSpoke, PhraseActivity, PhraseUnfamiliarUpdate)
 	out = append(out, PhraseServiceUp, PhraseServiceAbsent, PhraseGated, PhraseUngated, PhraseNoRun, PhraseNoRuns, PhraseNoFleetWork)
 	out = append(out, DecisionPhrase(Decision{}), FixRoundPhrase(string(pipeline.OutcomeFixRequested)))
