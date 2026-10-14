@@ -2,6 +2,7 @@ package findings
 
 import (
 	"encoding/json"
+	"fmt"
 	"strconv"
 	"strings"
 )
@@ -64,7 +65,10 @@ func (l Location) Empty() bool { return l.Path == "" && l.Line == 0 }
 // leaves Path empty.
 //
 // A value that is neither an object, nor a string, nor null is refused, because
-// that shape says nothing readable at all.
+// that shape says nothing readable at all. The refusal names the field itself
+// rather than leaving that to the decoder's message, whose wording is the
+// standard library's and has stopped carrying the field path in a later Go
+// release.
 func (l *Location) UnmarshalJSON(b []byte) error {
 	trimmed := strings.TrimSpace(string(b))
 	if trimmed == "null" {
@@ -85,8 +89,11 @@ func (l *Location) UnmarshalJSON(b []byte) error {
 		Path json.RawMessage `json:"path"`
 		Line json.RawMessage `json:"line"`
 	}
+	if !strings.HasPrefix(trimmed, "{") {
+		return fmt.Errorf("location: want an object, a string or null, got %.40s", trimmed)
+	}
 	if err := json.Unmarshal(b, &obj); err != nil {
-		return err
+		return fmt.Errorf("location: %w", err)
 	}
 	var read Location
 	var path string
