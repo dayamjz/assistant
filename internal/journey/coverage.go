@@ -187,7 +187,8 @@ func Coverage() []Established {
 				"no local socket peer credentials both are skipped rather than passing, and the two " +
 				"package-reach observations are the whole of what is established there. The kill path " +
 				"at recovery is held at package reach and not through this harness, because no walk " +
-				"here reaches an agent stage: internal/agents ends a group only after verifying its " +
+				"here kills a service while an agent it launched is running, since the kills here land at " +
+				"stage boundaries: internal/agents ends a group only after verifying its " +
 				"leader's recorded identity and leaves a reused identifier and an identity with no start " +
 				"time alone, and internal/service's recovery leaves a reused identifier, a record with no " +
 				"identity, and an active run's group running and reports each, while a service killed " +

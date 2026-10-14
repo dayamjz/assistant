@@ -228,10 +228,10 @@ func Open(opts Options) (*Journey, error) {
 // whitespace: internal/config walks the words to find a reserved flag, and
 // internal/agents takes the first as the agent's name and the rest as its
 // arguments. So an element carrying a space arrives as two arguments and an
-// empty one arrives as none, and in this build no run carries a stage body
-// through an agent launch, which means neither would produce a symptom. Refusing is
-// what keeps that from being a silently truncated path on a machine whose
-// temporary directory happens to have a space in it.
+// empty one arrives as none, so the agent a walk launches would be handed
+// arguments other than the ones written here. Refusing is what keeps that from
+// being a silently truncated path on a machine whose temporary directory happens
+// to have a space in it.
 func oneWordEach(arguments []string) error {
 	for i, argument := range arguments {
 		if argument == "" {
