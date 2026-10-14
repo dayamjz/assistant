@@ -553,7 +553,11 @@ func exitFor(answer any) machine.Code {
 			return machine.ExitFailure
 		}
 	case machine.Plan:
-		if !v.Applied {
+		// A plan that stops the person - refused, or a branch section 11
+		// blocks - is a failure a caller has to see without reading the
+		// document. A plan printed for confirmation, a branch the pipeline
+		// holds and one with nothing to do are each what was asked for.
+		if v.Blocked() {
 			return machine.ExitFailure
 		}
 	case machine.HostStop:

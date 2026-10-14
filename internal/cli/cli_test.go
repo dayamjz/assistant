@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/config"
+	"github.com/dayamjz/assistant/internal/custody"
 	"github.com/dayamjz/assistant/internal/gate"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/pipeline"
@@ -402,27 +403,46 @@ func TestDoctorReportsTheCodeHostAndDoesNotBlockOnIt(t *testing.T) {
 	}
 }
 
-// sync is present and refuses, because the module that owns reconciling a
-// local branch does not exist. A verb that is absent leaves a caller guessing
-// whether it was ever specified.
-func TestSyncRefusesAndSaysWhatIsMissing(t *testing.T) {
-	t.Parallel()
+// sync acts on a person's branch through the service, which holds the home,
+// so with no service it fails saying so and nothing is changed. With one, a
+// branch no run has checked is classified as a refusal the person can read:
+// the structured answer carries custody's reason and its sentence, the human
+// one the phrase-table row and nothing else, and the exit code says the
+// person was stopped.
+func TestSyncAsksTheServiceAndReportsWhatCustodyFound(t *testing.T) {
+	requiresIdentifiedPeer(t)
 	h := newHome(t)
 	subject := newSubject(t)
 
+	down := run(t, h, subject, "--json", "sync")
+	var failure machine.Failure
+	if down.code != machine.ExitFailure || json.Unmarshal([]byte(down.stdout), &failure) != nil ||
+		!strings.Contains(failure.Error, "the background service is not running") {
+		t.Fatalf("sync with no service exited %s with %q, want a failure saying the service is not running", down.code, down.stdout)
+	}
+
+	serve(t, h)
+	if got := run(t, h, subject, "init"); got.code != machine.ExitOK {
+		t.Fatalf("assistant init exited %s:\n%s%s", got.code, got.stdout, got.stderr)
+	}
 	got := run(t, h, subject, "--json", "sync")
 	if got.code != machine.ExitFailure {
-		t.Fatalf("sync exited %s, want failure", got.code)
+		t.Fatalf("sync of a branch no run checked exited %s, want failure", got.code)
 	}
 	var plan machine.Plan
 	if err := json.Unmarshal([]byte(got.stdout), &plan); err != nil {
 		t.Fatalf("sync does not decode: %v\n%s", err, got.stdout)
 	}
-	if plan.Applied {
-		t.Fatal("sync reports that it changed something")
+	if plan.Applied || plan.Refusal != custody.ReasonNoRun || plan.Detail == "" || len(plan.Steps) != 0 {
+		t.Fatalf("sync of a branch no run checked answered %+v", plan)
 	}
-	if plan.Detail == "" {
-		t.Fatal("sync changed nothing and does not say why")
+	human := run(t, h, subject, "sync")
+	if want := machine.PlanPhrase(plan).String(); strings.TrimSpace(human.stdout) != want {
+		t.Fatalf("sync printed %q, want the row %q", human.stdout, want)
+	}
+	confirmed := run(t, h, subject, "--json", "sync", "--confirm")
+	if err := json.Unmarshal([]byte(confirmed.stdout), &plan); err != nil || plan.Applied || plan.Refusal != custody.ReasonNoRun {
+		t.Fatalf("a confirmed sync of a branch no run checked answered %+v (%v)", plan, err)
 	}
 }
 

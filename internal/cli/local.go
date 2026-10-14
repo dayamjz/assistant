@@ -9,6 +9,7 @@ import (
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/forge"
 	"github.com/dayamjz/assistant/internal/gate"
+	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/redact"
@@ -191,21 +192,35 @@ func ejectPlan(gateID, working string) error {
 }
 
 // syncBranch reconciles the local branch with what the pipeline pushed, or
-// recovers work it holds.
+// recovers work it holds: PRD section 11's custody, which section 9 has print
+// the exact plan and require confirmation.
 //
-// It refuses, because the module that owns that reconciliation does not exist.
-// PRD section 8 gives custody the classify, synchronize and recover operations
-// and calls it the only sanctioned mutation path, so a command that moved a
-// local branch from here would be a second one. The verb is present and says
-// what is missing rather than being absent and leaving a caller to guess
-// whether it was ever specified.
-func syncBranch(_ context.Context, in *invocation) (any, error) {
-	if err := in.parseFlags("sync", func(*flag.FlagSet) {}); err != nil {
+// It acts on a run's work, so it calls the service, which holds the home and
+// serves internal/custody's classification and steps; nothing here reads a
+// run or moves a branch. Without --confirm the answer is the plan and nothing
+// is written anywhere; with it, the same classification is made again in the
+// service and its steps are carried out, each anchored on the run's own
+// observation of the branch rather than on anything read for this command.
+// A service that is not running is reported as the failure it is, because
+// the branch's custody is the service's and a second path to it here would
+// be the second mutation path section 8 forbids.
+func syncBranch(ctx context.Context, in *invocation) (any, error) {
+	var confirm bool
+	if err := in.parseFlags("sync", func(set *flag.FlagSet) {
+		set.BoolVar(&confirm, "confirm", false, "carry the plan out rather than printing it")
+	}); err != nil {
 		return nil, err
 	}
-	return machine.Plan{
-		Detail: "reconciling a local branch with what the pipeline pushed is the custody module's, which this build does not have. Nothing was changed.",
-	}, nil
+	working, err := in.workingCopy(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var plan machine.Plan
+	err = in.callService(ctx, ipc.MethodBranchSync, machine.SyncRequest{
+		Working: machine.Working{WorkingPath: working},
+		Confirm: confirm,
+	}, &plan)
+	return plan, err
 }
 
 // doctor checks every dependency and decides whether a run can start at all.

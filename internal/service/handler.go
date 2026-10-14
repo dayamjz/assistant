@@ -31,8 +31,8 @@ import (
 // one question a handler asks of a caller is the other relation,
 // whether it is a task's worker, and workers.go derives that from the same
 // credentials for the methods whose answer depends on it: the five there,
-// coordinator.go's three, steer.go's three, taskholds.go's task.respond and
-// catchup.go's catchup.mark.
+// coordinator.go's three, steer.go's three, taskholds.go's task.respond,
+// catchup.go's catchup.mark and custody.go's branch.sync.
 func (s *Service) handle(ctx context.Context, req ipc.Request) (json.RawMessage, error) {
 	switch req.Method {
 	case ipc.MethodHealth:
@@ -56,6 +56,10 @@ func (s *Service) handle(ctx context.Context, req ipc.Request) (json.RawMessage,
 		return call(ctx, req, s.respond)
 	case ipc.MethodRunCancel:
 		return call(ctx, req, s.cancel)
+	case ipc.MethodBranchSync:
+		return call(ctx, req, func(ctx context.Context, r machine.SyncRequest) (machine.Plan, error) {
+			return s.syncBranch(ctx, req, r)
+		})
 	case ipc.MethodGateAdmit:
 		return call(ctx, req, func(ctx context.Context, r machine.GateRequest) (machine.Admission, error) {
 			return s.admit(ctx, req, r)
@@ -175,7 +179,9 @@ func answer(v any) (json.RawMessage, error) {
 //
 // Every part it cannot report carries its own detail rather than failing the
 // whole answer: a working copy with no gate is a legitimate thing to ask about
-// and is exactly the state assistant init exists to change.
+// and is exactly the state assistant init exists to change. The local branch
+// state includes PRD section 11's classification, through custodyStatus,
+// which fetches nothing and writes nothing in the working copy.
 func (s *Service) status(ctx context.Context, req machine.StatusRequest) (machine.Status, error) {
 	build := s.build
 	out := machine.Status{
@@ -209,6 +215,7 @@ func (s *Service) status(ctx context.Context, req machine.StatusRequest) (machin
 		return machine.Status{}, err
 	}
 	if !found {
+		out.Custody = s.custodyStatus(ctx, repository)
 		return out, nil
 	}
 	if _, err := s.reconcile(ctx, active.ID); err != nil {
@@ -219,6 +226,7 @@ func (s *Service) status(ctx context.Context, req machine.StatusRequest) (machin
 		return machine.Status{}, err
 	}
 	out.ActiveRun = &view
+	out.Custody = s.custodyStatus(ctx, repository)
 	return out, nil
 }
 

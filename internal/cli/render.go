@@ -168,7 +168,7 @@ func writePointed(w io.Writer, row rendering, value any) {
 // answer's type through it, and Renderings reads it out, so a renderer added
 // here is enumerated and one added anywhere else is not reached.
 //
-// Every row but four is phrased: what it prints is a phrase from
+// Every row but three is phrased: what it prints is a phrase from
 // internal/machine's table, or one beside a word that is the person's own -
 // a branch name, a project, a reference a change carried, the repository's
 // default branch - or an agent's, escaped. The stop guard's answer is phrased
@@ -183,8 +183,8 @@ func writePointed(w io.Writer, row rendering, value any) {
 // it holds it. readOutHostInstall prints each on a line of its own after a
 // label, so the row is never mixed with them.
 //
-// The four that are not phrased are named, so that the claim about the rest
-// is bounded by an enumeration. Three are evidence documents, which P13
+// The three that are not phrased are named, so that the claim about the
+// rest is bounded by an enumeration. They are evidence documents, which P13
 // names as the exception to its rule and PRD section 9 names as these three:
 //
 //   - details is the detail view's evidence for a run: where its execution
@@ -218,16 +218,10 @@ func writePointed(w io.Writer, row rendering, value any) {
 // service closed the decision ahead of - is a status line rather than
 // evidence, so readOutRun prints it as a phrased row and not in details.
 //
-// The fourth is the one whose wording is not settled:
-//
-//   - plan prints the steps of a reconciliation, which PRD section 9 has
-//     assistant sync print exactly, and then the plan's detail. The custody
-//     module that would produce those steps does not exist in this build, so
-//     the one Plan this build makes is syncBranch's, which has no steps and
-//     whose detail is a sentence of this build's saying that module is
-//     missing; this row prints that sentence as written, and it is not a row
-//     of the phrase table. The row stays unsettled until that module exists,
-//     because the steps are what its wording would have to be settled for.
+// A plan is phrased: the row for what custody found or did, then for a plan
+// not yet carried out a row per step, each from internal/machine's table.
+// The commits, references and the run a plan names are the structured
+// rendering's, which the rows that need one point at.
 var renderings = []rendering{
 	{name: "status", voice: VoicePhrased, of: typeOf[machine.Status](), render: func(w io.Writer, v any) { readOutStatus(w, v.(machine.Status)) }},
 	{name: "run", voice: VoicePhrased, of: typeOf[machine.Run](), render: func(w io.Writer, v any) { readOutRun(w, v.(machine.Run)) }},
@@ -244,7 +238,7 @@ var renderings = []rendering{
 	{name: "doctor", voice: VoicePhrased, of: typeOf[machine.Doctor](), render: func(w io.Writer, v any) { readOutDoctor(w, v.(machine.Doctor)) }},
 	{name: "lifecycle", voice: VoicePhrased, of: typeOf[machine.Lifecycle](), render: func(w io.Writer, v any) { readOutLifecycle(w, v.(machine.Lifecycle)) }},
 	{name: "init", voice: VoicePhrased, of: typeOf[machine.Init](), render: func(w io.Writer, v any) { readOutInit(w, v.(machine.Init)) }},
-	{name: "plan", voice: VoiceUnsettled, of: typeOf[machine.Plan](), render: func(w io.Writer, v any) { readOutPlan(w, v.(machine.Plan)) }},
+	{name: "plan", voice: VoicePhrased, of: typeOf[machine.Plan](), render: func(w io.Writer, v any) { readOutPlan(w, v.(machine.Plan)) }},
 	{name: "eject", voice: VoicePhrased, of: typeOf[machine.Eject](), render: func(w io.Writer, v any) { writeln(w, machine.EjectPhrase(v.(machine.Eject))) }},
 	{name: "health", voice: VoicePhrased, of: typeOf[machine.Health](), render: func(w io.Writer, v any) { writeln(w, machine.HealthPhrase(v.(machine.Health))) }},
 	{name: "admission", voice: VoicePhrased, of: typeOf[machine.Admission](), render: func(w io.Writer, v any) { readOutAdmission(w, v.(machine.Admission)) }},
@@ -286,8 +280,9 @@ var (
 
 func typeOf[T any]() reflect.Type { return reflect.TypeOf((*T)(nil)).Elem() }
 
-// readOutStatus prints PRD section 9's status - service, gate, branch and
-// active run - each through the phrase table. What it does not print is in
+// readOutStatus prints PRD section 9's status - service, gate, branch, the
+// branch's custody classification and active run - each through the phrase
+// table. What it does not print is in
 // the structured rendering: the home root, the socket, the repository's
 // identifier and upstream, the gate's identifier and the head commit are
 // mechanics, and a person who needs one to act reads --json. A working copy
@@ -303,6 +298,11 @@ func readOutStatus(w io.Writer, s machine.Status) {
 	}
 	if s.Branch != nil && s.Branch.Name != "" {
 		writef(w, "Branch     %s\n", printable(s.Branch.Name))
+	}
+	if s.Custody != nil {
+		if phrase, ok := machine.CustodyPhrase(*s.Custody); ok {
+			writeln(w, phrase)
+		}
 	}
 	readOutSupervision(w, s.Supervision)
 	if s.Repository == nil {
@@ -619,14 +619,20 @@ func readOutInit(w io.Writer, answer machine.Init) {
 	}
 }
 
-// readOutPlan prints a plan's steps and why nothing was done. It is not
-// phrased; the renderings table says why.
+// readOutPlan prints what custody found or did for the branch, beside the
+// branch's name, which is the person's own, and for a plan not yet carried
+// out each step it would take, all through the phrase table. The commits and
+// references the steps name are the structured rendering's.
 func readOutPlan(w io.Writer, plan machine.Plan) {
-	for _, step := range plan.Steps {
-		writef(w, "  %s\n", step)
+	writeln(w, machine.PlanPhrase(plan))
+	if plan.Classification != nil && plan.Classification.Branch != "" {
+		writef(w, "Branch     %s\n", printable(plan.Classification.Branch))
 	}
-	if plan.Detail != "" {
-		writeln(w, plan.Detail)
+	if plan.Applied || plan.Refusal != "" {
+		return
+	}
+	for _, step := range plan.Steps {
+		writef(w, "  %s\n", machine.StepPhrase(step))
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/dayamjz/assistant/internal/custody"
 	"github.com/dayamjz/assistant/internal/findings"
 	"github.com/dayamjz/assistant/internal/graph"
 	"github.com/dayamjz/assistant/internal/pipeline"
@@ -120,6 +121,11 @@ type Status struct {
 	Branch *Branch `json:"branch,omitempty"`
 	// ActiveRun is the run this branch has in flight, absent when it has none.
 	ActiveRun *Run `json:"active_run,omitempty"`
+	// Custody is PRD section 11's classification of the branch, read
+	// without fetching and without mutating anything, absent when the
+	// branch was not classified because there is no repository record or
+	// no branch.
+	Custody *Custody `json:"custody,omitempty"`
 	// Supervision is the pull guard's finding, which a status computes from
 	// the home's files and lock even when the service is down, because
 	// reporting that the service is down is this command's job. It is absent
@@ -790,18 +796,51 @@ type Doctor struct {
 	Detail string `json:"detail,omitempty"`
 }
 
-// Plan is what a command that changes the working copy will do, printed before
-// it does any of it.
+// Plan is what assistant sync answers: PRD section 11's classification of
+// the branch, the exact steps it allows, and whether they were carried out.
 //
 // PRD section 9 makes assistant sync print the exact plan and require
 // confirmation, which is what this is for: the plan is produced, shown, and
-// only then carried out.
+// only then carried out, by the same command given --confirm. Every step
+// and the classification are internal/custody's own values, carried as they
+// are, so this shape is not a second owner of either.
 type Plan struct {
-	// Steps are what would happen, in order.
-	Steps []string `json:"steps"`
-	// Applied is whether they were carried out, which is false for a plan that
-	// was printed and not confirmed.
+	// Classification is the branch's class and the commits it was decided
+	// on, absent when the branch could not be classified.
+	Classification *custody.Classification `json:"classification,omitempty"`
+	// Steps are what synchronizing does, in order, exactly as
+	// internal/custody carries them out. A class that allows nothing has
+	// none.
+	Steps []custody.Step `json:"steps"`
+	// Applied is whether the steps were carried out, which is false for a
+	// plan that was printed and not confirmed, and for one refused.
 	Applied bool `json:"applied"`
-	// Detail says why nothing was done, and is empty when something was.
+	// Done is the steps carried out, which on a refusal partway is what was
+	// done before it.
+	Done []custody.Step `json:"done,omitempty"`
+	// Refusal is why custody refused to classify the branch or to carry the
+	// plan out, empty when it did neither.
+	Refusal custody.Reason `json:"refusal,omitempty"`
+	// Detail says what happened or why nothing did, in custody's own
+	// sentence.
+	Detail string `json:"detail,omitempty"`
+}
+
+// Blocked reports a plan that stops the person: one refused, or a branch
+// section 11 blocks as genuinely diverged. A plan waiting on confirmation, a
+// branch the pipeline holds, and one with nothing to do are not blocked.
+func (p Plan) Blocked() bool {
+	return p.Refusal != "" || (p.Classification != nil && p.Classification.Class == custody.ClassDiverged)
+}
+
+// Custody is the classification assistant status reports for the branch,
+// read without fetching and without writing anything in the working copy:
+// the class, or why it could not be read.
+type Custody struct {
+	// Classification is the branch's class, absent when it was refused.
+	Classification *custody.Classification `json:"classification,omitempty"`
+	// Refusal is why the branch could not be classified.
+	Refusal custody.Reason `json:"refusal,omitempty"`
+	// Detail is custody's sentence for either.
 	Detail string `json:"detail,omitempty"`
 }

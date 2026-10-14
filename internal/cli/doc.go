@@ -262,21 +262,19 @@
 // failure code, so a type added without a renderer fails loudly rather than
 // reaching a person as a Go value.
 //
-// The four that are not phrased are named in the renderings table, each
-// with its voice. Three are evidence: a run's details, the findings holding
-// a decision and the usage view are the detail view, the relay of a finding
-// that needs a decision and the usage view, the three detailed evidence
-// documents PRD section 9 names, which P13 lets keep exact identifiers and
-// stage names. Each row carries the phrase-table row that points a person
-// at it, and writeEvidence, which the run renderer reaches the first two
-// through, and writePointed, which readOut reaches the usage view through,
-// write that row first, so the message pointing at the evidence is phrased
-// like every other line; what a run says about a request it did not apply
-// is a status line and is a row beside the evidence rather than part of it.
-// The fourth, a plan, is
-// unsettled: the custody module that would write a plan's steps does not
-// exist in this build, and the one plan it makes is assistant sync's refusal,
-// whose sentence the renderer prints as this build wrote it.
+// The three that are not phrased are named in the renderings table, each
+// with its voice, and all three are evidence: a run's details, the findings
+// holding a decision and the usage view are the detail view, the relay of a
+// finding that needs a decision and the usage view, the three detailed
+// evidence documents PRD section 9 names, which P13 lets keep exact
+// identifiers and stage names. Each row carries the phrase-table row that
+// points a person at it, and writeEvidence, which the run renderer reaches
+// the first two through, and writePointed, which readOut reaches the usage
+// view through, write that row first, so the message pointing at the
+// evidence is phrased like every other line; what a run says about a request
+// it did not apply is a status line and is a row beside the evidence rather
+// than part of it. A plan, which was the last unsettled row, is phrased:
+// internal/custody's classes, refusals and steps each have a row.
 //
 // The refusal and usage text written on standard error is outside the table
 // too, and is not held to P13 by any test: a failure's sentence is composed
