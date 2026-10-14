@@ -59,7 +59,11 @@ func watch(ctx context.Context, in *invocation) (any, error) {
 // report writes one thing the fleet view saw, in whichever rendering this
 // invocation asked for. It writes as it goes rather than collecting an answer,
 // because a view that only printed once the stream ended would be a log rather
-// than a view.
+// than a view. An event the human rendering has no reading for is refused on
+// standard error and the view carries on, because one update it cannot
+// describe is no reason to stop showing the rest; the stream's own types all
+// have a reading, so this is the refusal readOut makes and not a path an event
+// takes today.
 func (in *invocation) report(v any) {
 	if in.json {
 		if err := machine.NewEncoder(in.env.Stdout).Encode(v); err != nil {
@@ -67,7 +71,9 @@ func (in *invocation) report(v any) {
 		}
 		return
 	}
-	readOut(in.env.Stdout, v)
+	if err := readOut(in.env.Stdout, v); err != nil {
+		in.progressf("%v", err)
+	}
 }
 
 // eventLine renders one event for a person, through internal/machine's
