@@ -64,7 +64,8 @@
 // from internal/taskstate's hold tier is the row saying the work waits on
 // the person's answer given with --task and --answer; a row per
 // Outcome, with OutcomeExecuting split three ways on the facts NextActionOf
-// reads, through RunPhrase and Run.Phrase; the hold rows, an open one naming
+// reads and OutcomeFailed split by the bound a run's record says parked it,
+// one row per store.ParkBound, through RunPhrase and Run.Phrase; the hold rows, an open one naming
 // a task saying the same command; a row per AnswerEffect that does more than
 // close a task's hold, through TaskAnsweredPhrase, each claiming only what
 // that effect's doc says the mechanism does; the kept and
@@ -89,7 +90,10 @@
 // action a driving agent reads stays on Run.NextAction, in that agent's
 // terms; the two are written for different readers and are not held equal.
 // RecordPhrase reads a record alone and says which two readings it cannot
-// make.
+// make. A park is not one of them once the record names it: the record is
+// where the bound that ended a run is written, so a listing reads a parked
+// run as its bound the way a run's whole answer does, and ParkAction is the
+// driving agent's reading of the same record.
 //
 // Blocking calls and relaying verbatim are not shapes, so they are not here.
 // A call blocks because the service advances the run before it answers, and a
