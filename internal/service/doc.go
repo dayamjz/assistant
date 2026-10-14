@@ -230,12 +230,14 @@
 // be starting work the service is giving up.
 //
 // No status is written over such a run, and that is deliberate rather than
-// unfinished. Its record is not wrong - the run is unfinished - and the two
-// statuses that would end it are answers to different questions:
-// internal/runs' Fail is a verdict on the change rather than a failure of the
-// service, and Terminate is what a cancellation or a supersession leaves. A
-// run standing at a resumable position is neither, and ending it would discard
-// work its checkpoint history still holds, which P6 forbids.
+// unfinished. Its record is not wrong - the run is unfinished - and the moves
+// that would end it are answers to different questions: internal/runs' Fail
+// is a verdict on the change rather than a failure of the service, Terminate
+// is what a cancellation or a supersession leaves, and Park is what a spent
+// bound leaves, which settle writes with the bound read off the parking
+// checkpoint and logs by name. A run standing at a resumable position is none
+// of them, and ending it would discard work its checkpoint history still
+// holds, which P6 forbids.
 //
 // # The record and the execution disagreeing, in both directions
 //
@@ -536,7 +538,12 @@
 // the service's own task reader resolved it, so a copy whose worker is
 // still running is kept with the live refusal and one whose worker is gone
 // is examined on the proof, and cleanup.go owns the three sites and the
-// window after the read. No verb or protocol method calls any of it.
+// window after the read. A landed task's worker this service holds is
+// ended first, and the decision is asked again when its terminal is next
+// observed Dead, from the supervisor's pass and from task.stop, which
+// registers no relaunch hold for a task in the terminal tier; landed.go owns
+// that, its cadence and its gaps. No verb or protocol method calls the
+// decision except through that stop.
 //
 // # The supervisor loop is here, and supervise.go owns it
 //

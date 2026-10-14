@@ -4,6 +4,7 @@ import (
 	"strconv"
 
 	"github.com/dayamjz/assistant/internal/config"
+	"github.com/dayamjz/assistant/internal/graph"
 )
 
 // Stage is one of the nine stages of the delivery gate. The set is closed and
@@ -58,6 +59,11 @@ type stageSpec struct {
 	// round. The five stages that have one are exactly the five fields
 	// config.FixRounds declares.
 	rounds func(*config.FixRounds) *int
+	// roundsKey is the configuration key that sets the limit rounds locates,
+	// and empty exactly when rounds is nil. It sits in this row beside the
+	// field it names so a stage's limit and the key a person changes it with
+	// cannot come to name different stages.
+	roundsKey config.Key
 	// requestable says a person may ask for a fix round at this stage's hold,
 	// PRD section 5's Fix action. It is exactly the stages before push. A
 	// requested round re-runs its stage and holds again so the person sees the
@@ -71,28 +77,28 @@ type stageSpec struct {
 // stageTable is the pipeline: nine rows, in the fixed order a run takes them.
 var stageTable = []stageSpec{
 	{StageIntent, "intent",
-		func(s *Stages) *Implementation { return &s.Intent }, nil, true},
+		func(s *Stages) *Implementation { return &s.Intent }, nil, "", true},
 	{StageRebase, "rebase",
 		func(s *Stages) *Implementation { return &s.Rebase },
-		func(r *config.FixRounds) *int { return &r.Rebase }, true},
+		func(r *config.FixRounds) *int { return &r.Rebase }, config.KeyFixRoundsRebase, true},
 	{StageReview, "review",
 		func(s *Stages) *Implementation { return &s.Review },
-		func(r *config.FixRounds) *int { return &r.Review }, true},
+		func(r *config.FixRounds) *int { return &r.Review }, config.KeyFixRoundsReview, true},
 	{StageTest, "test",
 		func(s *Stages) *Implementation { return &s.Test },
-		func(r *config.FixRounds) *int { return &r.Test }, true},
+		func(r *config.FixRounds) *int { return &r.Test }, config.KeyFixRoundsTest, true},
 	{StageDocument, "document",
-		func(s *Stages) *Implementation { return &s.Document }, nil, true},
+		func(s *Stages) *Implementation { return &s.Document }, nil, "", true},
 	{StageLint, "lint",
 		func(s *Stages) *Implementation { return &s.Lint },
-		func(r *config.FixRounds) *int { return &r.Lint }, true},
+		func(r *config.FixRounds) *int { return &r.Lint }, config.KeyFixRoundsLint, true},
 	{StagePush, "push",
-		func(s *Stages) *Implementation { return &s.Push }, nil, false},
+		func(s *Stages) *Implementation { return &s.Push }, nil, "", false},
 	{StagePR, "pr",
-		func(s *Stages) *Implementation { return &s.PR }, nil, false},
+		func(s *Stages) *Implementation { return &s.PR }, nil, "", false},
 	{StageCI, "ci",
 		func(s *Stages) *Implementation { return &s.CI },
-		func(r *config.FixRounds) *int { return &r.Checks }, false},
+		func(r *config.FixRounds) *int { return &r.Checks }, config.KeyFixRoundsChecks, false},
 }
 
 // spec returns the stage's row, and false when s names no stage.
@@ -175,6 +181,43 @@ func (s Stage) FixNode() string { return "fix:" + s.String() }
 // automatic round limit is, because asking for a round is the person's call
 // and not the configuration's.
 func (s Stage) RequestNode() string { return "request:" + s.String() }
+
+// RoundsKey returns the configuration key that sets this stage's automatic
+// fix round limit, and false for a stage that takes no automatic fix round.
+// It is what a person changes when that limit parks a run.
+func (s Stage) RoundsKey() (config.Key, bool) {
+	row, ok := s.spec()
+	if !ok || row.roundsKey == "" {
+		return "", false
+	}
+	return row.roundsKey, true
+}
+
+// StageOfNode returns the stage a graph node belongs to: the stage's own node,
+// its hold, its fixer, or its requested round. It returns false for a node
+// that is no stage's, which is the pipeline's terminal nodes and any name
+// this pipeline does not build.
+func StageOfNode(node string) (Stage, bool) {
+	for _, row := range stageTable {
+		switch node {
+		case row.stage.Node(), row.stage.HoldNode(), row.stage.FixNode(), row.stage.RequestNode():
+			return row.stage, true
+		}
+	}
+	return StageInvalid, false
+}
+
+// ParkedStage returns the stage a park belongs to. For a park on an edge's
+// bound it is the stage the edge leaves, which is the stage whose loop the
+// bound was counting; for a budget park, and for an edge park whose
+// checkpoint recorded no edge, it is the stage the run stands in front of.
+// It returns false when that node is no stage's.
+func ParkedStage(p graph.Park) (Stage, bool) {
+	if p.Edge != nil {
+		return StageOfNode(p.Edge.From)
+	}
+	return StageOfNode(p.Node)
+}
 
 // Requestable reports whether a person may ask for a fix round at this
 // stage's hold, which the stage table answers: the stages before push. A hold

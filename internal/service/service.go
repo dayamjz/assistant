@@ -294,6 +294,11 @@ type Service struct {
 	// head, and a run that recorded no observed head. It is memory and
 	// nothing durable, guarded by mu; mergeread.go owns it.
 	mergeReadsSettled map[string]bool
+	// landedTried holds, per landed task, the session reference whose Dead
+	// terminal the cleanup decision was last asked under, so the supervisor
+	// pass asks once per reference rather than at every interval. It is
+	// memory and nothing durable, guarded by mu; landed.go owns it.
+	landedTried map[string]string
 
 	revision atomic.Uint64
 	// published is the basis of the last task.state this service sent per

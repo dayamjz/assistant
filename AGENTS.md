@@ -771,7 +771,9 @@ Each has cost this repository more than one round of review.
   event, which `store.AcknowledgeMessage` writes with the record in one
   transaction (P8); a stop answers only after the probe reads `Dead` and then
   registers `task/<id>/stopped/<attempt>`, whose `retry` is the one anchored
-  relaunch counted by `relaunch_attempts`; interrupt is refused naming a
+  relaunch counted by `relaunch_attempts`, except for a task resolving in
+  `taskstate`'s terminal tier, which is owed no relaunch and gets no hold;
+  interrupt is refused naming a
   capability no table row declares. Its header owns the gaps.
   `admit_workers.go` owns the rule a worker's push is held to - only its
   task's branch, forward, never a deletion - and why that is admission's
@@ -800,7 +802,11 @@ Each has cost this repository more than one round of review.
   delivery task a merge record landed and for an investigation task whose
   report `storeTaskReport` stored, passing the terminal's liveness as the
   service's own task reader resolved it, never a second read, and no verb
-  or method reaches any of it. Before any of that a finished run's copy is
+  reaches any of it. `landed.go` ends a landed task's worker through the
+  session this service holds and asks the decision again when the terminal
+  is next observed `Dead`, from the supervisor's pass (once per reference
+  per service life) and from `task.stop`; a `Dead` terminal is only the
+  precondition, never the proof. Before any of that a finished run's copy is
   swept: the move that finished the run calls `internal/runs`' `OnFinish`
   with the row it wrote, and `runsweep.go` ends the run's recorded groups and
   asks `agents.Sweeper` of the copy, blocking nothing, and recovery asks the
