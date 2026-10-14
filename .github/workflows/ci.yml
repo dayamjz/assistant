@@ -55,8 +55,32 @@ jobs:
         run: make lint-guard-test
 
       # The race detector is the point of this job, so it is not optional.
+      # Verbose output goes to a file so a skipped test leaves a trace: a
+      # package that skipped its assertions still reads ok, and the step
+      # after this one lists every skip with its message.
       - name: Test
-        run: go test -race -count=1 ./...
+        shell: bash
+        run: |
+          set -o pipefail
+          go test -race -count=1 -v ./... > test.log 2>&1 || status=$?
+          grep -E '^(ok|FAIL|--- FAIL|panic:|\?)[[:space:]]' test.log || true
+          if [ -n "${status:-}" ]; then
+            echo "::group::full test output"
+            cat test.log
+            echo "::endgroup::"
+            exit "$status"
+          fi
+
+      - name: Skipped tests
+        if: always()
+        shell: bash
+        run: |
+          if [ -f test.log ] && grep -q -- '--- SKIP' test.log; then
+            echo "These tests skipped on ${{ matrix.os }}, with the reason each gave:"
+            grep -A3 -- '--- SKIP' test.log
+          else
+            echo "No test skipped on ${{ matrix.os }}."
+          fi
 
   lint:
     name: lint
