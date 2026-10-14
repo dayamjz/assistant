@@ -473,19 +473,19 @@ const (
 func AnswerEffects() []AnswerEffect {
 	return []AnswerEffect{
 		AnswerRecorded, AnswerRelaunched, AnswerRedispatched,
-		AnswerRetryDeferred, AnswerRetryHeld, AnswerRetryRefused, AnswerStopped,
+		AnswerRetryDeferred, AnswerRetryHeld, AnswerRetryAtBound, AnswerRetryRefused, AnswerStopped,
 	}
 }
 
 // RetryNotBegun reports whether the effect is a retry a person decided on
-// that began no work: deferred, held on a further decision, or refused by
-// the isolation assertion. It is what a surface reads to tell a caller that
+// that began no work: deferred, held on a further decision, held at the
+// relaunch bound, or refused by the isolation assertion. It is what a surface reads to tell a caller that
 // the decision was taken and the work did not start, without the caller
 // reading the document. A stop and an answer that only closed a hold asked
 // for no work, and a started retry began some, so neither is reported.
 func (e AnswerEffect) RetryNotBegun() bool {
 	switch e {
-	case AnswerRetryDeferred, AnswerRetryHeld, AnswerRetryRefused:
+	case AnswerRetryDeferred, AnswerRetryHeld, AnswerRetryAtBound, AnswerRetryRefused:
 		return true
 	}
 	return false
