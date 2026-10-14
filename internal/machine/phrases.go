@@ -487,7 +487,7 @@ func HoldPhrase(h store.Hold) Phrase {
 // retry that began the work again where it left off, one that began it
 // again in its copy as it stands, one recorded and not acted on yet, one
 // that raised a further decision, one the check that keeps the work apart
-// refused, and a stop. A hold whose answer acts on nothing further reads as
+// refused, one whose record cannot be used to begin the work, and a stop. A hold whose answer acts on nothing further reads as
 // HoldPhrase's answered row. Each row claims only what its effect's doc in
 // wire.go says the mechanism does: the deferred row promises nothing about
 // the next start, because what that start does depends on why the work was
@@ -524,6 +524,11 @@ var (
 		Consequence: "Nothing begins it again on its own.",
 		Decision:    "Repeat the command with --json to read what the check found, then decide whether to start this work afresh or let it go.",
 	}
+	phraseRetryUndispatchable = Phrase{
+		Outcome:     "Your answer was recorded, and the work was not begun again: what this task was recorded with cannot be used to begin it.",
+		Consequence: "Nothing will begin it until that record is changed.",
+		Decision:    "Repeat the command with --json to read what in the record was refused, then decide whether to put it right or let this work go.",
+	}
 	phraseNotRetried = Phrase{
 		Outcome:     "Your answer was recorded, and the work will not be begun again.",
 		Consequence: "It stays as it was left, and nothing more is done with it.",
@@ -548,6 +553,8 @@ func TaskAnsweredPhrase(a TaskAnswered) Phrase {
 		return phraseRetryAtBound
 	case AnswerRetryRefused:
 		return phraseRetryRefused
+	case AnswerRetryUndispatchable:
+		return phraseRetryUndispatchable
 	case AnswerStopped:
 		return phraseNotRetried
 	case AnswerLanded:
@@ -1289,7 +1296,7 @@ func TablePhrases() []Phrase {
 	out = append(out, phraseRunAdvancing, phraseRunStalled, phraseRunUnrecorded)
 	out = append(out, HoldPhrase(store.Hold{Subject: holdPlaceholder}), HoldPhrase(store.Hold{Subject: holdPlaceholder, Resolution: store.Known("answered")}))
 	out = append(out, HoldPhrase(store.Hold{Subject: holdPlaceholder, TaskID: store.Known("a task")}))
-	out = append(out, phraseRetried, phraseRedispatched, phraseRetryDeferred, phraseRetryHeld, phraseRetryAtBound, phraseRetryRefused, phraseNotRetried, phraseLandedLocallyNow)
+	out = append(out, phraseRetried, phraseRedispatched, phraseRetryDeferred, phraseRetryHeld, phraseRetryAtBound, phraseRetryRefused, phraseRetryUndispatchable, phraseNotRetried, phraseLandedLocallyNow)
 	out = append(out, phraseMessageUnread, phraseMessageRead, phraseMessageRefused, phraseMessageUnknown,
 		phraseWorkerStopped, PhraseStopUnverified)
 	out = append(out, phraseCopyKept, phraseCopyRemoved, phraseCopyNotSwept)

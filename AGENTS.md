@@ -167,7 +167,7 @@ Each has cost this repository more than one round of review.
   only, and refuses `ErrCleanupRecorded` by reading the claim the same way,
   so the two writes have exactly one loser in either order.
   The task row's `mode` column is the launch notation and never the delivery
-  posture: the posture is migration 24's `delivery` column, written once by
+  posture: the posture is the `delivery` column localLandingMigration adds, written once by
   `CreateTask`, and the same migration's `local_landing` is PRD section 8's
   local landing record, written once by `RecordLocalLanding` in the
   transaction that closes the approval hold and sealed like `merge_record`.
