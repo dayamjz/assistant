@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/gate"
 	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/store"
@@ -26,8 +27,9 @@ import (
 //
 // # The flip comes first, and it is one anchored write
 //
-// store.TransitionTaskShape writes the shape, the repository and the branch
-// on the task row together with the "promoted" entry, in one transaction,
+// store.TransitionTaskShape writes the shape, the repository, the branch and
+// the delivery posture on the task row together with the "promoted" entry,
+// in one transaction,
 // anchored to the event sequence the resolution this promotion decided from
 // had read. Delivery protection therefore starts before the copy changes:
 // from the flip on, a cleanup decides over a delivery copy or refuses with
@@ -37,6 +39,27 @@ import (
 // resolved rather than stored, so the anchor is what closes the gap between
 // reading that state and acting on it: a history that moved since, a worker
 // entry or a refusal, is a *store.TaskMovedError the caller reads again on.
+//
+// # The posture is read the way intake reads it
+//
+// A promoted task is a delivery task, and PRD section 6 has the record of
+// its posture, not a later read of the key, decide its path. So promotion
+// records one, on intake's terms (#187): the project's posture is read
+// through the same ProjectPosture, from the trusted copy at a fresh fetch of
+// the default branch, before the branch's exclusion is taken and before
+// anything is written. A copy that cannot be read or parsed refuses the
+// promotion with ErrPostureUnreadable and the task stays an investigation,
+// with no posture assumed in its place, not even gated. The coordinator may
+// ask for a stricter posture than the project's and never a lighter one,
+// which is a *PostureError. The posture is then written in the flip itself,
+// so no reader sees a promoted task without one, and the schema refuses
+// every later write of it.
+//
+// What that leaves: the posture is read before the exclusion and the anchor,
+// so a trusted copy that changes between the read and the flip is not seen,
+// which is intake's window too; and a task promoted before this build
+// carries no posture and is still followed as the gate, because nothing
+// writes one onto a delivery task after its promotion.
 //
 // # The copy is written to after the flip, and asserted on both sides of it
 //
@@ -207,6 +230,12 @@ type Promotion struct {
 	// instructions for the worker. It is refused empty: a delivery with
 	// nothing to do is not one, and the report is not it.
 	Intent string
+	// Delivery is a delivery posture the coordinator asks to record in place
+	// of the project's, as text decoded by config.ParseDelivery, or empty to
+	// record the project's own, on Request.Delivery's terms: it may be
+	// stricter than the project's and never lighter, which is a
+	// *PostureError.
+	Delivery string
 	// Environment is the environment the worker runs under, as
 	// agents.WorkerEnvironment computes it for a launch; the assertion
 	// refuses one vcs.StripRedirecting would change. The worker was
@@ -256,7 +285,11 @@ type Promoted struct {
 // rules, the name, a branch no task has worked on that exists in the gate
 // or has a run (*BranchTakenError), and the floor, a live task on the
 // branch (*BranchHeldError), under which nothing is written. The flip is
-// store.TransitionTaskShape anchored to that read; its refusals,
+// store.TransitionTaskShape anchored to that read, and it records the
+// posture read before it: the project's, from its trusted copy through the
+// queue's ProjectPosture, or the request's when that is no lighter. A copy
+// that cannot be read refuses with ErrPostureUnreadable and a lighter request
+// with a *PostureError, and under either nothing is written. Its refusals,
 // *store.TaskMovedError, store.ErrTaskShapeMoved and
 // store.ErrCleanupRecorded, come back as they are. The exclusion is given
 // back after the flip, before the copy is touched.
@@ -288,9 +321,20 @@ func (q *Queue) Promote(ctx context.Context, req Promotion) (Promoted, error) {
 	if strings.TrimSpace(req.Intent) == "" {
 		return Promoted{}, fmt.Errorf("%w: no intent", ErrRequest)
 	}
+	var requested config.Delivery
+	if text := strings.TrimSpace(req.Delivery); text != "" {
+		var err error
+		if requested, err = config.ParseDelivery(text); err != nil {
+			return Promoted{}, fmt.Errorf("%w: %w", ErrRequest, err)
+		}
+	}
 	repository, err := q.store.Repository(ctx, req.Repository)
 	if err != nil {
 		return Promoted{}, fmt.Errorf("tasks: the repository the delivery works in: %w", err)
+	}
+	posture, err := q.recordedPosture(ctx, repository, req.Task, requested)
+	if err != nil {
+		return Promoted{}, err
 	}
 	gatePath, err := q.gatePath(ctx, repository)
 	if err != nil {
@@ -315,7 +359,7 @@ func (q *Queue) Promote(ctx context.Context, req Promotion) (Promoted, error) {
 		if err != nil {
 			return err
 		}
-		detail := fmt.Sprintf("promoted to delivery on %s %s", repository.ID, branch)
+		detail := fmt.Sprintf("promoted to delivery on %s %s under %s", repository.ID, branch, posture)
 		switch report, err := q.store.TaskReport(ctx, req.Task); {
 		case err == nil:
 			out.Report = store.Known(ReportPointer{Task: report.TaskID, RecordedAt: report.RecordedAt})
@@ -329,7 +373,7 @@ func (q *Queue) Promote(ctx context.Context, req Promotion) (Promoted, error) {
 			q.betweenReadAndWrite()
 		}
 		out.Task, out.Event, err = q.store.TransitionTaskShape(ctx, req.Task, store.TaskInvestigation, store.TaskDelivery,
-			repository.ID, branch, r.State.Basis.EventSequence, detail)
+			repository.ID, branch, posture, r.State.Basis.EventSequence, detail)
 		return err
 	}
 	release, err := q.hold(ctx, repository.ID, branch)

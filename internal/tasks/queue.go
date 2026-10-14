@@ -32,10 +32,11 @@ type GatePath func(ctx context.Context, repository store.Repository) (string, er
 // ProjectPosture answers the delivery posture a repository's trusted copy
 // declares, read from its default branch at a freshly fetched commit and
 // resolved with the operator's layer, PRD section 10's delivery key. task is
-// the task being created, which the producer may name what it fetches after.
-// internal/service is the producer, because it is what reads a trusted copy;
-// this package never fetches one. An error is a copy that could not be read
-// or parsed, and Create refuses on it rather than assuming a posture.
+// the task being created or promoted, which the producer may name what it
+// fetches after. internal/service is the producer, because it is what reads
+// a trusted copy; this package never fetches one. An error is a copy that
+// could not be read or parsed, and Create and Promote refuse on it rather
+// than assuming a posture.
 type ProjectPosture func(ctx context.Context, repository store.Repository, task string) (config.Delivery, error)
 
 // Deps is what a Queue is built from. Every field is required.
@@ -56,7 +57,7 @@ type Deps struct {
 	// Promote points a promoted copy's remote at.
 	GatePath GatePath
 	// Posture answers a repository's declared delivery posture, which a
-	// delivery task's intake records.
+	// delivery task's intake and an investigation's promotion record.
 	Posture ProjectPosture
 }
 

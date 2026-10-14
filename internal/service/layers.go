@@ -184,8 +184,9 @@ func (s *Service) trustedLayerAt(ctx context.Context, bare *vcs.Repository, repo
 }
 
 // taskTrustedRef is the name the gate repository holds the default branch's
-// tip under while an intake reads the posture of the task it is creating.
-// It is named for the task, on trustedRef's terms, and deleted once read.
+// tip under while an intake or a promotion reads the posture of the task it
+// is creating or promoting. It is named for the task, on trustedRef's terms,
+// and deleted once read.
 func taskTrustedRef(taskID string) string { return "refs/assistant/trusted/task/" + taskID }
 
 // projectPosture is internal/tasks' ProjectPosture: the delivery posture a
@@ -194,8 +195,8 @@ func taskTrustedRef(taskID string) string { return "refs/assistant/trusted/task/
 // delivery key. It is read on the terms resolveRunConfig reads a run's
 // trusted copy, with no pushed copy, because the posture is trusted-only: a
 // default branch that cannot be fetched and a document that cannot be read
-// or parsed are ErrTrustedConfig, and internal/tasks refuses the intake on
-// it rather than assuming a posture. The reference the fetch landed under is
+// or parsed are ErrTrustedConfig, and internal/tasks refuses the intake or
+// the promotion on it rather than assuming a posture. The reference the fetch landed under is
 // deleted afterwards, best effort; one left behind is overwritten by the
 // next read for the same task and read by nothing.
 func (s *Service) projectPosture(ctx context.Context, repository store.Repository, taskID string) (config.Delivery, error) {

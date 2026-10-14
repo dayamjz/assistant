@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/dayamjz/assistant/internal/config"
 )
 
 // PromotedEventKind is the kind of the event TransitionTaskShape appends in
@@ -22,14 +24,25 @@ const PromotedEventKind = "promoted"
 var ErrShapeTransition = errors.New("store: the only shape transition is investigation to delivery")
 
 // TransitionTaskShape flips a task from one shape to the other and gives it
-// the repository and branch its new shape works on, in one transaction with
-// the event that records the move: the task row's shape, repository_id and
-// branch are written together, and an event of kind PromotedEventKind with
-// the given detail is appended, so a task is never read as a delivery task
-// naming no branch or as an investigation task on one. It returns the task
-// as stored and the event appended. The one move it makes is from
-// TaskInvestigation to TaskDelivery; any other pair is ErrShapeTransition,
-// and an empty repository or branch is refused before anything is read.
+// the repository, the branch and the delivery posture its new shape works
+// under, in one transaction with the event that records the move: the task
+// row's shape, repository_id, branch and delivery are written together, and
+// an event of kind PromotedEventKind with the given detail is appended, so a
+// task is never read as a delivery task naming no branch or as an
+// investigation task on one, and a task promoted through it is never read as
+// a delivery task with no posture. It returns the task as stored and the
+// event appended. The one move it makes is from TaskInvestigation to
+// TaskDelivery; any other pair is ErrShapeTransition, an empty repository or
+// branch is refused before anything is read, and so is a posture outside
+// config.Delivery's closed set, which is ErrUnknownDelivery.
+//
+// The posture is the one write of the delivery column after CreateTask's,
+// and the schema holds it to that: migration 27's trigger refuses an update
+// of the column unless the row had no posture, is given a known one, and
+// moves from investigation to delivery in the same statement. CreateTask
+// records no posture on an investigation task, so the write lands on an
+// empty column; a second write of it is refused, here by the shape check
+// below before the trigger is reached.
 //
 // Three facts are checked in the transaction, on the single writer
 // connection, and nothing is written unless all three hold. The task's shape
@@ -54,7 +67,7 @@ var ErrShapeTransition = errors.New("store: the only shape transition is investi
 // which internal/tasks' Promote answers for, and the store records what it
 // was asked to. Its one writer is that function.
 func (s *Store) TransitionTaskShape(ctx context.Context, id string, from, to TaskShape, repository, branch string,
-	anchor int64, detail string) (Task, TaskEvent, error) {
+	delivery config.Delivery, anchor int64, detail string) (Task, TaskEvent, error) {
 	if strings.TrimSpace(id) == "" {
 		return Task{}, TaskEvent{}, fmt.Errorf("store: a shape transition names no task")
 	}
@@ -66,6 +79,9 @@ func (s *Store) TransitionTaskShape(ctx context.Context, id string, from, to Tas
 	}
 	if strings.TrimSpace(branch) == "" {
 		return Task{}, TaskEvent{}, fmt.Errorf("store: task %s: a delivery task names a branch", id)
+	}
+	if !delivery.Recognized() {
+		return Task{}, TaskEvent{}, fmt.Errorf("store: task %s: %w: %q", id, ErrUnknownDelivery, delivery)
 	}
 
 	now := nowUTC()
@@ -94,8 +110,8 @@ func (s *Store) TransitionTaskShape(ctx context.Context, id string, from, to Tas
 			return &TaskMovedError{Task: id, Anchor: AnchoredEvent, Expected: anchor, Stands: tip}
 		}
 		if _, err := tx.ExecContext(ctx,
-			`UPDATE task SET shape = ?, repository_id = ?, branch = ? WHERE id = ?`,
-			string(to), repository, branch, id); err != nil {
+			`UPDATE task SET shape = ?, repository_id = ?, branch = ?, delivery = ? WHERE id = ?`,
+			string(to), repository, branch, string(delivery), id); err != nil {
 			return err
 		}
 		sequence = tip + 1

@@ -115,8 +115,9 @@
 // branch, the repository and the intent all come from the request, and the
 // stored report is carried only as a pointer to its row, because it is the
 // worker's text and the intent stage reads supplied intent. The order is the
-// protection: store.TransitionTaskShape writes the shape, the repository and
-// the branch together with the "promoted" entry in one transaction, anchored
+// protection: store.TransitionTaskShape writes the shape, the repository,
+// the branch and the delivery posture together with the "promoted" entry in
+// one transaction, anchored
 // to the event sequence the resolution it decided from had read, and only
 // then is the copy written to, given the assistant remote at this home's
 // gate and the task's branch at its current HEAD, and asserted on the
@@ -131,7 +132,11 @@
 // person's, and a branch a live task holds refuses with a *BranchHeldError
 // naming the holder, so the person queues a delivery task behind it through
 // Create rather than promoting onto it, since Task.BlockerTask is written
-// once and a promotion cannot queue a task that is already running.
+// once and a promotion cannot queue a task that is already running. The
+// posture is read on intake's terms, through the same ProjectPosture and the
+// same tighten-only rule, before anything is written: an unreadable trusted
+// copy refuses the promotion with ErrPostureUnreadable rather than leaving a
+// delivery task followed as gated by default.
 //
 // The flip and the cleanup claim exclude each other: RecordTaskCleanup
 // reads the shape in the transaction that claims the record, and

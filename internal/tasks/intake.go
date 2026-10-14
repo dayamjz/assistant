@@ -227,13 +227,14 @@ func (q *Queue) Create(ctx context.Context, req Request) (Created, error) {
 	return Created{Task: created, Cause: cause, BlockerState: blockerState, Instructions: instructions}, nil
 }
 
-// recordedPosture is the posture a delivery task is recorded under: the
-// project's, read through the posture reader, or the coordinator's request
-// when it asked for one no lighter. The project's is read whether or not a
-// request was made, because "never lighter" is a comparison against it and a
-// request cannot stand in for a read that failed: an unreadable trusted copy
-// refuses the intake with ErrPostureUnreadable, and a request no stricter
-// than nothing is not one this can establish.
+// recordedPosture is the posture a delivery task is recorded under, at
+// intake or at promotion, which are its two callers: the project's, read
+// through the posture reader, or the coordinator's request when it asked for
+// one no lighter. The project's is read whether or not a request was made,
+// because "never lighter" is a comparison against it and a request cannot
+// stand in for a read that failed: an unreadable trusted copy refuses with
+// ErrPostureUnreadable, and a request no stricter than nothing is not one
+// this can establish.
 func (q *Queue) recordedPosture(ctx context.Context, repository store.Repository, id string,
 	requested config.Delivery) (config.Delivery, error) {
 	project, err := q.posture(ctx, repository, id)

@@ -96,16 +96,19 @@ func (s *Service) createTask(ctx context.Context, req ipc.Request, r machine.Tas
 }
 
 // promoteTask flips an investigation task to delivery through internal/tasks'
-// promotion, for the coordinator. The environment the copy is asserted under
-// is the one every worker of this service is started with, the same
-// agents.WorkerEnvironment(os.Environ(), nil) assertCopy uses, and never one
-// the caller states.
+// promotion, for the coordinator. The posture the promoted task is recorded
+// under is read by that promotion through projectPosture, the reader intake
+// uses, so a trusted copy this service cannot read refuses it as
+// ipc.ErrUnavailable on refusalOf's terms. The environment the copy is
+// asserted under is the one every worker of this service is started with,
+// the same agents.WorkerEnvironment(os.Environ(), nil) assertCopy uses, and
+// never one the caller states.
 func (s *Service) promoteTask(ctx context.Context, req ipc.Request, r machine.TaskPromoteRequest) (machine.TaskPromoted, error) {
 	if err := s.refuseWorker(req); err != nil {
 		return machine.TaskPromoted{}, err
 	}
 	promoted, err := s.queue.Promote(ctx, tasks.Promotion{
-		Task: r.Task, Repository: r.Repository, Branch: r.Branch, Intent: r.Intent,
+		Task: r.Task, Repository: r.Repository, Branch: r.Branch, Intent: r.Intent, Delivery: r.Delivery,
 		Environment: agents.WorkerEnvironment(os.Environ(), nil),
 	})
 	if err != nil {

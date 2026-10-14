@@ -132,8 +132,8 @@ merge bound to that head, and a refusal from the code host is reported rather
 than worked around.
 
 The one push that starts no run is a delivery task's own, from its worker, when
-the task was recorded at intake under the `local` delivery posture its
-project's trusted `delivery` key declares: the task holds instead, and
+the task was recorded, at intake or at promotion, under the `local` delivery
+posture its project's trusted `delivery` key declares: the task holds instead, and
 answering `approve` fast-forwards your local default branch to the worker's
 commit, anchored to the tip read when the change was offered, without
 validating it and without anything leaving the machine. A person's push to the
