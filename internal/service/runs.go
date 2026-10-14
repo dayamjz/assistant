@@ -835,7 +835,7 @@ func (s *Service) settle(ctx context.Context, runID string, result graph.Result)
 		// A run that ended checks-passed is merged here when its repository
 		// is one autonomy.merge lists; autonomy.go owns the rule and every
 		// refusal, which is reported and never retried around.
-		if facts, ok := autonomyFactsOf(result.State); ok && checksPassed && moved.Status == store.RunPassed {
+		if facts, ok := passedPullRequestOf(result.State); ok && checksPassed && moved.Status == store.RunPassed {
 			if err := s.mergeUnderAutonomy(ctx, built, moved, facts); err != nil {
 				s.log.Printf("%v", err)
 			}

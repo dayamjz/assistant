@@ -47,8 +47,10 @@ const (
 	// beside its passed status, and that pair is what reads as this. Section
 	// 6's autonomy flag gives it a second: a run that ended checks-passed in
 	// a repository autonomy.merge lists, merged by internal/service after its
-	// live read, gains the merge record the read after that merge writes. The
-	// outcome is derived from the record on every read and stored nowhere.
+	// live read, gains the merge record the read after that merge writes; and
+	// a run that ended checks-passed and that a person then merged gains the
+	// same record from internal/service's periodic read of its pull request.
+	// The outcome is derived from the record on every read and stored nowhere.
 	//
 	// It says the run is complete and not that it was newly validated. The
 	// checks were not read to a verdict, and the rule that only a no_ci
@@ -251,8 +253,9 @@ type Standing struct {
 // run that has ended.
 //
 // A completed run is checks-passed rather than passed because nothing here
-// merges: the gate stops at the end, unless internal/service merged it later
-// under the autonomy flag and recorded that read, and PRD section 9 makes that the point at
+// merges: the gate stops at the end, unless a merge internal/service read
+// later, its own under the autonomy flag or a person's, was recorded, and PRD
+// section 9 makes that the point at
 // which a driving agent asks the person. The one passed record that reads as
 // passed is one whose merge record says a merge ended it, which is Standing's
 // PullRequestEnd, read off that record rather than inferred from a checkpoint

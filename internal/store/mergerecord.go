@@ -248,7 +248,8 @@ func scanMergeRecord(sc scanner) (MergeRecord, error) {
 // RecordMergeOfPassedRun writes the merge record of a run that had already
 // passed when its pull request was read as merged: the code-host read that
 // follows a merge the program made under the autonomy flag, PRD section 6,
-// which writes the record "as it does for a merge you made". The run's status
+// which writes the record "as it does for a merge you made", and the read of
+// a merge a person made after the run passed. The run's status
 // does not move, because a run that passed has its verdict; what the record
 // adds is the end the run's passed is then read with, which is why it is a
 // row beside the run and the run row gains nothing.
