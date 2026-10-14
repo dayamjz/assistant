@@ -141,7 +141,7 @@ func TestAFixRoundsCommitIsRecordedAsWhatFollowedItsPaths(t *testing.T) {
 	gitIn := func(args ...string) string {
 		t.Helper()
 		cmd := exec.Command("git", append([]string{"-C", dir, "-c", "user.name=t", "-c", "user.email=t@example.test",
-			"-c", "commit.gpgsign=false"}, args...)...)
+			"-c", "commit.gpgsign=false", "-c", "gc.auto=0", "-c", "maintenance.auto=false"}, args...)...)
 		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
 		out, err := cmd.CombinedOutput()
 		if err != nil {
