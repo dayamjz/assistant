@@ -30,6 +30,17 @@ const sealTaskStateTableMigration = "task attribution and seal the stored task s
 // record, for the reason sealCheckpointTableMigration is a constant.
 const runCopySweepMigration = "run copy sweep records"
 
+// forgetRunRecordsMigration names the migration that lets a run's written-once
+// records go with their run, for the reason sealCheckpointTableMigration is a
+// constant: ForgetRepository's comments name it rather than a version another
+// branch's migration may renumber.
+const forgetRunRecordsMigration = "written-once run records go with their run"
+
+// localLandingMigration names the migration that adds the task's delivery
+// posture and the local landing record, for the reason
+// sealCheckpointTableMigration is a constant.
+const localLandingMigration = "task delivery posture and local landing records"
+
 // invocationServedMigration names the migration that adds the run and stage
 // an agent invocation served, for the reason sealCheckpointTableMigration is
 // a constant.
@@ -1084,6 +1095,101 @@ var schema = []migration{
 	},
 	{
 		version: 24,
+		name:    forgetRunRecordsMigration,
+		statements: []string{
+			// PRD section 9's eject removes a gate and its records, and
+			// ForgetRepository is that removal for the store. Two of a run's
+			// records were sealed against any deletion: the merge record
+			// (migration 13) and the run cleanup record (migration 18). Their
+			// seals exist so that no write makes a row say other than what the
+			// read or the cleanup decision saw, and PRD section 8's
+			// "appended" is rows added and never edited; neither the PRD nor
+			// either seal says such a row outlives its run. A seal against
+			// every deletion made a repository with a merged or cleaned-up
+			// run one that could not be forgotten at all, and the eject that
+			// met one failed on the trigger partway rather than refusing.
+			//
+			// So the delete seal is narrowed to "while its run stands": a
+			// row is still refused deletion for as long as the run row it
+			// describes is there, which is every deletion that would leave a
+			// run disagreeing with its record, and it may go once the run row
+			// itself is gone, which only ForgetRepository does. The update
+			// seals are untouched. Like every seal here, this does not guard
+			// against a later migration that changes a trigger again, which
+			// is a deliberate act and visible in this list as one.
+			`DROP TRIGGER merge_record_is_not_removed`,
+			`CREATE TRIGGER merge_record_is_not_removed
+				BEFORE DELETE ON merge_record
+				WHEN EXISTS (SELECT 1 FROM run WHERE id = OLD.run)
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a merge record is written once by the read that made it and is not deleted while its run stands');
+				END`,
+			`DROP TRIGGER run_cleanup_is_not_removed`,
+			`CREATE TRIGGER run_cleanup_is_not_removed
+				BEFORE DELETE ON run_cleanup
+				WHEN EXISTS (SELECT 1 FROM run WHERE id = OLD.run)
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a run cleanup record is not deleted while its run stands');
+				END`,
+			// A seen mark of a merge record is keyed by the record's run
+			// (migration 22), and once the record has gone with its run the
+			// mark names nothing, so its delete seal is narrowed on the same
+			// terms: refused while the merge record it marks stands. A mark of
+			// a task's cleanup record keeps the whole seal, because nothing
+			// forgets a task.
+			`DROP TRIGGER seen_mark_is_not_removed`,
+			`CREATE TRIGGER seen_mark_is_not_removed
+				BEFORE DELETE ON seen_mark
+				WHEN OLD.kind <> 'merge' OR EXISTS (SELECT 1 FROM merge_record WHERE run = OLD.key)
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a seen mark is written once by the mark that made it and is not deleted while the record it marks stands');
+				END`,
+		},
+	},
+	{
+		version: 25,
+		name:    localLandingMigration,
+		statements: []string{
+			// PRD section 8's task row names two different things this table
+			// once spelled with one word: the launch notation, which the mode
+			// column migration 1 created has always held, and the delivery
+			// posture, which section 6 has recorded at intake "in a field of
+			// its own". This is that field. It is nullable and without a
+			// default, so a task recorded before it existed, and an
+			// investigation task, which has no posture, both read back
+			// unknown rather than as a fabricated gated. It is written once,
+			// at creation, and nothing here revises it: the record, and not
+			// a later read of the key, decides the task's path.
+			`ALTER TABLE task ADD COLUMN delivery TEXT`,
+			// PRD section 8's local landing record: append-only and written
+			// once, by the approved fast-forward that delivers a local task -
+			// the task, the commit, the local default branch it moved, the
+			// branch's tip before and after, and when. The task's Landed for
+			// a local task is derived from it, in the tier that reads the
+			// merge record, and nothing stores that fact again. One row per
+			// task, sealed on merge_record's terms.
+			`CREATE TABLE local_landing (
+				task        TEXT PRIMARY KEY REFERENCES task(id),
+				commit_id   TEXT NOT NULL,
+				branch      TEXT NOT NULL,
+				before      TEXT NOT NULL,
+				after       TEXT NOT NULL,
+				recorded_at TEXT NOT NULL
+			) STRICT`,
+			`CREATE TRIGGER local_landing_is_written_once
+				BEFORE UPDATE ON local_landing
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a local landing record is written once by the fast-forward that made it and is not updated');
+				END`,
+			`CREATE TRIGGER local_landing_is_not_removed
+				BEFORE DELETE ON local_landing
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a local landing record is written once by the fast-forward that made it and is not deleted');
+				END`,
+		},
+	},
+	{
+		version: 26,
 		name:    invocationServedMigration,
 		statements: []string{
 			// PRD section 8's agent invocation record gained the run and the
@@ -1096,9 +1202,9 @@ var schema = []migration{
 			// before them reads back unknown for both, never as a guess, and
 			// so does a call that served no run or no stage. Neither
 			// references run(id): the history is appended and never
-			// revised, so it keeps the identifier it was handed, on
-			// merge_record's terms, rather than tying a row's survival to a
-			// run record's.
+			// revised, so it keeps the identifier it was handed rather than
+			// a foreign key. ForgetRepository removes a run's rows with the
+			// run, and nothing else removes one.
 			`ALTER TABLE agent_invocation ADD COLUMN run TEXT`,
 			`ALTER TABLE agent_invocation ADD COLUMN stage TEXT`,
 		},

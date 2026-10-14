@@ -138,41 +138,82 @@ func (s *Service) resolveRunConfig(ctx context.Context, record store.Run) (runRe
 }
 
 // trustedLayer fetches the default branch's tip from the upstream and reads
-// the repository document at it. A commit with no document is the valid
-// no-configuration case; everything else that stops the read is a refusal.
+// the repository document at it, for run runID. A commit with no document is
+// the valid no-configuration case; everything else that stops the read is a
+// refusal.
 func (s *Service) trustedLayer(ctx context.Context, bare *vcs.Repository, repository store.Repository,
 	runID string) (config.Layer, string, []byte, error) {
+	return s.trustedLayerAt(ctx, bare, repository, trustedRef(runID), "run "+runID)
+}
+
+// trustedLayerAt is trustedLayer for whoever reads a trusted copy: the fetch
+// lands under ref, which the caller names after what it reads for so two
+// reads cannot overwrite each other's, and every refusal names for.
+func (s *Service) trustedLayerAt(ctx context.Context, bare *vcs.Repository, repository store.Repository,
+	ref, forWhat string) (config.Layer, string, []byte, error) {
 	if repository.DefaultBranch == "" {
 		return config.Layer{}, "", nil, fmt.Errorf(
-			"%w: the repository record of run %s names no default branch to read it from", ErrTrustedConfig, runID)
+			"%w: the repository record of %s names no default branch to read it from", ErrTrustedConfig, forWhat)
 	}
-	ref := trustedRef(runID)
 	if err := fetchIntoGate(ctx, bare, vcs.FetchSpec{
 		Remote:   repository.UpstreamURL,
 		Refspecs: []string{"+refs/heads/" + repository.DefaultBranch + ":" + ref},
 	}); err != nil {
-		return config.Layer{}, "", nil, fmt.Errorf("%w: fetching %s from the upstream for run %s: %w",
-			ErrTrustedConfig, repository.DefaultBranch, runID, err)
+		return config.Layer{}, "", nil, fmt.Errorf("%w: fetching %s from the upstream for %s: %w",
+			ErrTrustedConfig, repository.DefaultBranch, forWhat, err)
 	}
 	at, err := bare.ResolveCommit(ctx, ref)
 	if err != nil {
-		return config.Layer{}, "", nil, fmt.Errorf("%w: resolving the fetched %s for run %s: %w",
-			ErrTrustedConfig, repository.DefaultBranch, runID, err)
+		return config.Layer{}, "", nil, fmt.Errorf("%w: resolving the fetched %s for %s: %w",
+			ErrTrustedConfig, repository.DefaultBranch, forWhat, err)
 	}
 	document, err := bare.FileAt(ctx, at, config.RepositoryDocument)
 	if errors.Is(err, vcs.ErrPathNotFound) {
 		return config.Absent(config.OriginTrusted), at, nil, nil
 	}
 	if err != nil {
-		return config.Layer{}, "", nil, fmt.Errorf("%w: reading %s at %s for run %s: %w",
-			ErrTrustedConfig, config.RepositoryDocument, at, runID, err)
+		return config.Layer{}, "", nil, fmt.Errorf("%w: reading %s at %s for %s: %w",
+			ErrTrustedConfig, config.RepositoryDocument, at, forWhat, err)
 	}
 	layer, err := config.Parse(config.OriginTrusted, document)
 	if err != nil {
-		return config.Layer{}, "", nil, fmt.Errorf("%w: parsing %s at %s for run %s: %w",
-			ErrTrustedConfig, config.RepositoryDocument, at, runID, err)
+		return config.Layer{}, "", nil, fmt.Errorf("%w: parsing %s at %s for %s: %w",
+			ErrTrustedConfig, config.RepositoryDocument, at, forWhat, err)
 	}
 	return layer, at, document, nil
+}
+
+// taskTrustedRef is the name the gate repository holds the default branch's
+// tip under while an intake reads the posture of the task it is creating.
+// It is named for the task, on trustedRef's terms, and deleted once read.
+func taskTrustedRef(taskID string) string { return "refs/assistant/trusted/task/" + taskID }
+
+// projectPosture is internal/tasks' ProjectPosture: the delivery posture a
+// repository declares, read from its trusted copy at a fresh fetch of the
+// default branch and resolved with the operator's layer, PRD section 10's
+// delivery key. It is read on the terms resolveRunConfig reads a run's
+// trusted copy, with no pushed copy, because the posture is trusted-only: a
+// default branch that cannot be fetched and a document that cannot be read
+// or parsed are ErrTrustedConfig, and internal/tasks refuses the intake on
+// it rather than assuming a posture. The reference the fetch landed under is
+// deleted afterwards, best effort; one left behind is overwritten by the
+// next read for the same task and read by nothing.
+func (s *Service) projectPosture(ctx context.Context, repository store.Repository, taskID string) (config.Delivery, error) {
+	bare, err := s.gateRepositoryOf(ctx, repository, "task "+taskID)
+	if err != nil {
+		return "", err
+	}
+	ref := taskTrustedRef(taskID)
+	defer func() { _ = bare.DeleteRef(context.WithoutCancel(ctx), ref) }()
+	trusted, _, _, err := s.trustedLayerAt(ctx, bare, repository, ref, "task "+taskID)
+	if err != nil {
+		return "", err
+	}
+	resolution, err := config.ResolveRun(s.global, trusted, config.Absent(config.OriginPushed))
+	if err != nil {
+		return "", fmt.Errorf("service: resolving the configuration of task %s: %w", taskID, err)
+	}
+	return resolution.Config.Delivery, nil
 }
 
 // pushedLayer reads the repository document as the run's submitted commit

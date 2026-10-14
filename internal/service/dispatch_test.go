@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/gate"
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/principles"
@@ -25,6 +26,14 @@ import (
 // dispatch would race; coordinator_unix_test.go drives task.create itself.
 func recordDispatchedTask(t *testing.T, h *home.Home, repository store.Repository, shape store.TaskShape, branch string) string {
 	t.Helper()
+	return recordDispatchedTaskUnder(t, h, repository, shape, branch, store.Unknown[config.Delivery]())
+}
+
+// recordDispatchedTaskUnder is recordDispatchedTask for a task recorded
+// under a delivery posture, as intake records one.
+func recordDispatchedTaskUnder(t *testing.T, h *home.Home, repository store.Repository, shape store.TaskShape, branch string,
+	posture store.Optional[config.Delivery]) string {
+	t.Helper()
 	id, err := home.NewTaskID()
 	if err != nil {
 		t.Fatal(err)
@@ -35,7 +44,7 @@ func recordDispatchedTask(t *testing.T, h *home.Home, repository store.Repositor
 	}
 	task := store.Task{
 		ID: id, Shape: shape, Project: "one", Mode: "interactive", WorktreePath: copyPath,
-		RepositoryID: store.Known(repository.ID),
+		RepositoryID: store.Known(repository.ID), Delivery: posture,
 	}
 	if branch != "" {
 		task.Branch = store.Known(branch)

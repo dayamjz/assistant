@@ -116,9 +116,10 @@ type TaskRespondRequest struct {
 	Task string `json:"task"`
 	// Answer is what was decided. A relaunch hold, the one the relaunch
 	// bound raised or the one a relaunch with no process sweep raised,
-	// offers exactly AnswerRetry and AnswerStop and refuses anything else; a hold
-	// an investigation's report registered offers no closed set, and the
-	// answer is recorded as given.
+	// offers exactly AnswerRetry and AnswerStop and refuses anything else; a
+	// local task's approval hold offers exactly AnswerApprove and AnswerStop;
+	// a hold an investigation's report registered offers no closed set, and
+	// the answer is recorded as given.
 	Answer string `json:"answer"`
 	// Note is what a retry on a stop's hold tells the relaunched worker,
 	// after the relaunch note and before the text of every message the
@@ -135,7 +136,13 @@ const (
 	// with nothing proving its copy unowned where there is no process sweep.
 	AnswerRetry = "retry"
 	// AnswerStop leaves the task where it stopped; nothing relaunches it.
+	// On a local task's approval hold it declines the change: nothing is
+	// moved and the task stays where it is.
 	AnswerStop = "stop"
+	// AnswerApprove answers a local task's approval hold: the program
+	// fast-forwards the local default branch to the commit the worker
+	// pushed, anchored to the tip it read when it offered the change.
+	AnswerApprove = "approve"
 )
 
 // TaskMessageRequest sends a message to a running task's worker, PRD
@@ -272,6 +279,12 @@ type TaskCreateRequest struct {
 	// Overlaps names a task this one overlaps, or is empty for a claim of
 	// independence.
 	Overlaps string `json:"overlaps,omitempty"`
+	// Delivery is a delivery posture the coordinator asks to record in place
+	// of the project's, "gated" or "local", or empty to record the project's
+	// own. It may be stricter than the project's and never lighter, which
+	// intake refuses (PRD section 6's "tighten, never loosen"). It is
+	// refused on an investigation task, which has no posture.
+	Delivery string `json:"delivery,omitempty"`
 }
 
 // TaskPromoteRequest promotes an investigation task to delivery in place.

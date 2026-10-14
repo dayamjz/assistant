@@ -2,6 +2,7 @@ package cli_test
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -650,6 +651,82 @@ func TestEjectRefusedByAnActiveRunRemovesNothing(t *testing.T) {
 	}
 	if got := run(t, h, subject, "eject", "--confirm"); got.code != machine.ExitOK {
 		t.Fatalf("eject --confirm exited %s once the run was over:\n%s%s", got.code, got.stdout, got.stderr)
+	}
+}
+
+// Eject either removes everything the gate recorded or refuses before it
+// touches anything, and never fails partway (#177). A finished run that has a
+// cleanup record is forgotten with it, whatever else the service recorded about
+// the run meanwhile; a finished run with a process record, an agent group whose
+// end nothing recorded, is refused before the gate is touched, and the same
+// command completes once that record is cleared.
+func TestEjectRemovesEveryRecordOfAFinishedRunOrRefusesFirst(t *testing.T) {
+	requiresIdentifiedPeer(t)
+	h := newHome(t)
+	subject := newSubject(t)
+	serve(t, h)
+
+	created := run(t, h, subject, "--json", "init")
+	if created.code != machine.ExitOK {
+		t.Fatalf("assistant init exited %s:\n%s%s", created.code, created.stdout, created.stderr)
+	}
+	var built machine.Init
+	if err := json.Unmarshal([]byte(created.stdout), &built); err != nil {
+		t.Fatalf("init does not decode: %v\n%s", err, created.stdout)
+	}
+	standingOnChange(t, subject, "a-change")
+	started := run(t, h, subject, "--json", "--intent", "a change held at its first stage")
+	if started.code != machine.ExitOK {
+		t.Fatalf("starting a run exited %s:\n%s", started.code, started.stdout)
+	}
+	id := decodeRun(t, started.stdout).Record.ID
+	if got := run(t, h, subject, "--json", "--cancel"); got.code != machine.ExitOK {
+		t.Fatalf("ending the run exited %s:\n%s", got.code, got.stdout)
+	}
+
+	records := openStore(t, h)
+	defer func() { _ = records.Close() }()
+	ctx := t.Context()
+	// The service may already have recorded its own decision about the copy;
+	// either way the run ends up with a cleanup record, which is the row a
+	// forget used to fail on.
+	if _, err := records.RecordRunCleanupRefusal(ctx, id, "unproven", "kept for the test", nil); err != nil &&
+		!errors.Is(err, store.ErrCleanupRecorded) {
+		t.Fatalf("recording a cleanup refusal: %v", err)
+	}
+	if _, err := records.RunCleanup(ctx, id); err != nil {
+		t.Fatalf("the run has no cleanup record: %v", err)
+	}
+	if _, err := records.RecordProcess(ctx, store.ProcessRecord{RunID: id, Stage: "review", Group: 424242}); err != nil {
+		t.Fatalf("RecordProcess: %v", err)
+	}
+
+	refused := run(t, h, subject, "eject", "--confirm")
+	if refused.code != machine.ExitFailure {
+		t.Fatalf("eject --confirm exited %s over a recorded agent process, want failure:\n%s%s",
+			refused.code, refused.stdout, refused.stderr)
+	}
+	if _, err := os.Stat(built.Gate.Repository); err != nil {
+		t.Fatalf("the refused eject removed the gate at %s: %v", built.Gate.Repository, err)
+	}
+	if _, err := records.Run(ctx, id); err != nil {
+		t.Fatalf("the refused eject removed the run record: %v", err)
+	}
+
+	if err := records.ClearProcess(ctx, id, 424242); err != nil {
+		t.Fatalf("ClearProcess: %v", err)
+	}
+	if got := run(t, h, subject, "eject", "--confirm"); got.code != machine.ExitOK {
+		t.Fatalf("eject --confirm exited %s once the process record was cleared:\n%s%s", got.code, got.stdout, got.stderr)
+	}
+	if _, err := os.Stat(built.Gate.Repository); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the gate at %s survived the eject: %v", built.Gate.Repository, err)
+	}
+	if _, err := records.Run(ctx, id); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("the run record survived the eject: %v", err)
+	}
+	if _, err := records.RunCleanup(ctx, id); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("the run's cleanup record survived the eject: %v", err)
 	}
 }
 

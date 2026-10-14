@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/taskstate"
 )
 
@@ -87,3 +88,32 @@ func (e *OutrankedError) Error() string {
 
 // Unwrap makes every refused release match ErrOutranked.
 func (e *OutrankedError) Unwrap() error { return ErrOutranked }
+
+// ErrPostureUnreadable is the class of an intake refused because the
+// project's delivery posture could not be read from its trusted copy. PRD
+// section 6 delivers nothing when that copy cannot be read and parsed, and
+// assumes no posture in its place, not even gated.
+var ErrPostureUnreadable = errors.New("tasks: the project's delivery posture could not be read from its trusted configuration")
+
+// ErrLighterPosture is the class every *PostureError belongs to.
+var ErrLighterPosture = errors.New("tasks: a task may not be recorded under a lighter delivery posture than its project's")
+
+// PostureError refuses an intake that asked for a delivery posture lighter
+// than the one the project declares. PRD section 6 lets the coordinator
+// record a stricter posture for work it judges risky and never a lighter
+// one, so no agent judgment weakens the path a project declared.
+type PostureError struct {
+	// Requested is the posture the intake asked for.
+	Requested config.Delivery
+	// Project is the posture the project's trusted copy declares.
+	Project config.Delivery
+}
+
+// Error names both postures.
+func (e *PostureError) Error() string {
+	return fmt.Sprintf("tasks: the project's delivery posture is %q and %q is lighter; a task may be recorded under "+
+		"a stricter posture than its project's and never a lighter one", e.Project, e.Requested)
+}
+
+// Unwrap makes every refused posture match ErrLighterPosture.
+func (e *PostureError) Unwrap() error { return ErrLighterPosture }

@@ -170,11 +170,17 @@ func checkUpdates(req machine.GateRequest) error {
 // that started two runs has to read as that rather than as a push that was
 // fully acted on.
 //
+// A branch a local task's own worker pushed starts nothing either: local.go
+// says why, and the update is reported as ignored with the hold it raised
+// for approval in its reason. Who pushed is read from the request's
+// credentials, as admission reads it, and a person's push of any branch
+// starts its run.
+//
 // A deletion also ends nothing. The PRD is silent on what deleting a branch
 // should do to a run of it, so that branch's run keeps advancing and its
 // ignored reason says so and names the command that ends it, rather than
 // leaving an operator reading "nothing to validate" as "nothing outstanding".
-func (s *Service) notify(ctx context.Context, req machine.GateRequest) (machine.Notification, error) {
+func (s *Service) notify(ctx context.Context, from ipc.Request, req machine.GateRequest) (machine.Notification, error) {
 	found, err := s.gateSubject(ctx, req.Gate)
 	if err != nil {
 		return machine.Notification{}, err
@@ -186,6 +192,10 @@ func (s *Service) notify(ctx context.Context, req machine.GateRequest) (machine.
 	for _, update := range req.Updates {
 		if !startsARun(update) {
 			out.Ignored = append(out.Ignored, machine.Ignored{Ref: update.Ref, Reason: ignoredReason(update)})
+			continue
+		}
+		if task, local := s.localPush(ctx, from, update); local {
+			out.Ignored = append(out.Ignored, s.offerLocal(ctx, task, update))
 			continue
 		}
 		started, err := s.startPushedBranch(ctx, found, update.Branch(), update.New)

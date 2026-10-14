@@ -453,8 +453,12 @@ func (c *Cleaner) CleanUp(ctx context.Context, req TaskCopy) (Cleanup, error) {
 		var attempts []ProofAttempt
 		removal, attempts = c.prove(ctx, l)
 		if !removal.proven {
+			detail := "none of the three proofs could be established"
+			if l.local {
+				detail = "the content check against the local default branch could not be established"
+			}
 			return Cleanup{}, &CleanupRefusal{Task: task.ID, Reason: ReasonUnproven,
-				Detail: "none of the three proofs could be established", Attempts: attempts, Examined: work}
+				Detail: detail, Attempts: attempts, Examined: work}
 		}
 	}
 

@@ -61,7 +61,9 @@ func (s *Service) handle(ctx context.Context, req ipc.Request) (json.RawMessage,
 			return s.admit(ctx, req, r)
 		})
 	case ipc.MethodGateNotify:
-		return call(ctx, req, s.notify)
+		return call(ctx, req, func(ctx context.Context, r machine.GateRequest) (machine.Notification, error) {
+			return s.notify(ctx, req, r)
+		})
 	case ipc.MethodStageReport:
 		return call(ctx, req, s.stageReport)
 	case ipc.MethodTasksList:

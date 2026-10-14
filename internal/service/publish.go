@@ -85,7 +85,7 @@ func (s *Service) publishTaskChanges(observed []taskstate.Observed) {
 // compare equal whatever location each carries.
 func sameBasis(a, b taskstate.Basis) bool {
 	return a.RunID == b.RunID && a.RunStatus == b.RunStatus && a.RunUpdatedAt.Equal(b.RunUpdatedAt) &&
-		a.LandedRun == b.LandedRun && a.Hold == b.Hold && a.CleanupRecorded == b.CleanupRecorded && a.CleanupRemoved == b.CleanupRemoved &&
+		a.LandedRun == b.LandedRun && a.LandedLocally == b.LandedLocally && a.Hold == b.Hold && a.CleanupRecorded == b.CleanupRecorded && a.CleanupRemoved == b.CleanupRemoved &&
 		a.EventSequence == b.EventSequence && a.EventKind == b.EventKind && a.Process == b.Process && a.Advancing == b.Advancing
 }
 

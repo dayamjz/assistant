@@ -458,6 +458,7 @@ func TestRepositoryFileStillAcceptsEveryOtherKey(t *testing.T) {
 		KeyRecheckWindow:               `{"recheck_window": "1h"}`,
 		KeyStallInspectionCount:        `{"stall_inspection_count": 2}`,
 		KeyRelaunchAttempts:            `{"relaunch_attempts": 1}`,
+		KeyDelivery:                    `{"delivery": "local"}`,
 	}
 	// Every schema key is covered, so a key added without a decision about its
 	// class fails here rather than going untested.
