@@ -80,11 +80,8 @@ const (
 	// derived rather than chosen, so neither is a second row that could be
 	// set apart from the interval it is a multiple of. The default and both
 	// limits are chosen, not measured. It is not a loop bound: it stops
-	// nothing and parks nothing.
-	//
-	// PRD section 10's schema table and its limits table have no row for
-	// this key or its bounds; that is raised as a finding and not closed
-	// here.
+	// nothing and parks nothing. PRD section 10's keys table has its row and
+	// the limits table its floor and ceiling.
 	KeySupervisionBeaconInterval Key = "supervision_beacon_interval"
 	// KeyEscalationWindow is "escalation_window": how long a terminal may
 	// stay unchanged, with positive evidence of progress, before the
@@ -104,18 +101,17 @@ const (
 	// deeper inspection, PRD section 11's "after enough repetitions". It is
 	// global-only on the same terms as the two windows, and it is a level on
 	// a verdict rather than a bound: internal/supervisor's Stall says it stops
-	// nothing. The default and both limits are chosen, not measured.
-	//
-	// PRD section 10's schema table and its limits table have no row for
-	// this key or its bounds; that is #95 line I and not closed here.
+	// nothing. The default and both limits are chosen, not measured. PRD
+	// section 10's keys table has its row and the limits table its floor and
+	// ceiling, and section 11's repeated-stall row names it.
 	KeyStallInspectionCount Key = "stall_inspection_count"
 	// KeyRelaunchAttempts is "relaunch_attempts": how many times
 	// reconciliation at service start relaunches a task that resolves
 	// Failed with its terminal gone, counted from the task's attempt rows,
-	// before it surfaces the task to a person instead. It is global-only
-	// for the beacon interval's reason: the relaunch is the service's act
-	// on the operator's machine, and a repository has no standing over how
-	// many workers are started on its behalf.
+	// before the task holds for a person instead. It is global-only for the
+	// beacon interval's reason: the relaunch is the service's act on the
+	// operator's machine, and a repository has no standing over how many
+	// workers are started on its behalf.
 	//
 	// It is a task-level bound and not one of internal/graph's three loop
 	// bounds: it stops no run and parks nothing. A loop bound limits how
@@ -123,14 +119,17 @@ const (
 	// it is compared against; this row limits how many attempts of one
 	// task the program begins on its own, and the thing it is compared
 	// against is the attempt history, which is durable in its own right.
-	// internal/service's reconcile.go is the one reader. Who decides a
-	// retry past the bound is #95 line G and not this row. A task past it
-	// is told to a person by the supervisor loop's terminal-gone wake, which
-	// is why no second surface and no tolerance row sit beside this one.
 	//
-	// PRD section 10's schema table and its limits table have no row for
-	// this key or its bounds; that is raised as a finding and not closed
-	// here, on the beacon interval's terms.
+	// Past it the task holds, as PRD section 10's row says: internal/service
+	// registers a hold naming the task and the attempt that reached the
+	// bound, and a person decides whether it is retried by answering that
+	// hold with --answer, given the task. A retry relaunches once more
+	// through the same anchored relaunch and is not counted against this row
+	// for that one attempt; the next failure holds again. Zero relaunches
+	// nothing and holds every such task. internal/service's reconcile.go is
+	// the one reader, and its taskholds.go owns the hold and its answers.
+	// PRD section 10's keys table has its row and the limits table its
+	// ceiling; the floor is zero.
 	KeyRelaunchAttempts Key = "relaunch_attempts"
 	// KeyCommitFixMessage is "commit.fix_message": the fix commit subject
 	// template.

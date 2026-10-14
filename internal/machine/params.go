@@ -100,6 +100,33 @@ type RespondRequest struct {
 	Fix *pipeline.FixRequest `json:"fix,omitempty"`
 }
 
+// TaskRespondRequest answers a hold a task raised with no run behind it,
+// which PRD section 9 has answered the same way a run's hold is, given the
+// task rather than a run: a task past relaunch_attempts, or a decision an
+// investigation's report registered. The hold answered is the oldest one
+// open that names the task and no run; the answer names which.
+//
+// It carries no field saying who answered, on RespondRequest's terms: who
+// resolved a hold is derived from the surface by internal/ipc's
+// Request.HoldResolver and never read from a request.
+type TaskRespondRequest struct {
+	// Task is the task whose hold is answered.
+	Task string `json:"task"`
+	// Answer is what was decided. A hold the relaunch bound raised offers
+	// exactly AnswerRetry and AnswerStop and refuses anything else; a hold
+	// an investigation's report registered offers no closed set, and the
+	// answer is recorded as given.
+	Answer string `json:"answer"`
+}
+
+// The answers a hold the relaunch bound raised offers.
+const (
+	// AnswerRetry relaunches the task once more past relaunch_attempts.
+	AnswerRetry = "retry"
+	// AnswerStop leaves the task where it stopped; nothing relaunches it.
+	AnswerStop = "stop"
+)
+
 // CancelRequest ends a run.
 type CancelRequest struct {
 	// Run is the run to end.

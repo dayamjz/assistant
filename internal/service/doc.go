@@ -457,7 +457,13 @@
 // program the wakes about the session it replaced; it writes no wake and no
 // marker itself, because both are supervise.go's loop's, under its fence,
 // and the loop's terminal-gone row is what tells a person about a terminal
-// this pass did not relaunch. The launch of a claimed
+// this pass did not relaunch. A task past relaunch_attempts is the one
+// exception to writing nothing: it holds for a person, through a hold
+// record taskholds.go registers naming the task and the attempt that
+// reached the bound, which the loop then surfaces like any open hold; the
+// answer to that hold, given the task, is what decides whether it is
+// retried, and taskholds.go says how a retry reaches the one relaunch and
+// why it is good for one attempt. The launch of a claimed
 // attempt goes to a goroutine under startWork, so "before serving anything"
 // is a property of the claim. A launched task is never dispatched again,
 // which dispatch.go states: a restarted service holds no session, so its
@@ -514,7 +520,7 @@
 // Subscribers learn that a run moved from runs.go's publishRunState, that a
 // worker appended to its history from workers.go's publishTaskEvent, that a
 // task's resolved state moved from the supervisor loop's pass, and that a
-// hold opened or closed from the two sites that write one, and all four
+// hold opened or closed from the four sites that write one, and all four
 // draw their revision from the one counter on this service, so a consumer
 // orders them against each other. publish.go owns the second and third and
 // says why the pass is the one reader that publishes a task: a task's state
@@ -524,8 +530,10 @@
 // change is published once and not on every pass, within one beacon interval
 // of being made, and a restart publishes every task again to subscribers who
 // all attached fresh. A hold is published as the store returned it, at
-// storeTaskReport for the holds a report registers and after the checks-hold
-// closure for the one the program resolves. What travels is the record, a
+// storeTaskReport for the holds a report registers, after the checks-hold
+// closure for the one the program resolves, and at taskholds.go's
+// registration of the relaunch bound's hold and its answer to a task's
+// hold. What travels is the record, a
 // store.Hold, which store.Resolver's design keeps from carrying who resolved
 // it: the wire understates the resolver, as that package says the record
 // itself does. The task payload is machine.Task, composed through taskView
@@ -593,4 +601,6 @@
 // internal/ipc derives both from the surface: every resolution arriving over
 // this protocol is store.ResolvedByMachineInterface, including one a person
 // typed, and every acknowledgement is store.AcknowledgedByCoordinator.
+// taskholds.go records the resolver Request.HoldResolver returns and names
+// none of its own.
 package service

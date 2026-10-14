@@ -1,0 +1,251 @@
+package service
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strconv"
+	"strings"
+
+	"github.com/dayamjz/assistant/internal/ipc"
+	"github.com/dayamjz/assistant/internal/machine"
+	"github.com/dayamjz/assistant/internal/store"
+)
+
+// A task's holds: the one the relaunch bound raises, and the answer to any
+// hold a task raised with no run behind it.
+//
+// PRD section 10's relaunch_attempts row says that past the bound "the task
+// holds for you, and you decide whether it is retried: nothing retries a
+// task automatically without bound", and section 9 has a hold a task raised
+// answered the way a run's is, given the task. This file is both halves.
+//
+// # The bound's hold
+//
+// When decideReconciliation finds a task past the bound, the pass registers
+// a hold naming the task, keyed by the attempt that reached the bound,
+// relaunchBoundKey. Registration is internal/store's RegisterHold, so the
+// key is the identity: the same attempt found past the bound at every later
+// start is the same hold, open or answered, and a later attempt that fails
+// past the bound is a new key and so a new hold. Nothing here writes a wake:
+// the supervisor loop surfaces an open hold naming a task as a hold-opened
+// wake, a decision-class row, on its own terms, which is the one owner of
+// the queue (reconcile.go says why this pass writes no row).
+//
+// # The answer is the record, and the record is the allowance
+//
+// An answer to the bound's hold is a resolution of that hold, recorded with
+// the resolver internal/ipc's Request.HoldResolver derives from the surface.
+// "retry" is a person's decision to relaunch once more, and it is read back
+// by decideReconciliation, through boundAnswerOf, from the hold keyed by the
+// latest attempt: a relaunch past the bound proceeds only when that hold is
+// resolved "retry". The relaunch itself is relaunch.go's, the one anchored
+// relaunch, unchanged: it begins the next attempt with
+// store.BeginTaskAttempt anchored to the latest attempt it read. That anchor
+// is what makes the allowance good for one attempt and no more (P6). Once
+// the attempt begins, the latest attempt is the new one, whose key names a
+// hold that does not exist, so a second relauncher that read the same
+// allowance loses at the anchor with ErrTaskMoved and a later failure past
+// the bound holds again. The bypass is of the bound only: every other
+// refusal relaunchTask makes - the isolation-refused surface, a live or
+// unobserved terminal, a branch a live task holds, the copy's sweep and its
+// assertion - applies to a retry exactly as to any relaunch.
+//
+// "stop" is the decision not to: decideReconciliation reads it and does
+// nothing, so the task is never relaunched or held again for that attempt,
+// and stays where its records put it. Nothing reads who resolved to decide
+// anything: the resolution's text is the decision, and internal/store's
+// Resolver is recorded and not consulted, as that package requires.
+//
+// The resolution is written before the relaunch is asked, so a relaunch the
+// program makes past the bound always has a recorded decision behind it. A
+// relaunch refused at that moment leaves the decision standing, and the
+// next reconciliation, which reads the same hold, relaunches on it; the
+// answer says so rather than reporting a relaunch that did not happen.
+//
+// # Any other hold a task raised
+//
+// A hold naming a task and no run, an investigation's report's among them,
+// PRD section 11's "Recovering an investigation", is closed by the same
+// answer: the resolution is recorded as given, on the same terms, and acts
+// on nothing further here. Which hold an answer closes is the oldest one
+// open naming the task and no run, the order internal/store lists open
+// holds in, and the answer names it. A hold naming a run belongs to that
+// run and is answered through the run.
+//
+// # Residual gaps
+//
+//   - The record understates who decided. Every answer arriving over the
+//     local protocol is recorded as store.ResolvedByMachineInterface, the
+//     only value Request.HoldResolver produces, because nothing on that
+//     socket witnesses a person; store.ResolvedByPerson has no producer here
+//     on purpose. A retry the coordinator gives under PRD section 9's
+//     authority and one a person gives through the command are recorded
+//     alike.
+//   - PRD section 6's precedence has no tier for a hold naming only a task,
+//     and internal/taskstate resolves none: a task held at the bound reads
+//     the state its run, terminal or history gives it, Failed or Unknown,
+//     with the open hold beside it, and a stopped task keeps reading that.
+//     The hold record and the hold-opened wake are what say it waits on a
+//     person. That is raised as a finding against the precedence and not
+//     closed here.
+//   - The bound's hold is registered by reconciliation, which runs at service
+//     start, so a task past the bound holds from the next start after its
+//     terminal is found gone. A retry relaunch also takes the task's
+//     in-memory slot on dispatch.go's one-attempt-per-service rule, so a
+//     retry answered to a service that already dispatched or relaunched the
+//     task is recorded and refused now, and the next start relaunches it.
+//   - An answer to a hold that is not the bound's has no closed option set,
+//     because nothing records one for it; what was answered is recorded and
+//     nothing here checks it against what the hold offered.
+
+// errNoTaskHold reports an answer given a task with no open hold naming it
+// and no run. Nothing is recorded.
+var errNoTaskHold = errors.New("service: the task has no open hold to answer")
+
+// relaunchBoundPrefix is the key space of the bound's holds.
+const relaunchBoundPrefix = "/relaunch-bound/"
+
+// relaunchBoundKey is the key of the hold the relaunch bound raises for a
+// task's attempt.
+func relaunchBoundKey(task string, attempt int64) string {
+	return "task/" + task + relaunchBoundPrefix + strconv.FormatInt(attempt, 10)
+}
+
+// isRelaunchBound reports whether key is a bound hold of the task.
+func isRelaunchBound(key, task string) bool {
+	return strings.HasPrefix(key, "task/"+task+relaunchBoundPrefix)
+}
+
+// boundAnswer is what the bound's hold for a task's latest attempt says.
+type boundAnswer int
+
+const (
+	// boundUnanswered is no hold, or one still open.
+	boundUnanswered boundAnswer = iota
+	// boundRetry is a hold resolved "retry".
+	boundRetry
+	// boundStop is a hold resolved any other way.
+	boundStop
+)
+
+// boundAnswerOf reads the bound's hold for the latest of attempts. A task
+// with no attempt has none.
+func (s *Service) boundAnswerOf(ctx context.Context, id string, attempts []store.TaskAttempt) (boundAnswer, error) {
+	if len(attempts) == 0 {
+		return boundUnanswered, nil
+	}
+	h, err := s.store.Hold(ctx, relaunchBoundKey(id, attempts[len(attempts)-1].Sequence))
+	switch {
+	case errors.Is(err, store.ErrNotFound):
+		return boundUnanswered, nil
+	case err != nil:
+		return boundUnanswered, err
+	case h.Open():
+		return boundUnanswered, nil
+	case h.Resolution.Or("") == machine.AnswerRetry:
+		return boundRetry, nil
+	default:
+		return boundStop, nil
+	}
+}
+
+// holdAtBound registers the bound's hold for the latest of attempts and
+// publishes it as it stands. Registering a key already there returns that
+// hold unchanged, which is what keeps a restart from raising a second one.
+func (s *Service) holdAtBound(ctx context.Context, id string, attempts []store.TaskAttempt, d reconcileDecision) (store.Hold, error) {
+	if len(attempts) == 0 {
+		return store.Hold{}, fmt.Errorf("service: task %s has no attempt to hold at its relaunch bound", id)
+	}
+	latest := attempts[len(attempts)-1]
+	h, err := s.store.RegisterHold(ctx, store.Hold{
+		Key:     relaunchBoundKey(id, latest.Sequence),
+		TaskID:  store.Known(id),
+		Subject: "whether to begin this work again after it ended as many times as the program begins it on its own",
+		Detail: fmt.Sprintf("task %s: attempt %d's terminal is gone with the work not landed, and %s. "+
+			"Answer %q to relaunch it once more in the same copy, or %q to leave it where it stopped.",
+			id, latest.Sequence, d.reason, machine.AnswerRetry, machine.AnswerStop),
+	})
+	if err != nil {
+		return store.Hold{}, err
+	}
+	s.publishHoldState(h)
+	return h, nil
+}
+
+// respondTask answers the oldest open hold naming the task and no run, on
+// the terms this file's opening comment states. A task's worker is refused
+// with ipc.ErrWorker, from the caller's credentials. A request naming no
+// task or giving no answer, and an answer the bound's hold does not offer,
+// are ipc.ErrInvalidRequest; a task with no such hold is errNoTaskHold; a
+// hold another caller answered first is store.ErrHoldResolved. None of those
+// records anything.
+func (s *Service) respondTask(ctx context.Context, req ipc.Request, r machine.TaskRespondRequest) (machine.TaskAnswered, error) {
+	if err := s.refuseWorker(req); err != nil {
+		return machine.TaskAnswered{}, err
+	}
+	switch {
+	case strings.TrimSpace(r.Task) == "":
+		return machine.TaskAnswered{}, fmt.Errorf("%w: an answer names the task whose hold it closes", ipc.ErrInvalidRequest)
+	case strings.TrimSpace(r.Answer) == "":
+		return machine.TaskAnswered{}, fmt.Errorf("%w: an answer to task %s's hold is empty", ipc.ErrInvalidRequest, r.Task)
+	}
+	if _, err := s.store.Task(ctx, r.Task); err != nil {
+		return machine.TaskAnswered{}, err
+	}
+	hold, err := s.oldestTaskHold(ctx, r.Task)
+	if err != nil {
+		return machine.TaskAnswered{}, err
+	}
+	bound := isRelaunchBound(hold.Key, r.Task)
+	if bound && r.Answer != machine.AnswerRetry && r.Answer != machine.AnswerStop {
+		return machine.TaskAnswered{}, fmt.Errorf("%w: task %s holds at its relaunch bound, which is answered %q or %q, not %q",
+			ipc.ErrInvalidRequest, r.Task, machine.AnswerRetry, machine.AnswerStop, r.Answer)
+	}
+	resolved, err := s.store.ResolveHold(ctx, hold.Key, r.Answer, req.HoldResolver())
+	if err != nil {
+		return machine.TaskAnswered{}, err
+	}
+	s.publishHoldState(resolved)
+	out := machine.TaskAnswered{Hold: resolved, Effect: machine.AnswerRecorded}
+	switch {
+	case !bound:
+	case r.Answer == machine.AnswerStop:
+		out.Effect = machine.AnswerStopped
+		s.log.Printf("task %s is not relaunched past its bound: hold %s was answered %q", r.Task, hold.Key, r.Answer)
+	default:
+		relaunch, err := s.relaunchTask(ctx, r.Task)
+		if err != nil {
+			out.Effect, out.NotRelaunched = machine.AnswerRetryDeferred, err.Error()
+			s.log.Printf("task %s was answered %q on hold %s and was not relaunched now, so the next start relaunches it: %v",
+				r.Task, r.Answer, hold.Key, err)
+			break
+		}
+		out.Effect = machine.AnswerRelaunched
+		out.Relaunch = &machine.RelaunchBegun{Attempt: relaunch.launch.attempt, Superseded: relaunch.superseded}
+		s.log.Printf("task %s was relaunched past its bound as attempt %d on the answer %q to hold %s, superseding session %s; %s",
+			r.Task, relaunch.launch.attempt, r.Answer, hold.Key, relaunch.superseded, relaunch.swept)
+		s.launchInBackground(relaunch.launch)
+	}
+	o, err := s.tasks().ObserveTask(ctx, r.Task)
+	if err != nil {
+		return machine.TaskAnswered{}, err
+	}
+	out.Task = taskView(o)
+	return out, nil
+}
+
+// oldestTaskHold is the oldest open hold naming the task and no run, in the
+// order internal/store lists open holds, or errNoTaskHold.
+func (s *Service) oldestTaskHold(ctx context.Context, id string) (store.Hold, error) {
+	open, err := s.store.OpenHolds(ctx)
+	if err != nil {
+		return store.Hold{}, err
+	}
+	for _, h := range open {
+		if task, ok := h.TaskID.Get(); ok && task == id && !h.RunID.IsKnown() {
+			return h, nil
+		}
+	}
+	return store.Hold{}, fmt.Errorf("%w: task %s", errNoTaskHold, id)
+}

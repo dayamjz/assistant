@@ -158,6 +158,13 @@ func fixtures(t *testing.T) map[string]any {
 				Run: sampleID, Superseded: sampleID}},
 			Ignored: []machine.Ignored{{Ref: "refs/tags/v1", Reason: "not a branch, and the gate validates branches"}},
 		},
+		"task answer": machine.TaskAnswered{
+			Hold: store.Hold{Key: "task/" + sampleID + "/relaunch-bound/2", TaskID: store.Known(sampleID),
+				Subject: "whether to begin this work again", Resolution: store.Known(machine.AnswerRetry)},
+			Effect:   machine.AnswerRelaunched,
+			Relaunch: &machine.RelaunchBegun{Attempt: 3, Superseded: sampleID},
+			Task:     task,
+		},
 		"fallback": machine.Appended{Event: store.TaskEvent{TaskID: sampleID, Sequence: 3, Kind: "waiting-external",
 			Detail: "an upstream release of the parser"}},
 	}
@@ -267,8 +274,8 @@ func TestThePhrasedRenderersSpeakTheTableAndTheJSONKeepsIdentifiers(t *testing.T
 			t.Errorf("the structured rendering of %s carries no identifier, path or label, so this fixture holds the human rendering to nothing", r.Name)
 		}
 	}
-	if phrased < 17 {
-		t.Fatalf("%d renderers are phrased; the table claims seventeen", phrased)
+	if phrased < 18 {
+		t.Fatalf("%d renderers are phrased; the table claims eighteen", phrased)
 	}
 
 	// The other direction: the lines these renderers used to write, built

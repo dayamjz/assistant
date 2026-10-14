@@ -55,6 +55,16 @@ const (
 	// method that moves a record, and the kinds it accepts are the ones
 	// internal/taskstate's table gives a worker as their writer.
 	MethodTaskEvent Method = "task.event"
+	// MethodTaskRespond answers a hold a task raised with no run behind it:
+	// a task past relaunch_attempts, or a decision an investigation's report
+	// registered. PRD section 9 has that hold answered the way a run's is,
+	// given the task, and it is MethodRunRespond's sibling rather than that
+	// method with a second shape, because a run's answer resumes the run and
+	// blocks on it while a task's closes a hold record. Who resolved is
+	// derived from this surface by Request.HoldResolver and never read from
+	// the request. Refused for a task's worker on MethodWakesList's terms, so
+	// no worker answers a hold, its own task's included.
+	MethodTaskRespond Method = "task.respond"
 	// MethodWakesList drains the durable wake queue for the coordinator: it
 	// returns the queued wakes, oldest first, and acknowledges none, so a
 	// row stays actionable until MethodWakesAcknowledge names it. It is the
@@ -152,6 +162,7 @@ var specs = []Spec{
 	{MethodTasksList, KindRequest, AccessOpen, "List fleet work with its resolved current state."},
 	{MethodTaskGet, KindRequest, AccessOpen, "Read one task and the revision it is current as of."},
 	{MethodTaskEvent, KindRequest, AccessRestricted, "Append an event to the history of the task the caller is the worker of."},
+	{MethodTaskRespond, KindRequest, AccessRestricted, "Answer a hold a task raised with no run behind it."},
 	{MethodWakesList, KindRequest, AccessRestricted, "Drain the wake queue: list the queued wakes, acknowledging none."},
 	{MethodWakesAcknowledge, KindRequest, AccessRestricted, "Record that the coordinator handled the named wakes."},
 	{MethodSupervisionAssert, KindRequest, AccessRestricted, "Verify that the supervisor loop of this home's service is live."},

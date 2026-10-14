@@ -337,7 +337,8 @@ func Coverage() []Established {
 // leaving the note to drift.
 var (
 	p13Covered = []string{"status", "run", "runs", "tasks", "task", "service", "event", "host stop",
-		"decision", "doctor", "lifecycle", "init", "eject", "health", "admission", "notification", "fallback"}
+		"decision", "doctor", "lifecycle", "init", "eject", "health", "admission", "notification",
+		"task answer", "fallback"}
 	p13Remaining = []string{"details", "findings", "plan"}
 )
 

@@ -43,11 +43,13 @@ import (
 //
 // # hold.state is published where a hold is written
 //
-// A hold is written at two sites in this service, and each publishes the
+// A hold is written at four sites in this service, and each publishes the
 // hold as it then stands: storeTaskReport, where an investigation's report
-// registers one per ask finding, and the checks-hold closure, where the one
+// registers one per ask finding; the checks-hold closure, where the one
 // closure PRD section 8 lets the program make resolves the hold in the same
-// transaction as the run's move. The payload is the store.Hold record, on
+// transaction as the run's move; and taskholds.go's two, where
+// reconciliation registers the hold the relaunch bound raises and where an
+// answer given the task resolves a task's hold. The payload is the store.Hold record, on
 // machine's rule that a record travels as its owner's type.
 
 // published is what this service has published about each task: the basis of

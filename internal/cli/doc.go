@@ -29,7 +29,11 @@
 // shown the decision, and an agent driving the same gate needs the same
 // decision with the same options and no terminal to give it in. The
 // specification's table names no command for either, which is a gap against
-// section 9 worth raising rather than a licence to add a verb.
+// section 9 worth raising rather than a licence to add a verb. A hold a task
+// raised with no run behind it, an investigation's or a task's at its
+// relaunch bound, is answered by the same flag given --task, which section 9
+// says in as many words: answering takes a task as well as a run, and no
+// verb is added for it.
 //
 // Reading one run or one task in full is an argument to the command that lists
 // them, because that section gives runs one row and tasks one row.

@@ -69,8 +69,9 @@ type Config struct {
 	StallInspectionCount int
 	// RelaunchAttempts is how many times reconciliation at service start
 	// relaunches a task that resolves Failed with its terminal gone, counted
-	// from its attempt rows, before surfacing it instead. KeyRelaunchAttempts
-	// says why it is a task-level bound and not a loop bound.
+	// from its attempt rows, before the task holds for a person instead.
+	// KeyRelaunchAttempts says why it is a task-level bound and not a loop
+	// bound, and who decides a retry past it.
 	RelaunchAttempts int
 	// DecisionModel is the mode of the decision-model checks PRD section 5
 	// describes. Whether a request is sent at all also needs the provider's
@@ -274,7 +275,7 @@ const (
 	MaxChecksTimeout = 8760 * time.Hour
 	// MaxRelaunchAttempts is the most relaunches reconciliation may make of
 	// one task on its own. The floor is zero, which is never relaunch a
-	// Failed task and surface every one, and that is a value an operator may
+	// Failed task and hold every one, and that is a value an operator may
 	// choose. Above the ceiling a worker that fails the same way every time
 	// is restarted for days before a person hears. Chosen, not measured.
 	MaxRelaunchAttempts = 20

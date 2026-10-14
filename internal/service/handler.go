@@ -30,7 +30,7 @@ import (
 // validation stage, so nothing here asks whether a caller is contained. The
 // one question a handler asks of a caller is the other relation,
 // whether it is a task's worker, and workers.go derives that from the same
-// credentials for the five methods whose answer depends on it.
+// credentials for the six methods whose answer depends on it.
 func (s *Service) handle(ctx context.Context, req ipc.Request) (json.RawMessage, error) {
 	switch req.Method {
 	case ipc.MethodHealth:
@@ -71,6 +71,10 @@ func (s *Service) handle(ctx context.Context, req ipc.Request) (json.RawMessage,
 	case ipc.MethodTaskEvent:
 		return call(ctx, req, func(ctx context.Context, r machine.TaskEventRequest) (machine.Appended, error) {
 			return s.taskEvent(ctx, req, r)
+		})
+	case ipc.MethodTaskRespond:
+		return call(ctx, req, func(ctx context.Context, r machine.TaskRespondRequest) (machine.TaskAnswered, error) {
+			return s.respondTask(ctx, req, r)
 		})
 	case ipc.MethodWakesList:
 		return call(ctx, req, func(ctx context.Context, r machine.WakesRequest) (machine.Wakes, error) {

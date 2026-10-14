@@ -371,6 +371,43 @@ func HoldPhrase(h store.Hold) Phrase {
 	}
 }
 
+// The rows for an answer to a task's hold that did more than close it: a
+// retry that began the work again, one recorded and not acted on yet, and a
+// stop. A hold whose answer acts on nothing further reads as HoldPhrase's
+// answered row.
+var (
+	phraseRetried = Phrase{
+		Outcome:     "Your answer was taken, and the work was begun again where it left off.",
+		Consequence: "It carries on from what was already done there.",
+		Decision:    "Nothing to decide unless it ends again without finishing, which asks you again.",
+	}
+	phraseRetryDeferred = Phrase{
+		Outcome:     "Your answer was recorded, and the work could not be begun again just now.",
+		Consequence: "It is begun again the next time the service comes up, if nothing else has moved it by then.",
+		Decision:    "Run assistant service restart to try sooner, or repeat the command with --json to read why.",
+	}
+	phraseNotRetried = Phrase{
+		Outcome:     "Your answer was recorded, and the work will not be begun again.",
+		Consequence: "It stays as it was left, and nothing more is done with it.",
+		Decision:    "Nothing to decide.",
+	}
+)
+
+// TaskAnsweredPhrase is what a person reads about an answer to a task's
+// hold: the row for what the answer did, and HoldPhrase's answered row for
+// an answer that only closed the hold.
+func TaskAnsweredPhrase(a TaskAnswered) Phrase {
+	switch a.Effect {
+	case AnswerRelaunched:
+		return phraseRetried
+	case AnswerRetryDeferred:
+		return phraseRetryDeferred
+	case AnswerStopped:
+		return phraseNotRetried
+	}
+	return HoldPhrase(a.Hold)
+}
+
 // The stream's own rows: what a person reads when the fleet view is told
 // something about the channel rather than about the work.
 var (
@@ -801,13 +838,14 @@ var PhraseNoReading = Phrase{
 // TablePhrases returns every row this table holds, as a person reads each,
 // which is what the vocabulary test walks: the pull guard's three rows, the
 // stop guard's two turn rows, a row per task state and NoWordYet, a row per
-// outcome and the three OutcomeExecuting splits into, the two hold rows and
-// the two cleanup rows, the stream's four, the status rows, and the rows for
-// the rest of the command surface: a decision and a fix round's offer, a row
-// per doctor check and result and the verdict, the service lifecycle, a gate
-// created, reattached and removed, and the gate's own rows. A templated
-// row is listed with its placeholder filled in. The result is a copy. Phrases
-// is the same list as strings.
+// outcome and the three OutcomeExecuting splits into, the two hold rows, the
+// three rows for an answer to a task's hold and the two cleanup rows, the
+// stream's four, the status rows, and the rows for the rest of the command
+// surface: a decision and a fix round's offer, a row per doctor check and
+// result and the verdict, the service lifecycle, a gate created, reattached
+// and removed, and the gate's own rows. A templated row is listed with its
+// placeholder filled in. The result is a copy. Phrases is the same list as
+// strings.
 func TablePhrases() []Phrase {
 	out := []Phrase{phraseServiceDown, phraseServiceNotWatching, phraseUndecided}
 	out = append(out, phraseTurnBlocked, phraseTurnReEntered)
@@ -824,6 +862,7 @@ func TablePhrases() []Phrase {
 	}
 	out = append(out, phraseRunAdvancing, phraseRunStalled, phraseRunUnrecorded)
 	out = append(out, HoldPhrase(store.Hold{Subject: holdPlaceholder}), HoldPhrase(store.Hold{Subject: holdPlaceholder, Resolution: store.Known("answered")}))
+	out = append(out, phraseRetried, phraseRetryDeferred, phraseNotRetried)
 	out = append(out, phraseCopyKept, phraseCopyRemoved)
 	out = append(out, PhraseUpdatesMissed, PhraseServiceStopping, PhraseWorkerSpoke, PhraseActivity, PhraseUnfamiliarUpdate)
 	out = append(out, PhraseServiceUp, PhraseServiceAbsent, PhraseGated, PhraseUngated, PhraseNoRun, PhraseNoRuns, PhraseNoFleetWork)

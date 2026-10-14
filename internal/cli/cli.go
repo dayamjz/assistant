@@ -557,6 +557,12 @@ func exitFor(answer any) machine.Code {
 		}
 	case machine.HostStop:
 		return hostExit(v)
+	case machine.TaskAnswered:
+		// A retry recorded and not acted on yet is a decision taken and work
+		// not begun, which a caller has to see without reading the document.
+		if v.Effect == machine.AnswerRetryDeferred {
+			return machine.ExitFailure
+		}
 	}
 	return machine.ExitOK
 }
