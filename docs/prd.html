@@ -1822,7 +1822,9 @@ flowchart TB
           escapes that, so keep an identity-based sweep that matches processes by the isolated copy
           their working directory resolves under, never by command line. Once a run reaches a final
           state, its isolated copy is swept. The sweep must never touch a copy whose run is still
-          active. Where the platform has no sweep, section 11 says what a relaunch does.
+          active. Where the platform has no sweep, section 11 says what a relaunch does, and a retried
+          dispatch into a copy a crash left standing is held the same way: it starts only on your
+          answer to retry it.
         </p>
       </div>
     </div>
