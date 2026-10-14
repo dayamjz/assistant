@@ -160,14 +160,26 @@ func TestATaskLineIsItsPhraseAndNothingOfTheRecord(t *testing.T) {
 			t.Errorf("the task line %q carries the outcome word %q, and a task with no run has no outcome", line, outcome)
 		}
 	}
-	// The same task through --json keeps all of it.
+	// The same task through --json keeps all of it. The document is decoded
+	// rather than searched as text, because the encoder escapes a path's
+	// separators on Windows and the fact under test is what a consumer reads
+	// back, not the bytes on the wire.
 	var document bytes.Buffer
 	if err := machine.NewEncoder(&document).Encode(task); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{task.Record.ID, task.Record.WorktreePath, string(task.State.State), task.Waiting} {
-		if !strings.Contains(document.String(), want) {
-			t.Errorf("the structured rendering lost %q:\n%s", want, document.String())
+	var decoded machine.Task
+	if err := json.Unmarshal(document.Bytes(), &decoded); err != nil {
+		t.Fatalf("the structured rendering does not decode: %v\n%s", err, document.String())
+	}
+	for name, pair := range map[string][2]string{
+		"identifier": {decoded.Record.ID, task.Record.ID},
+		"copy path":  {decoded.Record.WorktreePath, task.Record.WorktreePath},
+		"state":      {string(decoded.State.State), string(task.State.State)},
+		"wait":       {decoded.Waiting, task.Waiting},
+	} {
+		if pair[0] != pair[1] {
+			t.Errorf("the structured rendering lost the %s: read %q, want %q:\n%s", name, pair[0], pair[1], document.String())
 		}
 	}
 }
