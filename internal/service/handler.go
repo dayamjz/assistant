@@ -30,7 +30,8 @@ import (
 // validation stage, so nothing here asks whether a caller is contained. The
 // one question a handler asks of a caller is the other relation,
 // whether it is a task's worker, and workers.go derives that from the same
-// credentials for the six methods whose answer depends on it.
+// credentials for the methods whose answer depends on it: the five there,
+// coordinator.go's three and taskholds.go's task.respond.
 func (s *Service) handle(ctx context.Context, req ipc.Request) (json.RawMessage, error) {
 	switch req.Method {
 	case ipc.MethodHealth:
@@ -75,6 +76,18 @@ func (s *Service) handle(ctx context.Context, req ipc.Request) (json.RawMessage,
 	case ipc.MethodTaskRespond:
 		return call(ctx, req, func(ctx context.Context, r machine.TaskRespondRequest) (machine.TaskAnswered, error) {
 			return s.respondTask(ctx, req, r)
+		})
+	case ipc.MethodTaskCreate:
+		return call(ctx, req, func(ctx context.Context, r machine.TaskCreateRequest) (machine.TaskCreated, error) {
+			return s.createTask(ctx, req, r)
+		})
+	case ipc.MethodTaskPromote:
+		return call(ctx, req, func(ctx context.Context, r machine.TaskPromoteRequest) (machine.TaskPromoted, error) {
+			return s.promoteTask(ctx, req, r)
+		})
+	case ipc.MethodTaskRelaunch:
+		return call(ctx, req, func(ctx context.Context, r machine.TaskRequest) (machine.TaskRelaunched, error) {
+			return s.relaunchTaskFor(ctx, req, r)
 		})
 	case ipc.MethodWakesList:
 		return call(ctx, req, func(ctx context.Context, r machine.WakesRequest) (machine.Wakes, error) {

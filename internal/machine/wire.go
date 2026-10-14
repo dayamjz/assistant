@@ -3,6 +3,7 @@ package machine
 import (
 	"bytes"
 	"encoding/json"
+	"time"
 
 	"github.com/dayamjz/assistant/internal/findings"
 	"github.com/dayamjz/assistant/internal/graph"
@@ -556,6 +557,60 @@ type Notification struct {
 type Appended struct {
 	// Event is the entry, with the sequence the store assigned it.
 	Event store.TaskEvent `json:"event"`
+}
+
+// TaskCreated is the answer to task.create: what internal/tasks' intake
+// recorded and why, composed from that package's Created rather than
+// restated. A task recorded Dispatched has its copy cut and its worker
+// launched by the service after this is answered; where it stands is read
+// from task.get.
+type TaskCreated struct {
+	// Record is the task as the store holds it. Its BlockerTask is known
+	// exactly when the task was queued.
+	Record store.Task `json:"record"`
+	// Cause says whether the task was queued and by whose decision, in
+	// internal/tasks' Cause vocabulary.
+	Cause string `json:"cause"`
+	// BlockerState is the blocker's state as intake read it, and empty for
+	// an independent task.
+	BlockerState taskstate.State `json:"blocker_state,omitempty"`
+	// Instructions is the file the instructions were written to.
+	Instructions string `json:"instructions"`
+}
+
+// TaskPromoted is the answer to task.promote: what internal/tasks'
+// promotion did, composed from its Promoted.
+type TaskPromoted struct {
+	// Record is the task after the flip.
+	Record store.Task `json:"record"`
+	// Event is the promoted entry the task's history now carries.
+	Event store.TaskEvent `json:"event"`
+	// Head is the commit the task's branch was created at.
+	Head string `json:"head"`
+	// ReportRecordedAt is when the report the promotion carries as evidence
+	// was stored, and absent when none was. The text is not carried.
+	ReportRecordedAt *time.Time `json:"report_recorded_at,omitempty"`
+	// Instructions is the file the intent and the second check were
+	// appended to.
+	Instructions string `json:"instructions"`
+}
+
+// TaskRelaunched is the answer to task.relaunch: the attempt the anchored
+// relaunch began and what it superseded. It answers once the attempt is
+// claimed and recorded, not once the worker runs: the launch is handed to
+// the service, as a relaunch at service start hands it, so whether the
+// worker started is read from the task's attempt afterwards.
+type TaskRelaunched struct {
+	// Task is the task relaunched.
+	Task string `json:"task"`
+	// Attempt is the attempt the relaunch began.
+	Attempt int64 `json:"attempt"`
+	// Superseded is the session reference of the attempt whose terminal was
+	// found gone.
+	Superseded string `json:"superseded"`
+	// Swept is what the sweep of the standing copy did, in the service's
+	// words.
+	Swept string `json:"swept,omitempty"`
 }
 
 // Wakes is the answer to a drain of the wake queue: the queued rows, oldest

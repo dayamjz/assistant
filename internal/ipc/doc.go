@@ -146,11 +146,16 @@
 // worker, is not answered here either, and it is not a third access class.
 // The handler decides it, from internal/service's worker group set, for the
 // methods whose answer turns on it: task.event admits only a worker, the
-// wakes methods and supervision.assert refuse one, and gate.admit holds a
-// worker's push to a rule. The method table stays about containment because
+// wakes methods, supervision.assert and the three coordinator task methods
+// (task.create, task.promote and task.relaunch) refuse one, and gate.admit
+// holds a worker's push to a rule. The method table stays about containment because
 // a class meaning "the coordinator only" would need that set as an input of
 // this package, and the set is a fact about processes a service started.
 // ErrWorker and ErrNotWorker are the two refusals that cross the wire for it.
+// ErrRefused is a third code and not about the caller at all: it is a
+// handler deciding a request against the records and refusing it, which a
+// caller must tell apart from a request it sent wrong and from a fact the
+// service could not establish.
 //
 // # What a resolution arriving here may say about who made it
 //

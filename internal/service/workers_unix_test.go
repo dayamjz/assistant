@@ -94,6 +94,13 @@ func callAs(t *testing.T, group int, running *service.Service, method ipc.Method
 // waits, in seconds.
 func launchedWorker(t *testing.T, branch string, body func(w launched)) {
 	t.Helper()
+	launchedWorkerOf(t, store.TaskDelivery, branch, body)
+}
+
+// launchedWorkerOf is launchedWorker for a task of either shape; an
+// investigation task names no branch, so branch is empty for one.
+func launchedWorkerOf(t *testing.T, shape store.TaskShape, branch string, body func(w launched)) {
+	t.Helper()
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
 	subject := newSubject(t)
@@ -103,7 +110,7 @@ func launchedWorker(t *testing.T, branch string, body func(w launched)) {
 	if err := os.WriteFile(h.ConfigFile(), []byte(`{"supervision_beacon_interval": "1s"}`+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	id := recordDispatchedTask(t, h, repository, store.TaskDelivery, branch)
+	id := recordDispatchedTask(t, h, repository, shape, branch)
 	gateRepo := gateRepositoryOf(t, h, subject)
 	o, _ := workerOptions(t, h)
 	withServiceOptions(t, o, func(running serviceUnderTest) {

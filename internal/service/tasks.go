@@ -21,9 +21,11 @@ import (
 // is gatePathOf, the same answer a dispatch cuts a copy against. The state
 // reader is the one the task surface reads through, advancing fact included.
 //
-// Nothing in this build calls the queue's intake: PRD section 9's table has
-// no verb that creates a task, and internal/tasks' doc says so. What this
-// service calls is Release, from the sites releaseQueued names.
+// The queue's intake and promotion are called from coordinator.go's
+// task.create and task.promote, the coordinator-only service methods PRD
+// section 9 puts beside its command table, and from nowhere else; no verb
+// creates or promotes a task. This service also calls Release, from the
+// sites releaseQueued names.
 func (s *Service) newQueue() (*tasks.Queue, error) {
 	return tasks.New(tasks.Deps{
 		Home:   s.home,

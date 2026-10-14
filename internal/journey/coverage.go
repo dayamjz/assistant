@@ -219,9 +219,9 @@ func Coverage() []Established {
 			"A task whose event log ends on an open decision and whose attributed validation run has " +
 				"passed is reported by the binary as the run's state, from the run, with the decision " +
 				"marked superseded and its text absent from the detail. The task and the run are written " +
-				"through internal/store, since nothing here dispatches a worker and no verb or method " +
-				"creates a task - internal/tasks' intake is a library entry with no caller in this build, so " +
-				"no journey walk can create one - so what is driven is the " +
+				"through internal/store, since nothing here dispatches a worker and the state planted - an " +
+				"open decision under a passed attributed run - is not one internal/service's task.create " +
+				"can write, so what is driven is the " +
 				"reading and not the writing; the planted task has no attempt and no session reference, so the " +
 				"service's probe has nothing to ask and the process tier is not reached. Reading it reaches no method " +
 				"internal/ipc restricts, so no platform refuses it for want of peer credentials, but it " +
@@ -301,7 +301,7 @@ func Coverage() []Established {
 				"a test here makes. A walk here does drive the human rendering through the binary: " +
 				"assistant tasks and assistant watch without --json, over a task whose worker declared " +
 				"a wait and one whose newest entry is a relaunch note, both written through " +
-				"internal/store since no verb creates a task, and every line each verb printed is held " +
+				"internal/store since no verb creates a task and those histories are not ones task.create writes, and every line each verb printed is held " +
 				"to the forbidden set internal/machine/vocabtest derives from the owners, with the wait " +
 				"relayed and the state word absent. P13 is cited at package reach: internal/machine's " +
 				"vocabulary test for the rows in its table, and internal/cli's renderer test for every " +

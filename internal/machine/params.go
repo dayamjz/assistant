@@ -216,6 +216,55 @@ type TaskEventRequest struct {
 	Detail string `json:"detail,omitempty"`
 }
 
+// TaskCreateRequest records a new task. It is internal/tasks' Request on
+// the wire, and that type owns what each field means and which combinations
+// intake refuses; the coordinator's judgment is the shape, the
+// instructions and the overlap claim, and everything the program decides
+// from them is intake's.
+//
+// It carries nothing about who is asking. The service decides that from the
+// caller's credentials: a caller inside a task's worker group is refused
+// before intake reads anything.
+type TaskCreateRequest struct {
+	// Shape is "delivery" or "investigation".
+	Shape string `json:"shape"`
+	// Project is what the task is for.
+	Project string `json:"project"`
+	// Instructions is what the worker is launched with.
+	Instructions string `json:"instructions"`
+	// Mode is how the worker is to be launched, recorded as given.
+	Mode string `json:"mode,omitempty"`
+	// Repository names the repository the task works in, by its record's
+	// identifier.
+	Repository string `json:"repository,omitempty"`
+	// Branch is the branch a delivery task works on.
+	Branch string `json:"branch,omitempty"`
+	// Overlaps names a task this one overlaps, or is empty for a claim of
+	// independence.
+	Overlaps string `json:"overlaps,omitempty"`
+}
+
+// TaskPromoteRequest promotes an investigation task to delivery in place.
+// It is internal/tasks' Promotion on the wire less the environment, which
+// is the service's: the environment a worker runs under is the one the
+// service launches workers with, and a field for it would be the caller's
+// claim about the assertion it is held to.
+//
+// It names the task to promote and nothing about who is asking; the service
+// refuses a caller inside any task's worker group, so an investigation's own
+// worker cannot promote it.
+type TaskPromoteRequest struct {
+	// Task is the investigation task to promote.
+	Task string `json:"task"`
+	// Repository names the repository the delivery works in, which must be
+	// the one the task's copy was cut from.
+	Repository string `json:"repository"`
+	// Branch is the branch the delivery works on.
+	Branch string `json:"branch"`
+	// Intent is what the delivery is to do.
+	Intent string `json:"intent"`
+}
+
 // WakesRequest drains the durable wake queue.
 type WakesRequest struct {
 	// Limit bounds how many queued wakes are returned, oldest first. Zero
