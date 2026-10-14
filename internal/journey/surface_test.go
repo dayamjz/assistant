@@ -180,17 +180,17 @@ func TestTheWholeCommandSurfaceAnswersOneDocumentPerInvocation(t *testing.T) {
 	drive[machine.Run](t, &observed, j, "--cancel")
 	drive[machine.Tasks](t, &observed, j, "tasks")
 
-	// The one verb that runs until it is stopped. It reports what is in flight
-	// before it follows the stream, so the first thing on standard output is a
-	// document whether or not an event ever arrives.
+	// The one verb that runs until it is stopped. It answers PRD section 9's
+	// catching up before it follows the stream, so the first thing on
+	// standard output is a document whether or not an event ever arrives.
 	watching := j.CommandBounded(dir, 2*time.Second, "watch")
-	var fleet machine.Tasks
+	var fleet machine.CatchUp
 	watched := spoken{
 		verb:    "assistant watch",
 		drove:   "watch",
 		code:    watching.Code,
 		decoded: firstDocument(watching.Stdout, &fleet) == nil,
-		shaped:  func(stdout string) error { return firstDocument(stdout, &machine.Tasks{}) },
+		shaped:  func(stdout string) error { return firstDocument(stdout, &machine.CatchUp{}) },
 		streams: true,
 		stdout:  watching.Stdout,
 		stderr:  watching.Stderr,

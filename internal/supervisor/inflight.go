@@ -44,6 +44,17 @@ func StateInFlight(s taskstate.State) (inFlight, decided bool) {
 	return inFlight, decided
 }
 
+// TaskInFlight reports whether one task is in flight: its state is, on
+// inFlightByState's terms, or it has a queued wake, whatever its state. The
+// second result is false for a state the table does not decide, which a
+// caller reads as a reading it cannot take and never as not in flight.
+// InFlightOf is this rule over a fleet, and PRD section 9's catch-up lists
+// the tasks it holds true for, so the two cannot count different work.
+func TaskInFlight(s taskstate.State, unacknowledged int) (inFlight, decided bool) {
+	inFlight, decided = StateInFlight(s)
+	return inFlight || unacknowledged > 0, decided
+}
+
 // InFlightOf is the in-flight reading over a fleet: states is each task's
 // resolved state keyed by task identifier, and unacknowledged is how many
 // queued wakes each task has, keyed the same way, which store.UnacknowledgedWakes
@@ -61,11 +72,11 @@ func StateInFlight(s taskstate.State) (inFlight, decided bool) {
 func InFlightOf(states map[string]taskstate.State, unacknowledged map[string]int) InFlight {
 	some := false
 	for task, state := range states {
-		inFlight, decided := StateInFlight(state)
+		inFlight, decided := TaskInFlight(state, unacknowledged[task])
 		if !decided {
 			return InFlightUnknown
 		}
-		if inFlight || unacknowledged[task] > 0 {
+		if inFlight {
 			some = true
 		}
 	}

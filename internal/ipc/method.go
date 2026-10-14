@@ -98,6 +98,20 @@ const (
 	// carries. It is the coordinator's session start's and refused for a
 	// task's worker on MethodWakesList's terms.
 	MethodSupervisionAssert Method = "supervision.assert"
+	// MethodCatchUpRead is PRD section 9's catching up: one read of what is
+	// waiting on the person, what landed since they last marked what they
+	// had seen, what is under way, and what stopped without a decision,
+	// which assistant watch starts with. It is open, because it reads, and
+	// it marks nothing: a read alone never moves the seen mark.
+	MethodCatchUpRead Method = "catchup.read"
+	// MethodCatchUpMark moves the seen mark: it records as seen exactly the
+	// landed records the request names, which are the ones a read showed,
+	// so a record recorded between that read and this mark is still shown
+	// next time. It writes, so it is restricted, and it is the
+	// coordinator's and the person's: refused for a task's worker on
+	// MethodWakesList's terms, which the handler decides from the caller's
+	// credentials against the worker group set.
+	MethodCatchUpMark Method = "catchup.mark"
 	// MethodServiceStop stops the service.
 	MethodServiceStop Method = "service.stop"
 	// MethodServiceRestart restarts the service.
@@ -184,6 +198,8 @@ var specs = []Spec{
 	{MethodWakesList, KindRequest, AccessRestricted, "Drain the wake queue: list the queued wakes, acknowledging none."},
 	{MethodWakesAcknowledge, KindRequest, AccessRestricted, "Record that the coordinator handled the named wakes."},
 	{MethodSupervisionAssert, KindRequest, AccessRestricted, "Verify that the supervisor loop of this home's service is live."},
+	{MethodCatchUpRead, KindRequest, AccessOpen, "Read what waits on you, what landed unseen, what is under way, and what stopped."},
+	{MethodCatchUpMark, KindRequest, AccessRestricted, "Mark seen exactly the landed records a catch-up read showed."},
 	{MethodServiceStop, KindRequest, AccessRestricted, "Stop the service."},
 	{MethodServiceRestart, KindRequest, AccessRestricted, "Restart the service."},
 	{MethodEventsSubscribe, KindStream, AccessOpen, "Open the event stream."},

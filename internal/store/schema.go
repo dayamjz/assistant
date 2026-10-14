@@ -966,4 +966,45 @@ var schema = []migration{
 			) STRICT`,
 		},
 	},
+	{
+		version: 22,
+		name:    "seen mark",
+		statements: []string{
+			// PRD section 8's seen mark: one row per landed record a person
+			// was shown and marked seen, keyed the way that record is keyed -
+			// a merge record by its run, a task's cleanup record by its task -
+			// with kind saying which. One per home, because the database is
+			// the home's. It is what section 9's catch-up reads to decide what
+			// landed since the person last looked, and nothing else reads it.
+			//
+			// It is a set of keys and never a time or a position in a log:
+			// a record is seen when it has a row here, so a record written
+			// after the read a mark was made from has no row and is shown
+			// again, whatever the clocks say. marked_at is when the row was
+			// written and decides nothing. No foreign key, for merge_record's
+			// reason: the key is the identifier the record carries, and what
+			// it names is that record's table's business; MarkSeen checks in
+			// its own transaction that it names a landed record.
+			`CREATE TABLE seen_mark (
+				kind      TEXT NOT NULL,
+				key       TEXT NOT NULL,
+				marked_at TEXT NOT NULL,
+				PRIMARY KEY (kind, key)
+			) STRICT`,
+			// Appended means appended, on merge_record's terms: a row is
+			// written once and neither rewritten nor removed. Like the other
+			// seals, this does not guard against a later migration that drops
+			// a trigger.
+			`CREATE TRIGGER seen_mark_is_written_once
+				BEFORE UPDATE ON seen_mark
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a seen mark is written once by the mark that made it and is not updated');
+				END`,
+			`CREATE TRIGGER seen_mark_is_not_removed
+				BEFORE DELETE ON seen_mark
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a seen mark is written once by the mark that made it and is not deleted');
+				END`,
+		},
+	},
 }

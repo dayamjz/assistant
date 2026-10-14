@@ -146,8 +146,10 @@
 // worker, is not answered here either, and it is not a third access class.
 // The handler decides it, from internal/service's worker group set, for the
 // methods whose answer turns on it: task.event admits only a worker, the
-// wakes methods, supervision.assert and the three coordinator task methods
-// (task.create, task.promote and task.relaunch) refuse one, and gate.admit
+// wakes methods, supervision.assert, the three coordinator task methods
+// (task.create, task.promote and task.relaunch), task.respond and
+// catchup.mark, which moves the seen mark section 9's catching up reads,
+// refuse one, and gate.admit
 // holds a worker's push to a rule. The method table stays about containment because
 // a class meaning "the coordinator only" would need that set as an input of
 // this package, and the set is a fact about processes a service started.
