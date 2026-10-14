@@ -38,15 +38,15 @@ import (
 //     copy was reclaimed from whatever was in it.
 //   - Unsupported: agents.ErrSweepUnsupported, which is every platform but
 //     Linux and macOS. Nothing was looked for and nothing is proven, and
-//     the two callers part here. A relaunch is refused (P6, #95 line O):
-//     relaunch.go registers a hold for a person, keyed by the attempt it
-//     read, and goes ahead only on a retry answer to it, with the note and
-//     the log saying nothing was proven; what still runs in the copy then
-//     is not looked for or ended, which is the person's decision rather
-//     than a proof. A retried dispatch is not held: it starts the worker as
-//     it did before the sweep existed, and its log says nothing was looked
-//     for, which is PRD section 11's proof left undone for that path,
-//     stated rather than closed.
+//     both callers refuse (P6, #95 line O, which the owner extended from a
+//     relaunch to a retried dispatch): each registers a hold for a person
+//     before its claim, keyed by the attempt it read and in a key space of
+//     its own, relaunch.go's *relaunchUnswept and dispatch.go's
+//     *dispatchUnswept, and goes ahead only on a retry answer to that hold,
+//     which the attempt anchor spends on one attempt, with the log, and a
+//     relaunch's note, saying nothing was proven; what still runs in the
+//     copy then is not looked for or ended, which is the person's decision
+//     rather than a proof. taskholds.go owns both holds and their answers.
 //   - Not a copy: the copy path does not stand as the copy itself, because it
 //     is a symbolic link or vanished, so home.CopyAt refuses it and nothing
 //     was swept. The caller goes on to the claim so the isolation assertion
@@ -112,8 +112,8 @@ func (e *copyUnswept) Unwrap() error { return e.Cause }
 type copySwept struct {
 	words string
 	// unsupported is true when the sweep answered agents.ErrSweepUnsupported:
-	// nothing was looked for, and words says so. relaunch.go refuses on it
-	// unless a person answered retry; dispatch.go goes ahead on it.
+	// nothing was looked for, and words says so. relaunch.go and dispatch.go
+	// both refuse on it unless a person answered retry on their own hold.
 	unsupported bool
 	// unswept is non-nil when nothing was swept because the copy path was
 	// not the copy itself; the caller refuses after the assertion on it.

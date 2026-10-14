@@ -10,6 +10,7 @@ import (
 
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/gate"
+	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/tasks"
@@ -86,11 +87,19 @@ import (
 // whatever the crashed one left at the path. A path already standing there is
 // swept before the claim, on sweep.go's terms, because a crash between a
 // worker's start and the record of its session leaves a process no record
-// names, and the sweep finds it by the copy instead. It is then observed and
-// asserted exactly as a fresh clone is, and is never removed or
-// written into (P6; copyStanding takes the same stance toward a run's copy):
-// a half-written directory fails the assertion, and that failure is recorded
-// as the refusal with the path untouched. The one directory this file does
+// names, and the sweep finds it by the copy instead. Where the platform has
+// no sweep, agents.ErrSweepUnsupported, nothing proves that process absent,
+// so the retry is refused (P6, #95 line O as the owner extended it to
+// dispatch): it registers a hold naming the task, keyed by the latest
+// attempt it read, on taskholds.go's terms, and returns *dispatchUnswept
+// before the claim, recording nothing else. Only a retry answer on that
+// hold lets a dispatch of that attempt past the refusal, and the claim's
+// anchor spends it on one attempt; a stop leaves the task where it is. The
+// standing copy is then observed and asserted exactly as a fresh clone is,
+// and is never removed or written into (P6; copyStanding takes the same
+// stance toward a run's copy): a half-written directory fails the
+// assertion, and that failure is recorded as the refusal with the path
+// untouched. The one directory this file does
 // remove is a clone this same call just made and could not shape - the task
 // branch could not be created in it, or HEAD could not be detached - which
 // holds no work and is the program's own; it is removed so that the next
@@ -180,6 +189,29 @@ func (e *isolationRefused) Error() string {
 
 // Unwrap makes every refused dispatch match tasks.ErrNotIsolated.
 func (e *isolationRefused) Unwrap() error { return tasks.ErrNotIsolated }
+
+// dispatchUnswept reports a dispatch retried over a copy already standing at
+// the task's copy path, refused because the sweep of that copy answered
+// agents.ErrSweepUnsupported and no person has answered retry on the hold
+// for the attempt the dispatch read (P6). Hold is that hold as registered:
+// open, or answered stop, in which case it stays refused for that attempt.
+// Nothing else is recorded, and the dispatch goes ahead only after a retry
+// answer, which the attempt anchor spends on one attempt.
+type dispatchUnswept struct {
+	Task string
+	Hold store.Hold
+}
+
+// Error names the task and the hold it waits on, or the stop it was given.
+func (e *dispatchUnswept) Error() string {
+	if !e.Hold.Open() {
+		return fmt.Sprintf("service: task %s is not dispatched again over its standing copy, because this platform has no "+
+			"process sweep and its hold %s was answered %q", e.Task, e.Hold.Key, e.Hold.Resolution.Or(""))
+	}
+	return fmt.Sprintf("service: task %s is not dispatched again over its standing copy, because this platform has no "+
+		"process sweep to prove nothing still runs in it; it holds for a person on %s, answered %q or %q",
+		e.Task, e.Hold.Key, machine.AnswerRetry, machine.AnswerStop)
+}
 
 // secondCheckHeading is the heading the second check is appended to the
 // instructions under. It is the marker that keeps the append idempotent
@@ -287,11 +319,32 @@ type dispatched struct {
 // asserted, and the copy's snapshot and the proof are written last. A task
 // that does not resolve Dispatched is errTaskNotDispatched; a record that
 // cannot be dispatched as written is errTaskRecord; a dispatch another caller
-// claimed first is store.ErrTaskMoved; a copy that fails the assertion is an
+// claimed first is store.ErrTaskMoved; a standing copy the platform cannot
+// sweep is a *dispatchUnswept, held for a person and otherwise unrecorded,
+// unless that hold was answered retry; a sweep that ran and did not clear
+// the copy is a *copyUnswept; a copy that fails the assertion is an
 // *isolationRefused, recorded. Every other error is a failure of a read or a
 // write, and leaves the attempt standing for a retry to find what it left.
 func (s *Service) dispatchTask(ctx context.Context, id string) (dispatched, error) {
 	settle, err := s.claimDispatch(id)
+	if err != nil {
+		return dispatched{}, err
+	}
+	d, err := s.dispatchClaimed(ctx, id)
+	settle(d.proof)
+	return d, err
+}
+
+// redispatchTask is dispatchTask for a retry answered on the hold a dispatch
+// over an unsweepable standing copy raised. It takes the task's slot through
+// claimRelaunch, because the refusal that raised the hold settled the slot
+// this service keeps for the task's lifetime and only a slot still in flight
+// should refuse the answer, and then dispatches on dispatchClaimed's terms:
+// the retry is read back from the hold's record there, never taken from the
+// caller, and the attempt anchor spends it on one attempt, so a concurrent
+// dispatcher that read the same answer is refused with store.ErrTaskMoved.
+func (s *Service) redispatchTask(ctx context.Context, id string) (dispatched, error) {
+	settle, err := s.claimRelaunch(id)
 	if err != nil {
 		return dispatched{}, err
 	}
@@ -318,12 +371,15 @@ func (s *Service) claimDispatch(id string) (func(proof tasks.Isolation), error) 
 	return s.takeSlot(id), nil
 }
 
-// claimRelaunch takes the task's slot for a relaunch, which is the one way
-// a slot this service already holds is taken again: the task's earlier
-// attempt was dispatched or relaunched here and its terminal is gone, and
-// the relaunch begins a new attempt. A slot that a dispatch or a relaunch
-// still holds unsettled is errRelaunchInFlight, so two relaunches in this
-// service, or a relaunch and a dispatch, do not run side by side; between
+// claimRelaunch takes the task's slot for a relaunch, or for a dispatch a
+// person answered retry on the no-sweep hold of, which are the two ways a
+// slot this service already holds is taken again: for a relaunch, the
+// task's earlier attempt was dispatched or relaunched here and its terminal
+// is gone, and the relaunch begins a new attempt; for the dispatch, the
+// slot was settled by the refusal the answer lifts. A slot that a dispatch
+// or a relaunch still holds unsettled is errRelaunchInFlight, so two
+// relaunches in this service, or a relaunch and a dispatch, do not run side
+// by side; between
 // services, and between a settled slot's attempt and this one, the store's
 // anchor is what refuses a second relauncher, as relaunch.go states. The
 // slot is settled as claimDispatch's is.
@@ -413,6 +469,24 @@ func (s *Service) dispatchClaimed(ctx context.Context, id string) (dispatched, e
 	if _, err := os.Lstat(copyPath); err == nil {
 		if swept, err = s.sweepStandingCopy(ctx, id, copyPath); err != nil {
 			return dispatched{}, err
+		}
+		if swept.unsupported {
+			// P6: nothing proves the copy unowned, so a person decides. Only a
+			// retry on the hold for the attempt read lets this dispatch past,
+			// and the anchor below spends it on one attempt.
+			answer, err := s.relaunchAnswerOf(ctx, dispatchUnsweptKey(id, latest))
+			if err != nil {
+				return dispatched{}, err
+			}
+			if answer != boundRetry {
+				h, err := s.holdDispatchUnswept(ctx, id, latest, swept.words)
+				if err != nil {
+					return dispatched{}, fmt.Errorf("service: task %s is not dispatched again with no process sweep, "+
+						"and its hold could not be registered: %w", id, err)
+				}
+				return dispatched{}, &dispatchUnswept{Task: id, Hold: h}
+			}
+			swept.words += ", and its hold for a dispatch without one was answered " + machine.AnswerRetry
 		}
 		if swept.words != "" {
 			s.log.Printf("task %s is dispatched again over its standing copy: %s", id, swept.words)

@@ -395,7 +395,7 @@ type TaskAnswered struct {
 	// NotRelaunched is why a retry began no attempt now, and is empty for
 	// every effect but AnswerRetryDeferred and AnswerRetryHeld. The
 	// decision stands in the hold's record, and the next reconciliation
-	// reads it.
+	// reads it, or for a dispatch's hold the next start's dispatch.
 	NotRelaunched string `json:"not_relaunched,omitempty"`
 	// Task is the task as it stands after the answer.
 	Task Task `json:"task"`
@@ -410,14 +410,17 @@ const (
 	AnswerRecorded AnswerEffect = "recorded"
 	// AnswerRelaunched is a retry on a relaunch hold, the one past
 	// relaunch_attempts or the one a relaunch with no process sweep raised,
-	// that began one attempt through the anchored relaunch.
+	// that began one attempt through the anchored relaunch, or a retry on
+	// the hold a dispatch over a standing copy with no process sweep raised,
+	// that began one attempt over that copy through the anchored dispatch.
 	AnswerRelaunched AnswerEffect = "relaunched"
-	// AnswerRetryDeferred is a retry recorded whose relaunch was refused
-	// now; NotRelaunched says why.
+	// AnswerRetryDeferred is a retry recorded whose relaunch or dispatch was
+	// refused now; NotRelaunched says why.
 	AnswerRetryDeferred AnswerEffect = "retry-deferred"
-	// AnswerRetryHeld is a retry recorded whose relaunch was refused because
-	// the platform has no process sweep, which raised a further hold for
-	// the same attempt; it begins nothing until that hold is answered retry.
+	// AnswerRetryHeld is a retry recorded whose relaunch or dispatch was
+	// refused because the platform has no process sweep, which raised a
+	// further hold for the attempt it read; it begins nothing until that
+	// hold is answered retry.
 	// NotRelaunched says why and names the hold.
 	AnswerRetryHeld AnswerEffect = "retry-held"
 	// AnswerStopped is a stop: the task is left where it stopped and
@@ -430,7 +433,8 @@ const (
 type RelaunchBegun struct {
 	// Attempt is the new attempt's sequence.
 	Attempt int64 `json:"attempt"`
-	// Superseded is the session reference of the attempt it replaced.
+	// Superseded is the session reference of the attempt it replaced, and
+	// empty when that attempt recorded none, which is a retried dispatch's.
 	Superseded string `json:"superseded"`
 }
 

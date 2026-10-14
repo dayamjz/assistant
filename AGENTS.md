@@ -827,7 +827,9 @@ Each has cost this repository more than one round of review.
   Where the platform has no sweep (`agents.ErrSweepUnsupported`) a relaunch
   is refused (P6) and holds for a person on a key of its own per attempt,
   beside the bound's, and goes ahead only on a `retry` answer, which the
-  attempt anchor spends on one attempt; a retried dispatch is not held.
+  attempt anchor spends on one attempt; a dispatch retried over a copy a
+  crash left standing is held the same way, on `task/<id>/dispatch-unswept/`
+  keyed by the latest attempt it read, and `taskholds.go` owns all three.
   It is also where PRD section 5's supervisor loop lives, in `supervise.go`,
   started by `Open` after recovery and before the caller serves. The loop
   runs as incarnations fenced by `store.BeginIncarnation`: every wake append
