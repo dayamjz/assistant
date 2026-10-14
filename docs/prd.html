@@ -2405,7 +2405,7 @@ flowchart TB
       <tbody>
         <tr><td><b>Pipeline holds it</b></td><td>A run is active. Wait for it.</td></tr>
         <tr><td><b>Recoverable</b></td><td>A terminated run moved the head. Recovery brings that work back to you.</td></tr>
-        <tr><td><b>Yours already</b></td><td>Termination positively verified the head never moved. Nothing to do, and recovery is a no-op.</td></tr>
+        <tr><td><b>Yours already</b></td><td>The run's last checkpoint, and its isolated copy where that still stands, show the head never moved, read when you ask rather than recorded at termination. With no checkpoint the class cannot be read and custody refuses. Nothing to do, and recovery is a no-op.</td></tr>
         <tr><td><b>Behind</b></td><td>Fast-forward a clean checked-out branch to a freshly verified pushed commit.</td></tr>
         <tr><td><b>Diverged but equivalent</b></td><td>Contents match. Anchor the current head under a recovery reference first, then move.</td></tr>
         <tr><td><b>Genuinely diverged</b></td><td>Blocked. Nothing changes and you are told why.</td></tr>
@@ -2416,7 +2416,7 @@ flowchart TB
     <div class="card card-border bg-base-200 border-error/30">
       <div class="card-body">
         <h4 class="card-title text-sm">Never</h4>
-        <p class="text-xs opacity-90">Stash, merge, rebase, force, switch branches, delete a branch, or touch a remote. Reading status never fetches and never mutates.</p>
+        <p class="text-xs opacity-90">Stash, merge, rebase, force, switch branches, delete a branch, or touch a remote. Reading status never fetches and never mutates. The one move that does not keep the branch's history, adopting a diverged but equivalent head, is not a force in this sense: it is anchored on the head the run observed, allowed only on the proof beside this, and the current head is kept under a recovery reference before it happens. Any other force is refused.</p>
       </div>
     </div>
     <div class="card card-border bg-base-200">
