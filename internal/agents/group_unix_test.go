@@ -24,6 +24,18 @@ import (
 // ends it on cleanup whether or not the assertion that should have did.
 func startHeld(t *testing.T) (*exec.Cmd, agents.Identity) {
 	t.Helper()
+	cmd, id, _ := startHeldReaped(t)
+	return cmd, id
+}
+
+// startHeldReaped is startHeld that also hands back the channel closed once
+// this process has reaped the stand-in, so a test that kills the leader can
+// wait for the reap rather than for the identity read to stop finding it.
+// The two are not the same moment here: macOS CI has answered signal zero
+// to the group of a leader the identity read already counted absent, before
+// this process reaped it.
+func startHeldReaped(t *testing.T) (*exec.Cmd, agents.Identity, <-chan struct{}) {
+	t.Helper()
 	requiresIdentityRead(t)
 	cmd := exec.Command(helperBinary(t))
 	cmd.Env = []string{helperModeVar + "=hold"}
@@ -46,7 +58,7 @@ func startHeld(t *testing.T) (*exec.Cmd, agents.Identity) {
 	if err != nil || !found {
 		t.Fatalf("identifying the held stand-in: %+v, %v, %v", id, found, err)
 	}
-	return cmd, id
+	return cmd, id, waited
 }
 
 // groupAlive reports whether the group still holds a process this process
@@ -118,11 +130,21 @@ func TestEndGroupLeavesAReusedIdentifierAlone(t *testing.T) {
 // survivor. The survivor is the stand-in's own child, started in the
 // leader's group the way an agent's descendant is.
 func TestEndGroupAnswersForALeaderThatIsGone(t *testing.T) {
-	_, id := startHeld(t)
+	_, id, reaped := startHeldReaped(t)
 	if err := syscall.Kill(id.PID, syscall.SIGKILL); err != nil {
 		t.Fatalf("killing the leader: %v", err)
 	}
 	waitAbsent(t, id)
+	// The empty-group answer is about a group with nothing left in it, so
+	// wait for this process to reap the leader. An exited leader not yet
+	// reaped is the case TestEndGroupCountsAnExitedUnreapedMemberAsGone
+	// drives on purpose, and it reads gone only where exitedOnly can list
+	// it, which is Linux alone.
+	select {
+	case <-reaped:
+	case <-time.After(10 * time.Second):
+		t.Fatalf("the killed leader %d was not reaped", id.PID)
+	}
 	end, err := agents.EndGroup(id, time.Second)
 	if err != nil || end != agents.GroupGone {
 		t.Fatalf("EndGroup(gone leader, empty group) = %s, %v, want %s", end, err, agents.GroupGone)
