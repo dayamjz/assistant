@@ -71,6 +71,28 @@ func (r *Repository) HeadBranch(ctx context.Context) (string, error) {
 	return name, nil
 }
 
+// SymbolicTarget returns the full name of the reference that the symbolic
+// reference name points at, such as refs/remotes/origin/main for
+// refs/remotes/origin/HEAD. It returns ErrRefNotFound when name does not exist
+// or is not symbolic, and ErrInvalidArgument for a name checkArg refuses.
+//
+// ListRefs cannot answer this: it reports a symbolic reference under its own
+// name with the object it resolves to, and never what it points at.
+func (r *Repository) SymbolicTarget(ctx context.Context, name string) (string, error) {
+	if err := checkArg("ref", name); err != nil {
+		return "", err
+	}
+	out, code, err := r.runExpecting(ctx, "symbolic-target", []int{1}, "symbolic-ref", "--quiet", name)
+	if err != nil {
+		return "", err
+	}
+	target := strings.TrimSpace(string(out))
+	if code != 0 || target == "" {
+		return "", &symbolicError{name: name, repo: r.path}
+	}
+	return target, nil
+}
+
 // ListRefs returns the references in this repository whose names match any of
 // the given patterns, in git's own order. With no patterns it returns every
 // reference. A pattern is matched the way git for-each-ref matches one: a
@@ -218,6 +240,20 @@ func (e *refError) Error() string {
 
 // Unwrap makes every unresolvable revision match ErrRefNotFound.
 func (e *refError) Unwrap() error { return ErrRefNotFound }
+
+// symbolicError reports a name that is not a symbolic reference, either
+// because nothing has that name or because what has it is an ordinary one.
+type symbolicError struct {
+	name string
+	repo string
+}
+
+func (e *symbolicError) Error() string {
+	return "vcs: " + e.name + " is missing or not a symbolic reference in " + e.repo
+}
+
+// Unwrap makes a name with no symbolic target match ErrRefNotFound.
+func (e *symbolicError) Unwrap() error { return ErrRefNotFound }
 
 // outputError reports git output that did not have the shape the requested
 // format promises. Parsing stops rather than skipping the line, because a

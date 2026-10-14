@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"strings"
@@ -114,13 +115,13 @@ func intendedRepository(ctx context.Context, working, upstream, defaultBranch st
 // branch has moved since it was cloned records the old one until it is fetched
 // again, which is why --default-branch exists.
 func defaultBranchOf(ctx context.Context, repo *vcs.Repository) (string, error) {
-	refs, err := repo.ListRefs(ctx, "refs/remotes/origin/HEAD")
+	target, err := repo.SymbolicTarget(ctx, "refs/remotes/origin/HEAD")
 	if err == nil {
-		for _, ref := range refs {
-			if name := strings.TrimPrefix(ref.Name, "refs/remotes/origin/"); name != "" && name != "HEAD" {
-				return name, nil
-			}
+		if name, ok := strings.CutPrefix(target, "refs/remotes/origin/"); ok && name != "" && name != "HEAD" {
+			return name, nil
 		}
+	} else if !errors.Is(err, vcs.ErrRefNotFound) {
+		return "", fmt.Errorf("reading origin's default branch: %w", err)
 	}
 	branch, err := repo.HeadBranch(ctx)
 	if err != nil {
