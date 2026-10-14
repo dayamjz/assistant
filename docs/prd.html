@@ -61,6 +61,8 @@
         <li><a href="#mvp">12. The MVP cut</a></li>
         <li><a href="#verification">13. Verification</a></li>
         <li><a href="#decisions">14. Decisions recorded</a></li>
+        <li><a href="#proposal-delivery">Proposed: delivery posture</a></li>
+        <li><a href="#proposal-routing">Proposed: agent routing</a></li>
       </ul>
     </div>
   </div>
@@ -2610,6 +2612,381 @@ flowchart TB
       anything, and how often a person waved a held file through. If they rarely lead anywhere, turn
       them off; if they fire wrongly on this kind of code, the fix is a new measurement rather than
       a looser setting.</li>
+  </ul>
+</section>
+
+<!-- ===================== PROPOSAL C: DELIVERY POSTURE (NOT DECIDED) ===================== -->
+<section id="proposal-delivery" class="prd-anchor mb-16">
+  <p class="prd-kicker mb-2">Proposal C, not decided</p>
+  <h2 class="text-3xl font-bold tracking-tight mb-3">Proposed: delivery posture and merge authority</h2>
+  <div role="alert" class="alert alert-soft alert-warning mb-6 items-start">
+    <div class="min-w-0">
+      <p class="font-semibold mb-1">Proposed, not decided</p>
+      <p class="text-sm opacity-90">
+        This section is a proposal for the owner to decide, raised from issue #134. It is not part
+        of the contract. Sections 1 through 14 govern wherever this text and theirs differ, and
+        nothing here may be built or cited as specified until the owner's decisions below are
+        recorded in section 14 and the text is moved into the sections it amends.
+      </p>
+    </div>
+  </div>
+
+  <h3 class="text-xl font-semibold mb-3">The problem</h3>
+  <p class="mb-4 opacity-90">
+    Every delivery task's change goes through all nine stages. That is right for work other people
+    will depend on, and it is slow and costs agent turns for work nobody would have asked another
+    person to review. When the only path is the full gate, the cheap way out is to stop using the
+    gate, which loses more than a lighter path would. Section 6 already describes three delivery
+    modes, <code>gated</code>, <code>direct</code>, and <code>local</code>, and an autonomy flag
+    that merges. Section 12 defers the two lighter modes, no configuration key selects a mode, and
+    nothing in this build merges a pull request: the code-host interface opens, reads, and updates
+    one, and has no merge operation.
+  </p>
+  <p class="mb-4 opacity-90">What a lighter posture collides with, quoted where the text is exact:</p>
+  <ul class="list-disc pl-6 space-y-1.5 mb-4 opacity-90">
+    <li><b>Section 1, Promise 2.</b> "Every change a worker produces reaches a shared branch through
+      the same gate". A direct pull request is a worker's change reaching a shared remote without
+      validation. This is the one collision a decision has to relax rather than route around.</li>
+    <li><b>P1.</b> Pushing to the gate by name authorizes a run to validate the change. A posture
+      that changed what a person's push to the gate does would change what that consent means.</li>
+    <li><b>P2 and the non-goal "Standing configuration that skips a stage. Per-run skips by a
+      person, yes. A rule that skips on your behalf, never."</b> A run that starts and then skips
+      stages because a project declared it is exactly that rule.</li>
+    <li><b>The non-goal "Risk-based automatic skipping. A classifier's guess must never weaken what
+      a pass means."</b> A posture chosen per task by judging whether the work is product-facing is
+      a guess of that kind.</li>
+    <li><b>The non-goal "Owning merge policy. That belongs to your forge."</b>, and section 1's "it
+      does not own merge policy. Your forge does." The autonomy flag in section 6 already merges
+      green work; what it may not do is decide when a merge is allowed.</li>
+    <li><b>P6.</b> A forward to the remote and a merge are both updates that must be anchored to a
+      commit the program observed. <b>P7.</b> A posture changes what runs, so it is read from the
+      trusted copy. <b>P13.</b> Nothing a lighter posture delivers may read as validated.
+      <b>P14.</b> Section 8's merge record stays the one record that a pull request merged.</li>
+  </ul>
+
+  <h3 class="text-xl font-semibold mb-3">The smallest design</h3>
+  <p class="mb-4 opacity-90">
+    A <b>posture</b> is section 6's delivery mode made a setting: which path a delivery task's work
+    takes to its destination. It is a property of a delivery task and never of a run. A run, when
+    one starts, is the full nine stages exactly as today; the lighter postures start no run at all,
+    so no stage is skipped, reordered, or added, and P2's "a pass means the same thing everywhere"
+    is untouched because nothing they deliver is a pass.
+  </p>
+  <div class="overflow-x-auto rounded-box border border-base-content/10 bg-base-100 mb-6">
+    <table class="table table-sm table-zebra">
+      <thead><tr><th class="w-28">Posture</th><th>Path after the worker pushes to the gate</th><th class="w-64">What the task ends with</th></tr></thead>
+      <tbody>
+        <tr><td><b>gated</b></td><td>The run starts through the existing admission and notification, all nine stages. Unchanged.</td><td>A run outcome, and Landed from the merge record, as today.</td></tr>
+        <tr><td><b>direct</b></td><td>No run starts. The program forwards the exact commit the worker pushed to the task's branch on the upstream, through <code>internal/safety</code>'s anchored update against the tip it observed, and opens or updates the pull request through the one forge adapter. The body says in its first line that the change was not validated by the gate.</td><td>No run outcome. The task resolves from its own records; the pull request's merge is read and recorded on the existing merge record's terms.</td></tr>
+        <tr><td><b>local</b></td><td>No run starts and nothing leaves the machine. The task holds for your approval. On <code>approve</code> the program fast-forwards your local default branch to the pushed commit, refusing anything that is not a fast-forward from the tip it read and anything section 11's custody table would block.</td><td>A once-written record of the fast-forward, read by section 6's terminal tier beside the merge record.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <ul class="list-disc pl-6 space-y-1.5 mb-4 opacity-90">
+    <li><b>Where it is configured.</b> One row in the key table, <code>delivery</code>, default
+      <code>gated</code>, trusted-only: read from the default branch at a freshly fetched commit and
+      never from the pushed copy (P7), so a branch cannot lighten its own path. If the trusted copy
+      cannot be read and parsed, nothing is delivered and the refusal is reported; no posture is
+      assumed in its place, not even <code>gated</code>.</li>
+    <li><b>Where it is recorded.</b> The posture a task was dispatched under is written on the task
+      at intake, in a column of its own. The task record's existing <code>mode</code> column holds
+      how the worker was launched, in the caller's notation, and is not reused for this.</li>
+    <li><b>Only delivery tasks.</b> A push a person makes to the gate always starts the full run
+      (P1). Admission already places a push inside a registered worker group by the credentials
+      the socket reports; only such a push is routed by its task's posture. An investigation task
+      pushes nothing and has no posture.</li>
+    <li><b>The coordinator may tighten, never loosen.</b> At intake the coordinator may record a
+      stricter posture than the project's, for work it judges risky. It may never record a lighter
+      one, so no agent judgment weakens the path a project declared.</li>
+    <li><b>One admission path stays one.</b> The worker still pushes only to <code>assistant</code>.
+      The forward in <code>direct</code> is the program's, so the worker gains no second route to a
+      shared branch.</li>
+    <li><b>Wording.</b> The phrase table gains rows for a change delivered without validation and a
+      local change waiting for your approval. Neither ever uses the words a passed run uses.</li>
+  </ul>
+  <p class="mb-4 opacity-90">
+    <b>Merge authority.</b> Section 6's autonomy flag is made a setting: a global-only key naming the
+    repositories where it is on, empty by default, so a repository can never grant itself merge
+    authority. Where it is on, the program merges only a run that ended <code>checks-passed</code>,
+    and only after a live read by the pull request's recorded identifier that finds it open, not a
+    draft, reported mergeable by the forge, and every reported check settled green on the head the
+    run observed, with an empty check list green only under <code>no_ci</code>. The merge request is bound to that head; where the forge cannot bind it, the
+    program refuses rather than merging an unbound head (P6). The forge's own rules decide whether
+    the merge is allowed, and a refusal from it is reported, not worked around, which is what keeps
+    this an actor inside your merge policy rather than an owner of it. The merge itself writes no
+    record: the existing code-host read that ends a run on a merge writes the merge record, and the
+    one-line outcome with the full URL section 6 requires is phrased from it.
+  </p>
+
+  <h3 class="text-xl font-semibold mb-3">Decisions for the owner</h3>
+  <ol class="list-decimal pl-6 space-y-3 mb-6 opacity-90">
+    <li><b>Whether to promote the lighter postures out of section 12's deferred list.</b>
+      <ol class="list-[lower-alpha] pl-6 mt-1 space-y-1">
+        <li>Promote both <code>direct</code> and <code>local</code>, relaxing Promise 2 for
+          <code>direct</code> tasks.</li>
+        <li>Promote <code>local</code> only; keep <code>direct</code> deferred.</li>
+        <li>Keep both deferred and record that decision.</li>
+      </ol>
+      <p class="mt-1"><b>Recommended: b.</b> <code>local</code> shares nothing, so it collides with
+        no promise. <code>direct</code> is the one posture that breaks Promise 2, and its motivation
+        is cost; the usage view in the next proposal can say what a gated run actually costs before
+        the gate is relaxed for it.</p></li>
+    <li><b>The non-goal "Standing configuration that skips a stage".</b>
+      <ol class="list-[lower-alpha] pl-6 mt-1 space-y-1">
+        <li>Keep it unchanged. A lighter posture starts no run, so it skips no stage; section 12
+          gains one sentence saying so when the posture is decided.</li>
+        <li>Relax it: a lighter posture starts a run that skips stages by standing configuration and
+          records which it skipped, as issue #134's third item proposes.</li>
+      </ol>
+      <p class="mt-1"><b>Recommended: a.</b> A run with standing skips reads as a run, and its
+        outcome words were built to mean the full gate; recording the skips beside them is the
+        "it passed the gate means something different here" failure P2 exists to prevent.</p></li>
+    <li><b>The non-goal "Risk-based automatic skipping", against a per-task posture.</b>
+      <ol class="list-[lower-alpha] pl-6 mt-1 space-y-1">
+        <li>Keep it: the coordinator may record a stricter posture than the project's, never a
+          lighter one.</li>
+        <li>Relax it: the coordinator chooses the posture per task, as firstmate's product-facing
+          default does.</li>
+      </ol>
+      <p class="mt-1"><b>Recommended: a.</b> Option b is a judgment choosing a weaker path, which
+        section 8 places on the program's side, and it is the guess the non-goal names.</p></li>
+    <li><b>Where the posture is configured.</b>
+      <ol class="list-[lower-alpha] pl-6 mt-1 space-y-1">
+        <li>A trusted-only repository key, default <code>gated</code>.</li>
+        <li>A global-only key, listing repositories and their posture.</li>
+        <li>Both, the stricter winning.</li>
+      </ol>
+      <p class="mt-1"><b>Recommended: a.</b> Section 6 says each project declares how its work
+        ships, which is a fact about the repository, and trusted-only already keeps a branch from
+        choosing for itself. Option c is two owners for one fact (P14).</p></li>
+    <li><b>Whether a posture governs a person's push to the gate.</b>
+      <ol class="list-[lower-alpha] pl-6 mt-1 space-y-1">
+        <li>No: a person's push always starts the full run; the posture applies to delivery
+          tasks.</li>
+        <li>Yes: every push to the gate follows the project's posture.</li>
+      </ol>
+      <p class="mt-1"><b>Recommended: a.</b> P1 makes that push consent to validation, and a
+        person who wants no validation already has <code>origin</code>.</p></li>
+    <li><b>Who forwards a <code>direct</code> task's work, if it is promoted.</b>
+      <ol class="list-[lower-alpha] pl-6 mt-1 space-y-1">
+        <li>The program, from the gate, after the worker's push is admitted, with an anchored
+          update.</li>
+        <li>The worker, through an upstream remote added to its copy.</li>
+      </ol>
+      <p class="mt-1"><b>Recommended: a.</b> It keeps one admission path and P6's anchor in
+        <code>internal/safety</code>. Option b hands a worker the second route to a shared branch
+        section 6 rules out.</p></li>
+    <li><b>How a lighter task reaches a terminal state.</b>
+      <ol class="list-[lower-alpha] pl-6 mt-1 space-y-1">
+        <li><code>direct</code>: the merge record, written by the same code-host read, keyed by the
+          pull request rather than by a run. <code>local</code>: a new once-written fast-forward
+          record. Both read by the terminal tier.</li>
+        <li>No terminal state: such a task stays where its last record left it.</li>
+      </ol>
+      <p class="mt-1"><b>Recommended: a.</b> P12's cleanup proof and the catch-up view's Landed part
+        both need a record of where the work went; without one a lighter task's copy can never be
+        cleaned up.</p></li>
+    <li><b>The non-goal "Owning merge policy", against the autonomy flag.</b>
+      <ol class="list-[lower-alpha] pl-6 mt-1 space-y-1">
+        <li>Keep it: the program merges only as an actor the forge's rules admit, after the live
+          read above, and decides nothing about when a merge is allowed.</li>
+        <li>Relax it: the program carries its own merge rules, such as required approvals or merge
+          windows.</li>
+      </ol>
+      <p class="mt-1"><b>Recommended: a.</b> Section 6 already gives the flag its merge; what keeps
+        it inside the non-goal is that the forge, not this program, says yes.</p></li>
+    <li><b>Where merge authority is configured.</b>
+      <ol class="list-[lower-alpha] pl-6 mt-1 space-y-1">
+        <li>A global-only key naming the repositories where it is on, empty by default.</li>
+        <li>A global-only boolean for every repository in the home.</li>
+        <li>A trusted-only repository key.</li>
+      </ol>
+      <p class="mt-1"><b>Recommended: a.</b> Authority is the operator's (section 10's test is
+        authority, not harm), so not c; and a home-wide switch grants merges in shared repositories
+        the operator never meant, so not b.</p></li>
+    <li><b>What the autonomy flag may merge.</b>
+      <ol class="list-[lower-alpha] pl-6 mt-1 space-y-1">
+        <li>Only a run that ended <code>checks-passed</code>.</li>
+        <li>Also a <code>direct</code> task's pull request whose checks are green.</li>
+      </ol>
+      <p class="mt-1"><b>Recommended: a.</b> Option b merges work nothing validated on the strength
+        of your CI alone, and it can be added later without changing a.</p></li>
+  </ol>
+
+  <h3 class="text-xl font-semibold mb-3">Out of scope</h3>
+  <ul class="list-disc pl-6 space-y-1.5 mb-4 opacity-90">
+    <li>Any change to the nine stages, their order, or what a run's outcome means.</li>
+    <li>A posture chosen per branch or per push, and a per-run lighter path. Per-run skips by a
+      person already exist.</li>
+    <li>A classifier or a decision model choosing a posture. Section 14's sixth decision limits the
+      decision model to its two checks.</li>
+    <li>Merge queues, required-approval rules, and any other merge policy: the forge's.</li>
+    <li>Merging on a person's behalf without the flag, and any force path around a forge
+      refusal.</li>
+    <li>A second forge adapter, which section 12 defers.</li>
+  </ul>
+</section>
+
+<!-- ===================== PROPOSAL D: AGENT ROUTING (NOT DECIDED) ===================== -->
+<section id="proposal-routing" class="prd-anchor mb-16">
+  <p class="prd-kicker mb-2">Proposal D, not decided</p>
+  <h2 class="text-3xl font-bold tracking-tight mb-3">Proposed: agent usage and routing</h2>
+  <div role="alert" class="alert alert-soft alert-warning mb-6 items-start">
+    <div class="min-w-0">
+      <p class="font-semibold mb-1">Proposed, not decided</p>
+      <p class="text-sm opacity-90">
+        This section is a proposal for the owner to decide, raised from issue #135. It is not part
+        of the contract. Sections 1 through 14 govern wherever this text and theirs differ, and
+        nothing here may be built or cited as specified until the owner's decisions below are
+        recorded in section 14 and the text is moved into the sections it amends.
+      </p>
+    </div>
+  </div>
+
+  <h3 class="text-xl font-semibold mb-3">The problem</h3>
+  <p class="mb-4 opacity-90">
+    A service resolves one agent from the <code>agent</code> key, and every stage and every worker
+    gets it. Nothing chooses by the kind of work, by how much of a provider's quota is left, or by
+    reasoning effort, and nothing reports what the agents cost. Section 8's agent invocation record
+    already keeps purpose, agent, model, timing, failure category, and token usage for every call a
+    stage makes, and nothing outside the tests reads it. It names no run, task, or stage beyond the
+    purpose, and a worker's turns produce no record, because nothing in the adapter reads a
+    worker's output.
+  </p>
+  <p class="mb-4 opacity-90">
+    Routing among adapters needs a second adapter, and section 12 defers "Agent adapters beyond
+    Claude Code". This build carries three more adapters reachable by naming them in
+    <code>agent</code>; <code>auto</code> resolves Claude Code alone, and only Claude Code declares
+    <code>worker_sessions</code>, so a worker cannot be routed anywhere else today. Section 14's
+    "what to settle next" leaves when the second adapter arrives open.
+  </p>
+  <p class="mb-4 opacity-90">
+    Principles this touches: P4 (a route may choose which adapter reviews and which fixes, and
+    never lets a review resume the fixer's session), P7 (a route chooses which process starts with
+    your credentials, so it is trusted configuration), P13 (usage figures are agent and model
+    names and stage purposes), P14 (the invocation record stays the one owner of what a call cost,
+    and a route decision is a record of its own rather than columns guessed onto it), and
+    section 12's "Silent degradation": a route that quietly falls to a weaker model is a weaker
+    check reported as the same one.
+  </p>
+
+  <h3 class="text-xl font-semibold mb-3">The smallest design</h3>
+  <p class="mb-2 opacity-90"><b>Step 1: a usage view, with no routing.</b></p>
+  <ul class="list-disc pl-6 space-y-1.5 mb-4 opacity-90">
+    <li><b>What it reads.</b> The agent invocation record, through a typed read in
+      <code>internal/store</code>, totalled by agent, model, and purpose over a window: calls,
+      failures by category, duration, and each token count. A count the agent did not report is
+      shown as unreported and never summed as a zero, per section 8's schema rule.</li>
+    <li><b>The surface.</b> A flag on <code>assistant runs</code>, which already answers history,
+      taking a window, plus one open read method on the local protocol that the flag and a driving
+      agent share. No verb is added and section 9's table is unchanged.</li>
+    <li><b>Wording.</b> Its rows are exact agent names, model identifiers, and stage purposes, which
+      P13 forbids in a phrased line, so it is named a detailed evidence document beside the detail
+      view, and the line pointing at it is phrased.</li>
+    <li><b>What it does not cover.</b> A worker's usage, and a dollar cost. It says so in the view
+      rather than leaving a reader to assume it is a whole.</li>
+  </ul>
+  <p class="mb-2 opacity-90"><b>Step 2: routing, once a second adapter is decided.</b></p>
+  <ul class="list-disc pl-6 space-y-1.5 mb-4 opacity-90">
+    <li><b>What a route is.</b> For one class of invocation (a worker, a fixer, a reviewer, or
+      another stage's agent), an ordered list of candidates, each an adapter with an optional model
+      and an optional effort. Effort is a capability an adapter declares with a conformance probe,
+      per section 8; undeclared means unavailable, and a route asking for it is refused rather than
+      run without it.</li>
+    <li><b>Where it lives.</b> A global-only key: quota and subscriptions are the operator's, and
+      section 10's test is authority. A route may only name entries the resolved
+      <code>agent</code> key admits, so a repository's trusted <code>agent</code> stays a limit
+      that routing cannot widen.</li>
+    <li><b>How a candidate is chosen.</b> By the program, in list order, skipping one that is not
+      runnable, lacks a capability the path requires, or reads below a quota floor through a
+      provider-agnostic quota seam. A candidate whose quota cannot be read counts as eligible and
+      the record says the reading was missing; no external quota tool is a dependency.</li>
+    <li><b>What is measured and recorded.</b> Each choice writes one route record: the class, the
+      candidates in order, each one's eligibility and quota reading, the winner, and why each
+      earlier candidate lost. The invocation record keeps what the winner cost.</li>
+    <li><b>What a route may never change mid-run.</b> A run's routes are decided once, when the run
+      begins, and recorded on it; a resume uses the recorded routes and refuses rather than
+      re-routing when one is no longer runnable. The fixer's adapter and model stay fixed for the
+      run, because the durable fixer session belongs to one adapter. Every review in a run,
+      including the push stage's re-review of fix commits, uses the same route as the first, so
+      the second look is never weaker than the first. A route never reaches the decision model,
+      whose version is pinned in the program. And a review is session-free whatever it routes to
+      (P4), while a fixer routed to an adapter without <code>resumable_sessions</code> is refused,
+      never given a substitute.</li>
+  </ul>
+
+  <h3 class="text-xl font-semibold mb-3">Decisions for the owner</h3>
+  <ol class="list-decimal pl-6 space-y-3 mb-6 opacity-90">
+    <li><b>Whether to ship only the usage view now.</b>
+      <ol class="list-[lower-alpha] pl-6 mt-1 space-y-1">
+        <li>Ship step 1 only; specify routing when a second adapter is promoted.</li>
+        <li>Ship step 1 and model routing within Claude Code now.</li>
+        <li>Ship step 1 and full routing, promoting a second adapter out of section 12.</li>
+      </ol>
+      <p class="mt-1"><b>Recommended: a.</b> The view is useful alone, it is what decides whether
+        routing is worth its cost, and routing with one adapter that runs workers chooses little.
+        It also answers the cost question proposal C's <code>direct</code> posture rests on.</p></li>
+    <li><b>Where the usage view lives.</b>
+      <ol class="list-[lower-alpha] pl-6 mt-1 space-y-1">
+        <li>A flag on <code>assistant runs</code>.</li>
+        <li>A part of <code>assistant status</code>.</li>
+        <li>A part of <code>assistant doctor</code>.</li>
+        <li>A new verb, amending section 9's closed table.</li>
+      </ol>
+      <p class="mt-1"><b>Recommended: a.</b> The record is history and <code>runs</code> is the
+        history verb. <code>status</code> answers for one branch and the record names no
+        branch; <code>doctor</code> answers whether a run can start.</p></li>
+    <li><b>Whether usage is attributed to runs.</b>
+      <ol class="list-[lower-alpha] pl-6 mt-1 space-y-1">
+        <li>The existing columns only: totals by agent, model, and purpose.</li>
+        <li>Also a nullable run and stage on each new invocation row, in an additive migration, old
+          rows reading unknown.</li>
+      </ol>
+      <p class="mt-1"><b>Recommended: b.</b> "What does one gated run cost" is the question both
+        issues start from, and a home-wide total cannot answer it. The columns are additive, and
+        rows written before them stay unknown rather than guessed.</p></li>
+    <li><b>How the view is worded.</b>
+      <ol class="list-[lower-alpha] pl-6 mt-1 space-y-1">
+        <li>A detailed evidence document, beside the detail view.</li>
+        <li>Phrased status lines.</li>
+      </ol>
+      <p class="mt-1"><b>Recommended: a.</b> A phrased figure without the model it belongs to says
+        nothing a reader can act on.</p></li>
+    <li><b>Where routes are configured.</b>
+      <ol class="list-[lower-alpha] pl-6 mt-1 space-y-1">
+        <li>A global-only key, limited to what the resolved <code>agent</code> admits.</li>
+        <li>An extension of <code>agent</code> itself, in its commands class.</li>
+        <li>A trusted-only repository key.</li>
+      </ol>
+      <p class="mt-1"><b>Recommended: a.</b> Quota is the operator's fact, and keeping
+        <code>agent</code> as the limit leaves the repository its say without a second owner of
+        agent selection.</p></li>
+    <li><b>Who chooses among candidates.</b>
+      <ol class="list-[lower-alpha] pl-6 mt-1 space-y-1">
+        <li>The program, by list order and eligibility, recording why.</li>
+        <li>The coordinator agent, from natural-language rules, as firstmate does.</li>
+      </ol>
+      <p class="mt-1"><b>Recommended: a.</b> Choosing a weaker reviewer weakens a pass, and section
+        8 puts anything that does on the program's side.</p></li>
+    <li><b>What is routed first.</b>
+      <ol class="list-[lower-alpha] pl-6 mt-1 space-y-1">
+        <li>Workers, then fixers, then reviewers last.</li>
+        <li>Every class at once.</li>
+      </ol>
+      <p class="mt-1"><b>Recommended: a.</b> A worker's route changes nothing a pass means, and a
+        reviewer's is the one that can.</p></li>
+  </ol>
+
+  <h3 class="text-xl font-semibold mb-3">Out of scope</h3>
+  <ul class="list-disc pl-6 space-y-1.5 mb-4 opacity-90">
+    <li>Recording a worker's usage, which would need a reader of worker output the adapter does not
+      have.</li>
+    <li>Prices and dollar cost.</li>
+    <li>Natural-language routing rules, and any route chosen by a decision model.</li>
+    <li>Switching agent or model on a running worker or mid-run, which section 6's steering already
+      excludes.</li>
+    <li>Promoting any adapter out of section 12's deferred list; that is a decision of its own.</li>
+    <li>Any dependency on a particular quota tool.</li>
   </ul>
 </section>
 
