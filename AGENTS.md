@@ -162,13 +162,15 @@ Each has cost this repository more than one round of review.
   it, with the parsed report opaque and the hold keys the one fact the row
   holds about it. `RecordTaskCleanup` takes the shape it was decided for and
   refuses `ErrTaskShapeMoved` in the claiming transaction, and
-  `TransitionTaskShape`, promotion's one write, flips shape, repository and
-  branch with the `promoted` entry in one anchored transaction, one way
-  only, and refuses `ErrCleanupRecorded` by reading the claim the same way,
-  so the two writes have exactly one loser in either order.
+  `TransitionTaskShape`, promotion's one write, flips shape, repository,
+  branch and posture with the `promoted` entry in one anchored transaction,
+  one way only, and refuses `ErrCleanupRecorded` by reading the claim the
+  same way, so the two writes have exactly one loser in either order.
   The task row's `mode` column is the launch notation and never the delivery
-  posture: the posture is the `delivery` column localLandingMigration adds, written once by
-  `CreateTask`, and the same migration's `local_landing` is PRD section 8's
+  posture: the posture is the `delivery` column localLandingMigration adds,
+  written once by `CreateTask` or, for a promoted task, by
+  `TransitionTaskShape`, which promotedPostureMigration's trigger enforces.
+  localLandingMigration's `local_landing` is PRD section 8's
   local landing record, written once by `RecordLocalLanding` in the
   transaction that closes the approval hold and sealed like `merge_record`.
   `ForgetHoldForTest` takes the test and is a counterfeit builder for the hold
@@ -443,8 +445,8 @@ Each has cost this repository more than one round of review.
 - `internal/tasks` is PRD section 8's tasks module as far as this build takes
   it: intake, queueing, the P11 assertion, the P12 cleanup decision and
   promotion, with dispatch and the copy in `internal/service` and the launch
-  in `internal/session`. Intake records a delivery task's delivery posture
-  from `Deps.Posture`, the project's trusted copy as `internal/service`
+  in `internal/session`. Intake and promotion record a delivery task's
+  delivery posture from `Deps.Posture`, the project's trusted copy as `internal/service`
   reads it, refuses with `ErrPostureUnreadable` when that read fails rather
   than assuming one, and lets a request tighten it and never loosen it
   (`*PostureError`); a local task's cleanup proof is the content check

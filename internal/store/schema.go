@@ -41,6 +41,11 @@ const forgetRunRecordsMigration = "written-once run records go with their run"
 // sealCheckpointTableMigration is a constant.
 const localLandingMigration = "task delivery posture and local landing records"
 
+// promotedPostureMigration names the migration that lets promotion write a
+// task's delivery posture once and refuses every other write of it, for the
+// reason sealCheckpointTableMigration is a constant.
+const promotedPostureMigration = "task delivery posture written once, at intake or promotion"
+
 // invocationServedMigration names the migration that adds the run and stage
 // an agent invocation served, for the reason sealCheckpointTableMigration is
 // a constant.
@@ -1207,6 +1212,36 @@ var schema = []migration{
 			// run, and nothing else removes one.
 			`ALTER TABLE agent_invocation ADD COLUMN run TEXT`,
 			`ALTER TABLE agent_invocation ADD COLUMN stage TEXT`,
+		},
+	},
+	{
+		version: 27,
+		name:    promotedPostureMigration,
+		statements: []string{
+			// Migration 25's delivery column was written once by having one
+			// writer, CreateTask's insert, and no statement here that
+			// updates it. Promotion now records the posture too (#187), in
+			// TransitionTaskShape's update, so "written once" becomes this
+			// trigger rather than the absence of a second writer. An update
+			// that names the column is refused unless it is the one write
+			// promotion makes: the row had no posture, it is given a known
+			// one, and the same statement moves the shape from
+			// investigation to delivery. A posture once known is never
+			// revised, a delivery task recorded without one - before
+			// migration 25 or promoted before this one - is never given one
+			// later, and no write clears one. An update that does not name
+			// the column cannot change it, so it does not reach the trigger.
+			// The shape move is the only thing the trigger ties the write
+			// to; that it is promotion's statement and not another update of
+			// both columns rests on TransitionTaskShape being the one writer
+			// of the shape.
+			`CREATE TRIGGER task_delivery_is_written_once
+				BEFORE UPDATE OF delivery ON task
+				WHEN OLD.delivery IS NOT NULL OR NEW.delivery IS NULL
+					OR OLD.shape <> 'investigation' OR NEW.shape <> 'delivery'
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a task''s delivery posture is written once, at intake or by the promotion that makes it a delivery task, and is not revised');
+				END`,
 		},
 	},
 }
