@@ -98,6 +98,28 @@ func (p *Pipe) Capture(s *Session) (Capture, error) {
 	return Capture{Text: got.Text, Dropped: got.Dropped, Digest: Digest(got.Text)}, nil
 }
 
+// CaptureReference is Capture addressed by a session's encoded reference
+// rather than its handle, for a caller that reads references out of the
+// record and holds no handle, which internal/service's terminal hookup is.
+// It is answered out of the same held set Probe answers Live from, so a
+// reference Probe answers Live for is one this captures, and every other
+// reference, held by no provider or by another one, is ErrNotHeld, which is
+// that terminal's failure and never the provider's. The read is of retained
+// output in memory and does not block, so ctx is honoured before it and
+// there is nothing for it to end during it.
+func (p *Pipe) CaptureReference(ctx context.Context, ref string) (Capture, error) {
+	if err := ctx.Err(); err != nil {
+		return Capture{}, err
+	}
+	p.mu.Lock()
+	s, held := p.held[ref]
+	p.mu.Unlock()
+	if !held {
+		return Capture{}, ErrNotHeld
+	}
+	return p.Capture(s)
+}
+
 // Send delivers text on the terms Provider.Send states.
 func (p *Pipe) Send(ctx context.Context, s *Session, text string) error {
 	if !p.holds(s) {

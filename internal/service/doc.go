@@ -340,11 +340,12 @@
 // worker an earlier service of this home started.
 //
 // Four things about the launch are stated rather than implied, and launch.go
-// owns each. The task's resolved state does not move: Running is
-// internal/taskstate's process tier answering from a Live probe, this
-// service still builds its reader with no probe, and nothing here writes an
-// event to say Running, so a launched task resolves Dispatched from the
-// record until the probe is wired, which is #91's last PR. One launch per
+// owns each. Nothing here writes an event to say Running, and the task
+// reads Running anyway: every task reader this service builds probes
+// through its Terminals, which in production is this same provider, on
+// terminals.go's terms, so internal/taskstate's process tier answers
+// Running from the Live probe of the recorded reference while the worker
+// runs and what precedence gives with Dead once it exits. One launch per
 // attempt per service, and a restart dispatches and launches again as a new
 // attempt over the standing copy, which is PRD section 11's relaunch in
 // place by the record's lights; the earlier process, if alive, is an orphan
@@ -378,11 +379,13 @@
 // this pass did not relaunch. The launch of a claimed
 // attempt goes to a goroutine under startWork, so "before serving anything"
 // is a property of the claim. A launched task is never dispatched again,
-// which dispatch.go states: without a probe, which is production until
-// #91's last PR, every terminal reads Unobserved and a restart leaves a
-// launched task alone, on PRD section 11's ambiguous-liveness row. Both
-// files state what the mechanism does not establish, a dead terminal not
-// being proof that nothing still writes in the copy among it.
+// which dispatch.go states: a restarted service holds no session, so its
+// provider answers every reference by identity, and a worker whose process
+// is still present reads Unobserved and is left alone, on PRD section 11's
+// ambiguous-liveness row, while one whose process is gone reads Dead and is
+// relaunched. Both files state what the mechanism does not establish, a
+// dead terminal not being proof that nothing still writes in the copy among
+// it.
 //
 // The one change the fleet work makes to the run path is beside it, in
 // copy.go. A run's copy used to be cut after a fetch of the submitted commit
@@ -406,10 +409,11 @@
 // the run's answer by report, so status says a local copy was kept rather
 // than only the log. A delivery task's copy is cleaned up at the same two
 // sites when the merge record landed it, and an investigation task's when
-// its report is stored; both pass taskstate.Unobserved for the terminal
-// until the probe is wired into this service's reader, so every task copy
-// refuses today, and cleanup.go owns the three sites and says so. No verb or
-// protocol method calls any of it.
+// its report is stored; both hand internal/tasks the terminal's liveness as
+// the service's own task reader resolved it, so a copy whose worker is
+// still running is kept with the live refusal and one whose worker is gone
+// is examined on the proof, and cleanup.go owns the three sites and the
+// window after the read. No verb or protocol method calls any of it.
 //
 // # The supervisor loop is here, and supervise.go owns it
 //
@@ -419,8 +423,10 @@
 // a pass that reads the records, then the slot, then the provider, and the
 // bounded wait Close gives it. Its header owns the design and the residual
 // gaps, Close's doc owns the one exception to the wait on work, and
-// Options.Terminals is the seam the terminal reading arrives through, nil
-// in this build, which runs the loop degraded to surface everything.
+// Options.Terminals is the seam the terminal reading arrives through, which
+// the product leaves to this service's own session provider, on
+// terminals.go's terms, so the loop absorbs an unchanged live worker on the
+// handle's evidence and surfaces a dead one.
 //
 // # What this package does not do
 //

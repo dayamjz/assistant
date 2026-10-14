@@ -109,13 +109,16 @@ func launchedWorker(t *testing.T, branch string, body func(w launched)) {
 	withServiceOptions(t, o, func(running serviceUnderTest) {
 		provider, session := launchedSession(t, running.service, id)
 		waitCapture(t, provider, session, "worker ready")
-		body(launched{running: running, home: h, repository: repository, gateRepo: gateRepo, task: id, group: session.Reference().PID})
+		body(launched{running: running, home: h, repository: repository, gateRepo: gateRepo, task: id, group: session.Reference().PID,
+			provider: provider, session: session})
 	})
 }
 
 // launched is what launchedWorker hands its body: the running service, the
-// home, the repository and gate it serves, the task, and the process group
-// the task's worker leads.
+// home, the repository and gate it serves, the task, the process group the
+// task's worker leads, and the provider and session the service holds for
+// it, so a body can end the worker through the same handle the service
+// observes it through.
 type launched struct {
 	running    serviceUnderTest
 	home       *home.Home
@@ -123,6 +126,8 @@ type launched struct {
 	gateRepo   string
 	task       string
 	group      int
+	provider   session.Provider
+	session    *session.Session
 }
 
 // A worker's push is admitted to its own branch and refused everywhere
@@ -264,7 +269,12 @@ func TestAWorkerAppendsToItsOwnHistoryAndNoOneElseCan(t *testing.T) {
 // of the next drain, arm verification answers from the real beacon the
 // service's own loop writes, and every one of the three is refused from the
 // worker's group. The wake drained is one the service's supervisor loop
-// surfaced for the launched task, not one written for the test.
+// surfaced for the launched task, not one written for the test: the loop
+// observes the worker through the service's own provider, so a live worker
+// is absorbed on its handle's evidence and nothing is queued for it; the
+// test ends the worker through that handle, and the loop's next pass
+// surfaces its terminal as gone. The refusals from the worker's group are
+// asked first, while the group still leads a live worker.
 func TestTheQueueAndArmVerificationAreTheCoordinatorsAndNotAWorkers(t *testing.T) {
 	launchedWorker(t, "task/three", func(w launched) {
 		running, task, group := w.running, w.task, w.group
@@ -278,11 +288,16 @@ func TestTheQueueAndArmVerificationAreTheCoordinatorsAndNotAWorkers(t *testing.T
 			}
 		}
 
+		if err := w.provider.Send(t.Context(), w.session, "finish"); err != nil {
+			t.Fatalf("Send: %v", err)
+		}
+		waitCapture(t, w.provider, w.session, "worker finished")
+
 		var queued machine.Wakes
 		deadline := time.Now().Add(30 * time.Second)
 		for len(queued.Wakes) == 0 {
 			if !time.Now().Before(deadline) {
-				t.Fatal("the loop surfaced no wake for the launched task")
+				t.Fatal("the loop surfaced no wake for the launched task after its worker finished")
 			}
 			if err := running.client.Call(t.Context(), ipc.MethodWakesList, machine.WakesRequest{}, &queued); err != nil {
 				t.Fatalf("wakes.list: %v", err)

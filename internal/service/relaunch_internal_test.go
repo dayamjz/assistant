@@ -23,31 +23,12 @@ import (
 	"github.com/dayamjz/assistant/internal/taskstate"
 )
 
-// providerTerminals is the Terminals a service would be given once the
-// session hookup wires it: the service's own provider, reached through
-// driverFor so it is the one the launches go through. Probe answers from
-// the provider; Capture is not addressable by reference through this
-// double and answers an error, which is this terminal's and not the
-// provider's. A service that cannot resolve an agent observes nothing.
-type providerTerminals struct{ s *Service }
-
-func (p providerTerminals) Probe(ctx context.Context, ref string) session.Observation {
-	built, err := p.s.driverFor(ctx)
-	if err != nil {
-		return session.Observation{Liveness: taskstate.Unobserved, Reason: session.ReasonUnreadable, Detail: err.Error()}
-	}
-	return built.sessions.Probe(ctx, ref)
-}
-
-func (p providerTerminals) Capture(context.Context, string) (session.Capture, error) {
-	return session.Capture{}, errors.New("this double captures nothing by reference")
-}
-
 // relaunchSubject is a launchSubject whose first attempt's worker was
 // launched and then ended, so its session reference probes Dead, standing
 // in a service that has since been replaced: the second service is built
 // over the same home, store and log with no slot and no session, which is
-// what a restart leaves, and carries the probe over its own provider.
+// what a restart leaves, and probes through the production seam over its
+// own provider, heldTerminals, which Open wires.
 type relaunchSubject struct {
 	*launchSubject
 	first    *session.Session
@@ -61,7 +42,7 @@ func newRelaunchSubject(t *testing.T) *relaunchSubject {
 	t.Helper()
 	ctx := t.Context()
 	sub := newLaunchSubject(t, workerStandIn(t))
-	sub.service.terminals = providerTerminals{sub.service}
+	sub.service.terminals = heldTerminals{sub.service}
 	d, err := sub.service.dispatchTask(ctx, sub.task)
 	if err != nil {
 		t.Fatalf("dispatching: %v", err)
@@ -81,8 +62,9 @@ func newRelaunchSubject(t *testing.T) *relaunchSubject {
 
 // restartedService is a second hand-built service over the subject's home,
 // store and log, resolving a worker-capable stand-in of its own, which it
-// returns beside the service, with the probe over its own provider and a
-// stop context for the launches it starts in the background.
+// returns beside the service, with the production terminal seam over its
+// own provider and a stop context for the launches it starts in the
+// background.
 func restartedService(t *testing.T, sub *launchSubject) (*Service, *standin.Agent) {
 	t.Helper()
 	agent := workerStandIn(t)
@@ -91,7 +73,7 @@ func restartedService(t *testing.T, sub *launchSubject) (*Service, *standin.Agen
 		catalog: agents.NewCatalog(fixedRunner{runner: agent.Runner()}), registry: newRegistry(),
 	}
 	s.cfg = sub.service.cfg
-	s.terminals = providerTerminals{s}
+	s.terminals = heldTerminals{s}
 	s.stopCtx, s.stopCancel = context.WithCancel(context.Background())
 	t.Cleanup(func() {
 		s.stopWork()
@@ -573,7 +555,7 @@ func TestATaskWhoseSessionIsAnotherHomesIsNotReconciled(t *testing.T) {
 	}
 	agent := workerStandIn(t)
 	s := &Service{home: h, store: records, log: log, catalog: agents.NewCatalog(fixedRunner{runner: agent.Runner()}), registry: newRegistry()}
-	s.terminals = providerTerminals{s}
+	s.terminals = heldTerminals{s}
 	s.stopCtx, s.stopCancel = context.WithCancel(context.Background())
 	t.Cleanup(s.stopCancel)
 
@@ -594,10 +576,74 @@ func TestATaskWhoseSessionIsAnotherHomesIsNotReconciled(t *testing.T) {
 	}
 }
 
-// A service with no probe relaunches nothing and refuses a relaunch asked
-// of it, because it cannot read a terminal as dead itself; and dispatch
-// passes over a task whose latest attempt names a session, so a restart
-// without a probe leaves the launched task alone rather than starting a
+// A restart over a surviving worker leaves the task alone: the first
+// service's worker is still running when the second service reads the
+// fleet, and the second holds no handle to it, so its own provider answers
+// the reference Unobserved by identity, the process present and unheld.
+// That is PRD section 11's ambiguous liveness: reconciliation relaunches
+// nothing, a relaunch asked for directly is refused as not due, dispatch
+// passes the task over, and the task reads Dispatched from the record with
+// its terminal unobserved, never Running, because Live is answered only
+// through a handle. Once the first service ends its worker the same
+// reference reads Dead through the same seam, which is the reading the
+// relaunch tests above start from.
+func TestARestartOverASurvivingWorkerLeavesTheTaskAlone(t *testing.T) {
+	ctx := t.Context()
+	sub := newLaunchSubject(t, workerStandIn(t))
+	sub.service.terminals = heldTerminals{sub.service}
+	d, err := sub.service.dispatchTask(ctx, sub.task)
+	if err != nil {
+		t.Fatalf("dispatching: %v", err)
+	}
+	first, err := sub.service.launchTask(ctx, d)
+	if err != nil {
+		t.Fatalf("launching: %v", err)
+	}
+	provider, _, _ := sub.service.sessionOf(sub.task)
+	waitCaptured(t, provider, first, "worker ready")
+	ref := first.Reference().String()
+	restart, agent := restartedService(t, sub)
+
+	if got := restart.terminals.Probe(ctx, ref); got.Liveness != taskstate.Unobserved || got.Reason != session.ReasonUnheld {
+		t.Fatalf("the restarted service probes the surviving worker %+v, want Unobserved because it is present and unheld", got)
+	}
+	got, err := restart.tasks().Task(ctx, sub.task)
+	if err != nil || got.State != taskstate.Dispatched || got.Basis.Process != taskstate.Unobserved {
+		t.Fatalf("the restarted service resolves the task %+v (%v), want Dispatched from the record with its terminal unobserved", got, err)
+	}
+	restart.reconcileTasks(ctx)
+	restart.dispatchDue(ctx)
+	restart.work.Wait()
+	if attempts, err := sub.records.TaskAttempts(ctx, sub.task); err != nil || len(attempts) != 1 {
+		t.Fatalf("a restart over a surviving worker began an attempt: %+v (%v)", attempts, err)
+	}
+	if _, held := restart.isolationOf(sub.task); held {
+		t.Fatal("dispatch took the slot of a task it passed over")
+	}
+	if _, err := restart.relaunchTask(ctx, sub.task); !errors.Is(err, errRelaunchNotDue) {
+		t.Fatalf("a relaunch over a surviving worker answered %v, want not due", err)
+	}
+	for _, call := range agent.Calls() {
+		if call.Worker {
+			t.Fatalf("the restarted service started a worker beside the survivor: %s", call)
+		}
+	}
+
+	// The first service ends its worker, and the same seam reads Dead.
+	for _, err := range sub.service.closeSessions() {
+		t.Fatalf("ending the first worker: %v", err)
+	}
+	waitLiveness(t, provider, ref, taskstate.Dead)
+	if got := restart.terminals.Probe(ctx, ref); got.Liveness != taskstate.Dead {
+		t.Fatalf("after the worker was ended the restarted service probes %+v, want Dead by identity", got)
+	}
+}
+
+// A Service with no Terminals, which only a hand-built one is since Open
+// wires the service's own provider, relaunches nothing and refuses a
+// relaunch asked of it, because it cannot read a terminal as dead itself;
+// and dispatch passes over a task whose latest attempt names a session, so
+// such a service leaves the launched task alone rather than starting a
 // second worker beside one it cannot see.
 func TestWithoutAProbeNothingIsRelaunchedOrDispatchedAgain(t *testing.T) {
 	sub := newRelaunchSubject(t)

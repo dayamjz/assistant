@@ -89,10 +89,11 @@ const relaunchedKind = "relaunched"
 // Nothing is recorded.
 var errRelaunchNotDue = errors.New("service: the task is not one reconciliation relaunches")
 
-// errRelaunchUnprobed reports a relaunch asked of a service with no
-// Terminals. A relaunch rests on a dead reading this service made itself,
-// and a service that cannot ask has none; it refuses rather than relaunching
-// on a reading somebody else reported.
+// errRelaunchUnprobed reports a relaunch asked of a Service with no
+// Terminals, which Open never produces and this package's tests build by
+// hand. A relaunch rests on a dead reading this service made itself, and a
+// service that cannot ask has none; it refuses rather than relaunching on a
+// reading somebody else reported.
 var errRelaunchUnprobed = errors.New("service: no terminal provider is wired into this service, so a terminal cannot be read as dead")
 
 // errRelaunchNotDead reports a re-probe immediately before the claim that

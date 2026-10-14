@@ -60,13 +60,19 @@ import (
 //
 // # What the launch moves, and what it does not
 //
-// The task's resolved state is not moved here. Running is answered by
-// internal/taskstate's process tier from a Live probe of the recorded
-// reference, and this service still builds its Reader with no probe, so
-// after a launch the task resolves what the record gives it, which is
-// Dispatched, until the probe is wired, which is #91's last PR. Nothing here
-// writes an event to say Running: that would be a second record of a fact
-// the process tier owns.
+// The task's resolved state is not moved here, and it moves anyway: Running
+// is answered by internal/taskstate's process tier from a Live probe of the
+// recorded reference, every reader this service builds probes through its
+// Terminals, which in production is the provider this launch created the
+// session through, and that provider answers Live for a session it holds
+// whose process is running. So a launched task reads Running from the
+// process tier on the task surface, the queue, reconciliation and the loop
+// from the moment the reference is recorded until the worker exits, and
+// then what precedence gives with Dead: Unknown from the process tier when
+// no run is attributed, or the run's state. Nothing here writes an event to
+// say Running: that would be a second record of a fact the process tier
+// owns. An adapter that launches nothing records no reference, so such a
+// task reads Dispatched from the record, on the terms below.
 //
 // One launch per attempt per service, and a launched task is never
 // dispatched again. A restart holds no session and no slot, and what it

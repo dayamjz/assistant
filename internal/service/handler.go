@@ -219,9 +219,10 @@ func (s *Service) listRuns(ctx context.Context, req machine.RunsRequest) (machin
 //
 // The state is resolved by internal/taskstate from the records that own the
 // facts, not read from a stored copy and not taken from the event log, which
-// P8 and P14 make the only two ways to get it wrong. No session module exists
-// in this build, so no terminal is observed and the resolver's process tier
-// stays out of the answer.
+// P8 and P14 make the only two ways to get it wrong, with the terminal of
+// each task's latest attempt probed through this service's Terminals, so a
+// launched task reads Running from the process tier while its worker runs
+// and what precedence gives with Dead once it has exited.
 func (s *Service) listTasks(ctx context.Context) (machine.Tasks, error) {
 	resolved, err := s.tasks().All(ctx)
 	if err != nil {
@@ -276,8 +277,8 @@ func (s *Service) task(ctx context.Context, req machine.TaskRequest) (machine.Ta
 // tasks is the resolver over the service's store, built through reader with
 // the probe of the service's Terminals under the per-task bound alone, so a
 // provider that does not answer costs a read reconcileProbeTimeout per task
-// and never hangs it. In production Terminals is nil and no task's terminal
-// is observed, which reconcile.go states. Whether a run is advancing is this
+// and never hangs it. In production Terminals is the service's own session
+// provider, which terminals.go states. Whether a run is advancing is this
 // service's own fact, read off the slot map the way report reads it, so a
 // task's resolution can say whether its validation is being driven and not
 // only that a run is recorded as running.

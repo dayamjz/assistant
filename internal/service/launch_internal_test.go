@@ -43,15 +43,22 @@ func newLaunchSubject(t *testing.T, agent *standin.Agent) *launchSubject {
 }
 
 // workerStandIn is the worker-capable stand-in with a greeting, so a launch
-// that started a process shows it through Capture, and one exchange that
-// answers the program's relaunch note, so a test can wait on the worker's
-// output for the note having been read rather than on its record, which
-// standin.Agent.Calls says not to poll while a worker reads.
+// that started a process shows it through Capture, and three exchanges: one
+// that answers the program's relaunch note, so a test can wait on the
+// worker's output for the note having been read rather than on its record,
+// which standin.Agent.Calls says not to poll while a worker reads; one that
+// answers a status line, so a test can wait until every line sent before it
+// has been read; and one that ends the worker on its own, which is the
+// shape a probe tells from a worker its caller ended.
 func workerStandIn(t *testing.T) *standin.Agent {
 	t.Helper()
 	return standin.NewWorker(t, standin.Script{Worker: &standin.WorkerScript{
-		Greeting:  "worker ready",
-		Exchanges: []standin.Exchange{{Contains: "This is attempt", Reply: noteReadReply}},
+		Greeting: "worker ready",
+		Exchanges: []standin.Exchange{
+			{Contains: "This is attempt", Reply: noteReadReply},
+			{Contains: "status", Reply: "still working on it"},
+			{Contains: "finish", Reply: "worker finished", Ends: true},
+		},
 	}}, agents.WithTerminationGrace(2*time.Second))
 }
 
