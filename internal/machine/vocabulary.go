@@ -8,10 +8,10 @@ import "github.com/dayamjz/assistant/internal/supervisor"
 // a path, a stage name, a state label or a watcher's word; the vocabulary test
 // derives the forbidden set from the packages that own each of those and
 // holds every phrase here to it. The rows are Phrase values in phrases.go,
-// where the pull guard's three stand beside the rows for a task's state, a
-// run's outcome, a hold, a run's cleanup record, the stream's own events and
-// the parts of a status; these three are exported as the strings the guard's
-// callers compare against.
+// where the pull guard's three stand beside the stop guard's two turn rows
+// and the rows for a task's state, a run's outcome, a hold, a run's cleanup
+// record, the stream's own events and the parts of a status; these three are
+// exported as the strings the guard's callers compare against.
 var (
 	// PhraseServiceDown is what the pull guard says when work is under way
 	// and no service holds this home: the next decision is starting one.

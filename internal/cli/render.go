@@ -87,7 +87,11 @@ type rendering struct {
 // run listing, the task listing, one task, the service, and an event on the
 // fleet view. What they print is a phrase from internal/machine's table, or
 // one beside a word that is the person's own - a branch name, a project - or
-// an agent's, escaped. The rest still print this build's vocabulary: the
+// an agent's, escaped. The stop guard's answer is phrased on different
+// terms: its renderer prints nothing, because the host reads the message on
+// standard error and hostStop writes it there, and that message is the turn
+// row followed by the pull guard's row, both from the table, so nothing a
+// person reads from the command is outside it. The rest still print this build's vocabulary: the
 // decision block and the run's details print stage names and node positions
 // because a person answering a hold needs the finding as the stage reported
 // it; the doctor, the service lifecycle, initialization, a plan, an eject,
@@ -102,6 +106,7 @@ var renderings = []rendering{
 	{"task", true, typeOf[machine.Task](), func(w io.Writer, v any) { readOutTask(w, v.(machine.Task)) }},
 	{"service", true, typeOf[machine.Service](), func(w io.Writer, v any) { readOutService(w, v.(machine.Service)) }},
 	{"event", true, typeOf[ipc.Event](), func(w io.Writer, v any) { writeln(w, eventLine(v.(ipc.Event))) }},
+	{"host stop", true, typeOf[machine.HostStop](), func(w io.Writer, v any) { readOutHostStop(w, v.(machine.HostStop)) }},
 	{"decision", false, nil, func(w io.Writer, v any) { readOutDecision(w, v.(machine.Decision)) }},
 	{"details", false, nil, func(w io.Writer, v any) { readOutDetails(w, v.(machine.Run)) }},
 	{"doctor", false, typeOf[machine.Doctor](), func(w io.Writer, v any) { readOutDoctor(w, v.(machine.Doctor)) }},

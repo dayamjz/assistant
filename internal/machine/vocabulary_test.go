@@ -10,7 +10,7 @@ import (
 	"github.com/dayamjz/assistant/internal/supervisor"
 )
 
-// P13 for the pull guard's text, in both directions section 13 asks for: the
+// P13 for the two guards' text, in both directions section 13 asks for: the
 // internal vocabulary is absent, with the forbidden set derived from the
 // packages that own each kind of word, and the required wording is present,
 // an outcome, a consequence and a next decision. The claim is for the phrases
@@ -33,11 +33,21 @@ func TestThePhrasesNameOutcomesAndNoMechanics(t *testing.T) {
 		machine.PhraseServiceDown:        {"nothing is watching", "go unnoticed", "assistant service start"},
 		machine.PhraseServiceNotWatching: {"the service is up", "go unnoticed", "assistant service restart"},
 		machine.PhraseUndecided:          {"could not be decided", "may go unnoticed", "assistant doctor"},
+		machine.PhraseTurnBlocked:        {"cannot end yet", "leave that work unwatched", "the sentence after this one"},
+		machine.PhraseTurnReEntered:      {"may end", "judged afresh", "the sentence after this one"},
 	} {
 		for _, want := range wants {
 			if !strings.Contains(phrase, want) {
 				t.Errorf("the phrase %q does not say %q", phrase, want)
 			}
+		}
+	}
+	// The turn rows are the first half of the host's message, and the pull
+	// guard's row after them names the step: a turn row that named a command
+	// of its own would put two competing decisions in one message.
+	for _, phrase := range []string{machine.PhraseTurnBlocked, machine.PhraseTurnReEntered} {
+		if strings.Contains(phrase, "assistant ") {
+			t.Errorf("the turn phrase %q names a command of its own, which competes with the pull guard's", phrase)
 		}
 	}
 	// Every blocking reason internal/supervisor can answer with has a

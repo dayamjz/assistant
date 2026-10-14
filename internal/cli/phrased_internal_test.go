@@ -14,6 +14,7 @@ import (
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/machine/vocabtest"
 	"github.com/dayamjz/assistant/internal/store"
+	"github.com/dayamjz/assistant/internal/supervisor"
 	"github.com/dayamjz/assistant/internal/taskstate"
 )
 
@@ -86,6 +87,17 @@ func TestThePhrasedRenderersSpeakTheTableAndTheJSONKeepsIdentifiers(t *testing.T
 		"task":    task,
 		"service": status.Service,
 		"event":   mustEvent(t, ipc.TypeTaskState, task),
+		// The stop guard blocked: the guard's reason and the detail are the
+		// structured rendering's, and the message is what a person reads.
+		"host stop": machine.HostStopOf(supervisor.StopVerdict{Reason: supervisor.StopLockFree}, false),
+	}
+	// A renderer whose answer a person reads somewhere other than standard
+	// output names where, and is held to writing nothing there instead: the
+	// stop guard's message goes to standard error, where the host reads it.
+	// Its text elsewhere is held to the rule in place of the lines, so the
+	// renderer is not passed for looking at nothing.
+	elsewhere := map[string]func(any) string{
+		"host stop": func(v any) string { return v.(machine.HostStop).Message },
 	}
 	phrased := 0
 	for _, r := range Renderings() {
@@ -99,7 +111,16 @@ func TestThePhrasedRenderersSpeakTheTableAndTheJSONKeepsIdentifiers(t *testing.T
 		}
 		var out bytes.Buffer
 		readOut(&out, value)
-		if out.Len() == 0 {
+		if read, ok := elsewhere[r.Name]; ok {
+			if out.Len() != 0 {
+				t.Errorf("%s is read elsewhere and rendered %q", r.Name, out.String())
+			}
+			text := read(value)
+			if text == "" {
+				t.Errorf("%s is read elsewhere and its fixture carries nothing to read", r.Name)
+			}
+			vocabtest.Assert(t, text)
+		} else if out.Len() == 0 {
 			t.Errorf("%s rendered nothing", r.Name)
 		}
 		for _, line := range strings.Split(strings.TrimRight(out.String(), "\n"), "\n") {
@@ -115,8 +136,8 @@ func TestThePhrasedRenderersSpeakTheTableAndTheJSONKeepsIdentifiers(t *testing.T
 			t.Errorf("the structured rendering of %s carries no identifier, path or label, so this fixture holds the human rendering to nothing", r.Name)
 		}
 	}
-	if phrased < 7 {
-		t.Fatalf("%d renderers are phrased; the table claims seven", phrased)
+	if phrased < 8 {
+		t.Fatalf("%d renderers are phrased; the table claims eight", phrased)
 	}
 
 	// The other direction: the lines these renderers used to write, built

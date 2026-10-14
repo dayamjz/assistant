@@ -52,6 +52,27 @@ var (
 	}
 )
 
+// The stop guard's rows, composed as the string constants host.go exports
+// and the host hook relays. Each is the first half of a composite: the host's
+// message is the turn row followed by the pull guard's row for the verdict,
+// through HostStopOf, so the turn row carries the outcome and the consequence
+// and its Decision names no step of its own. It says the concrete next step
+// is the sentence after it, which is the pull guard's row, so one message
+// never carries two competing decisions and the two tables cannot say
+// different things about one situation.
+var (
+	phraseTurnBlocked = Phrase{
+		Outcome:     "This turn cannot end yet, because work is under way and nothing is watching it.",
+		Consequence: "Ending it now would leave that work unwatched.",
+		Decision:    "What to do next is the sentence after this one, and it comes before ending the turn.",
+	}
+	phraseTurnReEntered = Phrase{
+		Outcome:     "This turn may end although work is under way and nothing is watching it, because the host re-entered it after a block.",
+		Consequence: "The next turn is judged afresh.",
+		Decision:    "What to do next is the sentence after this one.",
+	}
+)
+
 // phraseByState is the one table from a task's resolved state to what a person
 // reads about it. Every state internal/taskstate can resolve has a row, which
 // the vocabulary test derives from taskstate.States and checks, so a state
@@ -473,13 +494,15 @@ var (
 )
 
 // TablePhrases returns every row this table holds, as a person reads each,
-// which is what the vocabulary test walks: the pull guard's three rows, a row
-// per task state and NoWordYet, a row per outcome and the three OutcomeExecuting
-// splits into, the two hold rows and the two cleanup rows, the stream's four,
-// and the status rows. A templated row is listed with its placeholder filled
-// in. The result is a copy. Phrases is the same list as strings.
+// which is what the vocabulary test walks: the pull guard's three rows, the
+// stop guard's two turn rows, a row per task state and NoWordYet, a row per
+// outcome and the three OutcomeExecuting splits into, the two hold rows and
+// the two cleanup rows, the stream's four, and the status rows. A templated
+// row is listed with its placeholder filled in. The result is a copy. Phrases
+// is the same list as strings.
 func TablePhrases() []Phrase {
 	out := []Phrase{phraseServiceDown, phraseServiceNotWatching, phraseUndecided}
+	out = append(out, phraseTurnBlocked, phraseTurnReEntered)
 	for _, state := range taskstate.States() {
 		if p, ok := phraseByState[state]; ok {
 			out = append(out, p)

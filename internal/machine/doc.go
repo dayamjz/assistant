@@ -48,7 +48,12 @@
 // the rule, with the forbidden words derived from the packages that own them
 // rather than kept in a list beside the phrases. One table holds every row:
 // the pull guard's three, exported as strings in vocabulary.go and reached
-// through SupervisionOf; a row per taskstate.State, with the domain derived
+// through SupervisionOf; the stop guard's two turn rows, exported as strings
+// in host.go and reached through HostStopOf, which composes SupervisionOf
+// rather than making a second translation, so each turn row carries an
+// outcome and a consequence and its decision points at the pull guard's row
+// appended after it, while host.go holds HostStop, the answer's shape, and
+// says what the host's protocol is not; a row per taskstate.State, with the domain derived
 // from that package so a state added there fails until it is phrased, and
 // two translations TaskPhrase makes - Paused is never the word but what the
 // worker said it is waiting on, carried on Task.Waiting, and Unknown after a
