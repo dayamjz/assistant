@@ -273,10 +273,12 @@ type Service struct {
 	// dispatchers at the point where both have read and neither has written,
 	// on the terms internal/tasks' queue offers its own tests the same hook.
 	betweenAttemptReadAndClaim func()
-	// sweepCopy stands in for the sweep relaunch.go asks of a task's copy.
-	// It is nil in production, where the sweep is an agents.Sweeper over
-	// this service's home, and set only by this package's tests, to an
-	// answer the real sweep gives on a platform this test does not run on.
+	// sweepCopy stands in for the sweep this service asks of a copy: the
+	// one relaunch.go and dispatch.go ask of a task's standing copy, and the
+	// one runsweep.go asks of a finished run's. It is nil in production,
+	// where the sweep is an agents.Sweeper over this service's home, and set
+	// only by this package's tests, to an answer the real sweep gives on a
+	// platform this test does not run on or to a recorder of what was asked.
 	sweepCopy func(ctx context.Context, dir string) (agents.SweepResult, error)
 	// givingUp is whether Close has stopped taking background work. It is
 	// read and written under mu with the registration itself, which is what
@@ -706,6 +708,10 @@ func (s *Service) driverFor(ctx context.Context) (*driver, error) {
 		Store:        s.store,
 		Agent:        resolution,
 		SessionReuse: s.cfg.SessionReuse,
+		// Every ending of a run is a move of internal/runs, so the sweep of
+		// its copy is decided there from the row the ending wrote rather than
+		// at each site that ends one; runsweep.go owns what it does.
+		OnFinish: func(ctx context.Context, run store.Run) { s.sweepFinished(ctx, run, store.SweptAtFinish) },
 	})
 	if err != nil {
 		return nil, err

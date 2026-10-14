@@ -101,7 +101,9 @@ const (
 	// touched, decided from the run's reconciled status and this service's
 	// own registry alone, and the record stands. A record of an earlier
 	// service whose run is unfinished stands until a recovery finds the run
-	// finished; nothing ends that group in between, which doc.go states.
+	// finished; recovery ends nothing of it in between, and what does is this
+	// service ending the run, whose move ends the run's recorded groups on
+	// runsweep.go's terms, which doc.go states.
 	reapActive reapOutcome = "active"
 	// reapEnded is a record whose identity was verified to name a running
 	// process, whose group was then ended as that group through

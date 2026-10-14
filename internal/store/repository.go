@@ -208,7 +208,10 @@ func scanRepository(sc scanner) (Repository, error) {
 //
 // PRD section 9's eject removes a gate and its records, and this is the second
 // half of that: internal/gate removes the repository on disk and the working
-// copy's binding, and this removes what the gate recorded.
+// copy's binding, and this removes what the gate recorded. What a run's
+// records are is runRecords, and every table that keeps rows per run is either
+// there or one of the refusals below; forgetrows_test.go derives that set from
+// the catalog, so a table a later migration adds fails until it is placed.
 //
 // It refuses with ErrRepositoryInUse when a task names one of those runs.
 // A task is fleet work with a life of its own, and a row pointing at a run
@@ -220,6 +223,17 @@ func scanRepository(sc scanner) (Repository, error) {
 // It refuses with ErrRunActive when one of those runs has not finished, because
 // a run in flight is one a service is still driving and the records it is about
 // to write would land against a repository that is gone.
+//
+// It refuses with ErrRunProcessRecorded when a run process record of one of
+// those runs is still there: an agent group the run started whose end was
+// never recorded, and the record is the only thing a later recovery reaps it
+// from.
+//
+// Every refusal is decided before anything is removed, and the removal is one
+// transaction, so a forget either takes the whole repository or changes
+// nothing. It removes records and nothing on disk: a run cleanup record that
+// says a copy was kept goes with its run, and whether that copy still stands
+// is not something this package reads.
 //
 // A repository that is not there is not an error: the removal has nothing left
 // to do, which is the same answer internal/gate gives for a remote that is
@@ -234,22 +248,34 @@ func (s *Store) ForgetRepository(ctx context.Context, id string) (int, error) {
 		if err := refuseUnlessForgettable(ctx, tx, id, runIDs); err != nil {
 			return err
 		}
-		// The order is the reference order reversed: every table that names a
-		// run goes before the runs, and the runs go before the repository, so
-		// nothing is ever left pointing at a row that has been removed.
+		// The written-once records may be removed only once their run row is
+		// gone (forgetRunRecordsMigration), and run_cleanup also references that row, so
+		// the two orders the triggers and the foreign keys ask for are
+		// opposite. The foreign keys are checked at commit instead, which
+		// still refuses a commit that would leave a row pointing at a run that
+		// is gone; the setting ends with the transaction.
+		if _, err := tx.ExecContext(ctx, `PRAGMA defer_foreign_keys = ON`); err != nil {
+			return fmt.Errorf("store: forgetting repository %s: %w", id, err)
+		}
 		for _, runID := range runIDs {
-			for _, statement := range []string{
-				`DELETE FROM hold WHERE run_id = ?`,
-				`DELETE FROM round WHERE run_id = ?`,
-				`DELETE FROM stage_result WHERE run_id = ?`,
-				`DELETE FROM graph_checkpoint WHERE run = ?`,
-			} {
-				if _, err := tx.ExecContext(ctx, statement, runID); err != nil {
-					return fmt.Errorf("store: forgetting run %s of repository %s: %w", runID, id, err)
+			for _, r := range runRecords {
+				if r.afterRun {
+					continue
+				}
+				if err := r.forget(ctx, tx, id, runID); err != nil {
+					return err
 				}
 			}
 			if _, err := tx.ExecContext(ctx, `DELETE FROM run WHERE id = ?`, runID); err != nil {
 				return fmt.Errorf("store: forgetting run %s of repository %s: %w", runID, id, err)
+			}
+			for _, r := range runRecords {
+				if !r.afterRun {
+					continue
+				}
+				if err := r.forget(ctx, tx, id, runID); err != nil {
+					return err
+				}
 			}
 			removed++
 		}
@@ -264,8 +290,75 @@ func (s *Store) ForgetRepository(ctx context.Context, id string) (int, error) {
 	return removed, nil
 }
 
+// runRecord is one table that keeps rows per run and goes with the run when
+// its repository is forgotten.
+type runRecord struct {
+	// table is the table's name in the catalog.
+	table string
+	// remove deletes one run's rows; its one parameter is the run.
+	remove string
+	// afterRun is a written-once record whose seal lets a row go only once
+	// its run row is gone, so it is removed after the run rather than before.
+	afterRun bool
+}
+
+func (r runRecord) forget(ctx context.Context, tx *sql.Tx, repositoryID, runID string) error {
+	if _, err := tx.ExecContext(ctx, r.remove, runID); err != nil {
+		return fmt.Errorf("store: forgetting the %s rows of run %s of repository %s: %w", r.table, runID, repositoryID, err)
+	}
+	return nil
+}
+
+// runRecords is every table whose rows a run takes with it when its
+// repository is forgotten, in the order they are removed. Every table that
+// keeps rows per run is here or in refusedRunRecords, and
+// forgetrows_test.go holds both lists to the catalog.
+//
+// merge_record and run_cleanup are written once and sealed against deletion,
+// as is seen_mark, whose merge kind is keyed by the run. Their seals exist so
+// no write makes a row say other than what the read, the cleanup decision or
+// the mark saw, and PRD section 8's "appended" is rows added and never
+// edited; neither says such a row outlives its run. forgetRunRecordsMigration
+// narrows each delete seal to "while its run (or the merge record it marks)
+// stands", which keeps refused every deletion that would leave a record
+// disagreeing with what it describes, and this is the one path that removes
+// the run.
+//
+// checkpoint is migration 6's sealed table and holds no row; its delete is
+// here so the table is accounted for rather than skipped.
+var runRecords = []runRecord{
+	{table: "hold", remove: `DELETE FROM hold WHERE run_id = ?`},
+	{table: "round", remove: `DELETE FROM round WHERE run_id = ?`},
+	{table: "stage_result", remove: `DELETE FROM stage_result WHERE run_id = ?`},
+	{table: "checkpoint", remove: `DELETE FROM checkpoint WHERE run_id = ?`},
+	{table: "graph_checkpoint", remove: `DELETE FROM graph_checkpoint WHERE run = ?`},
+	{table: "run_copy_sweep", remove: `DELETE FROM run_copy_sweep WHERE run = ?`},
+	{table: "stage_execution", remove: `DELETE FROM stage_execution WHERE run = ?`},
+	// A follow-up is keyed by the answer it follows, so it goes first.
+	{table: "decision_followup", remove: `DELETE FROM decision_followup WHERE answer IN (SELECT seq FROM decision_answer WHERE run = ?)`},
+	{table: "decision_answer", remove: `DELETE FROM decision_answer WHERE run = ?`},
+	{table: "checks_wait", remove: `DELETE FROM checks_wait WHERE run = ?`},
+	{table: "merge_record", remove: `DELETE FROM merge_record WHERE run = ?`, afterRun: true},
+	{table: "run_cleanup", remove: `DELETE FROM run_cleanup WHERE run = ?`, afterRun: true},
+	// A seen mark of a merge record is keyed by the run through its kind,
+	// which the catalog cannot say, so it is named here; it goes after the
+	// merge record it marks, which its seal requires.
+	{table: "seen_mark", remove: `DELETE FROM seen_mark WHERE kind = 'merge' AND key = ?`, afterRun: true},
+}
+
+// refusedRunRecords is every table that keeps rows per run and whose row
+// stops a repository being forgotten rather than going with it, with the
+// refusal refuseUnlessForgettable answers for it. Nothing reachable only
+// through one of these tables is ever forgotten, because the refusal stands
+// in front of it.
+var refusedRunRecords = map[string]error{
+	"task":        ErrRepositoryInUse,
+	"run_process": ErrRunProcessRecorded,
+}
+
 // RepositoryRemovable reports what would stop ForgetRepository, and removes
-// nothing. It returns the same ErrRepositoryInUse and ErrRunActive refusals,
+// nothing. It returns the same ErrRepositoryInUse, ErrRunActive and
+// ErrRunProcessRecorded refusals,
 // against the same rows, so a caller with something of its own to destroy can
 // find out first rather than destroy it and then be refused.
 //
@@ -303,6 +396,9 @@ func refuseUnlessForgettable(ctx context.Context, tx *sql.Tx, id string, runIDs 
 			return err
 		}
 		if err := refuseIfRunIsActive(ctx, tx, id, runID); err != nil {
+			return err
+		}
+		if err := refuseIfRunHasAProcessRecord(ctx, tx, id, runID); err != nil {
 			return err
 		}
 	}
@@ -363,4 +459,22 @@ func refuseIfRunIsActive(ctx context.Context, tx *sql.Tx, repositoryID, runID st
 		return fmt.Errorf("%w: run %s of repository %s is %q, which this build does not recognize",
 			ErrRunActive, runID, repositoryID, status)
 	}
+}
+
+// refuseIfRunHasAProcessRecord stops a removal that would forget an agent
+// group a run started and whose end was never recorded. The run process
+// record is what a later recovery reaps that group from (migration 19), so
+// removing it would leave a process nothing here can find again. A record
+// stands only until a recovery verifies its process ended or gone, so the
+// refusal names the group for the caller to see to first.
+func refuseIfRunHasAProcessRecord(ctx context.Context, tx *sql.Tx, repositoryID, runID string) error {
+	var group int
+	err := tx.QueryRowContext(ctx, `SELECT group_id FROM run_process WHERE run_id = ? ORDER BY group_id LIMIT 1`, runID).Scan(&group)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("store: checking the process records of run %s: %w", runID, err)
+	}
+	return fmt.Errorf("%w: process group %d of run %s of repository %s", ErrRunProcessRecorded, group, runID, repositoryID)
 }

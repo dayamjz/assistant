@@ -559,9 +559,13 @@ func exitFor(answer any) machine.Code {
 	case machine.HostStop:
 		return hostExit(v)
 	case machine.TaskAnswered:
-		// A retry recorded and not acted on yet is a decision taken and work
-		// not begun, which a caller has to see without reading the document.
-		if v.Effect == machine.AnswerRetryDeferred || v.Effect == machine.AnswerRetryHeld {
+		// A retry that began no work - deferred, held on a further decision,
+		// refused by the isolation assertion, or refused on a record that
+		// cannot be dispatched - is a decision taken and work not begun,
+		// which a caller has to see without reading the document. A started
+		// retry, a stop and an answer that only closed a hold are each what
+		// was asked for.
+		if v.Effect.RetryNotBegun() {
 			return machine.ExitFailure
 		}
 	case machine.HostInstall:

@@ -41,7 +41,15 @@ import (
 // nothing, because a dead terminal is the ordinary shape of a worker that
 // handed off: Validating is the gate's, Ready is a pull request awaiting a
 // merge, Reported is an investigation delivered, Held is a person's, and
-// Landed and Complete are terminal records that outrank a run. "Not landed"
+// Landed and Complete are terminal records that outrank a run. Held is also
+// how a task reads while a hold naming it is open, from internal/taskstate's
+// hold tier, whatever its run or terminal says, so a task holding at the
+// relaunch bound or on the no-sweep hold reaches this table as Held and is
+// left alone until the answer closes the hold and it resolves Failed or
+// Unknown again; the bound's hold is therefore registered once, by the pass
+// that first finds the task past the bound, and a retry is acted on by the
+// answer's own relaunch or, where that was refused, by the next pass, which
+// reads the closed hold through taskholds.go. "Not landed"
 // is therefore the state itself and not a question asked of the code host.
 // Live and Unobserved are nothing in every row: a live terminal is a worker
 // to leave alone, and an unobserved one is PRD section 11's ambiguous
@@ -242,10 +250,14 @@ const (
 // decideReconciliation applies the table to a resolution and then the rules
 // that turn a relaunch into something else: a Failed decided by the
 // isolation assertion's own refusal, read off Basis.EventKind and never off
-// the log, surfaces; a task whose no-sweep hold for its latest attempt is
-// answered stop is left alone; and a task already relaunched bound times,
+// the log, surfaces; a task whose stop's hold (steer.go) or no-sweep hold
+// for its latest attempt is answered stop is left alone; and a task already
+// relaunched bound times,
 // counted from attempts, holds for a person unless the bound's hold for its
-// latest attempt is answered. answered carries both holds' answers, which
+// latest attempt is answered. A stop's hold answered retry is not read
+// here either: it is what lets the task resolve from its dead terminal
+// again, and the count applies to that relaunch like every other. answered
+// carries the holds' answers, which
 // taskholds.go reads: a retry on the bound's relaunches once more past the
 // bound, and a stop on either leaves the task alone. A retry on the no-sweep
 // hold is not read here, because whether the platform has a sweep is known
@@ -259,6 +271,10 @@ func decideReconciliation(r taskstate.Resolution, attempts []store.TaskAttempt, 
 	if r.State == taskstate.Failed && r.Source == taskstate.SourceEvent && r.Basis.EventKind == isolationRefusedKind {
 		return reconcileDecision{action: reconcileSurface, surfaced: surfacedIsolationRefused,
 			reason: "its copy was refused by the isolation assertion, which a relaunch would assert again"}
+	}
+	if answered.stopped == boundStop {
+		return reconcileDecision{action: reconcileNothing,
+			reason: "its worker was stopped, and the stop's hold was answered not to begin it again"}
 	}
 	if answered.unswept == boundStop {
 		return reconcileDecision{action: reconcileNothing,

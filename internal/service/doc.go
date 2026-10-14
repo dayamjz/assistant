@@ -110,14 +110,21 @@
 // What this does not reach is stated rather than implied. A process whose
 // service died before the record was written, or whose record could not be
 // written, was never recorded and is not reaped. A process of a run that is
-// still unfinished is not ended, even when this service resumes that run in
-// the same isolated copy; it is reaped by the first recovery that finds the
-// run finished. A process left alone as unverified may still be writing in
-// its run's isolated copy, and nothing here stops it. A descendant that
-// moved itself to another process group is not in the group signalled, and
-// nothing recorded names it; agents.Sweeper would find it by its run's copy,
-// but recovery does not ask it, because a run copy is removed by cleanup and
-// one whose run is unfinished must not be touched, so that gap is open. On
+// still unfinished is not ended by recovery, even when this service resumes
+// that run in the same isolated copy; it is ended when this service ends the
+// run, by the run's ending on runsweep.go's terms, or reaped by the first
+// recovery that finds the run finished. A process left alone as unverified
+// may still be writing in its run's isolated copy, and nothing here stops
+// it. A descendant that moved itself to another process group is not in the
+// group signalled, and nothing recorded names it; recovery does not ask
+// agents.Sweeper for it, because one whose run is unfinished must not be
+// touched. What finds it is the sweep runsweep.go asks of a run's copy when
+// the run reaches a final state, on Linux and macOS and only while it is
+// still in the copy; a service that stopped between a run's ending and that
+// sweep leaves it until the next service's recovery, which sweeps the copy
+// of every run its record shows finished while that copy stands, on
+// runsweep.go's terms. What each sweep came to is recorded on the run and
+// carried in its status answer, which runsweep.go also states. On
 // unix the adapter's forget runs once its termination has finished whether
 // or not the group emptied, so a member this service could not signal loses
 // its record with the rest; a later recovery would have found its leader
@@ -373,7 +380,9 @@
 // worker cannot append what the program decides; wakes.list,
 // wakes.acknowledge and supervision.assert are the coordinator's and refuse
 // a worker, with who acknowledged derived by internal/ipc's
-// Request.WakeAcknowledger and read from nothing; and gate.admit holds a
+// Request.WakeAcknowledger and read from nothing; catchup.mark, which moves
+// PRD section 9's seen mark and which catchup.go owns, refuses a worker on
+// the same terms while catchup.read stays open; and gate.admit holds a
 // worker's push to admit_workers.go's rule, only its task's branch, forward,
 // never a deletion, with the reasoning for its being admission's decision
 // rather than internal/safety's written there. A worker's group is in no
@@ -439,7 +448,10 @@
 // written, a crash leaves a process no record names, which internal/session
 // states; the dispatch that retries the task sweeps the standing copy before
 // it claims, on sweep.go's terms, which ends that process on Linux and
-// macOS while it is still in the copy and leaves it standing elsewhere.
+// macOS while it is still in the copy. Elsewhere there is no sweep, so the
+// retried dispatch is refused and holds for a person on a key of its own,
+// and on a retry answer starts a worker beside that process, if any, which
+// it neither finds nor ends.
 //
 // # A restart reconciles the fleet, and relaunches a dead terminal in place
 //
@@ -495,7 +507,10 @@
 // PRD principle P12 covers every isolated copy, a run's and a task's, and
 // the decision is internal/tasks' Cleaner: this service calls it and
 // decides nothing of it. A run's copy goes through reclaimCopy when the run
-// finishes, in settle and in the checks-hold closure, and a refusal there is
+// finishes, in settle and in the checks-hold closure, after the sweep
+// runsweep.go asks of it from inside the move that finished the run, whose
+// answer the decision does not read, so a sweep that did not clear does not
+// keep the copy; a refusal there is
 // recorded by the decision on the run's cleanup record and composed into
 // the run's answer by report, so status says a local copy was kept rather
 // than only the log. A delivery task's copy is cleaned up at the same two

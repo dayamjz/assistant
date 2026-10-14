@@ -87,20 +87,20 @@ func TestAHeldRunReportsItsOpenHold(t *testing.T) {
 }
 
 // Only the chosen run's own open hold supplies the detail: an older attributed
-// run's hold, which is older and so would win a scan of every hold, and a hold
-// naming only the task are both passed over. The control is the same hold
-// naming the newest run, which is then chosen.
+// run's hold, which is older and so would win a scan of every hold, is passed
+// over. The control is the same hold naming the newest run, which is then
+// chosen. A hold naming the task is not the run tier's at all: it decides the
+// hold tier above it, which hold_test.go holds to the precedence.
 func TestAHeldRunsDetailIsItsOwnHoldsAndNoOthers(t *testing.T) {
 	runs := []store.Run{runIn("old", store.RunHeld, 1), runIn("new", store.RunHeld, 2)}
 	oldHold := store.Hold{Key: "a", Subject: "the old run's question", RunID: store.Known("old"), OpenedAt: epoch}
-	taskHold := store.Hold{Key: "b", Subject: "a task question", TaskID: store.Known("t"), OpenedAt: epoch}
 	newHold := store.Hold{Key: "c", Subject: "the new run's question", RunID: store.Known("new"), OpenedAt: epoch.Add(time.Hour)}
 
-	got := Resolve(Inputs{Task: store.Task{ID: "t"}, Runs: runs, Holds: []store.Hold{oldHold, taskHold, newHold}})
-	if d := got.Detail.Or(""); d != "the new run's question" {
-		t.Fatalf("detail = %q, want the newest run's own hold", d)
+	got := Resolve(Inputs{Task: store.Task{ID: "t"}, Runs: runs, Holds: []store.Hold{oldHold, newHold}})
+	if d := got.Detail.Or(""); d != "the new run's question" || got.Source != SourceRun {
+		t.Fatalf("detail = %q from %s, want the newest run's own hold from the run", d, got.Source)
 	}
-	got = Resolve(Inputs{Task: store.Task{ID: "t"}, Runs: runs, Holds: []store.Hold{oldHold, taskHold}})
+	got = Resolve(Inputs{Task: store.Task{ID: "t"}, Runs: runs, Holds: []store.Hold{oldHold}})
 	if d := got.Detail.Or(""); strings.Contains(d, "question") {
 		t.Fatalf("detail %q names a hold that is not the chosen run's", d)
 	}
@@ -365,7 +365,8 @@ func TestTheWriterColumnKeepsTheProgramsKindsFromAWorker(t *testing.T) {
 }
 
 // isolation-refused carries a closed reason in its detail, checked by the
-// row's own decoder; every other kind's detail is free text and has none.
+// row's own decoder; message-acknowledged carries a message identifier,
+// checked by its own; every other kind's detail is free text and has none.
 func TestTheIsolationRefusalIsAClosedSet(t *testing.T) {
 	row, ok := Lookup("isolation-refused")
 	if !ok || row.Detail == nil {
@@ -390,8 +391,20 @@ func TestTheIsolationRefusalIsAClosedSet(t *testing.T) {
 			t.Errorf("ParseIsolationRefusal accepted %q", text)
 		}
 	}
+	acknowledged, ok := Lookup(store.MessageAcknowledgedEventKind)
+	if !ok || acknowledged.Detail == nil || acknowledged.Writer != WriterWorker || acknowledged.Role != RoleNote {
+		t.Fatalf("message-acknowledged is %+v, want a worker's note with a detail decoder", acknowledged)
+	}
+	if err := acknowledged.Detail("7"); err != nil {
+		t.Errorf("the acknowledgement's decoder refused a message identifier: %v", err)
+	}
+	for _, text := range []string{"", "seven", "0", "7 "} {
+		if err := acknowledged.Detail(text); err == nil {
+			t.Errorf("the acknowledgement's decoder accepted %q", text)
+		}
+	}
 	for _, other := range Kinds() {
-		if other.Kind != "isolation-refused" && other.Detail != nil {
+		if other.Kind != "isolation-refused" && other.Kind != store.MessageAcknowledgedEventKind && other.Detail != nil {
 			t.Errorf("kind %q has a detail decoder nobody specified", other.Kind)
 		}
 	}

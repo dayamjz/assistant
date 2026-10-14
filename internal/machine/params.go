@@ -3,6 +3,7 @@ package machine
 import (
 	"github.com/dayamjz/assistant/internal/gate"
 	"github.com/dayamjz/assistant/internal/pipeline"
+	"github.com/dayamjz/assistant/internal/store"
 )
 
 // The request bodies. internal/ipc carries a method's parameters as written
@@ -119,6 +120,13 @@ type TaskRespondRequest struct {
 	// an investigation's report registered offers no closed set, and the
 	// answer is recorded as given.
 	Answer string `json:"answer"`
+	// Note is what a retry on a stop's hold tells the relaunched worker,
+	// after the relaunch note and before the text of every message the
+	// stopped attempt never acknowledged, PRD section 6's "optionally with
+	// a note". It is accepted only with a retry on a stop's hold, the one
+	// answer that starts a worker with it, and refused as an invalid request
+	// with any other answer or hold rather than dropped.
+	Note string `json:"note,omitempty"`
 }
 
 // The answers a relaunch hold offers.
@@ -129,6 +137,25 @@ const (
 	// AnswerStop leaves the task where it stopped; nothing relaunches it.
 	AnswerStop = "stop"
 )
+
+// TaskMessageRequest sends a message to a running task's worker, PRD
+// section 6's steering. It carries no field saying who sent it: who sent a
+// message is derived from the surface by internal/ipc's
+// Request.MessageSender and never read from a request.
+type TaskMessageRequest struct {
+	// Task is the task whose current worker the message is for: the latest
+	// attempt's, which the service reads and the caller does not name.
+	Task string `json:"task"`
+	// Text is what the worker is sent, at most MaxMessageBytes and refused
+	// rather than truncated above it, and never empty.
+	Text string `json:"text"`
+}
+
+// MaxMessageBytes is the fixed limit on a message's text, in bytes, PRD
+// section 6's "bounded by a fixed limit in the program". It is not a
+// setting. The same limit bounds a stop's retry note, which reaches the
+// same worker input.
+const MaxMessageBytes = 16 << 10
 
 // CancelRequest ends a run.
 type CancelRequest struct {
@@ -290,4 +317,15 @@ type AcknowledgeRequest struct {
 	// handled. A subset leaves the rest queued; an identifier no wake has,
 	// or one already acknowledged, refuses the whole batch.
 	Wakes []int64 `json:"wakes"`
+}
+
+// MarkSeenRequest moves the seen mark PRD section 9's catching up reads. It
+// names the landed records a read showed, which CatchUp.Shown returns, and
+// nothing else: the mark moves only on an explicit mark of what a read
+// showed, so a record recorded between that read and this request is not
+// in it and is still shown next time. A request naming a record that is not
+// a landed one refuses the whole batch.
+type MarkSeenRequest struct {
+	// Records are the landed records the read showed.
+	Records []store.SeenRecord `json:"records"`
 }

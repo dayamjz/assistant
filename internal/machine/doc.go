@@ -58,12 +58,20 @@
 // HostInstallPhrase, with HostInstall beside them in host.go and the file and
 // the line kept out of every row; a row per taskstate.State, with the domain derived
 // from that package so a state added there fails until it is phrased, and
-// two translations TaskPhrase makes - Paused is never the word but what the
-// worker said it is waiting on, carried on Task.Waiting, and Unknown after a
-// note the program appended is NoWordYet rather than a failure; a row per
+// three translations TaskPhrase makes - Paused is never the word but what the
+// worker said it is waiting on, carried on Task.Waiting, Unknown after a
+// note the program appended is NoWordYet rather than a failure, and Held
+// from internal/taskstate's hold tier is the row saying the work waits on
+// the person's answer given with --task and --answer; a row per
 // Outcome, with OutcomeExecuting split three ways on the facts NextActionOf
-// reads, through RunPhrase and Run.Phrase; the two hold rows; the kept and
-// removed rows for a run's cleanup record; the stream's own rows; the
+// reads, through RunPhrase and Run.Phrase; the hold rows, an open one naming
+// a task saying the same command; a row per AnswerEffect that does more than
+// close a task's hold, through TaskAnsweredPhrase, each claiming only what
+// that effect's doc says the mechanism does; the kept and
+// removed rows for a run's cleanup record; the one row for a run's copy sweep
+// record that did not establish the copy clear, through CopySweepPhrase,
+// whose counts and occasion stay the structured rendering's; the stream's
+// own rows; the
 // status rows; and the rows for the rest of the command surface - a decision
 // and a fix round's offer, a row per doctor check and result keyed on the
 // check names declared beside them and the verdict, the service lifecycle, a

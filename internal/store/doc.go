@@ -98,10 +98,42 @@
 // whose decisions were never registered cannot exist through this package;
 // the parsed report is opaque bytes here, and the hold keys are the one
 // fact the row holds about its contents, which is what cleanup verifies.
+// Migration 21's run_copy_sweep table holds the third record about a run's
+// copy, RunCopySweep: what the latest sweep of a finished run's copy came to,
+// from a closed set, with the occasion that asked it. It is one row per run
+// rewritten by every sweep, so the row is the latest sweep and no reader
+// takes it from a history (P8), and it records what a sweep found when it
+// ran rather than whether anything runs in the copy now. internal/service
+// writes it and internal/machine composes it into a run's answer; nothing
+// decides from it, and ForgetRepository removes it with its run.
 // ForgetHoldForTest is the counterfeit builder for that rule's refusal
 // case, takes the test, and has no production caller. RecordTaskCleanup is
 // anchored to the task's shape, read in the transaction that claims the
 // record, on the terms its doc states.
+//
+// ForgetRepository removes a repository and every run-keyed row in one
+// transaction, or refuses before removing anything. runRecords names the
+// tables whose rows go with a run and refusedRunRecords the ones whose row
+// refuses the removal (a task, a run process record), and a test derives the
+// run-keyed tables from the catalog and holds the two lists to it, with
+// seen_mark named by hand because its merge kind is keyed by the run through a
+// column the catalog cannot read. The merge record, the run cleanup record
+// and a merge record's seen mark go too: the migration named
+// forgetRunRecordsMigration narrows their delete seals to "while what they
+// describe stands", and ForgetRepository removes them after the run row.
+//
+// # The message record
+//
+// PRD section 8's message record is the message table its steering messages migration creates: one row
+// per message sent to a task's worker, appended by AppendMessage before the
+// send with its text passed through the redactor Open was given, and sealed
+// on wake's terms. Its three facts are each written once: written or refused
+// by MarkMessageWritten and MarkMessageRefused, which exclude each other,
+// and acknowledged by AcknowledgeMessage, which appends the worker's
+// MessageAcknowledgedEventKind event in the same transaction, so the history
+// and the record cannot disagree. It is the one place delivery is read from
+// (P8). Who sent a message is Sender, closed on Acknowledger's terms, with no
+// member meaning a person.
 //
 // # The wake queue and the markers it is written with
 //

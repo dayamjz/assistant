@@ -112,14 +112,14 @@ func TestTheFleetIsSpokenInPhrasesThroughTheBinary(t *testing.T) {
 		What: "P13: the fleet as a person reads it",
 		Clauses: []journey.Clause[spokenFleet]{
 			{
-				States: "assistant tasks printed a line for each planted task, and watch opened with the same listing",
+				States: "assistant tasks printed a line for each planted task, and watch opened with the same lines in its catch-up read",
 				Holds: func(f spokenFleet) error {
 					if len(f.tasksLines) < len(f.ids) {
 						return fmt.Errorf("tasks printed %d lines for %d tasks", len(f.tasksLines), len(f.ids))
 					}
 					for _, line := range f.tasksLines {
 						if !slices.Contains(f.watchLines, line) {
-							return fmt.Errorf("watch did not open with the listing line %q", line)
+							return fmt.Errorf("watch did not open with the listing line %q in its catch-up read", line)
 						}
 					}
 					return nil

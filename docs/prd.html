@@ -450,7 +450,7 @@ flowchart TB
       </div>
       <div class="collapse-content text-sm opacity-90 space-y-2">
         <p>Everything Assistant says to you names the project outcome, the consequence, and the next decision. Internal terms do not appear: no task identifiers, no isolated-copy paths, no watcher or wake vocabulary, no stage names, no state labels, no compressed safety jargon. Worker reports and tool output are evidence to read, never text to relay.</p>
-        <p>Detailed evidence documents may keep exact identifiers. Section 9 names which outputs are evidence documents: the detail view and the relay of a finding that needs your decision. The message that points you at one still translates, and so does every plain status line.</p>
+        <p>Detailed evidence documents may keep exact identifiers. Section 9 names which outputs are evidence documents: the detail view, the usage view, and the relay of a finding that needs your decision. The message that points you at one still translates, and so does every plain status line.</p>
         <p><b>Prevents:</b> a tool that is technically correct and practically unusable, because using it requires holding its implementation in your head.</p>
       </div>
     </div>
@@ -1003,6 +1003,7 @@ stateDiagram-v2
   Validating --> Ready: every stage green
   Running --> Reported: investigation task
   Ready --> Landed: merge proof read from the code host, recorded once
+  Held --> Landed: local task approved, fast-forward recorded once
   Reported --> Complete: findings relayed, decisions recorded, cleanup proof recorded once
   Landed --> Complete: cleanup proof recorded once
   Running --> Failed: stopped, cannot proceed
@@ -1014,8 +1015,9 @@ stateDiagram-v2
     Paused is a worker's own declared external wait, entered only on the worker's own say-so; the
     checks stage's wait is not shown as Paused, and a hold is never Paused. Landed and Complete are
     terminal facts the program records once each: Landed is derived from the one merge record the
-    code-host read writes, the same record the run's <code>passed</code> is derived from, and
-    Complete is the cleanup proof, recorded once the same way. Neither is inferred from a run.
+    code-host read writes, the same record the run's <code>passed</code> is derived from, or, for a
+    task delivered under the <code>local</code> posture, from the local landing record its
+    approved fast-forward writes; and Complete is the cleanup proof, recorded once the same way. Neither is inferred from a run.
     The relaunch from Failed is bounded by section 10's <code>relaunch_attempts</code>: past it the
     task holds for you, and you decide whether it is retried.
   </p>
@@ -1073,7 +1075,7 @@ stateDiagram-v2
   </div>
   <p class="mb-4 opacity-90">The state resolver answers in a fixed precedence:</p>
   <ol class="list-decimal pl-6 space-y-1.5 mb-4 opacity-90">
-    <li>A terminal record the program wrote once for this task: Landed, derived from the merge record the code-host read writes, or Complete, the cleanup proof. This outranks a run, because a passed run resolves Ready forever and only a record of what happened after it can move a task past that. A terminal record is final for the task. A run attributed to the same branch afterwards does not displace it. Work that continues after Landed is a new task.</li>
+    <li>A terminal record the program wrote once for this task: Landed, derived from the merge record the code-host read writes or, for a <code>local</code> task, from the local landing record, or Complete, the cleanup proof. This outranks a run, because a passed run resolves Ready forever and only a record of what happened after it can move a task past that. A terminal record is final for the task. A run attributed to the same branch afterwards does not displace it. Work that continues after Landed is a new task.</li>
     <li>The hold tier: an open hold naming this task, which resolves Held, because the task is waiting on you. It sits below the terminal record and above the run, so a task waiting on you never resolves Failed or Unknown, and a terminal record still outranks it.</li>
     <li>A validation run attributed to this task's own branch, whether active or finished. This outranks everything below, because a worker handed off to the gate stops writing to its own log.</li>
     <li>A live process signal from the task's terminal.</li>
@@ -1123,6 +1125,7 @@ flowchart TD
   kind -->|"declared external wait"| pw{"Idle past the<br />recheck window?"}
   kind -->|"terminal gone"| esc
   kind -->|"a run moved to held"| esc
+  kind -->|"message unacknowledged"| esc
   kind -->|"no change"| abs["Absorb: advance markers, no model turn"]
   ev -->|yes| abs
   ev -->|no| esc
@@ -1198,6 +1201,83 @@ flowchart TD
     </div>
   </div>
 
+  <h3 id="steering" class="prd-anchor text-xl font-semibold mb-3">Steering a running worker</h3>
+  <p class="mb-4 opacity-90">
+    A worker that drifts off scope, asks a question in its output, or stalls on a live process
+    must be reachable without waiting for it to die, and stoppable without the agent reaching
+    around the program. Three operations do that, each a coordinator-only service method on the
+    terms section 9 gives creating, promoting, and relaunching a task. A caller inside a
+    registered worker group is refused, so no worker steers itself or a sibling, and who sent or
+    stopped is derived from the surface the way who resolved a hold is, with no value meaning a
+    person.
+  </p>
+  <div class="overflow-x-auto rounded-box border border-base-content/10 bg-base-100 mb-4">
+    <table class="table table-sm table-zebra">
+      <thead><tr><th class="w-28">Operation</th><th>What it does</th><th class="w-72">What proves it happened</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><b>Message</b></td>
+          <td>The program appends a message record naming the task, the attempt, and the text,
+            with credentials removed, then sends the text through the terminal session provider's
+            Send, which the Claude Code adapter frames as one stream-json user message. The text is
+            bounded by a fixed limit in the program and refused rather than truncated above it.
+            Nothing resends a message.</td>
+          <td>Three facts on the message record, each written once. <b>Written</b>: Send
+            returned, which proves the bytes reached the worker's input and nothing about whether
+            it read them. <b>Refused</b>: Send failed, with the reason. <b>Acknowledged</b>: the
+            worker appended the acknowledgement kind, naming the message, through the worker event
+            path, and the store records it on the message record in the same transaction as the
+            event. A record with neither written nor refused after a restart reads as unknown and
+            is never resent.</td>
+        </tr>
+        <tr>
+          <td><b>Stop</b></td>
+          <td>Ends the worker through its session's close, or, for a session this service does not
+            hold, through the one group ending that verifies the leader's identity first. The copy
+            is never touched, so what the worker wrote stays where it is (P6). The program then
+            registers a hold naming the task, keyed by the attempt it stopped.</td>
+          <td>The probe answering dead for the attempt's session reference, read after the stop
+            and never inferred from the close returning. Anything else is a typed refusal and no
+            hold is registered. The hold is what the task resolves from afterwards, Held in the
+            hold tier, so reconciliation does not relaunch a worker someone stopped.</td>
+        </tr>
+        <tr>
+          <td><b>Relaunch</b></td>
+          <td>Answering the stop's hold <code>retry</code>, optionally with a note, runs the one
+            anchored relaunch section 11 uses, in the same copy, with the same instructions, the
+            note, and the text of every message the stopped attempt never acknowledged.
+            <code>stop</code> leaves the task where its records put it. It is counted by
+            <code>relaunch_attempts</code> like every other relaunch.</td>
+          <td>The new attempt, anchored to the attempt the answer named, and the copy assertion and
+            launch that follow it on their existing terms. A second answer or a concurrent
+            reconciliation loses at the anchor.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <ul class="list-disc pl-6 space-y-1.5 mb-4 opacity-90">
+    <li><b>A stop is a hold.</b> It waits on a decision. A message nobody acknowledged is neither a
+      hold nor a park but a wake, and nothing here is a loop bound, so nothing here parks.</li>
+    <li><b>An unacknowledged message surfaces once.</b> A message written and not acknowledged
+      within <code>escalation_window</code> surfaces as a wake of its own kind, always actionable,
+      once per message, and is not resent.</li>
+    <li><b>A message never closes a decision.</b> A worker's open decision is closed by the worker's
+      own event, and a hold only by an answer through the hold path. A message carries text and
+      nothing the program reads as an answer.</li>
+    <li><b>What you hear.</b> A message not yet acknowledged, a stopped worker waiting on your
+      decision, and a stop that could not be verified are phrased like every other line. The
+      message's text and the worker's output are evidence, never relayed (P13).</li>
+    <li><b>Interrupt is not offered.</b> Ending a turn while keeping the process means knowing the
+      turn ended, which nothing here reads. An interrupt is refused naming the missing capability,
+      per section 8's rule that undeclared means unavailable, and the path is stop, then relaunch
+      with a note. Section 12 defers it.</li>
+  </ul>
+  <p class="mb-8 opacity-90">
+    Not in this design: switching agent or model on relaunch, since agent selection is trusted
+    configuration (P7) and a worker names no model; answering a permission prompt a worker's agent
+    raises; and steering a validating agent, which section 9 contains.
+  </p>
+
   <h3 class="text-xl font-semibold mb-3">What reaches you, and how it is worded</h3>
   <div class="grid gap-4 md:grid-cols-2 mb-6">
     <div class="card card-border bg-base-200 border-success/30">
@@ -1234,8 +1314,8 @@ flowchart TD
   <p class="mb-8 opacity-90">
     This is a testable contract, not a style preference. The translation table below should be
     enforced by a test that asserts both the required wording and the absence of the internal terms.
-    It governs everything a person reads except the two detailed evidence documents section 9
-    names, the detail view and the relay of a finding that needs your decision, where exact
+    It governs everything a person reads except the three detailed evidence documents section 9
+    names, the detail view, the usage view, and the relay of a finding that needs your decision, where exact
     identifiers and stage names stay. The plain status lines are not evidence documents and stay
     phrased.
   </p>
@@ -1265,11 +1345,41 @@ flowchart TD
       <thead><tr><th class="w-32">Mode</th><th>Path</th><th class="w-56">When to use it</th></tr></thead>
       <tbody>
         <tr><td><b>gated</b> <span class="badge badge-primary badge-xs">default</span></td><td>Implement, commit, run the full pipeline, open a pull request, watch checks, report ready when checks first go green.</td><td>Anything you or others will depend on.</td></tr>
-        <tr><td><b>direct</b></td><td>Implement, commit, push, open a pull request. No pipeline.</td><td>A repository where the outer CI is the real gate and speed matters more.</td></tr>
-        <tr><td><b>local</b></td><td>Implement and commit on a branch. Nothing is pushed. You approve, then Assistant performs a guarded fast-forward into your local default branch.</td><td>Work that never leaves your machine.</td></tr>
+        <tr><td><b>direct</b> <span class="badge badge-ghost badge-xs">deferred</span></td><td>Implement, commit, push, open a pull request. No pipeline. Deferred by section 12, so no configuration selects it yet.</td><td>A repository where the outer CI is the real gate and speed matters more.</td></tr>
+        <tr><td><b>local</b></td><td>Implement and commit on a branch. Nothing leaves your machine: the worker pushes to the gate as every delivery worker does, and no run starts. You approve, then Assistant performs a guarded fast-forward into your local default branch.</td><td>Work that never leaves your machine.</td></tr>
       </tbody>
     </table>
   </div>
+  <p class="mb-4 opacity-90">
+    The mode a project declares is its <b>delivery posture</b>, section 10's <code>delivery</code> key,
+    read only from the trusted copy so a branch cannot lighten its own path (P7). If that copy cannot
+    be read and parsed, nothing is delivered and the refusal is reported; no posture is assumed in
+    its place, not even <code>gated</code>. A posture belongs to a delivery task and never to a run.
+  </p>
+  <ul class="list-disc pl-6 space-y-1.5 mb-6 opacity-90">
+    <li><b>A lighter posture starts no run.</b> A run, whenever one starts, is all nine stages. Under
+      <code>local</code> no run starts at all, so no stage is skipped, reordered, or added, and
+      nothing it delivers is a pass or carries a run outcome (P2). Its task resolves from its own
+      records, and the phrase table words it as a change made on your machine without validation,
+      never with the words a passed run uses.</li>
+    <li><b>Recorded at intake.</b> The posture a task was dispatched under is written on the task
+      when it is created, and that record, not a later read of the key, decides the task's path.</li>
+    <li><b>Only a task's own push.</b> A push a person makes to the gate always starts the full run,
+      because that push is consent to validation (P1). Admission places a push inside a registered
+      worker group by the credentials the socket reports, and only such a push follows its task's
+      posture.</li>
+    <li><b>Tighten, never loosen.</b> At intake the coordinator may record a stricter posture than the
+      project's, for work it judges risky. It may never record a lighter one, so no agent judgment
+      weakens the path a project declared.</li>
+    <li><b>Approving a <code>local</code> change.</b> The task holds for your approval. Answering
+      approve fast-forwards your local default branch to the commit the worker pushed, anchored to
+      the tip the program read and refused on anything that is not a fast-forward from it or that
+      section 11's custody classification would block (P6). The fast-forward writes the local
+      landing record once, and the terminal tier above reads it as Landed. Cleanup's proof for such
+      a task is P12's content check, read against the local default branch that fast-forward
+      moved.</li>
+  </ul>
+
   <div role="alert" class="alert alert-soft mb-8 items-start">
     <div class="min-w-0">
       <p class="font-semibold mb-1">The selected path owns its own rigor</p>
@@ -1294,7 +1404,7 @@ flowchart TD
     <div class="card card-border bg-base-200 border-warning/40">
       <div class="card-body">
         <h4 class="card-title text-sm">On, by your explicit instruction</h4>
-        <p class="text-xs opacity-90">Assistant resolves routine gates itself and merges work that is green or already approved. It still escalates anything destructive, irreversible, or security-sensitive, and it never merges a failing pull request. Every autonomous merge produces a one-line outcome with the full URL.</p>
+        <p class="text-xs opacity-90">Assistant resolves routine gates itself and merges a run that ended <code>checks-passed</code> in a repository you listed for it. It still escalates anything destructive, irreversible, or security-sensitive, and it never merges a failing pull request. Every autonomous merge produces a one-line outcome with the full URL.</p>
       </div>
     </div>
   </div>
@@ -1302,6 +1412,23 @@ flowchart TD
     Automating judgment expands only when you say so, never by a default changing underneath you.
     Being away from the machine never expands this authority: it changes how you are reached, not
     what may be decided without you.
+  </p>
+  <p class="mb-4 opacity-90">
+    The merge half of the flag is section 10's <code>autonomy.merge</code>, a global-only list of the
+    repositories where it is on, empty by default, so a repository can never grant itself merge
+    authority. Where it is on, the program merges only a run that ended <code>checks-passed</code>,
+    and only after a live read of the pull request by its recorded identifier finds it open, not a
+    draft, reported mergeable by the forge, and every reported check settled green on the head the
+    run observed, with an empty check list green only under <code>no_ci</code>. The merge request is
+    bound to that head, and where the forge cannot bind it the program refuses rather than merging an
+    unbound head (P6).
+  </p>
+  <p class="mb-8 opacity-90">
+    The forge's own rules decide whether the merge is allowed, and a refusal from it is reported,
+    never worked around: the program merges as an actor inside your merge policy and owns none of it.
+    The merge itself writes no record. The code-host read that ends a run on a merge writes the merge
+    record as it does for a merge you made, and the one-line outcome with the full URL is phrased
+    from that record.
   </p>
 </section>
 
@@ -1718,14 +1845,17 @@ flowchart TB
         <tr><td><b>stage result</b></td><td>Authoritative</td><td>Per stage: status, findings, duration, log path, last activity, and the effective fix limit.</td></tr>
         <tr><td><b>round</b></td><td>History</td><td>One row per stage execution. Findings, which findings were selected and by whom, the exact payload sent to the fixer, and the one-line summary. This is what the pull request narrative is generated from.</td></tr>
         <tr><td><b>checkpoint history</b></td><td>Authoritative, appended</td><td>One entry per position a run has stood in: state, the node it has not yet run, the status it stood in, the decision it is halted on when it is halted, the bound accounting, and, on an entry a fork produced, the entry it was copied from. Appended after every node and never revised. The entry with the highest sequence is where the run stands, and it is the only record that answers that.</td></tr>
-        <tr><td><b>task</b></td><td>Authoritative</td><td>Shape, project, mode, isolated copy path, session reference, linked run, linked pull request.</td></tr>
+        <tr><td><b>task</b></td><td>Authoritative</td><td>Shape, project, launch notation (how the worker was started), delivery posture (recorded at intake, in a field of its own), isolated copy path, session reference, linked run, linked pull request.</td></tr>
         <tr><td><b>task state</b></td><td>Resolved on read</td><td>Not a stored row. A resolution with its source attached, computed on each read from the records that own its facts, as of one consistent read of them; section 6 says what it rests on. Distinct from the event log, per P8.</td></tr>
         <tr><td><b>task event</b></td><td>History</td><td>Append-only. Every append is a wake.</td></tr>
         <tr><td><b>wake</b></td><td>Authoritative, appended</td><td>The durable wake queue, one row per actionable wake, written in the same transaction as the detector markers it advances and drained by the coordinator. A table here and not a directory, so a wake and its markers are one write. Draining acknowledges a row and never deletes it: drained rows are kept, and a row is actionable until acknowledged.</td></tr>
         <tr><td><b>merge record</b></td><td>Authoritative, appended</td><td>Append-only and written once, by the code-host read that ends a run on a merge: the pull request, the head read, and when. The code host owns the merge; this is the program's record that it saw it. The run's <code>passed</code> on a merge and the task's Landed are both derived from this one record, and neither stores the fact again.</td></tr>
+        <tr><td><b>local landing record</b></td><td>Authoritative, appended</td><td>Append-only and written once, by the approved fast-forward that delivers a <code>local</code> task: the task, the commit, the local default branch's tip before and after, and when. The task's Landed for a <code>local</code> task is derived from it, read in the same tier as the merge record.</td></tr>
         <tr><td><b>cleanup record</b></td><td>Authoritative, appended</td><td>Append-only and written once, recording the cleanup check it was made from. The task's Complete is derived from it. With the merge record it is what section 6's resolver reads in the tier above the run tier.</td></tr>
         <tr><td><b>hold</b></td><td>Authoritative</td><td>A decision waiting on you, with a stable key. Idempotent to register. Closed only by an explicit resolution, recorded with who made it, never by the surrounding work finishing. The one resolution the service makes itself is for the hold the checks stage raises when <code>checks_timeout</code> elapses: when the pull request that hold waits on is read as merged or closed, the question it asked no longer exists, and the service records that reading as the resolution and itself as the resolver. Every other hold keeps the rule.</td></tr>
-        <tr><td><b>agent invocation</b></td><td>History</td><td>Purpose, agent, model, timing, failure category, token usage. Never prompts, outputs, diffs, or credentials.</td></tr>
+        <tr><td><b>message</b></td><td>Authoritative, appended</td><td>One row per message sent to a worker: the task, the attempt, the text with credentials removed, and who sent it, derived from the surface. Each of written, refused, and acknowledged is recorded on it once and never revised, and it is the one place whether a message was delivered is read from. Section 6's steering says what writes each.</td></tr>
+        <tr><td><b>seen mark</b></td><td>Authoritative, appended</td><td>One row per merge or cleanup record you were shown and marked seen, keyed the way that record is keyed. One per home. It is what section 9's catch-up reads to decide what landed since you last looked, and nothing else reads it.</td></tr>
+        <tr><td><b>agent invocation</b></td><td>History</td><td>Purpose, agent, model, timing, failure category, token usage, and the run and stage it served where it served one. Never prompts, outputs, diffs, or credentials. The run and stage were added later, so a row written before them reads both as unknown, never as a guess.</td></tr>
       </tbody>
     </table>
   </div>
@@ -1883,6 +2013,16 @@ flowchart TB
     </table>
   </div>
   <p class="mb-4 opacity-90">
+    The <b>usage view</b> is a flag on <code>assistant runs</code>, taking a window. It reads section
+    8's agent invocation record and totals it by agent, model, and purpose, and by run and stage
+    where a row names them: calls, failures by category, duration, and each token count. A count the
+    agent did not report is shown as unreported and never summed as a zero. It covers the calls a
+    stage makes and says so: a worker's turns and any price are not in it. The local protocol
+    carries the same read as one open method, so a driving agent gets the same model. It is a
+    detailed evidence document in P13's sense, because its rows are agent names, model identifiers,
+    and stage purposes; the line pointing at it is phrased. No verb is added.
+  </p>
+  <p class="mb-4 opacity-90">
     Answering a hold is a flag on <code>assistant</code>, and it takes a task as well as a run, so a
     hold a task raised with no run behind it, an investigation's among them, is answered the same
     way. No verb is added for it.
@@ -1899,6 +2039,56 @@ flowchart TB
     anchored relaunch that section 11's reconciliation also uses: the attempt it begins is anchored
     to the attempt history it read, so a coordinator's relaunch and reconciliation's cannot both
     relaunch the same task.
+  </p>
+  <p class="mb-8 opacity-90">
+    Messaging a running worker and stopping one are service methods on the same terms, and
+    coordinator-only for the same reason. Section 6's steering owns what each does and what proves
+    it happened. The relaunch after a stop is no new method: it is the answer to the stop's hold.
+  </p>
+
+  <h3 id="catch-up" class="prd-anchor text-xl font-semibold mb-3">Catching up</h3>
+  <p class="mb-4 opacity-90">
+    With many tasks running, the question that matters is what is waiting on you, what landed, and
+    what is still moving. <code>assistant watch</code> answers it first, in one read, before it
+    follows the stream. The read is resolved from the records that own each fact (P8), and the
+    person's rendering and the machine interface return the same model (P14).
+  </p>
+  <div class="overflow-x-auto rounded-box border border-base-content/10 bg-base-100 mb-4">
+    <table class="table table-sm table-zebra">
+      <thead><tr><th class="w-44">Part</th><th>Read from</th><th class="w-56">Filtered by the seen mark?</th></tr></thead>
+      <tbody>
+        <tr><td><b>Waiting on you</b></td><td>Every open hold, a run's and a task's, oldest first, each with the answer that closes it.</td><td>Never. An open decision is shown until it is answered.</td></tr>
+        <tr><td><b>Landed</b></td><td>The merge records and cleanup records section 6's terminal tier derives Landed and Complete from.</td><td>Yes: only records not yet marked seen.</td></tr>
+        <tr><td><b>Under way</b></td><td>Every task section 6's work-in-flight definition counts, and every run being advanced, with its resolved state.</td><td>Never. It is what is true now.</td></tr>
+        <tr><td><b>Stopped without a decision</b></td><td>Tasks that resolve Failed or Unknown, each with its next action.</td><td>Never.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <ul class="list-disc pl-6 space-y-1.5 mb-4 opacity-90">
+    <li><b>The seen mark.</b> "Since you last looked" is section 8's seen mark: which landed records
+      you were shown, one per home. It is never a time read off a clock and never inferred from the
+      log or the stream.</li>
+    <li><b>It moves only when you say so.</b> A flag on <code>watch</code> marks seen exactly the
+      records a read showed, so anything recorded between the read and the mark is still shown next
+      time. A read alone marks nothing.</li>
+    <li><b>Landed is bounded.</b> A read shows unseen records newest first, up to a fixed count in
+      the program, and says how many more there are. The rest stay unseen rather than being dropped.
+      The count is not a setting.</li>
+    <li><b>Answering is the existing answer.</b> Each listed decision carries its
+      <code>--answer</code> command, with <code>--task</code> where a task holds. There is no
+      second way to resolve a hold.</li>
+    <li><b>It is not the wake queue.</b> Acknowledging a wake records that the coordinator handled
+      it, and the seen mark records that you were shown something. Neither stands in for the
+      other.</li>
+    <li><b>Wording.</b> It is a plain status rendering under P13, not an evidence document, and it
+      points at the detail view for identifiers.</li>
+  </ul>
+  <p class="mb-8 opacity-90">
+    A second flag on <code>watch</code> prints the read once and exits. The local protocol carries
+    an open read and a restricted mark, refused for a task's worker. No verb is added, and
+    <code>status</code>, which answers for one branch, does not carry it. Not in this design: a
+    dated report file, an interactive board, away mode's return brief, planned work that is not yet
+    a task, and bucketing holds by age.
   </p>
 
   <div role="alert" class="alert alert-error alert-soft mb-8 items-start">
@@ -2039,10 +2229,10 @@ flowchart TB
   global["Your global settings<br />in your home"]
 
   push -->|"read from here"| A["Ignore patterns<br />Fix limits<br />Commit message template<br />Intent settings"]
-  trusted -->|"read from here, always"| B["Documentation instructions<br />Path-scoped review rules<br />Judge paths<br />Instruction suppression<br />No-CI declaration<br />Rerun budget"]
+  trusted -->|"read from here, always"| B["Documentation instructions<br />Path-scoped review rules<br />Judge paths<br />Instruction suppression<br />No-CI declaration<br />Rerun budget<br />Delivery posture"]
   trusted -->|"read from here, unless you opt out"| C["Test, lint, and format commands<br />Agent selection"]
 
-  global -->|"read from here only"| D["Checks timeout<br />Session reuse<br />Decision model"]
+  global -->|"read from here only"| D["Checks timeout<br />Session reuse<br />Decision model<br />Merge authority"]
 
   C -.->|"opt-in, itself trusted-only"| push
   trusted -->|"unreadable or unparseable"| stop["Abort before launching anything"]
@@ -2104,6 +2294,8 @@ flowchart TB
         <tr><td><code>document.ownership</code></td><td>empty</td><td>Which document owns which subject. Without this the document stage guesses, and guessing produces documentation churn on most changes.</td></tr>
         <tr><td><code>suppress_project_instructions</code></td><td><code>false</code></td><td>For a repository whose own instructions would give a validating agent an operator identity. If any resolved agent lacks a verified suppression mechanism, the run fails before launching it.</td></tr>
         <tr><td><code>no_ci</code></td><td><code>false</code></td><td>A positive declaration that this repository has no checks. Only this makes an empty check list count as green.</td></tr>
+        <tr><td><code>delivery</code></td><td><code>gated</code></td><td>The delivery posture of this repository's delivery tasks, section 6: <code>gated</code> or <code>local</code>. Read only from the trusted copy, so a branch cannot choose a lighter path for itself. <code>direct</code> is deferred and is rejected at parse time. It never changes what a person's push to the gate does.</td></tr>
+        <tr><td><code>autonomy.merge</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td>empty</td><td>The repositories, each named as the code host names it, where section 6's autonomy flag may merge a run that ended <code>checks-passed</code>, after the live read section 6 gives. Empty means the program merges nothing.</td></tr>
         <tr><td><code>allow_pushed_commands</code></td><td><code>false</code></td><td>The opt-out that lets the pushed branch set commands and agent selection. It is itself readable only from the trusted copy, so a branch cannot enable it for itself.</td></tr>
         <tr><td><code>checks_timeout</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code>168h</code></td><td>Idle timeout, re-armed whenever the base branch advances. On elapse the run holds rather than ending, and that hold is the one section 11's recovery step 3 applies to.</td></tr>
         <tr><td><code>escalation_window</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code>30m</code></td><td>How long a terminal may stay unchanged, with positive evidence of progress, before the supervisor surfaces it anyway. It is also how often a crashed worker that is still silent surfaces again. The default is chosen, not measured; the limits table bounds it on both sides, and those bounds are chosen, not measured.</td></tr>
@@ -2153,6 +2345,7 @@ flowchart TB
         <tr><td>Supervision beacon interval ceiling</td><td><code>10m</code></td><td><code>supervision_beacon_interval</code>. Above this a stopped supervisor is invisible for most of an hour at the staleness multiple. Chosen, not measured.</td></tr>
         <tr><td>Stall inspection count floor</td><td><code class="prd-num">1</code></td><td><code>stall_inspection_count</code>. At one every surface of a stall demands an inspection. Chosen, not measured.</td></tr>
         <tr><td>Stall inspection count ceiling</td><td><code class="prd-num">100</code></td><td><code>stall_inspection_count</code>. Above this a stall surfaces more often than anyone would read before an inspection is demanded. Chosen, not measured.</td></tr>
+        <tr><td>Merge authority entries</td><td><code class="prd-num">64</code></td><td>Elements of <code>autonomy.merge</code>. Chosen, not measured.</td></tr>
         <tr><td>Relaunch attempts ceiling</td><td><code class="prd-num">20</code></td><td><code>relaunch_attempts</code>. Above this a worker that fails the same way every time is restarted for days before you hear. The floor is zero, which is a value you may choose. Chosen, not measured.</td></tr>
       </tbody>
     </table>
@@ -2288,7 +2481,9 @@ flowchart TB
           <li><b>Extra forge adapters.</b> Same reasoning. Do not promise breadth ahead of demand.</li>
           <li><b>Extra session providers.</b> One reference provider proves the abstraction. Four more prove nothing new.</li>
           <li><b>Delegate coordinators.</b> The most complex feature in either source project. It only earns its cost at a fleet size you have not reached.</li>
-          <li><b>Direct and local delivery modes.</b> The gate is the thesis. Adding modes that bypass it before it is proven undermines the experiment.</li>
+          <li><b>The direct delivery mode.</b> The gate is the thesis, and this is the one mode that shares unvalidated work. When it is promoted, the program forwards the worker's pushed commit from the gate with an anchored update and the worker gains no second remote, and the merge record is its landed record. The local mode is not deferred: it shares nothing, and section 6 specifies it.</li>
+          <li><b>Agent routing by model, effort, or quota.</b> Routing among adapters means nothing with one, so it is specified when a second adapter is promoted. Section 9's usage view is the measurement it will start from.</li>
+          <li><b>Interrupting a worker's turn.</b> It needs proof the turn ended, which nothing reads yet. Stop and relaunch cover the need; an adapter offers interrupt once it declares it with a conformance probe for that proof.</li>
           <li><b>Transcript-based intent inference.</b> Supply intent explicitly first. Inference is a convenience over a mechanism that must already work.</li>
           <li><b>Away mode.</b> Requires the supervision loop to be trustworthy first.</li>
           <li><b>Evidence publishing to a branch.</b> Store evidence locally and link it. Publishing is an optimization.</li>
@@ -2305,7 +2500,7 @@ flowchart TB
         <h3 class="card-title text-base mb-1">Permanent non-goals</h3>
         <ul class="text-sm opacity-90 space-y-2.5">
           <li><b>Configurable stage order.</b> It is the only thing making a pass comparable across repositories.</li>
-          <li><b>Standing configuration that skips a stage.</b> Per-run skips by a person, yes. A rule that skips on your behalf, never.</li>
+          <li><b>Standing configuration that skips a stage.</b> Per-run skips by a person, yes. A rule that skips on your behalf, never. A lighter delivery posture starts no run, so it skips no stage.</li>
           <li><b>Adding stages.</b> A repository strengthens a stage; it does not add one.</li>
           <li><b>Risk-based automatic skipping.</b> A classifier's guess must never weaken what a pass means.</li>
           <li><b>A hosted service.</b> Your credentials, your machine, your initiative.</li>
@@ -2443,6 +2638,31 @@ flowchart TB
           <td class="prd-num">8</td>
           <td>A fix round you ask for at a hold is <b>bounded at three per stage per run</b>, by a fixed number rather than a setting.</td>
           <td>Section 5's Fix action is a second cycle through a stage, and every cycle carries a bound. Each of these rounds is your explicit answer, so the bound is a backstop against a loop nobody is driving rather than a policy a repository tunes, and section 10 gains no key for it. An answer asking for a fourth is refused while the hold is still open, so approve, skip, and cancel remain; the run-wide budget still counts every round. The round is held to the judge rule at every stage it is offered at, review and rebase included, because asking for a round is not approving an edit to a check. It is offered at the stages before push and not at push, pull request, or checks: push forwards a commit, so re-running it would push the round's result before you saw it, and a round at the two stages after it would leave a commit nothing pushes. A round that changes nothing returns to the hold and says so; it does not end the run on the convergence bound, because every such round is one you asked for.</td>
+        </tr>
+        <tr>
+          <td class="prd-num">9</td>
+          <td>A running worker is <b>steered by message and stop</b>, through coordinator-only service methods, and relaunched by answering the stop's hold.</td>
+          <td>Section 6's steering and section 8's message record. A message is acknowledged through the worker event path and surfaces once if it is not; it is never resent. A stop holds rather than letting reconciliation relaunch, and its relaunch is the one anchored relaunch, counted by <code>relaunch_attempts</code>. No verb or flag is added. Interrupt is deferred until an adapter can prove a turn ended.</td>
+        </tr>
+        <tr>
+          <td class="prd-num">10</td>
+          <td>Catching up is <b>the read <code>watch</code> starts with</b>, and "since you last looked" is one seen mark per home that moves only when you mark a read.</td>
+          <td>Section 9's catching up and section 8's seen mark. Open decisions and work under way are never filtered; only landed records are, bounded by a fixed count. It is kept separate from the wake queue, and no verb is added.</td>
+        </tr>
+        <tr>
+          <td class="prd-num">11</td>
+          <td>A delivery task's path is a <b>trusted-only delivery posture</b>, and <code>local</code> is promoted while <code>direct</code> stays deferred.</td>
+          <td>Section 6's delivery modes, section 10's <code>delivery</code> key, and section 8's local landing record. A lighter posture starts no run, so the non-goals against standing skips and risk-based skipping both stand unchanged: the first gains one sentence saying so, and the coordinator may record a stricter posture than the project's, never a lighter one. A person's push always runs the full gate. <code>direct</code> is the one mode that would share unvalidated work, so it waits until the usage view says what a gated run costs.</td>
+        </tr>
+        <tr>
+          <td class="prd-num">12</td>
+          <td>The autonomy flag <b>merges only a <code>checks-passed</code> run</b>, in repositories the operator lists, after a live read bound to the observed head.</td>
+          <td>Section 6's autonomy flag and section 10's global-only <code>autonomy.merge</code>. The non-goal "Owning merge policy" stands: the forge's rules decide whether a merge is allowed, a forge refusal is reported rather than worked around, and the existing code-host read writes the merge record.</td>
+        </tr>
+        <tr>
+          <td class="prd-num">13</td>
+          <td>Agent cost is <b>measured before anything is routed</b>: a usage view now, routing when a second adapter is promoted.</td>
+          <td>Section 9's usage view, a flag on <code>runs</code> plus one read method, named an evidence document under P13; section 8's agent invocation record gains the run and stage it served, old rows reading unknown. Where routes are configured, who chooses among candidates, and what is routed first stay open, and section 12 defers routing.</td>
         </tr>
       </tbody>
     </table>

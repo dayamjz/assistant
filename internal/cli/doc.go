@@ -22,7 +22,7 @@
 // about; section 9 names both outside its table and says they are not a
 // precedent for a third.
 //
-// Four things the section leaves to a verb's parameters are flags or arguments
+// Five things the section leaves to a verb's parameters are flags or arguments
 // rather than verbs.
 //
 // Answering a held run is --answer on the command that attaches to it, and
@@ -38,6 +38,13 @@
 //
 // Reading one run or one task in full is an argument to the command that lists
 // them, because that section gives runs one row and tasks one row.
+//
+// Catching up is the read assistant watch starts with, and its two flags are
+// the ones section 9's catching up names: --once prints the read and exits,
+// and --mark-seen marks seen exactly the landed records that read showed.
+// The section says no verb is added for it and status does not carry it, so
+// neither does this surface; answering a decision the read lists is the
+// --answer above, and the read names it rather than offering a second way.
 //
 // Running the service in the foreground is --foreground on service start,
 // because the process that serves and the command that launches it are one
@@ -174,7 +181,10 @@
 // the same surface and an agent that read a decision as a failure would stop
 // driving exactly when it should carry on. A run that is still advancing is a
 // success for the same reason, and PRD section 9 gives it an outcome of its
-// own rather than one of the four that say a run is finished with.
+// own rather than one of the four that say a run is finished with. An answer
+// to a task's hold exits with the operational failure exactly when it was a
+// retry that began no work, machine.AnswerEffect.RetryNotBegun, and a retry
+// that began an attempt, by relaunch or by dispatch, is a success.
 //
 // A verb's answer goes to standard output as a document under --json, and
 // progress goes to standard error, so a caller redirecting standard output

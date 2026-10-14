@@ -263,3 +263,172 @@ func TestHoldAndCleanupRowsFollowTheRecord(t *testing.T) {
 func wholeWord(text, word string) bool {
 	return regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(word) + `\b`).MatchString(text)
 }
+
+// A task the hold tier resolved Held waits on a hold naming the task, which
+// is answered given the task, so its row says that it waits on the person and
+// names --task and --answer. The control is Held from the run tier, a run's
+// decision answered from its branch, which keeps the table's row and names no
+// --task; and an open hold naming a task says the same command where one
+// naming a run does not.
+func TestAHeldTaskSaysItWaitsOnYouAndHowToAnswer(t *testing.T) {
+	t.Parallel()
+	vocabtest.Control(t)
+	byHold := machine.TaskPhrase(machine.Task{State: taskstate.Resolution{State: taskstate.Held, Source: taskstate.SourceHold}}).String()
+	for _, want := range []string{"waiting on an answer from you", "assistant --task", "--answer", "assistant tasks --json"} {
+		if !strings.Contains(byHold, want) {
+			t.Errorf("the hold tier's row %q does not say %q", byHold, want)
+		}
+	}
+	vocabtest.Assert(t, byHold)
+	if wholeWord(byHold, string(taskstate.Held)) {
+		t.Errorf("the row %q carries the state's own word", byHold)
+	}
+	byRun := machine.TaskPhrase(machine.Task{State: taskstate.Resolution{State: taskstate.Held, Source: taskstate.SourceRun}}).String()
+	if byRun == byHold || strings.Contains(byRun, "--task") {
+		t.Errorf("a held run's task reads %q, which is the hold tier's row", byRun)
+	}
+
+	taskHold := machine.HoldPhrase(store.Hold{Subject: "whether to begin this work again", TaskID: store.Known("abcdefghij23")}).String()
+	if !strings.Contains(taskHold, "assistant --task") || !strings.Contains(taskHold, "--answer") {
+		t.Errorf("an open hold naming a task reads %q, which does not say how to answer it", taskHold)
+	}
+	vocabtest.Assert(t, taskHold)
+	runHold := machine.HoldPhrase(store.Hold{Subject: "approve", TaskID: store.Known("abcdefghij23"), RunID: store.Known("r")}).String()
+	if strings.Contains(runHold, "--task") {
+		t.Errorf("an open hold naming a run reads %q, which points at the task's answer", runHold)
+	}
+}
+
+// Every effect an answer to a task's hold can report reads as a row the
+// table lists, so the vocabulary test holds it, and every effect that does
+// more than close the hold has a row of its own, so two effects whose
+// mechanisms differ cannot share a sentence. The rows are held to what
+// their mechanisms do: a retry started by dispatch claims nothing about
+// carrying on, because a dispatch gives the worker no note about the
+// earlier attempt; a deferred retry promises nothing about the next start,
+// because what that start does depends on why the retry was refused; and a
+// retry the isolation assertion refused says nothing begins it again, which
+// is what the recorded refusal makes true; and a retry refused on a record
+// that cannot be dispatched says nothing begins it until the record is
+// changed, which is what every path that begins an attempt reading that
+// record first makes true, and promises nothing of the next start. The domain is AnswerEffects, so
+// an effect added there fails here until it is phrased and listed. The
+// positive control is a row nobody listed, which the membership check must
+// report as missing.
+func TestEveryAnswerEffectReadsAsItsOwnListedRow(t *testing.T) {
+	t.Parallel()
+	vocabtest.Control(t)
+	listed := map[machine.Phrase]bool{}
+	for _, row := range machine.TablePhrases() {
+		listed[row] = true
+	}
+	unlisted := machine.Phrase{Outcome: "Your answer was taken.", Consequence: "Something happened.", Decision: "Nothing to decide."}
+	if listed[unlisted] {
+		t.Fatal("the control row nobody listed reads as listed, so the membership check checks nothing")
+	}
+	// The placeholder subject is the one TablePhrases fills HoldPhrase's rows
+	// with, so an answer that only closed its hold is found in the table.
+	hold := store.Hold{Subject: "a decision", Resolution: store.Known(machine.AnswerRetry)}
+	seen := map[machine.Phrase]machine.AnswerEffect{}
+	for _, effect := range machine.AnswerEffects() {
+		row := machine.TaskAnsweredPhrase(machine.TaskAnswered{Hold: hold, Effect: effect})
+		if !listed[row] {
+			t.Errorf("%s reads %q, which TablePhrases does not list", effect, row)
+		}
+		vocabtest.Assert(t, row.String())
+		if effect == machine.AnswerRecorded {
+			if row != machine.HoldPhrase(hold) {
+				t.Errorf("%s reads %q, want the answered hold's row", effect, row)
+			}
+			continue
+		}
+		if other, dup := seen[row]; dup {
+			t.Errorf("%s and %s read alike: %q", effect, other, row)
+		}
+		seen[row] = effect
+	}
+	phrase := func(e machine.AnswerEffect) string {
+		return machine.TaskAnsweredPhrase(machine.TaskAnswered{Hold: hold, Effect: e}).String()
+	}
+	for effect, rules := range map[machine.AnswerEffect]struct{ says, never []string }{
+		machine.AnswerRedispatched: {
+			says:  []string{"as that copy stands", "told nothing about the earlier attempt"},
+			never: []string{"where it left off", "carries on", "already done"},
+		},
+		machine.AnswerRetryDeferred: {
+			says:  []string{"could not be begun again just now", "may or may not begin it"},
+			never: []string{"is begun again the next time"},
+		},
+		machine.AnswerRetryRefused: {
+			says:  []string{"was not begun again", "did not pass the check", "Nothing begins it again on its own"},
+			never: []string{"next time the service comes up", "just now"},
+		},
+		machine.AnswerRetryUndispatchable: {
+			says:  []string{"was not begun again", "Nothing will begin it until that record is changed"},
+			never: []string{"next time the service comes up", "just now", "may or may not", "did not pass the check"},
+		},
+	} {
+		got := phrase(effect)
+		for _, want := range rules.says {
+			if !strings.Contains(got, want) {
+				t.Errorf("%s reads %q, which does not say %q", effect, got, want)
+			}
+		}
+		for _, bad := range rules.never {
+			if strings.Contains(got, bad) {
+				t.Errorf("%s reads %q, which promises %q", effect, got, bad)
+			}
+		}
+	}
+}
+
+// RetryNotBegun is true exactly for the retries that began no work, with
+// the oracle written from each effect's meaning rather than read off the
+// method, and the domain AnswerEffects, so an effect added without a
+// decision here fails.
+func TestRetryNotBegunIsTheRetriesThatStartedNothing(t *testing.T) {
+	t.Parallel()
+	oracle := map[machine.AnswerEffect]bool{
+		machine.AnswerRecorded:            false,
+		machine.AnswerRelaunched:          false,
+		machine.AnswerRedispatched:        false,
+		machine.AnswerRetryDeferred:       true,
+		machine.AnswerRetryHeld:           true,
+		machine.AnswerRetryAtBound:        true,
+		machine.AnswerRetryRefused:        true,
+		machine.AnswerRetryUndispatchable: true,
+		machine.AnswerStopped:             false,
+	}
+	effects := machine.AnswerEffects()
+	if len(effects) != len(oracle) {
+		t.Errorf("AnswerEffects lists %d effects and the oracle %d", len(effects), len(oracle))
+	}
+	for _, effect := range effects {
+		want, ok := oracle[effect]
+		if !ok {
+			t.Errorf("%s has no entry in the oracle", effect)
+			continue
+		}
+		if got := effect.RetryNotBegun(); got != want {
+			t.Errorf("%s.RetryNotBegun() = %v, want %v", effect, got, want)
+		}
+	}
+}
+
+// A copy sweep record is phrased exactly when it did not establish the copy
+// clear, so a person is spoken to about it only when something the run set
+// going may still be at work there. The set is walked from store's closed
+// set, so an outcome added there is decided here or fails.
+func TestACopySweepIsPhrasedExactlyWhenItDidNotClear(t *testing.T) {
+	t.Parallel()
+	quiet := map[store.SweepOutcome]bool{store.SweepCleared: true, store.SweepNothingStanding: true}
+	for _, outcome := range store.SweepOutcomes() {
+		phrase, ok := machine.CopySweepPhrase(store.RunCopySweep{Outcome: outcome})
+		if ok == quiet[outcome] {
+			t.Errorf("a %s sweep phrased = %v", outcome, ok)
+		}
+		if ok && phrase.Decision == "" {
+			t.Errorf("a %s sweep's row names no decision", outcome)
+		}
+	}
+}

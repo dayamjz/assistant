@@ -15,8 +15,8 @@
 //
 // # The terminal tier
 //
-// PRD section 6 puts one tier above the run: a terminal record the program
-// wrote once. Landed is derived from the merge record of a run attributed to
+// PRD section 6 puts two tiers above the run, and this is the first: a
+// terminal record the program wrote once. Landed is derived from the merge record of a run attributed to
 // the task, the record store.TransitionRunOnPullRequest writes in the
 // transaction that ends the run, and Complete from that and the task's
 // cleanup record with its removal marked. Both reach Resolve on the snapshot
@@ -51,6 +51,24 @@
 // Carrying the report onto the snapshot and reading it here is a change of
 // its own, and the test that pins today's answer is the one that moves when
 // it lands.
+//
+// # The hold tier
+//
+// The second tier is an open hold naming the task, which resolves Held with
+// SourceHold: the task is waiting on a person. It sits below the terminal
+// tier, so Landed and Complete still outrank it, and above the whole run
+// tier, so a task waiting on a person never resolves Failed or Unknown, and
+// does not resolve Validating or Ready either while the hold is open. The
+// holds are internal/store's, carried on TaskSnapshot, which already reads
+// every hold naming the task in the snapshot's own transaction; no record
+// is added and nothing here learns what a hold's key means. The producers in
+// this build are internal/service's two relaunch holds, the one the relaunch
+// bound raises and the one a relaunch with no process sweep raises, and
+// internal/tasks' StoreReport, which registers an investigation's asks.
+// Answering a hold resolves it, and a resolved hold is not read, so the task
+// falls back to whatever the tiers below say; the answer is a record, and
+// no event says the task stopped waiting (P8). Basis.Hold names the hold
+// that was read, so a reader comparing bases sees one open or close.
 //
 // The package is read-only and takes no clock. Resolve is pure, and Reader
 // only calls store accessors that read.
@@ -127,8 +145,21 @@
 //     the run status vocabulary by a test, not reconciled with
 //     internal/machine's outcome translation, which also reads a run's status
 //     for a different audience.
-//   - Only a run's own open hold supplies the detail of a Held answer. A hold
-//     that names the task while its run is not held does not make the task
-//     Held.
+//   - A hold naming the task decides the hold tier whether or not it also
+//     names a run, which is PRD section 6's "an open hold naming this task"
+//     read literally. internal/service's answer given a task closes only a
+//     hold naming the task and no run, so a hold naming both would resolve
+//     the task Held and not be answerable that way; no producer in this
+//     build writes one.
+//   - The hold tier's detail is the hold's subject, as a held run's is. For
+//     an investigation's hold that is a finding's description from the
+//     report the worker wrote: not an event's text, and never the log's,
+//     but words a worker chose.
+//   - The hold tier moves a task off Failed onto Held, and internal/tasks'
+//     Clears does not clear Held, so a task held at its relaunch bound now
+//     holds its branch against a queued successor until it is answered.
+//     An answer does not release that successor itself: Release runs where
+//     internal/service calls it, when a run finishes and at open, and that
+//     package's releaseQueued says the answer is not one of those sites.
 //   - A Reader loads a task's whole log for each read.
 package taskstate

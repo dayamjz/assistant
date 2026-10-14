@@ -53,6 +53,16 @@ var ErrRepositoryInUse = errors.New("store: a task still names a run of this rep
 // records it is about to write would land against rows that had been removed.
 var ErrRunActive = errors.New("store: run has not finished")
 
+// ErrRunProcessRecorded is returned by ForgetRepository and
+// RepositoryRemovable when a run of the repository still has a run process
+// record: an agent group it started whose end was never recorded. The record
+// is the only thing a later service's recovery reaps that group from, so
+// forgetting it would leave a process nothing could find again. A recovery
+// that verifies the group ended or gone clears the record, after which the
+// repository can be forgotten; one it cannot verify stands, and that refusal
+// stands with it.
+var ErrRunProcessRecorded = errors.New("store: a run's agent process has no recorded end")
+
 // ErrNoResolution is returned by ResolveHold when no resolution text was given.
 // PRD section 8 says a hold is closed only by an explicit resolution, and an
 // empty one is not explicit.
@@ -420,3 +430,55 @@ var ErrTaskShapeMoved = errors.New("store: the task's shape is not the one the c
 // survives cleanup, written once, so a second report is refused rather than
 // overwriting the holds the first was registered with.
 var ErrTaskReportStored = errors.New("store: the task already has a stored report")
+
+// ErrNoSender is returned by AppendMessage for the zero Sender: a message
+// records who sent it, on Hold's terms for who resolved one.
+var ErrNoSender = errors.New("store: a message records who sent it")
+
+// ErrUnknownSender is returned when a sender is outside the closed set
+// sender.go names, on ErrUnknownAcknowledger's terms.
+var ErrUnknownSender = errors.New("store: message sender is outside the closed set")
+
+// ErrMessageDelivery is returned by MarkMessageWritten and
+// MarkMessageRefused for a message whose delivery is already recorded,
+// written or refused: that fact is recorded once and the first record
+// stands.
+var ErrMessageDelivery = errors.New("store: the message's delivery is already recorded")
+
+// ErrMessageAcknowledged is returned by AcknowledgeMessage for a message
+// already acknowledged. Nothing is appended.
+var ErrMessageAcknowledged = errors.New("store: the message is already acknowledged")
+
+// ErrMessageRefused is returned by AcknowledgeMessage for a message whose
+// send was refused: it never reached a worker, so an acknowledgement of it
+// acknowledges nothing. Nothing is appended.
+var ErrMessageRefused = errors.New("store: the message was refused and never reached a worker")
+
+// ErrUnknownSeenKind is the reason a *SeenRecordError carries when MarkSeen
+// was named a record of a kind outside SeenKinds. Nothing in the batch is
+// written.
+var ErrUnknownSeenKind = errors.New("store: not a kind of record the seen mark names")
+
+// ErrNotLanded is the reason a *SeenRecordError carries when MarkSeen was
+// named a record that is not a landed one: no merge record for the run, one
+// read as closed rather than merged, no cleanup record for the task, or one
+// whose removal is not recorded. Nothing in the batch is written.
+var ErrNotLanded = errors.New("store: no landed record has this key")
+
+// SeenRecordError reports a refused seen mark and names the record that
+// refused it and why, so a caller reports the record it tripped on rather
+// than only that the batch failed.
+type SeenRecordError struct {
+	// Record is the record the batch named.
+	Record SeenRecord
+	// Reason is ErrUnknownSeenKind or ErrNotLanded.
+	Reason error
+}
+
+// Error names the record and the reason.
+func (e *SeenRecordError) Error() string {
+	return fmt.Sprintf("store: marking %s %s seen: %v", e.Record.Kind, e.Record.Key, e.Reason)
+}
+
+// Unwrap makes the error match its Reason.
+func (e *SeenRecordError) Unwrap() error { return e.Reason }
