@@ -419,7 +419,11 @@ Each has cost this repository more than one round of review.
   derived: `Landed` from the merge record of an attributed run and `Complete`
   from that and the cleanup record's removal, for a delivery task; nothing
   there reads a code host or writes a record, and no event kind is named
-  `landed` or `complete`. `Complete` for an investigation task is not
+  `landed` or `complete`. The hold tier, `SourceHold`, is the second: an
+  open hold naming the task resolves `Held` above every run, `Validating` and
+  `Ready` included, and below the terminal tier, read off the holds
+  `TaskSnapshot` already carries; an answered hold is not read, and
+  `Basis.Hold` names the one that was. `Complete` for an investigation task is not
   resolved: `internal/store` now holds the stored report and its holds, and
   `internal/tasks` verifies them before the cleanup record, but the snapshot
   does not carry the report and the tier declines rather than approximating,
@@ -659,8 +663,9 @@ Each has cost this repository more than one round of review.
   three fields so the required wording is structural, listed by
   `TablePhrases`. Its rows are the pull guard's three (`SupervisionOf`), one
   per `taskstate.State` with the domain derived from that package
-  (`TaskPhrase`, which renders Paused as `Task.Waiting` and never the word, and
-  a program note's Unknown as `NoWordYet`), one per `Outcome` with executing
+  (`TaskPhrase`, which renders Paused as `Task.Waiting` and never the word,
+  a program note's Unknown as `NoWordYet`, and Held from the hold tier as the
+  row naming `--task` and `--answer`), one per `Outcome` with executing
   split three ways on the facts `NextActionOf` reads (`RunPhrase`,
   `Run.Phrase`, `RecordPhrase` for a record alone), the hold rows, the cleanup
   rows, the stream's rows and the status rows. No task row carries an outcome

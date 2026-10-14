@@ -263,3 +263,38 @@ func TestHoldAndCleanupRowsFollowTheRecord(t *testing.T) {
 func wholeWord(text, word string) bool {
 	return regexp.MustCompile(`(?i)\b` + regexp.QuoteMeta(word) + `\b`).MatchString(text)
 }
+
+// A task the hold tier resolved Held waits on a hold naming the task, which
+// is answered given the task, so its row says that it waits on the person and
+// names --task and --answer. The control is Held from the run tier, a run's
+// decision answered from its branch, which keeps the table's row and names no
+// --task; and an open hold naming a task says the same command where one
+// naming a run does not.
+func TestAHeldTaskSaysItWaitsOnYouAndHowToAnswer(t *testing.T) {
+	t.Parallel()
+	vocabtest.Control(t)
+	byHold := machine.TaskPhrase(machine.Task{State: taskstate.Resolution{State: taskstate.Held, Source: taskstate.SourceHold}}).String()
+	for _, want := range []string{"waiting on an answer from you", "assistant --task", "--answer", "assistant tasks --json"} {
+		if !strings.Contains(byHold, want) {
+			t.Errorf("the hold tier's row %q does not say %q", byHold, want)
+		}
+	}
+	vocabtest.Assert(t, byHold)
+	if wholeWord(byHold, string(taskstate.Held)) {
+		t.Errorf("the row %q carries the state's own word", byHold)
+	}
+	byRun := machine.TaskPhrase(machine.Task{State: taskstate.Resolution{State: taskstate.Held, Source: taskstate.SourceRun}}).String()
+	if byRun == byHold || strings.Contains(byRun, "--task") {
+		t.Errorf("a held run's task reads %q, which is the hold tier's row", byRun)
+	}
+
+	taskHold := machine.HoldPhrase(store.Hold{Subject: "whether to begin this work again", TaskID: store.Known("abcdefghij23")}).String()
+	if !strings.Contains(taskHold, "assistant --task") || !strings.Contains(taskHold, "--answer") {
+		t.Errorf("an open hold naming a task reads %q, which does not say how to answer it", taskHold)
+	}
+	vocabtest.Assert(t, taskHold)
+	runHold := machine.HoldPhrase(store.Hold{Subject: "approve", TaskID: store.Known("abcdefghij23"), RunID: store.Known("r")}).String()
+	if strings.Contains(runHold, "--task") {
+		t.Errorf("an open hold naming a run reads %q, which points at the task's answer", runHold)
+	}
+}

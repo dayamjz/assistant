@@ -219,6 +219,24 @@ var phraseByState = map[taskstate.State]Phrase{
 	},
 }
 
+// phraseTaskHeld is the row for a task internal/taskstate resolved Held from
+// its hold tier: an open hold names the task itself, so it is answered given
+// the task, with --task and --answer, rather than from a branch as a run's
+// decision is. The identifier is the structured rendering's, which P13 keeps
+// off this line, so the row says where to read it. The tier outranks every
+// run, so this is the row whatever the task's run or terminal says.
+var phraseTaskHeld = Phrase{
+	Outcome:     "This work is waiting on an answer from you.",
+	Consequence: "Nothing more is done with it until you answer.",
+	Decision:    taskAnswerDecision,
+}
+
+// taskAnswerDecision is how a hold naming a task is answered, which the task
+// row above and HoldPhrase's open row for such a hold share, so the two
+// cannot name different commands.
+const taskAnswerDecision = "Answer it with assistant --task and the work's identifier, which assistant tasks --json shows, " +
+	"followed by --answer and your answer."
+
 // NoWordYet is the row for a task whose newest history entry is a note the
 // program appended, a promotion or a relaunch, and which therefore resolves
 // Unknown: the worker was launched, or launched again, and has not reported
@@ -258,7 +276,9 @@ func WaitingPhrase(on string) Phrase {
 // person reads. It is phraseByState's row for the state, with the two
 // translations that row table describes: Paused is WaitingPhrase over
 // Task.Waiting, and Unknown resolved at the event tier from a note the
-// program appended is NoWordYet. A state outside the table, which the
+// program appended is NoWordYet. Held resolved from the hold tier is
+// phraseTaskHeld, which says how a hold naming the task is answered; Held
+// from a run or from the worker's own history keeps the table's row. A state outside the table, which the
 // vocabulary test keeps from being one of internal/taskstate's, reads as the
 // Unknown row rather than as nothing.
 func TaskPhrase(t Task) Phrase {
@@ -266,6 +286,8 @@ func TaskPhrase(t Task) Phrase {
 	switch {
 	case state == taskstate.Paused:
 		return WaitingPhrase(t.Waiting)
+	case state == taskstate.Held && t.State.Source == taskstate.SourceHold:
+		return phraseTaskHeld
 	case state == taskstate.Unknown && t.State.Source == taskstate.SourceNone && noteTailed(t.State.Basis.EventKind):
 		return NoWordYet
 	}
@@ -413,17 +435,23 @@ const holdPlaceholder = "a decision"
 // it is open, which is a decision waiting on them, and one once it carries a
 // resolution. The subject is filled into the outcome; a hold with no subject,
 // which internal/store refuses to register, is phrased with a placeholder so
-// the row never reads as waiting on nothing.
+// the row never reads as waiting on nothing. An open hold naming a task and
+// no run, which internal/service answers given the task, says how: with
+// --task and --answer, as phraseTaskHeld does.
 func HoldPhrase(h store.Hold) Phrase {
 	subject := strings.TrimSpace(h.Subject)
 	if subject == "" {
 		subject = holdPlaceholder
 	}
 	if h.Open() {
+		decision := "Answer it to let that work continue."
+		if h.TaskID.IsKnown() && !h.RunID.IsKnown() {
+			decision = taskAnswerDecision
+		}
 		return Phrase{
 			Outcome:     "A decision is waiting on you: " + subject + ".",
 			Consequence: "The work it holds does not move until you answer.",
-			Decision:    "Answer it to let that work continue.",
+			Decision:    decision,
 		}
 	}
 	return Phrase{
@@ -450,7 +478,7 @@ var (
 	}
 	phraseRetryHeld = Phrase{
 		Outcome:     "Your answer was recorded, and the work needs one more decision from you before it is begun again.",
-		Consequence: "Nothing here can check that the earlier attempt left nothing running where the work is kept, so it waits on you.",
+		Consequence: "Nothing here can check that the earlier attempt left no process behind where the work is kept, so it waits on you.",
 		Decision:    "Answer the new decision to begin the work again anyway, or to leave it as it is.",
 	}
 	phraseNotRetried = Phrase{
@@ -968,9 +996,10 @@ var PhraseNoReading = Phrase{
 
 // TablePhrases returns every row this table holds, as a person reads each,
 // which is what the vocabulary test walks: the pull guard's three rows, the
-// stop guard's two turn rows, a row per task state and NoWordYet, a row per
-// outcome and the three OutcomeExecuting splits into, the two hold rows, the
-// three rows for an answer to a task's hold and the two cleanup rows, the
+// stop guard's two turn rows, a row per task state, the hold tier's row and
+// NoWordYet, a row per outcome and the three OutcomeExecuting splits into,
+// the three hold rows (open, answered, and open naming a task), the four
+// rows for an answer to a task's hold and the two cleanup rows, the
 // stream's four, the status rows, and the rows for the rest of the command
 // surface: a decision and a fix round's offer, a row per doctor check and
 // result and the verdict, the service lifecycle, a gate created, reattached
@@ -994,7 +1023,7 @@ func TablePhrases() []Phrase {
 			out = append(out, p)
 		}
 	}
-	out = append(out, NoWordYet)
+	out = append(out, phraseTaskHeld, NoWordYet)
 	for _, outcome := range Outcomes() {
 		if p, ok := phraseByOutcome[outcome]; ok {
 			out = append(out, p)
@@ -1002,7 +1031,8 @@ func TablePhrases() []Phrase {
 	}
 	out = append(out, phraseRunAdvancing, phraseRunStalled, phraseRunUnrecorded)
 	out = append(out, HoldPhrase(store.Hold{Subject: holdPlaceholder}), HoldPhrase(store.Hold{Subject: holdPlaceholder, Resolution: store.Known("answered")}))
-	out = append(out, phraseRetried, phraseRetryDeferred, phraseNotRetried)
+	out = append(out, HoldPhrase(store.Hold{Subject: holdPlaceholder, TaskID: store.Known("a task")}))
+	out = append(out, phraseRetried, phraseRetryDeferred, phraseRetryHeld, phraseNotRetried)
 	out = append(out, phraseCopyKept, phraseCopyRemoved)
 	out = append(out, PhraseUpdatesMissed, PhraseServiceStopping, PhraseWorkerSpoke, PhraseActivity, PhraseUnfamiliarUpdate)
 	out = append(out, PhraseServiceUp, PhraseServiceAbsent, PhraseGated, PhraseUngated, PhraseNoRun, PhraseNoRuns, PhraseNoFleetWork)
