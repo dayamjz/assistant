@@ -395,7 +395,8 @@ const (
 // ReservedAgentFlags are agent flags configuration may not set, because each
 // one would take over something the run manages itself: which session is
 // resumed, what the output format is, whether the repository's own
-// instructions reach the agent, and what permissions it runs under. PRD
+// instructions reach the agent, and what permissions and tools it runs under,
+// which is agents.Grant's to decide from the invocation's role. PRD
 // section 10 requires that reserved flags be rejected at load rather than
 // silently ignored, and leaves the list to the implementation; this is that
 // list, and it is matched on the flag token alone, so both "--resume x" and
@@ -415,6 +416,11 @@ var ReservedAgentFlags = []string{
 	"--settings",
 	"--permission-mode",
 	"--dangerously-skip-permissions",
+	"--allowedTools",
+	"--allowed-tools",
+	"--disallowedTools",
+	"--disallowed-tools",
+	"--tools",
 }
 
 // Defaults returns the configuration a repository with no configuration at all
