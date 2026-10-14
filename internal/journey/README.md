@@ -80,6 +80,28 @@ Neither walk's subject is the remote-advanced scenario itself: its trusted
 document configures `commands.test` over a branch planted to fail it, so a run
 over it is parked at the test stage before it can reach a push.
 
+One walk starts from a task rather than from a run.
+`TestATaskCreatedThroughTheServiceIsWorkedAndItsPushStartsARun` creates a
+delivery task with `task.create` on the socket the binary serves - PRD section
+9 names that a service method beside the command table, and no verb carries
+it - and the service dispatches the task into the copy the home lays out for
+it and launches its worker. **The worker is `internal/agents/standin`
+answering the Claude Code adapter's stdin stream-json mode, never a real
+Claude Code CLI**, so the walk establishes the program's wiring around a
+worker and not that a real CLI answers in that mode; `internal/agents`'
+conformance probe is what that rests on. The stand-in prints and runs
+nothing, so the commit and the push are made by the test with git started in
+the process group the service started the worker in, which is what
+`internal/service` places a worker by; a push from that group to a branch that
+is not the task's is refused on the worker rule, which is the evidence the
+placement happened. The push to the gate starts a run of the pushed commit,
+which takes the review stage with the stand-in scripted clean and is not
+walked past the first hold it reaches. The task is read off the binary as
+Running from its live terminal before the push, and as the run's state from
+the run after it. It does not reach a worker following its instructions, the
+second isolation check those instructions carry, the task's run going on to a
+push or a pull request, or the task's copy being removed.
+
 Every other walk stops short, and the same reasons bound them all. The
 review stage's body launches the agent the run resolved over the run's copy,
 and the agent these journeys resolve is the harness's own stand-in, scripted
@@ -96,10 +118,11 @@ and the checks stage holds because there is no code host to ask. Between
 them, that is the reason parts of the product are still not reachable from a
 run today:
 
-- the three walks above are the runs that launch an agent for review, and
-  every review is answered from a script, so no run parses a report a real
-  reviewer wrote; the other agent a run here launches is a fix round's,
-  scripted to change nothing;
+- the three walks above and the run the task walk's push starts are the runs
+  that launch an agent for review, and every review is answered from a
+  script, so no run parses a report a real reviewer wrote; the other agents
+  launched here are a fix round's, scripted to change nothing, and the task
+  walk's worker, scripted to answer its instructions and nothing more;
 - no run opens a pull request or reads checks, and only the three walks above
   reach the push stage's decision: the rebase body takes its P6 anchor through
   `internal/safety`'s `Observe` on every run, but every other run here holds at
@@ -225,7 +248,7 @@ works around them.
 | A run's record carries the pushed document's rejected keys now, written with the resolved digest when the run begins, and the run-reporting surfaces relay them; `internal/service`'s `resolveRunConfig` still logs them too. What this harness has not done is read them off a record: its rejection reads predate the surface. A run refused before its resolution records none, so the record understates there. | The P7 branch test walks a run that performs the full three-document composition through the binary, then drives `config.Resolve` over the same pushed document in process, where the rejection texts are readable, and holds them to what the condition records. It establishes nothing about the record's own rejection rows; `internal/service`'s tests hold those. |
 | Two of `internal/graph`'s three loop bounds sit on the back edge into a fixer. The P7 branch run now takes that edge through the binary: the trusted `commands.test` fails by plant, a fix round launches the scripted stand-in, and the convergence bound parks the round that changed no state. The per-edge round cap is still never exhausted by a run here, because a fixer that changes nothing converges before the cap is reached. The later-commit walk takes the lint stage's back edge too, with a round that commits and a lint command that then passes, so that run leaves the loop by passing after one round rather than by any bound; the remaining producers of a fix-eligible finding stay unreached for the reasons the second-limit section gives. | Drives the run-wide step budget and the convergence bound, both through the binary, and says the per-edge cap is not. |
 | Which agent a run resolved is on the run's record now, and the run-reporting surfaces relay it; a run refused before an agent answered for it records none. What has not changed: `doctor`'s `agent` check still resolves the constant `auto` against the default catalog, so it answers what is runnable on this machine rather than what any run resolved, and no check in this harness reads the recorded name. | Does not claim it. The P7 branch test establishes the pushed-configuration rejections and the suppression refusal instead, both of which observe something; the recorded agent name is held by `internal/service`'s tests, not here. |
-| `internal/fixture`'s nothing-executed evidence has a producer for one member of the branch-installation family now: the branch's `commands.test`. The P7 branch run resolves the trusted document and executes its commands against the branch, so a resolution that had taken the branch's `commands.test` instead would have run the branch's script, which appends to the tripwire file. The rest of the family - the `.claude` hooks, the branch's agent binary, the `.githooks` scripts, `.envrc` - still has none: the run's fix rounds launch the operator-resolved stand-in and every walk but the three that reach the push stage skips the review stage, and those three walk the walkable subject rather than this branch, so no launched agent could have honoured the branch's harness, and what keeps those unselected is the resolution's rejection of the branch's `agent`, which the test observes. | Rests one clause on the tripwire file, as an absence whose `Possible` is that a configured command demonstrably ran, so the file staying quiet discriminates for exactly the member with a producer and asserts nothing where none could have fired. |
+| `internal/fixture`'s nothing-executed evidence has a producer for one member of the branch-installation family now: the branch's `commands.test`. The P7 branch run resolves the trusted document and executes its commands against the branch, so a resolution that had taken the branch's `commands.test` instead would have run the branch's script, which appends to the tripwire file. The rest of the family - the `.claude` hooks, the branch's agent binary, the `.githooks` scripts, `.envrc` - still has none: the run's fix rounds launch the operator-resolved stand-in and every walk but the three that reach the push stage skips the review stage, the run the task walk's push starts takes it without being a walk that could skip it, and those four walk the walkable subject rather than this branch, so no launched agent could have honoured the branch's harness, and what keeps those unselected is the resolution's rejection of the branch's `agent`, which the test observes. | Rests one clause on the tripwire file, as an absence whose `Possible` is that a configured command demonstrably ran, so the file staying quiet discriminates for exactly the member with a producer and asserts nothing where none could have fired. |
 | It has no producer for the hostile-template family either, for a different reason. Those hooks are receive-side, so only a push to the gate could run them, and the four subtests that plant them make no push: each initializes a gate and reads how that came out, and none starts a service. So neither a promoted template `pre-receive` nor `update` nor `post-update` is reached. A push to a gate is admitted in this build, which the PRD section 9 row above records, so what leaves these four short is what they do rather than a door that is shut. | Rests no clause on the tripwire file, for the same reason as the row above, and none on the gate's hooks directory either - so whether a hook arrived is unestablished as well as whether one ran. What those four subtests establish is how the initialization came out: the two refusals refuse with the substrings their conditions record, and the two closed channels are not refused. |
 
 ## What accounts for what

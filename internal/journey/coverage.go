@@ -28,7 +28,10 @@ const (
 	// run's record names no repository on the code host, so every walk here
 	// asks to skip those two stages, and the test body holds wherever the
 	// run's resolved configuration names no command, which is every walk but
-	// the P7 branch one.
+	// the P7 branch one. The run a task's worker starts by pushing cannot ask
+	// for a skip; it takes the review stage with the stand-in scripted clean
+	// and holds at the first stage its configuration holds at, before the
+	// pull request stage.
 	ReachPackage Reach = "package"
 	// ReachNone is not driven here. The reason beside it says why, and it is
 	// prose nobody checks; what the row buys is that the gap is enumerable
@@ -108,8 +111,10 @@ func Coverage() []Established {
 				"with the finding that produced " +
 				"it, every one of those findings reports itself as holding for a person, and none is one " +
 				"a fixer may take. The planted agent output is driven at package reach as well, because " +
-				"the walks that launch a reviewer answer it from a script rather than from the planted " +
-				"bytes: three take the review stage with a scripted clean report, and one of them has " +
+				"the runs that launch a reviewer answer it from a script rather than from the planted " +
+				"bytes: four take the review stage with a scripted clean report - the three walks that " +
+				"reach the push stage's decision and the run a task's worker starts by pushing - and one " +
+				"of the three has " +
 				"the push stage's review of later commits answered with a scripted ask that holds the " +
 				"push, both reaching findings.ParseReviewReport; every other walk skips the review " +
 				"stage, so no report an agent wrote reaches those runs. " +
@@ -118,8 +123,9 @@ func Coverage() []Established {
 				"the package-reach half over the planted agent output is the whole of what is established " +
 				"there."},
 		{principles.P4, ReachPackage,
-			"The binary launches a reviewer in three walks, through the production adapter, and a " +
-				"fixer in two. One of them observes that the push stage's review of later commits " +
+			"The binary launches a reviewer in four runs, through the production adapter, a fixer " +
+				"in two, and a task's worker in one, through the same adapter's stream mode. One of " +
+				"them observes that the push stage's review of later commits " +
 				"carried no session, which is one invocation off the wire rather than the P4 split: " +
 				"the split is that no route hands a review a fixer's session, and a walk cannot " +
 				"enumerate routes, so none here cites P4 and every other walk skips the review stage. What " +
@@ -181,7 +187,8 @@ func Coverage() []Established {
 				"no local socket peer credentials both are skipped rather than passing, and the two " +
 				"package-reach observations are the whole of what is established there. The kill path " +
 				"at recovery is held at package reach and not through this harness, because no walk " +
-				"here reaches an agent stage: internal/agents ends a group only after verifying its " +
+				"here kills a service while an agent it launched is running, since the kills here land at " +
+				"stage boundaries: internal/agents ends a group only after verifying its " +
 				"leader's recorded identity and leaves a reused identifier and an identity with no start " +
 				"time alone, and internal/service's recovery leaves a reused identifier, a record with no " +
 				"identity, and an active run's group running and reports each, while a service killed " +
@@ -216,18 +223,25 @@ func Coverage() []Established {
 				"passing; what is established there is the template initialization, which needs no " +
 				"service, and the package-reach reads of the planted documents."},
 		{principles.P8, ReachBinary,
-			"A task whose event log ends on an open decision and whose attributed validation run has " +
-				"passed is reported by the binary as the run's state, from the run, with the decision " +
-				"marked superseded and its text absent from the detail. The task and the run are written " +
-				"through internal/store, since nothing here dispatches a worker and the state planted - an " +
-				"open decision under a passed attributed run - is not one internal/service's task.create " +
-				"can write, so what is driven is the " +
-				"reading and not the writing; the planted task has no attempt and no session reference, so the " +
-				"service's probe has nothing to ask and the process tier is not reached. Reading it reaches no method " +
-				"internal/ipc restricts, so no platform refuses it for want of peer credentials, but it " +
-				"is asked of a service, so on a platform with no local socket transport to serve this " +
-				"protocol over the test is skipped rather than passing and nothing about P8 is " +
-				"established there."},
+			"Two walks cite it. In the first, a task whose event log ends on an open decision and whose " +
+				"attributed validation run has passed is reported by the binary as the run's state, from " +
+				"the run, with the decision marked superseded and its text absent from the detail. That " +
+				"task and its run are written through internal/store, since the state planted - an open " +
+				"decision under a passed attributed run - is not one internal/service's task.create can " +
+				"write, so what is driven there is the reading and not the writing, and that task has no " +
+				"session reference, so the process tier is not reached. In the second, the task walk, " +
+				"nothing is written through internal/store: a task created with task.create on the " +
+				"binary's socket is read off the binary as Running from its live terminal while the newest " +
+				"event in its history claims no Running of its own, and, once its worker's push started a " +
+				"run and the run stopped executing, as that run's state from the run while the terminal " +
+				"was still live. Its worker is the scripted stand-in under the Claude Code adapter's " +
+				"stream mode, and its run is held rather than passed, so it reaches no superseded " +
+				"decision. The first reaches no method internal/ipc restricts but is asked of a service, " +
+				"so on a platform with no local socket transport to serve this protocol over it is " +
+				"skipped rather than passing; the second creates a task and pushes through methods " +
+				"internal/ipc restricts, so on a platform where that package reads no local socket peer " +
+				"credentials it is skipped rather than passing, and only the first half is established " +
+				"there."},
 		{principles.P9, ReachNone,
 			"Not driven here: P9 is cited in two packages, neither of them this harness. " +
 				"internal/supervisor's matrix test cites it for the table only: every wake kind " +
@@ -240,7 +254,9 @@ func Coverage() []Established {
 				"redraw; and through the product's own terminal seam over the service's session " +
 				"provider, a worker the service launched is absorbed on its unchanged live screen " +
 				"and surfaced as terminal gone once it has exited. Evidence derivation is " +
-				"internal/taskstate's, no walk here reaches a worker, and the kind for an " +
+				"internal/taskstate's. The task walk here reaches a worker and reads its task as " +
+				"Running with progress off the binary, but it classifies no wake and cites nothing " +
+				"for P9, and the kind for an " +
 				"authenticated check result has no producer in this build, so its rows test a path " +
 				"nothing walks."},
 		{principles.P10, ReachNone,
@@ -259,8 +275,20 @@ func Coverage() []Established {
 				"none of them reaches is a coordinator's host firing the hook: nothing installs it, " +
 				"since who may write it into a host's configuration is #95 line D, so the push layer " +
 				"is exercised as a command and not as a turn ending."},
-		{principles.P11, ReachNone,
-			"No walk here starts a worker, so nothing here reaches it. internal/tasks' own tests " +
+		{principles.P11, ReachBinary,
+			"The positive half is driven through the binary by the task walk: a task created with " +
+				"task.create on the binary's socket is dispatched and its worker launched by the " +
+				"service, in the copy the home lays out for the task, and the harness reads that copy " +
+				"with git as a clone with its own object store, distinct from the primary checkout, " +
+				"whose one remote is the gate; the commit made there as the worker is absent from the " +
+				"primary. The worker is the scripted stand-in under the Claude Code adapter's stream " +
+				"mode, so this is the program's wiring and not a real CLI, and the stand-in runs " +
+				"nothing, so the second check P11 puts in the worker's own instructions is never " +
+				"run. The walk creates a task and pushes through methods internal/ipc restricts, so on " +
+				"a platform where that package reads no local socket peer credentials it is skipped " +
+				"rather than passing and only the package-reach half below is established there. The " +
+				"refusal half - a copy that is not isolated is not launched - is not driven here. " +
+				"internal/tasks' own tests " +
 				"establish it at package reach and only the assertion half: AssertIsolated refuses a " +
 				"real observation of every shape the principle names and passes a proper clone of " +
 				"either task shape, and internal/agents strips the redirecting git variables from a " +
@@ -278,8 +306,8 @@ func Coverage() []Established {
 				"launches unproven."},
 		{principles.P12, ReachNone,
 			"No walk here reaches the removal of an isolated copy: a run here skips the stages that " +
-				"would land its branch, so its copy is kept on an unproven refusal, and no walk creates " +
-				"a task. The binary's eject removes a gate, which is a different question. What is " +
+				"would land its branch, so its copy is kept on an unproven refusal, and the one task a " +
+				"walk creates neither lands nor reports, so nothing asks for its copy to go. The binary's eject removes a gate, which is a different question. What is " +
 				"claimed is claimed at package reach, both halves now. The proof's refusal half: " +
 				"internal/vcs's Incorporated reports a conflict and anything it cannot compute as an " +
 				"error and never as false, and internal/safety's Incorporation fails closed on an " +

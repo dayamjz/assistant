@@ -26,10 +26,12 @@
 //
 // internal/stages has bodies for all nine stages, and no run here carries the
 // pull request body through a launch; only the three walks that reach the push
-// stage's decision carry the review body through one. The review body launches the agent this harness resolves,
-// which the default journey scripts to answer nothing, so every walk but those
-// three asks to skip that stage rather than stopping at an
-// ask recording a review that never happened. The pull request body opens a
+// stage's decision, and the run a task's worker starts by pushing, carry the
+// review body through one. The review body launches the agent this harness
+// resolves, which the default journey scripts to answer nothing, so every walk
+// but those three asks to skip that stage rather than stopping at an ask
+// recording a review that never happened; the pushed run cannot ask, and its
+// test scripts the reviewer clean instead. The pull request body opens a
 // provider for the repository the run's record names on the code host, and no
 // record here names one, so a run that reaches it fails rather than reaching
 // a code host; every run this harness drives to the end therefore asks to
@@ -42,6 +44,15 @@
 // repository configuration document's two copies now, so the P7 branch test
 // executes a trusted command and takes a scripted fix round, and the trusted
 // document that cannot be parsed refuses a run through the binary.
+//
+// One walk starts from a task: it is created with task.create on the socket
+// the binary serves, the service launches its worker through the Claude Code
+// adapter's stdin stream-json mode, and a push from the worker's copy starts a
+// run. The worker is internal/agents/standin and never a real Claude Code
+// CLI, so that walk establishes the program's wiring around a worker and not
+// that a real CLI answers in that mode, and the commit and the push are made
+// by the test from inside the worker's process group because the stand-in
+// runs nothing.
 //
 // Where a mechanism cannot be reached through the binary, this harness drives
 // it through the package that owns it against the same fixture, and every row
