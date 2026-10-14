@@ -53,6 +53,16 @@ var ErrRepositoryInUse = errors.New("store: a task still names a run of this rep
 // records it is about to write would land against rows that had been removed.
 var ErrRunActive = errors.New("store: run has not finished")
 
+// ErrRunProcessRecorded is returned by ForgetRepository and
+// RepositoryRemovable when a run of the repository still has a run process
+// record: an agent group it started whose end was never recorded. The record
+// is the only thing a later service's recovery reaps that group from, so
+// forgetting it would leave a process nothing could find again. A recovery
+// that verifies the group ended or gone clears the record, after which the
+// repository can be forgotten; one it cannot verify stands, and that refusal
+// stands with it.
+var ErrRunProcessRecorded = errors.New("store: a run's agent process has no recorded end")
+
 // ErrNoResolution is returned by ResolveHold when no resolution text was given.
 // PRD section 8 says a hold is closed only by an explicit resolution, and an
 // empty one is not explicit.
