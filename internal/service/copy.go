@@ -172,6 +172,10 @@ func (s *Service) ensureCopy(ctx context.Context, record store.Run) error {
 		return fmt.Errorf("service: %s in the gate repository is %s and run %s was recorded to validate %s; "+
 			"the copy is refused rather than cut at either", submittedRef(record.ID), held, record.ID, record.SubmittedHead)
 	}
+	// The copy is given no configuration write of its own: it is a linked
+	// worktree of the gate, whose repository internal/gate gives automatic
+	// maintenance off, and the copy test reads both keys back from inside a
+	// run's copy, which is what that rests on.
 	if _, err := bare.AddWorktree(ctx, vcs.WorktreeSpec{Path: path, Commit: held}); err != nil {
 		return fmt.Errorf("service: creating the isolated copy for run %s at %s: %w", record.ID, path, err)
 	}
