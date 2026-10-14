@@ -192,8 +192,8 @@ and `assistant runs --usage` totals what the stage agents' calls cost.
 
 What this build does not do yet, so nothing here claims it: the only session
 provider is `internal/session`'s pipe, so a worker does not yet run in a
-terminal you can attach to and type into; `direct` delivery is deferred until
-the usage view says what a gated run costs; routing among agents waits for a
+terminal you can attach to and type into; `direct` delivery stays deferred under
+PRD section 12 and is refused at parse; routing among agents waits for a
 second adapter; the `plan` view (#145) waits on its custody module; and
 interrupting a worker is refused because no adapter declares it.
 
