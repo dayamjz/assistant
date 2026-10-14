@@ -83,10 +83,15 @@ and answer again until the run is finished.
 
 - `decision` - waiting on an answer. Answer it as above.
 - `executing` - between two decisions, or waiting on the pull request's
-  checks; nothing to answer. The service carries the run on without you.
+  checks, or stopped with nothing moving it; nothing to answer. Do not
+  assume the service carries it on: read the answer's next action and
+  whether the run is advancing. If it is not advancing, the run has stalled,
+  so act on the next action it names rather than wait.
 - `checks-passed` - the run walked the gate to its end and the pull request
   is open. Stop driving: tell the user the pull request is ready for them to
-  review and merge. The gate never merges.
+  review and merge. The gate does not merge unless the operator's
+  `autonomy.merge` setting lists this repository, and even then you stop
+  driving here.
 - `passed` - the pull request merged.
 - `failed` - the run ended without a verdict: a bound stopped it, a stage
   could not run, or the pull request was closed. Read the reason, fix what it
