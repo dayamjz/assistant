@@ -172,6 +172,21 @@ type Provider interface {
 	// registered. What that means for the run is ChecksReport.Evaluate's
 	// question, and the answer is not "green".
 	Checks(ctx context.Context, number int) (ChecksReport, error)
+
+	// Merge asks the provider to merge the pull request with the given
+	// number, bound to head: the provider merges only while the pull
+	// request's head is that commit, and an implementation that cannot bind
+	// the request to a head refuses rather than merging an unbound one
+	// (P6). It returns the pull request as the provider then reports it.
+	//
+	// The provider's own rules decide whether the merge is allowed - branch
+	// protection, required reviews, required checks, which merge methods the
+	// repository permits - and a refusal from them is a *Refusal with
+	// ReasonRejected carrying the provider's message, which a caller reports
+	// and does not work around. Whether the program should ask at all is the
+	// caller's question; nothing here reads a pull request's checks or
+	// state first.
+	Merge(ctx context.Context, number int, head string) (PullRequest, error)
 }
 
 // Submit is PRD section 5's pull request stage: it creates the pull request

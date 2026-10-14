@@ -428,7 +428,7 @@ func TestRepositoryFileStillAcceptsEveryOtherKey(t *testing.T) {
 	globalOnly := map[Key]bool{
 		KeyChecksTimeout: true, KeySessionReuse: true, KeyDecisionModel: true, KeySupervisionBeaconInterval: true,
 		KeyEscalationWindow: true, KeyRecheckWindow: true, KeyStallInspectionCount: true,
-		KeyRelaunchAttempts: true,
+		KeyRelaunchAttempts: true, KeyAutonomyMerge: true,
 	}
 	docs := map[Key]string{
 		KeyAgent:                       `{"agent": "claude"}`,
@@ -458,6 +458,7 @@ func TestRepositoryFileStillAcceptsEveryOtherKey(t *testing.T) {
 		KeyRecheckWindow:               `{"recheck_window": "1h"}`,
 		KeyStallInspectionCount:        `{"stall_inspection_count": 2}`,
 		KeyRelaunchAttempts:            `{"relaunch_attempts": 1}`,
+		KeyAutonomyMerge:               `{"autonomy": {"merge": ["owner/name"]}}`,
 	}
 	// Every schema key is covered, so a key added without a decision about its
 	// class fails here rather than going untested.
@@ -494,7 +495,7 @@ func TestTrustGlobalIsAssignedToExactlyTheGlobalOnlyKeys(t *testing.T) {
 			global = append(global, k)
 		}
 	}
-	want := "checks_timeout,session_reuse,decision_model,supervision_beacon_interval,escalation_window,recheck_window,stall_inspection_count,relaunch_attempts"
+	want := "checks_timeout,session_reuse,decision_model,supervision_beacon_interval,escalation_window,recheck_window,stall_inspection_count,relaunch_attempts,autonomy.merge"
 	if got := strings.Join(keyStrings(global), ","); got != want {
 		t.Errorf("TrustGlobal keys = %q, want %s", got, want)
 	}

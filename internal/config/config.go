@@ -83,6 +83,26 @@ type Config struct {
 	// AllowPushedCommands is the opt-out that lets a pushed branch set the
 	// command and agent keys. It is itself never taken from a pushed branch.
 	AllowPushedCommands bool
+	// AutonomyMerge is the repositories, as the code host names them,
+	// where the program may merge a run that ended checks-passed. Empty
+	// means it merges nothing. Ask MergesIn rather than searching it.
+	AutonomyMerge []string
+}
+
+// MergesIn reports whether repository, named as the code host names it, is
+// one AutonomyMerge lists. The comparison ignores letter case, which is how
+// internal/forge compares a specifier with the repository a provider
+// resolves it to; an empty name is listed nowhere.
+func (c Config) MergesIn(repository string) bool {
+	if repository == "" {
+		return false
+	}
+	for _, listed := range c.AutonomyMerge {
+		if strings.EqualFold(listed, repository) {
+			return true
+		}
+	}
+	return false
 }
 
 // Commands are the repository's own checks. Each is a shell command line, and
@@ -307,6 +327,9 @@ const (
 	// above it a stall surfaces more often than anyone would read before an
 	// inspection is demanded. Chosen, not measured.
 	MaxStallInspectionCount = 100
+	// MaxAutonomyMerge is the number of repositories autonomy.merge may
+	// list. Chosen, not measured.
+	MaxAutonomyMerge = 64
 )
 
 // ReservedAgentFlags are agent flags configuration may not set, because each

@@ -244,3 +244,53 @@ func scanMergeRecord(sc scanner) (MergeRecord, error) {
 	}
 	return r, nil
 }
+
+// RecordMergeOfPassedRun writes the merge record of a run that had already
+// passed when its pull request was read as merged: the code-host read that
+// follows a merge the program made under the autonomy flag, PRD section 6,
+// which writes the record "as it does for a merge you made". The run's status
+// does not move, because a run that passed has its verdict; what the record
+// adds is the end the run's passed is then read with, which is why it is a
+// row beside the run and the run row gains nothing.
+//
+// It refuses an end other than PullRequestMerged with
+// ErrUnknownPullRequestEnd, because a closed pull request does not fail a run
+// that already passed, and a pull request number below one, before anything
+// is read. In the transaction that writes the row it refuses a run that is
+// not passed with a *RunStatusError and a run that already has a merge record
+// with ErrMergeRecorded, so the record is written once whichever read got
+// there first.
+func (s *Store) RecordMergeOfPassedRun(ctx context.Context, id string, read PullRequestRead) (MergeRecord, error) {
+	if read.End != PullRequestMerged {
+		return MergeRecord{}, fmt.Errorf("store: run %s: %w: %q is not a merge", id, ErrUnknownPullRequestEnd, read.End)
+	}
+	if read.PullRequest < 1 {
+		return MergeRecord{}, fmt.Errorf("store: run %s: pull request %d is not a positive number", id, read.PullRequest)
+	}
+	err := s.inTx(ctx, func(tx *sql.Tx) error {
+		current, err := scanRun(tx.QueryRowContext(ctx, runColumns+` FROM run WHERE id = ?`, id))
+		if err != nil {
+			return fmt.Errorf("store: reading run %s: %w", id, errNoRows(err))
+		}
+		if current.Status != RunPassed {
+			return &RunStatusError{Run: id, Expected: []RunStatus{RunPassed}, Actual: current.Status, To: RunPassed}
+		}
+		var one int
+		switch err := tx.QueryRowContext(ctx, `SELECT 1 FROM merge_record WHERE run = ?`, id).Scan(&one); {
+		case err == nil:
+			return fmt.Errorf("%w: run %s", ErrMergeRecorded, id)
+		case !isNoRows(err):
+			return err
+		}
+		_, err = tx.ExecContext(ctx, `
+			INSERT INTO merge_record (run, pull_request, head, pull_request_end, recorded_at)
+			VALUES (?, ?, ?, ?, ?)`,
+			id, read.PullRequest, read.Head, string(read.End), encodeTime(nowUTC()))
+		return err
+	})
+	if err != nil {
+		return MergeRecord{}, err
+	}
+	record, _, err := s.MergeRecord(ctx, id)
+	return record, err
+}

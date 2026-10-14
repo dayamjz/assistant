@@ -11,7 +11,10 @@
 // sets the adapter asks for. PullRequest is the pr view answer for
 // forge.GitHub's pull request fields, with gh's own key order and vocabulary
 // and every field the adapter ignores alongside the ones it reads; Repository
-// is the repo view answer the adapter's write confirmation asks for; Exit is
+// is the repo view answer the adapter's write confirmation asks for;
+// MergeMethods is the repo view a merge reads the permitted methods through,
+// Merged the answer to an accepted pr merge, and Checks the check rollup for
+// a head; Exit is
 // a provider that ran, answered, and refused, with the status and message gh
 // would leave; and Unauthenticated is the exit status the adapter reads as
 // an authentication failure. Raw is the one reply that writes arbitrary
@@ -123,6 +126,11 @@ const (
 	OpCreate Op = "create"
 	// OpEdit is pr edit.
 	OpEdit Op = "edit"
+	// OpMerge is pr merge.
+	OpMerge Op = "merge"
+	// OpMergeMethods is the repo view a merge reads the repository's
+	// permitted merge methods through.
+	OpMergeMethods Op = "merge-methods"
 	// OpOther is anything else, which the adapter never sends.
 	OpOther Op = "other"
 )
@@ -168,6 +176,60 @@ func Repository(nameWithOwner string) Response {
 	body, _ := json.Marshal(struct {
 		NameWithOwner string `json:"nameWithOwner"`
 	}{nameWithOwner})
+	return Response{Stdout: string(body) + "\n"}
+}
+
+// MergeMethods is gh's answer to the repo view a merge asks for: which merge
+// methods the repository permits.
+func MergeMethods(mergeCommit, squash, rebase bool) Response {
+	body, _ := json.Marshal(struct {
+		MergeCommitAllowed bool `json:"mergeCommitAllowed"`
+		RebaseMergeAllowed bool `json:"rebaseMergeAllowed"`
+		SquashMergeAllowed bool `json:"squashMergeAllowed"`
+	}{mergeCommit, rebase, squash})
+	return Response{Stdout: string(body) + "\n"}
+}
+
+// Merged is gh's answer to a pr merge the host accepted. gh reports the
+// merge on standard error and nothing the adapter reads, which re-reads the
+// pull request afterwards.
+func Merged(number int) Response {
+	return Response{Stderr: fmt.Sprintf("✓ Merged pull request #%d\n", number)}
+}
+
+// CheckRunView is one check run as a test states it, in gh's vocabulary:
+// Status is COMPLETED, IN_PROGRESS, QUEUED and so on, and Conclusion is
+// SUCCESS, FAILURE and so on once completed.
+type CheckRunView struct {
+	Name       string
+	Status     string
+	Conclusion string
+}
+
+// Checks is gh's answer to the pr view for the check rollup: the head commit
+// the checks were read against and one CheckRun entry per run, with every
+// field gh emits for one.
+func Checks(headCommit string, runs ...CheckRunView) Response {
+	type node struct {
+		Typename     string `json:"__typename"`
+		CompletedAt  string `json:"completedAt"`
+		Conclusion   string `json:"conclusion"`
+		DetailsURL   string `json:"detailsUrl"`
+		Name         string `json:"name"`
+		StartedAt    string `json:"startedAt"`
+		Status       string `json:"status"`
+		WorkflowName string `json:"workflowName"`
+	}
+	nodes := make([]node, 0, len(runs))
+	for _, r := range runs {
+		nodes = append(nodes, node{Typename: "CheckRun", CompletedAt: "2026-04-01T10:03:11Z", Conclusion: r.Conclusion,
+			DetailsURL: "https://github.com/owner/name/actions/runs/42/job/99", Name: r.Name,
+			StartedAt: "2026-04-01T10:01:00Z", Status: r.Status, WorkflowName: "CI"})
+	}
+	body, _ := json.Marshal(struct {
+		HeadRefOid        string `json:"headRefOid"`
+		StatusCheckRollup []node `json:"statusCheckRollup"`
+	}{headCommit, nodes})
 	return Response{Stdout: string(body) + "\n"}
 }
 
@@ -288,7 +350,7 @@ var subcommandFlags = map[string]map[string]bool{
 	"pr": {
 		"--head": true, "--state": true, "--limit": true, "--json": true,
 		"--base": true, "--title": true, "--body-file": true, "--draft": true,
-		"--repo": true,
+		"--repo": true, "--match-head-commit": true, "--merge": true, "--squash": true, "--rebase": true,
 	},
 	"repo": {"--json": true},
 }
@@ -296,6 +358,11 @@ var subcommandFlags = map[string]map[string]bool{
 // opOf reads the operation off an argument vector the way gh does.
 func opOf(args []string) Op {
 	if len(args) >= 2 && args[0] == "repo" && args[1] == "view" {
+		for _, a := range args {
+			if strings.HasPrefix(a, "--json=") && strings.Contains(a, "MergeAllowed") {
+				return OpMergeMethods
+			}
+		}
 		return OpRepository
 	}
 	if len(args) < 2 || args[0] != "pr" {
@@ -308,6 +375,8 @@ func opOf(args []string) Op {
 		return OpCreate
 	case "edit":
 		return OpEdit
+	case "merge":
+		return OpMerge
 	case "view":
 		for _, a := range args {
 			if strings.HasPrefix(a, "--json=") && strings.Contains(a, "statusCheckRollup") {

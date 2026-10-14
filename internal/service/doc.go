@@ -53,7 +53,9 @@
 //
 // The record of such an ending is PRD section 8's merge record, written once:
 // internal/runs' two pull request moves write it with the status in one
-// transaction, settle makes the same two moves for the live wait from what
+// transaction, and its RecordMergeAfterPass writes it beside a run that had
+// already passed when autonomy.go's merge was read back merged; settle makes
+// the same two moves for the live wait from what
 // the checks body wrote under pipeline.KeyPullRequestEnd and its head key,
 // and report reads that record to derive the run's passed, so a stage body
 // decides nothing about a run's status, the run's own row stores the fact

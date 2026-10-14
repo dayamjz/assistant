@@ -44,7 +44,8 @@ to, the Claude Code adapter, the review shape that carries the evidence its
 answer is bound to and that the fixer refuses, ordered fallback resolution, and
 a record of what each invocation cost. The eighth is
 `internal/forge`, the only package that talks to a code host: the provider
-interface over pull requests, mergeability, and checks, a GitHub adapter over
+interface over pull requests, mergeability, checks, and a merge bound to the
+head it was asked for, a GitHub adapter over
 the `gh` command line, and a checks model in which an empty check list is not a
 pass. The ninth is `internal/ipc`, the local protocol between the command line
 and the background service: the method table, the event taxonomy and its
@@ -123,6 +124,12 @@ the gate changes, and the notification hook starts a run for the branch and the
 commit the push named, whatever the working copy is standing on. A push that
 deletes a branch, or that carries anything that is not a branch, is accepted
 and starts nothing, and reports that rather than passing over it.
+Nothing merges a pull request on its own unless the operator lists the
+repository in the global-only `autonomy.merge` configuration key: there, a run
+that ended checks-passed is merged after a live read finds its pull request
+open, not a draft, mergeable and green on the head the run observed, with the
+merge bound to that head, and a refusal from the code host is reported rather
+than worked around.
 
 The stage bodies are separate work against the stage contract, and they land
 one at a time; all nine have landed. Review is the one that reads the change

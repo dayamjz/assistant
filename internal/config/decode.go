@@ -378,6 +378,45 @@ func decodeDecisionModel(k Key, v any) (any, error) {
 // decodeFixMessage accepts the fix commit subject template. It must contain
 // the summary placeholder, because a template without it renders the same
 // subject for every fix, which makes a history of fix commits unreadable.
+// decodeAutonomyMerge reads the repositories merge authority is on in. Each
+// entry is owner/name, the form the code host names a repository in: two
+// non-empty segments of printable characters with no whitespace, neither
+// beginning with a dash. A repeated entry, compared as MergesIn compares, is
+// refused rather than kept, because a list that names one repository twice
+// says nothing more and reads as two.
+func decodeAutonomyMerge(k Key, v any) (any, error) {
+	items, err := asList(k, v)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkLen(k, v, "repositories", len(items), MaxAutonomyMerge); err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(items))
+	for i, item := range items {
+		entry := listEntry{key: k, noun: "repository", index: i, value: item}
+		name, ok := item.(string)
+		if !ok {
+			return nil, entry.err("must be a string naming a repository as owner/name")
+		}
+		if err := checkPrintable(k, item, entry.of("name"), name); err != nil {
+			return nil, err
+		}
+		owner, repo, found := strings.Cut(name, "/")
+		if !found || owner == "" || repo == "" || strings.Contains(repo, "/") || strings.ContainsAny(name, " \t") ||
+			strings.HasPrefix(owner, "-") || strings.HasPrefix(repo, "-") {
+			return nil, entry.err("names " + quote(name) + ", which is not a repository as the code host names one, owner/name")
+		}
+		for _, seen := range out {
+			if strings.EqualFold(seen, name) {
+				return nil, entry.err("names " + quote(name) + " a second time")
+			}
+		}
+		out = append(out, name)
+	}
+	return out, nil
+}
+
 func decodeFixMessage(k Key, v any) (any, error) {
 	s, err := asString(k, v)
 	if err != nil {

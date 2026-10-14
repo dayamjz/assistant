@@ -49,6 +49,10 @@ const checkFields = "headRefOid,statusCheckRollup"
 // which is the whole of what confirmRepository compares.
 const repoFields = "nameWithOwner"
 
+// mergeMethodFields is the field set Merge reads the repository's permitted
+// merge methods through.
+const mergeMethodFields = "mergeCommitAllowed,squashMergeAllowed,rebaseMergeAllowed"
+
 // GitHub is the provider adapter over the gh command line. It is safe for
 // concurrent use: every call runs its own process, every configured field is
 // fixed at construction, and the one field that is not - whether this adapter
@@ -305,6 +309,67 @@ func (g *GitHub) Checks(ctx context.Context, number int) (ChecksReport, error) {
 		report.Runs = append(report.Runs, node.checkRun())
 	}
 	return report, nil
+}
+
+// Merge merges a pull request bound to head, on Provider.Merge's terms.
+//
+// The binding is gh's --match-head-commit, which has the host refuse the
+// merge unless the pull request's head is that commit, so the merge is of the
+// commit the caller observed and of nothing pushed after it. It is a write,
+// so it is preceded by the repository confirmation.
+//
+// gh asks for a merge method, and the method is the repository's: the
+// permitted methods are read from the host and the first of merge commit,
+// squash and rebase it permits is used, so the request is one the
+// repository's own settings allow. A repository permitting none is refused
+// before anything is asked. Which of several permitted methods is used is a
+// choice made here and stated rather than configured; the host's rules still
+// decide whether the merge happens.
+func (g *GitHub) Merge(ctx context.Context, number int, head string) (PullRequest, error) {
+	if err := checkNumber(number); err != nil {
+		return PullRequest{}, err
+	}
+	if err := g.checkLine("head commit", head); err != nil {
+		return PullRequest{}, err
+	}
+	if strings.HasPrefix(head, "-") || strings.ContainsAny(head, " \t") {
+		return PullRequest{}, g.badArgument("head commit", head, "is not a commit identifier")
+	}
+	if err := g.confirmRepository(ctx); err != nil {
+		return PullRequest{}, err
+	}
+	const op = "merge"
+	out, err := g.runExact(ctx, op, "", []string{"repo", "view", g.settings.repo, "--json=" + mergeMethodFields})
+	if err != nil {
+		return PullRequest{}, err
+	}
+	var methods struct {
+		MergeCommitAllowed bool `json:"mergeCommitAllowed"`
+		SquashMergeAllowed bool `json:"squashMergeAllowed"`
+		RebaseMergeAllowed bool `json:"rebaseMergeAllowed"`
+	}
+	if err := g.decode(op, out, &methods); err != nil {
+		return PullRequest{}, err
+	}
+	method := ""
+	switch {
+	case methods.MergeCommitAllowed:
+		method = "--merge"
+	case methods.SquashMergeAllowed:
+		method = "--squash"
+	case methods.RebaseMergeAllowed:
+		method = "--rebase"
+	default:
+		return PullRequest{}, &Refusal{
+			Reason: ReasonRejected,
+			Op:     op,
+			Detail: "the repository permits no merge method, so nothing was asked",
+		}
+	}
+	if _, err := g.run(ctx, op, "", "pr", "merge", strconv.Itoa(number), method, "--match-head-commit="+head); err != nil {
+		return PullRequest{}, err
+	}
+	return g.Get(ctx, number)
 }
 
 // confirmRepository establishes, before this adapter performs an outward-facing

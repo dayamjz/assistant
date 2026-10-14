@@ -76,6 +76,11 @@ type ghCall struct {
 // pull request read from a check read.
 func callKey(args []string) string {
 	if len(args) >= 2 && args[0] == "repo" && args[1] == "view" {
+		for _, a := range args {
+			if strings.HasPrefix(a, "--json=") && strings.Contains(a, "MergeAllowed") {
+				return "merge-methods"
+			}
+		}
 		return "repo"
 	}
 	if len(args) < 2 || args[0] != "pr" {
@@ -88,6 +93,8 @@ func callKey(args []string) string {
 		return "create"
 	case "edit":
 		return "edit"
+	case "merge":
+		return "merge"
 	case "view":
 		for _, a := range args {
 			if strings.HasPrefix(a, "--json=") && strings.Contains(a, "statusCheckRollup") {
@@ -113,7 +120,7 @@ var subcommandFlags = map[string]map[string]bool{
 	"pr": {
 		"--head": true, "--state": true, "--limit": true, "--json": true,
 		"--base": true, "--title": true, "--body-file": true, "--draft": true,
-		"--repo": true,
+		"--repo": true, "--match-head-commit": true, "--merge": true, "--squash": true, "--rebase": true,
 	},
 	"repo": {"--json": true},
 }
