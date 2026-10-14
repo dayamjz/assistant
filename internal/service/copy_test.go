@@ -2,8 +2,11 @@ package service_test
 
 import (
 	"context"
+	"fmt"
+	"maps"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -39,9 +42,15 @@ import (
 // that commit, the remote-branch proof finds it reachable from the upstream's
 // branch at once, and the copy is removed on it. The run that follows
 // establishes what that decision does with a copy whose work has not landed.
+//
+// The same body reads automatic maintenance from inside the copy. The copy is
+// a linked worktree of the gate and nothing writes its configuration, so this
+// reading is what says the gate's setting reaches it, and it is paired with
+// the working copy reading neither key, which is PRD principle P1's half.
 func TestARunIsGivenAnIsolatedCopyAndGivesItBack(t *testing.T) {
 	requiresIdentifiedPeer(t)
 	principles.Cite(t, principles.P12)
+	principles.Cite(t, principles.P1)
 
 	h := newHome(t)
 	subject := newSubject(t)
@@ -81,6 +90,18 @@ func TestARunIsGivenAnIsolatedCopyAndGivesItBack(t *testing.T) {
 		t.Fatalf("the copy stands at %s, want the submitted commit %s", got.head, submitted)
 	}
 
+	// The copy is a linked worktree of the gate and is given no configuration
+	// write of its own, so what is read from inside it is what the gate's
+	// initialization wrote. The working copy's own configuration is read the
+	// same way and carries neither key, which is PRD principle P1's half and
+	// the control that the read comes back unset where nothing set it.
+	if want := map[string]string{"gc.auto": "0", "maintenance.auto": "false"}; !maps.Equal(got.maintenance, want) {
+		t.Fatalf("the copy reads automatic maintenance as %v from its own configuration, want %v", got.maintenance, want)
+	}
+	if primary, err := ownMaintenanceConfig(subject); err != nil || len(primary) != 0 {
+		t.Fatalf("the working copy's own configuration reads %v (%v), want neither key", primary, err)
+	}
+
 	path := h.Worktree(repository.ID, run.id)
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatalf("the copy of run %s is still at %s after the run ended: %v", run.id, path, err)
@@ -113,7 +134,35 @@ func TestARunIsGivenAnIsolatedCopyAndGivesItBack(t *testing.T) {
 // could not be opened.
 type copyObservation struct {
 	head string
-	err  error
+	// maintenance is each automatic-maintenance key as the copy's own
+	// configuration reads from inside the copy, absent where it is unset.
+	maintenance map[string]string
+	err         error
+}
+
+// ownMaintenanceConfig reads the two automatic-maintenance keys the way a git
+// started in dir reads them from the repository's own configuration, with
+// nothing from a global or system file, and reports the ones that are set. It
+// runs on a stage body's goroutine, so it reports a failed read as an error
+// rather than failing the test there.
+func ownMaintenanceConfig(dir string) (map[string]string, error) {
+	got := map[string]string{}
+	for _, key := range []string{"gc.auto", "maintenance.auto"} {
+		cmd := exec.Command("git", "-C", dir, "config", "--local", "--get-all", key)
+		cmd.Env = append(os.Environ(),
+			"GIT_CONFIG_GLOBAL="+filepath.Join(dir, ".gitconfig-absent"),
+			"GIT_CONFIG_SYSTEM="+filepath.Join(dir, ".gitconfig-absent"))
+		out, err := cmd.CombinedOutput()
+		switch {
+		case err == nil:
+			got[key] = strings.TrimSpace(string(out))
+		case len(strings.TrimSpace(string(out))) == 0:
+			// git config reports an unset key with a failure and no output.
+		default:
+			return nil, fmt.Errorf("reading %s in %s: %w: %s", key, dir, err, out)
+		}
+	}
+	return got, nil
 }
 
 func copyObservingStage(deps stages.StageDeps, seen chan<- copyObservation) pipeline.Implementation {
@@ -126,12 +175,16 @@ func copyObservingStage(deps stages.StageDeps, seen chan<- copyObservation) pipe
 					return pipeline.Output{}, err
 				}
 				var head string
+				var maintenance map[string]string
 				copied, err := deps.Copy(ctx, repositoryID, runID)
 				if err == nil {
 					head, err = copied.ResolveCommit(ctx, "HEAD")
 				}
+				if err == nil {
+					maintenance, err = ownMaintenanceConfig(copied.Path())
+				}
 				select {
-				case seen <- copyObservation{head: head, err: err}:
+				case seen <- copyObservation{head: head, maintenance: maintenance, err: err}:
 				default:
 				}
 				return pipeline.Output{Report: findings.Report{

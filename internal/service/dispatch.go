@@ -49,6 +49,14 @@ import (
 // configuration is not scrubbed here: a key that could survive would be that
 // package's to remove.
 //
+// The clone is a full clone with configuration of its own, so it is given
+// gc.auto=0 and maintenance.auto=false there through
+// vcs.DisableAutomaticMaintenance before it is shaped, and a clone that cannot
+// be given them is removed like one that cannot be shaped. The primary's
+// configuration is not written, and the dispatch test reads it back to show
+// it is the same before and after. A copy cut before that write existed keeps
+// git's defaults until it is cut again: nothing here goes back to one.
+//
 // # The claim is the attempt, and the dispatched entry is not it
 //
 // Two dispatchers of one task cannot both cut: the dispatch is claimed by
@@ -568,6 +576,12 @@ func (s *Service) cutTaskCopy(ctx context.Context, record store.Task, primary, c
 		return fmt.Errorf("service: cloning the primary checkout for task %s: %w", record.ID, err)
 	}
 	shape := func() error {
+		// The clone is this program's and not the person's, so it is given
+		// automatic maintenance off in its own configuration, on the terms the
+		// opening comment of this file states.
+		if err := cloned.DisableAutomaticMaintenance(ctx); err != nil {
+			return fmt.Errorf("turning automatic maintenance off: %w", err)
+		}
 		switch record.Shape {
 		case store.TaskDelivery:
 			if err := cloned.SetRemote(ctx, gate.RemoteName, gatePath); err != nil {
