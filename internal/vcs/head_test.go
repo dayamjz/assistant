@@ -95,3 +95,43 @@ func TestUpdateRefWritesOneReferenceAtAPresentCommit(t *testing.T) {
 		t.Errorf("a short name answered %v, want ErrInvalidArgument", err)
 	}
 }
+
+// SymbolicTarget answers what a symbolic reference points at, which is the
+// one fact ListRefs cannot give: it lists a symbolic reference under its own
+// name. A reference that is not symbolic, and one that does not exist, are
+// ErrRefNotFound rather than an answer, and a name git would read as an option
+// is refused before git runs, so it cannot reach symbolic-ref's --delete.
+func TestSymbolicTargetReadsWhatAReferencePointsAt(t *testing.T) {
+	gitEnvironment(t)
+	src, _, _ := sourceRepo(t)
+	to := filepath.Join(t.TempDir(), "copy")
+	cloned, err := vcs.Clone(ctx(t), src, to, "")
+	if err != nil {
+		t.Fatalf("Clone: %v", err)
+	}
+	rawGit(t, to, "update-ref", "refs/remotes/origin/main", "HEAD")
+	rawGit(t, to, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/main")
+	rawGit(t, to, "switch", "--quiet", "-c", "a-feature")
+	got, err := cloned.SymbolicTarget(ctx(t), "refs/remotes/origin/HEAD")
+	if err != nil || got != "refs/remotes/origin/main" {
+		t.Errorf("SymbolicTarget(origin/HEAD) = %q, %v; want refs/remotes/origin/main", got, err)
+	}
+	if got, err := cloned.SymbolicTarget(ctx(t), "HEAD"); err != nil || got != "refs/heads/a-feature" {
+		t.Errorf("SymbolicTarget(HEAD) = %q, %v; want refs/heads/a-feature", got, err)
+	}
+	for _, name := range []string{"refs/heads/main", "refs/remotes/origin/nothing"} {
+		if _, err := cloned.SymbolicTarget(ctx(t), name); !errors.Is(err, vcs.ErrRefNotFound) {
+			t.Errorf("SymbolicTarget(%s) answered %v, want ErrRefNotFound", name, err)
+		} else if strings.Contains(err.Error(), "resolve to a commit") {
+			t.Errorf("SymbolicTarget(%s) says %q, a claim about commits that is false for an ordinary reference", name, err)
+		}
+	}
+	for _, name := range []string{"", "--delete", "refs/a\nrefs/b", "refs/a\x00"} {
+		if _, err := cloned.SymbolicTarget(ctx(t), name); !errors.Is(err, vcs.ErrInvalidArgument) {
+			t.Errorf("SymbolicTarget(%q) answered %v, want ErrInvalidArgument", name, err)
+		}
+	}
+	if got, err := cloned.SymbolicTarget(ctx(t), "refs/remotes/origin/HEAD"); err != nil || got != "refs/remotes/origin/main" {
+		t.Errorf("after refused names, origin/HEAD = %q, %v; want it untouched", got, err)
+	}
+}

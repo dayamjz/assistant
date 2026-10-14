@@ -16,6 +16,7 @@ import (
 	"github.com/dayamjz/assistant/internal/gate"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/pipeline"
+	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/stages"
 	"github.com/dayamjz/assistant/internal/store"
 )
@@ -1356,5 +1357,31 @@ func TestDoctorSeparatesANamedOnlyRunnableAgentFromTheAutoEligibleOne(t *testing
 	namedOnly, _ = findCheck(report, "named-only agents")
 	if namedOnly.OK || !strings.Contains(namedOnly.Detail, "cursor") || strings.Contains(namedOnly.Detail, "claude") {
 		t.Fatalf("named-only row is %+v, want cursor and not claude", namedOnly)
+	}
+}
+
+// The default branch init records is what origin's own HEAD names, read from
+// the working copy, and never the branch the checkout stands on. P7 reads the
+// trusted configuration from that branch, so recording a feature branch would
+// let the branch under validation be its own trusted copy. The subject is
+// standing on a feature branch when init runs, which is the case a fallback to
+// the checked-out branch would answer wrongly.
+func TestInitRecordsOriginsDefaultBranchFromAFeatureBranch(t *testing.T) {
+	principles.Cite(t, principles.P7)
+	h := newHome(t)
+	subject := newSubject(t)
+	git(t, subject, "checkout", "--quiet", "-b", "a-feature")
+
+	created := run(t, h, subject, "--json", "init")
+	if created.code != machine.ExitOK {
+		t.Fatalf("assistant init exited %s:\n%s%s", created.code, created.stdout, created.stderr)
+	}
+	var built machine.Init
+	if err := json.Unmarshal([]byte(created.stdout), &built); err != nil {
+		t.Fatalf("init does not decode: %v\n%s", err, created.stdout)
+	}
+	if built.Repository.DefaultBranch != "main" {
+		t.Errorf("init recorded default branch %q from a checkout on a-feature, want origin's main",
+			built.Repository.DefaultBranch)
 	}
 }
