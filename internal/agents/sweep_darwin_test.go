@@ -82,7 +82,7 @@ func TestTheListingReadsLsofsRealOutputAndRefusesWhatItCannotRead(t *testing.T) 
 		}
 	}
 
-	relative := replaceOnce(string(out), record, self+"\nfcwd\nrelative/name\n")
+	relative := replaceOnce(string(out), record, self+"\nfcwd\nnrelative/name\n")
 	if relative == string(out) {
 		t.Fatal("the relative-name mutation did not change the real output")
 	}
