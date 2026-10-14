@@ -312,6 +312,11 @@ func startPush(t *testing.T, subject, branch string) *runningPush {
 	cmd.Env = append(os.Environ(),
 		"GIT_CONFIG_GLOBAL="+filepath.Join(subject, ".gitconfig-absent"),
 		"GIT_CONFIG_SYSTEM="+filepath.Join(subject, ".gitconfig-absent"),
+		// Automatic maintenance off, so no git forked into the background
+		// outlives the test and races its TempDir cleanup (#119).
+		"GIT_CONFIG_COUNT=2",
+		"GIT_CONFIG_KEY_0=gc.auto", "GIT_CONFIG_VALUE_0=0",
+		"GIT_CONFIG_KEY_1=maintenance.auto", "GIT_CONFIG_VALUE_1=false",
 	)
 	stderr, err := cmd.StderrPipe()
 	if err != nil {

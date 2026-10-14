@@ -1048,6 +1048,13 @@ Each has cost this repository more than one round of review.
   well as saying so in its doc comment. The comment is what a reader learns
   from; the call is what `internal/principles` can count, and a principle no
   test cites fails `make check`.
+- A test helper that runs git itself turns automatic maintenance off
+  (`gc.auto=0`, `maintenance.auto=false`) in the configuration it gives git,
+  because a maintenance git forked into the background outlives the test and
+  races its `TempDir` cleanup (#119). Passing it as `GIT_CONFIG_COUNT`
+  variables reaches the git the helper starts and what that git starts, but
+  not a git the program starts, because `internal/vcs` strips them; a test
+  checking the program's own setting still reads it with `--local`.
 - A test that needs a coding agent scripts `internal/agents/standin` rather
   than writing its own `Runner`. A double that states typed values directly is
   how this repository shipped a dead guard once; one that answers over the wire

@@ -28,6 +28,11 @@ func git(t *testing.T, dir string, args ...string) string {
 	cmd.Env = append(os.Environ(),
 		"GIT_CONFIG_GLOBAL="+filepath.Join(dir, ".gitconfig-absent"),
 		"GIT_CONFIG_SYSTEM="+filepath.Join(dir, ".gitconfig-absent"),
+		// Automatic maintenance off, so no git forked into the background
+		// outlives the test and races its TempDir cleanup (#119).
+		"GIT_CONFIG_COUNT=2",
+		"GIT_CONFIG_KEY_0=gc.auto", "GIT_CONFIG_VALUE_0=0",
+		"GIT_CONFIG_KEY_1=maintenance.auto", "GIT_CONFIG_VALUE_1=false",
 		"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@example.invalid",
 		"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@example.invalid",
 	)
