@@ -57,7 +57,8 @@ type managed struct {
 // must accept "gate admit" and "gate notify", each taking --gate with a gate
 // identifier and --home with the home root that gate is filed in, and reading
 // git's reference update lines from standard input. Admission's exit status
-// decides whether the push is accepted.
+// decides whether the push is accepted. receive.go names the third subcommand
+// the command must accept, which is not a hook.
 var managedHooks = []managed{
 	{name: AdmissionHook, subcommand: "admit"},
 	{name: NotificationHook, subcommand: "notify"},

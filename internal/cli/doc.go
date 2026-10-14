@@ -49,11 +49,12 @@
 //
 // # The gate hook verbs are a second table on purpose
 //
-// gateHooks in gate.go is the other one, and it holds "assistant gate admit"
-// and "assistant gate notify". They are not commands PRD section 9's table
-// names and they are not candidates for it: they are the interface
-// internal/gate requires of this command surface, invoked by the hooks it
-// installs in a gate repository and never typed. A gate whose hooks call a
+// gateHooks in gate.go is the other one, and it holds "assistant gate admit",
+// "assistant gate notify" and "assistant gate receive". They are not commands
+// PRD section 9's table names and they are not candidates for it: they are the
+// interface internal/gate requires of this command surface, invoked by the
+// hooks it installs in a gate repository and by the receive command it writes
+// into a working copy's assistant remote, and never typed. A gate whose hooks call a
 // command that is not served installs executable files that fail, which is a
 // push refused before anything starts and every other verb answering about a
 // product nobody can reach.

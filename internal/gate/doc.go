@@ -30,7 +30,8 @@
 //
 // Nothing here decides what admission means. The hooks invoke a command whose
 // path a caller supplies, and hooks.go states the two subcommands and the two
-// options that command has to accept. That contract is this package's
+// options that command has to accept; receive.go states the third, which the
+// assistant remote runs in place of git receive-pack. That contract is this package's
 // requirement of the agent-facing command surface, not an implementation of
 // it.
 //
@@ -71,9 +72,11 @@
 // ordinary git push has to behave exactly as it did before a gate existed.
 // What this package does to keep that true is narrow: it sets one remote,
 // named by RemoteName, and reads one remote of the same name. Every write it
-// makes to a working copy goes through WorkingCopy.SetRemote, which internal/vcs
-// documents as touching only the remote it names. No configuration outside
-// that remote is written, and no reference in the working copy is moved.
+// makes to a working copy goes through WorkingCopy.SetRemote and
+// WorkingCopy.SetRemoteReceivePack, which internal/vcs documents as touching
+// only the remote they name: the remote's URL and the command a push to it
+// receives through. No configuration outside that remote is written, and no
+// reference in the working copy is moved.
 //
 // The claim is proved rather than asserted: a test pushes to origin after a
 // gate is initialized and checks both that origin received the same refs it
@@ -237,6 +240,18 @@
 // operation it needs is named in git.go, and nothing here pretends to check in
 // the meantime, because a check that cannot fail is worse than an admitted
 // gap.
+//
+// # A push waits for a copy being cut
+//
+// A run's copy is a linked worktree of the gate repository, and a push into
+// the gate reads every worktree's entry while it runs, so a push that met an
+// entry being written or removed used to be refused by git for it. copies.go
+// is the lock that serializes the two, and receive.go is how a push takes it:
+// git checks a push before the admission hook runs, so the wait is in the
+// receive command the assistant remote names rather than in a hook. Both
+// files state who takes the lock and who does not; a push to the gate by its
+// path, or from a working copy initialized before the receive command was
+// written, does not wait.
 //
 // # Identity, moving, and copying
 //

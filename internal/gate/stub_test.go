@@ -1,7 +1,9 @@
 package gate_test
 
 import (
+	"context"
 	"errors"
+	"flag"
 	"io"
 	"os"
 	"path/filepath"
@@ -9,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/dayamjz/assistant/internal/gate"
 )
 
 // The hooks a gate installs invoke a command by absolute path, so what these
@@ -83,6 +87,9 @@ func TestMain(m *testing.M) {
 // renders it onto one line, and a test that parses what git wrote has to read
 // the bytes rather than a rendering of them.
 func stubMain() int {
+	if len(os.Args) > 2 && os.Args[1] == "gate" && os.Args[2] == gate.ReceiveSubcommand {
+		return stubReceive(os.Args[3:])
+	}
 	dir, err := stubDir()
 	if err != nil {
 		return 3
@@ -110,6 +117,30 @@ func stubMain() int {
 		return 3
 	}
 	return stubStatus(dir)
+}
+
+// stubReceive answers the receive command Initialize writes into a working
+// copy's assistant remote, by handing it to gate.Receive, which is what the
+// product's command surface does with it. It is not logged: the log is the
+// record of what the hooks were asked, and a push that reached the gate by
+// its remote would otherwise add a line no hook wrote.
+func stubReceive(args []string) int {
+	set := flag.NewFlagSet("receive", flag.ContinueOnError)
+	id := set.String("gate", "", "")
+	home := set.String("home", "", "")
+	if err := set.Parse(args); err != nil || set.NArg() != 1 {
+		return 2
+	}
+	err := gate.Receive(context.Background(), gate.ReceiveSpec{
+		Home: *home, ID: *id, Target: set.Arg(0),
+		Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr,
+		Wait: gate.ReceiveWait,
+	})
+	if err != nil {
+		_, _ = os.Stderr.WriteString(err.Error() + "\n")
+		return 1
+	}
+	return 0
 }
 
 // stubDir is the directory the running stand-in was installed in, which is

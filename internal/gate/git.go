@@ -11,10 +11,11 @@ import (
 // now, and *vcs.Repository is the implementation this product uses. See
 // Detacher for what the seam still buys.
 //
-// The surface is deliberately two methods wide. PRD principle P1 makes an
-// untouched origin the consent boundary, and an interface that cannot express
-// a write to any remote but the one it is handed a name for is how this
-// package's part of that is checkable by reading it.
+// The surface is deliberately three methods wide, and every write in it names
+// the remote it writes. PRD principle P1 makes an untouched origin the consent
+// boundary, and an interface that cannot express a write to any remote but the
+// one it is handed a name for is how this package's part of that is checkable
+// by reading it.
 type WorkingCopy interface {
 	// RemoteURL returns the URL configured for a remote, and an error
 	// matching vcs.ErrRemoteNotFound when there is no such remote. The URL
@@ -25,6 +26,12 @@ type WorkingCopy interface {
 	// and changing its URL when it does. It must touch no other remote, and
 	// running it again with the same arguments must change nothing.
 	SetRemote(ctx context.Context, name, url string) error
+	// SetRemoteReceivePack sets the command a push to the named remote runs
+	// on the receiving side, and refuses with an error matching
+	// vcs.ErrRemoteNotFound when there is no such remote. It must touch no
+	// other remote, and running it again with the same arguments must change
+	// nothing.
+	SetRemoteReceivePack(ctx context.Context, name, command string) error
 }
 
 // Detacher is a WorkingCopy that can also give a remote up again. Remove needs
@@ -46,7 +53,7 @@ type WorkingCopy interface {
 // that gap.
 //
 // Two checks in this package's tests keep the claims above honest. A
-// compile-time assertion fails the build if RemoteURL or SetRemote drifts from
+// compile-time assertion fails the build if a WorkingCopy method drifts from
 // what *vcs.Repository provides, and another fails if *vcs.Repository stops
 // satisfying Detacher, which is the day the paragraph above stops being true.
 type Detacher interface {
