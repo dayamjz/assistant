@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"strings"
 
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/store"
@@ -20,7 +21,9 @@ import (
 // translation below is the whole of what this type decides; the record's
 // contents are agents.Record's contract, and each Count crosses as a known
 // value only when the agent reported one, which is the distinction the
-// store's nullable columns exist to keep.
+// store's nullable columns exist to keep. The run and stage cross the same
+// way: named when the invocation named them, which contain.go's wrapper
+// arranges on a run's path, and unknown when it did not.
 //
 // Recording is best-effort by the shape of the seam, and that is stated
 // rather than hidden: agents.Recorder returns nothing, so a row that cannot
@@ -56,6 +59,8 @@ func (r invocationRecorder) RecordInvocation(rec agents.Record) {
 		CacheReadTokens:     optionalCount(rec.Usage.CacheReadTokens),
 		CacheCreationTokens: optionalCount(rec.Usage.CacheCreationTokens),
 		Turns:               optionalCount(rec.Usage.Turns),
+		Run:                 optionalName(rec.Served.Run),
+		Stage:               optionalName(rec.Served.Stage),
 	})
 	if err != nil && r.s.log != nil {
 		r.s.log.Printf("dropping an agent invocation record: %v", err)
@@ -71,4 +76,15 @@ func optionalCount(c agents.Count) store.Optional[int64] {
 		return store.Unknown[int64]()
 	}
 	return store.Known(n)
+}
+
+// optionalName carries a name the invocation was attributed to across as
+// known and an empty one as unknown, so a call that served no run or no stage
+// lands in the history the way a row written before the columns existed
+// reads: unknown, never an empty name.
+func optionalName(name string) store.Optional[string] {
+	if strings.TrimSpace(name) == "" {
+		return store.Unknown[string]()
+	}
+	return store.Known(name)
 }

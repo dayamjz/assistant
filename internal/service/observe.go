@@ -36,6 +36,9 @@ import (
 //     something that followed it.
 //   - A fix round: each path its commit touched is a follow-up, of kind fix,
 //     of every answer about that path recorded before the round began.
+//   - Which stage an agent call served: each body and each fix round runs on
+//     a context marked with its stage, which contain.go's wrapper stamps on
+//     every invocation it launches, so the agent invocation record names it.
 //   - A person's answer at a hold: respond records each path a held finding
 //     is located at as a follow-up, of kind answer, once the answer is
 //     accepted.
@@ -94,7 +97,7 @@ func (s *Service) observeStage(impl pipeline.Implementation) pipeline.Implementa
 			run := readText(in.State, pipeline.KeyRun)
 			mark := s.answerMark(run)
 			started := time.Now()
-			out, err := body(ctx, in)
+			out, err := body(withServing(ctx, in.Stage.String()), in)
 			// The end is the start plus the monotonic time elapsed, so a wall
 			// clock stepped back mid-execution cannot record an end before
 			// its start.
@@ -125,7 +128,7 @@ func (s *Service) observeFixer(fixer pipeline.Fixer,
 			run := readText(in.State, pipeline.KeyRun)
 			before := readText(in.State, pipeline.KeyHead)
 			mark := s.answerMark(run)
-			out, err := body(ctx, in)
+			out, err := body(withServing(ctx, in.Stage.String()), in)
 			if err != nil {
 				return out, err
 			}

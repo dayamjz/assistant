@@ -953,6 +953,17 @@ var (
 		Consequence: "Each keeps its exact name and, where it has one, its location, so nothing in them was summarized away.",
 		Decision:    "Decide with them in view.",
 	}
+	// PhraseUsageFollows points at section 9's usage view, an evidence
+	// document whose groups carry agent names, model identifiers, purposes,
+	// run identifiers and stage names as the invocation record holds them.
+	// It says what the view leaves out, because the view is read as a cost
+	// and a cost that silently omits a worker's turns or reads a missing
+	// count as nothing would be read wrong.
+	PhraseUsageFollows = Phrase{
+		Outcome:     "What the agent calls made to vet your changes cost follows, in the exact terms each call was recorded in.",
+		Consequence: "It counts those calls and nothing else: a worker's own turns are not in it, it carries no price, and a count the agent did not report is shown as unreported rather than as nothing.",
+		Decision:    "Nothing to decide from it alone.",
+	}
 	// PhraseInputsNotApplied is the row for a request whose run-starting
 	// inputs went to no run, because the branch already had one and the
 	// request attached to it. Which inputs they were is the structured
@@ -1311,7 +1322,7 @@ func TablePhrases() []Phrase {
 	out = append(out, InitPhrase(Init{}), InitPhrase(Init{Reattached: true}), EjectPhrase(Eject{Removed: true}), EjectPhrase(Eject{}))
 	out = append(out, PhraseAdmitted, PhraseValidationBegun, PhraseSupersededEarlier, PhraseNothingStartedFor, PhraseNothingSent, PhraseNoReading)
 	out = append(out, PhraseCopyBusy, PhraseCopyStillBusy)
-	out = append(out, PhraseRunRecordFollows, PhraseFindingsFollow, PhraseInputsNotApplied, PhraseAnswerNotApplied)
+	out = append(out, PhraseRunRecordFollows, PhraseFindingsFollow, PhraseUsageFollows, PhraseInputsNotApplied, PhraseAnswerNotApplied)
 	out = append(out, phraseWaitingOnYou, phraseNothingWaiting, phraseLandedSince, phraseNothingLanded,
 		phraseUnderWay, phraseNothingUnderWay, phraseStoppedUndecided, phraseNothingStopped)
 	out = append(out, phraseWasMerged, phraseCopyCleared, LandedMorePhrase(LandedLimit), MarkedPhrase(Marked{}),
