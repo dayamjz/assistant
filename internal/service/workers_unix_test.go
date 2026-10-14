@@ -374,11 +374,16 @@ func tryGitIn(t *testing.T, dir string, args ...string) (string, error) {
 	return string(out), err
 }
 
-// gateRefs is every reference a gate repository holds with its object, read
-// with git directly.
+// gateRefs is every branch a gate repository holds with its object, read
+// with git directly. It reads refs/heads only, because those are the
+// references a push names and the ones admission decides about; the run an
+// admitted push starts writes references of its own under refs/assistant and
+// refs/remotes on the service's goroutine, at a moment this test does not
+// control, so comparing those would read the run's progress as the push's
+// doing.
 func gateRefs(t *testing.T, repository string) string {
 	t.Helper()
-	return git(t, repository, "for-each-ref", "--format=%(refname) %(objectname)")
+	return git(t, repository, "for-each-ref", "--format=%(refname) %(objectname)", "refs/heads")
 }
 
 // historyOf reads a task's history from the home's database through a
