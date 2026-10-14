@@ -33,7 +33,8 @@ func EvidenceOf(r taskstate.Resolution) Evidence {
 
 // WindowState is whether the window that applies to a kind has elapsed: the
 // escalation window for KindTerminalUnchanged, the recheck window for
-// KindDeclaredWait. The loop computes it from the marker's window start and
+// KindDeclaredWait, and for KindTerminalGone the escalation window measured
+// from that wake's last surface. The loop computes it from the markers and
 // the configured length, both of which are #100's; this package reads no
 // clock and no key. For every other kind it is not read. A value outside the
 // two is read as WindowElapsed, which is the direction a wrong value must
@@ -89,7 +90,8 @@ type Reason string
 // The reasons.
 const (
 	// ReasonActionable is a kind that always surfaces: an authenticated check
-	// result, an event with a decision verb, a terminal gone, a hold opened.
+	// result, an event with a decision verb, a hold opened; and a terminal
+	// gone on its first surface.
 	ReasonActionable Reason = "actionable"
 	// ReasonUnrecognized is an event whose kind taskstate has no row for, or
 	// a Wake nothing built. It surfaces, and it is not ReasonNoEvidence: the
@@ -112,6 +114,11 @@ const (
 	// ReasonNoChange is a pass that observed everything and found nothing
 	// changed.
 	ReasonNoChange Reason = "no-change"
+	// ReasonSurfacedThisWindow is a ClassResurface wake that has already
+	// surfaced and whose window, measured from that surface, has not
+	// elapsed: the crashed worker PRD section 5 surfaces once per
+	// escalation window, between two of its surfaces.
+	ReasonSurfacedThisWindow Reason = "surfaced-this-window"
 )
 
 // Verdict is the classifier's answer.
@@ -132,6 +139,12 @@ func (v Verdict) Surfaces() bool { return v.Level != Absorb }
 //   - A wake nothing built, or an event whose kind is unrecognized, surfaces
 //     with ReasonUnrecognized before anything else is read.
 //   - ClassActionable surfaces, whatever evidence, window and surfaced say.
+//   - ClassResurface reads no evidence. Not yet surfaced, it surfaces as
+//     actionable; surfaced, it absorbs while window is WindowOpen and
+//     surfaces when it has elapsed. The caller measures window from the
+//     wake's last surface and restarts it on every surface, so the wake
+//     surfaces at most once per window and never stays silent for longer
+//     than one: PRD section 5's crashed worker that is still silent.
 //   - ClassAbsorb absorbs, whatever they say.
 //   - ClassWait absorbs while window is WindowOpen and surfaces when it has
 //     elapsed; evidence is not read, because a declared wait is the worker's
@@ -140,27 +153,29 @@ func (v Verdict) Surfaces() bool { return v.Level != Absorb }
 //     KindTerminalUnchanged two more facts apply. An absorb on evidence ends
 //     when the escalation window elapses, so a screen unchanged for that long
 //     surfaces even with evidence. And without evidence, surfaced=true
-//     absorbs while the window is open, which is the one case this package
-//     absorbs with no proof of progress: the terminal-ish wait that has
-//     surfaced once and whose idle screen is redrawing. When the window
-//     elapses it surfaces once more, and the caller resets the flag and the
-//     window; whether that post-surface absorb needs a bound of its own is
-//     #95 line H and not decided here.
+//     absorbs while the window is open, which with ClassResurface's absorb
+//     is one of the two cases this package absorbs with no proof of
+//     progress: the terminal-ish wait that has surfaced once and whose idle
+//     screen is redrawing. When the window elapses it surfaces once more,
+//     and the caller restarts the window at that surface, so the
+//     post-surface absorb lasts one window at a time and not for good.
 //   - A surface of KindTerminalUnchanged is raised to SurfaceAndInspect when
 //     stall.Repetitions is at or above stall.InspectAt. No other kind reads
 //     the count: the repetition PRD section 11 names is of a stall on the
 //     same unchanged screen, and only this kind has one.
 //
-// surfaced is read for KindTerminalUnchanged alone. Every other kind with
-// surfaced=true decides exactly as with it false, which is what keeps a
-// caller passing the flag for a dead terminal from silencing it after its
-// first surface. Never absorbing on elapsed time alone is the shape of the
+// surfaced is read for KindTerminalUnchanged and ClassResurface alone.
+// Every other kind with surfaced=true decides exactly as with it false. For
+// a terminal gone the flag silences only until the window elapses, so a
+// caller passing it cannot leave a dead terminal quiet after its first
+// surface; it can only space the surfaces one window apart. Never absorbing on elapsed time alone is the shape of the
 // table rather than a check: no rule here absorbs because time has passed.
-// Two rules read an open window to absorb, and neither rests on the window
+// Three rules read an open window to absorb, and none rests on the window
 // alone. The declared wait rests on the worker's own declaration. The
-// surfaced-once case absorbs with no evidence, and it rests on the surface
-// already made plus the window still being open: a deliberate, bounded
-// exception, and the escalation window is what ends it.
+// surfaced-once case and the resurface case absorb with no evidence, and
+// they rest on the surface already made plus the window still being open:
+// deliberate, bounded exceptions, and the escalation window is what ends
+// each.
 func Classify(wake Wake, evidence Evidence, window WindowState, surfaced bool, stall Stall) Verdict {
 	row, ok := Lookup(wake.kind)
 	if !ok || wake.unrecognized {
@@ -171,6 +186,15 @@ func Classify(wake Wake, evidence Evidence, window WindowState, surfaced bool, s
 		return Verdict{Level: Surface, Reason: ReasonActionable}
 	case ClassAbsorb:
 		return Verdict{Level: Absorb, Reason: ReasonNoChange}
+	case ClassResurface:
+		switch {
+		case !surfaced:
+			return Verdict{Level: Surface, Reason: ReasonActionable}
+		case window == WindowOpen:
+			return Verdict{Level: Absorb, Reason: ReasonSurfacedThisWindow}
+		default:
+			return Verdict{Level: Surface, Reason: ReasonWindowElapsed}
+		}
 	case ClassWait:
 		if window == WindowOpen {
 			return Verdict{Level: Absorb, Reason: ReasonWindowOpen}

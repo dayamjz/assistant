@@ -113,7 +113,9 @@
 // wake_marker table holds PRD section 5's detector markers, one row per
 // task rewritten in place: the last capture digest, the change epoch, the
 // last event sequence seen, the surfaced flag, the window start, the stall
-// repetition count and the unobserved-since instant. It is the comparison
+// repetition count, the unobserved-since instant and, from migration 20, the
+// instant a terminal that stays unobserved last surfaced as gone. It is the
+// comparison
 // base for the loop's next pass and not the task's state; nothing resolves
 // a state from it, and it is one row per task rather than one per detector
 // because the markers advance together in the one transaction the wake is
