@@ -439,7 +439,10 @@
 // written, a crash leaves a process no record names, which internal/session
 // states; the dispatch that retries the task sweeps the standing copy before
 // it claims, on sweep.go's terms, which ends that process on Linux and
-// macOS while it is still in the copy and leaves it standing elsewhere.
+// macOS while it is still in the copy. Elsewhere there is no sweep, so the
+// retried dispatch is refused and holds for a person on a key of its own,
+// and on a retry answer starts a worker beside that process, if any, which
+// it neither finds nor ends.
 //
 // # A restart reconciles the fleet, and relaunches a dead terminal in place
 //

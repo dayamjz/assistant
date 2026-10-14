@@ -320,6 +320,224 @@ func TestTheNoSweepHoldIsAnsweredRetryOrStop(t *testing.T) {
 	}
 }
 
+// crashedDispatch is a task whose dispatch reached proven and whose service
+// went away before any terminal was recorded: its copy stands, its one
+// attempt names no session, and it still resolves Dispatched, which is what
+// a retried dispatch finds after a crash in launch.go's window. It returns
+// the subject and a restarted service over the same records whose sweep
+// answers as the platform with no sweep does.
+func crashedDispatch(t *testing.T) (*launchSubject, *Service) {
+	t.Helper()
+	sub := newLaunchSubject(t, workerStandIn(t))
+	if _, err := sub.service.dispatchTask(t.Context(), sub.task); err != nil {
+		t.Fatalf("dispatching: %v", err)
+	}
+	restart, _ := restartedService(t, sub)
+	restart.sweepCopy = sweepUnsupported
+	return sub, restart
+}
+
+// dispatchRefusedOn is the hold a dispatch refused for want of a sweep
+// names, failing the test unless err is that refusal, it names want, and
+// the refusal recorded no attempt beyond attempts and moved no history.
+func dispatchRefusedOn(t *testing.T, sub *launchSubject, err error, want string, attempts int, before []string) store.Hold {
+	t.Helper()
+	var unproven *dispatchUnswept
+	if !errors.As(err, &unproven) {
+		t.Fatalf("the dispatch over a standing copy with no sweep answered %v, want *dispatchUnswept", err)
+	}
+	if unproven.Hold.Key != want {
+		t.Fatalf("the dispatch was refused on hold %+v, want %s", unproven.Hold, want)
+	}
+	if got, err := sub.records.TaskAttempts(t.Context(), sub.task); err != nil || len(got) != attempts {
+		t.Fatalf("the refused dispatch left attempts %+v (%v), want %d", got, err, attempts)
+	}
+	if after := eventKinds(t, sub.records, sub.task); len(after) != len(before) {
+		t.Fatalf("the history moved from %v to %v on a refused dispatch", before, after)
+	}
+	return unproven.Hold
+}
+
+// PRD principle P6 at the retried dispatch, where the platform has no
+// sweep: a dispatch retried over a copy a crash left standing, which the
+// sweep cannot look in, is refused before the claim and holds for a person
+// on a key of its own, naming the task and keyed by the attempt that left
+// the copy, distinct from both relaunch holds; no attempt is begun and no
+// history entry appended. A service built over the same records, which is
+// what the next start is, is refused on the same hold and raises no second
+// one. Once the hold is answered retry, two dispatchers that read that
+// answer, held between their read of the attempts and their claim so the
+// test is of the anchor and not of scheduling, begin one attempt between
+// them, the loser refused with ErrTaskMoved. The answer does not carry
+// over: the retried attempt, crashed in turn with its copy standing, holds
+// again on a new key. The positive control is the same retried dispatch
+// with the real sweep on a platform that has one, which begins the attempt
+// and raises no hold. Run under the race detector, which make test does.
+func TestAnUnsupportedSweepHoldsTheRetriedDispatchUntilARetryAnswer(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	ctx := t.Context()
+	sub, restart := crashedDispatch(t)
+	before := eventKinds(t, sub.records, sub.task)
+	key := dispatchUnsweptKey(sub.task, 1)
+
+	// Refused, and held for a person on a key of its own.
+	_, err := restart.dispatchTask(ctx, sub.task)
+	hold := dispatchRefusedOn(t, sub, err, key, 1, before)
+	if !hold.Open() {
+		t.Fatalf("the hold is %+v, want it open", hold)
+	}
+	if task, ok := hold.TaskID.Get(); !ok || task != sub.task || hold.RunID.IsKnown() {
+		t.Fatalf("the hold names task %v and run %v, want the task and no run", hold.TaskID, hold.RunID)
+	}
+	if isRelaunchHold(hold.Key, sub.task) {
+		t.Fatalf("the dispatch's hold %s is in a relaunch hold's key space", hold.Key)
+	}
+	for _, other := range []string{relaunchUnsweptKey(sub.task, 1), relaunchBoundKey(sub.task, 1)} {
+		if _, err := sub.records.Hold(ctx, other); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("the dispatch's refusal raised the relaunch hold %s too: %v", other, err)
+		}
+	}
+
+	// The next start is refused on the same hold, through the dispatch pass.
+	next, _ := restartedService(t, sub)
+	next.sweepCopy = sweepUnsupported
+	next.dispatchDue(ctx)
+	_, err = next.dispatchClaimed(ctx, sub.task)
+	dispatchRefusedOn(t, sub, err, key, 1, before)
+	open, err := sub.records.OpenHolds(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var naming int
+	for _, h := range open {
+		if task, ok := h.TaskID.Get(); ok && task == sub.task {
+			naming++
+		}
+	}
+	if naming != 1 {
+		t.Fatalf("%d open holds name the task after three refusals, want the one", naming)
+	}
+
+	// Answered retry: one attempt between two dispatchers.
+	if _, err := sub.records.ResolveHold(ctx, key, machine.AnswerRetry, store.ResolvedByMachineInterface()); err != nil {
+		t.Fatal(err)
+	}
+	var arrived sync.WaitGroup
+	arrived.Add(2)
+	restart.betweenAttemptReadAndClaim = func() {
+		arrived.Done()
+		arrived.Wait()
+	}
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	outs := make([]dispatched, 2)
+	for i := range errs {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			outs[i], errs[i] = restart.dispatchClaimed(ctx, sub.task)
+		}()
+	}
+	wg.Wait()
+	restart.betweenAttemptReadAndClaim = nil
+	won, lost := -1, 0
+	for i, err := range errs {
+		switch {
+		case err == nil:
+			won = i
+		case errors.Is(err, store.ErrTaskMoved):
+			lost++
+		default:
+			t.Fatalf("a dispatcher failed for a reason other than the claim: %v", err)
+		}
+	}
+	if won < 0 || lost != 1 {
+		t.Fatalf("the dispatchers answered %v, want one winner and one refused claim", errs)
+	}
+	if outs[won].attempt != 2 || !outs[won].proof.Proven() {
+		t.Fatalf("the winner returned %+v, want attempt 2 proven", outs[won])
+	}
+
+	// The answer was the first attempt's: the retried one, crashed with its
+	// copy standing, holds again on a new key.
+	_, err = next.dispatchClaimed(ctx, sub.task)
+	again := dispatchRefusedOn(t, sub, err, dispatchUnsweptKey(sub.task, 2), 2, before)
+	if !again.Open() {
+		t.Fatalf("the hold for the retried attempt is %+v, want it open", again)
+	}
+
+	// The control: a platform with a sweep dispatches over the standing copy
+	// with no hold.
+	control, _ := crashedDispatch(t)
+	if _, err := agents.NewSweeper(control.service.home, 0, nil).Sweep(ctx, control.copy); errors.Is(err, agents.ErrSweepUnsupported) {
+		t.Logf("%s has no sweep, so the control, a retried dispatch that raises no hold, is not established here", runtime.GOOS)
+		return
+	}
+	requireSweepClearsHere(t, "the control, a retried dispatch with a sweep that raises no hold,")
+	swept, _ := restartedService(t, control)
+	d, err := swept.dispatchTask(ctx, control.task)
+	if err != nil || d.attempt != 2 {
+		t.Fatalf("the control's retried dispatch returned attempt %d (%v), want attempt 2", d.attempt, err)
+	}
+	if _, err := control.records.Hold(ctx, dispatchUnsweptKey(control.task, 1)); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("the control's dispatch with a sweep raised the no-sweep hold: %v", err)
+	}
+}
+
+// The dispatch's no-sweep hold is answered the way the relaunch holds are,
+// through task.respond's handler: an answer it does not offer is refused
+// and leaves it open, a retry begins one attempt over the standing copy
+// through the anchored dispatch and reports it as a relaunch's retry is,
+// with no superseded session because the crashed attempt recorded none,
+// and a stop leaves the task alone, so the next start's dispatch is
+// refused on the stopped hold and begins nothing.
+func TestTheDispatchNoSweepHoldIsAnsweredRetryOrStop(t *testing.T) {
+	ctx := t.Context()
+	answer := func(s *Service, task, text string) (machine.TaskAnswered, error) {
+		return s.respondTask(ctx, ipc.Request{}, machine.TaskRespondRequest{Task: task, Answer: text})
+	}
+
+	sub, restart := crashedDispatch(t)
+	before := eventKinds(t, sub.records, sub.task)
+	key := dispatchUnsweptKey(sub.task, 1)
+	_, err := restart.dispatchTask(ctx, sub.task)
+	dispatchRefusedOn(t, sub, err, key, 1, before)
+	if _, err := answer(restart, sub.task, "approve"); !errors.Is(err, ipc.ErrInvalidRequest) {
+		t.Fatalf("an answer the dispatch's hold does not offer answered %v, want an invalid request", err)
+	}
+	if h, err := sub.records.Hold(ctx, key); err != nil || !h.Open() {
+		t.Fatalf("after a refused answer the hold is %+v (%v), want it open", h, err)
+	}
+	retried, err := answer(restart, sub.task, machine.AnswerRetry)
+	if err != nil {
+		t.Fatalf("answering the dispatch's hold: %v", err)
+	}
+	if retried.Hold.Key != key || retried.Effect != machine.AnswerRelaunched || retried.Relaunch == nil ||
+		retried.Relaunch.Attempt != 2 || retried.Relaunch.Superseded != "" {
+		t.Fatalf("a retry on the dispatch's hold answered %+v, want attempt 2 begun on %s with nothing superseded", retried, key)
+	}
+	if attempts, err := sub.records.TaskAttempts(ctx, sub.task); err != nil || len(attempts) != 2 {
+		t.Fatalf("the task has attempts %+v (%v), want the crashed one and the retry", attempts, err)
+	}
+
+	stopped, stoppedAt := crashedDispatch(t)
+	before = eventKinds(t, stopped.records, stopped.task)
+	stopKey := dispatchUnsweptKey(stopped.task, 1)
+	_, err = stoppedAt.dispatchTask(ctx, stopped.task)
+	dispatchRefusedOn(t, stopped, err, stopKey, 1, before)
+	out, err := answer(stoppedAt, stopped.task, machine.AnswerStop)
+	if err != nil || out.Effect != machine.AnswerStopped || out.Hold.Key != stopKey {
+		t.Fatalf("a stop on the dispatch's hold answered %+v (%v), want it stopped", out, err)
+	}
+	next, _ := restartedService(t, stopped)
+	next.sweepCopy = sweepUnsupported
+	_, err = next.dispatchTask(ctx, stopped.task)
+	h := dispatchRefusedOn(t, stopped, err, stopKey, 1, before)
+	if h.Open() || h.Resolution.Or("") != machine.AnswerStop {
+		t.Fatalf("the dispatch after a stop was refused on %+v, want the stopped hold", h)
+	}
+}
+
 // A sweep that failed refuses the relaunch before the claim: no attempt is
 // begun, no note is appended, and the refusal is a *copyUnswept wrapping
 // the sweep's error, so the next start asks again rather than relaunching
