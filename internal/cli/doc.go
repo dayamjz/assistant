@@ -180,13 +180,52 @@
 // A description carrying an escape sequence is therefore shown rather than
 // acted on by the terminal reading either of them.
 //
-// Three things reach that rendering carrying text this build did not write,
-// and all three go through it: the findings a decision carries, the summary a
-// fix round wrote, and the payload an event on assistant watch carries, which
-// is a record holding the intent a person or a driving agent supplied. What is
-// not escaped is everything else a line is built from - a stage name, an
-// outcome, a park's reason - because those are this build's own vocabulary
-// rather than text that came from outside it.
+// Five things reach that rendering carrying text this build did not write,
+// and all five go through it: the findings a decision carries, the summary a
+// fix round wrote, a branch name and a project, which are the person's own
+// words, and what a paused worker said it is waiting on, which PRD section 6
+// has relayed in place of the state's word. What is not escaped is
+// everything else a line is built from - a phrase from internal/machine's
+// table, a stage name, a park's reason - because those are this build's own
+// vocabulary rather than text that came from outside it.
+//
+// # What a person reads is phrased, renderer by renderer
+//
+// P13 has what a person reads name the outcome, the consequence and the
+// next decision, with no task identifier, copy path, stage name, state label
+// or watcher's word in it. The vocabulary that does that is internal/machine's
+// phrase table, and this package has one owner of which renderers speak
+// through it: the renderings table in render.go, which readOut dispatches
+// through and Renderings reads out. Eight are phrased - status, a run, the
+// run listing, the task listing, one task, the service, an event on
+// assistant watch, and the stop guard's answer - and every line they write is
+// a row of the table or a row beside the person's own word. The stop guard's
+// renderer writes no line at all, because the host reads its message on
+// standard error, where hostStop writes it; that message is the turn row and
+// then the pull guard's row, so it is phrased on the same terms. assistant watch renders an event through the
+// same table rather than through a smaller one of its own, because a stream
+// is a sequence of the states the listing shows and a second vocabulary for
+// it would be a second owner of the same phrases; the type and revision of
+// an event are the structured rendering's. The rest still print this build's
+// words and are enumerated as not phrased: the decision block and a run's
+// details print stage names and node positions, because a person answering
+// a hold needs the finding as the stage reported it; the doctor, the service
+// lifecycle, initialization, a plan, an eject, the readiness answer and the
+// two gate renderers print identifiers and paths; and the fallback prints
+// whatever it was given. The refusal and usage text written on standard
+// error is outside the table too. Routing those through the table and
+// replacing the fallback with a typed refusal is the follow-up that cites
+// P13 for this surface; until then internal/machine's vocabulary test cites
+// it for the phrases alone, and internal/journey's coverage row holds its
+// note to the enumeration here.
+//
+// What that leaves is deliberate and worth knowing. The human rendering of a
+// listing names no run and no task, so a verb that takes an identifier -
+// runs by name, tasks by name - is driven from the structured listing, which
+// keeps every identifier by design. A run's listing row reads from the
+// record alone, so a merged run reads as having cleared the gate and a parked
+// run as ended before a verdict, which machine.RecordPhrase states; the run's
+// own rendering has the merge record and the checkpoint and reads them.
 //
 // # What this package does not do
 //

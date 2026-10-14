@@ -3,31 +3,24 @@ package machine
 import "github.com/dayamjz/assistant/internal/supervisor"
 
 // The stop guard's two phrases, which the host hook reads out to the
-// coordinator when PRD section 5's stop guard decides a turn. They are rows
-// of the same table as the pull guard's phrases and are held to the same
-// rule: each names what happened, what it costs and what to decide next, in
-// no internal vocabulary, and Phrases lists them so the vocabulary test holds
-// them to it. Neither carries the next decision itself: the host's message
-// is this phrase followed by the pull guard's, which names the decision the
-// situation calls for, so the two tables cannot say different things about
-// one situation.
-const (
+// coordinator when PRD section 5's stop guard decides a turn. They are the
+// phrase table's two turn rows, in phrases.go, exported as the strings the
+// host's message begins with, and TablePhrases lists them so the vocabulary
+// test holds them to the rule beside every other row. Neither names a step of
+// its own: the host's message is this phrase followed by the pull guard's,
+// which names the decision the situation calls for, and each row's Decision
+// says exactly that.
+var (
 	// PhraseTurnBlocked is what the coordinator reads when its turn may not
 	// end: work is under way, nothing is watching it, and the turn has to
 	// deal with that before it ends.
-	PhraseTurnBlocked = "This turn cannot end yet, because work is under way and nothing is watching it. Deal with that before ending the turn."
+	PhraseTurnBlocked = phraseTurnBlocked.String()
 	// PhraseTurnReEntered is what the coordinator reads when its turn may
 	// end although nothing is watching the work, because the host re-entered
 	// it after a block: the guard answers once per re-entry and judges the
 	// next turn afresh.
-	PhraseTurnReEntered = "This turn may end although work is under way and nothing is watching it, because the host re-entered it after a block. The next turn is judged afresh."
+	PhraseTurnReEntered = phraseTurnReEntered.String()
 )
-
-// hostPhrases is the host hook's half of the phrase table, which Phrases
-// appends to the pull guard's.
-func hostPhrases() []string {
-	return []string{PhraseTurnBlocked, PhraseTurnReEntered}
-}
 
 // HostStop is the stop guard's answer to the coordinator's host, PRD section
 // 5's stop guard as one document: whether the turn may end, what the guard

@@ -175,7 +175,9 @@ func hostExit(answer machine.HostStop) machine.Code {
 
 // readOutHostStop is the human rendering of the stop guard's answer, which
 // is nothing: the message went to standard error, where the host reads it,
-// and a person running the command by hand reads it there too.
+// and a person running the command by hand reads it there too. It is the
+// "host stop" row of the renderings table, listed as phrased because that
+// message is two rows of internal/machine's phrase table and nothing else.
 func readOutHostStop(io.Writer, machine.HostStop) {}
 
 // hostUsage is the host's subcommands read out, under a heading that says
