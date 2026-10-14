@@ -26,6 +26,12 @@ func startTime(pid int) (uint64, bool, error) {
 	if proc.P_stat == szomb {
 		return 0, false, nil
 	}
+	return startOf(proc), true, nil
+}
+
+// startOf is the start time a process table entry carries, in microseconds
+// since the epoch, as startTime reads it.
+func startOf(proc unix.ExternProc) uint64 {
 	t := proc.P_starttime
-	return uint64(t.Sec)*1_000_000 + uint64(t.Usec), true, nil
+	return uint64(t.Sec)*1_000_000 + uint64(t.Usec)
 }

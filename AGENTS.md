@@ -324,6 +324,8 @@ Each has cost this repository more than one round of review.
   one whose working directory it cannot read, so an unreadable one blocks
   `Clear` unless it is an ancestor or another user's process it may not
   signal, and a host with such a blocker refuses every sweep until it goes.
+  A refusal names each blocker by pid, uids and command name; the name is
+  read after the decision, for diagnosis only, and must never feed one.
 - `internal/agents/standin` is the scripted agent the tests outside
   `internal/agents` run against. It implements no `agents` interface and builds
   no `agents.Result`: it prints bytes and exits with a status, and the real

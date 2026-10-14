@@ -42,7 +42,8 @@ func (l *listing) addRead(before Identity, cwd, dir string) {
 // could not be read: it is classified by readRefused and viewer.blocks. One
 // that exited during those reads is skipped; one the reads could not decide
 // about is counted unreadable and reported unverified; any other is counted
-// unreadable and, unless me sets it aside, listed as blocking.
+// unreadable and, unless me sets it aside, listed as blocking, through
+// blockerOf, which reads its command name only after the decision is made.
 func (l *listing) addRefused(before Identity, me viewer) {
 	r, present, err := readRefused(before)
 	switch {
@@ -53,7 +54,7 @@ func (l *listing) addRefused(before Identity, me viewer) {
 	default:
 		l.unreadable++
 		if me.blocks(r) {
-			l.blocking = append(l.blocking, before)
+			l.blocking = append(l.blocking, blockerOf(r))
 		}
 	}
 }
@@ -96,6 +97,25 @@ func readRefused(id Identity) (refused, bool, error) {
 		return refused{}, false, fmt.Errorf("agents: process %d changed identity while it was being read", id.PID)
 	}
 	return refused{id: id, uids: uids, signal: signal}, true, nil
+}
+
+// errNameGone and errNameReplaced are commandName's answers when the
+// process its identity names is no longer running, or its identifier now
+// names a process with another start time. Either is recorded in
+// Blocker.NameErr, never returned from a sweep.
+var (
+	errNameGone     = errors.New("agents: the process exited before its command name was read")
+	errNameReplaced = errors.New("agents: the identifier names another process by the time its command name was read")
+)
+
+// blockerOf is the Blocker for a refused process viewer.blocks has already
+// decided keeps the sweep from clearing: the identity and user identifiers
+// that decision read, and the command name commandName reads now, after it.
+// The name is read only here, so nothing that decides can see it, and a
+// failure to read it is recorded in NameErr rather than failing the sweep.
+func blockerOf(r refused) Blocker {
+	name, err := commandName(r.id)
+	return Blocker{Identity: r.id, UIDs: r.uids, Name: name, NameErr: err}
 }
 
 // viewer is this process as the classification of a refused process sees

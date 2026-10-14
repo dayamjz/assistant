@@ -19,6 +19,11 @@ func startTime(pid int) (uint64, bool, error) {
 	if err != nil || !found {
 		return 0, false, err
 	}
+	return startOf(pid, fields)
+}
+
+// startOf is startTime's reading of fields statFields or statEntry returned.
+func startOf(pid int, fields []string) (uint64, bool, error) {
 	if state := fields[0]; state == "Z" || state == "X" {
 		return 0, false, nil
 	}
@@ -36,21 +41,57 @@ func startTime(pid int) (uint64, bool, error) {
 // so the fields are read after the last ')'; an entry with fewer than the 20
 // fields startTime reads is refused with errStatShape rather than indexed.
 func statFields(pid int) ([]string, bool, error) {
+	_, fields, found, err := statEntry(pid)
+	return fields, found, err
+}
+
+// statEntry is statFields with field 2, the command name, returned beside
+// the fields: the text between the first '(' and the last ')' of the same
+// read. An entry with no '(' before that ')' is refused with errStatShape.
+func statEntry(pid int) (name string, fields []string, found bool, err error) {
 	raw, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ESRCH) {
-			return nil, false, nil
+			return "", nil, false, nil
 		}
-		return nil, false, err
+		return "", nil, false, err
 	}
 	text := string(raw)
 	end := strings.LastIndexByte(text, ')')
 	if end < 0 {
-		return nil, false, fmt.Errorf("%w: /proc/%d/stat has no command name", errStatShape, pid)
+		return "", nil, false, fmt.Errorf("%w: /proc/%d/stat has no command name", errStatShape, pid)
 	}
-	fields := strings.Fields(text[end+1:])
+	open := strings.IndexByte(text, '(')
+	if open < 0 || open > end {
+		return "", nil, false, fmt.Errorf("%w: /proc/%d/stat has no '(' opening its command name", errStatShape, pid)
+	}
+	fields = strings.Fields(text[end+1:])
 	if len(fields) < 20 {
-		return nil, false, fmt.Errorf("%w: /proc/%d/stat has %d fields after the command name, want at least 20", errStatShape, pid, len(fields))
+		return "", nil, false, fmt.Errorf("%w: /proc/%d/stat has %d fields after the command name, want at least 20", errStatShape, pid, len(fields))
 	}
-	return fields, true, nil
+	return text[open+1 : end], fields, true, nil
+}
+
+// commandName reads the command name of the process id names out of the
+// same read of /proc/<pid>/stat as the start time it is checked against, so
+// a name returned without an error came from an entry whose start time is
+// id's. It is for diagnosis only: nothing decides from it.
+func commandName(id Identity) (string, error) {
+	name, fields, found, err := statEntry(id.PID)
+	if err != nil {
+		return "", err
+	}
+	if !found {
+		return "", errNameGone
+	}
+	start, running, err := startOf(id.PID, fields)
+	switch {
+	case err != nil:
+		return "", err
+	case !running:
+		return "", errNameGone
+	case start != id.Start:
+		return "", errNameReplaced
+	}
+	return name, nil
 }

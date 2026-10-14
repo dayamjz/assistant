@@ -227,7 +227,7 @@
 // home.CopyAt accepts, a task's copy or a run's, standing where the layout
 // puts it and reached through no symbolic link, and a process is matched by
 // the working directory the platform reports for it, resolved the same way.
-// It reads no command line. Everything under the copy is in scope, a shell a
+// It reads no command line and decides nothing from a name. Everything under the copy is in scope, a shell a
 // person opened there included, and Sweeper's comment says so. Each process
 // found is ended by itself, only after Identity.Presence verifies the
 // identity the listing read, so a reused identifier is reported and not
@@ -265,6 +265,17 @@
 // as an init process whose working directory is refused to it clear at all;
 // its residual, and the second's, is a set-aside process that did reach the
 // copy, which the sweep does not see.
+//
+// A refusal names what refused it. Each process in UnreadableBlocking is a
+// Blocker carrying its identity, the user identifiers the classification
+// read, and its command name, and SweepResult.String lists up to
+// BlockersShown of them that way and counts the rest. The name is read for a
+// person diagnosing a host that refuses every sweep, and is read only after
+// the classification has put the process in the list, from the same read as
+// a start time checked against its identity: Linux's stat entry, macOS's
+// process table entry. Nothing decides from it, so a process does not block
+// or stop blocking because of its name, and a name that could not be read is
+// recorded as unreadable in the Blocker rather than failing the sweep.
 //
 // # A process is named by its identity, and ended only after it is verified
 //
