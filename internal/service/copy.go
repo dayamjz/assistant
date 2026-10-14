@@ -109,7 +109,9 @@ import (
 // A copy is removed when its run reaches a terminal status, and a held run
 // keeps its copy, because a hold is answered later and the run resumes in the
 // copy it stopped in. The move to that status has already swept the copy by
-// then, on runsweep.go's terms, and nothing here reads what the sweep found.
+// then, on runsweep.go's terms, and nothing here reads what the sweep found,
+// which is recorded on the run: a copy whose sweep did not clear is reclaimed
+// on the same proof as one whose sweep did.
 //
 // What removes it is internal/tasks' cleanup decision, the same one a task's
 // copy goes through: PRD principle P12 covers every isolated copy, and a

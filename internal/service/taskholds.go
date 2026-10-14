@@ -60,9 +60,14 @@ import (
 //
 // The resolution is written before the relaunch is asked, so a relaunch the
 // program makes past the bound always has a recorded decision behind it. A
-// relaunch refused at that moment leaves the decision standing, and the
-// next reconciliation, which reads the same hold, relaunches on it; the
-// answer says so rather than reporting a relaunch that did not happen.
+// relaunch refused at that moment is reported as what it is, never as a
+// relaunch that did not happen, and retryNotBegun says which refusal is
+// which: one the isolation assertion made after the claim is recorded on the
+// new attempt, so the task resolves Failed and nothing relaunches it again,
+// which the answer reports as AnswerRetryRefused; for every other one the
+// decision stays on the hold, or is spent by an attempt begun since, and the
+// next reconciliation reads the records again, which the answer reports as
+// AnswerRetryDeferred without promising what that pass will do.
 //
 // # The no-sweep hold
 //
@@ -107,11 +112,14 @@ import (
 // past the refusal, and the anchor spends it on one attempt: the attempt the
 // retry begins is the latest, a hold keyed by it does not exist, and a crash
 // that leaves its copy standing again is held again on a new key. respondTask
-// acts on the retry at once through redispatchTask and reports it as a
-// relaunch's answer is reported, AnswerRelaunched with no superseded session
-// when an attempt began; a dispatch refused at that moment for another
-// reason leaves the answer standing for the dispatch at the next start,
-// which reads the same record. A stop is read by the same dispatch, which keeps refusing that
+// acts on the retry at once through redispatchTask and reports
+// AnswerRedispatched, with no superseded session, when an attempt began. That
+// is an effect of its own rather than a relaunch's, because a relaunch starts
+// its worker with a note saying the copy is the earlier worker's progress and
+// a dispatch starts it with the instructions alone, so the answer says the
+// work was begun again in the copy as it stands and claims nothing about carrying
+// on. A dispatch refused at that moment is reported on retryNotBegun's terms,
+// which is what a relaunch's refusal is reported on too. A stop is read by the same dispatch, which keeps refusing that
 // attempt with the stopped hold, so the task is left where it stopped. Every
 // other dispatch refusal is unchanged: the sweep's own failure or a sweep
 // that did not clear is *copyUnswept, a copy the assertion refuses is
@@ -167,6 +175,17 @@ import (
 //     same attempt was answered stop relaunches nothing, because the stop
 //     stands, and reports machine.AnswerRetryDeferred; only a
 //     relaunch_attempts lowered across a restart reaches it.
+//   - A started retry, AnswerRelaunched or AnswerRedispatched, reports the
+//     attempt the claim began and the copy the claim proved; the launch
+//     follows the answer in the background, through launchInBackground, and
+//     asserts the copy once more, so a launch refused there, or an adapter
+//     with no worker mode, leaves an answer that said the work was begun
+//     beside a task that then reads Failed or stays Dispatched. Only the
+//     service log and the task's own state say so afterwards.
+//   - AnswerRetryDeferred covers refusals whose next start differs, from one
+//     that relaunches on the standing answer to one that spends it, so its
+//     row promises nothing about that start; which it was is in
+//     NotRelaunched and the service log, and nothing more precise travels.
 //   - An answer to a hold that is neither relaunch hold has no closed option set,
 //     because nothing records one for it; what was answered is recorded and
 //     nothing here checks it against what the hold offered.
@@ -381,10 +400,11 @@ func (s *Service) holdAtBound(ctx context.Context, id string, attempts []store.T
 // hold another caller answered first is store.ErrHoldResolved, each wrapped
 // in ipc.ErrRefused. None of those records anything. A retry on a relaunch
 // hold asks relaunchTask and one on the dispatch's no-sweep hold asks
-// redispatchTask, through answerDispatchRetry; either refused now is not an
-// error: the decision is recorded, and the answer reports
-// AnswerRetryDeferred, or AnswerRetryHeld for a further no-sweep hold, with
-// the reason.
+// redispatchTask, through answerDispatchRetry. A retry that began an
+// attempt reports AnswerRelaunched or AnswerRedispatched; one refused now is
+// not an error: the decision is recorded, and the answer reports
+// AnswerRetryHeld for a further no-sweep hold, or retryNotBegun's effect,
+// with the reason.
 func (s *Service) respondTask(ctx context.Context, req ipc.Request, r machine.TaskRespondRequest) (machine.TaskAnswered, error) {
 	if err := s.refuseWorker(req); err != nil {
 		return machine.TaskAnswered{}, err
@@ -433,9 +453,9 @@ func (s *Service) respondTask(ctx context.Context, req ipc.Request, r machine.Ta
 			break
 		}
 		if err != nil {
-			out.Effect, out.NotRelaunched = machine.AnswerRetryDeferred, err.Error()
-			s.log.Printf("task %s was answered %q on hold %s and was not relaunched now, so the next start relaunches it: %v",
-				r.Task, r.Answer, hold.Key, err)
+			out.Effect, out.NotRelaunched = retryNotBegun(err), err.Error()
+			s.log.Printf("task %s was answered %q on hold %s and was not relaunched (%s): %v",
+				r.Task, r.Answer, hold.Key, out.Effect, err)
 			break
 		}
 		out.Effect = machine.AnswerRelaunched
@@ -455,12 +475,13 @@ func (s *Service) respondTask(ctx context.Context, req ipc.Request, r machine.Ta
 // answerDispatchRetry acts on a retry recorded on the hold a dispatch over an
 // unsweepable standing copy raised: it dispatches through redispatchTask,
 // which reads the answer back from the record, and launches what that
-// proved in the background, as a relaunch's answer does. The effects are a
-// relaunch's: the attempt begun over the standing copy is AnswerRelaunched,
-// with no superseded session because the attempt it replaced never
-// recorded one; a further no-sweep hold is AnswerRetryHeld; any other
-// refusal now is AnswerRetryDeferred, and the next start's dispatch reads
-// the same answer.
+// proved in the background, as a relaunch's answer does. The attempt begun
+// over the standing copy is AnswerRedispatched and not a relaunch's effect,
+// because a dispatch starts the worker with the instructions alone and no
+// note about the crashed attempt, so nothing tells it what the copy holds;
+// it carries no superseded session because the attempt it replaced never
+// recorded one. A refusal is reported on retryNotBegun's terms, a further
+// no-sweep hold being AnswerRetryHeld.
 func (s *Service) answerDispatchRetry(ctx context.Context, r machine.TaskRespondRequest, hold store.Hold, out *machine.TaskAnswered) {
 	d, err := s.redispatchTask(ctx, r.Task)
 	var unswept *dispatchUnswept
@@ -470,16 +491,58 @@ func (s *Service) answerDispatchRetry(ctx context.Context, r machine.TaskRespond
 		s.log.Printf("task %s was answered %q on hold %s and was not dispatched, because it now holds on %s: %v",
 			r.Task, r.Answer, hold.Key, unswept.Hold.Key, err)
 	case err != nil:
-		out.Effect, out.NotRelaunched = machine.AnswerRetryDeferred, err.Error()
-		s.log.Printf("task %s was answered %q on hold %s and was not dispatched now, so the next start dispatches it: %v",
-			r.Task, r.Answer, hold.Key, err)
+		out.Effect, out.NotRelaunched = retryNotBegun(err), err.Error()
+		s.log.Printf("task %s was answered %q on hold %s and was not dispatched (%s): %v",
+			r.Task, r.Answer, hold.Key, out.Effect, err)
 	default:
-		out.Effect = machine.AnswerRelaunched
+		out.Effect = machine.AnswerRedispatched
 		out.Relaunch = &machine.RelaunchBegun{Attempt: d.attempt}
 		s.log.Printf("task %s was dispatched again as attempt %d over its standing copy on the answer %q to hold %s",
 			r.Task, d.attempt, r.Answer, hold.Key)
 		s.launchInBackground(d)
 	}
+}
+
+// retryNotBegun is the effect of a retry whose relaunch or dispatch was
+// refused now for a reason other than a further no-sweep hold, which each
+// caller tells apart first because the hold's type is its own. A refusal of
+// the isolation assertion was recorded on the attempt the retry began, so
+// the task resolves Failed from it, reconcile.go's table surfaces it rather
+// than relaunching, and dispatchDue passes it over: that is
+// AnswerRetryRefused, and nothing begins the work again on its own. Every
+// other refusal is AnswerRetryDeferred, which promises nothing about the
+// next start, because the refusals it covers do not agree on one:
+//
+//   - errRelaunchInFlight: a dispatch or relaunch of the task holds the slot
+//     in this service, and what it ends at decides, not this answer.
+//   - errRelaunchNotDue, errTaskNotDispatched, errTaskLaunched: the records
+//     no longer ask for this start (another hold open, a terminal live or
+//     unobserved, a state the table leaves alone); the next start reads them
+//     again and does what they then say.
+//   - *relaunchHeld: a live task holds the branch; the next start relaunches
+//     only once it no longer does.
+//   - errRelaunchNotDead: the re-probe did not read dead; the next start
+//     relaunches only if it reads dead then.
+//   - *copyUnswept: the sweep failed or did not clear; the next start sweeps
+//     again and may be refused the same way.
+//   - errTaskRecord: the record cannot be dispatched as written, and no start
+//     dispatches it until the record changes.
+//   - store.ErrTaskMoved: another caller began an attempt first, which spends
+//     this answer; what that attempt does is its own.
+//   - a read or write failing before the claim leaves the answer standing
+//     for the next start; one failing after the claim began an attempt with
+//     no worker, which spends the answer, and the next start reads that
+//     attempt instead.
+//
+// What every one of them shares is that the start-time passes read the task
+// again, which may begin it, hold it again, or leave it, and the deferred
+// row says that and no more.
+func retryNotBegun(err error) machine.AnswerEffect {
+	var refused *isolationRefused
+	if errors.As(err, &refused) {
+		return machine.AnswerRetryRefused
+	}
+	return machine.AnswerRetryDeferred
 }
 
 // oldestTaskHold is the oldest open hold naming the task and no run, in the

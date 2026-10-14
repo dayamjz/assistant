@@ -181,7 +181,10 @@
 // the same surface and an agent that read a decision as a failure would stop
 // driving exactly when it should carry on. A run that is still advancing is a
 // success for the same reason, and PRD section 9 gives it an outcome of its
-// own rather than one of the four that say a run is finished with.
+// own rather than one of the four that say a run is finished with. An answer
+// to a task's hold exits with the operational failure exactly when it was a
+// retry that began no work, machine.AnswerEffect.RetryNotBegun, and a retry
+// that began an attempt, by relaunch or by dispatch, is a success.
 //
 // A verb's answer goes to standard output as a document under --json, and
 // progress goes to standard error, so a caller redirecting standard output

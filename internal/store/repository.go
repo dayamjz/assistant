@@ -243,6 +243,7 @@ func (s *Store) ForgetRepository(ctx context.Context, id string) (int, error) {
 				`DELETE FROM round WHERE run_id = ?`,
 				`DELETE FROM stage_result WHERE run_id = ?`,
 				`DELETE FROM graph_checkpoint WHERE run = ?`,
+				`DELETE FROM run_copy_sweep WHERE run = ?`,
 			} {
 				if _, err := tx.ExecContext(ctx, statement, runID); err != nil {
 					return fmt.Errorf("store: forgetting run %s of repository %s: %w", runID, id, err)
