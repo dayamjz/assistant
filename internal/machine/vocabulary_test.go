@@ -14,8 +14,9 @@ import (
 // internal vocabulary is absent, with the forbidden set derived from the
 // packages that own each kind of word, and the required wording is present,
 // an outcome, a consequence and a next decision. The claim is for the phrases
-// in machine's table and nothing else: internal/cli's human rendering still
-// prints identifiers, stage names and paths, which #110 is for.
+// in machine's table and nothing else: which of internal/cli's renderers
+// speak through them is that package's enumeration, and its renderer test
+// cites P13 for the ones it lists as phrased.
 func TestThePhrasesNameOutcomesAndNoMechanics(t *testing.T) {
 	t.Parallel()
 	principles.Cite(t, principles.P13)

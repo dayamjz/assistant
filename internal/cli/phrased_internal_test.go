@@ -3,16 +3,20 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/dayamjz/assistant/internal/findings"
 	"github.com/dayamjz/assistant/internal/graph"
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/machine/vocabtest"
+	"github.com/dayamjz/assistant/internal/pipeline"
+	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/supervisor"
 	"github.com/dayamjz/assistant/internal/taskstate"
@@ -37,8 +41,8 @@ func fixtureTask() machine.Task {
 }
 
 // fixtureRun is a run at a hold, with no position, no stage views and no
-// decision, so what it renders is the phrased head alone; the details and
-// the decision are the two renderers that are not phrased.
+// decision, so what it renders is the phrased head alone; the details and the
+// findings behind a decision are renderers that are not phrased.
 func fixtureRun() machine.Run {
 	return machine.Run{
 		Record: store.Run{
@@ -66,20 +70,51 @@ func fixtureStatus() machine.Status {
 	}
 }
 
-// Every phrased renderer, over a fixture carrying the words it must not
-// print, writes nothing from the derived forbidden set; the lines the old
-// renderers wrote for the same fixtures are caught, which is the other
-// direction; and the structured rendering of the same values keeps every
-// identifier, because the machine interface keeps them by design. The
-// enumeration is the renderer table's, so a renderer added there as phrased
-// is held here without being named.
-func TestThePhrasedRenderersSpeakTheTableAndTheJSONKeepsIdentifiers(t *testing.T) {
-	t.Parallel()
-	vocabtest.Control(t)
+// sampleID is an identifier in the generator's format, which the derived
+// forbidden set catches wherever it appears, so a fixture carrying it in
+// every identifier field holds a renderer to leaving all of them out.
+const sampleID = "abcdefghij23"
+
+// fixtureDecision is a decision at the test stage's hold, the shape
+// internal/pipeline's hold node declares, with a finding carrying a stage
+// name, an identifier and a path, so a decision renderer that printed the
+// question or the findings would be caught.
+func fixtureDecision() machine.Decision {
+	stage := pipeline.StageTest
+	return machine.Decision{
+		Decision: graph.Decision{
+			Node:     stage.HoldNode(),
+			Question: fmt.Sprintf("The %s stage is holding for your decision.", stage),
+			Options:  []string{"approved", "skipped", "cancelled", string(pipeline.OutcomeFixRequested)},
+			Detailed: []string{string(pipeline.OutcomeFixRequested)},
+		},
+		Stage: stage.String(),
+		Findings: []findings.Finding{{
+			ID: sampleID, Severity: findings.SeverityWarning, Action: findings.ActionAsk,
+			Location:    findings.Location{Path: filepath.Join(vocabtest.SampleRoot(), "tasks", sampleID, "copy", "main.go"), Line: 3},
+			Description: fmt.Sprintf("No %s command is configured.", stage),
+		}},
+	}
+}
+
+// fixtures is a value for every renderer, each carrying the words its old
+// rendering printed: identifiers in the generator's format, paths under a
+// sample home, stage names and state labels. The fallback's is a real answer
+// shape this surface has no renderer for, a worker's appended entry, so the
+// refusal is exercised on a value a service does produce.
+func fixtures(t *testing.T) map[string]any {
+	t.Helper()
+	root := vocabtest.SampleRoot()
 	task := fixtureTask()
 	run := fixtureRun()
 	status := fixtureStatus()
-	fixtures := map[string]any{
+	active := run.Record
+	active.ID, active.Status = sampleID, store.RunRunning
+	withDetails := run
+	halted := graph.StatusHalted
+	withDetails.Progress, withDetails.Position = &halted, "hold:test"
+	withDetails.Stages = []machine.Stage{{Stage: "test", Outcome: "passed", Ran: true}}
+	return map[string]any{
 		"status":  status,
 		"run":     run,
 		"runs":    machine.Runs{Runs: []store.Run{run.Record}},
@@ -90,43 +125,139 @@ func TestThePhrasedRenderersSpeakTheTableAndTheJSONKeepsIdentifiers(t *testing.T
 		// The stop guard blocked: the guard's reason and the detail are the
 		// structured rendering's, and the message is what a person reads.
 		"host stop": machine.HostStopOf(supervisor.StopVerdict{Reason: supervisor.StopLockFree}, false),
+		"decision":  fixtureDecision(),
+		"details":   withDetails,
+		"findings":  fixtureDecision(),
+		"doctor": machine.Doctor{
+			Checks: []machine.Check{
+				{Name: machine.CheckHome, OK: true, Blocking: true, Detail: root},
+				{Name: machine.CheckDatabase, OK: true, Blocking: true, Detail: filepath.Join(root, "state.db")},
+				{Name: machine.CheckService, Blocking: true, Detail: "dial " + filepath.Join(root, "socket") + ": no such file"},
+				{Name: machine.CheckStages, Detail: "3 of 9 stages have an implementation (intent, rebase, review); the rest hold for a decision"},
+			},
+			Detail: "a run cannot start: service",
+		},
+		"lifecycle": machine.Lifecycle{
+			Active: []store.Run{active},
+			Detail: "1 run(s) are active. Pass the force flag for this command to stop anyway.",
+		},
+		"init": machine.Init{
+			Gate:       machine.Gate{Present: true, ID: sampleID, Repository: filepath.Join(root, "repos", sampleID+".git")},
+			Repository: store.Repository{ID: sampleID, WorkingPath: "/somewhere/parser", DefaultBranch: "main"},
+		},
+		"plan": machine.Plan{
+			Steps:  []string{"reset feature/parser to the commit the push stage sent, " + sampleID},
+			Detail: "nothing was changed",
+		},
+		"eject":     machine.Eject{Removed: true, Repository: sampleID, Runs: 2},
+		"health":    machine.Health{Ready: true, Home: root, Build: store.Build{Version: "v1"}, Instance: sampleID},
+		"admission": machine.Admission{Gate: sampleID, Refs: []string{"refs/heads/feature/parser"}},
+		"notification": machine.Notification{
+			Gate: sampleID,
+			Started: []machine.Started{{Branch: "feature/parser", Head: "0123456789abcdef0123456789abcdef01234567",
+				Run: sampleID, Superseded: sampleID}},
+			Ignored: []machine.Ignored{{Ref: "refs/tags/v1", Reason: "not a branch, and the gate validates branches"}},
+		},
+		"fallback": machine.Appended{Event: store.TaskEvent{TaskID: sampleID, Sequence: 3, Kind: "waiting-external",
+			Detail: "an upstream release of the parser"}},
 	}
+}
+
+// rendered is what one renderer wrote for a value: the lines on standard
+// output, and the text a person reads somewhere else when the renderer is
+// read there instead.
+type rendered struct {
+	out       string
+	elsewhere string
+}
+
+// renderNamed drives one renderer by its name in the enumeration, the way a
+// person reaches it: a row with a type through readOut, a row reached only
+// from another renderer through its own function, and the fallback through
+// readOut over a value no row claims, which must come back as the refusal.
+func renderNamed(t *testing.T, name string, value any) rendered {
+	t.Helper()
+	var out bytes.Buffer
+	if name == fallback.name {
+		err := readOut(&out, value)
+		var refusal noReading
+		if !errors.As(err, &refusal) {
+			t.Fatalf("the fallback's fixture rendered with %v rather than being refused", err)
+		}
+		return rendered{out: out.String(), elsewhere: err.Error()}
+	}
+	for _, r := range renderings {
+		if r.name != name {
+			continue
+		}
+		if r.of == nil {
+			r.render(&out, value)
+		} else if err := readOut(&out, value); err != nil {
+			t.Fatalf("the %s fixture was refused: %v", name, err)
+		}
+		if hostStop, ok := value.(machine.HostStop); ok {
+			return rendered{out: out.String(), elsewhere: hostStop.Message}
+		}
+		return rendered{out: out.String()}
+	}
+	t.Fatalf("no renderer is named %q", name)
+	return rendered{}
+}
+
+// TestThePhrasedRenderersSpeakTheTableAndTheJSONKeepsIdentifiers is P13
+// for this surface's human renderers: every renderer the enumeration lists as
+// phrased, over a fixture carrying the words it must not print, writes
+// nothing from the derived forbidden set; the lines the old renderers wrote
+// for the same fixtures are caught, which is the other direction; and the
+// structured rendering of the same values keeps every identifier, because the
+// machine interface keeps them by design. The enumeration is the renderer
+// table's, so a renderer added there as phrased is held here without being
+// named.
+//
+// The claim is bounded by that enumeration and no wider. The renderers it
+// lists as not phrased - a run's details, the findings behind a decision and
+// a plan's steps - still print this build's words, which
+// TestTheUnphrasedRenderersPrintWhatTheyAreListedFor shows rather than
+// asserts; and the refusal and usage text the command surface writes on
+// standard error is not a renderer and is not held here.
+func TestThePhrasedRenderersSpeakTheTableAndTheJSONKeepsIdentifiers(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P13)
+	vocabtest.Control(t)
+	values := fixtures(t)
 	// A renderer whose answer a person reads somewhere other than standard
-	// output names where, and is held to writing nothing there instead: the
-	// stop guard's message goes to standard error, where the host reads it.
-	// Its text elsewhere is held to the rule in place of the lines, so the
-	// renderer is not passed for looking at nothing.
-	elsewhere := map[string]func(any) string{
-		"host stop": func(v any) string { return v.(machine.HostStop).Message },
-	}
+	// output is held to writing nothing there instead, and its text
+	// elsewhere is held to the rule in place of the lines, so it is not
+	// passed for looking at nothing: the stop guard's message goes to
+	// standard error, where the host reads it, and so does the fallback's
+	// refusal.
+	elsewhere := map[string]bool{"host stop": true, fallback.name: true}
 	phrased := 0
 	for _, r := range Renderings() {
 		if !r.Phrased {
 			continue
 		}
 		phrased++
-		value, ok := fixtures[r.Name]
+		value, ok := values[r.Name]
 		if !ok {
 			t.Fatalf("the renderer %q is phrased and this test has no fixture for it", r.Name)
 		}
-		var out bytes.Buffer
-		readOut(&out, value)
-		if read, ok := elsewhere[r.Name]; ok {
-			if out.Len() != 0 {
-				t.Errorf("%s is read elsewhere and rendered %q", r.Name, out.String())
+		got := renderNamed(t, r.Name, value)
+		if elsewhere[r.Name] {
+			if got.out != "" {
+				t.Errorf("%s is read elsewhere and rendered %q", r.Name, got.out)
 			}
-			text := read(value)
-			if text == "" {
+			if got.elsewhere == "" {
 				t.Errorf("%s is read elsewhere and its fixture carries nothing to read", r.Name)
 			}
-			vocabtest.Assert(t, text)
-		} else if out.Len() == 0 {
+			vocabtest.Assert(t, got.elsewhere)
+		} else if got.out == "" {
 			t.Errorf("%s rendered nothing", r.Name)
 		}
-		for _, line := range strings.Split(strings.TrimRight(out.String(), "\n"), "\n") {
+		for _, line := range strings.Split(strings.TrimRight(got.out, "\n"), "\n") {
 			vocabtest.Assert(t, line)
 		}
-		t.Logf("%s:\n%s", r.Name, out.String())
+		t.Logf("%s:\n%s%s", r.Name, got.out, got.elsewhere)
 
 		var document bytes.Buffer
 		if err := machine.NewEncoder(&document).Encode(value); err != nil {
@@ -136,24 +267,105 @@ func TestThePhrasedRenderersSpeakTheTableAndTheJSONKeepsIdentifiers(t *testing.T
 			t.Errorf("the structured rendering of %s carries no identifier, path or label, so this fixture holds the human rendering to nothing", r.Name)
 		}
 	}
-	if phrased < 8 {
-		t.Fatalf("%d renderers are phrased; the table claims eight", phrased)
+	if phrased < 17 {
+		t.Fatalf("%d renderers are phrased; the table claims seventeen", phrased)
 	}
 
 	// The other direction: the lines these renderers used to write, built
 	// here from the same fixtures the way the old renderers built them, are
 	// caught by the derivation.
+	task, run, status := fixtureTask(), fixtureRun(), fixtureStatus()
+	decision := values["decision"].(machine.Decision)
+	doctor := values["doctor"].(machine.Doctor)
+	lifecycle := values["lifecycle"].(machine.Lifecycle)
+	initialized := values["init"].(machine.Init)
+	ejected := values["eject"].(machine.Eject)
+	health := values["health"].(machine.Health)
+	admission := values["admission"].(machine.Admission)
+	notification := values["notification"].(machine.Notification)
 	for name, old := range map[string]string{
-		"task":    fmt.Sprintf("%s  %-10s %-12s %-8s %s", task.Record.ID, task.Record.Shape, task.State.State, task.State.Source, task.Record.Project),
-		"run":     fmt.Sprintf("Run        %s on %s (%s)", run.Record.ID, run.Record.Branch, run.Record.Status),
-		"runs":    fmt.Sprintf("%s  %-10s %-24s", run.Record.ID, run.Record.Status, run.Record.Branch),
-		"status":  fmt.Sprintf("Home       %s", status.Home),
-		"service": fmt.Sprintf("Service    running on %s", status.Service.Socket),
-		"event":   fmt.Sprintf("%s (revision %d) %s", ipc.TypeTaskState, 1, mustEvent(t, ipc.TypeTaskState, task).Payload),
+		"task":         fmt.Sprintf("%s  %-10s %-12s %-8s %s", task.Record.ID, task.Record.Shape, task.State.State, task.State.Source, task.Record.Project),
+		"run":          fmt.Sprintf("Run        %s on %s (%s)", run.Record.ID, run.Record.Branch, run.Record.Status),
+		"runs":         fmt.Sprintf("%s  %-10s %-24s", run.Record.ID, run.Record.Status, run.Record.Branch),
+		"status":       fmt.Sprintf("Home       %s", status.Home),
+		"service":      fmt.Sprintf("Service    running on %s", status.Service.Socket),
+		"event":        fmt.Sprintf("%s (revision %d) %s", ipc.TypeTaskState, 1, mustEvent(t, ipc.TypeTaskState, task).Payload),
+		"decision":     fmt.Sprintf("Waiting on you: %s", decision.Question),
+		"doctor":       fmt.Sprintf("%s  %-13s %s", "yes", doctor.Checks[0].Name, doctor.Checks[0].Detail),
+		"lifecycle":    fmt.Sprintf("  %s  %-10s %s", lifecycle.Active[0].ID, lifecycle.Active[0].Status, lifecycle.Active[0].Branch),
+		"init":         fmt.Sprintf("Created the gate %s at %s", initialized.Gate.ID, initialized.Gate.Repository),
+		"eject":        fmt.Sprintf("Removed the gate %s and %d run record(s).", ejected.Repository, ejected.Runs),
+		"health":       fmt.Sprintf("ready: %v, home %s, build %s", health.Ready, health.Home, health.Build),
+		"admission":    fmt.Sprintf("Admitted to gate %s: %s", admission.Gate, strings.Join(admission.Refs, ", ")),
+		"notification": fmt.Sprintf("Started run %s for %s at %s", notification.Started[0].Run, notification.Started[0].Branch, notification.Started[0].Head[:12]),
+		"fallback":     fmt.Sprintf("%+v", values["fallback"]),
 	} {
 		if len(vocabtest.Violations(t, old)) == 0 {
 			t.Errorf("the old %s line %q is not caught, so passing the new one proves nothing", name, old)
 		}
+	}
+}
+
+// The renderers the enumeration lists as not phrased do print this build's
+// own words over the same fixtures, which is what makes the listing honest in
+// the other direction: a renderer listed as not phrased that printed nothing
+// forbidden would be one this surface could claim and does not, and one
+// listed as phrased that did is caught by the test above. The domain is the
+// enumeration's, so a renderer added there as not phrased needs a fixture
+// here before it passes.
+func TestTheUnphrasedRenderersPrintWhatTheyAreListedFor(t *testing.T) {
+	t.Parallel()
+	vocabtest.Control(t)
+	values := fixtures(t)
+	unphrased := 0
+	for _, r := range Renderings() {
+		if r.Phrased {
+			continue
+		}
+		unphrased++
+		value, ok := values[r.Name]
+		if !ok {
+			t.Fatalf("the renderer %q is not phrased and this test has no fixture for it", r.Name)
+		}
+		got := renderNamed(t, r.Name, value)
+		if len(vocabtest.Violations(t, got.out)) == 0 {
+			t.Errorf("%s is listed as not phrased and printed nothing the derivation forbids:\n%s", r.Name, got.out)
+		}
+	}
+	if unphrased == 0 {
+		t.Fatal("no renderer is listed as not phrased, so this test checked nothing; if that is now true, delete it")
+	}
+}
+
+// An answer with no renderer is refused rather than printed as Go prints it:
+// nothing on standard output, internal/machine's refusal row on standard
+// error, and the operational failure code, so an answer type added without a
+// renderer fails loudly. The same answer through --json is a document, which
+// is the control that the refusal is the human rendering's and not the
+// answer's.
+func TestAnAnswerWithNoRendererIsRefusedRatherThanDumped(t *testing.T) {
+	t.Parallel()
+	value := fixtures(t)["fallback"]
+	var stdout, stderr bytes.Buffer
+	in := &invocation{env: Environment{Stdout: &stdout, Stderr: &stderr}}
+	if code := render(in, value, nil); code != machine.ExitFailure {
+		t.Fatalf("an answer with no renderer exited %s, want failure", code)
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("an answer with no renderer printed %q", stdout.String())
+	}
+	if got, want := strings.TrimSpace(stderr.String()), machine.PhraseNoReading.String(); got != want {
+		t.Fatalf("an answer with no renderer said %q, want the refusal %q", got, want)
+	}
+
+	stdout.Reset()
+	in.json = true
+	if code := render(in, value, nil); code != machine.ExitOK {
+		t.Fatalf("the same answer as a document exited %s, want ok", code)
+	}
+	var decoded machine.Appended
+	if err := json.Unmarshal(stdout.Bytes(), &decoded); err != nil || decoded.Event.TaskID != sampleID {
+		t.Fatalf("the same answer as a document did not carry it: %v\n%s", err, stdout.String())
 	}
 }
 

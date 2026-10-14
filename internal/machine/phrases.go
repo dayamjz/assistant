@@ -1,8 +1,11 @@
 package machine
 
 import (
+	"fmt"
 	"strings"
 
+	"github.com/dayamjz/assistant/internal/gate"
+	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/taskstate"
 )
@@ -493,11 +496,316 @@ var (
 	}
 )
 
+// Decision rows: what a person reads about a hold a run stopped at. The
+// halt point's own question is not one of them, because internal/pipeline
+// writes it naming the stage that holds and a stage's name is mechanics; the
+// question stays on the structured rendering. The options are filled in,
+// because they are the words a person types to answer and an answer the
+// command line takes is not a word P13 keeps from them.
+const optionsPlaceholder = "one of the answers it offers"
+
+// DecisionPhrase is what a person reads about a decision a run is waiting
+// on: that it waits on them, that nothing moves until they answer, and the
+// answers it takes. A decision listing no options, which a halt point the
+// engine accepts does not produce, is phrased with a placeholder rather than
+// as an answer with nothing after it.
+func DecisionPhrase(d Decision) Phrase {
+	options := strings.Join(d.Options, ", ")
+	if strings.TrimSpace(options) == "" {
+		options = optionsPlaceholder
+	}
+	return Phrase{
+		Outcome:     "Waiting on you: a decision about this change.",
+		Consequence: "Nothing about it moves until you answer.",
+		Decision:    "Answer it with assistant --answer followed by one of: " + options + ".",
+	}
+}
+
+// FixRoundPhrase is the row for a hold that also takes a request for a fix
+// round, with the answer that asks for one filled in. It points at the
+// structured rendering for the findings it does not list, because only the
+// findings holding the change are relayed beneath it and --select takes any
+// the stage reported.
+func FixRoundPhrase(option string) Phrase {
+	return Phrase{
+		Outcome:     "You may ask for a fix round instead of deciding.",
+		Consequence: "Only the findings holding this change are listed below; every finding behind it, with the name to select it by, is in assistant --json status.",
+		Decision:    "Ask with assistant --answer " + option + " --select and the findings to fix, separated by commas; --note and --finding add your own words.",
+	}
+}
+
+// The checks assistant doctor makes, by the name Check carries. The names are
+// the structured rendering's and travel as they always have; they are
+// constants here so that the command that makes a check and the row that
+// phrases it name it from one place. A check made under a name with no row
+// reads as phraseCheckUnfamiliar here, and internal/cli's command-line test
+// fails on it, because it reads the checks assistant doctor actually made and
+// holds each name to CheckNames.
+const (
+	// CheckHome is whether the home can be used.
+	CheckHome = "home"
+	// CheckDatabase is whether the home's records can be opened.
+	CheckDatabase = "database"
+	// CheckWorkingCopy is whether the command was run inside a checkout.
+	CheckWorkingCopy = "working copy"
+	// CheckGate is whether the checkout is bound to a gate and has the
+	// repository record a run is resolved against.
+	CheckGate = "gate"
+	// CheckService is whether a service answered for the home.
+	CheckService = "service"
+	// CheckAgent is whether a coding agent resolves for a run.
+	CheckAgent = "agent"
+	// CheckNamedOnlyAgents is whether any adapter resolves that a run uses
+	// only when configuration names it.
+	CheckNamedOnlyAgents = "named-only agents"
+	// CheckCodeHost is whether the code host's command line resolves.
+	CheckCodeHost = "code host"
+	// CheckStages is whether every stage has an implementation in this build.
+	CheckStages = "stages"
+)
+
+// CheckNames is every check name phraseByCheck has rows for, in the order
+// assistant doctor makes them. The result is a copy.
+func CheckNames() []string {
+	return []string{CheckHome, CheckDatabase, CheckWorkingCopy, CheckGate, CheckService,
+		CheckAgent, CheckNamedOnlyAgents, CheckCodeHost, CheckStages}
+}
+
+// readDoctor is the decision every row for a check that found something
+// points at when what was found is the thing to read: the detail is a path
+// or an error, which is the structured rendering's.
+const readDoctor = "Run assistant --json doctor for what was found."
+
+// phraseByCheck is the one table from a check and its result to what a person
+// reads, the passing row first. The detail a check carries - a path, a
+// socket, an error, an agent's name - is mechanics, and the structured
+// rendering keeps it; a row that needs it to be acted on says so.
+var phraseByCheck = map[string][2]Phrase{
+	CheckHome: {
+		{Outcome: "This home can be used.", Consequence: "What is recorded about your work is kept in it.", Decision: "Nothing to do."},
+		{Outcome: "This home cannot be used.", Consequence: "Nothing can be recorded or validated until it can.", Decision: readDoctor},
+	},
+	CheckDatabase: {
+		{Outcome: "This home's records can be read.", Consequence: "Runs and fleet work can be recorded.", Decision: "Nothing to do."},
+		{Outcome: "This home's records could not be opened.", Consequence: "Nothing can be recorded, so no run can start.", Decision: readDoctor},
+	},
+	CheckWorkingCopy: {
+		{Outcome: "This directory is inside a checkout.", Consequence: "There is a change here a run can validate.", Decision: "Nothing to do."},
+		{Outcome: "This directory is not inside a checkout.", Consequence: "There is nothing here for a run to validate.", Decision: "Run assistant from inside the checkout you want validated."},
+	},
+	CheckGate: {
+		{Outcome: "This checkout is set up for validation.", Consequence: "A change sent from here is validated before it goes anywhere.", Decision: "Nothing to do."},
+		{Outcome: "This checkout is not set up for validation.", Consequence: "A run cannot start from it.", Decision: "Run assistant init here."},
+	},
+	CheckService: {PhraseServiceUp, PhraseServiceAbsent},
+	CheckAgent: {
+		{Outcome: "A coding agent this build can drive is available.", Consequence: "A run has an agent to examine and fix the change with.", Decision: "Nothing to do."},
+		{Outcome: "No coding agent this build can drive is available here.", Consequence: "A run cannot start without one.", Decision: readDoctor},
+	},
+	CheckNamedOnlyAgents: {
+		{Outcome: "No agent is installed here that is used only when named.", Consequence: "A run uses the agent it chooses on its own.", Decision: "Nothing to do."},
+		{Outcome: "Some agents installed here are used only when your configuration names them.", Consequence: "A run never chooses one on its own, and nothing here has checked them against their own command lines.", Decision: "Name one in your configuration only if you mean to try it."},
+	},
+	CheckCodeHost: {
+		{Outcome: "The code host's command line was found here.", Consequence: "Whether it can reach your repository is learned when a run first needs it.", Decision: "Nothing to do."},
+		{Outcome: "The code host's command line was not found here.", Consequence: "A run can still start, and a step that needs the code host stops and says so.", Decision: readDoctor},
+	},
+	CheckStages: {
+		{Outcome: "Every step of the gate has an implementation in this build.", Consequence: "No step stops for your decision only for want of one.", Decision: "Nothing to do."},
+		{Outcome: "Some steps of the gate have no implementation in this build.", Consequence: "A run stops for your decision at each of them, and what they would check is not checked.", Decision: "Answer each as it comes, and run assistant --json doctor for which they are."},
+	},
+}
+
+// phraseCheckUnfamiliar is the row for a check under a name the table has
+// none for, which internal/cli's command-line test keeps assistant doctor
+// from making.
+var phraseCheckUnfamiliar = Phrase{
+	Outcome:     "Something this build checked is not one it can describe.",
+	Consequence: "Whether it stops a run is in the verdict below.",
+	Decision:    readDoctor,
+}
+
+// CheckPhrase is what a person reads about one check: phraseByCheck's row for
+// its name and result, or the unfamiliar row for a name it has none for.
+func CheckPhrase(c Check) Phrase {
+	rows, ok := phraseByCheck[c.Name]
+	if !ok {
+		return phraseCheckUnfamiliar
+	}
+	if c.OK {
+		return rows[0]
+	}
+	return rows[1]
+}
+
+// The doctor's verdict, which is the decision PRD section 9 asks it to make.
+var (
+	phraseRunCanStart = Phrase{
+		Outcome:     "A run can start here.",
+		Consequence: "Everything a run needs is in place.",
+		Decision:    "Nothing to do.",
+	}
+	phraseRunCannotStart = Phrase{
+		Outcome:     "A run cannot start here.",
+		Consequence: "Something it needs is missing, as the lines above say.",
+		Decision:    "Do what the first of them says, then run assistant doctor again.",
+	}
+)
+
+// DoctorPhrase is the doctor's verdict as a person reads it, read off the
+// decision the report carries rather than inferred from its checks.
+func DoctorPhrase(d Doctor) Phrase {
+	if d.CanStartRun {
+		return phraseRunCanStart
+	}
+	return phraseRunCannotStart
+}
+
+// Lifecycle rows: what a person reads when they asked the service to stop or
+// restart. A restart is answered only once the replacement has answered a
+// readiness check, so its row says the service is back rather than going.
+var (
+	phraseServiceRestarted = Phrase{
+		Outcome:     "The service restarted and is answering again.",
+		Consequence: "A change sent to the gate is validated as before.",
+		Decision:    "Nothing to do.",
+	}
+	phraseServiceStopped = Phrase{
+		Outcome:     "The service is stopping.",
+		Consequence: "Nothing is validated or watched until it is brought back up.",
+		Decision:    "Run assistant service start when you want it back.",
+	}
+)
+
+// LifecyclePhrase is what a person reads about a request to stop or restart
+// the service: the restarted or stopping row when it was accepted, and when it
+// was refused because runs are under way, a row counting them. The runs
+// themselves are the renderer's to list beside it, each by its branch.
+func LifecyclePhrase(l Lifecycle) Phrase {
+	switch {
+	case l.Accepted && l.Restarting:
+		return phraseServiceRestarted
+	case l.Accepted:
+		return phraseServiceStopped
+	}
+	return Phrase{
+		Outcome:     fmt.Sprintf("The service was left up, because %d run(s) are under way.", len(l.Active)),
+		Consequence: "Stopping it now would interrupt them.",
+		Decision:    "Let them finish, or repeat the command with --force to interrupt them anyway.",
+	}
+}
+
+// InitPhrase is what a person reads once a gate was created or reattached for
+// their checkout. The next decision names the remote a change is sent to,
+// which is internal/gate's, because sending a branch there is how a person
+// starts a run and nothing else on the line says so.
+func InitPhrase(i Init) Phrase {
+	decision := "Send your branch to the remote named " + gate.RemoteName + " to have it validated."
+	if i.Reattached {
+		return Phrase{
+			Outcome:     "This checkout was reattached to the gate it had before.",
+			Consequence: "The runs recorded through it carried over, and a change sent to it is validated before it goes anywhere.",
+			Decision:    decision,
+		}
+	}
+	return Phrase{
+		Outcome:     "This checkout now sends its changes through a new gate.",
+		Consequence: "A change sent to it is validated before it goes anywhere, and nothing has been validated through it yet.",
+		Decision:    decision,
+	}
+}
+
+// EjectPhrase is what a person reads once a gate was removed, with how many
+// run records went with it. An answer that removed nothing, which eject does
+// not return, reads as nothing removed rather than as a removal.
+func EjectPhrase(e Eject) Phrase {
+	if !e.Removed {
+		return Phrase{
+			Outcome:     "Nothing was removed.",
+			Consequence: "The gate and its records are as they were.",
+			Decision:    "Nothing to decide.",
+		}
+	}
+	return Phrase{
+		Outcome:     fmt.Sprintf("The gate was removed from this checkout, with %d recorded run(s).", e.Runs),
+		Consequence: "Nothing sent from here is validated any more.",
+		Decision:    "Run assistant init here to set one up again.",
+	}
+}
+
+// HealthPhrase is what a person reads about a readiness answer: a service
+// that answered is the status row for one that is up, and anything else the
+// row for one that is not.
+func HealthPhrase(h Health) Phrase {
+	if h.Ready {
+		return PhraseServiceUp
+	}
+	return PhraseServiceAbsent
+}
+
+// The gate's rows: what a person sending a change reads, relayed by git from
+// the gate's hooks. The references and branches beside them are the person's
+// own names; the gate's identifier, a run's and the commit are the structured
+// rendering's.
+var (
+	// PhraseAdmitted is the row for a change the gate let in.
+	PhraseAdmitted = Phrase{
+		Outcome:     "The gate let this change in.",
+		Consequence: "It is validated before it goes anywhere.",
+		Decision:    "Nothing to decide yet.",
+	}
+	// PhraseValidationBegun is the row for a branch a change started a run
+	// for. The run goes on in the service, which is why the command that
+	// sent the change returns at once.
+	PhraseValidationBegun = Phrase{
+		Outcome:     "Validation of this change has begun.",
+		Consequence: "It goes on in the service, so nothing here waits for it.",
+		Decision:    "Ask assistant status from its branch for where it stands.",
+	}
+	// PhraseSupersededEarlier is the row for a run of the same branch the new
+	// one displaced. It says what the record says and no more: the earlier
+	// run is recorded as ended, which is the only verdict it gives.
+	PhraseSupersededEarlier = Phrase{
+		Outcome:     "The earlier version of this branch that was being validated was set aside for this one.",
+		Consequence: "Its run is recorded as ended and gives no verdict.",
+		Decision:    "Nothing to decide.",
+	}
+	// PhraseNothingStartedFor is the row for a reference a change carried
+	// that started no run: one that is not a branch, or a branch being
+	// deleted. A run that branch already had is left as it was, which is
+	// the one thing a person might want to act on.
+	PhraseNothingStartedFor = Phrase{
+		Outcome:     "No run was begun for this, because the gate begins one only for a branch moved to a new commit.",
+		Consequence: "Nothing new is validated, and a run already under way for it carries on.",
+		Decision:    "If that run should not carry on, end it with assistant --cancel from its branch.",
+	}
+	// PhraseNothingSent is the row for a change that moved no reference at
+	// all.
+	PhraseNothingSent = Phrase{
+		Outcome:     "Nothing that was sent moved a branch, so no run was begun.",
+		Consequence: "Nothing is validated.",
+		Decision:    "Nothing to decide.",
+	}
+)
+
+// PhraseNoReading is what a person reads when an answer reaches the human
+// rendering with no renderer for its type. It is a refusal rather than a
+// guess: printing the value as Go prints it would hand a person this build's
+// field names and identifiers, which is what P13 keeps from them.
+var PhraseNoReading = Phrase{
+	Outcome:     "This answer has no reading for a person in this build.",
+	Consequence: "Nothing was printed in its place rather than a guess at what it meant.",
+	Decision:    "Repeat the command with --json to read it.",
+}
+
 // TablePhrases returns every row this table holds, as a person reads each,
 // which is what the vocabulary test walks: the pull guard's three rows, the
 // stop guard's two turn rows, a row per task state and NoWordYet, a row per
 // outcome and the three OutcomeExecuting splits into, the two hold rows and
-// the two cleanup rows, the stream's four, and the status rows. A templated
+// the two cleanup rows, the stream's four, the status rows, and the rows for
+// the rest of the command surface: a decision and a fix round's offer, a row
+// per doctor check and result and the verdict, the service lifecycle, a gate
+// created, reattached and removed, and the gate's own rows. A templated
 // row is listed with its placeholder filled in. The result is a copy. Phrases
 // is the same list as strings.
 func TablePhrases() []Phrase {
@@ -519,5 +827,13 @@ func TablePhrases() []Phrase {
 	out = append(out, phraseCopyKept, phraseCopyRemoved)
 	out = append(out, PhraseUpdatesMissed, PhraseServiceStopping, PhraseWorkerSpoke, PhraseActivity, PhraseUnfamiliarUpdate)
 	out = append(out, PhraseServiceUp, PhraseServiceAbsent, PhraseGated, PhraseUngated, PhraseNoRun, PhraseNoRuns, PhraseNoFleetWork)
+	out = append(out, DecisionPhrase(Decision{}), FixRoundPhrase(string(pipeline.OutcomeFixRequested)))
+	for _, name := range CheckNames() {
+		out = append(out, CheckPhrase(Check{Name: name, OK: true}), CheckPhrase(Check{Name: name}))
+	}
+	out = append(out, phraseCheckUnfamiliar, phraseRunCanStart, phraseRunCannotStart)
+	out = append(out, LifecyclePhrase(Lifecycle{Accepted: true, Restarting: true}), LifecyclePhrase(Lifecycle{Accepted: true}), LifecyclePhrase(Lifecycle{}))
+	out = append(out, InitPhrase(Init{}), InitPhrase(Init{Reattached: true}), EjectPhrase(Eject{Removed: true}), EjectPhrase(Eject{}))
+	out = append(out, PhraseAdmitted, PhraseValidationBegun, PhraseSupersededEarlier, PhraseNothingStartedFor, PhraseNothingSent, PhraseNoReading)
 	return out
 }

@@ -151,39 +151,38 @@ func (in *invocation) gateRequest(hook string) (machine.GateRequest, error) {
 	return machine.GateRequest{Gate: id, Updates: updates}, nil
 }
 
-// readOutAdmission is what a person pushing sees when the gate admits the
-// push. It goes to standard output, which git relays to them prefixed as
-// coming from the remote, so it says which gate accepted what rather than only
-// that something did.
+// readOutAdmission is what a person sending a change sees when the gate
+// admits it. It goes to standard output, which git relays to them prefixed as
+// coming from the remote, so it says that the change was let in and which
+// references it carried, which are the person's own names; the gate's
+// identifier is the structured rendering's.
 func readOutAdmission(w io.Writer, a machine.Admission) {
-	writef(w, "Admitted to gate %s: %s\n", a.Gate, refList(a.Refs))
+	writeln(w, machine.PhraseAdmitted)
+	for _, ref := range a.Refs {
+		writef(w, "  %s\n", printable(ref))
+	}
 }
 
-// readOutNotification is what a person pushing sees once the push is in: the
-// runs it started, and every reference it started nothing for with the reason.
+// readOutNotification is what a person sending a change sees once it is in:
+// a line for each branch it began validating, one for the earlier run of that
+// branch it set aside, and one for every reference it began nothing for, each
+// by the person's own name for it. The runs' identifiers and the commits are
+// the structured rendering's, and so is the reason a reference began nothing:
+// internal/service words it, and the row says what a person can do about
+// either reason it gives.
 func readOutNotification(w io.Writer, n machine.Notification) {
 	for _, started := range n.Started {
-		writef(w, "Started run %s for %s at %s\n", started.Run, started.Branch, short(started.Head))
+		writef(w, "%s: %s\n", printable(started.Branch), machine.PhraseValidationBegun)
 		if started.Superseded != "" {
-			writef(w, "  superseded run %s, which was validating an earlier push of %s\n",
-				started.Superseded, started.Branch)
+			writef(w, "%s: %s\n", printable(started.Branch), machine.PhraseSupersededEarlier)
 		}
 	}
 	for _, ignored := range n.Ignored {
-		writef(w, "No run for %s: %s\n", ignored.Ref, ignored.Reason)
+		writef(w, "%s: %s\n", printable(ignored.Ref), machine.PhraseNothingStartedFor)
 	}
 	if len(n.Started) == 0 && len(n.Ignored) == 0 {
-		writef(w, "The push to gate %s carried no reference updates, so no run was started.\n", n.Gate)
+		writeln(w, machine.PhraseNothingSent)
 	}
-}
-
-// refList reads out the references a push updates, for a message about the
-// push as a whole.
-func refList(refs []string) string {
-	if len(refs) == 0 {
-		return "no reference updates"
-	}
-	return strings.Join(refs, ", ")
 }
 
 // gateUsage is the hook subcommands read out, under a heading that says these

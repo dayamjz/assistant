@@ -225,20 +225,20 @@ func doctor(ctx context.Context, in *invocation) (any, error) {
 	report := machine.Doctor{}
 	add := func(check machine.Check) { report.Checks = append(report.Checks, check) }
 
-	add(machine.Check{Name: "home", OK: true, Blocking: true, Detail: in.home.Root()})
+	add(machine.Check{Name: machine.CheckHome, OK: true, Blocking: true, Detail: in.home.Root()})
 	records, err := in.openStore(ctx)
 	if err != nil {
-		add(machine.Check{Name: "database", Blocking: true, Detail: err.Error()})
+		add(machine.Check{Name: machine.CheckDatabase, Blocking: true, Detail: err.Error()})
 	} else {
-		add(machine.Check{Name: "database", OK: true, Blocking: true, Detail: records.Path()})
+		add(machine.Check{Name: machine.CheckDatabase, OK: true, Blocking: true, Detail: records.Path()})
 		defer func() { _ = records.Close() }()
 	}
 
 	working, workErr := in.workingCopy(ctx)
 	if workErr != nil {
-		add(machine.Check{Name: "working copy", Blocking: true, Detail: workErr.Error()})
+		add(machine.Check{Name: machine.CheckWorkingCopy, Blocking: true, Detail: workErr.Error()})
 	} else {
-		add(machine.Check{Name: "working copy", OK: true, Blocking: true, Detail: working})
+		add(machine.Check{Name: machine.CheckWorkingCopy, OK: true, Blocking: true, Detail: working})
 	}
 
 	if records != nil && workErr == nil {
@@ -247,7 +247,7 @@ func doctor(ctx context.Context, in *invocation) (any, error) {
 
 	service := in.serviceState(ctx)
 	add(machine.Check{
-		Name:     "service",
+		Name:     machine.CheckService,
 		OK:       service.Running,
 		Blocking: true,
 		Detail:   serviceDetail(service),
@@ -256,9 +256,9 @@ func doctor(ctx context.Context, in *invocation) (any, error) {
 	catalog := agents.DefaultCatalog()
 	resolution, err := agents.Resolve(ctx, in.resolvedAgents(), catalog)
 	if err != nil {
-		add(machine.Check{Name: "agent", Blocking: true, Detail: err.Error()})
+		add(machine.Check{Name: machine.CheckAgent, Blocking: true, Detail: err.Error()})
 	} else {
-		add(machine.Check{Name: "agent", OK: true, Blocking: true, Detail: resolution.Name})
+		add(machine.Check{Name: machine.CheckAgent, OK: true, Blocking: true, Detail: resolution.Name})
 	}
 	add(namedOnlyAgents(ctx, catalog))
 
@@ -293,11 +293,11 @@ func namedOnlyAgents(ctx context.Context, catalog *agents.Catalog) machine.Check
 		}
 	}
 	if len(found) == 0 {
-		return machine.Check{Name: "named-only agents", OK: true,
+		return machine.Check{Name: machine.CheckNamedOnlyAgents, OK: true,
 			Detail: "no adapter that auto never chooses resolves here"}
 	}
 	return machine.Check{
-		Name: "named-only agents",
+		Name: machine.CheckNamedOnlyAgents,
 		Detail: strings.Join(found, ", ") + " resolve on this machine, but PRD section 12 defers them, so " +
 			"auto never chooses them and a run uses one only when the agent key names it; nothing here " +
 			"has checked them against their real CLIs",
@@ -315,17 +315,17 @@ func namedOnlyAgents(ctx context.Context, catalog *agents.Catalog) machine.Check
 func gateCheck(ctx context.Context, records *store.Store, working string) machine.Check {
 	binding, err := records.GateBinding(ctx, working)
 	if err != nil {
-		return machine.Check{Name: "gate", Blocking: true, Detail: "this working copy is not bound to a gate; run assistant init"}
+		return machine.Check{Name: machine.CheckGate, Blocking: true, Detail: "this working copy is not bound to a gate; run assistant init"}
 	}
 	if _, err := records.RepositoryAt(ctx, working); err != nil {
 		return machine.Check{
-			Name:     "gate",
+			Name:     machine.CheckGate,
 			Blocking: true,
 			Detail: fmt.Sprintf("bound to %s, and this working copy has no repository record, which a run is resolved against; run assistant init",
 				binding.GateID),
 		}
 	}
-	return machine.Check{Name: "gate", OK: true, Blocking: true, Detail: "bound to " + binding.GateID}
+	return machine.Check{Name: machine.CheckGate, OK: true, Blocking: true, Detail: "bound to " + binding.GateID}
 }
 
 // codeHost reports whether the code-host provider command line resolves on
@@ -342,11 +342,11 @@ func codeHost() machine.Check {
 	resolved, err := forge.NewGitHubHost(redact.New()).Probe()
 	if err != nil {
 		return machine.Check{
-			Name:   "code host",
+			Name:   machine.CheckCodeHost,
 			Detail: err.Error() + "; a run can start without it, and a stage that needs the code host reports the refusal itself",
 		}
 	}
-	return machine.Check{Name: "code host", OK: true, Detail: resolved}
+	return machine.Check{Name: machine.CheckCodeHost, OK: true, Detail: resolved}
 }
 
 // stageBodies reports how much of the gate this build actually implements. It
@@ -355,7 +355,7 @@ func codeHost() machine.Check {
 func stageBodies() machine.Check {
 	implemented := stages.Implemented()
 	if len(implemented) == len(pipeline.Order()) {
-		return machine.Check{Name: "stages", OK: true, Detail: "all nine stages have an implementation"}
+		return machine.Check{Name: machine.CheckStages, OK: true, Detail: "all nine stages have an implementation"}
 	}
 	names := make([]string, 0, len(implemented))
 	for _, stage := range implemented {
@@ -366,7 +366,7 @@ func stageBodies() machine.Check {
 		detail = fmt.Sprintf("%d of %d stages have an implementation (%s); the rest hold for a decision",
 			len(names), len(pipeline.Order()), strings.Join(names, ", "))
 	}
-	return machine.Check{Name: "stages", Detail: detail}
+	return machine.Check{Name: machine.CheckStages, Detail: detail}
 }
 
 // resolvedAgents is the agent list this machine would resolve a run against.

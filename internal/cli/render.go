@@ -9,7 +9,6 @@ import (
 	"unicode"
 
 	"github.com/dayamjz/assistant/internal/findings"
-	"github.com/dayamjz/assistant/internal/gate"
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/pipeline"
@@ -28,26 +27,38 @@ import (
 // interface to use only the terminal's own palette so it follows the user's
 // theme; the safest reading of that for a command that prints and exits is to
 // emit no styling at all.
-func readOut(w io.Writer, answer any) {
+//
+// An answer of a type no row claims is refused rather than printed: the
+// refusal is a noReading, which writes nothing here and which render turns
+// into a failure on standard error, so an answer type added without a
+// renderer fails loudly instead of handing a person a Go struct.
+func readOut(w io.Writer, answer any) error {
 	if answer == nil {
-		return
+		return nil
 	}
 	of := reflect.TypeOf(answer)
 	for _, r := range renderings {
 		if r.of == of {
 			r.render(w, answer)
-			return
+			return nil
 		}
 	}
-	fallback.render(w, answer)
+	return noReading{of: of}
 }
+
+// noReading is the refusal readOut returns for an answer no row claims. What
+// it says is internal/machine's row for that refusal; the type it names is
+// for a test or a log, and is not in what a person reads.
+type noReading struct{ of reflect.Type }
+
+// Error is the refusal as a person reads it.
+func (noReading) Error() string { return machine.PhraseNoReading.String() }
 
 // Rendering is one human renderer of this surface: what it is called and
 // whether it speaks through internal/machine's phrase table, which is the
 // vocabulary P13 holds to the derived forbidden set. A renderer that does not
-// is one that still prints this build's own words - a stage name, a run's
-// position, an identifier a person needs to act - and the follow-up that
-// routes every renderer through the table is where that changes.
+// is one that still prints this build's own words, and the renderings table
+// says, beside each such row, why its wording is not settled yet.
 type Rendering struct {
 	// Name is the renderer's name, as internal/journey's coverage note and
 	// this package's tests refer to it.
@@ -59,8 +70,10 @@ type Rendering struct {
 
 // Renderings is every human renderer this surface has, in the order the
 // table lists them and the fallback last, so a reader can hold a claim about
-// which are phrased to an enumeration rather than to a list someone kept.
-// The result is a copy.
+// which are phrased to an enumeration rather than to a list someone kept. The
+// fallback is the refusal readOut returns for an answer no row claims, which
+// writes nothing on standard output and is phrased on standard error. The
+// result is a copy.
 func Renderings() []Rendering {
 	out := make([]Rendering, 0, len(renderings)+1)
 	for _, r := range renderings {
@@ -83,21 +96,32 @@ type rendering struct {
 // answer's type through it, and Renderings reads it out, so a renderer added
 // here is enumerated and one added anywhere else is not reached.
 //
-// The phrased renderers are the fleet and run surfaces: status, a run, the
-// run listing, the task listing, one task, the service, and an event on the
-// fleet view. What they print is a phrase from internal/machine's table, or
-// one beside a word that is the person's own - a branch name, a project - or
-// an agent's, escaped. The stop guard's answer is phrased on different
-// terms: its renderer prints nothing, because the host reads the message on
-// standard error and hostStop writes it there, and that message is the turn
-// row followed by the pull guard's row, both from the table, so nothing a
-// person reads from the command is outside it. The rest still print this build's vocabulary: the
-// decision block and the run's details print stage names and node positions
-// because a person answering a hold needs the finding as the stage reported
-// it; the doctor, the service lifecycle, initialization, a plan, an eject,
-// the readiness answer and the two gate renderers print identifiers and
-// paths; and the fallback prints whatever it was given. Each is named here
-// so the claim about the phrased ones is bounded by an enumeration.
+// Every row but three is phrased: what it prints is a phrase from
+// internal/machine's table, or one beside a word that is the person's own -
+// a branch name, a project, a reference a change carried, the repository's
+// default branch - or an agent's, escaped. The stop guard's answer is phrased
+// on different terms: its renderer prints nothing, because the host reads the
+// message on standard error and hostStop writes it there, and that message is
+// the turn row followed by the pull guard's row, both from the table.
+//
+// The three that are not phrased are the ones whose wording the
+// specification has not settled, and each is named so that the claim about
+// the rest is bounded by an enumeration:
+//
+//   - details prints a run's position, its park reason, its configuration
+//     rejections and a line per stage by name. PRD section 9's terminal
+//     interface answers "where am I?" with all nine stages by name, and P13
+//     keeps stage names from a person; the two disagree, and that is a
+//     finding against the specification rather than a choice to make here.
+//   - findings relays a decision's findings in full, which PRD section 9's
+//     relay-verbatim row requires and P13's "never text to relay" forbids;
+//     the same disagreement, and the text is the stage's report rather than
+//     this build's sentence, so it cannot be rephrased without being
+//     summarized.
+//   - plan prints the steps of a reconciliation, which PRD section 9 has
+//     assistant sync print exactly; the module that would produce them does
+//     not exist in this build, so there is no step whose wording could be
+//     held to the table.
 var renderings = []rendering{
 	{"status", true, typeOf[machine.Status](), func(w io.Writer, v any) { readOutStatus(w, v.(machine.Status)) }},
 	{"run", true, typeOf[machine.Run](), func(w io.Writer, v any) { readOutRun(w, v.(machine.Run)) }},
@@ -107,27 +131,24 @@ var renderings = []rendering{
 	{"service", true, typeOf[machine.Service](), func(w io.Writer, v any) { readOutService(w, v.(machine.Service)) }},
 	{"event", true, typeOf[ipc.Event](), func(w io.Writer, v any) { writeln(w, eventLine(v.(ipc.Event))) }},
 	{"host stop", true, typeOf[machine.HostStop](), func(w io.Writer, v any) { readOutHostStop(w, v.(machine.HostStop)) }},
-	{"decision", false, nil, func(w io.Writer, v any) { readOutDecision(w, v.(machine.Decision)) }},
+	{"decision", true, nil, func(w io.Writer, v any) { readOutDecision(w, v.(machine.Decision)) }},
 	{"details", false, nil, func(w io.Writer, v any) { readOutDetails(w, v.(machine.Run)) }},
-	{"doctor", false, typeOf[machine.Doctor](), func(w io.Writer, v any) { readOutDoctor(w, v.(machine.Doctor)) }},
-	{"lifecycle", false, typeOf[machine.Lifecycle](), func(w io.Writer, v any) { readOutLifecycle(w, v.(machine.Lifecycle)) }},
-	{"init", false, typeOf[machine.Init](), func(w io.Writer, v any) { readOutInit(w, v.(machine.Init)) }},
+	{"findings", false, nil, func(w io.Writer, v any) { readOutFindings(w, v.(machine.Decision)) }},
+	{"doctor", true, typeOf[machine.Doctor](), func(w io.Writer, v any) { readOutDoctor(w, v.(machine.Doctor)) }},
+	{"lifecycle", true, typeOf[machine.Lifecycle](), func(w io.Writer, v any) { readOutLifecycle(w, v.(machine.Lifecycle)) }},
+	{"init", true, typeOf[machine.Init](), func(w io.Writer, v any) { readOutInit(w, v.(machine.Init)) }},
 	{"plan", false, typeOf[machine.Plan](), func(w io.Writer, v any) { readOutPlan(w, v.(machine.Plan)) }},
-	{"eject", false, typeOf[machine.Eject](), func(w io.Writer, v any) {
-		e := v.(machine.Eject)
-		writef(w, "Removed the gate %s and %d run record(s).\n", e.Repository, e.Runs)
-	}},
-	{"health", false, typeOf[machine.Health](), func(w io.Writer, v any) {
-		h := v.(machine.Health)
-		writef(w, "ready: %v, home %s, build %s\n", h.Ready, h.Home, h.Build)
-	}},
-	{"admission", false, typeOf[machine.Admission](), func(w io.Writer, v any) { readOutAdmission(w, v.(machine.Admission)) }},
-	{"notification", false, typeOf[machine.Notification](), func(w io.Writer, v any) { readOutNotification(w, v.(machine.Notification)) }},
+	{"eject", true, typeOf[machine.Eject](), func(w io.Writer, v any) { writeln(w, machine.EjectPhrase(v.(machine.Eject))) }},
+	{"health", true, typeOf[machine.Health](), func(w io.Writer, v any) { writeln(w, machine.HealthPhrase(v.(machine.Health))) }},
+	{"admission", true, typeOf[machine.Admission](), func(w io.Writer, v any) { readOutAdmission(w, v.(machine.Admission)) }},
+	{"notification", true, typeOf[machine.Notification](), func(w io.Writer, v any) { readOutNotification(w, v.(machine.Notification)) }},
 }
 
-// fallback renders an answer no row claims, as Go prints it. It is the one
-// renderer that is not a row, because it has no type to dispatch on.
-var fallback = rendering{"fallback", false, nil, func(w io.Writer, v any) { writef(w, "%+v\n", v) }}
+// fallback is the row for an answer no row claims. It is not in the table,
+// because it has no type to dispatch on, and it renders nothing: readOut
+// returns noReading in its place, whose text is internal/machine's row for
+// the refusal and which render writes on standard error.
+var fallback = rendering{"fallback", true, nil, func(io.Writer, any) {}}
 
 func typeOf[T any]() reflect.Type { return reflect.TypeOf((*T)(nil)).Elem() }
 
@@ -184,8 +205,9 @@ func readOutService(w io.Writer, s machine.Service) {
 }
 
 // readOutRun prints a run: its phrase, the branch, the agent it resolved,
-// what became of its local copy, and then its details and decision through
-// the two renderers that are not phrased. The phrase carries the outcome,
+// what became of its local copy, and then its details, its decision and the
+// findings behind the decision, through the details and findings renderers
+// that are not phrased and the decision renderer that is. The phrase carries the outcome,
 // the consequence and the next decision, so no outcome word, status or next
 // action is printed beside it; the record's identifier is the structured
 // rendering's.
@@ -206,6 +228,7 @@ func readOutRun(w io.Writer, r machine.Run) {
 	readOutDetails(w, r)
 	if r.Decision != nil {
 		readOutDecision(w, *r.Decision)
+		readOutFindings(w, *r.Decision)
 	}
 }
 
@@ -254,30 +277,30 @@ func readOutDetails(w io.Writer, r machine.Run) {
 	}
 }
 
-// readOutDecision prints the decision and the findings behind it in full.
+// readOutDecision prints the decision a run is waiting on, through the
+// phrase table: that it waits on the person, and the answers it takes, with
+// the fix round's offer when the hold takes a request for one. The halt
+// point's question names the stage holding, so it is the structured
+// rendering's; the answers are printed because they are what a person types.
+// They come off the run's checkpoint, so the line is escaped as a whole.
+func readOutDecision(w io.Writer, d machine.Decision) {
+	writeln(w)
+	writeln(w, printable(machine.DecisionPhrase(d).String()))
+	for _, option := range d.Detailed {
+		if option == string(pipeline.OutcomeFixRequested) {
+			writeln(w, printable(machine.FixRoundPhrase(option).String()))
+		}
+	}
+}
+
+// readOutFindings prints the findings behind a decision in full.
 //
 // PRD section 9 requires a finding that needs a decision to be relayed with
 // its full text, unsummarized and unjudged. Nothing here truncates a
-// description, drops a finding, or reorders them.
-func readOutDecision(w io.Writer, d machine.Decision) {
-	writef(w, "\nWaiting on you: %s\n", printable(d.Question))
-	if len(d.Options) > 0 {
-		options := make([]string, len(d.Options))
-		for i, option := range d.Options {
-			options[i] = printable(option)
-		}
-		writef(w, "Options: %s\n", strings.Join(options, ", "))
-		writef(w, "Answer with: assistant --answer %s\n", options[0])
-		for _, option := range d.Detailed {
-			if option == string(pipeline.OutcomeFixRequested) {
-				writef(w, "Ask for a fix round with: assistant --answer %s --select <finding>,... "+
-					"[--note <text>] [--finding <text>]\n", printable(option))
-				writef(w, "Only the findings holding the stage are listed below. --select takes any "+
-					"finding the stage reported; every one, with its identifier, is under "+
-					"active_run.stages[].report.findings in: assistant --json status\n")
-			}
-		}
-	}
+// description, drops a finding, or reorders them. That is also why this
+// renderer is not phrased: a finding is the stage's report, and phrasing it
+// would summarize it.
+func readOutFindings(w io.Writer, d machine.Decision) {
 	for _, finding := range d.Findings {
 		writef(w, "\n  [%s] %s %s\n", printable(string(finding.Action)), printable(string(finding.Severity)), printable(finding.ID))
 		if where := locationOf(finding); where != "" {
@@ -355,47 +378,41 @@ func readOutTask(w io.Writer, task machine.Task) {
 	writef(w, "%s: %s\n", printable(task.Record.Project), printable(machine.TaskPhrase(task).String()))
 }
 
+// readOutDoctor prints a row per check and then the verdict, all through
+// the phrase table. What each check found - a path, a socket, an error, an
+// agent's name - is the structured rendering's, and a row that needs it to be
+// acted on points there.
 func readOutDoctor(w io.Writer, report machine.Doctor) {
 	for _, check := range report.Checks {
-		mark := "no "
-		if check.OK {
-			mark = "yes"
-		}
-		writef(w, "%s  %-13s %s\n", mark, check.Name, check.Detail)
+		writeln(w, machine.CheckPhrase(check))
 	}
 	writeln(w)
-	if report.CanStartRun {
-		writeln(w, "A run can start.")
-		return
-	}
-	writef(w, "A run cannot start. %s\n", report.Detail)
+	writeln(w, machine.DoctorPhrase(report))
 }
 
+// readOutLifecycle prints what became of a request to stop or restart the
+// service, and for a refusal each run that caused it, by its branch and its
+// phrase from the record, as the run listing prints one.
 func readOutLifecycle(w io.Writer, answer machine.Lifecycle) {
-	if answer.Accepted {
-		if answer.Restarting {
-			writeln(w, "The service is restarting.")
-			return
-		}
-		writeln(w, "The service is stopping.")
-		return
-	}
-	writeln(w, answer.Detail)
+	writeln(w, machine.LifecyclePhrase(answer))
 	for _, record := range answer.Active {
-		writef(w, "  %s  %-10s %s\n", record.ID, record.Status, record.Branch)
+		writef(w, "  %s: %s\n", printable(record.Branch), machine.RecordPhrase(record))
 	}
 }
 
+// readOutInit prints what became of the checkout's gate, and the branch
+// trusted configuration is read from, which is the person's own branch name
+// and the one fact here they may want to correct with --default-branch. The
+// gate's identifier and where it lives are the structured rendering's.
 func readOutInit(w io.Writer, answer machine.Init) {
-	word := "Created"
-	if answer.Reattached {
-		word = "Reattached to"
+	writeln(w, machine.InitPhrase(answer))
+	if branch := answer.Repository.DefaultBranch; branch != "" {
+		writef(w, "Default branch %s\n", printable(branch))
 	}
-	writef(w, "%s the gate %s at %s\n", word, answer.Gate.ID, answer.Gate.Repository)
-	writef(w, "Repository %s, default branch %s\n", answer.Repository.ID, answer.Repository.DefaultBranch)
-	writef(w, "Push to it with: git push %s\n", gate.RemoteName)
 }
 
+// readOutPlan prints a plan's steps and why nothing was done. It is not
+// phrased; the renderings table says why.
 func readOutPlan(w io.Writer, plan machine.Plan) {
 	for _, step := range plan.Steps {
 		writef(w, "  %s\n", step)
@@ -468,15 +485,6 @@ func locationOf(f findings.Finding) string {
 		return fmt.Sprintf("%s:%d", f.Location.Path, f.Location.Line)
 	}
 	return f.Location.Path
-}
-
-// short renders a commit for reading, and leaves anything that is not one
-// alone.
-func short(commit string) string {
-	if len(commit) <= 12 {
-		return commit
-	}
-	return commit[:12]
 }
 
 // writef and writeln are the two writes this rendering makes. A write that

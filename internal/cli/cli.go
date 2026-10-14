@@ -463,7 +463,10 @@ func usageText() string {
 //
 // A structured answer goes to standard output whether or not it reports a
 // failure, because a driving agent parses one document per invocation and a
-// failure it has to read out of prose is one it will read wrong.
+// failure it has to read out of prose is one it will read wrong. An answer the
+// human rendering has no renderer for is refused on standard error with the
+// operational failure code, rather than printed as Go prints it; the
+// structured rendering has no such case, since every answer encodes.
 func render(in *invocation, answer any, err error) machine.Code {
 	env := in.env
 	var version versionAnswer
@@ -505,7 +508,10 @@ func render(in *invocation, answer any, err error) machine.Code {
 		}
 		return exitFor(answer)
 	}
-	readOut(env.Stdout, answer)
+	if err := readOut(env.Stdout, answer); err != nil {
+		writeln(env.Stderr, err)
+		return machine.ExitFailure
+	}
 	return exitFor(answer)
 }
 

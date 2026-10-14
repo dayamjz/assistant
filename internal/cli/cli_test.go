@@ -268,8 +268,7 @@ func TestTheHumanRenderingShowsTheDecisionAndHowToAnswerIt(t *testing.T) {
 	}
 	for _, want := range []string{
 		"Waiting on you",
-		"Options: approved, skipped, cancelled",
-		"assistant --answer approved",
+		"assistant --answer followed by one of: approved, skipped, cancelled",
 		// The finding behind the hold, in full: the run stops at the test
 		// stage, which holds wherever the configuration names no test
 		// command, and these homes configure none.
