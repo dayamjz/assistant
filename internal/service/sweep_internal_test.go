@@ -6,14 +6,62 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/dayamjz/assistant/internal/agents"
+	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/store"
 )
+
+// requireSweepClearsHere skips the test, recording the limit, when this
+// host refuses every sweep: the real sweep of an empty task copy of a home
+// created for the purpose does not clear, and what keeps it from clearing
+// is only processes whose working directory it cannot read and which
+// neither of agents.Sweeper's carve-outs sets aside. Nothing was started in
+// that copy, so they are processes of this host outside it, and every
+// relaunch and every dispatch retry here is refused before its claim while
+// they run, which is P6's refusal working. unestablished names what the
+// test would have established. A platform with no sweep, and a host whose
+// empty copy sweeps clear, run the test; any other answer from the empty
+// copy fails it, because it is not the host's standing refusal.
+func requireSweepClearsHere(t *testing.T, unestablished string) {
+	t.Helper()
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	h, err := home.Open(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id, err := home.NewTaskID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir, err := h.TaskCopy(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	r, err := agents.NewSweeper(h, 0, nil).Sweep(t.Context(), dir)
+	switch {
+	case errors.Is(err, agents.ErrSweepUnsupported), err == nil && r.Clear():
+		return
+	case err != nil:
+		t.Fatalf("sweeping an empty copy for the host's baseline: %v", err)
+	case len(r.Ended)+len(r.Exited)+len(r.Replaced)+len(r.Survived)+len(r.Unverified) != 0 || len(r.UnreadableBlocking) == 0:
+		t.Fatalf("the sweep of an empty copy did %s (%+v), want it clear or blocked only by processes whose working directory it cannot read", r, r)
+	}
+	t.Skipf("this host has %d process(es) outside any copy under test whose working directory this service cannot read and "+
+		"which neither of agents.Sweeper's carve-outs sets aside, so every sweep here refuses to clear, as P6 requires, and "+
+		"%s is not established here", len(r.UnreadableBlocking), unestablished)
+}
 
 // relaunchedDetail is the detail of the task's newest "relaunched" note, and
 // fails the test when there is none.
@@ -66,6 +114,7 @@ func TestAnUnsupportedSweepRelaunchesUnprovenAndSaysSo(t *testing.T) {
 		t.Logf("%s has no sweep, so the control's swept reading is not established here", runtime.GOOS)
 		return
 	}
+	requireSweepClearsHere(t, "the control, a relaunch whose note says the copy was swept,")
 	if _, err := control.restart.relaunchTask(t.Context(), control.task); err != nil {
 		t.Fatalf("relaunching the control: %v", err)
 	}
@@ -106,6 +155,7 @@ func TestAFailedSweepRefusesTheRelaunchBeforeTheClaim(t *testing.T) {
 // says the copy was reclaimed from whatever was in it. The wait is on the
 // process's own exit, not on any record.
 func TestARelaunchReclaimsTheCopyFromAProcessLeftInIt(t *testing.T) {
+	requireSweepClearsHere(t, "a relaunch reclaiming its copy from a process left in it")
 	sub := newRelaunchSubject(t)
 	if _, err := agents.NewSweeper(sub.restart.home, 0, nil).Sweep(t.Context(), sub.copy); errors.Is(err, agents.ErrSweepUnsupported) {
 		t.Skipf("%s has no sweep, so a relaunch reclaiming its copy is not established here: %v", runtime.GOOS, err)

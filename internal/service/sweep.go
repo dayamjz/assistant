@@ -28,14 +28,14 @@ import (
 //
 //   - Clear: the sweep listed, everything it found under the copy was ended,
 //     nothing it could read was left undecided, and every process whose
-//     working directory it was refused fell under one of agents.Sweeper's
-//     two carve-outs. The worker is started,
+//     working directory it could not read fell under one of
+//     agents.Sweeper's two carve-outs. The worker is started,
 //     and the relaunch's note and the log say what was ended. That includes
 //     anything a person had running there, a shell among it, because the
 //     sweep's scope is the directory and nothing else, and the words say the
 //     copy was reclaimed from whatever was in it.
 //   - Unsupported: agents.ErrSweepUnsupported, which is every platform but
-//     Linux. The worker is started as it was before the sweep existed, and
+//     Linux and macOS. The worker is started as it was before the sweep existed, and
 //     the note and the log say that nothing was looked for and nothing is
 //     proven. That is PRD section 11's proof left undone on that platform,
 //     stated rather than closed.
@@ -46,16 +46,20 @@ import (
 //     checkout among them, and a copy the assertion would pass is refused
 //     after it as not isolated, recorded on the new attempt, rather than
 //     given a worker unswept.
-//   - Anything else: the listing failed, something under the copy survived
-//     the forceful step or could not be decided, or a process whose working
-//     directory was refused falls under neither carve-out, a process of this
-//     service's own user among them, and so could be standing in the copy. The caller refuses with
-//     *copyUnswept before the claim, nothing is recorded, and the next pass
-//     asks again: the next start for a relaunch, the next dispatch pass for
-//     a dispatch.
+//   - Anything else: the listing failed, lsof missing or refused on macOS
+//     among it, something under the copy survived the forceful step or
+//     could not be decided, or a process whose working directory could not
+//     be read falls under neither carve-out, a process of this service's own
+//     user among them, and so could be standing in the copy. The caller
+//     refuses with *copyUnswept before the claim, nothing is recorded, and
+//     the next pass asks again: the next start for a relaunch, the next
+//     dispatch pass for a dispatch. A host with such a process anywhere off
+//     this service's parent chain refuses every relaunch and every retried
+//     dispatch while it runs, wherever it stands, which is the strict rule
+//     paying for the proof rather than a gap in it.
 //
-// What Clear does not cover is agents.Sweeper's to state: a refused process
-// one of its carve-outs sets aside, an ancestor of this service or another
+// What Clear does not cover is agents.Sweeper's to state: an unreadable
+// process one of its carve-outs sets aside, an ancestor of this service or another
 // user's process this service may not signal, is counted and not looked at,
 // and a process that left the copy before the listing is not seen.
 //
@@ -137,6 +141,6 @@ func unreadable(r agents.SweepResult) string {
 	if r.Unreadable == 0 {
 		return ""
 	}
-	return fmt.Sprintf(" (%d process(es) whose working directory this service may not read were not looked at; "+
+	return fmt.Sprintf(" (%d process(es) whose working directory this service could not read were not looked at; "+
 		"each is an ancestor of this service or another user's process this service may not signal)", r.Unreadable)
 }

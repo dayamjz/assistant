@@ -133,9 +133,9 @@ import (
 //   - A dead terminal proves the terminal is gone, not that nothing is still
 //     writing in the copy: a detached descendant can outlive its leader. The
 //     table decides on the dead reading, and relaunch.go then asks the sweep
-//     of the copy before it claims, on sweep.go's terms: on Linux the copy is
-//     swept and a sweep that does not clear it refuses the relaunch, and on
-//     every other platform agents.ErrSweepUnsupported is the answer, the
+//     of the copy before it claims, on sweep.go's terms: on Linux and macOS
+//     the copy is swept and a sweep that does not clear it refuses the
+//     relaunch, and on every other platform agents.ErrSweepUnsupported is the answer, the
 //     relaunch goes into the copy on the dead reading alone as it did before
 //     the sweep existed, and its note and log say nothing was proven. This
 //     file does not say "prove" for that platform.

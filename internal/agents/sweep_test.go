@@ -14,9 +14,10 @@ import (
 // TestAnUnsupportedSweepCannotReadAsEmpty holds the one answer a platform
 // without a listing gives, on every platform: the zero SweepResult is not
 // clear, so a caller that ignores the error cannot read it as nothing found,
-// and a sweep of a real copy either lists, on Linux, or answers
+// and a sweep of a real copy either lists, on Linux and macOS, or answers
 // ErrSweepUnsupported beside the zero result everywhere else.
 func TestAnUnsupportedSweepCannotReadAsEmpty(t *testing.T) {
+	listed := map[string]bool{"linux": true, "darwin": true}
 	if (agents.SweepResult{}).Clear() {
 		t.Fatal("the zero SweepResult reads clear, so an unsupported sweep with its error dropped would read as nothing found")
 	}
@@ -42,15 +43,15 @@ func TestAnUnsupportedSweepCannotReadAsEmpty(t *testing.T) {
 	r, err := agents.NewSweeper(h, 0, nil).Sweep(t.Context(), copyDir)
 	switch {
 	case errors.Is(err, agents.ErrSweepUnsupported):
-		if runtime.GOOS == "linux" {
-			t.Fatalf("Linux answered %v; its listing is the one this package ships", err)
+		if listed[runtime.GOOS] {
+			t.Fatalf("%s answered %v; it has a listing this package ships", runtime.GOOS, err)
 		}
 		if r.Clear() || len(r.Ended) != 0 || r.Dir != "" {
 			t.Fatalf("an unsupported sweep returned %+v beside its error, want the zero result", r)
 		}
 	case err == nil:
-		if runtime.GOOS != "linux" {
-			t.Fatalf("%s swept %s, but only Linux has a verified listing", runtime.GOOS, copyDir)
+		if !listed[runtime.GOOS] {
+			t.Fatalf("%s swept %s, but only Linux and macOS have a listing", runtime.GOOS, copyDir)
 		}
 	default:
 		t.Fatalf("sweeping an empty copy: %v", err)

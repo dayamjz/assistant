@@ -1,3 +1,5 @@
+//go:build linux || darwin
+
 package agents_test
 
 import (
@@ -5,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"slices"
-	"strconv"
 	"syscall"
 	"testing"
 
@@ -13,29 +14,17 @@ import (
 	"github.com/dayamjz/assistant/internal/principles"
 )
 
-// realRefusal is the error a real read of a process's cwd link returned when
-// it was refused, found by reading the links /proc lists until one is
-// refused. The test skips, saying so, where no link is refused, because a
-// refusal it wrote itself would be a shape it stated rather than one the
-// reader produced.
-func realRefusal(t *testing.T) *os.PathError {
+// realRefusal is a real unreadable working directory on this platform,
+// as agents.RealRefusal finds one. The test skips, saying so, where none is,
+// because a refusal it wrote itself would be a shape it stated rather than
+// one the reader produced.
+func realRefusal(t *testing.T) agents.Refusal {
 	t.Helper()
-	entries, err := os.ReadDir("/proc")
-	if err != nil {
-		t.Fatal(err)
+	refusal, ok := agents.RealRefusal(t.Context())
+	if !ok {
+		t.Skip("no process's working directory is unreadable to this test here, so there is no real refusal to carry over and the classification of a refused process is not established through the listing")
 	}
-	for _, entry := range entries {
-		if _, err := strconv.Atoi(entry.Name()); err != nil {
-			continue
-		}
-		_, err := os.Readlink("/proc/" + entry.Name() + "/cwd")
-		var refusal *os.PathError
-		if errors.Is(err, os.ErrPermission) && errors.As(err, &refusal) {
-			return refusal
-		}
-	}
-	t.Skip("no process's working directory is refused to this test here, so there is no real refusal to carry over and the classification of a refused process is not established through the listing")
-	return nil
+	return refusal
 }
 
 // TestAnUnreadableProcessOfThisUserInTheCopyKeepsTheSweepFromClearing
@@ -46,11 +35,14 @@ func realRefusal(t *testing.T) *os.PathError {
 // in the copy, every read the listing makes of it is real but the one
 // refused, and that refusal is carried over from a real refused read. It is
 // never signalled. The control is the same sweep with the read allowed,
-// which finds the process, ends it and clears.
+// which finds the process, ends it and clears. The refusal half runs on
+// every host; the control's clear is asserted only where an empty copy's
+// sweep clears, and is otherwise recorded as a limit by hostLimit.
 func TestAnUnreadableProcessOfThisUserInTheCopyKeepsTheSweepFromClearing(t *testing.T) {
 	principles.Cite(t, principles.P6)
 	requiresSweep(t)
 	refusal := realRefusal(t)
+	blockers := hostBlockers(t)
 	ctx := t.Context()
 	h, _ := sweepHome(t, sweepBase(t), "home")
 	copyDir := makeTaskCopy(t, h)
@@ -70,10 +62,12 @@ func TestAnUnreadableProcessOfThisUserInTheCopyKeepsTheSweepFromClearing(t *test
 	requirePresent(t, d, "a process whose working directory the sweep was refused")
 
 	control, err := sweeper.Sweep(ctx, copyDir)
-	if err != nil || !control.Clear() || !slices.Contains(control.Ended, d.id) {
-		t.Fatalf("the same sweep with the read allowed did %s, %v, want it clear with %s ended", control, err, d.id)
+	if err != nil || !slices.Contains(control.Ended, d.id) {
+		t.Fatalf("the same sweep with the read allowed did %s, %v, want %s ended", control, err, d.id)
 	}
+	requireClearUnlessHostBlocks(t, control, blockers, "the same sweep with the read allowed")
 	waitEnded(t, d, "the control sweep")
+	hostLimit(t, blockers, "that the control sweep, with the read allowed, clears")
 }
 
 // TestAnUnreadableAncestorDoesNotKeepTheSweepFromClearing holds the first
@@ -82,10 +76,13 @@ func TestAnUnreadableProcessOfThisUserInTheCopyKeepsTheSweepFromClearing(t *test
 // process is this test's real parent, which the parent chain finds by
 // identity. Where the environment itself refuses a link, as a container's
 // init can be refused to a service running as its user, that refusal is
-// read for real alongside.
+// read for real alongside. That the refused parent is counted and not
+// blocking is asserted on every host; that the sweep then clears is
+// asserted only where an empty copy's sweep clears.
 func TestAnUnreadableAncestorDoesNotKeepTheSweepFromClearing(t *testing.T) {
 	requiresSweep(t)
 	refusal := realRefusal(t)
+	blockers := hostBlockers(t)
 	parent, present, err := agents.Identify(os.Getppid())
 	if err != nil || !present || !slices.Contains(agents.Ancestry(), parent) {
 		t.Fatalf("this test's parent %d reads %+v, %v, %v, and the parent chain is %v; want it found there", os.Getppid(), parent, present, err, agents.Ancestry())
@@ -93,9 +90,11 @@ func TestAnUnreadableAncestorDoesNotKeepTheSweepFromClearing(t *testing.T) {
 	h, _ := sweepHome(t, sweepBase(t), "home")
 	copyDir := makeTaskCopy(t, h)
 	r, err := agents.SweepRefusing(t.Context(), agents.NewSweeper(h, sweepGrace, nil), copyDir, func(pid int) bool { return pid == parent.PID }, refusal)
-	if err != nil || !r.Clear() || r.Unreadable < 1 || slices.Contains(r.UnreadableBlocking, parent) {
-		t.Fatalf("the sweep refused the working directory of this test's parent %s and did %s, %v (%+v), want it clear with the refusal counted", parent, r, err, r)
+	if err != nil || r.Unreadable < 1 || slices.Contains(r.UnreadableBlocking, parent) {
+		t.Fatalf("the sweep refused the working directory of this test's parent %s and did %s, %v (%+v), want the refusal counted and not blocking", parent, r, err, r)
 	}
+	requireClearUnlessHostBlocks(t, r, blockers, "the sweep with this test's parent refused")
+	hostLimit(t, blockers, "that a sweep whose only refused process in reach is an ancestor clears")
 }
 
 // TestARefusedProcessIsSetAsideOnlyWhenItSharesNoUserAndRefusesASignal holds
@@ -127,7 +126,7 @@ func TestARefusedProcessIsSetAsideOnlyWhenItSharesNoUserAndRefusesASignal(t *tes
 
 // foreignProcess is a running process sharing no user with this test and
 // not on its parent chain: started as another user where this test may do
-// that, and otherwise the first such process /proc lists, where the
+// that, and otherwise the first such process the process table lists, where the
 // set-aside half of the assertion then restates the selection and only the
 // blocking half discriminates. It skips, saying
 // so, where there is neither.
@@ -142,13 +141,12 @@ func foreignProcess(t *testing.T) int {
 		}
 	}
 	ancestors := agents.Ancestry()
-	entries, err := os.ReadDir("/proc")
+	pids, err := agents.ProcessIDs()
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, entry := range entries {
-		pid, err := strconv.Atoi(entry.Name())
-		if err != nil || pid == os.Getpid() {
+	for _, pid := range pids {
+		if pid <= 0 || pid == os.Getpid() {
 			continue
 		}
 		id, present, err := agents.Identify(pid)

@@ -58,7 +58,8 @@ import (
 // internal/session's doc describes: one no record names. The dispatch that
 // retries the task sweeps the standing copy before its claim, on sweep.go's
 // terms, which finds such a process by its working directory on Linux and
-// is agents.ErrSweepUnsupported elsewhere, where the window stays open.
+// macOS and is agents.ErrSweepUnsupported elsewhere, where the window stays
+// open.
 //
 // # What the launch moves, and what it does not
 //

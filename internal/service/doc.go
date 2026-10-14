@@ -425,9 +425,9 @@
 // attempt per service, and a restart dispatches and launches again as a new
 // attempt over the standing copy, which is PRD section 11's relaunch in
 // place by the record's lights; the earlier process, if alive and still in
-// the copy, is ended by the sweep relaunch.go asks of the copy on Linux, or,
-// where its working directory is refused to this service and neither of
-// agents.Sweeper's carve-outs sets it aside, refuses the relaunch until a
+// the copy, is ended by the sweep relaunch.go asks of the copy on Linux and
+// macOS, or, where its working directory cannot be read by this service and
+// neither of agents.Sweeper's carve-outs sets it aside, refuses the relaunch until a
 // later start, and elsewhere is an orphan this service holds no handle to
 // and does not end. An adapter that has not declared worker sessions, which in
 // this build is every shipped adapter, dispatches every task and launches
@@ -437,8 +437,8 @@
 // isolation failure. And between Create returning and the reference being
 // written, a crash leaves a process no record names, which internal/session
 // states; the dispatch that retries the task sweeps the standing copy before
-// it claims, on sweep.go's terms, which ends that process on Linux while it
-// is still in the copy and leaves it standing elsewhere.
+// it claims, on sweep.go's terms, which ends that process on Linux and
+// macOS while it is still in the copy and leaves it standing elsewhere.
 //
 // # A restart reconciles the fleet, and relaunches a dead terminal in place
 //

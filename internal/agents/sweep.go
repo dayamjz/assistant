@@ -12,8 +12,8 @@ import (
 // ErrSweepUnsupported is Sweeper.Sweep's answer on a platform where this
 // package has no verified way to read another process's working directory.
 // It means the sweep could not prove anything, never that it found nothing:
-// no process was looked for and none was signalled. Linux is the one
-// platform with a listing; every other platform answers this.
+// no process was looked for and none was signalled. Linux and macOS are
+// the platforms with a listing; every other platform answers this.
 var ErrSweepUnsupported = errors.New("agents: this platform has no verified listing of process working directories, so no sweep was made")
 
 // SweepResult is what one sweep of one copy did. The zero value is not a
@@ -41,20 +41,24 @@ type SweepResult struct {
 	// when the grace ran out.
 	Survived []Identity
 	// Unverified are identifiers of processes this sweep could not decide
-	// about although it was not refused permission to look: an identity
-	// that could not be read, a working directory whose read failed for any
-	// reason but permission, an identity that changed between the reads the
-	// listing made, or a presence that could not be read before a signal.
-	// None of them was signalled.
+	// about: an identity that could not be read, on Linux a working
+	// directory whose read failed for any reason but permission, an
+	// identity that changed between the reads the listing made, a process
+	// whose working directory could not be read and whose user identifiers
+	// or zero signal could not be read either, or a presence that could not
+	// be read before a signal. None of them was signalled.
 	Unverified []int
-	// Unreadable counts every process whose working directory this process
-	// was refused permission to read, whoever owns them and whether or not
-	// it is in UnreadableBlocking. None was signalled, and the sweep claims
-	// nothing about where any of them runs: they were not looked at.
+	// Unreadable counts every process whose working directory the listing
+	// could not read, whoever owns them and whether or not it is in
+	// UnreadableBlocking: on Linux a cwd link this process was refused
+	// permission to read, and on macOS a running process lsof reported no
+	// working directory for, whatever the reason. None was signalled, and
+	// the sweep claims nothing about where any of them runs: they were not
+	// looked at.
 	Unreadable int
 	// UnreadableBlocking are the processes among Unreadable that keep the
-	// sweep from clearing: every one this process was refused the working
-	// directory of except those Sweeper's comment sets aside, which are
+	// sweep from clearing: every one of them except those Sweeper's comment
+	// sets aside, which are
 	// processes on this process's parent chain and processes sharing no
 	// user with it that refused a zero signal. They could be standing in
 	// Dir and the sweep cannot say, so they are a refusal to clear rather
@@ -69,7 +73,7 @@ type SweepResult struct {
 // Clear reports whether the sweep found nothing still under Dir that it
 // could not account for: the listing completed, nothing survived the
 // forceful step, nothing was left undecided, and no process whose working
-// directory was refused is in UnreadableBlocking. A refused process does
+// directory could not be read is in UnreadableBlocking. Such a process does
 // not make it false only when Sweeper's comment sets it aside, so Clear
 // says nothing about those, which is the sweep's stated carve-out and not
 // a proof about them, and nothing about a process that changed its working
@@ -100,8 +104,8 @@ func (r SweepResult) String() string {
 // that cannot be resolved, such as one that was removed, is compared as the
 // platform reported it. No command line or name is read or matched, and no
 // user or parent puts a process in scope or gets it ended: those are read
-// only to decide whether a process whose working directory was refused
-// keeps the sweep from clearing.
+// only to decide whether a process whose working directory could not be
+// read keeps the sweep from clearing.
 //
 // That scope is a policy, and it is stated here because it is broader than
 // "what an agent left behind": anything running under the copy is ended,
@@ -122,7 +126,7 @@ func (r SweepResult) String() string {
 //     the listing is not found, whatever files it holds open in it.
 //   - A process started under the copy after its entry was read is not
 //     found; the sweep is a pass over a moment, not a lock on the copy.
-//   - A process whose working directory this process may not read is
+//   - A process whose working directory the listing could not read is
 //     counted Unreadable and never ended. It keeps the sweep from clearing,
 //     listed in UnreadableBlocking, unless it is set aside by one of two
 //     carve-outs, each read rather than assumed. First, a process on this
@@ -135,8 +139,19 @@ func (r SweepResult) String() string {
 //     not end it if it found it. The residual of each is the same shape: a
 //     set-aside process that did stand in the copy, an ancestor that changed
 //     its working directory into it or another user's process that reached
-//     it, is not seen, and Clear says nothing about it.
-//   - Only Linux lists; elsewhere every sweep is ErrSweepUnsupported.
+//     it, is not seen, and Clear says nothing about it. The other side of
+//     the same rule: a host with a process off this process's parent chain
+//     whose working directory cannot be read and that shares a user with
+//     this process, or, when this process runs as root, answers its zero
+//     signal, refuses every sweep there until that process is gone, wherever
+//     it stands.
+//   - Linux lists from /proc. macOS lists the process table through
+//     kern.proc.all and reads every working directory with one run of
+//     /usr/sbin/lsof, so a sweep there fails when that program is missing
+//     or its run is refused, and fails rather than compares for a copy whose
+//     path holds a byte listUnder names; a process lsof reports no working
+//     directory for is read as unreadable whatever the reason was. Every
+//     other platform answers ErrSweepUnsupported.
 type Sweeper struct {
 	home   *home.Home
 	grace  time.Duration
@@ -197,7 +212,7 @@ func (s *Sweeper) SweepUnder(ctx context.Context, dir string) {
 
 // listing is what a platform's listUnder found: the identities of the
 // processes under the directory, the identifiers it could not decide about,
-// how many processes' working directories it was refused, and which of
+// how many processes' working directories it could not read, and which of
 // those it could not set aside.
 type listing struct {
 	under      []Identity

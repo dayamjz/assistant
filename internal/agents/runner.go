@@ -159,7 +159,7 @@ type Fixer interface {
 // that puts itself in a new group escapes that, and finding it again needs a
 // scan of the machine's processes matched on the isolated copy their working
 // directory resolves under, never on their command line. Sweeper is that
-// scan on Linux and answers ErrSweepUnsupported everywhere else.
+// scan on Linux and macOS and answers ErrSweepUnsupported everywhere else.
 //
 // A runner built WithSweep calls SweepUnder after the process tree of every
 // invocation has been terminated, giving it that invocation's working

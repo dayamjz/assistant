@@ -44,6 +44,55 @@ func requiresSweep(t *testing.T) {
 	}
 }
 
+// hostBlockers sweeps an empty task copy of a home of its own, created for
+// the purpose, and returns how many processes keep that sweep from
+// clearing. Nothing was started in the copy, so every one of them is a
+// process of this host outside it: one whose working directory this test
+// cannot read and which neither of Sweeper's carve-outs sets aside. Such a
+// host refuses every sweep while they run, which is P6's refusal working,
+// and a test that would assert a clear sweep there can establish only the
+// rest of what it checks. Any other answer from the empty copy fails the
+// test, because it is not the host's standing refusal.
+func hostBlockers(t *testing.T) int {
+	t.Helper()
+	h, _ := sweepHome(t, sweepBase(t), "baseline")
+	dir := makeTaskCopy(t, h)
+	r, err := agents.NewSweeper(h, sweepGrace, nil).Sweep(t.Context(), dir)
+	switch {
+	case err != nil:
+		t.Fatalf("sweeping an empty copy for the host's baseline: %v", err)
+	case r.Clear():
+		return 0
+	case len(r.Ended)+len(r.Exited)+len(r.Replaced)+len(r.Survived)+len(r.Unverified) != 0 || len(r.UnreadableBlocking) == 0:
+		t.Fatalf("the sweep of an empty copy did %s (%+v), want it clear or blocked only by processes whose working directory it cannot read", r, r)
+	}
+	return len(r.UnreadableBlocking)
+}
+
+// requireClearUnlessHostBlocks fails the test unless r left nothing it
+// could read survived or undecided, and, where hostBlockers found none on
+// this host, unless r is clear.
+func requireClearUnlessHostBlocks(t *testing.T, r agents.SweepResult, blockers int, what string) {
+	t.Helper()
+	if len(r.Survived) != 0 || len(r.Unverified) != 0 {
+		t.Fatalf("%s did %s (%+v), want nothing survived or left undecided", what, r, r)
+	}
+	if blockers == 0 && !r.Clear() {
+		t.Fatalf("%s did %s (%+v) on a host whose empty copy sweeps clear, want it clear", what, r, r)
+	}
+}
+
+// hostLimit ends a test that has asserted everything else it checks by
+// skipping, with the limit recorded, when hostBlockers found processes on
+// this host that refuse every sweep: unestablished is the clear the test
+// could not assert. It does nothing where there were none.
+func hostLimit(t *testing.T, blockers int, unestablished string) {
+	t.Helper()
+	if blockers > 0 {
+		t.Skipf("this host has %d process(es) outside the copies under test whose working directory this test cannot read and which neither of Sweeper's carve-outs sets aside, so every sweep here refuses to clear, as P6 requires; %s is not established here, and everything else this test checks was", blockers, unestablished)
+	}
+}
+
 // sweepBase is a fresh temporary directory for the test, resolved, so the
 // homes a test opens under it share one parent.
 func sweepBase(t *testing.T) string {
@@ -193,8 +242,12 @@ func mentions(r agents.SweepResult, id agents.Identity) bool {
 // The positive control is the listing over the directory the three share:
 // it finds all three, so their command line and their detachment are no
 // reason they were left alone, and the directory is.
+//
+// That the sweep clears is asserted only where an empty copy's sweep
+// clears; elsewhere hostLimit records it as the one thing not established.
 func TestASweepEndsADetachedDescendantUnderTheCopyAndNothingElse(t *testing.T) {
 	requiresSweep(t)
+	blockers := hostBlockers(t)
 	ctx := t.Context()
 	base := sweepBase(t)
 	h, root := sweepHome(t, base, "home")
@@ -234,9 +287,10 @@ func TestASweepEndsADetachedDescendantUnderTheCopyAndNothingElse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sweeping %s: %v", target, err)
 	}
-	if !r.Clear() || len(r.Ended) != 1 || r.Ended[0] != inTarget.id || r.Dir != target {
-		t.Fatalf("the sweep of %s did %s (%+v), want a clear sweep that ended %s", target, r, r, inTarget.id)
+	if len(r.Ended) != 1 || r.Ended[0] != inTarget.id || r.Dir != target {
+		t.Fatalf("the sweep of %s did %s (%+v), want a sweep that ended %s", target, r, r, inTarget.id)
 	}
+	requireClearUnlessHostBlocks(t, r, blockers, "the sweep of "+target)
 	waitEnded(t, inTarget, "the process under the swept copy was reported ended")
 	for _, d := range []detached{inNeighbour, inElsewhere} {
 		if mentions(r, d.id) {
@@ -246,9 +300,11 @@ func TestASweepEndsADetachedDescendantUnderTheCopyAndNothingElse(t *testing.T) {
 	}
 
 	again, err := agents.NewSweeper(h, sweepGrace, nil).Sweep(ctx, target)
-	if err != nil || !again.Clear() || len(again.Ended) != 0 {
-		t.Fatalf("a second sweep of %s did %s, %v, want clear with nothing ended", target, again, err)
+	if err != nil || len(again.Ended) != 0 {
+		t.Fatalf("a second sweep of %s did %s, %v, want nothing ended", target, again, err)
 	}
+	requireClearUnlessHostBlocks(t, again, blockers, "a second sweep of "+target)
+	hostLimit(t, blockers, "that a sweep which ended everything under its copy clears")
 }
 
 // TestASweepRefusesADirectoryThatIsNotOneOfItsHomesCopies holds the scope at

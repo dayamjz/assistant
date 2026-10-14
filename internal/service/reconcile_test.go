@@ -75,6 +75,7 @@ func launchedAndEnded(t *testing.T, h *home.Home, id string) session.Reference {
 // dead session is acknowledged by the program, and a hold wake stays queued
 // for the coordinator.
 func TestARestartRelaunchesADeadTerminalInPlace(t *testing.T) {
+	service.RequireSweepClearsHere(t, "a restart relaunching a dead terminal in place")
 	h := newHome(t)
 	subject := newSubject(t)
 	quietMaintenance(t, subject)

@@ -314,14 +314,16 @@ Each has cost this repository more than one round of review.
   leader, and then only by group identifier, never by pattern. `Sweeper` is
   the identity-based sweep: it ends what runs in one copy `home.CopyAt`
   accepts, matched by working directory and never by command line, and lists
-  only on Linux; elsewhere `ErrSweepUnsupported` means "could not prove",
+  on Linux from `/proc` and on macOS from the process table plus one
+  `/usr/sbin/lsof` run, a reading helper rather than an agent; elsewhere
+  `ErrSweepUnsupported` means "could not prove",
   and its zero `SweepResult` is not `Clear`, so never read it as "none
   found". Read its `doc.go` for the residual gaps: a capability whose row
   has no probe is taken at its word, an identity narrows PID reuse rather
   than closing it, and a sweep sees neither a process that left the copy nor
-  one whose working directory it may not read, so an unreadable one blocks
+  one whose working directory it cannot read, so an unreadable one blocks
   `Clear` unless it is an ancestor or another user's process it may not
-  signal.
+  signal, and a host with such a blocker refuses every sweep until it goes.
 - `internal/agents/standin` is the scripted agent the tests outside
   `internal/agents` run against. It implements no `agents` interface and builds
   no `agents.Result`: it prints bytes and exits with a status, and the real

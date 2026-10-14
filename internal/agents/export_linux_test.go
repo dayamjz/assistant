@@ -2,9 +2,35 @@ package agents
 
 import (
 	"context"
+	"errors"
 	"os"
 	"strconv"
 )
+
+// Refusal is a real refused read of a working directory on this platform:
+// the *os.PathError reading a process's cwd link returned when it was
+// refused.
+type Refusal = *os.PathError
+
+// RealRefusal reads the cwd links /proc lists until one is refused, and
+// returns that refusal. ok is false where none is.
+func RealRefusal(context.Context) (Refusal, bool) {
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return nil, false
+	}
+	for _, entry := range entries {
+		if _, err := strconv.Atoi(entry.Name()); err != nil {
+			continue
+		}
+		_, err := os.Readlink("/proc/" + entry.Name() + "/cwd")
+		var refusal *os.PathError
+		if errors.Is(err, os.ErrPermission) && errors.As(err, &refusal) {
+			return refusal, true
+		}
+	}
+	return nil, false
+}
 
 // SweepRefusing is Sweeper.Sweep with every read the listing makes real
 // except one: the cwd link of a process refuse names answers refusal, the
@@ -13,7 +39,7 @@ import (
 // working directory on demand, and this is the one read a test cannot make
 // it refuse, so the shape is carried over from a real refusal rather than
 // stated.
-func SweepRefusing(ctx context.Context, s *Sweeper, dir string, refuse func(pid int) bool, refusal *os.PathError) (SweepResult, error) {
+func SweepRefusing(ctx context.Context, s *Sweeper, dir string, refuse func(pid int) bool, refusal Refusal) (SweepResult, error) {
 	return s.sweep(ctx, dir, func(ctx context.Context, d string) (listing, error) {
 		return listUnderReading(ctx, d, func(pid int) (string, error) {
 			if refuse(pid) {
@@ -24,21 +50,17 @@ func SweepRefusing(ctx context.Context, s *Sweeper, dir string, refuse func(pid 
 	})
 }
 
-// ClassifyRefused is the decision the listing makes about pid were its
-// working directory refused, from pid's real identity and status entry and
-// this process's real viewer, with signal standing for the zero signal's
-// answer.
-func ClassifyRefused(pid int, signal error) (bool, error) {
-	id, _, err := Identify(pid)
+// ProcessIDs lists the identifiers of the numbered entries in /proc.
+func ProcessIDs() ([]int, error) {
+	entries, err := os.ReadDir("/proc")
 	if err != nil {
-		return false, err
+		return nil, err
 	}
-	uids, _, err := statusUids(pid)
-	if err != nil {
-		return false, err
+	var pids []int
+	for _, entry := range entries {
+		if pid, err := strconv.Atoi(entry.Name()); err == nil {
+			pids = append(pids, pid)
+		}
 	}
-	return currentViewer().blocks(refused{id: id, uids: uids, signal: signal}), nil
+	return pids, nil
 }
-
-// Ancestry exposes the parent chain the listing sets aside.
-func Ancestry() []Identity { return ancestry(os.Getpid()) }

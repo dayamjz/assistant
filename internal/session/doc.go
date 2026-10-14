@@ -149,7 +149,7 @@
 // whose record does name it is observable but not reachable. Only an
 // identity-based sweep reaches either, and that is agents.Sweeper's and not
 // this package's: internal/service asks it of the standing copy before it
-// starts another worker there, and it lists only on Linux.
+// starts another worker there, and it lists only on Linux and macOS.
 //
 // # Residual gaps
 //
