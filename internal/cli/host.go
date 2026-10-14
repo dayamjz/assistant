@@ -146,20 +146,24 @@ var hostHooks = []struct {
 // line is one a host's configuration holds rather than one a person types,
 // and requiring the subcommand first removes the ambiguity a scan for it
 // would have.
+//
+// --help where the subcommand belongs is answered with the subcommand table,
+// and anything else there, or nothing, is incorrect usage on gateVerb's terms.
 func hostVerb(ctx context.Context, in *invocation) (any, error) {
-	if len(in.args) == 0 {
-		return nil, usagef("assistant host needs one of: %s", strings.Join(hostHookNames(), ", "))
-	}
-	named := in.args[0]
-	for _, hook := range hostHooks {
-		if named != hook.name {
-			continue
+	if len(in.args) > 0 {
+		named := in.args[0]
+		for _, hook := range hostHooks {
+			if named != hook.name {
+				continue
+			}
+			in.args = in.args[1:]
+			return hook.run(ctx, in)
 		}
-		in.args = in.args[1:]
-		return hook.run(ctx, in)
+		if isHelp(named) {
+			return nil, subcommandHelp(hostVerbName, hostUsage())
+		}
 	}
-	return nil, usagef("assistant host %s names none of: %s, which come first after the verb",
-		named, strings.Join(hostHookNames(), ", "))
+	return nil, subcommandRefusal(hostVerbName, in.args, hostHookNames())
 }
 
 // hostHookNames is the subcommands read out, for a refusal that says what was

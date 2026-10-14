@@ -1145,6 +1145,34 @@ func LifecyclePhrase(l Lifecycle) Phrase {
 	}
 }
 
+// subcommandsPlaceholder stands in for a command's subcommands in
+// SubcommandPhrase's row when it is listed without them, as TablePhrases
+// lists it.
+const subcommandsPlaceholder = "the subcommands it takes"
+
+// SubcommandPhrase is what a person reads when a command that does its work
+// through a subcommand was given none of its subcommands: given says whether
+// a word stood where one belongs, and subcommands are the ones it takes, in
+// the order the command's table holds them. The decision names them, because
+// they are the words a person types next, and says --help lists what each
+// one does. It is the refusal's sentence and decides nothing about the exit
+// code, which is the caller's.
+func SubcommandPhrase(given bool, subcommands []string) Phrase {
+	listed := strings.Join(subcommands, ", ")
+	if strings.TrimSpace(listed) == "" {
+		listed = subcommandsPlaceholder
+	}
+	outcome := "Nothing was done, because this command needs a subcommand to say what to do and was given none."
+	if given {
+		outcome = "Nothing was done, because this command needs a subcommand to say what to do and none it takes was given."
+	}
+	return Phrase{
+		Outcome:     outcome,
+		Consequence: "Nothing changed.",
+		Decision:    "Repeat it with one of " + listed + " right after the command; --help lists what each one does.",
+	}
+}
+
 // InitPhrase is what a person reads once a gate was created or reattached for
 // their checkout. The next decision names the remote a change is sent to,
 // which is internal/gate's, because sending a branch there is how a person
@@ -1275,7 +1303,8 @@ var PhraseNoReading = Phrase{
 // rows for an answer to a task's hold and the two cleanup rows, the
 // stream's four, the status rows, and the rows for the rest of the command
 // surface: a decision and a fix round's offer, a row per doctor check and
-// result and the verdict, the service lifecycle, a gate created, reattached
+// result and the verdict, the service lifecycle, the two rows for a command
+// given none of its subcommands, a gate created, reattached
 // and removed, the gate's own rows, and the rows pointing at a run's evidence
 // and the two notices beside it, and the catch-up read's: a heading and an
 // empty row per part, a row per kind of landed record, the row for what a
@@ -1321,6 +1350,7 @@ func TablePhrases() []Phrase {
 	}
 	out = append(out, phraseCheckUnfamiliar, phraseRunCanStart, phraseRunCannotStart)
 	out = append(out, LifecyclePhrase(Lifecycle{Accepted: true, Restarting: true}), LifecyclePhrase(Lifecycle{Accepted: true}), LifecyclePhrase(Lifecycle{}))
+	out = append(out, SubcommandPhrase(false, nil), SubcommandPhrase(true, nil))
 	out = append(out, InitPhrase(Init{}), InitPhrase(Init{Reattached: true}), EjectPhrase(Eject{Removed: true}), EjectPhrase(Eject{}))
 	out = append(out, PhraseAdmitted, PhraseValidationBegun, PhraseSupersededEarlier, PhraseNothingStartedFor, PhraseNothingSent, PhraseNoReading)
 	out = append(out, PhraseCopyBusy, PhraseCopyStillBusy)

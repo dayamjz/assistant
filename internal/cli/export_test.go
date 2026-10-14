@@ -15,3 +15,21 @@ func ShortenReceiveWait(t *testing.T, d time.Duration) {
 	receiveWait = d
 	t.Cleanup(func() { receiveWait = was })
 }
+
+// Subcommands is each verb that takes a subcommand and its table, read from
+// the tables the verbs dispatch on, as name and summary pairs in table
+// order, so a test holds a verb's help to every row it dispatches rather than
+// to a list written beside it.
+func Subcommands() map[string][][2]string {
+	out := map[string][][2]string{}
+	for _, action := range serviceActions {
+		out["service"] = append(out["service"], [2]string{action.name, action.summary})
+	}
+	for _, hook := range gateHooks {
+		out[gateVerbName] = append(out[gateVerbName], [2]string{hook.name, hook.summary})
+	}
+	for _, hook := range hostHooks {
+		out[hostVerbName] = append(out[hostVerbName], [2]string{hook.name, hook.summary})
+	}
+	return out
+}

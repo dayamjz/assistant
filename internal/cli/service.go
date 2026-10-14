@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -32,17 +33,20 @@ const readyPoll = 25 * time.Millisecond
 // there are: it names the subcommand a command line holds and it runs the one
 // that was named.
 var serviceActions = []struct {
-	name string
-	run  func(context.Context, *invocation) (any, error)
+	name    string
+	summary string
+	run     func(context.Context, *invocation) (any, error)
 }{
-	{"start", startService},
-	{"stop", func(ctx context.Context, in *invocation) (any, error) {
-		return stopService(ctx, in, ipc.MethodServiceStop)
-	}},
-	{"restart", func(ctx context.Context, in *invocation) (any, error) {
-		return stopService(ctx, in, ipc.MethodServiceRestart)
-	}},
-	{"status", serviceStatus},
+	{"start", "Launch the service in the background and wait until it answers a readiness check.", startService},
+	{"stop", "Stop the service; refused while runs are active unless --force is given.",
+		func(ctx context.Context, in *invocation) (any, error) {
+			return stopService(ctx, in, ipc.MethodServiceStop)
+		}},
+	{"restart", "Stop the service and wait for its replacement to answer; refused while runs are active unless --force is given.",
+		func(ctx context.Context, in *invocation) (any, error) {
+			return stopService(ctx, in, ipc.MethodServiceRestart)
+		}},
+	{"status", "Report whether the service answers a readiness check.", serviceStatus},
 }
 
 // serviceVerb runs the subcommand the command line names.
@@ -50,7 +54,12 @@ var serviceActions = []struct {
 // The subcommand is taken from wherever it stands rather than from the first
 // argument, so a global flag written between the verb and it is a flag and not
 // a subcommand nobody recognizes. What is left is the subcommand's to parse,
-// with the flags around it still in the order they were written.
+// with the flags around it still in the order they were written, so --help
+// written beside a subcommand is that subcommand's and lists its flags.
+//
+// With no subcommand, --help anywhere after the verb is answered with the
+// subcommand table, and anything else is incorrect usage phrased as what the
+// verb needs and the subcommands to choose from.
 func serviceVerb(ctx context.Context, in *invocation) (any, error) {
 	for _, action := range serviceActions {
 		for i, arg := range in.args {
@@ -61,10 +70,20 @@ func serviceVerb(ctx context.Context, in *invocation) (any, error) {
 			return action.run(ctx, in)
 		}
 	}
-	if len(in.args) == 0 {
-		return nil, usagef("assistant service needs one of: %s", strings.Join(serviceActionNames(), ", "))
+	if slices.ContainsFunc(in.args, isHelp) {
+		return nil, subcommandHelp("service", serviceUsage())
 	}
-	return nil, usagef("assistant service names none of: %s", strings.Join(serviceActionNames(), ", "))
+	return nil, subcommandRefusal("service", in.args, serviceActionNames())
+}
+
+// serviceUsage is the four read out one line each, for the verb's help.
+func serviceUsage() string {
+	var b strings.Builder
+	b.WriteString("\nSubcommands:\n")
+	for _, action := range serviceActions {
+		fmt.Fprintf(&b, "  %-8s %s\n", action.name, action.summary)
+	}
+	return strings.TrimRight(b.String(), "\n")
 }
 
 // serviceActionNames is the four read out, for a refusal that says what was
