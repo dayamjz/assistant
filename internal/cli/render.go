@@ -223,6 +223,10 @@ var renderings = []rendering{
 	{name: "task answer", voice: VoicePhrased, of: typeOf[machine.TaskAnswered](), render: func(w io.Writer, v any) {
 		writeln(w, machine.TaskAnsweredPhrase(v.(machine.TaskAnswered)))
 	}},
+	{name: "catch up", voice: VoicePhrased, of: typeOf[machine.CatchUp](), render: func(w io.Writer, v any) { readOutCatchUp(w, v.(machine.CatchUp)) }},
+	{name: "marked seen", voice: VoicePhrased, of: typeOf[machine.Marked](), render: func(w io.Writer, v any) {
+		writeln(w, machine.MarkedPhrase(v.(machine.Marked)))
+	}},
 }
 
 // fallback is the row for an answer no row claims. It is not in the table,
@@ -482,6 +486,67 @@ func readOutTasks(w io.Writer, tasks machine.Tasks) {
 // no outcome word, which the phrase table holds to.
 func readOutTask(w io.Writer, task machine.Task) {
 	writef(w, "%s: %s\n", printable(task.Record.Project), printable(machine.TaskPhrase(task).String()))
+}
+
+// readOutCatchUp prints PRD section 9's catching up: the pull guard's
+// warning when there is one, and then the four parts in the read's order,
+// each under its row from the phrase table, or that part's empty row. A
+// task's line is the fleet listing's, the person's project and the task's
+// phrase, so the two cannot read differently; a run's is its branch and its
+// phrase, the decision's row for a run held at one; a hold's is its row,
+// beside the project of the task it names. Landed records past the read's
+// bound are counted on a row of their own. Identifiers, the answer's
+// command line and the records themselves are the structured rendering's,
+// which the rows that need one point at.
+func readOutCatchUp(w io.Writer, c machine.CatchUp) {
+	readOutSupervision(w, c.Supervision)
+	waiting, landed, underWay, stopped := machine.CatchUpPhrases(c)
+	writeln(w, waiting)
+	for _, item := range c.Waiting {
+		writeln(w, waitingLine(item))
+	}
+	writeln(w)
+	writeln(w, landed)
+	for _, l := range c.Landed {
+		writef(w, "%s: %s\n", printable(l.Task.Record.Project), machine.LandedPhrase(l))
+	}
+	if c.MoreLanded > 0 {
+		writeln(w, machine.LandedMorePhrase(c.MoreLanded))
+	}
+	writeln(w)
+	writeln(w, underWay)
+	for _, task := range c.UnderWay.Tasks {
+		readOutTask(w, task)
+	}
+	for _, run := range c.UnderWay.Runs {
+		writef(w, "%s: %s\n", printable(run.Record.Branch), run.Phrase())
+	}
+	writeln(w)
+	writeln(w, stopped)
+	for _, task := range c.Stopped {
+		readOutTask(w, task)
+	}
+}
+
+// waitingLine is one decision waiting on the person: a run's branch and the
+// decision's row with the answers it takes, or a hold's row beside the
+// project of the task it names. The hold's subject is the program's own
+// sentence and the options come off a checkpoint, so the line is escaped.
+func waitingLine(item machine.Waiting) string {
+	switch {
+	case item.Run != nil:
+		phrase := item.Run.Phrase()
+		if item.Run.Decision != nil {
+			phrase = machine.DecisionPhrase(*item.Run.Decision)
+		}
+		return printable(item.Run.Record.Branch) + ": " + printable(phrase.String())
+	case item.Hold != nil && item.Task != nil:
+		return printable(item.Task.Record.Project) + ": " + printable(machine.HoldPhrase(*item.Hold).String())
+	case item.Hold != nil:
+		return printable(machine.HoldPhrase(*item.Hold).String())
+	default:
+		return machine.PhraseUnfamiliarUpdate.String()
+	}
 }
 
 // readOutDoctor prints a row per check and then the verdict, all through

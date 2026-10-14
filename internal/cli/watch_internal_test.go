@@ -281,7 +281,7 @@ func TestAStreamThatFallsBehindRendersTheGapMarker(t *testing.T) {
 }
 
 // assistant watch, without --json, through the surface against the real
-// service: it prints the fleet as it stands and then one line per event,
+// service: it prints the catch-up read and then one line per event,
 // every line through the phrase table, and ends cleanly when interrupted.
 // With --json the same view writes documents that keep the identifiers.
 func TestWatchSpeaksThePhraseTableAndEndsWhenInterrupted(t *testing.T) {
@@ -317,14 +317,15 @@ func TestWatchSpeaksThePhraseTableAndEndsWhenInterrupted(t *testing.T) {
 	documents, _ := watchFor(t, h, func(seen <-chan string) {
 		waitLine(t, seen, "watchedtaska")
 	}, "--json", "watch")
-	var fleet machine.Tasks
+	var fleet machine.CatchUp
 	if err := json.Unmarshal([]byte(documents[0]), &fleet); err != nil {
-		t.Fatalf("the first document is not the fleet: %v\n%s", err, documents[0])
+		t.Fatalf("the first document is not the catch-up read: %v\n%s", err, documents[0])
 	}
 	// The worker moved on above, so the structured view carries the
 	// identifier and the state label the human one keeps out.
-	if len(fleet.Tasks) != 1 || fleet.Tasks[0].Record.ID != "watchedtaska" || fleet.Tasks[0].State.State != taskstate.Running {
-		t.Fatalf("the structured view lost the identifier or the label: %+v", fleet.Tasks)
+	under := fleet.UnderWay.Tasks
+	if len(under) != 1 || under[0].Record.ID != "watchedtaska" || under[0].State.State != taskstate.Running {
+		t.Fatalf("the structured view lost the identifier or the label: %+v", under)
 	}
 }
 

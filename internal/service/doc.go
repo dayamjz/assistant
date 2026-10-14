@@ -380,7 +380,9 @@
 // worker cannot append what the program decides; wakes.list,
 // wakes.acknowledge and supervision.assert are the coordinator's and refuse
 // a worker, with who acknowledged derived by internal/ipc's
-// Request.WakeAcknowledger and read from nothing; and gate.admit holds a
+// Request.WakeAcknowledger and read from nothing; catchup.mark, which moves
+// PRD section 9's seen mark and which catchup.go owns, refuses a worker on
+// the same terms while catchup.read stays open; and gate.admit holds a
 // worker's push to admit_workers.go's rule, only its task's branch, forward,
 // never a deletion, with the reasoning for its being admission's decision
 // rather than internal/safety's written there. A worker's group is in no

@@ -443,3 +443,32 @@ var ErrMessageAcknowledged = errors.New("store: the message is already acknowled
 // send was refused: it never reached a worker, so an acknowledgement of it
 // acknowledges nothing. Nothing is appended.
 var ErrMessageRefused = errors.New("store: the message was refused and never reached a worker")
+
+// ErrUnknownSeenKind is the reason a *SeenRecordError carries when MarkSeen
+// was named a record of a kind outside SeenKinds. Nothing in the batch is
+// written.
+var ErrUnknownSeenKind = errors.New("store: not a kind of record the seen mark names")
+
+// ErrNotLanded is the reason a *SeenRecordError carries when MarkSeen was
+// named a record that is not a landed one: no merge record for the run, one
+// read as closed rather than merged, no cleanup record for the task, or one
+// whose removal is not recorded. Nothing in the batch is written.
+var ErrNotLanded = errors.New("store: no landed record has this key")
+
+// SeenRecordError reports a refused seen mark and names the record that
+// refused it and why, so a caller reports the record it tripped on rather
+// than only that the batch failed.
+type SeenRecordError struct {
+	// Record is the record the batch named.
+	Record SeenRecord
+	// Reason is ErrUnknownSeenKind or ErrNotLanded.
+	Reason error
+}
+
+// Error names the record and the reason.
+func (e *SeenRecordError) Error() string {
+	return fmt.Sprintf("store: marking %s %s seen: %v", e.Record.Kind, e.Record.Key, e.Reason)
+}
+
+// Unwrap makes the error match its Reason.
+func (e *SeenRecordError) Unwrap() error { return e.Reason }

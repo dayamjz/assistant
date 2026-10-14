@@ -110,3 +110,30 @@ func TestInFlightOfReadsTheStatesAndTheQueueTogether(t *testing.T) {
 		})
 	}
 }
+
+// TaskInFlight is the per-task rule InFlightOf applies over a fleet: for
+// every state the table decides, a task is in flight on its state alone or
+// with a queued wake, and a lone task's fleet reading agrees with it in
+// every case, so the catch-up read and the guard cannot count different
+// work. A state the table does not decide is undecided either way.
+func TestTaskInFlightIsTheRuleInFlightOfApplies(t *testing.T) {
+	for _, state := range taskstate.States() {
+		for _, queued := range []int{0, 1} {
+			inFlight, decided := supervisor.TaskInFlight(state, queued)
+			alone, _ := supervisor.StateInFlight(state)
+			if !decided {
+				t.Fatalf("%s is not decided", state)
+			}
+			if want := alone || queued > 0; inFlight != want {
+				t.Errorf("%s with %d queued: in flight %v, want %v", state, queued, inFlight, want)
+			}
+			fleet := supervisor.InFlightOf(map[string]taskstate.State{"t": state}, map[string]int{"t": queued})
+			if (fleet == supervisor.InFlightSome) != inFlight {
+				t.Errorf("%s with %d queued: the fleet reads %v and the task in flight %v", state, queued, fleet, inFlight)
+			}
+		}
+	}
+	if _, decided := supervisor.TaskInFlight("undecided", 1); decided {
+		t.Error("a state the table has no row for is decided")
+	}
+}
