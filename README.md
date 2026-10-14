@@ -2,20 +2,20 @@
 
 **Run many coding agents at once, and let none of them ship unvalidated work.**
 
-Assistant is meant to do two things you currently do by hand. Today it does one
-of them: it puts a validation gate in front of your remote, so no change reaches
-a shared branch until it has been independently reviewed, tested, documented,
-and linted. The other is planned and not built: running a fleet of coding agents
-in parallel, each in its own isolated copy of a repository. The product
-requirements describe both halves and why they belong in one tool, but no fleet
-module (tasks, sessions, a supervisor) exists in this repository yet. The gate
-is what you can run now. [`docs/operators.md`](docs/operators.md) covers using
-it next to your CI and forge.
+Assistant does two things you currently do by hand. It puts a validation gate
+in front of your remote, so no change reaches a shared branch until it has been
+independently reviewed, tested, documented, and linted. And it runs a fleet of
+coding agents in parallel, each in its own isolated copy of a repository, with
+a coordinator agent you talk to and a supervisor that keeps watch while you are
+away. The product requirements describe both halves and why they belong in one
+tool. The gate is the more mature half; the fleet's limits in this build are
+listed under Status. [`docs/operators.md`](docs/operators.md) covers using the
+gate next to your CI and forge.
 
 ## Status
 
 Early. The product requirements are settled and checked in at
-[`docs/prd.html`](docs/prd.html). Twenty-three pieces exist so far, and the
+[`docs/prd.html`](docs/prd.html). Twenty-eight pieces exist so far, and the
 binary can be driven. The execution
 engine in `internal/graph` is the first: the graph builder with its
 construction-time checks, an executor with halt points and bounded cycles, and
@@ -114,6 +114,19 @@ as a process against the fixture's subject, organized by PRD principle rather
 than by feature, with every check carrying the counterfeit observations it must
 reject so no assertion that cannot fail may ship, and three tables accounting
 for the principles, the planted conditions and the fixture's open questions.
+The twenty-fourth is `internal/judge`, the decision-model client behind the
+checks PRD section 5 lets a decision model add: two fixed questions, a pinned
+model version, and an answer that is a probability or a failed call, never a
+guess. The remaining four are the fleet. The twenty-fifth is
+`internal/taskstate`, which answers what is true of a task now by resolving its
+records on every read rather than storing a summary. The twenty-sixth is
+`internal/tasks`: intake, queueing behind a blocker, the isolation assertion a
+worker's copy has to pass before anything launches in it, the cleanup decision
+and promotion. The twenty-seventh is `internal/supervisor`, the pure wake
+classifier and stop-guard predicate, with `internal/supervisor/feed` as the
+edge that reads the beacon, the lock and the database for it. The
+twenty-eighth is `internal/session`, the terminal session a worker runs in,
+behind a five-operation provider.
 
 So `assistant` builds and runs. A run can be started, reported on, answered and
 carried on across separate invocations, with the service restarted in between,
@@ -163,18 +176,43 @@ what the end-to-end harness can drive through the binary;
 and does not establish, starting with the limit that a scripted agent proves
 the machinery and not the review quality.
 
+The fleet runs through the same service. A coordinator agent creates work over
+the local protocol's restricted `task.create` method; there is no person-facing
+create verb, by PRD section 9's design. Each delivery task is cut its own copy,
+asserted isolated before its worker starts, and the worker is started through
+the resolved adapter's worker sessions, which the Claude Code adapter declares.
+A supervisor loop keeps a durable wake queue for the coordinator, and
+`assistant host install` prints, or with `--write` adds, the stop guard that
+keeps the coordinator's turn from ending while work is in flight with no live
+supervisor. A worker's
+push goes through the gate like anyone's, unless its task was recorded under the
+`local` posture described above. Workers can be messaged and stopped,
+`assistant watch` opens with a catch-up of what landed and what waits on you,
+and `assistant runs --usage` totals what the stage agents' calls cost.
+
+What this build does not do yet, so nothing here claims it: the only session
+provider is `internal/session`'s pipe, so a worker does not yet run in a
+terminal you can attach to and type into; `direct` delivery stays deferred under
+PRD section 12 and is refused at parse; routing among agents waits for a
+second adapter; `assistant sync` prints no reconciliation steps,
+because the custody module that would produce them does not exist yet (see
+`internal/cli/render.go`); and
+interrupting a worker is refused because no adapter declares it.
+
 ## The two promises
 
 **Nothing unvalidated is shared.** The gate is a named remote you push to on
 purpose. Pushing to it is how you consent to having that change validated,
 fixed, pushed, and turned into a pull request. Your ordinary `git push` keeps
-working as it always did. This is the half that exists.
+working as it always did.
 
-**Parallel work you can watch.** Planned, not built. The specification has every
-worker running in a real terminal you can attach to, read, and type into, with a
-direct intervention in a worker's terminal being authoritative. Nothing in this
-repository starts or supervises such workers yet; the store has task records, the
-service can list them, and nothing outside tests creates one.
+**Parallel work you can watch.** Each worker runs in its own isolated copy,
+supervised, and what it ships goes through the gate. The specification has
+every worker running in a real terminal you can attach to, read, and type into,
+with a direct intervention there being authoritative. This build starts workers
+over a pipe instead, so you watch them through `assistant watch` and
+`assistant tasks` and steer them through the coordinator, not by typing into
+their terminal.
 
 ## What it is not
 
@@ -197,12 +235,13 @@ service can list them, and nothing outside tests creates one.
 | `internal/config` | The configuration schema: layers, defaults, merge, validation, path matcher. |
 | `internal/findings` | The stage vocabulary: findings, actions, reports, parsing of agent output, and the evidence a review report's findings are bound to. |
 | `internal/fixture` | The adversarial subject repository the end-to-end harness validates against: the seven scenarios, the conditions planted in them, and what each one is expected to produce. |
-| `internal/forge` | The only package that talks to a code host: the provider interface over pull requests, mergeability, and checks, and the GitHub adapter over the `gh` command line. |
+| `internal/forge` | The only package that talks to a code host: the provider interface over pull requests, mergeability, checks and a merge bound to a head, and the GitHub adapter over the `gh` command line. `internal/forge/forgetest` is its over-the-wire stand-in. |
 | `internal/gate` | The local bare repository a push is validated through: where it lives, its two hooks and the protocol they call the command surface with, the receive command and lock that make a push wait for a run's copy being cut, its identity across a move or a copy, and the ownership question every operation asks before it adopts or deletes one. |
 | `internal/graph` | The execution engine: nodes, edges, bounds, halt points, checkpoints. |
 | `internal/home` | The one root everything lives under: where the database, the socket, the lock, the gates, the isolated copies and the logs go, and the exclusive lock that gives a home one service. |
 | `internal/ipc` | The local protocol between the command line and the background service: the method table, the event taxonomy, the bounded stream, the client and the server, peer identification, and the one resolver it derives for an answer that arrives here. |
 | `internal/journey` | The end-to-end harness: the `assistant` binary driven as a process against `internal/fixture`'s subject, organized by PRD principle, with every check carrying the counterfeit observations it must reject, and the three tables that account for principles, planted conditions and the fixture's open questions. |
+| `internal/judge` | The decision-model client: the two fixed questions, the pinned model version, the cutoffs, and an answer that is a probability or a failed call. `internal/judge/judgetest` is its over-the-wire stand-in. |
 | `internal/machine` | The agent-facing half of the surface: the shapes an answer takes, the three exit codes, and the outcome vocabulary. |
 | `internal/outcomes` | The build-time check that the PRD's outcome row and `internal/machine`'s set declare the same six values, in the same order, in the same two groups: the marked row it reads, the comparison, and the refusal when it cannot be read. |
 | `internal/pipeline` | The nine stages as a graph definition over `internal/graph`: the stage contract, the fixed order, the state key table, the capabilities a path needs of the adapter, the fix loop, and its halt points and bounds. |
@@ -211,9 +250,13 @@ service can list them, and nothing outside tests creates one.
 | `internal/runs` | The run service: the anchored table of a run's status changes, and the one durable fixer session a run keeps, recorded on the run so a restarted service resumes the same conversation. |
 | `internal/safety` | The data-loss policy over git: whether a branch update may proceed, on what anchor, and when to refuse. |
 | `internal/scope` | The review stage's scope lens, not a tenth stage: the guidance a reviewer traces each touched path against, and the note an untraced path becomes. |
-| `internal/service` | The background service: it holds the home's lock, binds the socket, recovers the runs it finds, and owns every run that is executing. |
+| `internal/service` | The background service: it holds the home's lock, binds the socket, recovers the runs and tasks it finds, owns every run that is executing, and dispatches, supervises and cleans up after fleet workers. |
+| `internal/session` | The terminal session a worker runs in: a five-operation provider (create, capture, send, probe, close), with a pipe as the only provider in this build. |
 | `internal/stages` | Where the nine stage bodies live. A stage without one holds a placeholder that validates nothing and holds for a decision; `Implemented` says which stages have a body. |
 | `internal/store` | The only package that opens the database: the schema, its additive migrations, and typed accessors for repositories, runs, stages, rounds, a run's anchored checkpoint history, tasks, task state and events, holds and the closed set of who resolved each one, and the gate ownership index. |
+| `internal/supervisor` | The pure core of supervision: the wake classifier and the stop-guard predicate, with no I/O. `internal/supervisor/feed` reads the beacon, the lock and the database for it. |
+| `internal/tasks` | Fleet intake and queueing, the isolation assertion a worker's copy must pass, the cleanup decision, the delivery posture recorded at intake or promotion, and promotion itself. |
+| `internal/taskstate` | What is true of a task now, resolved from its records on every read rather than stored as a summary. |
 | `internal/vcs` | The only package that invokes git: typed operations over repositories, worktrees, refs, diffs, and remotes. |
 | `docs/prd.html` | The product requirements. The specification this code answers to. |
 
@@ -234,6 +277,9 @@ assistant                      # attach to this branch's run, or start one
 assistant --answer approved    # answer the decision it is holding on
 assistant --answer fix --select ID --note TEXT   # ask for one fix round there
 assistant tasks                # fleet work and where each task stands
+assistant watch                # catch up, then follow everything in flight
+assistant runs --usage=7d      # what the stage agents' calls cost, by agent and run
+assistant host install         # print the stop guard line for the coordinator's host
 assistant --task ID --answer retry   # answer a task that is waiting on you
 assistant status               # repository, gate, service, run, branch
 assistant --json status        # the same answer as one structured document
