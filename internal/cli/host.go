@@ -53,7 +53,9 @@ const hostVerbName = "host"
 // the host sets the variable on; the next turn ends with the variable unset
 // and is judged afresh. A host whose own protocol carries the signal another
 // way, as a field in what it writes to the hook, bridges it by setting this
-// variable, which is the installer's to arrange and is not built here.
+// variable. hostInstall's line does not: it runs this command with nothing
+// set, so this command sees no signal on any turn and blocks every one that
+// ends while work is under way unwatched, and hostInstall says so.
 const HostReentryVar = "ASSISTANT_HOST_REENTRY"
 
 // hostBlockCode is the exit status that tells the coordinator's host the turn
@@ -70,15 +72,26 @@ const HostReentryVar = "ASSISTANT_HOST_REENTRY"
 // text on standard error says what was wrong.
 const hostBlockCode machine.Code = 2
 
-// hostHooks are the subcommands the coordinator's host invokes. The list is
-// the one owner of which there are, on gateHooks' terms: it names the
-// subcommand, says what it is for, and runs the one that was named.
+// hostHooks are the subcommands under the host verb. The list is the one
+// owner of which there are, on gateHooks' terms: it names the subcommand,
+// says what it is for, says whether the host invokes it or a person types
+// it, and runs the one that was named.
+//
+// stop is the one the host invokes. install is the one a person types: PRD
+// section 6's stop guard row has an installer print the line the host's
+// configuration needs and write it only under an explicit flag, and it is
+// here because the line it prints is the command beside it, so the two cannot
+// name different things. PRD section 9's row for this verb says a person
+// never types it, which predates the installer; that is a finding against
+// the specification, raised where this row was added, and not settled here.
 var hostHooks = []struct {
 	name    string
+	byHost  bool
 	summary string
 	run     func(context.Context, *invocation) (any, error)
 }{
-	{"stop", "Decide whether the coordinator's turn may end, from the hook the host fires at turn end.", hostStop},
+	{"stop", true, "Decide whether the coordinator's turn may end, from the hook the host fires at turn end.", hostStop},
+	{"install", false, "Print the line the host's settings need to run stop; --write adds it to that file.", hostInstall},
 }
 
 // hostVerb runs the hook subcommand the command line names, which has to be
@@ -180,15 +193,49 @@ func hostExit(answer machine.HostStop) machine.Code {
 // message is two rows of internal/machine's phrase table and nothing else.
 func readOutHostStop(io.Writer, machine.HostStop) {}
 
-// hostUsage is the host's subcommands read out, under a heading that says
-// these are not commands to type. It is built from hostHooks rather than
+// hostUsage is the host's subcommands read out, the ones the host invokes
+// under a heading that says they are not commands to type and the installer
+// under one that says it is. It is built from hostHooks rather than
 // spelled out, so a subcommand added there is a subcommand this describes.
 func hostUsage() string {
 	var b strings.Builder
 	b.WriteString("\nInvoked by the coordinator's host at turn end rather than typed. The host sets\n")
 	fmt.Fprintf(&b, "%s on a turn it re-entered after a block, and on no other:\n", HostReentryVar)
 	for _, hook := range hostHooks {
-		fmt.Fprintf(&b, "  %s %-7s %s\n", hostVerbName, hook.name, hook.summary)
+		if hook.byHost {
+			fmt.Fprintf(&b, "  %s %-7s %s\n", hostVerbName, hook.name, hook.summary)
+		}
+	}
+	b.WriteString("\nTyped by a person to set the host up, and changing nothing without --write:\n")
+	for _, hook := range hostHooks {
+		if !hook.byHost {
+			fmt.Fprintf(&b, "  %s %-7s %s\n", hostVerbName, hook.name, hook.summary)
+		}
 	}
 	return strings.TrimRight(b.String(), "\n")
 }
+
+// readOutHostInstall is the human rendering of the installer's answer: the
+// phrase for what became of the request, then the machine text a person
+// copies, each on a line of its own after a label. The settings file is
+// always named, because every row refers to it; the line is printed whenever
+// it was not written, because then the person may want it; and a conflict's
+// existing command line follows it, as the file holds it, escaped.
+func readOutHostInstall(w io.Writer, answer machine.HostInstall) {
+	writeln(w, machine.HostInstallPhrase(answer))
+	writef(w, "%s %s\n", hostInstallFileLabel, printable(answer.Settings))
+	if answer.Result != machine.HostInstallWritten && answer.Result != machine.HostInstallPresent {
+		writef(w, "%s %s\n", hostInstallLineLabel, printable(answer.Line))
+	}
+	if answer.Conflict != "" {
+		writef(w, "%s %s\n", hostInstallConflictLabel, printable(answer.Conflict))
+	}
+}
+
+// The labels readOutHostInstall prints its machine text after, named so a
+// test can tell the labelled lines from the phrase.
+const (
+	hostInstallFileLabel     = "Settings file:"
+	hostInstallLineLabel     = "Line:"
+	hostInstallConflictLabel = "Already there:"
+)
