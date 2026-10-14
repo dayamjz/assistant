@@ -260,8 +260,9 @@ func parentPID(pid int) (int, bool, error) {
 // commandName reads the command name the process table entry carries for
 // the process id names, Proc.P_comm, out of the same entry as the start
 // time it is checked against, so a name returned without an error came from
-// an entry whose start time is id's. It is for diagnosis only: nothing
-// decides from it.
+// an entry whose start time is id's. P_comm is a 17-byte array in
+// x/sys/unix's Proc, so a name longer than its terminated capacity comes
+// back cut short. It is for diagnosis only: nothing decides from it.
 func commandName(id Identity) (string, error) {
 	k, found, err := kinfo(id.PID)
 	if err != nil {

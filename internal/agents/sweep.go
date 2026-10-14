@@ -90,7 +90,11 @@ type Blocker struct {
 	// on macOS the process table entry's P_comm. It is read for a person
 	// diagnosing a refusal and for nothing else: no decision of the sweep
 	// reads it, and a process does not block, or stop blocking, because of
-	// its name. It is the empty string when NameErr is not nil.
+	// its name. It is the empty string when NameErr is not nil. It may be
+	// shorter than the executable's name: on macOS the field read is a
+	// fixed array of 17 bytes in x/sys/unix's kinfo_proc, so a longer name
+	// arrives cut short, and on Linux the stat field is a short name the
+	// kernel keeps rather than the path that was run.
 	Name string
 	// NameErr is why Name could not be read, nil when it was: the process
 	// exited, its identifier was given to another process, or the read
