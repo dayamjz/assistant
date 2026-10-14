@@ -105,6 +105,7 @@ func TestWritesIntoTheGateDoNotWaitOnEachOther(t *testing.T) {
 // push git addressed to a repository other than the gate the command was
 // written for, before anything is locked or received.
 func TestAReceiveAddressedElsewhereIsRefused(t *testing.T) {
+	gitEnvironment(t)
 	home, opts := newHome(t)
 	wc := newWorkingCopy(t)
 	command, _ := recorderCommand(t, 0)
