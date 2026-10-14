@@ -49,8 +49,9 @@ func (w Wake) Queued() bool { return !w.HandledAt.IsKnown() }
 // markers carry and, for an escalation of the same stall, the stall
 // repetition count; for an event kind the event's sequence; for a hold kind
 // the hold's key; for a terminal gone the session reference with which of
-// the three terminal-gone cases it was; this package checks only that the
-// marker is non-empty. A marker composed without that component drops a
+// the three terminal-gone cases it was and, for each surface after the
+// first of the same silence, the instant of that surface; this package
+// checks only that the marker is non-empty. A marker composed without that component drops a
 // second surface as a replay while the first row is queued and is refused
 // with ErrWakeHandled once it is acknowledged, which is where the defect
 // surfaces.
@@ -137,6 +138,12 @@ type WakeMarkers struct {
 	// UnobservedSince is when the terminal first could not be observed, and
 	// unknown while it is observed.
 	UnobservedSince Optional[time.Time] `json:"unobserved_since"`
+	// GoneSurfacedAt is when the terminal that could not be observed last
+	// surfaced as gone, which the escalation window between two of those
+	// surfaces is measured from. It is unknown while the terminal is
+	// observed and before the first surface of a silence, and it is
+	// written in the transaction that appends the wake it records.
+	GoneSurfacedAt Optional[time.Time] `json:"gone_surfaced_at"`
 	// UpdatedAt is when the row was last written.
 	UpdatedAt time.Time `json:"updated_at"`
 }
@@ -152,6 +159,7 @@ type MarkerAdvance struct {
 	WindowStart      Optional[time.Time]
 	StallRepetitions int64
 	UnobservedSince  Optional[time.Time]
+	GoneSurfacedAt   Optional[time.Time]
 }
 
 func (a MarkerAdvance) validate(taskID string) error {
@@ -326,8 +334,8 @@ func advanceMarkers(ctx context.Context, tx *sql.Tx, taskID string, a MarkerAdva
 	now := nowUTC()
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO wake_marker (task_id, capture_digest, change_epoch, event_sequence, surfaced,
-			window_start, stall_repetitions, unobserved_since, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+			window_start, stall_repetitions, unobserved_since, gone_surfaced_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(task_id) DO UPDATE SET
 			capture_digest = excluded.capture_digest,
 			change_epoch = excluded.change_epoch,
@@ -336,9 +344,11 @@ func advanceMarkers(ctx context.Context, tx *sql.Tx, taskID string, a MarkerAdva
 			window_start = excluded.window_start,
 			stall_repetitions = excluded.stall_repetitions,
 			unobserved_since = excluded.unobserved_since,
+			gone_surfaced_at = excluded.gone_surfaced_at,
 			updated_at = excluded.updated_at`,
 		taskID, a.CaptureDigest, epoch, a.EventSequence, surfaced,
-		optionalTimeText(a.WindowStart), a.StallRepetitions, optionalTimeText(a.UnobservedSince), encodeTime(now),
+		optionalTimeText(a.WindowStart), a.StallRepetitions, optionalTimeText(a.UnobservedSince),
+		optionalTimeText(a.GoneSurfacedAt), encodeTime(now),
 	); err != nil {
 		return WakeMarkers{}, err
 	}
@@ -346,16 +356,16 @@ func advanceMarkers(ctx context.Context, tx *sql.Tx, taskID string, a MarkerAdva
 }
 
 const wakeMarkerColumns = `SELECT task_id, capture_digest, change_epoch, event_sequence, surfaced,
-	window_start, stall_repetitions, unobserved_since, updated_at`
+	window_start, stall_repetitions, unobserved_since, gone_surfaced_at, updated_at`
 
 func wakeMarkersOf(ctx context.Context, q querier, taskID string) (WakeMarkers, error) {
 	var m WakeMarkers
 	var surfaced int
-	var window, unobserved Optional[string]
+	var window, unobserved, goneSurfaced Optional[string]
 	var updated string
 	if err := q.QueryRowContext(ctx, wakeMarkerColumns+` FROM wake_marker WHERE task_id = ?`, taskID).Scan(
 		&m.TaskID, &m.CaptureDigest, &m.ChangeEpoch, &m.EventSequence, &surfaced,
-		&window, &m.StallRepetitions, &unobserved, &updated,
+		&window, &m.StallRepetitions, &unobserved, &goneSurfaced, &updated,
 	); err != nil {
 		return WakeMarkers{}, err
 	}
@@ -365,6 +375,9 @@ func wakeMarkersOf(ctx context.Context, q querier, taskID string) (WakeMarkers, 
 		return WakeMarkers{}, err
 	}
 	if m.UnobservedSince, err = optionalTimeValue(unobserved, "unobserved_since"); err != nil {
+		return WakeMarkers{}, err
+	}
+	if m.GoneSurfacedAt, err = optionalTimeValue(goneSurfaced, "gone_surfaced_at"); err != nil {
 		return WakeMarkers{}, err
 	}
 	if m.UpdatedAt, err = decodeTime(updated); err != nil {

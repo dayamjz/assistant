@@ -66,12 +66,18 @@
 // absorbs on a window. The declared wait reads its window to absorb, and
 // rests on the worker's own declaration rather than on time passing; the
 // terminal-ish wait that has surfaced once reads its window to absorb too,
-// and rests on the surface already made. The matrix test's oracle is written
-// from the flowchart independently of the kind table, enumerates the kinds
-// from the table so a row without an oracle fails, and runs two
-// counterfeit classifiers to show the matrix can fail: one that absorbs on an
-// open window alone, one that absorbs a terminal gone after its first
-// surface.
+// and rests on the surface already made, and so does a terminal gone that
+// has surfaced, whose window is the escalation window measured from its
+// last surface: a crashed worker that stays silent surfaces again once per
+// window rather than once for good, PRD section 5's "a terminal-ish wait
+// surfaces once" card. Whether that window has elapsed is an input; the
+// loop computes it from a marker internal/store holds, and records each
+// surface in the same transaction as the wake. The matrix test's oracle is
+// written from the flowchart independently of the kind table, enumerates
+// the kinds from the table so a row without an oracle fails, and runs
+// counterfeit classifiers to show the matrix can fail: one that absorbs on
+// an open window alone, one that absorbs a surfaced terminal gone however
+// long it has been silent.
 //
 // A StopVerdict's Allowed is derived from its Reason, so a verdict cannot
 // say allowed beside a reason that blocks. InFlight and Lock have their
@@ -100,8 +106,11 @@
 // start on every absorbed pass would absorb on elapsed time with this table
 // unchanged, and nothing here can see it; internal/service's loop test under
 // an injected clock is the other half of P9 and cites it there, and reads
-// the window start out of the markers after each absorbed pass. P10 is not
-// cited here
+// the window start out of the markers after each absorbed pass. The same
+// holds for a terminal gone: the table spaces its surfaces one window apart
+// only if the loop restarts the window at a surface and nowhere else, which
+// the loop's own test of a dead terminal under the injected clock checks.
+// P10 is not cited here
 // at all: Assess's inputs are stated by its tests rather than produced by
 // the real lock, beacon and instance file, and a test over stated values
 // cannot show that the real mechanism produces the shapes it checks. feed's
