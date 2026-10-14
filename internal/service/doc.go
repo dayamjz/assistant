@@ -536,7 +536,12 @@
 // the service's own task reader resolved it, so a copy whose worker is
 // still running is kept with the live refusal and one whose worker is gone
 // is examined on the proof, and cleanup.go owns the three sites and the
-// window after the read. No verb or protocol method calls any of it.
+// window after the read. A landed task's worker this service holds is
+// ended first, and the decision is asked again when its terminal is next
+// observed Dead, from the supervisor's pass and from task.stop, which
+// registers no relaunch hold for a task in the terminal tier; landed.go owns
+// that, its cadence and its gaps. No verb or protocol method calls the
+// decision except through that stop.
 //
 // # The supervisor loop is here, and supervise.go owns it
 //

@@ -593,6 +593,11 @@ var (
 		Consequence: "Nothing more is done with the work until you answer, and nothing begins it again on its own.",
 		Decision:    taskAnswerDecision,
 	}
+	phraseFinishedWorkerStopped = Phrase{
+		Outcome:     "The worker was ended after its work was already finished.",
+		Consequence: "No decision was opened and nothing begins it again; its local copy is removed only once that is proven safe.",
+		Decision:    "Nothing to decide.",
+	}
 	// PhraseStopUnverified is the row for a stop whose end the program could
 	// not show: the worker may still be running, and no decision was opened.
 	PhraseStopUnverified = Phrase{
@@ -617,9 +622,15 @@ func MessagePhrase(m store.Message) Phrase {
 	return phraseMessageUnknown
 }
 
-// StopPhrase is what a person reads about a stop that ended the worker and
-// registered its hold.
-func StopPhrase(TaskStopped) Phrase { return phraseWorkerStopped }
+// StopPhrase is what a person reads about a stop that ended the worker: the
+// row for the hold it registered, or, for a task whose work was already
+// finished and so was owed no hold, the row saying nothing waits on them.
+func StopPhrase(stopped TaskStopped) Phrase {
+	if stopped.Finished != "" {
+		return phraseFinishedWorkerStopped
+	}
+	return phraseWorkerStopped
+}
 
 // The stream's own rows: what a person reads when the fleet view is told
 // something about the channel rather than about the work.
@@ -1311,7 +1322,7 @@ func TablePhrases() []Phrase {
 	out = append(out, HoldPhrase(store.Hold{Subject: holdPlaceholder, TaskID: store.Known("a task")}))
 	out = append(out, phraseRetried, phraseRedispatched, phraseRetryDeferred, phraseRetryHeld, phraseRetryAtBound, phraseRetryRefused, phraseRetryUndispatchable, phraseNotRetried, phraseLandedLocallyNow)
 	out = append(out, phraseMessageUnread, phraseMessageRead, phraseMessageRefused, phraseMessageUnknown,
-		phraseWorkerStopped, PhraseStopUnverified)
+		phraseWorkerStopped, phraseFinishedWorkerStopped, PhraseStopUnverified)
 	out = append(out, phraseCopyKept, phraseCopyRemoved, phraseCopyNotSwept)
 	out = append(out, PhraseUpdatesMissed, PhraseServiceStopping, PhraseWorkerSpoke, PhraseActivity, PhraseUnfamiliarUpdate)
 	out = append(out, PhraseServiceUp, PhraseServiceAbsent, PhraseGated, PhraseUngated, PhraseNoRun, PhraseNoRuns, PhraseNoFleetWork)

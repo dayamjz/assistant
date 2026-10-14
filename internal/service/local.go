@@ -14,7 +14,6 @@ import (
 	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/safety"
 	"github.com/dayamjz/assistant/internal/store"
-	"github.com/dayamjz/assistant/internal/tasks"
 	"github.com/dayamjz/assistant/internal/vcs"
 )
 
@@ -298,13 +297,10 @@ func (s *Service) answerLocal(ctx context.Context, req ipc.Request, r machine.Ta
 	return machine.TaskAnswered{Hold: resolved, Effect: machine.AnswerLanded}, nil
 }
 
-// cleanUpLocal asks for a landed local task's copy's cleanup, with the
-// terminal as this service's task reader resolved it, on cleanup.go's terms.
+// cleanUpLocal settles a landed local task on landed.go's terms: it ends
+// the worker this service holds for it and then asks for its copy's
+// cleanup, with the terminal as this service's task reader resolved it, on
+// cleanup.go's terms.
 func (s *Service) cleanUpLocal(ctx context.Context, taskID string) {
-	resolved, err := s.tasks().Resolved(ctx, taskID)
-	if err != nil {
-		s.log.Printf("the isolated copy of task %s was not cleaned up: its terminal could not be read: %v", taskID, err)
-		return
-	}
-	s.logCleanup(s.cleaner.CleanUp(ctx, tasks.TaskCopy{Task: taskID, Terminal: resolved.State.Basis.Process}))
+	s.settleLanded(ctx, taskID)
 }
