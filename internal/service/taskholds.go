@@ -91,10 +91,11 @@ import (
 //     closed here.
 //   - The bound's hold is registered by reconciliation, which runs at service
 //     start, so a task past the bound holds from the next start after its
-//     terminal is found gone. A retry relaunch also takes the task's
-//     in-memory slot on dispatch.go's one-attempt-per-service rule, so a
-//     retry answered to a service that already dispatched or relaunched the
-//     task is recorded and refused now, and the next start relaunches it.
+//     terminal is found gone. The coordinator's task.relaunch goes through
+//     the same relaunchTask, so before then it is refused past the bound as
+//     not due, and after a retry answer it relaunches on that answer exactly
+//     as the answer's own relaunch would; the anchor keeps the two to one
+//     attempt between them.
 //   - An answer to a hold that is not the bound's has no closed option set,
 //     because nothing records one for it; what was answered is recorded and
 //     nothing here checks it against what the hold offered.
@@ -177,9 +178,11 @@ func (s *Service) holdAtBound(ctx context.Context, id string, attempts []store.T
 // the terms this file's opening comment states. A task's worker is refused
 // with ipc.ErrWorker, from the caller's credentials. A request naming no
 // task or giving no answer, and an answer the bound's hold does not offer,
-// are ipc.ErrInvalidRequest; a task with no such hold is errNoTaskHold; a
-// hold another caller answered first is store.ErrHoldResolved. None of those
-// records anything.
+// are ipc.ErrInvalidRequest; a task with no such hold is errNoTaskHold and a
+// hold another caller answered first is store.ErrHoldResolved, each wrapped
+// in ipc.ErrRefused. None of those records anything. A retry's relaunch
+// refused now is not an error: the decision is recorded, and the answer
+// reports AnswerRetryDeferred with the reason.
 func (s *Service) respondTask(ctx context.Context, req ipc.Request, r machine.TaskRespondRequest) (machine.TaskAnswered, error) {
 	if err := s.refuseWorker(req); err != nil {
 		return machine.TaskAnswered{}, err
@@ -195,7 +198,7 @@ func (s *Service) respondTask(ctx context.Context, req ipc.Request, r machine.Ta
 	}
 	hold, err := s.oldestTaskHold(ctx, r.Task)
 	if err != nil {
-		return machine.TaskAnswered{}, err
+		return machine.TaskAnswered{}, fmt.Errorf("%w: %w", ipc.ErrRefused, err)
 	}
 	bound := isRelaunchBound(hold.Key, r.Task)
 	if bound && r.Answer != machine.AnswerRetry && r.Answer != machine.AnswerStop {
@@ -203,6 +206,9 @@ func (s *Service) respondTask(ctx context.Context, req ipc.Request, r machine.Ta
 			ipc.ErrInvalidRequest, r.Task, machine.AnswerRetry, machine.AnswerStop, r.Answer)
 	}
 	resolved, err := s.store.ResolveHold(ctx, hold.Key, r.Answer, req.HoldResolver())
+	if errors.Is(err, store.ErrHoldResolved) {
+		return machine.TaskAnswered{}, fmt.Errorf("%w: %w", ipc.ErrRefused, err)
+	}
 	if err != nil {
 		return machine.TaskAnswered{}, err
 	}
