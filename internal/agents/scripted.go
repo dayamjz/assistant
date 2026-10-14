@@ -12,17 +12,19 @@ const ScriptedName = "scripted"
 
 // ScriptedFactory returns the Factory for the scripted adapter: the Claude
 // Code adapter's one-shot path, which reads the same result envelope and
-// opens the same fixer sessions, plus the worker path, which no shipped
-// adapter carries. It is built over a binary a test supplies, which is what
-// internal/agents/standin stands up, and it ships in no catalog: nothing in
-// this build knows a real coding agent that answers the worker path, so
-// configuration cannot name this adapter and "auto" never chooses it.
+// opens the same fixer sessions, plus a worker path over plain lines rather
+// than the Claude Code adapter's stream-json messages. It is built over a
+// binary a test supplies, which is what internal/agents/standin stands up,
+// and it ships in no catalog: no real coding agent is known to this build to
+// answer plain lines as a worker, so configuration cannot name this adapter
+// and "auto" never chooses it.
 //
-// It exists so that CapabilityWorkerSessions has a declarer the conformance
-// suite can hold to the mechanism, and so that a layer built on workers can
-// run against the scripted stand-in rather than against a double of its own.
-// What that establishes is a property of this package's worker mechanism, and
-// nothing about any real agent.
+// It exists so that a layer built on workers can run against a scripted
+// stand-in whose output is plain lines it can script and read, rather than
+// against a double of its own, and so that the conformance suite holds a
+// second declarer of CapabilityWorkerSessions to the mechanism. What that
+// establishes is a property of this package's worker mechanism, and nothing
+// about any real agent.
 //
 // The options are ClaudeOption because the one-shot path is that adapter's,
 // and every option applies to the worker path the same way: the binary, the
@@ -59,9 +61,9 @@ func (f *scriptedFactory) New(ctx context.Context, args []string) (Runner, error
 	}}, nil
 }
 
-// scriptedRunner is the Claude Code runner with the worker path added. The
-// embedded runner's Fixer is what makes it a SessionRunner, and Start below
-// is what makes it a WorkerRunner; Capabilities declares both, and Resolve
+// scriptedRunner is the Claude Code runner with its worker path replaced by
+// plain lines. The embedded runner's Fixer is what makes it a SessionRunner,
+// and Start below is what makes it a WorkerRunner; Capabilities declares both, and Resolve
 // refuses the pair if they ever disagree.
 type scriptedRunner struct{ *claudeRunner }
 
@@ -73,9 +75,9 @@ func (r *scriptedRunner) Capabilities() Capabilities {
 }
 
 // Start launches the binary as a worker: the configured entry's own
-// arguments and nothing managed, so the binary is started the way an
-// interactive agent is rather than the way a one-shot invocation is, with
-// --print and --output-format absent. The environment is the one builder's,
+// arguments and nothing managed, with --print absent, and every send written
+// as a plain line. It overrides the Claude Code adapter's Start, so this
+// adapter's worker is never framed as stream-json. The environment is the one builder's,
 // with the redirecting variables removed afterwards, on the terms WorkerSpec
 // states.
 func (r *scriptedRunner) Start(ctx context.Context, spec WorkerSpec) (Worker, error) {
@@ -89,7 +91,7 @@ func (r *scriptedRunner) Start(ctx context.Context, spec WorkerSpec) (Worker, er
 		env:    WorkerEnvironment(r.settings.base, spec.Env),
 		grace:  r.settings.grace,
 		maxOut: r.settings.maxOut,
-	}, spec.Instructions)
+	}, spec.Instructions, plainLine)
 	if err != nil {
 		return nil, err
 	}
