@@ -103,9 +103,9 @@ func TestARunCopySweepRecordOutsideTheSetIsRefused(t *testing.T) {
 	}
 }
 
-// The sweep record's migration is additive: the database is taken back to
-// the shape the migration before it left, a run is written there, and the
-// shipped migration is applied over it. The run reads back unchanged and
+// The sweep record's migration is additive: that one migration is undone by
+// hand, a run is written without it, and the shipped list is applied again,
+// which runs only the undone migration since every other is recorded. The run reads back unchanged and
 // with no sweep recorded, and a sweep can then be recorded for it. The
 // migration is found by name, so the test does not spell a version the
 // shipped list may grow past.
@@ -126,7 +126,7 @@ func TestTheRunCopySweepMigrationKeepsEarlierRuns(t *testing.T) {
 	if _, err := s.write.ExecContext(ctx, `DROP TABLE run_copy_sweep`); err != nil {
 		t.Fatalf("rolling the schema back: %v", err)
 	}
-	if _, err := s.write.ExecContext(ctx, `DELETE FROM schema_migration WHERE version >= ?`, added.version); err != nil {
+	if _, err := s.write.ExecContext(ctx, `DELETE FROM schema_migration WHERE version = ?`, added.version); err != nil {
 		t.Fatalf("forgetting the migration: %v", err)
 	}
 	run := seedRun(t, s)

@@ -80,6 +80,27 @@ const (
 	// the one anchored relaunch PRD section 11's reconciliation uses. It is
 	// the coordinator's on MethodTaskCreate's terms.
 	MethodTaskRelaunch Method = "task.relaunch"
+	// MethodTaskMessage sends a message to a running task's worker, PRD
+	// section 6's steering: the program appends the message record, then
+	// writes the text to the worker's input, and the record says which of
+	// written or refused followed. Who sent it is derived from this surface
+	// by Request.MessageSender and never read from the request. It is the
+	// coordinator's on MethodTaskCreate's terms, so no worker steers itself
+	// or a sibling.
+	MethodTaskMessage Method = "task.message"
+	// MethodTaskStop ends a running task's worker, leaves its copy as it
+	// is, proves the end with the probe answering dead, and only then
+	// registers a hold naming the task, which a retry answer relaunches
+	// through the one anchored relaunch. It is the coordinator's on
+	// MethodTaskCreate's terms.
+	MethodTaskStop Method = "task.stop"
+	// MethodTaskInterrupt asks to end a worker's turn while keeping its
+	// process. No adapter declares the capability that needs, so it is
+	// always refused naming that capability, PRD section 8's "undeclared
+	// means unavailable", and section 12 defers it. It is the coordinator's
+	// on MethodTaskCreate's terms, refused for a worker before the
+	// capability is asked.
+	MethodTaskInterrupt Method = "task.interrupt"
 	// MethodWakesList drains the durable wake queue for the coordinator: it
 	// returns the queued wakes, oldest first, and acknowledges none, so a
 	// row stays actionable until MethodWakesAcknowledge names it. It is the
@@ -98,6 +119,20 @@ const (
 	// carries. It is the coordinator's session start's and refused for a
 	// task's worker on MethodWakesList's terms.
 	MethodSupervisionAssert Method = "supervision.assert"
+	// MethodCatchUpRead is PRD section 9's catching up: one read of what is
+	// waiting on the person, what landed since they last marked what they
+	// had seen, what is under way, and what stopped without a decision,
+	// which assistant watch starts with. It is open, because it reads, and
+	// it marks nothing: a read alone never moves the seen mark.
+	MethodCatchUpRead Method = "catchup.read"
+	// MethodCatchUpMark moves the seen mark: it records as seen exactly the
+	// landed records the request names, which are the ones a read showed,
+	// so a record recorded between that read and this mark is still shown
+	// next time. It writes, so it is restricted, and it is the
+	// coordinator's and the person's: refused for a task's worker on
+	// MethodWakesList's terms, which the handler decides from the caller's
+	// credentials against the worker group set.
+	MethodCatchUpMark Method = "catchup.mark"
 	// MethodServiceStop stops the service.
 	MethodServiceStop Method = "service.stop"
 	// MethodServiceRestart restarts the service.
@@ -181,9 +216,14 @@ var specs = []Spec{
 	{MethodTaskCreate, KindRequest, AccessRestricted, "Record a new task through intake, for the coordinator."},
 	{MethodTaskPromote, KindRequest, AccessRestricted, "Promote an investigation task to delivery in place, for the coordinator."},
 	{MethodTaskRelaunch, KindRequest, AccessRestricted, "Relaunch a task whose terminal is gone, in its own copy, for the coordinator."},
+	{MethodTaskMessage, KindRequest, AccessRestricted, "Send a message to a running task's worker, recorded first, for the coordinator."},
+	{MethodTaskStop, KindRequest, AccessRestricted, "End a running task's worker, prove it dead, and hold the task, for the coordinator."},
+	{MethodTaskInterrupt, KindRequest, AccessRestricted, "Interrupt a worker's turn; refused, since no adapter declares the capability."},
 	{MethodWakesList, KindRequest, AccessRestricted, "Drain the wake queue: list the queued wakes, acknowledging none."},
 	{MethodWakesAcknowledge, KindRequest, AccessRestricted, "Record that the coordinator handled the named wakes."},
 	{MethodSupervisionAssert, KindRequest, AccessRestricted, "Verify that the supervisor loop of this home's service is live."},
+	{MethodCatchUpRead, KindRequest, AccessOpen, "Read what waits on you, what landed unseen, what is under way, and what stopped."},
+	{MethodCatchUpMark, KindRequest, AccessRestricted, "Mark seen exactly the landed records a catch-up read showed."},
 	{MethodServiceStop, KindRequest, AccessRestricted, "Stop the service."},
 	{MethodServiceRestart, KindRequest, AccessRestricted, "Restart the service."},
 	{MethodEventsSubscribe, KindStream, AccessOpen, "Open the event stream."},

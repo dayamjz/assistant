@@ -129,6 +129,18 @@ import (
 // recorded as before, and the not-a-copy case is refused after the
 // assertion.
 //
+// # The stop's hold
+//
+// steer.go's task.stop registers a hold keyed by the attempt it stopped,
+// stoppedKey, once the probe read the worker dead. It is answered retry or
+// stop like the three above, and a retry may carry a note. answerStopRetry
+// asks relaunchTaskWith, the one anchored relaunch, which reads the answer
+// back through relaunchAnswersOf and starts the worker with the note and the
+// stopped attempt's unacknowledged messages; the relaunch is counted by
+// relaunch_attempts, so past the bound the bound's hold is registered at
+// once and the answer is machine.AnswerRetryAtBound. A stop is read by
+// decideReconciliation, which leaves the task alone for that attempt.
+//
 // # Any other hold a task raised
 //
 // A hold naming a task and no run, an investigation's report's among them,
@@ -262,12 +274,12 @@ func isDispatchUnswept(key, task string) bool {
 	return strings.HasPrefix(key, "task/"+task+dispatchUnsweptPrefix)
 }
 
-// isRetryHold reports whether key is one of the three holds of the task
-// whose answer is retry or stop: the two relaunch holds, whose retry asks
-// relaunchTask, and the dispatch's no-sweep hold, whose retry asks
-// redispatchTask.
+// isRetryHold reports whether key is one of the four holds of the task
+// whose answer is retry or stop: the two relaunch holds and a stop's, whose
+// retry asks relaunchTask, and the dispatch's no-sweep hold, whose retry
+// asks redispatchTask.
 func isRetryHold(key, task string) bool {
-	return isRelaunchHold(key, task) || isDispatchUnswept(key, task)
+	return isRelaunchHold(key, task) || isStopped(key, task) || isDispatchUnswept(key, task)
 }
 
 // boundAnswer is what a relaunch hold for a task's latest attempt says: the
@@ -300,10 +312,12 @@ type relaunchAnswers struct {
 	bound boundAnswer
 	// unswept is the answer to the hold a relaunch with no sweep raised.
 	unswept boundAnswer
+	// stopped is the answer to the hold a stop raised, steer.go's.
+	stopped boundAnswer
 }
 
-// relaunchAnswersOf reads both relaunch holds for the latest of attempts. A
-// task with no attempt has neither.
+// relaunchAnswersOf reads both relaunch holds and the stop's hold for the
+// latest of attempts. A task with no attempt has none.
 func (s *Service) relaunchAnswersOf(ctx context.Context, id string, attempts []store.TaskAttempt) (relaunchAnswers, error) {
 	if len(attempts) == 0 {
 		return relaunchAnswers{}, nil
@@ -316,7 +330,11 @@ func (s *Service) relaunchAnswersOf(ctx context.Context, id string, attempts []s
 	if err != nil {
 		return relaunchAnswers{}, err
 	}
-	return relaunchAnswers{bound: bound, unswept: unswept}, nil
+	stopped, err := s.relaunchAnswerOf(ctx, stoppedKey(id, attempts[len(attempts)-1].Sequence))
+	if err != nil {
+		return relaunchAnswers{}, err
+	}
+	return relaunchAnswers{bound: bound, unswept: unswept, stopped: stopped}, nil
 }
 
 // relaunchAnswerOf reads the relaunch hold keyed key: retry only when it is
@@ -407,15 +425,19 @@ func (s *Service) holdAtBound(ctx context.Context, id string, attempts []store.T
 // the terms this file's opening comment states. A task's worker is refused
 // with ipc.ErrWorker, from the caller's credentials. A request naming no
 // task or giving no answer, and an answer a retry hold does not offer,
-// are ipc.ErrInvalidRequest; a task with no such hold is errNoTaskHold and a
+// are ipc.ErrInvalidRequest, as is a note given with anything but a retry
+// on a stop's hold, or one over machine.MaxMessageBytes; a task with no such
+// hold is errNoTaskHold and a
 // hold another caller answered first is store.ErrHoldResolved, each wrapped
 // in ipc.ErrRefused. None of those records anything. A retry on a relaunch
-// hold asks relaunchTask and one on the dispatch's no-sweep hold asks
+// hold asks relaunchTask, one on a stop's hold asks relaunchTaskWith with the
+// note, through answerStopRetry, and one on the dispatch's no-sweep hold asks
 // redispatchTask, through answerDispatchRetry. A retry that began an
 // attempt reports AnswerRelaunched or AnswerRedispatched; one refused now is
 // not an error: the decision is recorded, and the answer reports
-// AnswerRetryHeld for a further no-sweep hold, or retryNotBegun's effect,
-// with the reason.
+// AnswerRetryHeld for a further no-sweep hold, AnswerRetryAtBound for a
+// stopped task past its relaunch bound, or retryNotBegun's effect, with the
+// reason.
 func (s *Service) respondTask(ctx context.Context, req ipc.Request, r machine.TaskRespondRequest) (machine.TaskAnswered, error) {
 	if err := s.refuseWorker(req); err != nil {
 		return machine.TaskAnswered{}, err
@@ -438,6 +460,15 @@ func (s *Service) respondTask(ctx context.Context, req ipc.Request, r machine.Ta
 		return machine.TaskAnswered{}, fmt.Errorf("%w: task %s holds on %s, which is answered %q or %q, not %q",
 			ipc.ErrInvalidRequest, r.Task, hold.Key, machine.AnswerRetry, machine.AnswerStop, r.Answer)
 	}
+	switch {
+	case r.Note == "":
+	case !isStopped(hold.Key, r.Task) || r.Answer != machine.AnswerRetry:
+		return machine.TaskAnswered{}, fmt.Errorf("%w: task %s holds on %s answered %q, and only a %q on a stop's hold carries a note",
+			ipc.ErrInvalidRequest, r.Task, hold.Key, r.Answer, machine.AnswerRetry)
+	case len(r.Note) > machine.MaxMessageBytes:
+		return machine.TaskAnswered{}, fmt.Errorf("%w: the note is %d bytes, over the limit of %d, and is refused rather than cut",
+			ipc.ErrInvalidRequest, len(r.Note), machine.MaxMessageBytes)
+	}
 	resolved, err := s.store.ResolveHold(ctx, hold.Key, r.Answer, req.HoldResolver())
 	if errors.Is(err, store.ErrHoldResolved) {
 		return machine.TaskAnswered{}, fmt.Errorf("%w: %w", ipc.ErrRefused, err)
@@ -454,6 +485,8 @@ func (s *Service) respondTask(ctx context.Context, req ipc.Request, r machine.Ta
 		s.log.Printf("task %s is left where it stopped: hold %s was answered %q", r.Task, hold.Key, r.Answer)
 	case isDispatchUnswept(hold.Key, r.Task):
 		s.answerDispatchRetry(ctx, r, hold, &out)
+	case isStopped(hold.Key, r.Task):
+		s.answerStopRetry(ctx, r, hold, &out)
 	default:
 		relaunch, err := s.relaunchTask(ctx, r.Task)
 		var unswept *relaunchUnswept
@@ -514,9 +547,77 @@ func (s *Service) answerDispatchRetry(ctx context.Context, r machine.TaskRespond
 	}
 }
 
+// answerStopRetry acts on a retry recorded on a stop's hold: it relaunches
+// through relaunchTaskWith, the one anchored relaunch, carrying the answer's
+// note and the stopped attempt's unacknowledged messages on steer.go's
+// terms, and launches what that proved in the background. The effects are a
+// relaunch's, with one more: a stopped task already relaunched
+// relaunch_attempts times is past the bound like every other, so the
+// bound's hold is registered for the attempt now rather than at the next
+// start, and the answer is AnswerRetryAtBound naming it. The note does not
+// survive that wait, because it is recorded nowhere, and the answer says so.
+func (s *Service) answerStopRetry(ctx context.Context, r machine.TaskRespondRequest, hold store.Hold, out *machine.TaskAnswered) {
+	relaunch, err := s.relaunchTaskWith(ctx, r.Task, r.Note)
+	var unswept *relaunchUnswept
+	switch {
+	case errors.As(err, &unswept):
+		out.Effect, out.NotRelaunched = machine.AnswerRetryHeld, err.Error()
+		s.log.Printf("task %s was answered %q on hold %s and was not relaunched, because it now holds on %s: %v",
+			r.Task, r.Answer, hold.Key, unswept.Hold.Key, err)
+	case errors.Is(err, errRelaunchNotDue):
+		if bound, held := s.holdIfPastBound(ctx, r.Task); held {
+			out.Effect = machine.AnswerRetryAtBound
+			out.NotRelaunched = fmt.Sprintf("the task has been relaunched as many times as relaunch_attempts allows, so it holds on %s; "+
+				"a retry there relaunches it with its unacknowledged messages", bound.Key)
+			if r.Note != "" {
+				out.NotRelaunched += ", and without the note given here, which is not recorded"
+			}
+			s.log.Printf("task %s was answered %q on hold %s and was not relaunched, because it is past its relaunch bound and holds on %s",
+				r.Task, r.Answer, hold.Key, bound.Key)
+			break
+		}
+		fallthrough
+	case err != nil:
+		out.Effect, out.NotRelaunched = retryNotBegun(err), err.Error()
+		s.log.Printf("task %s was answered %q on hold %s and was not relaunched (%s): %v",
+			r.Task, r.Answer, hold.Key, out.Effect, err)
+	default:
+		out.Effect = machine.AnswerRelaunched
+		out.Relaunch = &machine.RelaunchBegun{Attempt: relaunch.launch.attempt, Superseded: relaunch.superseded}
+		s.log.Printf("task %s was relaunched as attempt %d on the answer %q to its stop's hold %s, superseding session %s; %s",
+			r.Task, relaunch.launch.attempt, r.Answer, hold.Key, relaunch.superseded, relaunch.swept)
+		s.launchInBackground(relaunch.launch)
+	}
+}
+
+// holdIfPastBound registers the bound's hold for the task's latest attempt
+// when the task has been relaunched relaunch_attempts times and that hold is
+// not answered, which is the case decideReconciliation holds, and returns
+// it. Any other reading, or a failure to read or register, registers
+// nothing and reports false.
+func (s *Service) holdIfPastBound(ctx context.Context, id string) (store.Hold, bool) {
+	attempts, err := s.store.TaskAttempts(ctx, id)
+	if err != nil || len(attempts) == 0 {
+		return store.Hold{}, false
+	}
+	answered, err := s.relaunchAnswersOf(ctx, id, attempts)
+	relaunches := len(attempts) - 1
+	if err != nil || relaunches < s.cfg.RelaunchAttempts || answered.bound != boundUnanswered {
+		return store.Hold{}, false
+	}
+	h, err := s.holdAtBound(ctx, id, attempts, reconcileDecision{action: reconcileHold, surfaced: surfacedRelaunchBound,
+		reason: fmt.Sprintf("it has been relaunched %d times and relaunch_attempts is %d, and it was stopped", relaunches, s.cfg.RelaunchAttempts)})
+	if err != nil {
+		s.log.Printf("task %s is past its relaunch bound and its hold could not be registered: %v", id, err)
+		return store.Hold{}, false
+	}
+	return h, true
+}
+
 // retryNotBegun is the effect of a retry whose relaunch or dispatch was
-// refused now for a reason other than a further no-sweep hold, which each
-// caller tells apart first because the hold's type is its own. A refusal of
+// refused now for a reason other than a further no-sweep hold, or for a
+// stop's hold the relaunch bound, which each caller tells apart first because
+// the hold is its own. A refusal of
 // the isolation assertion was recorded on the attempt the retry began, so
 // the task resolves Failed from it, reconcile.go's table surfaces it rather
 // than relaunching, and dispatchDue passes it over: that is

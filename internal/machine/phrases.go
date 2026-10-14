@@ -492,6 +492,11 @@ var (
 		Consequence: "Nothing here can check that the earlier attempt left no process behind where the work is kept, so it waits on you.",
 		Decision:    "Answer the new decision to begin the work again anyway, or to leave it as it is.",
 	}
+	phraseRetryAtBound = Phrase{
+		Outcome:     "Your answer was recorded, and the work needs one more decision from you before it is begun again.",
+		Consequence: "It has already been begun again as many times as the program does on its own.",
+		Decision:    "Answer the new decision to begin the work again anyway, or to leave it as it is.",
+	}
 	phraseRetryRefused = Phrase{
 		Outcome:     "Your answer was recorded, and the work was not begun again: its local copy did not pass the check that keeps the work apart.",
 		Consequence: "Nothing begins it again on its own.",
@@ -522,6 +527,8 @@ func TaskAnsweredPhrase(a TaskAnswered) Phrase {
 		return phraseRetryDeferred
 	case AnswerRetryHeld:
 		return phraseRetryHeld
+	case AnswerRetryAtBound:
+		return phraseRetryAtBound
 	case AnswerRetryRefused:
 		return phraseRetryRefused
 	case AnswerRetryUndispatchable:
@@ -531,6 +538,64 @@ func TaskAnsweredPhrase(a TaskAnswered) Phrase {
 	}
 	return HoldPhrase(a.Hold)
 }
+
+// The steering rows, PRD section 6's "what you hear": a message as its
+// record stands, a stopped worker waiting on a decision, and a stop that
+// could not be shown to have ended the worker. None relays the message's
+// text or the worker's output, which are evidence and never relayed (P13).
+var (
+	phraseMessageUnread = Phrase{
+		Outcome:     "Your message reached the worker, which has not yet said it read it.",
+		Consequence: "Nothing sends it again; if it stays unread for a while, you are told once.",
+		Decision:    "Nothing to decide unless you are told it went unread.",
+	}
+	phraseMessageRead = Phrase{
+		Outcome:     "The worker said it read your message.",
+		Consequence: "What it does with it shows in its work.",
+		Decision:    "Nothing to decide.",
+	}
+	phraseMessageRefused = Phrase{
+		Outcome:     "Your message did not reach the worker.",
+		Consequence: "Nothing sends it again.",
+		Decision:    "Send it again while a worker is on the work, or end the worker and begin the work again with a note.",
+	}
+	phraseMessageUnknown = Phrase{
+		Outcome:     "Whether your message reached the worker is not known.",
+		Consequence: "Nothing sends it again.",
+		Decision:    "Look at the work directly before sending it again.",
+	}
+	phraseWorkerStopped = Phrase{
+		Outcome:     "The worker was ended, and what it had done was left where it was.",
+		Consequence: "Nothing more is done with the work until you answer, and nothing begins it again on its own.",
+		Decision:    taskAnswerDecision,
+	}
+	// PhraseStopUnverified is the row for a stop whose end the program could
+	// not show: the worker may still be running, and no decision was opened.
+	PhraseStopUnverified = Phrase{
+		Outcome:     "The worker could not be shown to have ended.",
+		Consequence: "No decision was opened, so the work is as it was and may still be moving.",
+		Decision:    "Look at the work directly, then ask for the stop again.",
+	}
+)
+
+// MessagePhrase is what a person reads about a message as its record
+// stands: read, once the worker acknowledged it; otherwise by its delivery,
+// written and not yet read, refused, or not known.
+func MessagePhrase(m store.Message) Phrase {
+	switch {
+	case m.Acknowledged():
+		return phraseMessageRead
+	case m.Delivery() == store.DeliveryWritten:
+		return phraseMessageUnread
+	case m.Delivery() == store.DeliveryRefused:
+		return phraseMessageRefused
+	}
+	return phraseMessageUnknown
+}
+
+// StopPhrase is what a person reads about a stop that ended the worker and
+// registered its hold.
+func StopPhrase(TaskStopped) Phrase { return phraseWorkerStopped }
 
 // The stream's own rows: what a person reads when the fleet view is told
 // something about the channel rather than about the work.
@@ -576,6 +641,127 @@ var (
 		Decision:    "Run assistant tasks for the current picture.",
 	}
 )
+
+// The catching-up rows: what a person reads of PRD section 9's catch-up
+// read, one heading per part with a row for the part when it is empty, the
+// rows for a landed record and for the landed records a read left out, and
+// the rows for a mark. Each heading is a row rather than a label, because a
+// part's name is not a sentence P13 lets reach a person on its own, and the
+// landed part's name is a state's word besides.
+var (
+	phraseWaitingOnYou = Phrase{
+		Outcome:     "These decisions are waiting on you, oldest first.",
+		Consequence: "The work each one holds does not move until it is answered.",
+		Decision:    "Answer each as its line says.",
+	}
+	phraseNothingWaiting = Phrase{
+		Outcome:     "Nothing is waiting on you.",
+		Consequence: "No work is stopped for an answer of yours.",
+		Decision:    "Nothing to decide.",
+	}
+	phraseLandedSince = Phrase{
+		Outcome:     "This work was merged or cleared away since you last marked what you had seen, newest first.",
+		Consequence: "It is shown here until you mark it as seen.",
+		Decision:    "Once you have read it, run assistant watch --mark-seen to mark it.",
+	}
+	phraseNothingLanded = Phrase{
+		Outcome:     "Nothing was merged or cleared away since you last marked what you had seen.",
+		Consequence: "There is nothing new to read here.",
+		Decision:    "Nothing to decide.",
+	}
+	phraseUnderWay = Phrase{
+		Outcome:     "This work is under way.",
+		Consequence: "It moves without an answer from you, unless its line says otherwise.",
+		Decision:    "Nothing to decide unless a line says so.",
+	}
+	phraseNothingUnderWay = Phrase{
+		Outcome:     "Nothing is under way.",
+		Consequence: "No work is moving right now.",
+		Decision:    "Nothing to decide.",
+	}
+	phraseStoppedUndecided = Phrase{
+		Outcome:     "This work stopped without asking you anything.",
+		Consequence: "Nothing more happens to it until it is picked up or let go.",
+		Decision:    "Read each line for what to do with it.",
+	}
+	phraseNothingStopped = Phrase{
+		Outcome:     "No work stopped without asking you anything.",
+		Consequence: "Nothing is left stuck without a decision.",
+		Decision:    "Nothing to decide.",
+	}
+	phraseWasMerged = Phrase{
+		Outcome:     "This work was merged.",
+		Consequence: "It is on the shared branch.",
+		Decision:    "Nothing to decide.",
+	}
+	phraseCopyCleared = Phrase{
+		Outcome:     "This work's local copy was removed after it was merged.",
+		Consequence: "Nothing of it is left here, and nothing was lost.",
+		Decision:    "Nothing to decide.",
+	}
+	phraseNothingMarked = Phrase{
+		Outcome:     "Nothing was marked as seen, because nothing merged or cleared away was shown.",
+		Consequence: "What you marked before stands.",
+		Decision:    "Nothing to decide.",
+	}
+)
+
+// CatchUpPhrases is what a person reads at the head of each of the catch-up
+// read's four parts, in the order the read gives them: the row for the
+// part, or the part's empty row when it lists nothing. MoreLanded is not a
+// part and has a row of its own, LandedMorePhrase.
+func CatchUpPhrases(c CatchUp) (waiting, landed, underWay, stopped Phrase) {
+	waiting, landed, underWay, stopped = phraseWaitingOnYou, phraseLandedSince, phraseUnderWay, phraseStoppedUndecided
+	if len(c.Waiting) == 0 {
+		waiting = phraseNothingWaiting
+	}
+	if len(c.Landed) == 0 {
+		landed = phraseNothingLanded
+	}
+	if len(c.UnderWay.Tasks)+len(c.UnderWay.Runs) == 0 {
+		underWay = phraseNothingUnderWay
+	}
+	if len(c.Stopped) == 0 {
+		stopped = phraseNothingStopped
+	}
+	return waiting, landed, underWay, stopped
+}
+
+// LandedPhrase is what a person reads about one landed record: the merge
+// row for a merge record and the cleared-away row for a cleanup record.
+// It is the record's row and not the task's, so a task whose copy was
+// removed after it merged reads as merged on its merge record's line.
+func LandedPhrase(l Landed) Phrase {
+	if l.Cleanup != nil && l.Merge == nil {
+		return phraseCopyCleared
+	}
+	return phraseWasMerged
+}
+
+// LandedMorePhrase is the row for the landed records a read counted and did
+// not show, because LandedLimit bounds a read. They stay unseen, so marking
+// what was shown is what brings them into the next read.
+func LandedMorePhrase(more int) Phrase {
+	return Phrase{
+		Outcome:     fmt.Sprintf("And %d more were merged or cleared away that are not shown here.", more),
+		Consequence: "They stay unseen, and are shown once those above are marked as seen.",
+		Decision:    "Mark those above as seen to read the rest.",
+	}
+}
+
+// MarkedPhrase is what a person reads once a mark was made: how many of
+// the records the read showed are now marked, or that nothing was, because
+// a read that showed nothing landed has nothing to mark.
+func MarkedPhrase(m Marked) Phrase {
+	if len(m.Marks) == 0 {
+		return phraseNothingMarked
+	}
+	return Phrase{
+		Outcome:     fmt.Sprintf("What was shown above as merged or cleared away, %d item(s), is now marked as seen.", len(m.Marks)),
+		Consequence: "It is not shown here again; anything that arrived after this read still is.",
+		Decision:    "Nothing to decide.",
+	}
+}
 
 // Cleanup rows, for a run's cleanup record: the copy was kept on a refusal,
 // or removed on a proof. A record with a proof and no removal yet is the
@@ -1056,7 +1242,9 @@ var PhraseNoReading = Phrase{
 // surface: a decision and a fix round's offer, a row per doctor check and
 // result and the verdict, the service lifecycle, a gate created, reattached
 // and removed, the gate's own rows, and the rows pointing at a run's evidence
-// and the two notices beside it. A templated row is listed with its
+// and the two notices beside it, and the catch-up read's: a heading and an
+// empty row per part, a row per kind of landed record, the row for what a
+// read left out, and the two rows for a mark. A templated row is listed with its
 // placeholder filled in. The result is a copy. Phrases is the same list as
 // strings.
 func TablePhrases() []Phrase {
@@ -1084,7 +1272,9 @@ func TablePhrases() []Phrase {
 	out = append(out, phraseRunAdvancing, phraseRunStalled, phraseRunUnrecorded)
 	out = append(out, HoldPhrase(store.Hold{Subject: holdPlaceholder}), HoldPhrase(store.Hold{Subject: holdPlaceholder, Resolution: store.Known("answered")}))
 	out = append(out, HoldPhrase(store.Hold{Subject: holdPlaceholder, TaskID: store.Known("a task")}))
-	out = append(out, phraseRetried, phraseRedispatched, phraseRetryDeferred, phraseRetryHeld, phraseRetryRefused, phraseRetryUndispatchable, phraseNotRetried)
+	out = append(out, phraseRetried, phraseRedispatched, phraseRetryDeferred, phraseRetryHeld, phraseRetryAtBound, phraseRetryRefused, phraseRetryUndispatchable, phraseNotRetried)
+	out = append(out, phraseMessageUnread, phraseMessageRead, phraseMessageRefused, phraseMessageUnknown,
+		phraseWorkerStopped, PhraseStopUnverified)
 	out = append(out, phraseCopyKept, phraseCopyRemoved, phraseCopyNotSwept)
 	out = append(out, PhraseUpdatesMissed, PhraseServiceStopping, PhraseWorkerSpoke, PhraseActivity, PhraseUnfamiliarUpdate)
 	out = append(out, PhraseServiceUp, PhraseServiceAbsent, PhraseGated, PhraseUngated, PhraseNoRun, PhraseNoRuns, PhraseNoFleetWork)
@@ -1098,5 +1288,9 @@ func TablePhrases() []Phrase {
 	out = append(out, PhraseAdmitted, PhraseValidationBegun, PhraseSupersededEarlier, PhraseNothingStartedFor, PhraseNothingSent, PhraseNoReading)
 	out = append(out, PhraseCopyBusy, PhraseCopyStillBusy)
 	out = append(out, PhraseRunRecordFollows, PhraseFindingsFollow, PhraseInputsNotApplied, PhraseAnswerNotApplied)
+	out = append(out, phraseWaitingOnYou, phraseNothingWaiting, phraseLandedSince, phraseNothingLanded,
+		phraseUnderWay, phraseNothingUnderWay, phraseStoppedUndecided, phraseNothingStopped)
+	out = append(out, phraseWasMerged, phraseCopyCleared, LandedMorePhrase(LandedLimit), MarkedPhrase(Marked{}),
+		MarkedPhrase(Marked{Marks: []store.SeenMark{{}}}))
 	return out
 }

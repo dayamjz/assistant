@@ -13,17 +13,31 @@ import (
 
 // watch is the fleet view: everything in flight, everything waiting on you.
 //
-// It reports what is in flight now and then follows the service's event
-// stream, so a caller sees the current state before it sees a delta. That
-// order is not a nicety: internal/ipc opens every subscription gapped, and a
-// consumer that applied a delta before reading state back would be applying it
-// to a base it never established.
+// It starts with PRD section 9's catching up, one read of what is waiting on
+// the person, what landed since they last marked what they had seen, what is
+// under way and what stopped without a decision, and then follows the
+// service's event stream, so a caller sees the current state before it sees
+// a delta. That order is not a nicety: internal/ipc opens every subscription
+// gapped, and a consumer that applied a delta before reading state back
+// would be applying it to a base it never established.
+//
+// Two flags are section 9's. --once prints the read and exits without
+// following the stream. --mark-seen marks seen exactly the landed records
+// the read showed, through the restricted mark, after printing it; a read
+// alone marks nothing, and a record recorded between the read and the mark
+// is not named by it, so it is shown next time. Answering a listed decision
+// is the existing --answer, with --task where a task holds, and nothing
+// here answers one.
 //
 // PRD section 9's four-question screen is the terminal interface's, which is
 // internal/ui's and does not exist here. This prints, which is the same
 // answers in the rendering this surface has.
 func watch(ctx context.Context, in *invocation) (any, error) {
-	if err := in.parseFlags("watch", func(*flag.FlagSet) {}); err != nil {
+	var once, markSeen bool
+	if err := in.parseFlags("watch", func(set *flag.FlagSet) {
+		set.BoolVar(&once, onceFlagName, false, "print what is waiting on you, what landed, what is under way and what stopped, and exit")
+		set.BoolVar(&markSeen, markSeenFlagName, false, "after printing, mark as seen exactly the merged and cleared-away work that was shown")
+	}); err != nil {
 		return nil, err
 	}
 	client, err := in.connect(ctx)
@@ -32,17 +46,31 @@ func watch(ctx context.Context, in *invocation) (any, error) {
 	}
 	defer func() { _ = client.Close() }()
 
-	var tasks machine.Tasks
-	if err := client.Call(ctx, ipc.MethodTasksList, nil, &tasks); err != nil {
+	var read machine.CatchUp
+	if err := client.Call(ctx, ipc.MethodCatchUpRead, nil, &read); err != nil {
 		return nil, err
 	}
-	stream, err := client.Subscribe(ctx, machine.SubscribeRequest{})
-	if err != nil {
-		return nil, err
+	var stream *ipc.Stream
+	if !once {
+		if stream, err = client.Subscribe(ctx, machine.SubscribeRequest{}); err != nil {
+			return nil, err
+		}
+		defer stream.Close()
 	}
-	defer stream.Close()
 
-	in.report(tasks)
+	in.report(read)
+	if markSeen {
+		marked := machine.Marked{Marks: []store.SeenMark{}}
+		if shown := read.Shown(); len(shown) > 0 {
+			if err := client.Call(ctx, ipc.MethodCatchUpMark, machine.MarkSeenRequest{Records: shown}, &marked); err != nil {
+				return nil, err
+			}
+		}
+		in.report(marked)
+	}
+	if once {
+		return nil, nil
+	}
 	in.progressf("watching; interrupt to stop")
 	for {
 		event, err := stream.Recv(ctx)
@@ -55,6 +83,13 @@ func watch(ctx context.Context, in *invocation) (any, error) {
 		in.report(event)
 	}
 }
+
+// The two flags watch takes, named once so the usage text and a test read
+// the same words.
+const (
+	onceFlagName     = "once"
+	markSeenFlagName = "mark-seen"
+)
 
 // report writes one thing the fleet view saw, in whichever rendering this
 // invocation asked for. It writes as it goes rather than collecting an answer,

@@ -50,6 +50,13 @@ const (
 	// KindHoldOpened is an open hold naming the task or one of its
 	// attributed runs, including a run moved to held with no worker event.
 	KindHoldOpened Kind = "hold-opened"
+	// KindMessageUnacknowledged is a message the program wrote to a task's
+	// worker that the worker has not acknowledged within the escalation
+	// window, PRD section 6's "an unacknowledged message surfaces once". It
+	// is always actionable: the window is the detector's, which makes the
+	// detection only once the window has elapsed from the record's written
+	// instant and only once per message, and nothing here resends it.
+	KindMessageUnacknowledged Kind = "message-unacknowledged"
 )
 
 // Class is how the flowchart decides a kind.
@@ -105,6 +112,7 @@ var kinds = []Row{
 	{Kind: KindNoChange, Class: ClassAbsorb, Produced: true},
 	{Kind: KindTerminalGone, Class: ClassResurface, Produced: true},
 	{Kind: KindHoldOpened, Class: ClassActionable, Produced: true},
+	{Kind: KindMessageUnacknowledged, Class: ClassActionable, Produced: true},
 }
 
 // Kinds returns every kind's row, in the flowchart's order. The result is a

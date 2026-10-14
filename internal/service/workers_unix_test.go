@@ -19,6 +19,7 @@ import (
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/principles"
+	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/service"
 	"github.com/dayamjz/assistant/internal/session"
 	"github.com/dayamjz/assistant/internal/store"
@@ -352,6 +353,58 @@ func TestTheQueueAndArmVerificationAreTheCoordinatorsAndNotAWorkers(t *testing.T
 		}
 		if arm.Outcome == supervisor.ArmFailed || arm.Sequence == 0 {
 			t.Fatalf("arm verification over the running service's own beacon answered %+v", arm)
+		}
+	})
+}
+
+// The seen mark PRD section 9's catching up reads is moved by the person or
+// the coordinator and never by a task's worker: catchup.mark from the
+// worker's group is refused as a worker and writes nothing, while the open
+// read answers it; the same mark from outside every worker group, naming
+// the same landed record, is taken, which is the positive control that the
+// refusal is the worker relation's and not the request's.
+func TestTheSeenMarkIsNotAWorkers(t *testing.T) {
+	launchedWorker(t, "task/four", func(w launched) {
+		running, group := w.running, w.group
+		records, err := store.Open(t.Context(), w.home.Database(), store.WithRedactor(redact.New()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = records.Close() }()
+		const landed = "run-landed-for-the-mark"
+		if _, err := records.CreateRun(t.Context(), store.Run{
+			ID: landed, RepositoryID: w.repository.ID, Branch: "landed", SubmittedHead: "aaaa", Base: "bbbb",
+			Intent: "land it", IntentSource: "push", Build: store.Build{Version: "v0.1.0", Revision: "0123456789abcdef", Go: "go1.25.0"},
+			ConfigDigest: "cfg",
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := records.TransitionRun(t.Context(), landed, []store.RunStatus{store.RunPending}, store.RunRunning); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := records.TransitionRunOnPullRequest(t.Context(), landed, []store.RunStatus{store.RunRunning}, store.RunPassed,
+			store.PullRequestRead{PullRequest: 7, Head: "0123abc", End: store.PullRequestMerged}, store.HoldClosure{}); err != nil {
+			t.Fatal(err)
+		}
+		mark := machine.MarkSeenRequest{Records: []store.SeenRecord{{Kind: store.SeenMerge, Key: landed}}}
+
+		if _, code := callAs(t, group, running.service, ipc.MethodCatchUpMark, mark); code != ipc.CodeWorker {
+			t.Fatalf("catchup.mark from the worker's group answered %q, want %q", code, ipc.CodeWorker)
+		}
+		if marks, err := records.SeenMarks(t.Context()); err != nil || len(marks) != 0 {
+			t.Fatalf("the refused mark wrote %+v (%v)", marks, err)
+		}
+		if _, code := callAs(t, group, running.service, ipc.MethodCatchUpRead, struct{}{}); code != "" {
+			t.Fatalf("catchup.read from the worker's group was refused with %q, and it is open", code)
+		}
+
+		var marked machine.Marked
+		if err := running.client.Call(t.Context(), ipc.MethodCatchUpMark, mark, &marked); err != nil {
+			t.Fatalf("catchup.mark from outside every worker group: %v", err)
+		}
+		marks, err := records.SeenMarks(t.Context())
+		if err != nil || len(marks) != 1 || marks[0].SeenRecord != mark.Records[0] || len(marked.Marks) != 1 {
+			t.Fatalf("the mark from outside left %+v (%v) and answered %+v, want the one record", marks, err, marked)
 		}
 	})
 }

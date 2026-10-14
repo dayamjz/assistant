@@ -59,3 +59,36 @@ func TestWakeAcknowledgerIsDerivedFromTheSurfaceAndNeverRead(t *testing.T) {
 		t.Fatalf("acknowledging as nobody = %v, want ErrNoAcknowledger", err)
 	}
 }
+
+// A message sent through this protocol is recorded as the coordinator's,
+// whatever the request says, on WakeAcknowledger's terms: the record read
+// back is the store's own, and the zero sender the derivation never produces
+// is what the store refuses, the control that a surface which stopped
+// deriving would be refused rather than recorded as nobody.
+func TestMessageSenderIsDerivedFromTheSurfaceAndNeverRead(t *testing.T) {
+	records := recordingStore(t)
+	ctx := context.Background()
+	if _, err := records.CreateTask(ctx, store.Task{ID: "abcdefghijkm", Shape: store.TaskInvestigation, Project: "one", Mode: "m", WorktreePath: "/w"}, store.Disposition{}); err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	attempt, err := records.BeginTaskAttempt(ctx, "abcdefghijkm", 0)
+	if err != nil {
+		t.Fatalf("BeginTaskAttempt: %v", err)
+	}
+	claims := []ipc.Request{
+		{Method: ipc.MethodTaskMessage},
+		{Method: ipc.MethodTaskMessage, Params: json.RawMessage(`{"sent_by":"person","by":"person"}`)},
+	}
+	for _, req := range claims {
+		if got := req.MessageSender(); got != store.SentByCoordinator() {
+			t.Fatalf("a request with body %s derives %s, want the coordinator", req.Params, got)
+		}
+	}
+	m, err := records.AppendMessage(ctx, "abcdefghijkm", attempt.Sequence, "stay on scope", claims[1].MessageSender())
+	if err != nil || m.SentBy != store.SentByCoordinator() {
+		t.Fatalf("the record says %s sent it (%v), want the coordinator", m.SentBy, err)
+	}
+	if _, err := records.AppendMessage(ctx, "abcdefghijkm", attempt.Sequence, "x", store.Sender{}); !errors.Is(err, store.ErrNoSender) {
+		t.Fatalf("a message from nobody = %v, want ErrNoSender", err)
+	}
+}

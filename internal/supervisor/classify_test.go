@@ -142,6 +142,17 @@ var oracle = map[cell]supervisor.Level{
 	{supervisor.KindHoldOpened, proof, open, true}:      supervisor.Surface,
 	{supervisor.KindHoldOpened, proof, elapsed, false}:  supervisor.Surface,
 	{supervisor.KindHoldOpened, proof, elapsed, true}:   supervisor.Surface,
+
+	// "message unacknowledged" -> Surface: always actionable. When it is
+	// detected is the loop's; once detected, nothing absorbs it.
+	{supervisor.KindMessageUnacknowledged, absent, open, false}:    supervisor.Surface,
+	{supervisor.KindMessageUnacknowledged, absent, open, true}:     supervisor.Surface,
+	{supervisor.KindMessageUnacknowledged, absent, elapsed, false}: supervisor.Surface,
+	{supervisor.KindMessageUnacknowledged, absent, elapsed, true}:  supervisor.Surface,
+	{supervisor.KindMessageUnacknowledged, proof, open, false}:     supervisor.Surface,
+	{supervisor.KindMessageUnacknowledged, proof, open, true}:      supervisor.Surface,
+	{supervisor.KindMessageUnacknowledged, proof, elapsed, false}:  supervisor.Surface,
+	{supervisor.KindMessageUnacknowledged, proof, elapsed, true}:   supervisor.Surface,
 }
 
 // eventKindWithRole picks a task event kind of the given role from
