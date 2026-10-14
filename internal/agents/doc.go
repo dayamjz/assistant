@@ -154,13 +154,24 @@
 // worker which never reads its input turns every later send into a wait,
 // and nothing here ends that wait but the caller's own context or Close.
 //
-// No adapter this build ships declares the capability. The scripted adapter
-// ScriptedFactory builds does, over the stand-in, so the conformance suite
-// holds the mechanism to the declaration and a layer built on workers can
-// run against something real; the Claude Code adapter's declaration is a
-// change of its own, made when the invocation mode it runs as a worker in is
-// known and a probe can check it. Until then nothing here launches a real
-// worker.
+// The Claude Code adapter declares the capability, and what stands behind
+// that declaration is narrower than a real CLI answering. Its Start runs the
+// CLI with --print and stream-json on both streams, the mode the CLI's --help
+// documents for realtime streaming input, and frames every send as one
+// stream-json user message, the shape Anthropic's Agent SDK writes to the same
+// CLI for a string prompt. The conformance probe holds that to the declaration
+// against internal/agents/standin, whose stream mode is chosen by the flags
+// the adapter puts on the wire and reads each line the way that SDK writes it:
+// a line that is not JSON ends it with status 1, a JSON line that is not a
+// user message is passed over, and a user message is answered with
+// stream-json lines. So what the conformance suite establishes is that this
+// package speaks that wire and keeps the process alive, driveable and endable
+// across it; it is not evidence that any installed CLI answers it, which the
+// stand-in cannot be, and the stand-in's modelling of the CLI's answers is a
+// record of what was observed of one version rather than a contract the CLI
+// states. The scripted adapter ScriptedFactory builds declares the capability
+// too, over the stand-in's line mode, so a layer built on workers can run
+// against plain lines it can script and read; it ships in no catalog.
 //
 // A worker produces no Record. The Recorder's unit is an invocation with a
 // purpose, and a worker has neither: it is started once and what it costs

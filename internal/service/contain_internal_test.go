@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/agents"
+	"github.com/dayamjz/assistant/internal/agents/standin"
+	"github.com/dayamjz/assistant/internal/principles"
 )
 
 // The two halves of the containment seam are pinned in two places, and this
@@ -152,5 +154,40 @@ func TestAnInvocationOutsideARunIsStillContained(t *testing.T) {
 	}
 	if !probe.asserted {
 		t.Fatal("the probe never ran, so nothing here was checked")
+	}
+}
+
+// The agent a stage body is handed is the resolved agent through
+// containRunner, and the shipped adapter is now a WorkerRunner, so this is
+// where the review path is kept from a worker: the wrapped Claude Code
+// adapter is no WorkerRunner, declares no worker sessions, and is refused by
+// name when a worker is asked of it, while it keeps the fixer session
+// agents.Resolve vouched for. A worker is memory for as long as it runs, so a
+// stage that could start one could review from inside a conversation, which
+// is what P4 keeps a review out of. The control is the unwrapped adapter,
+// which really is a WorkerRunner, so the assertions below are about what the
+// wrapper removed and not about an adapter that never had it.
+func TestTheWrappedShippedAdapterOffersAStageNoWorker(t *testing.T) {
+	principles.Cite(t, principles.P4)
+	resolved := standin.New(t, standin.Script{}).Runner()
+	if _, ok := resolved.(agents.WorkerRunner); !ok || !resolved.Capabilities().Has(agents.CapabilityWorkerSessions) {
+		t.Fatal("the shipped adapter carries or declares no worker, so wrapping it removes nothing")
+	}
+
+	wrapped := (&Service{registry: newRegistry()}).containRunner(resolved)
+	if _, ok := wrapped.(agents.WorkerRunner); ok {
+		t.Fatal("the wrapped shipped adapter is a WorkerRunner, so a stage body could start a worker")
+	}
+	if wrapped.Capabilities().Has(agents.CapabilityWorkerSessions) {
+		t.Fatal("the wrapped shipped adapter declares worker sessions it does not carry")
+	}
+	if _, ok := wrapped.(agents.SessionRunner); !ok {
+		t.Fatal("wrapping the shipped adapter lost the fixer session it declares")
+	}
+	_, err := agents.OpenWorker(t.Context(), wrapped, agents.WorkerSpec{Dir: t.TempDir(), Instructions: "work"})
+	var refusal *agents.CapabilityError
+	if !errors.As(err, &refusal) || refusal.Capability != agents.CapabilityWorkerSessions {
+		t.Fatalf("OpenWorker on the wrapped shipped adapter answered %v, want a *CapabilityError naming %s",
+			err, agents.CapabilityWorkerSessions)
 	}
 }

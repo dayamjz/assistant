@@ -50,15 +50,15 @@ func New(tb testing.TB, script Script, opts ...agents.ClaudeOption) *Agent {
 }
 
 // NewWorker is New over agents.ScriptedFactory instead of the Claude Code
-// factory: the Runner it hands back declares worker sessions as well as
-// resumable ones, so a test reaches a worker through agents.OpenWorker and a
-// one-shot invocation exactly as it would through New. The worker that
-// starts is this binary, answering as Script.Worker says.
+// factory: the Runner it hands back starts line-mode workers, which read and
+// answer plain lines, where New's starts stream-mode workers, which read
+// stream-json messages. Both declare worker sessions as well as resumable
+// ones, and a test reaches either worker through agents.OpenWorker.
 //
 // It is a second constructor rather than an option on New because which
 // adapter reads the stand-in is a fact a test holds: a test of the shipped
-// adapter asks for the shipped adapter, and a test that needs a worker asks
-// for the one adapter in this build that carries one.
+// adapter asks for the shipped adapter, and a test that wants to script and
+// read plain lines asks for the one adapter in this build that writes them.
 func NewWorker(tb testing.TB, script Script, opts ...agents.ClaudeOption) *Agent {
 	tb.Helper()
 	return newAgent(tb, script, handshakeFlag, agents.ScriptedFactory, opts...)

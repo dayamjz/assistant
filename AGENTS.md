@@ -301,9 +301,13 @@ Each has cost this repository more than one round of review.
   `vcs.StripRedirecting`, which owns what redirects git. The handle reports
   its process group and registers it nowhere; `internal/service`'s
   `containRunner` has no worker arm, because a worker's push is what the gate
-  admits. No shipped adapter declares `worker_sessions`; `ScriptedFactory` is the
-  declarer the conformance suite holds to the mechanism, and
-  `standin.NewWorker` is how a test gets a runner built from it. Reading agent output is `internal/findings`' job and
+  admits. The Claude Code adapter declares `worker_sessions`, starting the CLI
+  with stream-json on both streams and framing every send as one user
+  message; the conformance probe holds that to the stand-in's stream mode,
+  which proves the wire this package writes and nothing about an installed
+  CLI, and its `doc.go` says what the stand-in models and from where.
+  `ScriptedFactory` declares it over plain lines, and `standin.NewWorker` is
+  how a test gets a runner whose worker it can script line by line. Reading agent output is `internal/findings`' job and
   never a second parser here; the one choice this package makes is `Shape`, and
   `ShapeReview` is the only one carrying a `findings.Demand`, which
   `Invocation.Validate` requires there and refuses everywhere else. It also owns
@@ -501,9 +505,9 @@ Each has cost this repository more than one round of review.
   a later provider has is a row in `internal/agents`' table with its probe
   and declarer. `Pipe` is the reference provider and starts nothing: `Create`
   refuses an unproven `tasks.Isolation` with `ErrUnproven` and then asks the
-  resolved runner for a worker through `agents.OpenWorker`, so only the
-  scripted adapter answers it in this build and the real adapter's worker
-  mode is #95 line K. Its one creating caller is `internal/service`'s
+  resolved runner for a worker through `agents.OpenWorker`, so an adapter
+  without `worker_sessions` is refused there; its tests run the scripted
+  adapter's line mode. Its one creating caller is `internal/service`'s
   `launch.go`, which hands it a proof asserted again at launch rather than
   dispatch's; `Create` itself re-derives nothing. Its one observing caller
   is that package's `terminals.go`, which probes through `Probe` and

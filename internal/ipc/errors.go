@@ -46,6 +46,15 @@ var (
 	// worker may make and the peer is inside no worker group, so there is no
 	// task to attribute it to.
 	ErrNotWorker = sentinelFor(CodeNotWorker)
+	// ErrRefused reports a request the handler decided against the records
+	// and refused: a task a coordinator method may not act on as it stands,
+	// such as one not in a state the method is made from, a branch another
+	// task holds, or an anchored write another caller won first. It is
+	// neither a request that could not be read, which is ErrInvalidRequest,
+	// nor a fact that could not be established, which is ErrUnavailable, and
+	// the message says which record refused it and whether anything was
+	// recorded.
+	ErrRefused = sentinelFor(CodeRefused)
 	// ErrUnavailable reports that a fact the service needed to decide the
 	// request could not be established. It fails closed, so this is a refusal
 	// rather than a request served on an assumption.
@@ -100,6 +109,8 @@ const (
 	CodeWorker Code = "worker"
 	// CodeNotWorker maps to ErrNotWorker.
 	CodeNotWorker Code = "not-worker"
+	// CodeRefused maps to ErrRefused.
+	CodeRefused Code = "refused"
 	// CodeUnavailable maps to ErrUnavailable.
 	CodeUnavailable Code = "unavailable"
 	// CodeSubscriberStalled maps to ErrSubscriberStalled. The service reports
@@ -156,6 +167,7 @@ var codeRows = []struct {
 	{CodeContained, "ipc: refused, caller is contained by an active validation stage"},
 	{CodeWorker, "ipc: refused, caller is a task's worker"},
 	{CodeNotWorker, "ipc: refused, caller is not a task's worker"},
+	{CodeRefused, "ipc: refused by the records the request was decided against"},
 	{CodeUnavailable, "ipc: a fact this request depends on could not be established"},
 	{CodeSubscriberStalled, "ipc: subscriber stalled"},
 	{CodeEventUndeliverable, "ipc: event cannot be delivered on this connection"},

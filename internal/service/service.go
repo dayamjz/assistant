@@ -251,13 +251,19 @@ type Service struct {
 	// this service's memory and nothing durable: launch.go takes the proof
 	// as the value it re-asserts before it starts a worker, and a restart
 	// dispatches the task again. dispatch.go owns it and isolationOf is its
-	// one reader.
+	// one reader. A relaunch takes the slot again for its new attempt,
+	// through claimRelaunch, which is the one way a slot is retaken.
 	isolated map[string]tasks.Isolation
+	// claiming holds the tasks whose slot a dispatch or a relaunch has
+	// taken and not yet settled, so a relaunch cannot retake a slot that a
+	// claim in flight holds. dispatch.go owns it beside isolated.
+	claiming map[string]bool
 	// launched holds, per task, the terminal session launch.go started for
-	// the attempt this service dispatched: one session per attempt, and one
-	// attempt per task per service, so one entry per task. It is this
-	// service's memory, like the slot above: the attempt's record carries
-	// the session's reference and nothing durable carries the handle, so a
+	// the latest attempt this service launched: one session per attempt,
+	// one dispatch per task per service, and a relaunch replacing the
+	// session it superseded, so one entry per task. It is this service's
+	// memory, like the slot above: the attempt's record carries the
+	// session's reference and nothing durable carries the handle, so a
 	// service that restarts holds none of these and relaunches. Close ends
 	// every session here, and launch.go owns the map.
 	launched map[string]*session.Session
@@ -415,6 +421,7 @@ func Open(ctx context.Context, o Options) (*Service, error) {
 		topologies: make(map[string]*topology),
 		advancing:  make(map[string]*slot),
 		isolated:   make(map[string]tasks.Isolation),
+		claiming:   make(map[string]bool),
 		launched:   make(map[string]*session.Session),
 		starting:   make(map[branchKey]*branchGate),
 		stopping:   make(chan struct{}),

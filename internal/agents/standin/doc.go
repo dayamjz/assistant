@@ -98,17 +98,38 @@
 // should not be. internal/agents keeps them out of a Record by having no field
 // they fit in; this keeps them out of a Call the same way.
 //
-// # The worker mode, and what its Call proves
+// # The worker modes, and what a worker's Call proves
 //
-// A stand-in is started as a worker when the adapter puts no --print on its
-// command line, which is how the wire tells an interactive agent from a
-// one-shot invocation. NewWorker builds the one adapter in this build that
-// starts one, agents.ScriptedFactory, and a test reaches the worker through
-// agents.OpenWorker exactly as it reaches a fixer through agents.OpenFixer.
-// The worker reads its standard input line by line, instructions first, and
-// answers each line as Script.Worker says; a line nothing answers draws a note
-// on standard error and nothing on standard output, so silence is the
-// stand-in's and never a default.
+// A stand-in is started as a worker in one of two modes, each chosen by the
+// command line the adapter built, which is what the wire carries.
+//
+// Stream mode is the Claude Code adapter's: --print with --input-format
+// stream-json. New builds that adapter, and a test reaches its worker
+// through agents.OpenWorker exactly as it reaches a fixer through
+// agents.OpenFixer. The worker reads one JSON message per line and answers a
+// user message's text as Script.Worker says, in stream-json lines; the rules
+// it applies to a line are stated on serveStreamWorker. They are modelled on
+// two sources and no more. The input shape is what Anthropic's Python Agent
+// SDK writes to the CLI for a string prompt. The reactions are what the
+// Claude Code CLI did when it was driven this way by hand: it stayed running
+// after answering a message and answered a second one, exited 0 when its
+// input closed, exited 1 on a line that was not JSON with its input still
+// open, and passed over a JSON line that was not a user message. That is an
+// observation of one version, recorded in the pull request that added this
+// mode, and nothing re-checks it: no test here runs the real CLI, so a later
+// CLI that reacts differently is not noticed here. The stand-in also answers
+// with three lines per turn where the CLI prints more kinds of line than
+// that; a reader of a worker's output that relied on exactly three would be
+// relying on the stand-in.
+//
+// Line mode is the scripted adapter's: no --print at all. NewWorker builds
+// agents.ScriptedFactory, which starts one. The worker reads its standard
+// input line by line, instructions first, and answers each line as
+// Script.Worker says; a line nothing answers draws a note on standard error
+// and nothing on standard output, so silence is the stand-in's and never a
+// default. No real agent is known to this repository to answer plain lines
+// as a worker; the mode exists so a layer built on workers can script plain
+// lines and read them back.
 //
 // A worker's Call is the exception to "complete or absent": it is written
 // when the worker starts and rewritten whole, under the same number, as each
@@ -119,9 +140,9 @@
 // were sent afterwards, because nothing on the wire marks that, and a test
 // that needs the distinction scripts lines it can tell apart.
 //
-// Being a worker is not on the Call either, except as the absence of --print
-// the stand-in itself read: Call.Worker is the process's own account of how
-// it decided, not a second observation.
+// Being a worker is not on the Call either, except as the command line the
+// stand-in itself read: Call.Worker and Call.Stream are the process's own
+// account of how it decided, not a second observation.
 //
 // # What this package is not
 //

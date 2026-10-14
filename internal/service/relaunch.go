@@ -15,9 +15,10 @@ import (
 // "relaunched with context", and section 11's "relaunch in that same copy
 // with the same instructions plus a note".
 //
-// relaunchTask is the one function that relaunches, so a coordinator surface
-// that relaunches later (#95 line J) and the start-time pass in reconcile.go
-// go through the same claim and cannot both relaunch one task. It is
+// relaunchTask is the one function that relaunches, so the coordinator's
+// task.relaunch method (#95 line J, coordinator.go) and the start-time pass
+// in reconcile.go go through the same claim and cannot both relaunch one
+// task. It is
 // anchored rather than idempotent by convention: the attempt it begins is
 // store.BeginTaskAttempt anchored to the highest attempt this call read, so
 // two relaunchers that read the same latest attempt begin one between them
@@ -100,6 +101,12 @@ var errRelaunchNotDue = errors.New("service: the task is not one reconciliation 
 // reading somebody else reported.
 var errRelaunchUnprobed = errors.New("service: no terminal provider is wired into this service, so a terminal cannot be read as dead")
 
+// errRelaunchInFlight reports a relaunch asked of a task whose slot a
+// dispatch or another relaunch in this service holds unsettled. Nothing is
+// recorded; the claim in flight decides, and a relaunch asked again after
+// it settles is decided from the records it left.
+var errRelaunchInFlight = errors.New("service: a dispatch or a relaunch of the task is in flight in this service")
+
 // errRelaunchNotDead reports a re-probe immediately before the claim that
 // did not answer Dead: the terminal came back, or could not be observed
 // this time. Nothing is recorded, and PRD section 11 leaves it alone.
@@ -133,17 +140,52 @@ type relaunched struct {
 
 // relaunchTask relaunches one task in place, on the terms this file's
 // opening comment states, and returns the launch to make. It takes the
-// task's slot first, so dispatchDue and a second relaunch in this service
-// pass the task over; the store's anchor is what refuses a second relauncher
-// on another path or in another service.
+// task's slot first, through claimRelaunch, so dispatchDue passes the task
+// over and a second relaunch in this service while this one is in flight is
+// refused; the store's anchor is what refuses a second relauncher on
+// another path, in another service, or after this one settled. A slot this
+// service already held, because it dispatched or relaunched the task's
+// earlier attempt, is taken again, which is what lets a coordinator
+// relaunch a terminal that died while this service was up.
+//
+// Once the attempt is claimed, the session handle this service still holds
+// for the superseded attempt, if any, is released through the provider:
+// its process is gone, which the re-probe just read, and the launch that
+// follows replaces the handle, so a handle left here would be one Close
+// never reaches. A handle that does not name the superseded reference is
+// left alone, and a release that fails is logged; neither changes what was
+// recorded.
 func (s *Service) relaunchTask(ctx context.Context, id string) (relaunched, error) {
-	settle, err := s.claimDispatch(id)
+	settle, err := s.claimRelaunch(id)
 	if err != nil {
 		return relaunched{}, err
 	}
 	out, err := s.relaunchClaimed(ctx, id)
 	settle(out.launch.proof)
+	if err == nil {
+		s.releaseSuperseded(id, out.superseded)
+	}
 	return out, err
+}
+
+// releaseSuperseded closes and forgets the session this service holds for
+// a task when it is the one a relaunch superseded, on relaunchTask's terms.
+func (s *Service) releaseSuperseded(id, ref string) {
+	s.mu.Lock()
+	held, ok := s.launched[id]
+	built := s.built
+	if ok && built != nil && held.Reference().String() == ref {
+		delete(s.launched, id)
+	} else {
+		ok = false
+	}
+	s.mu.Unlock()
+	if !ok {
+		return
+	}
+	if err := built.sessions.Close(held); err != nil {
+		s.log.Printf("the superseded session %s of task %s was not released: %v", ref, id, err)
+	}
 }
 
 // relaunchClaimed is relaunchTask once the in-memory slot is taken.
