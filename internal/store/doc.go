@@ -111,6 +111,17 @@
 // anchored to the task's shape, read in the transaction that claims the
 // record, on the terms its doc states.
 //
+// ForgetRepository removes a repository and every run-keyed row in one
+// transaction, or refuses before removing anything. runRecords names the
+// tables whose rows go with a run and refusedRunRecords the ones whose row
+// refuses the removal (a task, a run process record), and a test derives the
+// run-keyed tables from the catalog and holds the two lists to it, with
+// seen_mark named by hand because its merge kind is keyed by the run through a
+// column the catalog cannot read. The merge record, the run cleanup record
+// and a merge record's seen mark go too: the migration named
+// forgetRunRecordsMigration narrows their delete seals to "while what they
+// describe stands", and ForgetRepository removes them after the run row.
+//
 // # The wake queue and the markers it is written with
 //
 // PRD section 8's wake is the durable wake queue: a table here and not a
