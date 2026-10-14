@@ -49,7 +49,12 @@ import (
 // open hold naming it or one of its runs, because a run moved to held
 // surfaces always and a task so held is not in flight on its state, so
 // nothing but this detection would carry the hold to the queue that then
-// keeps the task in flight. Everything else, the events past the marker and
+// keeps the task in flight. A second is made for every task on the same
+// terms: a message the record says was written and not acknowledged once
+// escalation_window has elapsed from its written instant, PRD section 6's
+// "an unacknowledged message surfaces once", read from the message record
+// and never from the history or a log, and keyed by the message so it
+// surfaces once; nothing here resends it. Everything else, the events past the marker and
 // the terminal, is read for a watched task only, and a task outside the set
 // has no marker written: a Complete task whose terminal cleanup closed
 // produces no terminal-gone wake and no wake for the history it finished
@@ -460,10 +465,17 @@ func (s *Service) pass(c *incarnation) passReport {
 		report.Err = err
 		return report
 	}
+	ctx, cancel = s.sup.bound(c.ctx)
+	unread, err := s.store.WrittenUnacknowledgedMessages(ctx)
+	cancel()
+	if err != nil {
+		report.Err = err
+		return report
+	}
 	providerWideSurfaced := false
 	for _, o := range observed {
 		id := o.Snapshot.Task.ID
-		report.Tasks[id] = s.superviseTask(c, o, probes, unacknowledged[id] > 0, now, &providerWideSurfaced)
+		report.Tasks[id] = s.superviseTask(c, o, probes, unacknowledged[id] > 0, unread[id], now, &providerWideSurfaced)
 	}
 	return report
 }
@@ -471,10 +483,10 @@ func (s *Service) pass(c *incarnation) passReport {
 // superviseTask is the pass over one task: the terminal reading for a watched
 // task, the decision, and the writes.
 func (s *Service) superviseTask(c *incarnation, o taskstate.Observed, probes map[string]session.Observation,
-	queued bool, now time.Time, providerWideSurfaced *bool) taskReport {
+	queued bool, unread []store.Message, now time.Time, providerWideSurfaced *bool) taskReport {
 	id := o.Snapshot.Task.ID
 	inFlight, decided := supervisor.StateInFlight(o.State.State)
-	obs := observation{observed: o, watched: inFlight || !decided || queued}
+	obs := observation{observed: o, watched: inFlight || !decided || queued, unread: unread}
 	var err error
 	ctx, cancel := s.sup.bound(c.ctx)
 	obs.markers, obs.has, err = s.store.WakeMarkers(ctx, id)
@@ -579,6 +591,9 @@ type observation struct {
 	// gone is which gone case the terminal was, empty when it was captured
 	// or there was no terminal to read.
 	gone gone
+	// unread is every message to the task the record says was written and
+	// not acknowledged, oldest first, read from the message record (P8).
+	unread []store.Message
 }
 
 // decision is what decide composed for one task: the detections with their
@@ -598,8 +613,12 @@ func surfacedKey(kind supervisor.Kind, marker string) string { return string(kin
 // count, and providerWideSurfaced is the pass's one-surface memory for the
 // provider-wide case.
 //
-// The detections, in order: an open hold not yet surfaced, and for a watched
-// task each event past the marker's sequence and then its terminal. The
+// The detections, in order: an open hold not yet surfaced, a message
+// written and not acknowledged once escalation_window has elapsed from the
+// instant the record says it was written, not yet surfaced, and for a
+// watched task each event past the marker's sequence and then its terminal.
+// The first two are made for every task, watched or not, and each surfaces
+// once: its key is in the wake table afterwards. The
 // terminal
 // reading is one of: terminal gone, with the case and the unobserved-since
 // instant in the marker, surfaced once per reference and case and then
@@ -635,6 +654,16 @@ func decide(o observation, cfg config.Config, now time.Time, providerWideSurface
 		}
 		wake, _ := supervisor.Of(supervisor.KindHoldOpened)
 		detect(wake, marker, supervisor.WindowOpen, false, supervisor.Stall{})
+	}
+	for _, m := range o.unread {
+		marker := messageUnacknowledgedMarker(m.ID)
+		written, ok := m.WrittenAt.Get()
+		if !ok || elapsed(written, cfg.EscalationWindow, now) != supervisor.WindowElapsed ||
+			seen(supervisor.KindMessageUnacknowledged, marker) {
+			continue
+		}
+		wake, _ := supervisor.Of(supervisor.KindMessageUnacknowledged)
+		detect(wake, marker, supervisor.WindowElapsed, false, supervisor.Stall{})
 	}
 	if !o.watched {
 		d.write = len(d.detections) > 0
@@ -723,6 +752,13 @@ func decide(o observation, cfg config.Config, now time.Time, providerWideSurface
 	}
 	return d
 }
+
+// messageUnacknowledgedMarker composes an unacknowledged message's wake
+// marker: the message's identifier, which is the whole of what makes it
+// surface once per message, since a detection whose (kind, marker) is
+// already in the wake table is not made again and the store holds the pair
+// unique.
+func messageUnacknowledgedMarker(id int64) string { return fmt.Sprintf("message:%d", id) }
 
 // terminalGoneMarker composes a terminal-gone wake's marker: the case, the
 // session reference and the unobserved-since instant, which is what

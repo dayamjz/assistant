@@ -146,6 +146,28 @@ func TestTheRelaunchBoundCountsRelaunchesFromAttemptRows(t *testing.T) {
 			t.Errorf("a Failed decided by the isolation refusal decides %+v, want a surface naming the refusal", got)
 		}
 	}
+	// A stop's hold answered stop leaves the task alone whatever the count
+	// and the other answers; answered retry it changes nothing here, so a
+	// stopped task's relaunch is counted toward the bound like any other.
+	for _, row := range []struct {
+		attempts int
+		stopped  boundAnswer
+		bound    boundAnswer
+		want     reconcileAction
+	}{
+		{1, boundStop, boundUnanswered, reconcileNothing},
+		{3, boundStop, boundRetry, reconcileNothing},
+		{1, boundRetry, boundUnanswered, reconcileRelaunch},
+		{3, boundRetry, boundUnanswered, reconcileHold},
+		{3, boundRetry, boundRetry, reconcileRelaunch},
+		{1, boundUnanswered, boundUnanswered, reconcileRelaunch},
+	} {
+		got := decideReconciliation(dead, attempts(row.attempts), 2, relaunchAnswers{bound: row.bound, stopped: row.stopped})
+		if got.action != row.want {
+			t.Errorf("%d attempts under a bound of 2 with the stop's hold answered %d and the bound's %d decide %+v, want %s",
+				row.attempts, row.stopped, row.bound, got, row.want)
+		}
+	}
 	live := dead
 	live.Basis.Process = taskstate.Live
 	if got := decideReconciliation(live, attempts(5), 2, relaunchAnswers{bound: boundRetry, unswept: boundRetry}); got.action != reconcileNothing || got.surfaced != "" {

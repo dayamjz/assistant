@@ -82,25 +82,10 @@ func (s *Store) appendTaskEvent(ctx context.Context, taskID, kind, detail string
 		return TaskEvent{}, fmt.Errorf("store: task %s: event has no kind", taskID)
 	}
 
-	now := nowUTC()
-	var sequence int64
+	var event TaskEvent
 	err := s.inTx(ctx, func(tx *sql.Tx) error {
-		if err := taskExists(ctx, tx, taskID); err != nil {
-			return err
-		}
-		var stands int64
-		if err := tx.QueryRowContext(ctx,
-			`SELECT COALESCE(MAX(sequence), 0) FROM task_event WHERE task_id = ?`, taskID).
-			Scan(&stands); err != nil {
-			return err
-		}
-		if expected, anchored := anchor.Get(); anchored && expected != stands {
-			return &TaskMovedError{Task: taskID, Anchor: AnchoredEvent, Expected: expected, Stands: stands}
-		}
-		sequence = stands + 1
-		_, err := tx.ExecContext(ctx,
-			`INSERT INTO task_event (task_id, sequence, kind, detail, at) VALUES (?, ?, ?, ?, ?)`,
-			taskID, sequence, kind, detail, encodeTime(now))
+		var err error
+		event, err = appendTaskEventTx(ctx, tx, taskID, kind, detail, anchor)
 		return err
 	})
 	if err != nil {
@@ -109,6 +94,33 @@ func (s *Store) appendTaskEvent(ctx context.Context, taskID, kind, detail string
 			return TaskEvent{}, err
 		}
 		return TaskEvent{}, fmt.Errorf("store: appending an event to task %s: %w", taskID, err)
+	}
+	return event, nil
+}
+
+// appendTaskEventTx is the append inside a transaction the caller holds, so
+// an accessor that writes another record with the event, AcknowledgeMessage,
+// writes both or neither. An unknown anchor accepts whatever the tip is; a
+// known one must equal it.
+func appendTaskEventTx(ctx context.Context, tx *sql.Tx, taskID, kind, detail string, anchor Optional[int64]) (TaskEvent, error) {
+	if err := taskExists(ctx, tx, taskID); err != nil {
+		return TaskEvent{}, err
+	}
+	var stands int64
+	if err := tx.QueryRowContext(ctx,
+		`SELECT COALESCE(MAX(sequence), 0) FROM task_event WHERE task_id = ?`, taskID).
+		Scan(&stands); err != nil {
+		return TaskEvent{}, err
+	}
+	if expected, anchored := anchor.Get(); anchored && expected != stands {
+		return TaskEvent{}, &TaskMovedError{Task: taskID, Anchor: AnchoredEvent, Expected: expected, Stands: stands}
+	}
+	now := nowUTC()
+	sequence := stands + 1
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO task_event (task_id, sequence, kind, detail, at) VALUES (?, ?, ?, ?, ?)`,
+		taskID, sequence, kind, detail, encodeTime(now)); err != nil {
+		return TaskEvent{}, err
 	}
 	return TaskEvent{TaskID: taskID, Sequence: sequence, Kind: kind, Detail: detail, At: now}, nil
 }

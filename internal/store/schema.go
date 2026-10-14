@@ -1007,4 +1007,74 @@ var schema = []migration{
 				END`,
 		},
 	},
+	{
+		version: 23,
+		name:    "steering messages",
+		statements: []string{
+			// PRD section 8's message record: one row per message sent to a
+			// task's worker, naming the task, the attempt it was sent to,
+			// the text with credentials removed, and who sent it, from the
+			// closed set sender.go names. It is the one place whether a
+			// message was delivered is read from (P8): no log line and no
+			// event answers that question.
+			//
+			// Three facts are recorded on it, each once and never revised.
+			// written_at is the provider's Send returning; refused_at with
+			// refusal is Send failing, with the reason; the two are
+			// exclusive, which the CHECK holds, and a row with neither is a
+			// message whose send never reported, which reads as unknown and
+			// is never resent. acknowledged_at with acknowledged_event is the
+			// worker's acknowledgement, written by AcknowledgeMessage in the
+			// transaction that appends that event to the task's history, so
+			// the event and the fact on the record cannot come apart.
+			`CREATE TABLE message (
+				id                 INTEGER PRIMARY KEY,
+				task_id            TEXT NOT NULL,
+				attempt            INTEGER NOT NULL,
+				text               TEXT NOT NULL,
+				sent_by            TEXT NOT NULL,
+				created_at         TEXT NOT NULL,
+				written_at         TEXT,
+				refused_at         TEXT,
+				refusal            TEXT,
+				acknowledged_at    TEXT,
+				acknowledged_event INTEGER,
+				FOREIGN KEY (task_id, attempt) REFERENCES task_attempt(task_id, sequence),
+				CHECK (written_at IS NULL OR refused_at IS NULL),
+				CHECK ((refused_at IS NULL) = (refusal IS NULL)),
+				CHECK ((acknowledged_at IS NULL) = (acknowledged_event IS NULL))
+			) STRICT`,
+			// The rows the supervisor loop reads each pass: written and not
+			// yet acknowledged.
+			`CREATE INDEX message_unacknowledged ON message(task_id, id)
+				WHERE written_at IS NOT NULL AND acknowledged_at IS NULL`,
+			// Appended means appended, on wake's terms: the identifying
+			// columns never change, the delivery fact is written once, the
+			// acknowledgement is written once, and no row is deleted. Like
+			// the other seals, this does not guard against a later
+			// migration that drops a trigger.
+			`CREATE TRIGGER message_is_appended
+				BEFORE UPDATE OF id, task_id, attempt, text, sent_by, created_at ON message
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a message is appended by the program that sent it and is not rewritten');
+				END`,
+			`CREATE TRIGGER message_delivery_is_recorded_once
+				BEFORE UPDATE OF written_at, refused_at, refusal ON message
+				WHEN OLD.written_at IS NOT NULL OR OLD.refused_at IS NOT NULL
+				BEGIN
+					SELECT RAISE(ABORT, 'store: whether a message was written or refused is recorded once and stands');
+				END`,
+			`CREATE TRIGGER message_is_acknowledged_once
+				BEFORE UPDATE OF acknowledged_at, acknowledged_event ON message
+				WHEN OLD.acknowledged_at IS NOT NULL
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a message is acknowledged once and the first acknowledgement stands');
+				END`,
+			`CREATE TRIGGER message_is_not_removed
+				BEFORE DELETE ON message
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a message is kept after it is delivered and is not deleted');
+				END`,
+		},
+	},
 }

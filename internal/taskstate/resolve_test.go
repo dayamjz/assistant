@@ -365,7 +365,8 @@ func TestTheWriterColumnKeepsTheProgramsKindsFromAWorker(t *testing.T) {
 }
 
 // isolation-refused carries a closed reason in its detail, checked by the
-// row's own decoder; every other kind's detail is free text and has none.
+// row's own decoder; message-acknowledged carries a message identifier,
+// checked by its own; every other kind's detail is free text and has none.
 func TestTheIsolationRefusalIsAClosedSet(t *testing.T) {
 	row, ok := Lookup("isolation-refused")
 	if !ok || row.Detail == nil {
@@ -390,8 +391,20 @@ func TestTheIsolationRefusalIsAClosedSet(t *testing.T) {
 			t.Errorf("ParseIsolationRefusal accepted %q", text)
 		}
 	}
+	acknowledged, ok := Lookup(store.MessageAcknowledgedEventKind)
+	if !ok || acknowledged.Detail == nil || acknowledged.Writer != WriterWorker || acknowledged.Role != RoleNote {
+		t.Fatalf("message-acknowledged is %+v, want a worker's note with a detail decoder", acknowledged)
+	}
+	if err := acknowledged.Detail("7"); err != nil {
+		t.Errorf("the acknowledgement's decoder refused a message identifier: %v", err)
+	}
+	for _, text := range []string{"", "seven", "0", "7 "} {
+		if err := acknowledged.Detail(text); err == nil {
+			t.Errorf("the acknowledgement's decoder accepted %q", text)
+		}
+	}
 	for _, other := range Kinds() {
-		if other.Kind != "isolation-refused" && other.Detail != nil {
+		if other.Kind != "isolation-refused" && other.Kind != store.MessageAcknowledgedEventKind && other.Detail != nil {
 			t.Errorf("kind %q has a detail decoder nobody specified", other.Kind)
 		}
 	}
