@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/config"
@@ -40,6 +41,13 @@ type promotionSubject struct {
 	gate      string
 	inGate    map[string]bool
 	exclusion *keyedExclusion
+	// posture is what the posture reader answers for the project, and
+	// postureErr, when set, fails it instead, as an unreadable trusted copy
+	// does. postureAsked counts the reads; it is atomic because the race test
+	// promotes on a goroutine of its own.
+	posture      config.Delivery
+	postureErr   error
+	postureAsked atomic.Int32
 }
 
 func newPromotionSubject(t *testing.T) *promotionSubject {
@@ -96,7 +104,8 @@ func newPromotionSubject(t *testing.T) *promotionSubject {
 		t.Fatalf("UpsertRepository: %v", err)
 	}
 	ps := &promotionSubject{home: h, store: s, primary: primary, gate: gatePath,
-		inGate: map[string]bool{}, exclusion: &keyedExclusion{locks: map[string]*sync.Mutex{}}}
+		inGate: map[string]bool{}, exclusion: &keyedExclusion{locks: map[string]*sync.Mutex{}},
+		posture: config.DeliveryGated}
 	ps.queue, err = New(Deps{
 		Home: h, Store: s, Reader: taskstate.NewReader(s, nil, nil), Exclude: ps.exclusion.hold,
 		BranchInGate: func(_ context.Context, r store.Repository, b string) (bool, error) {
@@ -104,7 +113,8 @@ func newPromotionSubject(t *testing.T) *promotionSubject {
 		},
 		GatePath: func(context.Context, store.Repository) (string, error) { return gatePath, nil },
 		Posture: func(context.Context, store.Repository, string) (config.Delivery, error) {
-			return config.DeliveryGated, nil
+			ps.postureAsked.Add(1)
+			return ps.posture, ps.postureErr
 		},
 	})
 	if err != nil {

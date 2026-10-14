@@ -306,6 +306,12 @@ type TaskPromoteRequest struct {
 	Branch string `json:"branch"`
 	// Intent is what the delivery is to do.
 	Intent string `json:"intent"`
+	// Delivery is a delivery posture the coordinator asks to record in place
+	// of the project's, "gated" or "local", or empty to record the project's
+	// own, read from its trusted copy as intake reads it. It may be stricter
+	// than the project's and never lighter, which promotion refuses on
+	// TaskCreateRequest.Delivery's terms.
+	Delivery string `json:"delivery,omitempty"`
 }
 
 // WakesRequest drains the durable wake queue.

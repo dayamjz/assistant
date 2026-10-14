@@ -28,7 +28,8 @@ import (
 // changes is the notification: a branch update whose pusher the worker group
 // set places in a task's worker group, for that task's own branch, on a task
 // recorded under config.DeliveryLocal, starts no run. The posture read is the
-// one intake recorded on the task, never a later read of the delivery key,
+// one intake or promotion recorded on the task, never a later read of the
+// delivery key,
 // and a task with no recorded posture is followed as the gate. Nothing else
 // is decided from the pusher: a push from outside every worker group is a
 // person's, and a person's push is consent to validation (P1), so it starts
@@ -67,8 +68,9 @@ import (
 //
 // # Residual gaps
 //
-//   - A task promoted to delivery carries no recorded posture, because
-//     promotion records none, and is followed as the gate.
+//   - A delivery task with no recorded posture is followed as the gate: one
+//     recorded before the column existed, or promoted before promotion
+//     recorded a posture. Nothing writes one onto such a task afterwards.
 //   - Each push of a local task's branch offers its commit on a hold of its
 //     own, and an answer closes the oldest open one, so a worker that pushed
 //     twice is approved or stopped one offer at a time, oldest first.

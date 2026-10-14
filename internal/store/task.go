@@ -49,14 +49,17 @@ type Task struct {
 	// is Delivery.
 	Mode string `json:"mode"`
 	// Delivery is the delivery posture the task was dispatched under, PRD
-	// section 6, recorded at intake in a field of its own and never revised:
-	// this record, not a later read of the delivery key, decides the task's
-	// path. It is unknown for an investigation task, which has no posture,
-	// for a task recorded before the column existed, and for a task promoted
-	// to delivery, which promotion does not record one for; internal/service
-	// follows an unknown posture as config.DeliveryGated, the full gate.
-	// CreateTask refuses a known value outside config.Delivery's closed set
-	// and a known value on an investigation task.
+	// section 6, in a field of its own and never revised: this record, not a
+	// later read of the delivery key, decides the task's path. It is
+	// recorded at intake for a delivery task, and by TransitionTaskShape for
+	// a task promoted to delivery, in the write that changes its shape. It
+	// is unknown for an investigation task, which has no posture, and for a
+	// delivery task recorded before the column existed or promoted before
+	// promotion recorded one; internal/service follows an unknown posture as
+	// config.DeliveryGated, the full gate. CreateTask refuses a known value
+	// outside config.Delivery's closed set and a known value on an
+	// investigation task, and the schema refuses any later write of it but
+	// promotion's.
 	Delivery Optional[config.Delivery] `json:"delivery"`
 	// WorktreePath is the isolated copy the worker was given. PRD principle
 	// P11 says isolation is asserted at launch rather than inferred from this

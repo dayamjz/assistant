@@ -1362,13 +1362,15 @@ flowchart TD
       nothing it delivers is a pass or carries a run outcome (P2). Its task resolves from its own
       records, and the phrase table words it as a change made on your machine without validation,
       never with the words a passed run uses.</li>
-    <li><b>Recorded at intake.</b> The posture a task was dispatched under is written on the task
-      when it is created, and that record, not a later read of the key, decides the task's path.</li>
+    <li><b>Recorded at intake or promotion.</b> The posture a task was dispatched under is written
+      on the task when it is created, or, for an investigation promoted into a delivery task, when
+      it is promoted, read from the trusted copy the same way. It is written once, and that record,
+      not a later read of the key, decides the task's path.</li>
     <li><b>Only a task's own push.</b> A push a person makes to the gate always starts the full run,
       because that push is consent to validation (P1). Admission places a push inside a registered
       worker group by the credentials the socket reports, and only such a push follows its task's
       posture.</li>
-    <li><b>Tighten, never loosen.</b> At intake the coordinator may record a stricter posture than the
+    <li><b>Tighten, never loosen.</b> At intake or promotion the coordinator may record a stricter posture than the
       project's, for work it judges risky. It may never record a lighter one, so no agent judgment
       weakens the path a project declared.</li>
     <li><b>Approving a <code>local</code> change.</b> The task holds for your approval. Answering
@@ -1845,7 +1847,7 @@ flowchart TB
         <tr><td><b>stage result</b></td><td>Authoritative</td><td>Per stage: status, findings, duration, log path, last activity, and the effective fix limit.</td></tr>
         <tr><td><b>round</b></td><td>History</td><td>One row per stage execution. Findings, which findings were selected and by whom, the exact payload sent to the fixer, and the one-line summary. This is what the pull request narrative is generated from.</td></tr>
         <tr><td><b>checkpoint history</b></td><td>Authoritative, appended</td><td>One entry per position a run has stood in: state, the node it has not yet run, the status it stood in, the decision it is halted on when it is halted, the bound accounting, and, on an entry a fork produced, the entry it was copied from. Appended after every node and never revised. The entry with the highest sequence is where the run stands, and it is the only record that answers that.</td></tr>
-        <tr><td><b>task</b></td><td>Authoritative</td><td>Shape, project, launch notation (how the worker was started), delivery posture (recorded at intake, in a field of its own), isolated copy path, session reference, linked run, linked pull request.</td></tr>
+        <tr><td><b>task</b></td><td>Authoritative</td><td>Shape, project, launch notation (how the worker was started), delivery posture (recorded at intake or promotion, in a field of its own), isolated copy path, session reference, linked run, linked pull request.</td></tr>
         <tr><td><b>task state</b></td><td>Resolved on read</td><td>Not a stored row. A resolution with its source attached, computed on each read from the records that own its facts, as of one consistent read of them; section 6 says what it rests on. Distinct from the event log, per P8.</td></tr>
         <tr><td><b>task event</b></td><td>History</td><td>Append-only. Every append is a wake.</td></tr>
         <tr><td><b>wake</b></td><td>Authoritative, appended</td><td>The durable wake queue, one row per actionable wake, written in the same transaction as the detector markers it advances and drained by the coordinator. A table here and not a directory, so a wake and its markers are one write. Draining acknowledges a row and never deletes it: drained rows are kept, and a row is actionable until acknowledged.</td></tr>

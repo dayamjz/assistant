@@ -62,14 +62,17 @@ func TestTheDeliveryPostureIsRecordedBesideTheLaunchNotation(t *testing.T) {
 	}
 
 	// A word outside the set in the column was not written by this package,
-	// and reading it back is refused rather than taken as some posture.
+	// and reading it back is refused rather than taken as some posture. It
+	// is inserted rather than updated in, because the schema refuses an
+	// update of a task's posture.
 	if err := s.inTx(ctx, func(tx *sql.Tx) error {
-		_, err := tx.ExecContext(ctx, `UPDATE task SET delivery = 'direct' WHERE id = ?`, plain.ID)
+		_, err := tx.ExecContext(ctx, `INSERT INTO task (id, shape, project, mode, worktree_path, created_at, delivery)
+			VALUES ('taskaaaaaaag', 'delivery', 'one', 'interactive', '/w/g', ?, 'direct')`, encodeTime(nowUTC()))
 		return err
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Task(ctx, plain.ID); !errors.Is(err, ErrUnknownDelivery) {
+	if _, err := s.Task(ctx, "taskaaaaaaag"); !errors.Is(err, ErrUnknownDelivery) {
 		t.Fatalf("a stored posture outside the set read back as %v, want ErrUnknownDelivery", err)
 	}
 }
@@ -164,7 +167,20 @@ func TestTheLocalLandingMigrationKeepsEarlierTasks(t *testing.T) {
 	if added.version == 0 {
 		t.Fatalf("the shipped schema has no migration named %q", localLandingMigration)
 	}
+	// The written-once trigger a later migration put on the column has to go
+	// before the column can, so that migration is forgotten too and
+	// reapplied with this one; it is found by name on the same terms.
+	var sealed migration
+	for _, m := range schema {
+		if m.name == promotedPostureMigration {
+			sealed = m
+		}
+	}
+	if sealed.version == 0 {
+		t.Fatalf("the shipped schema has no migration named %q", promotedPostureMigration)
+	}
 	for _, statement := range []string{
+		`DROP TRIGGER task_delivery_is_written_once`,
 		`DROP TABLE local_landing`,
 		`ALTER TABLE task DROP COLUMN delivery`,
 	} {
@@ -172,8 +188,10 @@ func TestTheLocalLandingMigrationKeepsEarlierTasks(t *testing.T) {
 			t.Fatalf("rolling the schema back with %q: %v", statement, err)
 		}
 	}
-	if _, err := s.write.ExecContext(ctx, `DELETE FROM schema_migration WHERE version = ?`, added.version); err != nil {
-		t.Fatalf("forgetting the migration: %v", err)
+	for _, version := range []int{added.version, sealed.version} {
+		if _, err := s.write.ExecContext(ctx, `DELETE FROM schema_migration WHERE version = ?`, version); err != nil {
+			t.Fatalf("forgetting migration %d: %v", version, err)
+		}
 	}
 	if _, err := s.write.ExecContext(ctx, `INSERT INTO task (id, shape, project, mode, worktree_path, created_at)
 		VALUES ('taskaaaaaaai', 'delivery', 'one', 'interactive', '/w/i', ?)`, encodeTime(nowUTC())); err != nil {
