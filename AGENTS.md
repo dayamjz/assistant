@@ -320,7 +320,7 @@ Each has cost this repository more than one round of review.
   so `Resolve` rather than the type is what keeps an assertion on it from
   finding an undeclared session mechanism. What a started agent may do is its
   `Grant`, decided by role in `grant.go` and never by a caller: only a fix
-  round edits, a worker edits and runs git, everything else reads; the
+  round edits, a worker edits and is allowed git, everything else reads; the
   permission and tool-list flags are reserved so an entry cannot widen one,
   and only the Claude Code adapter translates a grant. An adapter declares what it supports
   through `Runner.Capabilities`, the set is the table in `capability.go`, and
