@@ -4,10 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"strings"
 
 	"github.com/dayamjz/assistant/internal/config"
+	"github.com/dayamjz/assistant/internal/custody"
 	"github.com/dayamjz/assistant/internal/gate"
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
@@ -53,9 +53,11 @@ import (
 // The commit is fetched from the gate into the working copy by identifier,
 // internal/safety's DecideFastForward refuses anything but a fast-forward
 // from the anchor and anything section 11's custody classification would
-// block, and internal/vcs' AdvanceBranch moves the branch as a
+// block, and internal/vcs' MoveBranch moves the branch as a
 // compare-and-swap on the anchor, with the tree when the branch is checked out
-// there. Then the local landing record is written once, in the transaction
+// there. The decision and the move are internal/custody's FastForward, the
+// one fast-forward of a person's branch this build makes, which section 11's
+// behind row moves through as well. Then the local landing record is written once, in the transaction
 // that records the approval on the hold, and the task resolves Landed from it
 // in internal/taskstate's terminal tier. A refused approval records nothing:
 // the answer is refused with the reason, and the hold stays open for an
@@ -226,24 +228,22 @@ func (s *Service) landLocally(ctx context.Context, req ipc.Request, task store.T
 	} else if got != commit {
 		return store.LocalLanding{}, fmt.Errorf("service: the fetch of %s into %s landed %s", commit, repository.WorkingPath, got)
 	}
-	checkout, err := checkoutOf(ctx, primary, repository)
-	if err != nil {
-		return store.LocalLanding{}, err
-	}
 	anchor, err := safety.RestoreObservedFromCheckpoint(safety.ObservationRecord{
 		Remote: target.Remote, Ref: target.Ref, Exists: true, Commit: tip,
 	})
 	if err != nil {
 		return store.LocalLanding{}, fmt.Errorf("service: the anchor hold %s carries: %w", hold.Key, err)
 	}
-	decision, err := safety.New(primary).DecideFastForward(ctx, safety.Update{Target: target, Proposed: commit, Anchor: anchor}, checkout)
+	decision, err := custody.FastForward(ctx, primary, safety.Update{Target: target, Proposed: commit, Anchor: anchor},
+		repository.DefaultBranch, "assistant: approved local landing of task "+task.ID)
 	if err != nil {
-		return store.LocalLanding{}, err
-	}
-	before := decision.Anchor().State().Commit
-	if err := primary.AdvanceBranch(ctx, repository.DefaultBranch, before, decision.Proposed()); err != nil {
+		var refusal *safety.Refusal
+		if errors.As(err, &refusal) {
+			return store.LocalLanding{}, err
+		}
 		return store.LocalLanding{}, fmt.Errorf("service: moving %s in %s: %w", repository.DefaultBranch, repository.WorkingPath, err)
 	}
+	before := decision.Anchor().State().Commit
 	landing, err := s.store.RecordLocalLanding(ctx, store.LocalLanding{
 		Task: task.ID, Commit: decision.Proposed(), Branch: target.Ref, Before: before, After: decision.Proposed(),
 	}, store.HoldClosure{Hold: hold, Resolution: machine.AnswerApprove, By: req.HoldResolver()})
@@ -253,38 +253,6 @@ func (s *Service) landLocally(ctx context.Context, req ipc.Request, task store.T
 		return store.LocalLanding{}, err
 	}
 	return landing, nil
-}
-
-// checkoutOf reads where the default branch is checked out, for custody:
-// in the working copy itself, with its tree's state, and in any other
-// worktree of it.
-func checkoutOf(ctx context.Context, primary *vcs.Repository, repository store.Repository) (safety.Checkout, error) {
-	inv, err := primary.Inventory(ctx)
-	if err != nil {
-		return safety.Checkout{}, fmt.Errorf("service: reading %s: %w", repository.WorkingPath, err)
-	}
-	c := safety.Checkout{Here: inv.Head.Branch == repository.DefaultBranch, Dirty: inv.Dirty, Untracked: inv.Untracked}
-	worktrees, err := primary.ListWorktrees(ctx)
-	if err != nil {
-		return safety.Checkout{}, fmt.Errorf("service: listing the worktrees of %s: %w", repository.WorkingPath, err)
-	}
-	here := canonical(repository.WorkingPath)
-	for _, w := range worktrees {
-		if !w.Bare && w.Branch == repository.DefaultBranch && canonical(w.Path) != here {
-			c.Elsewhere = append(c.Elsewhere, w.Path)
-		}
-	}
-	return c, nil
-}
-
-// canonical is a path with its links resolved, or the path cleaned when it
-// cannot be resolved, so the working copy is not counted as a worktree
-// other than itself.
-func canonical(path string) string {
-	if resolved, err := filepath.EvalSymlinks(path); err == nil {
-		return resolved
-	}
-	return filepath.Clean(path)
 }
 
 // answerLocal acts on an answer to a local task's approval hold: approve
