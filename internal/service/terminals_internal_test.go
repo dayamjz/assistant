@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/session"
@@ -36,13 +37,33 @@ func TestTheTerminalSeamAnswersThroughTheServicesProvider(t *testing.T) {
 	if got := terminals.Probe(ctx, ref); got.Liveness != taskstate.Live || got.Reason != session.ReasonHeld {
 		t.Fatalf("the launched session probes %+v through the seam, want Live through the held handle", got)
 	}
-	byHandle, err := provider.Capture(launched)
-	if err != nil {
-		t.Fatal(err)
-	}
-	byReference, err := terminals.Capture(ctx, ref)
-	if err != nil || byReference.Digest != byHandle.Digest || byReference.Text != byHandle.Text {
-		t.Fatalf("the capture by reference is %+v (%v), want the handle's %+v", byReference, err, byHandle)
+	// The worker may still be printing what it was sent, so the two reads
+	// are compared only when a handle read on each side of the reference
+	// read agrees: the output did not move across it.
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		before, err := provider.Capture(launched)
+		if err != nil {
+			t.Fatal(err)
+		}
+		byReference, err := terminals.Capture(ctx, ref)
+		if err != nil {
+			t.Fatalf("the capture by reference failed: %v", err)
+		}
+		after, err := provider.Capture(launched)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if before.Digest == after.Digest && before.Text == after.Text {
+			if byReference.Digest != before.Digest || byReference.Text != before.Text {
+				t.Fatalf("the capture by reference is %+v, want the handle's %+v", byReference, before)
+			}
+			break
+		}
+		if !time.Now().Before(deadline) {
+			t.Fatalf("the worker's output never settled; the last handle read is %+v", after)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 
 	other := session.Reference{Home: session.HomeMarker(sub.service.home), Task: sub.task, PID: 1 << 30, Start: 1}
