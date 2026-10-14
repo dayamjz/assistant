@@ -15,6 +15,15 @@ handed over:
 git push assistant BRANCH
 ```
 
+`init` also records the repository's default branch, which is where trusted
+configuration is read from. It takes the branch this working copy records
+origin's HEAD as naming, reads nothing over the network, and never takes the
+branch you are standing on. When the working copy has no origin, records no
+HEAD for it, or records one pointing outside origin's branches, `init` refuses
+and sets up no gate; record it with `git remote set-head origin --auto`, or name
+the branch with `--default-branch`. Either way `init` says which branch it
+recorded and where that answer came from.
+
 The gate's admission hook decides whether the push may proceed, and its
 notification hook starts a run for that branch and commit. A push that deletes
 a branch, or carries anything that is not a branch, starts nothing. An ordinary
