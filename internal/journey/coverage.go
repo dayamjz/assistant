@@ -196,7 +196,17 @@ func Coverage() []Established {
 				"pattern would have matched survives. Those checks run on unix; where no identity read " +
 				"exists they are skipped saying nothing is established, where no local socket transport " +
 				"exists the recovery checks are skipped rather than passing, and Windows establishes the " +
-				"identity read and EndGroup's verified leader and nothing about recovery."},
+				"identity read and EndGroup's verified leader and nothing about recovery. After every " +
+				"kill the branch is also asked assistant sync through the binary and held to " +
+				"internal/custody's pipeline-holds class with nothing to carry out, which is PRD section " +
+				"11's classification of a branch whose run is resumable, so that half of section 12's " +
+				"criterion is driven here. What no walk here drives through the binary is the class of " +
+				"a run that ended after it moved the work - recoverable, behind, and the two diverged " +
+				"rows - because no walk ends a run with its work moved and pushed to a code host: " +
+				"internal/custody's tests establish each class over real repositories, and " +
+				"internal/service's establishes recoverable on a commit its copy holds past the last " +
+				"checkpoint, the work a kill mid-stage leaves, both at package reach. That gap is " +
+				"recorded here rather than closed."},
 		{principles.P7, ReachBinary,
 			"The git template that would choose what a gate is born with is refused by the binary, and " +
 				"the environment channel is shown closed. How the initialization came out is the whole " +
@@ -346,10 +356,9 @@ func Coverage() []Established {
 				"evidence documents PRD section 9 names, the detail view, the relay of a finding that " +
 				"needs a decision and the usage view, and keep exact identifiers and stage names as P13 lets them; " +
 				"internal/cli's evidence test cites P13 for the phrase-table row pointing at each and " +
-				"every line beside them, against counterfeits it must reject. The one it enumerates as " +
-				"unsettled, which is " + strings.Join(p13Remaining, ", ") + ", still prints this build's " +
-				"words: a plan's steps belong to the custody module this build does not have, and the " +
-				"one plan it makes is assistant sync's refusal, whose sentence is printed as written. " +
+				"every line beside them, against counterfeits it must reject. None is enumerated as " +
+				"unsettled: the plan, the last that was, speaks internal/custody's classes, refusals " +
+				"and steps through rows of the phrase table now that the custody module exists. " +
 				"The refusal and usage text the command surface writes on standard error, and the " +
 				"next-action line after it, are held by no test and are outside the citation. All three " +
 				"lists are checked against " +
@@ -376,10 +385,10 @@ func Coverage() []Established {
 // leaving the note to drift.
 var (
 	p13Covered = []string{"status", "run", "runs", "tasks", "task", "service", "event", "host stop", "host install",
-		"decision", "doctor", "lifecycle", "init", "eject", "health", "admission", "notification",
+		"decision", "doctor", "lifecycle", "init", "plan", "eject", "health", "admission", "notification",
 		"task answer", "catch up", "marked seen", "fallback"}
 	p13Evidence  = []string{"details", "findings", "usage"}
-	p13Remaining = []string{"plan"}
+	p13Remaining []string
 )
 
 // P13Renderers returns the renderers the P13 row says the phrase table

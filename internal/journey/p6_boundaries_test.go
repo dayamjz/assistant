@@ -5,6 +5,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/dayamjz/assistant/internal/custody"
 	"github.com/dayamjz/assistant/internal/journey"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/principles"
@@ -26,6 +27,10 @@ type boundary struct {
 	// be equal for the least interesting reason there is.
 	servedBy    int
 	recoveredBy int
+	// custody is what assistant sync answered for the branch once a service
+	// was serving the home again: PRD section 11's classification, which the
+	// criterion's "the classification is correct" is read as here.
+	custody machine.Plan
 }
 
 // survival is a whole run driven with the service killed at every stage
@@ -95,11 +100,17 @@ func TestARunSurvivesTheServiceBeingKilledAtEveryStageBoundary(t *testing.T) {
 		if err := serving(t, j); err != nil {
 			t.Fatalf("serving the home again after the kill at %s: %v", current.Position, err)
 		}
+		recovered := startRun(t, j)
+		var plan machine.Plan
+		if synced := j.Command("--json", "sync"); firstDocument(synced.Stdout, &plan) != nil {
+			t.Fatalf("assistant sync after the kill at %s did not answer a plan:\n%s%s", current.Position, synced.Stdout, synced.Stderr)
+		}
 		observed.boundaries = append(observed.boundaries, boundary{
 			standing:    current,
-			recovered:   startRun(t, j),
+			recovered:   recovered,
 			servedBy:    served,
 			recoveredBy: j.ServicePID(),
+			custody:     plan,
 		})
 		current = decodeRun(t, succeeds(t, j.Command("--answer", "approved")))
 	}
@@ -249,6 +260,19 @@ func TestARunSurvivesTheServiceBeingKilledAtEveryStageBoundary(t *testing.T) {
 				},
 			},
 			{
+				States: "the branch classified as one the pipeline holds after every kill, with nothing to carry out",
+				Holds: func(s survival) error {
+					return atEachBoundary(s, func(stage string, at boundary) error {
+						c := at.custody.Classification
+						if c == nil || c.Class != custody.ClassPipelineHolds || len(at.custody.Steps) != 0 || at.custody.Applied {
+							return fmt.Errorf("killed at %s: assistant sync answered %+v rather than that the pipeline "+
+								"holds the branch", stage, at.custody)
+						}
+						return nil
+					})
+				},
+			},
+			{
 				States: "the run reached the end of the gate after the kills",
 				Holds: func(s survival) error {
 					if s.ended.Outcome != machine.OutcomeChecksPassed {
@@ -350,6 +374,19 @@ func TestARunSurvivesTheServiceBeingKilledAtEveryStageBoundary(t *testing.T) {
 				s.boundaries = slices.Delete(s.boundaries, at(4), at(4)+1)
 				return s
 			}},
+			// The class this puts in its place is the one custody gives a
+			// run that ended where it began, which this branch's run would
+			// be classified as had the kill read it as over.
+			{Named: "the branch came back classified as though its run had ended",
+				Break: func(s survival) survival {
+					s = cloneSurvival(s)
+					if c := s.boundaries[at(2)].custody.Classification; c != nil {
+						ended := *c
+						ended.Class = custody.ClassYoursAlready
+						s.boundaries[at(2)].custody.Classification = &ended
+					}
+					return s
+				}},
 			{Named: "the run never reached the end of the gate after the kills",
 				Break: func(s survival) survival {
 					s = cloneSurvival(s)

@@ -15,7 +15,7 @@ gate next to your CI and forge.
 ## Status
 
 Early. The product requirements are settled and checked in at
-[`docs/prd.html`](docs/prd.html). Twenty-eight pieces exist so far, and the
+[`docs/prd.html`](docs/prd.html). Twenty-nine pieces exist so far, and the
 binary can be driven. The execution
 engine in `internal/graph` is the first: the graph builder with its
 construction-time checks, an executor with halt points and bounded cycles, and
@@ -126,7 +126,15 @@ and promotion. The twenty-seventh is `internal/supervisor`, the pure wake
 classifier and stop-guard predicate, with `internal/supervisor/feed` as the
 edge that reads the beacon, the lock and the database for it. The
 twenty-eighth is `internal/session`, the terminal session a worker runs in,
-behind a five-operation provider.
+behind a five-operation provider. The twenty-ninth is `internal/custody`, PRD
+section 11's custody of your branch: `assistant sync` classifies the branch
+against what the pipeline holds for it, prints the exact steps, and with
+`--confirm` brings back work a finished run moved, fast-forwards a branch that
+is behind, or adopts a diverged head only on a three-way merge proving the
+contents match, keeping the replaced head first; it never stashes, merges,
+rebases, switches or deletes a branch, or writes to a remote, and
+`assistant status` reports the same classification without fetching or
+writing anything.
 
 So `assistant` builds and runs. A run can be started, reported on, answered and
 carried on across separate invocations, with the service restarted in between,
@@ -194,10 +202,8 @@ What this build does not do yet, so nothing here claims it: the only session
 provider is `internal/session`'s pipe, so a worker does not yet run in a
 terminal you can attach to and type into; `direct` delivery stays deferred under
 PRD section 12 and is refused at parse; routing among agents waits for a
-second adapter; `assistant sync` prints no reconciliation steps,
-because the custody module that would produce them does not exist yet (see
-`internal/cli/render.go`); and
-interrupting a worker is refused because no adapter declares it.
+second adapter; and interrupting a worker is refused because no adapter
+declares it.
 
 ## The two promises
 
@@ -233,6 +239,7 @@ their terminal.
 | `internal/checkpoints` | The durable `graph.CheckpointStore` over `internal/store`: a run's checkpoint history, appends anchored to what the caller observed, and the fork that copies a run's history up to a point into a new run. |
 | `internal/cli` | The command surface: the verbs PRD section 9 specifies, their flags, the two renderings of one answer, and the subcommands a gate's hooks and its remote invoke. It holds no validation logic. |
 | `internal/config` | The configuration schema: layers, defaults, merge, validation, path matcher. |
+| `internal/custody` | Custody of a person's branch, PRD section 11: the six classes a branch is in relative to what the pipeline holds, the exact steps each allows, and the only path that moves a person's branch, every move a decision of `internal/safety`'s anchored on the run's own observation. |
 | `internal/findings` | The stage vocabulary: findings, actions, reports, parsing of agent output, and the evidence a review report's findings are bound to. |
 | `internal/fixture` | The adversarial subject repository the end-to-end harness validates against: the seven scenarios, the conditions planted in them, and what each one is expected to produce. |
 | `internal/forge` | The only package that talks to a code host: the provider interface over pull requests, mergeability, checks and a merge bound to a head, and the GitHub adapter over the `gh` command line. `internal/forge/forgetest` is its over-the-wire stand-in. |
@@ -282,6 +289,8 @@ assistant runs --usage=7d      # what the stage agents' calls cost, by agent and
 assistant host install         # print the stop guard line for the coordinator's host
 assistant --task ID --answer retry   # answer a task that is waiting on you
 assistant status               # repository, gate, service, run, branch
+assistant sync                 # how this branch stands against what the pipeline holds, and the plan
+assistant sync --confirm       # carry that plan out
 assistant --json status        # the same answer as one structured document
 assistant doctor               # can a run start at all, and what stops one
 ```

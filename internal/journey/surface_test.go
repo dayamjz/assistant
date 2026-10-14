@@ -203,9 +203,9 @@ func TestTheWholeCommandSurfaceAnswersOneDocumentPerInvocation(t *testing.T) {
 		t.Fatalf("assistant watch returned on its own, and it follows a stream until it is stopped:\n%s", watching)
 	}
 
-	// The verb that is present and says what is missing, which answers a
-	// document reporting that nothing was changed and exits as an operational
-	// failure.
+	// assistant sync, which answers internal/custody's plan for the branch -
+	// its classification and steps, or the refusal to make one - as one
+	// document, without --confirm and so without changing anything.
 	drive[machine.Plan](t, &observed, j, "sync")
 
 	// The two things that are asked for rather than produced by a verb. Both
