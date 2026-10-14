@@ -1,6 +1,8 @@
 package machine
 
 import (
+	"fmt"
+
 	"github.com/dayamjz/assistant/internal/gate"
 	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/store"
@@ -87,10 +89,48 @@ type StartRequest struct {
 // The branch is read from the working copy this names, the same way a start
 // reads it, so a rerun never acts on a branch the caller is not on. A branch
 // with no run of its own is refused by that branch's name rather than answered
-// with another branch's run.
+// with another branch's run. A working copy whose HEAD is not the head the
+// branch's last run recorded is refused with RerunMoved, and no run begins.
 type RerunRequest struct {
 	Working
 }
+
+// RerunMoved is a rerun refused because the working copy it names stands at a
+// commit other than the one the rerun would validate: Local is the commit the
+// working copy's HEAD resolved to, Recorded is the head the branch's last run
+// recorded, which is what a rerun validates, and Branch is the branch both are
+// about. A rerun refused this way began no run and recorded nothing, and
+// reading HEAD changed nothing in the working copy.
+//
+// It is a refusal rather than an answer, so it travels as an error: its
+// message is RerunMovedPhrase followed by both commits and the two commands
+// that validate Local instead, a push to the gate's remote and a start with an
+// intent. The commits and the commands are machine text a person copies, so
+// they are beside the row rather than in it.
+type RerunMoved struct {
+	// Branch is the branch the working copy is on.
+	Branch string `json:"branch"`
+	// Local is the commit the working copy stands at.
+	Local string `json:"local"`
+	// Recorded is the commit a rerun of Branch would validate.
+	Recorded string `json:"recorded"`
+}
+
+// Error is the refusal as a person reads it: the row, then the commit they
+// are on, the commit a rerun would validate, and the commands that validate
+// theirs instead.
+func (m RerunMoved) Error() string {
+	return fmt.Sprintf("%s %s %s. %s %s. %s git push %s %s, or assistant --intent followed by what it sets out to do.",
+		RerunMovedPhrase(), rerunLocalLabel, m.Local, rerunRecordedLabel, m.Recorded, rerunRemedyLabel, gate.RemoteName, m.Branch)
+}
+
+// The labels RerunMoved puts before the machine text it carries beside its
+// row.
+const (
+	rerunLocalLabel    = "The commit you are on:"
+	rerunRecordedLabel = "The commit a fresh run would validate:"
+	rerunRemedyLabel   = "To validate yours:"
+)
 
 // RespondRequest answers the decision a run is holding on, and blocks until
 // the run reaches its next decision point or a terminal outcome.

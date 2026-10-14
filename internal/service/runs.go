@@ -142,7 +142,11 @@ func (s *Service) rerun(ctx context.Context, req machine.RerunRequest) (machine.
 	if err != nil {
 		return machine.Run{}, fmt.Errorf("service: reading the branch to run again: %w", err)
 	}
-	record, err := s.claimRerun(ctx, branchKey{repository: repository.ID, branch: branch})
+	local, err := working.ResolveCommit(ctx, "HEAD")
+	if err != nil {
+		return machine.Run{}, fmt.Errorf("service: reading the commit this checkout stands at: %w", err)
+	}
+	record, err := s.claimRerun(ctx, branchKey{repository: repository.ID, branch: branch}, local)
 	if err != nil {
 		return machine.Run{}, err
 	}
@@ -164,7 +168,15 @@ func (s *Service) rerun(ctx context.Context, req machine.RerunRequest) (machine.
 // the branch with two runs. Reading the run being carried forward is inside
 // the claim too, because the head and the intent the new record is built from
 // have to be the ones that were there when the decision was made.
-func (s *Service) claimRerun(ctx context.Context, key branchKey) (store.Run, error) {
+//
+// local is the commit the caller's working copy stood at when the request was
+// read. A rerun validates the head the branch's last run recorded, so when
+// local is a different commit the rerun is refused with rerunMoved naming both
+// and nothing is created: validating the recorded head would re-vet a commit
+// the person has moved on from and say nothing about theirs. local is read
+// before the claim, as start reads its head, so a commit made after that read
+// and before the claim is not seen.
+func (s *Service) claimRerun(ctx context.Context, key branchKey, local string) (store.Run, error) {
 	release, err := s.holdBranch(ctx, key)
 	if err != nil {
 		return store.Run{}, err
@@ -180,16 +192,32 @@ func (s *Service) claimRerun(ctx context.Context, key branchKey) (store.Run, err
 	} else if active {
 		return store.Run{}, fmt.Errorf("service: %s already has a run in flight; end it before starting another", key.branch)
 	}
+	recorded := previous.CurrentHead.Or(previous.SubmittedHead)
+	if local != recorded {
+		return store.Run{}, rerunMoved{machine.RerunMoved{Branch: key.branch, Local: local, Recorded: recorded}}
+	}
 	return s.create(ctx, run{
 		repository: key.repository,
 		branch:     key.branch,
-		head:       previous.CurrentHead.Or(previous.SubmittedHead),
+		head:       recorded,
 		base:       previous.Base,
 		intent:     previous.Intent,
 		source:     previous.IntentSource,
 		supplied:   previous.IntentSource == intentSourceSupplied,
 	})
 }
+
+// rerunMoved is machine.RerunMoved as this service refuses with it: on the
+// wire it is ipc.ErrRefused, because the request was readable and the records
+// decided against it, and its message is the refusal's own text with no
+// prefix. errors.As still reaches the machine.RerunMoved inside.
+type rerunMoved struct{ moved machine.RerunMoved }
+
+// Error is the refusal's own text.
+func (r rerunMoved) Error() string { return r.moved.Error() }
+
+// Unwrap resolves to the wire category and to the refusal.
+func (r rerunMoved) Unwrap() []error { return []error{ipc.ErrRefused, r.moved} }
 
 // respond answers the decision a run is holding on and blocks until it reaches
 // the next one or a terminal outcome.

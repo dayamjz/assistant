@@ -70,8 +70,10 @@ type verb struct {
 	// reader comparing the two finds a summary that says what the verb does
 	// rather than one that repeats a line the verb does not answer to: rerun
 	// says it acts on the branch you are standing on, which the table leaves
-	// open and this build settles, and sync leaves out the table's plan and
-	// confirmation, which this build has no custody module to carry out.
+	// open and this build settles, and that it is refused when the working
+	// copy stands at another commit, which the table does not mention; sync
+	// leaves out the table's plan and confirmation, which this build has no
+	// custody module to carry out.
 	summary string
 	// run does the work and returns the answer to render.
 	run func(context.Context, *invocation) (any, error)
@@ -87,7 +89,7 @@ var verbs = []verb{
 	{"init", "Create or repair the gate for this repository.", initGate},
 	{"status", "Repository, gate, service, active run, and local branch state.", reportStatus},
 	{"runs", "Recent runs, newest first.", listRuns},
-	{"rerun", "Start a fresh run of this branch from its last known head, inheriting the recorded intent.", rerun},
+	{"rerun", "Start a fresh run of this branch from its last known head, inheriting the recorded intent; refused when you are on another commit.", rerun},
 	{"sync", "Reconcile your local branch with what the pipeline pushed, or recover work it holds.", syncBranch},
 	{"tasks", "List fleet work with its resolved current state.", listTasks},
 	{"watch", "Fleet view: everything in flight, everything waiting on you.", watch},

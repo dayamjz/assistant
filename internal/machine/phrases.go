@@ -1173,6 +1173,20 @@ func SubcommandPhrase(given bool, subcommands []string) Phrase {
 	}
 }
 
+// phraseRerunMoved is the row for a rerun refused because the checkout stands
+// at a commit other than the one the rerun would validate. Which two commits,
+// and the commands that validate the person's own, are RerunMoved's to print
+// beside it.
+var phraseRerunMoved = Phrase{
+	Outcome:     "No run was begun, because the commit this checkout stands at is not the one a fresh run of its branch would validate.",
+	Consequence: "A fresh run would vet the commit the gate last recorded for this branch rather than yours, so none was begun and nothing in this checkout was changed.",
+	Decision:    "Send your commit to the gate, or start a run on it with the command named after this.",
+}
+
+// RerunMovedPhrase is what a person reads about a rerun refused because the
+// checkout moved away from the commit it would validate.
+func RerunMovedPhrase() Phrase { return phraseRerunMoved }
+
 // InitPhrase is what a person reads once a gate was created or reattached for
 // their checkout. The next decision names the remote a change is sent to,
 // which is internal/gate's, because sending a branch there is how a person
@@ -1304,7 +1318,8 @@ var PhraseNoReading = Phrase{
 // stream's four, the status rows, and the rows for the rest of the command
 // surface: a decision and a fix round's offer, a row per doctor check and
 // result and the verdict, the service lifecycle, the two rows for a command
-// given none of its subcommands, a gate created, reattached
+// given none of its subcommands, a rerun refused because the checkout
+// moved, a gate created, reattached
 // and removed, the gate's own rows, and the rows pointing at a run's evidence
 // and the two notices beside it, and the catch-up read's: a heading and an
 // empty row per part, a row per kind of landed record, the row for what a
@@ -1350,7 +1365,7 @@ func TablePhrases() []Phrase {
 	}
 	out = append(out, phraseCheckUnfamiliar, phraseRunCanStart, phraseRunCannotStart)
 	out = append(out, LifecyclePhrase(Lifecycle{Accepted: true, Restarting: true}), LifecyclePhrase(Lifecycle{Accepted: true}), LifecyclePhrase(Lifecycle{}))
-	out = append(out, SubcommandPhrase(false, nil), SubcommandPhrase(true, nil))
+	out = append(out, SubcommandPhrase(false, nil), SubcommandPhrase(true, nil), phraseRerunMoved)
 	out = append(out, InitPhrase(Init{}), InitPhrase(Init{Reattached: true}), EjectPhrase(Eject{Removed: true}), EjectPhrase(Eject{}))
 	out = append(out, PhraseAdmitted, PhraseValidationBegun, PhraseSupersededEarlier, PhraseNothingStartedFor, PhraseNothingSent, PhraseNoReading)
 	out = append(out, PhraseCopyBusy, PhraseCopyStillBusy)
