@@ -389,7 +389,7 @@ func (r *claudeRunner) invoke(ctx context.Context, purpose Purpose, inv Invocati
 
 	proc := runProcess(ctx, procSpec{
 		bin:     r.resolved,
-		args:    r.arguments(inv, s.resume),
+		args:    r.arguments(GrantFor(purpose), inv, s.resume),
 		stdin:   inv.Prompt,
 		dir:     inv.Dir,
 		env:     environment(r.settings.base, inv.Env),
@@ -498,8 +498,8 @@ func (r *claudeRunner) invoke(ctx context.Context, purpose Purpose, inv Invocati
 }
 
 // arguments builds the command line. The configured entry's own flags come
-// first, then the four this run manages: --print, --output-format, --model,
-// and --resume.
+// first, then the grant's flags (claudeGrantFlags), then the four this run
+// manages: --print, --output-format, --model, and --resume.
 //
 // Of those four, config.ReservedAgentFlags refuses a configured entry that
 // names --output-format or --resume, so an entry cannot contradict the two
@@ -512,8 +512,9 @@ func (r *claudeRunner) invoke(ctx context.Context, purpose Purpose, inv Invocati
 // standard input, so its size is bounded by MaxPromptBytes rather than by an
 // argument list, and a prompt that begins with a dash cannot be read as an
 // option.
-func (r *claudeRunner) arguments(inv Invocation, resume string) []string {
+func (r *claudeRunner) arguments(grant Grant, inv Invocation, resume string) []string {
 	args := slices.Clone(r.extra)
+	args = append(args, claudeGrantFlags(grant)...)
 	args = append(args, "--print", "--output-format", "json")
 	if inv.Model != "" {
 		args = append(args, "--model", inv.Model)
@@ -522,6 +523,35 @@ func (r *claudeRunner) arguments(inv Invocation, resume string) []string {
 		args = append(args, "--resume", resume)
 	}
 	return args
+}
+
+// claudeGrantFlags is Claude Code's translation of a Grant: a permission mode
+// and a tool list for each, every one written as a single argument so a list
+// cannot swallow the flag after it. The mode is always stated, so a default
+// mode in the CLI's own settings never decides a grant, and each tool list
+// names only tools of the CLI's that a grant has to rule in or out.
+//
+//   - GrantRead runs in the default mode with the built-in editing tools
+//     (Edit, Write, NotebookEdit) and the shell denied, whatever allow rules
+//     the CLI's settings carry. Only those are denied: any other tool those
+//     settings allow, an MCP server's tools included, stays usable by a
+//     review, and reading is not confined to the copy.
+//   - GrantEdit runs in acceptEdits, so its edits are taken without a prompt
+//     nobody is there to answer, with the shell denied.
+//   - GrantWorker runs in acceptEdits with git allowed. It denies nothing,
+//     so a command the CLI's settings allow reaches a worker too, and git
+//     itself runs what a repository's hooks and configuration name.
+//
+// An unrecognized grant is GrantRead's, so a grant this function has not
+// learned is denied what GrantRead is denied.
+func claudeGrantFlags(g Grant) []string {
+	switch g {
+	case GrantEdit:
+		return []string{"--permission-mode", "acceptEdits", "--disallowedTools", "Bash"}
+	case GrantWorker:
+		return []string{"--permission-mode", "acceptEdits", "--allowedTools", "Bash(git:*)"}
+	}
+	return []string{"--permission-mode", "default", "--disallowedTools", "Edit,Write,NotebookEdit,Bash"}
 }
 
 // report hands one record to the configured Recorder, if there is one.
