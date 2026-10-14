@@ -78,8 +78,9 @@ type verb struct {
 
 // verbs is the surface a caller drives. It is PRD section 9's table and nothing
 // else: a verb that section does not describe is a finding against the
-// specification rather than a row here, and the one command this binary answers
-// to that section does not name is dispatched beside it; see gateVerbName.
+// specification rather than a row here, and the two commands this binary
+// answers to that section names outside its table are dispatched beside it;
+// see gateVerbName and hostVerbName.
 var verbs = []verb{
 	{"", "Attach to this branch's active run. With no run, start one.", attachOrStart},
 	{"init", "Create or repair the gate for this repository.", initGate},
@@ -151,6 +152,11 @@ func dispatch(ctx context.Context, in *invocation) (any, error) {
 	// gateVerbName.
 	if name == gateVerbName {
 		return gateVerb(ctx, in)
+	}
+	// And the one the coordinator's host requires, on the same terms; see
+	// hostVerbName for why these two are the last.
+	if name == hostVerbName {
+		return hostVerb(ctx, in)
 	}
 	return nil, usagef("%q is not a command. %s", name, usageText())
 }
@@ -448,6 +454,8 @@ func usageText() string {
 	b.WriteString("  --version   Report the build.\n")
 	b.WriteString("  --help      Print this.\n")
 	b.WriteString(gateUsage())
+	b.WriteString("\n")
+	b.WriteString(hostUsage())
 	return b.String()
 }
 
@@ -541,6 +549,8 @@ func exitFor(answer any) machine.Code {
 		if !v.Applied {
 			return machine.ExitFailure
 		}
+	case machine.HostStop:
+		return hostExit(v)
 	}
 	return machine.ExitOK
 }

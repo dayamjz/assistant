@@ -252,8 +252,13 @@ func Coverage() []Established {
 				"positive control allows. internal/service's wedge test cites it for the loop: a " +
 				"capture that ignores its context stops the beacon, the watchdog replaces the " +
 				"incarnation and the replaced one's writes are fenced, so one incarnation writes the " +
-				"beacon at a time. What neither reaches is the hook at turn end, which is #106's: no " +
-				"coordinator ends a turn in this build, so the guard's push layer is unexercised."},
+				"beacon at a time. internal/cli's host tests cite it for the hook at turn end, driven " +
+				"through cli.Run with the test's own streams: the same planted facts reach the host as " +
+				"an exit status and a message with no service consulted, and the host's re-entry " +
+				"signal allows the one invocation it was given to and never an unsignalled one. What " +
+				"none of them reaches is a coordinator's host firing the hook: nothing installs it, " +
+				"since who may write it into a host's configuration is #95 line D, so the push layer " +
+				"is exercised as a command and not as a turn ending."},
 		{principles.P11, ReachNone,
 			"No walk here starts a worker, so nothing here reaches it. internal/tasks' own tests " +
 				"establish it at package reach and only the assertion half: AssertIsolated refuses a " +
@@ -292,18 +297,49 @@ func Coverage() []Established {
 				"gone, and a service with no terminal seam, which Open never builds, refuses as " +
 				"unobserved."},
 		{principles.P13, ReachNone,
-			"Every answer this harness reads back carries run identifiers, stage names and home paths, " +
-				"so the principle does not hold on this surface today and a test claiming it here would " +
-				"be claiming the opposite of what was observed. internal/machine's vocabulary test cites " +
-				"it for the pull guard's phrases alone, with the forbidden set derived from the owners; " +
-				"#110 extends that table to every renderer, and until it lands the claim reaches no " +
-				"further than those phrases."},
+			"Not cited here, and the row stays at none by this table's own rule that a reach is a claim " +
+				"a test here makes. A walk here does drive the human rendering through the binary: " +
+				"assistant tasks and assistant watch without --json, over a task whose worker declared " +
+				"a wait and one whose newest entry is a relaunch note, both written through " +
+				"internal/store since no verb creates a task, and every line each verb printed is held " +
+				"to the forbidden set internal/machine/vocabtest derives from the owners, with the wait " +
+				"relayed and the state word absent. internal/machine's vocabulary test cites P13 for the " +
+				"phrases in its table alone, and this walk extends what is checked and not what is " +
+				"claimed: the table speaks for the renderers internal/cli enumerates as phrased, which " +
+				"are " + strings.Join(p13Covered, ", ") + ", and the renderers that still print this " +
+				"build's own words, which are " + strings.Join(p13Remaining, ", ") + ", remain, as does " +
+				"the refusal and usage text the command surface writes on standard error. The citation " +
+				"waits for the follow-up that routes every renderer through the table and replaces the " +
+				"fallback with a typed refusal, so that the test can enumerate the table rather than a " +
+				"list. Both lists are checked against internal/cli's enumeration, so the note cannot " +
+				"name a renderer that package does not have or miss one it does. The walk needs a " +
+				"service, so on a platform with no local socket transport to serve this protocol over " +
+				"it is skipped rather than passing; it reaches no method internal/ipc restricts, so no " +
+				"platform refuses it for want of peer credentials, and nothing here drives a run for it."},
 		{principles.P14, ReachNone,
 			"One owner per fact is a property of the source rather than of a run, so driving a journey " +
 				"establishes nothing about it. internal/principles and internal/pipeline's schema test " +
 				"claim it, and internal/store's shape transition test claims it for a task's shape, " +
 				"repository and branch: one row, flipped in one write."},
 	}
+}
+
+// p13Covered and p13Remaining name internal/cli's human renderers by the
+// names its Renderings enumeration gives them: the ones that speak through
+// internal/machine's phrase table, and the ones that still print this build's
+// own words. The P13 row's note is built from them, and P13Renderers hands
+// them to the test that holds both to that enumeration, so a renderer added
+// or rerouted there fails here rather than leaving the note to drift.
+var (
+	p13Covered   = []string{"status", "run", "runs", "tasks", "task", "service", "event", "host stop"}
+	p13Remaining = []string{"decision", "details", "doctor", "lifecycle", "init", "plan", "eject", "health", "admission", "notification", "fallback"}
+)
+
+// P13Renderers returns the renderers the P13 row says the phrase table
+// covers and the ones it says remain, as copies, for the test that checks
+// both against internal/cli's enumeration.
+func P13Renderers() (covered, remaining []string) {
+	return slices.Clone(p13Covered), slices.Clone(p13Remaining)
 }
 
 // PackageDir is this package's directory relative to the module root. Citations

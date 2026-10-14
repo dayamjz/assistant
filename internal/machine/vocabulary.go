@@ -7,21 +7,24 @@ import "github.com/dayamjz/assistant/internal/supervisor"
 // costs them, and what they decide next, and none carries a task identifier,
 // a path, a stage name, a state label or a watcher's word; the vocabulary test
 // derives the forbidden set from the packages that own each of those and
-// holds every phrase here to it. This table holds the pull guard's phrases,
-// and #110 extends it to every renderer.
-const (
+// holds every phrase here to it. The rows are Phrase values in phrases.go,
+// where the pull guard's three stand beside the stop guard's two turn rows
+// and the rows for a task's state, a run's outcome, a hold, a run's cleanup
+// record, the stream's own events and the parts of a status; these three are
+// exported as the strings the guard's callers compare against.
+var (
 	// PhraseServiceDown is what the pull guard says when work is under way
 	// and no service holds this home: the next decision is starting one.
-	PhraseServiceDown = "Work is under way and nothing is watching it, so a worker that stops or needs a decision will go unnoticed until the service is up. Run assistant service start."
+	PhraseServiceDown = phraseServiceDown.String()
 	// PhraseServiceNotWatching is what the pull guard says when a service
 	// holds this home and nothing in it is watching the fleet: starting one
 	// is not the next decision, because one is up; restarting it is.
-	PhraseServiceNotWatching = "Work is under way and the service is up, but nothing in it is watching the fleet, so a worker that stops or needs a decision will go unnoticed. Run assistant service restart."
+	PhraseServiceNotWatching = phraseServiceNotWatching.String()
 	// PhraseUndecided is what the pull guard says when it could not tell
 	// whether work is under way or whether a service holds this home: the
 	// record or the home could not be read, and the next decision is finding
 	// out why.
-	PhraseUndecided = "Whether work is under way could not be decided, because this home could not be read, so a worker that stops or needs a decision may go unnoticed. Run assistant doctor."
+	PhraseUndecided = phraseUndecided.String()
 )
 
 // phraseByReason is the one table from a blocking verdict to the phrase a
@@ -49,10 +52,16 @@ func PhraseFor(reason supervisor.StopReason) (string, bool) {
 	return phrase, ok
 }
 
-// Phrases returns every phrase this table holds, which is what the vocabulary
-// test walks. The result is a copy.
+// Phrases returns every phrase this table holds, as a person reads each,
+// which is what the vocabulary test walks: TablePhrases rendered through
+// Phrase.String. The result is a copy.
 func Phrases() []string {
-	return []string{PhraseServiceDown, PhraseServiceNotWatching, PhraseUndecided}
+	rows := TablePhrases()
+	out := make([]string, 0, len(rows))
+	for _, p := range rows {
+		out = append(out, p.String())
+	}
+	return out
 }
 
 // Supervision is what the pull guard found, as a command reports it beside

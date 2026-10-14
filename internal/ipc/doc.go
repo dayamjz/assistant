@@ -38,6 +38,14 @@
 // matters: the other way round, it would apply a delta first and find out
 // afterwards that its base was wrong.
 //
+// Four state types have a producer in this build, all in internal/service
+// and all drawing their revision from one counter there: a run's state, a
+// task's resolved state, a hold opening or closing, and an entry a worker
+// appended to its task's history. The other two state
+// types the table names, a stage's state and a finding set, have none, and a
+// consumer rendering them has no owned shape to read; the table keeps them
+// because a type is a row and not a promise of a producer.
+//
 // Every state event carries a monotonic revision, and Cursor is the consumer
 // half of that. A delta is applied only when its revision is newer than what
 // the consumer holds, so a repeat or a delivery that arrived out of order

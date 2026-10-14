@@ -33,10 +33,13 @@ var specified = []string{"init", "status", "runs", "rerun", "sync", "tasks", "wa
 // not name is a finding to raise against the specification rather than a row
 // to add quietly, so each of these has to be refused as incorrect usage.
 //
-// "gate" is deliberately not among them. It is not a command a person types
-// and not a candidate for that table: it is the interface internal/gate
-// requires of this surface, invoked by the hooks it installs, and
-// TestTheGateVerbServesTheHooksAndNothingElse is what holds what it may be.
+// "gate" and "host" are deliberately not among them. Neither is a command a
+// person types or a candidate for that table: "gate" is the interface
+// internal/gate requires of this surface, invoked by the hooks it installs,
+// and "host" is the interface the coordinator's host requires, invoked by the
+// hook it fires at turn end; PRD section 9 names both outside its table.
+// TestTheGateVerbServesTheHooksAndNothingElse and host_test.go's
+// TestTheHostVerbServesTheHookAndNothingElse hold what each may be.
 var unspecified = []string{
 	"start", "attach", "respond", "answer", "cancel", "stop", "restart",
 	"machine", "agent", "push", "version", "help", "config", "logs", "stage",

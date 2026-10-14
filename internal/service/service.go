@@ -278,7 +278,11 @@ type Service struct {
 	starting map[branchKey]*branchGate
 
 	revision atomic.Uint64
-	restart  atomic.Bool
+	// published is the basis of the last task.state this service sent per
+	// task, which publish.go owns and the supervisor loop's pass compares
+	// against to publish once per change.
+	published published
+	restart   atomic.Bool
 	// stopCtx ends when this service stops. Background work this service
 	// started, which has no caller's context to run under, runs under it.
 	stopCtx    context.Context

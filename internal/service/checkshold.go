@@ -155,6 +155,9 @@ func (s *Service) closeChecksHoldIfPullRequestEnded(ctx context.Context, record 
 	s.cleanUpLanded(ctx, moved)
 	s.releaseQueued(ctx)
 	s.publishRunState(ctx, record.ID)
+	// The hold was registered and resolved in the move's transaction, so it
+	// is published after the run, as the record now holds it.
+	s.publishHoldByKey(ctx, closing.Hold.Key)
 	return read.End, nil
 }
 
