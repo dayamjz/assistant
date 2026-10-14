@@ -1018,7 +1018,8 @@ Each has cost this repository more than one round of review.
 - Construction-time rules get construction-time tests: an unbounded cycle must
   fail to build, and an undeclared shared state key must fail to build.
 - Concurrency rules need the race detector, so `make test` runs it and CI runs
-  it on every platform.
+  it on both platforms CI checks, macOS and Linux. Windows-tagged sources still
+  build but no CI lane exercises them.
 - A test that establishes a PRD principle cites it with `principles.Cite` as
   well as saying so in its doc comment. The comment is what a reader learns
   from; the call is what `internal/principles` can count, and a principle no
