@@ -133,6 +133,27 @@ func fixtureCatchUp() machine.CatchUp {
 	}
 }
 
+// fixtureUsage is a usage view over two calls of the fixture run, one in its
+// review stage and a fix round serving it, and one call from before the
+// record kept a run or stage, so its evidence carries a run identifier, a
+// stage name and an unknown group, with one count no call reported.
+func fixtureUsage() machine.Usage {
+	window, err := machine.ParseUsageWindow("7d")
+	if err != nil {
+		panic(err)
+	}
+	readAt := time.Date(2026, 10, 14, 12, 0, 0, 0, time.UTC)
+	review := store.AgentInvocation{Purpose: "review", Agent: "claude", Model: "some-model", SessionUse: "none",
+		Started: readAt.Add(-time.Hour), Duration: 90 * time.Second, InputTokens: store.Known[int64](1200),
+		OutputTokens: store.Known[int64](300), Run: store.Known(sampleID), Stage: store.Known("review")}
+	fix := store.AgentInvocation{Purpose: "fix", Agent: "claude", Model: "some-model", SessionUse: "resumed",
+		Started: readAt.Add(-50 * time.Minute), Duration: 30 * time.Second, Failure: "timeout",
+		InputTokens: store.Known[int64](80), Run: store.Known(sampleID), Stage: store.Known("review")}
+	old := store.AgentInvocation{Purpose: "intent", Agent: "claude", SessionUse: "none",
+		Started: readAt.Add(-40 * time.Minute), Duration: time.Second}
+	return machine.UsageOf(window, readAt, []store.AgentInvocation{review, fix, old})
+}
+
 // fixtures is a value for every renderer, each carrying the words its old
 // rendering printed: identifiers in the generator's format, paths under a
 // sample home, stage names and state labels. The fallback's is a real answer
@@ -175,6 +196,7 @@ func fixtures(t *testing.T) map[string]any {
 		"decision": fixtureDecision(),
 		"details":  withDetails,
 		"findings": fixtureDecision(),
+		"usage":    fixtureUsage(),
 		"doctor": machine.Doctor{
 			Checks: []machine.Check{
 				{Name: machine.CheckHome, OK: true, Blocking: true, Detail: root},
@@ -422,20 +444,22 @@ func TestTheUnphrasedRenderersPrintWhatTheyAreListedFor(t *testing.T) {
 	}
 }
 
-// TestTheMessagePointingAtEvidenceIsPhrased is P13 for the two evidence
+// TestTheMessagePointingAtEvidenceIsPhrased is P13 for the three evidence
 // documents PRD section 9 names. P13 lets an evidence document keep exact
 // identifiers and stage names and keeps the message that points at one
-// phrased, so a run carrying both documents is rendered and each document is
-// taken out from behind its pointer; what is left - the pointers, the run's
-// head, the notice that its starting inputs were not applied, and the
-// decision - is held to the derived forbidden set line by line.
+// phrased, so a run carrying the two a run carries is rendered and each
+// document is taken out from behind its pointer; what is left - the
+// pointers, the run's head, the notice that its starting inputs were not
+// applied, and the decision - is held to the derived forbidden set line by
+// line. The usage view is an answer of its own, so it is rendered the way
+// runs --usage reaches it, through readOut, and held the same way.
 //
 // It is not passed for looking at nothing. Each evidence fixture is shown to
 // carry a forbidden word on its own, so taking it out is what lets the rest
-// pass; and the check is run over three counterfeits of the same output it
-// must reject: a pointer carrying the run's identifier and position, a
-// document written with no pointer before it, and the notice in the words
-// the details renderer used to print it in.
+// pass; and the check is run over counterfeits of the same output it must
+// reject: a pointer carrying the run's identifier and position, a document
+// written with no pointer before it, the notice in the words the details
+// renderer used to print it in, and the usage view with no pointer.
 func TestTheMessagePointingAtEvidenceIsPhrased(t *testing.T) {
 	t.Parallel()
 	principles.Cite(t, principles.P13)
@@ -451,6 +475,7 @@ func TestTheMessagePointingAtEvidenceIsPhrased(t *testing.T) {
 	}
 	rows := machine.TablePhrases()
 	var blocks []evidenceBlock
+	answers := map[string]evidenceBlock{}
 	for _, r := range renderings {
 		if r.voice != VoiceEvidence {
 			if r.points != (machine.Phrase{}) {
@@ -458,20 +483,41 @@ func TestTheMessagePointingAtEvidenceIsPhrased(t *testing.T) {
 			}
 			continue
 		}
-		if r.of != nil {
-			t.Errorf("%s is evidence and readOut dispatches to it directly, so it is reachable with no pointer before it", r.name)
-		}
 		if !slices.Contains(rows, r.points) {
 			t.Errorf("%s points at itself with %q, which is not a row of the phrase table", r.name, r.points)
 		}
-		body := renderNamed(t, r.name, values[r.name]).out
+		var rendered bytes.Buffer
+		r.render(&rendered, values[r.name])
+		body := rendered.String()
 		if len(vocabtest.Violations(t, body)) == 0 {
 			t.Errorf("the %s fixture carries nothing the derivation forbids, so taking it out holds the rest to nothing:\n%s", r.name, body)
 		}
-		blocks = append(blocks, evidenceBlock{pointer: r.points.String(), body: body})
+		block := evidenceBlock{pointer: r.points.String(), body: body}
+		if r.of != nil {
+			answers[r.name] = block
+			continue
+		}
+		blocks = append(blocks, block)
 	}
-	if len(blocks) != 2 {
-		t.Fatalf("%d renderers are evidence; PRD section 9 names two evidence documents", len(blocks))
+	if len(blocks)+len(answers) != 3 {
+		t.Fatalf("%d renderers are evidence; PRD section 9 names three evidence documents", len(blocks)+len(answers))
+	}
+	for name, block := range answers {
+		var answered bytes.Buffer
+		if err := readOut(&answered, values[name]); err != nil {
+			t.Fatalf("the %s answer was refused: %v", name, err)
+		}
+		whole := answered.String()
+		t.Logf("the %s answer as a person reads it:\n%s", name, whole)
+		if !strings.HasPrefix(whole, block.pointer+"\n") {
+			t.Errorf("the %s answer does not open with the phrase that points at it:\n%s", name, whole)
+		}
+		for _, problem := range pointedAt(t, whole, []evidenceBlock{block}) {
+			t.Error(problem)
+		}
+		if len(pointedAt(t, strings.Replace(whole, block.pointer+"\n", "", 1), []evidenceBlock{block})) == 0 {
+			t.Errorf("the check passed the %s answer with no pointer, so passing the real one proves nothing", name)
+		}
 	}
 	got := out.String()
 	t.Logf("the run as a person reads it:\n%s", got)

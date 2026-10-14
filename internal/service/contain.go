@@ -89,6 +89,27 @@ func advancingRun(ctx context.Context) string {
 	return runID
 }
 
+// servingKey carries which stage a body or a fix round on ctx is serving,
+// written by the observe wrappers around every stage body and the fix body
+// and read by the containment wrapper below, on advancingKey's terms: a key
+// of this package's own, set by this service for itself.
+type servingKey struct{}
+
+// withServing marks ctx as serving one stage.
+func withServing(ctx context.Context, stage string) context.Context {
+	return context.WithValue(ctx, servingKey{}, stage)
+}
+
+// servedOn is the run and stage an invocation launched on ctx serves, as
+// agents.Invocation.Served carries them into the invocation record: the run
+// the segment advances and the stage whose body or fix round is executing.
+// Either is empty where ctx was never marked with it, which the record keeps
+// as unknown rather than a guess.
+func servedOn(ctx context.Context) agents.Served {
+	stage, _ := ctx.Value(servingKey{}).(string)
+	return agents.Served{Run: advancingRun(ctx), Stage: stage}
+}
+
 // containRunner wraps the resolved agent so that every invocation it runs is
 // registered with this service's registry for as long as its process group
 // exists. It is what makes StageStarted called rather than callable: the
@@ -99,11 +120,18 @@ func advancingRun(ctx context.Context) string {
 // adapter of its own would stand outside it, which is the same gap
 // stages.StageDeps already names for P4, not a new one this wrapper opens.
 //
-// The stage recorded is the invocation's purpose, because that is what this
-// seam can say truthfully: the pipeline stage that asked is not in an
-// invocation, and the purpose names the same work in the same words for every
-// stage that launches an agent. The run is read off the segment context
-// advance marked.
+// The stage the containment registry records is the invocation's purpose,
+// which names the same work in the same words for every stage that launches
+// an agent. The run is read off the segment context advance marked.
+//
+// The same seam stamps agents.Invocation.Served, which is what the agent
+// invocation record names: the run the segment advances, and the pipeline
+// stage the observe wrappers marked on ctx around the body or fix round that
+// made the call. A fix round serves the stage whose findings it fixes, so
+// there its purpose and its stage differ. What it does not reach is the same
+// as for registration: a body that resolved an adapter of its own stands
+// outside this wrapper, and its calls are recorded by whatever recorder that
+// adapter was built with, if any.
 //
 // The wrapper preserves the shape agents.Resolve vouched for: a runner with
 // resumable sessions stays an agents.SessionRunner and one without stays a
@@ -151,6 +179,7 @@ func (c containedRunner) Capabilities() agents.Capabilities {
 func (c containedRunner) Run(ctx context.Context, purpose agents.Purpose, inv agents.Invocation) (
 	agents.Result, error) {
 	inv.Started = c.registry.starter(advancingRun(ctx), string(purpose))
+	inv.Served = servedOn(ctx)
 	return c.inner.Run(ctx, purpose, inv)
 }
 
@@ -178,6 +207,7 @@ type containedFixer struct {
 
 func (c containedFixer) Apply(ctx context.Context, inv agents.Invocation) (agents.Result, error) {
 	inv.Started = c.registry.starter(advancingRun(ctx), string(agents.PurposeFix))
+	inv.Served = servedOn(ctx)
 	return c.inner.Apply(ctx, inv)
 }
 

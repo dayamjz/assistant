@@ -896,7 +896,11 @@ Each has cost this repository more than one round of review.
   Answering a hold and running the service in the foreground are flags on the
   commands that section does name, and so is catching up: `watch` starts
   with the `catchup.read` answer, `--once` and `--mark-seen` are its flags,
-  and the mark names exactly what that read showed (`CatchUp.Shown`). A verb that acts on a run calls the service;
+  and the mark names exactly what that read showed (`CatchUp.Shown`). So is
+  the usage view: `runs --usage=WINDOW` answers with the open `usage.read`,
+  totalled by `machine.UsageOf` from the invocation record, whose run and
+  stage `internal/service`'s `containRunner` stamps from the context its
+  observe wrappers mark. A verb that acts on a run calls the service;
   a verb whose job includes reporting that the service is down does not.
   Two commands stand outside that table, and together they are not a
   precedent for a third: each is the interface something external requires,
@@ -920,8 +924,8 @@ Each has cost this repository more than one round of review.
   comes from and its gaps.
   What a person reads is rendered through the `renderings` table in
   `render.go`, which `readOut` dispatches through and `Renderings` enumerates:
-  every renderer but three is phrased through `internal/machine`'s table and
-  those three are enumerated as not, `doc.go` names which and why, and
+  every renderer but four is phrased through `internal/machine`'s table and
+  those four are enumerated as not, `doc.go` names which and why, and
   `internal/journey`'s P13 row is held to that enumeration. `eventLine` speaks
   the same table. Do not put a sentence a person reads in a renderer; put a
   row in the table.

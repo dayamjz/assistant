@@ -41,6 +41,11 @@ const forgetRunRecordsMigration = "written-once run records go with their run"
 // sealCheckpointTableMigration is a constant.
 const localLandingMigration = "task delivery posture and local landing records"
 
+// invocationServedMigration names the migration that adds the run and stage
+// an agent invocation served, for the reason sealCheckpointTableMigration is
+// a constant.
+const invocationServedMigration = "agent invocation run and stage"
+
 // schema is the migration list this package applies. Adding a column means
 // appending a migration whose ALTER TABLE names a nullable column with no
 // default, so rows written before it reads back unknown; migrate refuses
@@ -1181,6 +1186,27 @@ var schema = []migration{
 				BEGIN
 					SELECT RAISE(ABORT, 'store: a local landing record is written once by the fast-forward that made it and is not deleted');
 				END`,
+		},
+	},
+	{
+		version: 26,
+		name:    invocationServedMigration,
+		statements: []string{
+			// PRD section 8's agent invocation record gained the run and the
+			// stage each call served, where it served one, which is what
+			// section 9's usage view totals by. Migration 8 left them out,
+			// and migration 9's comment says that history named no run;
+			// these two columns are what changed that.
+			//
+			// Both are nullable and carry no default, so a row written
+			// before them reads back unknown for both, never as a guess, and
+			// so does a call that served no run or no stage. Neither
+			// references run(id): the history is appended and never
+			// revised, so it keeps the identifier it was handed rather than
+			// a foreign key. ForgetRepository removes a run's rows with the
+			// run, and nothing else removes one.
+			`ALTER TABLE agent_invocation ADD COLUMN run TEXT`,
+			`ALTER TABLE agent_invocation ADD COLUMN stage TEXT`,
 		},
 	},
 }

@@ -113,7 +113,8 @@ type Usage struct {
 
 // Record is what is kept about one invocation. PRD section 8 lists it as
 // history and fixes its contents: purpose, agent, model, timing, failure
-// category, and token usage. Never prompts, outputs, diffs, or credentials.
+// category, token usage, and the run and stage it served where it served one.
+// Never prompts, outputs, diffs, or credentials.
 //
 // That is a property of the type, not of its callers. Every field here is
 // cost, and there is no field a prompt, an agent's text, a diff, or an
@@ -139,6 +140,10 @@ type Record struct {
 	Failure Failure
 	// Usage is what the agent reported it cost.
 	Usage Usage
+	// Served is the run and stage the invocation served, copied from
+	// Invocation.Served as it was handed over. Each is an identifier or a
+	// name, never content.
+	Served Served
 }
 
 // Recorder receives one Record per invocation that got past Invocation.

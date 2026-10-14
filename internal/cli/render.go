@@ -39,6 +39,10 @@ func readOut(w io.Writer, answer any) error {
 	of := reflect.TypeOf(answer)
 	for _, r := range renderings {
 		if r.of == of {
+			if r.voice == VoiceEvidence {
+				writePointed(w, r, answer)
+				return nil
+			}
 			r.render(w, answer)
 			return nil
 		}
@@ -79,13 +83,15 @@ const (
 	// forbidden set, or one beside text that is the person's own or an
 	// agent's, escaped.
 	VoicePhrased
-	// VoiceEvidence is a renderer that writes one of the two detailed
-	// evidence documents PRD section 9 names - the detail view, and the
-	// relay of a finding that needs a decision - which P13 lets keep exact
-	// identifiers and stage names. Its row carries the phrase-table row that
-	// points a person at it, and writeEvidence, which the run renderer
-	// writes it through, writes that row first, because the message that
-	// points at an evidence document stays phrased.
+	// VoiceEvidence is a renderer that writes one of the three detailed
+	// evidence documents PRD section 9 names - the detail view, the usage
+	// view, and the relay of a finding that needs a decision - which P13
+	// lets keep exact identifiers and stage names. Its row carries the
+	// phrase-table row that points a person at it, and writeEvidence, which
+	// the run renderer writes the first and last through, and writePointed,
+	// which readOut writes the usage view through, write that row first,
+	// because the message that points at an evidence document stays
+	// phrased.
 	VoiceEvidence
 )
 
@@ -142,11 +148,27 @@ func writeEvidence(w io.Writer, row rendering, value any) {
 	_, _ = io.WriteString(w, body.String())
 }
 
+// writePointed is writeEvidence for an evidence document that is a whole
+// answer rather than part of one, which readOut dispatches here by the row's
+// voice: the pointer, then the document, with nothing before them. Because
+// the dispatch reads the voice, an evidence row that names an answer type is
+// written behind its pointer by readOut itself, and no renderer has to
+// remember to.
+func writePointed(w io.Writer, row rendering, value any) {
+	var body strings.Builder
+	row.render(&body, value)
+	if body.Len() == 0 {
+		return
+	}
+	writeln(w, row.points)
+	_, _ = io.WriteString(w, body.String())
+}
+
 // renderings is the one table of human renderers. readOut dispatches by the
 // answer's type through it, and Renderings reads it out, so a renderer added
 // here is enumerated and one added anywhere else is not reached.
 //
-// Every row but three is phrased: what it prints is a phrase from
+// Every row but four is phrased: what it prints is a phrase from
 // internal/machine's table, or one beside a word that is the person's own -
 // a branch name, a project, a reference a change carried, the repository's
 // default branch - or an agent's, escaped. The stop guard's answer is phrased
@@ -161,9 +183,9 @@ func writeEvidence(w io.Writer, row rendering, value any) {
 // it holds it. readOutHostInstall prints each on a line of its own after a
 // label, so the row is never mixed with them.
 //
-// The three that are not phrased are named, so that the claim about the rest
-// is bounded by an enumeration. Two are evidence documents, which P13 names
-// as the exception to its rule and PRD section 9 names as these two:
+// The four that are not phrased are named, so that the claim about the rest
+// is bounded by an enumeration. Three are evidence documents, which P13
+// names as the exception to its rule and PRD section 9 names as these three:
 //
 //   - details is the detail view's evidence for a run: where its execution
 //     stands, the reason a bound parked it, the keys its configuration
@@ -176,20 +198,27 @@ func writeEvidence(w io.Writer, row rendering, value any) {
 //   - findings relays the findings holding a decision in full, with their
 //     exact names, locations and text, which section 9's relay-verbatim row
 //     requires and says is an evidence document in P13's sense.
+//   - usage is the usage view, runs --usage's answer: what the agent calls
+//     in a window cost, grouped by agent, model and purpose and by run and
+//     stage, under those exact names.
 //
-// Neither row names an answer type, so readOut never dispatches to one; the
-// run renderer reaches each through writeEvidence, behind the phrased row its
-// table entry carries, so what points a person at the evidence is held to
-// P13 even though the evidence is not. That is a convention inside this
-// package rather than a mechanism: readOutDetails and readOutFindings are
-// callable from anywhere here, and the evidence test reads the run renderer,
-// so a new caller that skipped writeEvidence would print no pointer and
-// nothing would fail until a test rendered it. What a run says about a request it
+// The first two name no answer type, so readOut never dispatches to either;
+// the run renderer reaches each through writeEvidence, behind the phrased
+// row its table entry carries, so what points a person at the evidence is
+// held to P13 even though the evidence is not. That is a convention inside
+// this package rather than a mechanism: readOutDetails and readOutFindings
+// are callable from anywhere here, and the evidence test reads the run
+// renderer, so a new caller that skipped writeEvidence would print no
+// pointer and nothing would fail until a test rendered it. The usage row
+// names its answer type, and readOut writes any evidence row it dispatches
+// to through writePointed, so on that path the pointer is the dispatch's
+// rather than a caller's to remember; readOutUsage is still callable
+// directly, on the same terms as the other two. What a run says about a request it
 // did not apply - starting inputs that went to no run, or an answer the
 // service closed the decision ahead of - is a status line rather than
 // evidence, so readOutRun prints it as a phrased row and not in details.
 //
-// The third is the one whose wording is not settled:
+// The fourth is the one whose wording is not settled:
 //
 //   - plan prints the steps of a reconciliation, which PRD section 9 has
 //     assistant sync print exactly, and then the plan's detail. The custody
@@ -227,6 +256,7 @@ var renderings = []rendering{
 	{name: "marked seen", voice: VoicePhrased, of: typeOf[machine.Marked](), render: func(w io.Writer, v any) {
 		writeln(w, machine.MarkedPhrase(v.(machine.Marked)))
 	}},
+	usageRendering,
 }
 
 // fallback is the row for an answer no row claims. It is not in the table,
@@ -235,9 +265,10 @@ var renderings = []rendering{
 // the refusal and which render writes on standard error.
 var fallback = rendering{name: "fallback", voice: VoicePhrased, render: func(io.Writer, any) {}}
 
-// detailsRendering and findingsRendering are the two evidence rows. They are
-// named so that readOutRun reaches each through writeEvidence by its row,
-// which carries the phrase that points at it, rather than by its function.
+// detailsRendering, findingsRendering and usageRendering are the evidence
+// rows. The first two are named so that readOutRun reaches each through
+// writeEvidence by its row, which carries the phrase that points at it,
+// rather than by its function.
 var (
 	detailsRendering = rendering{name: "details", voice: VoiceEvidence,
 		render: func(w io.Writer, v any) { readOutDetails(w, v.(machine.Run)) },
@@ -245,6 +276,12 @@ var (
 	findingsRendering = rendering{name: "findings", voice: VoiceEvidence,
 		render: func(w io.Writer, v any) { readOutFindings(w, v.(machine.Decision)) },
 		points: machine.PhraseFindingsFollow}
+	// usageRendering is the third evidence row, and the one that is an answer
+	// of its own: runs --usage answers with a machine.Usage, so the row names
+	// that type and readOut writes it through writePointed.
+	usageRendering = rendering{name: "usage", voice: VoiceEvidence, of: typeOf[machine.Usage](),
+		render: func(w io.Writer, v any) { readOutUsage(w, v.(machine.Usage)) },
+		points: machine.PhraseUsageFollows}
 )
 
 func typeOf[T any]() reflect.Type { return reflect.TypeOf((*T)(nil)).Elem() }

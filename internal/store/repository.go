@@ -338,6 +338,10 @@ var runRecords = []runRecord{
 	{table: "decision_followup", remove: `DELETE FROM decision_followup WHERE answer IN (SELECT seq FROM decision_answer WHERE run = ?)`},
 	{table: "decision_answer", remove: `DELETE FROM decision_answer WHERE run = ?`},
 	{table: "checks_wait", remove: `DELETE FROM checks_wait WHERE run = ?`},
+	// An agent invocation names the run it served where it served one, and
+	// goes with that run like the rest of its records; a call that named no
+	// run is not this repository's to forget, and stays.
+	{table: "agent_invocation", remove: `DELETE FROM agent_invocation WHERE run = ?`},
 	{table: "merge_record", remove: `DELETE FROM merge_record WHERE run = ?`, afterRun: true},
 	{table: "run_cleanup", remove: `DELETE FROM run_cleanup WHERE run = ?`, afterRun: true},
 	// A seen mark of a merge record is keyed by the run through its kind,

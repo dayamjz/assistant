@@ -306,12 +306,27 @@ func (in *invocation) localStatus(ctx context.Context, working string, cause err
 // listRuns reports recent runs, newest first, or one run in full when it is
 // named. Naming one is an argument rather than a command of its own, because
 // PRD section 9's table has one row for runs.
+//
+// The usage view is --usage on this command, because section 9 says it is a
+// flag on runs and adds no verb. It takes its window as --usage=WINDOW, and
+// --usage alone is machine.DefaultUsageWindow; usageFlag says why the window
+// cannot follow it as a separate word. A window that does not parse is
+// refused here as incorrect usage before the service is asked. The view
+// reads the whole home's invocation history rather than this working copy's
+// runs, because the record names no repository, so it neither names a run nor
+// takes --limit, and either given with it is refused rather than ignored.
 func listRuns(ctx context.Context, in *invocation) (any, error) {
 	var limit int
+	var usage usageFlag
 	if err := in.parseArgs("runs", 1, func(set *flag.FlagSet) {
 		set.IntVar(&limit, "limit", 0, "how many runs to report, newest first; zero means all of them")
+		set.Var(&usage, usageFlagName, "report what the agent calls of the last WINDOW cost, written --"+usageFlagName+
+			"=WINDOW as 24h, 90m or 7d; alone it is "+machine.DefaultUsageWindow)
 	}); err != nil {
 		return nil, err
+	}
+	if usage.set {
+		return readUsage(ctx, in, usage, limit)
 	}
 	if len(in.args) == 1 {
 		var run machine.Run
@@ -329,6 +344,59 @@ func listRuns(ctx context.Context, in *invocation) (any, error) {
 	}, &runs)
 	return runs, err
 }
+
+// readUsage is runs --usage: the usage view over the window the flag named.
+func readUsage(ctx context.Context, in *invocation, usage usageFlag, limit int) (any, error) {
+	if len(in.args) > 0 {
+		if _, err := machine.ParseUsageWindow(in.args[0]); err == nil {
+			return nil, usagef("%s takes its window joined to it, as --%s=%s", "--"+usageFlagName, usageFlagName, in.args[0])
+		}
+		return nil, usagef("--%s reads every run's agent calls and names no run, and was given %s", usageFlagName, in.args[0])
+	}
+	if limit != 0 {
+		return nil, usagef("--limit counts runs, and --%s reports agent calls rather than runs", usageFlagName)
+	}
+	if _, err := machine.ParseUsageWindow(usage.window); err != nil {
+		return nil, usageError{err: err}
+	}
+	var answer machine.Usage
+	err := in.callService(ctx, ipc.MethodUsageRead, machine.UsageRequest{Window: usage.window}, &answer)
+	return answer, err
+}
+
+// usageFlagName is the flag on runs that asks for the usage view, named once
+// so the declaration, the refusals and a test read the same word.
+const usageFlagName = "usage"
+
+// usageFlag is --usage: whether it was given, and the window it was given.
+//
+// It is a boolean flag to the flag package, so --usage alone is accepted and
+// means the default window, and the window is written joined to it as
+// --usage=7d. That is the price of the default: a flag the flag package reads
+// as taking a value would swallow the word after it, and a flag it reads as
+// boolean cannot take one as a separate word. readUsage refuses a window given
+// as a separate word by name rather than reading it as a run.
+type usageFlag struct {
+	set    bool
+	window string
+}
+
+// String is the window as given, for the flag package's usage text.
+func (u *usageFlag) String() string { return u.window }
+
+// Set records the flag. The flag package hands a boolean flag given alone the
+// value "true", which is the default window and not a window called true.
+func (u *usageFlag) Set(value string) error {
+	u.set = true
+	if value == "true" {
+		value = ""
+	}
+	u.window = value
+	return nil
+}
+
+// IsBoolFlag tells the flag package --usage may be given alone.
+func (u *usageFlag) IsBoolFlag() bool { return true }
 
 // rerun starts a fresh run of the branch this working copy is standing on,
 // from that branch's last known head, inheriting the intent recorded there,

@@ -28,6 +28,7 @@ func TestARecordHasNoFieldContentCouldBeWrittenInto(t *testing.T) {
 		"Duration": reflect.TypeFor[time.Duration](),
 		"Failure":  reflect.TypeFor[agents.Failure](),
 		"Usage":    reflect.TypeFor[agents.Usage](),
+		"Served":   reflect.TypeFor[agents.Served](),
 	}
 	typ := reflect.TypeFor[agents.Record]()
 	seen := make(map[string]struct{}, typ.NumField())
@@ -127,6 +128,45 @@ func TestASuccessfulInvocationRecordsWhatItCost(t *testing.T) {
 	}
 	if got.Usage != helperUsage() {
 		t.Errorf("usage is %+v, want %+v", got.Usage, helperUsage())
+	}
+}
+
+// The run and stage an invocation served reach its record as the invocation
+// named them, on a call that produced a result and on one that failed, and an
+// invocation naming neither records neither rather than anything in their
+// place. The failing call is the control that the field is set where the
+// record is born rather than only on the success path.
+func TestTheRecordNamesTheRunAndStageTheInvocationServed(t *testing.T) {
+	rec := &recorder{}
+	runner := newRunner(t, agents.WithRecorder(rec))
+	served := agents.Served{Run: "run-7", Stage: "review"}
+
+	ok := invocation(t, agents.ShapeText, map[string]string{helperModeVar: "envelope", helperResultVar: "done"})
+	ok.Served = served
+	if _, err := runner.Run(t.Context(), agents.PurposeReview, ok); err != nil {
+		t.Fatalf("invocation failed: %v", err)
+	}
+	failing := invocation(t, agents.ShapeText, map[string]string{helperModeVar: "fail"})
+	failing.Served = agents.Served{Run: "run-7", Stage: "test"}
+	if _, err := runner.Run(t.Context(), agents.PurposeFix, failing); err == nil {
+		t.Fatal("the failing invocation succeeded, so its record proves nothing about the failure path")
+	}
+	none := invocation(t, agents.ShapeText, map[string]string{helperModeVar: "envelope", helperResultVar: "done"})
+	if _, err := runner.Run(t.Context(), agents.PurposeIntent, none); err != nil {
+		t.Fatalf("invocation failed: %v", err)
+	}
+
+	if len(rec.records) != 3 {
+		t.Fatalf("recorded %d invocations, want 3", len(rec.records))
+	}
+	if got := rec.records[0].Served; got != served {
+		t.Errorf("the successful call recorded %+v, want %+v", got, served)
+	}
+	if got := rec.records[1].Served; got != failing.Served || rec.records[1].Failure == agents.FailureNone {
+		t.Errorf("the failed call recorded %+v with failure %q, want %+v and a failure", got, rec.records[1].Failure, failing.Served)
+	}
+	if got := rec.records[2].Served; got != (agents.Served{}) {
+		t.Errorf("a call naming no run or stage recorded %+v", got)
 	}
 }
 

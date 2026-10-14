@@ -578,7 +578,11 @@
 // The default catalog's adapters are built with a recorder over this
 // service's store, so every invocation a run makes through them, failed and
 // cancelled ones included, lands one row of cost: purpose, agent, model,
-// timing, failure category, and token usage, never a prompt or an output.
+// timing, failure category, token usage, and the run and stage it served,
+// never a prompt or an output. The run and stage are stamped by containRunner
+// from the context advance and the observe wrappers mark, so a call outside
+// either records it as unknown; usage.go reads the history back as section
+// 9's usage view.
 // invocation.go owns the translation and states the two edges plainly: a
 // caller-supplied catalog built its factories already, so it records only
 // what its own factories arranged, and a row that cannot be written is

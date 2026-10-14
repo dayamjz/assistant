@@ -22,7 +22,7 @@
 // about; section 9 names both outside its table and says they are not a
 // precedent for a third.
 //
-// Five things the section leaves to a verb's parameters are flags or arguments
+// Six things the section leaves to a verb's parameters are flags or arguments
 // rather than verbs.
 //
 // Answering a held run is --answer on the command that attaches to it, and
@@ -45,6 +45,11 @@
 // The section says no verb is added for it and status does not carry it, so
 // neither does this surface; answering a decision the read lists is the
 // --answer above, and the read names it rather than offering a second way.
+//
+// The usage view is --usage on runs, which is where section 9 puts it, taking
+// a window as --usage=WINDOW (24h, 90m, 7d) and the seven-day default alone.
+// It reads the agent invocation record of the whole home, so it names no run
+// and takes no --limit, and a window that does not parse is incorrect usage.
 //
 // Running the service in the foreground is --foreground on service start,
 // because the process that serves and the command that launches it are one
@@ -241,7 +246,7 @@
 // or watcher's word in it. The vocabulary that does that is internal/machine's
 // phrase table, and this package has one owner of which renderers speak
 // through it: the renderings table in render.go, which readOut dispatches
-// through and Renderings reads out. Every row but three is phrased, and
+// through and Renderings reads out. Every row but four is phrased, and
 // every line those rows write is a row of the table or a row beside the
 // person's own word - a branch, a project, a reference a change carried, the
 // repository's default branch - escaped. The stop guard's renderer writes no
@@ -257,16 +262,18 @@
 // failure code, so a type added without a renderer fails loudly rather than
 // reaching a person as a Go value.
 //
-// The three that are not phrased are named in the renderings table, each
-// with its voice. Two are evidence: a run's details and the findings holding
-// a decision are the detail view and the relay of a finding that needs a
-// decision, the two detailed evidence documents PRD section 9 names, which
-// P13 lets keep exact identifiers and stage names. Each row carries the
-// phrase-table row that points a person at it, and writeEvidence, which the
-// run renderer reaches each through, writes that row first, so the message
-// pointing at the evidence is phrased like every other line; what a
-// run says about a request it did not apply is a status line and is a row
-// beside the evidence rather than part of it. The third, a plan, is
+// The four that are not phrased are named in the renderings table, each
+// with its voice. Three are evidence: a run's details, the findings holding
+// a decision and the usage view are the detail view, the relay of a finding
+// that needs a decision and the usage view, the three detailed evidence
+// documents PRD section 9 names, which P13 lets keep exact identifiers and
+// stage names. Each row carries the phrase-table row that points a person
+// at it, and writeEvidence, which the run renderer reaches the first two
+// through, and writePointed, which readOut reaches the usage view through,
+// write that row first, so the message pointing at the evidence is phrased
+// like every other line; what a run says about a request it did not apply
+// is a status line and is a row beside the evidence rather than part of it.
+// The fourth, a plan, is
 // unsettled: the custody module that would write a plan's steps does not
 // exist in this build, and the one plan it makes is assistant sync's refusal,
 // whose sentence the renderer prints as this build wrote it.

@@ -111,3 +111,137 @@ func TestAppendAgentInvocationRefusesAnUnattributedCost(t *testing.T) {
 		t.Errorf("refused appends left %d rows", len(rows))
 	}
 }
+
+// A row names the run and stage it served when it was handed them, and a row
+// handed neither reads both back unknown rather than as an empty name. A
+// known but blank name is refused, because unknown is the one spelling of a
+// call that served none.
+func TestAnAgentInvocationKeepsTheRunAndStageItServed(t *testing.T) {
+	ctx := context.Background()
+	s := openStore(t)
+	started := time.Date(2026, 10, 14, 9, 0, 0, 0, time.UTC)
+	served := AgentInvocation{Purpose: "fix", Agent: "claude", SessionUse: "resumed", Started: started,
+		Run: Known("run-1"), Stage: Known("review")}
+	unattributed := AgentInvocation{Purpose: "intent", Agent: "claude", SessionUse: "none", Started: started}
+	for _, inv := range []AgentInvocation{served, unattributed} {
+		if _, err := s.AppendAgentInvocation(ctx, inv); err != nil {
+			t.Fatalf("AppendAgentInvocation: %v", err)
+		}
+	}
+	for name, blank := range map[string]AgentInvocation{
+		"run":   {Purpose: "fix", Agent: "claude", Run: Known(" "), Stage: Known("review")},
+		"stage": {Purpose: "fix", Agent: "claude", Run: Known("run-1"), Stage: Known("")},
+	} {
+		if _, err := s.AppendAgentInvocation(ctx, blank); err == nil || !strings.Contains(err.Error(), name) {
+			t.Errorf("a blank known %s was accepted or refused for another reason: %v", name, err)
+		}
+	}
+
+	rows, err := s.AgentInvocations(ctx)
+	if err != nil {
+		t.Fatalf("AgentInvocations: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("history holds %d rows, want the 2 accepted", len(rows))
+	}
+	if run, ok := rows[0].Run.Get(); !ok || run != "run-1" {
+		t.Errorf("the run reads back as (%q, %v)", run, ok)
+	}
+	if stage, ok := rows[0].Stage.Get(); !ok || stage != "review" {
+		t.Errorf("the stage reads back as (%q, %v)", stage, ok)
+	}
+	if rows[1].Run.IsKnown() || rows[1].Stage.IsKnown() {
+		t.Errorf("a call naming neither reads back as %v / %v, want unknown for both", rows[1].Run, rows[1].Stage)
+	}
+}
+
+// The windowed read returns exactly the rows whose call started at or after
+// the window's start, in appended order. The row started before it is the
+// control that the filter filters; the one started exactly at it pins the
+// boundary as inclusive.
+func TestAgentInvocationsSinceReadsTheWindowByWhenACallStarted(t *testing.T) {
+	ctx := context.Background()
+	s := openStore(t)
+	since := time.Date(2026, 10, 14, 9, 0, 0, 0, time.UTC)
+	for i, started := range []time.Time{since.Add(-time.Nanosecond), since, since.Add(time.Hour)} {
+		if _, err := s.AppendAgentInvocation(ctx, AgentInvocation{Purpose: "review", Agent: "claude",
+			SessionUse: "none", Started: started, Model: string(rune('a' + i))}); err != nil {
+			t.Fatalf("AppendAgentInvocation: %v", err)
+		}
+	}
+	all, err := s.AgentInvocations(ctx)
+	if err != nil || len(all) != 3 {
+		t.Fatalf("the whole history reads %d rows (%v), want 3", len(all), err)
+	}
+	got, err := s.AgentInvocationsSince(ctx, since)
+	if err != nil {
+		t.Fatalf("AgentInvocationsSince: %v", err)
+	}
+	if len(got) != 2 || got[0].Model != "b" || got[1].Model != "c" {
+		t.Fatalf("the window read %+v, want the two rows started at or after its start", got)
+	}
+}
+
+// The run-and-stage migration is additive: that one migration is undone by
+// hand, a row is written without its columns, and the shipped list is
+// applied again, which runs only the undone migration since every other is
+// recorded. The earlier row reads back unchanged with its run and stage
+// unknown, never a guess, and a row naming both can be written beside it.
+// The migration is found by name, so the test does not spell a version the
+// shipped list may grow past.
+func TestTheInvocationRunAndStageMigrationKeepsEarlierRowsUnknown(t *testing.T) {
+	ctx := context.Background()
+	s := openStore(t)
+	var added migration
+	for _, m := range schema {
+		if m.name == invocationServedMigration {
+			added = m
+		}
+	}
+	if added.version == 0 {
+		t.Fatalf("the shipped schema has no migration named %q", invocationServedMigration)
+	}
+	// Back to the shape the migration before it left. A migration may not do
+	// this, which is why it is done here by hand and not through one.
+	for _, column := range []string{"run", "stage"} {
+		if _, err := s.write.ExecContext(ctx, `ALTER TABLE agent_invocation DROP COLUMN `+column); err != nil {
+			t.Fatalf("rolling the schema back: %v", err)
+		}
+	}
+	if _, err := s.write.ExecContext(ctx, `DELETE FROM schema_migration WHERE version = ?`, added.version); err != nil {
+		t.Fatalf("forgetting the migration: %v", err)
+	}
+	started := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	if _, err := s.write.ExecContext(ctx, `
+		INSERT INTO agent_invocation (purpose, agent, model, session_use, started, duration_ns, failure, input_tokens)
+		VALUES ('review', 'claude', 'some-model', 'none', ?, 5, '', 900)`, encodeTime(started)); err != nil {
+		t.Fatalf("writing a row the old way: %v", err)
+	}
+	if err := migrate(ctx, s.write, schema); err != nil {
+		t.Fatalf("applying the shipped migration over the old row: %v", err)
+	}
+	if _, err := s.AppendAgentInvocation(ctx, AgentInvocation{Purpose: "fix", Agent: "claude", SessionUse: "none",
+		Started: started, Run: Known("run-1"), Stage: Known("review")}); err != nil {
+		t.Fatalf("writing a row naming its run and stage: %v", err)
+	}
+	rows, err := s.AgentInvocations(ctx)
+	if err != nil {
+		t.Fatalf("AgentInvocations: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("history holds %d rows, want 2", len(rows))
+	}
+	old := rows[0]
+	if old.Purpose != "review" || old.Model != "some-model" || !old.Started.Equal(started) || old.Duration != 5 {
+		t.Errorf("the earlier row reads back as %+v", old)
+	}
+	if n, ok := old.InputTokens.Get(); !ok || n != 900 {
+		t.Errorf("the earlier row's input tokens read back as (%d, %v)", n, ok)
+	}
+	if old.Run.IsKnown() || old.Stage.IsKnown() {
+		t.Errorf("the earlier row reads its run and stage as %v / %v, want unknown for both", old.Run, old.Stage)
+	}
+	if !rows[1].Run.IsKnown() || !rows[1].Stage.IsKnown() {
+		t.Errorf("the later row lost its run or stage: %+v", rows[1])
+	}
+}
