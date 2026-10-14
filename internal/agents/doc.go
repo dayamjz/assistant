@@ -370,9 +370,13 @@
 // It does not write prompts. A stage owns its own prompt, and this package
 // carries whatever it was handed.
 //
-// It does not sandbox an agent. An agent process can do whatever that agent
-// allows in the directory it was pointed at, and containing that belongs to
-// whatever chooses the directory and the agent's own permissions.
+// It does not sandbox an agent. What it does decide is the Grant a process
+// runs under, from its role (grant.go): a fix round edits, a worker edits and
+// is allowed git on top of its settings' own allow rules, and everything else
+// reads only. A grant is a command line the
+// agent's own permission system enforces, so an agent process can still do
+// whatever that agent allows under it in the directory it was pointed at, and
+// containing that belongs to whatever chooses the directory.
 //
 // It does not decide what an agent may be told. Suppressing a repository's own
 // instruction files, which PRD section 10 makes a configuration key, needs a
