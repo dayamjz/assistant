@@ -11,6 +11,8 @@ import (
 )
 
 // The sweep asked of a copy that already stands before a worker starts in it.
+// A run's copy is swept at another moment, once the run is final, and
+// runsweep.go owns that one.
 //
 // PRD section 11's "terminal gone, work not landed" preserves the copy,
 // proves no live process owns it, and relaunches in it. A dead terminal

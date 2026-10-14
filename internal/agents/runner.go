@@ -166,10 +166,13 @@ type Fixer interface {
 // directory. Which runs are still active is state this package does not own,
 // and PRD section 8 says the sweep must never touch a copy whose run is still
 // active, while this seam is called during the run whose invocation just
-// ended. So no runner this repository builds is given one: internal/service
-// asks Sweeper of a task's copy before relaunching into it, and a detached
-// descendant of a stage invocation still survives the invocation that
-// started it.
+// ended. So no runner this repository builds is given one, and a detached
+// descendant of a stage invocation survives the invocation that started it.
+// internal/service asks Sweeper itself, of a task's copy before relaunching
+// into it and of a run's copy once the run has reached a final state, which
+// it decides from the record that move wrote; a detached descendant still
+// standing in its run's copy then is ended there on Linux and macOS, and
+// that package's runsweep.go states what that leaves open.
 type Sweep interface {
 	// SweepUnder is asked to end any process still running under dir. It is
 	// called after the invocation's process tree was terminated and its leader
