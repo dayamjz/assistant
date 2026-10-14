@@ -378,6 +378,25 @@ func decodeDecisionModel(k Key, v any) (any, error) {
 // decodeFixMessage accepts the fix commit subject template. It must contain
 // the summary placeholder, because a template without it renders the same
 // subject for every fix, which makes a history of fix commits unreadable.
+// decodeDelivery reads a delivery posture. "direct" is refused by name,
+// because PRD section 12 defers it and section 10's row has it rejected at
+// parse time; a reader told only that the value is unknown would not learn
+// that the mode exists and is withheld.
+func decodeDelivery(k Key, v any) (any, error) {
+	s, err := asString(k, v)
+	if err != nil {
+		return nil, err
+	}
+	switch d := Delivery(s); {
+	case d.Recognized():
+		return d, nil
+	case s == "direct":
+		return nil, keyErr(k, v, `"direct" is deferred and no configuration selects it yet; expected "gated" or "local"`)
+	default:
+		return nil, keyErr(k, v, `expected "gated" or "local"`)
+	}
+}
+
 func decodeFixMessage(k Key, v any) (any, error) {
 	s, err := asString(k, v)
 	if err != nil {

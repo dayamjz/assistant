@@ -287,6 +287,23 @@ var ErrAttemptSessionRecorded = errors.New("store: the attempt already names a s
 // transaction that would flip the shape.
 var ErrCleanupRecorded = errors.New("store: the task already has a cleanup record")
 
+// ErrUnknownDelivery is returned by CreateTask for a delivery posture outside
+// config.Delivery's closed set, and by a read of a task whose stored posture
+// is outside it, which no accessor here wrote.
+var ErrUnknownDelivery = errors.New("store: the delivery posture is not one this build defines")
+
+// ErrLocalLandingRecorded is returned by RecordLocalLanding when the task
+// already has a local landing record. PRD section 8 has the record written
+// once, so a second write is refused rather than overwriting what the first
+// fast-forward recorded.
+var ErrLocalLandingRecorded = errors.New("store: the task already has a local landing record")
+
+// ErrNotLocal is returned by RecordLocalLanding for a task that is not a
+// delivery task recorded under config.DeliveryLocal: only a local task is
+// delivered by a fast-forward, so a landing record on any other task would
+// say it landed in a way its posture never allowed.
+var ErrNotLocal = errors.New("store: the task was not recorded under the local delivery posture")
+
 // ErrCleanupRemoved is returned by MarkCleanupRemoved when the task's cleanup
 // record already says when the copy was removed. The removal happens once,
 // so a second mark is a caller re-reporting what the record already holds

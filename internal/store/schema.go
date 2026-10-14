@@ -30,6 +30,11 @@ const sealTaskStateTableMigration = "task attribution and seal the stored task s
 // record, for the reason sealCheckpointTableMigration is a constant.
 const runCopySweepMigration = "run copy sweep records"
 
+// localLandingMigration names the migration that adds the task's delivery
+// posture and the local landing record, for the reason
+// sealCheckpointTableMigration is a constant.
+const localLandingMigration = "task delivery posture and local landing records"
+
 // schema is the migration list this package applies. Adding a column means
 // appending a migration whose ALTER TABLE names a nullable column with no
 // default, so rows written before it reads back unknown; migrate refuses
@@ -1074,6 +1079,48 @@ var schema = []migration{
 				BEFORE DELETE ON message
 				BEGIN
 					SELECT RAISE(ABORT, 'store: a message is kept after it is delivered and is not deleted');
+				END`,
+		},
+	},
+	{
+		version: 24,
+		name:    localLandingMigration,
+		statements: []string{
+			// PRD section 8's task row names two different things this table
+			// once spelled with one word: the launch notation, which the mode
+			// column migration 1 created has always held, and the delivery
+			// posture, which section 6 has recorded at intake "in a field of
+			// its own". This is that field. It is nullable and without a
+			// default, so a task recorded before it existed, and an
+			// investigation task, which has no posture, both read back
+			// unknown rather than as a fabricated gated. It is written once,
+			// at creation, and nothing here revises it: the record, and not
+			// a later read of the key, decides the task's path.
+			`ALTER TABLE task ADD COLUMN delivery TEXT`,
+			// PRD section 8's local landing record: append-only and written
+			// once, by the approved fast-forward that delivers a local task -
+			// the task, the commit, the local default branch it moved, the
+			// branch's tip before and after, and when. The task's Landed for
+			// a local task is derived from it, in the tier that reads the
+			// merge record, and nothing stores that fact again. One row per
+			// task, sealed on merge_record's terms.
+			`CREATE TABLE local_landing (
+				task        TEXT PRIMARY KEY REFERENCES task(id),
+				commit_id   TEXT NOT NULL,
+				branch      TEXT NOT NULL,
+				before      TEXT NOT NULL,
+				after       TEXT NOT NULL,
+				recorded_at TEXT NOT NULL
+			) STRICT`,
+			`CREATE TRIGGER local_landing_is_written_once
+				BEFORE UPDATE ON local_landing
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a local landing record is written once by the fast-forward that made it and is not updated');
+				END`,
+			`CREATE TRIGGER local_landing_is_not_removed
+				BEFORE DELETE ON local_landing
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a local landing record is written once by the fast-forward that made it and is not deleted');
 				END`,
 		},
 	},

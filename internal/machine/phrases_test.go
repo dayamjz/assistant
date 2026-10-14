@@ -360,6 +360,10 @@ func TestEveryAnswerEffectReadsAsItsOwnListedRow(t *testing.T) {
 			says:  []string{"was not begun again", "did not pass the check", "Nothing begins it again on its own"},
 			never: []string{"next time the service comes up", "just now"},
 		},
+		machine.AnswerLanded: {
+			says:  []string{"without validation", "Nothing was shared"},
+			never: []string{"merged", "cleared", "validated and"},
+		},
 	} {
 		got := phrase(effect)
 		for _, want := range rules.says {
@@ -390,6 +394,7 @@ func TestRetryNotBegunIsTheRetriesThatStartedNothing(t *testing.T) {
 		machine.AnswerRetryAtBound:  true,
 		machine.AnswerRetryRefused:  true,
 		machine.AnswerStopped:       false,
+		machine.AnswerLanded:        false,
 	}
 	effects := machine.AnswerEffects()
 	if len(effects) != len(oracle) {

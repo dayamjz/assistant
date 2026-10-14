@@ -219,6 +219,25 @@ var phraseByState = map[taskstate.State]Phrase{
 	},
 }
 
+// phraseTaskLandedLocally is the row for a task its local landing record
+// landed: PRD section 6's local posture, which starts no run, so the row words
+// it as a change made on this machine without validation and never with the
+// words a run that cleared the gate uses. TaskPhrase chooses it from
+// Basis.LandedLocally when the terminal tier answered Landed.
+var phraseTaskLandedLocally = Phrase{
+	Outcome:     "This change was made on your machine without validation: your local default branch was moved to it.",
+	Consequence: "Nothing was shared, and its local copy stays until removing it is proven safe.",
+	Decision:    "Nothing to decide.",
+}
+
+// phraseLandedLocallyNow is the row for an approval whose fast-forward was
+// made, AnswerLanded, on phraseTaskLandedLocally's terms.
+var phraseLandedLocallyNow = Phrase{
+	Outcome:     "Your approval was taken, and your local default branch was moved to the change without validation.",
+	Consequence: "Nothing was shared, and nothing checked the change before it moved.",
+	Decision:    "Nothing to decide.",
+}
+
 // phraseTaskHeld is the row for a task internal/taskstate resolved Held from
 // its hold tier: an open hold names the task itself, so it is answered given
 // the task, with --task and --answer, rather than from a branch as a run's
@@ -288,6 +307,9 @@ func TaskPhrase(t Task) Phrase {
 		return WaitingPhrase(t.Waiting)
 	case state == taskstate.Held && t.State.Source == taskstate.SourceHold:
 		return phraseTaskHeld
+	case state == taskstate.Landed && t.State.Source == taskstate.SourceRecord && t.State.Basis.LandedRun == "" &&
+		t.State.Basis.LandedLocally != "":
+		return phraseTaskLandedLocally
 	case state == taskstate.Unknown && t.State.Source == taskstate.SourceNone && noteTailed(t.State.Basis.EventKind):
 		return NoWordYet
 	}
@@ -528,6 +550,8 @@ func TaskAnsweredPhrase(a TaskAnswered) Phrase {
 		return phraseRetryRefused
 	case AnswerStopped:
 		return phraseNotRetried
+	case AnswerLanded:
+		return phraseLandedLocallyNow
 	}
 	return HoldPhrase(a.Hold)
 }
@@ -1256,7 +1280,7 @@ func TablePhrases() []Phrase {
 			out = append(out, p)
 		}
 	}
-	out = append(out, phraseTaskHeld, NoWordYet)
+	out = append(out, phraseTaskHeld, NoWordYet, phraseTaskLandedLocally)
 	for _, outcome := range Outcomes() {
 		if p, ok := phraseByOutcome[outcome]; ok {
 			out = append(out, p)
@@ -1265,7 +1289,7 @@ func TablePhrases() []Phrase {
 	out = append(out, phraseRunAdvancing, phraseRunStalled, phraseRunUnrecorded)
 	out = append(out, HoldPhrase(store.Hold{Subject: holdPlaceholder}), HoldPhrase(store.Hold{Subject: holdPlaceholder, Resolution: store.Known("answered")}))
 	out = append(out, HoldPhrase(store.Hold{Subject: holdPlaceholder, TaskID: store.Known("a task")}))
-	out = append(out, phraseRetried, phraseRedispatched, phraseRetryDeferred, phraseRetryHeld, phraseRetryAtBound, phraseRetryRefused, phraseNotRetried)
+	out = append(out, phraseRetried, phraseRedispatched, phraseRetryDeferred, phraseRetryHeld, phraseRetryAtBound, phraseRetryRefused, phraseNotRetried, phraseLandedLocallyNow)
 	out = append(out, phraseMessageUnread, phraseMessageRead, phraseMessageRefused, phraseMessageUnknown,
 		phraseWorkerStopped, PhraseStopUnverified)
 	out = append(out, phraseCopyKept, phraseCopyRemoved, phraseCopyNotSwept)

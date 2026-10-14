@@ -126,7 +126,7 @@ func (r *Reader) Observe(ctx context.Context) ([]Observed, error) {
 func (r *Reader) resolve(ctx context.Context, snap store.TaskSnapshot) Resolution {
 	in := Inputs{
 		Task: snap.Task, Runs: snap.Runs, Holds: snap.Holds, Events: snap.Events,
-		MergeRecords: snap.MergeRecords, Cleanup: snap.Cleanup, Process: Unobserved,
+		MergeRecords: snap.MergeRecords, Cleanup: snap.Cleanup, LocalLanding: snap.LocalLanding, Process: Unobserved,
 	}
 	if run, ok := newest(snap.Runs); ok && r.advancing != nil {
 		in.Advancing = r.advancing(run.ID)

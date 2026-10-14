@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/taskstate"
@@ -28,6 +29,15 @@ type BranchInGate func(ctx context.Context, repository store.Repository, branch 
 // working path is recorded under; this package never opens the gate.
 type GatePath func(ctx context.Context, repository store.Repository) (string, error)
 
+// ProjectPosture answers the delivery posture a repository's trusted copy
+// declares, read from its default branch at a freshly fetched commit and
+// resolved with the operator's layer, PRD section 10's delivery key. task is
+// the task being created, which the producer may name what it fetches after.
+// internal/service is the producer, because it is what reads a trusted copy;
+// this package never fetches one. An error is a copy that could not be read
+// or parsed, and Create refuses on it rather than assuming a posture.
+type ProjectPosture func(ctx context.Context, repository store.Repository, task string) (config.Delivery, error)
+
 // Deps is what a Queue is built from. Every field is required.
 type Deps struct {
 	// Home says where a task's instructions and its copy go.
@@ -45,6 +55,9 @@ type Deps struct {
 	// GatePath answers where a repository's gate repository stands, which
 	// Promote points a promoted copy's remote at.
 	GatePath GatePath
+	// Posture answers a repository's declared delivery posture, which a
+	// delivery task's intake records.
+	Posture ProjectPosture
 }
 
 // ErrIncomplete is returned by New when a dependency is missing.
@@ -61,6 +74,7 @@ type Queue struct {
 	hold     Exclude
 	inGate   BranchInGate
 	gatePath GatePath
+	posture  ProjectPosture
 	// betweenReadAndWrite runs after an intake, a release or a promotion
 	// has read the records it decides from and before it writes. It is nil
 	// in production and set only by this package's tests, which use it to
@@ -89,8 +103,11 @@ func New(d Deps) (*Queue, error) {
 		return nil, fmt.Errorf("%w: no gate reader", ErrIncomplete)
 	case d.GatePath == nil:
 		return nil, fmt.Errorf("%w: no gate locator", ErrIncomplete)
+	case d.Posture == nil:
+		return nil, fmt.Errorf("%w: no posture reader", ErrIncomplete)
 	}
-	return &Queue{home: d.Home, store: d.Store, reader: d.Reader, hold: d.Exclude, inGate: d.BranchInGate, gatePath: d.GatePath}, nil
+	return &Queue{home: d.Home, store: d.Store, reader: d.Reader, hold: d.Exclude, inGate: d.BranchInGate,
+		gatePath: d.GatePath, posture: d.Posture}, nil
 }
 
 // Clears reports whether a blocker in this state no longer holds the tasks

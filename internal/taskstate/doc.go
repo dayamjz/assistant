@@ -33,6 +33,15 @@
 // to the task and read as merged, lands the task. Where more than one
 // attributed run has a merged record, the newest is the one named.
 //
+// A task delivered under the local posture lands without a run: its Landed is
+// derived from its own local landing record, store.RecordLocalLanding's row,
+// which internal/service writes once in the transaction that records the
+// approval whose fast-forward moved the person's local default branch, and
+// it is read in this same tier, beside the merge record and on its terms.
+// Complete follows from it and the cleanup record exactly as it does from a
+// merge record. The detail says the branch was fast-forwarded on this
+// machine and never that anything merged, because nothing was validated.
+//
 // A terminal record is final. Every run in the snapshot is read below it, so
 // a run attributed later, by branch or named by the task's own row, does not
 // displace it; work that continues after Landed is a new task, which is what
