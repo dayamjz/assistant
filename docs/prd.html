@@ -449,7 +449,7 @@ flowchart TB
       </div>
       <div class="collapse-content text-sm opacity-90 space-y-2">
         <p>Everything Assistant says to you names the project outcome, the consequence, and the next decision. Internal terms do not appear: no task identifiers, no isolated-copy paths, no watcher or wake vocabulary, no stage names, no state labels, no compressed safety jargon. Worker reports and tool output are evidence to read, never text to relay.</p>
-        <p>Detailed evidence documents may keep exact identifiers. The message that points you at one still translates.</p>
+        <p>Detailed evidence documents may keep exact identifiers. Section 9 names which outputs are evidence documents: the detail view and the relay of a finding that needs your decision. The message that points you at one still translates, and so does every plain status line.</p>
         <p><b>Prevents:</b> a tool that is technically correct and practically unusable, because using it requires holding its implementation in your head.</p>
       </div>
     </div>
@@ -1015,6 +1015,8 @@ stateDiagram-v2
     terminal facts the program records once each: Landed is derived from the one merge record the
     code-host read writes, the same record the run's <code>passed</code> is derived from, and
     Complete is the cleanup proof, recorded once the same way. Neither is inferred from a run.
+    The relaunch from Failed is bounded by section 10's <code>relaunch_attempts</code>: past it the
+    task holds for you, and you decide whether it is retried.
   </p>
 
   <div class="grid gap-4 md:grid-cols-2 mb-8">
@@ -1154,7 +1156,7 @@ flowchart TD
     <div class="card card-border bg-base-200">
       <div class="card-body">
         <h4 class="card-title text-sm">A terminal-ish wait surfaces once</h4>
-        <p class="text-xs opacity-90">A worker that finished and is waiting on a merge, or that stopped on a blocker, surfaces once, then is absorbed even as its idle screen redraws, then surfaces again when something actually changes. Otherwise it storms every poll.</p>
+        <p class="text-xs opacity-90">A worker that finished and is waiting on a merge, or that stopped on a blocker, surfaces once, then is absorbed even as its idle screen redraws, then surfaces again when something actually changes. Otherwise it storms every poll. A worker that crashed and is still silent is not absorbed for good: it surfaces again once per <code>escalation_window</code>, so a crash is never seen only once and still never storms.</p>
       </div>
     </div>
   </div>
@@ -1162,7 +1164,11 @@ flowchart TD
   <h3 class="text-xl font-semibold mb-3">Keeping supervision alive</h3>
   <p class="mb-4 opacity-90">
     P10 is defended four independent ways, because a single mechanism has already failed in practice
-    and the cost of that failure is hours of silence.
+    and the cost of that failure is hours of silence. Work is in flight while any task resolves
+    Queued, Dispatched, Running, Paused, Validating, or Unknown, or has a wake not yet
+    acknowledged; a task that resolves Held, Ready, Reported, Failed, Landed, or Complete is not in
+    flight by its state alone, because the only one it waits on is you and the wake that told you
+    is in the queue.
   </p>
   <div class="overflow-x-auto rounded-box border border-base-content/10 bg-base-100 mb-8">
     <table class="table table-sm table-zebra">
@@ -1171,7 +1177,7 @@ flowchart TD
         <tr><td><b>The live cycle</b></td><td>Active</td><td>The coordinator holds exactly one supervision wait whenever work is in flight, resumed as the last action of every turn.</td></tr>
         <tr><td><b>Arm verification</b></td><td>Active</td><td>Starting the service confirms its supervisor is genuinely alive: the service writes its instance identity to a fresh beacon file, the probe checks that the same instance holds the home's lock, and the result is an honest started, attached, or failed. An unexplained exit of the loop is a typed failure, not silence.</td></tr>
         <tr><td><b>Pull guard</b></td><td>Passive</td><td>Ordinary commands warn when work is in flight and the supervisor has stopped, which the beacon and the lock probe decide, or when queued wakes are waiting to be drained.</td></tr>
-        <tr><td><b>Stop guard</b></td><td>Push</td><td>The guard acts through a hook the coordinator's host invokes at turn end, which runs the command section 9 names beside <code>assistant gate</code>. When the coordinator tries to end a turn while work is in flight and no live supervisor holds this home's lock, the turn is blocked until the host supplies a re-entry signal; the host defines that signal, not this program. It is never forced into a counted follow-up turn: a turn count is a bound nothing here owns, so without a host-supplied re-entry signal the only safe reading is blocked.</td></tr>
+        <tr><td><b>Stop guard</b></td><td>Push</td><td>The guard acts through a hook the coordinator's host invokes at turn end, which runs the command section 9 names beside <code>assistant gate</code>. When the coordinator tries to end a turn while work is in flight and no live supervisor holds this home's lock, the turn is blocked until the host supplies a re-entry signal; the host defines that signal, not this program. It is never forced into a counted follow-up turn: a turn count is a bound nothing here owns, so without a host-supplied re-entry signal the only safe reading is blocked. Installing that hook is a change to the host's configuration, which a push never consented to (P1): the installer prints the exact line the host's configuration needs and writes it only when given an explicit flag, so without that flag nothing in the host's configuration changes.</td></tr>
       </tbody>
     </table>
   </div>
@@ -1226,6 +1232,10 @@ flowchart TD
   <p class="mb-8 opacity-90">
     This is a testable contract, not a style preference. The translation table below should be
     enforced by a test that asserts both the required wording and the absence of the internal terms.
+    It governs everything a person reads except the two detailed evidence documents section 9
+    names, the detail view and the relay of a finding that needs your decision, where exact
+    identifiers and stage names stay. The plain status lines are not evidence documents and stay
+    phrased.
   </p>
   <div class="overflow-x-auto rounded-box border border-base-content/10 bg-base-100 mb-8">
     <table class="table table-sm table-zebra">
@@ -1867,6 +1877,24 @@ flowchart TB
       </tbody>
     </table>
   </div>
+  <p class="mb-4 opacity-90">
+    Answering a hold is a flag on <code>assistant</code>, and it takes a task as well as a run, so a
+    hold a task raised with no run behind it, an investigation's among them, is answered the same
+    way. No verb is added for it.
+  </p>
+  <p class="mb-8 opacity-90">
+    Creating a task, promoting an investigation to delivery, and relaunching a task whose terminal
+    is gone are the coordinator's typed commands from section 8, and each is a service method
+    rather than a command: none is a row in the table above, a person never types one, and they sit
+    beside the table on the same terms as <code>assistant gate</code> and <code>assistant host</code>
+    without being a third command. Each is coordinator-only. A caller whose process is inside a
+    registered worker group, which the service decides from the credentials the socket reports and
+    never from anything the caller says about itself, is refused, so an investigation cannot
+    promote itself and no worker can create or relaunch a task. Relaunch goes through the one
+    anchored relaunch that section 11's reconciliation also uses: the attempt it begins is anchored
+    to the attempt history it read, so a coordinator's relaunch and reconciliation's cannot both
+    relaunch the same task.
+  </p>
 
   <div role="alert" class="alert alert-error alert-soft mb-8 items-start">
     <div class="min-w-0">
@@ -1904,6 +1932,12 @@ flowchart TB
       <p class="text-xs opacity-80">A live log tail, and while checks are running, the pull request state and a clear signal once checks are green.</p>
     </div>
   </div>
+  <p class="mb-4 opacity-90">
+    The detail view is a detailed evidence document in P13's sense, so it names the nine stages and
+    shows each finding's identifier, location, and full text as they are. The plain status lines
+    are not evidence documents: they stay phrased under P13 and section 6's translation table, and
+    so does the message that points you at the detail view.
+  </p>
   <p class="mb-8 opacity-90">
     Design constraints: use only the terminal's own palette so it follows the user's theme; keep a
     fixed-width gutter so content never shifts as the selection moves; and reflect run state
@@ -1925,7 +1959,7 @@ flowchart TB
         <tr><td><b>Structured output</b></td><td>Machine-readable on standard output, progress on standard error. Control characters are escaped visibly rather than emitted raw.</td></tr>
         <tr><td><b>Stable exit codes</b></td><td>Success and normal decision points; operational failure; incorrect usage. Three meanings, never overloaded. A run that has not executed is not an operational failure: it is unfinished, so it exits with the first meaning and its next action says what to do.</td></tr>
         <tr id="outcome-set"><td><b>Outcomes</b></td><td>Six, in two groups, and this row is where the set is stated. Each one is marked with a <code>data-outcome</code> attribute naming its group, so the set, its order, and its grouping can be read off this row alone; a build whose own set differs in any of the three is wrong against this row rather than merely inconsistent with it. Four say a run is finished with. <code data-outcome="finished">checks-passed</code> means validated and green but not merged, and it means stop driving and ask the person. <code data-outcome="finished">passed</code> means merged. A pull request closed without merging ends the run as <code>failed</code>, with the reason recorded. <code data-outcome="finished">failed</code> and <code data-outcome="finished">cancelled</code> are terminal and require a next action, never silence. Two say it is not. <code data-outcome="unfinished">decision</code> is the decision point a blocking call returns at, and <code data-outcome="unfinished">executing</code> is a run whose execution has not finished, which only an answer that reported the run without advancing it can carry. It covers three situations a reader must act on differently: a segment in flight; a segment that stopped without settling, leaving the run at a resumable position with nothing moving it; and a run with no recorded position at all. The outcome is the same for all three because none is finished with. What separates them is the next action, decided by whether anything is advancing the run and whether a checkpoint recorded a position. Every outcome carries a next action, terminal or not.</td></tr>
-        <tr><td><b>Relay verbatim</b></td><td>A finding that needs a decision is relayed with its full text, unsummarized and unjudged, unless standing consent to resolve unattended was given.</td></tr>
+        <tr><td><b>Relay verbatim</b></td><td>A finding that needs a decision is relayed with its full text, unsummarized and unjudged, unless standing consent to resolve unattended was given. That relay is a detailed evidence document in P13's sense, so the finding keeps its exact identifiers; P13's "never text to relay" governs worker reports and tool output, not a finding you are asked to decide on, and the message asking for the decision is still phrased.</td></tr>
       </tbody>
     </table>
   </div>
@@ -2066,8 +2100,11 @@ flowchart TB
         <tr><td><code>no_ci</code></td><td><code>false</code></td><td>A positive declaration that this repository has no checks. Only this makes an empty check list count as green.</td></tr>
         <tr><td><code>allow_pushed_commands</code></td><td><code>false</code></td><td>The opt-out that lets the pushed branch set commands and agent selection. It is itself readable only from the trusted copy, so a branch cannot enable it for itself.</td></tr>
         <tr><td><code>checks_timeout</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code>168h</code></td><td>Idle timeout, re-armed whenever the base branch advances. On elapse the run holds rather than ending, and that hold is the one section 11's recovery step 3 applies to.</td></tr>
-        <tr><td><code>escalation_window</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code>30m</code></td><td>How long a terminal may stay unchanged, with positive evidence of progress, before the supervisor surfaces it anyway. The default is chosen, not measured; the limits table bounds it on both sides, and those bounds are chosen, not measured.</td></tr>
+        <tr><td><code>escalation_window</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code>30m</code></td><td>How long a terminal may stay unchanged, with positive evidence of progress, before the supervisor surfaces it anyway. It is also how often a crashed worker that is still silent surfaces again. The default is chosen, not measured; the limits table bounds it on both sides, and those bounds are chosen, not measured.</td></tr>
         <tr><td><code>recheck_window</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code>2h</code></td><td>How long a declared external wait may sit idle before it surfaces, so a forgotten wait cannot stay invisible. The default is chosen, not measured; the limits table bounds it on both sides, and those bounds are chosen, not measured.</td></tr>
+        <tr><td><code>supervision_beacon_interval</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code>10s</code></td><td>How often the supervisor loop rewrites its liveness beacon. A beacon is stale at three times this interval, and arm verification waits five times it for the first beacon; both are fixed multiples of this row, not rows of their own. It stops nothing and parks nothing. The default is chosen, not measured; the limits table bounds it on both sides, and those bounds are chosen, not measured.</td></tr>
+        <tr><td><code>stall_inspection_count</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code class="prd-num">3</code></td><td>How many times the same unchanged screen may surface before the next surface demands a deeper inspection, section 11's repeated stall. It raises the level of what surfaces and bounds nothing. The default is chosen, not measured; the limits table bounds it on both sides, and those bounds are chosen, not measured.</td></tr>
+        <tr><td><code>relaunch_attempts</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code class="prd-num">2</code></td><td>How many times reconciliation relaunches a task that resolves Failed with its terminal gone, in place, counted from the task's attempt history. Past it the task holds for you, and you decide whether it is retried: nothing retries a task automatically without bound. Zero relaunches nothing and holds every such task. It is a bound on a task, not one of the three loop bounds, and stops no run. The default is chosen, not measured; the limits table bounds it, and the ceiling is chosen, not measured.</td></tr>
         <tr><td><code>session_reuse</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code>true</code></td><td>One durable fixer session per run. Review turns are always fresh regardless, per P4.</td></tr>
         <tr><td><code>decision_model</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code>evaluate</code></td><td>The mode of the checks in section 5, "Checks a decision model may add": <code>evaluate</code>, <code>enforce</code>, or <code>off</code>. They run against the one supported provider, and only where the provider's key is in the operator's environment, never in a configuration file; with the key present they send the changed lines of every reviewed file to that provider.</td></tr>
         <tr><td><code>commit.fix_message</code></td><td><code>fix: {summary}</code></td><td>Subject line for fix commits. <code>{summary}</code> is the single required substitution, replaced by the agent's summary of the fix; a template without it is invalid. The template, the agent's summary, and the rendered result are each validated for length and for characters that could disguise content before anything is staged.</td></tr>
@@ -2106,6 +2143,11 @@ flowchart TB
         <tr><td>Escalation window ceiling</td><td><code>24h</code></td><td><code>escalation_window</code>. Above this a stalled worker is invisible for a day. Chosen, not measured.</td></tr>
         <tr><td>Recheck window floor</td><td><code>1m</code></td><td><code>recheck_window</code>. Chosen, not measured.</td></tr>
         <tr><td>Recheck window ceiling</td><td><code>168h</code></td><td><code>recheck_window</code>. Above this a forgotten wait is invisible for a week. Chosen, not measured.</td></tr>
+        <tr><td>Supervision beacon interval floor</td><td><code>1s</code></td><td><code>supervision_beacon_interval</code>. Below this the loop spends its passes rewriting the beacon. Chosen, not measured.</td></tr>
+        <tr><td>Supervision beacon interval ceiling</td><td><code>10m</code></td><td><code>supervision_beacon_interval</code>. Above this a stopped supervisor is invisible for most of an hour at the staleness multiple. Chosen, not measured.</td></tr>
+        <tr><td>Stall inspection count floor</td><td><code class="prd-num">1</code></td><td><code>stall_inspection_count</code>. At one every surface of a stall demands an inspection. Chosen, not measured.</td></tr>
+        <tr><td>Stall inspection count ceiling</td><td><code class="prd-num">100</code></td><td><code>stall_inspection_count</code>. Above this a stall surfaces more often than anyone would read before an inspection is demanded. Chosen, not measured.</td></tr>
+        <tr><td>Relaunch attempts ceiling</td><td><code class="prd-num">20</code></td><td><code>relaunch_attempts</code>. Above this a worker that fails the same way every time is restarted for days before you hear. The floor is zero, which is a value you may choose. Chosen, not measured.</td></tr>
       </tbody>
     </table>
   </div>
@@ -2143,7 +2185,7 @@ flowchart TB
       <tbody>
         <tr><td>Terminal gone, work not landed</td><td>Preserve the isolated copy. Prove no live process owns it, then relaunch in that same copy with the same instructions plus a note about what already happened. Never a fresh generic launch while the copy is unaccounted for.</td></tr>
         <tr><td>Terminal alive, screen unchanged</td><td>Only a stall if nothing positively proves progress. A worker thinking for a long time is not stuck.</td></tr>
-        <tr><td>Repeated stall on the same unchanged screen</td><td>Escalates. After enough repetitions it demands a deeper inspection rather than another surface look.</td></tr>
+        <tr><td>Repeated stall on the same unchanged screen</td><td>Escalates. Once the same unchanged screen has surfaced <code>stall_inspection_count</code> times, section 10's key, the next surface demands a deeper inspection rather than another surface look. The count raises the level of what surfaces and stops nothing.</td></tr>
         <tr><td>Ambiguous liveness</td><td>Leave it alone. Relaunching on an ambiguous reading risks two supervisors for one task, which is worse than one late check.</td></tr>
         <tr><td>Queued wakes present at start</td><td>Drain before doing anything else, including before reading further.</td></tr>
       </tbody>
@@ -2190,7 +2232,8 @@ flowchart TB
     cleanup, and any decision the investigation surfaced must be registered as a durable hold before
     the task can be treated as complete. Cleanup verifies that registration and refuses without it.
     A hold is not closed because the investigation finished, the report was filed, or the task was
-    cleaned up. It is closed when you answer it.
+    cleaned up. It is closed when you answer it, with the same answer that closes a run's hold,
+    given the task rather than a run, as section 9 says.
   </p>
 </section>
 
@@ -2220,7 +2263,7 @@ flowchart TB
           <li>The graph layer with halt points and checkpoints.</li>
           <li>The data-loss rules in full. This is not phaseable.</li>
           <li>The configuration trust boundary in full. Also not phaseable.</li>
-          <li><b>Claude Code</b> as the only agent adapter, behind the full adapter interface. It has a native output schema and resumable sessions, so the structured-output and session-reuse paths are exercised properly rather than stubbed.</li>
+          <li><b>Claude Code</b> as the only agent adapter, behind the full adapter interface. It has a native output schema and resumable sessions, so the structured-output and session-reuse paths are exercised properly rather than stubbed. It also gains a long-lived worker mode driven over standard input, so the fleet's workers are real agents rather than only the stand-in the tests script. The adapter declares that mode as the <code>worker_sessions</code> capability, and declares it once a conformance probe covers it; until then section 8's rule that undeclared means unavailable holds, and no shipped adapter runs the fleet's workers.</li>
           <li><b>One</b> forge adapter.</li>
           <li>Fleet: <b>both task shapes</b>, dispatch, isolation assertion, the state resolver, cleanup proofs, and promotion from investigation to delivery.</li>
           <li>Decision holds raised by an investigation, and the cleanup check that refuses without them.</li>
