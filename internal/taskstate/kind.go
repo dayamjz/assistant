@@ -143,7 +143,11 @@ func decodeIsolationRefusal(detail string) error {
 // and nothing follows it: the worker it tells is already running, and what
 // it is doing is the process tier's to answer, so a promoted task whose
 // newest event this is resolves Unknown at the event tier, as it does after
-// any note, until the worker's next entry.
+// any note, until the worker's next entry. "message-acknowledged" is a
+// worker's note naming a message sent to it, PRD section 6's acknowledgement;
+// it claims nothing, its detail is the message's identifier, and
+// internal/store appends it only in the transaction that records the
+// acknowledgement on the message, so the history and the record agree.
 var kinds = []Row{
 	{Kind: store.OpeningEventKind, Role: RoleState, State: Queued, Writer: WriterProgram},
 	{Kind: store.DispatchedEventKind, Role: RoleState, State: Dispatched, Writer: WriterProgram},
@@ -160,6 +164,15 @@ var kinds = []Row{
 	{Kind: "decision-open", Role: RoleDecisionOpen, State: Held, Writer: WriterWorker},
 	{Kind: "decision-closed", Role: RoleDecisionClosed, Writer: WriterWorker},
 	{Kind: "progress-note", Role: RoleNote, Writer: WriterWorker},
+	{Kind: store.MessageAcknowledgedEventKind, Role: RoleNote, Writer: WriterWorker, Detail: decodeMessageID},
+}
+
+// decodeMessageID holds the detail of a message acknowledgement to a message
+// identifier, store.ParseMessageID's rule, so a worker's acknowledgement that
+// names no message is refused before anything is appended.
+func decodeMessageID(detail string) error {
+	_, err := store.ParseMessageID(detail)
+	return err
 }
 
 // Lookup returns the row for a kind, or false for a kind this package defines

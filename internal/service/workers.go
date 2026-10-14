@@ -30,10 +30,11 @@ import (
 // answer depends on it apply it here: task.event admits only a worker and
 // attributes the entry to its task; wakes.list, wakes.acknowledge,
 // supervision.assert, coordinator.go's task.create, task.promote and
-// task.relaunch, taskholds.go's task.respond and catchup.go's catchup.mark
-// are the coordinator's and refuse a worker, task.respond so that no worker
-// answers a hold, its own task's included, and catchup.mark so that no
-// worker moves what a person was shown; and
+// task.relaunch, steer.go's task.message, task.stop and task.interrupt,
+// taskholds.go's task.respond and catchup.go's catchup.mark are the
+// coordinator's and refuse a worker, task.respond so that no worker answers a
+// hold, its own task's included, and catchup.mark so that no worker moves
+// what a person was shown; and
 // gate.admit holds a worker's push to admit_workers.go's rule. The set is
 // internal/session's, produced by session.Pipe.Create for the worker
 // process's lifetime, and this service reaches it through the driver that
@@ -126,8 +127,11 @@ func (s *Service) refuseWorker(req ipc.Request) error {
 // is held to internal/taskstate's table, refusing with ipc.ErrWorker a kind
 // whose writer is the program and with ipc.ErrInvalidRequest a kind the
 // table has no row for or a detail its decoder refuses. A peer outside every
-// worker group is ipc.ErrNotWorker. The entry is published as
-// ipc.TypeTaskEvent once it is recorded.
+// worker group is ipc.ErrNotWorker. The one kind with a record beside the
+// history, store.MessageAcknowledgedEventKind, is written through
+// acknowledgeMessage instead, so its event and the message record are one
+// transaction. The entry is published as ipc.TypeTaskEvent once it is
+// recorded.
 func (s *Service) taskEvent(ctx context.Context, req ipc.Request, r machine.TaskEventRequest) (machine.Appended, error) {
 	m, ok, err := s.workerPeer(req)
 	if err != nil {
@@ -151,8 +155,35 @@ func (s *Service) taskEvent(ctx context.Context, req ipc.Request, r machine.Task
 			return machine.Appended{}, fmt.Errorf("%w: the detail of a %q event: %w", ipc.ErrInvalidRequest, r.Kind, err)
 		}
 	}
+	if r.Kind == store.MessageAcknowledgedEventKind {
+		return s.acknowledgeMessage(ctx, m.Task, r.Detail)
+	}
 	event, err := s.store.AppendTaskEvent(ctx, m.Task, r.Kind, r.Detail)
 	if err != nil {
+		return machine.Appended{}, err
+	}
+	s.publishTaskEvent(event)
+	return machine.Appended{Event: event}, nil
+}
+
+// acknowledgeMessage is the worker's acknowledgement of a message to its
+// task, PRD section 6's: the row's decoder has already held the detail to a
+// message identifier, and store.AcknowledgeMessage appends the event and
+// records the acknowledgement on the message in one transaction, so the
+// history and the record cannot disagree (P8). A message that is not the
+// task's, one already acknowledged and one refused are each
+// ipc.ErrInvalidRequest with nothing appended. The entry is published as
+// every worker entry is.
+func (s *Service) acknowledgeMessage(ctx context.Context, task, detail string) (machine.Appended, error) {
+	id, err := store.ParseMessageID(detail)
+	if err != nil {
+		return machine.Appended{}, fmt.Errorf("%w: %w", ipc.ErrInvalidRequest, err)
+	}
+	event, _, err := s.store.AcknowledgeMessage(ctx, task, id)
+	switch {
+	case errors.Is(err, store.ErrNotFound), errors.Is(err, store.ErrMessageAcknowledged), errors.Is(err, store.ErrMessageRefused):
+		return machine.Appended{}, fmt.Errorf("%w: %w", ipc.ErrInvalidRequest, err)
+	case err != nil:
 		return machine.Appended{}, err
 	}
 	s.publishTaskEvent(event)

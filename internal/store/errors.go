@@ -421,6 +421,29 @@ var ErrTaskShapeMoved = errors.New("store: the task's shape is not the one the c
 // overwriting the holds the first was registered with.
 var ErrTaskReportStored = errors.New("store: the task already has a stored report")
 
+// ErrNoSender is returned by AppendMessage for the zero Sender: a message
+// records who sent it, on Hold's terms for who resolved one.
+var ErrNoSender = errors.New("store: a message records who sent it")
+
+// ErrUnknownSender is returned when a sender is outside the closed set
+// sender.go names, on ErrUnknownAcknowledger's terms.
+var ErrUnknownSender = errors.New("store: message sender is outside the closed set")
+
+// ErrMessageDelivery is returned by MarkMessageWritten and
+// MarkMessageRefused for a message whose delivery is already recorded,
+// written or refused: that fact is recorded once and the first record
+// stands.
+var ErrMessageDelivery = errors.New("store: the message's delivery is already recorded")
+
+// ErrMessageAcknowledged is returned by AcknowledgeMessage for a message
+// already acknowledged. Nothing is appended.
+var ErrMessageAcknowledged = errors.New("store: the message is already acknowledged")
+
+// ErrMessageRefused is returned by AcknowledgeMessage for a message whose
+// send was refused: it never reached a worker, so an acknowledgement of it
+// acknowledges nothing. Nothing is appended.
+var ErrMessageRefused = errors.New("store: the message was refused and never reached a worker")
+
 // ErrUnknownSeenKind is the reason a *SeenRecordError carries when MarkSeen
 // was named a record of a kind outside SeenKinds. Nothing in the batch is
 // written.

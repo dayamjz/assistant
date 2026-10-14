@@ -119,7 +119,8 @@ var errRelaunchNotDue = errors.New("service: the task is not one reconciliation 
 var errRelaunchUnprobed = errors.New("service: no terminal provider is wired into this service, so a terminal cannot be read as dead")
 
 // errRelaunchInFlight reports a relaunch asked of a task whose slot a
-// dispatch or another relaunch in this service holds unsettled. Nothing is
+// dispatch, another relaunch or a stop (steer.go) in this service holds
+// unsettled. Nothing is
 // recorded; the claim in flight decides, and a relaunch asked again after
 // it settles is decided from the records it left.
 var errRelaunchInFlight = errors.New("service: a dispatch or a relaunch of the task is in flight in this service")
@@ -189,11 +190,19 @@ type relaunched struct {
 // left alone, and a release that fails is logged; neither changes what was
 // recorded.
 func (s *Service) relaunchTask(ctx context.Context, id string) (relaunched, error) {
+	return s.relaunchTaskWith(ctx, id, "")
+}
+
+// relaunchTaskWith is relaunchTask carrying the note a retry on a stop's
+// hold gave, which steer.go's steeringNote places after the relaunch note;
+// it is added only when the superseded attempt's stop hold is answered
+// retry, the one relaunch a stop's note is for.
+func (s *Service) relaunchTaskWith(ctx context.Context, id, stopNote string) (relaunched, error) {
 	settle, err := s.claimRelaunch(id)
 	if err != nil {
 		return relaunched{}, err
 	}
-	out, err := s.relaunchClaimed(ctx, id)
+	out, err := s.relaunchClaimed(ctx, id, stopNote)
 	settle(out.launch.proof)
 	if err == nil {
 		s.releaseSuperseded(id, out.superseded)
@@ -222,7 +231,7 @@ func (s *Service) releaseSuperseded(id, ref string) {
 }
 
 // relaunchClaimed is relaunchTask once the in-memory slot is taken.
-func (s *Service) relaunchClaimed(ctx context.Context, id string) (relaunched, error) {
+func (s *Service) relaunchClaimed(ctx context.Context, id, stopNote string) (relaunched, error) {
 	if s.terminals == nil {
 		return relaunched{}, errRelaunchUnprobed
 	}
@@ -338,10 +347,21 @@ func (s *Service) relaunchClaimed(ctx context.Context, id string) (relaunched, e
 		return relaunched{}, fmt.Errorf("service: recording the dispatch of task %s: %w", id, err)
 	}
 	s.acknowledgeSuperseded(ctx, id, ref)
+	told := relaunchNote(attempt.Sequence, reason)
+	if answered.stopped == boundRetry {
+		// A stopped attempt's relaunch carries what steer.go says it does,
+		// read from the records the stop left; a read that fails is logged
+		// and the relaunch, already recorded, goes on with the note alone.
+		unacknowledged, err := s.unacknowledgedOf(ctx, id, latest.Sequence)
+		if err != nil {
+			s.log.Printf("the unacknowledged messages of task %s attempt %d could not be read for its relaunch: %v", id, latest.Sequence, err)
+		}
+		told += steeringNote(stopNote, unacknowledged)
+	}
 	return relaunched{
 		launch: dispatched{
 			id: id, proof: proof, attempt: attempt.Sequence, want: e.want, instructions: e.instructions,
-			anchor: moved.Sequence, note: relaunchNote(attempt.Sequence, reason),
+			anchor: moved.Sequence, note: told,
 		},
 		superseded: ref,
 		swept:      swept.words,

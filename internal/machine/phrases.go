@@ -492,6 +492,11 @@ var (
 		Consequence: "Nothing here can check that the earlier attempt left no process behind where the work is kept, so it waits on you.",
 		Decision:    "Answer the new decision to begin the work again anyway, or to leave it as it is.",
 	}
+	phraseRetryAtBound = Phrase{
+		Outcome:     "Your answer was recorded, and the work needs one more decision from you before it is begun again.",
+		Consequence: "It has already been begun again as many times as the program does on its own.",
+		Decision:    "Answer the new decision to begin the work again anyway, or to leave it as it is.",
+	}
 	phraseRetryRefused = Phrase{
 		Outcome:     "Your answer was recorded, and the work was not begun again: its local copy did not pass the check that keeps the work apart.",
 		Consequence: "Nothing begins it again on its own.",
@@ -517,6 +522,8 @@ func TaskAnsweredPhrase(a TaskAnswered) Phrase {
 		return phraseRetryDeferred
 	case AnswerRetryHeld:
 		return phraseRetryHeld
+	case AnswerRetryAtBound:
+		return phraseRetryAtBound
 	case AnswerRetryRefused:
 		return phraseRetryRefused
 	case AnswerStopped:
@@ -524,6 +531,64 @@ func TaskAnsweredPhrase(a TaskAnswered) Phrase {
 	}
 	return HoldPhrase(a.Hold)
 }
+
+// The steering rows, PRD section 6's "what you hear": a message as its
+// record stands, a stopped worker waiting on a decision, and a stop that
+// could not be shown to have ended the worker. None relays the message's
+// text or the worker's output, which are evidence and never relayed (P13).
+var (
+	phraseMessageUnread = Phrase{
+		Outcome:     "Your message reached the worker, which has not yet said it read it.",
+		Consequence: "Nothing sends it again; if it stays unread for a while, you are told once.",
+		Decision:    "Nothing to decide unless you are told it went unread.",
+	}
+	phraseMessageRead = Phrase{
+		Outcome:     "The worker said it read your message.",
+		Consequence: "What it does with it shows in its work.",
+		Decision:    "Nothing to decide.",
+	}
+	phraseMessageRefused = Phrase{
+		Outcome:     "Your message did not reach the worker.",
+		Consequence: "Nothing sends it again.",
+		Decision:    "Send it again while a worker is on the work, or end the worker and begin the work again with a note.",
+	}
+	phraseMessageUnknown = Phrase{
+		Outcome:     "Whether your message reached the worker is not known.",
+		Consequence: "Nothing sends it again.",
+		Decision:    "Look at the work directly before sending it again.",
+	}
+	phraseWorkerStopped = Phrase{
+		Outcome:     "The worker was ended, and what it had done was left where it was.",
+		Consequence: "Nothing more is done with the work until you answer, and nothing begins it again on its own.",
+		Decision:    taskAnswerDecision,
+	}
+	// PhraseStopUnverified is the row for a stop whose end the program could
+	// not show: the worker may still be running, and no decision was opened.
+	PhraseStopUnverified = Phrase{
+		Outcome:     "The worker could not be shown to have ended.",
+		Consequence: "No decision was opened, so the work is as it was and may still be moving.",
+		Decision:    "Look at the work directly, then ask for the stop again.",
+	}
+)
+
+// MessagePhrase is what a person reads about a message as its record
+// stands: read, once the worker acknowledged it; otherwise by its delivery,
+// written and not yet read, refused, or not known.
+func MessagePhrase(m store.Message) Phrase {
+	switch {
+	case m.Acknowledged():
+		return phraseMessageRead
+	case m.Delivery() == store.DeliveryWritten:
+		return phraseMessageUnread
+	case m.Delivery() == store.DeliveryRefused:
+		return phraseMessageRefused
+	}
+	return phraseMessageUnknown
+}
+
+// StopPhrase is what a person reads about a stop that ended the worker and
+// registered its hold.
+func StopPhrase(TaskStopped) Phrase { return phraseWorkerStopped }
 
 // The stream's own rows: what a person reads when the fleet view is told
 // something about the channel rather than about the work.
@@ -1211,7 +1276,9 @@ func TablePhrases() []Phrase {
 	out = append(out, phraseRunAdvancing, phraseRunStalled, phraseRunUnrecorded)
 	out = append(out, HoldPhrase(store.Hold{Subject: holdPlaceholder}), HoldPhrase(store.Hold{Subject: holdPlaceholder, Resolution: store.Known("answered")}))
 	out = append(out, HoldPhrase(store.Hold{Subject: holdPlaceholder, TaskID: store.Known("a task")}))
-	out = append(out, phraseRetried, phraseRedispatched, phraseRetryDeferred, phraseRetryHeld, phraseRetryRefused, phraseNotRetried)
+	out = append(out, phraseRetried, phraseRedispatched, phraseRetryDeferred, phraseRetryHeld, phraseRetryAtBound, phraseRetryRefused, phraseNotRetried)
+	out = append(out, phraseMessageUnread, phraseMessageRead, phraseMessageRefused, phraseMessageUnknown,
+		phraseWorkerStopped, PhraseStopUnverified)
 	out = append(out, phraseCopyKept, phraseCopyRemoved, phraseCopyNotSwept)
 	out = append(out, PhraseUpdatesMissed, PhraseServiceStopping, PhraseWorkerSpoke, PhraseActivity, PhraseUnfamiliarUpdate)
 	out = append(out, PhraseServiceUp, PhraseServiceAbsent, PhraseGated, PhraseUngated, PhraseNoRun, PhraseNoRuns, PhraseNoFleetWork)

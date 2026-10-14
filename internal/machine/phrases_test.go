@@ -387,6 +387,7 @@ func TestRetryNotBegunIsTheRetriesThatStartedNothing(t *testing.T) {
 		machine.AnswerRedispatched:  false,
 		machine.AnswerRetryDeferred: true,
 		machine.AnswerRetryHeld:     true,
+		machine.AnswerRetryAtBound:  true,
 		machine.AnswerRetryRefused:  true,
 		machine.AnswerStopped:       false,
 	}
