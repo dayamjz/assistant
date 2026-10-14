@@ -98,8 +98,8 @@ and the outcome vocabulary a driving agent reads. The twentieth is
 the local socket, owns every run that is executing, and answers the protocol.
 The twenty-first is `internal/cli`, the command surface itself: the verbs PRD
 section 9 specifies and no others, rendered for a person or as one structured
-document per invocation, and beside that table the two subcommands a gate's
-hooks invoke, which are what makes a push to the gate start a run.
+document per invocation, and beside that table the subcommands a gate's
+hooks and its remote invoke, which are what makes a push to the gate start a run.
 The twenty-second is `internal/outcomes`, the build-time check that fails when
 the PRD's outcome row and `internal/machine`'s outcome set stop declaring the
 same six values, in the same order, in the same two groups. The row owns the
@@ -178,12 +178,12 @@ service can list them, and nothing outside tests creates one.
 | `internal/agents/route` | The typed-graph answer to one question about a type: can a caller holding it reach a fixer session. The general form of the P4 check, asked by `internal/agents` and `internal/stages`. |
 | `internal/agents/standin` | The scripted agent the tests outside `internal/agents` run against: the test binary re-executed as the agent process, read by the production adapter. |
 | `internal/checkpoints` | The durable `graph.CheckpointStore` over `internal/store`: a run's checkpoint history, appends anchored to what the caller observed, and the fork that copies a run's history up to a point into a new run. |
-| `internal/cli` | The command surface: the verbs PRD section 9 specifies, their flags, the two renderings of one answer, and the two subcommands a gate's hooks invoke. It holds no validation logic. |
+| `internal/cli` | The command surface: the verbs PRD section 9 specifies, their flags, the two renderings of one answer, and the subcommands a gate's hooks and its remote invoke. It holds no validation logic. |
 | `internal/config` | The configuration schema: layers, defaults, merge, validation, path matcher. |
 | `internal/findings` | The stage vocabulary: findings, actions, reports, parsing of agent output, and the evidence a review report's findings are bound to. |
 | `internal/fixture` | The adversarial subject repository the end-to-end harness validates against: the seven scenarios, the conditions planted in them, and what each one is expected to produce. |
 | `internal/forge` | The only package that talks to a code host: the provider interface over pull requests, mergeability, and checks, and the GitHub adapter over the `gh` command line. |
-| `internal/gate` | The local bare repository a push is validated through: where it lives, its two hooks and the protocol they call the command surface with, its identity across a move or a copy, and the ownership question every operation asks before it adopts or deletes one. |
+| `internal/gate` | The local bare repository a push is validated through: where it lives, its two hooks and the protocol they call the command surface with, the receive command and lock that make a push wait for a run's copy being cut, its identity across a move or a copy, and the ownership question every operation asks before it adopts or deletes one. |
 | `internal/graph` | The execution engine: nodes, edges, bounds, halt points, checkpoints. |
 | `internal/home` | The one root everything lives under: where the database, the socket, the lock, the gates, the isolated copies and the logs go, and the exclusive lock that gives a home one service. |
 | `internal/ipc` | The local protocol between the command line and the background service: the method table, the event taxonomy, the bounded stream, the client and the server, peer identification, and the one resolver it derives for an answer that arrives here. |

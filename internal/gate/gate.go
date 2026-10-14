@@ -210,6 +210,16 @@ func (h *held) initialize(ctx context.Context, command string) (*Gate, error) {
 		return nil, fmt.Errorf("gate: pointing the %s remote of %s at %s: %w",
 			RemoteName, h.workingPath, h.repository, err)
 	}
+	// The receive command is written with the URL, so a push by the remote
+	// waits for a run's copy being cut or removed in the gate rather than
+	// being refused by git for it; receive.go says why a hook is too late for
+	// that. A working copy initialized before this was written has a remote
+	// with no receive command, and its pushes do not wait until it is
+	// initialized again.
+	if err := h.copyOf.SetRemoteReceivePack(ctx, RemoteName, receiveCommand(h.home, h.id, command)); err != nil {
+		return nil, fmt.Errorf("gate: writing the receive command of the %s remote of %s: %w",
+			RemoteName, h.workingPath, err)
+	}
 	return &Gate{id: h.id, repository: h.repository, workingPath: h.workingPath, reattached: h.reattached}, nil
 }
 

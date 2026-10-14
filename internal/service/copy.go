@@ -92,6 +92,18 @@ import (
 // principle P1's promise about a person's own origin is untouched: nothing
 // here opens the working copy at all.
 //
+// # Cutting and removing a copy take the gate's copies lock
+//
+// A copy's administrative entry is written inside the gate repository, and a
+// push or a fetch into that repository reads every such entry, so one that met
+// an entry part-written was refused by git (#144). The cut here and the
+// removal in internal/tasks hold internal/gate's copies lock exclusively while
+// git writes the entry, and the fetches this service makes into the gate,
+// fetchIntoGate's two callers, hold it shared, as a push through the
+// assistant remote does. internal/gate's copies.go owns the lock and names the
+// writers into the gate that do not take it, the rebase stage's fetch in a
+// run's copy among them.
+//
 // # Reclaim is a P12 decision, and the work it may not throw away
 //
 // A copy is removed when its run reaches a terminal status, and a held run
@@ -172,10 +184,33 @@ func (s *Service) ensureCopy(ctx context.Context, record store.Run) error {
 		return fmt.Errorf("service: %s in the gate repository is %s and run %s was recorded to validate %s; "+
 			"the copy is refused rather than cut at either", submittedRef(record.ID), held, record.ID, record.SubmittedHead)
 	}
+	// The cut is made under the gate's copies lock, held exclusively, so a
+	// push or a fetch into the gate that takes the lock waits for the cut
+	// rather than meeting it half-written; internal/gate's copies.go says
+	// who takes it and who does not.
+	lock, err := gate.LockCopies(ctx, bare.Path())
+	if err != nil {
+		return fmt.Errorf("service: waiting to cut the isolated copy for run %s: %w", record.ID, err)
+	}
+	defer func() { _ = lock.Release() }()
 	if _, err := bare.AddWorktree(ctx, vcs.WorktreeSpec{Path: path, Commit: held}); err != nil {
 		return fmt.Errorf("service: creating the isolated copy for run %s at %s: %w", record.ID, path, err)
 	}
 	return nil
+}
+
+// fetchIntoGate fetches into the gate repository under its copies lock, held
+// shared, so the fetch waits for a copy being cut or removed there rather than
+// being refused by git for it. It waits no longer than a push does, and a
+// fetch that waited that long is refused with internal/gate's
+// ErrCopyInTransit, which the caller returns like any other failure to fetch.
+func fetchIntoGate(ctx context.Context, bare *vcs.Repository, spec vcs.FetchSpec) error {
+	lock, err := gate.AwaitCopies(ctx, bare.Path(), gate.ReceiveWait, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = lock.Release() }()
+	return bare.Fetch(ctx, spec)
 }
 
 // recordSubmittedCommit writes the run's reference in the gate repository at
@@ -210,7 +245,7 @@ func (s *Service) recordSubmittedCommit(ctx context.Context, record store.Run, h
 		}
 		return nil
 	}
-	if err := bare.Fetch(ctx, vcs.FetchSpec{
+	if err := fetchIntoGate(ctx, bare, vcs.FetchSpec{
 		Remote:   repository.WorkingPath,
 		Refspecs: []string{"+" + record.SubmittedHead + ":" + submittedRef(record.ID)},
 	}); err != nil {

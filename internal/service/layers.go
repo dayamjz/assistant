@@ -147,7 +147,7 @@ func (s *Service) trustedLayer(ctx context.Context, bare *vcs.Repository, reposi
 			"%w: the repository record of run %s names no default branch to read it from", ErrTrustedConfig, runID)
 	}
 	ref := trustedRef(runID)
-	if err := bare.Fetch(ctx, vcs.FetchSpec{
+	if err := fetchIntoGate(ctx, bare, vcs.FetchSpec{
 		Remote:   repository.UpstreamURL,
 		Refspecs: []string{"+refs/heads/" + repository.DefaultBranch + ":" + ref},
 	}); err != nil {

@@ -257,9 +257,13 @@ Each has cost this repository more than one round of review.
   ownership, so neither the `assistant` remote nor the path hash is weighed;
   the question is one shared rule both askers run, over the store's ownership
   index and the gate's own record, and every answer either gives is checked
-  against the working copy actually standing there. Read its `doc.go` before
-  changing any of that, and for the residual gaps: a path that outlives its
-  working copy, `core.hooksPath`, and letter case in a path.
+  against the working copy actually standing there. It also owns the copies
+  lock a push and a fetch into the gate share against a run's copy being cut
+  or removed there; a push takes it in the receive command `Initialize` writes
+  on the `assistant` remote rather than in a hook, because git checks a push
+  before `pre-receive` runs, and `copies.go` names who does not take it. Read
+  its `doc.go` before changing any of that, and for the residual gaps: a path
+  that outlives its working copy, `core.hooksPath`, and letter case in a path.
 - `internal/findings` is the vocabulary every stage speaks, and the only place
   a report is parsed, normalized, validated, or refused. P3 lives there: an
   action it cannot read becomes `ask`. The review stage answers for one rule
@@ -838,8 +842,9 @@ Each has cost this repository more than one round of review.
   Two commands stand outside that table, and together they are not a
   precedent for a third: each is the interface something external requires,
   so each is dispatched beside the table rather than added to it.
-  `assistant gate` is what `internal/gate`'s installed hooks invoke, and its
-  two subcommands are the `gateHooks` table in `gate.go`. `assistant host` is
+  `assistant gate` is what `internal/gate`'s installed hooks and the
+  `assistant` remote's receive command invoke, and its subcommands are the
+  `gateHooks` table in `gate.go`. `assistant host` is
   what the coordinator's host invokes from the hook it fires at turn end, its
   one subcommand is the `hostHooks` table in `host.go`, and it is PRD section
   5's stop guard with no service: it feeds `supervisor.Assess` through

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/dayamjz/assistant/internal/forge"
+	"github.com/dayamjz/assistant/internal/gate"
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/store"
@@ -697,6 +698,16 @@ func removeRunCopy(ctx context.Context, bare *vcs.Repository, path string, r Rem
 	if !r.proven {
 		return fmt.Errorf("tasks: refusing to remove %s on a removal nobody proved", path)
 	}
+	// The removal is made under the gate's copies lock, held exclusively, so
+	// a push or a fetch into the gate that takes the lock waits for it rather
+	// than meeting the copy's entry half-removed. Only the removal is held:
+	// the proof before it can fetch from the upstream, and a push would wait
+	// on the network for no reason.
+	lock, err := gate.LockCopies(ctx, bare.Path())
+	if err != nil {
+		return fmt.Errorf("tasks: waiting to remove the copy at %s: %w", path, err)
+	}
+	defer func() { _ = lock.Release() }()
 	if err := bare.RemoveWorktree(ctx, path); err != nil {
 		return fmt.Errorf("tasks: removing the copy at %s: %w", path, err)
 	}

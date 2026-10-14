@@ -59,8 +59,8 @@ func usagef(format string, a ...any) error {
 }
 
 // verb is one command. Every row is a command PRD section 9's table names, and
-// the table below is the whole of what a caller drives; the two subcommands
-// internal/gate's hooks invoke are gateHooks in gate.go rather than rows here.
+// the table below is the whole of what a caller drives; the subcommands
+// internal/gate requires are gateHooks in gate.go rather than rows here.
 type verb struct {
 	// name is what a caller types, empty for the command with no verb.
 	name string

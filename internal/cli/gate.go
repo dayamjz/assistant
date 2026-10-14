@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -21,9 +22,11 @@ import (
 // a row there. This is neither. It is the interface internal/gate requires of
 // this command surface: the hooks it installs in a gate repository invoke
 // "<this binary> gate admit" and "<this binary> gate notify", and hooks.go
-// states that requirement. A gate whose hooks call a command that is not
-// served installs executable files that fail, so a push is refused before
-// anything starts.
+// states that requirement, and the receive command it writes into a working
+// copy's assistant remote invokes "<this binary> gate receive", which
+// receive.go states. A gate whose hooks call a command that is not served
+// installs executable files that fail, so a push is refused before anything
+// starts.
 //
 // It is dispatched beside that table rather than added to it, because the
 // table is a claim and a row added there would quietly weaken it. It is in the
@@ -31,8 +34,10 @@ import (
 // binary answers to and does not mention is worse than either.
 const gateVerbName = "gate"
 
-// gateHooks are the two subcommands internal/gate's hooks invoke. The list is
-// the one owner of which two there are: it names the subcommand a command line
+// gateHooks are the subcommands internal/gate requires of this binary: the
+// two its hooks invoke, and the receive command it writes into a working
+// copy's assistant remote, which git runs in place of receive-pack. The list
+// is the one owner of which there are: it names the subcommand a command line
 // holds, says what it is for, and runs the one that was named.
 var gateHooks = []struct {
 	name    string
@@ -41,6 +46,8 @@ var gateHooks = []struct {
 }{
 	{"admit", "Decide whether a push may proceed, before any reference in the gate changes.", admitPush},
 	{"notify", "Start the run a push that was accepted calls for.", notifyPush},
+	{gate.ReceiveSubcommand, "Receive a push once no run's local copy is being set up or cleaned up in the gate.",
+		receivePush},
 }
 
 // gateVerb runs the hook subcommand the command line names, which has to be
@@ -128,6 +135,68 @@ func notifyPush(ctx context.Context, in *invocation) (any, error) {
 	return notification, err
 }
 
+// receiveWait is how long a push waits for a run's copy before it is refused.
+// It is internal/gate's bound, held here as a variable only so this package's
+// own tests can reach the refusal without waiting it out; nothing in the
+// product assigns it.
+var receiveWait = gate.ReceiveWait
+
+// receivePush answers the receive command internal/gate writes into a working
+// copy's assistant remote. git runs it in place of receive-pack and appends
+// the gate repository's path, so it takes --gate and --home on the hooks'
+// terms and exactly one argument.
+//
+// Standard output is the push protocol from the first byte, so nothing here
+// writes to it: the answer is nil, which renders nothing, and --json is
+// turned off after the flags are read, because a structured failure on
+// standard output would be read by the pushing git as protocol. A refusal goes
+// to standard error, which git shows the person pushing as it arrives. Whether
+// the push waits, and for how long, is internal/gate's; what the person reads
+// when it starts to wait and when it is refused are internal/machine's rows,
+// and both name the state the push waited on.
+func receivePush(ctx context.Context, in *invocation) (any, error) {
+	var id string
+	err := in.parseArgs("gate "+gate.ReceiveSubcommand, 1, func(set *flag.FlagSet) {
+		set.StringVar(&id, "gate", "", "the identifier of the gate the push is arriving at")
+	})
+	in.json = false
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(id) == "" || len(in.args) != 1 {
+		return nil, usagef("assistant gate %s needs --gate with the gate's identifier and the path git "+
+			"appends; the assistant remote's receive command writes both", gate.ReceiveSubcommand)
+	}
+	err = gate.Receive(ctx, gate.ReceiveSpec{
+		Home:   in.home.Root(),
+		ID:     id,
+		Target: in.args[0],
+		Stdin:  in.env.Stdin,
+		Stdout: in.env.Stdout,
+		Stderr: in.env.Stderr,
+		Wait:   receiveWait,
+		Waiting: func() {
+			writeln(in.env.Stderr, machine.PhraseCopyBusy.String())
+		},
+	})
+	if errors.Is(err, gate.ErrCopyInTransit) {
+		return nil, copyStillBusy{err: err}
+	}
+	return nil, err
+}
+
+// copyStillBusy is internal/gate's refusal of a push a run's copy held past
+// the bound, read out in the words a person sending a change is given. It
+// still matches gate.ErrCopyInTransit, so the typed reason survives the
+// rewording.
+type copyStillBusy struct{ err error }
+
+// Error is the row a person reads.
+func (e copyStillBusy) Error() string { return machine.PhraseCopyStillBusy.String() }
+
+// Unwrap resolves to internal/gate's refusal.
+func (e copyStillBusy) Unwrap() error { return e.err }
+
 // gateRequest parses the flags both hooks take and the reference update lines
 // both are given, which is everything either of them sends.
 //
@@ -190,8 +259,8 @@ func readOutNotification(w io.Writer, n machine.Notification) {
 // out, so a subcommand added there is a subcommand this describes.
 func gateUsage() string {
 	var b strings.Builder
-	b.WriteString("\nInvoked by a gate's hooks rather than typed. internal/gate writes this binary's\n")
-	b.WriteString("absolute path, the gate, and the home into the hook, so a push chooses none of them:\n")
+	b.WriteString("\nInvoked by a gate's hooks and its remote rather than typed. internal/gate writes this\n")
+	b.WriteString("binary's absolute path, the gate, and the home into both, so a push chooses none of them:\n")
 	for _, hook := range gateHooks {
 		fmt.Fprintf(&b, "  %s %-7s %s\n", gateVerbName, hook.name, hook.summary)
 	}

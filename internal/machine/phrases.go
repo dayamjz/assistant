@@ -779,6 +779,25 @@ var (
 		Consequence: "Nothing new is validated, and a run already under way for it carries on.",
 		Decision:    "If that run should not carry on, end it with assistant --cancel from its branch.",
 	}
+	// PhraseCopyBusy is the row for a change that arrived while a run's
+	// copy was being set up or cleaned up in the gate, and is held back,
+	// for internal/gate's bound at most, until that is done. Git shows it
+	// to the person sending the change as it happens, so a pause is never
+	// silent.
+	PhraseCopyBusy = Phrase{
+		Outcome:     "A local copy for a run is being set up or cleaned up where this change is received.",
+		Consequence: "The change is taken in once that is done, within a bounded time, and nothing you sent is lost meanwhile.",
+		Decision:    "Nothing to decide yet.",
+	}
+	// PhraseCopyStillBusy is the row for a change refused because a run's
+	// copy was still being set up or cleaned up when the bound ran out. It
+	// names that state, because the person sending did nothing wrong and
+	// the cure is to send again.
+	PhraseCopyStillBusy = Phrase{
+		Outcome:     "A local copy for a run was still being set up or cleaned up when the time allowed for it ran out, so this change was not taken in.",
+		Consequence: "Nothing was received, and your branch is as you left it.",
+		Decision:    "Send it again in a moment.",
+	}
 	// PhraseNothingSent is the row for a change that moved no reference at
 	// all.
 	PhraseNothingSent = Phrase{
@@ -835,5 +854,6 @@ func TablePhrases() []Phrase {
 	out = append(out, LifecyclePhrase(Lifecycle{Accepted: true, Restarting: true}), LifecyclePhrase(Lifecycle{Accepted: true}), LifecyclePhrase(Lifecycle{}))
 	out = append(out, InitPhrase(Init{}), InitPhrase(Init{Reattached: true}), EjectPhrase(Eject{Removed: true}), EjectPhrase(Eject{}))
 	out = append(out, PhraseAdmitted, PhraseValidationBegun, PhraseSupersededEarlier, PhraseNothingStartedFor, PhraseNothingSent, PhraseNoReading)
+	out = append(out, PhraseCopyBusy, PhraseCopyStillBusy)
 	return out
 }

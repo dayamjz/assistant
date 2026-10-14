@@ -27,6 +27,7 @@ var _ gate.WorkingCopy = (*vcs.Repository)(nil)
 type attached struct {
 	remoteURL func(ctx context.Context, name string) (string, error)
 	setRemote func(ctx context.Context, name, url string) error
+	setRecv   func(ctx context.Context, name, command string) error
 }
 
 func (a attached) RemoteURL(ctx context.Context, name string) (string, error) {
@@ -37,6 +38,10 @@ func (a attached) SetRemote(ctx context.Context, name, url string) error {
 	return a.setRemote(ctx, name, url)
 }
 
+func (a attached) SetRemoteReceivePack(ctx context.Context, name, command string) error {
+	return a.setRecv(ctx, name, command)
+}
+
 var _ gate.WorkingCopy = attached{}
 
 // attachedOpener opens a working copy that cannot detach.
@@ -45,7 +50,8 @@ func attachedOpener(ctx context.Context, path string) (gate.WorkingCopy, error) 
 	if err != nil {
 		return nil, err
 	}
-	return attached{remoteURL: repository.RemoteURL, setRemote: repository.SetRemote}, nil
+	return attached{remoteURL: repository.RemoteURL, setRemote: repository.SetRemote,
+		setRecv: repository.SetRemoteReceivePack}, nil
 }
 
 // TestTheProductWorkingCopyCanDetach fails if *vcs.Repository stops satisfying

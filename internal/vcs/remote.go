@@ -133,3 +133,30 @@ func (r *Repository) SetRemote(ctx context.Context, name, url string) error {
 		return err
 	}
 }
+
+// SetRemoteReceivePack sets the command a push to the named remote starts on
+// the receiving side in place of git receive-pack, and refuses with
+// ErrRemoteNotFound when there is no such remote.
+//
+// The command is stored exactly as given. Git runs it through a shell with the
+// remote's path appended, so a caller quotes what it writes; this package
+// neither quotes nor checks it beyond refusing what would be read as an option
+// or would break the configuration line.
+//
+// It writes the one key of the one named remote, so it is SetRemote's terms
+// for PRD principle P1: another remote, a person's own origin included, is
+// untouched. RemoveRemote removes the key along with the rest of the remote.
+func (r *Repository) SetRemoteReceivePack(ctx context.Context, name, command string) error {
+	if err := checkArg("remote", name); err != nil {
+		return err
+	}
+	if err := checkArg("receive-pack command", command); err != nil {
+		return err
+	}
+	if _, err := r.RemoteURL(ctx, name); err != nil {
+		return err
+	}
+	_, err := r.run(ctx, "remote-set-receivepack", "config", "--replace-all",
+		"remote."+name+".receivepack", command)
+	return err
+}
