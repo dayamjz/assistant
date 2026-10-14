@@ -55,6 +55,21 @@ const (
 	// method that moves a record, and the kinds it accepts are the ones
 	// internal/taskstate's table gives a worker as their writer.
 	MethodTaskEvent Method = "task.event"
+	// MethodTaskCreate records a new task through internal/tasks' intake,
+	// PRD section 9's coordinator-only service method for creating one. It
+	// is the coordinator's: the handler refuses a caller the worker group
+	// set places inside a task's worker group, decided from the caller's
+	// credentials, so no worker can create a task.
+	MethodTaskCreate Method = "task.create"
+	// MethodTaskPromote flips an investigation task to delivery through
+	// internal/tasks' promotion. It is the coordinator's on
+	// MethodTaskCreate's terms, which is what keeps an investigation's own
+	// worker from promoting itself.
+	MethodTaskPromote Method = "task.promote"
+	// MethodTaskRelaunch relaunches a task whose terminal is gone, through
+	// the one anchored relaunch PRD section 11's reconciliation uses. It is
+	// the coordinator's on MethodTaskCreate's terms.
+	MethodTaskRelaunch Method = "task.relaunch"
 	// MethodWakesList drains the durable wake queue for the coordinator: it
 	// returns the queued wakes, oldest first, and acknowledges none, so a
 	// row stays actionable until MethodWakesAcknowledge names it. It is the
@@ -152,6 +167,9 @@ var specs = []Spec{
 	{MethodTasksList, KindRequest, AccessOpen, "List fleet work with its resolved current state."},
 	{MethodTaskGet, KindRequest, AccessOpen, "Read one task and the revision it is current as of."},
 	{MethodTaskEvent, KindRequest, AccessRestricted, "Append an event to the history of the task the caller is the worker of."},
+	{MethodTaskCreate, KindRequest, AccessRestricted, "Record a new task through intake, for the coordinator."},
+	{MethodTaskPromote, KindRequest, AccessRestricted, "Promote an investigation task to delivery in place, for the coordinator."},
+	{MethodTaskRelaunch, KindRequest, AccessRestricted, "Relaunch a task whose terminal is gone, in its own copy, for the coordinator."},
 	{MethodWakesList, KindRequest, AccessRestricted, "Drain the wake queue: list the queued wakes, acknowledging none."},
 	{MethodWakesAcknowledge, KindRequest, AccessRestricted, "Record that the coordinator handled the named wakes."},
 	{MethodSupervisionAssert, KindRequest, AccessRestricted, "Verify that the supervisor loop of this home's service is live."},

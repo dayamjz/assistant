@@ -49,6 +49,14 @@ import (
 // configuration is not scrubbed here: a key that could survive would be that
 // package's to remove.
 //
+// The clone is a full clone with configuration of its own, so it is given
+// gc.auto=0 and maintenance.auto=false there through
+// vcs.DisableAutomaticMaintenance before it is shaped, and a clone that cannot
+// be given them is removed like one that cannot be shaped. The primary's
+// configuration is not written, and the dispatch test reads it back to show
+// it is the same before and after. A copy cut before that write existed keeps
+// git's defaults until it is cut again: nothing here goes back to one.
+//
 // # The claim is the attempt, and the dispatched entry is not it
 //
 // Two dispatchers of one task cannot both cut: the dispatch is claimed by
@@ -296,26 +304,62 @@ func (s *Service) dispatchTask(ctx context.Context, id string) (dispatched, erro
 // not begin a second attempt behind this one, and returns the function that
 // settles it with what the dispatch ended at: the proof, or the zero value
 // for a dispatch that ended without one. The slot is kept either way, which
-// is dispatchDue's one-attempt-per-service rule. The store's anchor is what
+// is dispatchDue's one-dispatch-per-service rule; only claimRelaunch takes a
+// held slot again, for a relaunch's new attempt. The store's anchor is what
 // refuses a second dispatcher in another service or on another path; this
 // is the cheaper refusal within one.
 func (s *Service) claimDispatch(id string) (func(proof tasks.Isolation), error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.isolated == nil {
-		// Open makes the map; a service built by hand in this package's
-		// tests may not have, and a nil map is no slot at all.
-		s.isolated = make(map[string]tasks.Isolation)
-	}
+	s.slotMaps()
 	if _, taken := s.isolated[id]; taken {
 		return nil, fmt.Errorf("service: task %s has already been dispatched here", id)
 	}
+	return s.takeSlot(id), nil
+}
+
+// claimRelaunch takes the task's slot for a relaunch, which is the one way
+// a slot this service already holds is taken again: the task's earlier
+// attempt was dispatched or relaunched here and its terminal is gone, and
+// the relaunch begins a new attempt. A slot that a dispatch or a relaunch
+// still holds unsettled is errRelaunchInFlight, so two relaunches in this
+// service, or a relaunch and a dispatch, do not run side by side; between
+// services, and between a settled slot's attempt and this one, the store's
+// anchor is what refuses a second relauncher, as relaunch.go states. The
+// slot is settled as claimDispatch's is.
+func (s *Service) claimRelaunch(id string) (func(proof tasks.Isolation), error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.slotMaps()
+	if s.claiming[id] {
+		return nil, fmt.Errorf("%w: task %s", errRelaunchInFlight, id)
+	}
+	return s.takeSlot(id), nil
+}
+
+// slotMaps makes the slot maps a service built by hand in this package's
+// tests may not have; Open makes both, and a nil map is no slot at all. It
+// is called with s.mu held.
+func (s *Service) slotMaps() {
+	if s.isolated == nil {
+		s.isolated = make(map[string]tasks.Isolation)
+	}
+	if s.claiming == nil {
+		s.claiming = make(map[string]bool)
+	}
+}
+
+// takeSlot marks the task's slot taken and unsettled and returns the
+// function that settles it. It is called with s.mu held.
+func (s *Service) takeSlot(id string) func(proof tasks.Isolation) {
 	s.isolated[id] = tasks.Isolation{}
+	s.claiming[id] = true
 	return func(proof tasks.Isolation) {
 		s.mu.Lock()
 		defer s.mu.Unlock()
 		s.isolated[id] = proof
-	}, nil
+		delete(s.claiming, id)
+	}
 }
 
 // isolationOf reports the proof this service holds for a task, and whether it
@@ -568,6 +612,12 @@ func (s *Service) cutTaskCopy(ctx context.Context, record store.Task, primary, c
 		return fmt.Errorf("service: cloning the primary checkout for task %s: %w", record.ID, err)
 	}
 	shape := func() error {
+		// The clone is this program's and not the person's, so it is given
+		// automatic maintenance off in its own configuration, on the terms the
+		// opening comment of this file states.
+		if err := cloned.DisableAutomaticMaintenance(ctx); err != nil {
+			return fmt.Errorf("turning automatic maintenance off: %w", err)
+		}
 		switch record.Shape {
 		case store.TaskDelivery:
 			if err := cloned.SetRemote(ctx, gate.RemoteName, gatePath); err != nil {
