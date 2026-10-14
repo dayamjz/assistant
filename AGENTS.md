@@ -332,7 +332,9 @@ Each has cost this repository more than one round of review.
   (`task.event`, `wakes.*`, `supervision.assert`, `gate.admit`) say so, and
   `ErrWorker` and `ErrNotWorker` are its two refusals. Read its `doc.go` for
   where state may still be collapsed into a gap marker and why that is not the
-  strict rule relaxed.
+  strict rule relaxed. Four state types have a
+  producer, all in `internal/service`; two the table names have none, and the
+  table keeps them because a row is not a promise of a producer.
 - `internal/pipeline` is the nine stages as a graph definition, not a second
   executor: `internal/graph` owns execution, halting, and all three bounds. P2
   is structural there rather than checked. A `Stages` is nine named fields, so
@@ -622,12 +624,21 @@ Each has cost this repository more than one round of review.
   in-flight read outside the service resolves with no probe and no advancing
   answer.
 - `internal/machine` owns the shapes a structured answer takes, the three exit
-  codes, the outcome vocabulary, and the P13 phrase table in `vocabulary.go`,
-  which `SupervisionOf` is the one translation into; the forbidden set its
-  test holds every phrase to is derived from the owners by
-  `internal/machine/vocabtest`, which `internal/cli` runs over what the pull
-  guard printed, and a caller pairs `Assert` with `Control`. The table covers
-  the pull guard's phrases only; #110 extends it to every renderer. It composes records rather than restating
+  codes, the outcome vocabulary, and the P13 phrase table in `phrases.go`: one
+  table of `Phrase` rows, each an outcome, a consequence and a decision in
+  three fields so the required wording is structural, listed by
+  `TablePhrases`. Its rows are the pull guard's three (`SupervisionOf`), one
+  per `taskstate.State` with the domain derived from that package
+  (`TaskPhrase`, which renders Paused as `Task.Waiting` and never the word, and
+  a program note's Unknown as `NoWordYet`), one per `Outcome` with executing
+  split three ways on the facts `NextActionOf` reads (`RunPhrase`,
+  `Run.Phrase`, `RecordPhrase` for a record alone), the hold rows, the cleanup
+  rows, the stream's rows and the status rows. No task row carries an outcome
+  word. The forbidden set its test holds every row to is derived from the
+  owners by `internal/machine/vocabtest`, which `internal/cli` and
+  `internal/journey` run over what was printed, and a caller pairs `Assert`
+  with `Control`. Add a phrase by adding a row there, never a sentence at a
+  renderer. It composes records rather than restating
   them: a run is a `store.Run`, a report is a `findings.Report`, so no wire
   shape becomes a second owner of a record. `Outcome` is a closed set, and one
   translation answers for a run: `Run.Decide` takes a `Standing`, which is the
@@ -668,7 +679,14 @@ Each has cost this repository more than one round of review.
   `admit_workers.go` owns the rule a worker's push is held to - only its
   task's branch, forward, never a deletion - and why that is admission's
   decision and not `internal/safety`'s; a person's push meets it nowhere, and
-  on Windows no peer is placed at all, which both files state as a limit. A push is the one
+  on Windows no peer is placed at all, which both files state as a limit. Three
+  state events have producers here and `publish.go` owns two: `task.state` is
+  published from the supervisor loop's pass, the one reader that resolves
+  every task, once per change by `taskstate.Basis` equality and not per pass,
+  and `hold.state` at the two sites a hold is written, as the store returned
+  it; both draw on the one revision counter `run.state` draws on, and
+  `taskView` is the one composition of a task's answer for the publisher and
+  the surface alike. A push is the one
   caller that does not wait: `gate.notify` records the runs and walks each on a
   goroutine of the service's, and a new push supersedes the branch's run in the
   record, which is the whole of what that word buys: `doc.go` says nothing
@@ -795,6 +813,13 @@ Each has cost this repository more than one round of review.
   precedent for a second: it is the interface `internal/gate`'s installed hooks
   require, so it is dispatched beside the table rather than added to it, and
   its two subcommands are the `gateHooks` table in `gate.go`.
+  What a person reads is rendered through the `renderings` table in
+  `render.go`, which `readOut` dispatches through and `Renderings` enumerates:
+  seven renderers are phrased through `internal/machine`'s table and the rest
+  are enumerated as not, `doc.go` names which and why, and
+  `internal/journey`'s P13 row is held to that enumeration. `eventLine` speaks
+  the same table. Do not put a sentence a person reads in a renderer; put a
+  row in the table.
   `cmd/assistant` is the process boundary and holds no behaviour, so a test
   drives `cli.Run` with its own streams rather than a subprocess. The push
   tests reach the surface the way a push does: the test binary answers the

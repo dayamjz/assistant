@@ -56,13 +56,28 @@ func (r *Reader) Task(ctx context.Context, id string) (Resolution, error) {
 }
 
 // Resolved resolves one task and returns its record from the same snapshot.
-// It fails as Task does.
+// It fails as Task does, and it is ObserveTask with the snapshot reduced to
+// the task record.
 func (r *Reader) Resolved(ctx context.Context, id string) (Resolved, error) {
-	snap, err := r.store.TaskSnapshot(ctx, id)
+	o, err := r.ObserveTask(ctx, id)
 	if err != nil {
 		return Resolved{}, err
 	}
-	return Resolved{Record: snap.Task, State: r.resolve(ctx, snap)}, nil
+	return Resolved{Record: o.Snapshot.Task, State: o.State}, nil
+}
+
+// ObserveTask resolves one task and returns it with the snapshot it was
+// resolved from, on Observe's terms, for a reader that needs a record the
+// state was derived from beside the state: the task surface in
+// internal/service, which fills in what a paused worker said it is waiting
+// on from the history entry the resolution's basis names, out of the same
+// read rather than a second one. It fails as Task does.
+func (r *Reader) ObserveTask(ctx context.Context, id string) (Observed, error) {
+	snap, err := r.store.TaskSnapshot(ctx, id)
+	if err != nil {
+		return Observed{}, err
+	}
+	return Observed{Snapshot: snap, State: r.resolve(ctx, snap)}, nil
 }
 
 // All resolves every task, newest task first, each with its record, from

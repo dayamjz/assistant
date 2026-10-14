@@ -105,6 +105,13 @@ func (s *Service) storeTaskReport(ctx context.Context, taskID, raw string) (task
 	if err != nil {
 		return tasks.StoredReport{}, err
 	}
+	// The report's holds are registered in the store's transaction, and
+	// each is published as it was returned: a hold already registered under
+	// its key comes back as it stands, resolved or not, and that is what
+	// travels.
+	for _, h := range stored.Holds {
+		s.publishHoldState(h)
+	}
 	resolved, err := s.tasks().Resolved(ctx, taskID)
 	if err != nil {
 		s.log.Printf("the isolated copy of task %s was not cleaned up: its terminal could not be read: %v", taskID, err)

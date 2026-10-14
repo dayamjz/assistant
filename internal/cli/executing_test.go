@@ -92,17 +92,19 @@ func TestReadsOfARunInsideAStageBodyAnswerExecuting(t *testing.T) {
 			status.ActiveRun.Record.ID, view.Record.ID)
 	}
 
-	// What a person reads says the run is executing and what to do about it,
-	// rather than leaving them to infer either.
+	// What a person reads says the run is being validated now and what to
+	// do about it, rather than leaving them to infer either: the phrase for
+	// an advancing run, and not the one for a stalled run.
 	human := run(t, h, subject)
 	if human.code != machine.ExitOK {
 		t.Fatalf("the human rendering exited %s:\n%s%s", human.code, human.stdout, human.stderr)
 	}
 	t.Logf("assistant, the same attach rendered for a person:\n%s\nprogress, on standard error:\n%s", human.stdout, human.stderr)
-	for _, want := range []string{string(machine.OutcomeExecuting), machine.OutcomeExecuting.NextActionFor(true)} {
-		if !strings.Contains(human.stdout, want) {
-			t.Fatalf("the rendering does not say %q:\n%s", want, human.stdout)
-		}
+	if !strings.Contains(human.stdout, advancingRendering) {
+		t.Fatalf("the rendering does not say %q:\n%s", advancingRendering, human.stdout)
+	}
+	if strings.Contains(human.stdout, stalledRendering) {
+		t.Fatalf("the rendering says nothing is carrying on a run a service is advancing:\n%s", human.stdout)
 	}
 
 	// A rerun has no attach to fall back on, so the branch it would report a

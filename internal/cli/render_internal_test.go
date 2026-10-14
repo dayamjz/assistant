@@ -154,8 +154,8 @@ func TestARunInFlightIsNotReportedAsAFailure(t *testing.T) {
 	if code := renderFor(&out, answer); code != machine.ExitOK {
 		t.Fatalf("a run in flight exits %s, want ok", code)
 	}
-	if !strings.Contains(out.String(), string(machine.OutcomeExecuting)) {
-		t.Fatalf("the rendering does not say the run is executing:\n%s", out.String())
+	if !strings.Contains(out.String(), answer.Phrase().String()) {
+		t.Fatalf("the rendering does not say the run is being validated:\n%s", out.String())
 	}
 }
 
@@ -188,10 +188,9 @@ func TestAStalledRunAndARunInFlightDoNotRenderTheSame(t *testing.T) {
 	if moving == stalled {
 		t.Fatalf("a run in flight and a run nothing is advancing render identically:\n%s", moving)
 	}
-	for _, line := range strings.Split(moving, "\n") {
-		if strings.HasPrefix(line, "Outcome") && strings.Contains(stalled, line) {
-			t.Fatalf("both renderings carry the same outcome line %q, so the two are told apart only elsewhere", line)
-		}
+	// The first line is the phrase, and it is where the two are told apart.
+	if first := strings.SplitN(moving, "\n", 2)[0]; strings.Contains(stalled, first) {
+		t.Fatalf("both renderings carry the same phrase %q, so the two are told apart only elsewhere", first)
 	}
 }
 
