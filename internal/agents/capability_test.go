@@ -9,8 +9,10 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/dayamjz/assistant/internal/agents"
+	"github.com/dayamjz/assistant/internal/agents/standin"
 )
 
 // The conformance suite. Its rule is that what an adapter declares is what it
@@ -81,10 +83,11 @@ var probes = []probe{{
 			return
 		}
 		// The mechanism, not the type: a worker is started in a directory,
-		// is sent a line, and is ended, through the route a caller takes.
-		// What the worker says in between is the script's business and is
-		// not asserted here; that it is a live, driveable, endable process
-		// in a group of its own is the whole of what the declaration claims.
+		// is sent text, reads it, and is ended, through the route a caller
+		// takes. What the worker says is the script's business and is not
+		// asserted here; that it is a live process in a group of its own
+		// that stays driveable across what it is sent is the whole of what
+		// the declaration claims.
 		dir, err := os.MkdirTemp("", "conform-worker-")
 		if err != nil {
 			t.Fatalf("making a directory for the worker: %v", err)
@@ -102,14 +105,30 @@ var probes = []probe{{
 		if worker.Group() <= 0 {
 			t.Errorf("%s started a worker in group %d, want a positive identifier", r.Name(), worker.Group())
 		}
-		select {
-		case <-worker.Done():
-			t.Errorf("%s's worker ended on its own before it was sent anything, so it is not long-lived", r.Name())
-			return
-		default:
-		}
-		if err := worker.Send(t.Context(), "conformance: a line after the instructions"); err != nil {
-			t.Errorf("%s's worker refused a line while running: %v", r.Name(), err)
+		// Two sends, each waited on until the worker has written something
+		// after it or has ended. Writing into the pipe succeeds whether or
+		// not the worker can read what was written, so a send returning nil
+		// says nothing on its own; a worker that ends on what it was sent,
+		// which is what a worker sent a framing it cannot read does, has
+		// at most the first send's wait to hide behind, and nothing it could
+		// write after the second, so the second wait ends in Done and this
+		// fails. Every worker this probe runs against writes something for
+		// every message it reads, an answer or a note on standard error,
+		// which is the stand-in's convention and why the probe can wait.
+		for _, text := range []string{
+			"conformance: a first message after the instructions",
+			"conformance: a second message, with \"quotes\" and a\nsecond line",
+		} {
+			mark := written(worker)
+			if err := worker.Send(t.Context(), text); err != nil {
+				t.Errorf("%s's worker refused a send while running: %v", r.Name(), err)
+				return
+			}
+			if !reacted(t, worker, mark) {
+				t.Errorf("%s's worker ended on what it was sent rather than reading it, so it is not driveable: %s",
+					r.Name(), worker.Capture().Text)
+				return
+			}
 		}
 		worker.Close()
 		select {
@@ -143,6 +162,44 @@ var probes = []probe{{
 		}
 	},
 }}
+
+// written is how many bytes a worker has written so far, counting what its
+// Capture let go, so it only grows.
+func written(w agents.Worker) int64 {
+	got := w.Capture()
+	return got.Dropped + int64(len(got.Text))
+}
+
+// reacted waits until the worker has written past mark while still running,
+// and reports false once it has ended, whether or not it wrote first: a
+// worker that wrote and then ended was not left driveable by what it read.
+// A worker that is still exiting when it is looked at reads as having
+// reacted, which is why the probe sends twice. The wait is bounded by the
+// test's own context.
+func reacted(t testing.TB, w agents.Worker, mark int64) bool {
+	t.Helper()
+	tick := time.NewTicker(5 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		if written(w) > mark {
+			select {
+			case <-w.Done():
+				// It wrote and ended: what it wrote was its last.
+				return false
+			default:
+				return true
+			}
+		}
+		select {
+		case <-w.Done():
+			return false
+		case <-t.Context().Done():
+			t.Fatalf("waiting for a worker to react: %v", t.Context().Err())
+			return false
+		case <-tick.C:
+		}
+	}
+}
 
 // probeFor returns the pair for a capability, and false when it has none.
 func probeFor(capability agents.Capability) (probe, bool) {
@@ -250,10 +307,41 @@ func TestTheSuiteRefusesADeclarationNothingProbes(t *testing.T) {
 }
 
 // TestTheShippedAdapterConformsToItsDeclaration runs the suite against the
-// production Claude Code adapter, built over the stand-in agent so what it
+// production Claude Code adapter, built over the scripted stand-in so what it
 // proves is a property of this package rather than of whatever is installed.
+// The adapter declares worker sessions, so this is where the worker probe
+// runs against the stream-json framing the adapter writes, read by the
+// stand-in's stream mode, which ends on a line it cannot read.
 func TestTheShippedAdapterConformsToItsDeclaration(t *testing.T) {
-	conform(t, newRunner(t))
+	conform(t, standin.New(t, standin.Script{}, agents.WithTerminationGrace(300*time.Millisecond)).Runner())
+}
+
+// The worker probe has to be able to fail on a worker that cannot read what
+// it is sent, or it passes by looking at nothing. This is its positive
+// control: the scripted adapter writes plain lines, and here its command line
+// carries the flags that put the stand-in in stream mode, so every line it
+// writes is one the stream mode refuses by ending. That is the defect a
+// Claude Code adapter that framed its sends wrongly would have, and the suite
+// must refuse it.
+func TestTheWorkerProbeRefusesAWorkerThatEndsOnWhatItIsSent(t *testing.T) {
+	agent := standin.NewWorker(t, standin.Script{})
+	misframed, err := agents.ScriptedFactory(
+		agents.WithBinary(helperBinary(t)),
+		agents.WithTerminationGrace(300*time.Millisecond),
+	).New(t.Context(), append(agent.Arguments(), "--print", "--input-format", "stream-json"))
+	if err != nil {
+		t.Fatalf("building the misframing runner: %v", err)
+	}
+
+	recorder := &recordingTB{TB: t}
+	onItsOwnGoroutine(func() { conform(recorder, misframed) })
+
+	if !recorder.failed {
+		t.Fatal("the suite accepted a worker that ends on every line it is sent")
+	}
+	if !strings.Contains(recorder.message, misframed.Name()) {
+		t.Errorf("the suite refused with %q, want it to name the adapter", recorder.message)
+	}
 }
 
 // TestAnAdapterWithoutSessionsConformsToItsDeclaration runs the same suite
@@ -264,9 +352,9 @@ func TestAnAdapterWithoutSessionsConformsToItsDeclaration(t *testing.T) {
 }
 
 // TestTheScriptedAdapterConformsToItsDeclaration runs the suite against the
-// one adapter in this build that declares worker sessions, built over the
-// stand-in, so the worker probe is exercised against a real process rather
-// than left as a pair nothing reaches.
+// scripted adapter, the second declarer of worker sessions, built over the
+// stand-in's line mode, so the worker probe is exercised against both
+// framings this package writes.
 func TestTheScriptedAdapterConformsToItsDeclaration(t *testing.T) {
 	conform(t, newWorkerRunner(t))
 }
@@ -281,7 +369,7 @@ func TestWhatTheScriptedAdapterDeclares(t *testing.T) {
 		t.Errorf("the scripted adapter declares %v, want exactly %v", got, want)
 	}
 	if slices.Contains(agents.DefaultCatalog().Names(), agents.ScriptedName) {
-		t.Errorf("the scripted adapter is in the default catalog, and no real agent answers its worker path")
+		t.Errorf("the scripted adapter is in the default catalog, and no real agent is known to answer its plain-line worker path")
 	}
 	if agents.ScriptedFactory().AutoEligible() {
 		t.Error("the scripted adapter is auto-eligible, so \"auto\" could resolve a worker nothing real answers")
@@ -289,19 +377,19 @@ func TestWhatTheScriptedAdapterDeclares(t *testing.T) {
 }
 
 // What the shipped adapter declares is a fact about it, so it is asserted
-// rather than derived. Claude Code has resumable sessions, and it has no
-// instruction-suppression mechanism, so a run configured to suppress a
-// repository's own instructions is refused against it.
+// rather than derived. Claude Code has resumable sessions and worker
+// sessions, and it has no instruction-suppression mechanism, so a run
+// configured to suppress a repository's own instructions is refused against
+// it.
 //
 // The second half is the one worth spelling out. It is not an accident of the
 // list: internal/agents implements no suppression mechanism at all, so a
 // declaration of it here would be a claim with nothing behind it, and this is
 // what fails if one is ever added without the mechanism.
 func TestWhatTheShippedAdapterDeclares(t *testing.T) {
-	// Test that Claude declares resumable sessions
 	claude := newRunner(t)
 	claudeDeclared := claude.Capabilities()
-	wantClaude := []agents.Capability{agents.CapabilityResumableSessions}
+	wantClaude := []agents.Capability{agents.CapabilityResumableSessions, agents.CapabilityWorkerSessions}
 	if got := claudeDeclared.List(); !slices.Equal(got, wantClaude) {
 		t.Errorf("the claude adapter declares %v, want exactly %v", got, wantClaude)
 	}
@@ -324,8 +412,9 @@ func TestWhatTheShippedAdapterDeclares(t *testing.T) {
 		t.Fatalf("cursor factory failed: %v", err)
 	}
 	cursorDeclared := cursor.Capabilities()
-	if got := cursorDeclared.List(); !slices.Equal(got, wantClaude) {
-		t.Errorf("the cursor adapter declares %v, want exactly %v", got, wantClaude)
+	wantCursor := []agents.Capability{agents.CapabilityResumableSessions}
+	if got := cursorDeclared.List(); !slices.Equal(got, wantCursor) {
+		t.Errorf("the cursor adapter declares %v, want exactly %v", got, wantCursor)
 	}
 
 	// Verify OpenAI declares no capabilities

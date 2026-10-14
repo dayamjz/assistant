@@ -96,16 +96,14 @@ import (
 //
 // Create asks the resolved agent for a worker through agents.OpenWorker,
 // which refuses an adapter that has not declared
-// agents.CapabilityWorkerSessions with a *agents.CapabilityError. In this
-// build only the scripted adapter declares it, so a service resolved to the
-// shipped claude adapter dispatches every task and launches none: the
-// refusal is logged, the task stays Dispatched with its slot and its attempt
-// standing, and no reference is recorded. Nothing here turns that into a
-// recorded refusal, because internal/taskstate's refusal tokens are about
-// isolation and this is not an isolation failure; whether the real adapter
-// runs as a stdin-driven worker is #95 line K, and until an adapter declares
-// the capability a fleet over it is a fleet that dispatches and never
-// launches. That is stated rather than widened.
+// agents.CapabilityWorkerSessions with a *agents.CapabilityError. The Claude
+// Code adapter declares it, so a service resolved to it launches what it
+// dispatches; one resolved to an adapter that does not, such as the Cursor
+// adapter, dispatches every task and launches none: the refusal is
+// logged, the task stays Dispatched with its slot and its attempt standing,
+// and no reference is recorded. Nothing here turns that into a recorded
+// refusal, because internal/taskstate's refusal tokens are about isolation
+// and this is not an isolation failure. That is stated rather than widened.
 
 // launchTask launches the worker for a dispatch that reached proven: it
 // asserts the copy again, creates the terminal session with the task's
