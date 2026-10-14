@@ -151,16 +151,31 @@ func TestAnUnsupportedSweepRefusesTheRelaunchUntilARetryAnswer(t *testing.T) {
 		t.Fatalf("the refusal raised the relaunch bound's hold too: %v", err)
 	}
 
-	// The next start, and the coordinator, are refused on the same hold.
+	// The next start, and the coordinator, are refused on the same hold:
+	// while it is open the task resolves Held from the hold tier, so the
+	// relaunch is not due and the refusal names the hold it waits on, and
+	// nothing is recorded.
+	waitingOn := func(err error) {
+		t.Helper()
+		if !errors.Is(err, errRelaunchNotDue) || !strings.Contains(err.Error(), key) {
+			t.Fatalf("the relaunch with the hold open answered %v, want not due, naming %s", err, key)
+		}
+		if attempts, err := sub.records.TaskAttempts(ctx, sub.task); err != nil || len(attempts) != 1 {
+			t.Fatalf("the refused relaunch left attempts %+v (%v), want only the first", attempts, err)
+		}
+		if after := eventKinds(t, sub.records, sub.task); len(after) != len(before) {
+			t.Fatalf("the history moved from %v to %v on a refused relaunch", before, after)
+		}
+	}
 	next, _ := restartedService(t, sub.launchSubject)
 	next.sweepCopy = sweepUnsupported
 	_, err = next.relaunchTask(ctx, sub.task)
-	refusedOn(err)
+	waitingOn(err)
 	_, err = next.relaunchTaskFor(ctx, ipc.Request{}, machine.TaskRequest{Task: sub.task})
 	if !errors.Is(err, ipc.ErrRefused) {
 		t.Fatalf("task.relaunch with no sweep answered %v, want it refused", err)
 	}
-	refusedOn(err)
+	waitingOn(err)
 	open, err := sub.records.OpenHolds(ctx)
 	if err != nil {
 		t.Fatal(err)

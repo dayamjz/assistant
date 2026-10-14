@@ -39,7 +39,11 @@ import (
 // refusing with errRelaunchNotDue a task the table does not relaunch, which
 // is what makes a coordinator's request on a live task a refusal rather
 // than a second supervisor, and a task past relaunch_attempts whose hold is
-// not answered retry a refusal too. It re-runs internal/tasks' floor over the same
+// not answered retry a refusal too. A task with a hold naming it still open
+// resolves Held from internal/taskstate's hold tier, which the table leaves
+// alone, so a relaunch asked while the bound's or the no-sweep hold waits is
+// refused naming that hold, and only its answer gives the task back to the
+// rows that relaunch. It re-runs internal/tasks' floor over the same
 // read, through tasks.HoldsBranch, the function Release runs it through,
 // and refuses with *relaunchHeld when a live task now holds the branch:
 // Failed is not terminal in the lifecycle, so a successor dispatched past
@@ -249,6 +253,10 @@ func (s *Service) relaunchClaimed(ctx context.Context, id string) (relaunched, e
 		return relaunched{}, err
 	}
 	decision := decideReconciliation(r.State, attempts, s.cfg.RelaunchAttempts, answered)
+	if decision.action != reconcileRelaunch && r.State.Source == taskstate.SourceHold {
+		return relaunched{}, fmt.Errorf("%w: task %s waits on an answer to hold %s, and nothing relaunches it while that hold is open",
+			errRelaunchNotDue, id, r.State.Basis.Hold)
+	}
 	if decision.action != reconcileRelaunch {
 		return relaunched{}, fmt.Errorf("%w: task %s resolves %s from %s with its terminal %s, which calls for %s",
 			errRelaunchNotDue, id, r.State.State, r.State.Source, r.State.Basis.Process, decision.action)

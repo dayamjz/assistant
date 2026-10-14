@@ -241,7 +241,10 @@ func Coverage() []Established {
 				"skipped rather than passing; the second creates a task and pushes through methods " +
 				"internal/ipc restricts, so on a platform where that package reads no local socket peer " +
 				"credentials it is skipped rather than passing, and only the first half is established " +
-				"there."},
+				"there. Neither walk opens a hold naming a task, so PRD section 6's hold tier is not " +
+				"driven here: a task reading Held from such a hold, above its run, is established in " +
+				"internal/taskstate's precedence tests and through internal/cli's command surface, not " +
+				"through this binary."},
 		{principles.P9, ReachNone,
 			"Not driven here: P9 is cited in two packages, neither of them this harness. " +
 				"internal/supervisor's matrix test cites it for the table only: every wake kind " +

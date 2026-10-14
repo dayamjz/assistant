@@ -329,8 +329,16 @@ func TestCompleteIsLandedAndRemovedForADeliveryTask(t *testing.T) {
 	if _, err := s.RegisterHold(ctx, store.Hold{Key: "task/" + inquiry.ID + "/ask-1", TaskID: store.Known(inquiry.ID), Subject: "decide"}); err != nil {
 		t.Fatalf("RegisterHold: %v", err)
 	}
+	// While its hold is open the investigation waits on a person, which the
+	// hold tier says above the report entry; answered, the entry decides.
+	if got := resolveTask(t, s, inquiry.ID); got.State != Held || got.Source != SourceHold {
+		t.Fatalf("an investigation with a report entry and an open hold resolved %s from %s, want held from the hold", got.State, got.Source)
+	}
+	if _, err := s.ResolveHold(ctx, "task/"+inquiry.ID+"/ask-1", "noted", store.ResolvedByMachineInterface()); err != nil {
+		t.Fatalf("ResolveHold: %v", err)
+	}
 	if got := resolveTask(t, s, inquiry.ID); got.State != Reported || got.Source != SourceEvent {
-		t.Fatalf("an investigation with a report entry and a hold resolved %s from %s, want reported", got.State, got.Source)
+		t.Fatalf("an investigation with a report entry and an answered hold resolved %s from %s, want reported", got.State, got.Source)
 	}
 	recordCleanup(inquiry.ID, store.TaskInvestigation)
 	if got := resolveTask(t, s, inquiry.ID); got.State != Reported || got.Source != SourceEvent || !got.Basis.CleanupRemoved {
