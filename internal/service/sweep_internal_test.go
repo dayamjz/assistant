@@ -379,8 +379,8 @@ func dispatchRefusedOn(t *testing.T, sub *launchSubject, err error, want string,
 // on a key of its own, naming the task and keyed by the attempt that left
 // the copy, distinct from both relaunch holds; no attempt is begun and no
 // history entry appended. A service built over the same records, which is
-// what the next start is, is refused on the same hold and raises no second
-// one. Once the hold is answered retry, two dispatchers that read that
+// what the next start is, finds the task held by that hold (PRD section 6)
+// and neither dispatches it nor raises a second hold. Once the hold is answered retry, two dispatchers that read that
 // answer, held between their read of the attempts and their claim so the
 // test is of the anchor and not of scheduling, begin one attempt between
 // them, the loser refused with ErrTaskMoved. The answer does not carry
@@ -413,12 +413,22 @@ func TestAnUnsupportedSweepHoldsTheRetriedDispatchUntilARetryAnswer(t *testing.T
 		}
 	}
 
-	// The next start is refused on the same hold, through the dispatch pass.
+	// The next start finds the task held by that hold, which PRD section 6
+	// ranks above the run tier, so it is not dispatched again and the hold
+	// is not raised a second time.
 	next, _ := restartedService(t, sub)
 	next.sweepCopy = sweepUnsupported
 	next.dispatchDue(ctx)
 	_, err = next.dispatchClaimed(ctx, sub.task)
-	dispatchRefusedOn(t, sub, err, key, 1, before)
+	if !errors.Is(err, errTaskNotDispatched) {
+		t.Fatalf("a dispatch of the held task answered %v, want errTaskNotDispatched", err)
+	}
+	if got, err := sub.records.TaskAttempts(ctx, sub.task); err != nil || len(got) != 1 {
+		t.Fatalf("the held task's dispatch left attempts %+v (%v), want 1", got, err)
+	}
+	if after := eventKinds(t, sub.records, sub.task); len(after) != len(before) {
+		t.Fatalf("the history moved from %v to %v on a held task's dispatch", before, after)
+	}
 	open, err := sub.records.OpenHolds(ctx)
 	if err != nil {
 		t.Fatal(err)

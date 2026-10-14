@@ -97,9 +97,11 @@ import (
 // read, dispatchUnsweptKey, and refuses with *dispatchUnswept before the
 // claim, recording nothing else. It is the relaunch's no-sweep hold with a
 // key space of its own, because the attempt it names has no terminal and is
-// not a relaunch question: the key is the identity, so every later dispatch
-// pass and every later start that reads the same attempt finds the same
-// hold, open or answered. It is answered retry or stop like the other two.
+// not a relaunch question: the key is the identity, so registering it again
+// for the same attempt finds the same hold, open or answered. While it is
+// open the task resolves Held from it (PRD section 6), so a later dispatch
+// pass or start refuses the task as not dispatched before it reaches the
+// sweep, and raises no second hold. It is answered retry or stop like the other two.
 // A retry is read back from the record by dispatchClaimed, the one
 // dispatch, which is the only thing that lets a dispatch of that attempt
 // past the refusal, and the anchor spends it on one attempt: the attempt the
