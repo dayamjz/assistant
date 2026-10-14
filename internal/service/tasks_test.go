@@ -1,6 +1,7 @@
 package service_test
 
 import (
+	"encoding/json"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -9,6 +10,7 @@ import (
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
+	"github.com/dayamjz/assistant/internal/runs"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/taskstate"
 )
@@ -40,6 +42,51 @@ func queuedBehindABlocker(t *testing.T, h *home.Home, repository store.Repositor
 		t.Fatalf("recording the successor: %v", err)
 	}
 	return b.ID, s.ID
+}
+
+// awaitRunStatus returns once the service has reported a run at status, read
+// off the event stream the test opened before the run started.
+//
+// It consumes events rather than polling the record: a run.state event is the
+// service saying the move was made, and this returns on the one that carries
+// the status waited for. A gap marker says the stream discarded something, so
+// on one the record is read back through run.get, which is the reconcile
+// every consumer of the stream owes and the only read this makes. The stream
+// opens gapped, so the first event is always that marker and a run that
+// reached the status before the subscription was served is found by the read.
+// A run that reports a finished status instead is a failure, not a wait.
+func awaitRunStatus(t *testing.T, client *ipc.Client, events *ipc.Stream, runID string, status store.RunStatus) {
+	t.Helper()
+	for {
+		event, err := events.Recv(t.Context())
+		if err != nil {
+			t.Fatalf("waiting for run %s to be %s: %v", runID, status, err)
+		}
+		var record store.Run
+		switch event.Type {
+		case ipc.TypeGap:
+			var run machine.Run
+			if err := client.Call(t.Context(), ipc.MethodRunGet, machine.RunRequest{Run: runID}, &run); err != nil {
+				t.Fatalf("reading run %s: %v", runID, err)
+			}
+			record = run.Record
+		case ipc.TypeRunState:
+			if err := json.Unmarshal(event.Payload, &record); err != nil {
+				t.Fatalf("decoding a run.state event: %v", err)
+			}
+			if record.ID != runID {
+				continue
+			}
+		default:
+			continue
+		}
+		if record.Status == status {
+			return
+		}
+		if runs.Finished(record.Status) {
+			t.Fatalf("run %s is %s while this waits for it to be %s", runID, record.Status, status)
+		}
+	}
 }
 
 // taskState reads a task's resolved state off the service.
@@ -158,8 +205,21 @@ func TestAPushSupersedingTheBlockersRunDoesNotReleaseTheSuccessor(t *testing.T) 
 	// notification runs, and the run's reference is written from the gate's
 	// own object at creation, so each notification below is preceded by what
 	// the push it reports would have left there.
+	//
+	// The second of those fetches waits for the first run to hold. The gate
+	// repository is also where that run's isolated copy is cut, as a linked
+	// worktree, on a goroutine the notification does not wait for, and a
+	// fetch into a repository while git is adding a worktree to it can fail
+	// its connectivity check on the worktree's not-yet-written HEAD (#119's
+	// sibling signature). A run holding has its copy standing, and the hold
+	// is read off the event stream rather than polled for.
 	gatePath := gateRepositoryOf(t, h, subject)
 	withService(t, h, func(running serviceUnderTest) {
+		events, err := running.client.Subscribe(t.Context(), machine.SubscribeRequest{})
+		if err != nil {
+			t.Fatalf("subscribing to the service's events: %v", err)
+		}
+		defer events.Close()
 		push := func(old, head string) machine.Notification {
 			git(t, gatePath, "fetch", "--quiet", subject, "+"+head+":refs/heads/work")
 			var out machine.Notification
@@ -177,6 +237,7 @@ func TestAPushSupersedingTheBlockersRunDoesNotReleaseTheSuccessor(t *testing.T) 
 		if got := taskState(t, running.client, blocker); got.Source != taskstate.SourceRun {
 			t.Fatalf("after the first push the blocker resolves %s from %s, want from its run", got.State, got.Source)
 		}
+		awaitRunStatus(t, running.client, events, one.Started[0].Run, store.RunHeld)
 		two := push(first, second)
 		if len(two.Started) != 1 || two.Started[0].Superseded != one.Started[0].Run {
 			t.Fatalf("the second push started %+v, want one run superseding %s", two.Started, one.Started[0].Run)
