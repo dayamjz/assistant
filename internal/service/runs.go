@@ -272,6 +272,13 @@ func (s *Service) respond(ctx context.Context, req machine.RespondRequest) (mach
 // is refused too: it would otherwise be an instruction nobody acted on.
 // internal/graph refuses both shapes again, so this is the early half and not
 // the only one.
+//
+// A fix request that selects nothing, selects a finding the held stage's
+// report does not carry, or adds a finding with no description is the
+// caller's request being wrong rather than this service failing, so it crosses
+// the wire as ipc.ErrInvalidRequest with pipeline's refusal beneath it, which
+// names the identifiers the report does carry. The refusals about where the
+// run holds are not that and keep their own codes.
 func (s *Service) fixRequestFor(ctx context.Context, runID string, req machine.RespondRequest) (string, error) {
 	if req.Answer != string(pipeline.OutcomeFixRequested) {
 		if req.Fix != nil {
@@ -281,8 +288,8 @@ func (s *Service) fixRequestFor(ctx context.Context, runID string, req machine.R
 		return "", nil
 	}
 	if req.Fix == nil {
-		return "", fmt.Errorf("%w: run %s was answered %q with nothing selected to fix",
-			pipeline.ErrEmptyFixRequest, runID, req.Answer)
+		return "", fmt.Errorf("%w: %w: run %s was answered %q with nothing selected to fix",
+			ipc.ErrInvalidRequest, pipeline.ErrEmptyFixRequest, runID, req.Answer)
 	}
 	cp, err := s.checkpoints.Latest(ctx, runID)
 	if err != nil {
@@ -300,7 +307,7 @@ func (s *Service) fixRequestFor(ctx context.Context, runID string, req machine.R
 		return "", err
 	}
 	if _, err := req.Fix.Select(report); err != nil {
-		return "", err
+		return "", fmt.Errorf("%w: run %s: %w", ipc.ErrInvalidRequest, runID, err)
 	}
 	return req.Fix.Encode()
 }

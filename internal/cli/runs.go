@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"strings"
 	"time"
 
@@ -67,7 +68,7 @@ func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 		set.BoolVar(&cancel, "cancel", false, "end this branch's run, wherever it stands")
 		set.StringVar(&skip, "skip", "", "comma-separated stages this one run does not take")
 		set.StringVar(&selected, "select", "", "with --answer fix: comma-separated identifiers of findings the held stage reported, for the round to resolve; "+
-			"the hold lists only the findings holding it, and every finding with its identifier is under active_run.stages[].report.findings in assistant --json status")
+			"the hold lists only the findings holding it, and "+everyFindingIsIn)
 		set.StringVar(&note, "note", "", "with --answer fix: a note for the fixer")
 		set.Var(&own, "finding", "with --answer fix: a finding of your own for the round to resolve; may be repeated")
 	}); err != nil {
@@ -173,6 +174,11 @@ func actingOnTheRunInFlight(answering, cancel bool) string {
 	}
 }
 
+// everyFindingIsIn says where a caller reads every finding a held stage
+// reported with the identifier --select takes, which the human rendering of a
+// hold does not list in full.
+const everyFindingIsIn = "every finding with its identifier is under active_run.stages[].report.findings in assistant --json status"
+
 // answerDecision answers the branch's active run. The run is found the same
 // way attaching finds it, so a caller does not have to name an identifier it
 // was never shown.
@@ -180,6 +186,13 @@ func actingOnTheRunInFlight(answering, cancel bool) string {
 // request is what a fix answer asks the round to resolve, nil for every other
 // answer. Whether it selects anything the held stage reported is the
 // service's to check, against the report it holds.
+//
+// A request the service answers with ipc.ErrInvalidRequest is incorrect usage:
+// the service raises it for an answer whose fix request is wrong, such as an
+// identifier the held stage's current report does not carry, and for a
+// request body it could not read. The refusal keeps the code it crossed the
+// wire with and gains where every reported identifier is, so a caller holding
+// one from an earlier report can correct the selection.
 func (in *invocation) answerDecision(ctx context.Context, working, answer string, request *pipeline.FixRequest) (any, error) {
 	active, err := in.activeRun(ctx, working, "answer")
 	if err != nil {
@@ -188,6 +201,9 @@ func (in *invocation) answerDecision(ctx context.Context, working, answer string
 	in.progressf("answering %s with %q; this blocks until the run needs another decision", active, answer)
 	var run machine.Run
 	err = in.callService(ctx, ipc.MethodRunRespond, machine.RespondRequest{Run: active, Answer: answer, Fix: request}, &run)
+	if errors.Is(err, ipc.ErrInvalidRequest) {
+		return nil, usageError{err: fmt.Errorf("%w; %s", err, everyFindingIsIn)}
+	}
 	return run, err
 }
 

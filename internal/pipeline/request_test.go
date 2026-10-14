@@ -230,6 +230,16 @@ func TestAFixRequestIsResolvedAgainstTheStagesReport(t *testing.T) {
 			t.Errorf("%s: Select returned %v, want %v", name, err, tc.want)
 		}
 	}
+	// A stale identifier is refused naming every unknown one in the order it
+	// was selected, and every identifier the report does carry, so the caller
+	// can correct the selection from the refusal alone.
+	_, err := FixRequest{Selected: []string{"four", "one", "three"}}.Select(report)
+	if !errors.Is(err, ErrUnknownFinding) {
+		t.Fatalf("a stale selection came to %v", err)
+	}
+	if want := `"four", "three"; the stage reported "one", "two"`; !strings.Contains(err.Error(), want) {
+		t.Fatalf("the refusal %q does not say %q", err, want)
+	}
 	got, err := FixRequest{Selected: []string{"two"}}.Select(report)
 	if err != nil {
 		t.Fatalf("selecting a reported finding: %v", err)
