@@ -10,6 +10,7 @@ import (
 	"github.com/dayamjz/assistant/internal/findings"
 	"github.com/dayamjz/assistant/internal/graph"
 	"github.com/dayamjz/assistant/internal/machine"
+	"github.com/dayamjz/assistant/internal/machine/vocabtest"
 	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/store"
 )
@@ -245,8 +246,11 @@ func renderFor(w *bytes.Buffer, answer any) machine.Code {
 // An answer the service did not apply, because the hold it answered was
 // closed first on a re-read of the pull request, is said on its own line, so
 // a person whose approval was overtaken by a merge learns that and not only
-// the outcome. The control is the same run with nothing unapplied, which
-// prints no such line.
+// the outcome. The line is the phrase table's row, held to P13 like every
+// status line, and the service's own sentence for why stays on the structured
+// rendering, so an escape sequence in it never reaches the terminal at all.
+// The control is the same run with nothing unapplied, which prints no such
+// line.
 func TestAnAnswerThatWasNotAppliedIsSaid(t *testing.T) {
 	t.Parallel()
 	run := machine.Run{
@@ -255,7 +259,7 @@ func TestAnAnswerThatWasNotAppliedIsSaid(t *testing.T) {
 	}
 	var control bytes.Buffer
 	readOut(&control, run)
-	if strings.Contains(control.String(), "Not applied your answer") {
+	if strings.Contains(control.String(), machine.PhraseAnswerNotApplied.Outcome) {
 		t.Fatalf("a run with its answer applied says it was not:\n%s", control.String())
 	}
 
@@ -263,10 +267,14 @@ func TestAnAnswerThatWasNotAppliedIsSaid(t *testing.T) {
 	var out bytes.Buffer
 	readOut(&out, run)
 	rendered := out.String()
-	if !strings.Contains(rendered, "Not applied your answer - the pull request had already merged") {
+	if !strings.Contains(rendered, machine.PhraseAnswerNotApplied.String()+"\n") {
 		t.Fatalf("the unapplied answer is not said:\n%s", rendered)
 	}
-	if strings.ContainsRune(rendered, 0x1b) {
-		t.Fatalf("a control character in the sentence reached the terminal unescaped:\n%q", rendered)
+	if strings.Contains(rendered, "already merged") || strings.ContainsRune(rendered, 0x1b) {
+		t.Fatalf("the service's own sentence reached the terminal:\n%q", rendered)
+	}
+	vocabtest.Control(t)
+	for _, line := range strings.Split(strings.TrimRight(rendered, "\n"), "\n") {
+		vocabtest.Assert(t, line)
 	}
 }

@@ -633,6 +633,49 @@ func FixRoundPhrase(option string) Phrase {
 	}
 }
 
+// Evidence rows: the message that points a person at one of the two
+// detailed evidence documents PRD section 9 names, and the two notices about
+// a request that sit beside a run's evidence without being part of it. P13
+// lets an evidence document keep exact identifiers and stage names and keeps
+// the message that points at one phrased, so these rows are what a person
+// reads before the evidence, and the evidence itself is not a row here.
+var (
+	// PhraseRunRecordFollows points at a run's own record: the detail view's
+	// evidence, which names where execution stands and each stage as this
+	// build records them.
+	PhraseRunRecordFollows = Phrase{
+		Outcome:     "This run's own record follows, in the exact terms it was kept in.",
+		Consequence: "It is there to be read and changes nothing said above.",
+		Decision:    "Nothing to decide from it alone.",
+	}
+	// PhraseFindingsFollow points at the findings holding a decision, which
+	// are relayed in full beneath it with their exact names and locations,
+	// because a finding a person is asked to decide on is relayed unsummarized.
+	PhraseFindingsFollow = Phrase{
+		Outcome:     "The findings holding this decision follow in full, as they were written.",
+		Consequence: "Each keeps its exact name and, where it has one, its location, so nothing in them was summarized away.",
+		Decision:    "Decide with them in view.",
+	}
+	// PhraseInputsNotApplied is the row for a request whose run-starting
+	// inputs went to no run, because the branch already had one and the
+	// request attached to it. Which inputs they were is the structured
+	// rendering's.
+	PhraseInputsNotApplied = Phrase{
+		Outcome:     "What you gave to start a run with was not used, because this branch already had a run and this is that run.",
+		Consequence: "That run goes on as it was begun, without it.",
+		Decision:    "Give it again when this branch next starts a run; assistant --json names what was not used.",
+	}
+	// PhraseAnswerNotApplied is the row for an answer the service did not
+	// apply because the decision it answered had been closed first, on a
+	// re-read of the run's pull request. The service's own sentence for why
+	// is the structured rendering's.
+	PhraseAnswerNotApplied = Phrase{
+		Outcome:     "Your answer was not applied, because the decision it answered was closed first when the pull request was read again.",
+		Consequence: "The run ended on that, as said above, so there was nothing left for the answer to act on.",
+		Decision:    "Nothing to decide; assistant --json says why it was closed.",
+	}
+)
+
 // The checks assistant doctor makes, by the name Check carries. The names are
 // the structured rendering's and travel as they always have; they are
 // constants here so that the command that makes a check and the row that
@@ -924,7 +967,8 @@ var PhraseNoReading = Phrase{
 // stream's four, the status rows, and the rows for the rest of the command
 // surface: a decision and a fix round's offer, a row per doctor check and
 // result and the verdict, the service lifecycle, a gate created, reattached
-// and removed, and the gate's own rows. A templated row is listed with its
+// and removed, the gate's own rows, and the rows pointing at a run's evidence
+// and the two notices beside it. A templated row is listed with its
 // placeholder filled in. The result is a copy. Phrases is the same list as
 // strings.
 func TablePhrases() []Phrase {
@@ -964,5 +1008,6 @@ func TablePhrases() []Phrase {
 	out = append(out, InitPhrase(Init{}), InitPhrase(Init{Reattached: true}), EjectPhrase(Eject{Removed: true}), EjectPhrase(Eject{}))
 	out = append(out, PhraseAdmitted, PhraseValidationBegun, PhraseSupersededEarlier, PhraseNothingStartedFor, PhraseNothingSent, PhraseNoReading)
 	out = append(out, PhraseCopyBusy, PhraseCopyStillBusy)
+	out = append(out, PhraseRunRecordFollows, PhraseFindingsFollow, PhraseInputsNotApplied, PhraseAnswerNotApplied)
 	return out
 }

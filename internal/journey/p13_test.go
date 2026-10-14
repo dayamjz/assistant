@@ -240,25 +240,28 @@ func TestTheFleetIsSpokenInPhrasesThroughTheBinary(t *testing.T) {
 	}
 }
 
-// The P13 row names the renderers the phrase table covers and the ones that
-// remain, and both lists are internal/cli's enumeration and not a list kept
-// here: a renderer rerouted, added or removed there fails this rather than
-// leaving the note to say what used to be true.
+// The P13 row names the renderers the phrase table covers, the evidence
+// documents and the ones that remain, and all three lists are internal/cli's
+// enumeration and not a list kept here: a renderer rerouted, reclassified,
+// added or removed there fails this rather than leaving the note to say what
+// used to be true.
 func TestTheP13RowNamesTheRenderersAsTheSurfaceEnumeratesThem(t *testing.T) {
-	covered, remaining := journey.P13Renderers()
-	var wantCovered, wantRemaining []string
+	covered, evidence, remaining := journey.P13Renderers()
+	want := map[cli.Voice][]string{}
 	for _, r := range cli.Renderings() {
-		if r.Phrased {
-			wantCovered = append(wantCovered, r.Name)
-		} else {
-			wantRemaining = append(wantRemaining, r.Name)
+		want[r.Voice] = append(want[r.Voice], r.Name)
+	}
+	for _, c := range []struct {
+		voice cli.Voice
+		got   []string
+	}{{cli.VoicePhrased, covered}, {cli.VoiceEvidence, evidence}, {cli.VoiceUnsettled, remaining}} {
+		if !slices.Equal(c.got, want[c.voice]) {
+			t.Errorf("the row lists %v as %s; internal/cli enumerates %v", c.got, c.voice, want[c.voice])
 		}
+		delete(want, c.voice)
 	}
-	if !slices.Equal(covered, wantCovered) {
-		t.Errorf("the row says the table covers %v; internal/cli enumerates %v as phrased", covered, wantCovered)
-	}
-	if !slices.Equal(remaining, wantRemaining) {
-		t.Errorf("the row says %v remain; internal/cli enumerates %v as not phrased", remaining, wantRemaining)
+	if len(want) != 0 {
+		t.Errorf("internal/cli enumerates renderers in a voice the row has no list for: %v", want)
 	}
 	var note string
 	for _, row := range journey.Coverage() {
@@ -266,7 +269,7 @@ func TestTheP13RowNamesTheRenderersAsTheSurfaceEnumeratesThem(t *testing.T) {
 			note = row.Note
 		}
 	}
-	for _, name := range append(slices.Clone(covered), remaining...) {
+	for _, name := range slices.Concat(covered, evidence, remaining) {
 		if !strings.Contains(note, name) {
 			t.Errorf("the P13 note does not name the renderer %q", name)
 		}

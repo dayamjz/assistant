@@ -308,13 +308,18 @@ func Coverage() []Established {
 				"renderer internal/cli enumerates as phrased, which are " + strings.Join(p13Covered, ", ") +
 				", enumerating that list rather than keeping one, with the fallback a typed refusal " +
 				"that prints no Go value; internal/cli's command-line tests drive init, doctor, eject " +
-				"and a push through the gate's hooks the same way. The renderers it enumerates as not " +
-				"phrased, which are " + strings.Join(p13Remaining, ", ") + ", still print this build's " +
-				"words, because the specification has not settled their wording: PRD section 9's " +
-				"terminal interface lists every stage by name and its relay-verbatim row has a " +
-				"finding's full text relayed, both against P13's own text, and the plan's steps belong " +
-				"to a module this build does not have. The refusal and usage text the command surface " +
-				"writes on standard error is outside the citation too. Both lists are checked against " +
+				"and a push through the gate's hooks the same way. The renderers it enumerates as " +
+				"evidence, which are " + strings.Join(p13Evidence, ", ") + ", are the two detailed " +
+				"evidence documents PRD section 9 names, the detail view and the relay of a finding that " +
+				"needs a decision, and keep exact identifiers and stage names as P13 lets them; " +
+				"internal/cli's evidence test cites P13 for the phrase-table row pointing at each and " +
+				"every line beside them, against counterfeits it must reject. The one it enumerates as " +
+				"unsettled, which is " + strings.Join(p13Remaining, ", ") + ", still prints this build's " +
+				"words: a plan's steps belong to the custody module this build does not have, and the " +
+				"one plan it makes is assistant sync's refusal, whose sentence is printed as written. " +
+				"The refusal and usage text the command surface writes on standard error, and the " +
+				"next-action line after it, are held by no test and are outside the citation. All three " +
+				"lists are checked against " +
 				"internal/cli's enumeration, so the note cannot name a renderer that package does not " +
 				"have or miss one it does. The walk needs a service, so on a platform with no local " +
 				"socket transport to serve this protocol over it is skipped rather than passing; it " +
@@ -328,25 +333,28 @@ func Coverage() []Established {
 	}
 }
 
-// p13Covered and p13Remaining name internal/cli's human renderers by the
-// names its Renderings enumeration gives them: the ones that speak through
-// internal/machine's phrase table, and the ones that still print this build's
-// own words for want of settled wording. The P13 row's note is built from
-// them, and P13Renderers hands them to the test that holds both to that
+// p13Covered, p13Evidence and p13Remaining name internal/cli's human
+// renderers by the names its Renderings enumeration gives them, one list per
+// voice: the ones that speak through internal/machine's phrase table, the
+// evidence documents, and the ones that still print this build's own words
+// for want of settled wording. The P13 row's note is built from them, and
+// P13Renderers hands them to the test that holds all three to that
 // enumeration, so a renderer added or rerouted there fails here rather than
 // leaving the note to drift.
 var (
 	p13Covered = []string{"status", "run", "runs", "tasks", "task", "service", "event", "host stop", "host install",
 		"decision", "doctor", "lifecycle", "init", "eject", "health", "admission", "notification",
 		"task answer", "fallback"}
-	p13Remaining = []string{"details", "findings", "plan"}
+	p13Evidence  = []string{"details", "findings"}
+	p13Remaining = []string{"plan"}
 )
 
 // P13Renderers returns the renderers the P13 row says the phrase table
-// covers and the ones it says remain, as copies, for the test that checks
-// both against internal/cli's enumeration.
-func P13Renderers() (covered, remaining []string) {
-	return slices.Clone(p13Covered), slices.Clone(p13Remaining)
+// covers, the ones it says are evidence documents, and the ones it says
+// remain, as copies, for the test that checks all three against
+// internal/cli's enumeration.
+func P13Renderers() (covered, evidence, remaining []string) {
+	return slices.Clone(p13Covered), slices.Clone(p13Evidence), slices.Clone(p13Remaining)
 }
 
 // PackageDir is this package's directory relative to the module root. Citations

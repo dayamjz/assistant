@@ -55,17 +55,50 @@ type noReading struct{ of reflect.Type }
 func (noReading) Error() string { return machine.PhraseNoReading.String() }
 
 // Rendering is one human renderer of this surface: what it is called and
-// whether it speaks through internal/machine's phrase table, which is the
-// vocabulary P13 holds to the derived forbidden set. A renderer that does not
-// is one that still prints this build's own words, and the renderings table
-// says, beside each such row, why its wording is not settled yet.
+// which rule P13 holds its lines to.
 type Rendering struct {
 	// Name is the renderer's name, as internal/journey's coverage note and
 	// this package's tests refer to it.
 	Name string
-	// Phrased is whether every line it writes is a row of the phrase table,
-	// or one beside text that is the person's own or an agent's, escaped.
-	Phrased bool
+	// Voice is the rule its lines answer to.
+	Voice Voice
+}
+
+// Voice is the rule P13 holds one renderer's lines to. It is one of three,
+// and the renderings table gives every row exactly one.
+type Voice int
+
+const (
+	// VoiceUnsettled is a renderer that still prints this build's own words
+	// because the wording it would be held to is not settled; the renderings
+	// table says why beside each such row. It is the zero value, so a row
+	// that states no voice claims nothing.
+	VoiceUnsettled Voice = iota
+	// VoicePhrased is a renderer every line of which is a row of
+	// internal/machine's phrase table, which P13 holds to the derived
+	// forbidden set, or one beside text that is the person's own or an
+	// agent's, escaped.
+	VoicePhrased
+	// VoiceEvidence is a renderer that writes one of the two detailed
+	// evidence documents PRD section 9 names - the detail view, and the
+	// relay of a finding that needs a decision - which P13 lets keep exact
+	// identifiers and stage names. Its row carries the phrase-table row that
+	// points a person at it, and writeEvidence, which the run renderer
+	// writes it through, writes that row first, because the message that
+	// points at an evidence document stays phrased.
+	VoiceEvidence
+)
+
+// String is the voice's name, for a test's message.
+func (v Voice) String() string {
+	switch v {
+	case VoicePhrased:
+		return "phrased"
+	case VoiceEvidence:
+		return "evidence"
+	default:
+		return "unsettled"
+	}
 }
 
 // Renderings is every human renderer this surface has, in the order the
@@ -77,19 +110,36 @@ type Rendering struct {
 func Renderings() []Rendering {
 	out := make([]Rendering, 0, len(renderings)+1)
 	for _, r := range renderings {
-		out = append(out, Rendering{Name: r.name, Phrased: r.phrased})
+		out = append(out, Rendering{Name: r.name, Voice: r.voice})
 	}
-	return append(out, Rendering{Name: fallback.name, Phrased: fallback.phrased})
+	return append(out, Rendering{Name: fallback.name, Voice: fallback.voice})
 }
 
 // rendering is one row of the table readOut dispatches through: the
-// renderer, the answer type it renders, which is nil for a renderer reached
-// only from another renderer, and whether it is phrased.
+// renderer, its voice, the answer type it renders, which is nil for a
+// renderer reached only from another renderer, and for an evidence document
+// the row that points a person at it.
 type rendering struct {
-	name    string
-	phrased bool
-	of      reflect.Type
-	render  func(io.Writer, any)
+	name   string
+	voice  Voice
+	of     reflect.Type
+	render func(io.Writer, any)
+	points machine.Phrase
+}
+
+// writeEvidence writes an evidence document behind the phrase that points at
+// it, and nothing at all when the document is empty, so a pointer never
+// stands over nothing. It is how the run renderer reaches each evidence row;
+// the renderings table says what that does and does not guarantee.
+func writeEvidence(w io.Writer, row rendering, value any) {
+	var body strings.Builder
+	row.render(&body, value)
+	if body.Len() == 0 {
+		return
+	}
+	writeln(w)
+	writeln(w, row.points)
+	_, _ = io.WriteString(w, body.String())
 }
 
 // renderings is the one table of human renderers. readOut dispatches by the
@@ -111,46 +161,66 @@ type rendering struct {
 // it holds it. readOutHostInstall prints each on a line of its own after a
 // label, so the row is never mixed with them.
 //
-// The three that are not phrased are the ones whose wording the
-// specification has not settled, and each is named so that the claim about
-// the rest is bounded by an enumeration:
+// The three that are not phrased are named, so that the claim about the rest
+// is bounded by an enumeration. Two are evidence documents, which P13 names
+// as the exception to its rule and PRD section 9 names as these two:
 //
-//   - details prints a run's position, its park reason, its configuration
-//     rejections and a line per stage by name. PRD section 9's terminal
-//     interface answers "where am I?" with all nine stages by name, and P13
-//     keeps stage names from a person; the two disagree, and that is a
-//     finding against the specification rather than a choice to make here.
-//   - findings relays a decision's findings in full, which PRD section 9's
-//     relay-verbatim row requires and P13's "never text to relay" forbids;
-//     the same disagreement, and the text is the stage's report rather than
-//     this build's sentence, so it cannot be rephrased without being
-//     summarized.
+//   - details is the detail view's evidence for a run: where its execution
+//     stands, the reason a bound parked it, the keys its configuration
+//     resolution dropped, a line per stage by name with its timing and fix
+//     note, and the proposals raised about it. Section 9 says the detail view
+//     names the nine stages. It does not list the rejections or the
+//     proposals; they are records of the run rather than lines about the
+//     person's request, and this table classes them as the detail view's
+//     evidence, a reading of this build's rather than one the PRD states.
+//   - findings relays the findings holding a decision in full, with their
+//     exact names, locations and text, which section 9's relay-verbatim row
+//     requires and says is an evidence document in P13's sense.
+//
+// Neither row names an answer type, so readOut never dispatches to one; the
+// run renderer reaches each through writeEvidence, behind the phrased row its
+// table entry carries, so what points a person at the evidence is held to
+// P13 even though the evidence is not. That is a convention inside this
+// package rather than a mechanism: readOutDetails and readOutFindings are
+// callable from anywhere here, and the evidence test reads the run renderer,
+// so a new caller that skipped writeEvidence would print no pointer and
+// nothing would fail until a test rendered it. What a run says about a request it
+// did not apply - starting inputs that went to no run, or an answer the
+// service closed the decision ahead of - is a status line rather than
+// evidence, so readOutRun prints it as a phrased row and not in details.
+//
+// The third is the one whose wording is not settled:
+//
 //   - plan prints the steps of a reconciliation, which PRD section 9 has
-//     assistant sync print exactly; the module that would produce them does
-//     not exist in this build, so there is no step whose wording could be
-//     held to the table.
+//     assistant sync print exactly, and then the plan's detail. The custody
+//     module that would produce those steps does not exist in this build, so
+//     the one Plan this build makes is syncBranch's, which has no steps and
+//     whose detail is a sentence of this build's saying that module is
+//     missing; this row prints that sentence as written, and it is not a row
+//     of the phrase table. The row stays unsettled until that module exists,
+//     because the steps are what its wording would have to be settled for.
 var renderings = []rendering{
-	{"status", true, typeOf[machine.Status](), func(w io.Writer, v any) { readOutStatus(w, v.(machine.Status)) }},
-	{"run", true, typeOf[machine.Run](), func(w io.Writer, v any) { readOutRun(w, v.(machine.Run)) }},
-	{"runs", true, typeOf[machine.Runs](), func(w io.Writer, v any) { readOutRuns(w, v.(machine.Runs)) }},
-	{"tasks", true, typeOf[machine.Tasks](), func(w io.Writer, v any) { readOutTasks(w, v.(machine.Tasks)) }},
-	{"task", true, typeOf[machine.Task](), func(w io.Writer, v any) { readOutTask(w, v.(machine.Task)) }},
-	{"service", true, typeOf[machine.Service](), func(w io.Writer, v any) { readOutService(w, v.(machine.Service)) }},
-	{"event", true, typeOf[ipc.Event](), func(w io.Writer, v any) { writeln(w, eventLine(v.(ipc.Event))) }},
-	{"host stop", true, typeOf[machine.HostStop](), func(w io.Writer, v any) { readOutHostStop(w, v.(machine.HostStop)) }},
-	{"host install", true, typeOf[machine.HostInstall](), func(w io.Writer, v any) { readOutHostInstall(w, v.(machine.HostInstall)) }},
-	{"decision", true, nil, func(w io.Writer, v any) { readOutDecision(w, v.(machine.Decision)) }},
-	{"details", false, nil, func(w io.Writer, v any) { readOutDetails(w, v.(machine.Run)) }},
-	{"findings", false, nil, func(w io.Writer, v any) { readOutFindings(w, v.(machine.Decision)) }},
-	{"doctor", true, typeOf[machine.Doctor](), func(w io.Writer, v any) { readOutDoctor(w, v.(machine.Doctor)) }},
-	{"lifecycle", true, typeOf[machine.Lifecycle](), func(w io.Writer, v any) { readOutLifecycle(w, v.(machine.Lifecycle)) }},
-	{"init", true, typeOf[machine.Init](), func(w io.Writer, v any) { readOutInit(w, v.(machine.Init)) }},
-	{"plan", false, typeOf[machine.Plan](), func(w io.Writer, v any) { readOutPlan(w, v.(machine.Plan)) }},
-	{"eject", true, typeOf[machine.Eject](), func(w io.Writer, v any) { writeln(w, machine.EjectPhrase(v.(machine.Eject))) }},
-	{"health", true, typeOf[machine.Health](), func(w io.Writer, v any) { writeln(w, machine.HealthPhrase(v.(machine.Health))) }},
-	{"admission", true, typeOf[machine.Admission](), func(w io.Writer, v any) { readOutAdmission(w, v.(machine.Admission)) }},
-	{"notification", true, typeOf[machine.Notification](), func(w io.Writer, v any) { readOutNotification(w, v.(machine.Notification)) }},
-	{"task answer", true, typeOf[machine.TaskAnswered](), func(w io.Writer, v any) {
+	{name: "status", voice: VoicePhrased, of: typeOf[machine.Status](), render: func(w io.Writer, v any) { readOutStatus(w, v.(machine.Status)) }},
+	{name: "run", voice: VoicePhrased, of: typeOf[machine.Run](), render: func(w io.Writer, v any) { readOutRun(w, v.(machine.Run)) }},
+	{name: "runs", voice: VoicePhrased, of: typeOf[machine.Runs](), render: func(w io.Writer, v any) { readOutRuns(w, v.(machine.Runs)) }},
+	{name: "tasks", voice: VoicePhrased, of: typeOf[machine.Tasks](), render: func(w io.Writer, v any) { readOutTasks(w, v.(machine.Tasks)) }},
+	{name: "task", voice: VoicePhrased, of: typeOf[machine.Task](), render: func(w io.Writer, v any) { readOutTask(w, v.(machine.Task)) }},
+	{name: "service", voice: VoicePhrased, of: typeOf[machine.Service](), render: func(w io.Writer, v any) { readOutService(w, v.(machine.Service)) }},
+	{name: "event", voice: VoicePhrased, of: typeOf[ipc.Event](), render: func(w io.Writer, v any) { writeln(w, eventLine(v.(ipc.Event))) }},
+	{name: "host stop", voice: VoicePhrased, of: typeOf[machine.HostStop](), render: func(w io.Writer, v any) { readOutHostStop(w, v.(machine.HostStop)) }},
+	{name: "host install", voice: VoicePhrased, of: typeOf[machine.HostInstall](), render: func(w io.Writer, v any) { readOutHostInstall(w, v.(machine.HostInstall)) }},
+	{name: "decision", voice: VoicePhrased, render: func(w io.Writer, v any) { readOutDecision(w, v.(machine.Decision)) }},
+	detailsRendering,
+	findingsRendering,
+	{name: "doctor", voice: VoicePhrased, of: typeOf[machine.Doctor](), render: func(w io.Writer, v any) { readOutDoctor(w, v.(machine.Doctor)) }},
+	{name: "lifecycle", voice: VoicePhrased, of: typeOf[machine.Lifecycle](), render: func(w io.Writer, v any) { readOutLifecycle(w, v.(machine.Lifecycle)) }},
+	{name: "init", voice: VoicePhrased, of: typeOf[machine.Init](), render: func(w io.Writer, v any) { readOutInit(w, v.(machine.Init)) }},
+	{name: "plan", voice: VoiceUnsettled, of: typeOf[machine.Plan](), render: func(w io.Writer, v any) { readOutPlan(w, v.(machine.Plan)) }},
+	{name: "eject", voice: VoicePhrased, of: typeOf[machine.Eject](), render: func(w io.Writer, v any) { writeln(w, machine.EjectPhrase(v.(machine.Eject))) }},
+	{name: "health", voice: VoicePhrased, of: typeOf[machine.Health](), render: func(w io.Writer, v any) { writeln(w, machine.HealthPhrase(v.(machine.Health))) }},
+	{name: "admission", voice: VoicePhrased, of: typeOf[machine.Admission](), render: func(w io.Writer, v any) { readOutAdmission(w, v.(machine.Admission)) }},
+	{name: "notification", voice: VoicePhrased, of: typeOf[machine.Notification](), render: func(w io.Writer, v any) { readOutNotification(w, v.(machine.Notification)) }},
+	{name: "task answer", voice: VoicePhrased, of: typeOf[machine.TaskAnswered](), render: func(w io.Writer, v any) {
 		writeln(w, machine.TaskAnsweredPhrase(v.(machine.TaskAnswered)))
 	}},
 }
@@ -159,7 +229,19 @@ var renderings = []rendering{
 // because it has no type to dispatch on, and it renders nothing: readOut
 // returns noReading in its place, whose text is internal/machine's row for
 // the refusal and which render writes on standard error.
-var fallback = rendering{"fallback", true, nil, func(io.Writer, any) {}}
+var fallback = rendering{name: "fallback", voice: VoicePhrased, render: func(io.Writer, any) {}}
+
+// detailsRendering and findingsRendering are the two evidence rows. They are
+// named so that readOutRun reaches each through writeEvidence by its row,
+// which carries the phrase that points at it, rather than by its function.
+var (
+	detailsRendering = rendering{name: "details", voice: VoiceEvidence,
+		render: func(w io.Writer, v any) { readOutDetails(w, v.(machine.Run)) },
+		points: machine.PhraseRunRecordFollows}
+	findingsRendering = rendering{name: "findings", voice: VoiceEvidence,
+		render: func(w io.Writer, v any) { readOutFindings(w, v.(machine.Decision)) },
+		points: machine.PhraseFindingsFollow}
+)
 
 func typeOf[T any]() reflect.Type { return reflect.TypeOf((*T)(nil)).Elem() }
 
@@ -216,12 +298,13 @@ func readOutService(w io.Writer, s machine.Service) {
 }
 
 // readOutRun prints a run: its phrase, the branch, the agent it resolved,
-// what became of its local copy, and then its details, its decision and the
-// findings behind the decision, through the details and findings renderers
-// that are not phrased and the decision renderer that is. The phrase carries the outcome,
-// the consequence and the next decision, so no outcome word, status or next
-// action is printed beside it; the record's identifier is the structured
-// rendering's.
+// what became of its local copy, what of the request was not applied, and
+// then its details, its decision and the findings holding the decision. The
+// details and the findings are the two evidence documents, each written
+// through writeEvidence behind the row that points at it; the decision
+// renderer is phrased. The phrase carries the outcome, the consequence and
+// the next decision, so no outcome word, status or next action is printed
+// beside it; the record's identifier is the structured rendering's.
 func readOutRun(w io.Writer, r machine.Run) {
 	writeln(w, r.Phrase())
 	writef(w, "Branch     %s\n", printable(r.Record.Branch))
@@ -236,19 +319,30 @@ func readOutRun(w io.Writer, r machine.Run) {
 			writeln(w, phrase)
 		}
 	}
-	readOutDetails(w, r)
+	// What a request carried and the run did not take is said about the
+	// request, as a status line, so it is a row here and not evidence: which
+	// inputs they were, and the service's sentence for why an answer was not
+	// taken, are the structured rendering's.
+	if len(r.NotApplied) > 0 {
+		writeln(w, machine.PhraseInputsNotApplied)
+	}
+	if r.AnswerNotApplied != "" {
+		writeln(w, machine.PhraseAnswerNotApplied)
+	}
+	writeEvidence(w, detailsRendering, r)
 	if r.Decision != nil {
 		readOutDecision(w, *r.Decision)
-		readOutFindings(w, *r.Decision)
+		writeEvidence(w, findingsRendering, *r.Decision)
 	}
 }
 
 // readOutDetails prints the run's details: where its execution stands, the
 // reason a bound parked it, the keys its configuration resolution dropped,
-// what became of each stage, the proposals raised about it, and the inputs a
-// request carried that were not applied. These are this build's own words -
-// node positions, stage names, configuration keys - and the renderer is not
-// phrased; it is the evidence a person reads beside the phrase above it.
+// what became of each stage, and the proposals raised about it. These are
+// this build's own words - node positions, stage names, configuration keys -
+// because this is the detail view's evidence, which P13 lets keep them; it
+// is reached through writeEvidence, behind the phrased row that points at it,
+// and prints nothing for a run with none of them.
 func readOutDetails(w io.Writer, r machine.Run) {
 	if r.Progress != nil {
 		writef(w, "Position   %s after %d of %d steps\n", positionOf(r), r.Steps, r.Budget)
@@ -279,13 +373,6 @@ func readOutDetails(w io.Writer, r machine.Run) {
 			writef(w, "  %s\n", printable(p.Description))
 		}
 	}
-	if len(r.NotApplied) > 0 {
-		writef(w, "Not applied %s - this branch already had a run, and these start one\n",
-			strings.Join(r.NotApplied, ", "))
-	}
-	if r.AnswerNotApplied != "" {
-		writef(w, "Not applied your answer - %s\n", printable(r.AnswerNotApplied))
-	}
 }
 
 // readOutDecision prints the decision a run is waiting on, through the
@@ -304,13 +391,15 @@ func readOutDecision(w io.Writer, d machine.Decision) {
 	}
 }
 
-// readOutFindings prints the findings behind a decision in full.
+// readOutFindings prints the findings holding a decision in full.
 //
 // PRD section 9 requires a finding that needs a decision to be relayed with
-// its full text, unsummarized and unjudged. Nothing here truncates a
-// description, drops a finding, or reorders them. That is also why this
-// renderer is not phrased: a finding is the stage's report, and phrasing it
-// would summarize it.
+// its full text, unsummarized and unjudged, and calls that relay a detailed
+// evidence document in P13's sense, so each keeps its exact identifier and
+// location. Nothing here truncates a description, drops a finding, or
+// reorders them. It is reached through writeEvidence, behind the phrased row
+// that points at it; the message asking for the decision is the decision
+// renderer's, which is phrased.
 func readOutFindings(w io.Writer, d machine.Decision) {
 	for _, finding := range d.Findings {
 		writef(w, "\n  [%s] %s %s\n", printable(string(finding.Action)), printable(string(finding.Severity)), printable(finding.ID))
