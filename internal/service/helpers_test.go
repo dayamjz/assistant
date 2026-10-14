@@ -17,6 +17,7 @@ import (
 	"github.com/dayamjz/assistant/internal/agents/standin"
 	"github.com/dayamjz/assistant/internal/cli"
 	"github.com/dayamjz/assistant/internal/config"
+	"github.com/dayamjz/assistant/internal/forge/forgetest"
 	"github.com/dayamjz/assistant/internal/gate"
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/ipc"
@@ -37,6 +38,7 @@ func TestMain(m *testing.M) {
 	// to a third party, so a test must never inherit one from whoever runs it.
 	_ = os.Unsetenv(judge.KeyVariable)
 	standin.Main()
+	forgetest.Main()
 	hookMain()
 	callMain()
 	service.EarlierServiceMain()

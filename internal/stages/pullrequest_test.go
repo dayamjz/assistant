@@ -175,6 +175,13 @@ func (h *host) Checks(context.Context, int) (forge.ChecksReport, error) {
 	return forge.ChecksReport{}, h.refuse
 }
 
+func (h *host) Merge(context.Context, int, string) (forge.PullRequest, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.record("merge")
+	return forge.PullRequest{}, errors.New("the pull request stage does not merge pull requests")
+}
+
 var _ forge.Provider = (*host)(nil)
 
 // hostFor is the forge.Host the stage is handed: it answers Open with the one

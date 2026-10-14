@@ -769,6 +769,7 @@ func (s *Service) settle(ctx context.Context, runID string, result graph.Result)
 		return err
 	}
 	var move func(context.Context, string) (store.Run, error)
+	checksPassed := false
 	switch {
 	case result.Status == graph.StatusHalted:
 		move = built.runs.Hold
@@ -786,7 +787,7 @@ func (s *Service) settle(ctx context.Context, runID string, result graph.Result)
 		endText, head := pipeline.PullRequestEnd(result.State)
 		end := store.PullRequestEnd(endText)
 		if end == "" {
-			move = built.runs.Pass
+			move, checksPassed = built.runs.Pass, true
 			break
 		}
 		_, number, err := recordedPullRequest(result.State)
@@ -831,6 +832,14 @@ func (s *Service) settle(ctx context.Context, runID string, result graph.Result)
 		// decides about first.
 		s.cleanUpLanded(ctx, moved)
 		s.releaseQueued(ctx)
+		// A run that ended checks-passed is merged here when its repository
+		// is one autonomy.merge lists; autonomy.go owns the rule and every
+		// refusal, which is reported and never retried around.
+		if facts, ok := autonomyFactsOf(result.State); ok && checksPassed && moved.Status == store.RunPassed {
+			if err := s.mergeUnderAutonomy(ctx, built, moved, facts); err != nil {
+				s.log.Printf("%v", err)
+			}
+		}
 	}
 	s.publishRunState(ctx, runID)
 	return nil

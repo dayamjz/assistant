@@ -141,6 +141,10 @@ func (p *scriptedProvider) UpdateBody(context.Context, int, string) (forge.PullR
 	return forge.PullRequest{}, errors.New("nothing here updates a pull request")
 }
 
+func (p *scriptedProvider) Merge(context.Context, int, string) (forge.PullRequest, error) {
+	return forge.PullRequest{}, errors.New("nothing here merges a pull request")
+}
+
 var _ forge.Provider = (*scriptedProvider)(nil)
 
 // checksHoldSubject is a home and a subject arranged so that a run walks

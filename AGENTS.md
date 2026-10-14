@@ -240,6 +240,12 @@ Each has cost this repository more than one round of review.
   itself. Read its `doc.go` before changing any of that, and for the residual
   gaps: the confirmation precedes a write and not a read, it is not a lock
   against a later rename, and a GitHub Enterprise upstream yields no specifier.
+  `Provider.Merge` is bound to a head through gh's `--match-head-commit`
+  and refuses an unbound one; whether a merge is allowed is the host's, and
+  its refusal is a `ReasonRejected` the caller reports and never retries
+  around. `internal/service`'s `autonomy.go` is its one caller: the
+  global-only `autonomy.merge` list, the live read, and the read after the
+  merge that writes the merge record.
   Tests outside the package reach a code host through
   `internal/forge/forgetest`, a stand-in `gh` answering over the wire and
   read by the real adapter, scripted with only shapes gh produces, on
@@ -703,7 +709,8 @@ Each has cost this repository more than one round of review.
   `Decide` rather than filling the fields in. `OutcomePassed` has one
   producer: a passed record beside PRD section 8's merge record,
   `store.MergeRecord`, which only `internal/runs`' two pull request moves
-  write, once, and which `Standing` carries as the end read off it. It
+  and its `RecordMergeAfterPass` (the read after an autonomy merge) write,
+  once, and which `Standing` carries as the end read off it. It
   does not own the outcome set: the PRD's outcome row does, and
   `internal/outcomes` fails the build when the two come apart, so the constant
   block's order is that row's order rather than a free choice.

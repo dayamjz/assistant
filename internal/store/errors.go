@@ -297,6 +297,11 @@ var ErrAttemptSessionRecorded = errors.New("store: the attempt already names a s
 // transaction that would flip the shape.
 var ErrCleanupRecorded = errors.New("store: the task already has a cleanup record")
 
+// ErrMergeRecorded is returned by RecordMergeOfPassedRun when the run
+// already has a merge record. PRD section 8 has the record written once, so
+// a second read of the same merge is refused rather than recorded again.
+var ErrMergeRecorded = errors.New("store: the run already has a merge record")
+
 // ErrUnknownDelivery is returned by CreateTask for a delivery posture outside
 // config.Delivery's closed set, and by a read of a task whose stored posture
 // is outside it, which no accessor here wrote.

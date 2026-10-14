@@ -71,6 +71,10 @@ func (p *checksProvider) UpdateBody(context.Context, int, string) (forge.PullReq
 	return forge.PullRequest{}, errors.New("the checks stage does not update pull requests")
 }
 
+func (p *checksProvider) Merge(context.Context, int, string) (forge.PullRequest, error) {
+	return forge.PullRequest{}, errors.New("the checks stage does not merge pull requests")
+}
+
 func (p *checksProvider) Get(ctx context.Context, number int) (forge.PullRequest, error) {
 	p.gets++
 	if err := ctx.Err(); err != nil {
