@@ -99,13 +99,22 @@
 // beacon under a live one, a file or a database that cannot be read, and an
 // operator file that does not parse.
 //
-// The re-entry signal is HostReentryVar in the environment the host gives the
-// process, and that constant says why it is a variable rather than a flag and
-// what consumes it: the host's own re-entered turn, since this process
-// stores nothing and judges each invocation from what it was given. With the
-// signal the turn may end and the message says why; without it a turn with
-// work under way unwatched is blocked, and PRD section 5 says that is the
-// only safe reading.
+// The re-entry signal arrives one of two ways, and either is the signal:
+// stop_hook_active true in the JSON the host writes to the hook's standard
+// input, which is how the host the installer configures documents it, and
+// HostReentryVar in the environment, for a host that bridges its own
+// protocol by setting it. hostReentryField names where the field is
+// documented and holds the reading to one direction: input that is absent,
+// empty or an object without the member is no signal, and input that is
+// there and cannot be read - not one JSON object, the member twice or as
+// another type, past the size bound, or still open after the wait - is no
+// signal either, with the answer saying why, so unreadable input blocks and
+// never allows. The read is bounded in size and time so a hook never holds a
+// turn on its input. What consumes the signal is the host's own re-entered
+// turn, since this process stores nothing and judges each invocation from
+// what it was given. With the signal the turn may end and the message says
+// why; without it a turn with work under way unwatched is blocked, and PRD
+// section 5 says that is the only safe reading.
 //
 // The host's protocol is this package's adapter and not internal/machine's
 // shape. machine.HostStop is the verdict and the message, and
@@ -126,11 +135,12 @@
 // stop guard under another command line, or one it cannot read as settings,
 // is refused as a typed result with the file left as it was. The host is
 // Claude Code, and the settings shape is what that host documents about
-// itself; hostInstall names the source and its four gaps, the one that
-// matters most being that the line arranges no re-entry signal. PRD section
-// 9's row for this verb says a person never types it, which predates the
-// installer, so that is a finding against the specification rather than a
-// precedent for typed subcommands here.
+// itself; hostInstall names the source and its three gaps. The line sets no
+// re-entry signal of its own, because that host documents one on the hook's
+// standard input and stop reads it there. PRD section 9's row for this verb
+// says a person never types it, which predates the installer, so that is a
+// finding against the specification rather than a precedent for typed
+// subcommands here.
 //
 // Three gaps are deliberate and written down rather than rounded off. The
 // block status coincides with the usage status, so a host that runs a
@@ -140,9 +150,10 @@
 // coordinator, but the worker group set is the service's and is reached over
 // the socket by peer credentials, and a process with no socket has no peer
 // to place, so the command answers the same whoever invokes it and refuses
-// nobody. And the installer arranges no re-entry signal, so a host
-// configured through it is never told a turn was re-entered and every turn
-// that ends with work under way unwatched is blocked; hostInstall says why.
+// nobody. And the read of the host's input is bounded, so a re-entered turn
+// whose event is larger than hostInputLimit, or whose input stays open past
+// hostInputWait, is read as no signal and blocked again; the bounds are
+// chosen, not measured against a host.
 //
 // # Which verbs need the service, and which cannot
 //

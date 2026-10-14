@@ -271,10 +271,12 @@ func Coverage() []Established {
 				"beacon at a time. internal/cli's host tests cite it for the hook at turn end, driven " +
 				"through cli.Run with the test's own streams: the same planted facts reach the host as " +
 				"an exit status and a message with no service consulted, and the host's re-entry " +
-				"signal allows the one invocation it was given to and never an unsignalled one. What " +
-				"none of them reaches is a coordinator's host firing the hook: nothing installs it, " +
-				"since who may write it into a host's configuration is #95 line D, so the push layer " +
-				"is exercised as a command and not as a turn ending."},
+				"signal, stop_hook_active on standard input or ASSISTANT_HOST_REENTRY, allows the one " +
+				"invocation it was given to and never an unsignalled one, while input it cannot read " +
+				"never allows. What none of them reaches is a coordinator's host firing the hook: " +
+				"host install prints and writes the line, but no test runs a host, so the input is " +
+				"the shape the host documents and the push layer is exercised as a command and not " +
+				"as a turn ending."},
 		{principles.P11, ReachBinary,
 			"The positive half is driven through the binary by the task walk: a task created with " +
 				"task.create on the binary's socket is dispatched and its worker launched by the " +

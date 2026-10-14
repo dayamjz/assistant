@@ -52,6 +52,13 @@ type HostStop struct {
 	// Detail says why the guard could not be computed, when it could not,
 	// and is empty otherwise.
 	Detail string `json:"detail,omitempty"`
+	// InputUnread says why what the host wrote to the hook's input was not
+	// read as a re-entry signal although something was there: input that
+	// does not parse, says the signal twice or as another type, is too
+	// large, or did not end in time. It is empty when there was no input or
+	// the input was read. It never allows: input this explains carries no
+	// signal, so ReEntered is set only by a signal from elsewhere.
+	InputUnread string `json:"input_unread,omitempty"`
 }
 
 // HostStopOf is the one translation from the guard's verdict and the host's

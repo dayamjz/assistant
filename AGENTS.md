@@ -855,15 +855,17 @@ Each has cost this repository more than one round of review.
   what the coordinator's host invokes from the hook it fires at turn end, its
   subcommands are the `hostHooks` table in `host.go`, and `stop` is PRD section
   5's stop guard with no service: it feeds `supervisor.Assess` through
-  `internal/supervisor/feed` and never a second predicate, reads the re-entry
-  signal from `HostReentryVar` and stores nothing, and maps the verdict onto
+  `internal/supervisor/feed` and never a second predicate, takes the re-entry
+  signal from the host's `stop_hook_active` on standard input or from
+  `HostReentryVar`, reads unreadable input as no signal under a bounded read
+  (`hostinput.go`), stores nothing, and maps the verdict onto
   the host's block convention in `cli`, never in `internal/machine`, which owns
   the verdict's shape and section 9's three codes. `host.go` says what the
   command cannot tell about its caller. `install` is section 6's installer and
   the one row a person types: it prints the host's line and writes nothing
   unless given `--write` (P1), and refuses rather than overrides a file it
   cannot merge into; `hostinstall.go` names where the host's settings shape
-  comes from and its gaps, among them that the line sets no re-entry signal.
+  comes from and its gaps.
   What a person reads is rendered through the `renderings` table in
   `render.go`, which `readOut` dispatches through and `Renderings` enumerates:
   eight renderers are phrased through `internal/machine`'s table and the rest

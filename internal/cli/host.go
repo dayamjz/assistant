@@ -32,11 +32,15 @@ import (
 // for, for the same reason.
 const hostVerbName = "host"
 
-// HostReentryVar is the environment variable the coordinator's host sets on
+// HostReentryVar is the environment variable a coordinator's host may set on
 // a turn it re-entered after the stop guard blocked the previous one. Set to
 // any non-empty value, it is the re-entry signal PRD section 5 has the host
-// supply; unset or empty, no signal was supplied, and a turn with work under
-// way and no live supervisor is blocked.
+// supply; unset or empty, it supplies none. It is one of the two ways the
+// signal arrives, and hostReentryField is the other: the field is what the
+// host hostInstall writes the line for documents, and this variable stays for
+// a host whose own protocol says nothing this command reads, which bridges
+// it by setting the variable. Either one is the signal, and with neither a
+// turn with work under way and no live supervisor is blocked.
 //
 // It is an environment variable rather than a flag on the hook's command
 // line, for two reasons. The command line is configuration the host owns and
@@ -50,13 +54,56 @@ const hostVerbName = "host"
 // Nothing here consumes the signal: this process stores nothing, so it
 // cannot tell the first re-entered turn from a second. The signal is
 // consumed by the host's own re-entered turn, which is the one invocation
-// the host sets the variable on; the next turn ends with the variable unset
-// and is judged afresh. A host whose own protocol carries the signal another
-// way, as a field in what it writes to the hook, bridges it by setting this
-// variable. hostInstall's line does not: it runs this command with nothing
-// set, so this command sees no signal on any turn and blocks every one that
-// ends while work is under way unwatched, and hostInstall says so.
+// the host supplies it on; the next turn ends without it and is judged
+// afresh. A host that supplied it on every turn would have disabled the
+// guard, and nothing here can tell.
 const HostReentryVar = "ASSISTANT_HOST_REENTRY"
+
+// hostReentryField is the re-entry signal as the coordinator's host
+// hostInstall configures puts it on the hook's standard input: a JSON object
+// whose stop_hook_active member is true. The name and its meaning are what
+// that host documents about itself, not something this package verified by
+// running it: the 2.1.299 build of Claude Code carries, among its own
+// messages, "For Stop/SubagentStop hooks, check stop_hook_active in the input
+// and return success while it's true", and its documentation's "Hook Input
+// (stdin JSON)" heading says where a command hook's input arrives; the Agent
+// SDK for Python, 0.2.159, declares StopHookInput with "stop_hook_active:
+// bool". The owner's decision on #95 is that this member is re-entry, read
+// exactly as HostReentryVar is.
+//
+// That gives the member a gap the variable does not have. Nothing the host
+// documents says the member names which hook blocked, so a turn another
+// program's turn-end hook blocked may arrive here with the member true, and
+// the guard then allows a turn it did not block itself. Whether the host
+// sets it on only the turn after a block or on every turn of a continued
+// chain is not documented either, and nothing here can tell the two apart.
+//
+// readHostInput is the reading, and it is strict in one direction only: the
+// member allows a turn when it is there once, as the JSON literal true, in a
+// whole object that parses and ends, and in nothing else. Input that is
+// absent or empty, or an object without the member, supplies no signal and
+// nothing is said about it, because a host that writes nothing, or another
+// event, is not a fault. Input that is there and cannot be read that way -
+// not JSON, not one object, trailing data, the member twice or as anything
+// but a boolean, more than hostInputLimit bytes, a read that fails, or a
+// stream still open after hostInputWait - supplies no signal either, and the
+// answer says why in machine.HostStop's InputUnread, so unreadable input
+// blocks rather than allows and the block is not mistaken for the guard's
+// alone. Member names are matched exactly, as the host spells them, and not
+// with encoding/json's case folding.
+const hostReentryField = "stop_hook_active"
+
+// hostInputLimit and hostInputWait bound the read of the hook's standard
+// input, so a hook never holds a turn on its input. The limit is generous
+// beside the input's documented members because one of them, the turn's last
+// message, is the coordinator's own text and has no stated size; input past
+// it is unread, and a re-entered turn whose input is that large is blocked
+// again, which is the gap the bound costs. The wait is how long a stream
+// still open is waited for; neither figure was measured against a host.
+const (
+	hostInputLimit = 4 << 20
+	hostInputWait  = 3 * time.Second
+)
 
 // hostBlockCode is the exit status that tells the coordinator's host the turn
 // may not end, with the reason on standard error. It is the host's convention
@@ -140,10 +187,13 @@ func hostHookNames() []string {
 // an operator file that does not parse, which leaves the guard uncomputed
 // rather than judged by a default the operator did not set.
 //
-// The re-entry signal is HostReentryVar, read from the environment the host
-// gave this process; see that constant for why it is a variable and what
-// consumes it. Nothing is stored and nothing is written: the guard is a read
-// of the home, and the answer is machine.HostStopOf over it.
+// The re-entry signal is hostReentryField on standard input, read by
+// readHostInput under its bounds, or HostReentryVar in the environment the
+// host gave this process; either one is the signal, and see those two for
+// what each is and what consumes it. Input on standard input that is there
+// and unreadable is no signal, and the answer's InputUnread says why. Nothing
+// is stored and nothing is written: the guard is a read of the home, and the
+// answer is machine.HostStopOf over it.
 //
 // Two things it cannot do. It cannot place its caller: a process inside a
 // registered worker group ending the coordinator's turn would be a worker
@@ -155,7 +205,9 @@ func hostStop(ctx context.Context, in *invocation) (any, error) {
 	if err := in.parseFlags("host stop", func(*flag.FlagSet) {}); err != nil {
 		return nil, err
 	}
-	reEntered := in.env.Getenv != nil && in.env.Getenv(HostReentryVar) != ""
+	byInput, unread := readHostInput(ctx, in.env.Stdin)
+	byEnvironment := in.env.Getenv != nil && in.env.Getenv(HostReentryVar) != ""
+	reEntered := byInput || byEnvironment
 	var verdict supervisor.StopVerdict
 	detail := ""
 	cfg, err := service.GlobalConfig(in.home.ConfigFile())
@@ -166,6 +218,7 @@ func hostStop(ctx context.Context, in *invocation) (any, error) {
 	}
 	answer := machine.HostStopOf(verdict, reEntered)
 	answer.Detail = detail
+	answer.InputUnread = unread
 	// The message is the host's to relay, and the host's convention reads it
 	// off standard error beside the exit status; it is written whether or
 	// not the answer is a document, because under --json standard output
@@ -199,8 +252,9 @@ func readOutHostStop(io.Writer, machine.HostStop) {}
 // spelled out, so a subcommand added there is a subcommand this describes.
 func hostUsage() string {
 	var b strings.Builder
-	b.WriteString("\nInvoked by the coordinator's host at turn end rather than typed. The host sets\n")
-	fmt.Fprintf(&b, "%s on a turn it re-entered after a block, and on no other:\n", HostReentryVar)
+	b.WriteString("\nInvoked by the coordinator's host at turn end rather than typed. A turn the\n")
+	fmt.Fprintf(&b, "host re-entered after a block says so with %s true in the JSON on\n", hostReentryField)
+	fmt.Fprintf(&b, "standard input, or with %s set, and no other turn does:\n", HostReentryVar)
 	for _, hook := range hostHooks {
 		if hook.byHost {
 			fmt.Fprintf(&b, "  %s %-7s %s\n", hostVerbName, hook.name, hook.summary)
