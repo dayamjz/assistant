@@ -377,7 +377,7 @@ func Coverage() []Established {
 var (
 	p13Covered = []string{"status", "run", "runs", "tasks", "task", "service", "event", "host stop", "host install",
 		"decision", "doctor", "lifecycle", "init", "eject", "health", "admission", "notification",
-		"task answer", "fallback"}
+		"task answer", "catch up", "marked seen", "fallback"}
 	p13Evidence  = []string{"details", "findings"}
 	p13Remaining = []string{"plan"}
 )

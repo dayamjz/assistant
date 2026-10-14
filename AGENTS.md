@@ -357,7 +357,8 @@ Each has cost this repository more than one round of review.
   Whether a peer is a task's worker is a second relation over the same
   `Credentials`, decided by the handler from `internal/session`'s worker group
   set and never a third access class: the rows whose answer turns on it
-  (`task.event`, `wakes.*`, `supervision.assert`, `gate.admit`) say so, and
+  (`task.event`, `wakes.*`, `supervision.assert`, `catchup.mark`,
+  `gate.admit`) say so, and
   `ErrWorker` and `ErrNotWorker` are its two refusals. Read its `doc.go` for
   where state may still be collapsed into a gap marker and why that is not the
   strict rule relaxed. Four state types have a
@@ -668,7 +669,7 @@ Each has cost this repository more than one round of review.
   row naming `--task` and `--answer`), one per `Outcome` with executing
   split three ways on the facts `NextActionOf` reads (`RunPhrase`,
   `Run.Phrase`, `RecordPhrase` for a record alone), the hold rows, the cleanup
-  rows, the stream's rows and the status rows. No task row carries an outcome
+  rows, the stream's rows, the status rows and the catch-up read's rows. No task row carries an outcome
   word. The forbidden set its test holds every row to is derived from the
   owners by `internal/machine/vocabtest`, which `internal/cli` and
   `internal/journey` run over what was printed, and a caller pairs `Assert`
@@ -858,7 +859,9 @@ Each has cost this repository more than one round of review.
   raise against the specification, not a row to add: `cli_test.go` holds both
   halves of that, the commands it names and the plausible ones it does not.
   Answering a hold and running the service in the foreground are flags on the
-  commands that section does name. A verb that acts on a run calls the service;
+  commands that section does name, and so is catching up: `watch` starts
+  with the `catchup.read` answer, `--once` and `--mark-seen` are its flags,
+  and the mark names exactly what that read showed (`CatchUp.Shown`). A verb that acts on a run calls the service;
   a verb whose job includes reporting that the service is down does not.
   Two commands stand outside that table, and together they are not a
   precedent for a third: each is the interface something external requires,
@@ -882,8 +885,8 @@ Each has cost this repository more than one round of review.
   comes from and its gaps.
   What a person reads is rendered through the `renderings` table in
   `render.go`, which `readOut` dispatches through and `Renderings` enumerates:
-  eight renderers are phrased through `internal/machine`'s table and the rest
-  are enumerated as not, `doc.go` names which and why, and
+  every renderer but three is phrased through `internal/machine`'s table and
+  those three are enumerated as not, `doc.go` names which and why, and
   `internal/journey`'s P13 row is held to that enumeration. `eventLine` speaks
   the same table. Do not put a sentence a person reads in a renderer; put a
   row in the table.

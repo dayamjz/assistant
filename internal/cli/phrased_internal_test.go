@@ -99,6 +99,36 @@ func fixtureDecision() machine.Decision {
 	}
 }
 
+// fixtureCatchUp is a catch-up read with every part filled: a hold naming
+// the fixture task and the fixture run held at the fixture decision, a merge
+// and a cleanup record of the task with more past the bound, the task and a
+// run under way, and the task stopped, each carrying identifiers, a copy
+// path, a stage name and state labels its human rendering must leave out.
+func fixtureCatchUp() machine.CatchUp {
+	task, run := fixtureTask(), fixtureRun()
+	decision := fixtureDecision()
+	run.Decision = &decision
+	advancing := fixtureRun()
+	advancing.Record.Status, advancing.Outcome, advancing.Advancing = store.RunRunning, machine.OutcomeExecuting, true
+	stopped := task
+	stopped.State.State, stopped.State.Source, stopped.Waiting = taskstate.Failed, taskstate.SourceRun, ""
+	at := time.Date(2026, 10, 13, 12, 0, 0, 0, time.UTC)
+	return machine.CatchUp{
+		Waiting: []machine.Waiting{
+			{Hold: &store.Hold{Key: "task/" + sampleID + "/relaunch-bound/2", TaskID: store.Known(sampleID),
+				Subject: "whether to begin this work again", OpenedAt: at}, Task: &task, Answer: machine.TaskAnswering(sampleID)},
+			{Run: &run, Answer: machine.RunAnswering("/somewhere/parser", run.Record.Branch)},
+		},
+		Landed: []machine.Landed{
+			{Task: task, Cleanup: &store.TaskCleanup{TaskID: sampleID, Proof: store.CleanupProofRemoteBranch, RemovedAt: store.Known(at)}},
+			{Task: task, Merge: &store.MergeRecord{Run: sampleID, PullRequest: 7, Head: "0123abc", End: store.PullRequestMerged, RecordedAt: at}},
+		},
+		MoreLanded: 2,
+		UnderWay:   machine.UnderWay{Tasks: []machine.Task{task}, Runs: []machine.Run{advancing}},
+		Stopped:    []machine.Task{stopped},
+	}
+}
+
 // fixtures is a value for every renderer, each carrying the words its old
 // rendering printed: identifiers in the generator's format, paths under a
 // sample home, stage names and state labels. The fallback's is a real answer
@@ -178,6 +208,8 @@ func fixtures(t *testing.T) map[string]any {
 			Relaunch: &machine.RelaunchBegun{Attempt: 3, Superseded: sampleID},
 			Task:     task,
 		},
+		"catch up":    fixtureCatchUp(),
+		"marked seen": machine.Marked{Marks: []store.SeenMark{{SeenRecord: store.SeenRecord{Kind: store.SeenMerge, Key: sampleID}}}},
 		"fallback": machine.Appended{Event: store.TaskEvent{TaskID: sampleID, Sequence: 3, Kind: "waiting-external",
 			Detail: "an upstream release of the parser"}},
 	}

@@ -3,6 +3,7 @@ package machine
 import (
 	"github.com/dayamjz/assistant/internal/gate"
 	"github.com/dayamjz/assistant/internal/pipeline"
+	"github.com/dayamjz/assistant/internal/store"
 )
 
 // The request bodies. internal/ipc carries a method's parameters as written
@@ -290,4 +291,15 @@ type AcknowledgeRequest struct {
 	// handled. A subset leaves the rest queued; an identifier no wake has,
 	// or one already acknowledged, refuses the whole batch.
 	Wakes []int64 `json:"wakes"`
+}
+
+// MarkSeenRequest moves the seen mark PRD section 9's catching up reads. It
+// names the landed records a read showed, which CatchUp.Shown returns, and
+// nothing else: the mark moves only on an explicit mark of what a read
+// showed, so a record recorded between that read and this request is not
+// in it and is still shown next time. A request naming a record that is not
+// a landed one refuses the whole batch.
+type MarkSeenRequest struct {
+	// Records are the landed records the read showed.
+	Records []store.SeenRecord `json:"records"`
 }
