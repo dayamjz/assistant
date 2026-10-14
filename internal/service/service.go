@@ -206,6 +206,10 @@ type Service struct {
 	instance string
 	catalog  *agents.Catalog
 	registry *registry
+	// reaped is what recovery decided about each run process record at Open,
+	// the same accounts the log carries; reap.go owns them. It is written
+	// once, before anything is served, and not changed afterwards.
+	reaped []reaped
 	// judge is the decision-model client every run's review stage is handed.
 	// It is built once at Open, from the key in the operator's environment,
 	// with the recorder that feeds the store's decision-model record.
@@ -478,6 +482,10 @@ func (s *Service) openParts(ctx context.Context, o Options) error {
 	if s.log, err = s.home.OpenLog(0); err != nil {
 		return err
 	}
+	// The containment registry's entries are recorded durably from here,
+	// so what this service starts and does not live to end is something the
+	// next service of this home can reap; reap.go owns the record.
+	s.registry.durable = &processJournal{store: s.store, log: s.log}
 	if s.events, err = ipc.NewPublisher(ipc.PublisherConfig{}); err != nil {
 		return err
 	}
@@ -641,7 +649,10 @@ func (s *Service) cancelAdvancing() {
 // wrapper's: driverFor wraps the resolved runner in containRunner, which sets
 // agents.Invocation.Started on every invocation, and the adapter then reports
 // the group when the process starts and its end when the tree has been
-// terminated. This entry point remains for a launcher outside that path.
+// terminated. This entry point remains for a launcher outside that path, and
+// it registers in memory only: it writes no run process record, because the
+// group is whatever its caller states, and a record recovery would act on
+// has to name a group this service started, which only the wrapper knows.
 // The residual gaps are the relation's own: a descendant that moves itself to
 // a new process group is no longer in the registered one, which
 // internal/agents' documentation names, and a peer whose group cannot be read

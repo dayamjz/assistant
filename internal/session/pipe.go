@@ -58,10 +58,12 @@ func (p *Pipe) Create(ctx context.Context, spec Spec) (*Session, error) {
 		return nil, fmt.Errorf("session: starting the worker: %w", err)
 	}
 	pid := worker.Group()
-	start, found, err := startTime(pid)
+	// The identity is internal/agents' PID-reuse check, read once here and
+	// carried in the reference; a platform with no read records zero.
+	identity, found, err := agents.Identify(pid)
 	switch {
-	case errors.Is(err, errPlatform):
-		start = 0
+	case errors.Is(err, agents.ErrIdentityUnreadable):
+		identity = agents.Identity{}
 	case err != nil:
 		worker.Close()
 		return nil, fmt.Errorf("%w: process %d: %w", ErrIdentity, pid, err)
@@ -70,7 +72,7 @@ func (p *Pipe) Create(ctx context.Context, spec Spec) (*Session, error) {
 		return nil, fmt.Errorf("%w: process %d was not running when looked for", ErrIdentity, pid)
 	}
 	s := &Session{
-		ref:    Reference{Home: p.home, Task: spec.TaskID, PID: pid, Start: start},
+		ref:    Reference{Home: p.home, Task: spec.TaskID, PID: pid, Start: identity.Start},
 		owner:  p,
 		worker: worker,
 	}
@@ -156,14 +158,14 @@ func (p *Pipe) Probe(ctx context.Context, ref string) Observation {
 	if decoded.Start == 0 {
 		return observe(ReasonUnreadable, "the reference records no start time for process %d, so its presence proves nothing", decoded.PID)
 	}
-	start, found, err := startTime(decoded.PID)
+	presence, err := agents.Identity{PID: decoded.PID, Start: decoded.Start}.Presence()
 	switch {
 	case err != nil:
 		return observe(ReasonUnreadable, "reading the start time of process %d: %v", decoded.PID, err)
-	case !found:
+	case presence == agents.PresenceAbsent:
 		return observe(ReasonAbsent, "no running process has identifier %d", decoded.PID)
-	case start != decoded.Start:
-		return observe(ReasonReplaced, "process %d started at %d, and the reference names one started at %d", decoded.PID, start, decoded.Start)
+	case presence == agents.PresenceReplaced:
+		return observe(ReasonReplaced, "process %d is running with another start time, and the reference names one started at %d", decoded.PID, decoded.Start)
 	default:
 		return observe(ReasonUnheld, "process %d is present and this provider holds no session for it", decoded.PID)
 	}

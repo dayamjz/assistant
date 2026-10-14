@@ -220,6 +220,40 @@
 // is state this package does not own. Sweep is the seam it plugs into, and
 // until a caller supplies one the gap is open.
 //
+// # A process is named by its identity, and ended only after it is verified
+//
+// Identity is the one PID-reuse check in this module: a process identifier
+// and the platform's reading of that process's start time, read by Identify
+// and compared by Identity.Presence. internal/session embeds one in a
+// terminal session's reference and internal/store's run process record
+// carries one, and neither reads a start time of its own. Linux reads the
+// process's stat entry, macOS the kernel's process table, Windows the
+// process's creation time; another platform has no read, Identify answers
+// ErrIdentityUnreadable there, and nothing that needs an identity can be
+// verified. A process that has exited and not been reaped counts as not
+// running wherever the platform lets that be seen. The check narrows reuse to
+// a process given the same identifier and started within the reading's
+// resolution, and does not close it.
+//
+// EndGroup is the one way to end, from outside the invocation that started
+// it, a group this package started: internal/service's recovery ends a group
+// an earlier service recorded and did not live to terminate. It signals
+// nothing until Presence has verified the leader, and then only by group
+// identifier, with the escalation an invocation applies to its own tree;
+// nothing here matches a process on its command line, working directory or
+// user. A reused identifier, a gone leader, and a read that failed are
+// answered without a signal, each as its own GroupEnd or error. On unix it
+// asks between steps whether anything of the group is still running rather
+// than whether signal zero still reaches it, and on Linux and macOS it lists
+// the group's members to count one that exited and waits on a parent that is
+// not this process, which is what an orphan is wherever nothing reaps
+// orphans; another unix has no listing and reports such a group survived.
+// On Windows there is no group to signal, so what is ended is the tree under
+// the verified leader, and a leader that is gone is answered GroupLeaderGone
+// with nothing of its tree looked for. EndGroup's own comment states the
+// residual gaps: reuse between the read and the signal, a descendant that
+// left the group, and what Windows does not reach.
+//
 // # What is recorded
 //
 // A Record carries purpose, agent, model, session use, timing, failure

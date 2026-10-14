@@ -27,6 +27,12 @@ type stage struct {
 type registry struct {
 	mu     sync.Mutex
 	groups map[int]stage
+	// durable is the run process record containRunner's registrations are
+	// written to beside their entry here and cleared from with it, so a
+	// service that dies with them leaves the next one a record to reap by;
+	// reap.go owns it. Nil records nothing, which is a registry built
+	// without a store.
+	durable *processJournal
 }
 
 // newRegistry returns an empty registry, which is a service that has started
@@ -179,9 +185,22 @@ func (c containedFixer) Reference() string { return c.inner.Reference() }
 
 // starter is the agents.Invocation.Started value the wrappers set: it
 // registers the invocation's process group under the run and purpose it was
-// launched for, and hands back the forget.
+// launched for, writes the run process record reap.go keeps, and hands back
+// the forget, which clears the record only when this registration wrote it.
+// The adapter calls the forget after its termination of the invocation's
+// tree has finished, so the record stands from just after the process
+// exists until then; reap.go states what that span leaves out.
 func (r *registry) starter(run, purpose string) func(pgid int) func() {
-	return func(pgid int) func() { return r.add(run, purpose, pgid) }
+	return func(pgid int) func() {
+		forget := r.add(run, purpose, pgid)
+		recorded := r.durable.record(run, purpose, pgid)
+		return func() {
+			forget()
+			if recorded {
+				r.durable.clear(run, pgid)
+			}
+		}
+	}
 }
 
 // Contained reports whether the process on the other end of a connection is

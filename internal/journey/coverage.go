@@ -179,7 +179,17 @@ func Coverage() []Established {
 				"internal/forge to address. The killed run, and the contention check beside it, are " +
 				"driven through methods internal/ipc restricts, so on a platform where that package reads " +
 				"no local socket peer credentials both are skipped rather than passing, and the two " +
-				"package-reach observations are the whole of what is established there."},
+				"package-reach observations are the whole of what is established there. The kill path " +
+				"at recovery is held at package reach and not through this harness, because no walk " +
+				"here reaches an agent stage: internal/agents ends a group only after verifying its " +
+				"leader's recorded identity and leaves a reused identifier and an identity with no start " +
+				"time alone, and internal/service's recovery leaves a reused identifier, a record with no " +
+				"identity, and an active run's group running and reports each, while a service killed " +
+				"with SIGKILL leaves a record the next one ends that group by and a sibling a command-line " +
+				"pattern would have matched survives. Those checks run on unix; where no identity read " +
+				"exists they are skipped saying nothing is established, where no local socket transport " +
+				"exists the recovery checks are skipped rather than passing, and Windows establishes the " +
+				"identity read and EndGroup's verified leader and nothing about recovery."},
 		{principles.P7, ReachBinary,
 			"The git template that would choose what a gate is born with is refused by the binary, and " +
 				"the environment channel is shown closed. How the initialization came out is the whole " +

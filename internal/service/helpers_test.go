@@ -39,6 +39,7 @@ func TestMain(m *testing.M) {
 	standin.Main()
 	hookMain()
 	callMain()
+	service.EarlierServiceMain()
 	os.Exit(m.Run())
 }
 
