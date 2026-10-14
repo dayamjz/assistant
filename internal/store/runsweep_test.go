@@ -121,8 +121,10 @@ func TestTheRunCopySweepMigrationKeepsEarlierRuns(t *testing.T) {
 	if added.version == 0 {
 		t.Fatalf("the shipped schema has no migration named %q", runCopySweepMigration)
 	}
-	// Back to the shape the migration before it left. A migration may not do
-	// this, which is why it is done here by hand and not through one.
+	// Back to the shape without it. A migration may not do this, which is
+	// why it is done here by hand and not through one. Only this migration is
+	// forgotten: a later one stays applied, because rolling it back too would
+	// need its own statements undone and this test is not about it.
 	if _, err := s.write.ExecContext(ctx, `DROP TABLE run_copy_sweep`); err != nil {
 		t.Fatalf("rolling the schema back: %v", err)
 	}

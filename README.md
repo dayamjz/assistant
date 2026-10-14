@@ -123,6 +123,13 @@ the gate changes, and the notification hook starts a run for the branch and the
 commit the push named, whatever the working copy is standing on. A push that
 deletes a branch, or that carries anything that is not a branch, is accepted
 and starts nothing, and reports that rather than passing over it.
+The one push that starts no run is a delivery task's own, from its worker, when
+the task was recorded at intake under the `local` delivery posture its
+project's trusted `delivery` key declares: the task holds instead, and
+answering `approve` fast-forwards your local default branch to the worker's
+commit, anchored to the tip read when the change was offered, without
+validating it and without anything leaving the machine. A person's push to the
+gate always starts the full run.
 
 The stage bodies are separate work against the stage contract, and they land
 one at a time; all nine have landed. Review is the one that reads the change

@@ -141,6 +141,13 @@ import (
 // once and the answer is machine.AnswerRetryAtBound. A stop is read by
 // decideReconciliation, which leaves the task alone for that attempt.
 //
+// # A local task's approval
+//
+// The hold a local task's own push raises is answered here too, and is the
+// one hold whose answer moves something outside the store: approve
+// fast-forwards the working copy's default branch and stop declines. Which
+// answers it offers, what approve does, and its refusals are local.go's.
+//
 // # Any other hold a task raised
 //
 // A hold naming a task and no run, an investigation's report's among them,
@@ -448,12 +455,25 @@ func (s *Service) respondTask(ctx context.Context, req ipc.Request, r machine.Ta
 	case strings.TrimSpace(r.Answer) == "":
 		return machine.TaskAnswered{}, fmt.Errorf("%w: an answer to task %s's hold is empty", ipc.ErrInvalidRequest, r.Task)
 	}
-	if _, err := s.store.Task(ctx, r.Task); err != nil {
+	task, err := s.store.Task(ctx, r.Task)
+	if err != nil {
 		return machine.TaskAnswered{}, err
 	}
 	hold, err := s.oldestTaskHold(ctx, r.Task)
 	if err != nil {
 		return machine.TaskAnswered{}, fmt.Errorf("%w: %w", ipc.ErrRefused, err)
+	}
+	if _, _, local := localApprovalOf(hold.Key, r.Task); local {
+		out, err := s.answerLocal(ctx, req, r, task, hold)
+		if err != nil {
+			return machine.TaskAnswered{}, err
+		}
+		o, err := s.tasks().ObserveTask(ctx, r.Task)
+		if err != nil {
+			return machine.TaskAnswered{}, err
+		}
+		out.Task = taskView(o)
+		return out, nil
 	}
 	retryHold := isRetryHold(hold.Key, r.Task)
 	if retryHold && r.Answer != machine.AnswerRetry && r.Answer != machine.AnswerStop {

@@ -28,6 +28,7 @@ func TestAnAnswerExitsWithFailureExactlyWhenARetryBeganNoWork(t *testing.T) {
 		machine.AnswerRetryRefused:        false,
 		machine.AnswerRetryUndispatchable: false,
 		machine.AnswerStopped:             true,
+		machine.AnswerLanded:              true,
 	}
 	for _, effect := range machine.AnswerEffects() {
 		ok, decided := succeeds[effect]

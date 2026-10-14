@@ -47,6 +47,10 @@ type TaskSnapshot struct {
 	// written. It is carried for the same tier, which derives Complete from
 	// it.
 	Cleanup Optional[TaskCleanup]
+	// LocalLanding is the task's local landing record, and unknown while no
+	// approved fast-forward has delivered it. It is carried for the same
+	// tier, which derives a local task's Landed from it.
+	LocalLanding Optional[LocalLanding]
 }
 
 // TaskSnapshot reads one task and the records its state is resolved from, as
@@ -197,6 +201,13 @@ func snapshotOf(ctx context.Context, q querier, task Task) (TaskSnapshot, error)
 		snap.Cleanup = Known(cleanup)
 	case !errors.Is(err, ErrNotFound):
 		return TaskSnapshot{}, err
+	}
+
+	switch landing, err := localLandingOf(ctx, q, task.ID); {
+	case err == nil:
+		snap.LocalLanding = Known(landing)
+	case !isNoRows(err):
+		return TaskSnapshot{}, fmt.Errorf("reading the local landing record of task %s: %w", task.ID, err)
 	}
 
 	query = holdColumns + ` FROM hold WHERE task_id = ?`

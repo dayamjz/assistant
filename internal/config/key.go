@@ -142,6 +142,15 @@ const (
 	// decision, not an open question: the name says exactly what it permits,
 	// and what the PRD still owes is a schema row, not a rename.
 	KeyAllowPushedCommands Key = "allow_pushed_commands"
+	// KeyDelivery is "delivery": PRD section 10's delivery posture, the path
+	// a repository's delivery tasks ship on, section 6's delivery modes. It
+	// is trusted-only, so a branch cannot choose a lighter path for itself
+	// (P7), and its default is DeliveryGated. Its values are Delivery's closed
+	// set; "direct" is section 12's deferred mode and is refused at parse
+	// time rather than accepted and ignored. It decides only what a task's
+	// own push does, and only through the posture recorded on the task at
+	// intake: it never changes what a person's push to the gate does.
+	KeyDelivery Key = "delivery"
 )
 
 // cloneSlice copies a slice-valued configuration value. A default and a parsed
@@ -238,6 +247,8 @@ var specs = []spec{
 		func(c *Config, v any) { c.CommitFixMessage = v.(string) }},
 	{KeyAllowPushedCommands, TrustTrusted, false, decodeBool,
 		func(c *Config, v any) { c.AllowPushedCommands = v.(bool) }},
+	{KeyDelivery, TrustTrusted, DefaultDelivery, decodeDelivery,
+		func(c *Config, v any) { c.Delivery = v.(Delivery) }},
 }
 
 // specByKey indexes the schema, and sections holds every dotted prefix a key

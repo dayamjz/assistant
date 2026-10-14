@@ -27,7 +27,11 @@ var runStates = map[store.RunStatus]State{
 //
 //  1. A terminal record: SourceRecord. A task is Landed when the merge
 //     record of a run in Runs reads merged; where more than one does, the
-//     newest such run is the one named in Basis.LandedRun. A delivery task
+//     newest such run is the one named in Basis.LandedRun. A task is Landed
+//     too when its own local landing record exists, which the approved
+//     fast-forward of a task delivered under the local posture writes, PRD
+//     section 6; Basis.LandedLocally names the commit it records, and where a
+//     task has both records the merge record decides the detail. A delivery task
 //     is Complete when it is Landed and its cleanup record carries a
 //     removal, and Complete outranks Landed. Nothing else reaches this tier:
 //     a cleanup record on a task that has not landed is a disk reclamation
@@ -92,6 +96,11 @@ func Resolve(in Inputs) Resolution {
 	if isLanded {
 		out.Basis.LandedRun = landed.ID
 	}
+	local, isLocal := in.LocalLanding.Get()
+	isLocal = isLocal && local.Task == in.Task.ID
+	if isLocal {
+		out.Basis.LandedLocally = local.Commit
+	}
 	if cleanup, known := in.Cleanup.Get(); known {
 		out.Basis.CleanupRecorded, out.Basis.CleanupRemoved = true, cleanup.RemovedAt.IsKnown()
 	}
@@ -106,6 +115,8 @@ func Resolve(in Inputs) Resolution {
 	switch {
 	case isLanded:
 		out.State, out.Source, out.Detail = fromRecords(in.Task, landed, in.MergeRecords, in.Cleanup)
+	case isLocal:
+		out.State, out.Source, out.Detail = fromLocalRecord(in.Task, local, in.Cleanup)
 	case isHeld:
 		out.State, out.Source, out.Detail = Held, SourceHold, store.Known(hold.Subject)
 	case ok:
@@ -178,6 +189,23 @@ func fromRecords(task store.Task, landed store.Run, records []store.MergeRecord,
 		}
 	}
 	return Landed, SourceRecord, store.Known(fmt.Sprintf("pull request %d of run %s was read as merged", rec.PullRequest, landed.ID))
+}
+
+// fromLocalRecord is the terminal tier for a task its local landing record
+// landed, on fromRecords' terms: Complete when the task's cleanup record
+// carries a removal, otherwise Landed. The detail names the record and says
+// the change was made on the person's machine, never that anything merged.
+func fromLocalRecord(task store.Task, local store.LocalLanding,
+	cleanup store.Optional[store.TaskCleanup]) (State, Source, store.Optional[string]) {
+	said := fmt.Sprintf("%s was fast-forwarded from %s to %s on this machine when the change was approved",
+		local.Branch, local.Before, local.After)
+	if c, ok := cleanup.Get(); ok && task.Shape == store.TaskDelivery {
+		if removedAt, removed := c.RemovedAt.Get(); removed {
+			return Complete, SourceRecord, store.Known(said + " and the isolated copy was removed at " +
+				removedAt.UTC().Format(time.RFC3339))
+		}
+	}
+	return Landed, SourceRecord, store.Known(said)
 }
 
 func fromRun(run store.Run, holds []store.Hold) (State, Source, store.Optional[string]) {

@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/forge/forgetest"
 	"github.com/dayamjz/assistant/internal/gate"
 	"github.com/dayamjz/assistant/internal/home"
@@ -102,6 +103,9 @@ func newPromotionSubject(t *testing.T) *promotionSubject {
 			return ps.inGate[r.ID+"\x00"+b], nil
 		},
 		GatePath: func(context.Context, store.Repository) (string, error) { return gatePath, nil },
+		Posture: func(context.Context, store.Repository, string) (config.Delivery, error) {
+			return config.DeliveryGated, nil
+		},
 	})
 	if err != nil {
 		t.Fatalf("New: %v", err)

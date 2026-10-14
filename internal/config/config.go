@@ -1,6 +1,7 @@
 package config
 
 import (
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -83,6 +84,11 @@ type Config struct {
 	// AllowPushedCommands is the opt-out that lets a pushed branch set the
 	// command and agent keys. It is itself never taken from a pushed branch.
 	AllowPushedCommands bool
+	// Delivery is the delivery posture of the repository's delivery tasks,
+	// PRD section 6. A Config from Resolve holds a member of Delivery's
+	// closed set. internal/tasks records it on a task at intake, and that
+	// record, not a later read of this field, decides the task's path.
+	Delivery Delivery
 }
 
 // Commands are the repository's own checks. Each is a shell command line, and
@@ -198,6 +204,8 @@ const (
 	// PRD section 10 records the default as "a template" without giving its
 	// text; this is that text, and it is a conventional-commit subject.
 	DefaultCommitFixMessage = "fix: " + FixMessagePlaceholder
+	// DefaultDelivery is PRD section 10's default delivery posture: the gate.
+	DefaultDelivery = DeliveryGated
 )
 
 // DecisionModel is the mode of the decision-model checks. The three values
@@ -223,6 +231,58 @@ const (
 // DecisionOff and the zero value included.
 func (m DecisionModel) RunsChecks() bool {
 	return m == DecisionEvaluate || m == DecisionEnforce
+}
+
+// Delivery is a delivery posture, PRD section 6's delivery modes as section
+// 10's delivery key names them. The set is closed: decoding refuses any
+// other text, and "direct", which section 12 defers, is refused by name.
+//
+// The set is ordered by how much of the gate a posture keeps, and the order
+// is what Lighter answers: DeliveryGated keeps all of it and DeliveryLocal
+// starts no run. That order is the whole of what "tighten, never loosen"
+// compares at intake.
+type Delivery string
+
+const (
+	// DeliveryGated is the gate: a delivery task's push starts the full
+	// run, as every push does.
+	DeliveryGated Delivery = "gated"
+	// DeliveryLocal is the local posture: a delivery task's own push to the
+	// gate starts no run, and the task holds until a person approves a
+	// guarded fast-forward of their local default branch. Nothing leaves the
+	// machine.
+	DeliveryLocal Delivery = "local"
+)
+
+// deliveries is the closed set, strictest first: a posture's index is how
+// much lighter it is than DeliveryGated.
+var deliveries = []Delivery{DeliveryGated, DeliveryLocal}
+
+// Deliveries returns the closed set, strictest first. The result is a copy.
+func Deliveries() []Delivery { return slices.Clone(deliveries) }
+
+// Recognized reports whether d is a member of the closed set.
+func (d Delivery) Recognized() bool { return slices.Contains(deliveries, d) }
+
+// Lighter reports whether d keeps less of the gate than than does. Both must
+// be recognized; a posture outside the set is lighter than nothing and
+// nothing is lighter than it, so a caller that compares one has already
+// skipped the check that would have refused it.
+func (d Delivery) Lighter(than Delivery) bool {
+	a, b := slices.Index(deliveries, d), slices.Index(deliveries, than)
+	return a >= 0 && b >= 0 && a > b
+}
+
+// ParseDelivery reads a posture from text, on the terms the delivery key is
+// decoded on, so a posture stated anywhere but a configuration document - a
+// coordinator's request at intake - is refused for the same reasons. A
+// refusal is a *KeyError naming KeyDelivery.
+func ParseDelivery(text string) (Delivery, error) {
+	v, err := decodeDelivery(KeyDelivery, text)
+	if err != nil {
+		return "", err
+	}
+	return v.(Delivery), nil
 }
 
 // FixMessagePlaceholder is the one substitution a fix commit subject template

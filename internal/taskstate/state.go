@@ -124,6 +124,10 @@ type Inputs struct {
 	// Cleanup is the task's cleanup record, and unknown while none has been
 	// written.
 	Cleanup store.Optional[store.TaskCleanup]
+	// LocalLanding is the task's local landing record, and unknown while no
+	// approved fast-forward has delivered it. A record naming another task
+	// is not this task's and is not read.
+	LocalLanding store.Optional[store.LocalLanding]
 	// Process is what the terminal looked like, as of when it was asked.
 	Process Liveness
 	// Advancing is whether the service is executing the newest of Runs now:
@@ -190,6 +194,11 @@ type Basis struct {
 	// Landed, the newest attributed run with a record reading merged, and
 	// is empty when no attributed run has one.
 	LandedRun string `json:"landed_run"`
+	// LandedLocally is the commit the task's local landing record says the
+	// approved fast-forward moved the local default branch to, and empty
+	// when the task has no such record. It is recorded whether or not it
+	// decided, as LandedRun is; when both are set the merge record decided.
+	LandedLocally string `json:"landed_locally"`
 	// CleanupRecorded is whether the task has a cleanup record, and
 	// CleanupRemoved whether that record carries a removal. Both are false
 	// for a task cleanup has not reached.

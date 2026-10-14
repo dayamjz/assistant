@@ -478,6 +478,13 @@ const (
 	// AnswerStopped is a stop: the task is left where it stopped and
 	// nothing relaunches it.
 	AnswerStopped AnswerEffect = "stopped"
+	// AnswerLanded is an approve on a local task's approval hold whose
+	// fast-forward of the local default branch was made and recorded: the
+	// local landing record exists and the task resolves Landed from it.
+	// Nothing was validated and nothing left the machine. An approve whose
+	// fast-forward is refused is not an effect: the answer is refused, the
+	// hold stays open, and nothing is recorded.
+	AnswerLanded AnswerEffect = "landed-locally"
 )
 
 // AnswerEffects is the closed set of AnswerEffect, in declaration order. The
@@ -485,7 +492,7 @@ const (
 func AnswerEffects() []AnswerEffect {
 	return []AnswerEffect{
 		AnswerRecorded, AnswerRelaunched, AnswerRedispatched,
-		AnswerRetryDeferred, AnswerRetryHeld, AnswerRetryAtBound, AnswerRetryRefused, AnswerRetryUndispatchable, AnswerStopped,
+		AnswerRetryDeferred, AnswerRetryHeld, AnswerRetryAtBound, AnswerRetryRefused, AnswerRetryUndispatchable, AnswerStopped, AnswerLanded,
 	}
 }
 
