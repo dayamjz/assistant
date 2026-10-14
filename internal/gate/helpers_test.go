@@ -110,7 +110,7 @@ func gitEnvironment(t *testing.T) string {
 	t.Helper()
 	home := t.TempDir()
 	cfg := filepath.Join(home, "gitconfig")
-	writeFile(t, cfg, "[user]\n\tname = Test\n\temail = test@example.invalid\n[init]\n\tdefaultBranch = main\n[receive]\n\tdenyCurrentBranch = ignore\n")
+	writeFile(t, cfg, "[user]\n\tname = Test\n\temail = test@example.invalid\n[init]\n\tdefaultBranch = main\n[gc]\n\tauto = 0\n[maintenance]\n\tauto = false\n[receive]\n\tdenyCurrentBranch = ignore\n")
 	t.Setenv("GIT_CONFIG_GLOBAL", cfg)
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 	return cfg
