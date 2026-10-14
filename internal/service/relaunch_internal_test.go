@@ -386,10 +386,13 @@ func TestARelaunchWaitsOnALiveTaskHoldingTheBranch(t *testing.T) {
 // new attempt is the attribution cutoff, so the task reads Dispatched from
 // its new attempt rather than Failed from the old run, and a second pass of
 // reconciliation does not relaunch it again. Past relaunch_attempts the task
-// is not relaunched: no attempt is begun, and the pass writes no wake of
-// its own, because the terminal-gone row that tells the person is the
-// supervisor loop's and this hand-built service runs no loop.
-func TestAFailedRunIsRelaunchedUpToTheBoundAndThenSurfaced(t *testing.T) {
+// is not relaunched and holds for a person instead: no attempt is begun, a
+// hold naming the task and the attempt that reached the bound is
+// registered, and a second pass registers no second hold for it. The pass
+// writes no wake of its own, because the rows that tell the person, the
+// terminal-gone and the hold-opened, are the supervisor loop's and this
+// hand-built service runs no loop.
+func TestAFailedRunIsRelaunchedUpToTheBoundAndThenHeld(t *testing.T) {
 	requireSweepClearsHere(t, "a failed run relaunched up to its bound")
 	sub := newRelaunchSubject(t)
 	ctx := t.Context()
@@ -451,6 +454,20 @@ func TestAFailedRunIsRelaunchedUpToTheBoundAndThenSurfaced(t *testing.T) {
 	}
 	if wakes, err := sub.records.TaskWakes(ctx, sub.task); err != nil || len(wakes) != 0 {
 		t.Fatalf("reconciliation wrote a wake of its own: %+v (%v); the loop owns the queue", wakes, err)
+	}
+	sub.restart.reconcileTasks(ctx)
+	open, err := sub.records.OpenHolds(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var held []store.Hold
+	for _, h := range open {
+		if h.TaskID.Or("") == sub.task {
+			held = append(held, h)
+		}
+	}
+	if len(held) != 1 || held[0].Key != relaunchBoundKey(sub.task, 2) || held[0].RunID.IsKnown() {
+		t.Fatalf("past the bound, across two passes, the task's open holds are %+v, want one naming it and attempt 2 and no run", held)
 	}
 	// Below the slot, which the earlier relaunch holds: the table itself
 	// refuses a relaunch past the bound.

@@ -8,9 +8,11 @@ import "github.com/dayamjz/assistant/internal/store"
 //
 // PRD section 8 requires the value meaning a person decided to be unreachable
 // from any path an agent reaches, on any surface. This surface is one an agent
-// reaches: MethodRunRespond is restricted, so a caller the kernel places inside
-// an active validation stage is refused, but a coordinator acting under the
-// authority PRD section 9 gives it is not, and that is intended. So what has to
+// reaches: MethodRunRespond and MethodTaskRespond are restricted, so a caller
+// the kernel places inside an active validation stage is refused, and the
+// service refuses a task's worker MethodTaskRespond, but a coordinator acting
+// under the authority PRD section 9 gives it is not refused, and that is
+// intended. So what has to
 // hold here is not who may call, but what a call may say about itself.
 //
 // Two things put the person value out of reach, and neither is a check a caller

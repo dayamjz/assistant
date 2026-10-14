@@ -165,6 +165,9 @@ func (s *Service) dispatchInBackground() {
 // typed refusal the records decided is ipc.ErrRefused. An error that is
 // none of these is a failure of a read or a write and is returned as it is,
 // which the wire reports as internal.
+//
+// It names the promotion and store refusals itself because tasks.IsRefusal is
+// intake-shaped and answers for none of them.
 func refusalOf(err error) error {
 	var held *relaunchHeld
 	var unswept *copyUnswept

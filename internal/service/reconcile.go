@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/supervisor"
 	"github.com/dayamjz/assistant/internal/taskstate"
@@ -45,43 +46,48 @@ import (
 // Live and Unobserved are nothing in every row: a live terminal is a worker
 // to leave alone, and an unobserved one is PRD section 11's ambiguous
 // liveness, which relaunching on would risk two supervisors for one task.
-// The action set is closed at relaunch, surface and nothing, and the test
+// The action set is closed at relaunch, surface, hold and nothing, and the test
 // derives the table's domain from taskstate.States, Sources and Livenesses,
 // so a state or a source added later fails until a row decides it.
 //
-// Surface never comes from the table. decideReconciliation turns a relaunch
-// row into a surface in two cases: a Failed whose deciding event is the
+// Surface and hold never come from the table. decideReconciliation turns a
+// relaunch row into a surface for a Failed whose deciding event is the
 // isolation assertion's own refusal, because the copy was already rejected
-// and a relaunch would assert it again to the same end, and a task the
-// program has already relaunched relaunch_attempts times, counted from its
-// attempt rows, because a worker that fails the same way every start is a
-// retry nobody bounded. The bound is read on both relaunch rows and not on
-// the Failed row alone: a worker that crashes with no run is the same
-// unbounded retry otherwise. The first case is the rule stated and no more:
-// a refusal is recorded on an attempt that has no session, the reader
-// probes the latest attempt only, and a dead terminal with no run outranks
-// the log, so no record this build writes reaches the table as Failed from
-// the event tier with a dead terminal. A refused copy's task reads Failed
+// and a relaunch would assert it again to the same end; and into a hold for
+// a task the program has already relaunched relaunch_attempts times, counted
+// from its attempt rows, because a worker that fails the same way every
+// start is a retry nobody bounded, and PRD section 10's row has the task
+// hold for a person there. The answer to that hold, read from its record by
+// taskholds.go, is the third input: a retry relaunches once more past the
+// bound and a stop leaves the task alone, and taskholds.go says why the
+// anchor makes a retry good for one attempt. The bound is read on both
+// relaunch rows and not on the Failed row alone: a worker that crashes with
+// no run is the same unbounded retry otherwise. The surface case is the rule
+// stated and no more: a refusal is recorded on an attempt that has no
+// session, the reader probes the latest attempt only, and a dead terminal
+// with no run outranks the log, so no record this build writes reaches the
+// table as Failed from the event tier with a dead terminal. A refused copy's task reads Failed
 // from the refusal with nothing to probe, the table leaves it, and the
 // refusal reaches a person through the log and the task surface, as a
 // dispatch's does.
 //
 // # A surface is the loop's wake, not a second one
 //
-// This file writes no wake and no marker. The wake queue and the detector
-// markers are supervise.go's: every row and every marker is written by the
-// supervisor loop under its incarnation fence, which this pass runs before
-// and cannot hold, and the loop surfaces a terminal that is dead or that
-// could not be observed as a terminal-gone wake, per reference and case, on
-// its first pass after this one and again once per escalation_window while
+// This file writes no wake and no marker; the bound's hold is a hold record,
+// registered through taskholds.go, and not a row. The wake queue and the
+// detector markers are supervise.go's: every row and every marker is written
+// by the supervisor loop under its incarnation fence, which this pass runs
+// before and cannot hold, and the loop surfaces a terminal that is dead or
+// that could not be observed as a terminal-gone wake, per reference and case,
+// on its first pass after this one and again once per escalation_window while
 // it stays silent. So a task this pass decides to
 // surface rather than relaunch is told to the person by that row, and what
 // this pass adds is the reason it was not relaunched, in the service log; a
-// second row for the same dead terminal would be a second owner of one
-// fact. The one row this pass's relaunch does write to is the
-// acknowledgement: a terminal-gone wake about the session a relaunch
-// replaced is handled, and relaunch.go acknowledges it as the program
-// through the loop's own composition of the marker, terminalGoneAbout.
+// second row for the same dead terminal would be a second owner of one fact.
+// The one row this pass's relaunch does write to is the acknowledgement: a
+// terminal-gone wake about the session a relaunch replaced is handled, and
+// relaunch.go acknowledges it as the program through the loop's own
+// composition of the marker, terminalGoneAbout.
 //
 // For the same reason an unobserved terminal has no tolerance here: PRD
 // section 11's ambiguous liveness is left alone by this pass, the loop
@@ -156,10 +162,12 @@ import (
 //     refusal with no terminal to probe, exactly as a dispatch's refusal
 //     does today, and reaches a person through the log and the task
 //     surface rather than the wake queue.
-//   - A task this pass surfaces rather than relaunches is told to the
-//     person by the loop's terminal-gone row and nothing else: that row
-//     says the terminal is gone and not that the program declined to
-//     relaunch it, which is in the service log only.
+//   - A task this pass surfaces rather than relaunches, which is a task
+//     whose copy the isolation assertion refused, is told to the person by
+//     the loop's terminal-gone row and nothing else: that row says the
+//     terminal is gone and not that the program declined to relaunch it,
+//     which is in the service log only. A task past the bound is told by
+//     the loop's hold-opened row for the hold this pass registered as well.
 
 // reconcileProbeTimeout bounds one probe of one terminal. Chosen, not
 // measured: a provider answers from a process table in far less, and a task
@@ -188,6 +196,9 @@ const (
 	// reconcileSurface is a task the program will not relaunch on its own
 	// and a person has not been told about: one terminal-gone wake.
 	reconcileSurface reconcileAction = "surface"
+	// reconcileHold is a task past relaunch_attempts that nobody has
+	// answered: the hold taskholds.go registers, which a person answers.
+	reconcileHold reconcileAction = "hold"
 	// reconcileNothing is leave it alone.
 	reconcileNothing reconcileAction = "nothing"
 )
@@ -224,12 +235,15 @@ const (
 	surfacedRelaunchBound    = "relaunch-bound"
 )
 
-// decideReconciliation applies the table to a resolution and then the two
-// rules that turn a relaunch into a surface: a Failed decided by the
+// decideReconciliation applies the table to a resolution and then the rules
+// that turn a relaunch into something else: a Failed decided by the
 // isolation assertion's own refusal, read off Basis.EventKind and never off
-// the log, and a task already relaunched bound times, counted from attempts.
-// The count is relaunches, so a task's first attempt is not one.
-func decideReconciliation(r taskstate.Resolution, attempts []store.TaskAttempt, bound int) reconcileDecision {
+// the log, surfaces; and a task already relaunched bound times, counted from
+// attempts, holds for a person unless the bound's hold for its latest
+// attempt is answered. answered is that hold's answer, which taskholds.go
+// reads: a retry relaunches once more past the bound, and a stop leaves the
+// task alone. The count is relaunches, so a task's first attempt is not one.
+func decideReconciliation(r taskstate.Resolution, attempts []store.TaskAttempt, bound int, answered boundAnswer) reconcileDecision {
 	action := reconcileRow(r.State, r.Source, r.Basis.Process)
 	if action != reconcileRelaunch {
 		return reconcileDecision{action: action}
@@ -239,8 +253,16 @@ func decideReconciliation(r taskstate.Resolution, attempts []store.TaskAttempt, 
 			reason: "its copy was refused by the isolation assertion, which a relaunch would assert again"}
 	}
 	if relaunches := max(len(attempts)-1, 0); relaunches >= bound {
-		return reconcileDecision{action: reconcileSurface, surfaced: surfacedRelaunchBound,
-			reason: fmt.Sprintf("it has been relaunched %d times and relaunch_attempts is %d", relaunches, bound)}
+		past := fmt.Sprintf("it has been relaunched %d times and relaunch_attempts is %d", relaunches, bound)
+		switch answered {
+		case boundRetry:
+			return reconcileDecision{action: reconcileRelaunch,
+				reason: past + ", and its hold at the bound was answered " + machine.AnswerRetry}
+		case boundStop:
+			return reconcileDecision{action: reconcileNothing,
+				reason: past + ", and its hold at the bound was answered not to retry it"}
+		}
+		return reconcileDecision{action: reconcileHold, surfaced: surfacedRelaunchBound, reason: past}
 	}
 	return reconcileDecision{action: reconcileRelaunch,
 		reason: fmt.Sprintf("its terminal is gone and it resolves %s from its %s", r.State, r.Source)}
@@ -302,13 +324,28 @@ func (s *Service) reconcileTasks(ctx context.Context) {
 			s.log.Printf("reconciliation: the attempts of task %s could not be read: %v", r.Record.ID, err)
 			continue
 		}
-		decision := decideReconciliation(r.State, attempts, s.cfg.RelaunchAttempts)
+		answered, err := s.boundAnswerOf(ctx, r.Record.ID, attempts)
+		if err != nil {
+			s.log.Printf("reconciliation: the relaunch hold of task %s could not be read: %v", r.Record.ID, err)
+			continue
+		}
+		decision := decideReconciliation(r.State, attempts, s.cfg.RelaunchAttempts, answered)
 		switch decision.action {
 		case reconcileRelaunch:
 			s.relaunchAtStart(ctx, r.Record.ID)
 		case reconcileSurface:
 			s.log.Printf("task %s is not relaunched (%s); the supervisor's terminal-gone wake is what tells the coordinator",
 				r.Record.ID, decision.reason)
+		case reconcileHold:
+			if h, err := s.holdAtBound(ctx, r.Record.ID, attempts, decision); err != nil {
+				s.log.Printf("task %s is not relaunched (%s), and its hold could not be registered: %v", r.Record.ID, decision.reason, err)
+			} else {
+				s.log.Printf("task %s is not relaunched (%s); it holds for a person on %s", r.Record.ID, decision.reason, h.Key)
+			}
+		case reconcileNothing:
+			if decision.reason != "" {
+				s.log.Printf("task %s is not relaunched: %s", r.Record.ID, decision.reason)
+			}
 		}
 	}
 }

@@ -170,6 +170,13 @@ func fixtures(t *testing.T) map[string]any {
 				Run: sampleID, Superseded: sampleID}},
 			Ignored: []machine.Ignored{{Ref: "refs/tags/v1", Reason: "not a branch, and the gate validates branches"}},
 		},
+		"task answer": machine.TaskAnswered{
+			Hold: store.Hold{Key: "task/" + sampleID + "/relaunch-bound/2", TaskID: store.Known(sampleID),
+				Subject: "whether to begin this work again", Resolution: store.Known(machine.AnswerRetry)},
+			Effect:   machine.AnswerRelaunched,
+			Relaunch: &machine.RelaunchBegun{Attempt: 3, Superseded: sampleID},
+			Task:     task,
+		},
 		"fallback": machine.Appended{Event: store.TaskEvent{TaskID: sampleID, Sequence: 3, Kind: "waiting-external",
 			Detail: "an upstream release of the parser"}},
 	}

@@ -162,10 +162,10 @@
 // PRD section 8 requires every hold resolution to record who resolved it, from
 // a closed set internal/store owns, and requires the value meaning a person
 // decided to be unreachable from any path an agent reaches. This protocol is
-// such a path. MethodRunRespond is restricted, so the code under validation
-// cannot reach it, but a coordinator under the authority PRD section 9 gives it
-// can, and that is intended: the rule is about what a call may say, not about
-// who may call.
+// such a path. MethodRunRespond and MethodTaskRespond are restricted, so the
+// code under validation cannot reach either, but a coordinator under the
+// authority PRD section 9 gives it can, and that is intended: the rule is
+// about what a call may say, not about who may call.
 //
 // Request.HoldResolver is the whole of this package's part in that. No frame
 // defined here has a field for a resolver, exactly as none has a field for a
@@ -241,11 +241,14 @@
 // It does not record a hold resolution, and so does not enforce what one says
 // about who made it. Request.HoldResolver is an answer a handler may take, not
 // a value any write is checked against: store.ResolvedByPerson is exported, so
-// a handler serving MethodRunRespond could name it in source and the record
+// a handler serving MethodTaskRespond could name it in source and the record
 // would then say a person decided for a call that arrived over the machine
 // interface. Nothing here obliges a handler to derive the resolver from the
-// request instead, and today the protocol-side property holds because no
-// production code in this repository resolves a hold at all. This is placement
+// request instead. The one production resolution that arrives over this
+// protocol today is internal/service's answer to MethodTaskRespond, which
+// records what Request.HoldResolver derives; a run's answer through
+// MethodRunRespond closes the decision in internal/graph's checkpoint and
+// writes no hold record. That the service takes the derived value is placement
 // rather than a mechanism, and it is the same limit internal/store names for
 // the person value itself. What is mechanical is unaffected: no frame defined
 // here carries a resolver, and the derivation reads nothing out of the request.

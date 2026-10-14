@@ -29,8 +29,10 @@ import (
 // answers which task the peer is the worker of, and the handlers whose
 // answer depends on it apply it here: task.event admits only a worker and
 // attributes the entry to its task; wakes.list, wakes.acknowledge,
-// supervision.assert and coordinator.go's task.create, task.promote and
-// task.relaunch are the coordinator's and refuse a worker; and
+// supervision.assert, coordinator.go's task.create, task.promote and
+// task.relaunch, and taskholds.go's task.respond are the coordinator's and
+// refuse a worker, the last so that no worker answers a hold, its own task's
+// included; and
 // gate.admit holds a worker's push to admit_workers.go's rule. The set is
 // internal/session's, produced by session.Pipe.Create for the worker
 // process's lifetime, and this service reaches it through the driver that

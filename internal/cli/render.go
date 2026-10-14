@@ -150,6 +150,9 @@ var renderings = []rendering{
 	{"health", true, typeOf[machine.Health](), func(w io.Writer, v any) { writeln(w, machine.HealthPhrase(v.(machine.Health))) }},
 	{"admission", true, typeOf[machine.Admission](), func(w io.Writer, v any) { readOutAdmission(w, v.(machine.Admission)) }},
 	{"notification", true, typeOf[machine.Notification](), func(w io.Writer, v any) { readOutNotification(w, v.(machine.Notification)) }},
+	{"task answer", true, typeOf[machine.TaskAnswered](), func(w io.Writer, v any) {
+		writeln(w, machine.TaskAnsweredPhrase(v.(machine.TaskAnswered)))
+	}},
 }
 
 // fallback is the row for an answer no row claims. It is not in the table,

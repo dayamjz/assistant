@@ -16,9 +16,12 @@ import (
 // with the same instructions plus a note".
 //
 // relaunchTask is the one function that relaunches, so the coordinator's
-// task.relaunch method (#95 line J, coordinator.go) and the start-time pass
-// in reconcile.go go through the same claim and cannot both relaunch one
-// task. It is
+// task.relaunch method (#95 line J, coordinator.go), the start-time pass in
+// reconcile.go and a retry answered at the relaunch bound (taskholds.go) go
+// through the same claim and cannot both relaunch one task. A retry is not a
+// second path: the answer is a record decideReconciliation reads, so the
+// bound gives way here only when the hold for the latest attempt this call
+// read says retry. It is
 // anchored rather than idempotent by convention: the attempt it begins is
 // store.BeginTaskAttempt anchored to the highest attempt this call read, so
 // two relaunchers that read the same latest attempt begin one between them
@@ -33,7 +36,8 @@ import (
 // what it acts on. It resolves the task and applies reconcile.go's table,
 // refusing with errRelaunchNotDue a task the table does not relaunch, which
 // is what makes a coordinator's request on a live task a refusal rather
-// than a second supervisor. It re-runs internal/tasks' floor over the same
+// than a second supervisor, and a task past relaunch_attempts whose hold is
+// not answered retry a refusal too. It re-runs internal/tasks' floor over the same
 // read, through tasks.HoldsBranch, the function Release runs it through,
 // and refuses with *relaunchHeld when a live task now holds the branch:
 // Failed is not terminal in the lifecycle, so a successor dispatched past
@@ -215,7 +219,11 @@ func (s *Service) relaunchClaimed(ctx context.Context, id string) (relaunched, e
 	if err != nil {
 		return relaunched{}, err
 	}
-	decision := decideReconciliation(r.State, attempts, s.cfg.RelaunchAttempts)
+	answered, err := s.boundAnswerOf(ctx, id, attempts)
+	if err != nil {
+		return relaunched{}, err
+	}
+	decision := decideReconciliation(r.State, attempts, s.cfg.RelaunchAttempts, answered)
 	if decision.action != reconcileRelaunch {
 		return relaunched{}, fmt.Errorf("%w: task %s resolves %s from %s with its terminal %s, which calls for %s",
 			errRelaunchNotDue, id, r.State.State, r.State.Source, r.State.Basis.Process, decision.action)

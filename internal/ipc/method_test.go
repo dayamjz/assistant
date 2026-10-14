@@ -26,6 +26,7 @@ func TestMethodTableIsWrittenDownHere(t *testing.T) {
 		"tasks.list":         false,
 		"task.get":           false,
 		"task.event":         true,
+		"task.respond":       true,
 		"task.create":        true,
 		"task.promote":       true,
 		"task.relaunch":      true,

@@ -55,6 +55,16 @@ const (
 	// method that moves a record, and the kinds it accepts are the ones
 	// internal/taskstate's table gives a worker as their writer.
 	MethodTaskEvent Method = "task.event"
+	// MethodTaskRespond answers a hold a task raised with no run behind it:
+	// a task past relaunch_attempts, or a decision an investigation's report
+	// registered. PRD section 9 has that hold answered the way a run's is,
+	// given the task, and it is MethodRunRespond's sibling rather than that
+	// method with a second shape, because a run's answer resumes the run and
+	// blocks on it while a task's closes a hold record. Who resolved is
+	// derived from this surface by Request.HoldResolver and never read from
+	// the request. Refused for a task's worker on MethodWakesList's terms, so
+	// no worker answers a hold, its own task's included.
+	MethodTaskRespond Method = "task.respond"
 	// MethodTaskCreate records a new task through internal/tasks' intake,
 	// PRD section 9's coordinator-only service method for creating one. It
 	// is the coordinator's: the handler refuses a caller the worker group
@@ -167,6 +177,7 @@ var specs = []Spec{
 	{MethodTasksList, KindRequest, AccessOpen, "List fleet work with its resolved current state."},
 	{MethodTaskGet, KindRequest, AccessOpen, "Read one task and the revision it is current as of."},
 	{MethodTaskEvent, KindRequest, AccessRestricted, "Append an event to the history of the task the caller is the worker of."},
+	{MethodTaskRespond, KindRequest, AccessRestricted, "Answer a hold a task raised with no run behind it."},
 	{MethodTaskCreate, KindRequest, AccessRestricted, "Record a new task through intake, for the coordinator."},
 	{MethodTaskPromote, KindRequest, AccessRestricted, "Promote an investigation task to delivery in place, for the coordinator."},
 	{MethodTaskRelaunch, KindRequest, AccessRestricted, "Relaunch a task whose terminal is gone, in its own copy, for the coordinator."},

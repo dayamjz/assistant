@@ -968,7 +968,10 @@ func TestASilentCrashSurfacesAgainOncePerEscalationWindow(t *testing.T) {
 	clock.Advance(59 * time.Second)
 	l.freshPass(t)
 	gone(2)
+	// Two passes, as at every surface here: a ticker pass already under
+	// way when the clock moved can be the report the first one returns.
 	clock.Advance(time.Second)
+	l.freshPass(t)
 	l.freshPass(t)
 	gone(3)
 	third := clock.Now()

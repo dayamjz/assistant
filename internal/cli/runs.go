@@ -39,6 +39,14 @@ import (
 // --finding, which may be repeated, is a finding of the caller's own. They are
 // read only with --answer fix and refused with anything else, because an
 // instruction given and then ignored is worse than one refused.
+//
+// --task names a task instead of this branch's run, for a hold a task raised
+// with no run behind it: PRD section 9 has answering a hold take a task as
+// well as a run, so an investigation's decision and a task held at its
+// relaunch bound are answered with the same flag and no verb of their own.
+// It is read only with --answer, and the fix round's flags are refused with
+// it, because a fix round is a run's. A task's hold needs no working copy,
+// so the command answers it from wherever it is run.
 func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 	var (
 		intent       string
@@ -49,11 +57,13 @@ func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 		selected     string
 		note         string
 		own          repeated
+		task         string
 	)
 	if err := in.parseFlags("", func(set *flag.FlagSet) {
 		set.StringVar(&intent, "intent", "", "what this change sets out to do, in your own terms")
 		set.BoolVar(&suppliedFlag, "intent-supplied", false, "treat the intent as authoritative acceptance criteria rather than a hint")
-		set.StringVar(&answer, "answer", "", "answer the decision the run is holding on")
+		set.StringVar(&answer, "answer", "", "answer the decision the run is holding on, or with --task the task's")
+		set.StringVar(&task, "task", "", "with --answer: the task whose hold is answered, for a hold a task raised with no run behind it")
 		set.BoolVar(&cancel, "cancel", false, "end this branch's run, wherever it stands")
 		set.StringVar(&skip, "skip", "", "comma-separated stages this one run does not take")
 		set.StringVar(&selected, "select", "", "with --answer fix: comma-separated identifiers of findings the held stage reported, for the round to resolve; "+
@@ -70,6 +80,16 @@ func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 			return nil, usagef("--%s says what a fix round resolves, and it is read only with --answer %s",
 				name, pipeline.OutcomeFixRequested)
 		}
+	}
+	tasked := flagWasSet(in.flags, "task")
+	if tasked && !answered {
+		return nil, usagef("--task names the task whose hold --answer closes, and it is read only with --answer")
+	}
+	if tasked && strings.TrimSpace(task) == "" {
+		return nil, usagef("--task was given no task; it takes the identifier of the task whose hold is answered")
+	}
+	if tasked && fixing {
+		return nil, usagef("--answer %s asks for a run's fix round, and --task answers a task's hold", pipeline.OutcomeFixRequested)
 	}
 	if answered && strings.TrimSpace(answer) == "" {
 		return nil, usagef("--answer was given an empty answer; it takes one of the options the decision offered")
@@ -93,6 +113,9 @@ func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 	supplied := intent != ""
 	if flagWasSet(in.flags, "intent-supplied") {
 		supplied = suppliedFlag
+	}
+	if tasked {
+		return in.answerTask(ctx, task, answer)
 	}
 	working, err := in.workingCopy(ctx)
 	if err != nil {
@@ -166,6 +189,17 @@ func (in *invocation) answerDecision(ctx context.Context, working, answer string
 	var run machine.Run
 	err = in.callService(ctx, ipc.MethodRunRespond, machine.RespondRequest{Run: active, Answer: answer, Fix: request}, &run)
 	return run, err
+}
+
+// answerTask answers the oldest open hold the task raised with no run behind
+// it. Which hold that was, what the answer did and the task as it then
+// stands are in the answer; who resolved it is the service's to derive and
+// nothing here says.
+func (in *invocation) answerTask(ctx context.Context, task, answer string) (any, error) {
+	in.progressf("answering the hold task %s is waiting on with %q", task, answer)
+	var answered machine.TaskAnswered
+	err := in.callService(ctx, ipc.MethodTaskRespond, machine.TaskRespondRequest{Task: task, Answer: answer}, &answered)
+	return answered, err
 }
 
 // endRun ends the branch's active run, wherever it stands.

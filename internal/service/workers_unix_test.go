@@ -442,3 +442,43 @@ func TestAWorkerIsPlacedByTheWorkerSetAndNotByContainment(t *testing.T) {
 		}
 	})
 }
+
+// Answering a task's hold is the coordinator's and not a worker's: a hold
+// naming the launched task, the shape an investigation's report registers,
+// is refused to the task's own worker from its process group with
+// ErrWorker and stays open, which is what keeps an investigation from
+// answering its own decision and a worker from retrying itself past its
+// relaunch bound. The same answer from outside every worker group closes
+// it, recorded with the resolver the surface derives and with nothing the
+// request said.
+func TestATasksHoldIsAnsweredByTheCoordinatorAndNotItsWorker(t *testing.T) {
+	launchedWorker(t, "task/four", func(w launched) {
+		records := openRecords(t, w.home)
+		defer func() { _ = records.Close() }()
+		hold, err := records.RegisterHold(t.Context(), store.Hold{
+			Key: "task/" + w.task + "/finding/one", TaskID: store.Known(w.task),
+			Subject: "whether the cache may be dropped", Detail: "the report asks before dropping it",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		request := machine.TaskRespondRequest{Task: w.task, Answer: "approve"}
+		if _, code := callAs(t, w.group, w.running.service, ipc.MethodTaskRespond, request); code != ipc.CodeWorker {
+			t.Fatalf("task.respond from the task's own worker answered %q, want %q", code, ipc.CodeWorker)
+		}
+		if got, err := records.Hold(t.Context(), hold.Key); err != nil || !got.Open() {
+			t.Fatalf("after the worker's refused answer the hold is %+v (%v), want it open", got, err)
+		}
+		var answered machine.TaskAnswered
+		if err := w.running.client.Call(t.Context(), ipc.MethodTaskRespond, request, &answered); err != nil {
+			t.Fatalf("task.respond from outside every worker group: %v", err)
+		}
+		got, err := records.Hold(t.Context(), hold.Key)
+		if err != nil || got.Resolution.Or("") != "approve" || got.ResolvedBy.Or(store.Resolver{}) != (ipc.Request{}).HoldResolver() {
+			t.Fatalf("the coordinator's answer left the hold %+v (%v), want it resolved approve by the derived resolver", got, err)
+		}
+		if answered.Hold.Key != hold.Key || answered.Effect != machine.AnswerRecorded {
+			t.Fatalf("the answer reports %+v, want hold %s recorded", answered, hold.Key)
+		}
+	})
+}

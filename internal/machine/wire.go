@@ -379,6 +379,54 @@ type Task struct {
 	Waiting string `json:"waiting,omitempty"`
 }
 
+// TaskAnswered is the answer to a task's hold. It carries the hold as the
+// answer left it, what the answer did, and the task as it then stands.
+type TaskAnswered struct {
+	// Hold is the hold answered, with its resolution and when it was made.
+	// Who made it is in the record and does not travel: a store.Resolver
+	// has no encoded form, so this understates the resolver as the hold.state
+	// event does.
+	Hold store.Hold `json:"hold"`
+	// Effect is what the answer did beyond closing the hold.
+	Effect AnswerEffect `json:"effect"`
+	// Relaunch is the attempt a retry began, and is nil for every other
+	// effect.
+	Relaunch *RelaunchBegun `json:"relaunch,omitempty"`
+	// NotRelaunched is why a retry began no attempt now, and is empty for
+	// every other effect. The decision stands in the hold's record, and the
+	// next reconciliation honours it.
+	NotRelaunched string `json:"not_relaunched,omitempty"`
+	// Task is the task as it stands after the answer.
+	Task Task `json:"task"`
+}
+
+// AnswerEffect is what answering a task's hold did. The set is closed.
+type AnswerEffect string
+
+const (
+	// AnswerRecorded is a hold whose answer is recorded and acts on nothing
+	// further: a decision an investigation's report registered.
+	AnswerRecorded AnswerEffect = "recorded"
+	// AnswerRelaunched is a retry past relaunch_attempts that began one
+	// attempt through the anchored relaunch.
+	AnswerRelaunched AnswerEffect = "relaunched"
+	// AnswerRetryDeferred is a retry recorded whose relaunch was refused
+	// now; NotRelaunched says why.
+	AnswerRetryDeferred AnswerEffect = "retry-deferred"
+	// AnswerStopped is a stop: the task is left where it stopped and
+	// nothing relaunches it.
+	AnswerStopped AnswerEffect = "stopped"
+)
+
+// RelaunchBegun is the attempt a retry began: its position in the task's
+// attempts and the session reference of the attempt it superseded.
+type RelaunchBegun struct {
+	// Attempt is the new attempt's sequence.
+	Attempt int64 `json:"attempt"`
+	// Superseded is the session reference of the attempt it replaced.
+	Superseded string `json:"superseded"`
+}
+
 // Tasks is the answer to a request for fleet work.
 type Tasks struct {
 	// Tasks are the records with their resolved states.
