@@ -142,8 +142,9 @@
       <div class="card-body">
         <h3 class="card-title text-base">Promise 1: parallel work you can watch</h3>
         <p class="text-sm opacity-90">
-          Every worker runs in a real terminal you can attach to, read, and type into. Nothing
-          happens in a hidden process. If you intervene directly in a worker's terminal, that
+          Every worker is one you can read and reach. In phase 1 the Claude Code worker runs in its
+          command line's standard-input stream-json mode: you read it through the service's capture
+          and reach it through Send. A terminal-hosted mode is a later option, not a promise. If you intervene directly in a worker, that
           intervention is authoritative and the coordinator reconciles around it.
         </p>
       </div>
@@ -1073,6 +1074,7 @@ stateDiagram-v2
   <p class="mb-4 opacity-90">The state resolver answers in a fixed precedence:</p>
   <ol class="list-decimal pl-6 space-y-1.5 mb-4 opacity-90">
     <li>A terminal record the program wrote once for this task: Landed, derived from the merge record the code-host read writes, or Complete, the cleanup proof. This outranks a run, because a passed run resolves Ready forever and only a record of what happened after it can move a task past that. A terminal record is final for the task. A run attributed to the same branch afterwards does not displace it. Work that continues after Landed is a new task.</li>
+    <li>The hold tier: an open hold naming this task, which resolves Held, because the task is waiting on you. It sits below the terminal record and above the run, so a task waiting on you never resolves Failed or Unknown, and a terminal record still outranks it.</li>
     <li>A validation run attributed to this task's own branch, whether active or finished. This outranks everything below, because a worker handed off to the gate stops writing to its own log.</li>
     <li>A live process signal from the task's terminal.</li>
     <li>The event log, and only when its most recent event maps to a recognized state.</li>
@@ -1094,8 +1096,8 @@ stateDiagram-v2
     and the two are not required to agree word for word. A test pins that every run status maps to
     a task state; it does not pin the words to the outcome set, so a run a person cancelled reads
     <code>cancelled</code> as an outcome and Failed as a task state. The lifecycle's Landed and
-    Complete are resolved from the terminal records the program writes once each, in the tier
-    above the run tier, and from nothing else. A task with no attributed run, an investigation
+    Complete are resolved from the terminal records the program writes once each, in the first
+    tier of that precedence, and from nothing else. A task with no attributed run, an investigation
     task among them, shows its task state and has no run outcome: the outcome set in section 9 is
     not extended for it, and no outcome word is shown where no run produced one.
   </p>
@@ -1156,7 +1158,7 @@ flowchart TD
     <div class="card card-border bg-base-200">
       <div class="card-body">
         <h4 class="card-title text-sm">A terminal-ish wait surfaces once</h4>
-        <p class="text-xs opacity-90">A worker that finished and is waiting on a merge, or that stopped on a blocker, surfaces once, then is absorbed even as its idle screen redraws, then surfaces again when something actually changes. Otherwise it storms every poll. A worker that crashed and is still silent is not absorbed for good: it surfaces again once per <code>escalation_window</code>, so a crash is never seen only once and still never storms.</p>
+        <p class="text-xs opacity-90">A worker that finished and is waiting on a merge, or that stopped on a blocker, surfaces once, then is absorbed even as its idle screen redraws, then surfaces again when something actually changes. Otherwise it storms every poll. A worker that crashed and is still silent is not absorbed for good: it surfaces again once per <code>escalation_window</code>, so a crash is never seen only once and still never storms. Acknowledging a resurfaced terminal-gone wake does not restart that spacing.</p>
       </div>
     </div>
   </div>
@@ -1177,7 +1179,7 @@ flowchart TD
         <tr><td><b>The live cycle</b></td><td>Active</td><td>The coordinator holds exactly one supervision wait whenever work is in flight, resumed as the last action of every turn.</td></tr>
         <tr><td><b>Arm verification</b></td><td>Active</td><td>Starting the service confirms its supervisor is genuinely alive: the service writes its instance identity to a fresh beacon file, the probe checks that the same instance holds the home's lock, and the result is an honest started, attached, or failed. An unexplained exit of the loop is a typed failure, not silence.</td></tr>
         <tr><td><b>Pull guard</b></td><td>Passive</td><td>Ordinary commands warn when work is in flight and the supervisor has stopped, which the beacon and the lock probe decide, or when queued wakes are waiting to be drained.</td></tr>
-        <tr><td><b>Stop guard</b></td><td>Push</td><td>The guard acts through a hook the coordinator's host invokes at turn end, which runs the command section 9 names beside <code>assistant gate</code>. When the coordinator tries to end a turn while work is in flight and no live supervisor holds this home's lock, the turn is blocked until the host supplies a re-entry signal; the host defines that signal, not this program. It is never forced into a counted follow-up turn: a turn count is a bound nothing here owns, so without a host-supplied re-entry signal the only safe reading is blocked. Installing that hook is a change to the host's configuration, which a push never consented to (P1): the installer prints the exact line the host's configuration needs and writes it only when given an explicit flag, so without that flag nothing in the host's configuration changes.</td></tr>
+        <tr><td><b>Stop guard</b></td><td>Push</td><td>The guard acts through a hook the coordinator's host invokes at turn end, which runs the command section 9 names beside <code>assistant gate</code>. When the coordinator tries to end a turn while work is in flight and no live supervisor holds this home's lock, the turn is blocked until the host supplies a re-entry signal; the host defines that signal, not this program. The guard reads the host's <code>stop_hook_active</code> field on its standard input as re-entry, and an environment variable carries the signal for a host that supplies no such field. It is never forced into a counted follow-up turn: a turn count is a bound nothing here owns, so without a host-supplied re-entry signal the only safe reading is blocked. Installing that hook is a change to the host's configuration, which a push never consented to (P1): the installer prints the exact line the host's configuration needs and writes it only when given an explicit flag, so without that flag nothing in the host's configuration changes. The line is installed at the host's user scope.</td></tr>
       </tbody>
     </table>
   </div>
@@ -1818,8 +1820,9 @@ flowchart TB
           cancellation, terminate the whole process tree, escalating from a polite signal to a
           forceful one after a grace period. A descendant that detaches from its process group
           escapes that, so keep an identity-based sweep that matches processes by the isolated copy
-          their working directory resolves under, never by command line. It must never touch a copy
-          whose run is still active.
+          their working directory resolves under, never by command line. Once a run reaches a final
+          state, its isolated copy is swept. The sweep must never touch a copy whose run is still
+          active. Where the platform has no sweep, section 11 says what a relaunch does.
         </p>
       </div>
     </div>
@@ -1872,7 +1875,7 @@ flowchart TB
         <tr><td><code>assistant doctor</code></td><td>Check every dependency, and decisively report whether a run can start at all.</td></tr>
         <tr><td><code>assistant service …</code></td><td>Start, stop, restart, status.</td></tr>
         <tr><td><code>assistant gate …</code></td><td>What the gate's own hooks invoke, not a verb a person drives: <code>admit</code> runs before any reference changes and refuses a push it cannot validate, and <code>notify</code> runs after and starts the run. They are named here because the hooks the gate installs depend on them existing; a person never types either.</td></tr>
-        <tr><td><code>assistant host …</code></td><td>What the coordinator's host invokes, not a verb a person drives: <code>stop</code> runs from the hook the host fires at turn end and is section 6's stop guard, answering whether the turn may end and blocking it when work is in flight and no live supervisor is the service holding this home's lock. It is named here because that hook depends on it existing, and a person never types it. It is the second command outside the table, and with <code>assistant gate</code> it is not a precedent for a third: each is the interface a hook this program installed or asked for requires.</td></tr>
+        <tr><td><code>assistant host …</code></td><td>The coordinator's host and its hook. <code>install</code> is the one host verb a person types, once, for setup: it is section 6's stop guard installer. The other host verbs are hook plumbing a person never types: <code>stop</code> runs from the hook the host fires at turn end and is section 6's stop guard, answering whether the turn may end and blocking it when work is in flight and no live supervisor is the service holding this home's lock. It is named here because that hook depends on it existing. It is the second command outside the table, and with <code>assistant gate</code> it is not a precedent for a third: each is the interface a hook this program installed or asked for requires.</td></tr>
         <tr><td><code>assistant eject</code></td><td>Remove the gate and its records.</td></tr>
       </tbody>
     </table>
@@ -1934,7 +1937,8 @@ flowchart TB
   </div>
   <p class="mb-4 opacity-90">
     The detail view is a detailed evidence document in P13's sense, so it names the nine stages and
-    shows each finding's identifier, location, and full text as they are. The plain status lines
+    shows each finding's identifier, location, and full text as they are. The configuration keys
+    the run dropped and the proposals raised about it are part of that evidence. The plain status lines
     are not evidence documents: they stay phrased under P13 and section 6's translation table, and
     so does the message that points you at the detail view.
   </p>
@@ -2183,7 +2187,7 @@ flowchart TB
     <table class="table table-sm table-zebra">
       <thead><tr><th class="w-52">Situation</th><th>Response</th></tr></thead>
       <tbody>
-        <tr><td>Terminal gone, work not landed</td><td>Preserve the isolated copy. Prove no live process owns it, then relaunch in that same copy with the same instructions plus a note about what already happened. Never a fresh generic launch while the copy is unaccounted for.</td></tr>
+        <tr><td>Terminal gone, work not landed</td><td>Preserve the isolated copy. Prove no live process owns it, then relaunch in that same copy with the same instructions plus a note about what already happened. Never a fresh generic launch while the copy is unaccounted for. Where the platform has no sweep, that proof cannot be made, so the relaunch is refused and goes ahead only on your answer to retry it (P6).</td></tr>
         <tr><td>Terminal alive, screen unchanged</td><td>Only a stall if nothing positively proves progress. A worker thinking for a long time is not stuck.</td></tr>
         <tr><td>Repeated stall on the same unchanged screen</td><td>Escalates. Once the same unchanged screen has surfaced <code>stall_inspection_count</code> times, section 10's key, the next surface demands a deeper inspection rather than another surface look. The count raises the level of what surfaces and stops nothing.</td></tr>
         <tr><td>Ambiguous liveness</td><td>Leave it alone. Relaunching on an ambiguous reading risks two supervisors for one task, which is worse than one late check.</td></tr>
@@ -2263,7 +2267,7 @@ flowchart TB
           <li>The graph layer with halt points and checkpoints.</li>
           <li>The data-loss rules in full. This is not phaseable.</li>
           <li>The configuration trust boundary in full. Also not phaseable.</li>
-          <li><b>Claude Code</b> as the only agent adapter, behind the full adapter interface. It has a native output schema and resumable sessions, so the structured-output and session-reuse paths are exercised properly rather than stubbed. It also gains a long-lived worker mode driven over standard input, so the fleet's workers are real agents rather than only the stand-in the tests script. The adapter declares that mode as the <code>worker_sessions</code> capability, and declares it once a conformance probe covers it; until then section 8's rule that undeclared means unavailable holds, and no shipped adapter runs the fleet's workers.</li>
+          <li><b>Claude Code</b> as the only agent adapter, behind the full adapter interface. It has a native output schema and resumable sessions, so the structured-output and session-reuse paths are exercised properly rather than stubbed. It also gains a long-lived worker mode, the command line's stream-json mode driven over standard input, so the fleet's workers are real agents rather than only the stand-in the tests script. In phase 1 the tests' worker is the scripted stand-in under this adapter's stream mode, and a run against the real command line is a manual check. A push made from inside the worker's process group is the worker's push, because process group is how the product attributes a push to a worker. The adapter declares that mode as the <code>worker_sessions</code> capability, and declares it once a conformance probe covers it; until then section 8's rule that undeclared means unavailable holds, and no shipped adapter runs the fleet's workers.</li>
           <li><b>One</b> forge adapter.</li>
           <li>Fleet: <b>both task shapes</b>, dispatch, isolation assertion, the state resolver, cleanup proofs, and promotion from investigation to delivery.</li>
           <li>Decision holds raised by an investigation, and the cleanup check that refuses without them.</li>
@@ -2367,7 +2371,10 @@ flowchart TB
     One journey test running the real binary against a deterministic stand-in agent, covering the
     whole path: push, every stage, a hold, a fix round, a re-review, push, pull request, checks. Run
     it on every supported platform. Process spawning behaves differently enough across platforms that
-    only an end-to-end run finds those differences.
+    only an end-to-end run finds those differences. Where a phase-1 test needs a worker, the worker
+    is that stand-in under the Claude Code adapter's stream mode, and a push the test makes from
+    inside the worker's process group is the worker's push; a run against the real command line is
+    a manual check, not a test.
   </p>
   <p class="opacity-90">
     Then use the tool on itself. Every change to Assistant goes through Assistant's own gate. That is
