@@ -180,11 +180,13 @@
 // A description carrying an escape sequence is therefore shown rather than
 // acted on by the terminal reading either of them.
 //
-// Five things reach that rendering carrying text this build did not write,
-// and all five go through it: the findings a decision carries, the summary a
-// fix round wrote, a branch name and a project, which are the person's own
+// Several things reach that rendering carrying text this build did not
+// write, and all of them go through it: the findings a decision carries, the
+// summary a fix round wrote, a branch name, a project, a reference a change
+// carried and a repository's default branch, which are the person's own
 // words, and what a paused worker said it is waiting on, which PRD section 6
-// has relayed in place of the state's word. What is not escaped is
+// has relayed in place of the state's word. A decision's answers come off a
+// checkpoint and are escaped with the row they are filled into. What is not escaped is
 // everything else a line is built from - a phrase from internal/machine's
 // table, a stage name, a park's reason - because those are this build's own
 // vocabulary rather than text that came from outside it.
@@ -196,28 +198,34 @@
 // or watcher's word in it. The vocabulary that does that is internal/machine's
 // phrase table, and this package has one owner of which renderers speak
 // through it: the renderings table in render.go, which readOut dispatches
-// through and Renderings reads out. Eight are phrased - status, a run, the
-// run listing, the task listing, one task, the service, an event on
-// assistant watch, and the stop guard's answer - and every line they write is
-// a row of the table or a row beside the person's own word. The stop guard's
-// renderer writes no line at all, because the host reads its message on
-// standard error, where hostStop writes it; that message is the turn row and
-// then the pull guard's row, so it is phrased on the same terms. assistant watch renders an event through the
-// same table rather than through a smaller one of its own, because a stream
-// is a sequence of the states the listing shows and a second vocabulary for
-// it would be a second owner of the same phrases; the type and revision of
-// an event are the structured rendering's. The rest still print this build's
-// words and are enumerated as not phrased: the decision block and a run's
-// details print stage names and node positions, because a person answering
-// a hold needs the finding as the stage reported it; the doctor, the service
-// lifecycle, initialization, a plan, an eject, the readiness answer and the
-// two gate renderers print identifiers and paths; and the fallback prints
-// whatever it was given. The refusal and usage text written on standard
-// error is outside the table too. Routing those through the table and
-// replacing the fallback with a typed refusal is the follow-up that cites
-// P13 for this surface; until then internal/machine's vocabulary test cites
-// it for the phrases alone, and internal/journey's coverage row holds its
-// note to the enumeration here.
+// through and Renderings reads out. Every row but three is phrased, and
+// every line those rows write is a row of the table or a row beside the
+// person's own word - a branch, a project, a reference a change carried, the
+// repository's default branch - escaped. The stop guard's renderer writes no
+// line at all, because the host reads its message on standard error, where
+// hostStop writes it; that message is the turn row and then the pull guard's
+// row, so it is phrased on the same terms. assistant watch renders an event
+// through the same table rather than through a smaller one of its own,
+// because a stream is a sequence of the states the listing shows and a second
+// vocabulary for it would be a second owner of the same phrases; the type and
+// revision of an event are the structured rendering's. An answer no row
+// claims is not printed at all: readOut refuses it, and render writes the
+// table's refusal row on standard error and exits with the operational
+// failure code, so a type added without a renderer fails loudly rather than
+// reaching a person as a Go value.
+//
+// The three that are not phrased are a run's details, the findings behind a
+// decision, and a plan's steps, and the renderings table says why for each:
+// the specification has not settled their wording. PRD section 9's terminal
+// interface names every stage and its relay-verbatim row has a finding
+// relayed in full, both against P13's text, and the module that would write
+// a plan's steps does not exist in this build. The refusal and usage text
+// written on standard error is outside the table too: a failure's sentence
+// is composed by whichever package refused, and no closed set of them exists
+// to phrase. The renderer test cites P13 for the phrased renderers by
+// enumerating the table, and shows the three that are not phrased printing
+// this build's words, so the enumeration is held in both directions;
+// internal/journey's coverage row holds its note to the same enumeration.
 //
 // What that leaves is deliberate and worth knowing. The human rendering of a
 // listing names no run and no task, so a verb that takes an identifier -

@@ -60,8 +60,12 @@
 // note the program appended is NoWordYet rather than a failure; a row per
 // Outcome, with OutcomeExecuting split three ways on the facts NextActionOf
 // reads, through RunPhrase and Run.Phrase; the two hold rows; the kept and
-// removed rows for a run's cleanup record; the stream's own rows; and the
-// status rows. No task row carries an outcome word, because PRD section 6
+// removed rows for a run's cleanup record; the stream's own rows; the
+// status rows; and the rows for the rest of the command surface - a decision
+// and a fix round's offer, a row per doctor check and result keyed on the
+// check names declared beside them and the verdict, the service lifecycle, a
+// gate created, reattached and removed, the gate's own rows for a change sent
+// to it, and the refusal for an answer with no renderer. No task row carries an outcome word, because PRD section 6
 // makes a task's state its own vocabulary and a task with no run has no
 // outcome. The vocabulary test cites P13 for the rows here, and which of
 // internal/cli's renderers speak through them is that package's enumeration.

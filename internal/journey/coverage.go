@@ -303,19 +303,23 @@ func Coverage() []Established {
 				"a wait and one whose newest entry is a relaunch note, both written through " +
 				"internal/store since no verb creates a task, and every line each verb printed is held " +
 				"to the forbidden set internal/machine/vocabtest derives from the owners, with the wait " +
-				"relayed and the state word absent. internal/machine's vocabulary test cites P13 for the " +
-				"phrases in its table alone, and this walk extends what is checked and not what is " +
-				"claimed: the table speaks for the renderers internal/cli enumerates as phrased, which " +
-				"are " + strings.Join(p13Covered, ", ") + ", and the renderers that still print this " +
-				"build's own words, which are " + strings.Join(p13Remaining, ", ") + ", remain, as does " +
-				"the refusal and usage text the command surface writes on standard error. The citation " +
-				"waits for the follow-up that routes every renderer through the table and replaces the " +
-				"fallback with a typed refusal, so that the test can enumerate the table rather than a " +
-				"list. Both lists are checked against internal/cli's enumeration, so the note cannot " +
-				"name a renderer that package does not have or miss one it does. The walk needs a " +
-				"service, so on a platform with no local socket transport to serve this protocol over " +
-				"it is skipped rather than passing; it reaches no method internal/ipc restricts, so no " +
-				"platform refuses it for want of peer credentials, and nothing here drives a run for it."},
+				"relayed and the state word absent. P13 is cited at package reach: internal/machine's " +
+				"vocabulary test for the rows in its table, and internal/cli's renderer test for every " +
+				"renderer internal/cli enumerates as phrased, which are " + strings.Join(p13Covered, ", ") +
+				", enumerating that list rather than keeping one, with the fallback a typed refusal " +
+				"that prints no Go value; internal/cli's command-line tests drive init, doctor, eject " +
+				"and a push through the gate's hooks the same way. The renderers it enumerates as not " +
+				"phrased, which are " + strings.Join(p13Remaining, ", ") + ", still print this build's " +
+				"words, because the specification has not settled their wording: PRD section 9's " +
+				"terminal interface lists every stage by name and its relay-verbatim row has a " +
+				"finding's full text relayed, both against P13's own text, and the plan's steps belong " +
+				"to a module this build does not have. The refusal and usage text the command surface " +
+				"writes on standard error is outside the citation too. Both lists are checked against " +
+				"internal/cli's enumeration, so the note cannot name a renderer that package does not " +
+				"have or miss one it does. The walk needs a service, so on a platform with no local " +
+				"socket transport to serve this protocol over it is skipped rather than passing; it " +
+				"reaches no method internal/ipc restricts, so no platform refuses it for want of peer " +
+				"credentials, and nothing here drives a run for it."},
 		{principles.P14, ReachNone,
 			"One owner per fact is a property of the source rather than of a run, so driving a journey " +
 				"establishes nothing about it. internal/principles and internal/pipeline's schema test " +
@@ -327,12 +331,14 @@ func Coverage() []Established {
 // p13Covered and p13Remaining name internal/cli's human renderers by the
 // names its Renderings enumeration gives them: the ones that speak through
 // internal/machine's phrase table, and the ones that still print this build's
-// own words. The P13 row's note is built from them, and P13Renderers hands
-// them to the test that holds both to that enumeration, so a renderer added
-// or rerouted there fails here rather than leaving the note to drift.
+// own words for want of settled wording. The P13 row's note is built from
+// them, and P13Renderers hands them to the test that holds both to that
+// enumeration, so a renderer added or rerouted there fails here rather than
+// leaving the note to drift.
 var (
-	p13Covered   = []string{"status", "run", "runs", "tasks", "task", "service", "event", "host stop"}
-	p13Remaining = []string{"decision", "details", "doctor", "lifecycle", "init", "plan", "eject", "health", "admission", "notification", "fallback"}
+	p13Covered = []string{"status", "run", "runs", "tasks", "task", "service", "event", "host stop",
+		"decision", "doctor", "lifecycle", "init", "eject", "health", "admission", "notification", "fallback"}
+	p13Remaining = []string{"details", "findings", "plan"}
 )
 
 // P13Renderers returns the renderers the P13 row says the phrase table

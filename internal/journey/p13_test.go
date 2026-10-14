@@ -49,12 +49,13 @@ type spokenFleet struct {
 // never the word, and a task whose newest entry is a relaunch note is no
 // word from the worker rather than a failure.
 //
-// It cites nothing. P13 is cited by internal/machine for the phrases in its
-// table, and the row in Coverage says why the claim does not widen here: the
-// renderers the table covers are an enumeration internal/cli keeps, and the
-// ones that remain still print this build's words. What this walk adds is
-// that the two fleet verbs, as a person drives them, print those phrases and
-// nothing else; the row records the walk and the skip it takes.
+// It cites nothing. P13 is cited at package reach, by internal/machine for
+// the phrases in its table and by internal/cli for the renderers it
+// enumerates as phrased, and the row in Coverage says why the claim does not
+// widen here and which renderers still print this build's words. What this
+// walk adds is that the two fleet verbs, as a person drives them through the
+// binary, print those phrases and nothing else; the row records the walk and
+// the skip it takes.
 func TestTheFleetIsSpokenInPhrasesThroughTheBinary(t *testing.T) {
 	vocabtest.Control(t)
 	j := inClone(t)
