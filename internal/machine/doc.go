@@ -68,7 +68,10 @@
 // a task saying the same command; a row per AnswerEffect that does more than
 // close a task's hold, through TaskAnsweredPhrase, each claiming only what
 // that effect's doc says the mechanism does; the kept and
-// removed rows for a run's cleanup record; the stream's own rows; the
+// removed rows for a run's cleanup record; the one row for a run's copy sweep
+// record that did not establish the copy clear, through CopySweepPhrase,
+// whose counts and occasion stay the structured rendering's; the stream's
+// own rows; the
 // status rows; and the rows for the rest of the command surface - a decision
 // and a fix round's offer, a row per doctor check and result keyed on the
 // check names declared beside them and the verdict, the service lifecycle, a

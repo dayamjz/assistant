@@ -53,6 +53,10 @@ func fixtureRun() machine.Run {
 		},
 		Outcome: machine.OutcomeDecision,
 		Cleanup: &store.RunCleanup{Run: "abcdefghij23", Refusal: store.Known("unproven"), Detail: "the branch is not on any remote"},
+		CopySweep: &store.RunCopySweep{
+			Run: "abcdefghij23", Outcome: store.SweepNotCleared, Ended: store.Known(0), Remaining: store.Known(1),
+			Occasion: store.SweptAtRecovery, Detail: "swept " + filepath.Join(vocabtest.SampleRoot(), "worktrees", "repo", "abcdefghij23") + ": 1 survived",
+		},
 	}
 }
 
@@ -570,8 +574,9 @@ func TestATaskLineIsItsPhraseAndNothingOfTheRecord(t *testing.T) {
 	}
 }
 
-// A run's head is its phrase, its branch, its agent and the kept-copy line
-// from its cleanup refusal; the details beneath it are an evidence document,
+// A run's head is its phrase, its branch, its agent, the kept-copy line
+// from its cleanup refusal and the line for a copy sweep that did not clear;
+// the details beneath it are an evidence document,
 // and this says so by showing exactly which lines carry a stage name once
 // stage views are added.
 func TestARunsHeadIsPhrasedAndItsDetailsAreNot(t *testing.T) {
@@ -584,6 +589,12 @@ func TestARunsHeadIsPhrasedAndItsDetailsAreNot(t *testing.T) {
 	kept, ok := machine.CleanupPhrase(*run.Cleanup)
 	if !ok || !strings.Contains(head, kept.String()) {
 		t.Fatalf("the head does not carry the kept-copy line:\n%s", head)
+	}
+	// The copy sweep that did not clear is the one phrased line, and its
+	// account, which names the copy's path, stays the structured rendering's.
+	unswept, ok := machine.CopySweepPhrase(*run.CopySweep)
+	if !ok || !strings.Contains(head, unswept.String()) || strings.Contains(head, run.CopySweep.Detail) {
+		t.Fatalf("the head does not carry the uncleared-sweep line alone:\n%s", head)
 	}
 	if !strings.Contains(head, run.Phrase().String()) || !strings.Contains(head, "Branch     feature/parser") || !strings.Contains(head, "Agent      claude") {
 		t.Fatalf("the head is missing the phrase, the branch or the agent:\n%s", head)

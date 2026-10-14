@@ -26,6 +26,10 @@ const sealCheckpointTableMigration = "seal the one-row checkpoint"
 // task_state table, for the reason sealCheckpointTableMigration is a constant.
 const sealTaskStateTableMigration = "task attribution and seal the stored task state"
 
+// runCopySweepMigration names the migration that adds the run copy sweep
+// record, for the reason sealCheckpointTableMigration is a constant.
+const runCopySweepMigration = "run copy sweep records"
+
 // schema is the migration list this package applies. Adding a column means
 // appending a migration whose ALTER TABLE names a nullable column with no
 // default, so rows written before it reads back unknown; migrate refuses
@@ -931,6 +935,35 @@ var schema = []migration{
 			// before the column existed reads back unknown, which the loop
 			// reads as a window starting at the pass that first finds it.
 			`ALTER TABLE wake_marker ADD COLUMN gone_surfaced_at TEXT`,
+		},
+	},
+	{
+		version: 21,
+		name:    runCopySweepMigration,
+		statements: []string{
+			// The record of the latest sweep of a finished run's isolated
+			// copy: what it came to, from a closed set RunCopySweep's
+			// accessors hold; how many processes it ended and how many
+			// kept it from clearing, known exactly when the sweep listed
+			// the processes; which path asked it, the move that finished
+			// the run or a later service's recovery; the sweep's own
+			// account as evidence; and when it was recorded. It is one
+			// row per run, rewritten in place by every sweep, so the row
+			// is the latest sweep and nothing derives that from a history
+			// (P8). It sits beside the run row rather than on it, on
+			// run_cleanup's terms: the run row is the run's status, and
+			// this is what a sweep of its copy found. It records what a
+			// sweep found when it ran and never whether anything runs in
+			// the copy now. ForgetRepository removes it with its run.
+			`CREATE TABLE run_copy_sweep (
+				run       TEXT PRIMARY KEY REFERENCES run(id),
+				outcome   TEXT NOT NULL,
+				ended     INTEGER,
+				remaining INTEGER,
+				occasion  TEXT NOT NULL,
+				detail    TEXT NOT NULL,
+				swept_at  TEXT NOT NULL
+			) STRICT`,
 		},
 	},
 }

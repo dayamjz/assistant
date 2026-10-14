@@ -603,6 +603,31 @@ func CleanupPhrase(c store.RunCleanup) (Phrase, bool) {
 	}
 }
 
+// The copy sweep row, for the record of the latest sweep of a run's local
+// copy that did not establish the copy clear: the platform has no sweep, the
+// sweep could not be made, or it left something it could not end. A cleared
+// sweep and a run with no copy standing have no row, because nothing a person
+// decides turns on either.
+var phraseCopyNotSwept = Phrase{
+	Outcome:     "Something this run set going may still be at work in its local copy after the run ended.",
+	Consequence: "It could keep using this machine or changing the files left there.",
+	Decision:    "Look at what this machine has going and stop anything left in that copy that should not be.",
+}
+
+// CopySweepPhrase is what a person reads about the latest sweep of a run's
+// local copy, and false for an outcome no row phrases: the one line for a
+// sweep that did not establish the copy clear, whichever of the three ways
+// that happened, because what a person does about each is the same. Which
+// way, and the counts, are the structured rendering's.
+func CopySweepPhrase(w store.RunCopySweep) (Phrase, bool) {
+	switch w.Outcome {
+	case store.SweepUnsupported, store.SweepFailed, store.SweepNotCleared:
+		return phraseCopyNotSwept, true
+	default:
+		return Phrase{}, false
+	}
+}
+
 // Status rows: the parts of assistant status that are not a run.
 var (
 	// PhraseServiceUp is the row for a service that answered.
@@ -1053,7 +1078,7 @@ func TablePhrases() []Phrase {
 	out = append(out, HoldPhrase(store.Hold{Subject: holdPlaceholder}), HoldPhrase(store.Hold{Subject: holdPlaceholder, Resolution: store.Known("answered")}))
 	out = append(out, HoldPhrase(store.Hold{Subject: holdPlaceholder, TaskID: store.Known("a task")}))
 	out = append(out, phraseRetried, phraseRedispatched, phraseRetryDeferred, phraseRetryHeld, phraseRetryRefused, phraseNotRetried)
-	out = append(out, phraseCopyKept, phraseCopyRemoved)
+	out = append(out, phraseCopyKept, phraseCopyRemoved, phraseCopyNotSwept)
 	out = append(out, PhraseUpdatesMissed, PhraseServiceStopping, PhraseWorkerSpoke, PhraseActivity, PhraseUnfamiliarUpdate)
 	out = append(out, PhraseServiceUp, PhraseServiceAbsent, PhraseGated, PhraseUngated, PhraseNoRun, PhraseNoRuns, PhraseNoFleetWork)
 	out = append(out, DecisionPhrase(Decision{}), FixRoundPhrase(string(pipeline.OutcomeFixRequested)))

@@ -260,6 +260,16 @@ type Run struct {
 	// MergeRecord's terms, and it is where a surface learns that a local
 	// copy was kept because its work is not yet safely elsewhere.
 	Cleanup *store.RunCleanup `json:"cleanup,omitempty"`
+	// CopySweep is the record of the latest sweep of this run's isolated
+	// copy, present exactly when one was recorded: what it came to, how many
+	// processes it ended and how many kept it from clearing, whether the move
+	// that finished the run or a later recovery asked it, and when. It is the
+	// record composed rather than restated, on Cleanup's terms. It says what
+	// a sweep found when it ran and not whether anything runs in the copy
+	// now, and nothing decides from it: an uncleared sweep does not keep the
+	// copy, whose removal is Cleanup's decision alone. CopySweepPhrase is the
+	// line a person reads for the outcomes that leave them something to do.
+	CopySweep *store.RunCopySweep `json:"copy_sweep,omitempty"`
 	// AnswerNotApplied says, on the answer to a response, why the answer the
 	// request carried was not applied to the run: the hold it answered was
 	// closed by the service first, on a re-read of the run's pull request,

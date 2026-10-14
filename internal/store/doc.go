@@ -98,6 +98,14 @@
 // whose decisions were never registered cannot exist through this package;
 // the parsed report is opaque bytes here, and the hold keys are the one
 // fact the row holds about its contents, which is what cleanup verifies.
+// Migration 21's run_copy_sweep table holds the third record about a run's
+// copy, RunCopySweep: what the latest sweep of a finished run's copy came to,
+// from a closed set, with the occasion that asked it. It is one row per run
+// rewritten by every sweep, so the row is the latest sweep and no reader
+// takes it from a history (P8), and it records what a sweep found when it
+// ran rather than whether anything runs in the copy now. internal/service
+// writes it and internal/machine composes it into a run's answer; nothing
+// decides from it, and ForgetRepository removes it with its run.
 // ForgetHoldForTest is the counterfeit builder for that rule's refusal
 // case, takes the test, and has no production caller. RecordTaskCleanup is
 // anchored to the task's shape, read in the transaction that claims the

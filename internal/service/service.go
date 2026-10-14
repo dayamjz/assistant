@@ -711,7 +711,7 @@ func (s *Service) driverFor(ctx context.Context) (*driver, error) {
 		// Every ending of a run is a move of internal/runs, so the sweep of
 		// its copy is decided there from the row the ending wrote rather than
 		// at each site that ends one; runsweep.go owns what it does.
-		OnFinish: s.sweepFinished,
+		OnFinish: func(ctx context.Context, run store.Run) { s.sweepFinished(ctx, run, store.SweptAtFinish) },
 	})
 	if err != nil {
 		return nil, err
