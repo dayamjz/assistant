@@ -1384,4 +1384,17 @@ func TestInitRecordsOriginsDefaultBranchFromAFeatureBranch(t *testing.T) {
 		t.Errorf("init recorded default branch %q from a checkout on a-feature, want origin's main",
 			built.Repository.DefaultBranch)
 	}
+	// And it says where that answer came from, in both renderings, so a
+	// wrong one is visible at the moment it is written.
+	if built.DefaultBranchSource != machine.DefaultBranchFromOrigin {
+		t.Errorf("init says its default branch came from %q, want %q", built.DefaultBranchSource, machine.DefaultBranchFromOrigin)
+	}
+	plain := run(t, h, subject, "init")
+	if plain.code != machine.ExitOK {
+		t.Fatalf("assistant init again exited %s:\n%s%s", plain.code, plain.stdout, plain.stderr)
+	}
+	if !strings.Contains(plain.stdout, machine.DefaultBranchPhrase(machine.DefaultBranchFromOrigin).String()) ||
+		!strings.Contains(plain.stdout, "Default branch main") {
+		t.Errorf("init does not say it recorded main from origin:\n%s", plain.stdout)
+	}
 }

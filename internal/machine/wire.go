@@ -565,6 +565,10 @@ type Init struct {
 	Reattached bool `json:"reattached"`
 	// Repository is the repository record as it now stands.
 	Repository store.Repository `json:"repository"`
+	// DefaultBranchSource is where Repository.DefaultBranch came from, one
+	// of DefaultBranchSources. It is this answer's and not the record's: the
+	// record keeps the branch and not how it was learned.
+	DefaultBranchSource DefaultBranchSource `json:"default_branch_source"`
 }
 
 // Eject is the answer to removing a gate and its records.
