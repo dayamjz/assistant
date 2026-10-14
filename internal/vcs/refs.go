@@ -71,6 +71,25 @@ func (r *Repository) HeadBranch(ctx context.Context) (string, error) {
 	return name, nil
 }
 
+// SymbolicTarget returns the full name of the reference that the symbolic
+// reference name points at, such as refs/remotes/origin/main for
+// refs/remotes/origin/HEAD. It returns ErrRefNotFound when name does not exist
+// or is not symbolic.
+//
+// ListRefs cannot answer this: it reports a symbolic reference under its own
+// name with the object it resolves to, and never what it points at.
+func (r *Repository) SymbolicTarget(ctx context.Context, name string) (string, error) {
+	out, code, err := r.runExpecting(ctx, "symbolic-target", []int{1}, "symbolic-ref", "--quiet", name)
+	if err != nil {
+		return "", err
+	}
+	target := strings.TrimSpace(string(out))
+	if code != 0 || target == "" {
+		return "", &refError{rev: name, repo: r.path}
+	}
+	return target, nil
+}
+
 // ListRefs returns the references in this repository whose names match any of
 // the given patterns, in git's own order. With no patterns it returns every
 // reference. A pattern is matched the way git for-each-ref matches one: a
