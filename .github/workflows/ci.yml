@@ -78,8 +78,8 @@ jobs:
           if [ ! -f test.log ]; then
             echo "The Test step left no output on ${{ matrix.os }}, so whether anything skipped is unknown."
           elif grep -q -- '--- SKIP' test.log; then
-            echo "These tests skipped on ${{ matrix.os }}, with the reason each gave:"
-            grep -A3 -- '--- SKIP' test.log
+            echo "These tests skipped on ${{ matrix.os }}; each reason is printed above its SKIP line:"
+            grep -B3 -- '--- SKIP' test.log
           else
             echo "No test skipped on ${{ matrix.os }}."
           fi
