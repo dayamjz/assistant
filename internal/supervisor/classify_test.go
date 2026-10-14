@@ -43,8 +43,9 @@ const (
 // the document and not from the classifier's table: every edge of the
 // flowchart, the "absence of evidence surfaces" rule beneath it, the "never
 // read as no change" sentence for terminal gone and a run moved to held, the
-// "terminal-ish wait surfaces once" rule, and the issue's decision that the
-// surfaced flag reaches no other kind. Each kind has every combination of
+// "terminal-ish wait surfaces once" rule with its sentence on a crashed
+// worker that stays silent, and the issue's decision that the surfaced flag
+// reaches no other kind. Each kind has every combination of
 // evidence, window and surfaced, so a kind the table has that this list
 // lacks a row for fails rather than passing on nothing.
 var oracle = map[cell]supervisor.Level{
@@ -116,15 +117,18 @@ var oracle = map[cell]supervisor.Level{
 	{supervisor.KindNoChange, proof, elapsed, false}:  supervisor.Absorb,
 	{supervisor.KindNoChange, proof, elapsed, true}:   supervisor.Absorb,
 
-	// "terminal gone" -> Surface: always actionable, and "never read as no
-	// change"; the flag silences nothing, or a dead worker would be silent
-	// after its first surface.
+	// "terminal gone" -> Surface, "never read as no change", and evidence
+	// is not read. Then the "terminal-ish wait surfaces once" card: "a
+	// worker that crashed and is still silent is not absorbed for good: it
+	// surfaces again once per escalation_window". Surfaced, it absorbs
+	// while the window since that surface is open and surfaces when it has
+	// elapsed.
 	{supervisor.KindTerminalGone, absent, open, false}:    supervisor.Surface,
-	{supervisor.KindTerminalGone, absent, open, true}:     supervisor.Surface,
+	{supervisor.KindTerminalGone, absent, open, true}:     supervisor.Absorb,
 	{supervisor.KindTerminalGone, absent, elapsed, false}: supervisor.Surface,
 	{supervisor.KindTerminalGone, absent, elapsed, true}:  supervisor.Surface,
 	{supervisor.KindTerminalGone, proof, open, false}:     supervisor.Surface,
-	{supervisor.KindTerminalGone, proof, open, true}:      supervisor.Surface,
+	{supervisor.KindTerminalGone, proof, open, true}:      supervisor.Absorb,
 	{supervisor.KindTerminalGone, proof, elapsed, false}:  supervisor.Surface,
 	{supervisor.KindTerminalGone, proof, elapsed, true}:   supervisor.Surface,
 
@@ -244,15 +248,17 @@ func TestAbsenceOfEvidenceSurfacesWhereverEvidenceCouldAbsorb(t *testing.T) {
 	}
 }
 
-// Three classifiers, each the real one with one rule relaxed, fail the
+// Four classifiers, each the real one with one rule relaxed, fail the
 // matrix at the cell the relaxation breaks, so what the matrix catches is
 // named and not merely counted. A timer absorbs every evidence-gated kind
 // while its window is open, which is time standing in for proof. A silencer
-// honours the surfaced flag for a terminal gone, which would leave a dead
-// worker quiet after its first surface. And a non-escalator never surfaces
-// an unchanged terminal with evidence once the escalation window has
-// elapsed, which is the loop that never escalates in the issue's B1.
-func TestTheMatrixRejectsATimerASilencedDeadTerminalAndANonEscalator(t *testing.T) {
+// absorbs a surfaced terminal gone whatever the window says, which would
+// leave a dead worker quiet after its first surface: #95 line H. A storm
+// ignores the surfaced flag for a terminal gone, which surfaces a crashed
+// worker on every pass. And a non-escalator never surfaces an unchanged
+// terminal with evidence once the escalation window has elapsed, which is
+// the loop that never escalates in the issue's B1.
+func TestTheMatrixRejectsATimerASilencedDeadTerminalAStormAndANonEscalator(t *testing.T) {
 	t.Parallel()
 	timer := func(w supervisor.Wake, e supervisor.Evidence, win supervisor.WindowState, s bool, st supervisor.Stall) supervisor.Verdict {
 		if row, ok := supervisor.Lookup(w.Kind()); ok && row.Class == supervisor.ClassEvidence && win == open {
@@ -263,6 +269,12 @@ func TestTheMatrixRejectsATimerASilencedDeadTerminalAndANonEscalator(t *testing.
 	silenced := func(w supervisor.Wake, e supervisor.Evidence, win supervisor.WindowState, s bool, st supervisor.Stall) supervisor.Verdict {
 		if w.Kind() == supervisor.KindTerminalGone && s {
 			return supervisor.Verdict{Level: supervisor.Absorb, Reason: supervisor.ReasonSurfacedOnce}
+		}
+		return supervisor.Classify(w, e, win, s, st)
+	}
+	storm := func(w supervisor.Wake, e supervisor.Evidence, win supervisor.WindowState, s bool, st supervisor.Stall) supervisor.Verdict {
+		if w.Kind() == supervisor.KindTerminalGone {
+			return supervisor.Verdict{Level: supervisor.Surface, Reason: supervisor.ReasonActionable}
 		}
 		return supervisor.Classify(w, e, win, s, st)
 	}
@@ -278,7 +290,8 @@ func TestTheMatrixRejectsATimerASilencedDeadTerminalAndANonEscalator(t *testing.
 		broken cell
 	}{
 		{"absorbs on an open window alone", timer, cell{supervisor.KindPlainEvent, absent, open, false}},
-		{"silences a surfaced terminal gone", silenced, cell{supervisor.KindTerminalGone, absent, open, true}},
+		{"silences a surfaced terminal gone", silenced, cell{supervisor.KindTerminalGone, absent, elapsed, true}},
+		{"surfaces a silent crash on every pass", storm, cell{supervisor.KindTerminalGone, absent, open, true}},
 		{"never escalates on an elapsed window with evidence", nonEscalator, cell{supervisor.KindTerminalUnchanged, proof, elapsed, false}},
 	}
 	for _, c := range cases {
@@ -295,9 +308,10 @@ func TestTheMatrixRejectsATimerASilencedDeadTerminalAndANonEscalator(t *testing.
 
 // The terminal-ish wait: one surface, absorbed while the idle screen
 // redraws, surfaced once more when the escalation window elapses, with the
-// reason naming which. The same flag on every other kind changes nothing,
-// cell by cell against the flag off.
-func TestSurfacedOnceReachesOnlyTheUnchangedTerminal(t *testing.T) {
+// reason naming which. The same flag on every kind but the two it is
+// defined for changes nothing, cell by cell against the flag off; the
+// resurfacing class has its own test below.
+func TestSurfacedOnceReachesOnlyTheUnchangedTerminalAndTheResurfacingKind(t *testing.T) {
 	t.Parallel()
 	unchanged := wakeOf(t, supervisor.KindTerminalUnchanged)
 	if got := supervisor.Classify(unchanged, absent, open, true, noStall); got.Level != supervisor.Absorb || got.Reason != supervisor.ReasonSurfacedOnce {
@@ -307,7 +321,7 @@ func TestSurfacedOnceReachesOnlyTheUnchangedTerminal(t *testing.T) {
 		t.Errorf("surfaced, idle, window elapsed: got %+v, want one more surface for the window", got)
 	}
 	for _, row := range supervisor.Kinds() {
-		if row.Kind == supervisor.KindTerminalUnchanged {
+		if row.Kind == supervisor.KindTerminalUnchanged || row.Class == supervisor.ClassResurface {
 			continue
 		}
 		for _, evidence := range []supervisor.Evidence{absent, proof} {
@@ -318,6 +332,85 @@ func TestSurfacedOnceReachesOnlyTheUnchangedTerminal(t *testing.T) {
 					t.Errorf("%s evidence=%s window=%s: the flag changed the verdict from %+v to %+v", row.Kind, evidence, window, off, on)
 				}
 			}
+		}
+	}
+}
+
+// A crashed worker that stays silent, #95 line H: a terminal gone that has
+// not surfaced surfaces as actionable whatever the window says; once it has
+// surfaced it is absorbed while the window since that surface is open, and
+// surfaces again for the window when it has elapsed, with evidence read in
+// neither case and the repetition count raising nothing. Terminal gone is
+// the one kind of the class, so a kind moved into it or out of it is a
+// change this test sees.
+func TestASilentCrashSurfacesOncePerWindow(t *testing.T) {
+	t.Parallel()
+	var resurfacing []supervisor.Kind
+	for _, row := range supervisor.Kinds() {
+		if row.Class == supervisor.ClassResurface {
+			resurfacing = append(resurfacing, row.Kind)
+		}
+	}
+	if !slices.Equal(resurfacing, []supervisor.Kind{supervisor.KindTerminalGone}) {
+		t.Fatalf("the resurfacing kinds are %v, want exactly terminal gone", resurfacing)
+	}
+	gone := wakeOf(t, supervisor.KindTerminalGone)
+	stalled := supervisor.Stall{Repetitions: 99, InspectAt: 1}
+	for _, evidence := range []supervisor.Evidence{absent, proof} {
+		for _, stall := range []supervisor.Stall{noStall, stalled} {
+			for _, window := range []supervisor.WindowState{open, elapsed} {
+				got := supervisor.Classify(gone, evidence, window, false, stall)
+				if got != (supervisor.Verdict{Level: supervisor.Surface, Reason: supervisor.ReasonActionable}) {
+					t.Errorf("not yet surfaced, evidence=%s window=%s stall=%+v: got %+v, want a surface as actionable", evidence, window, stall, got)
+				}
+			}
+			got := supervisor.Classify(gone, evidence, open, true, stall)
+			if got != (supervisor.Verdict{Level: supervisor.Absorb, Reason: supervisor.ReasonSurfacedThisWindow}) {
+				t.Errorf("surfaced and within the window, evidence=%s stall=%+v: got %+v, want absorbed as surfaced this window", evidence, stall, got)
+			}
+			got = supervisor.Classify(gone, evidence, elapsed, true, stall)
+			if got != (supervisor.Verdict{Level: supervisor.Surface, Reason: supervisor.ReasonWindowElapsed}) {
+				t.Errorf("surfaced and past the window, evidence=%s stall=%+v: got %+v, want a surface for the window", evidence, stall, got)
+			}
+		}
+	}
+}
+
+// Never more than once per window, and never silent for longer than one:
+// passes every ten seconds over a crash that stays silent for five windows,
+// with the caller the loop's shape, the window measured from the last
+// surface and restarted at each one and nowhere else, surface at the first
+// pass and then exactly at each window's end. The caller here is a model
+// of the loop's, so this checks the table under that caller and nothing
+// about the loop; internal/service's test of a dead terminal under an
+// injected clock checks the loop through the real store.
+func TestASilentCrashNeverSurfacesTwiceInOneWindow(t *testing.T) {
+	t.Parallel()
+	const (
+		window = 60
+		step   = 10
+		span   = 5 * window
+	)
+	gone := wakeOf(t, supervisor.KindTerminalGone)
+	var surfaces []int
+	surfaced, last := false, 0
+	for now := 0; now <= span; now += step {
+		state := open
+		if surfaced && now-last >= window {
+			state = elapsed
+		}
+		if supervisor.Classify(gone, absent, state, surfaced, noStall).Surfaces() {
+			surfaces = append(surfaces, now)
+			surfaced, last = true, now
+		}
+	}
+	want := []int{0, 60, 120, 180, 240, 300}
+	if !slices.Equal(surfaces, want) {
+		t.Fatalf("surfaces at %v seconds, want %v: once at the crash and once per window after", surfaces, want)
+	}
+	for i := 1; i < len(surfaces); i++ {
+		if gap := surfaces[i] - surfaces[i-1]; gap < window {
+			t.Errorf("surfaces at %d and %d are %d seconds apart, inside one %d-second window", surfaces[i-1], surfaces[i], gap, window)
 		}
 	}
 }

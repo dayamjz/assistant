@@ -72,8 +72,9 @@ import (
 // markers are supervise.go's: every row and every marker is written by the
 // supervisor loop under its incarnation fence, which this pass runs before
 // and cannot hold, and the loop surfaces a terminal that is dead or that
-// could not be observed as a terminal-gone wake, once per reference and
-// case, on its first pass after this one. So a task this pass decides to
+// could not be observed as a terminal-gone wake, per reference and case, on
+// its first pass after this one and again once per escalation_window while
+// it stays silent. So a task this pass decides to
 // surface rather than relaunch is told to the person by that row, and what
 // this pass adds is the reason it was not relaunched, in the service log; a
 // second row for the same dead terminal would be a second owner of one
