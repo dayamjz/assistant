@@ -102,6 +102,18 @@ type Result struct {
 	// the run, but a reason a checkpoint arrived carrying is reported here as
 	// it stands.
 	Reason string
+	// ParkedAt is the edge whose bound parked the run, on the terms
+	// Checkpoint.ParkedAt states.
+	ParkedAt *EdgeRef
+}
+
+// Park reports which bound parked the run, on the terms Checkpoint.Park
+// states, and false when the result is not a park.
+func (r Result) Park() (Park, bool) {
+	if !r.Status.Parked() {
+		return Park{}, false
+	}
+	return Park{Status: r.Status, Node: r.Position, Edge: r.ParkedAt.clone(), Budget: r.Budget}, true
 }
 
 // Run starts a new run of the graph under the given name, from initial state.
@@ -470,9 +482,11 @@ func (e *Executor) advance(ctx context.Context, cp Checkpoint) (Result, error) {
 		to, edge := e.next(cp.State, idx)
 		if edge >= 0 {
 			if parked, reason := e.checkEdgeBounds(&cp, edge); parked != StatusRunning {
+				declared := e.graph.edges[edge]
 				cp.Position = to
 				cp.Status = parked
 				cp.Reason = reason
+				cp.ParkedAt = &EdgeRef{From: declared.From, To: declared.To, Rounds: declared.Rounds}
 				return e.finish(ctx, cp)
 			}
 		}
@@ -731,6 +745,9 @@ func (e *Executor) persist(ctx context.Context, cp *Checkpoint) error {
 	if !cp.Status.Stopped() {
 		cp.Reason = ""
 	}
+	if cp.Status != StatusRoundsExhausted && cp.Status != StatusConverged {
+		cp.ParkedAt = nil
+	}
 	if idx, ok := e.graph.index[cp.Position]; ok && cp.Status != StatusRunning {
 		if node := e.graph.nodes[idx]; node.Halt != nil {
 			cp.State.set(node.Halt.Into, TextValue(""))
@@ -757,18 +774,7 @@ func (e *Executor) persist(ctx context.Context, cp *Checkpoint) error {
 }
 
 // result renders a checkpoint as the result a caller sees.
-func (e *Executor) result(cp Checkpoint) Result {
-	return Result{
-		Status:     cp.Status,
-		Position:   cp.Position,
-		Decision:   cp.Decision.clone(),
-		State:      cp.State.Clone(),
-		Checkpoint: cp.ID(),
-		Steps:      cp.Counters.Steps,
-		Budget:     cp.Counters.Budget,
-		Reason:     cp.Reason,
-	}
-}
+func (e *Executor) result(cp Checkpoint) Result { return cp.Result() }
 
 // checkRunState refuses a state a run cannot start from. It reports the same
 // shape invariant Graph.Validate applies to a checkpoint's state, as the

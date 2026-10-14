@@ -121,6 +121,14 @@ type Status struct {
 	Branch *Branch `json:"branch,omitempty"`
 	// ActiveRun is the run this branch has in flight, absent when it has none.
 	ActiveRun *Run `json:"active_run,omitempty"`
+	// ParkedRun is the branch's latest run when the branch has no run in
+	// flight and that run's record names the bound that parked it, absent
+	// otherwise. It is the whole answer for that run, so the stage reports it
+	// stood on when it parked, the findings among them, stay readable after
+	// its record has ended; which stage the park names is its record's Park.
+	// A run parked before the park record existed is not reported here,
+	// because nothing but its checkpoint says it parked.
+	ParkedRun *Run `json:"parked_run,omitempty"`
 	// Custody is PRD section 11's classification of the branch, read
 	// without fetching and without mutating anything, absent when the
 	// branch was not classified because there is no repository record or
@@ -374,6 +382,31 @@ func (r *Run) UnmarshalJSON(data []byte) error {
 type Runs struct {
 	// Runs are the records, newest first.
 	Runs []store.Run `json:"runs"`
+	// Parked is, for each listed run whose record names the bound that
+	// parked it, the report the stage that park names last recorded, in the
+	// order Runs lists them. It is read off the checkpoint the park record
+	// names, so it is what the stage reported as the run parked and not a
+	// copy kept anywhere else. It is absent when no listed run was parked.
+	Parked []ParkedReport `json:"parked,omitempty"`
+}
+
+// ParkedReport is the report the stage a run's park names last recorded,
+// carried for a run listing so the findings a park stopped on can be read
+// after the run has ended without asking for each run on its own.
+type ParkedReport struct {
+	// Run is the run's identifier.
+	Run string `json:"run"`
+	// Stage is the stage the park names, the record's own Park.Stage. It is
+	// empty for a budget park that stood in front of no stage, which has no
+	// report to carry.
+	Stage string `json:"stage,omitempty"`
+	// Report is what that stage recorded, absent when the stage never ran,
+	// when the park names no stage, and when the report could not be read.
+	Report *findings.Report `json:"report,omitempty"`
+	// Detail says why a report that should be here is not: the checkpoint or
+	// the report could not be read. It is empty when Report is present and
+	// when there was nothing to read.
+	Detail string `json:"detail,omitempty"`
 }
 
 // Task is one piece of fleet work with its resolved current state. The state
@@ -742,8 +775,15 @@ type TaskStopped struct {
 	// Ended is how the worker was ended, in the service's words.
 	Ended string `json:"ended"`
 	// Hold is the hold the stop registered, open, which a retry answer
-	// relaunches through the anchored relaunch and a stop answer leaves.
+	// relaunches through the anchored relaunch and a stop answer leaves. It
+	// is the zero hold when Finished is set.
 	Hold store.Hold `json:"hold"`
+	// Finished is the state the task resolved in from internal/taskstate's
+	// terminal tier when it was read after the worker ended, landed or
+	// complete, in which case no hold was registered because the work is
+	// finished and nothing is owed a relaunch. It is empty when the stop
+	// registered Hold.
+	Finished taskstate.State `json:"finished,omitempty"`
 }
 
 // Wakes is the answer to a drain of the wake queue: the queued rows, oldest

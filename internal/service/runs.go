@@ -842,6 +842,20 @@ func (s *Service) settle(ctx context.Context, runID string, result graph.Result)
 		default:
 			return fmt.Errorf("service: run %s completed with %w: %q", runID, store.ErrUnknownPullRequestEnd, end)
 		}
+	case result.Status.Parked():
+		// A park ends the run's record with the bound that parked it written
+		// beside the status, read off the result this segment or the
+		// checkpoint returned rather than inferred from where the run
+		// stands, so a park and a cancellation never read alike on the
+		// record.
+		park, err := parkRecord(result)
+		if err != nil {
+			return fmt.Errorf("service: run %s parked: %w", runID, err)
+		}
+		s.log.Printf("run %s parked: %s", runID, describePark(park, result.Reason))
+		move = func(ctx context.Context, id string) (store.Run, error) {
+			return built.runs.Park(ctx, id, park)
+		}
 	case result.Status.Stopped():
 		move = built.runs.Terminate
 	default:
@@ -880,6 +894,53 @@ func (s *Service) settle(ctx context.Context, runID string, result graph.Result)
 	return nil
 }
 
+// parkRecord is the record of which bound parked a run, read off the result
+// that parked it: the bound is the result's status, the stage is
+// internal/pipeline's for the edge the checkpoint recorded or, without one,
+// for the node the run stands at, and the checkpoint is the one the result
+// was read from. It refuses a result that is not a park, and a round limit or
+// convergence park whose node belongs to no stage, rather than recording a
+// park nobody can act on.
+func parkRecord(result graph.Result) (store.RunPark, error) {
+	park, ok := result.Park()
+	if !ok {
+		return store.RunPark{}, fmt.Errorf("a run that is %s was not parked", result.Status)
+	}
+	record := store.RunPark{Node: park.Node, Checkpoint: result.Checkpoint.Seq}
+	if stage, ok := pipeline.ParkedStage(park); ok {
+		record.Stage = stage.String()
+	}
+	switch park.Status {
+	case graph.StatusRoundsExhausted:
+		record.Bound = store.ParkRoundLimit
+		if park.Edge != nil {
+			record.Limit = park.Edge.Rounds
+		}
+	case graph.StatusConverged:
+		record.Bound = store.ParkConvergence
+	case graph.StatusBudgetExhausted:
+		record.Bound = store.ParkStepBudget
+		record.Limit = park.Budget
+	}
+	if err := record.Validate(); err != nil {
+		return store.RunPark{}, err
+	}
+	return record, nil
+}
+
+// describePark is the service log's line for a park: the bound, the stage and
+// node it names, and the reason the checkpoint carries.
+func describePark(p store.RunPark, reason string) string {
+	line := fmt.Sprintf("%s at stage %q, node %q", p.Bound, p.Stage, p.Node)
+	if p.Limit > 0 {
+		line += fmt.Sprintf(", limit %d", p.Limit)
+	}
+	if reason != "" {
+		line += ": " + reason
+	}
+	return line
+}
+
 // reconcile moves a run's record to match its durable checkpoint, and returns
 // the record as it then stands.
 //
@@ -908,7 +969,7 @@ func (s *Service) reconcile(ctx context.Context, runID string) (store.Run, error
 		// pending run is. There is nothing to reconcile against.
 		return record, nil
 	}
-	if err := s.settle(ctx, runID, graph.Result{Status: latest.Status, State: latest.State}); err != nil {
+	if err := s.settle(ctx, runID, latest.Result()); err != nil {
 		return store.Run{}, err
 	}
 	return s.store.Run(ctx, runID)
@@ -1390,6 +1451,7 @@ func (s *Service) report(ctx context.Context, runID string, result *graph.Result
 	}
 	standing := machine.Standing{
 		Record:    record.Status,
+		Park:      record.Park,
 		Execution: machine.ExecutionUnrecorded(),
 		Advancing: result == nil && s.isAdvancing(runID),
 	}
@@ -1431,15 +1493,8 @@ func (s *Service) report(ctx context.Context, runID string, result *graph.Result
 			// separates them everywhere else.
 			return answer.Decide(standing), nil
 		}
-		result = &graph.Result{
-			Status:   latest.Status,
-			Position: latest.Position,
-			Decision: latest.Decision,
-			State:    latest.State,
-			Reason:   latest.Reason,
-			Steps:    latest.Counters.Steps,
-			Budget:   latest.Counters.Budget,
-		}
+		read := latest.Result()
+		result = &read
 	}
 	status := result.Status
 	answer.Progress = &status

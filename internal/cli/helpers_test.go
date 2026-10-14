@@ -287,6 +287,15 @@ func serveWithNoRunnableAgent(t *testing.T, h *home.Home) func() {
 // it may resolve.
 func serveCatalog(t *testing.T, h *home.Home, served func(stages.StageDeps) pipeline.Stages, catalog *agents.Catalog) func() {
 	t.Helper()
+	return serveFixing(t, h, served, stages.Fix, catalog)
+}
+
+// serveFixing is serveCatalog for a test that also varies the fix path's
+// body, since that is what decides whether a stage's fix loop converges or
+// spends its rounds.
+func serveFixing(t *testing.T, h *home.Home, served func(stages.StageDeps) pipeline.Stages,
+	fixer func(stages.FixDeps) pipeline.Fixer, catalog *agents.Catalog) func() {
+	t.Helper()
 	build, err := store.CurrentBuild()
 	if err != nil {
 		t.Fatalf("reading this build's identity: %v", err)
@@ -294,7 +303,7 @@ func serveCatalog(t *testing.T, h *home.Home, served func(stages.StageDeps) pipe
 	running, err := service.Open(t.Context(), service.Options{
 		Home:      h,
 		NewStages: served,
-		NewFixer:  stages.Fix,
+		NewFixer:  fixer,
 		Build:     build,
 		Catalog:   catalog,
 	})

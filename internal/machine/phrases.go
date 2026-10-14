@@ -392,28 +392,58 @@ var (
 	}
 )
 
+// phraseByPark is what a person reads about a run whose record names the
+// bound that parked it, one row per bound in store.ParkBounds, which the
+// vocabulary test derives and checks. They sharpen OutcomeFailed's row the way
+// the executing rows sharpen that outcome's: the failed row has to cover a run
+// that could not proceed as well as all three parks, and a person deciding
+// what to do about a park needs to know which bound it was, because what
+// changes the outcome differs by bound. ParkAction is the driving agent's
+// reading of the same three, with the stage and the key a row may not name.
+var phraseByPark = map[store.ParkBound]Phrase{
+	store.ParkRoundLimit: {
+		Outcome:     "Automatic fixing of this change reached its round limit with findings still to fix.",
+		Consequence: "Nothing more is done with it, and what the last check found stays with the run.",
+		Decision:    "Fix those findings and send the change again, or allow more fix rounds and send it again.",
+	},
+	store.ParkConvergence: {
+		Outcome:     "Automatic fixing of this change was stopped because its last round changed nothing.",
+		Consequence: "Another round would change nothing either, and what the last check found stays with the run.",
+		Decision:    "Fix those findings yourself and send the change again.",
+	},
+	store.ParkStepBudget: {
+		Outcome:     "This run used its whole step budget before the gate reached a verdict.",
+		Consequence: "Nothing more is done with it, and nothing was undone.",
+		Decision:    "Allow a larger step budget and send the change again.",
+	},
+}
+
 // RunPhrase is the one translation from a run's standing to what a person
 // reads: phraseByOutcome's row for OutcomeOf the standing, sharpened for
 // OutcomeExecuting into the three rows above on the facts NextActionOf reads,
-// so the phrase and the next action a driving agent is given cannot describe
+// and for a failed run whose record names its park into that bound's row, so
+// the phrase and the next action a driving agent is given cannot describe
 // different runs. Run.Phrase makes the same choice from an answer already
 // decided, through the same chooser.
 func RunPhrase(s Standing) Phrase {
-	return outcomePhrase(OutcomeOf(s), s.Advancing, s.Execution.Recorded())
+	return outcomePhrase(OutcomeOf(s), s.Park, s.Advancing, s.Execution.Recorded())
 }
 
 // Phrase is what a person reads about this run, chosen from the outcome,
-// the advancing fact and whether a position was recorded, which is what
-// Decide wrote and Progress carries, through the chooser RunPhrase uses.
+// the park its record names, the advancing fact and whether a position was
+// recorded, which is what Decide wrote and Progress carries, through the
+// chooser RunPhrase uses.
 func (r Run) Phrase() Phrase {
-	return outcomePhrase(r.Outcome, r.Advancing, r.Progress != nil)
+	return outcomePhrase(r.Outcome, r.Record.Park, r.Advancing, r.Progress != nil)
 }
 
-// outcomePhrase is the one chooser behind RunPhrase and Run.Phrase. An
-// outcome outside the set, which the vocabulary test keeps from being one of
-// Outcomes, reads as the failed row, on OutcomeOf's own terms for a standing
-// it cannot interpret.
-func outcomePhrase(outcome Outcome, advancing, recorded bool) Phrase {
+// outcomePhrase is the one chooser behind RunPhrase and Run.Phrase. An outcome outside the set, which the vocabulary test keeps
+// from being one of Outcomes, reads as the failed row, on OutcomeOf's own
+// terms for a standing it cannot interpret.
+func outcomePhrase(outcome Outcome, park store.Optional[store.RunPark], advancing, recorded bool) Phrase {
+	if row, ok := parkPhrase(outcome, park); ok {
+		return row
+	}
 	if outcome == OutcomeExecuting {
 		switch {
 		case advancing:
@@ -432,21 +462,37 @@ func outcomePhrase(outcome Outcome, advancing, recorded bool) Phrase {
 
 // RecordPhrase is what a person reads about a run of which only the record is
 // in hand: a listing, or a run's state travelling as an event. The record
-// carries no merge record, no checkpoint and no advancing fact, so this is
-// phraseByOutcome's row for the record's status read through OutcomeOf with
-// the execution unrecorded, and OutcomeExecuting is left at the weaker row
-// rather than sharpened on facts the caller does not have. Two readings are
-// therefore the record's and not the run's, and RunPhrase is where the run's
-// are: a passed record reads as having cleared the gate, which is true of a
-// merged one too, and a terminated record reads as ended before a verdict,
-// which is true of a run a bound parked too; the merged and the parked
-// readings need the merge record and the checkpoint.
+// carries its status and the park that ended it, if a bound did, and no merge
+// record, no checkpoint and no advancing fact, so this is the row for the
+// record read through OutcomeOf with the execution unrecorded, and
+// OutcomeExecuting is left at the weaker row rather than sharpened on facts
+// the caller does not have. A terminated record naming a park reads as that
+// bound's row, as RunPhrase reads it. Two readings are still the record's and
+// not the run's, and RunPhrase is where the run's are: a passed record reads
+// as having cleared the gate, which is true of a merged one too, and a
+// terminated record parked before the park record existed reads as ended
+// before a verdict; those readings need the merge record and the checkpoint.
 func RecordPhrase(r store.Run) Phrase {
-	outcome := OutcomeOf(Standing{Record: r.Status, Execution: ExecutionUnrecorded()})
+	outcome := OutcomeOf(Standing{Record: r.Status, Park: r.Park, Execution: ExecutionUnrecorded()})
+	if p, ok := parkPhrase(outcome, r.Park); ok {
+		return p
+	}
 	if p, ok := phraseByOutcome[outcome]; ok {
 		return p
 	}
 	return phraseByOutcome[OutcomeFailed]
+}
+
+// parkPhrase is the bound's row for a failed run whose record names its park,
+// and false for any other run. It is the one place that choice is made, for
+// outcomePhrase and RecordPhrase both.
+func parkPhrase(outcome Outcome, park store.Optional[store.RunPark]) (Phrase, bool) {
+	p, ok := park.Get()
+	if !ok || outcome != OutcomeFailed {
+		return Phrase{}, false
+	}
+	row, ok := phraseByPark[p.Bound]
+	return row, ok
 }
 
 // Hold rows, with the decision's subject filled in: the subject is the
@@ -593,6 +639,11 @@ var (
 		Consequence: "Nothing more is done with the work until you answer, and nothing begins it again on its own.",
 		Decision:    taskAnswerDecision,
 	}
+	phraseFinishedWorkerStopped = Phrase{
+		Outcome:     "The worker was ended after its work was already finished.",
+		Consequence: "No decision was opened and nothing begins it again; its local copy is removed only once that is proven safe.",
+		Decision:    "Nothing to decide.",
+	}
 	// PhraseStopUnverified is the row for a stop whose end the program could
 	// not show: the worker may still be running, and no decision was opened.
 	PhraseStopUnverified = Phrase{
@@ -617,9 +668,15 @@ func MessagePhrase(m store.Message) Phrase {
 	return phraseMessageUnknown
 }
 
-// StopPhrase is what a person reads about a stop that ended the worker and
-// registered its hold.
-func StopPhrase(TaskStopped) Phrase { return phraseWorkerStopped }
+// StopPhrase is what a person reads about a stop that ended the worker: the
+// row for the hold it registered, or, for a task whose work was already
+// finished and so was owed no hold, the row saying nothing waits on them.
+func StopPhrase(stopped TaskStopped) Phrase {
+	if stopped.Finished != "" {
+		return phraseFinishedWorkerStopped
+	}
+	return phraseWorkerStopped
+}
 
 // The stream's own rows: what a person reads when the fleet view is told
 // something about the channel rather than about the work.
@@ -1351,11 +1408,16 @@ func TablePhrases() []Phrase {
 		}
 	}
 	out = append(out, phraseRunAdvancing, phraseRunStalled, phraseRunUnrecorded)
+	for _, bound := range store.ParkBounds() {
+		if p, ok := phraseByPark[bound]; ok {
+			out = append(out, p)
+		}
+	}
 	out = append(out, HoldPhrase(store.Hold{Subject: holdPlaceholder}), HoldPhrase(store.Hold{Subject: holdPlaceholder, Resolution: store.Known("answered")}))
 	out = append(out, HoldPhrase(store.Hold{Subject: holdPlaceholder, TaskID: store.Known("a task")}))
 	out = append(out, phraseRetried, phraseRedispatched, phraseRetryDeferred, phraseRetryHeld, phraseRetryAtBound, phraseRetryRefused, phraseRetryUndispatchable, phraseNotRetried, phraseLandedLocallyNow)
 	out = append(out, phraseMessageUnread, phraseMessageRead, phraseMessageRefused, phraseMessageUnknown,
-		phraseWorkerStopped, PhraseStopUnverified)
+		phraseWorkerStopped, phraseFinishedWorkerStopped, PhraseStopUnverified)
 	out = append(out, phraseCopyKept, phraseCopyRemoved, phraseCopyNotSwept)
 	out = append(out, PhraseUpdatesMissed, PhraseServiceStopping, PhraseWorkerSpoke, PhraseActivity, PhraseUnfamiliarUpdate)
 	out = append(out, PhraseServiceUp, PhraseServiceAbsent, PhraseGated, PhraseUngated, PhraseNoRun, PhraseNoRuns, PhraseNoFleetWork)

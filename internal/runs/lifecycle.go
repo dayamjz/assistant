@@ -29,6 +29,9 @@ type move struct {
 	// the status that goes with it or the reverse. The zero value records
 	// none and is every other row.
 	end store.PullRequestEnd
+	// park is whether this move records a store.RunPark with the status,
+	// which is movePark and no other row.
+	park bool
 }
 
 // The legal moves. A run is created pending, runs, and ends in exactly one of
@@ -44,6 +47,15 @@ var (
 	moveTerminate = move{
 		from: []store.RunStatus{store.RunPending, store.RunRunning, store.RunHeld},
 		to:   store.RunTerminated,
+	}
+	// movePark is terminate with the record of which bound ended the run
+	// written beside the status, in one transaction. It is legal from the
+	// statuses terminate is, so a park ends a run wherever a cancellation
+	// could, and a run a cancellation already ended stays as that ending.
+	movePark = move{
+		from: []store.RunStatus{store.RunPending, store.RunRunning, store.RunHeld},
+		to:   store.RunTerminated,
+		park: true,
 	}
 	// The two moves a run's pull request makes, per PRD section 5's "Waiting
 	// on checks". Each is legal from running, which is the checks stage's
@@ -67,7 +79,7 @@ var (
 	// moves is every row above. It exists so that "no move leads out of a
 	// terminal status" is read off the table rather than restated as a second
 	// list that could disagree with it.
-	moves = []move{moveStart, moveHold, moveRelease, movePass, moveFail, moveTerminate,
+	moves = []move{moveStart, moveHold, moveRelease, movePass, moveFail, moveTerminate, movePark,
 		movePassOnMerge, moveFailOnClose}
 )
 
@@ -149,6 +161,24 @@ func (s *Service) FailOnClose(ctx context.Context, id string, read store.PullReq
 // before it started ends the same way as one cancelled halfway through.
 func (s *Service) Terminate(ctx context.Context, id string) (store.Run, error) {
 	return s.apply(ctx, id, moveTerminate)
+}
+
+// Park records that a bound parked a run: it ends the run terminated, as
+// Terminate does, and writes park beside the status in the same transaction,
+// so the record says which bound ended it and a cancellation never reads as a
+// park or the reverse. A run already terminated is returned as it stands with
+// no park written, which is what keeps a run a person ended before its park
+// was recorded reading as the ending it had. It ends the run on apply's
+// terms, fixer role and OnFinish included.
+func (s *Service) Park(ctx context.Context, id string, park store.RunPark) (store.Run, error) {
+	r, err := s.locked(func() (store.Run, error) {
+		return s.store.TransitionRunOnPark(ctx, id, movePark.from, park)
+	})
+	if err != nil {
+		return store.Run{}, err
+	}
+	s.finish(ctx, r)
+	return r, nil
 }
 
 // apply makes one move and, when it ends the run, drops the run's fixer role

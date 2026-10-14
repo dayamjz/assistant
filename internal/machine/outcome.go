@@ -1,6 +1,8 @@
 package machine
 
 import (
+	"fmt"
+
 	"github.com/dayamjz/assistant/internal/graph"
 	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/store"
@@ -233,6 +235,13 @@ type Standing struct {
 	// passed from that record, so this is a read of it and never a copy
 	// stored elsewhere.
 	PullRequestEnd store.PullRequestEnd
+	// Park is which bound parked the run, read off the run's record,
+	// store.Run.Park, and unknown for a run its record names no park for. It
+	// travels beside Record for the reason PullRequestEnd does: a terminated
+	// record is a cancellation, a supersession or a park, and only the park
+	// record says which bound, so a surface holding the record alone reads
+	// the same answer a surface holding the checkpoint does.
+	Park store.Optional[store.RunPark]
 	// Execution is where the run's execution stands.
 	Execution Execution
 	// Advancing is whether a segment of the run was executing when the answer
@@ -285,7 +294,10 @@ func OutcomeOf(s Standing) Outcome {
 	case store.RunFailed:
 		return OutcomeFailed
 	case store.RunTerminated:
-		if s.Execution.parked() {
+		// The park record decides first, because it is the record of the
+		// ending; the checkpoint's own status is read for a run parked before
+		// that record existed, which has none.
+		if s.Park.IsKnown() || s.Execution.parked() {
 			return OutcomeFailed
 		}
 		return OutcomeCancelled
@@ -307,12 +319,66 @@ func OutcomeOf(s Standing) Outcome {
 // advancing cannot be attached to and carried on, because attaching to a run
 // with no checkpoint reports it rather than resuming it. Telling a reader to
 // attach would be telling them to make a call that answers with the same run.
+//
+// A failed run whose record names the bound that parked it is answered with
+// that bound's action, ParkAction's, rather than the failed row's, which has to
+// cover a run that could not proceed as well as all three parks.
 func NextActionOf(s Standing) string {
 	outcome := OutcomeOf(s)
 	if outcome == OutcomeExecuting && !s.Advancing && !s.Execution.Recorded() {
 		return unrecordedAction
 	}
+	if park, ok := s.Park.Get(); ok && outcome == OutcomeFailed {
+		return ParkAction(park)
+	}
 	return outcome.NextActionFor(s.Advancing)
+}
+
+// ParkAction is what a driving agent does about a run the given bound parked.
+// It names the bound, the stage it was counting where there is one, and the
+// one thing that changes the outcome for that bound, which differs by bound:
+//
+//   - A round limit is a configuration key, the stage's fix_rounds key, read
+//     from the pushed commit.
+//   - The step budget is what graph.Executor.AdoptBudget changes on a run
+//     where it stands; nothing in this build calls it on a run, and a parked
+//     run's record has ended, so the action says so and names run_budget.
+//   - Convergence has no knob: the last round changed nothing, so another
+//     would change nothing either.
+//
+// Every action says where the findings are, which is the parked stage's
+// report on the run's answer. A park this build cannot name is answered with
+// the failed row's action rather than an invented one.
+func ParkAction(p store.RunPark) string {
+	stage, _ := pipeline.ParseStage(p.Stage)
+	switch p.Bound {
+	case store.ParkRoundLimit:
+		rounds := "its automatic rounds"
+		if p.Limit > 0 {
+			rounds = fmt.Sprintf("%d automatic rounds", p.Limit)
+		}
+		action := fmt.Sprintf("A fix round limit parked this run: the %s stage still reported findings to fix after "+
+			"%s, and they are in that stage's report on this answer. ", p.Stage, rounds)
+		if key, ok := stage.RoundsKey(); ok && p.Node == stage.FixNode() {
+			return action + fmt.Sprintf("Fix them and push again, or raise %s in the change's configuration and "+
+				"push again to start a fresh run with more rounds. This run's record has ended, so nothing resumes it.", key)
+		}
+		return action + "That bound is not a configuration key. Fix them and push again to start a fresh run. " +
+			"This run's record has ended, so nothing resumes it."
+	case store.ParkConvergence:
+		return fmt.Sprintf("Convergence parked this run: the last automatic fix round at the %s stage changed "+
+			"nothing, leaving the run's state exactly as the round before it did, so the round limit was not what "+
+			"stopped it. The findings it stopped on are in that stage's report on this answer. Fix them yourself and "+
+			"push again to start a fresh run. This run's record has ended, so nothing resumes it.", p.Stage)
+	case store.ParkStepBudget:
+		return fmt.Sprintf("The run-wide step budget of %d parked this run before node %s could run. internal/graph's "+
+			"AdoptBudget moves a run its budget parked onto a larger budget where it stands, without re-running "+
+			"anything, but no command in this build calls it and this run's record has ended, so nothing resumes it. "+
+			"Raise run_budget in the default branch's or the operator's configuration, which a pushed branch cannot "+
+			"set, and start a fresh run, or find what keeps the run looping.",
+			p.Limit, p.Node)
+	}
+	return OutcomeFailed.NextAction()
 }
 
 // nextActions is what a caller does about each outcome. PRD section 9 requires
