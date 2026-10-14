@@ -64,10 +64,13 @@ import (
 // relaunch that did not happen, and retryNotBegun says which refusal is
 // which: one the isolation assertion made after the claim is recorded on the
 // new attempt, so the task resolves Failed and nothing relaunches it again,
-// which the answer reports as AnswerRetryRefused; for every other one the
-// decision stays on the hold, or is spent by an attempt begun since, and the
-// next reconciliation reads the records again, which the answer reports as
-// AnswerRetryDeferred without promising what that pass will do.
+// which the answer reports as AnswerRetryRefused; one on a record that
+// cannot be dispatched is refused at the same read by every path that
+// begins an attempt, before it claims one, which the answer reports as
+// AnswerRetryUndispatchable; for every other one the decision stays on the
+// hold, or is spent by an attempt begun since, and the next reconciliation
+// reads the records again, which the answer reports as AnswerRetryDeferred
+// without promising what that pass will do.
 //
 // # The no-sweep hold
 //
@@ -186,6 +189,14 @@ import (
 //     that relaunches on the standing answer to one that spends it, so its
 //     row promises nothing about that start; which it was is in
 //     NotRelaunched and the service log, and nothing more precise travels.
+//   - AnswerRetryUndispatchable's "nothing will begin it" rests on every
+//     path that begins an attempt reading the record through expectationOf
+//     before its claim, which is structure and not a recorded fact: a third
+//     caller of store.BeginTaskAttempt that skipped that read would falsify
+//     it with nothing here noticing. The answer stands unspent, so once the
+//     record is put right a later start may act on it; nothing tells the
+//     person when that happens, and nothing watches the record for the
+//     change.
 //   - An answer to a hold that is neither relaunch hold has no closed option set,
 //     because nothing records one for it; what was answered is recorded and
 //     nothing here checks it against what the hold offered.
@@ -509,9 +520,40 @@ func (s *Service) answerDispatchRetry(ctx context.Context, r machine.TaskRespond
 // the isolation assertion was recorded on the attempt the retry began, so
 // the task resolves Failed from it, reconcile.go's table surfaces it rather
 // than relaunching, and dispatchDue passes it over: that is
-// AnswerRetryRefused, and nothing begins the work again on its own. Every
-// other refusal is AnswerRetryDeferred, which promises nothing about the
-// next start, because the refusals it covers do not agree on one:
+// AnswerRetryRefused, and nothing begins the work again on its own.
+//
+// A refusal of errTaskRecord is AnswerRetryUndispatchable, and nothing
+// begins the work while what it read stands, because of where the read sits
+// rather than because anything records it. An attempt is begun only by
+// store.BeginTaskAttempt, whose two callers here are dispatchClaimed and
+// relaunchClaimed, and a worker is launched only from the dispatched value
+// one of them returns; both call expectationOf before they claim, and it
+// refuses with errTaskRecord, recording nothing, a record naming no
+// repository, a reserved copy path that is not home.TaskCopy, a missing
+// instructions file, or values tasks.Expect refuses. Every start reaches
+// the task through those two - dispatchDue at open and after each release,
+// reconciliation's relaunch at open, the coordinator's task.relaunch and a
+// retry answered here - and is refused at the same read, before any claim.
+// The answer itself is not spent, since no attempt was begun. "Until the
+// record changes" is reachable and means exactly a change to what
+// expectationOf reads: the instructions file at home.TaskInstructions
+// created again, which nothing in this program does after intake, because
+// its two later writers, dispatch's second check and promotion's intent,
+// only append to a file that stands; the task's repository, shape or
+// branch, whose one writer after intake is promotion's
+// store.TransitionTaskShape; the repository row's working path, rewritten
+// by store.UpsertRepository; or the home's root, since the task's reserved
+// path, which nothing rewrites, is compared against the path this home
+// composes. After such a change the next start's passes read the task
+// on their ordinary terms, and the row promises nothing about what they do.
+// recordPrimary's errTaskRecord, a repository naming no default branch, is
+// the one site after the claim; store.UpsertRepository, the one writer of
+// that row, refuses an empty default branch, so no row this build writes
+// reaches it, and were it reached each start would claim an attempt and be
+// refused the same way, beginning no work.
+//
+// Every other refusal is AnswerRetryDeferred, which promises nothing about
+// the next start, because the refusals it covers do not agree on one:
 //
 //   - errRelaunchInFlight: a dispatch or relaunch of the task holds the slot
 //     in this service, and what it ends at decides, not this answer.
@@ -525,8 +567,6 @@ func (s *Service) answerDispatchRetry(ctx context.Context, r machine.TaskRespond
 //     relaunches only if it reads dead then.
 //   - *copyUnswept: the sweep failed or did not clear; the next start sweeps
 //     again and may be refused the same way.
-//   - errTaskRecord: the record cannot be dispatched as written, and no start
-//     dispatches it until the record changes.
 //   - store.ErrTaskMoved: another caller began an attempt first, which spends
 //     this answer; what that attempt does is its own.
 //   - a read or write failing before the claim leaves the answer standing
@@ -539,8 +579,11 @@ func (s *Service) answerDispatchRetry(ctx context.Context, r machine.TaskRespond
 // row says that and no more.
 func retryNotBegun(err error) machine.AnswerEffect {
 	var refused *isolationRefused
-	if errors.As(err, &refused) {
+	switch {
+	case errors.As(err, &refused):
 		return machine.AnswerRetryRefused
+	case errors.Is(err, errTaskRecord):
+		return machine.AnswerRetryUndispatchable
 	}
 	return machine.AnswerRetryDeferred
 }

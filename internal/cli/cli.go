@@ -560,10 +560,11 @@ func exitFor(answer any) machine.Code {
 		return hostExit(v)
 	case machine.TaskAnswered:
 		// A retry that began no work - deferred, held on a further decision,
-		// or refused by the isolation assertion - is a decision taken and work
-		// not begun, which a caller has to see without reading the document.
-		// A started retry, a stop and an answer that only closed a hold are
-		// each what was asked for.
+		// refused by the isolation assertion, or refused on a record that
+		// cannot be dispatched - is a decision taken and work not begun,
+		// which a caller has to see without reading the document. A started
+		// retry, a stop and an answer that only closed a hold are each what
+		// was asked for.
 		if v.Effect.RetryNotBegun() {
 			return machine.ExitFailure
 		}

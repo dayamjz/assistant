@@ -405,7 +405,8 @@ type TaskAnswered struct {
 	// NotRelaunched is why a retry began no work now, and is empty for
 	// every effect RetryNotBegun does not report. The answer is recorded on
 	// the hold either way; what it does after that is the effect's to say,
-	// and only AnswerRetryDeferred leaves it to a later start to read.
+	// and only AnswerRetryDeferred leaves it to a later start to read. For
+	// AnswerRetryUndispatchable it names what in the record was refused.
 	NotRelaunched string `json:"not_relaunched,omitempty"`
 	// Task is the task as it stands after the answer.
 	Task Task `json:"task"`
@@ -415,8 +416,9 @@ type TaskAnswered struct {
 // AnswerEffects lists it. Each effect says only what the answer itself did
 // or what the mechanism behind it then does for certain: a retry that began
 // work names which kind of start it was, and a retry that began none names
-// the one refusal whose consequence is settled, AnswerRetryRefused, apart
-// from the rest, AnswerRetryDeferred, whose consequence is not.
+// the two refusals whose consequence is settled, AnswerRetryRefused and
+// AnswerRetryUndispatchable, apart from the rest, AnswerRetryDeferred,
+// whose consequence is not.
 type AnswerEffect string
 
 const (
@@ -438,7 +440,7 @@ const (
 	// is not part of it.
 	AnswerRedispatched AnswerEffect = "redispatched"
 	// AnswerRetryDeferred is a retry recorded whose relaunch or dispatch was
-	// refused now for a reason other than the two below; NotRelaunched says
+	// refused now for a reason other than the three below; NotRelaunched says
 	// why. Nothing about the next start is promised: the reasons it covers
 	// range from a slot another caller holds to a refusal after the claim,
 	// which spends the answer, and the one thing they share is that the
@@ -458,6 +460,16 @@ const (
 	// and dispatch passes it over, so nothing begins the work again on its
 	// own. NotRelaunched says what the assertion found.
 	AnswerRetryRefused AnswerEffect = "retry-refused"
+	// AnswerRetryUndispatchable is a retry recorded whose relaunch or
+	// dispatch was refused because the task's record cannot be dispatched as
+	// it stands: it names no repository, reserved its copy somewhere other
+	// than the home puts it, has no instructions file, or carries values the
+	// copy's expectation refuses. Every path that begins an attempt reads the
+	// record that way before it claims one, so nothing begins the work until
+	// what that read finds changes: the task's or its repository's record,
+	// or the instructions file the home keeps for the task. NotRelaunched
+	// says what was refused.
+	AnswerRetryUndispatchable AnswerEffect = "retry-undispatchable"
 	// AnswerStopped is a stop: the task is left where it stopped and
 	// nothing relaunches it.
 	AnswerStopped AnswerEffect = "stopped"
@@ -468,19 +480,19 @@ const (
 func AnswerEffects() []AnswerEffect {
 	return []AnswerEffect{
 		AnswerRecorded, AnswerRelaunched, AnswerRedispatched,
-		AnswerRetryDeferred, AnswerRetryHeld, AnswerRetryRefused, AnswerStopped,
+		AnswerRetryDeferred, AnswerRetryHeld, AnswerRetryRefused, AnswerRetryUndispatchable, AnswerStopped,
 	}
 }
 
 // RetryNotBegun reports whether the effect is a retry a person decided on
-// that began no work: deferred, held on a further decision, or refused by
-// the isolation assertion. It is what a surface reads to tell a caller that
-// the decision was taken and the work did not start, without the caller
-// reading the document. A stop and an answer that only closed a hold asked
+// that began no work: deferred, held on a further decision, refused by the
+// isolation assertion, or refused on a record that cannot be dispatched. It
+// is what a surface reads to tell a caller that the decision was taken and
+// the work did not start, without the caller reading the document. A stop and an answer that only closed a hold asked
 // for no work, and a started retry began some, so neither is reported.
 func (e AnswerEffect) RetryNotBegun() bool {
 	switch e {
-	case AnswerRetryDeferred, AnswerRetryHeld, AnswerRetryRefused:
+	case AnswerRetryDeferred, AnswerRetryHeld, AnswerRetryRefused, AnswerRetryUndispatchable:
 		return true
 	}
 	return false
