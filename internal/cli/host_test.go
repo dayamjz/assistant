@@ -350,8 +350,9 @@ func TestHostStopBlocksWhenTheConfigurationDoesNotResolve(t *testing.T) {
 // TestTheHostVerbServesTheHookAndNothingElse is the boundary around the
 // second command outside PRD section 9's table, on the terms
 // TestTheGateVerbServesTheHooksAndNothingElse sets for the first: the
-// subcommand the host invokes reaches a verb rather than being refused, and
-// nothing else under that verb does, so "host" is not a door the
+// subcommand the host invokes and the installer that configures the host
+// reach a verb rather than being refused, and nothing else under that verb
+// does, so "host" is not a door the
 // specification's surface can grow through. The usage refusals are read as
 // documents, because the host's block status and the usage status coincide
 // and a code alone could not tell the two apart.
@@ -365,11 +366,18 @@ func TestTheHostVerbServesTheHookAndNothingElse(t *testing.T) {
 		t.Fatalf("assistant host stop over an idle home exited %s, want success:\n%s%s", got.code, got.stdout, got.stderr)
 	}
 	decodeHostStop(t, got)
+	// The installer a person types is served too, and without its flag it
+	// changes nothing; host install's own tests hold what it prints.
+	if got := run(t, h, subject, "--json", "host", "install"); got.code == machine.ExitUsage {
+		t.Fatalf("assistant host install is refused as incorrect usage:\n%s%s", got.stdout, got.stderr)
+	}
 
 	for _, args := range [][]string{
 		{"host"},
 		{"host", "start"},
 		{"host", "stop", "again"},
+		{"host", "install", "again"},
+		{"host", "install", "--force"},
 		// The subcommand comes first after the verb.
 		{"host", "--json", "stop", "stop"},
 	} {
@@ -385,7 +393,7 @@ func TestTheHostVerbServesTheHookAndNothingElse(t *testing.T) {
 	// The usage text names the command under its own heading, so a command
 	// this binary answers to is one it mentions.
 	help := run(t, h, subject, "--help")
-	if !strings.Contains(help.stdout, "host stop") || !strings.Contains(help.stdout, cli.HostReentryVar) {
+	if !strings.Contains(help.stdout, "host stop") || !strings.Contains(help.stdout, "host install") || !strings.Contains(help.stdout, cli.HostReentryVar) {
 		t.Fatalf("the usage text does not describe the host hook and its signal:\n%s", help.stdout)
 	}
 }

@@ -563,6 +563,10 @@ func exitFor(answer any) machine.Code {
 		if v.Effect == machine.AnswerRetryDeferred {
 			return machine.ExitFailure
 		}
+	case machine.HostInstall:
+		if v.Result == machine.HostInstallRefused {
+			return machine.ExitFailure
+		}
 	}
 	return machine.ExitOK
 }

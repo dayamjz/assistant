@@ -1,6 +1,7 @@
 // Package cli is the command surface: the verbs PRD section 9 specifies, the
-// flags that parameterize them, the two renderings of one answer, and the two
-// subcommands a gate's hooks invoke.
+// flags that parameterize them, the two renderings of one answer, the two
+// subcommands a gate's hooks invoke, and the host verb's turn-end hook and its
+// installer.
 //
 // A person at a terminal and an agent driving programmatically are both
 // first-class users of the same commands. They share the same decisions, the
@@ -113,6 +114,23 @@
 // to exactly one status and the message reaches the coordinator in the
 // vocabulary P13 holds the phrase table to.
 //
+// # Installing the hook is a person's consent
+//
+// hostHooks also holds "assistant host install", the installer PRD section
+// 6's stop guard row asks for, and it is the one row there a person types. A
+// change to the host's configuration is one a push never consented to (P1),
+// so by default it prints the exact line the host's settings need and the
+// file it belongs in and writes nothing; only --write merges the line into
+// that file, keeping every other setting, and a file holding this program's
+// stop guard under another command line, or one it cannot read as settings,
+// is refused as a typed result with the file left as it was. The host is
+// Claude Code, and the settings shape is what that host documents about
+// itself; hostInstall names the source and its four gaps, the one that
+// matters most being that the line arranges no re-entry signal. PRD section
+// 9's row for this verb says a person never types it, which predates the
+// installer, so that is a finding against the specification rather than a
+// precedent for typed subcommands here.
+//
 // Three gaps are deliberate and written down rather than rounded off. The
 // block status coincides with the usage status, so a host that runs a
 // command line this surface refuses reads a block; that is the safe
@@ -121,10 +139,9 @@
 // coordinator, but the worker group set is the service's and is reached over
 // the socket by peer credentials, and a process with no socket has no peer
 // to place, so the command answers the same whoever invokes it and refuses
-// nobody. And nothing installs the hook: writing the command into the
-// coordinator host's configuration is a consent question in P1's sense that
-// #95 line D has yet to answer, so this package writes into no host
-// configuration and the host stays unconfigured until that line is.
+// nobody. And the installer arranges no re-entry signal, so a host
+// configured through it is never told a turn was re-entered and every turn
+// that ends with work under way unwatched is blocked; hostInstall says why.
 //
 // # Which verbs need the service, and which cannot
 //

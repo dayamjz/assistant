@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/machine"
@@ -34,5 +36,38 @@ func TestEveryVerdictMapsToExactlyOneExitCode(t *testing.T) {
 	}
 	if len(seen) != 2 {
 		t.Fatalf("the answers mapped onto %d statuses, want the host's two", len(seen))
+	}
+}
+
+// The hook's command line quotes a path a shell would split or expand, and
+// the reader that recognises this program's stop guard splits it back to the
+// same words, so a binary or a home under a directory with a space or a quote
+// in its name is named whole, and recognised as this program's when it is
+// already there.
+func TestTheHookCommandQuotesAndSplitsBackToTheSameWords(t *testing.T) {
+	t.Parallel()
+	for _, words := range [][]string{
+		{"/usr/local/bin/assistant", "--home", "/home/someone/.assistant", "host", "stop"},
+		{"/Users/some one/Application Support/assistant", "--home", "/Users/some one/it's here", "host", "stop"},
+		{"/opt/a$b/assistant", "--home", "/tmp/x;y&z", "host", "stop"},
+	} {
+		quoted := make([]string, len(words))
+		for i, w := range words {
+			quoted[i] = shellQuote(w)
+		}
+		line := strings.Join(quoted, " ")
+		got, ok := shellWords(line)
+		if !ok || !slices.Equal(got, words) {
+			t.Fatalf("%q split into %q (%v), want %q", line, got, ok, words)
+		}
+		if !runsThisStopGuard(line, words[0]) {
+			t.Fatalf("%q is not recognised as this program's stop guard", line)
+		}
+	}
+	if runsThisStopGuard("~/.claude/stop-hook-git-check.sh", "/usr/local/bin/assistant") {
+		t.Fatal("another program's turn-end hook is read as this program's")
+	}
+	if _, ok := shellWords("'unterminated"); ok {
+		t.Fatal("an unterminated quote split")
 	}
 }

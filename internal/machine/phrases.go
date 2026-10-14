@@ -76,6 +76,68 @@ var (
 	}
 )
 
+// The stop guard installer's rows, one per result and one per refusal,
+// chosen by HostInstallPhrase. None names the file or the line: both are
+// machine text a person copies exactly, so the renderer prints them beside
+// the row as they are. None says when the host reads its settings either,
+// because that is the host's behaviour and nothing here establishes it; the
+// rows say what this command did to the file and nothing past it.
+var (
+	phraseHostInstallPrinted = Phrase{
+		Outcome:     "The line below is what the coordinator's host needs in the settings file named below to check, as each turn ends, whether work would be left unwatched.",
+		Consequence: "Nothing was written, so the host's settings are as they were.",
+		Decision:    "Add the line to that file yourself, beside any hooks it already has, or run this again with --write to have it added for you.",
+	}
+	phraseHostInstallWritten = Phrase{
+		Outcome:     "The settings file named below now holds the line the coordinator's host needs to check, as each turn ends, whether work would be left unwatched.",
+		Consequence: "Every other setting in the file was kept, in its order, though the file is laid out afresh.",
+		Decision:    "Nothing to decide.",
+	}
+	phraseHostInstallPresent = Phrase{
+		Outcome:     "The settings file named below already holds the line the coordinator's host needs.",
+		Consequence: "Nothing was written, so the file is as it was.",
+		Decision:    "Nothing to decide.",
+	}
+	phraseHostInstallConflict = Phrase{
+		Outcome:     "The line was not added, because the settings file named below already runs this program's turn-end check with a different command, shown after the line.",
+		Consequence: "Nothing was written, so the file is as it was; adding a second check would judge another binary or another home.",
+		Decision:    "Decide which of the two the host should run, edit the file yourself, and run this again with --write if you still want the line below.",
+	}
+	phraseHostInstallUnreadable = Phrase{
+		Outcome:     "The line was not added, because the settings file named below could not be read as settings the line can be merged into.",
+		Consequence: "Nothing was written, so the file is as it was.",
+		Decision:    "Repair the file, or add the line below yourself, and run this again with --write if you still want it added for you.",
+	}
+	phraseHostInstallChanged = Phrase{
+		Outcome:     "The line was not added, because the settings file named below changed while it was being merged.",
+		Consequence: "Nothing was written, so whatever changed it was kept.",
+		Decision:    "Run this again with --write.",
+	}
+)
+
+// HostInstallPhrase is what a person reads about a request to install the
+// stop guard's hook: the row for the result, and for a refusal the row for
+// why. A refused answer whose refusal is not one HostInstallRefusals lists
+// reads as unreadable, which says nothing was written; it never reads as
+// written.
+func HostInstallPhrase(h HostInstall) Phrase {
+	switch h.Result {
+	case HostInstallPrinted:
+		return phraseHostInstallPrinted
+	case HostInstallWritten:
+		return phraseHostInstallWritten
+	case HostInstallPresent:
+		return phraseHostInstallPresent
+	}
+	switch h.Refusal {
+	case HostInstallConflict:
+		return phraseHostInstallConflict
+	case HostInstallChanged:
+		return phraseHostInstallChanged
+	}
+	return phraseHostInstallUnreadable
+}
+
 // phraseByState is the one table from a task's resolved state to what a person
 // reads about it. Every state internal/taskstate can resolve has a row, which
 // the vocabulary test derives from taskstate.States and checks, so a state
@@ -849,6 +911,14 @@ var PhraseNoReading = Phrase{
 func TablePhrases() []Phrase {
 	out := []Phrase{phraseServiceDown, phraseServiceNotWatching, phraseUndecided}
 	out = append(out, phraseTurnBlocked, phraseTurnReEntered)
+	for _, result := range HostInstallResults() {
+		if result != HostInstallRefused {
+			out = append(out, HostInstallPhrase(HostInstall{Result: result}))
+		}
+	}
+	for _, refusal := range HostInstallRefusals() {
+		out = append(out, HostInstallPhrase(HostInstall{Result: HostInstallRefused, Refusal: refusal}))
+	}
 	for _, state := range taskstate.States() {
 		if p, ok := phraseByState[state]; ok {
 			out = append(out, p)

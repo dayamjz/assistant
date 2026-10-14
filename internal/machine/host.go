@@ -83,3 +83,92 @@ func HostStopOf(v supervisor.StopVerdict, reEntered bool) HostStop {
 	answer.Message = PhraseTurnBlocked + " " + answer.Supervision.Warning
 	return answer
 }
+
+// HostInstall is the answer to installing the stop guard's hook into the
+// coordinator's host: PRD section 6's stop guard row says the installer
+// prints the exact line the host's configuration needs and writes it only
+// when given an explicit flag, so without that flag nothing in the host's
+// configuration changes (P1). This shape is what that installer found and
+// did, and nothing about how it found it: which file the host reads and how
+// the line merges into it are internal/cli's adapter.
+//
+// Settings and Line are machine text a person copies exactly, so they are
+// carried as they are and printed beside the phrase rather than in it.
+type HostInstall struct {
+	// Settings is the host's settings file the line belongs in, whether or
+	// not anything was written to it.
+	Settings string `json:"settings"`
+	// Line is the exact configuration line: a whole settings document on one
+	// line, which is the file's content when it holds nothing else, and
+	// whose one hook merges beside whatever hooks the file already holds.
+	Line string `json:"line"`
+	// Command is the command line the hook runs, which is the part of Line
+	// this program owns.
+	Command string `json:"command"`
+	// Result is what became of the request, one of HostInstallResults.
+	Result HostInstallResult `json:"result"`
+	// Refusal is why the line was not written, set exactly when Result is
+	// HostInstallRefused, one of HostInstallRefusals.
+	Refusal HostInstallRefusal `json:"refusal,omitempty"`
+	// Conflict is the command line of the hook the file already holds that
+	// the line could not be added beside, when Refusal is
+	// HostInstallConflict, carried as the file holds it.
+	Conflict string `json:"conflict,omitempty"`
+	// Detail says what was wrong with the file when the line was refused, and
+	// is empty otherwise.
+	Detail string `json:"detail,omitempty"`
+}
+
+// HostInstallResult is what became of a request to install the stop guard's
+// hook. It is a closed set, HostInstallResults, and each member has its own
+// row in the phrase table.
+type HostInstallResult string
+
+// The four results, in the order HostInstallResults lists them.
+const (
+	// HostInstallPrinted is the default: the line was printed and nothing
+	// was written, because the explicit flag was not given.
+	HostInstallPrinted HostInstallResult = "printed"
+	// HostInstallWritten is the line added to the settings file under the
+	// explicit flag, with everything else the file held kept.
+	HostInstallWritten HostInstallResult = "written"
+	// HostInstallPresent is the explicit flag given over a file that already
+	// holds exactly this hook, so nothing was written.
+	HostInstallPresent HostInstallResult = "present"
+	// HostInstallRefused is the explicit flag given over a file the line
+	// could not be added to, so nothing was written; Refusal says why.
+	HostInstallRefused HostInstallResult = "refused"
+)
+
+// HostInstallResults is every result, so a test walks the set rather than a
+// list of its own.
+func HostInstallResults() []HostInstallResult {
+	return []HostInstallResult{HostInstallPrinted, HostInstallWritten, HostInstallPresent, HostInstallRefused}
+}
+
+// HostInstallRefusal is why the line was not written under the explicit
+// flag. It is a closed set, HostInstallRefusals, and each member has its own
+// row in the phrase table.
+type HostInstallRefusal string
+
+// The three refusals, in the order HostInstallRefusals lists them.
+const (
+	// HostInstallConflict is a file that already holds a turn-end hook
+	// running this program's stop guard with a different command line, which
+	// would be a second guard over another binary or another home.
+	HostInstallConflict HostInstallRefusal = "conflict"
+	// HostInstallUnreadable is a file that could not be read, or whose
+	// content is not a settings document the line can be merged into
+	// without guessing at what it means.
+	HostInstallUnreadable HostInstallRefusal = "unreadable"
+	// HostInstallChanged is a file that changed between the read the merge
+	// was computed from and the write, so the write would have replaced
+	// content the merge never saw.
+	HostInstallChanged HostInstallRefusal = "changed"
+)
+
+// HostInstallRefusals is every refusal, so a test walks the set rather than
+// a list of its own.
+func HostInstallRefusals() []HostInstallRefusal {
+	return []HostInstallRefusal{HostInstallConflict, HostInstallUnreadable, HostInstallChanged}
+}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -125,9 +126,20 @@ func fixtures(t *testing.T) map[string]any {
 		// The stop guard blocked: the guard's reason and the detail are the
 		// structured rendering's, and the message is what a person reads.
 		"host stop": machine.HostStopOf(supervisor.StopVerdict{Reason: supervisor.StopLockFree}, false),
-		"decision":  fixtureDecision(),
-		"details":   withDetails,
-		"findings":  fixtureDecision(),
+		// The installer refused a conflict, which prints all three lines of
+		// machine text beside its row: the settings file, the line, and the
+		// command the file already holds, each carrying a home path.
+		"host install": machine.HostInstall{
+			Settings: filepath.Join(os.TempDir(), "someone", ".claude", "settings.json"),
+			Line:     `{"hooks":{"Stop":[{"hooks":[{"type":"command","command":"/bin/assistant --home ` + root + ` host stop"}]}]}}`,
+			Command:  "/bin/assistant --home " + root + " host stop",
+			Result:   machine.HostInstallRefused, Refusal: machine.HostInstallConflict,
+			Conflict: "/elsewhere/assistant --home " + filepath.Join(root, sampleID) + " host stop",
+			Detail:   "a turn-end hook runs this program's stop guard with a different command line",
+		},
+		"decision": fixtureDecision(),
+		"details":  withDetails,
+		"findings": fixtureDecision(),
 		"doctor": machine.Doctor{
 			Checks: []machine.Check{
 				{Name: machine.CheckHome, OK: true, Blocking: true, Detail: root},
@@ -239,6 +251,16 @@ func TestThePhrasedRenderersSpeakTheTableAndTheJSONKeepsIdentifiers(t *testing.T
 	// standard error, where the host reads it, and so does the fallback's
 	// refusal.
 	elsewhere := map[string]bool{"host stop": true, fallback.name: true}
+	// A renderer that prints machine text a person copies exactly beside its
+	// row names those lines here: each has to be printed, exactly, after its
+	// label, and only the lines left once they are taken out are held to the
+	// rule, so the exemption cannot swallow the row itself.
+	verbatim := map[string]func(any) []string{
+		"host install": func(v any) []string {
+			a := v.(machine.HostInstall)
+			return []string{hostInstallFileLabel + " " + a.Settings, hostInstallLineLabel + " " + a.Line, hostInstallConflictLabel + " " + a.Conflict}
+		},
+	}
 	phrased := 0
 	for _, r := range Renderings() {
 		if !r.Phrased {
@@ -261,8 +283,25 @@ func TestThePhrasedRenderersSpeakTheTableAndTheJSONKeepsIdentifiers(t *testing.T
 		} else if got.out == "" {
 			t.Errorf("%s rendered nothing", r.Name)
 		}
+		exempt := map[string]bool{}
+		if lines, ok := verbatim[r.Name]; ok {
+			for _, line := range lines(value) {
+				if !strings.Contains(got.out, line+"\n") {
+					t.Errorf("%s did not print the machine text %q as it is", r.Name, line)
+				}
+				exempt[line] = true
+			}
+		}
+		held := 0
 		for _, line := range strings.Split(strings.TrimRight(got.out, "\n"), "\n") {
+			if exempt[line] {
+				continue
+			}
+			held++
 			vocabtest.Assert(t, line)
+		}
+		if got.out != "" && held == 0 {
+			t.Errorf("%s printed nothing but machine text, so its row was held to nothing", r.Name)
 		}
 		t.Logf("%s:\n%s%s", r.Name, got.out, got.elsewhere)
 
