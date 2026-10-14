@@ -149,8 +149,16 @@ func writeInstance(t *testing.T, h *home.Home) {
 // hostStop drives "assistant host stop" the way the host does: through
 // cli.Run with the test's own streams, under an environment the test
 // composes, so the re-entry signal reaches the command the way the host
-// supplies it and no subprocess is involved.
+// supplies it and no subprocess is involved. It gives the command no
+// standard input; hostStopWith gives it one.
 func hostStop(t *testing.T, h *home.Home, env map[string]string, args ...string) invocation {
+	t.Helper()
+	return hostStopWith(t, h, env, nil, args...)
+}
+
+// hostStopWith is hostStop with stdin as the command's standard input, which
+// is where the host writes its turn-end event.
+func hostStopWith(t *testing.T, h *home.Home, env map[string]string, stdin io.Reader, args ...string) invocation {
 	t.Helper()
 	executable, err := os.Executable()
 	if err != nil {
@@ -161,6 +169,7 @@ func hostStop(t *testing.T, h *home.Home, env map[string]string, args ...string)
 		Args:       append([]string{"--home", h.Root(), "host", "stop"}, args...),
 		Stdout:     &out,
 		Stderr:     &errs,
+		Stdin:      stdin,
 		Getenv:     func(key string) string { return env[key] },
 		WorkingDir: t.TempDir(),
 		Executable: executable,

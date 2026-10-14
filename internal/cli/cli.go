@@ -25,8 +25,9 @@ type Environment struct {
 	Stdout io.Writer
 	// Stderr is where progress and human-facing failures go.
 	Stderr io.Writer
-	// Stdin is what a command reads input from. Only the gate hook verbs read
-	// it, because git puts a push's reference update lines there; a nil reader
+	// Stdin is what a command reads input from. Only the gate hook verbs and
+	// "host stop" read it: git puts a push's reference update lines there,
+	// and the coordinator's host puts the turn-end event there. A nil reader
 	// is no input rather than a failure, so every other verb is unaffected by
 	// what the process was given.
 	Stdin io.Reader

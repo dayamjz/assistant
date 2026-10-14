@@ -28,7 +28,9 @@ import (
 // own settings are found and HOME as what that defaults from, so a set
 // CLAUDE_CONFIG_DIR is read as the directory standing in for ~/.claude.
 // These are what the host says about itself, not something this package
-// verified by running it.
+// verified by running it. The line sets no re-entry signal of its own:
+// the same host documents stop_hook_active on the hook's standard input,
+// and hostStop reads it there; hostReentryField names the source.
 const (
 	hostConfigDirVar   = "CLAUDE_CONFIG_DIR"
 	hostConfigDirName  = ".claude"
@@ -65,7 +67,7 @@ const (
 // is reported present and not touched. Each refusal is a typed result that
 // exits with machine.ExitFailure.
 //
-// Four gaps are this command's and are not closed here. The write is
+// Three gaps are this command's and are not closed here. The write is
 // anchored to the bytes the merge read: those are read again just before the
 // new file is renamed into place and a difference is a refusal, but a change
 // that lands between that read and the rename is overwritten, and nothing
@@ -73,13 +75,7 @@ const (
 // hook from another's is textual: a hook whose command line ends in "host
 // stop" and whose program has this binary's file name is this program's,
 // so one reached through a link or a wrapper is not recognised as a
-// conflict. And the line arranges no re-entry signal: the host documents a
-// stop_hook_active field in what it writes to the hook's standard input,
-// hostStop reads HostReentryVar and nothing on standard input, and so a
-// turn the host re-entered after a block is judged afresh and blocked again
-// while the work stays unwatched. That is the direction PRD section 5 calls
-// the only safe reading without a signal, and bridging the two is not built.
-// Last, the file is the one the host documents as a person's user settings
+// conflict. Last, the file is the one the host documents as a person's user settings
 // rather than one tied to the coordinator's directory, which this command
 // does not know, so the line is configured beside every session that file
 // applies to and not only the coordinator's.
