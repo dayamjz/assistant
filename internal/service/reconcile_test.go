@@ -17,26 +17,6 @@ import (
 	"github.com/dayamjz/assistant/internal/taskstate"
 )
 
-// pipeTerminals is a Terminals over a provider of this home built on the
-// stand-in's runner. It holds no session, so it answers every reference by
-// identity alone, which is exactly what a restarted service's own provider
-// answers before it launches anything: Dead for a process that is gone,
-// Unobserved for one that is present and unheld, and Unobserved for another
-// home's reference. It captures nothing by reference.
-type pipeTerminals struct{ pipe *session.Pipe }
-
-func terminalsOver(h *home.Home, agent *standin.Agent) pipeTerminals {
-	return pipeTerminals{pipe: session.NewPipe(h, agent.Runner())}
-}
-
-func (p pipeTerminals) Probe(ctx context.Context, ref string) session.Observation {
-	return p.pipe.Probe(ctx, ref)
-}
-
-func (p pipeTerminals) Capture(context.Context, string) (session.Capture, error) {
-	return session.Capture{}, errors.New("this double captures nothing by reference")
-}
-
 // blockingTerminals is a provider that never answers a probe until the
 // context ends, and then answers Unobserved: the shape a provider that
 // hangs takes behind a bound.
@@ -82,17 +62,19 @@ func launchedAndEnded(t *testing.T, h *home.Home, id string) session.Reference {
 	return first
 }
 
-// A restart with the probe wired relaunches a dead terminal in place: the
-// new service reads the first attempt's reference as Dead, claims a second
-// attempt before it serves, appends the relaunched note and the dispatched
-// entry, launches a worker in the standing copy with the instructions
-// followed by the program's note, and records the new session on the second
-// attempt. The task reads Dispatched from its new attempt through the task
-// surface, whose probe is the test's and holds no session; it never reads
-// Unknown from the dead terminal once the attempt exists. The terminal-gone
-// wake standing for the dead session is acknowledged by the program, and a
-// hold wake stays queued for the coordinator.
-func TestARestartWithAProbeRelaunchesADeadTerminalInPlace(t *testing.T) {
+// A restart relaunches a dead terminal in place, through the service's own
+// provider and nothing injected: the new service's probe answers the first
+// attempt's reference Dead by identity, because the process Close ended is
+// gone, so it claims a second attempt before it serves, appends the
+// relaunched note and the dispatched entry, launches a worker in the
+// standing copy with the instructions followed by the program's note, and
+// records the new session on the second attempt. The task then reads
+// Running from the process tier through the task surface, because the same
+// provider holds the new session; it never reads Unknown from the dead
+// terminal once the attempt exists. The terminal-gone wake standing for the
+// dead session is acknowledged by the program, and a hold wake stays queued
+// for the coordinator.
+func TestARestartRelaunchesADeadTerminalInPlace(t *testing.T) {
 	h := newHome(t)
 	subject := newSubject(t)
 	quietMaintenance(t, subject)
@@ -125,15 +107,14 @@ func TestARestartWithAProbeRelaunchesADeadTerminalInPlace(t *testing.T) {
 	_ = records.Close()
 
 	o, agent := workerOptions(t, h)
-	o.Terminals = terminalsOver(h, agent)
 	var second session.Reference
 	var read string
 	withServiceOptions(t, o, func(running serviceUnderTest) {
 		provider, launched := waitSession(t, running.service, id)
 		second = launched.Reference()
 		waitCapture(t, provider, launched, "worker ready")
-		if got := taskState(t, running.client, id); got.State != taskstate.Dispatched || got.Source != taskstate.SourceEvent {
-			t.Fatalf("after the relaunch the task resolves %s from %s, want Dispatched from its new attempt", got.State, got.Source)
+		if got := taskState(t, running.client, id); !readsRunning(got) {
+			t.Fatalf("after the relaunch the task resolves %+v, want Running from the process tier through its new session", got)
 		}
 		// The worker prints this once it has read the note's first line,
 		// after recording it, so the record is complete when it is read
@@ -207,43 +188,6 @@ func TestARestartWithAProbeRelaunchesADeadTerminalInPlace(t *testing.T) {
 	}
 	if strings.Contains(string(raw), "Relaunched by the program") {
 		t.Fatal("the note was written into the instructions file")
-	}
-}
-
-// A restart without a probe leaves a launched task alone: nothing reads
-// its terminal as dead, so reconciliation relaunches nothing, and dispatch
-// passes over a task whose latest attempt already names a session rather
-// than starting a second worker beside one it cannot see. The task still
-// has its one attempt, the new service holds no session, and the task reads
-// Dispatched from the record, which is PRD section 11's ambiguous liveness
-// left alone.
-func TestARestartWithoutAProbeLeavesALaunchedTaskAlone(t *testing.T) {
-	h := newHome(t)
-	subject := newSubject(t)
-	quietMaintenance(t, subject)
-	repository := recordRepository(t, h, subject)
-	id := recordDispatchedTask(t, h, repository, store.TaskDelivery, "task/one")
-	first := launchedAndEnded(t, h, id)
-
-	o, agent := workerOptions(t, h)
-	withServiceOptions(t, o, func(running serviceUnderTest) {
-		if got := taskState(t, running.client, id); got.State != taskstate.Dispatched || got.Basis.Process != taskstate.Unobserved {
-			t.Fatalf("the task resolves %+v, want Dispatched from the record with its terminal unobserved", got)
-		}
-		if _, _, ok := running.service.SessionOf(id); ok {
-			t.Fatal("the restarted service launched a worker for a task whose terminal it cannot read")
-		}
-		for _, call := range agent.Calls() {
-			if call.Worker {
-				t.Fatalf("a worker was started: %s", call)
-			}
-		}
-	})
-	records := openRecords(t, h)
-	defer func() { _ = records.Close() }()
-	attempts, err := records.TaskAttempts(t.Context(), id)
-	if err != nil || len(attempts) != 1 || attempts[0].SessionRef.Or("") != first.String() {
-		t.Fatalf("the task has attempts %+v (%v), want only the first with its session", attempts, err)
 	}
 }
 

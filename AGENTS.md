@@ -325,8 +325,14 @@ Each has cost this repository more than one round of review.
   a caller writes for itself. A third follows from the second: no frame here has
   a field for who resolved a hold, and `Request.HoldResolver` derives the answer
   from the surface rather than reading it, so a caller cannot claim a person
-  decided. Read its `doc.go` for where state may still be collapsed into a gap
-  marker and why that is not the strict rule relaxed. Three state types have a
+  decided; `Request.WakeAcknowledger` is the same rule for the wake queue.
+  Whether a peer is a task's worker is a second relation over the same
+  `Credentials`, decided by the handler from `internal/session`'s worker group
+  set and never a third access class: the rows whose answer turns on it
+  (`task.event`, `wakes.*`, `supervision.assert`, `gate.admit`) say so, and
+  `ErrWorker` and `ErrNotWorker` are its two refusals. Read its `doc.go` for
+  where state may still be collapsed into a gap marker and why that is not the
+  strict rule relaxed. Four state types have a
   producer, all in `internal/service`; two the table names have none, and the
   table keeps them because a row is not a promise of a producer.
 - `internal/pipeline` is the nine stages as a graph definition, not a second
@@ -446,12 +452,14 @@ Each has cost this repository more than one round of review.
   first through `StoreReport`, which parses with `findings.ParseReport`,
   registers every ask as a hold in the row's transaction, and keeps a fix
   finding as evidence that reaches no fixer. A task copy is examined only
-  once its terminal probed `Dead`; `internal/service` passes `Unobserved`
-  until the probe is wired, so every task copy refuses today, and its
-  `doc.go` lists that with the other gaps: the discarding worktree removal
-  stays reachable, a stated liveness is believed, ignored files are
-  invisible, and a promoted copy holding nothing main lacks passes the
-  content proof like a fresh delivery copy.
+  once its terminal probed `Dead`, and `internal/service` passes the
+  liveness its own task reader resolved through the session provider, so a
+  landed task whose worker runs keeps its copy with the live refusal; its
+  `doc.go` lists the gaps: a stated liveness is believed, the window after
+  the read is covered by the inventory re-read alone, the discarding
+  worktree removal stays reachable, ignored files are invisible, and a
+  promoted copy holding nothing main lacks passes the content proof like a
+  fresh delivery copy.
   `Promote` is PRD section 5's promotion, a library entry on `Create`'s
   terms (no verb, no method: #95 line E) and the one place this package
   writes into a copy. The flip is first and is `store.TransitionTaskShape`
@@ -475,10 +483,14 @@ Each has cost this repository more than one round of review.
   refuses an unproven `tasks.Isolation` with `ErrUnproven` and then asks the
   resolved runner for a worker through `agents.OpenWorker`, so only the
   scripted adapter answers it in this build and the real adapter's worker
-  mode is #95 line K. Its one caller is `internal/service`'s `launch.go`,
-  which hands it a proof asserted again at launch rather than dispatch's;
-  `Create` itself re-derives nothing. Three things there are mechanism
-  rather than rule.
+  mode is #95 line K. Its one creating caller is `internal/service`'s
+  `launch.go`, which hands it a proof asserted again at launch rather than
+  dispatch's; `Create` itself re-derives nothing. Its one observing caller
+  is that package's `terminals.go`, which probes through `Probe` and
+  captures through `Pipe.CaptureReference`, the capture addressed by the
+  record's reference out of the same held set `Probe` answers `Live` from,
+  so the reference to handle lookup has one owner. Three things there are
+  mechanism rather than rule.
   `Probe` answers `taskstate.Liveness`, that package's word, with a typed
   `Reason`, and the `reasons` table is the one place a reason's liveness is
   decided: `Live` only through a handle this provider holds whose process
@@ -492,7 +504,15 @@ Each has cost this repository more than one round of review.
   `Capture` is the worker's bounded tail plus `Digest` over `Normalize`, an
   output stream and not a screen, with the rules derived from what the
   stand-in emits and the real adapter's format stated unknown; the
-  comparison is the supervisor's. Read its `doc.go` for the restart answer
+  comparison is the supervisor's. `Workers` is the set of live worker groups,
+  keyed by the process group a worker leads and naming its task, and `Pipe`
+  is its one producer: `Create` joins the group and the membership ends with
+  the process or with `Close`, the join is unexported, and `Member` reads the
+  worker's done signal, so nothing a caller states is a membership. It is
+  the authority input every worker-to-program path derives a task from and it
+  is not `internal/service`'s containment registry, which answers a different
+  question; its doc says why one map may not answer both. Read its `doc.go`
+  for the restart answer
   and the residual gaps: nothing ends an orphan, the record-first window
   leaves a process no record names until #112's sweep, the route walk does
   not see behind an interface-typed field, and on a platform without a
@@ -649,7 +669,17 @@ Each has cost this repository more than one round of review.
   itself, and it has a producer now: `containRunner` wraps the resolved agent
   so every invocation and fix round registers its group for exactly the
   process's lifetime, while the configured commands and the provider command
-  still register nothing, which `doc.go` states rather than implies. Three
+  still register nothing, which `doc.go` states rather than implies. A task's
+  worker is placed by the other relation over the same credentials, the
+  worker group set `internal/session` holds, and `workers.go` owns that
+  derivation (credentials, then the peer's process group read as containment
+  reads it, then the set) and the four methods that turn on it: `task.event`
+  admits only a worker and holds the kind to `taskstate`'s writer column,
+  `wakes.list`, `wakes.acknowledge` and `supervision.assert` refuse one.
+  `admit_workers.go` owns the rule a worker's push is held to - only its
+  task's branch, forward, never a deletion - and why that is admission's
+  decision and not `internal/safety`'s; a person's push meets it nowhere, and
+  on Windows no peer is placed at all, which both files state as a limit. Three
   state events have producers here and `publish.go` owns two: `task.state` is
   published from the supervisor loop's pass, the one reader that resolves
   every task, once per change by `taskstate.Basis` equality and not per pass,
@@ -668,8 +698,9 @@ Each has cost this repository more than one round of review.
   recorded on the run's cleanup record and `report` composes into the run's
   answer as `machine.Run.Cleanup`; `cleanup.go` calls `CleanUp` for the
   delivery task a merge record landed and for an investigation task whose
-  report `storeTaskReport` stored, passing `taskstate.Unobserved` until the
-  probe is wired, and no verb or method reaches any of it. And whether anything is advancing a run is a third
+  report `storeTaskReport` stored, passing the terminal's liveness as the
+  service's own task reader resolved it, never a second read, and no verb
+  or method reaches any of it. And whether anything is advancing a run is a third
   fact neither the record nor the checkpoint holds: it lives in the slot a run
   advances in, `report` reads it rather than inferring it, and it travels as
   `machine.Run.Advancing`. It is also where PRD section 11's step 3 lives:
@@ -708,13 +739,21 @@ Each has cost this repository more than one round of review.
   the service's `session.Pipe` - built in `driverFor` on the resolved agent
   before `containRunner` takes its worker arm away - and records
   `Session.Reference()` on the attempt through `store.SetAttemptSession`.
-  Every task reader is built through `reader`, probing through
-  `Options.Terminals`, the one seam a terminal is observed through, which
-  is nil in production until the session hookup, so a launched task still
-  resolves Dispatched there and nothing writes an event to say otherwise; an
-  adapter without `worker_sessions` dispatches and never launches, with the
-  `*agents.CapabilityError` logged and nothing recorded; and `Close` ends
-  only the sessions this service created. A path already standing at the
+  Every task reader is built through `reader`, probing through the
+  service's `Terminals`, the one seam a terminal is observed through, which
+  `Open` leaves to `terminals.go`'s `heldTerminals` over the service's own
+  provider unless a test passes a double: liveness has one producer, the
+  provider's probe, reached through that seam by the task surface, the
+  queue, reconciliation, the loop and the cleanup sites alike, so a launched
+  task reads Running from the process tier while its worker runs and what
+  precedence gives with `Dead` once it exits, and nothing writes an event to
+  say either; the provider is built in `driverFor` when first asked for, so
+  a service that cannot resolve an agent observes nothing, and
+  `ErrTerminalsUnavailable`'s one producer is a capture on such a service.
+  An adapter without `worker_sessions` dispatches and never launches, with
+  the `*agents.CapabilityError` logged and nothing recorded, so such a task
+  reads Dispatched from the record; and `Close` ends only the sessions this
+  service created. A path already standing at the
   copy's path is asserted and never removed. The environment half of P11 is
   only as strong as every launch path building its environment through
   `agents.WorkerEnvironment`, which every assertion and the worker's start
@@ -747,8 +786,9 @@ Each has cost this repository more than one round of review.
   transaction, and the beacon, written only from the loop's own `select`
   through `feed.Writer`, is written under the same mutex the epoch is bumped
   under. A pass reads the records, then the slot, then the provider, through
-  `Terminals`, a seam nothing implements yet, so the loop runs degraded with
-  every terminal `Unobserved` and surfaces everything; classification is
+  the same `Terminals`, so an unchanged live worker is absorbed on the
+  handle's evidence, a dead one surfaces as terminal gone, and a survivor
+  or another home's reference surfaces as unobservable; classification is
   `supervisor.Classify` over inputs `decide` composes from the markers, and a
   capture reaches a marker as its digest only, through `internal/redact`. The
   watchdog reads the beacon the guards read, replaces an incarnation whose

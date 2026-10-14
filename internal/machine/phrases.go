@@ -364,6 +364,14 @@ var (
 		Consequence: "This view ends with it, and work under way goes unwatched until it is back.",
 		Decision:    "Run assistant service start to resume.",
 	}
+	// PhraseWorkerSpoke is the row for a worker appending to its history:
+	// the entry is history and its words are not relayed, and what the task
+	// now resolves to is the listing's to say once it has been read.
+	PhraseWorkerSpoke = Phrase{
+		Outcome:     "A worker added to its history.",
+		Consequence: "What that means for its work shows once it has been read.",
+		Decision:    "Nothing to decide until it does.",
+	}
 	// PhraseActivity is the row for a worker's or a stage's output arriving
 	// on the stream. P13 makes that output something to read and never
 	// something to relay, so the row says that something was produced and
@@ -486,7 +494,7 @@ func TablePhrases() []Phrase {
 	out = append(out, phraseRunAdvancing, phraseRunStalled, phraseRunUnrecorded)
 	out = append(out, HoldPhrase(store.Hold{Subject: holdPlaceholder}), HoldPhrase(store.Hold{Subject: holdPlaceholder, Resolution: store.Known("answered")}))
 	out = append(out, phraseCopyKept, phraseCopyRemoved)
-	out = append(out, PhraseUpdatesMissed, PhraseServiceStopping, PhraseActivity, PhraseUnfamiliarUpdate)
+	out = append(out, PhraseUpdatesMissed, PhraseServiceStopping, PhraseWorkerSpoke, PhraseActivity, PhraseUnfamiliarUpdate)
 	out = append(out, PhraseServiceUp, PhraseServiceAbsent, PhraseGated, PhraseUngated, PhraseNoRun, PhraseNoRuns, PhraseNoFleetWork)
 	return out
 }

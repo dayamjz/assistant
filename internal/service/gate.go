@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/dayamjz/assistant/internal/gate"
+	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/redact"
@@ -99,13 +100,24 @@ func (s *Service) gateSubject(ctx context.Context, id string) (subject, error) {
 // inside a stage that pushes to the gate is a caller Ancestry places inside
 // that stage. The gaps that remain are stated on StageStarted rather than
 // implied here.
-func (s *Service) admit(ctx context.Context, req machine.GateRequest) (machine.Admission, error) {
+//
+// A task's worker is the one pusher that is placed and not refused: its
+// process group is in the worker group set and in no stage, so containment
+// passes it, and what admission then asks of it is admit_workers.go's rule,
+// decided from the same credentials - only the task's own branch, only
+// forward, never a deletion. A person's push meets none of that: a peer in
+// no worker group is held to exactly what this method held every push to
+// before the rule existed.
+func (s *Service) admit(ctx context.Context, from ipc.Request, req machine.GateRequest) (machine.Admission, error) {
 	// Resolving is the check; the resolution itself is the notification's to
 	// use.
 	if _, err := s.gateSubject(ctx, req.Gate); err != nil {
 		return machine.Admission{}, err
 	}
 	if err := checkUpdates(req); err != nil {
+		return machine.Admission{}, err
+	}
+	if err := s.admitWorkerPush(ctx, from, req); err != nil {
 		return machine.Admission{}, err
 	}
 	if pushNeedsADriver(req) {

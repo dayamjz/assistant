@@ -104,11 +104,14 @@
 // string. It is the attempt's session reference: the caller records it
 // through store.SetAttemptSession, once, after Create returns, and nowhere
 // else, and internal/service's launch is that caller. No file under the
-// home holds it, and this package writes no record;
-// taskstate's Reader already probes by that reference, so the one record
-// serves both. A reference whose home marker is another home's probes
-// Unobserved here, never Dead, so a colliding task identifier in a second
-// home on the same machine cannot be relaunched over from this one.
+// home holds it, and this package writes no record. The one record serves
+// every reader: taskstate's Reader probes by that reference, and
+// internal/service's terminal hookup, its Terminals over this provider,
+// probes and captures by it, through Probe and Pipe.CaptureReference, which
+// answer out of one held set, so the reference a probe answers Live for is
+// the one a capture reads. A reference whose home marker is another home's
+// probes Unobserved here, never Dead, so a colliding task identifier in a
+// second home on the same machine cannot be relaunched over from this one.
 //
 // The start time is read per platform: Linux from the process's stat entry,
 // macOS from the kernel's process table, Windows from the process's
@@ -117,6 +120,21 @@
 // builds for, no start time can be read: Create records zero, and a probe of
 // a reference this provider does not hold answers Unobserved there, never
 // Dead, because the identifier alone proves nothing.
+//
+// # The worker group set
+//
+// Workers is the set of live worker groups, keyed by the process group a
+// worker leads and naming the task it was created for, and Pipe is its one
+// producer: Create joins the group when the session is created and the
+// membership ends when the worker's process does or Close ends the session.
+// It is the authority input the worker-to-program paths derive a task from:
+// a caller's kernel credentials name a process, the process has a group,
+// and the set says whose worker that group is, so no caller states a task.
+// Reading the group is the platform's question and internal/service's,
+// which asks it the way its containment registry does; this package holds
+// the set and answers only by group. It is deliberately not that registry,
+// and Workers' doc says why: a worker registered as a stage would have every
+// push it makes refused before admission.
 //
 // # Restart
 //
@@ -152,6 +170,12 @@
 //     identifier is reused by another process started at the same tick on
 //     Linux, or the same microsecond on macOS, would read as present; the
 //     start time narrows the reuse to that coincidence and does not close it.
+//   - The set is as current as the worker's done signal. Member answers
+//     false for a group whose worker has exited before the leave has run,
+//     and a group identifier the operating system reuses for a worker this
+//     provider started replaces the old entry; one reused for a process this
+//     provider did not start is not a member, so nothing is placed by a
+//     number alone.
 //   - The route walk over the handle types reads exported fields and the
 //     results of exported methods, so what Pipe holds in its unexported
 //     fields, the agents.Runner among them, is outside what it inspects, and

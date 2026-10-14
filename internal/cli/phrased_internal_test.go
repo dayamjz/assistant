@@ -223,9 +223,10 @@ func TestARunsHeadIsPhrasedAndItsDetailsAreNot(t *testing.T) {
 
 // Every event type this build classifies has a phrase, with the domain
 // derived from internal/ipc's table: the three records read as their
-// phrases, the stream's two control events as theirs, activity as output
-// that arrived, and the two state types nothing here produces, like a type
-// this build does not know, as an update the view cannot describe. A payload
+// phrases, a worker's history entry as added and not relayed, the stream's
+// two control events as theirs, activity as output that arrived, and the
+// two state types nothing here produces, like a type this build does not
+// know, as an update the view cannot describe. A payload
 // that does not read as its type reads the same way rather than as nothing.
 func TestEveryEventTypeHasAPhrase(t *testing.T) {
 	t.Parallel()
@@ -263,6 +264,10 @@ func TestEveryEventTypeHasAPhrase(t *testing.T) {
 		case ipc.TypeHoldState:
 			if !strings.Contains(line, hold.Subject) || !strings.Contains(line, "waiting on you") {
 				t.Errorf("a hold renders %q", line)
+			}
+		case ipc.TypeTaskEvent:
+			if line != machine.PhraseWorkerSpoke.String() {
+				t.Errorf("a worker's history entry renders %q", line)
 			}
 		case ipc.TypeGap:
 			if line != machine.PhraseUpdatesMissed.String() {

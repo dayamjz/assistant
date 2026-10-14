@@ -27,7 +27,10 @@ import (
 //
 // Authority is decided before this is called. internal/ipc refuses a
 // restricted method to a caller its Ancestry places inside an active
-// validation stage, so nothing here asks who is calling.
+// validation stage, so nothing here asks whether a caller is contained. The
+// one question a handler asks of a caller is the other relation,
+// whether it is a task's worker, and workers.go derives that from the same
+// credentials for the five methods whose answer depends on it.
 func (s *Service) handle(ctx context.Context, req ipc.Request) (json.RawMessage, error) {
 	switch req.Method {
 	case ipc.MethodHealth:
@@ -52,7 +55,9 @@ func (s *Service) handle(ctx context.Context, req ipc.Request) (json.RawMessage,
 	case ipc.MethodRunCancel:
 		return call(ctx, req, s.cancel)
 	case ipc.MethodGateAdmit:
-		return call(ctx, req, s.admit)
+		return call(ctx, req, func(ctx context.Context, r machine.GateRequest) (machine.Admission, error) {
+			return s.admit(ctx, req, r)
+		})
 	case ipc.MethodGateNotify:
 		return call(ctx, req, s.notify)
 	case ipc.MethodStageReport:
@@ -63,6 +68,22 @@ func (s *Service) handle(ctx context.Context, req ipc.Request) (json.RawMessage,
 		})
 	case ipc.MethodTaskGet:
 		return call(ctx, req, s.task)
+	case ipc.MethodTaskEvent:
+		return call(ctx, req, func(ctx context.Context, r machine.TaskEventRequest) (machine.Appended, error) {
+			return s.taskEvent(ctx, req, r)
+		})
+	case ipc.MethodWakesList:
+		return call(ctx, req, func(ctx context.Context, r machine.WakesRequest) (machine.Wakes, error) {
+			return s.listWakes(ctx, req, r)
+		})
+	case ipc.MethodWakesAcknowledge:
+		return call(ctx, req, func(ctx context.Context, r machine.AcknowledgeRequest) (machine.Acknowledged, error) {
+			return s.acknowledgeWakes(ctx, req, r)
+		})
+	case ipc.MethodSupervisionAssert:
+		return call(ctx, req, func(ctx context.Context, _ struct{}) (supervisor.Arm, error) {
+			return s.assertSupervision(ctx, req)
+		})
 	case ipc.MethodServiceStop:
 		return call(ctx, req, func(ctx context.Context, r machine.LifecycleRequest) (machine.Lifecycle, error) {
 			return s.lifecycle(ctx, req, r, false)
@@ -198,10 +219,13 @@ func (s *Service) listRuns(ctx context.Context, req machine.RunsRequest) (machin
 //
 // The state is resolved by internal/taskstate from the records that own the
 // facts, not read from a stored copy and not taken from the event log, which
-// P8 and P14 make the only two ways to get it wrong. Each task is composed
-// through taskView, which is also what the supervisor loop publishes, so a
-// paused worker's declared wait reaches the answer here on the same terms it
-// reaches the stream.
+// P8 and P14 make the only two ways to get it wrong, with the terminal of
+// each task's latest attempt probed through this service's Terminals, so a
+// launched task reads Running from the process tier while its worker runs
+// and what precedence gives with Dead once it has exited. Each task is
+// composed through taskView, which is also what the supervisor loop
+// publishes, so a paused worker's declared wait reaches the answer here on
+// the same terms it reaches the stream.
 func (s *Service) listTasks(ctx context.Context) (machine.Tasks, error) {
 	observed, err := s.tasks().Observe(ctx)
 	if err != nil {
@@ -257,8 +281,8 @@ func (s *Service) task(ctx context.Context, req machine.TaskRequest) (machine.Ta
 // tasks is the resolver over the service's store, built through reader with
 // the probe of the service's Terminals under the per-task bound alone, so a
 // provider that does not answer costs a read reconcileProbeTimeout per task
-// and never hangs it. In production Terminals is nil and no task's terminal
-// is observed, which reconcile.go states. Whether a run is advancing is this
+// and never hangs it. In production Terminals is the service's own session
+// provider, which terminals.go states. Whether a run is advancing is this
 // service's own fact, read off the slot map the way report reads it, so a
 // task's resolution can say whether its validation is being driven and not
 // only that a run is recorded as running.

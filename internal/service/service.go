@@ -156,10 +156,11 @@ type Options struct {
 	// Terminals is what the supervisor loop observes a task's terminal
 	// through, and what every task reader this service builds probes
 	// through, reconciliation's included. Nil, which is what the product
-	// passes until the session hookup lands, runs the loop degraded: every
-	// terminal is Unobserved and every in-flight task surfaces, on
-	// supervise.go's terms, and reconciliation relaunches nothing, on
-	// reconcile.go's.
+	// passes, is the service's own session provider, on terminals.go's
+	// terms: the provider the launches go through, so a launched task's
+	// terminal reads Live through the handle and a dead one reads Dead by
+	// its identity. A test passes a double to script what a terminal
+	// answers.
 	Terminals Terminals
 	// hooks are the seams this package's tests drive the loop through. They
 	// are here rather than on the Service because the loop starts inside
@@ -212,11 +213,13 @@ type Service struct {
 	// forge is the code host, settled at Open from Options.Forge; checkshold.go
 	// is the one reader of it outside the stage dependencies.
 	forge forge.Host
-	// terminals is Options.Terminals: the one seam a task's terminal is
+	// terminals is Options.Terminals, or heldTerminals over this service's
+	// own provider when none was passed: the one seam a task's terminal is
 	// observed through, which the supervisor loop probes and captures
 	// through and every task reader this service builds probes through, so
 	// the loop, the task surface and reconciliation cannot disagree about a
-	// terminal. Nil means no terminal is observed anywhere.
+	// terminal. Open never leaves it nil; a Service this package's tests
+	// build by hand may, and such a service observes no terminal anywhere.
 	terminals Terminals
 	// queue is internal/tasks' intake and release over this service's store,
 	// built at Open from the branch gate and the gate repositories this
@@ -316,12 +319,21 @@ type driver struct {
 	agent agents.Resolution
 	runs  *runs.Service
 	// sessions is the terminal session provider launch.go starts a task's
-	// worker through. It is built over the resolved runner before
-	// containRunner wraps it, because the wrapper carries no worker arm on
-	// purpose - contain.go says why a worker is not registered as a stage -
-	// so the one route to a worker is the unwrapped agent, and this is the
-	// one place that agent is held unwrapped.
-	sessions session.Provider
+	// worker through, and the one heldTerminals probes and captures through,
+	// held as the concrete provider because a capture by reference is that
+	// provider's own operation beside the five session.Provider names. It is
+	// built over the resolved runner before containRunner wraps it, because
+	// the wrapper carries no worker arm on purpose - contain.go says why a
+	// worker is not registered as a stage - so the one route to a worker is
+	// the unwrapped agent, and this is the one place that agent is held
+	// unwrapped.
+	sessions *session.Pipe
+	// workers is the worker group set the provider above produces, held
+	// here so a peer can be placed in a task's worker group without
+	// asking the provider's concrete type; workers.go reads it. It is nil
+	// until the driver is built, and a service with no driver has launched
+	// no worker, so nobody is in a worker group before it exists.
+	workers *session.Workers
 }
 
 // topology is one resolved configuration's pipeline and executor. Every run
@@ -390,7 +402,6 @@ func Open(ctx context.Context, o Options) (*Service, error) {
 		build:      o.Build,
 		catalog:    o.Catalog,
 		newFixer:   o.NewFixer,
-		terminals:  o.Terminals,
 		registry:   newRegistry(),
 		topologies: make(map[string]*topology),
 		advancing:  make(map[string]*slot),
@@ -400,6 +411,12 @@ func Open(ctx context.Context, o Options) (*Service, error) {
 		stopping:   make(chan struct{}),
 	}
 	s.stopCtx, s.stopCancel = context.WithCancel(context.WithoutCancel(ctx))
+	// The terminal seam is the service's own provider unless a test passed
+	// a double; terminals.go owns what the product's answers through.
+	s.terminals = o.Terminals
+	if s.terminals == nil {
+		s.terminals = heldTerminals{s}
+	}
 	s.forge = o.Forge
 	if s.forge == nil {
 		// Built with its own redactor because the redactor is otherwise
@@ -433,7 +450,7 @@ func Open(ctx context.Context, o Options) (*Service, error) {
 	// serves, so a run recovery continued is under supervision before the
 	// first request arrives and the beacon is being written before anything
 	// reads it.
-	if err := s.startSupervision(o.hooks, o.Terminals); err != nil {
+	if err := s.startSupervision(o.hooks, s.terminals); err != nil {
 		_ = s.Close()
 		return nil, err
 	}
@@ -670,7 +687,7 @@ func (s *Service) driverFor(ctx context.Context) (*driver, error) {
 	if err != nil {
 		return nil, err
 	}
-	s.built = &driver{agent: resolution, runs: runService, sessions: sessions}
+	s.built = &driver{agent: resolution, runs: runService, sessions: sessions, workers: sessions.Workers()}
 	s.log.Printf("resolved agent %s for runs of this service", resolution.Name)
 	return s.built, nil
 }

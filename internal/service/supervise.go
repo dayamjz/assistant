@@ -73,16 +73,18 @@ import (
 // second time. A relaunch is nobody's here: the loop surfaces and relaunches
 // nothing.
 //
-// # Degraded mode
+// # What the terminal reading is
 //
-// With no Terminals wired, every terminal is Unobserved: a task whose latest
-// attempt has a session reference surfaces terminal gone as unobservable,
-// and a task with none is read on an empty screen, which surfaces for want
-// of evidence on the same terms as an unchanged one. That is supervision
-// degraded to surface everything, and it is the honest reading until the
-// provider is wired: a loop that wrote a fresh beacon and observed nothing
-// would otherwise let the guards read a fleet as supervised that nobody was
-// looking at.
+// Terminals is the service's own session provider unless a test passed a
+// double, on terminals.go's terms: a worker this service launched reads
+// Live through the handle the launch holds and its output is captured
+// through the same handle, so an unchanged live terminal is absorbed on
+// positive evidence and a dead one surfaces as terminal gone; a survivor an
+// earlier service launched, another home's reference and every failure to
+// read are Unobserved, and surface as unobservable. A task with no session
+// reference is read on an empty screen, which surfaces for want of
+// evidence on the same terms as an unchanged one, because P9 forbids
+// reading the absence of a terminal as no change.
 //
 // # Captures are evidence
 //
@@ -138,12 +140,12 @@ import (
 // the probe and the capture of PRD section 8's provider row, addressed by
 // the session reference the attempt's record holds rather than by a handle,
 // because the loop reads references out of the record and holds no
-// session. It is a seam for the service hookup that holds the sessions: an
-// implementation maps a reference to the session.Provider handle it holds
-// and answers from the provider, and answers ErrTerminalsUnavailable from
-// Capture when the failure is the provider's and not the session's. Nothing
-// in this build implements it, so the loop runs degraded, on the package
-// comment's terms, until that hookup lands.
+// session. The product's implementation is terminals.go's heldTerminals,
+// over the service's own provider: it maps a reference to the handle the
+// provider holds and answers from the provider, and answers
+// ErrTerminalsUnavailable from Capture when the failure is the provider's
+// and not the session's. A test passes a double to script what a terminal
+// answers.
 type Terminals interface {
 	// Probe answers what the terminal named by ref looks like now, on
 	// session.Provider.Probe's terms: it never fails, and every answer it
@@ -161,8 +163,9 @@ type Terminals interface {
 // capture failed because the provider as a whole could not answer, rather
 // than because this terminal could not be read. The loop surfaces it once
 // per pass rather than once per terminal, and marks the wake provider-wide,
-// so a provider restart does not read as every worker dying at once. No
-// implementation produces it in this build.
+// so a provider restart does not read as every worker dying at once. Its one
+// producer is heldTerminals' Capture on a service whose provider cannot be
+// built, which terminals.go states the reach of.
 var ErrTerminalsUnavailable = errors.New("service: the terminal provider is unavailable")
 
 // ErrSupervisionAbandoned reports that Close stopped waiting for the
@@ -198,8 +201,8 @@ type gone string
 const (
 	// goneDead is a probe that proved the terminal's process absent.
 	goneDead gone = "dead"
-	// goneUnobservable is a probe that could not say, a capture that failed
-	// for this terminal, or no provider to ask.
+	// goneUnobservable is a probe that could not say, or a capture that
+	// failed for this terminal.
 	goneUnobservable gone = "unobservable"
 	// goneProviderWide is a capture that failed because the provider could
 	// not answer at all.
@@ -424,9 +427,6 @@ func (s *Service) pass(c *incarnation) passReport {
 	now := s.sup.now()
 	probes := make(map[string]session.Observation)
 	probe := func(ctx context.Context, ref string) taskstate.Liveness {
-		if s.sup.terminals == nil {
-			return taskstate.Unobserved
-		}
 		obs := s.sup.terminals.Probe(ctx, ref)
 		probes[ref] = obs
 		return obs.Liveness
@@ -499,9 +499,6 @@ func (s *Service) superviseTask(c *incarnation, o taskstate.Observed, probes map
 func (s *Service) readTerminal(c *incarnation, ref string, probed session.Observation) (store.Optional[string], gone) {
 	switch probed.Liveness {
 	case taskstate.Live:
-		if s.sup.terminals == nil {
-			return store.Optional[string]{}, goneUnobservable
-		}
 		ctx, cancel := s.sup.bound(c.ctx)
 		defer cancel()
 		captured, err := s.sup.terminals.Capture(ctx, ref)

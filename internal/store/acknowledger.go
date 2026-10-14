@@ -31,13 +31,11 @@ type Acknowledger struct{ name string }
 // AcknowledgedByCoordinator is an acknowledgement made by the coordinator's
 // turn, which PRD section 5 says drains the queue before doing anything else.
 //
-// It has no producer in this build. The surface it belongs to is the two
-// machine-interface rows that drain and acknowledge the queue, and those are
-// not added before the worker set #91 produces exists: a method that exists
-// and admits a task worker to the coordinator's queue is worse than one that
-// does not exist, so the rows, and with them this value's one producer, wait
-// on that set. When they land, internal/ipc derives this value from the
-// surface the way Request.HoldResolver does, and no frame carries it.
+// Its one producer is internal/ipc's Request.WakeAcknowledger, which derives
+// it from the surface the way Request.HoldResolver derives a resolver, and
+// no frame carries it; the method that records it, wakes.acknowledge,
+// refuses a task's worker from the worker group set internal/session holds,
+// so the value reaches a row only through a coordinator's call.
 func AcknowledgedByCoordinator() Acknowledger { return Acknowledger{name: "coordinator"} }
 
 // AcknowledgedByProgram is an acknowledgement the program made itself, for a

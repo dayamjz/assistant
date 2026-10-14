@@ -80,9 +80,11 @@ func (in *invocation) report(v any) {
 // machine.Task for a task, a store.Hold for a hold - and is read as that
 // type. A payload that does not read as its type, an event of a type this
 // build names but nothing produces, and a type this build does not know all
-// read as the one row for an update the view cannot describe; the stream's
-// own two control events have rows of their own; and output arriving as
-// activity is said to have arrived and is not relayed.
+// read as the one row for an update the view cannot describe; a history
+// entry a worker appended is said to have been added and its words are not
+// relayed, since the task's resolved state follows on its own event; the
+// stream's own two control events have rows of their own; and output
+// arriving as activity is said to have arrived and is not relayed.
 //
 // The words that are not the table's go through the same escaping every
 // other line a person reads does: a branch, a project, a hold's subject and
@@ -107,6 +109,8 @@ func eventLine(event ipc.Event) string {
 			return machine.PhraseUnfamiliarUpdate.String()
 		}
 		return printable(machine.HoldPhrase(hold).String())
+	case ipc.TypeTaskEvent:
+		return machine.PhraseWorkerSpoke.String()
 	case ipc.TypeGap:
 		return machine.PhraseUpdatesMissed.String()
 	case ipc.TypeServiceStopping:

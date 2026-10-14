@@ -38,9 +38,10 @@
 // matters: the other way round, it would apply a delta first and find out
 // afterwards that its base was wrong.
 //
-// Three state types have a producer in this build, all in internal/service
+// Four state types have a producer in this build, all in internal/service
 // and all drawing their revision from one counter there: a run's state, a
-// task's resolved state, and a hold opening or closing. The other two state
+// task's resolved state, a hold opening or closing, and an entry a worker
+// appended to its task's history. The other two state
 // types the table names, a stage's state and a finding set, have none, and a
 // consumer rendering them has no owned shape to read; the table keeps them
 // because a type is a row and not a promise of a producer.
@@ -141,6 +142,16 @@
 // prevent. Where a fact cannot be established, the request is refused. An
 // unidentified peer, and an ancestry that could not answer, both refuse.
 //
+// A second relation over the same credentials, whether the peer is a task's
+// worker, is not answered here either, and it is not a third access class.
+// The handler decides it, from internal/service's worker group set, for the
+// methods whose answer turns on it: task.event admits only a worker, the
+// wakes methods and supervision.assert refuse one, and gate.admit holds a
+// worker's push to a rule. The method table stays about containment because
+// a class meaning "the coordinator only" would need that set as an input of
+// this package, and the set is a fact about processes a service started.
+// ErrWorker and ErrNotWorker are the two refusals that cross the wire for it.
+//
 // # What a resolution arriving here may say about who made it
 //
 // PRD section 8 requires every hold resolution to record who resolved it, from
@@ -169,6 +180,12 @@
 // It records and does not gate. Nothing here reads the value to decide whether
 // a call is served: the access class in the method table is the whole of that
 // decision, and it is unchanged by this.
+//
+// Request.WakeAcknowledger is the same rule for the wake queue: every
+// acknowledgement arriving over this protocol is
+// store.AcknowledgedByCoordinator, derived from the surface and read from no
+// frame, so a worker refused the method by the handler and a coordinator
+// admitted to it can say nothing different about who acknowledged.
 //
 // # What one connection may hold at once
 //
