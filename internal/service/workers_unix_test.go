@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/gate"
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/ipc"
@@ -102,6 +103,14 @@ func launchedWorker(t *testing.T, branch string, body func(w launched)) {
 // investigation task names no branch, so branch is empty for one.
 func launchedWorkerOf(t *testing.T, shape store.TaskShape, branch string, body func(w launched)) {
 	t.Helper()
+	launchedWorkerUnder(t, shape, branch, store.Unknown[config.Delivery](), body)
+}
+
+// launchedWorkerUnder is launchedWorkerOf for a task recorded under a
+// delivery posture, as intake records one.
+func launchedWorkerUnder(t *testing.T, shape store.TaskShape, branch string, posture store.Optional[config.Delivery],
+	body func(w launched)) {
+	t.Helper()
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
 	subject := newSubject(t)
@@ -111,7 +120,7 @@ func launchedWorkerOf(t *testing.T, shape store.TaskShape, branch string, body f
 	if err := os.WriteFile(h.ConfigFile(), []byte(`{"supervision_beacon_interval": "1s"}`+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	id := recordDispatchedTask(t, h, repository, shape, branch)
+	id := recordDispatchedTaskUnder(t, h, repository, shape, branch, posture)
 	gateRepo := gateRepositoryOf(t, h, subject)
 	o, _ := workerOptions(t, h)
 	withServiceOptions(t, o, func(running serviceUnderTest) {

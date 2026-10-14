@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/taskstate"
@@ -27,8 +28,15 @@ type Request struct {
 	// not one.
 	Instructions string
 	// Mode is how the worker is to be launched, in the caller's notation. It
-	// is recorded as given and decides nothing here.
+	// is recorded as given and decides nothing here. It is the launch
+	// notation and not the delivery posture, which is Delivery.
 	Mode string
+	// Delivery is a delivery posture the coordinator asks to record in place
+	// of the project's, as text decoded by config.ParseDelivery, or empty to
+	// record the project's own. It may be stricter than the project's and
+	// never lighter, which is a *PostureError. It is refused on an
+	// investigation task, which has no posture.
+	Delivery string
 	// Repository names the repository the task works in. A delivery task
 	// must name one; an investigation task may, so its copy is cut from the
 	// right primary, and may name none.
@@ -139,6 +147,16 @@ func (q *Queue) Create(ctx context.Context, req Request) (Created, error) {
 		if branch != "" {
 			return Created{}, fmt.Errorf("%w: an investigation task creates no branch, and %q was asked for", ErrRequest, branch)
 		}
+		if strings.TrimSpace(req.Delivery) != "" {
+			return Created{}, fmt.Errorf("%w: an investigation task delivers nothing and has no delivery posture, and %q was asked for",
+				ErrRequest, req.Delivery)
+		}
+	}
+	var requested config.Delivery
+	if text := strings.TrimSpace(req.Delivery); text != "" {
+		if requested, err = config.ParseDelivery(text); err != nil {
+			return Created{}, fmt.Errorf("%w: %w", ErrRequest, err)
+		}
 	}
 	var repository store.Repository
 	if req.Repository != "" {
@@ -162,6 +180,11 @@ func (q *Queue) Create(ctx context.Context, req Request) (Created, error) {
 	}
 	if shape == store.TaskDelivery {
 		task.Branch = store.Known(branch)
+		posture, err := q.recordedPosture(ctx, repository, id, requested)
+		if err != nil {
+			return Created{}, err
+		}
+		task.Delivery = store.Known(posture)
 	}
 
 	var created store.Task
@@ -202,6 +225,32 @@ func (q *Queue) Create(ctx context.Context, req Request) (Created, error) {
 		return Created{}, err
 	}
 	return Created{Task: created, Cause: cause, BlockerState: blockerState, Instructions: instructions}, nil
+}
+
+// recordedPosture is the posture a delivery task is recorded under: the
+// project's, read through the posture reader, or the coordinator's request
+// when it asked for one no lighter. The project's is read whether or not a
+// request was made, because "never lighter" is a comparison against it and a
+// request cannot stand in for a read that failed: an unreadable trusted copy
+// refuses the intake with ErrPostureUnreadable, and a request no stricter
+// than nothing is not one this can establish.
+func (q *Queue) recordedPosture(ctx context.Context, repository store.Repository, id string,
+	requested config.Delivery) (config.Delivery, error) {
+	project, err := q.posture(ctx, repository, id)
+	if err != nil {
+		return "", fmt.Errorf("%w: repository %s: %w", ErrPostureUnreadable, repository.ID, err)
+	}
+	if !project.Recognized() {
+		return "", fmt.Errorf("%w: repository %s declares %q, which is not a posture this build defines",
+			ErrPostureUnreadable, repository.ID, project)
+	}
+	if requested == "" {
+		return project, nil
+	}
+	if requested.Lighter(project) {
+		return "", &PostureError{Requested: requested, Project: project}
+	}
+	return requested, nil
 }
 
 // dispose decides a new task's disposition from the tasks it read. The claim
@@ -348,8 +397,10 @@ func decodeShape(text string) (store.TaskShape, error) {
 
 // IsRefusal reports whether err is one of this package's typed refusals of an
 // intake, as opposed to a failure to read or write: a malformed request, a
-// person's branch, or an unknown record. A caller relaying the result to the
-// coordinator reports a refusal as an answer and a failure as a failure.
+// person's branch, an unknown record, or a posture lighter than the project's.
+// A caller relaying the result to the coordinator reports a refusal as an
+// answer and a failure as a failure.
 func IsRefusal(err error) bool {
-	return errors.Is(err, ErrRequest) || errors.Is(err, ErrBranchTaken) || errors.Is(err, store.ErrNotFound)
+	return errors.Is(err, ErrRequest) || errors.Is(err, ErrBranchTaken) || errors.Is(err, store.ErrNotFound) ||
+		errors.Is(err, ErrLighterPosture)
 }

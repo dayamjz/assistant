@@ -82,7 +82,7 @@ func (s *Service) createTask(ctx context.Context, req ipc.Request, r machine.Tas
 	}
 	created, err := s.queue.Create(ctx, tasks.Request{
 		Shape: r.Shape, Project: r.Project, Instructions: r.Instructions, Mode: r.Mode,
-		Repository: r.Repository, Branch: r.Branch, Overlaps: r.Overlaps,
+		Repository: r.Repository, Branch: r.Branch, Overlaps: r.Overlaps, Delivery: r.Delivery,
 	})
 	if err != nil {
 		return machine.TaskCreated{}, refusalOf(err)
@@ -177,7 +177,7 @@ func refusalOf(err error) error {
 	switch {
 	case errors.Is(err, tasks.ErrRequest):
 		return fmt.Errorf("%w: %w", ipc.ErrInvalidRequest, err)
-	case errors.Is(err, errRelaunchUnprobed):
+	case errors.Is(err, errRelaunchUnprobed), errors.Is(err, tasks.ErrPostureUnreadable):
 		return fmt.Errorf("%w: %w", ipc.ErrUnavailable, err)
 	case tasks.IsRefusal(err),
 		errors.Is(err, tasks.ErrNotPromotable),

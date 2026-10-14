@@ -264,7 +264,7 @@ func TestTwoReleasesOfOneTaskDispatchOnce(t *testing.T) {
 func TestNewRefusesAMissingDependency(t *testing.T) {
 	f := newFixture(t)
 	whole := Deps{Home: f.home, Store: f.store, Reader: taskstate.NewReader(f.store, nil, nil),
-		Exclude: f.exclusion.hold, BranchInGate: f.queue.inGate, GatePath: f.queue.gatePath}
+		Exclude: f.exclusion.hold, BranchInGate: f.queue.inGate, GatePath: f.queue.gatePath, Posture: f.queue.posture}
 	if _, err := New(whole); err != nil {
 		t.Fatalf("New with every dependency: %v", err)
 	}
@@ -283,10 +283,12 @@ func TestNewRefusesAMissingDependency(t *testing.T) {
 			d.BranchInGate = nil
 		case "gate locator":
 			d.GatePath = nil
+		case "posture reader":
+			d.Posture = nil
 		}
 		return d
 	}
-	for _, name := range []string{"home", "store", "reader", "exclusion", "gate", "gate locator"} {
+	for _, name := range []string{"home", "store", "reader", "exclusion", "gate", "gate locator", "posture reader"} {
 		d := without(name)
 		if _, err := New(d); !errors.Is(err, ErrIncomplete) {
 			t.Errorf("New without the %s = %v, want ErrIncomplete", name, err)

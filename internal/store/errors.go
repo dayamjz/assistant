@@ -53,6 +53,16 @@ var ErrRepositoryInUse = errors.New("store: a task still names a run of this rep
 // records it is about to write would land against rows that had been removed.
 var ErrRunActive = errors.New("store: run has not finished")
 
+// ErrRunProcessRecorded is returned by ForgetRepository and
+// RepositoryRemovable when a run of the repository still has a run process
+// record: an agent group it started whose end was never recorded. The record
+// is the only thing a later service's recovery reaps that group from, so
+// forgetting it would leave a process nothing could find again. A recovery
+// that verifies the group ended or gone clears the record, after which the
+// repository can be forgotten; one it cannot verify stands, and that refusal
+// stands with it.
+var ErrRunProcessRecorded = errors.New("store: a run's agent process has no recorded end")
+
 // ErrNoResolution is returned by ResolveHold when no resolution text was given.
 // PRD section 8 says a hold is closed only by an explicit resolution, and an
 // empty one is not explicit.
@@ -291,6 +301,23 @@ var ErrCleanupRecorded = errors.New("store: the task already has a cleanup recor
 // already has a merge record. PRD section 8 has the record written once, so
 // a second read of the same merge is refused rather than recorded again.
 var ErrMergeRecorded = errors.New("store: the run already has a merge record")
+
+// ErrUnknownDelivery is returned by CreateTask for a delivery posture outside
+// config.Delivery's closed set, and by a read of a task whose stored posture
+// is outside it, which no accessor here wrote.
+var ErrUnknownDelivery = errors.New("store: the delivery posture is not one this build defines")
+
+// ErrLocalLandingRecorded is returned by RecordLocalLanding when the task
+// already has a local landing record. PRD section 8 has the record written
+// once, so a second write is refused rather than overwriting what the first
+// fast-forward recorded.
+var ErrLocalLandingRecorded = errors.New("store: the task already has a local landing record")
+
+// ErrNotLocal is returned by RecordLocalLanding for a task that is not a
+// delivery task recorded under config.DeliveryLocal: only a local task is
+// delivered by a fast-forward, so a landing record on any other task would
+// say it landed in a way its posture never allowed.
+var ErrNotLocal = errors.New("store: the task was not recorded under the local delivery posture")
 
 // ErrCleanupRemoved is returned by MarkCleanupRemoved when the task's cleanup
 // record already says when the copy was removed. The removal happens once,

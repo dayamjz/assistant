@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/home"
 )
 
@@ -43,8 +44,20 @@ type Task struct {
 	Shape TaskShape `json:"shape"`
 	// Project is what the task is for.
 	Project string `json:"project"`
-	// Mode is how the worker was launched, in the caller's own notation.
+	// Mode is how the worker was launched, in the caller's own notation:
+	// PRD section 8's launch notation. It is not the delivery posture, which
+	// is Delivery.
 	Mode string `json:"mode"`
+	// Delivery is the delivery posture the task was dispatched under, PRD
+	// section 6, recorded at intake in a field of its own and never revised:
+	// this record, not a later read of the delivery key, decides the task's
+	// path. It is unknown for an investigation task, which has no posture,
+	// for a task recorded before the column existed, and for a task promoted
+	// to delivery, which promotion does not record one for; internal/service
+	// follows an unknown posture as config.DeliveryGated, the full gate.
+	// CreateTask refuses a known value outside config.Delivery's closed set
+	// and a known value on an investigation task.
+	Delivery Optional[config.Delivery] `json:"delivery"`
 	// WorktreePath is the isolated copy the worker was given. PRD principle
 	// P11 says isolation is asserted at launch rather than inferred from this
 	// field; recording it is what lets a cleanup proof name what it refused to
@@ -111,17 +124,26 @@ type Disposition struct {
 }
 
 const taskColumns = `SELECT rowid, id, shape, project, mode, worktree_path, run_id, pull_request,
-	repository_id, branch, blocker_task, created_at, start_snapshot`
+	repository_id, branch, blocker_task, created_at, start_snapshot, delivery`
 
 func scanTask(sc scanner) (Task, error) {
 	var t Task
 	var shape, created string
-	var snapshot Optional[string]
+	var snapshot, delivery Optional[string]
 	if err := sc.Scan(&t.Row, &t.ID, &shape, &t.Project, &t.Mode, &t.WorktreePath, &t.RunID,
-		&t.PullRequest, &t.RepositoryID, &t.Branch, &t.BlockerTask, &created, &snapshot); err != nil {
+		&t.PullRequest, &t.RepositoryID, &t.Branch, &t.BlockerTask, &created, &snapshot, &delivery); err != nil {
 		return Task{}, err
 	}
 	t.Shape = TaskShape(shape)
+	if text, ok := delivery.Get(); ok {
+		// A word outside the set was not written by CreateTask, and reading
+		// it back as gated or as unknown would turn a row nobody can account
+		// for into a posture.
+		if d := config.Delivery(text); !d.Recognized() {
+			return Task{}, fmt.Errorf("column delivery: %w: %q", ErrUnknownDelivery, text)
+		}
+		t.Delivery = Known(config.Delivery(text))
+	}
 	var err error
 	if t.CreatedAt, err = decodeTime(created); err != nil {
 		return Task{}, err
@@ -186,6 +208,16 @@ func (s *Store) CreateTask(ctx context.Context, t Task, d Disposition) (Task, er
 	if blocker, ok := d.Blocker.Get(); ok && blocker == t.ID {
 		return Task{}, fmt.Errorf("store: task %s is named as its own blocker", t.ID)
 	}
+	var delivery Optional[string]
+	if posture, ok := t.Delivery.Get(); ok {
+		if !posture.Recognized() {
+			return Task{}, fmt.Errorf("store: task %s: %w: %q", t.ID, ErrUnknownDelivery, posture)
+		}
+		if t.Shape != TaskDelivery {
+			return Task{}, fmt.Errorf("store: task %s is an investigation task and has no delivery posture to record", t.ID)
+		}
+		delivery = Known(string(posture))
+	}
 
 	now := nowUTC()
 	err := s.inTx(ctx, func(tx *sql.Tx) error {
@@ -205,10 +237,10 @@ func (s *Store) CreateTask(ctx context.Context, t Task, d Disposition) (Task, er
 		}
 		if _, err := tx.ExecContext(ctx, `
 			INSERT INTO task (id, shape, project, mode, worktree_path, run_id, pull_request,
-				repository_id, branch, blocker_task, created_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				repository_id, branch, blocker_task, created_at, delivery)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			t.ID, string(t.Shape), t.Project, t.Mode, t.WorktreePath,
-			t.RunID, t.PullRequest, t.RepositoryID, t.Branch, d.Blocker, encodeTime(now)); err != nil {
+			t.RunID, t.PullRequest, t.RepositoryID, t.Branch, d.Blocker, encodeTime(now), delivery); err != nil {
 			return err
 		}
 		kinds := []string{OpeningEventKind}

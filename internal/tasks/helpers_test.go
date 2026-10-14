@@ -7,6 +7,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/redact"
 	"github.com/dayamjz/assistant/internal/store"
@@ -25,6 +26,12 @@ type fixture struct {
 	queue *Queue
 	// inGate is what BranchInGate answers, per branch.
 	inGate map[string]bool
+	// posture is what the posture reader answers for the project, and
+	// postureErr, when set, fails it instead, as an unreadable trusted copy
+	// does. postureAsked counts the reads.
+	posture      config.Delivery
+	postureErr   error
+	postureAsked int
 	// exclusion is the per-branch exclusion the queue takes. It is a keyed
 	// mutex in the shape of internal/service's branch gate, so a test here
 	// establishes what the queue does under one without opening a service.
@@ -83,7 +90,8 @@ func newFixture(t *testing.T) *fixture {
 	}); err != nil {
 		t.Fatalf("UpsertRepository: %v", err)
 	}
-	f := &fixture{home: h, store: s, inGate: map[string]bool{}, exclusion: &keyedExclusion{locks: map[string]*sync.Mutex{}}}
+	f := &fixture{home: h, store: s, inGate: map[string]bool{}, exclusion: &keyedExclusion{locks: map[string]*sync.Mutex{}},
+		posture: config.DeliveryGated}
 	f.queue, err = New(Deps{
 		Home: h, Store: s, Reader: taskstate.NewReader(s, nil, nil),
 		Exclude: f.exclusion.hold,
@@ -92,6 +100,10 @@ func newFixture(t *testing.T) *fixture {
 		},
 		GatePath: func(_ context.Context, r store.Repository) (string, error) {
 			return filepath.Join(root, "repos", r.ID+".git"), nil
+		},
+		Posture: func(context.Context, store.Repository, string) (config.Delivery, error) {
+			f.postureAsked++
+			return f.posture, f.postureErr
 		},
 	})
 	if err != nil {

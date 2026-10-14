@@ -166,6 +166,11 @@ Each has cost this repository more than one round of review.
   branch with the `promoted` entry in one anchored transaction, one way
   only, and refuses `ErrCleanupRecorded` by reading the claim the same way,
   so the two writes have exactly one loser in either order.
+  The task row's `mode` column is the launch notation and never the delivery
+  posture: the posture is the `delivery` column localLandingMigration adds, written once by
+  `CreateTask`, and the same migration's `local_landing` is PRD section 8's
+  local landing record, written once by `RecordLocalLanding` in the
+  transaction that closes the approval hold and sealed like `merge_record`.
   `ForgetHoldForTest` takes the test and is a counterfeit builder for the hold
   rule's refusal case, never a production path.
   A schema change is a new migration appended to `schema.go`, never an edit to
@@ -215,7 +220,9 @@ Each has cost this repository more than one round of review.
   or `RestoreObservedFromCheckpoint` produces one. The wrong anchor is not
   unrepresentable: a restored anchor's provenance rests on the checkpoint it came
   out of, not on the type. Read its `doc.go` for why, and for the residual gaps
-  that leaves.
+  that leaves. `DecideFastForward` is the local posture's narrowing of
+  `Decide`: a fast-forward from the anchor only, and refused where section
+  11's custody would block it, over a `Checkout` the caller read.
 - `internal/forge` is the only package that talks to a code host. Everything
   provider-specific stays behind `Provider`, and `internal/vcs` still owns git,
   so a forge adapter never shells out to it. Its checks model is the part that
@@ -425,8 +432,9 @@ Each has cost this repository more than one round of review.
   `task_state` table is sealed (migration 10) and must never get an accessor.
   `internal/store` only returns the facts, through `TaskSnapshot`, and learns
   no meaning. The terminal tier, `SourceRecord`, outranks every run and is
-  derived: `Landed` from the merge record of an attributed run and `Complete`
-  from that and the cleanup record's removal, for a delivery task; nothing
+  derived: `Landed` from the merge record of an attributed run, or from a
+  local task's own local landing record, and `Complete` from that and the
+  cleanup record's removal, for a delivery task; nothing
   there reads a code host or writes a record, and no event kind is named
   `landed` or `complete`. The hold tier, `SourceHold`, is the second: an
   open hold naming the task resolves `Held` above every run, `Validating` and
@@ -441,7 +449,12 @@ Each has cost this repository more than one round of review.
 - `internal/tasks` is PRD section 8's tasks module as far as this build takes
   it: intake, queueing, the P11 assertion, the P12 cleanup decision and
   promotion, with dispatch and the copy in `internal/service` and the launch
-  in `internal/session`. `Expect` computes
+  in `internal/session`. Intake records a delivery task's delivery posture
+  from `Deps.Posture`, the project's trusted copy as `internal/service`
+  reads it, refuses with `ErrPostureUnreadable` when that read fails rather
+  than assuming one, and lets a request tighten it and never loosen it
+  (`*PostureError`); a local task's cleanup proof is the content check
+  against the working copy's default branch and nothing else. `Expect` computes
   a task's `Expectation` and its second-check shell line from one call, and
   `AssertIsolated` compares a real `vcs.Observation` against it by file
   identity, never by string, with an exact remote set per shape and a typed
@@ -742,7 +755,10 @@ Each has cost this repository more than one round of review.
   capability no table row declares. Its header owns the gaps.
   `admit_workers.go` owns the rule a worker's push is held to - only its
   task's branch, forward, never a deletion - and why that is admission's
-  decision and not `internal/safety`'s; a person's push meets it nowhere, and
+  decision and not `internal/safety`'s; `local.go` owns what a local task's
+  own push does instead of starting a run, the approval hold it raises, and
+  the anchored fast-forward an approve answer makes; a person's push meets
+  neither, always starting its run, and
   on Windows no peer is placed at all, which both files state as a limit. Three
   state events have producers here and `publish.go` owns two: `task.state` is
   published from the supervisor loop's pass, the one reader that resolves

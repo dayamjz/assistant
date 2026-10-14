@@ -99,7 +99,8 @@ func TestParseAcceptsTheWholeSchema(t *testing.T) {
 		"relaunch_attempts": 3,
 		"commit": {"fix_message": "fix(gate): {summary}"},
 		"allow_pushed_commands": true,
-		"autonomy": {"merge": ["owner/name"]}
+		"autonomy": {"merge": ["owner/name"]},
+		"delivery": "local"
 	}`
 	l := mustParse(t, OriginGlobal, doc)
 	if got, want := len(l.SetKeys()), len(Keys()); got != want {
@@ -154,6 +155,9 @@ func TestParseAcceptsTheWholeSchema(t *testing.T) {
 	}
 	if strings.Join(c.AutonomyMerge, ",") != "owner/name" {
 		t.Errorf("AutonomyMerge = %v", c.AutonomyMerge)
+	}
+	if c.Delivery != DeliveryLocal {
+		t.Errorf("Delivery = %q", c.Delivery)
 	}
 }
 

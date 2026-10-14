@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/forge"
 	"github.com/dayamjz/assistant/internal/safety"
 	"github.com/dayamjz/assistant/internal/store"
@@ -52,6 +53,11 @@ type landing struct {
 	// refs/assistant/cleanup/, named for the copy so two checks of different
 	// copies in one repository do not overwrite each other.
 	namespace string
+	// local is a task delivered under the local posture. Its work landed in
+	// the person's own default branch and nowhere upstream, so upstream is
+	// the repository's working path, and the one proof made is P12's content
+	// check against that branch, localDefault.
+	local bool
 }
 
 // pullRequestFact is what the merge record says about the pull request the
@@ -74,13 +80,16 @@ func (c *Cleaner) taskLanding(ctx context.Context, task store.Task, copied *vcs.
 			return landing{}, fmt.Errorf("tasks: reading the repository task %s works in: %w", task.ID, err)
 		}
 		l.upstream, l.defaultBranch = repository.UpstreamURL, repository.DefaultBranch
+		if posture, ok := task.Delivery.Get(); ok && posture == config.DeliveryLocal {
+			l.local, l.upstream = true, repository.WorkingPath
+		}
 	}
 	snap, err := c.store.TaskSnapshot(ctx, task.ID)
 	if err != nil {
 		return landing{}, err
 	}
 	resolved := taskstate.Resolve(taskstate.Inputs{Task: snap.Task, Runs: snap.Runs, Holds: snap.Holds,
-		Events: snap.Events, MergeRecords: snap.MergeRecords, Cleanup: snap.Cleanup})
+		Events: snap.Events, MergeRecords: snap.MergeRecords, Cleanup: snap.Cleanup, LocalLanding: snap.LocalLanding})
 	if landed := resolved.Basis.LandedRun; landed != "" {
 		for _, rec := range snap.MergeRecords {
 			if rec.Run == landed && rec.End == store.PullRequestMerged {
@@ -128,10 +137,12 @@ func (c *Cleaner) prove(ctx context.Context, l landing) (Removal, []ProofAttempt
 			{Proof: store.CleanupProofDefaultBranch, Detail: detail},
 		}
 	}
+	proofs := []func(context.Context, landing) (Removal, string){c.remoteBranch, c.mergedPullRequest, c.defaultBranch}
+	if l.local {
+		proofs = []func(context.Context, landing) (Removal, string){c.localDefault}
+	}
 	var attempts []ProofAttempt
-	for _, proof := range []func(context.Context, landing) (Removal, string){
-		c.remoteBranch, c.mergedPullRequest, c.defaultBranch,
-	} {
+	for _, proof := range proofs {
 		r, detail := proof(ctx, l)
 		if r.proven {
 			return r, nil
@@ -255,6 +266,57 @@ func (c *Cleaner) defaultBranch(ctx context.Context, l landing) (Removal, string
 	return Removal{proof: proof, examined: append(result.Commits(), result.Into()), proven: true}, ""
 }
 
+// localDefault is the proof for a task delivered under the local posture,
+// PRD section 6's "P12's content check, read against the local default branch
+// that fast-forward moved": the work is present by content in the tip the
+// repository's working copy holds for its default branch, read now from that
+// working copy, fetched by identifier, checked through internal/safety's
+// incorporation, and read again afterwards so a tip that moved during the
+// check is not the one recorded. It is recorded as the default-branch proof,
+// because it is that proof read against the branch the work landed in. No
+// HEAD is compared, unlike freshDefault: which branch is the default is the
+// repository record's, and the working copy's HEAD is wherever its owner
+// stands.
+func (c *Cleaner) localDefault(ctx context.Context, l landing) (Removal, string) {
+	proof := store.CleanupProofDefaultBranch
+	read := func() (string, string) {
+		if l.defaultBranch == "" {
+			return "", "the repository record names no default branch"
+		}
+		refs, err := l.repo.RemoteRefs(ctx, l.upstream, "refs/heads/"+l.defaultBranch)
+		if err != nil {
+			return "", "the working copy could not be read: " + err.Error()
+		}
+		for _, ref := range refs {
+			if ref.Name == "refs/heads/"+l.defaultBranch {
+				return ref.Commit, ""
+			}
+		}
+		return "", "the working copy has no branch " + l.defaultBranch
+	}
+	tip, detail := read()
+	if detail != "" {
+		return Removal{proof: proof}, detail
+	}
+	if detail := l.fetch(ctx, tip, "local-default-branch"); detail != "" {
+		return Removal{proof: proof}, detail
+	}
+	result, err := safety.New(l.repo).Incorporation(ctx, l.work, tip)
+	if err != nil {
+		return Removal{proof: proof}, err.Error()
+	}
+	if !result.Incorporated() {
+		return Removal{proof: proof}, "integrating " + strings.Join(result.Commits(), ", ") + " into the local " +
+			l.defaultBranch + " at " + result.Into() + " would change it"
+	}
+	if again, detail := read(); detail != "" {
+		return Removal{proof: proof}, detail
+	} else if again != tip {
+		return Removal{proof: proof}, "the local " + l.defaultBranch + " moved from " + tip + " to " + again + " during the check"
+	}
+	return Removal{proof: proof, examined: append(result.Commits(), result.Into()), proven: true}, ""
+}
+
 // freshDefault reads the upstream's default branch tip now, and confirms
 // that the branch the record names is the one the upstream's HEAD stands on
 // (PRD principle P7: the default branch is read from the upstream, never
@@ -312,7 +374,7 @@ func (l landing) forget(ctx context.Context) {
 	if l.repo == nil {
 		return
 	}
-	for _, name := range []string{"remote-branch", "pull-request-head", "default-branch"} {
+	for _, name := range []string{"remote-branch", "pull-request-head", "default-branch", "local-default-branch"} {
 		_ = l.repo.DeleteRef(ctx, l.namespace+"/"+name)
 	}
 }
