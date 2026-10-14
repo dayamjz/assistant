@@ -39,28 +39,40 @@ func terminateTree(proc *os.Process, grace time.Duration, leaderRunning bool, st
 	if proc == nil {
 		return
 	}
-	pgid := proc.Pid
-	if groupEmpty(pgid) {
-		return
+	terminateGroup(proc.Pid, grace, groupEmpty)
+}
+
+// terminateGroup is terminateTree over a group identifier rather than a
+// process handle, so EndGroup can apply the same escalation to a group an
+// earlier process of this binary started. gone is the question asked of the
+// group between steps: terminateTree asks groupEmpty, which is what it has
+// always asked, and EndGroup asks groupGone, which also counts a member that
+// has exited and waits on a parent that is not this process. It reports
+// whether gone answered yes when it finished: false is a process still there
+// after SIGKILL, which is one this process may not signal, or one already
+// gone that gone could not tell apart from a running one.
+func terminateGroup(pgid int, grace time.Duration, gone func(int) bool) bool {
+	if gone(pgid) {
+		return true
 	}
 	_ = syscall.Kill(-pgid, syscall.SIGTERM)
-	if waitForEmpty(pgid, grace) {
-		return
+	if waitForEmpty(pgid, grace, gone) {
+		return true
 	}
 	_ = syscall.Kill(-pgid, syscall.SIGKILL)
 	// SIGKILL cannot be caught, so what remains after it is a process already
 	// gone that has not been reaped yet, or one this process may not signal.
 	// Waiting a little keeps the ordinary case honest without pretending the
 	// second is fixable here.
-	waitForEmpty(pgid, grace)
+	return waitForEmpty(pgid, grace, gone)
 }
 
-// waitForEmpty polls until the group holds no process or the deadline passes,
-// and reports whether it emptied.
-func waitForEmpty(pgid int, grace time.Duration) bool {
+// waitForEmpty polls until gone answers yes for the group or the deadline
+// passes, and reports whether it did.
+func waitForEmpty(pgid int, grace time.Duration, gone func(int) bool) bool {
 	deadline := time.Now().Add(grace)
 	for {
-		if groupEmpty(pgid) {
+		if gone(pgid) {
 			return true
 		}
 		if !time.Now().Before(deadline) {

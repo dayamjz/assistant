@@ -194,6 +194,9 @@ Each has cost this repository more than one round of review.
   cannot read. It also holds the run checkpoint history the durability layer needs,
   which is the only record of a run's position: opaque payloads indexed by run
   and sequence, with the anchor a property of the request that no column holds.
+  The run process record (`RecordProcess`, migration 19) says which agent group
+  a run started and not whether it runs now (P8), so nothing reads it as
+  liveness.
   The one-row `checkpoint` migration 1 created was the second record the PRD
   forbids, and it now has no accessor at all. Do not give it one. Its table is
   still declared because a migration may not remove a table, so migration 6
@@ -303,9 +306,14 @@ Each has cost this repository more than one round of review.
   `standin.NewWorker` is how a test gets a runner built from it. Reading agent output is `internal/findings`' job and
   never a second parser here; the one choice this package makes is `Shape`, and
   `ShapeReview` is the only one carrying a `findings.Demand`, which
-  `Invocation.Validate` requires there and refuses everywhere else. Read its
-  `doc.go` for the residual gap: a capability whose row has no probe is taken at
-  its word.
+  `Invocation.Validate` requires there and refuses everywhere else. It also owns
+  the one PID-reuse check, `Identity`, which `internal/session` and the run
+  process record carry rather than reading a start time of their own, and
+  `EndGroup`, the only way to end a group it started from outside the
+  invocation: nothing is signalled until `Identity.Presence` verifies the
+  leader, and then only by group identifier, never by pattern. Read its
+  `doc.go` for the residual gaps: a capability whose row has no probe is taken
+  at its word, and an identity narrows PID reuse rather than closing it.
 - `internal/agents/standin` is the scripted agent the tests outside
   `internal/agents` run against. It implements no `agents` interface and builds
   no `agents.Result`: it prints bytes and exits with a status, and the real
@@ -669,7 +677,13 @@ Each has cost this repository more than one round of review.
   itself, and it has a producer now: `containRunner` wraps the resolved agent
   so every invocation and fix round registers its group for exactly the
   process's lifetime, while the configured commands and the provider command
-  still register nothing, which `doc.go` states rather than implies. A task's
+  still register nothing, which `doc.go` states rather than implies. Each such
+  registration also writes the run process record, and `recover` reaps from it
+  after the runs are reconciled: decided from the run's reconciled status, a
+  group ended only through `agents.EndGroup`, and anything it cannot verify
+  reported and left alone rather than refusing to serve; `reap.go` owns the
+  outcomes and `doc.go` the gaps, task terminals and copy removal being other
+  owners'. A task's
   worker is placed by the other relation over the same credentials, the
   worker group set `internal/session` holds, and `workers.go` owns that
   derivation (credentials, then the peer's process group read as containment

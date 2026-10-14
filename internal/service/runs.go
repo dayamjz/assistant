@@ -927,6 +927,12 @@ func (s *Service) recover(ctx context.Context) {
 			s.continueRun(settled.ID)
 		}
 	}
+	// PRD section 11's step 5, after the runs are reconciled: every agent
+	// process an earlier service of this home recorded and did not live to
+	// end is looked for by its recorded identity and ended as its group,
+	// unless its run is still unfinished. reap.go owns the decision and its
+	// outcomes; what it does not reach is stated there and in doc.go.
+	s.reaped = s.reapOrphans(ctx)
 	// PRD section 11's fleet reconciliation, after the runs and before
 	// anything is served: the queued wakes are drained as input, every task
 	// of this home is read with its terminal probed under a bound, and a

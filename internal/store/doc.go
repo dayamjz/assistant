@@ -504,4 +504,20 @@
 // stage's body, with its start and end, written once both are known. It is
 // not stage_result's duration, which is one rewritten row per stage and is
 // written by nothing in this build.
+//
+// The run process record PRD section 11's reaping reads is here, as
+// RecordProcess, ClearProcess and ProcessRecords over migration 19's
+// run_process table: one row per agent process group a run's invocation
+// started, naming the run, the purpose, the group, when it was recorded, and
+// the leader's identity as internal/agents read it, written when the group
+// is registered and deleted when its tree has been ended. It is neither
+// authoritative nor history: a row says an agent was launched and its end was
+// not recorded, and never that anything runs now (P8), so no accessor here
+// reads it as liveness and the identity is stored as an opaque number this
+// package compares with nothing. Whether the process is there is
+// internal/agents' read, and what to do about it is internal/service's
+// reap.go. A second record for a run and group that already has one is
+// refused with ErrProcessRecorded rather than replacing it, so a launch whose
+// end nobody recorded is never forgotten by a later one given the same
+// number.
 package store

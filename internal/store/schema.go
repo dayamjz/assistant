@@ -881,4 +881,36 @@ var schema = []migration{
 				END`,
 		},
 	},
+	{
+		version: 19,
+		name:    "run process records",
+		statements: []string{
+			// The record of an agent process a run's validation stage
+			// started: which run and stage, the process group the agent
+			// leads, when it was started, and the platform's PID-reuse
+			// identity of the leader as internal/agents read it at launch,
+			// which is what lets a later service tell the process from
+			// another one given the same number. It is written when the
+			// group is registered with the service's containment registry
+			// and deleted when the invocation's tree has been terminated,
+			// so a row that is here after a service died is exactly what
+			// PRD section 11's "reap orphaned agent processes" is about.
+			//
+			// It is a record of what was started and never of what is
+			// running now (P8): a row here says an agent was launched and
+			// its end was not recorded, and whether anything of it is
+			// still there is answered by looking for the process, never by
+			// reading this table. identity is nullable because a platform
+			// with no start-time read records none, and a row with none is
+			// one recovery cannot verify and so leaves alone.
+			`CREATE TABLE run_process (
+				run_id     TEXT NOT NULL REFERENCES run(id),
+				stage      TEXT NOT NULL,
+				group_id   INTEGER NOT NULL,
+				started_at TEXT NOT NULL,
+				identity   TEXT,
+				PRIMARY KEY (run_id, group_id)
+			) STRICT`,
+		},
+	},
 }

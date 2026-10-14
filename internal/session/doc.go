@@ -113,13 +113,14 @@
 // probes Unobserved here, never Dead, so a colliding task identifier in a
 // second home on the same machine cannot be relaunched over from this one.
 //
-// The start time is read per platform: Linux from the process's stat entry,
-// macOS from the kernel's process table, Windows from the process's
-// creation time. Each is compared for equality with the value read at
-// Create and carries no other meaning. On a platform none of those files
-// builds for, no start time can be read: Create records zero, and a probe of
-// a reference this provider does not hold answers Unobserved there, never
-// Dead, because the identifier alone proves nothing.
+// The start time is internal/agents' Identity, read through agents.Identify
+// at Create and compared through Identity.Presence at Probe, so this package
+// carries the one PID-reuse check that package owns rather than a second
+// read of its own; which platform reads what is stated there. It is compared
+// for equality with the value read at Create and carries no other meaning.
+// On a platform that package has no read for, Create records zero, and a
+// probe of a reference this provider does not hold answers Unobserved there,
+// never Dead, because the identifier alone proves nothing.
 //
 // # The worker group set
 //

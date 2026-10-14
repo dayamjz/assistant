@@ -60,6 +60,80 @@
 // nowhere, and the record, not a checkpoint still standing at the checks
 // stage, says what ended the run.
 //
+// # A restart reaps the agent processes an earlier service recorded
+//
+// PRD section 11's step 5 is "reap orphaned agent processes ... and never
+// touch one whose run is still active", and reap.go is the run half of it.
+// What makes an orphan findable is a record written while the process was
+// not yet one: containRunner's Started value, beside the registry entry it
+// adds, writes a run process record to internal/store naming the run, the
+// invocation's purpose, the group the adapter reported and the leader's
+// identity as agents.Identify read it then, and the forget the adapter calls
+// once its termination of the tree has finished clears it. StageStarted
+// writes no record: it registers whatever group its caller states, and a
+// record of a group nothing here started is one recovery has no business
+// acting on. A record says an agent was launched and its end was not
+// recorded, never that anything runs now (P8), and nothing reads it as
+// liveness: whether a process is there is asked of agents.Identity.Presence.
+//
+// recover reaps after the runs are reconciled and before anything is served.
+// Each record is decided from the run's reconciled status first: a group
+// this service registered itself, or a run internal/runs does not call
+// finished, is left untouched without a process being looked at. A status
+// this build does not recognize is refused as unverified rather than read as
+// finished, because internal/runs' reading of it as finished is the safe
+// direction for taking a run further and the unsafe one for ending a process.
+// Every other record goes to agents.EndGroup, which signals a group only
+// after verifying its leader still carries the recorded identity, and only
+// by group identifier: this package holds no pattern kill and builds no
+// command line to match on, so PRD section 5's "never kill watchers broadly"
+// holds on this path by construction. A reused identifier is left alone and
+// its record cleared; a gone leader is cleared without a signal; a group
+// that outlived its leader, and every record that cannot be verified, are
+// left alone with their records standing; and a group that still held a
+// process after the forceful step keeps its record too, so the next
+// recovery looks again.
+//
+// Two decisions the issue that built this asked are settled here. The record
+// is a table in internal/store, because that package is the only one that
+// writes SQL and the record has to outlive this process, while
+// internal/agents owns the identity read and the ending, because it is the
+// only package that starts or ends an agent process; this package composes
+// the two and owns neither. And a process recovery cannot verify is a typed
+// account, reported line by line in the service log with a summary line
+// after, and the service comes up: refusing to serve until a person looks
+// would hold every other run of the home on one process this service may not
+// even be able to see, and nothing here offers a person a way to look. The
+// accounts are kept on the service as well, so a test reads what was decided
+// rather than parsing the log.
+//
+// What this does not reach is stated rather than implied. A process whose
+// service died before the record was written, or whose record could not be
+// written, was never recorded and is not reaped. A process of a run that is
+// still unfinished is not ended, even when this service resumes that run in
+// the same isolated copy; it is reaped by the first recovery that finds the
+// run finished. A process left alone as unverified may still be writing in
+// its run's isolated copy, and nothing here stops it. A descendant that
+// moved itself to another process group is not in the group signalled, and
+// nothing recorded names it; that is the Sweep seam's gap, still open. On
+// unix the adapter's forget runs once its termination has finished whether
+// or not the group emptied, so a member this service could not signal loses
+// its record with the rest; a later recovery would have found its leader
+// gone and left it alone in any case. Only on Linux does a group whose
+// members have all exited and wait unreaped read as gone; on macOS and
+// another unix such a group reads as outlived or survived, so its record
+// stands and every later recovery looks again without signalling it, which
+// internal/agents' EndGroup states. On Windows there is no process group:
+// what is ended is the tree under the verified leader that taskkill's tree
+// option ends, a leader that is gone answers agents.GroupLeaderGone without
+// anything of its tree being looked for, and on a platform with no identity
+// read every record is unverified and nothing is ended there at all.
+//
+// Two neighbouring jobs are not here. A task's terminal is a worker, its
+// group is internal/session's set rather than this registry, and its
+// survivors belong to the task terminal sweep; and removing an isolated copy
+// no run owns is the cleanup proof's, which this path never touches.
+//
 // # Blocking calls, and the one slot per run that makes them safe
 //
 // PRD section 9 has starting and responding block until the run reaches its

@@ -1,4 +1,4 @@
-package session
+package agents
 
 import (
 	"golang.org/x/sys/unix"
