@@ -39,7 +39,7 @@ func initGate(ctx context.Context, in *invocation) (any, error) {
 	var upstream, defaultBranch string
 	if err := in.parseFlags("init", func(set *flag.FlagSet) {
 		set.StringVar(&upstream, "upstream", "", "the remote the change is destined for; the default is this working copy's origin")
-		set.StringVar(&defaultBranch, "default-branch", "", "the branch trusted configuration is read from; the default is what origin's HEAD names, or the branch checked out")
+		set.StringVar(&defaultBranch, "default-branch", "", "the branch trusted configuration is read from; the default is what this working copy records origin's HEAD as naming, and init refuses when it records none")
 	}); err != nil {
 		return nil, err
 	}
@@ -53,7 +53,7 @@ func initGate(ctx context.Context, in *invocation) (any, error) {
 	}
 	defer func() { _ = records.Close() }()
 
-	intended, err := intendedRepository(ctx, working, upstream, defaultBranch)
+	intended, source, err := intendedRepository(ctx, working, upstream, defaultBranch)
 	if err != nil {
 		return nil, err
 	}
@@ -74,61 +74,110 @@ func initGate(ctx context.Context, in *invocation) (any, error) {
 		Gate:       machine.Gate{Present: true, ID: built.ID(), Repository: built.Repository()},
 		Reattached: built.Reattached(),
 		Repository: repository,
+		// The source travels with the answer so that a wrong default branch
+		// is visible when it is written, and not first when a run reads
+		// trusted configuration from it.
+		DefaultBranchSource: source,
 	}, nil
 }
 
 // intendedRepository is the repository record the gate will validate, filling
-// in from the working copy what the caller did not name. It reads and writes
-// nothing, so a working copy that cannot answer is refused before the gate it
-// would have been recorded against exists.
+// in from the working copy what the caller did not name, and where its default
+// branch came from. It reads and writes nothing, so a working copy that cannot
+// answer is refused before the gate it would have been recorded against
+// exists.
 //
 // The record's identifier is the gate's, which is not known until the gate is
 // built, so it is the one field the caller fills in afterwards.
-func intendedRepository(ctx context.Context, working, upstream, defaultBranch string) (store.Repository, error) {
+func intendedRepository(ctx context.Context, working, upstream, defaultBranch string) (store.Repository, machine.DefaultBranchSource, error) {
 	repo, err := vcs.OpenWorktree(ctx, working, vcs.WithRedactor(redact.New()))
 	if err != nil {
-		return store.Repository{}, err
+		return store.Repository{}, "", err
 	}
 	if upstream == "" {
 		if upstream, err = repo.RemoteURL(ctx, "origin"); err != nil {
-			return store.Repository{}, fmt.Errorf("this working copy has no origin, so name the upstream with --upstream: %w", err)
+			return store.Repository{}, "", fmt.Errorf("this working copy has no origin, so name the upstream with --upstream: %w", err)
 		}
 	}
+	source := machine.DefaultBranchFromFlag
 	if defaultBranch == "" {
+		source = machine.DefaultBranchFromOrigin
 		if defaultBranch, err = defaultBranchOf(ctx, repo); err != nil {
-			return store.Repository{}, err
+			return store.Repository{}, "", err
 		}
 	}
 	return store.Repository{
 		WorkingPath:   working,
 		UpstreamURL:   upstream,
 		DefaultBranch: defaultBranch,
-	}, nil
+	}, source, nil
 }
 
+// originHead is the reference a clone records origin's own HEAD under.
+const originHead = "refs/remotes/origin/HEAD"
+
+// originBranches is the namespace origin's branches are recorded under, and
+// the only one a record of origin's HEAD may point into.
+const originBranches = "refs/remotes/origin/"
+
 // defaultBranchOf is the branch PRD principle P7 reads trusted configuration
-// from: what origin's own HEAD names, or the branch checked out when the
-// working copy records nothing about origin.
+// from: the branch this working copy records origin's own HEAD as naming, and
+// nothing else. When that cannot be established it refuses with a
+// defaultBranchRefused, whose reason says which of four things stopped it: no
+// origin, no record of origin's HEAD, a record pointing outside origin's
+// branches, or a read that failed. It never falls back to the branch the
+// checkout stands on, because run from a feature branch that answer makes the
+// branch under validation its own trusted copy.
 //
 // It reads what is already in the repository and fetches nothing, so the
 // answer is what this working copy last learned. A repository whose default
-// branch has moved since it was cloned records the old one until it is fetched
-// again, which is why --default-branch exists.
+// branch has moved since then records the old one until the record is
+// refreshed, which is why init reports where its answer came from and why
+// --default-branch exists. It checks that the record points into origin's
+// branches and not that the branch it names still exists there.
 func defaultBranchOf(ctx context.Context, repo *vcs.Repository) (string, error) {
-	target, err := repo.SymbolicTarget(ctx, "refs/remotes/origin/HEAD")
-	if err == nil {
-		if name, ok := strings.CutPrefix(target, "refs/remotes/origin/"); ok && name != "" && name != "HEAD" {
-			return name, nil
-		}
-	} else if !errors.Is(err, vcs.ErrRefNotFound) {
-		return "", fmt.Errorf("reading origin's default branch: %w", err)
+	if _, err := repo.RemoteURL(ctx, "origin"); errors.Is(err, vcs.ErrRemoteNotFound) {
+		return "", defaultBranchRefused{reason: machine.DefaultBranchNoOrigin, cause: err}
+	} else if err != nil {
+		return "", defaultBranchRefused{reason: machine.DefaultBranchUnreadable, cause: err}
 	}
-	branch, err := repo.HeadBranch(ctx)
-	if err != nil {
-		return "", fmt.Errorf("this working copy names no default branch, so name it with --default-branch: %w", err)
+	target, err := repo.SymbolicTarget(ctx, originHead)
+	if errors.Is(err, vcs.ErrRefNotFound) {
+		return "", defaultBranchRefused{reason: machine.DefaultBranchUnrecorded, cause: err}
+	} else if err != nil {
+		return "", defaultBranchRefused{reason: machine.DefaultBranchUnreadable, cause: err}
 	}
-	return branch, nil
+	name, ok := strings.CutPrefix(target, originBranches)
+	if !ok || name == "" || name == "HEAD" {
+		return "", defaultBranchRefused{reason: machine.DefaultBranchOutsideOrigin,
+			cause: fmt.Errorf("%s points at %s, outside %s", originHead, target, originBranches)}
+	}
+	return name, nil
 }
+
+// defaultBranchRefused is init's refusal to record a default branch it could
+// not establish, read out in internal/machine's row for the reason. The
+// reason is the typed half a caller in this package branches on; the cause is
+// what was read, and it still matches the sentinel it wraps, so errors.Is on
+// vcs.ErrRefNotFound or vcs.ErrRemoteNotFound survives the rewording.
+type defaultBranchRefused struct {
+	reason machine.DefaultBranchRefusal
+	cause  error
+}
+
+// Error is the row a person reads. For a read that failed, the cause follows
+// the row, because that row's decision points at it and nothing else names
+// what could not be read; every other reason's row says all there is.
+func (e defaultBranchRefused) Error() string {
+	row := machine.DefaultBranchRefusalPhrase(e.reason).String()
+	if e.reason == machine.DefaultBranchUnreadable && e.cause != nil {
+		return row + " Cause: " + e.cause.Error()
+	}
+	return row
+}
+
+// Unwrap resolves to what was read.
+func (e defaultBranchRefused) Unwrap() error { return e.cause }
 
 // eject removes the gate and its records.
 //

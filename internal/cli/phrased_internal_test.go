@@ -227,8 +227,9 @@ func fixtures(t *testing.T) map[string]any {
 			Detail: "1 run(s) are active. Pass the force flag for this command to stop anyway.",
 		},
 		"init": machine.Init{
-			Gate:       machine.Gate{Present: true, ID: sampleID, Repository: filepath.Join(root, "repos", sampleID+".git")},
-			Repository: store.Repository{ID: sampleID, WorkingPath: "/somewhere/parser", DefaultBranch: "main"},
+			Gate:                machine.Gate{Present: true, ID: sampleID, Repository: filepath.Join(root, "repos", sampleID+".git")},
+			Repository:          store.Repository{ID: sampleID, WorkingPath: "/somewhere/parser", DefaultBranch: "main"},
+			DefaultBranchSource: machine.DefaultBranchFromOrigin,
 		},
 		"plan":      fixturePlan(),
 		"eject":     machine.Eject{Removed: true, Repository: sampleID, Runs: 2},

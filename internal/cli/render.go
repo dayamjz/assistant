@@ -659,11 +659,14 @@ func readOutLifecycle(w io.Writer, answer machine.Lifecycle) {
 
 // readOutInit prints what became of the checkout's gate, and the branch
 // trusted configuration is read from, which is the person's own branch name
-// and the one fact here they may want to correct with --default-branch. The
-// gate's identifier and where it lives are the structured rendering's.
+// and the one fact here they may want to correct with --default-branch, after
+// internal/machine's row for where that answer came from, so a wrong one is
+// visible when it is written. The gate's identifier and where it lives are
+// the structured rendering's.
 func readOutInit(w io.Writer, answer machine.Init) {
 	writeln(w, machine.InitPhrase(answer))
 	if branch := answer.Repository.DefaultBranch; branch != "" {
+		writeln(w, machine.DefaultBranchPhrase(answer.DefaultBranchSource))
 		writef(w, "Default branch %s\n", printable(branch))
 	}
 }
