@@ -425,8 +425,11 @@
 // attempt per service, and a restart dispatches and launches again as a new
 // attempt over the standing copy, which is PRD section 11's relaunch in
 // place by the record's lights; the earlier process, if alive and still in
-// the copy, is ended by the sweep relaunch.go asks of the copy on Linux, and
-// elsewhere is an orphan this service holds no handle to and does not end. An adapter that has not declared worker sessions, which in
+// the copy, is ended by the sweep relaunch.go asks of the copy on Linux, or,
+// where its working directory is refused to this service and neither of
+// agents.Sweeper's carve-outs sets it aside, refuses the relaunch until a
+// later start, and elsewhere is an orphan this service holds no handle to
+// and does not end. An adapter that has not declared worker sessions, which in
 // this build is every shipped adapter, dispatches every task and launches
 // none: the *agents.CapabilityError is logged, the task stays Dispatched
 // with its slot and attempt standing, and no reference is recorded, because

@@ -47,26 +47,35 @@ type SweepResult struct {
 	// listing made, or a presence that could not be read before a signal.
 	// None of them was signalled.
 	Unverified []int
-	// Unreadable counts processes whose working directory this process was
-	// refused permission to read, whoever owns them. None was signalled, and
-	// the sweep claims nothing about where they run.
+	// Unreadable counts every process whose working directory this process
+	// was refused permission to read, whoever owns them and whether or not
+	// it is in UnreadableBlocking. None was signalled, and the sweep claims
+	// nothing about where any of them runs: they were not looked at.
 	Unreadable int
+	// UnreadableBlocking are the processes among Unreadable that keep the
+	// sweep from clearing: every one this process was refused the working
+	// directory of except those Sweeper's comment sets aside, which are
+	// processes on this process's parent chain and processes sharing no
+	// user with it that refused a zero signal. They could be standing in
+	// Dir and the sweep cannot say, so they are a refusal to clear rather
+	// than a count beside a clear sweep. None was signalled.
+	UnreadableBlocking []Identity
 
 	// listed is true only when the platform's listing completed, which is
 	// what makes Clear possible at all.
 	listed bool
 }
 
-// Clear reports whether the sweep proves that no process whose working
-// directory this process may read still has it under Dir: the listing
-// completed, nothing survived the forceful step, and nothing was left
-// undecided. It is a statement about the processes the sweep was permitted
-// to read and no others: Unreadable processes do not make it false, which
-// is the sweep's stated limit and not a proof about them, and neither does a
-// process that changed its working directory out of Dir before the listing,
-// which the listing cannot see.
+// Clear reports whether the sweep found nothing still under Dir that it
+// could not account for: the listing completed, nothing survived the
+// forceful step, nothing was left undecided, and no process whose working
+// directory was refused is in UnreadableBlocking. A refused process does
+// not make it false only when Sweeper's comment sets it aside, so Clear
+// says nothing about those, which is the sweep's stated carve-out and not
+// a proof about them, and nothing about a process that changed its working
+// directory out of Dir before the listing, which the listing cannot see.
 func (r SweepResult) Clear() bool {
-	return r.listed && len(r.Survived) == 0 && len(r.Unverified) == 0
+	return r.listed && len(r.Survived) == 0 && len(r.Unverified) == 0 && len(r.UnreadableBlocking) == 0
 }
 
 // String renders the result for a log line.
@@ -74,8 +83,8 @@ func (r SweepResult) String() string {
 	if !r.listed {
 		return "no sweep was made"
 	}
-	return fmt.Sprintf("swept %s: %d ended, %d exited before a signal, %d replaced, %d survived, %d unverified, %d not readable",
-		r.Dir, len(r.Ended), len(r.Exited), len(r.Replaced), len(r.Survived), len(r.Unverified), r.Unreadable)
+	return fmt.Sprintf("swept %s: %d ended, %d exited before a signal, %d replaced, %d survived, %d unverified, %d not readable of which %d could be in it",
+		r.Dir, len(r.Ended), len(r.Exited), len(r.Replaced), len(r.Survived), len(r.Unverified), r.Unreadable, len(r.UnreadableBlocking))
 }
 
 // Sweeper is the identity-based sweep PRD section 8 requires: it ends the
@@ -89,8 +98,10 @@ func (r SweepResult) String() string {
 // working directory the platform reports for it, resolved through symbolic
 // links when it can be, is that directory or below it; a working directory
 // that cannot be resolved, such as one that was removed, is compared as the
-// platform reported it. No command line, name, user or parent is read or
-// matched.
+// platform reported it. No command line or name is read or matched, and no
+// user or parent puts a process in scope or gets it ended: those are read
+// only to decide whether a process whose working directory was refused
+// keeps the sweep from clearing.
 //
 // That scope is a policy, and it is stated here because it is broader than
 // "what an agent left behind": anything running under the copy is ended,
@@ -112,9 +123,19 @@ func (r SweepResult) String() string {
 //   - A process started under the copy after its entry was read is not
 //     found; the sweep is a pass over a moment, not a lock on the copy.
 //   - A process whose working directory this process may not read is
-//     counted Unreadable and never ended, and Clear says nothing about it.
-//     The sweep does not ask who owns such a process, so a refusal for a
-//     process of this process's own user is counted the same way.
+//     counted Unreadable and never ended. It keeps the sweep from clearing,
+//     listed in UnreadableBlocking, unless it is set aside by one of two
+//     carve-outs, each read rather than assumed. First, a process on this
+//     process's parent chain, verified by identity with each parent started
+//     no later than the process below it: this service did not start it,
+//     and without this a service running as the same user as an init
+//     process whose working directory is refused to it could never clear.
+//     Second, a process none of whose user identifiers is this process's
+//     real or effective one and which refused a zero signal: the sweep could
+//     not end it if it found it. The residual of each is the same shape: a
+//     set-aside process that did stand in the copy, an ancestor that changed
+//     its working directory into it or another user's process that reached
+//     it, is not seen, and Clear says nothing about it.
 //   - Only Linux lists; elsewhere every sweep is ErrSweepUnsupported.
 type Sweeper struct {
 	home   *home.Home
@@ -139,6 +160,12 @@ func NewSweeper(h *home.Home, grace time.Duration, report func(dir string, r Swe
 // that ends while signalled processes are being waited on cuts the waits
 // short, and what is still running then is reported Survived.
 func (s *Sweeper) Sweep(ctx context.Context, dir string) (SweepResult, error) {
+	return s.sweep(ctx, dir, listUnder)
+}
+
+// sweep is Sweep with the platform listing passed in, so a test can hand it
+// the listing with one read replaced and every other step real.
+func (s *Sweeper) sweep(ctx context.Context, dir string, list func(context.Context, string) (listing, error)) (SweepResult, error) {
 	if s == nil || s.home == nil {
 		return SweepResult{}, fmt.Errorf("agents: a sweep needs the home whose copies it may sweep")
 	}
@@ -146,7 +173,7 @@ func (s *Sweeper) Sweep(ctx context.Context, dir string) (SweepResult, error) {
 	if err != nil {
 		return SweepResult{}, err
 	}
-	found, err := listUnder(ctx, copyDir)
+	found, err := list(ctx, copyDir)
 	if err != nil {
 		return SweepResult{}, fmt.Errorf("agents: listing processes under %s: %w", copyDir, err)
 	}
@@ -154,6 +181,7 @@ func (s *Sweeper) Sweep(ctx context.Context, dir string) (SweepResult, error) {
 	r.Dir = copyDir
 	r.Unverified = append(found.unverified, r.Unverified...)
 	r.Unreadable = found.unreadable
+	r.UnreadableBlocking = found.blocking
 	r.listed = true
 	return r, nil
 }
@@ -169,15 +197,17 @@ func (s *Sweeper) SweepUnder(ctx context.Context, dir string) {
 
 // listing is what a platform's listUnder found: the identities of the
 // processes under the directory, the identifiers it could not decide about,
-// and how many processes' working directories it was refused.
+// how many processes' working directories it was refused, and which of
+// those it could not set aside.
 type listing struct {
 	under      []Identity
 	unverified []int
 	unreadable int
+	blocking   []Identity
 }
 
 // endListed ends the listed processes on Sweeper's terms and returns what it
-// did, leaving Dir, Unreadable and listed for Sweep to fill.
+// did, leaving Dir, the unreadable fields and listed for Sweep to fill.
 func endListed(ctx context.Context, ids []Identity, grace time.Duration) SweepResult {
 	var r SweepResult
 	var signalled []Identity

@@ -240,7 +240,17 @@
 // ErrSweepUnsupported there with the zero SweepResult, which is not Clear: a
 // caller cannot read an unsupported sweep as one that found nothing. Sweeper's
 // comment lists the residual gaps, among them a process that left the copy
-// before the listing and one whose working directory may not be read.
+// before the listing.
+//
+// A process whose working directory the listing is refused is not looked
+// at, and it keeps the sweep from Clear unless one of two carve-outs sets
+// it aside: it is on this process's parent chain, verified by identity, or
+// it shares no user identifier with this process and refused a zero signal.
+// A process of this process's own user off the parent chain always blocks.
+// The first carve-out is what lets a service running as the same user as an
+// init process whose working directory is refused to it clear at all; its
+// residual, and the second's, is a set-aside process that did reach the
+// copy, which the sweep does not see.
 //
 // # A process is named by its identity, and ended only after it is verified
 //

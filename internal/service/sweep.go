@@ -27,7 +27,9 @@ import (
 // that found nothing.
 //
 //   - Clear: the sweep listed, everything it found under the copy was ended,
-//     and nothing it could read was left undecided. The worker is started,
+//     nothing it could read was left undecided, and every process whose
+//     working directory it was refused fell under one of agents.Sweeper's
+//     two carve-outs. The worker is started,
 //     and the relaunch's note and the log say what was ended. That includes
 //     anything a person had running there, a shell among it, because the
 //     sweep's scope is the directory and nothing else, and the words say the
@@ -44,15 +46,18 @@ import (
 //     checkout among them, and a copy the assertion would pass is refused
 //     after it as not isolated, recorded on the new attempt, rather than
 //     given a worker unswept.
-//   - Anything else: the listing failed, or something under the copy survived
-//     the forceful step or could not be decided. The caller refuses with
+//   - Anything else: the listing failed, something under the copy survived
+//     the forceful step or could not be decided, or a process whose working
+//     directory was refused falls under neither carve-out, a process of this
+//     service's own user among them, and so could be standing in the copy. The caller refuses with
 //     *copyUnswept before the claim, nothing is recorded, and the next pass
 //     asks again: the next start for a relaunch, the next dispatch pass for
 //     a dispatch.
 //
-// What Clear does not cover is agents.Sweeper's to state: a process whose
-// working directory this service may not read is counted and not ended, and
-// a process that left the copy before the listing is not seen.
+// What Clear does not cover is agents.Sweeper's to state: a refused process
+// one of its carve-outs sets aside, an ancestor of this service or another
+// user's process this service may not signal, is counted and not looked at,
+// and a process that left the copy before the listing is not seen.
 //
 // A sweep is not under reconcile.go's probe bound. It costs a read of the
 // process table and, when it signals something, waits of up to reapGrace
@@ -126,10 +131,12 @@ func readSweep(id string, r agents.SweepResult, err error) (copySwept, error) {
 }
 
 // unreadable is the words for the processes a clear sweep could not read,
-// and nothing when there were none.
+// and nothing when there were none. A clear sweep has set every one of them
+// aside, so the words say on what terms rather than leaving the count bare.
 func unreadable(r agents.SweepResult) string {
 	if r.Unreadable == 0 {
 		return ""
 	}
-	return fmt.Sprintf(" (%d process(es) whose working directory this service may not read were not looked at)", r.Unreadable)
+	return fmt.Sprintf(" (%d process(es) whose working directory this service may not read were not looked at; "+
+		"each is an ancestor of this service or another user's process this service may not signal)", r.Unreadable)
 }

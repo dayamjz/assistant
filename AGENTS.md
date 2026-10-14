@@ -319,7 +319,9 @@ Each has cost this repository more than one round of review.
   found". Read its `doc.go` for the residual gaps: a capability whose row
   has no probe is taken at its word, an identity narrows PID reuse rather
   than closing it, and a sweep sees neither a process that left the copy nor
-  one whose working directory it may not read.
+  one whose working directory it may not read, so an unreadable one blocks
+  `Clear` unless it is an ancestor or another user's process it may not
+  signal.
 - `internal/agents/standin` is the scripted agent the tests outside
   `internal/agents` run against. It implements no `agents` interface and builds
   no `agents.Result`: it prints bytes and exits with a status, and the real
