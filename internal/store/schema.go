@@ -913,4 +913,24 @@ var schema = []migration{
 			) STRICT`,
 		},
 	},
+	{
+		version: 20,
+		name:    "terminal gone surface instant",
+		statements: []string{
+			// PRD section 5's crashed worker that is still silent surfaces
+			// again once per escalation_window. The window between two of
+			// those surfaces is measured from the last one, and this column
+			// is that instant: written by the supervisor loop in the
+			// transaction that appends the terminal-gone wake it records,
+			// cleared when the terminal is observed again. It is a marker
+			// beside unobserved_since and, like every marker, the comparison
+			// base for the next pass and not the task's state. It is a
+			// column rather than a read of the newest terminal-gone wake row
+			// because the newest row of an appended table is not current
+			// state (P8). Nullable and without a default, so a row written
+			// before the column existed reads back unknown, which the loop
+			// reads as a window starting at the pass that first finds it.
+			`ALTER TABLE wake_marker ADD COLUMN gone_surfaced_at TEXT`,
+		},
+	},
 }

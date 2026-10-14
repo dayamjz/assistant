@@ -42,7 +42,10 @@ const (
 	// KindTerminalGone is a capture that failed, a probe that could not
 	// observe the terminal, or a terminal that died. Which of the three is
 	// the wake's marker, written by the loop; the verdict is the same for
-	// all three, so this package does not read it.
+	// all three, so this package does not read it. It is the one kind of
+	// ClassResurface: a worker that crashed and stays silent surfaces again
+	// once per escalation window, PRD section 5's "a terminal-ish wait
+	// surfaces once" card.
 	KindTerminalGone Kind = "terminal-gone"
 	// KindHoldOpened is an open hold naming the task or one of its
 	// attributed runs, including a run moved to held with no worker event.
@@ -52,11 +55,19 @@ const (
 // Class is how the flowchart decides a kind.
 type Class string
 
-// The classes. They are the flowchart's four shapes and nothing finer.
+// The classes. They are the flowchart's four shapes, plus the one the
+// "terminal-ish wait surfaces once" card adds for a crashed worker that
+// stays silent, and nothing finer.
 const (
 	// ClassActionable always surfaces, whatever the evidence, the window or
 	// the surfaced flag say.
 	ClassActionable Class = "actionable"
+	// ClassResurface surfaces whatever the evidence says, and is bounded to
+	// once per window: a wake that has not surfaced surfaces, and one that
+	// has absorbs while its window is open and surfaces again when it
+	// elapses. The window is the escalation window measured from the last
+	// surface, which the loop computes; see Classify.
+	ClassResurface Class = "resurface"
 	// ClassEvidence absorbs on positive evidence of progress and surfaces
 	// without it. For KindTerminalUnchanged the absorb also ends at the
 	// escalation window, and the surfaced flag absorbs one more case; see
@@ -92,7 +103,7 @@ var kinds = []Row{
 	{Kind: KindTerminalUnchanged, Class: ClassEvidence, Produced: true},
 	{Kind: KindDeclaredWait, Class: ClassWait, Produced: true},
 	{Kind: KindNoChange, Class: ClassAbsorb, Produced: true},
-	{Kind: KindTerminalGone, Class: ClassActionable, Produced: true},
+	{Kind: KindTerminalGone, Class: ClassResurface, Produced: true},
 	{Kind: KindHoldOpened, Class: ClassActionable, Produced: true},
 }
 

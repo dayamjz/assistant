@@ -623,12 +623,23 @@ func TestAFailedCaptureIsTerminalGoneWithItsCase(t *testing.T) {
 		t.Fatalf("the provider-wide detections across two terminals = %+v, want exactly one", wide)
 	}
 
-	// Surfaced once: the next pass makes none of them again, and
-	// acknowledging does not bring them back either.
+	// Surfaced once: inside the escalation window the next pass surfaces
+	// none of them again, and acknowledging does not bring them back
+	// either. A pass that classifies one absorbs it as surfaced this
+	// window; the provider-wide terminal after the first is not
+	// classified at all.
+	quiet := func(r passReport, task string) bool {
+		for _, d := range detectionsOf(r, task, supervisor.KindTerminalGone) {
+			if d.Verdict.Surfaces() || d.Verdict.Reason != supervisor.ReasonSurfacedThisWindow {
+				return false
+			}
+		}
+		return r.Tasks[task].Err == nil
+	}
 	second := l.pass(t)
 	for _, task := range []string{failed, dead, wideA, wideB} {
-		if got := detectionsOf(second, task, supervisor.KindTerminalGone); len(got) != 0 {
-			t.Fatalf("task %s surfaced terminal gone again: %+v", task, got)
+		if !quiet(second, task) {
+			t.Fatalf("task %s surfaced terminal gone again: %+v", task, detectionsOf(second, task, supervisor.KindTerminalGone))
 		}
 	}
 	queued, err := l.records(t).DrainWakes(t.Context(), 100)
@@ -649,8 +660,9 @@ func TestAFailedCaptureIsTerminalGoneWithItsCase(t *testing.T) {
 	}
 	third := l.pass(t)
 	for _, task := range []string{failed, dead, wideA, wideB} {
-		if got := detectionsOf(third, task, supervisor.KindTerminalGone); len(got) != 0 || third.Tasks[task].Err != nil {
-			t.Fatalf("after acknowledgement task %s: detections %+v, err %v; want nothing", task, got, third.Tasks[task].Err)
+		if !quiet(third, task) {
+			t.Fatalf("after acknowledgement task %s: detections %+v, err %v; want nothing surfaced",
+				task, detectionsOf(third, task, supervisor.KindTerminalGone), third.Tasks[task].Err)
 		}
 	}
 }
@@ -855,10 +867,11 @@ func TestTheLoopAbsorbsALiveWorkerAndSurfacesADeadOne(t *testing.T) {
 	waitCaptured(t, provider, launched, "worker finished")
 	waitLiveness(t, provider, ref, taskstate.Dead)
 	// A ticker pass may have surfaced it already, in which case the kicked
-	// pass finds the row standing and makes no second detection; the wake
-	// table is the owner of the fact, so it is what is read.
+	// pass finds the row standing and absorbs it as surfaced this window;
+	// the wake table is the owner of the fact, so it is what is read.
 	third := l.freshPass(t)
-	if gone := detectionsOf(third, id, supervisor.KindTerminalGone); len(gone) == 1 && !gone[0].Verdict.Surfaces() {
+	if gone := detectionsOf(third, id, supervisor.KindTerminalGone); len(gone) == 1 && !gone[0].Verdict.Surfaces() &&
+		gone[0].Verdict.Reason != supervisor.ReasonSurfacedThisWindow {
 		t.Fatalf("the finished worker = %+v, want terminal gone surfaced", gone)
 	}
 	rows := wakesOfKind(t, l.records(t), id, supervisor.KindTerminalGone)
@@ -868,6 +881,121 @@ func TestTheLoopAbsorbsALiveWorkerAndSurfacesADeadOne(t *testing.T) {
 	if got, err := l.service.tasks().Task(ctx, id); err != nil || got.State != taskstate.Unknown || got.Source != taskstate.SourceProcess {
 		t.Fatalf("the finished task resolves %+v (%v), want Unknown from the dead terminal", got, err)
 	}
+}
+
+// PRD section 5's crashed worker that is still silent, #95 line H, through
+// the real store under an injected clock: a dead terminal surfaces once,
+// is absorbed on every pass inside the escalation window, surfaces again
+// once the window since that surface has elapsed and not before, with the
+// instant in the wake's marker and in the markers' GoneSurfacedAt, and
+// keeps that spacing across a restart of the service, because the instant
+// it measures from is the durable marker. The wake table is read for
+// counts, since a ticker pass may make a surface before the kicked one;
+// nothing here sleeps. P9's "absence of evidence surfaces" is what is
+// established for the loop: the silence is never absorbed for good.
+func TestASilentCrashSurfacesAgainOncePerEscalationWindow(t *testing.T) {
+	principles.Cite(t, principles.P9)
+	h, records := loopHome(t)
+	task := plantRunning(t, records, "silentcrasha", "pane-crashed").ID
+	terminals := newScriptedTerminals()
+	terminals.dead("pane-crashed")
+	start := time.Date(2026, 10, 14, 9, 0, 0, 0, time.UTC)
+	clock := &fakeClock{now: start}
+	l := openLoop(t, h, records, terminals, clock)
+	closed := false
+	defer func() {
+		if !closed {
+			_ = l.service.Close()
+		}
+	}()
+
+	gone := func(want int) []store.Wake {
+		t.Helper()
+		rows := wakesOfKind(t, l.records(t), task, supervisor.KindTerminalGone)
+		if len(rows) != want {
+			t.Fatalf("at %v the terminal-gone wakes are %d, want %d: %+v", clock.Now(), len(rows), want, rows)
+		}
+		return rows
+	}
+	lastSurface := func(want time.Time) {
+		t.Helper()
+		m, has, err := l.records(t).WakeMarkers(t.Context(), task)
+		if err != nil || !has {
+			t.Fatalf("markers: %v %v", has, err)
+		}
+		if at, ok := m.GoneSurfacedAt.Get(); !ok || !at.Equal(want) {
+			t.Fatalf("the last surface marker is %v (known %v), want %v", at, ok, want)
+		}
+	}
+
+	l.freshPass(t)
+	first := gone(1)[0]
+	if !strings.HasPrefix(first.Marker, "terminal-gone:dead:pane-crashed:") || strings.Contains(first.Marker, ":again:") {
+		t.Fatalf("the first surface's marker is %q, want the first composition", first.Marker)
+	}
+	lastSurface(start)
+
+	// Inside the window: every pass absorbs, however many.
+	for i := 0; i < 3; i++ {
+		clock.Advance(15 * time.Second)
+		r := l.freshPass(t)
+		for _, d := range detectionsOf(r, task, supervisor.KindTerminalGone) {
+			if d.Verdict.Surfaces() {
+				t.Fatalf("a pass %v after the surface surfaced again: %+v", clock.Now().Sub(start), d)
+			}
+		}
+		gone(1)
+	}
+	lastSurface(start)
+
+	// The window since the surface elapses: one more surface, at once, and
+	// the window restarts at it.
+	clock.Advance(15 * time.Second)
+	l.freshPass(t)
+	l.freshPass(t)
+	again := gone(2)[1]
+	resurfaced := clock.Now()
+	if want := terminalGoneAgainMarker(goneDead, "pane-crashed", start, resurfaced); again.Marker != want || !again.Queued() {
+		t.Fatalf("the second surface is %+v, want a queued row with marker %q", again, want)
+	}
+	lastSurface(resurfaced)
+
+	// Acknowledging it changes nothing about the spacing: just short of
+	// the next window nothing surfaces, and at it one more does.
+	if err := l.records(t).AcknowledgeWakes(t.Context(), []int64{first.ID, again.ID}, store.AcknowledgedByProgram()); err != nil {
+		t.Fatalf("acknowledging: %v", err)
+	}
+	clock.Advance(59 * time.Second)
+	l.freshPass(t)
+	gone(2)
+	clock.Advance(time.Second)
+	l.freshPass(t)
+	gone(3)
+	third := clock.Now()
+	lastSurface(third)
+
+	// A restart: the new service reads the instant from the marker, so it
+	// neither surfaces early nor forgets the last surface.
+	if err := l.service.Close(); err != nil {
+		t.Fatalf("closing the service: %v", err)
+	}
+	closed = true
+	clock.Advance(30 * time.Second)
+	reopened, err := store.Open(t.Context(), h.Database(), store.WithRedactor(redact.New()))
+	if err != nil {
+		t.Fatalf("reopening the store: %v", err)
+	}
+	l = openLoop(t, h, reopened, terminals, clock)
+	closed = false
+	l.freshPass(t)
+	l.freshPass(t)
+	gone(3)
+	lastSurface(third)
+	clock.Advance(30 * time.Second)
+	l.freshPass(t)
+	l.freshPass(t)
+	gone(4)
+	lastSurface(clock.Now())
 }
 
 // A Complete task with no session is outside the watched set under the

@@ -431,6 +431,7 @@ func TestMarkersAreRewrittenInPlaceWithTheEpochDerived(t *testing.T) {
 		{MarkerAdvance{CaptureDigest: Known("A"), EventSequence: 2}, 1},
 		{MarkerAdvance{CaptureDigest: Known("A"), EventSequence: 3, Surfaced: true, WindowStart: Known(window)}, 1},
 		{MarkerAdvance{CaptureDigest: Known("A"), StallRepetitions: 2, UnobservedSince: Known(window.Add(time.Minute))}, 1},
+		{MarkerAdvance{CaptureDigest: Known("A"), UnobservedSince: Known(window), GoneSurfacedAt: Known(window.Add(time.Hour))}, 1},
 		{MarkerAdvance{EventSequence: 3}, 2},
 		{MarkerAdvance{CaptureDigest: Known("A")}, 3},
 	}
@@ -443,7 +444,8 @@ func TestMarkersAreRewrittenInPlaceWithTheEpochDerived(t *testing.T) {
 			TaskID: task, CaptureDigest: step.advance.CaptureDigest, ChangeEpoch: step.epoch,
 			EventSequence: step.advance.EventSequence, Surfaced: step.advance.Surfaced,
 			WindowStart: step.advance.WindowStart, StallRepetitions: step.advance.StallRepetitions,
-			UnobservedSince: step.advance.UnobservedSince, UpdatedAt: m.UpdatedAt,
+			UnobservedSince: step.advance.UnobservedSince, GoneSurfacedAt: step.advance.GoneSurfacedAt,
+			UpdatedAt: m.UpdatedAt,
 		}
 		if m != want {
 			t.Fatalf("step %d: markers = %+v, want %+v", i, m, want)

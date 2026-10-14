@@ -64,10 +64,21 @@ import (
 // where the probe proved absence; unobservable, where the probe could not
 // say or the capture failed for this terminal; and provider-wide, where the
 // capture failed because the provider itself was unavailable. The first two
-// surface per terminal, once per reference and case for as long as it stays
-// unobserved, and the third surfaces once per outage across every terminal
-// that met it: on the first task in the pass's order that did, and a pass
-// that finds that task's row already surfaced surfaces none of the rest.
+// surface per terminal, per reference and case, and the third per outage
+// across every terminal that met it: on the first task in the pass's order
+// that did, and a pass that finds that task's row already surfaced surfaces
+// none of the rest. Each surfaces once and then, for as long as it stays
+// unobserved, once more per escalation_window, PRD section 5's crashed
+// worker that is still silent. The window is measured from the marker
+// store.WakeMarkers.GoneSurfacedAt, which the pass that surfaces writes in
+// the wake's own transaction and which an observed pass clears, so a
+// restart neither surfaces early nor forgets the last surface; whether it
+// has elapsed is an input to supervisor.Classify, which decides. Nothing
+// reads the newest wake row for the instant (P8). A marker row written
+// before that column existed reads unknown beside a wake already surfaced,
+// and the window is then taken to start at the pass that first finds it,
+// which can put one surface up to a window later than the last one plus a
+// window and never earlier.
 // The residual gap is the order, newest task first: a task created during
 // an outage precedes the one the outage was filed under and surfaces it a
 // second time. A relaunch is nobody's here: the loop surfaces and relaunches
@@ -591,7 +602,9 @@ func surfacedKey(kind supervisor.Kind, marker string) string { return string(kin
 // task each event past the marker's sequence and then its terminal. The
 // terminal
 // reading is one of: terminal gone, with the case and the unobserved-since
-// instant in the marker, surfaced once per reference and case; a screen
+// instant in the marker, surfaced once per reference and case and then
+// once per escalation window measured from the GoneSurfacedAt marker, with
+// that surface's instant added to the marker; a screen
 // that changed, which resets the surfaced flag, the window and the stall
 // count and makes no wake; a declared wait, when the task resolves Paused,
 // measured against the recheck window; no change, when the screen is empty,
@@ -648,20 +661,30 @@ func decide(o observation, cfg config.Config, now time.Time, providerWideSurface
 		if o.gone == goneProviderWide && *providerWideSurfaced {
 			return d
 		}
-		if seen(supervisor.KindTerminalGone, marker) {
-			if o.gone == goneProviderWide {
-				*providerWideSurfaced = true
+		surfaced := seen(supervisor.KindTerminalGone, marker)
+		window := supervisor.WindowOpen
+		if surfaced {
+			last, ok := o.markers.GoneSurfacedAt.Get()
+			if !ok {
+				last = now
+				d.advance.GoneSurfacedAt = store.Known(now)
 			}
-			return d
+			if window = elapsed(last, cfg.EscalationWindow, now); window == supervisor.WindowElapsed {
+				marker = terminalGoneAgainMarker(o.gone, o.ref, since, now)
+			}
 		}
 		wake, _ := supervisor.Of(supervisor.KindTerminalGone)
-		if v := detect(wake, marker, supervisor.WindowOpen, false, supervisor.Stall{}); v.Surfaces() && o.gone == goneProviderWide {
+		if v := detect(wake, marker, window, surfaced, supervisor.Stall{}); v.Surfaces() {
+			d.advance.GoneSurfacedAt = store.Known(now)
+		}
+		if o.gone == goneProviderWide {
 			*providerWideSurfaced = true
 		}
 		return d
 	}
 
 	d.advance.UnobservedSince = store.Optional[time.Time]{}
+	d.advance.GoneSurfacedAt = store.Optional[time.Time]{}
 	if !o.has || o.markers.CaptureDigest != o.screen {
 		d.advance.CaptureDigest = o.screen
 		d.advance.Surfaced = false
@@ -704,11 +727,21 @@ func decide(o observation, cfg config.Config, now time.Time, providerWideSurface
 // terminalGoneMarker composes a terminal-gone wake's marker: the case, the
 // session reference and the unobserved-since instant, which is what
 // internal/store's WakeRequest states the loop composes for that kind. It
-// is the one composer, and terminalGoneAbout beside it is the one reader of
-// the composition, for the relaunch that acknowledges the rows about a
-// session it replaced.
+// and terminalGoneAgainMarker are the composers, and terminalGoneAbout
+// beside them is the one reader of the composition, for the relaunch that
+// acknowledges the rows about a session it replaced.
 func terminalGoneMarker(g gone, ref string, since time.Time) string {
 	return fmt.Sprintf("terminal-gone:%s:%s:%s", g, ref, since.UTC().Format(time.RFC3339Nano))
+}
+
+// terminalGoneAgainMarker composes the marker of a terminal-gone wake that
+// surfaces again for the same silence once the escalation window has
+// elapsed: the first surface's marker with the instant of this surface
+// after it, which is the component that keeps each window's surface from
+// reading as a replay of the one before. It begins with terminalGoneMarker's
+// composition, so terminalGoneAbout matches it on the same terms.
+func terminalGoneAgainMarker(g gone, ref string, since, at time.Time) string {
+	return terminalGoneMarker(g, ref, since) + ":again:" + at.UTC().Format(time.RFC3339Nano)
 }
 
 // terminalGoneAbout reports whether a terminal-gone marker this loop
@@ -732,6 +765,7 @@ func carry(m store.WakeMarkers) store.MarkerAdvance {
 	return store.MarkerAdvance{
 		CaptureDigest: m.CaptureDigest, EventSequence: m.EventSequence, Surfaced: m.Surfaced,
 		WindowStart: m.WindowStart, StallRepetitions: m.StallRepetitions, UnobservedSince: m.UnobservedSince,
+		GoneSurfacedAt: m.GoneSurfacedAt,
 	}
 }
 
