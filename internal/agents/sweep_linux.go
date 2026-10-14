@@ -172,7 +172,7 @@ func parseStatusUids(pid int, text string) ([]int, bool, error) {
 		for _, f := range fields {
 			uid, err := strconv.Atoi(f)
 			if err != nil {
-				return nil, false, fmt.Errorf("%w: /proc/%d/status Uid field %q: %v", errStatShape, pid, f, err)
+				return nil, false, fmt.Errorf("%w: /proc/%d/status Uid field %q: %w", errStatShape, pid, f, err)
 			}
 			uids = append(uids, uid)
 		}
