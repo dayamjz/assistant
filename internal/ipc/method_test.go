@@ -35,6 +35,7 @@ func TestMethodTableIsWrittenDownHere(t *testing.T) {
 		"supervision.assert": true,
 		"catchup.read":       false,
 		"catchup.mark":       true,
+		"usage.read":         false,
 		"service.stop":       true,
 		"service.restart":    true,
 		"events.subscribe":   false,

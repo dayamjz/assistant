@@ -159,6 +159,32 @@ type Invocation struct {
 	// service's own wrapper owns the field, so a value set earlier is
 	// replaced there rather than chained.
 	Started func(pgid int) (ended func())
+	// Served names the run and the stage this invocation was made for, which
+	// the adapter copies into Record.Served unread. It is attribution rather
+	// than shape, on Started's terms: Validate does not read it, nothing here
+	// decides anything from it, and on a run's path internal/service's own
+	// wrapper owns the field, so a value a caller set earlier is replaced
+	// there. Its zero value is an invocation that names neither.
+	Served Served
+}
+
+// Served is the run and the pipeline stage an invocation served, as PRD
+// section 8's agent invocation record keeps them. Either may be empty, and
+// empty is the one spelling of "names none": an invocation made outside a
+// run, or outside a stage, records nothing in that field rather than a guess.
+//
+// This package does not know what a run or a stage is. It carries the two
+// names from the Invocation it was handed to the Record it reports, so what
+// they claim is whatever set them; the residual gap is that a caller holding
+// a Runner directly, outside the service's wrapper, names whatever it likes.
+type Served struct {
+	// Run is the identifier of the run the invocation served, empty when it
+	// served none.
+	Run string
+	// Stage is the name of the pipeline stage the invocation served, empty
+	// when it served none. A fix round serves the stage whose findings it is
+	// fixing, so its purpose and its stage differ.
+	Stage string
 }
 
 // Validate reports whether the invocation can be run at all. Every refusal

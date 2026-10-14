@@ -281,6 +281,7 @@ func (r *cursorRunner) invoke(ctx context.Context, purpose Purpose, inv Invocati
 		Model:   inv.Model,
 		Session: s.use(),
 		Started: time.Now(),
+		Served:  inv.Served,
 	}
 	// reference is what this invocation hands back to the Fixer. It is set
 	// once, from the envelope, and every exit below returns it, so the record

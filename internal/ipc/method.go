@@ -112,6 +112,12 @@ const (
 	// MethodWakesList's terms, which the handler decides from the caller's
 	// credentials against the worker group set.
 	MethodCatchUpMark Method = "catchup.mark"
+	// MethodUsageRead is PRD section 9's usage view: what the agent calls
+	// recorded in a window cost, totalled from section 8's agent invocation
+	// record by agent, model and purpose and by run and stage, which
+	// assistant runs --usage prints. It is open, because it reads and
+	// changes nothing, so a driving agent gets the same model a person does.
+	MethodUsageRead Method = "usage.read"
 	// MethodServiceStop stops the service.
 	MethodServiceStop Method = "service.stop"
 	// MethodServiceRestart restarts the service.
@@ -200,6 +206,7 @@ var specs = []Spec{
 	{MethodSupervisionAssert, KindRequest, AccessRestricted, "Verify that the supervisor loop of this home's service is live."},
 	{MethodCatchUpRead, KindRequest, AccessOpen, "Read what waits on you, what landed unseen, what is under way, and what stopped."},
 	{MethodCatchUpMark, KindRequest, AccessRestricted, "Mark seen exactly the landed records a catch-up read showed."},
+	{MethodUsageRead, KindRequest, AccessOpen, "Read what the agent calls recorded in a window cost."},
 	{MethodServiceStop, KindRequest, AccessRestricted, "Stop the service."},
 	{MethodServiceRestart, KindRequest, AccessRestricted, "Restart the service."},
 	{MethodEventsSubscribe, KindStream, AccessOpen, "Open the event stream."},

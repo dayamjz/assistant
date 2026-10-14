@@ -196,6 +196,7 @@ func (r *grokRunner) invoke(ctx context.Context, purpose Purpose, inv Invocation
 		Model:   inv.Model,
 		Session: SessionNone,
 		Started: time.Now(),
+		Served:  inv.Served,
 	}
 
 	fail := func(res *procResult, category Failure, cause error, message string) (Result, error) {

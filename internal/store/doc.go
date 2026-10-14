@@ -494,10 +494,12 @@
 // carry one is internal/agents' type split.
 //
 // The agent invocation record PRD section 8 lists is here, as
-// AppendAgentInvocation and AgentInvocations, and it is history on that
-// section's terms: appended, never revised, and holding purpose, agent,
-// model, timing, failure category, and token usage with no column a prompt,
-// an output, a diff, or a credential could land in. What each vocabulary
+// AppendAgentInvocation, AgentInvocations and AgentInvocationsSince, and it
+// is history on that section's terms: appended, never revised, and holding
+// purpose, agent, model, timing, failure category, token usage, and the run
+// and stage it served, with no column a prompt, an output, a diff, or a
+// credential could land in. The run and stage came later, so a row written
+// before them reads both unknown, as does a call that served neither. What each vocabulary
 // value means is internal/agents', and who feeds the history is
 // internal/service, which is also where its one softness is owned and stated:
 // the recording interface returns nothing, so a row that cannot be written is

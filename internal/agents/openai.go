@@ -201,6 +201,7 @@ func (r *openaiRunner) invoke(ctx context.Context, purpose Purpose, inv Invocati
 		Model:   inv.Model,
 		Session: SessionNone,
 		Started: time.Now(),
+		Served:  inv.Served,
 	}
 
 	fail := func(res *procResult, category Failure, cause error, message string) (Result, error) {

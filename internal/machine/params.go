@@ -303,3 +303,12 @@ type MarkSeenRequest struct {
 	// Records are the landed records the read showed.
 	Records []store.SeenRecord `json:"records"`
 }
+
+// UsageRequest asks for PRD section 9's usage view over a window. Window is
+// read by ParseUsageWindow, so empty is DefaultUsageWindow and a window it
+// cannot read is refused as an invalid request rather than read as the
+// default.
+type UsageRequest struct {
+	// Window is how far back the read reaches, such as 24h or 7d.
+	Window string `json:"window,omitempty"`
+}

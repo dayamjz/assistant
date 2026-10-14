@@ -22,7 +22,10 @@ import (
 //
 // Every count is an Optional because an agent that did not report one and an
 // agent that reported zero are different facts, and the distinction is born
-// at the adapter; a row must keep it or the history fabricates zeros.
+// at the adapter; a row must keep it or the history fabricates zeros. Run and
+// Stage are Optionals for the reason a later column always is: a row written
+// before they existed reads back unknown for both, and so does a call that
+// served no run or no stage, so unknown is the one spelling of "names none".
 type AgentInvocation struct {
 	// Seq is the row's position in the history, assigned by this package on
 	// append and counted from one. A caller never supplies it.
@@ -54,12 +57,21 @@ type AgentInvocation struct {
 	CacheCreationTokens Optional[int64]
 	// Turns is how many turns the agent took.
 	Turns Optional[int64]
+	// Run is the identifier of the run the invocation served, unknown when
+	// it served none or the row predates the column.
+	Run Optional[string]
+	// Stage is the name of the pipeline stage the invocation served, unknown
+	// when it served none or the row predates the column.
+	Stage Optional[string]
 }
 
 // AppendAgentInvocation appends one invocation to the history and returns the
 // row with the sequence it was assigned. It refuses a row naming no purpose
 // or no agent, because a cost nothing is attributed to answers no question
-// the history exists for; every other field is stored as handed over.
+// the history exists for, and a Run or Stage that is known but blank,
+// because unknown is how a row says it names none and a blank known value
+// would be a second spelling of that read back as a name. Every other field
+// is stored as handed over.
 //
 // Nothing revises or deletes a row: there is no accessor that does, so the
 // history holds what happened in the order it was accepted.
@@ -70,17 +82,26 @@ func (s *Store) AppendAgentInvocation(ctx context.Context, inv AgentInvocation) 
 	if strings.TrimSpace(inv.Agent) == "" {
 		return AgentInvocation{}, fmt.Errorf("store: agent invocation has no agent")
 	}
+	for _, named := range []struct {
+		column string
+		value  Optional[string]
+	}{{"run", inv.Run}, {"stage", inv.Stage}} {
+		if v, known := named.value.Get(); known && strings.TrimSpace(v) == "" {
+			return AgentInvocation{}, fmt.Errorf("store: agent invocation names a blank %s; a call that served none leaves it unknown", named.column)
+		}
+	}
 	var seq int64
 	err := s.inTx(ctx, func(tx *sql.Tx) error {
 		result, err := tx.ExecContext(ctx, `
 			INSERT INTO agent_invocation (
 				purpose, agent, model, session_use, started, duration_ns, failure,
-				input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, turns)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, turns,
+				run, stage)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			inv.Purpose, inv.Agent, inv.Model, inv.SessionUse,
 			encodeTime(inv.Started), int64(inv.Duration), inv.Failure,
 			inv.InputTokens, inv.OutputTokens, inv.CacheReadTokens,
-			inv.CacheCreationTokens, inv.Turns)
+			inv.CacheCreationTokens, inv.Turns, inv.Run, inv.Stage)
 		if err != nil {
 			return err
 		}
@@ -98,10 +119,27 @@ func (s *Store) AppendAgentInvocation(ctx context.Context, inv AgentInvocation) 
 // It is a history read, so a caller summarizing cost reads every row rather
 // than trusting a summary kept beside them; none is kept.
 func (s *Store) AgentInvocations(ctx context.Context) ([]AgentInvocation, error) {
+	return s.agentInvocations(ctx, "", nil)
+}
+
+// AgentInvocationsSince returns every row of the history whose call started
+// at or after since, in the order it was appended. It is AgentInvocations
+// bounded by a window, for a caller totalling what calls in that window cost:
+// the window is over when a call started, so a call that started before since
+// and ran into the window is not in it.
+func (s *Store) AgentInvocationsSince(ctx context.Context, since time.Time) ([]AgentInvocation, error) {
+	return s.agentInvocations(ctx, "WHERE started >= ?", []any{encodeTime(since)})
+}
+
+// agentInvocations is the one read both accessors make, with where the
+// filter its caller adds. Stored instants are fixed-width UTC text, which
+// sorts as the instants do, so the comparison is over the column as stored.
+func (s *Store) agentInvocations(ctx context.Context, where string, args []any) ([]AgentInvocation, error) {
 	rows, err := s.read.QueryContext(ctx, `
 		SELECT seq, purpose, agent, model, session_use, started, duration_ns, failure,
-			input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, turns
-		FROM agent_invocation ORDER BY seq`)
+			input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, turns,
+			run, stage
+		FROM agent_invocation `+where+` ORDER BY seq`, args...)
 	if err != nil {
 		return nil, fmt.Errorf("store: reading agent invocations: %w", err)
 	}
@@ -115,7 +153,7 @@ func (s *Store) AgentInvocations(ctx context.Context) ([]AgentInvocation, error)
 		if err := rows.Scan(&inv.Seq, &inv.Purpose, &inv.Agent, &inv.Model,
 			&inv.SessionUse, &started, &durationNS, &inv.Failure,
 			&inv.InputTokens, &inv.OutputTokens, &inv.CacheReadTokens,
-			&inv.CacheCreationTokens, &inv.Turns); err != nil {
+			&inv.CacheCreationTokens, &inv.Turns, &inv.Run, &inv.Stage); err != nil {
 			return nil, fmt.Errorf("store: reading agent invocations: %w", err)
 		}
 		if inv.Started, err = decodeTime(started); err != nil {
