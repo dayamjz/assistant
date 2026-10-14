@@ -61,8 +61,6 @@
         <li><a href="#mvp">12. The MVP cut</a></li>
         <li><a href="#verification">13. Verification</a></li>
         <li><a href="#decisions">14. Decisions recorded</a></li>
-        <li><a href="#proposal-steering">Proposed: steering a worker</a></li>
-        <li><a href="#proposal-catch-up">Proposed: a catch-up view</a></li>
       </ul>
     </div>
   </div>
@@ -1125,6 +1123,7 @@ flowchart TD
   kind -->|"declared external wait"| pw{"Idle past the<br />recheck window?"}
   kind -->|"terminal gone"| esc
   kind -->|"a run moved to held"| esc
+  kind -->|"message unacknowledged"| esc
   kind -->|"no change"| abs["Absorb: advance markers, no model turn"]
   ev -->|yes| abs
   ev -->|no| esc
@@ -1199,6 +1198,83 @@ flowchart TD
       </p>
     </div>
   </div>
+
+  <h3 id="steering" class="prd-anchor text-xl font-semibold mb-3">Steering a running worker</h3>
+  <p class="mb-4 opacity-90">
+    A worker that drifts off scope, asks a question in its output, or stalls on a live process
+    must be reachable without waiting for it to die, and stoppable without the agent reaching
+    around the program. Three operations do that, each a coordinator-only service method on the
+    terms section 9 gives creating, promoting, and relaunching a task. A caller inside a
+    registered worker group is refused, so no worker steers itself or a sibling, and who sent or
+    stopped is derived from the surface the way who resolved a hold is, with no value meaning a
+    person.
+  </p>
+  <div class="overflow-x-auto rounded-box border border-base-content/10 bg-base-100 mb-4">
+    <table class="table table-sm table-zebra">
+      <thead><tr><th class="w-28">Operation</th><th>What it does</th><th class="w-72">What proves it happened</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><b>Message</b></td>
+          <td>The program appends a message record naming the task, the attempt, and the text,
+            with credentials removed, then sends the text through the terminal session provider's
+            Send, which the Claude Code adapter frames as one stream-json user message. The text is
+            bounded by a fixed limit in the program and refused rather than truncated above it.
+            Nothing resends a message.</td>
+          <td>Three facts on the message record, each written once. <b>Written</b>: Send
+            returned, which proves the bytes reached the worker's input and nothing about whether
+            it read them. <b>Refused</b>: Send failed, with the reason. <b>Acknowledged</b>: the
+            worker appended the acknowledgement kind, naming the message, through the worker event
+            path, and the store records it on the message record in the same transaction as the
+            event. A record with neither written nor refused after a restart reads as unknown and
+            is never resent.</td>
+        </tr>
+        <tr>
+          <td><b>Stop</b></td>
+          <td>Ends the worker through its session's close, or, for a session this service does not
+            hold, through the one group ending that verifies the leader's identity first. The copy
+            is never touched, so what the worker wrote stays where it is (P6). The program then
+            registers a hold naming the task, keyed by the attempt it stopped.</td>
+          <td>The probe answering dead for the attempt's session reference, read after the stop
+            and never inferred from the close returning. Anything else is a typed refusal and no
+            hold is registered. The hold is what the task resolves from afterwards, Held in the
+            hold tier, so reconciliation does not relaunch a worker someone stopped.</td>
+        </tr>
+        <tr>
+          <td><b>Relaunch</b></td>
+          <td>Answering the stop's hold <code>retry</code>, optionally with a note, runs the one
+            anchored relaunch section 11 uses, in the same copy, with the same instructions, the
+            note, and the text of every message the stopped attempt never acknowledged.
+            <code>stop</code> leaves the task where its records put it. It is counted by
+            <code>relaunch_attempts</code> like every other relaunch.</td>
+          <td>The new attempt, anchored to the attempt the answer named, and the copy assertion and
+            launch that follow it on their existing terms. A second answer or a concurrent
+            reconciliation loses at the anchor.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+  <ul class="list-disc pl-6 space-y-1.5 mb-4 opacity-90">
+    <li><b>A stop is a hold.</b> It waits on a decision. A message nobody acknowledged is neither a
+      hold nor a park but a wake, and nothing here is a loop bound, so nothing here parks.</li>
+    <li><b>An unacknowledged message surfaces once.</b> A message written and not acknowledged
+      within <code>escalation_window</code> surfaces as a wake of its own kind, always actionable,
+      once per message, and is not resent.</li>
+    <li><b>A message never closes a decision.</b> A worker's open decision is closed by the worker's
+      own event, and a hold only by an answer through the hold path. A message carries text and
+      nothing the program reads as an answer.</li>
+    <li><b>What you hear.</b> A message not yet acknowledged, a stopped worker waiting on your
+      decision, and a stop that could not be verified are phrased like every other line. The
+      message's text and the worker's output are evidence, never relayed (P13).</li>
+    <li><b>Interrupt is not offered.</b> Ending a turn while keeping the process means knowing the
+      turn ended, which nothing here reads. An interrupt is refused naming the missing capability,
+      per section 8's rule that undeclared means unavailable, and the path is stop, then relaunch
+      with a note. Section 12 defers it.</li>
+  </ul>
+  <p class="mb-8 opacity-90">
+    Not in this design: switching agent or model on relaunch, since agent selection is trusted
+    configuration (P7) and a worker names no model; answering a permission prompt a worker's agent
+    raises; and steering a validating agent, which section 9 contains.
+  </p>
 
   <h3 class="text-xl font-semibold mb-3">What reaches you, and how it is worded</h3>
   <div class="grid gap-4 md:grid-cols-2 mb-6">
@@ -1727,6 +1803,8 @@ flowchart TB
         <tr><td><b>merge record</b></td><td>Authoritative, appended</td><td>Append-only and written once, by the code-host read that ends a run on a merge: the pull request, the head read, and when. The code host owns the merge; this is the program's record that it saw it. The run's <code>passed</code> on a merge and the task's Landed are both derived from this one record, and neither stores the fact again.</td></tr>
         <tr><td><b>cleanup record</b></td><td>Authoritative, appended</td><td>Append-only and written once, recording the cleanup check it was made from. The task's Complete is derived from it. With the merge record it is what section 6's resolver reads in the tier above the run tier.</td></tr>
         <tr><td><b>hold</b></td><td>Authoritative</td><td>A decision waiting on you, with a stable key. Idempotent to register. Closed only by an explicit resolution, recorded with who made it, never by the surrounding work finishing. The one resolution the service makes itself is for the hold the checks stage raises when <code>checks_timeout</code> elapses: when the pull request that hold waits on is read as merged or closed, the question it asked no longer exists, and the service records that reading as the resolution and itself as the resolver. Every other hold keeps the rule.</td></tr>
+        <tr><td><b>message</b></td><td>Authoritative, appended</td><td>One row per message sent to a worker: the task, the attempt, the text with credentials removed, and who sent it, derived from the surface. Each of written, refused, and acknowledged is recorded on it once and never revised, and it is the one place whether a message was delivered is read from. Section 6's steering says what writes each.</td></tr>
+        <tr><td><b>seen mark</b></td><td>Authoritative, appended</td><td>One row per merge or cleanup record you were shown and marked seen, keyed the way that record is keyed. One per home. It is what section 9's catch-up reads to decide what landed since you last looked, and nothing else reads it.</td></tr>
         <tr><td><b>agent invocation</b></td><td>History</td><td>Purpose, agent, model, timing, failure category, token usage. Never prompts, outputs, diffs, or credentials.</td></tr>
       </tbody>
     </table>
@@ -1901,6 +1979,56 @@ flowchart TB
     anchored relaunch that section 11's reconciliation also uses: the attempt it begins is anchored
     to the attempt history it read, so a coordinator's relaunch and reconciliation's cannot both
     relaunch the same task.
+  </p>
+  <p class="mb-8 opacity-90">
+    Messaging a running worker and stopping one are service methods on the same terms, and
+    coordinator-only for the same reason. Section 6's steering owns what each does and what proves
+    it happened. The relaunch after a stop is no new method: it is the answer to the stop's hold.
+  </p>
+
+  <h3 id="catch-up" class="prd-anchor text-xl font-semibold mb-3">Catching up</h3>
+  <p class="mb-4 opacity-90">
+    With many tasks running, the question that matters is what is waiting on you, what landed, and
+    what is still moving. <code>assistant watch</code> answers it first, in one read, before it
+    follows the stream. The read is resolved from the records that own each fact (P8), and the
+    person's rendering and the machine interface return the same model (P14).
+  </p>
+  <div class="overflow-x-auto rounded-box border border-base-content/10 bg-base-100 mb-4">
+    <table class="table table-sm table-zebra">
+      <thead><tr><th class="w-44">Part</th><th>Read from</th><th class="w-56">Filtered by the seen mark?</th></tr></thead>
+      <tbody>
+        <tr><td><b>Waiting on you</b></td><td>Every open hold, a run's and a task's, oldest first, each with the answer that closes it.</td><td>Never. An open decision is shown until it is answered.</td></tr>
+        <tr><td><b>Landed</b></td><td>The merge records and cleanup records section 6's terminal tier derives Landed and Complete from.</td><td>Yes: only records not yet marked seen.</td></tr>
+        <tr><td><b>Under way</b></td><td>Every task section 6's work-in-flight definition counts, and every run being advanced, with its resolved state.</td><td>Never. It is what is true now.</td></tr>
+        <tr><td><b>Stopped without a decision</b></td><td>Tasks that resolve Failed or Unknown, each with its next action.</td><td>Never.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <ul class="list-disc pl-6 space-y-1.5 mb-4 opacity-90">
+    <li><b>The seen mark.</b> "Since you last looked" is section 8's seen mark: which landed records
+      you were shown, one per home. It is never a time read off a clock and never inferred from the
+      log or the stream.</li>
+    <li><b>It moves only when you say so.</b> A flag on <code>watch</code> marks seen exactly the
+      records a read showed, so anything recorded between the read and the mark is still shown next
+      time. A read alone marks nothing.</li>
+    <li><b>Landed is bounded.</b> A read shows unseen records newest first, up to a fixed count in
+      the program, and says how many more there are. The rest stay unseen rather than being dropped.
+      The count is not a setting.</li>
+    <li><b>Answering is the existing answer.</b> Each listed decision carries its
+      <code>--answer</code> command, with <code>--task</code> where a task holds. There is no
+      second way to resolve a hold.</li>
+    <li><b>It is not the wake queue.</b> Acknowledging a wake records that the coordinator handled
+      it, and the seen mark records that you were shown something. Neither stands in for the
+      other.</li>
+    <li><b>Wording.</b> It is a plain status rendering under P13, not an evidence document, and it
+      points at the detail view for identifiers.</li>
+  </ul>
+  <p class="mb-8 opacity-90">
+    A second flag on <code>watch</code> prints the read once and exits. The local protocol carries
+    an open read and a restricted mark, refused for a task's worker. No verb is added, and
+    <code>status</code>, which answers for one branch, does not carry it. Not in this design: a
+    dated report file, an interactive board, away mode's return brief, planned work that is not yet
+    a task, and bucketing holds by age.
   </p>
 
   <div role="alert" class="alert alert-error alert-soft mb-8 items-start">
@@ -2291,6 +2419,7 @@ flowchart TB
           <li><b>Extra session providers.</b> One reference provider proves the abstraction. Four more prove nothing new.</li>
           <li><b>Delegate coordinators.</b> The most complex feature in either source project. It only earns its cost at a fleet size you have not reached.</li>
           <li><b>Direct and local delivery modes.</b> The gate is the thesis. Adding modes that bypass it before it is proven undermines the experiment.</li>
+          <li><b>Interrupting a worker's turn.</b> It needs proof the turn ended, which nothing reads yet. Stop and relaunch cover the need; an adapter offers interrupt once it declares it with a conformance probe for that proof.</li>
           <li><b>Transcript-based intent inference.</b> Supply intent explicitly first. Inference is a convenience over a mechanism that must already work.</li>
           <li><b>Away mode.</b> Requires the supervision loop to be trustworthy first.</li>
           <li><b>Evidence publishing to a branch.</b> Store evidence locally and link it. Publishing is an optimization.</li>
@@ -2446,6 +2575,16 @@ flowchart TB
           <td>A fix round you ask for at a hold is <b>bounded at three per stage per run</b>, by a fixed number rather than a setting.</td>
           <td>Section 5's Fix action is a second cycle through a stage, and every cycle carries a bound. Each of these rounds is your explicit answer, so the bound is a backstop against a loop nobody is driving rather than a policy a repository tunes, and section 10 gains no key for it. An answer asking for a fourth is refused while the hold is still open, so approve, skip, and cancel remain; the run-wide budget still counts every round. The round is held to the judge rule at every stage it is offered at, review and rebase included, because asking for a round is not approving an edit to a check. It is offered at the stages before push and not at push, pull request, or checks: push forwards a commit, so re-running it would push the round's result before you saw it, and a round at the two stages after it would leave a commit nothing pushes. A round that changes nothing returns to the hold and says so; it does not end the run on the convergence bound, because every such round is one you asked for.</td>
         </tr>
+        <tr>
+          <td class="prd-num">9</td>
+          <td>A running worker is <b>steered by message and stop</b>, through coordinator-only service methods, and relaunched by answering the stop's hold.</td>
+          <td>Section 6's steering and section 8's message record. A message is acknowledged through the worker event path and surfaces once if it is not; it is never resent. A stop holds rather than letting reconciliation relaunch, and its relaunch is the one anchored relaunch, counted by <code>relaunch_attempts</code>. No verb or flag is added. Interrupt is deferred until an adapter can prove a turn ended.</td>
+        </tr>
+        <tr>
+          <td class="prd-num">10</td>
+          <td>Catching up is <b>the read <code>watch</code> starts with</b>, and "since you last looked" is one seen mark per home that moves only when you mark a read.</td>
+          <td>Section 9's catching up and section 8's seen mark. Open decisions and work under way are never filtered; only landed records are, bounded by a fixed count. It is kept separate from the wake queue, and no verb is added.</td>
+        </tr>
       </tbody>
     </table>
   </div>
@@ -2471,330 +2610,6 @@ flowchart TB
       anything, and how often a person waved a held file through. If they rarely lead anywhere, turn
       them off; if they fire wrongly on this kind of code, the fix is a new measurement rather than
       a looser setting.</li>
-  </ul>
-</section>
-
-<!-- ===================== PROPOSAL A: STEERING (NOT DECIDED) ===================== -->
-<section id="proposal-steering" class="prd-anchor mb-16">
-  <p class="prd-kicker mb-2">Proposal A, not decided</p>
-  <h2 class="text-3xl font-bold tracking-tight mb-3">Proposed: steering a running worker</h2>
-  <div role="alert" class="alert alert-soft alert-warning mb-6 items-start">
-    <div class="min-w-0">
-      <p class="font-semibold mb-1">Proposed, not decided</p>
-      <p class="text-sm opacity-90">
-        This section is a proposal for the owner to decide, raised from issue #136. It is not part
-        of the contract. Sections 1 through 14 govern wherever this text and theirs differ, and
-        nothing here may be built or cited as specified until the owner's decisions below are
-        recorded in section 14 and the text is moved into the sections it amends.
-      </p>
-    </div>
-  </div>
-
-  <h3 class="text-xl font-semibold mb-3">The problem</h3>
-  <p class="mb-4 opacity-90">
-    Section 1 promises a worker you can reach through Send, and nothing sends. Once a worker is
-    running, the only things that can happen to it are being watched and being relaunched after its
-    terminal is gone. A worker that drifts off scope, asks a question in its output, or stalls on a
-    live process has two outcomes today: you wait for it to die, or the task fails. A worker that
-    is alive and wrong cannot be stopped by any typed command, and section 8 forbids the agent from
-    reaching around the program to stop it.
-  </p>
-  <p class="mb-6 opacity-90">
-    Principles this touches: P6 (stopping a worker must not lose the work in its copy, and every
-    relaunch stays anchored), P8 (that a message arrived or a worker stopped is a record, never the
-    last line of an event log or of the worker's output), P9 (a message nobody acknowledged is
-    absence of evidence, so it surfaces), P11 (a relaunch asserts its copy again), P13 (a message's
-    text and the worker's output are evidence, never text to relay), and P14 (one relaunch, one hold
-    path, one owner for whether a message was delivered). P4 is untouched: a worker is on the fixer
-    side of section 8's split, and nothing here reaches a review.
-  </p>
-
-  <h3 class="text-xl font-semibold mb-3">The smallest design</h3>
-  <p class="mb-4 opacity-90">
-    Three operations, each a coordinator-only service method beside section 9's table on the same
-    terms as creating, promoting, and relaunching a task. A caller the service places inside a
-    registered worker group, from the credentials the socket reports, is refused, so no worker can
-    steer itself or a sibling. Who sent or stopped is derived from the surface, the way who resolved
-    a hold is, and no value meaning a person can be produced.
-  </p>
-  <div class="overflow-x-auto rounded-box border border-base-content/10 bg-base-100 mb-6">
-    <table class="table table-sm table-zebra">
-      <thead><tr><th class="w-32">Operation</th><th>What it does</th><th class="w-72">What proves it happened</th></tr></thead>
-      <tbody>
-        <tr>
-          <td><b>Message</b></td>
-          <td>The program appends a message record naming the task, the attempt, and the text,
-            with credentials removed, then sends the text through the terminal session provider's
-            Send, which the Claude Code adapter frames as one stream-json user message. The text is
-            bounded by a fixed limit in the program and refused rather than truncated above it.
-            Delivery is at most once per call: nothing resends automatically.</td>
-          <td>Three facts on the message record, each written once. <b>Written</b>: Send
-            returned, which proves the bytes reached the worker's input and nothing about whether
-            it read them. <b>Refused</b>: Send failed, with the reason, such as a session this
-            service does not hold. <b>Acknowledged</b>: the worker said so through the worker event
-            path, naming the message, and the store records it on the message record in the same
-            transaction as the event. A record with neither written nor refused after a restart is
-            reported as unknown and never resent.</td>
-        </tr>
-        <tr>
-          <td><b>Stop</b></td>
-          <td>Ends the worker through the session's Close, or, for a session this service does not
-            hold, through the one group ending that verifies the leader's identity first. The copy
-            is never touched, so what the worker wrote to disk stays where it is (P6). The program
-            then registers a hold naming the task and keyed by the attempt it stopped.</td>
-          <td>The probe answering Dead for the attempt's session reference, read after the stop and
-            never inferred from Close returning. Anything else is a typed refusal and no hold is
-            registered. The hold record is what the task's state rests on afterwards: it resolves
-            Held from section 6's hold tier, so reconciliation does not relaunch a worker someone
-            deliberately stopped.</td>
-        </tr>
-        <tr>
-          <td><b>Relaunch</b></td>
-          <td>Answering the stop's hold with <code>retry</code>, optionally with a note, runs the
-            one anchored relaunch section 11 already uses, in the same copy, with the same
-            instructions, the note, and the text of every message the stopped attempt never
-            acknowledged. <code>stop</code> leaves the task where its records put it. No second
-            relaunch path exists.</td>
-          <td>The new attempt the relaunch begins, anchored to the attempt the answer named, and the
-            copy assertion and launch that follow it on their existing terms. A second answer or a
-            concurrent reconciliation loses at the anchor.</td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
-  <ul class="list-disc pl-6 space-y-1.5 mb-4 opacity-90">
-    <li><b>Held, not parked.</b> A stopped worker waits on a decision, so it is a hold. A message
-      nobody acknowledged is neither: it is a wake. Nothing here is a loop bound, so nothing here
-      parks. The relaunch is still counted by <code>relaunch_attempts</code>, which is a bound on a
-      task and stops no run.</li>
-    <li><b>An unacknowledged message surfaces.</b> A message written and not acknowledged within
-      <code>escalation_window</code> surfaces as a wake of its own kind, always actionable, once per
-      message. That is a new row in the supervisor's kind table and a new branch in section 6's
-      flowchart that goes straight to surface.</li>
-    <li><b>A message never closes a decision.</b> A worker's open decision is closed by the worker's
-      own event, and a hold is closed only by an answer through the existing hold path. A message
-      carries text and nothing the program reads as an answer.</li>
-    <li><b>What the coordinator hears.</b> The phrase table gains rows for a message not yet
-      acknowledged, a stopped worker waiting for your decision, and a stop that could not be
-      verified. The message's own text and the worker's output are never relayed (P13).</li>
-    <li><b>Interrupt is not in the first cut.</b> Interrupting a turn while keeping the process means
-      knowing the turn ended, which this build reads nowhere: the adapter does not read a worker's
-      output, and a worker that is not in a turn cannot report it. Until an adapter declares an
-      interrupt capability with a conformance probe for its postcondition, an interrupt is refused
-      naming that capability, per section 8's rule that undeclared means unavailable, and the
-      coordinator's path is stop, then relaunch with a note.</li>
-  </ul>
-  <p class="mb-6 opacity-90">
-    Methods this adds to the local protocol, all restricted and all refused for a worker:
-    <code>task.message</code> and <code>task.stop</code>. The acknowledgement is one new worker kind
-    on the existing <code>task.event</code>, which already admits only a task's own worker. The
-    relaunch adds no method: it is the existing <code>task.respond</code> answering the stop's hold.
-    No section 9 verb or flag is needed.
-  </p>
-
-  <h3 class="text-xl font-semibold mb-3">Decisions for the owner</h3>
-  <ol class="list-decimal pl-6 space-y-3 mb-6 opacity-90">
-    <li><b>Who can send and stop.</b>
-      <ol class="list-[lower-alpha] pl-6 mt-1 space-y-1">
-        <li>Coordinator-only service methods, no verb, no flag. Smallest, and it matches how create,
-          promote, and relaunch were decided.</li>
-        <li>Also a flag on <code>assistant</code>, read only with <code>--task</code>, so a person
-          can send without the coordinator. Adds a second sender and a P13 rendering for it.</li>
-        <li>A new verb. Requires amending section 9's closed table.</li>
-      </ol>
-      <p class="mt-1"><b>Recommended: a.</b> A person already reaches workers through the
-        coordinator, and the record could not tell a person from an agent on any surface anyway.</p></li>
-    <li><b>How a worker acknowledges a message.</b>
-      <ol class="list-[lower-alpha] pl-6 mt-1 space-y-1">
-        <li>A new worker event kind on <code>task.event</code>, recorded on the message record in the
-          same transaction.</li>
-        <li>A separate worker-only method.</li>
-        <li>No acknowledgement: Written is the whole proof.</li>
-      </ol>
-      <p class="mt-1"><b>Recommended: a.</b> It reuses the one worker write path and its authority,
-        and the message record stays the one owner of the fact (P14). Option c would report a
-        message read when only the pipe took it.</p></li>
-    <li><b>What happens to a message nobody acknowledged.</b>
-      <ol class="list-[lower-alpha] pl-6 mt-1 space-y-1">
-        <li>Surface once per message after <code>escalation_window</code>; never resend.</li>
-        <li>Resend each window up to a fixed count, then surface.</li>
-        <li>A new configuration key for the window.</li>
-      </ol>
-      <p class="mt-1"><b>Recommended: a.</b> A resend is a second cycle that needs its own bound, and
-        a worker that did not read one copy gains little from two. The existing window already means
-        "how long silence is tolerated".</p></li>
-    <li><b>What stopping a worker leaves behind.</b>
-      <ol class="list-[lower-alpha] pl-6 mt-1 space-y-1">
-        <li>A hold on the task; relaunch is a <code>retry</code> answer to it.</li>
-        <li>No hold: the task resolves from its dead terminal, and reconciliation relaunches it at
-          the next start.</li>
-        <li>One call that stops and relaunches together.</li>
-      </ol>
-      <p class="mt-1"><b>Recommended: a.</b> A stop is a decision, and without a hold the next start
-        would undo it. It reuses the hold tier, the hold path, and the anchored relaunch unchanged;
-        option c would be a second relaunch path.</p></li>
-    <li><b>Whether a relaunch after a stop counts toward <code>relaunch_attempts</code>.</b>
-      <ol class="list-[lower-alpha] pl-6 mt-1 space-y-1">
-        <li>It counts, read from the attempt history like every other.</li>
-        <li>It does not count, because a decision asked for it.</li>
-      </ol>
-      <p class="mt-1"><b>Recommended: a.</b> One bound over one record. Each relaunch here already
-        needs an answer, so the bound only bites on a loop of answers.</p></li>
-    <li><b>Interrupt.</b>
-      <ol class="list-[lower-alpha] pl-6 mt-1 space-y-1">
-        <li>Defer it: refused until an adapter declares it with a conformance probe.</li>
-        <li>Ship it as a signal to the worker's group with only process survival verified.</li>
-        <li>Have the adapter read its own stream for the end of a turn.</li>
-      </ol>
-      <p class="mt-1"><b>Recommended: a.</b> Option b would report an interrupt with no evidence the
-        turn ended, which is the unverified postcondition the issue rules out. Option c adds a second
-        parser of agent output outside the one place that reads it.</p></li>
-  </ol>
-
-  <h3 class="text-xl font-semibold mb-3">Out of scope</h3>
-  <ul class="list-disc pl-6 space-y-1.5 mb-4 opacity-90">
-    <li>Switching agent, model, or effort on relaunch. Agent selection is trusted configuration (P7),
-      and a worker's spec names no model.</li>
-    <li>A terminal-hosted worker a person types into. Section 1 already makes it a later option.</li>
-    <li>Answering a permission prompt a worker's agent raises. Nothing in the adapter answers one
-      today, and this adds nothing that does.</li>
-    <li>Messages to a run's validating agent. A stage is contained (section 9), and steering one
-      would let something outside review decide its verdict.</li>
-    <li>Delegate coordinators, which section 12 defers.</li>
-  </ul>
-</section>
-
-<!-- ===================== PROPOSAL B: CATCH-UP VIEW (NOT DECIDED) ===================== -->
-<section id="proposal-catch-up" class="prd-anchor mb-16">
-  <p class="prd-kicker mb-2">Proposal B, not decided</p>
-  <h2 class="text-3xl font-bold tracking-tight mb-3">Proposed: a catch-up view</h2>
-  <div role="alert" class="alert alert-soft alert-warning mb-6 items-start">
-    <div class="min-w-0">
-      <p class="font-semibold mb-1">Proposed, not decided</p>
-      <p class="text-sm opacity-90">
-        This section is a proposal for the owner to decide, raised from issue #137. It is not part
-        of the contract. Sections 1 through 14 govern wherever this text and theirs differ, and
-        nothing here may be built or cited as specified until the owner's decisions below are
-        recorded in section 14 and the text is moved into the sections it amends.
-      </p>
-    </div>
-  </div>
-
-  <h3 class="text-xl font-semibold mb-3">The problem</h3>
-  <p class="mb-4 opacity-90">
-    With many tasks running, the hard question for you is not what any one of them is doing. It is
-    what is waiting on you, what landed, and what is still moving. Section 1 promises the
-    coordinator brings you only the decisions that need you, and section 9's fleet view promises
-    "everything in flight, everything waiting on you". Today the pieces exist in separate answers:
-    the task list, the stream, and a run's holds. None gathers every open decision in one place,
-    and none answers what changed since you last looked.
-  </p>
-  <p class="mb-6 opacity-90">
-    Principles this touches: P8 (the view is resolved on read from the records that own each fact,
-    never from the stream or the event log's tail), P10 (it uses the supervisor's one definition of
-    work in flight rather than a second), P13 (everything in it is phrased, and it points at the
-    detail view for evidence), and P14 (it is one read model that both the person's rendering and
-    the machine interface return, and the "since you last looked" mark has one owner).
-  </p>
-
-  <h3 class="text-xl font-semibold mb-3">The smallest design</h3>
-  <p class="mb-4 opacity-90">One read, four parts, in this order:</p>
-  <div class="overflow-x-auto rounded-box border border-base-content/10 bg-base-100 mb-6">
-    <table class="table table-sm table-zebra">
-      <thead><tr><th class="w-44">Part</th><th>Read from</th><th class="w-56">Filtered by the mark?</th></tr></thead>
-      <tbody>
-        <tr><td><b>Waiting on you</b></td><td>Every open hold, a run's and a task's, from the hold records, each with the answer that closes it.</td><td>Never. An open decision is shown until it is answered.</td></tr>
-        <tr><td><b>Landed</b></td><td>The merge records and cleanup records, which section 6's terminal tier already derives Landed and Complete from.</td><td>Yes: only records not yet marked seen.</td></tr>
-        <tr><td><b>Under way</b></td><td>Every task the supervisor's in-flight table counts as in flight, and every run being advanced, with its resolved state.</td><td>Never. It is what is true now.</td></tr>
-        <tr><td><b>Stopped without a decision</b></td><td>Tasks that resolve Failed or Unknown, each with its next action.</td><td>Never. It is what is true now.</td></tr>
-      </tbody>
-    </table>
-  </div>
-  <ul class="list-disc pl-6 space-y-1.5 mb-4 opacity-90">
-    <li><b>The mark.</b> "Since you last looked" is a record in the store, owned by
-      <code>internal/store</code> like every other record: which merge and cleanup records you have
-      been shown, one row per record, keyed the way that record is keyed. It is never a time read
-      off a clock and never inferred from the log or the stream. Only the Landed part reads it.</li>
-    <li><b>The mark moves only when you say so.</b> Advancing names the records a read showed, and
-      only those are marked seen, so something recorded between your read and your advance is still
-      shown next time. A read alone marks nothing, because a read that failed to render is not
-      having looked.</li>
-    <li><b>Answering from the view is the existing answer.</b> Each listed decision carries the
-      existing <code>--answer</code> command, with <code>--task</code> where a task holds. There is
-      no second way to resolve a hold, and who resolved is still derived from the surface.</li>
-    <li><b>Wording.</b> Every line is a row in <code>internal/machine</code>'s phrase table. The view
-      is a status rendering, not an evidence document, so it names outcomes and decisions and points
-      at the detail view for identifiers.</li>
-  </ul>
-  <p class="mb-6 opacity-90">
-    Surface: the view is what <code>assistant watch</code> reads before it follows the stream, since
-    that row already describes this view, plus a flag on <code>watch</code> that prints it once and
-    exits and a flag that marks what that read showed as seen. Two local
-    protocol methods: an open read, and a restricted advance refused for a task's worker. No new
-    verb, and no field on <code>status</code>, which answers for one repository and branch.
-  </p>
-
-  <h3 class="text-xl font-semibold mb-3">Decisions for the owner</h3>
-  <ol class="list-decimal pl-6 space-y-3 mb-6 opacity-90">
-    <li><b>Where the view lives.</b>
-      <ol class="list-[lower-alpha] pl-6 mt-1 space-y-1">
-        <li>The read <code>watch</code> starts with, plus flags on <code>watch</code>.</li>
-        <li>A field on <code>status</code>.</li>
-        <li>A new verb. Requires amending section 9's closed table.</li>
-      </ol>
-      <p class="mt-1"><b>Recommended: a.</b> Section 9 already gives <code>watch</code> exactly this
-        purpose, so no table changes. <code>status</code> is scoped to one branch and the view is the
-        fleet.</p></li>
-    <li><b>How many marks.</b>
-      <ol class="list-[lower-alpha] pl-6 mt-1 space-y-1">
-        <li>One per home.</li>
-        <li>One per reader name the caller supplies.</li>
-        <li>One per surface, derived from the connection.</li>
-      </ol>
-      <p class="mt-1"><b>Recommended: a.</b> A home has one developer (section 1), and the
-        coordinator already has its own catch-up in the wake queue and its acknowledgements. Option c
-        would claim a split between a person and an agent that no surface here can witness. Option b
-        is cheap to add later if a second reader appears.</p></li>
-    <li><b>When the mark moves.</b>
-      <ol class="list-[lower-alpha] pl-6 mt-1 space-y-1">
-        <li>Only on an explicit advance, naming the records a read showed.</li>
-        <li>On every read.</li>
-        <li>On an explicit advance that marks everything recorded so far.</li>
-      </ol>
-      <p class="mt-1"><b>Recommended: a.</b> Option b loses whatever a read showed that nobody saw.
-        Option c marks seen whatever landed between the read and the advance, which nobody saw
-        either.</p></li>
-    <li><b>How much of Landed one read shows, including the first read, when nothing is marked yet.</b>
-      <ol class="list-[lower-alpha] pl-6 mt-1 space-y-1">
-        <li>Unseen records newest first, up to a fixed count in the program, saying how many more
-          there are.</li>
-        <li>Every unseen record.</li>
-        <li>On the first read, nothing: every record existing then is marked seen.</li>
-      </ol>
-      <p class="mt-1"><b>Recommended: a.</b> Option b grows without bound on a home with history, and
-        option c hides work that just landed. Because an advance marks only what was shown, the rest
-        stays unseen rather than being dropped. A fixed count is not a setting, so nothing tunes it
-        into an off switch.</p></li>
-    <li><b>Whether the view and the coordinator's wake drain should be one model.</b>
-      <ol class="list-[lower-alpha] pl-6 mt-1 space-y-1">
-        <li>Keep them separate: wakes are what the coordinator must handle, the view is what you have
-          not seen.</li>
-        <li>Build the view on the wake queue, with acknowledgement as the mark.</li>
-      </ol>
-      <p class="mt-1"><b>Recommended: a.</b> The two answer different questions with different
-        owners. Acknowledging a wake records that the coordinator handled it, so it cannot also
-        record that you saw it.</p></li>
-  </ol>
-
-  <h3 class="text-xl font-semibold mb-3">Out of scope</h3>
-  <ul class="list-disc pl-6 space-y-1.5 mb-4 opacity-90">
-    <li>The terminal interface's four-question screen in section 9, which is per run and is
-      <code>ui</code>'s.</li>
-    <li>A dated report file, an interactive board, and away mode's return brief. Section 12 defers
-      away mode.</li>
-    <li>"Charted next", planned work that is not yet a task. No record here holds it.</li>
-    <li>Bucketing holds by age or urgency, beyond listing the oldest first.</li>
-    <li>Pushing the view anywhere. It is read when asked, like every other surface.</li>
   </ul>
 </section>
 
