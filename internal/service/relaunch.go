@@ -40,9 +40,13 @@ import (
 // would share its runs. It re-probes the latest attempt's session
 // immediately before the claim, because the read's probe was taken after
 // the records and a terminal can come back, and refuses with
-// errRelaunchNotDead when the answer is no longer Dead. Then the claim, the
-// "relaunched" note anchored to the history the decision read, the
-// assertion of the standing copy, the "dispatched" entry anchored to the
+// errRelaunchNotDead when the answer is no longer Dead. Then the sweep of the
+// copy, read on sweep.go's terms, which refuses with *copyUnswept before
+// anything is recorded when it ran and did not clear the copy. Then the claim, the
+// "relaunched" note anchored to the history the decision read, carrying what
+// the sweep did, the assertion of the standing copy, a not-isolated refusal
+// when the copy path was not the copy itself and so was not swept, the
+// "dispatched" entry anchored to the
 // note, and the acknowledgement of the wakes the relaunch superseded. The
 // launch is the caller's, through launchTask over the dispatched value this
 // returns, which asserts the copy once more before the process starts, on
@@ -118,11 +122,13 @@ func (e *relaunchHeld) Error() string {
 		e.Task, e.Holder, e.State)
 }
 
-// relaunched is what a relaunch established: the launch to make, and the
-// session reference of the attempt it superseded.
+// relaunched is what a relaunch established: the launch to make, the
+// session reference of the attempt it superseded, and what the sweep of the
+// copy did, in sweep.go's words.
 type relaunched struct {
 	launch     dispatched
 	superseded string
+	swept      string
 }
 
 // relaunchTask relaunches one task in place, on the terms this file's
@@ -180,11 +186,19 @@ func (s *Service) relaunchClaimed(ctx context.Context, id string) (relaunched, e
 		return relaunched{}, err
 	}
 
-	// The re-probe, then the claim.
+	// The re-probe, then the sweep, then the claim.
 	latest := attempts[len(attempts)-1]
 	ref, _ := latest.SessionRef.Get()
 	if liveness := probe(ctx, ref); liveness != taskstate.Dead {
 		return relaunched{}, fmt.Errorf("%w: task %s: it reads %s", errRelaunchNotDead, id, liveness)
+	}
+	swept, err := s.sweepStandingCopy(ctx, id, e.copyPath)
+	if err != nil {
+		return relaunched{}, err
+	}
+	reason := decision.reason
+	if swept.words != "" {
+		reason += "; " + swept.words
 	}
 	if s.betweenAttemptReadAndClaim != nil {
 		s.betweenAttemptReadAndClaim()
@@ -199,7 +213,7 @@ func (s *Service) relaunchClaimed(ctx context.Context, id string) (relaunched, e
 		return relaunched{}, fmt.Errorf("service: the %q kind is not one internal/taskstate knows", relaunchedKind)
 	}
 	note, err := s.store.AppendTaskEventAfter(ctx, id, r.State.Basis.EventSequence, relaunchedKind,
-		fmt.Sprintf("attempt %d, after session %s was found gone: %s", attempt.Sequence, ref, decision.reason))
+		fmt.Sprintf("attempt %d, after session %s was found gone: %s", attempt.Sequence, ref, reason))
 	if err != nil {
 		return relaunched{}, fmt.Errorf("service: recording the relaunch of task %s: %w", id, err)
 	}
@@ -215,6 +229,10 @@ func (s *Service) relaunchClaimed(ctx context.Context, id string) (relaunched, e
 	if err != nil {
 		return relaunched{}, err
 	}
+	if swept.unswept != nil {
+		return relaunched{}, s.refuseIsolation(ctx, id, attempt.Sequence, note.Sequence, taskstate.RefusedNotIsolated,
+			fmt.Errorf("the copy passed the assertion and was not swept: %w", swept.unswept))
+	}
 
 	// The entry that moves the task, then the wakes this supersedes.
 	moved, err := s.store.AppendTaskEventAfter(ctx, id, note.Sequence, store.DispatchedEventKind,
@@ -226,9 +244,10 @@ func (s *Service) relaunchClaimed(ctx context.Context, id string) (relaunched, e
 	return relaunched{
 		launch: dispatched{
 			id: id, proof: proof, attempt: attempt.Sequence, want: e.want, instructions: e.instructions,
-			anchor: moved.Sequence, note: relaunchNote(attempt.Sequence, decision.reason),
+			anchor: moved.Sequence, note: relaunchNote(attempt.Sequence, reason),
 		},
 		superseded: ref,
+		swept:      swept.words,
 	}, nil
 }
 

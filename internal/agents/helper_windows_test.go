@@ -17,3 +17,10 @@ func helperPoliteSignals() []os.Signal {
 func helperSelfKill() {
 	os.Exit(8)
 }
+
+// helperDetach has no counterpart on Windows, where this package has no
+// sweep to end what it would start. No test runs the mode here, and this exit
+// says so rather than starting a process nothing ends.
+func helperDetach() {
+	os.Exit(9)
+}

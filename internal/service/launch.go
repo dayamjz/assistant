@@ -55,8 +55,10 @@ import (
 // the session before the failure is reported, so no process this service
 // started stands behind an attempt whose row does not name it. Between
 // Create returning and the row being written, a crash leaves the process
-// internal/session's doc describes: one no record names, which only #112's
-// sweep closes.
+// internal/session's doc describes: one no record names. The dispatch that
+// retries the task sweeps the standing copy before its claim, on sweep.go's
+// terms, which finds such a process by its working directory on Linux and
+// is agents.ErrSweepUnsupported elsewhere, where the window stays open.
 //
 // # What the launch moves, and what it does not
 //
@@ -85,8 +87,9 @@ import (
 // errTaskLaunched, so a restart cannot start a second worker beside one it
 // cannot see. The earlier attempt's process, if it is still running, is an
 // orphan the new service holds no handle to and does not end; its reference
-// probes Unobserved while it stands and Dead once it is gone, and the sweep
-// that would account for it is #112's.
+// probes Unobserved while it stands and Dead once it is gone, and only then
+// is the task relaunched, after the sweep sweep.go reads has been asked of
+// the copy.
 //
 // # An adapter without worker sessions dispatches and never launches
 //

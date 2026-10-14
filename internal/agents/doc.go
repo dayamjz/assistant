@@ -216,9 +216,31 @@
 // A descendant that puts itself in a new process group escapes group
 // termination on either platform. Finding it again needs a scan matched on the
 // isolated copy a process's working directory resolves under, never on its
-// command line, and that scan needs to know which runs are still active, which
-// is state this package does not own. Sweep is the seam it plugs into, and
-// until a caller supplies one the gap is open.
+// command line, and the next section's Sweeper is that scan. No runner here
+// is built with it, for the reason Sweep gives, so a stage invocation's
+// detached descendant still outlives the invocation.
+//
+// # A sweep ends what runs in one copy, on Linux, and proves nothing elsewhere
+//
+// Sweeper ends the processes whose working directory resolves under one
+// isolated copy of its home, and nothing else: the directory must be one
+// home.CopyAt accepts, a task's copy or a run's, standing where the layout
+// puts it and reached through no symbolic link, and a process is matched by
+// the working directory the platform reports for it, resolved the same way.
+// It reads no command line. Everything under the copy is in scope, a shell a
+// person opened there included, and Sweeper's comment says so. Each process
+// found is ended by itself, only after Identity.Presence verifies the
+// identity the listing read, so a reused identifier is reported and not
+// signalled.
+//
+// Linux is the one platform with a listing, read from /proc. This package
+// uses no route to another process's working directory on macOS or Windows,
+// none having been established here without cgo and exercised on their CI,
+// so Sweep answers
+// ErrSweepUnsupported there with the zero SweepResult, which is not Clear: a
+// caller cannot read an unsupported sweep as one that found nothing. Sweeper's
+// comment lists the residual gaps, among them a process that left the copy
+// before the listing and one whose working directory may not be read.
 //
 // # A process is named by its identity, and ended only after it is verified
 //
@@ -239,9 +261,8 @@
 // it, a group this package started: internal/service's recovery ends a group
 // an earlier service recorded and did not live to terminate. It signals
 // nothing until Presence has verified the leader, and then only by group
-// identifier, with the escalation an invocation applies to its own tree;
-// nothing here matches a process on its command line, working directory or
-// user. A reused identifier, a gone leader, and a read that failed are
+// identifier, with the escalation an invocation applies to its own tree,
+// and it matches no process on its command line, working directory or user. A reused identifier, a gone leader, and a read that failed are
 // answered without a signal, each as its own GroupEnd or error. On unix it
 // asks between steps whether anything of the group is still running rather
 // than whether signal zero still reaches it, and on Linux it lists the

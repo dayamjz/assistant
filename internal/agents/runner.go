@@ -152,21 +152,24 @@ type Fixer interface {
 	Reference() string
 }
 
-// Sweep is the seam for the identity-based sweep PRD section 8 requires and
-// this package does not implement.
+// Sweep is the seam for the identity-based sweep PRD section 8 requires, and
+// Sweeper is this package's implementation of it.
 //
 // Terminating the process group covers a tree that stays in it. A descendant
 // that puts itself in a new group escapes that, and finding it again needs a
 // scan of the machine's processes matched on the isolated copy their working
-// directory resolves under, never on their command line. That scan reads
-// state this package does not own, including which runs are still active, so
-// it belongs to whatever owns run state.
+// directory resolves under, never on their command line. Sweeper is that
+// scan on Linux and answers ErrSweepUnsupported everywhere else.
 //
-// The seam is here so the two are connected rather than merely intended: a
-// runner built WithSweep calls SweepUnder after the process tree of every
+// A runner built WithSweep calls SweepUnder after the process tree of every
 // invocation has been terminated, giving it that invocation's working
-// directory. Until a caller supplies one, the residual gap is real and a
-// detached descendant survives the invocation that started it.
+// directory. Which runs are still active is state this package does not own,
+// and PRD section 8 says the sweep must never touch a copy whose run is still
+// active, while this seam is called during the run whose invocation just
+// ended. So no runner this repository builds is given one: internal/service
+// asks Sweeper of a task's copy before relaunching into it, and a detached
+// descendant of a stage invocation still survives the invocation that
+// started it.
 type Sweep interface {
 	// SweepUnder is asked to end any process still running under dir. It is
 	// called after the invocation's process tree was terminated and its leader

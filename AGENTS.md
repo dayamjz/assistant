@@ -311,9 +311,15 @@ Each has cost this repository more than one round of review.
   process record carry rather than reading a start time of their own, and
   `EndGroup`, the only way to end a group it started from outside the
   invocation: nothing is signalled until `Identity.Presence` verifies the
-  leader, and then only by group identifier, never by pattern. Read its
-  `doc.go` for the residual gaps: a capability whose row has no probe is taken
-  at its word, and an identity narrows PID reuse rather than closing it.
+  leader, and then only by group identifier, never by pattern. `Sweeper` is
+  the identity-based sweep: it ends what runs in one copy `home.CopyAt`
+  accepts, matched by working directory and never by command line, and lists
+  only on Linux; elsewhere `ErrSweepUnsupported` means "could not prove",
+  and its zero `SweepResult` is not `Clear`, so never read it as "none
+  found". Read its `doc.go` for the residual gaps: a capability whose row
+  has no probe is taken at its word, an identity narrows PID reuse rather
+  than closing it, and a sweep sees neither a process that left the copy nor
+  one whose working directory it may not read.
 - `internal/agents/standin` is the scripted agent the tests outside
   `internal/agents` run against. It implements no `agents` interface and builds
   no `agents.Result`: it prints bytes and exits with a status, and the real

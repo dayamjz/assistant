@@ -147,8 +147,9 @@
 // the process starts and the reference is filled after Create returns, so a
 // crash between the two leaves a process no record names. And an orphan
 // whose record does name it is observable but not reachable. Only an
-// identity-based sweep closes either, and that is #112's and not this
-// package's.
+// identity-based sweep reaches either, and that is agents.Sweeper's and not
+// this package's: internal/service asks it of the standing copy before it
+// starts another worker there, and it lists only on Linux.
 //
 // # Residual gaps
 //
