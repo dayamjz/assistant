@@ -13,14 +13,16 @@ type State string
 
 // The states a resolution can name. Landed and Complete are the two PRD
 // section 6 resolves from the terminal records the program writes once each,
-// in the tier above the run tier: Landed from the merge record of a run
+// in the first tier of its precedence: Landed from the merge record of a run
 // attributed to the task, Complete from the task's cleanup record on top of
 // that. The merge record has a producer in this build, internal/runs'
 // PassOnMerge; the cleanup record has none yet (#108), and the rule that
 // reads it is here so its writer inherits a consumer. Complete is resolved
 // for a delivery task only: for an investigation task it is not reachable in
-// this build, and the package comment says why. Unknown is the resolver
-// declining to say.
+// this build, and the package comment says why. Held is resolved by three
+// tiers: the hold tier, from an open hold naming the task; the run tier,
+// from a held run; and the log, from a decision the worker opened. Unknown
+// is the resolver declining to say.
 const (
 	Queued     State = "queued"
 	Dispatched State = "dispatched"
@@ -55,14 +57,20 @@ const (
 	// SourceRecord is the terminal tier: a merge record of an attributed
 	// run, or that and the task's cleanup record. It outranks every run,
 	// because PRD section 6 makes a terminal record final for the task.
-	SourceRecord  Source = "record"
+	SourceRecord Source = "record"
+	// SourceHold is the hold tier: an open hold naming the task, which
+	// resolves Held. It sits below the terminal tier and above the run,
+	// because PRD section 6 has a task waiting on a person never resolve
+	// Failed or Unknown, whatever its run says, while a terminal record
+	// still outranks it.
+	SourceHold    Source = "hold"
 	SourceRun     Source = "run"
 	SourceProcess Source = "process"
 	SourceEvent   Source = "event"
 	SourceNone    Source = "none"
 )
 
-var sources = []Source{SourceRecord, SourceRun, SourceProcess, SourceEvent, SourceNone}
+var sources = []Source{SourceRecord, SourceHold, SourceRun, SourceProcess, SourceEvent, SourceNone}
 
 // Sources returns the closed set of sources in precedence order. The result
 // is a copy. A table keyed on a Source derives its domain from here, so a
@@ -102,7 +110,9 @@ type Inputs struct {
 	// Runs are the runs attributed to the task, in any order and any status.
 	Runs []store.Run
 	// Holds are the holds naming the task or one of Runs. Only an open one is
-	// read, and only for the detail of a held answer.
+	// read: one whose TaskID names Task decides the hold tier, and one naming
+	// the newest run supplies the detail of a held run's answer. A hold
+	// naming another task is not this task's and is not read.
 	Holds []store.Hold
 	// Events are the task's whole history, in any order; Resolve orders them
 	// by sequence itself.
@@ -185,6 +195,13 @@ type Basis struct {
 	// for a task cleanup has not reached.
 	CleanupRecorded bool `json:"cleanup_recorded"`
 	CleanupRemoved  bool `json:"cleanup_removed"`
+	// Hold is the key of the oldest open hold naming the task, read on
+	// Resolve's terms, and empty when none is open. It is recorded whether
+	// or not it decided, as LandedRun is: it decided exactly when Source is
+	// SourceHold. It is what makes a hold opening or closing a change of
+	// basis, so a reader comparing bases sees a task start or stop waiting
+	// on a person.
+	Hold string `json:"hold"`
 	// EventSequence is the highest event sequence read, zero for an empty log.
 	EventSequence int64 `json:"event_sequence"`
 	// EventKind is the kind of the newest event read, and empty for an empty

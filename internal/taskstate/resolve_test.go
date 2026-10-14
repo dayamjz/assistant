@@ -87,20 +87,20 @@ func TestAHeldRunReportsItsOpenHold(t *testing.T) {
 }
 
 // Only the chosen run's own open hold supplies the detail: an older attributed
-// run's hold, which is older and so would win a scan of every hold, and a hold
-// naming only the task are both passed over. The control is the same hold
-// naming the newest run, which is then chosen.
+// run's hold, which is older and so would win a scan of every hold, is passed
+// over. The control is the same hold naming the newest run, which is then
+// chosen. A hold naming the task is not the run tier's at all: it decides the
+// hold tier above it, which hold_test.go holds to the precedence.
 func TestAHeldRunsDetailIsItsOwnHoldsAndNoOthers(t *testing.T) {
 	runs := []store.Run{runIn("old", store.RunHeld, 1), runIn("new", store.RunHeld, 2)}
 	oldHold := store.Hold{Key: "a", Subject: "the old run's question", RunID: store.Known("old"), OpenedAt: epoch}
-	taskHold := store.Hold{Key: "b", Subject: "a task question", TaskID: store.Known("t"), OpenedAt: epoch}
 	newHold := store.Hold{Key: "c", Subject: "the new run's question", RunID: store.Known("new"), OpenedAt: epoch.Add(time.Hour)}
 
-	got := Resolve(Inputs{Task: store.Task{ID: "t"}, Runs: runs, Holds: []store.Hold{oldHold, taskHold, newHold}})
-	if d := got.Detail.Or(""); d != "the new run's question" {
-		t.Fatalf("detail = %q, want the newest run's own hold", d)
+	got := Resolve(Inputs{Task: store.Task{ID: "t"}, Runs: runs, Holds: []store.Hold{oldHold, newHold}})
+	if d := got.Detail.Or(""); d != "the new run's question" || got.Source != SourceRun {
+		t.Fatalf("detail = %q from %s, want the newest run's own hold from the run", d, got.Source)
 	}
-	got = Resolve(Inputs{Task: store.Task{ID: "t"}, Runs: runs, Holds: []store.Hold{oldHold, taskHold}})
+	got = Resolve(Inputs{Task: store.Task{ID: "t"}, Runs: runs, Holds: []store.Hold{oldHold}})
 	if d := got.Detail.Or(""); strings.Contains(d, "question") {
 		t.Fatalf("detail %q names a hold that is not the chosen run's", d)
 	}

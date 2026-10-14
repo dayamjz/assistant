@@ -40,16 +40,27 @@ var runStates = map[store.RunStatus]State{
 //     newer run in Runs, attributed by branch or named by the task, does not
 //     displace it, which is PRD section 6's "work that continues after
 //     Landed is a new task".
-//  2. The newest attributed run, whatever its status: SourceRun. A run that
+//  2. An open hold naming the task: SourceHold, which resolves Held. A hold
+//     names the task when its TaskID is Task's identifier, whether or not it
+//     also names a run; the oldest open one, by opening time with the key
+//     breaking a tie, is the one named in Basis.Hold and its subject is the
+//     detail. It outranks every run, whatever the run's status, Validating
+//     and Ready included, because PRD section 6 puts the tier above the
+//     whole run tier: a task waiting on a person is waiting on them while a
+//     run of its branch validates. A resolved hold is not open and reaches
+//     nothing here, so an answered hold gives the task back to the tiers
+//     below, and a hold naming only a run is the run's, read by the run
+//     tier for its detail and never here.
+//  3. The newest attributed run, whatever its status: SourceRun. A run that
 //     is pending or running reads as Validating, held as Held, passed as
 //     Ready, failed or terminated as Failed. A status outside the run
 //     vocabulary reads as Unknown from SourceRun and does not fall through,
 //     because a run exists and the log is exactly what it outranks.
-//  3. The terminal: Live reads as Running, positive evidence. Dead with no run
+//  4. The terminal: Live reads as Running, positive evidence. Dead with no run
 //     reads as Unknown from SourceProcess and does not fall through to the
 //     log, because a stale event is what a dead terminal must not be trusted
 //     for. Unobserved skips the tier.
-//  4. The log: only when its most recent event's kind has a row in this
+//  5. The log: only when its most recent event's kind has a row in this
 //     package's table that claims a state, or says a decision is open (Held).
 //     A kind that closes a decision, a note, an unrecognized kind, or an empty
 //     log reads as Unknown from SourceNone.
@@ -84,10 +95,19 @@ func Resolve(in Inputs) Resolution {
 	if cleanup, known := in.Cleanup.Get(); known {
 		out.Basis.CleanupRecorded, out.Basis.CleanupRemoved = true, cleanup.RemovedAt.IsKnown()
 	}
+	hold, isHeld := oldestOpenNaming(in.Holds, func(h store.Hold) bool {
+		id, ok := h.TaskID.Get()
+		return ok && id == in.Task.ID
+	})
+	if isHeld {
+		out.Basis.Hold = hold.Key
+	}
 
 	switch {
 	case isLanded:
 		out.State, out.Source, out.Detail = fromRecords(in.Task, landed, in.MergeRecords, in.Cleanup)
+	case isHeld:
+		out.State, out.Source, out.Detail = Held, SourceHold, store.Known(hold.Subject)
 	case ok:
 		out.State, out.Source, out.Detail = fromRun(run, in.Holds)
 	case in.Process == Live:
@@ -100,7 +120,7 @@ func Resolve(in Inputs) Resolution {
 		out.State, out.Source, out.Detail = fromEvents(events)
 	}
 
-	if out.Source == SourceRecord || out.Source == SourceRun || out.Source == SourceProcess {
+	if out.Source == SourceRecord || out.Source == SourceHold || out.Source == SourceRun || out.Source == SourceProcess {
 		out.Superseded = supersededBy(events, out.State, out.Source)
 	}
 	out.Progress = (out.State == Validating && out.Source == SourceRun && in.Advancing) ||
@@ -176,10 +196,20 @@ func fromRun(run store.Run, holds []store.Hold) (State, Source, store.Optional[s
 // oldestOpen picks the oldest open hold that names the run itself: a hold of
 // another attributed run, or one naming only the task, is not this run's.
 func oldestOpen(holds []store.Hold, runID string) (store.Hold, bool) {
+	return oldestOpenNaming(holds, func(h store.Hold) bool {
+		id, ok := h.RunID.Get()
+		return ok && id == runID
+	})
+}
+
+// oldestOpenNaming picks, of the open holds names accepts, the oldest by
+// opening time with the key breaking a tie, so the choice does not depend on
+// the order the holds were handed in.
+func oldestOpenNaming(holds []store.Hold, names func(store.Hold) bool) (store.Hold, bool) {
 	var best store.Hold
 	found := false
 	for _, h := range holds {
-		if id, ok := h.RunID.Get(); !h.Open() || !ok || id != runID {
+		if !h.Open() || !names(h) {
 			continue
 		}
 		if !found || h.OpenedAt.Before(best.OpenedAt) || (h.OpenedAt.Equal(best.OpenedAt) && h.Key < best.Key) {

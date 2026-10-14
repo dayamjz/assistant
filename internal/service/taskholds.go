@@ -106,13 +106,14 @@ import (
 //     on purpose. A retry the coordinator gives under PRD section 9's
 //     authority and one a person gives through the command are recorded
 //     alike.
-//   - PRD section 6's precedence has no tier for a hold naming only a task,
-//     and internal/taskstate resolves none: a task held at the bound reads
-//     the state its run, terminal or history gives it, Failed or Unknown,
-//     with the open hold beside it, and a stopped task keeps reading that.
-//     The hold record and the hold-opened wake are what say it waits on a
-//     person. That is raised as a finding against the precedence and not
-//     closed here.
+//   - While any of these holds is open the task resolves Held from
+//     internal/taskstate's hold tier, PRD section 6's second tier, above
+//     whatever its run, terminal or history says; once it is answered the
+//     hold is no longer read and the task resolves from those again, so a
+//     stopped task reads Failed or Unknown as it did before it held, and a
+//     retried one reads what its new attempt gives it. That tier reads any
+//     open hold naming the task, while an answer here closes only one naming
+//     the task and no run; nothing in this build registers one naming both.
 //   - The bound's hold is registered by reconciliation, which runs at service
 //     start, so a task past the bound holds from the next start after its
 //     terminal is found gone. The coordinator's task.relaunch goes through
@@ -250,7 +251,7 @@ func (s *Service) holdUnswept(ctx context.Context, id string, attempt int64, ref
 	h, err := s.store.RegisterHold(ctx, store.Hold{
 		Key:     relaunchUnsweptKey(id, attempt),
 		TaskID:  store.Known(id),
-		Subject: "whether to begin this work again when nothing could check that the earlier attempt left nothing running",
+		Subject: "whether to begin this work again when nothing could check that the earlier attempt left no process behind",
 		Detail: fmt.Sprintf("task %s: attempt %d's terminal (session %s) is gone with the work not landed, and %s. "+
 			"Answer %q to relaunch it once in the same copy anyway, or %q to leave it where it stopped.",
 			id, attempt, ref, words, machine.AnswerRetry, machine.AnswerStop),

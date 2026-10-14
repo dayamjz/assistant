@@ -41,7 +41,15 @@ import (
 // nothing, because a dead terminal is the ordinary shape of a worker that
 // handed off: Validating is the gate's, Ready is a pull request awaiting a
 // merge, Reported is an investigation delivered, Held is a person's, and
-// Landed and Complete are terminal records that outrank a run. "Not landed"
+// Landed and Complete are terminal records that outrank a run. Held is also
+// how a task reads while a hold naming it is open, from internal/taskstate's
+// hold tier, whatever its run or terminal says, so a task holding at the
+// relaunch bound or on the no-sweep hold reaches this table as Held and is
+// left alone until the answer closes the hold and it resolves Failed or
+// Unknown again; the bound's hold is therefore registered once, by the pass
+// that first finds the task past the bound, and a retry is acted on by the
+// answer's own relaunch or, where that was refused, by the next pass, which
+// reads the closed hold through taskholds.go. "Not landed"
 // is therefore the state itself and not a question asked of the code host.
 // Live and Unobserved are nothing in every row: a live terminal is a worker
 // to leave alone, and an unobserved one is PRD section 11's ambiguous

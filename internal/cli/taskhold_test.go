@@ -19,6 +19,7 @@ import (
 	"github.com/dayamjz/assistant/internal/stages"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/tasks"
+	"github.com/dayamjz/assistant/internal/taskstate"
 )
 
 // A task past relaunch_attempts holds for a person, and only that person's
@@ -37,11 +38,16 @@ import (
 // next start holds again on a new hold for the new attempt rather than
 // relaunching on the spent answer. "stop" closes that one, and a later start
 // neither relaunches nor holds again, and with nothing open a further answer
-// is refused. P6 is the anchor that makes the answer good for one attempt;
-// P13 is the human rendering of the answer, held to the derived forbidden
-// set.
+// is refused. While each hold is open the task reads Held from PRD section
+// 6's hold tier off the command surface, naming that hold, and the line a
+// person reads says it waits on them and how to answer; once both are
+// answered it reads what its records give it again, with nothing appended
+// to its history saying so, which is P8's half. P6 is the anchor that makes
+// the answer good for one attempt; P13 is the human rendering of the answer
+// and of the held task, held to the derived forbidden set.
 func TestATaskPastItsRelaunchBoundHoldsUntilAnAnswerRetriesItOnce(t *testing.T) {
 	principles.Cite(t, principles.P6)
+	principles.Cite(t, principles.P8)
 	principles.Cite(t, principles.P13)
 	requiresIdentifiedPeer(t)
 	requireSweepClears(t)
@@ -76,6 +82,7 @@ func TestATaskPastItsRelaunchBoundHoldsUntilAnAnswerRetriesItOnce(t *testing.T) 
 	if n := len(attemptsOf(t, h, id)); n != 1 {
 		t.Fatalf("the task past its bound has %d attempts, want the first alone", n)
 	}
+	heldBy(t, h, subject, id, first[0].Key)
 
 	// An answer the hold does not offer is refused and records nothing.
 	if got := run(t, h, subject, "--json", "--task", id, "--answer", "approve"); got.code != machine.ExitFailure {
@@ -113,6 +120,7 @@ func TestATaskPastItsRelaunchBoundHoldsUntilAnAnswerRetriesItOnce(t *testing.T) 
 	if n := len(attemptsOf(t, h, id)); n != 2 {
 		t.Fatalf("the spent retry relaunched again: %d attempts, want 2", n)
 	}
+	heldBy(t, h, subject, id, second[0].Key)
 
 	// Stop, read as a person reads it.
 	plain := run(t, h, subject, "--task", id, "--answer", machine.AnswerStop)
@@ -131,6 +139,10 @@ func TestATaskPastItsRelaunchBoundHoldsUntilAnAnswerRetriesItOnce(t *testing.T) 
 	stop = serveWorkers(t, h)
 	if open := openHoldsOf(t, h, id); len(open) != 0 {
 		t.Fatalf("a task answered stop holds again: %+v", open)
+	}
+	if task := taskOf(t, h, subject, id); task.State.State == taskstate.Held || task.State.Basis.Hold != "" {
+		t.Fatalf("a task whose holds are all answered resolves %s from %s on hold %q, want what its records give it",
+			task.State.State, task.State.Source, task.State.Basis.Hold)
 	}
 	if n := len(attemptsOf(t, h, id)); n != 2 {
 		t.Fatalf("a task answered stop was relaunched: %d attempts", n)
@@ -228,6 +240,44 @@ func TestTheTaskFlagIsReadOnlyWithAnAnswer(t *testing.T) {
 			t.Errorf("assistant %s exited %s, want incorrect usage:\n%s", strings.Join(args, " "), got.code, got.stderr)
 		}
 	}
+}
+
+// heldBy reads the task off the command surface while key is open and holds
+// it to the hold tier: the structured rendering resolves Held from the hold
+// and names key, and the line a person reads says the work waits on them and
+// how to answer it, with no word the derived forbidden set keeps from them.
+func heldBy(t *testing.T, h *home.Home, dir, id, key string) {
+	t.Helper()
+	task := taskOf(t, h, dir, id)
+	if task.State.State != taskstate.Held || task.State.Source != taskstate.SourceHold || task.State.Basis.Hold != key {
+		t.Fatalf("the task with %s open resolves %s from %s on hold %q, want held from the hold", key,
+			task.State.State, task.State.Source, task.State.Basis.Hold)
+	}
+	plain := run(t, h, dir, "tasks", id)
+	if plain.code != machine.ExitOK {
+		t.Fatalf("assistant tasks %s exited %s:\n%s%s", id, plain.code, plain.stdout, plain.stderr)
+	}
+	if !strings.Contains(plain.stdout, "waiting on an answer from you") || !strings.Contains(plain.stdout, "assistant --task") ||
+		!strings.Contains(plain.stdout, "--answer") {
+		t.Fatalf("the task reads %q, want it to say it waits on you and how to answer", plain.stdout)
+	}
+	for _, line := range strings.Split(strings.TrimSpace(plain.stdout), "\n") {
+		vocabtest.Assert(t, line)
+	}
+}
+
+// taskOf reads one task's structured answer off the command surface.
+func taskOf(t *testing.T, h *home.Home, dir, id string) machine.Task {
+	t.Helper()
+	got := run(t, h, dir, "--json", "tasks", id)
+	if got.code != machine.ExitOK {
+		t.Fatalf("assistant --json tasks %s exited %s:\n%s%s", id, got.code, got.stdout, got.stderr)
+	}
+	var task machine.Task
+	if err := json.Unmarshal([]byte(got.stdout), &task); err != nil {
+		t.Fatalf("decoding the task: %v\n%s", err, got.stdout)
+	}
+	return task
 }
 
 // answerTask answers a task's hold through the surface and decodes what it
