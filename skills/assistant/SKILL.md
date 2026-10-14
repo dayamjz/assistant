@@ -94,7 +94,13 @@ and answer again until the run is finished.
   driving here.
 - `passed` - the pull request merged.
 - `failed` - the run ended without a verdict: a bound stopped it, a stage
-  could not run, or the pull request was closed. Read the reason, fix what it
+  could not run, or the pull request was closed. Read the answer's next
+  action first. When a bound stopped it, the answer names the bound: a round
+  limit points at that stage's `fix_rounds` key and a step budget at
+  `run_budget`, so tell the user which setting to raise, then start a fresh
+  run. A convergence park means the last fix round changed nothing, so
+  raising a limit will not help; take the stage's findings to the user.
+  Nothing resumes the stopped run itself. Otherwise fix what the reason
   points at in a new commit on the same branch, and start a run again.
 - `cancelled` - a person ended it at a hold.
 
