@@ -30,6 +30,16 @@ type StatusRequest struct {
 	Working
 }
 
+// SyncRequest asks assistant sync's question of the branch the working copy
+// has checked out: classify it, and with Confirm carry out the steps its
+// class allows.
+type SyncRequest struct {
+	Working
+	// Confirm carries the plan out. Without it nothing is written anywhere,
+	// and the answer is the plan a person confirms.
+	Confirm bool `json:"confirm,omitempty"`
+}
+
 // RunsRequest asks for recent runs of one repository, newest first.
 type RunsRequest struct {
 	Working

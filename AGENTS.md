@@ -225,6 +225,20 @@ Each has cost this repository more than one round of review.
   that leaves. `DecideFastForward` is the local posture's narrowing of
   `Decide`: a fast-forward from the anchor only, and refused where section
   11's custody would block it, over a `Checkout` the caller read.
+- `internal/custody` is PRD section 11's custody of a person's branch and the
+  only path that moves one: section 6's approved local landing and `assistant
+  sync` both go through it. `internal/safety` decides each move
+  (`DecideFastForward`, `Adoption.Decide`) and owns the equivalence proof;
+  this package owns the six classes and the exact steps, carried out in the
+  order `Steps` prints them, so the plan confirmed and the steps taken cannot
+  differ. Every move is anchored on the run's `SubmittedHead`, restored as an
+  observation, never on a tip read for the sync. `Classify` writes nothing in
+  the working copy, which is what lets `assistant status` show it; the service
+  reads its facts from their owners and serves it as the restricted
+  `branch.sync`. Read its `doc.go` for what each class is read from in this
+  build and for the residual gaps: only the newest run of a branch is
+  classified, and the classification is read when asked rather than verified
+  at termination.
 - `internal/forge` is the only package that talks to a code host. Everything
   provider-specific stays behind `Provider`, and `internal/vcs` still owns git,
   so a forge adapter never shells out to it. Its checks model is the part that

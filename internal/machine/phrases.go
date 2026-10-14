@@ -1279,7 +1279,9 @@ var PhraseNoReading = Phrase{
 // and removed, the gate's own rows, and the rows pointing at a run's evidence
 // and the two notices beside it, and the catch-up read's: a heading and an
 // empty row per part, a row per kind of landed record, the row for what a
-// read left out, and the two rows for a mark. A templated row is listed with its
+// read left out, and the two rows for a mark, and custody's: a row per class
+// planned and carried out and as status prints it, a row per refusal, and a
+// row per step. A templated row is listed with its
 // placeholder filled in. The result is a copy. Phrases is the same list as
 // strings.
 func TablePhrases() []Phrase {
@@ -1327,5 +1329,5 @@ func TablePhrases() []Phrase {
 		phraseUnderWay, phraseNothingUnderWay, phraseStoppedUndecided, phraseNothingStopped)
 	out = append(out, phraseWasMerged, phraseCopyCleared, LandedMorePhrase(LandedLimit), MarkedPhrase(Marked{}),
 		MarkedPhrase(Marked{Marks: []store.SeenMark{{}}}))
-	return out
+	return append(out, custodyRows()...)
 }

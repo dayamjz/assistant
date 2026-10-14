@@ -20,6 +20,7 @@ func TestMethodTableIsWrittenDownHere(t *testing.T) {
 		"run.rerun":          true,
 		"run.respond":        true,
 		"run.cancel":         true,
+		"branch.sync":        true,
 		"gate.admit":         true,
 		"gate.notify":        true,
 		"stage.report":       false,

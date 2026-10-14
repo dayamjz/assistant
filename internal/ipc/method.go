@@ -29,6 +29,13 @@ const (
 	MethodRunRespond Method = "run.respond"
 	// MethodRunCancel ends a run.
 	MethodRunCancel Method = "run.cancel"
+	// MethodBranchSync is PRD section 11's custody of a person's branch:
+	// classify the branch a working copy has checked out and, when the
+	// request confirms, carry out the steps its class allows. It is the one
+	// method that moves a person's branch, so it is restricted, and the
+	// handler refuses a task's worker as well, on MethodTaskCreate's terms:
+	// a worker reconciles nobody's branch.
+	MethodBranchSync Method = "branch.sync"
 	// MethodGateAdmit decides whether a push to a gate may proceed. It is
 	// called from the gate's admission hook, before any reference in the gate
 	// changes, and a refusal is what rejects the push.
@@ -212,6 +219,7 @@ var specs = []Spec{
 	{MethodRunRerun, KindRequest, AccessRestricted, "Start a fresh run from the last known head."},
 	{MethodRunRespond, KindRequest, AccessRestricted, "Answer a decision a run is holding on."},
 	{MethodRunCancel, KindRequest, AccessRestricted, "End a run."},
+	{MethodBranchSync, KindRequest, AccessRestricted, "Classify a person's branch and, when confirmed, reconcile it with what the pipeline holds."},
 	{MethodGateAdmit, KindRequest, AccessRestricted, "Decide whether a push to a gate may proceed."},
 	{MethodGateNotify, KindRequest, AccessRestricted, "Start the runs a push a gate accepted calls for."},
 	{MethodStageReport, KindRequest, AccessOpen, "Return a stage result from the agent running it."},

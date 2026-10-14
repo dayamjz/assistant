@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/dayamjz/assistant/internal/custody"
 	"github.com/dayamjz/assistant/internal/findings"
 	"github.com/dayamjz/assistant/internal/graph"
 	"github.com/dayamjz/assistant/internal/ipc"
@@ -154,6 +155,21 @@ func fixtureUsage() machine.Usage {
 	return machine.UsageOf(window, readAt, []store.AgentInvocation{review, fix, old})
 }
 
+// fixturePlan is an adoption printed for confirmation: its classification
+// and steps carry the run's identifier, the commits and the references the
+// steps write, which the structured rendering keeps and the human one leaves
+// out.
+func fixturePlan() machine.Plan {
+	c := custody.Classification{
+		Class: custody.ClassDivergedEquivalent, Run: sampleID, Branch: "feature/parser",
+		Head: "0123456789abcdef0123456789abcdef01234567", Submitted: "0123456789abcdef0123456789abcdef01234567",
+		Work: "89abcdef0123456789abcdef0123456789abcdef", Pushed: true,
+		Detail: "integrating the branch into run " + sampleID + "'s work reproduces its tree",
+	}
+	return machine.Plan{Classification: &c, Detail: c.Detail,
+		Steps: custody.Steps(c, filepath.Join(vocabtest.SampleRoot(), "repos", sampleID+".git"), "https://example.test/parser.git")}
+}
+
 // fixtures is a value for every renderer, each carrying the words its old
 // rendering printed: identifiers in the generator's format, paths under a
 // sample home, stage names and state labels. The fallback's is a real answer
@@ -214,10 +230,7 @@ func fixtures(t *testing.T) map[string]any {
 			Gate:       machine.Gate{Present: true, ID: sampleID, Repository: filepath.Join(root, "repos", sampleID+".git")},
 			Repository: store.Repository{ID: sampleID, WorkingPath: "/somewhere/parser", DefaultBranch: "main"},
 		},
-		"plan": machine.Plan{
-			Steps:  []string{"reset feature/parser to the commit the push stage sent, " + sampleID},
-			Detail: "nothing was changed",
-		},
+		"plan":      fixturePlan(),
 		"eject":     machine.Eject{Removed: true, Repository: sampleID, Runs: 2},
 		"health":    machine.Health{Ready: true, Home: root, Build: store.Build{Version: "v1"}, Instance: sampleID},
 		"admission": machine.Admission{Gate: sampleID, Refs: []string{"refs/heads/feature/parser"}},
@@ -295,10 +308,9 @@ func renderNamed(t *testing.T, name string, value any) rendered {
 // The claim is bounded by that enumeration and no wider. The renderers it
 // lists as evidence - a run's details and the findings holding a decision -
 // keep this build's words, as P13 lets an evidence document, and
-// TestTheMessagePointingAtEvidenceIsPhrased holds what points at them; the
-// one it lists as unsettled, a plan, prints this build's words for want of
-// settled wording; TestTheUnphrasedRenderersPrintWhatTheyAreListedFor shows
-// both rather than asserting them. The refusal and usage text the command
+// TestTheMessagePointingAtEvidenceIsPhrased holds what points at them;
+// TestTheUnphrasedRenderersPrintWhatTheyAreListedFor shows that rather than
+// asserting it. The refusal and usage text the command
 // surface writes on standard error is not a renderer and is not held here.
 func TestThePhrasedRenderersSpeakTheTableAndTheJSONKeepsIdentifiers(t *testing.T) {
 	t.Parallel()
@@ -390,6 +402,7 @@ func TestThePhrasedRenderersSpeakTheTableAndTheJSONKeepsIdentifiers(t *testing.T
 	health := values["health"].(machine.Health)
 	admission := values["admission"].(machine.Admission)
 	notification := values["notification"].(machine.Notification)
+	plan := values["plan"].(machine.Plan)
 	for name, old := range map[string]string{
 		"task":         fmt.Sprintf("%s  %-10s %-12s %-8s %s", task.Record.ID, task.Record.Shape, task.State.State, task.State.Source, task.Record.Project),
 		"run":          fmt.Sprintf("Run        %s on %s (%s)", run.Record.ID, run.Record.Branch, run.Record.Status),
@@ -406,6 +419,7 @@ func TestThePhrasedRenderersSpeakTheTableAndTheJSONKeepsIdentifiers(t *testing.T
 		"admission":    fmt.Sprintf("Admitted to gate %s: %s", admission.Gate, strings.Join(admission.Refs, ", ")),
 		"notification": fmt.Sprintf("Started run %s for %s at %s", notification.Started[0].Run, notification.Started[0].Branch, notification.Started[0].Head[:12]),
 		"fallback":     fmt.Sprintf("%+v", values["fallback"]),
+		"plan":         fmt.Sprintf("  %s %s from %s to %s", plan.Steps[2].Kind, plan.Steps[2].Ref, plan.Steps[2].From, plan.Steps[2].To),
 	} {
 		if len(vocabtest.Violations(t, old)) == 0 {
 			t.Errorf("the old %s line %q is not caught, so passing the new one proves nothing", name, old)
@@ -413,8 +427,8 @@ func TestThePhrasedRenderersSpeakTheTableAndTheJSONKeepsIdentifiers(t *testing.T
 	}
 }
 
-// The renderers the enumeration lists as not phrased, the evidence documents
-// and the unsettled plan, do print this build's own words over the same
+// The renderers the enumeration lists as not phrased, the evidence documents,
+// do print this build's own words over the same
 // fixtures, which is what makes the listing honest in the other direction: a
 // renderer listed as not phrased that printed nothing forbidden would be one
 // this surface could claim and does not, and one listed as phrased that did

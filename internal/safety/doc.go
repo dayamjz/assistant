@@ -123,6 +123,16 @@
 // not support, so the refusal says the comparison could not be answered
 // instead.
 //
+// # Adopting a diverged head
+//
+// The local moves internal/custody makes of a person's branch are decided
+// here too. DecideFastForward is one; Adoption.Decide is the other, and it
+// is the one update this package allows on a person's branch that is not a
+// fast-forward: PRD section 11's diverged-but-equivalent row. It is allowed
+// only on Adoption.Prove's proof - a three-way merge over the one merge base
+// that reproduces the proposed tree - and adopt.go states what that proof
+// buys over patch identity and what it leaves.
+//
 // # A refusal is a typed result
 //
 // *Refusal carries the reason, the target, the anchor, what the fresh read

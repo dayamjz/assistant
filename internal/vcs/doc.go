@@ -163,11 +163,15 @@
 // repository, and a refspec beginning with + tells git to update one even when
 // that is not a fast-forward; a caller passing such a refspec has chosen that.
 // UpdateRef writes one full reference name at a commit already in the
-// repository and fetches nothing. CommitAll records the working copy as a
-// commit and moves the branch or detached HEAD it was made on;
-// SwitchToNewBranch and Detach move HEAD itself, to a new branch or to no
-// branch, and nothing else here moves a branch in a working copy. Whether any
-// of it may proceed is the safety module's question, not this one's.
+// repository and fetches nothing, and CreateRef does the same only where the
+// name does not exist yet. CommitAll records the working copy as a commit and
+// moves the branch or detached HEAD it was made on; SwitchToNewBranch and
+// Detach move HEAD itself, to a new branch or to no branch; and AdvanceBranch
+// and MoveBranch move one branch from a commit the caller names to another,
+// as a compare-and-swap, with the working tree when it is checked out there.
+// Nothing else here moves a branch in a working copy. MergeTreeAt writes the
+// objects of the tree it merges and no reference. Whether any of it may
+// proceed is the safety module's question, not this one's.
 //
 // Clone creates a repository, as InitBare does, and refuses a destination
 // that already exists; what it promises is the remote set the caller named
