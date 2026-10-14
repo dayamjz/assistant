@@ -236,18 +236,31 @@
 // failure code, so a type added without a renderer fails loudly rather than
 // reaching a person as a Go value.
 //
-// The three that are not phrased are a run's details, the findings behind a
-// decision, and a plan's steps, and the renderings table says why for each:
-// the specification has not settled their wording. PRD section 9's terminal
-// interface names every stage and its relay-verbatim row has a finding
-// relayed in full, both against P13's text, and the module that would write
-// a plan's steps does not exist in this build. The refusal and usage text
-// written on standard error is outside the table too: a failure's sentence
-// is composed by whichever package refused, and no closed set of them exists
-// to phrase. The renderer test cites P13 for the phrased renderers by
-// enumerating the table, and shows the three that are not phrased printing
-// this build's words, so the enumeration is held in both directions;
-// internal/journey's coverage row holds its note to the same enumeration.
+// The three that are not phrased are named in the renderings table, each
+// with its voice. Two are evidence: a run's details and the findings holding
+// a decision are the detail view and the relay of a finding that needs a
+// decision, the two detailed evidence documents PRD section 9 names, which
+// P13 lets keep exact identifiers and stage names. Each row carries the
+// phrase-table row that points a person at it, and writeEvidence, which the
+// run renderer reaches each through, writes that row first, so the message
+// pointing at the evidence is phrased like every other line; what a
+// run says about a request it did not apply is a status line and is a row
+// beside the evidence rather than part of it. The third, a plan, is
+// unsettled: the custody module that would write a plan's steps does not
+// exist in this build, and the one plan it makes is assistant sync's refusal,
+// whose sentence the renderer prints as this build wrote it.
+//
+// The refusal and usage text written on standard error is outside the table
+// too, and is not held to P13 by any test: a failure's sentence is composed
+// by whichever package refused, and no closed set of them exists to phrase;
+// the next-action line render may print after it is a row of nextActions in
+// client.go, which is a closed set but not the phrase table and is not held
+// to the derived forbidden set either. The renderer test cites P13 for the
+// phrased renderers by enumerating the table, the evidence test cites it for
+// what points at the evidence, and the renderers that are not phrased are
+// shown printing this build's words, so the enumeration is held in both
+// directions; internal/journey's coverage row holds its note to the same
+// enumeration.
 //
 // What that leaves is deliberate and worth knowing. The human rendering of a
 // listing names no run and no task, so a verb that takes an identifier -

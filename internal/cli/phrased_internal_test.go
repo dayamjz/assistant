@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -234,11 +235,13 @@ func renderNamed(t *testing.T, name string, value any) rendered {
 // named.
 //
 // The claim is bounded by that enumeration and no wider. The renderers it
-// lists as not phrased - a run's details, the findings behind a decision and
-// a plan's steps - still print this build's words, which
-// TestTheUnphrasedRenderersPrintWhatTheyAreListedFor shows rather than
-// asserts; and the refusal and usage text the command surface writes on
-// standard error is not a renderer and is not held here.
+// lists as evidence - a run's details and the findings holding a decision -
+// keep this build's words, as P13 lets an evidence document, and
+// TestTheMessagePointingAtEvidenceIsPhrased holds what points at them; the
+// one it lists as unsettled, a plan, prints this build's words for want of
+// settled wording; TestTheUnphrasedRenderersPrintWhatTheyAreListedFor shows
+// both rather than asserting them. The refusal and usage text the command
+// surface writes on standard error is not a renderer and is not held here.
 func TestThePhrasedRenderersSpeakTheTableAndTheJSONKeepsIdentifiers(t *testing.T) {
 	t.Parallel()
 	principles.Cite(t, principles.P13)
@@ -263,7 +266,7 @@ func TestThePhrasedRenderersSpeakTheTableAndTheJSONKeepsIdentifiers(t *testing.T
 	}
 	phrased := 0
 	for _, r := range Renderings() {
-		if !r.Phrased {
+		if r.Voice != VoicePhrased {
 			continue
 		}
 		phrased++
@@ -352,20 +355,20 @@ func TestThePhrasedRenderersSpeakTheTableAndTheJSONKeepsIdentifiers(t *testing.T
 	}
 }
 
-// The renderers the enumeration lists as not phrased do print this build's
-// own words over the same fixtures, which is what makes the listing honest in
-// the other direction: a renderer listed as not phrased that printed nothing
-// forbidden would be one this surface could claim and does not, and one
-// listed as phrased that did is caught by the test above. The domain is the
-// enumeration's, so a renderer added there as not phrased needs a fixture
-// here before it passes.
+// The renderers the enumeration lists as not phrased, the evidence documents
+// and the unsettled plan, do print this build's own words over the same
+// fixtures, which is what makes the listing honest in the other direction: a
+// renderer listed as not phrased that printed nothing forbidden would be one
+// this surface could claim and does not, and one listed as phrased that did
+// is caught by the test above. The domain is the enumeration's, so a renderer
+// added there as not phrased needs a fixture here before it passes.
 func TestTheUnphrasedRenderersPrintWhatTheyAreListedFor(t *testing.T) {
 	t.Parallel()
 	vocabtest.Control(t)
 	values := fixtures(t)
 	unphrased := 0
 	for _, r := range Renderings() {
-		if r.Phrased {
+		if r.Voice == VoicePhrased {
 			continue
 		}
 		unphrased++
@@ -381,6 +384,110 @@ func TestTheUnphrasedRenderersPrintWhatTheyAreListedFor(t *testing.T) {
 	if unphrased == 0 {
 		t.Fatal("no renderer is listed as not phrased, so this test checked nothing; if that is now true, delete it")
 	}
+}
+
+// TestTheMessagePointingAtEvidenceIsPhrased is P13 for the two evidence
+// documents PRD section 9 names. P13 lets an evidence document keep exact
+// identifiers and stage names and keeps the message that points at one
+// phrased, so a run carrying both documents is rendered and each document is
+// taken out from behind its pointer; what is left - the pointers, the run's
+// head, the notice that its starting inputs were not applied, and the
+// decision - is held to the derived forbidden set line by line.
+//
+// It is not passed for looking at nothing. Each evidence fixture is shown to
+// carry a forbidden word on its own, so taking it out is what lets the rest
+// pass; and the check is run over three counterfeits of the same output it
+// must reject: a pointer carrying the run's identifier and position, a
+// document written with no pointer before it, and the notice in the words
+// the details renderer used to print it in.
+func TestTheMessagePointingAtEvidenceIsPhrased(t *testing.T) {
+	t.Parallel()
+	principles.Cite(t, principles.P13)
+	vocabtest.Control(t)
+	values := fixtures(t)
+	run := values["details"].(machine.Run)
+	decision := values["findings"].(machine.Decision)
+	run.Decision = &decision
+	run.NotApplied = []string{"intent", "skip"}
+	var out bytes.Buffer
+	if err := readOut(&out, run); err != nil {
+		t.Fatalf("the run was refused: %v", err)
+	}
+	rows := machine.TablePhrases()
+	var blocks []evidenceBlock
+	for _, r := range renderings {
+		if r.voice != VoiceEvidence {
+			if r.points != (machine.Phrase{}) {
+				t.Errorf("%s is %s and carries a pointer, which only an evidence row has", r.name, r.voice)
+			}
+			continue
+		}
+		if r.of != nil {
+			t.Errorf("%s is evidence and readOut dispatches to it directly, so it is reachable with no pointer before it", r.name)
+		}
+		if !slices.Contains(rows, r.points) {
+			t.Errorf("%s points at itself with %q, which is not a row of the phrase table", r.name, r.points)
+		}
+		body := renderNamed(t, r.name, values[r.name]).out
+		if len(vocabtest.Violations(t, body)) == 0 {
+			t.Errorf("the %s fixture carries nothing the derivation forbids, so taking it out holds the rest to nothing:\n%s", r.name, body)
+		}
+		blocks = append(blocks, evidenceBlock{pointer: r.points.String(), body: body})
+	}
+	if len(blocks) != 2 {
+		t.Fatalf("%d renderers are evidence; PRD section 9 names two evidence documents", len(blocks))
+	}
+	got := out.String()
+	t.Logf("the run as a person reads it:\n%s", got)
+	if !strings.Contains(got, machine.PhraseInputsNotApplied.String()+"\n") {
+		t.Errorf("the run does not say its starting inputs were not applied:\n%s", got)
+	}
+	for _, problem := range pointedAt(t, got, blocks) {
+		t.Error(problem)
+	}
+
+	counterfeitPointer := "Details of run " + sampleID + " at " + run.Position
+	misnamed := slices.Clone(blocks)
+	misnamed[0].pointer = counterfeitPointer
+	for name, c := range map[string]struct {
+		out    string
+		blocks []evidenceBlock
+	}{
+		"a pointer carrying the identifier and position": {strings.Replace(got, blocks[0].pointer, counterfeitPointer, 1), misnamed},
+		"a document with no pointer":                     {strings.Replace(got, blocks[1].pointer+"\n", "", 1), blocks},
+		"the notice in the old details words": {strings.Replace(got, machine.PhraseInputsNotApplied.String(),
+			"Not applied "+strings.Join(run.NotApplied, ", ")+" - this branch already had a run, and these start one", 1), blocks},
+	} {
+		if len(pointedAt(t, c.out, c.blocks)) == 0 {
+			t.Errorf("the check passed %s, so passing the real output proves nothing", name)
+		}
+	}
+}
+
+// evidenceBlock is one evidence document as a run renders it: the phrase
+// that points at it and the document written after it.
+type evidenceBlock struct{ pointer, body string }
+
+// pointedAt reports what is wrong with a rendering against the evidence it
+// should carry: a document not written directly after its pointer, and any
+// line left once each document is taken out that carries a forbidden word.
+func pointedAt(t *testing.T, out string, blocks []evidenceBlock) []string {
+	t.Helper()
+	var problems []string
+	for _, b := range blocks {
+		whole := b.pointer + "\n" + b.body
+		if !strings.Contains(out, whole) {
+			problems = append(problems, fmt.Sprintf("the document behind %q is not written directly after it", b.pointer))
+			continue
+		}
+		out = strings.Replace(out, whole, b.pointer+"\n", 1)
+	}
+	for _, line := range strings.Split(out, "\n") {
+		for _, v := range vocabtest.Violations(t, line) {
+			problems = append(problems, fmt.Sprintf("%q points at evidence or stands beside it and carries %q, which is %s's word", line, v.Text, v.Owner))
+		}
+	}
+	return problems
 }
 
 // An answer with no renderer is refused rather than printed as Go prints it:
@@ -464,9 +571,9 @@ func TestATaskLineIsItsPhraseAndNothingOfTheRecord(t *testing.T) {
 }
 
 // A run's head is its phrase, its branch, its agent and the kept-copy line
-// from its cleanup refusal; the details beneath it are the renderer that is
-// not phrased, and this says so by showing exactly which lines carry a stage
-// name once stage views are added.
+// from its cleanup refusal; the details beneath it are an evidence document,
+// and this says so by showing exactly which lines carry a stage name once
+// stage views are added.
 func TestARunsHeadIsPhrasedAndItsDetailsAreNot(t *testing.T) {
 	t.Parallel()
 	vocabtest.Control(t)
@@ -491,7 +598,7 @@ func TestARunsHeadIsPhrasedAndItsDetailsAreNot(t *testing.T) {
 	}
 
 	// With a position and stage views, the details carry a node name and
-	// stage names: that renderer is the one Renderings lists unphrased, and
+	// stage names: that renderer is the one Renderings lists as evidence, and
 	// this is the line that says so.
 	halted := graph.StatusHalted
 	withStages := run
@@ -506,8 +613,8 @@ func TestARunsHeadIsPhrasedAndItsDetailsAreNot(t *testing.T) {
 		t.Fatal("neither detail line carries a forbidden word, so the details renderer could be claimed phrased")
 	}
 	for _, r := range Renderings() {
-		if r.Name == "details" && r.Phrased {
-			t.Fatal("the details renderer is listed as phrased and prints stage names")
+		if r.Name == "details" && r.Voice != VoiceEvidence {
+			t.Fatalf("the details renderer is listed as %s and prints stage names as only an evidence document may", r.Voice)
 		}
 	}
 }

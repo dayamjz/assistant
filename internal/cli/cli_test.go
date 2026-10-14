@@ -1035,7 +1035,7 @@ func TestAttachingSaysWhichStartingInputsWereNotApplied(t *testing.T) {
 	if plain.code != machine.ExitOK {
 		t.Fatalf("attaching exited %s:\n%s%s", plain.code, plain.stdout, plain.stderr)
 	}
-	if !strings.Contains(plain.stdout, "Not applied") || !strings.Contains(plain.stdout, "intent") {
+	if !strings.Contains(plain.stdout, machine.PhraseInputsNotApplied.String()) {
 		t.Fatalf("the rendering a person reads does not say the intent was not applied:\n%s", plain.stdout)
 	}
 }
