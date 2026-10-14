@@ -123,6 +123,17 @@
 // that says what it became. So a budget may change, and a change is a line in
 // the run's history rather than a difference between two executors.
 //
+// A park says which bound made it, from the checkpoint that recorded it and
+// not from anything a reader infers. The status is the bound, and for the two
+// bounds that live on an edge, Checkpoint.ParkedAt names the edge by its
+// endpoints and declared rounds; Checkpoint.Park and Result.Park compose that
+// with the node the run stands at and the budget it was held to. Validation
+// holds a recorded edge to one the graph declares, whose bound could have
+// parked the run there. A checkpoint written before ParkedAt existed carries
+// none, and its park is reported without an edge rather than with a guessed
+// one. Status.Parked is Status.Stopped without the hold, which is the line
+// PRD section 5 draws between the two words.
+//
 // Integrity checking leaves the three bounds three. It decides whether a
 // checkpoint may be resumed at all, and past that each bound still parks runs
 // the other two would not: AdoptBudget releases a run its own budget parked

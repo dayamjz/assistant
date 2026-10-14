@@ -12,6 +12,7 @@ import (
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/pipeline"
+	"github.com/dayamjz/assistant/internal/store"
 )
 
 // readOut writes an answer for a person.
@@ -281,7 +282,8 @@ var (
 func typeOf[T any]() reflect.Type { return reflect.TypeOf((*T)(nil)).Elem() }
 
 // readOutStatus prints PRD section 9's status - service, gate, branch, the
-// branch's custody classification and active run - each through the phrase
+// branch's custody classification and active run, or the branch's latest run
+// when a bound parked it and none is active - each through the phrase
 // table. What it does not print is in
 // the structured rendering: the home root, the socket, the repository's
 // identifier and upstream, the gate's identifier and the head commit are
@@ -314,6 +316,13 @@ func readOutStatus(w io.Writer, s machine.Status) {
 		return
 	}
 	writeln(w, machine.PhraseNoRun)
+	// The branch's latest run, when a bound parked it, is read out after
+	// that row so the findings it stopped on stay in view once it has ended;
+	// its own phrase says which bound.
+	if s.ParkedRun != nil {
+		writeln(w)
+		readOutRun(w, *s.ParkedRun)
+	}
 }
 
 // readOutSupervision prints the pull guard's warning when there is one. The
@@ -384,7 +393,8 @@ func readOutRun(w io.Writer, r machine.Run) {
 }
 
 // readOutDetails prints the run's details: where its execution stands, the
-// reason a bound parked it, the keys its configuration resolution dropped,
+// reason a bound parked it, which bound its record names and the findings the
+// stage that park names last reported, the keys its configuration resolution dropped,
 // what became of each stage, and the proposals raised about it. These are
 // this build's own words - node positions, stage names, configuration keys -
 // because this is the detail view's evidence, which P13 lets keep them; it
@@ -396,6 +406,15 @@ func readOutDetails(w io.Writer, r machine.Run) {
 	}
 	if r.Reason != "" {
 		writef(w, "Reason     %s\n", printable(r.Reason))
+	}
+	// Which bound parked the run, off its record, and the findings the stage
+	// the park names last reported, off that stage's report on this answer.
+	if park, ok := r.Record.Park.Get(); ok {
+		writef(w, "Parked     %s\n", parkLine(park))
+		if parked := parkedFindings(r, park); len(parked) > 0 {
+			writef(w, "\nFindings the %s stage parked on\n", printable(park.Stage))
+			writeFindings(w, parked)
+		}
 	}
 	// The keys the run's configuration resolution dropped, one line each as
 	// the record carries them, so an author whose setting had no effect learns
@@ -448,7 +467,37 @@ func readOutDecision(w io.Writer, d machine.Decision) {
 // that points at it; the message asking for the decision is the decision
 // renderer's, which is phrased.
 func readOutFindings(w io.Writer, d machine.Decision) {
-	for _, finding := range d.Findings {
+	writeFindings(w, d.Findings)
+}
+
+// parkLine is the details line for a park: the bound in the record's own
+// word, the stage it names, and its limit where it has one.
+func parkLine(p store.RunPark) string {
+	line := string(p.Bound)
+	if p.Stage != "" {
+		line += " at " + p.Stage
+	}
+	if p.Limit > 0 {
+		line += fmt.Sprintf(" (limit %d)", p.Limit)
+	}
+	return printable(line)
+}
+
+// parkedFindings is what the stage a park names last reported, read off that
+// stage's report on the run's answer, and nil when it has none.
+func parkedFindings(r machine.Run, p store.RunPark) []findings.Finding {
+	for _, stage := range r.Stages {
+		if stage.Stage == p.Stage && stage.Report != nil {
+			return stage.Report.Findings
+		}
+	}
+	return nil
+}
+
+// writeFindings prints findings in full, on readOutFindings' terms: nothing
+// truncated, dropped or reordered, and every agent-written line escaped.
+func writeFindings(w io.Writer, list []findings.Finding) {
+	for _, finding := range list {
 		writef(w, "\n  [%s] %s %s\n", printable(string(finding.Action)), printable(string(finding.Severity)), printable(finding.ID))
 		if where := locationOf(finding); where != "" {
 			writef(w, "  %s\n", printable(where))

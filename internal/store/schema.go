@@ -51,6 +51,10 @@ const promotedPostureMigration = "task delivery posture written once, at intake 
 // a constant.
 const invocationServedMigration = "agent invocation run and stage"
 
+// runParkMigration names the migration that records which bound parked a run,
+// for the reason sealCheckpointTableMigration is a constant.
+const runParkMigration = "run park record"
+
 // schema is the migration list this package applies. Adding a column means
 // appending a migration whose ALTER TABLE names a nullable column with no
 // default, so rows written before it reads back unknown; migrate refuses
@@ -1241,6 +1245,37 @@ var schema = []migration{
 					OR OLD.shape <> 'investigation' OR NEW.shape <> 'delivery'
 				BEGIN
 					SELECT RAISE(ABORT, 'store: a task''s delivery posture is written once, at intake or by the promotion that makes it a delivery task, and is not revised');
+				END`,
+		},
+	},
+	{
+		version: 28,
+		name:    runParkMigration,
+		statements: []string{
+			// Which of PRD section 5's three loop bounds parked a run, as
+			// RunPark encodes it. A park ends a run's record in terminated,
+			// which is also what a cancellation and a supersession leave, so
+			// the status alone cannot say which ending a run had; this column
+			// is what qualifies that one status, and so it sits on the run
+			// row beside it rather than in a table of its own. It is written
+			// by TransitionRunOnPark in the transaction that moves the run to
+			// terminated, so a run never reads as parked without the status
+			// or the reverse.
+			//
+			// It is nullable with no default, so every run written before it
+			// and every run no bound parked reads back unknown. The trigger
+			// makes it written once: an update naming it is refused unless
+			// the row had none, is given one, and already stands terminated,
+			// which TransitionRunOnPark's own status move establishes first in
+			// the same transaction. No statement clears it and none revises
+			// it. An update that does not name the column cannot change it,
+			// so it does not reach the trigger.
+			`ALTER TABLE run ADD COLUMN park TEXT`,
+			`CREATE TRIGGER run_park_is_written_once
+				BEFORE UPDATE OF park ON run
+				WHEN OLD.park IS NOT NULL OR NEW.park IS NULL OR OLD.status <> 'terminated'
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a run''s park is written once, with the move that ends it terminated, and is not revised');
 				END`,
 		},
 	},

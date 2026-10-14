@@ -12,7 +12,10 @@
 // # A run's status changes are anchored and tabulated
 //
 // A run is created pending, runs, and ends in exactly one of passed, failed,
-// or terminated. Held is where it waits on a person.
+// or terminated. Held is where it waits on a person. Terminated is what a
+// cancellation, a supersession and a park all leave, so Park is its own row:
+// it writes which bound parked the run, store.RunPark, in the transaction that
+// ends it, and the record is then what tells a park from the other two.
 //
 // The moves between those are a table in lifecycle.go, and every exported
 // method that changes a status is one of its rows. No row leads out

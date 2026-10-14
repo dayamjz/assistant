@@ -76,6 +76,66 @@ func (s Status) Stopped() bool {
 	}
 }
 
+// Parked reports whether the status is one of the three parks: a bound, not a
+// person, stopped the run. It is Stopped without StatusHalted, which is the
+// hold, and it names which bound only through the status itself, so a caller
+// that needs the bound reads Checkpoint.Park or Result.Park rather than
+// switching on the status beside this.
+func (s Status) Parked() bool {
+	switch s {
+	case StatusRoundsExhausted, StatusBudgetExhausted, StatusConverged:
+		return true
+	case StatusInvalid, StatusRunning, StatusCompleted, StatusHalted:
+		return false
+	default:
+		return false
+	}
+}
+
+// EdgeRef names one declared edge by its endpoints and the round bound it
+// declares. It is how a checkpoint records which edge's bound parked a run,
+// in terms a reader holding no graph can read; Graph.Validate holds a
+// checkpoint's EdgeRef to an edge the graph actually declares.
+type EdgeRef struct {
+	// From is the node the edge leaves.
+	From string `json:"from"`
+	// To is the node the edge enters.
+	To string `json:"to"`
+	// Rounds is the round bound the edge declares, zero for an edge that
+	// declares none.
+	Rounds int `json:"rounds"`
+}
+
+// clone returns an independent copy of the reference.
+func (r *EdgeRef) clone() *EdgeRef {
+	if r == nil {
+		return nil
+	}
+	out := *r
+	return &out
+}
+
+// Park is which of the three bounds parked a run, and where, as the
+// checkpoint that recorded the park says. It is read off a checkpoint or a
+// result and is never stored on its own, so it cannot disagree with the
+// checkpoint it describes.
+type Park struct {
+	// Status is the park itself, one of the three statuses Parked accepts:
+	// StatusRoundsExhausted for an edge's round limit, StatusConverged for a
+	// round that changed nothing, StatusBudgetExhausted for the run-wide step
+	// budget.
+	Status Status
+	// Node is the node the run stands in front of, which has not run.
+	Node string
+	// Edge is the edge whose bound parked the run, for a round limit or a
+	// convergence park. It is nil for a budget park, which is no edge's bound,
+	// and for an edge park recorded by a build that did not yet write
+	// Checkpoint.ParkedAt: the park is then known and its edge is not.
+	Edge *EdgeRef
+	// Budget is the run-wide step budget the run was held to when it parked.
+	Budget int
+}
+
 // MarshalJSON writes the status as its wire name.
 func (s Status) MarshalJSON() ([]byte, error) {
 	switch s {
@@ -264,6 +324,14 @@ type Checkpoint struct {
 	// Status.Stopped, so a checkpoint built by hand or read out of a store may
 	// carry one on a halted run; see Graph.validateReason.
 	Reason string `json:"reason,omitempty"`
+	// ParkedAt is the edge whose bound parked the run. The executor sets it
+	// exactly when it parks a run on a round limit or on convergence, and
+	// clears it on every other status, so a budget park, which no edge
+	// caused, never carries one. A checkpoint written before the field
+	// existed reads back without it on any status; Graph.Validate refuses one
+	// that names an edge the graph does not declare, or that stands anywhere
+	// but where that edge leads.
+	ParkedAt *EdgeRef `json:"parked_at,omitempty"`
 	// State is the typed record as of this point.
 	State State `json:"state"`
 	// Decision is the open decision, non-nil exactly when Status is
@@ -286,6 +354,7 @@ func (c Checkpoint) clone() Checkpoint {
 	out.State = c.State.Clone()
 	out.Decision = c.Decision.clone()
 	out.Counters = c.Counters.clone()
+	out.ParkedAt = c.ParkedAt.clone()
 	if c.ForkedFrom != nil {
 		origin := *c.ForkedFrom
 		out.ForkedFrom = &origin
@@ -296,6 +365,32 @@ func (c Checkpoint) clone() Checkpoint {
 // ID returns the checkpoint's identifier.
 func (c Checkpoint) ID() CheckpointID { return CheckpointID{Run: c.Run, Seq: c.Seq} }
 
+// Park reports which bound parked the run this checkpoint describes, and false
+// when its status is not a park.
+func (c Checkpoint) Park() (Park, bool) {
+	if !c.Status.Parked() {
+		return Park{}, false
+	}
+	return Park{Status: c.Status, Node: c.Position, Edge: c.ParkedAt.clone(), Budget: c.Counters.Budget}, true
+}
+
+// Result renders the checkpoint as the result a caller of the executor sees,
+// for a caller that read the checkpoint from a store rather than receiving it
+// from a segment. It shares nothing mutable with the checkpoint.
+func (c Checkpoint) Result() Result {
+	return Result{
+		Status:     c.Status,
+		Position:   c.Position,
+		Decision:   c.Decision.clone(),
+		State:      c.State.Clone(),
+		Checkpoint: c.ID(),
+		Steps:      c.Counters.Steps,
+		Budget:     c.Counters.Budget,
+		Reason:     c.Reason,
+		ParkedAt:   c.ParkedAt.clone(),
+	}
+}
+
 // checkpointJSON is the wire shape. It exists so decoding can refuse unknown
 // fields without the alias recursing into Checkpoint's own unmarshaler.
 type checkpointJSON struct {
@@ -304,6 +399,7 @@ type checkpointJSON struct {
 	Position   string        `json:"position"`
 	Status     Status        `json:"status"`
 	Reason     string        `json:"reason,omitempty"`
+	ParkedAt   *EdgeRef      `json:"parked_at,omitempty"`
 	State      State         `json:"state"`
 	Decision   *Decision     `json:"decision,omitempty"`
 	Counters   Counters      `json:"counters"`
