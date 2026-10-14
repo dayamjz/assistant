@@ -17,19 +17,22 @@ import (
 // says what that observation is and is not.
 const exitStreamParse = 1
 
-// streamInput reports whether args select streaming input: --print with
+// streamInput reports whether args select streaming input: --print together with
 // --input-format stream-json, in either of the two spellings an argument
 // parser accepts for a flag with a value. The adapter writes the first.
 func streamInput(args []string) bool {
+	print, stream := false, false
 	for i, a := range args {
-		if a == "--input-format=stream-json" {
-			return true
-		}
-		if a == "--input-format" && i+1 < len(args) && args[i+1] == "stream-json" {
-			return true
+		switch {
+		case a == "--print":
+			print = true
+		case a == "--input-format=stream-json":
+			stream = true
+		case a == "--input-format" && i+1 < len(args) && args[i+1] == "stream-json":
+			stream = true
 		}
 	}
-	return false
+	return print && stream
 }
 
 // streamLine is what the stand-in reads of one line in stream mode: the type,
