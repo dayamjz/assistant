@@ -49,9 +49,10 @@ type resolvedState struct {
 // internal/store's own transition, and the surface is asked; the state is not
 // written anywhere, so the only way the surface can answer is by resolving.
 //
-// Nothing in this build creates a task or dispatches a worker, so the task
-// and its history are written through internal/store's accessors, which are the
-// ones anything creating a task would use. The run's moves are the store's
+// Nothing here dispatches a worker, and the history planted is not one
+// internal/service's task.create writes, so the task and its history are
+// written through internal/store's accessors, which are the ones intake
+// itself uses. The run's moves are the store's
 // TransitionRun rather than a run of the gate, which this harness reaches no
 // review or push through. What is driven end to end is the reading.
 func TestAnEventLogIsNotCurrentState(t *testing.T) {

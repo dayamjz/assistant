@@ -488,7 +488,8 @@ func ensureRepository(ctx context.Context, repo string) error {
 	if err != nil {
 		return err
 	}
-	if _, err := vcs.InitBare(ctx, repo); err != nil {
+	bare, err := vcs.InitBare(ctx, repo)
+	if err != nil {
 		return fmt.Errorf("gate: creating the gate repository at %s: %w", repo, err)
 	}
 	after, err := activeHooks(repo)
@@ -521,9 +522,20 @@ func ensureRepository(ctx context.Context, repo string) error {
 	// and the seal is skipped. It is written this way because this is the third
 	// place a seal and a refusal share one return, and three places that decide
 	// this differently is how the two that already agree stop agreeing.
+	//
+	// Automatic maintenance is turned off after the seal rather than before
+	// it, so the window the seal closes is not widened by a git invocation.
+	// It is written on every initialization that leaves a repository standing,
+	// a refresh and a refused repair included, because this function is the
+	// one path every gate takes and the write is idempotent; doc.go says why
+	// the seal is not a second place for it. A failure joins the refusal on
+	// the same terms as the seal's.
 	if !holdsNoRepository(repo) {
 		if err := sealAdmission(repo); err != nil {
 			return errors.Join(refusal, err)
+		}
+		if err := bare.DisableAutomaticMaintenance(ctx); err != nil {
+			return errors.Join(refusal, fmt.Errorf("gate: turning automatic maintenance off in %s: %w", repo, err))
 		}
 	}
 	return refusal

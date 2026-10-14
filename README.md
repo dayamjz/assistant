@@ -223,6 +223,11 @@ assistant --json status        # the same answer as one structured document
 assistant doctor               # can a run start at all, and what stops one
 ```
 
+A working copy whose gate was created before a push learned to wait for a
+run's copy needs `assistant init` once more: that is what points its
+`assistant` remote's receive command through the gate, and until it runs a
+push that lands while a copy is being set up can still be rejected.
+
 The home is `~/.assistant` unless `ASSISTANT_HOME` names another root. Add
 `--json` to any command for the machine interface: one document on standard
 output, progress on standard error, and three exit codes that mean success or

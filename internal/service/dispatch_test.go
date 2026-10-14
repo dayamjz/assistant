@@ -2,6 +2,7 @@ package service_test
 
 import (
 	"errors"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,9 +19,10 @@ import (
 
 // recordDispatchedTask writes, where a coordinator's intake would have, a
 // task that resolves Dispatched: the record with its copy reserved at
-// home.TaskCopy, and the instructions file intake writes after it. Nothing in
-// this build creates a task through the service, so the records are written
-// through internal/store.
+// home.TaskCopy, and the instructions file intake writes after it. It is
+// written through internal/store rather than task.create so the test holds a
+// task that has not yet been dispatched, which task.create's background
+// dispatch would race; coordinator_unix_test.go drives task.create itself.
 func recordDispatchedTask(t *testing.T, h *home.Home, repository store.Repository, shape store.TaskShape, branch string) string {
 	t.Helper()
 	id, err := home.NewTaskID()
@@ -75,8 +77,11 @@ func sameFile(t *testing.T, a, b string) bool {
 // by file identity and HEAD on the task's branch at the default branch's tip.
 // Both snapshots are recorded, the second check is in its instructions, the
 // attempt is one, and nothing launched: the task still resolves Dispatched,
-// and the primary is untouched.
+// and the primary is untouched, its own configuration included. The clone's
+// own configuration turns automatic maintenance off, because the clone is the
+// program's and the primary is the person's, which is PRD principle P1.
 func TestADispatchedDeliveryTaskIsCutAnIsolatedClone(t *testing.T) {
+	principles.Cite(t, principles.P1)
 	h := newHome(t)
 	subject := newSubject(t)
 	quietMaintenance(t, subject)
@@ -87,6 +92,7 @@ func TestADispatchedDeliveryTaskIsCutAnIsolatedClone(t *testing.T) {
 	workTip := git(t, subject, "rev-parse", "HEAD")
 	primaryBefore := refsOf(t, subject)
 	remotesBefore := git(t, subject, "remote")
+	primaryConfigBefore := git(t, subject, "config", "--local", "--list")
 
 	withService(t, h, func(running serviceUnderTest) {
 		if got := taskState(t, running.client, id); got.State != taskstate.Dispatched || got.Source != taskstate.SourceEvent {
@@ -119,6 +125,21 @@ func TestADispatchedDeliveryTaskIsCutAnIsolatedClone(t *testing.T) {
 	}
 	if got := git(t, subject, "remote"); got != remotesBefore {
 		t.Fatalf("the primary's remotes are %q after the dispatch, were %q", got, remotesBefore)
+	}
+	// The clone is the program's, so its own configuration turns automatic
+	// maintenance off; the primary is the person's, so its own configuration
+	// is read back whole and is what it was. The subject carries both keys
+	// already, set by quietMaintenance, so the comparison is of the whole
+	// file rather than of an absence.
+	copyMaintenance, err := ownMaintenanceConfig(copyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := map[string]string{"gc.auto": "0", "maintenance.auto": "false"}; !maps.Equal(copyMaintenance, want) {
+		t.Fatalf("the copy's own configuration reads automatic maintenance as %v, want %v", copyMaintenance, want)
+	}
+	if got := git(t, subject, "config", "--local", "--list"); got != primaryConfigBefore {
+		t.Fatalf("the primary's own configuration changed under the dispatch:\n%s\nwas:\n%s", got, primaryConfigBefore)
 	}
 
 	records := openRecords(t, h)

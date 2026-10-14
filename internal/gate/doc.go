@@ -43,6 +43,29 @@
 // the reference update lines the hooks put on that command's standard input;
 // both are here because this package defined the protocol they belong to.
 //
+// # Automatic maintenance is off in the gate's own configuration
+//
+// The gate repository is born with gc.auto=0 and maintenance.auto=false in its
+// own configuration, written through vcs.DisableAutomaticMaintenance. What that
+// buys this package is a gate whose configuration does not ask git for
+// background work of its own that could run alongside a push being admitted or
+// a run copy being cut; internal/vcs states the measure's limits.
+//
+// It is written by the function that creates the repository, on every
+// initialization rather than only the first, so a gate created before the
+// write existed carries both keys after its working copy is next initialized,
+// and keeps git's defaults until then. Nothing else reaches an existing gate:
+// the seal is not a second place for it, because the seal writes files and
+// invokes no git, and it reaches gates an operation is refusing to act on.
+//
+// Only the gate's configuration is written. The working copy's is not, which
+// is PRD principle P1's concern as much as the remote rule below, and a test
+// reads the working copy's own configuration back after an initialization to
+// show neither key arrived there. A run copy internal/service cuts from the
+// gate is a linked worktree of it and is given no write of its own; that
+// package's test reads both keys back from inside a run copy, and that reading
+// is the whole of what the run copy's setting rests on.
+//
 // # Your origin is never touched
 //
 // PRD principle P1 makes pushing to a named remote the consent boundary, so an
