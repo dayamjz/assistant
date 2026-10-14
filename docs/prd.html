@@ -803,6 +803,9 @@ flowchart LR
     room for all three. A finding that needs your decision holds. A stage whose fix round limit is
     zero holds as well, because it has no fixer to send the finding to. A limit or a budget that is
     spent, or a round that changed nothing, parks. A hold waits for you; a park stops the run.
+    A park ends the run, and it says which bound it was. The work goes on in a fresh run, after
+    raising that stage's round limit or the run budget where the bound was one of those; nothing
+    resumes the parked run itself.
   </p>
 
   <div class="prd-mermaid mb-4">
