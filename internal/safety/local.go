@@ -76,8 +76,21 @@ func (g *Guard) DecideFastForward(ctx context.Context, u Update, c Checkout) (De
 			Discarded: decision.Rewritten(), Detail: detail,
 		}
 	}
-	refuse := func(detail string) (Decision, error) {
-		return Decision{}, &Refusal{
+	if err := refuseCheckout(u, c, "a fast-forward"); err != nil {
+		return Decision{}, err
+	}
+	return decision, nil
+}
+
+// refuseCheckout is the custody half of a local move, shared by every
+// decision that moves a person's branch: a branch checked out elsewhere, or
+// checked out here over uncommitted changes or untracked files, is
+// ReasonCheckedOut, and anything else is nil. move names the kind of move in
+// the refusal's sentence. One function answers it so the rule cannot be
+// relaxed for one kind of move and kept for another.
+func refuseCheckout(u Update, c Checkout, move string) error {
+	refuse := func(detail string) error {
+		return &Refusal{
 			Reason: ReasonCheckedOut, Target: u.Target, Anchor: u.Anchor, Observed: u.Anchor.State(), Detail: detail,
 		}
 	}
@@ -86,9 +99,9 @@ func (g *Guard) DecideFastForward(ctx context.Context, u Update, c Checkout) (De
 		return refuse("the branch is checked out in " + strings.Join(c.Elsewhere, ", ") +
 			", whose working tree would no longer match it")
 	case c.Here && c.Dirty:
-		return refuse("the branch is checked out with uncommitted changes, which a fast-forward would leave over a different commit")
+		return refuse("the branch is checked out with uncommitted changes, which " + move + " would leave over a different commit")
 	case c.Here && c.Untracked:
-		return refuse("the branch is checked out with untracked files, which the fast-forward's files could collide with")
+		return refuse("the branch is checked out with untracked files, which the files " + move + " brings could collide with")
 	}
-	return decision, nil
+	return nil
 }

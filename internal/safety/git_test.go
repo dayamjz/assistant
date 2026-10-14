@@ -18,6 +18,10 @@ import (
 // compiling whatever internal/vcs did, so the shim is what had to go.
 var _ safety.Git = (*vcs.Repository)(nil)
 
+// safety.Merger's doc comment makes the same claim for the adoption proof's
+// mechanism, and this is that claim as a compile-time assertion.
+var _ safety.Merger = (*vcs.Repository)(nil)
+
 // TestTheProductsGitIsTheOneThisPackageDecidesOn is the assertion above in a
 // form that runs, so a reader looking for the claim in the test output finds it
 // stated rather than having to know that a compile-time assertion is what
