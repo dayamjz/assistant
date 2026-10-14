@@ -104,6 +104,13 @@ type rendering struct {
 // message on standard error and hostStop writes it there, and that message is
 // the turn row followed by the pull guard's row, both from the table.
 //
+// The installer's answer is phrased with two lines beside the row that are
+// machine text rather than this build's words: the host's settings file and
+// the configuration line, printed exactly because a person copies them into
+// the host, and for a conflict the command line the file already holds, as
+// it holds it. readOutHostInstall prints each on a line of its own after a
+// label, so the row is never mixed with them.
+//
 // The three that are not phrased are the ones whose wording the
 // specification has not settled, and each is named so that the claim about
 // the rest is bounded by an enumeration:
@@ -131,6 +138,7 @@ var renderings = []rendering{
 	{"service", true, typeOf[machine.Service](), func(w io.Writer, v any) { readOutService(w, v.(machine.Service)) }},
 	{"event", true, typeOf[ipc.Event](), func(w io.Writer, v any) { writeln(w, eventLine(v.(ipc.Event))) }},
 	{"host stop", true, typeOf[machine.HostStop](), func(w io.Writer, v any) { readOutHostStop(w, v.(machine.HostStop)) }},
+	{"host install", true, typeOf[machine.HostInstall](), func(w io.Writer, v any) { readOutHostInstall(w, v.(machine.HostInstall)) }},
 	{"decision", true, nil, func(w io.Writer, v any) { readOutDecision(w, v.(machine.Decision)) }},
 	{"details", false, nil, func(w io.Writer, v any) { readOutDetails(w, v.(machine.Run)) }},
 	{"findings", false, nil, func(w io.Writer, v any) { readOutFindings(w, v.(machine.Decision)) }},

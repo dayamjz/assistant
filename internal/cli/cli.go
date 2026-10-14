@@ -557,6 +557,10 @@ func exitFor(answer any) machine.Code {
 		}
 	case machine.HostStop:
 		return hostExit(v)
+	case machine.HostInstall:
+		if v.Result == machine.HostInstallRefused {
+			return machine.ExitFailure
+		}
 	}
 	return machine.ExitOK
 }
