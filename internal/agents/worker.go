@@ -61,9 +61,9 @@ type WorkerSpec struct {
 	// question PRD principle P11 gives whoever launches a task.
 	Dir string
 	// Instructions is what the worker is told first, on its standard input,
-	// followed by a newline when it does not end in one. It is required, it
-	// is bounded by MaxPromptBytes, and it is content: nothing here records
-	// it.
+	// framed the way Worker.Send frames text for the adapter that starts it.
+	// It is required, it is bounded by MaxPromptBytes before any framing, and
+	// it is content: nothing here records it.
 	Instructions string
 	// Env are environment variables set for this worker only, applied over
 	// the environment the runner was built with and before the redirecting
@@ -103,8 +103,12 @@ func (s WorkerSpec) Validate() error {
 // send waits for it to drain or for the input to close before writing
 // anything. What that costs is stated on Send.
 type Worker interface {
-	// Send delivers text on the worker's standard input, followed by a
-	// newline when text does not end in one, because a worker reads lines.
+	// Send delivers text on the worker's standard input as one line, framed
+	// the way the adapter that started the worker frames it: the scripted
+	// adapter writes text itself, followed by a newline when it does not end
+	// in one, and the Claude Code adapter writes one stream-json user message
+	// carrying text exactly, on the terms its Start states. Either way the
+	// worker reads lines, and one Send is one unit of what it reads.
 	// It returns once the text has been written, or ErrWorkerEnded when the
 	// process is no longer running, so nothing is reported delivered to a
 	// process that is gone. ctx bounds the wait: a worker that is not
@@ -206,6 +210,10 @@ type procWorker struct {
 	// the order of bytes on the pipe.
 	slot    chan struct{}
 	pending chan error
+	// frame turns one send into the bytes written for it, which end in a
+	// newline. It is the adapter's: plainLine for the scripted adapter, and
+	// claudeUserMessage for the Claude Code adapter.
+	frame func(text string) ([]byte, error)
 	// closeOnce makes Close idempotent, and closeMu guards the stdin close
 	// against a concurrent Send.
 	closeOnce sync.Once
@@ -216,8 +224,14 @@ type procWorker struct {
 // startWorker starts one process as a worker, delivers instructions on its
 // standard input, and returns the handle. spec.stdin and spec.started are not
 // read: the instructions are written here, after the process exists, and the
-// caller reads the group off the handle rather than being told.
-func startWorker(ctx context.Context, spec procSpec, instructions string) (*procWorker, error) {
+// caller reads the group off the handle rather than being told. frame is how
+// the adapter puts one send on the wire, the instructions among them.
+func startWorker(ctx context.Context, spec procSpec, instructions string, frame func(string) ([]byte, error)) (*procWorker, error) {
+	// A send that cannot be framed is refused before any process exists, so
+	// a worker is never started over instructions it could not be given.
+	if _, err := frame(instructions); err != nil {
+		return nil, fmt.Errorf("framing the worker's instructions: %w", err)
+	}
 	cmd := exec.Command(spec.bin, spec.args...)
 	cmd.Dir = spec.dir
 	cmd.Env = spec.env
@@ -246,6 +260,7 @@ func startWorker(ctx context.Context, spec procSpec, instructions string) (*proc
 		grace:     spec.grace,
 		done:      make(chan struct{}),
 		slot:      make(chan struct{}, 1),
+		frame:     frame,
 		stdinOpen: true,
 	}
 	go func() {
@@ -268,7 +283,7 @@ func (w *procWorker) Send(ctx context.Context, text string) error {
 	return w.write(ctx, text)
 }
 
-// write puts text, newline-terminated, on standard input. It refuses once the
+// write puts text, framed, on standard input. It refuses once the
 // process is gone or standard input has been closed. When ctx ends while the
 // write is still in flight it returns ctx's error and leaves the write
 // pending, on the terms Worker.Send states; the next write drains it first.
@@ -302,12 +317,13 @@ func (w *procWorker) write(ctx context.Context, text string) error {
 	if !open {
 		return ErrWorkerEnded
 	}
-	if !strings.HasSuffix(text, "\n") {
-		text += "\n"
+	framed, err := w.frame(text)
+	if err != nil {
+		return err
 	}
 	written := make(chan error, 1)
 	go func() {
-		_, err := io.WriteString(w.stdin, text)
+		_, err := w.stdin.Write(framed)
 		written <- err
 	}()
 	select {
@@ -422,4 +438,13 @@ func (w *tailWriter) snapshot() (string, int64) {
 // records the result, because a value in it may be a credential.
 func WorkerEnvironment(base []string, extra map[string]string) []string {
 	return vcs.StripRedirecting(environment(base, extra))
+}
+
+// plainLine is the scripted adapter's framing: the text itself, followed by a
+// newline when it does not end in one. It refuses nothing.
+func plainLine(text string) ([]byte, error) {
+	if !strings.HasSuffix(text, "\n") {
+		text += "\n"
+	}
+	return []byte(text), nil
 }

@@ -188,6 +188,14 @@ func (r *claudeRunner) Name() string { return r.name }
 // phase one partly for it, so the fixer-session path is real rather than
 // stubbed.
 //
+// Worker sessions are declared because that mechanism is here too: Start, in
+// claudeworker.go, starts the CLI as a long-lived process driven by stream-json
+// messages on its standard input, which is what makes this adapter a
+// WorkerRunner. The conformance suite holds the declaration to the mechanism
+// against the stand-in, which reads that wire the way the package
+// documentation states, and that is the whole of what the declaration rests
+// on; doc.go names what the stand-in does not establish about the real CLI.
+//
 // Instruction suppression is not declared, because nothing here implements it.
 // This adapter carries a configured entry's own flags and the four the run
 // manages, and none of those tells Claude Code to ignore a repository's
@@ -196,7 +204,7 @@ func (r *claudeRunner) Name() string { return r.name }
 // Leaving it undeclared is what lets internal/pipeline refuse a run that asks
 // for suppression against this adapter before it launches one.
 func (r *claudeRunner) Capabilities() Capabilities {
-	return Declare(CapabilityResumableSessions)
+	return Declare(CapabilityResumableSessions, CapabilityWorkerSessions)
 }
 
 // Run executes one invocation with no session. It resumes nothing, and the

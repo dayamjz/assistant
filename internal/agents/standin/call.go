@@ -40,13 +40,22 @@ type Call struct {
 	Step int `json:"step"`
 	// Worker reports that this process was started as a worker rather than
 	// as a one-shot invocation: the adapter put no --print on its command
-	// line, which is the whole of how the stand-in tells the two apart.
+	// line, or put it there with streaming input, which is the whole of how
+	// the stand-in tells the two apart.
 	Worker bool `json:"worker,omitempty"`
+	// Stream reports that the worker read streaming input: --print and
+	// --input-format stream-json were on its command line, so each line it
+	// read was a JSON message rather than text. It is the process's own
+	// account of how it decided, like Worker.
+	Stream bool `json:"stream,omitempty"`
 	// Lines is every line a worker read on its standard input, in order, the
-	// instructions first. A worker rewrites its record as each line arrives,
-	// so what a reader sees is complete up to some line and may be behind
-	// the worker; Agent.Calls states the terms. It is empty for a one-shot
-	// invocation, whose input is Prompt.
+	// instructions first. A stream-mode worker records the text of each user
+	// message it read instead, decoded from the line, and records nothing for
+	// a line it passed over, so a test reads what the worker was told rather
+	// than how the adapter framed it. A worker rewrites its record as each
+	// line arrives, so what a reader sees is complete up to some line and may
+	// be behind the worker; Agent.Calls states the terms. It is empty for a
+	// one-shot invocation, whose input is Prompt.
 	Lines []string `json:"lines,omitempty"`
 }
 

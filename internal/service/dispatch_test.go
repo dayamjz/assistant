@@ -74,8 +74,9 @@ func sameFile(t *testing.T, a, b string) bool {
 // checkout at the path its record reserved, with the gate as its one remote
 // by file identity and HEAD on the task's branch at the default branch's tip.
 // Both snapshots are recorded, the second check is in its instructions, the
-// attempt is one, and nothing launched: the task still resolves Dispatched,
-// and the primary is untouched.
+// attempt is one, and nothing launched, because the adapter here declares no
+// worker sessions: the task still resolves Dispatched, and the primary is
+// untouched. Launching is launch_test.go's subject.
 func TestADispatchedDeliveryTaskIsCutAnIsolatedClone(t *testing.T) {
 	h := newHome(t)
 	subject := newSubject(t)
@@ -88,9 +89,9 @@ func TestADispatchedDeliveryTaskIsCutAnIsolatedClone(t *testing.T) {
 	primaryBefore := refsOf(t, subject)
 	remotesBefore := git(t, subject, "remote")
 
-	withService(t, h, func(running serviceUnderTest) {
+	withServiceOptions(t, workerlessOptions(t, h), func(running serviceUnderTest) {
 		if got := taskState(t, running.client, id); got.State != taskstate.Dispatched || got.Source != taskstate.SourceEvent {
-			t.Fatalf("after dispatch the task resolves %s from %s; nothing launches in this build, so it stays dispatched",
+			t.Fatalf("after dispatch the task resolves %s from %s; its adapter declares no worker sessions, so it stays dispatched",
 				got.State, got.Source)
 		}
 	})
@@ -171,7 +172,8 @@ func TestADispatchedDeliveryTaskIsCutAnIsolatedClone(t *testing.T) {
 }
 
 // An investigation task's clone carries no remote at all and a detached HEAD
-// at the default branch's tip.
+// at the default branch's tip. The adapter declares no worker sessions, so
+// the copy is read as dispatch left it.
 func TestADispatchedInvestigationTaskIsCutADetachedCloneWithNoRemote(t *testing.T) {
 	h := newHome(t)
 	subject := newSubject(t)
@@ -180,7 +182,7 @@ func TestADispatchedInvestigationTaskIsCutADetachedCloneWithNoRemote(t *testing.
 	id := recordDispatchedTask(t, h, repository, store.TaskInvestigation, "")
 	mainTip := git(t, subject, "rev-parse", "refs/heads/main")
 
-	withService(t, h, func(running serviceUnderTest) {
+	withServiceOptions(t, workerlessOptions(t, h), func(running serviceUnderTest) {
 		if got := taskState(t, running.client, id); got.State != taskstate.Dispatched {
 			t.Fatalf("after dispatch the task resolves %s", got.State)
 		}

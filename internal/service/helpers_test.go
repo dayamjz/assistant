@@ -330,6 +330,35 @@ func scriptedAgent(t *testing.T) *agents.Catalog {
 	return agents.NewCatalog(fixedFactory{runner: runner})
 }
 
+// workerlessAgent is a catalog holding a shipped adapter that declares no
+// worker sessions, the Cursor one, for a test whose subject is what a service
+// does before a worker launches or when none can: the Claude Code adapter
+// declares them, so a service over scriptedAgent launches every task it
+// dispatches. It is built over the stand-in's own arguments, so anything that
+// did invoke it would reach a scripted process rather than this test binary
+// running its tests again.
+func workerlessAgent(t *testing.T) *agents.Catalog {
+	t.Helper()
+	agent := standin.New(t, standin.Script{})
+	runner, err := agents.CursorFactory(agents.WithCursorBinary(testCommand(t))).New(t.Context(), agent.Arguments())
+	if err != nil {
+		t.Fatalf("building the cursor adapter over the stand-in: %v", err)
+	}
+	if runner.Capabilities().Has(agents.CapabilityWorkerSessions) {
+		t.Fatalf("the cursor adapter declares %s, so it cannot stand for an adapter without them", agents.CapabilityWorkerSessions)
+	}
+	return agents.NewCatalog(fixedFactory{runner: runner})
+}
+
+// workerlessOptions is options with workerlessAgent in place of the shipped
+// adapter's stand-in.
+func workerlessOptions(t *testing.T, h *home.Home) service.Options {
+	t.Helper()
+	o := options(t, h)
+	o.Catalog = workerlessAgent(t)
+	return o
+}
+
 // fixedFactory hands back a Runner somebody else built. It builds no Runner of
 // its own, so nothing here can produce an adapter the production path could
 // not.

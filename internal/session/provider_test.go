@@ -3,6 +3,7 @@ package session_test
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 
@@ -173,10 +174,18 @@ func TestCreateRefusesBeforeStarting(t *testing.T) {
 		t.Errorf("a refused Create started a worker: %s", calls)
 	}
 
-	// The Claude Code adapter over the stand-in declares no worker sessions,
-	// so OpenWorker refuses it and this package passes that refusal on.
-	oneShot := standin.New(t, standin.Script{})
-	undeclared := session.NewPipe(sub.home, oneShot.Runner())
+	// The Cursor adapter declares no worker sessions, so OpenWorker refuses
+	// it before anything starts and this package passes that refusal on. It
+	// is built over this test binary, which it never runs here.
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cursor, err := agents.CursorFactory(agents.WithCursorBinary(self)).New(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("building the cursor adapter: %v", err)
+	}
+	undeclared := session.NewPipe(sub.home, cursor)
 	var capErr *agents.CapabilityError
 	if _, err := undeclared.Create(context.Background(), sub.spec("begin")); !errors.As(err, &capErr) {
 		t.Errorf("an adapter without worker sessions answered %v, want a *agents.CapabilityError", err)
