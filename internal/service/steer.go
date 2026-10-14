@@ -77,6 +77,17 @@ import (
 // it toward relaunch_attempts like every other; answered stop, it leaves the
 // task where its records put it, which decideReconciliation reads.
 //
+// A task whose work is finished is owed no relaunch, so before registering
+// the hold the stop reads the task through the service's reader, and a task
+// resolving in internal/taskstate's terminal tier, Landed or Complete,
+// registers none: the answer carries the state as TaskStopped.Finished and
+// a zero hold. A Landed one is then asked internal/tasks' cleanup decision
+// with the terminal that read resolved, on landed.go's terms, so the copy is
+// removed only on P12's proof and never because the stop ended the worker.
+// A read that fails registers the hold, as for a live task, because a
+// stopped worker with neither a hold nor a terminal record would read
+// Unknown over a dead terminal, which a restart relaunches.
+//
 // The stop takes the task's slot for its duration, claimSteer, so a relaunch
 // or a second stop in this service is refused while it runs rather than
 // interleaving with the ending and the hold.
@@ -333,6 +344,13 @@ func (s *Service) stopTask(ctx context.Context, req ipc.Request, r machine.TaskR
 		return machine.TaskStopped{}, fmt.Errorf("%w: %w", ipc.ErrRefused,
 			&stopUnverified{Task: r.Task, Session: ref, Observation: observed})
 	}
+	if finished, ok := s.stoppedFinished(ctx, r.Task); ok {
+		s.log.Printf("the worker of task %s attempt %d (session %s) was stopped by %s: %s; the task is %s, so no hold was registered",
+			r.Task, latest.Sequence, ref, peerOf(req), ended, finished.State.State)
+		s.askLandedCleanup(ctx, finished)
+		return machine.TaskStopped{Task: r.Task, Attempt: latest.Sequence, Session: ref, Ended: ended,
+			Finished: finished.State.State}, nil
+	}
 	h, err := s.store.RegisterHold(ctx, store.Hold{
 		Key:     stoppedKey(r.Task, latest.Sequence),
 		TaskID:  store.Known(r.Task),
@@ -356,19 +374,11 @@ func (s *Service) stopTask(ctx context.Context, req ipc.Request, r machine.TaskR
 // *stopRefused for a reference of another home, one with no start time to
 // verify against, or one that does not decode. It reports how, in words.
 func (s *Service) endWorker(id, ref string) (string, error) {
-	s.mu.Lock()
-	held, ok := s.launched[id]
-	built := s.built
-	if ok && built != nil && held.Reference().String() == ref {
-		delete(s.launched, id)
-	} else {
-		ok = false
+	ended, err := s.endHeldWorker(id, ref)
+	if err != nil {
+		return "", err
 	}
-	s.mu.Unlock()
-	if ok {
-		if err := built.sessions.Close(held); err != nil {
-			return "", &stopRefused{Task: id, Session: ref, Reason: fmt.Sprintf("closing its session: %v", err)}
-		}
+	if ended {
 		return "this service ended through the session it holds", nil
 	}
 	decoded, err := session.ParseReference(ref)
@@ -386,6 +396,46 @@ func (s *Service) endWorker(id, ref string) (string, error) {
 		return "", &stopRefused{Task: id, Session: ref, Reason: fmt.Sprintf("ending process group %d: %v", decoded.PID, err)}
 	}
 	return fmt.Sprintf("an earlier service launched and this one ended by its verified identity (%s)", end), nil
+}
+
+// stoppedFinished reads the task through the service's reader after its
+// stop's probe answered Dead, and reports the read when it resolves in
+// internal/taskstate's terminal tier, where no relaunch is owed and so no
+// hold is registered. A read that fails reports false, so the stop holds
+// for a person as it would for a live task: a stopped worker with neither a
+// hold nor a terminal record would read Unknown over a dead terminal, which
+// reconcile.go relaunches at the next start.
+func (s *Service) stoppedFinished(ctx context.Context, id string) (taskstate.Observed, bool) {
+	o, err := s.tasks().ObserveTask(ctx, id)
+	if err != nil {
+		s.log.Printf("the worker of task %s was stopped and the task could not be read, so its stop holds: %v", id, err)
+		return taskstate.Observed{}, false
+	}
+	return o, landedEnds(o.State)
+}
+
+// endHeldWorker is endWorker's held half: when this service holds the
+// session ref names for the task, it forgets the session and ends it
+// through the provider's Close, reporting true, or a *stopRefused when the
+// Close failed, by which point the session is already forgotten. It reports
+// false and does nothing when this service holds no such session.
+func (s *Service) endHeldWorker(id, ref string) (bool, error) {
+	s.mu.Lock()
+	held, ok := s.launched[id]
+	built := s.built
+	if ok && built != nil && held.Reference().String() == ref {
+		delete(s.launched, id)
+	} else {
+		ok = false
+	}
+	s.mu.Unlock()
+	if !ok {
+		return false, nil
+	}
+	if err := built.sessions.Close(held); err != nil {
+		return false, &stopRefused{Task: id, Session: ref, Reason: fmt.Sprintf("closing its session: %v", err)}
+	}
+	return true, nil
 }
 
 // interruptTask is task.interrupt: refused, for the coordinator, with the

@@ -458,6 +458,10 @@ func (s *Service) pass(c *incarnation) passReport {
 	// publish.go's terms: every task whose basis moved since the last
 	// publication, once, from the resolution the pass is about to decide on.
 	s.publishTaskChanges(observed)
+	// A task in the terminal tier is owed its worker's end and, once its
+	// terminal reads Dead, its cleanup decision; landed.go owns both, the
+	// cadence, and why the work leaves this goroutine.
+	s.landedFromPass(observed)
 	ctx, cancel = s.sup.bound(c.ctx)
 	unacknowledged, err := s.store.UnacknowledgedWakes(ctx)
 	cancel()

@@ -162,7 +162,14 @@ func (g *Graph) Validate(c Checkpoint) error {
 	if err := g.validateReason(c); err != nil {
 		return err
 	}
-	return g.validateCounters(c.Counters)
+	// The park edge is read against the edge vector, so it is checked after
+	// the counters have established that the vector is the one the run
+	// accrued under: a changed edge is then reported as the changed edge it
+	// is rather than as a park on an edge this graph does not declare.
+	if err := g.validateCounters(c.Counters); err != nil {
+		return err
+	}
+	return g.validateParkedAt(c)
 }
 
 // stateMismatch describes one way a State fails to hold exactly the graph's
@@ -323,6 +330,42 @@ func (g *Graph) validateReason(c Checkpoint) error {
 			"is set on a run that is %s, and a reason explains a run that stopped short and nothing else", c.Status)}
 	}
 	return nil
+}
+
+// validateParkedAt holds a recorded park edge to what the executor writes:
+// only a round limit or a convergence park carries one, it names an edge this
+// graph declares with the bound it declares, a convergence park's edge is one
+// the convergence check applies to, and the run stands where that edge leads.
+// An edge park with no edge recorded passes, because a checkpoint written
+// before the field existed reads back that way; Park then reports the bound
+// without the edge rather than guessing one.
+func (g *Graph) validateParkedAt(c Checkpoint) error {
+	ref := c.ParkedAt
+	if ref == nil {
+		return nil
+	}
+	if c.Status != StatusRoundsExhausted && c.Status != StatusConverged {
+		return &CheckpointError{Field: "parked_at", Detail: fmt.Sprintf(
+			"names an edge on a run that is %s, and only a round limit or a convergence park has one", c.Status)}
+	}
+	if ref.To != c.Position {
+		return &CheckpointError{Field: "parked_at", Detail: fmt.Sprintf(
+			"names the edge from %q to %q while the run stands at %q", ref.From, ref.To, c.Position)}
+	}
+	for i, e := range g.edges {
+		if e.From != ref.From || e.To != ref.To || e.Rounds != ref.Rounds {
+			continue
+		}
+		switch {
+		case c.Status == StatusRoundsExhausted && e.Rounds > 0:
+			return nil
+		case c.Status == StatusConverged && g.back[i] && !e.Answered:
+			return nil
+		}
+	}
+	return &CheckpointError{Field: "parked_at", Detail: fmt.Sprintf(
+		"names the edge from %q to %q with %d rounds, and this graph declares no such edge whose bound parks a run %s",
+		ref.From, ref.To, ref.Rounds, c.Status)}
 }
 
 // decisionFor builds the decision a halt point emits. It is the one place the

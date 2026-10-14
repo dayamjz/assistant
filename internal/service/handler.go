@@ -11,9 +11,12 @@ import (
 	"time"
 
 	"github.com/dayamjz/assistant/internal/config"
+	"github.com/dayamjz/assistant/internal/graph"
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
+	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/redact"
+	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/supervisor"
 	"github.com/dayamjz/assistant/internal/supervisor/feed"
 	"github.com/dayamjz/assistant/internal/taskstate"
@@ -215,6 +218,11 @@ func (s *Service) status(ctx context.Context, req machine.StatusRequest) (machin
 		return machine.Status{}, err
 	}
 	if !found {
+		parked, err := s.parkedRun(ctx, repository.ID, out.Branch.Name)
+		if err != nil {
+			return machine.Status{}, err
+		}
+		out.ParkedRun = parked
 		out.Custody = s.custodyStatus(ctx, repository)
 		return out, nil
 	}
@@ -228,6 +236,31 @@ func (s *Service) status(ctx context.Context, req machine.StatusRequest) (machin
 	out.ActiveRun = &view
 	out.Custody = s.custodyStatus(ctx, repository)
 	return out, nil
+}
+
+// parkedRun is the answer for a branch's latest run when its record names the
+// bound that parked it, and nil when the branch has no run or its latest run
+// ended any other way. It reads the record's park rather than the checkpoint's
+// status, so status and runs say a run parked on the one record that says so.
+func (s *Service) parkedRun(ctx context.Context, repositoryID, branch string) (*machine.Run, error) {
+	records, err := s.store.RunsForRepository(ctx, repositoryID)
+	if err != nil {
+		return nil, err
+	}
+	for _, record := range records {
+		if record.Branch != branch {
+			continue
+		}
+		if !record.Park.IsKnown() {
+			return nil, nil
+		}
+		view, err := s.view(ctx, record.ID)
+		if err != nil {
+			return nil, err
+		}
+		return &view, nil
+	}
+	return nil, nil
 }
 
 // branchState reads the working copy the caller is standing in. A working copy
@@ -264,7 +297,54 @@ func (s *Service) listRuns(ctx context.Context, req machine.RunsRequest) (machin
 	if req.Limit > 0 && len(records) > req.Limit {
 		records = records[:req.Limit]
 	}
-	return machine.Runs{Runs: records}, nil
+	out := machine.Runs{Runs: records}
+	for _, record := range records {
+		if park, ok := record.Park.Get(); ok {
+			out.Parked = append(out.Parked, s.parkedReport(ctx, record.ID, park))
+		}
+	}
+	return out, nil
+}
+
+// parkedReport reads the report the stage a park names recorded, off the
+// checkpoint the park record names. A checkpoint or a report that cannot be
+// read is said in Detail rather than failing the listing, which is about every
+// run and not this one, and rather than leaving Report absent with nothing
+// saying why, which would read as a stage that never ran.
+func (s *Service) parkedReport(ctx context.Context, runID string, park store.RunPark) machine.ParkedReport {
+	out := machine.ParkedReport{Run: runID, Stage: park.Stage}
+	stage, ok := pipeline.ParseStage(park.Stage)
+	if !ok {
+		return out
+	}
+	// A parked run's record has ended, so nothing in this build writes past
+	// the checkpoint its park was read off and the latest is that one; the
+	// history is read only when it is not.
+	history := []graph.Checkpoint{}
+	latest, err := s.checkpoints.Latest(ctx, runID)
+	if err == nil && latest.Seq == park.Checkpoint {
+		history = append(history, latest)
+	} else if history, err = s.checkpoints.History(ctx, runID); err != nil {
+		out.Detail = fmt.Sprintf("the run's checkpoints could not be read: %v", err)
+		return out
+	}
+	for _, cp := range history {
+		if cp.Seq != park.Checkpoint {
+			continue
+		}
+		if !pipeline.StageRan(cp.State, stage) {
+			return out
+		}
+		report, err := pipeline.StageReport(cp.State, stage)
+		if err != nil {
+			out.Detail = fmt.Sprintf("the %s stage's report could not be read: %v", stage, err)
+			return out
+		}
+		out.Report = &report
+		return out
+	}
+	out.Detail = fmt.Sprintf("the run has no checkpoint %d, which its park record names", park.Checkpoint)
+	return out
 }
 
 // listTasks reports fleet work with its resolved current state.

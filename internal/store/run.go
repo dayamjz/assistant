@@ -115,11 +115,131 @@ type Run struct {
 	// column existed and for one refused before an agent answered for it, so
 	// the record understates here too.
 	ResolvedAgent Optional[string] `json:"resolved_agent"`
+	// Park is which loop bound parked the run, known exactly when
+	// TransitionRunOnPark ended it. It is what tells a terminated run a bound
+	// stopped from one a person cancelled or a push superseded, which the
+	// status alone cannot. It is unknown for every run no bound parked and for
+	// a run parked before the column existed, whose park only its checkpoint
+	// still names: the record understates rather than guessing.
+	Park Optional[RunPark] `json:"park"`
 	// CreatedAt is when the run was recorded, which PRD section 8 requires to
 	// precede the creation of its directory.
 	CreatedAt time.Time `json:"created_at"`
 	// UpdatedAt is when the record last changed.
 	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// ParkBound names which of PRD section 5's three loop bounds parked a run. The
+// set is closed: a park this package cannot name is refused where it would be
+// recorded rather than stored as a word nobody defined.
+type ParkBound string
+
+// The three bounds.
+const (
+	// ParkRoundLimit is a stage's automatic fix round limit: the stage still
+	// reported findings to fix when the limit was reached.
+	ParkRoundLimit ParkBound = "round_limit"
+	// ParkConvergence is a fix round that left the run's state exactly where
+	// the round before it left it.
+	ParkConvergence ParkBound = "convergence"
+	// ParkStepBudget is the run-wide step budget.
+	ParkStepBudget ParkBound = "step_budget"
+)
+
+// parkBounds is the closed set ParkBounds reports and Recognized answers from.
+var parkBounds = []ParkBound{ParkRoundLimit, ParkConvergence, ParkStepBudget}
+
+// ParkBounds returns the closed set. The result is a copy.
+func ParkBounds() []ParkBound { return slices.Clone(parkBounds) }
+
+// Recognized reports whether b is one of the three bounds.
+func (b ParkBound) Recognized() bool { return slices.Contains(parkBounds, b) }
+
+// RunPark is the record of which bound parked a run and where, written once
+// with the move that ends the run. Every field is read off the checkpoint the
+// park was recorded from, by the caller recording it: this package checks the
+// record's shape and decides nothing about what a bound means.
+type RunPark struct {
+	// Bound is which bound parked the run.
+	Bound ParkBound `json:"bound"`
+	// Stage is the stage whose loop the bound was counting, or, for the
+	// budget, the stage the run stood in front of. It is empty when the
+	// checkpoint named no stage, which the step budget may do and the other
+	// two may not.
+	Stage string `json:"stage,omitempty"`
+	// Node is the graph node the run stands in front of, which has not run.
+	Node string `json:"node"`
+	// Limit is the bound's value: the round limit for ParkRoundLimit and the
+	// step budget for ParkStepBudget. A convergence park has no limit, and
+	// carries zero, and so does a round limit park whose checkpoint was
+	// written before checkpoints recorded the parking edge, whose limit
+	// nothing recorded.
+	Limit int `json:"limit,omitempty"`
+	// Checkpoint is the sequence number of the checkpoint the park was read
+	// off, which is where the run's state as it parked, the stage reports
+	// among it, is kept.
+	Checkpoint int `json:"checkpoint"`
+}
+
+// Validate refuses a record whose shape no park has: an unrecognized bound,
+// no node, no checkpoint, a round limit or a convergence park with no stage,
+// a step budget below one, a negative round limit, or a limit on a
+// convergence park.
+func (p RunPark) Validate() error {
+	if !p.Bound.Recognized() {
+		return fmt.Errorf("store: %q is not a bound that parks a run", p.Bound)
+	}
+	if strings.TrimSpace(p.Node) == "" {
+		return fmt.Errorf("store: a %s park names no node", p.Bound)
+	}
+	if p.Checkpoint < 1 {
+		return fmt.Errorf("store: a %s park names checkpoint %d, which no run wrote", p.Bound, p.Checkpoint)
+	}
+	switch p.Bound {
+	case ParkRoundLimit, ParkConvergence:
+		if strings.TrimSpace(p.Stage) == "" {
+			return fmt.Errorf("store: a %s park names no stage", p.Bound)
+		}
+	case ParkStepBudget:
+	}
+	switch p.Bound {
+	case ParkRoundLimit:
+		if p.Limit < 0 {
+			return fmt.Errorf("store: a %s park carries a limit of %d", p.Bound, p.Limit)
+		}
+	case ParkStepBudget:
+		if p.Limit < 1 {
+			return fmt.Errorf("store: a %s park carries a limit of %d", p.Bound, p.Limit)
+		}
+	case ParkConvergence:
+		if p.Limit != 0 {
+			return fmt.Errorf("store: a convergence park carries a limit of %d, and convergence has none", p.Limit)
+		}
+	}
+	return nil
+}
+
+// TransitionRunOnPark moves a run to terminated and records the park that
+// ended it, in one transaction, on TransitionRun's terms: from names every
+// status the move is legal out of, and a run already terminated is returned
+// as it stands with nothing written, park included, so a run a person ended
+// before its park was recorded keeps reading as the ending it had.
+//
+// It refuses a park Validate refuses before anything is written. The column
+// is written once: the schema refuses a second write, so a run's park is
+// never revised.
+func (s *Store) TransitionRunOnPark(ctx context.Context, id string, from []RunStatus, park RunPark) (Run, error) {
+	if err := park.Validate(); err != nil {
+		return Run{}, fmt.Errorf("store: run %s: %w", id, err)
+	}
+	// Encoding a struct of strings and integers cannot fail.
+	encoded, _ := json.Marshal(park)
+	return s.transitionRun(ctx, id, from, RunTerminated, func(tx *sql.Tx, now string) error {
+		if _, err := tx.ExecContext(ctx, `UPDATE run SET park = ? WHERE id = ?`, string(encoded), id); err != nil {
+			return fmt.Errorf("store: recording what parked run %s: %w", id, err)
+		}
+		return nil
+	})
 }
 
 // CreateRun records a new run and returns it as stored.
@@ -403,19 +523,19 @@ const runColumns = `SELECT
 	id, repository_id, branch, submitted_head, base, current_head, status,
 	approved_commit, push_binding, pull_request, fixer_session, intent, intent_source,
 	build_version, build_revision, build_modified, build_go, config_digest,
-	config_rejections, resolved_agent,
+	config_rejections, resolved_agent, park,
 	created_at, updated_at`
 
 func scanRun(sc scanner) (Run, error) {
 	var r Run
 	var status, created, updated string
 	var modified int
-	var rejections Optional[string]
+	var rejections, park Optional[string]
 	if err := sc.Scan(
 		&r.ID, &r.RepositoryID, &r.Branch, &r.SubmittedHead, &r.Base, &r.CurrentHead, &status,
 		&r.ApprovedCommit, &r.PushBinding, &r.PullRequest, &r.FixerSession, &r.Intent, &r.IntentSource,
 		&r.Build.Version, &r.Build.Revision, &modified, &r.Build.Go, &r.ConfigDigest,
-		&rejections, &r.ResolvedAgent,
+		&rejections, &r.ResolvedAgent, &park,
 		&created, &updated,
 	); err != nil {
 		return Run{}, err
@@ -424,6 +544,9 @@ func scanRun(sc scanner) (Run, error) {
 	r.Build.Modified = modified != 0
 	var err error
 	if r.ConfigRejections, err = rejectionsValue(rejections); err != nil {
+		return Run{}, err
+	}
+	if r.Park, err = parkValue(park); err != nil {
 		return Run{}, err
 	}
 	if r.CreatedAt, err = decodeTime(created); err != nil {
@@ -473,6 +596,27 @@ func rejectionsValue(o Optional[string]) (Optional[[]string], error) {
 		return Unknown[[]string](), fmt.Errorf("store: column config_rejections: %w", err)
 	}
 	return Known(list), nil
+}
+
+// parkValue converts the stored park back to the optional record. Text that is
+// present but does not decode to a park Validate accepts is an error rather
+// than an unknown, on rejectionsValue's terms: a corrupt row reported as "no
+// bound parked this run" would read a park as a cancellation.
+func parkValue(o Optional[string]) (Optional[RunPark], error) {
+	text, ok := o.Get()
+	if !ok {
+		return Unknown[RunPark](), nil
+	}
+	var p RunPark
+	dec := json.NewDecoder(strings.NewReader(text))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&p); err != nil {
+		return Unknown[RunPark](), fmt.Errorf("store: column park: %w", err)
+	}
+	if err := p.Validate(); err != nil {
+		return Unknown[RunPark](), fmt.Errorf("store: column park: %w", err)
+	}
+	return Known(p), nil
 }
 
 func boolToInt(b bool) int {

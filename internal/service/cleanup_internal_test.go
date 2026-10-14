@@ -158,15 +158,16 @@ func TestStoringAReportCallsTheInvestigationsCleanup(t *testing.T) {
 }
 
 // PRD principle P12 at the task-copy site, with the terminal read through
-// the product's own seam: a landed delivery task whose worker is still
-// running keeps its copy with the live refusal, because the service's
-// reader probed the launched session Live through the provider that holds
-// it, and nothing here stated a liveness; once the worker has been ended
-// the same reader resolves the terminal Dead by identity, the site examines
-// the copy on the proof and removes it, and the task resolves Complete from
-// the cleanup record. The site is cleanUpLanded, reached as settle reaches
-// it, with the merge record written for a run attributed to the task.
-func TestATaskCopyIsKeptWhileItsWorkerRunsAndRemovedOnceItIsDead(t *testing.T) {
+// the product's own seam. The decision asked over a landed delivery task
+// whose worker is still running keeps its copy with the live refusal,
+// because the service's reader probed the launched session Live through the
+// provider that holds it, and nothing here stated a liveness. The landing
+// site, cleanUpLanded reached as settle reaches it with the merge record
+// written for a run attributed to the task, then ends that worker through
+// the session the service holds, reads the terminal Dead through the same
+// reader, examines the copy on the proof and removes it, and the task
+// resolves Complete from the cleanup record.
+func TestATaskCopyIsKeptWhileItsWorkerRunsAndTheLandingEndsItAndRemovesTheCopy(t *testing.T) {
 	principles.Cite(t, principles.P12)
 	ctx := t.Context()
 	sub := newLaunchSubject(t, workerStandIn(t))
@@ -211,8 +212,9 @@ func TestATaskCopyIsKeptWhileItsWorkerRunsAndRemovedOnceItIsDead(t *testing.T) {
 		t.Fatalf("the task resolves %+v (%v), want Landed with its terminal live", got, err)
 	}
 
-	// The worker runs: the copy is kept with the live refusal.
-	s.cleanUpLanded(ctx, landed)
+	// The worker runs: the decision, asked without ending it, keeps the
+	// copy with the live refusal.
+	s.cleanUpLandedTask(ctx, sub.task)
 	if log := serviceLog(t, s.home); !strings.Contains(log, "isolated copy of task "+sub.task+" is left standing ("+string(tasks.ReasonTerminalLive)+")") {
 		t.Fatalf("the cleanup over a live worker did not refuse as live: %s", log)
 	}
@@ -223,13 +225,16 @@ func TestATaskCopyIsKeptWhileItsWorkerRunsAndRemovedOnceItIsDead(t *testing.T) {
 		t.Fatalf("a cleanup record was written over a live worker: %v", err)
 	}
 
-	// The worker is ended: the same seam reads Dead, and the copy is
-	// examined and removed on the proof.
-	for _, err := range s.closeSessions() {
-		t.Fatalf("ending the worker: %v", err)
-	}
-	waitLiveness(t, provider, launched.Reference().String(), taskstate.Dead)
+	// The landing site ends the worker through the session the service
+	// holds; the same seam then reads Dead, and the copy is examined and
+	// removed on the proof.
 	s.cleanUpLanded(ctx, landed)
+	if obs := provider.Probe(ctx, launched.Reference().String()); obs.Liveness != taskstate.Dead {
+		t.Fatalf("after the landing site the worker probes %+v, want dead", obs)
+	}
+	if _, _, held := s.sessionOf(sub.task); held {
+		t.Fatal("the service still holds the landed task's session")
+	}
 	if log := serviceLog(t, s.home); !strings.Contains(log, "isolated copy of task "+sub.task+": "+string(tasks.CleanupRemoved)+" on ") {
 		t.Fatalf("the cleanup over a dead terminal did not remove the copy: %s", log)
 	}
