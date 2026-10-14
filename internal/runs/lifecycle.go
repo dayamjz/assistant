@@ -121,6 +121,17 @@ func (s *Service) PassOnMerge(ctx context.Context, id string, read store.PullReq
 	return s.applyOnPullRequest(ctx, id, movePassOnMerge, read, closing)
 }
 
+// RecordMergeAfterPass records that a run which had already passed, with no
+// pull request read ending it, was then read as merged: the code-host read
+// after a merge internal/service made under PRD section 6's autonomy flag.
+// It is not a move: the run's status stays passed, which no row of this
+// table leads out of, and the store writes the merge record beside it once,
+// so machine.OutcomeOf reads the run as passed from then on. A run that is
+// not passed and a run that already has a record are refused by the store.
+func (s *Service) RecordMergeAfterPass(ctx context.Context, id string, read store.PullRequestRead) (store.MergeRecord, error) {
+	return s.store.RecordMergeOfPassedRun(ctx, id, read)
+}
+
 // FailOnClose records that a run ended because its pull request was read as
 // closed without being merged. The merge record carries store.PullRequestClosed
 // beside the failed status, which is the reason PRD section 5 has recorded:

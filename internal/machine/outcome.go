@@ -44,13 +44,16 @@ const (
 	// its one producer: a run whose pull request was read as merged while the
 	// checks stage waited on its checks, or at the hold that wait left when
 	// checks_timeout elapsed, ends with PRD section 8's merge record written
-	// beside its passed status, and that pair is what reads as this. The
+	// beside its passed status, and that pair is what reads as this. Section
+	// 6's autonomy flag gives it a second: a run that ended checks-passed in
+	// a repository autonomy.merge lists, merged by internal/service after its
+	// live read, gains the merge record the read after that merge writes. The
 	// outcome is derived from the record on every read and stored nowhere.
 	//
 	// It says the run is complete and not that it was newly validated. The
 	// checks were not read to a verdict, and the rule that only a no_ci
 	// declaration makes an empty check list green was never applied; the
-	// checks stage's own report says so, and nothing here merges.
+	// checks stage's own report says so, and nothing in this package merges.
 	OutcomePassed Outcome = "passed"
 	// OutcomeFailed is a run that ended without a verdict on the change: a
 	// bound parked it, a stage could not run at all, or its pull request was
@@ -248,7 +251,8 @@ type Standing struct {
 // run that has ended.
 //
 // A completed run is checks-passed rather than passed because nothing here
-// merges: the gate stops at the end, and PRD section 9 makes that the point at
+// merges: the gate stops at the end, unless internal/service merged it later
+// under the autonomy flag and recorded that read, and PRD section 9 makes that the point at
 // which a driving agent asks the person. The one passed record that reads as
 // passed is one whose merge record says a merge ended it, which is Standing's
 // PullRequestEnd, read off that record rather than inferred from a checkpoint

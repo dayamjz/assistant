@@ -142,6 +142,16 @@ const (
 	// decision, not an open question: the name says exactly what it permits,
 	// and what the PRD still owes is a schema row, not a rename.
 	KeyAllowPushedCommands Key = "allow_pushed_commands"
+	// KeyAutonomyMerge is "autonomy.merge": PRD section 10's merge half of
+	// section 6's autonomy flag, the repositories - each named as the code
+	// host names it, owner/name - where the program may merge a run that
+	// ended checks-passed, after the live read section 6 gives. It is
+	// global-only, so a repository can never grant itself merge authority,
+	// and empty by default, so the program merges nothing until the operator
+	// lists a repository. What the live read requires is internal/service's;
+	// whether a merge is allowed is the code host's.
+	KeyAutonomyMerge Key = "autonomy.merge"
+
 	// KeyDelivery is "delivery": PRD section 10's delivery posture, the path
 	// a repository's delivery tasks ship on, section 6's delivery modes. It
 	// is trusted-only, so a branch cannot choose a lighter path for itself
@@ -247,6 +257,8 @@ var specs = []spec{
 		func(c *Config, v any) { c.CommitFixMessage = v.(string) }},
 	{KeyAllowPushedCommands, TrustTrusted, false, decodeBool,
 		func(c *Config, v any) { c.AllowPushedCommands = v.(bool) }},
+	{KeyAutonomyMerge, TrustGlobal, []string(nil), decodeAutonomyMerge,
+		func(c *Config, v any) { c.AutonomyMerge = cloneSlice(v.([]string)) }},
 	{KeyDelivery, TrustTrusted, DefaultDelivery, decodeDelivery,
 		func(c *Config, v any) { c.Delivery = v.(Delivery) }},
 }

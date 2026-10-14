@@ -170,6 +170,7 @@ func TestKeysAreTheWholeSchemaAndUnique(t *testing.T) {
 		KeySuppressProjectInstructions, KeyNoCI, KeyChecksTimeout, KeySessionReuse,
 		KeyDecisionModel, KeySupervisionBeaconInterval, KeyEscalationWindow, KeyRecheckWindow,
 		KeyStallInspectionCount, KeyRelaunchAttempts, KeyCommitFixMessage, KeyAllowPushedCommands,
+		KeyAutonomyMerge,
 		KeyDelivery,
 	} {
 		if !seen[k] {
