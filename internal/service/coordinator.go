@@ -171,6 +171,7 @@ func (s *Service) dispatchInBackground() {
 func refusalOf(err error) error {
 	var held *relaunchHeld
 	var unswept *copyUnswept
+	var unproven *relaunchUnswept
 	switch {
 	case errors.Is(err, tasks.ErrRequest):
 		return fmt.Errorf("%w: %w", ipc.ErrInvalidRequest, err)
@@ -188,7 +189,8 @@ func refusalOf(err error) error {
 		errors.Is(err, errRelaunchNotDead),
 		errors.Is(err, errRelaunchInFlight),
 		errors.As(err, &held),
-		errors.As(err, &unswept):
+		errors.As(err, &unswept),
+		errors.As(err, &unproven):
 		return fmt.Errorf("%w: %w", ipc.ErrRefused, err)
 	}
 	return err

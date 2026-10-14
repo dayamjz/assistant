@@ -428,8 +428,9 @@
 // the copy, is ended by the sweep relaunch.go asks of the copy on Linux and
 // macOS, or, where its working directory cannot be read by this service and
 // neither of agents.Sweeper's carve-outs sets it aside, refuses the relaunch until a
-// later start, and elsewhere is an orphan this service holds no handle to
-// and does not end. An adapter that has not declared worker sessions, which in
+// later start. Elsewhere there is no sweep, so the relaunch is refused and
+// holds for a person, and on a retry answer goes ahead with that process,
+// if any, an orphan this service holds no handle to and does not end. An adapter that has not declared worker sessions, which in
 // this build is every shipped adapter, dispatches every task and launches
 // none: the *agents.CapabilityError is logged, the task stays Dispatched
 // with its slot and attempt standing, and no reference is recorded, because
@@ -457,13 +458,16 @@
 // program the wakes about the session it replaced; it writes no wake and no
 // marker itself, because both are supervise.go's loop's, under its fence,
 // and the loop's terminal-gone row is what tells a person about a terminal
-// this pass did not relaunch. A task past relaunch_attempts is the one
-// exception to writing nothing: it holds for a person, through a hold
-// record taskholds.go registers naming the task and the attempt that
-// reached the bound, which the loop then surfaces like any open hold; the
-// answer to that hold, given the task, is what decides whether it is
-// retried, and taskholds.go says how a retry reaches the one relaunch and
-// why it is good for one attempt. The launch of a claimed
+// this pass did not relaunch. Two cases are the exception to writing
+// nothing, and both hold for a person through a hold record naming the
+// task and an attempt, which the loop then surfaces like any open hold: a
+// task past relaunch_attempts, whose hold taskholds.go registers for the
+// attempt that reached the bound, and a relaunch on a platform with no
+// process sweep, which relaunch.go refuses and holds for the attempt whose
+// terminal is gone, because nothing proves the copy unowned there. The
+// answer to either, given the task, is what decides whether it is retried,
+// and taskholds.go says how a retry reaches the one relaunch and why it is
+// good for one attempt. The launch of a claimed
 // attempt goes to a goroutine under startWork, so "before serving anything"
 // is a property of the claim. A launched task is never dispatched again,
 // which dispatch.go states: a restarted service holds no session, so its
@@ -532,8 +536,7 @@
 // all attached fresh. A hold is published as the store returned it, at
 // storeTaskReport for the holds a report registers, after the checks-hold
 // closure for the one the program resolves, and at taskholds.go's
-// registration of the relaunch bound's hold and its answer to a task's
-// hold. What travels is the record, a
+// registration of the two relaunch holds and its answer to a task's hold. What travels is the record, a
 // store.Hold, which store.Resolver's design keeps from carrying who resolved
 // it: the wire understates the resolver, as that package says the record
 // itself does. The task payload is machine.Task, composed through taskView

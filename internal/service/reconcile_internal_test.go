@@ -92,7 +92,10 @@ func TestADeadTerminalInAHandedOffStateIsLeftAlone(t *testing.T) {
 // holds at the first dead terminal, which is the floor an operator may
 // choose. Past the bound the answer to the bound's hold decides: a retry
 // relaunches once more and a stop relaunches nothing and holds nothing,
-// while within the bound an answer changes nothing. A Failed decided by the
+// while within the bound an answer changes nothing. A stop on the hold a
+// relaunch with no process sweep raised relaunches nothing whatever the
+// count or the bound's answer, and a retry there changes nothing here,
+// because relaunch.go reads it once the sweep has answered. A Failed decided by the
 // isolation assertion's own refusal surfaces whatever the count or the
 // answer, read off Basis.EventKind.
 func TestTheRelaunchBoundCountsRelaunchesFromAttemptRows(t *testing.T) {
@@ -107,24 +110,30 @@ func TestTheRelaunchBoundCountsRelaunchesFromAttemptRows(t *testing.T) {
 	for _, row := range []struct {
 		attempts, bound int
 		answered        boundAnswer
+		unswept         boundAnswer
 		want            reconcileAction
 		surfaced        string
 	}{
-		{1, 2, boundUnanswered, reconcileRelaunch, ""},
-		{2, 2, boundUnanswered, reconcileRelaunch, ""},
-		{3, 2, boundUnanswered, reconcileHold, surfacedRelaunchBound},
-		{1, 0, boundUnanswered, reconcileHold, surfacedRelaunchBound},
-		{0, 0, boundUnanswered, reconcileHold, surfacedRelaunchBound},
-		{0, 1, boundUnanswered, reconcileRelaunch, ""},
-		{3, 2, boundRetry, reconcileRelaunch, ""},
-		{1, 0, boundRetry, reconcileRelaunch, ""},
-		{3, 2, boundStop, reconcileNothing, ""},
-		{2, 2, boundStop, reconcileRelaunch, ""},
+		{1, 2, boundUnanswered, boundUnanswered, reconcileRelaunch, ""},
+		{2, 2, boundUnanswered, boundUnanswered, reconcileRelaunch, ""},
+		{3, 2, boundUnanswered, boundUnanswered, reconcileHold, surfacedRelaunchBound},
+		{1, 0, boundUnanswered, boundUnanswered, reconcileHold, surfacedRelaunchBound},
+		{0, 0, boundUnanswered, boundUnanswered, reconcileHold, surfacedRelaunchBound},
+		{0, 1, boundUnanswered, boundUnanswered, reconcileRelaunch, ""},
+		{3, 2, boundRetry, boundUnanswered, reconcileRelaunch, ""},
+		{1, 0, boundRetry, boundUnanswered, reconcileRelaunch, ""},
+		{3, 2, boundStop, boundUnanswered, reconcileNothing, ""},
+		{2, 2, boundStop, boundUnanswered, reconcileRelaunch, ""},
+		{1, 2, boundUnanswered, boundStop, reconcileNothing, ""},
+		{3, 2, boundRetry, boundStop, reconcileNothing, ""},
+		{3, 2, boundUnanswered, boundStop, reconcileNothing, ""},
+		{1, 2, boundUnanswered, boundRetry, reconcileRelaunch, ""},
+		{3, 2, boundUnanswered, boundRetry, reconcileHold, surfacedRelaunchBound},
 	} {
-		got := decideReconciliation(dead, attempts(row.attempts), row.bound, row.answered)
+		got := decideReconciliation(dead, attempts(row.attempts), row.bound, relaunchAnswers{bound: row.answered, unswept: row.unswept})
 		if got.action != row.want || got.surfaced != row.surfaced {
-			t.Errorf("%d attempts under a bound of %d answered %d decide %+v, want %s %q",
-				row.attempts, row.bound, row.answered, got, row.want, row.surfaced)
+			t.Errorf("%d attempts under a bound of %d answered %d and %d with no sweep decide %+v, want %s %q",
+				row.attempts, row.bound, row.answered, row.unswept, got, row.want, row.surfaced)
 		}
 		if got.reason == "" {
 			t.Errorf("%d attempts under a bound of %d decide with no reason", row.attempts, row.bound)
@@ -133,13 +142,13 @@ func TestTheRelaunchBoundCountsRelaunchesFromAttemptRows(t *testing.T) {
 	refused := dead
 	refused.Source, refused.Basis.EventKind = taskstate.SourceEvent, isolationRefusedKind
 	for _, answered := range []boundAnswer{boundUnanswered, boundRetry} {
-		if got := decideReconciliation(refused, attempts(3), 2, answered); got.action != reconcileSurface || got.surfaced != surfacedIsolationRefused {
+		if got := decideReconciliation(refused, attempts(3), 2, relaunchAnswers{bound: answered}); got.action != reconcileSurface || got.surfaced != surfacedIsolationRefused {
 			t.Errorf("a Failed decided by the isolation refusal decides %+v, want a surface naming the refusal", got)
 		}
 	}
 	live := dead
 	live.Basis.Process = taskstate.Live
-	if got := decideReconciliation(live, attempts(5), 2, boundRetry); got.action != reconcileNothing || got.surfaced != "" {
+	if got := decideReconciliation(live, attempts(5), 2, relaunchAnswers{bound: boundRetry, unswept: boundRetry}); got.action != reconcileNothing || got.surfaced != "" {
 		t.Errorf("a live terminal past the bound decides %+v, want nothing: the bound is read only on a relaunch row", got)
 	}
 }

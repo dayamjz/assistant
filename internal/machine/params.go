@@ -102,7 +102,8 @@ type RespondRequest struct {
 
 // TaskRespondRequest answers a hold a task raised with no run behind it,
 // which PRD section 9 has answered the same way a run's hold is, given the
-// task rather than a run: a task past relaunch_attempts, or a decision an
+// task rather than a run: a task past relaunch_attempts, a relaunch refused
+// because the platform has no process sweep, or a decision an
 // investigation's report registered. The hold answered is the oldest one
 // open that names the task and no run; the answer names which.
 //
@@ -112,16 +113,18 @@ type RespondRequest struct {
 type TaskRespondRequest struct {
 	// Task is the task whose hold is answered.
 	Task string `json:"task"`
-	// Answer is what was decided. A hold the relaunch bound raised offers
-	// exactly AnswerRetry and AnswerStop and refuses anything else; a hold
+	// Answer is what was decided. A relaunch hold, the one the relaunch
+	// bound raised or the one a relaunch with no process sweep raised,
+	// offers exactly AnswerRetry and AnswerStop and refuses anything else; a hold
 	// an investigation's report registered offers no closed set, and the
 	// answer is recorded as given.
 	Answer string `json:"answer"`
 }
 
-// The answers a hold the relaunch bound raised offers.
+// The answers a relaunch hold offers.
 const (
-	// AnswerRetry relaunches the task once more past relaunch_attempts.
+	// AnswerRetry relaunches the task once more: past relaunch_attempts, or
+	// with nothing proving its copy unowned where there is no process sweep.
 	AnswerRetry = "retry"
 	// AnswerStop leaves the task where it stopped; nothing relaunches it.
 	AnswerStop = "stop"

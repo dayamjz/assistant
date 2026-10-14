@@ -434,8 +434,8 @@ func HoldPhrase(h store.Hold) Phrase {
 }
 
 // The rows for an answer to a task's hold that did more than close it: a
-// retry that began the work again, one recorded and not acted on yet, and a
-// stop. A hold whose answer acts on nothing further reads as HoldPhrase's
+// retry that began the work again, one recorded and not acted on yet, one
+// that raised a further decision, and a stop. A hold whose answer acts on nothing further reads as HoldPhrase's
 // answered row.
 var (
 	phraseRetried = Phrase{
@@ -447,6 +447,11 @@ var (
 		Outcome:     "Your answer was recorded, and the work could not be begun again just now.",
 		Consequence: "It is begun again the next time the service comes up, if nothing else has moved it by then.",
 		Decision:    "Run assistant service restart to try sooner, or repeat the command with --json to read why.",
+	}
+	phraseRetryHeld = Phrase{
+		Outcome:     "Your answer was recorded, and the work needs one more decision from you before it is begun again.",
+		Consequence: "Nothing here can check that the earlier attempt left nothing running where the work is kept, so it waits on you.",
+		Decision:    "Answer the new decision to begin the work again anyway, or to leave it as it is.",
 	}
 	phraseNotRetried = Phrase{
 		Outcome:     "Your answer was recorded, and the work will not be begun again.",
@@ -464,6 +469,8 @@ func TaskAnsweredPhrase(a TaskAnswered) Phrase {
 		return phraseRetried
 	case AnswerRetryDeferred:
 		return phraseRetryDeferred
+	case AnswerRetryHeld:
+		return phraseRetryHeld
 	case AnswerStopped:
 		return phraseNotRetried
 	}
