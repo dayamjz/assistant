@@ -216,9 +216,55 @@
 // A descendant that puts itself in a new process group escapes group
 // termination on either platform. Finding it again needs a scan matched on the
 // isolated copy a process's working directory resolves under, never on its
-// command line, and that scan needs to know which runs are still active, which
-// is state this package does not own. Sweep is the seam it plugs into, and
-// until a caller supplies one the gap is open.
+// command line, and the next section's Sweeper is that scan. No runner here
+// is built with it, for the reason Sweep gives, so a stage invocation's
+// detached descendant still outlives the invocation.
+//
+// # A sweep ends what runs in one copy, on Linux and macOS, and proves nothing elsewhere
+//
+// Sweeper ends the processes whose working directory resolves under one
+// isolated copy of its home, and nothing else: the directory must be one
+// home.CopyAt accepts, a task's copy or a run's, standing where the layout
+// puts it and reached through no symbolic link, and a process is matched by
+// the working directory the platform reports for it, resolved the same way.
+// It reads no command line. Everything under the copy is in scope, a shell a
+// person opened there included, and Sweeper's comment says so. Each process
+// found is ended by itself, only after Identity.Presence verifies the
+// identity the listing read, so a reused identifier is reported and not
+// signalled.
+//
+// Two platforms have a listing. Linux reads /proc: each process's cwd link,
+// and its status and stat entries for the users and parent the carve-outs
+// below need. macOS reads the kernel's process table for the processes,
+// their users and their parents, and the working directories from one run
+// of /usr/sbin/lsof with field output restricted to the cwd descriptor. The
+// module is built without cgo, and x/sys/unix at the version go.mod pins
+// exposes no call for another process's working directory there, so a
+// helper program is the route. lsof is not an agent: like taskkill on
+// Windows it is a program this package runs to act on processes, and what
+// it prints is read only by the listing's own parse. Its absence, a run that ended other than with status zero or one,
+// output the parse refuses, and output that leaves out this process's own
+// working directory each fail the listing, and a failed listing is an error
+// beside the zero SweepResult. Every other platform answers
+// ErrSweepUnsupported with that zero SweepResult, which is not Clear: a
+// caller cannot read an unsupported sweep as one that found nothing.
+// Sweeper's comment lists the residual gaps, among them a process that left
+// the copy before the listing.
+//
+// A process whose working directory the listing could not read is not
+// looked at, and it keeps the sweep from Clear unless one of two carve-outs
+// sets it aside: it is on this process's parent chain, verified by
+// identity, or it shares no user identifier with this process and refused a
+// zero signal. On Linux that is a refused cwd link; on macOS it is a running
+// process lsof reported no working directory for, whatever the reason. A
+// process of this process's own user off the parent chain always blocks, so
+// a host with one whose working directory cannot be read, or, for a service
+// running as root, with any process off the chain whose working directory
+// cannot be read and which answers the signal, refuses every sweep while it
+// runs. The first carve-out is what lets a service running as the same user
+// as an init process whose working directory is refused to it clear at all;
+// its residual, and the second's, is a set-aside process that did reach the
+// copy, which the sweep does not see.
 //
 // # A process is named by its identity, and ended only after it is verified
 //
@@ -239,9 +285,8 @@
 // it, a group this package started: internal/service's recovery ends a group
 // an earlier service recorded and did not live to terminate. It signals
 // nothing until Presence has verified the leader, and then only by group
-// identifier, with the escalation an invocation applies to its own tree;
-// nothing here matches a process on its command line, working directory or
-// user. A reused identifier, a gone leader, and a read that failed are
+// identifier, with the escalation an invocation applies to its own tree,
+// and it matches no process on its command line, working directory or user. A reused identifier, a gone leader, and a read that failed are
 // answered without a signal, each as its own GroupEnd or error. On unix it
 // asks between steps whether anything of the group is still running rather
 // than whether signal zero still reaches it, and on Linux it lists the

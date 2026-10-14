@@ -76,8 +76,9 @@ func (g GroupEnd) String() string { return string(g) }
 // and the signal, and a reuse within the start time's resolution, which
 // Identity names per platform, reads as present. The second is a descendant
 // that moved itself to another process group: the group signal does not
-// reach it, nothing recorded names it, and finding it is the Sweep seam's
-// gap, still open. The third is Windows: there is no process group to
+// reach it, nothing recorded names it, and only Sweeper finds it, by the
+// copy its working directory is in, on Linux and macOS, and when a caller
+// asks it about that copy. The third is Windows: there is no process group to
 // signal, so what is ended is whatever taskkill's tree option ends under the
 // verified leader, nothing here claims that reaches a descendant whose
 // parent already exited, and the polite step is a console control event, which reaches

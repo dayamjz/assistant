@@ -76,7 +76,10 @@ import (
 //
 // A retry after a crash is a new attempt of the same task, and it finds
 // whatever the crashed one left at the path. A path already standing there is
-// observed and asserted exactly as a fresh clone is, and is never removed or
+// swept before the claim, on sweep.go's terms, because a crash between a
+// worker's start and the record of its session leaves a process no record
+// names, and the sweep finds it by the copy instead. It is then observed and
+// asserted exactly as a fresh clone is, and is never removed or
 // written into (P6; copyStanding takes the same stance toward a run's copy):
 // a half-written directory fails the assertion, and that failure is recorded
 // as the refusal with the path untouched. The one directory this file does
@@ -360,6 +363,17 @@ func (s *Service) dispatchClaimed(ctx context.Context, id string) (dispatched, e
 	if _, launched := latestSession(attempts); launched {
 		return dispatched{}, fmt.Errorf("%w: task %s attempt %d", errTaskLaunched, id, latest)
 	}
+	// A copy already standing is a retry's, swept before the claim on
+	// sweep.go's terms; a copy about to be cut has nothing in it to sweep.
+	var swept copySwept
+	if _, err := os.Lstat(copyPath); err == nil {
+		if swept, err = s.sweepStandingCopy(ctx, id, copyPath); err != nil {
+			return dispatched{}, err
+		}
+		if swept.words != "" {
+			s.log.Printf("task %s is dispatched again over its standing copy: %s", id, swept.words)
+		}
+	}
 	if s.betweenAttemptReadAndClaim != nil {
 		s.betweenAttemptReadAndClaim()
 	}
@@ -402,6 +416,10 @@ func (s *Service) dispatchClaimed(ctx context.Context, id string) (dispatched, e
 			return dispatched{}, fmt.Errorf("service: asserting the copy of task %s: %w", id, err)
 		}
 		return dispatched{}, s.refuseIsolation(ctx, id, attempt.Sequence, resolved.State.Basis.EventSequence, reason, err)
+	}
+	if swept.unswept != nil {
+		return dispatched{}, s.refuseIsolation(ctx, id, attempt.Sequence, resolved.State.Basis.EventSequence,
+			taskstate.RefusedNotIsolated, fmt.Errorf("the standing copy passed the assertion and was not swept: %w", swept.unswept))
 	}
 
 	// The copy's snapshot, then the line the worker is told to run.
