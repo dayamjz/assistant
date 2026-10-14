@@ -12,8 +12,8 @@ import (
 // spec.Instructions as its first message. Having this method is what makes the
 // Claude Code adapter a WorkerRunner, and Capabilities declares the same fact.
 //
-// The command line is the configured entry's own flags followed by the four
-// this mode manages: --print, --input-format stream-json, --output-format
+// The command line is the configured entry's own flags, then GrantWorker's
+// flags (claudeGrantFlags), then the four this mode manages: --print, --input-format stream-json, --output-format
 // stream-json, and --verbose. Those are the flags the CLI's own --help
 // documents for realtime streaming input, which it offers only with --print;
 // --verbose is there because the CLI answers stream-json output under --print
@@ -34,11 +34,10 @@ import (
 //
 // What this buys is a worker the caller drives and ends on the terms Worker
 // states, over a wire this package frames rather than one it leaves to a
-// terminal. What it does not decide is anything the CLI does with a turn: its
-// permissions are what the configured entry and the CLI's own settings give
-// it, exactly as for a fix round, and nothing here answers a permission
-// request, so a tool the CLI would ask permission for is not granted by
-// anything here.
+// terminal. What it does not decide is anything the CLI does with a turn
+// beyond the grant: a worker runs under GrantWorker, and nothing here answers
+// a permission request, so a tool outside that grant is refused by the CLI
+// rather than granted by anything here.
 func (r *claudeRunner) Start(ctx context.Context, spec WorkerSpec) (Worker, error) {
 	if err := spec.Validate(); err != nil {
 		return nil, err
@@ -58,9 +57,10 @@ func (r *claudeRunner) Start(ctx context.Context, spec WorkerSpec) (Worker, erro
 }
 
 // workerArguments builds a worker's command line: the configured entry's own
-// flags, then the four Start states.
+// flags, then the worker's grant, then the four Start states.
 func (r *claudeRunner) workerArguments() []string {
-	return append(slices.Clone(r.extra),
+	args := append(slices.Clone(r.extra), claudeGrantFlags(GrantWorker)...)
+	return append(args,
 		"--print",
 		"--input-format", "stream-json",
 		"--output-format", "stream-json",

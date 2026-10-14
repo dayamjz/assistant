@@ -318,7 +318,11 @@ Each has cost this repository more than one round of review.
   method, only `SessionRunner` does, and `OpenFixer` is the only route to one
   this package offers a caller holding a `Runner`. `SessionRunner` is exported,
   so `Resolve` rather than the type is what keeps an assertion on it from
-  finding an undeclared session mechanism. An adapter declares what it supports
+  finding an undeclared session mechanism. What a started agent may do is its
+  `Grant`, decided by role in `grant.go` and never by a caller: only a fix
+  round edits, a worker edits and is allowed git, everything else reads; the
+  permission and tool-list flags are reserved so an entry cannot widen one,
+  and only the Claude Code adapter translates a grant. An adapter declares what it supports
   through `Runner.Capabilities`, the set is the table in `capability.go`, and
   undeclared means unavailable. Add a capability by adding a row there and a
   conformance probe in `capability_test.go`; a capability an adapter declares
