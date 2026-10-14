@@ -19,14 +19,15 @@ func TestAnAnswerExitsWithFailureExactlyWhenARetryBeganNoWork(t *testing.T) {
 		t.Fatalf("the control, a failed run, exits %v, want %v", got, machine.ExitFailure)
 	}
 	succeeds := map[machine.AnswerEffect]bool{
-		machine.AnswerRecorded:      true,
-		machine.AnswerRelaunched:    true,
-		machine.AnswerRedispatched:  true,
-		machine.AnswerRetryDeferred: false,
-		machine.AnswerRetryHeld:     false,
-		machine.AnswerRetryAtBound:  false,
-		machine.AnswerRetryRefused:  false,
-		machine.AnswerStopped:       true,
+		machine.AnswerRecorded:            true,
+		machine.AnswerRelaunched:          true,
+		machine.AnswerRedispatched:        true,
+		machine.AnswerRetryDeferred:       false,
+		machine.AnswerRetryHeld:           false,
+		machine.AnswerRetryAtBound:        false,
+		machine.AnswerRetryRefused:        false,
+		machine.AnswerRetryUndispatchable: false,
+		machine.AnswerStopped:             true,
 	}
 	for _, effect := range machine.AnswerEffects() {
 		ok, decided := succeeds[effect]
