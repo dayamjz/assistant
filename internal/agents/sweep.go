@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/dayamjz/assistant/internal/home"
@@ -62,12 +65,84 @@ type SweepResult struct {
 	// processes on this process's parent chain and processes sharing no
 	// user with it that refused a zero signal. They could be standing in
 	// Dir and the sweep cannot say, so they are a refusal to clear rather
-	// than a count beside a clear sweep. None was signalled.
-	UnreadableBlocking []Identity
+	// than a count beside a clear sweep. None was signalled. Each carries
+	// what was read about it, for a person reading a refusal; see Blocker.
+	UnreadableBlocking []Blocker
 
 	// listed is true only when the platform's listing completed, which is
 	// what makes Clear possible at all.
 	listed bool
+}
+
+// Blocker is one process in UnreadableBlocking: its identity, the user
+// identifiers the classification that put it there read, and a command
+// name read for diagnosis only.
+type Blocker struct {
+	Identity
+	// UIDs are the user identifiers the classification read for the
+	// process and decided from, in the platform's order: on Linux the real,
+	// effective, saved and filesystem identifiers of /proc/<pid>/status, on
+	// macOS the real, effective and saved ones of the process table entry.
+	UIDs []int
+	// Name is the process's command name, read after the classification
+	// decided the process blocks, from the same read as a start time that
+	// was checked against Identity's: on Linux field 2 of /proc/<pid>/stat,
+	// on macOS the process table entry's P_comm. It is read for a person
+	// diagnosing a refusal and for nothing else: no decision of the sweep
+	// reads it, and a process does not block, or stop blocking, because of
+	// its name. It is the empty string when NameErr is not nil.
+	Name string
+	// NameErr is why Name could not be read, nil when it was: the process
+	// exited, its identifier was given to another process, or the read
+	// failed. A failed name read is recorded here and never fails the sweep
+	// or changes what it decided.
+	NameErr error
+}
+
+// String renders the blocker for a log line: its identifier, its user
+// identifiers, and its name quoted, or that the name was unreadable.
+func (b Blocker) String() string {
+	uids := "uid unread"
+	if len(b.UIDs) > 0 {
+		parts := make([]string, len(b.UIDs))
+		for i, uid := range b.UIDs {
+			parts[i] = strconv.Itoa(uid)
+		}
+		if slices.Equal(b.UIDs, slices.Repeat(b.UIDs[:1], len(b.UIDs))) {
+			uids = "uid " + parts[0]
+		} else {
+			uids = "uids " + strings.Join(parts, "/")
+		}
+	}
+	name := fmt.Sprintf("name %q", b.Name)
+	if b.NameErr != nil {
+		name = fmt.Sprintf("name unreadable (%v)", b.NameErr)
+	}
+	return fmt.Sprintf("pid %d %s %s", b.PID, uids, name)
+}
+
+// BlockersShown is how many blockers DescribeBlockers lists before it
+// counts the rest.
+const BlockersShown = 10
+
+// DescribeBlockers lists blockers, a sweep's UnreadableBlocking, for a
+// person reading a refusal: the first BlockersShown of them each as
+// Blocker.String renders it, separated by "; ", and the rest as a count,
+// "; and N more". It is the empty string when there are none.
+func DescribeBlockers(blockers []Blocker) string {
+	if len(blockers) == 0 {
+		return ""
+	}
+	shown := blockers[:min(len(blockers), BlockersShown)]
+	parts := make([]string, len(shown))
+	for i, b := range shown {
+		parts[i] = b.String()
+	}
+	text := strings.Join(parts, "; ")
+	if rest := len(blockers) - len(shown); rest > 0 {
+		text += fmt.Sprintf("; and %d more", rest)
+	}
+	return text
 }
 
 // Clear reports whether the sweep found nothing still under Dir that it
@@ -82,13 +157,19 @@ func (r SweepResult) Clear() bool {
 	return r.listed && len(r.Survived) == 0 && len(r.Unverified) == 0 && len(r.UnreadableBlocking) == 0
 }
 
-// String renders the result for a log line.
+// String renders the result for a log line, naming the processes in
+// UnreadableBlocking, in parentheses, as DescribeBlockers does when there
+// are any.
 func (r SweepResult) String() string {
 	if !r.listed {
 		return "no sweep was made"
 	}
-	return fmt.Sprintf("swept %s: %d ended, %d exited before a signal, %d replaced, %d survived, %d unverified, %d not readable of which %d could be in it",
+	text := fmt.Sprintf("swept %s: %d ended, %d exited before a signal, %d replaced, %d survived, %d unverified, %d not readable of which %d could be in it",
 		r.Dir, len(r.Ended), len(r.Exited), len(r.Replaced), len(r.Survived), len(r.Unverified), r.Unreadable, len(r.UnreadableBlocking))
+	if blocking := DescribeBlockers(r.UnreadableBlocking); blocking != "" {
+		text += " (" + blocking + ")"
+	}
+	return text
 }
 
 // Sweeper is the identity-based sweep PRD section 8 requires: it ends the
@@ -102,10 +183,12 @@ func (r SweepResult) String() string {
 // working directory the platform reports for it, resolved through symbolic
 // links when it can be, is that directory or below it; a working directory
 // that cannot be resolved, such as one that was removed, is compared as the
-// platform reported it. No command line or name is read or matched, and no
-// user or parent puts a process in scope or gets it ended: those are read
-// only to decide whether a process whose working directory could not be
-// read keeps the sweep from clearing.
+// platform reported it. No command line is read and no name is matched,
+// and no user or parent puts a process in scope or gets it ended: those are
+// read only to decide whether a process whose working directory could not
+// be read keeps the sweep from clearing. The one name read is a blocking
+// process's command name, read after that decision for Blocker.Name, which
+// reports the refusal and decides nothing.
 //
 // That scope is a policy, and it is stated here because it is broader than
 // "what an agent left behind": anything running under the copy is ended,
@@ -218,7 +301,7 @@ type listing struct {
 	under      []Identity
 	unverified []int
 	unreadable int
-	blocking   []Identity
+	blocking   []Blocker
 }
 
 // endListed ends the listed processes on Sweeper's terms and returns what it

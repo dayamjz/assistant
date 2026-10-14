@@ -53,7 +53,14 @@ import (
 //     user among them, and so could be standing in the copy. The caller
 //     refuses with *copyUnswept before the claim, nothing is recorded, and
 //     the next pass asks again: the next start for a relaunch, the next
-//     dispatch pass for a dispatch. A host with such a process anywhere off
+//     dispatch pass for a dispatch. When the sweep completed, the refusal's
+//     text is its result as agents.SweepResult.String renders it, which
+//     names each process that kept the sweep from clearing for its
+//     unreadable working directory by identifier, user identifiers and
+//     command name, up to agents.BlockersShown of them and a count of the
+//     rest. The log lines for a relaunch and a dispatch not made, in
+//     reconcile.go and dispatch.go, carry that text; no relaunch note is
+//     written for a refused sweep. A host with such a process anywhere off
 //     this service's parent chain refuses every relaunch and every retried
 //     dispatch while it runs, wherever it stands, which is the strict rule
 //     paying for the proof rather than a gap in it.
@@ -70,7 +77,10 @@ import (
 
 // copyUnswept is a worker refused because the sweep of its standing copy did
 // not clear it: Cause is the sweep's error, or nil when the sweep completed
-// and left something running or undecided, which Result names.
+// and left something running or undecided, which Result names, the
+// processes whose unreadable working directory blocked it among them. The
+// command names Result carries are for a person reading the refusal, and
+// nothing here decides from them.
 type copyUnswept struct {
 	Task   string
 	Result agents.SweepResult

@@ -256,3 +256,22 @@ func parentPID(pid int) (int, bool, error) {
 	}
 	return int(k.Eproc.Ppid), true, nil
 }
+
+// commandName reads the command name the process table entry carries for
+// the process id names, Proc.P_comm, out of the same entry as the start
+// time it is checked against, so a name returned without an error came from
+// an entry whose start time is id's. It is for diagnosis only: nothing
+// decides from it.
+func commandName(id Identity) (string, error) {
+	k, found, err := kinfo(id.PID)
+	if err != nil {
+		return "", err
+	}
+	if !found {
+		return "", errNameGone
+	}
+	if startOf(k.Proc) != id.Start {
+		return "", errNameReplaced
+	}
+	return unix.ByteSliceToString(k.Proc.P_comm[:]), nil
+}

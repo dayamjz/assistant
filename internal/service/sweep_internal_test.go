@@ -25,9 +25,11 @@ import (
 // that copy, so they are processes of this host outside it, and every
 // relaunch and every dispatch retry here is refused before its claim while
 // they run, which is P6's refusal working. unestablished names what the
-// test would have established. A platform with no sweep, and a host whose
-// empty copy sweeps clear, run the test; any other answer from the empty
-// copy fails it, because it is not the host's standing refusal.
+// test would have established, and the skip names those processes as
+// agents.DescribeBlockers does, so a log shows which they were. A platform
+// with no sweep, and a host whose empty copy sweeps clear, run the test;
+// any other answer from the empty copy fails it, because it is not the
+// host's standing refusal.
 func requireSweepClearsHere(t *testing.T, unestablished string) {
 	t.Helper()
 	base, err := filepath.EvalSymlinks(t.TempDir())
@@ -59,8 +61,8 @@ func requireSweepClearsHere(t *testing.T, unestablished string) {
 		t.Fatalf("the sweep of an empty copy did %s (%+v), want it clear or blocked only by processes whose working directory it cannot read", r, r)
 	}
 	t.Skipf("this host has %d process(es) outside any copy under test whose working directory this service cannot read and "+
-		"which neither of agents.Sweeper's carve-outs sets aside, so every sweep here refuses to clear, as P6 requires, and "+
-		"%s is not established here", len(r.UnreadableBlocking), unestablished)
+		"which neither of agents.Sweeper's carve-outs sets aside (%s), so every sweep here refuses to clear, as P6 requires, and "+
+		"%s is not established here", len(r.UnreadableBlocking), agents.DescribeBlockers(r.UnreadableBlocking), unestablished)
 }
 
 // relaunchedDetail is the detail of the task's newest "relaunched" note, and

@@ -45,7 +45,7 @@ func requiresSweep(t *testing.T) {
 }
 
 // hostBlockers sweeps an empty task copy of a home of its own, created for
-// the purpose, and returns how many processes keep that sweep from
+// the purpose, and returns the processes that keep that sweep from
 // clearing. Nothing was started in the copy, so every one of them is a
 // process of this host outside it: one whose working directory this test
 // cannot read and which neither of Sweeper's carve-outs sets aside. Such a
@@ -53,7 +53,7 @@ func requiresSweep(t *testing.T) {
 // and a test that would assert a clear sweep there can establish only the
 // rest of what it checks. Any other answer from the empty copy fails the
 // test, because it is not the host's standing refusal.
-func hostBlockers(t *testing.T) int {
+func hostBlockers(t *testing.T) []agents.Blocker {
 	t.Helper()
 	h, _ := sweepHome(t, sweepBase(t), "baseline")
 	dir := makeTaskCopy(t, h)
@@ -62,22 +62,22 @@ func hostBlockers(t *testing.T) int {
 	case err != nil:
 		t.Fatalf("sweeping an empty copy for the host's baseline: %v", err)
 	case r.Clear():
-		return 0
+		return nil
 	case len(r.Ended)+len(r.Exited)+len(r.Replaced)+len(r.Survived)+len(r.Unverified) != 0 || len(r.UnreadableBlocking) == 0:
 		t.Fatalf("the sweep of an empty copy did %s (%+v), want it clear or blocked only by processes whose working directory it cannot read", r, r)
 	}
-	return len(r.UnreadableBlocking)
+	return r.UnreadableBlocking
 }
 
 // requireClearUnlessHostBlocks fails the test unless r left nothing it
 // could read survived or undecided, and, where hostBlockers found none on
 // this host, unless r is clear.
-func requireClearUnlessHostBlocks(t *testing.T, r agents.SweepResult, blockers int, what string) {
+func requireClearUnlessHostBlocks(t *testing.T, r agents.SweepResult, blockers []agents.Blocker, what string) {
 	t.Helper()
 	if len(r.Survived) != 0 || len(r.Unverified) != 0 {
 		t.Fatalf("%s did %s (%+v), want nothing survived or left undecided", what, r, r)
 	}
-	if blockers == 0 && !r.Clear() {
+	if len(blockers) == 0 && !r.Clear() {
 		t.Fatalf("%s did %s (%+v) on a host whose empty copy sweeps clear, want it clear", what, r, r)
 	}
 }
@@ -85,11 +85,13 @@ func requireClearUnlessHostBlocks(t *testing.T, r agents.SweepResult, blockers i
 // hostLimit ends a test that has asserted everything else it checks by
 // skipping, with the limit recorded, when hostBlockers found processes on
 // this host that refuse every sweep: unestablished is the clear the test
-// could not assert. It does nothing where there were none.
-func hostLimit(t *testing.T, blockers int, unestablished string) {
+// could not assert. The skip names them as agents.DescribeBlockers does, so
+// a log shows which processes they were. It does nothing where there were
+// none.
+func hostLimit(t *testing.T, blockers []agents.Blocker, unestablished string) {
 	t.Helper()
-	if blockers > 0 {
-		t.Skipf("this host has %d process(es) outside the copies under test whose working directory this test cannot read and which neither of Sweeper's carve-outs sets aside, so every sweep here refuses to clear, as P6 requires; %s is not established here, and everything else this test checks was", blockers, unestablished)
+	if len(blockers) > 0 {
+		t.Skipf("this host has %d process(es) outside the copies under test whose working directory this test cannot read and which neither of Sweeper's carve-outs sets aside (%s), so every sweep here refuses to clear, as P6 requires; %s is not established here, and everything else this test checks was", len(blockers), agents.DescribeBlockers(blockers), unestablished)
 	}
 }
 
@@ -154,11 +156,18 @@ type detached struct {
 // The cleanup ends it by verified identity if a sweep did not.
 func startDetached(t *testing.T, dir string, stubborn bool) detached {
 	t.Helper()
+	return startDetachedAs(t, helperBinary(t), dir, stubborn)
+}
+
+// startDetachedAs is startDetached running binary, a copy of the test
+// binary, so the child it leaves runs a file of the name the test chose.
+func startDetachedAs(t *testing.T, binary, dir string, stubborn bool) detached {
+	t.Helper()
 	r, w, err := os.Pipe()
 	if err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command(helperBinary(t))
+	cmd := exec.Command(binary)
 	cmd.Env = []string{helperModeVar + "=detach", helperDirVar + "=" + dir}
 	if stubborn {
 		cmd.Env = append(cmd.Env, helperStderrVar+"=stubborn")

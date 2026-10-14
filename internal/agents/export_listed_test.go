@@ -22,3 +22,12 @@ func ClassifyRefused(pid int, signal error) (bool, error) {
 
 // Ancestry exposes the parent chain the listing sets aside.
 func Ancestry() []Identity { return ancestry(os.Getpid()) }
+
+// BlockerOf exposes blockerOf for a refused process the classification read
+// as id with uids, so a test can hand it a real identity and a mutation of
+// one and see what the name read records.
+func BlockerOf(id Identity, uids []int) Blocker { return blockerOf(refused{id: id, uids: uids}) }
+
+// ErrNameReplaced exposes errNameReplaced, the name read's answer for an
+// identifier that names another process.
+var ErrNameReplaced = errNameReplaced
