@@ -24,6 +24,7 @@ func TestAnAnswerExitsWithFailureExactlyWhenARetryBeganNoWork(t *testing.T) {
 		machine.AnswerRedispatched:  true,
 		machine.AnswerRetryDeferred: false,
 		machine.AnswerRetryHeld:     false,
+		machine.AnswerRetryAtBound:  false,
 		machine.AnswerRetryRefused:  false,
 		machine.AnswerStopped:       true,
 	}

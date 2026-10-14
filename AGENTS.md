@@ -196,7 +196,9 @@ Each has cost this repository more than one round of review.
   and sequence, with the anchor a property of the request that no column holds.
   The run process record (`RecordProcess`, migration 19) says which agent group
   a run started and not whether it runs now (P8), so nothing reads it as
-  liveness.
+  liveness. The message record (migration 21, `message.go`) is sealed like
+  `wake`: written or refused once, acknowledged once, never deleted, and who
+  sent it is `Sender`, the same closed shape as `Acknowledger`.
   The one-row `checkpoint` migration 1 created was the second record the PRD
   forbids, and it now has no accessor at all. Do not give it one. Its table is
   still declared because a migration may not remove a table, so migration 6
@@ -357,8 +359,8 @@ Each has cost this repository more than one round of review.
   Whether a peer is a task's worker is a second relation over the same
   `Credentials`, decided by the handler from `internal/session`'s worker group
   set and never a third access class: the rows whose answer turns on it
-  (`task.event`, `wakes.*`, `supervision.assert`, `catchup.mark`,
-  `gate.admit`) say so, and
+  (`task.event`, `wakes.*`, `supervision.assert`, `catchup.mark`, `gate.admit`,
+  and the coordinator's `task.*` methods) say so, and
   `ErrWorker` and `ErrNotWorker` are its two refusals. Read its `doc.go` for
   where state may still be collapsed into a gap marker and why that is not the
   strict rule relaxed. Four state types have a
@@ -557,7 +559,10 @@ Each has cost this repository more than one round of review.
   guard's predicate, both over typed inputs the caller computed, with no
   clock, key, file or record read here; its direct imports are
   `internal/taskstate`, `internal/home` for its lock vocabulary, and the
-  standard library, and neither function performs I/O. The loop, the queue, the beacon and the hook are
+  standard library, and neither function performs I/O. A kind is a row of
+  `kind.go`'s table with its class and the matrix test's oracle row beside
+  it; `message-unacknowledged` is actionable, and when it is detected (once
+  per message, after `escalation_window`) is the loop's. The loop, the queue, the beacon and the hook are
   elsewhere. Three things there are mechanism rather than rule. Evidence is
   `taskstate.Resolution.Progress` and `EvidenceOf` reads that field alone,
   so nothing here re-derives from `Basis`. An event wake exists only through
@@ -717,7 +722,17 @@ Each has cost this repository more than one round of review.
   derivation (credentials, then the peer's process group read as containment
   reads it, then the set) and the four methods that turn on it: `task.event`
   admits only a worker and holds the kind to `taskstate`'s writer column,
-  `wakes.list`, `wakes.acknowledge` and `supervision.assert` refuse one.
+  `wakes.list`, `wakes.acknowledge` and `supervision.assert` refuse one; the
+  coordinator's task methods (`coordinator.go`'s create, promote and
+  relaunch, `steer.go`'s message, stop and interrupt, and `task.respond`)
+  refuse one through the same `refuseWorker`. `steer.go` is PRD section 6's
+  steering: a message is a `store.Message` record first and a `Send` second,
+  never resent, acknowledged only by the worker's `message-acknowledged`
+  event, which `store.AcknowledgeMessage` writes with the record in one
+  transaction (P8); a stop answers only after the probe reads `Dead` and then
+  registers `task/<id>/stopped/<attempt>`, whose `retry` is the one anchored
+  relaunch counted by `relaunch_attempts`; interrupt is refused naming a
+  capability no table row declares. Its header owns the gaps.
   `admit_workers.go` owns the rule a worker's push is held to - only its
   task's branch, forward, never a deletion - and why that is admission's
   decision and not `internal/safety`'s; a person's push meets it nowhere, and
