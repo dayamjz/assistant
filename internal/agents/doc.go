@@ -244,10 +244,13 @@
 // user. A reused identifier, a gone leader, and a read that failed are
 // answered without a signal, each as its own GroupEnd or error. On unix it
 // asks between steps whether anything of the group is still running rather
-// than whether signal zero still reaches it, and on Linux and macOS it lists
-// the group's members to count one that exited and waits on a parent that is
-// not this process, which is what an orphan is wherever nothing reaps
-// orphans; another unix has no listing and reports such a group survived.
+// than whether signal zero still reaches it, and on Linux it lists the
+// group's members to count one that exited and waits on a parent that is not
+// this process, which is what an orphan is wherever nothing reaps orphans.
+// macOS and another unix count no such member: macOS's process-table reading
+// by group did not identify one on CI and is not used, and another unix has
+// no listing, so on both a group holding only such a member is reported
+// survived or outlived rather than gone, which is the over-cautious answer.
 // On Windows there is no group to signal, so what is ended is the tree under
 // the verified leader, and a leader that is gone is answered GroupLeaderGone
 // with nothing of its tree looked for. EndGroup's own comment states the

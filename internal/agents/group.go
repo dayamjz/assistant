@@ -21,8 +21,8 @@ type GroupEnd string
 const (
 	// GroupEnded is the leader verified present and the group then ended,
 	// politely first and forcefully after the grace, with nothing of it
-	// still running that this platform can see. On Linux and macOS a member
-	// that has exited and waits to be reaped counts as ended; on another
+	// still running that this platform can see. On Linux a member that has
+	// exited and waits to be reaped counts as ended; on macOS and another
 	// unix it does not, and the answer is ErrGroupSurvived instead.
 	GroupEnded GroupEnd = "ended"
 	// GroupGone is no running process with the leader's identifier and

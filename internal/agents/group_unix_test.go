@@ -183,7 +183,8 @@ func waitAbsent(t *testing.T, id agents.Identity) {
 }
 
 // TestEndGroupCountsAnExitedUnreapedMemberAsGone pins groupGone's widening
-// where the platform can list a group's members: a leader that has exited
+// on Linux, the one platform whose listing of a group's members is trusted,
+// and its over-cautious answer everywhere else: a leader that has exited
 // and that nothing has reaped is still in its group, signal zero still
 // reaches it, and that is the state an orphan a recovering service ends is
 // left in wherever nothing reaps orphans. The control is the signal-zero
@@ -221,13 +222,16 @@ func TestEndGroupCountsAnExitedUnreapedMemberAsGone(t *testing.T) {
 
 	end, err := agents.EndGroup(id, time.Second)
 	switch runtime.GOOS {
-	case "linux", "darwin":
+	case "linux":
 		if err != nil || end != agents.GroupGone {
 			t.Fatalf("EndGroup(an exited, unreaped leader) = %s, %v, want %s", end, err, agents.GroupGone)
 		}
 	default:
-		// No member listing here, so the zombie keeps the group from reading
-		// gone, which is the over-cautious direction groupGone documents.
+		// No member reading here is trusted to identify an exited member,
+		// so the zombie keeps the group from reading gone, which is the
+		// over-cautious direction groupGone documents. darwin is here because
+		// its process-table reading by group did not answer gone for this
+		// very case on darwin/arm64 CI; group_otherunix.go says so.
 		if err != nil || end != agents.GroupOutlivedLeader {
 			t.Fatalf("EndGroup(an exited, unreaped leader) on %s = %s, %v, want %s",
 				runtime.GOOS, end, err, agents.GroupOutlivedLeader)

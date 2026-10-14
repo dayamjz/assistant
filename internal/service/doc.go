@@ -119,7 +119,11 @@
 // unix the adapter's forget runs once its termination has finished whether
 // or not the group emptied, so a member this service could not signal loses
 // its record with the rest; a later recovery would have found its leader
-// gone and left it alone in any case. On Windows there is no process group:
+// gone and left it alone in any case. Only on Linux does a group whose
+// members have all exited and wait unreaped read as gone; on macOS and
+// another unix such a group reads as outlived or survived, so its record
+// stands and every later recovery looks again without signalling it, which
+// internal/agents' EndGroup states. On Windows there is no process group:
 // what is ended is the tree under the verified leader that taskkill's tree
 // option ends, a leader that is gone answers agents.GroupLeaderGone without
 // anything of its tree being looked for, and on a platform with no identity

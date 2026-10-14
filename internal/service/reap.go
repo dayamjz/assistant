@@ -109,8 +109,8 @@ const (
 	reapEnded reapOutcome = "ended"
 	// reapGone is a record whose leader is gone and whose group holds
 	// nothing still running that the platform can see: on unix a group
-	// signal zero no longer reaches or whose listed members have all
-	// exited, on Windows the leader alone, which agents.GroupLeaderGone
+	// signal zero no longer reaches or, on Linux alone, whose listed
+	// members have all exited, on Windows the leader alone, which agents.GroupLeaderGone
 	// states. Nothing was signalled, and the record was cleared.
 	reapGone reapOutcome = "gone"
 	// reapReplaced is a record whose identifier now names a process with

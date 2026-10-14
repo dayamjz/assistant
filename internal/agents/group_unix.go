@@ -39,8 +39,9 @@ func endPresentGroup(id Identity, grace time.Duration) (GroupEnd, error) {
 // no such group is gone. Any other refusal, which is a member this process
 // may not signal, is not gone. And a group the signal reaches is gone only
 // when exitedOnly lists at least one member and every member it lists has
-// exited; a platform with no listing answers no, so there a zombie keeps the
-// group from reading gone, which is the over-cautious direction.
+// exited; a platform with no listing this package trusts, which is every
+// unix but Linux, answers no, so there a zombie keeps the group from reading
+// gone, which is the over-cautious direction.
 func groupGone(pgid int) bool {
 	switch err := syscall.Kill(-pgid, 0); err {
 	case syscall.ESRCH:
