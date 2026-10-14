@@ -121,6 +121,7 @@ func endsWith(kinds []string, suffix ...string) bool {
 // note. Run under the race detector, which make test does.
 func TestTwoRelaunchersOfOneDeadTerminalBeginOneAttempt(t *testing.T) {
 	principles.Cite(t, principles.P6)
+	requireSweepClearsHere(t, "that two relaunchers of one dead terminal begin one attempt")
 	sub := newRelaunchSubject(t)
 	ctx := t.Context()
 	var arrived sync.WaitGroup
@@ -181,6 +182,7 @@ func TestTwoRelaunchersOfOneDeadTerminalBeginOneAttempt(t *testing.T) {
 // reads Dispatched from its new attempt and not Unknown from the dead
 // terminal, and a second pass of reconciliation relaunches nothing.
 func TestARelaunchReusesTheStandingCopyAndASecondPassDoesNotRelaunchAgain(t *testing.T) {
+	requireSweepClearsHere(t, "a relaunch reusing its standing copy")
 	sub := newRelaunchSubject(t)
 	ctx := t.Context()
 	left := filepath.Join(sub.copy, "left-by-the-first-worker.txt")
@@ -388,6 +390,7 @@ func TestARelaunchWaitsOnALiveTaskHoldingTheBranch(t *testing.T) {
 // its own, because the terminal-gone row that tells the person is the
 // supervisor loop's and this hand-built service runs no loop.
 func TestAFailedRunIsRelaunchedUpToTheBoundAndThenSurfaced(t *testing.T) {
+	requireSweepClearsHere(t, "a failed run relaunched up to its bound")
 	sub := newRelaunchSubject(t)
 	ctx := t.Context()
 	sub.restart.cfg.RelaunchAttempts = 1
@@ -461,6 +464,7 @@ func TestAFailedRunIsRelaunchedUpToTheBoundAndThenSurfaced(t *testing.T) {
 // another session and a row of another kind stay queued for the
 // coordinator.
 func TestARelaunchAcknowledgesOnlyTheWakesItSuperseded(t *testing.T) {
+	requireSweepClearsHere(t, "a relaunch acknowledging the wakes it superseded")
 	sub := newRelaunchSubject(t)
 	ctx := t.Context()
 	ref := sub.first.Reference().String()

@@ -41,9 +41,9 @@ func setProcessGroup(cmd *exec.Cmd) {
 // What this platform gives up is worth stating rather than implying away.
 // There is no cheap way here to ask whether anything is left in the group, so
 // termination happens only while the leader is known to be running. A
-// descendant that outlives a leader which exited on its own is not ended here;
-// the identity-based sweep seam on Runner is the answer to that, on every
-// platform.
+// descendant that outlives a leader which exited on its own is not ended here,
+// and Sweeper, which is what would find it by its working directory, answers
+// ErrSweepUnsupported on this platform.
 func terminateTree(proc *os.Process, grace time.Duration, leaderRunning bool, stopped <-chan struct{}) {
 	if proc == nil || !leaderRunning {
 		return

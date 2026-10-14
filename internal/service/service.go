@@ -267,6 +267,11 @@ type Service struct {
 	// dispatchers at the point where both have read and neither has written,
 	// on the terms internal/tasks' queue offers its own tests the same hook.
 	betweenAttemptReadAndClaim func()
+	// sweepCopy stands in for the sweep relaunch.go asks of a task's copy.
+	// It is nil in production, where the sweep is an agents.Sweeper over
+	// this service's home, and set only by this package's tests, to an
+	// answer the real sweep gives on a platform this test does not run on.
+	sweepCopy func(ctx context.Context, dir string) (agents.SweepResult, error)
 	// givingUp is whether Close has stopped taking background work. It is
 	// read and written under mu with the registration itself, which is what
 	// orders a continuation started from a request-serving goroutine against

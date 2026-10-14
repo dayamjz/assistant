@@ -132,11 +132,13 @@ import (
 //
 //   - A dead terminal proves the terminal is gone, not that nothing is still
 //     writing in the copy: a detached descendant can outlive its leader. The
-//     relaunch goes into the copy on the dead reading alone, because the
-//     sweep that would answer the second question, agents.Sweep's
-//     SweepUnder, has no implementation in this build (#112), and this file
-//     does not say "prove". When it exists, the dead reading plus its
-//     answer is the input this decision takes.
+//     table decides on the dead reading, and relaunch.go then asks the sweep
+//     of the copy before it claims, on sweep.go's terms: on Linux and macOS
+//     the copy is swept and a sweep that does not clear it refuses the
+//     relaunch, and on every other platform agents.ErrSweepUnsupported is the answer, the
+//     relaunch goes into the copy on the dead reading alone as it did before
+//     the sweep existed, and its note and log say nothing was proven. This
+//     file does not say "prove" for that platform.
 //   - A relaunch the floor defers, because a live task now holds the
 //     branch, is retried at the next reconciliation, which is the next
 //     service start: no release site re-runs this pass, so such a task
@@ -337,8 +339,8 @@ func (s *Service) relaunchAtStart(ctx context.Context, id string) {
 		s.log.Printf("task %s was not relaunched: %v", id, err)
 		return
 	}
-	s.log.Printf("task %s was relaunched in place as attempt %d, superseding session %s",
-		id, out.launch.attempt, out.superseded)
+	s.log.Printf("task %s was relaunched in place as attempt %d, superseding session %s; %s",
+		id, out.launch.attempt, out.superseded, out.swept)
 	s.launchInBackground(out.launch)
 }
 

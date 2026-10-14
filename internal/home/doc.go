@@ -83,6 +83,17 @@
 // identifier is one path element, and nothing about whether the directory it
 // names exists, is empty, or belongs to the task that claims it.
 //
+// # A copy is answered by where it stands, not by how it is named
+//
+// CopyAt is the one answer to "is this directory one of this home's isolated
+// copies", and internal/agents' sweep asks it before ending anything under a
+// directory. It accepts a task's copy or a run's copy exactly where the
+// layout puts it, and refuses a path that resolves through a symbolic link,
+// so a copy path swapped for a link into a person's checkout, or into
+// another copy, is not a copy. It answers about the layout and the
+// filesystem and nothing else: whether a run or a task still owns the copy
+// is not a question it can answer.
+//
 // # The service log is bounded, and rotation truncates in place
 //
 // PRD section 8 makes logs/service.log a bounded lifecycle log with rotation,

@@ -11,6 +11,7 @@ import (
 	"github.com/dayamjz/assistant/internal/gate"
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/principles"
+	"github.com/dayamjz/assistant/internal/service"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/taskstate"
 )
@@ -222,6 +223,7 @@ func TestADispatchedInvestigationTaskIsCutADetachedCloneWithNoRemote(t *testing.
 // read apart in the history.
 func TestARetryAfterACrashRefusesTheHalfWrittenCopyAndLeavesIt(t *testing.T) {
 	principles.Cite(t, principles.P6)
+	service.RequireSweepClearsHere(t, "a dispatch retry refusing the half-written copy for isolation")
 	h := newHome(t)
 	subject := newSubject(t)
 	quietMaintenance(t, subject)

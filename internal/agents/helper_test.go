@@ -38,6 +38,7 @@ const (
 	helperPidVar    = "AGENTS_HELPER_PIDFILE"
 	helperEchoVar   = "AGENTS_HELPER_ECHO"
 	helperGoVar     = "AGENTS_HELPER_GO"
+	helperDirVar    = "AGENTS_HELPER_DIR"
 )
 
 // helperModeFlag carries the stand-in agent's mode on its command line, for
@@ -183,6 +184,12 @@ func helperMain(mode string) {
 			os.Exit(5)
 		}
 		time.Sleep(helperHold)
+	case "detach":
+		// Start a child in a session of its own, in the directory the test
+		// names, handing it this process's descriptor 3, then print the
+		// child's identifier and exit. It is a descendant that left the
+		// invocation's process group and outlived its parent.
+		helperDetach()
 	case "hold":
 		if os.Getenv(helperStderrVar) == "stubborn" {
 			signal.Ignore(helperPoliteSignals()...)

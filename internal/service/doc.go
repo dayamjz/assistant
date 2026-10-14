@@ -115,7 +115,9 @@
 // run finished. A process left alone as unverified may still be writing in
 // its run's isolated copy, and nothing here stops it. A descendant that
 // moved itself to another process group is not in the group signalled, and
-// nothing recorded names it; that is the Sweep seam's gap, still open. On
+// nothing recorded names it; agents.Sweeper would find it by its run's copy,
+// but recovery does not ask it, because a run copy is removed by cleanup and
+// one whose run is unfinished must not be touched, so that gap is open. On
 // unix the adapter's forget runs once its termination has finished whether
 // or not the group emptied, so a member this service could not signal loses
 // its record with the rest; a later recovery would have found its leader
@@ -422,16 +424,21 @@
 // runs and what precedence gives with Dead once it exits. One launch per
 // attempt per service, and a restart dispatches and launches again as a new
 // attempt over the standing copy, which is PRD section 11's relaunch in
-// place by the record's lights; the earlier process, if alive, is an orphan
-// this service holds no handle to and does not end, which #112's sweep is
-// the closer of. An adapter that has not declared worker sessions, which in
+// place by the record's lights; the earlier process, if alive and still in
+// the copy, is ended by the sweep relaunch.go asks of the copy on Linux and
+// macOS, or, where its working directory cannot be read by this service and
+// neither of agents.Sweeper's carve-outs sets it aside, refuses the relaunch until a
+// later start, and elsewhere is an orphan this service holds no handle to
+// and does not end. An adapter that has not declared worker sessions, which in
 // this build is every shipped adapter, dispatches every task and launches
 // none: the *agents.CapabilityError is logged, the task stays Dispatched
 // with its slot and attempt standing, and no reference is recorded, because
 // internal/taskstate's refusal tokens are about isolation and this is not an
 // isolation failure. And between Create returning and the reference being
 // written, a crash leaves a process no record names, which internal/session
-// states and the same sweep closes.
+// states; the dispatch that retries the task sweeps the standing copy before
+// it claims, on sweep.go's terms, which ends that process on Linux and
+// macOS while it is still in the copy and leaves it standing elsewhere.
 //
 // # A restart reconciles the fleet, and relaunches a dead terminal in place
 //

@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"testing"
 
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/session"
@@ -33,4 +34,11 @@ func (s *Service) WorkerOf(c ipc.Credentials) (session.Membership, bool, error) 
 // one group differently.
 func (s *Service) Contained(ctx context.Context, c ipc.Credentials) (ipc.Containment, error) {
 	return s.registry.Contained(ctx, c)
+}
+
+// RequireSweepClearsHere is requireSweepClearsHere for this package's
+// external tests.
+func RequireSweepClearsHere(t *testing.T, unestablished string) {
+	t.Helper()
+	requireSweepClearsHere(t, unestablished)
 }
