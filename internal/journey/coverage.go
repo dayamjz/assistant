@@ -242,8 +242,13 @@ func Coverage() []Established {
 				"positive control allows. internal/service's wedge test cites it for the loop: a " +
 				"capture that ignores its context stops the beacon, the watchdog replaces the " +
 				"incarnation and the replaced one's writes are fenced, so one incarnation writes the " +
-				"beacon at a time. What neither reaches is the hook at turn end, which is #106's: no " +
-				"coordinator ends a turn in this build, so the guard's push layer is unexercised."},
+				"beacon at a time. internal/cli's host tests cite it for the hook at turn end, driven " +
+				"through cli.Run with the test's own streams: the same planted facts reach the host as " +
+				"an exit status and a message with no service consulted, and the host's re-entry " +
+				"signal allows the one invocation it was given to and never an unsignalled one. What " +
+				"none of them reaches is a coordinator's host firing the hook: nothing installs it, " +
+				"since who may write it into a host's configuration is #95 line D, so the push layer " +
+				"is exercised as a command and not as a turn ending."},
 		{principles.P11, ReachNone,
 			"No walk here starts a worker, so nothing here reaches it. internal/tasks' own tests " +
 				"establish it at package reach and only the assertion half: AssertIsolated refuses a " +

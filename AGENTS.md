@@ -791,10 +791,20 @@ Each has cost this repository more than one round of review.
   Answering a hold and running the service in the foreground are flags on the
   commands that section does name. A verb that acts on a run calls the service;
   a verb whose job includes reporting that the service is down does not.
-  `assistant gate` is the one command outside that table, and it is not a
-  precedent for a second: it is the interface `internal/gate`'s installed hooks
-  require, so it is dispatched beside the table rather than added to it, and
-  its two subcommands are the `gateHooks` table in `gate.go`.
+  Two commands stand outside that table, and together they are not a
+  precedent for a third: each is the interface something external requires,
+  so each is dispatched beside the table rather than added to it.
+  `assistant gate` is what `internal/gate`'s installed hooks invoke, and its
+  two subcommands are the `gateHooks` table in `gate.go`. `assistant host` is
+  what the coordinator's host invokes from the hook it fires at turn end, its
+  one subcommand is the `hostHooks` table in `host.go`, and it is PRD section
+  5's stop guard with no service: it feeds `supervisor.Assess` through
+  `internal/supervisor/feed` and never a second predicate, reads the re-entry
+  signal from `HostReentryVar` and stores nothing, and maps the verdict onto
+  the host's block convention in `cli`, never in `internal/machine`, which owns
+  the verdict's shape and section 9's three codes. Nothing installs the hook
+  until #95 line D is answered, and `host.go` says what the command cannot
+  tell about its caller.
   `cmd/assistant` is the process boundary and holds no behaviour, so a test
   drives `cli.Run` with its own streams rather than a subprocess. The push
   tests reach the surface the way a push does: the test binary answers the

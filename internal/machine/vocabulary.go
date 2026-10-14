@@ -52,7 +52,7 @@ func PhraseFor(reason supervisor.StopReason) (string, bool) {
 // Phrases returns every phrase this table holds, which is what the vocabulary
 // test walks. The result is a copy.
 func Phrases() []string {
-	return []string{PhraseServiceDown, PhraseServiceNotWatching, PhraseUndecided}
+	return append([]string{PhraseServiceDown, PhraseServiceNotWatching, PhraseUndecided}, hostPhrases()...)
 }
 
 // Supervision is what the pull guard found, as a command reports it beside

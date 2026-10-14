@@ -45,10 +45,13 @@
 // watcher's word in it. The phrases that do that are the constants in
 // vocabulary.go, and Phrases lists them so a test can hold every one to the
 // rule, with the forbidden words derived from the packages that own them
-// rather than kept in a list beside the phrases. Supervision is the one
-// answer built from that table today, through SupervisionOf, which is the
-// only translation from internal/supervisor's verdict to a phrase. The
-// table covers the pull guard's text and no other renderer's: the human
+// rather than kept in a list beside the phrases. Supervision is the answer
+// built from that table for the pull guard, through SupervisionOf, which is
+// the only translation from internal/supervisor's verdict to a phrase, and
+// HostStop is the stop guard's, through HostStopOf, which composes that
+// translation rather than making a second one; host.go holds its two
+// phrases and the shape, and says what the host's protocol is not. The
+// table covers the two guards' text and no other renderer's: the human
 // rendering in internal/cli still prints run identifiers, stage names and
 // home paths, which is #110's, and the vocabulary test claims P13 for the
 // phrases here alone.

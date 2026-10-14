@@ -15,9 +15,11 @@
 // verbs in cli.go is the whole of what a caller drives. Every row is a command
 // PRD section 9's table names, and a command that section does not name is not
 // here: a verb this product needs and that section does not describe is a
-// finding to raise against the specification, not a row to add quietly. The one
-// thing this binary answers to that is not in that table is the gate hook
-// interface, which the section below is about.
+// finding to raise against the specification, not a row to add quietly. The two
+// things this binary answers to that are not in that table are the gate hook
+// interface and the host hook interface, which the two sections below are
+// about; section 9 names both outside its table and says they are not a
+// precedent for a third.
 //
 // Four things the section leaves to a verb's parameters are flags or arguments
 // rather than verbs.
@@ -69,6 +71,57 @@
 // definite admission - a refusal, a failure, a service that did not answer -
 // is a non-zero status and a rejected push.
 //
+// # The host hook verb is the second, and the last
+//
+// hostHooks in host.go holds "assistant host stop", which the coordinator's
+// host runs from the hook it fires at turn end. It is PRD section 5's stop
+// guard as the host sees it: P10 says a coordinator about to stop while work
+// is under way and no healthy supervisor is the service holding this home's
+// lock is blocked from stopping until its host supplies a re-entry signal,
+// and this command is where that verdict becomes an exit status the host
+// reads. It is dispatched beside the table for the gate verb's reason, and
+// PRD section 9 says the two together are not a precedent for a third: each
+// is the interface a hook this program installed or asked for requires.
+//
+// It decides nothing of its own. The verdict is internal/supervisor's
+// Assess, fed by internal/supervisor/feed's reads of the beacon file, the
+// instance file, the lock probe and the in-flight set through the read-only
+// open, under the operator's own supervision_beacon_interval; the same guard
+// the status command computes with the service down, and not a second
+// predicate. It consults no socket, because the service is what may be dead.
+// Everything that is not a definite answer blocks: a dead service, a stale
+// beacon under a live one, a file or a database that cannot be read, and an
+// operator file that does not parse.
+//
+// The re-entry signal is HostReentryVar in the environment the host gives the
+// process, and that constant says why it is a variable rather than a flag and
+// what consumes it: the host's own re-entered turn, since this process
+// stores nothing and judges each invocation from what it was given. With the
+// signal the turn may end and the message says why; without it a turn with
+// work under way unwatched is blocked, and PRD section 5 says that is the
+// only safe reading.
+//
+// The host's protocol is this package's adapter and not internal/machine's
+// shape. machine.HostStop is the verdict and the message, and
+// machine.HostStopOf is the one translation to it; hostExit maps that onto
+// the host's convention, success when the turn may end and hostBlockCode
+// with the message on standard error when it may not, so every answer maps
+// to exactly one status and the message reaches the coordinator in the
+// vocabulary P13 holds the phrase table to.
+//
+// Three gaps are deliberate and written down rather than rounded off. The
+// block status coincides with the usage status, so a host that runs a
+// command line this surface refuses reads a block; that is the safe
+// direction, and hostBlockCode says so. The command cannot place its caller:
+// a worker ending the coordinator's turn would be deciding for the
+// coordinator, but the worker group set is the service's and is reached over
+// the socket by peer credentials, and a process with no socket has no peer
+// to place, so the command answers the same whoever invokes it and refuses
+// nobody. And nothing installs the hook: writing the command into the
+// coordinator host's configuration is a consent question in P1's sense that
+// #95 line D has yet to answer, so this package writes into no host
+// configuration and the host stays unconfigured until that line is.
+//
 // # Which verbs need the service, and which cannot
 //
 // A verb that acts on a run or on fleet state is a call to the service, which
@@ -81,7 +134,9 @@
 // # Exit codes and where output goes
 //
 // Three codes, per PRD section 9, and internal/machine owns them: success and
-// normal decision points, operational failure, and incorrect usage. A run that
+// normal decision points, operational failure, and incorrect usage. The host
+// hook's block status is the one exit this package maps itself, because it
+// is the host's protocol rather than section 9's; see hostBlockCode. A run that
 // stopped to ask something is a success, because the answer goes back through
 // the same surface and an agent that read a decision as a failure would stop
 // driving exactly when it should carry on. A run that is still advancing is a

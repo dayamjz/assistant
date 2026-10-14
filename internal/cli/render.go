@@ -49,6 +49,8 @@ func readOut(w io.Writer, answer any) {
 		readOutAdmission(w, v)
 	case machine.Notification:
 		readOutNotification(w, v)
+	case machine.HostStop:
+		readOutHostStop(w, v)
 	case machine.Eject:
 		writef(w, "Removed the gate %s and %d run record(s).\n", v.Repository, v.Runs)
 	case machine.Plan:

@@ -27,13 +27,15 @@ import (
 
 // TestMain lets this binary act as the stand-in agent, which the service a
 // test opens resolves instead of whatever agent is installed on the machine
-// running the tests, and as the command a gate's hooks invoke.
+// running the tests, as the command a gate's hooks invoke, and as a second
+// process holding a home's lock for the host hook's tests.
 func TestMain(m *testing.M) {
 	// The decision-model key is the operator's consent to send changed lines
 	// to a third party, so a test must never inherit one from whoever runs it.
 	_ = os.Unsetenv(judge.KeyVariable)
 	standin.Main()
 	hookMain()
+	holdLockMain()
 	os.Exit(m.Run())
 }
 
