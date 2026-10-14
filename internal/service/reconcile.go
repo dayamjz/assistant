@@ -57,7 +57,9 @@ import (
 // a task the program has already relaunched relaunch_attempts times, counted
 // from its attempt rows, because a worker that fails the same way every
 // start is a retry nobody bounded, and PRD section 10's row has the task
-// hold for a person there. The answer to that hold, read from its record by
+// hold for a person there. A stop answered on the hold a relaunch with no
+// process sweep raised turns it into nothing; the retry on that hold is
+// relaunch.go's to read, because only the sweep says whether it is needed. The answer to that hold, read from its record by
 // taskholds.go, is the third input: a retry relaunches once more past the
 // bound and a stop leaves the task alone, and taskholds.go says why the
 // anchor makes a retry good for one attempt. The bound is read on both
@@ -74,7 +76,8 @@ import (
 // # A surface is the loop's wake, not a second one
 //
 // This file writes no wake and no marker; the bound's hold is a hold record,
-// registered through taskholds.go, and not a row. The wake queue and the
+// registered through taskholds.go, and not a row, as is the no-sweep hold
+// relaunch.go registers. The wake queue and the
 // detector markers are supervise.go's: every row and every marker is written
 // by the supervisor loop under its incarnation fence, which this pass runs
 // before and cannot hold, and the loop surfaces a terminal that is dead or
@@ -142,10 +145,11 @@ import (
 //     table decides on the dead reading, and relaunch.go then asks the sweep
 //     of the copy before it claims, on sweep.go's terms: on Linux and macOS
 //     the copy is swept and a sweep that does not clear it refuses the
-//     relaunch, and on every other platform agents.ErrSweepUnsupported is the answer, the
-//     relaunch goes into the copy on the dead reading alone as it did before
-//     the sweep existed, and its note and log say nothing was proven. This
-//     file does not say "prove" for that platform.
+//     relaunch, and on every other platform agents.ErrSweepUnsupported is the
+//     answer and the relaunch is refused and holds for a person, going into
+//     the copy only on a retry answer, unproven and saying so. This file does
+//     not say "prove" for that platform; a retry there is a person's decision
+//     to go ahead without the proof.
 //   - A relaunch the floor defers, because a live task now holds the
 //     branch, is retried at the next reconciliation, which is the next
 //     service start: no release site re-runs this pass, so such a task
@@ -238,12 +242,16 @@ const (
 // decideReconciliation applies the table to a resolution and then the rules
 // that turn a relaunch into something else: a Failed decided by the
 // isolation assertion's own refusal, read off Basis.EventKind and never off
-// the log, surfaces; and a task already relaunched bound times, counted from
-// attempts, holds for a person unless the bound's hold for its latest
-// attempt is answered. answered is that hold's answer, which taskholds.go
-// reads: a retry relaunches once more past the bound, and a stop leaves the
-// task alone. The count is relaunches, so a task's first attempt is not one.
-func decideReconciliation(r taskstate.Resolution, attempts []store.TaskAttempt, bound int, answered boundAnswer) reconcileDecision {
+// the log, surfaces; a task whose no-sweep hold for its latest attempt is
+// answered stop is left alone; and a task already relaunched bound times,
+// counted from attempts, holds for a person unless the bound's hold for its
+// latest attempt is answered. answered carries both holds' answers, which
+// taskholds.go reads: a retry on the bound's relaunches once more past the
+// bound, and a stop on either leaves the task alone. A retry on the no-sweep
+// hold is not read here, because whether the platform has a sweep is known
+// only once relaunch.go asks it; relaunch.go reads that answer itself. The
+// count is relaunches, so a task's first attempt is not one.
+func decideReconciliation(r taskstate.Resolution, attempts []store.TaskAttempt, bound int, answered relaunchAnswers) reconcileDecision {
 	action := reconcileRow(r.State, r.Source, r.Basis.Process)
 	if action != reconcileRelaunch {
 		return reconcileDecision{action: action}
@@ -252,9 +260,13 @@ func decideReconciliation(r taskstate.Resolution, attempts []store.TaskAttempt, 
 		return reconcileDecision{action: reconcileSurface, surfaced: surfacedIsolationRefused,
 			reason: "its copy was refused by the isolation assertion, which a relaunch would assert again"}
 	}
+	if answered.unswept == boundStop {
+		return reconcileDecision{action: reconcileNothing,
+			reason: "this platform has no process sweep, and its hold for a relaunch without one was answered not to retry it"}
+	}
 	if relaunches := max(len(attempts)-1, 0); relaunches >= bound {
 		past := fmt.Sprintf("it has been relaunched %d times and relaunch_attempts is %d", relaunches, bound)
-		switch answered {
+		switch answered.bound {
 		case boundRetry:
 			return reconcileDecision{action: reconcileRelaunch,
 				reason: past + ", and its hold at the bound was answered " + machine.AnswerRetry}
@@ -324,9 +336,9 @@ func (s *Service) reconcileTasks(ctx context.Context) {
 			s.log.Printf("reconciliation: the attempts of task %s could not be read: %v", r.Record.ID, err)
 			continue
 		}
-		answered, err := s.boundAnswerOf(ctx, r.Record.ID, attempts)
+		answered, err := s.relaunchAnswersOf(ctx, r.Record.ID, attempts)
 		if err != nil {
-			s.log.Printf("reconciliation: the relaunch hold of task %s could not be read: %v", r.Record.ID, err)
+			s.log.Printf("reconciliation: the relaunch holds of task %s could not be read: %v", r.Record.ID, err)
 			continue
 		}
 		decision := decideReconciliation(r.State, attempts, s.cfg.RelaunchAttempts, answered)

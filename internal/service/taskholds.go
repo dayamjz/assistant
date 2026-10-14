@@ -12,7 +12,8 @@ import (
 	"github.com/dayamjz/assistant/internal/store"
 )
 
-// A task's holds: the one the relaunch bound raises, and the answer to any
+// A task's holds: the one the relaunch bound raises, the one a relaunch
+// raises where the platform has no process sweep, and the answer to any
 // hold a task raised with no run behind it.
 //
 // PRD section 10's relaunch_attempts row says that past the bound "the task
@@ -63,6 +64,29 @@ import (
 // next reconciliation, which reads the same hold, relaunches on it; the
 // answer says so rather than reporting a relaunch that did not happen.
 //
+// # The no-sweep hold
+//
+// Where agents.Sweeper answers agents.ErrSweepUnsupported nothing proves the
+// copy unowned, and P6 refuses rather than relaunching on the dead reading
+// alone (#95 line O). relaunch.go registers a hold naming the task, keyed by
+// the attempt whose terminal it found gone, relaunchUnsweptKey, and refuses
+// with *relaunchUnswept. It is the bound's mechanism with a key space of its
+// own: the key is the identity, so the same attempt refused at every later
+// start, or by the coordinator's task.relaunch, is the same hold, and the
+// two holds of one attempt are two records, neither answering the other. It
+// is answered the same way, retry or stop, and read back by
+// relaunchAnswersOf. A retry is the one thing that lets relaunch.go past the
+// refusal, and only for the attempt it names, so the anchor spends it on one
+// attempt exactly as it spends the bound's: the attempt the retry begins is
+// the latest, a hold keyed by it does not exist, and its own terminal gone
+// is refused and held again. A stop is read by decideReconciliation, which
+// leaves the task alone for that attempt. Every other refusal is unchanged,
+// and the hold is asked only after them: a branch held, a live or
+// unobserved terminal, and the re-probe refuse before the sweep is asked,
+// and the assertion of the copy still runs after the claim. A retry on the
+// bound's hold that reaches this refusal begins nothing and reports
+// machine.AnswerRetryHeld, naming the hold the person answers next.
+//
 // # Any other hold a task raised
 //
 // A hold naming a task and no run, an investigation's report's among them,
@@ -96,7 +120,15 @@ import (
 //     not due, and after a retry answer it relaunches on that answer exactly
 //     as the answer's own relaunch would; the anchor keeps the two to one
 //     attempt between them.
-//   - An answer to a hold that is not the bound's has no closed option set,
+//   - A retry on the no-sweep hold lets a worker start in a copy nothing
+//     looked in: whatever the earlier attempt left running there is neither
+//     found nor ended, and the relaunch's note and log say so. That is the
+//     decision the hold asks a person for, not a proof.
+//   - A retry on the bound's hold given after the no-sweep hold for the
+//     same attempt was answered stop relaunches nothing, because the stop
+//     stands, and reports machine.AnswerRetryDeferred; only a
+//     relaunch_attempts lowered across a restart reaches it.
+//   - An answer to a hold that is neither relaunch hold has no closed option set,
 //     because nothing records one for it; what was answered is recorded and
 //     nothing here checks it against what the hold offered.
 
@@ -118,7 +150,33 @@ func isRelaunchBound(key, task string) bool {
 	return strings.HasPrefix(key, "task/"+task+relaunchBoundPrefix)
 }
 
-// boundAnswer is what the bound's hold for a task's latest attempt says.
+// relaunchUnsweptPrefix is the key space of the holds a relaunch with no
+// sweep raises.
+const relaunchUnsweptPrefix = "/relaunch-unswept/"
+
+// relaunchUnsweptKey is the key of the hold a relaunch raises when the sweep
+// of the task's copy answered agents.ErrSweepUnsupported, keyed by the
+// attempt whose terminal was found gone. It is a key space of its own beside
+// relaunchBoundKey's, so the two holds of one attempt are two records and
+// answering one never answers the other.
+func relaunchUnsweptKey(task string, attempt int64) string {
+	return "task/" + task + relaunchUnsweptPrefix + strconv.FormatInt(attempt, 10)
+}
+
+// isRelaunchUnswept reports whether key is a no-sweep hold of the task.
+func isRelaunchUnswept(key, task string) bool {
+	return strings.HasPrefix(key, "task/"+task+relaunchUnsweptPrefix)
+}
+
+// isRelaunchHold reports whether key is one of the two holds of the task
+// whose answer is retry or stop and whose retry asks relaunchTask.
+func isRelaunchHold(key, task string) bool {
+	return isRelaunchBound(key, task) || isRelaunchUnswept(key, task)
+}
+
+// boundAnswer is what a relaunch hold for a task's latest attempt says: the
+// bound's, read by boundAnswerOf, or the no-sweep one, read by
+// unsweptAnswerOf.
 type boundAnswer int
 
 const (
@@ -136,7 +194,39 @@ func (s *Service) boundAnswerOf(ctx context.Context, id string, attempts []store
 	if len(attempts) == 0 {
 		return boundUnanswered, nil
 	}
-	h, err := s.store.Hold(ctx, relaunchBoundKey(id, attempts[len(attempts)-1].Sequence))
+	return s.relaunchAnswerOf(ctx, relaunchBoundKey(id, attempts[len(attempts)-1].Sequence))
+}
+
+// relaunchAnswers is what the two relaunch holds for a task's latest attempt
+// say, the input decideReconciliation and relaunch.go read them through.
+type relaunchAnswers struct {
+	// bound is the answer to the relaunch bound's hold.
+	bound boundAnswer
+	// unswept is the answer to the hold a relaunch with no sweep raised.
+	unswept boundAnswer
+}
+
+// relaunchAnswersOf reads both relaunch holds for the latest of attempts. A
+// task with no attempt has neither.
+func (s *Service) relaunchAnswersOf(ctx context.Context, id string, attempts []store.TaskAttempt) (relaunchAnswers, error) {
+	if len(attempts) == 0 {
+		return relaunchAnswers{}, nil
+	}
+	bound, err := s.boundAnswerOf(ctx, id, attempts)
+	if err != nil {
+		return relaunchAnswers{}, err
+	}
+	unswept, err := s.relaunchAnswerOf(ctx, relaunchUnsweptKey(id, attempts[len(attempts)-1].Sequence))
+	if err != nil {
+		return relaunchAnswers{}, err
+	}
+	return relaunchAnswers{bound: bound, unswept: unswept}, nil
+}
+
+// relaunchAnswerOf reads the relaunch hold keyed key: retry only when it is
+// resolved exactly machine.AnswerRetry.
+func (s *Service) relaunchAnswerOf(ctx context.Context, key string) (boundAnswer, error) {
+	h, err := s.store.Hold(ctx, key)
 	switch {
 	case errors.Is(err, store.ErrNotFound):
 		return boundUnanswered, nil
@@ -149,6 +239,27 @@ func (s *Service) boundAnswerOf(ctx context.Context, id string, attempts []store
 	default:
 		return boundStop, nil
 	}
+}
+
+// holdUnswept registers the no-sweep hold for the attempt whose terminal
+// the relaunch found gone and publishes it as it stands. Registering a key
+// already there returns that hold unchanged, open or answered, which is
+// what keeps a refusal asked again, at this start or a later one, from
+// raising a second hold for the same attempt.
+func (s *Service) holdUnswept(ctx context.Context, id string, attempt int64, ref, words string) (store.Hold, error) {
+	h, err := s.store.RegisterHold(ctx, store.Hold{
+		Key:     relaunchUnsweptKey(id, attempt),
+		TaskID:  store.Known(id),
+		Subject: "whether to begin this work again when nothing could check that the earlier attempt left nothing running",
+		Detail: fmt.Sprintf("task %s: attempt %d's terminal (session %s) is gone with the work not landed, and %s. "+
+			"Answer %q to relaunch it once in the same copy anyway, or %q to leave it where it stopped.",
+			id, attempt, ref, words, machine.AnswerRetry, machine.AnswerStop),
+	})
+	if err != nil {
+		return store.Hold{}, err
+	}
+	s.publishHoldState(h)
+	return h, nil
 }
 
 // holdAtBound registers the bound's hold for the latest of attempts and
@@ -200,10 +311,10 @@ func (s *Service) respondTask(ctx context.Context, req ipc.Request, r machine.Ta
 	if err != nil {
 		return machine.TaskAnswered{}, fmt.Errorf("%w: %w", ipc.ErrRefused, err)
 	}
-	bound := isRelaunchBound(hold.Key, r.Task)
-	if bound && r.Answer != machine.AnswerRetry && r.Answer != machine.AnswerStop {
-		return machine.TaskAnswered{}, fmt.Errorf("%w: task %s holds at its relaunch bound, which is answered %q or %q, not %q",
-			ipc.ErrInvalidRequest, r.Task, machine.AnswerRetry, machine.AnswerStop, r.Answer)
+	relaunchHold := isRelaunchHold(hold.Key, r.Task)
+	if relaunchHold && r.Answer != machine.AnswerRetry && r.Answer != machine.AnswerStop {
+		return machine.TaskAnswered{}, fmt.Errorf("%w: task %s holds on %s, which is answered %q or %q, not %q",
+			ipc.ErrInvalidRequest, r.Task, hold.Key, machine.AnswerRetry, machine.AnswerStop, r.Answer)
 	}
 	resolved, err := s.store.ResolveHold(ctx, hold.Key, r.Answer, req.HoldResolver())
 	if errors.Is(err, store.ErrHoldResolved) {
@@ -215,12 +326,19 @@ func (s *Service) respondTask(ctx context.Context, req ipc.Request, r machine.Ta
 	s.publishHoldState(resolved)
 	out := machine.TaskAnswered{Hold: resolved, Effect: machine.AnswerRecorded}
 	switch {
-	case !bound:
+	case !relaunchHold:
 	case r.Answer == machine.AnswerStop:
 		out.Effect = machine.AnswerStopped
-		s.log.Printf("task %s is not relaunched past its bound: hold %s was answered %q", r.Task, hold.Key, r.Answer)
+		s.log.Printf("task %s is not relaunched: hold %s was answered %q", r.Task, hold.Key, r.Answer)
 	default:
 		relaunch, err := s.relaunchTask(ctx, r.Task)
+		var unswept *relaunchUnswept
+		if errors.As(err, &unswept) {
+			out.Effect, out.NotRelaunched = machine.AnswerRetryHeld, err.Error()
+			s.log.Printf("task %s was answered %q on hold %s and was not relaunched, because it now holds on %s: %v",
+				r.Task, r.Answer, hold.Key, unswept.Hold.Key, err)
+			break
+		}
 		if err != nil {
 			out.Effect, out.NotRelaunched = machine.AnswerRetryDeferred, err.Error()
 			s.log.Printf("task %s was answered %q on hold %s and was not relaunched now, so the next start relaunches it: %v",
@@ -229,7 +347,7 @@ func (s *Service) respondTask(ctx context.Context, req ipc.Request, r machine.Ta
 		}
 		out.Effect = machine.AnswerRelaunched
 		out.Relaunch = &machine.RelaunchBegun{Attempt: relaunch.launch.attempt, Superseded: relaunch.superseded}
-		s.log.Printf("task %s was relaunched past its bound as attempt %d on the answer %q to hold %s, superseding session %s; %s",
+		s.log.Printf("task %s was relaunched as attempt %d on the answer %q to hold %s, superseding session %s; %s",
 			r.Task, relaunch.launch.attempt, r.Answer, hold.Key, relaunch.superseded, relaunch.swept)
 		s.launchInBackground(relaunch.launch)
 	}

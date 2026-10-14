@@ -393,8 +393,9 @@ type TaskAnswered struct {
 	// effect.
 	Relaunch *RelaunchBegun `json:"relaunch,omitempty"`
 	// NotRelaunched is why a retry began no attempt now, and is empty for
-	// every other effect. The decision stands in the hold's record, and the
-	// next reconciliation honours it.
+	// every effect but AnswerRetryDeferred and AnswerRetryHeld. The
+	// decision stands in the hold's record, and the next reconciliation
+	// reads it.
 	NotRelaunched string `json:"not_relaunched,omitempty"`
 	// Task is the task as it stands after the answer.
 	Task Task `json:"task"`
@@ -407,12 +408,18 @@ const (
 	// AnswerRecorded is a hold whose answer is recorded and acts on nothing
 	// further: a decision an investigation's report registered.
 	AnswerRecorded AnswerEffect = "recorded"
-	// AnswerRelaunched is a retry past relaunch_attempts that began one
-	// attempt through the anchored relaunch.
+	// AnswerRelaunched is a retry on a relaunch hold, the one past
+	// relaunch_attempts or the one a relaunch with no process sweep raised,
+	// that began one attempt through the anchored relaunch.
 	AnswerRelaunched AnswerEffect = "relaunched"
 	// AnswerRetryDeferred is a retry recorded whose relaunch was refused
 	// now; NotRelaunched says why.
 	AnswerRetryDeferred AnswerEffect = "retry-deferred"
+	// AnswerRetryHeld is a retry recorded whose relaunch was refused because
+	// the platform has no process sweep, which raised a further hold for
+	// the same attempt; it begins nothing until that hold is answered retry.
+	// NotRelaunched says why and names the hold.
+	AnswerRetryHeld AnswerEffect = "retry-held"
 	// AnswerStopped is a stop: the task is left where it stopped and
 	// nothing relaunches it.
 	AnswerStopped AnswerEffect = "stopped"

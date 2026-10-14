@@ -811,8 +811,11 @@ Each has cost this repository more than one round of review.
   why. Reconciliation writes no wake and no marker: the queue and the
   markers are the loop's, under its fence, and the loop's terminal-gone row
   is what tells the person about a terminal this pass did not relaunch.
-  `reconcile.go` states what a dead terminal does not prove about the copy,
-  since no sweep exists.
+  `reconcile.go` states what a dead terminal does not prove about the copy.
+  Where the platform has no sweep (`agents.ErrSweepUnsupported`) a relaunch
+  is refused (P6) and holds for a person on a key of its own per attempt,
+  beside the bound's, and goes ahead only on a `retry` answer, which the
+  attempt anchor spends on one attempt; a retried dispatch is not held.
   It is also where PRD section 5's supervisor loop lives, in `supervise.go`,
   started by `Open` after recovery and before the caller serves. The loop
   runs as incarnations fenced by `store.BeginIncarnation`: every wake append

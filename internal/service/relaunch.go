@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/tasks"
 	"github.com/dayamjz/assistant/internal/taskstate"
@@ -17,11 +18,12 @@ import (
 //
 // relaunchTask is the one function that relaunches, so the coordinator's
 // task.relaunch method (#95 line J, coordinator.go), the start-time pass in
-// reconcile.go and a retry answered at the relaunch bound (taskholds.go) go
+// reconcile.go and a retry answered on a relaunch hold (taskholds.go) go
 // through the same claim and cannot both relaunch one task. A retry is not a
-// second path: the answer is a record decideReconciliation reads, so the
-// bound gives way here only when the hold for the latest attempt this call
-// read says retry. It is
+// second path: the answer is a record this call reads, so the bound gives
+// way here only when the bound's hold for the latest attempt this call read
+// says retry, and a platform with no sweep only when the no-sweep hold for
+// that attempt does. It is
 // anchored rather than idempotent by convention: the attempt it begins is
 // store.BeginTaskAttempt anchored to the highest attempt this call read, so
 // two relaunchers that read the same latest attempt begin one between them
@@ -47,7 +49,14 @@ import (
 // the records and a terminal can come back, and refuses with
 // errRelaunchNotDead when the answer is no longer Dead. Then the sweep of the
 // copy, read on sweep.go's terms, which refuses with *copyUnswept before
-// anything is recorded when it ran and did not clear the copy. Then the claim, the
+// anything is recorded when it ran and did not clear the copy. A sweep the
+// platform cannot make, agents.ErrSweepUnsupported, proves nothing about the
+// copy, so it is refused too (P6, #95 line O): the call registers the
+// no-sweep hold for the attempt it read, on taskholds.go's terms, and
+// refuses with *relaunchUnswept, recording nothing else, unless that hold is
+// already answered retry, in which case it goes on and the note and the log
+// say that nothing was proven and that the relaunch rests on that answer.
+// Then the claim, the
 // "relaunched" note anchored to the history the decision read, carrying what
 // the sweep did, the assertion of the standing copy, a not-isolated refusal
 // when the copy path was not the copy itself and so was not swept, the
@@ -131,6 +140,22 @@ type relaunchHeld struct {
 func (e *relaunchHeld) Error() string {
 	return fmt.Sprintf("service: task %s is not relaunched while task %s, which is %s, holds its branch",
 		e.Task, e.Holder, e.State)
+}
+
+// relaunchUnswept reports a relaunch refused because the sweep of the copy
+// answered agents.ErrSweepUnsupported and no person has answered retry on
+// the hold for the attempt the relaunch read. Hold is that hold as
+// registered, open unless it was already answered; nothing else is
+// recorded, and the relaunch goes ahead only after a retry answer.
+type relaunchUnswept struct {
+	Task string
+	Hold store.Hold
+}
+
+// Error names the task and the hold it waits on.
+func (e *relaunchUnswept) Error() string {
+	return fmt.Sprintf("service: task %s is not relaunched, because this platform has no process sweep to prove nothing "+
+		"still runs in its copy; it holds for a person on %s, answered %q or %q", e.Task, e.Hold.Key, machine.AnswerRetry, machine.AnswerStop)
 }
 
 // relaunched is what a relaunch established: the launch to make, the
@@ -219,7 +244,7 @@ func (s *Service) relaunchClaimed(ctx context.Context, id string) (relaunched, e
 	if err != nil {
 		return relaunched{}, err
 	}
-	answered, err := s.boundAnswerOf(ctx, id, attempts)
+	answered, err := s.relaunchAnswersOf(ctx, id, attempts)
 	if err != nil {
 		return relaunched{}, err
 	}
@@ -249,6 +274,20 @@ func (s *Service) relaunchClaimed(ctx context.Context, id string) (relaunched, e
 	reason := decision.reason
 	if swept.words != "" {
 		reason += "; " + swept.words
+	}
+	if swept.unsupported {
+		// P6: nothing proves the copy unowned, so a person decides. Only a
+		// retry on the hold for the attempt read lets this relaunch past,
+		// and the anchor below spends it on one attempt.
+		if answered.unswept != boundRetry {
+			h, err := s.holdUnswept(ctx, id, latest.Sequence, ref, swept.words)
+			if err != nil {
+				return relaunched{}, fmt.Errorf("service: task %s is not relaunched with no process sweep, "+
+					"and its hold could not be registered: %w", id, err)
+			}
+			return relaunched{}, &relaunchUnswept{Task: id, Hold: h}
+		}
+		reason += ", and its hold for a relaunch without one was answered " + machine.AnswerRetry
 	}
 	if s.betweenAttemptReadAndClaim != nil {
 		s.betweenAttemptReadAndClaim()

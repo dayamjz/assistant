@@ -560,7 +560,7 @@ func exitFor(answer any) machine.Code {
 	case machine.TaskAnswered:
 		// A retry recorded and not acted on yet is a decision taken and work
 		// not begun, which a caller has to see without reading the document.
-		if v.Effect == machine.AnswerRetryDeferred {
+		if v.Effect == machine.AnswerRetryDeferred || v.Effect == machine.AnswerRetryHeld {
 			return machine.ExitFailure
 		}
 	case machine.HostInstall:

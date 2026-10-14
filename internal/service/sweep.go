@@ -35,9 +35,15 @@ import (
 //     sweep's scope is the directory and nothing else, and the words say the
 //     copy was reclaimed from whatever was in it.
 //   - Unsupported: agents.ErrSweepUnsupported, which is every platform but
-//     Linux and macOS. The worker is started as it was before the sweep existed, and
-//     the note and the log say that nothing was looked for and nothing is
-//     proven. That is PRD section 11's proof left undone on that platform,
+//     Linux and macOS. Nothing was looked for and nothing is proven, and
+//     the two callers part here. A relaunch is refused (P6, #95 line O):
+//     relaunch.go registers a hold for a person, keyed by the attempt it
+//     read, and goes ahead only on a retry answer to it, with the note and
+//     the log saying nothing was proven; what still runs in the copy then
+//     is not looked for or ended, which is the person's decision rather
+//     than a proof. A retried dispatch is not held: it starts the worker as
+//     it did before the sweep existed, and its log says nothing was looked
+//     for, which is PRD section 11's proof left undone for that path,
 //     stated rather than closed.
 //   - Not a copy: the copy path does not stand as the copy itself, because it
 //     is a symbolic link or vanished, so home.CopyAt refuses it and nothing
@@ -103,6 +109,10 @@ func (e *copyUnswept) Unwrap() error { return e.Cause }
 // itself, why a copy the assertion passes must still be refused.
 type copySwept struct {
 	words string
+	// unsupported is true when the sweep answered agents.ErrSweepUnsupported:
+	// nothing was looked for, and words says so. relaunch.go refuses on it
+	// unless a person answered retry; dispatch.go goes ahead on it.
+	unsupported bool
 	// unswept is non-nil when nothing was swept because the copy path was
 	// not the copy itself; the caller refuses after the assertion on it.
 	unswept error
@@ -130,7 +140,7 @@ func (s *Service) sweepStandingCopy(ctx context.Context, id, copyPath string) (c
 func readSweep(id string, r agents.SweepResult, err error) (copySwept, error) {
 	switch {
 	case errors.Is(err, agents.ErrSweepUnsupported):
-		return copySwept{words: "this platform has no process sweep, so nothing still running in the copy was " +
+		return copySwept{unsupported: true, words: "this platform has no process sweep, so nothing still running in the copy was " +
 			"looked for or ended and none is proven absent"}, nil
 	case err != nil:
 		return copySwept{}, &copyUnswept{Task: id, Cause: err}
