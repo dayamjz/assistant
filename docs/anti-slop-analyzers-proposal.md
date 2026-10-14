@@ -1,7 +1,8 @@
-# Anti-slop analyzers: product requirements
+# Anti-slop analyzers: proposal
 
-Status: draft for decision. Nothing here is implemented, and nothing in
-`docs/prd.html` changes because of it.
+Status: proposal, with decisions D1-D3 taken by the owner on 2026-10-14
+(section 6). Nothing here is implemented, and nothing in `docs/prd.html`
+changes because of it.
 
 ## 1. Problem
 
@@ -75,10 +76,11 @@ Conclusions:
    regression except a reviewer reading the right rule.
 2. Some of the 30 uncited principle mentions are context rather than claims.
    They need triage before a rule can be strict.
-3. Whether a test helper may run `git` directly is unsettled. `CLAUDE.md`
+3. Whether a test helper may run `git` directly was unsettled. `CLAUDE.md`
    calls a third exception "a finding rather than a precedent". Nineteen test
-   call sites outside the two exceptions say either that the rule exempts
-   tests or that it already has been broken. Settling this is decision D1.
+   call sites outside the two exceptions said either that the rule exempts
+   tests or that it already had been broken. Decision D1 settles it: test
+   files are exempt.
 
 ## 4. Requirements
 
@@ -102,7 +104,7 @@ Conclusions:
 | Rule | Allowed importers | Denied elsewhere |
 | --- | --- | --- |
 | `sql` | `internal/store` | `database/sql`, `modernc.org/sqlite` |
-| `exec` | `internal/vcs`, `internal/agents`, `internal/forge`, `internal/stages`, `internal/cli`, `internal/gate`, `internal/fixture`, `internal/journey`; test files per D1 | `os/exec` |
+| `exec` | `internal/vcs`, `internal/agents`, `internal/forge`, `internal/stages`, `internal/cli`, `internal/gate`, `internal/fixture`, `internal/journey`; every `_test.go` file (D1) | `os/exec` |
 | `net` | `internal/ipc`, `internal/judge`, `internal/service` | `net`, `net/http` |
 | `pure-core` | none | `internal/graph` and `internal/findings` may import nothing outside the standard library, and nothing from `os`, `os/exec`, `net` or `syscall` |
 | `no-log` | `cmd/assistant` | `log`, `log/slog` |
@@ -115,7 +117,7 @@ no reason is refused in review.
 1. **`gitexec`.** Reports a call to `exec.Command` or `exec.CommandContext`
    whose program argument is the constant `"git"`. Also reports a constant
    that resolves to `"git"`, outside `internal/vcs`, `internal/fixture` and
-   `internal/journey`. Test-file scope per D1.
+   `internal/journey`. `_test.go` files are exempt (D1).
    - Analysis boundary: a program name built at run time or passed through a
      variable from another package is not seen.
 2. **`citeclaim`.** Reports a `Test` function whose doc comment names a
@@ -161,7 +163,8 @@ relaxed in one path. Every rule lands with the tree clean:
 
 - The 30 `citeclaim` cases are each fixed: either the test cites, or the
   comment is reworded to make clear it is not a claim.
-- D1 is settled before `gitexec` and the `exec` depguard rule land.
+- D1 exempts test files, so the 19 test call sites need no change and
+  production code is already clean for `gitexec` and the `exec` rule.
 - A `//nolint` on any of these rules is refused by review. The `nolintlint`
   linter is enabled with `require-explanation` so a suppression cannot be
   silent.
@@ -207,24 +210,35 @@ passing analyzer says the pattern is absent, never that the property holds.
   by design, because the owning package's typed operation is the sanctioned
   route.
 
-## 6. Decisions needed
+## 6. Decisions
 
-- **D1.** May test helpers outside `internal/vcs`, `internal/fixture` and
-  `internal/journey` run git directly? The options are:
-  - Yes: write that into `CLAUDE.md`, and the rules exempt `_test.go`.
-  - No: migrate the 19 call sites to a shared test helper in one of the
-    exceptions.
-- **D2.** Are the `os/exec` uses in `internal/cli` (relaunching itself) and
-  `internal/gate` (`LookPath`) intended, or should they move behind an owning
-  package?
-- **D3.** Should `pure-core` cover `internal/pipeline` too? It imports
-  `internal/agents` and `internal/config` today, which may be intended.
+Taken by the owner on 2026-10-14.
+
+- **D1. Test helpers may run git directly.** Every `_test.go` file is exempt
+  from `gitexec` and from the `exec` depguard rule, and `CLAUDE.md` says so
+  beside the rule it narrows. The reason is the one `internal/fixture` and
+  `internal/journey` already give: setting up a test through the package
+  under test would have that package confirm itself. The rejected option was
+  migrating the 19 call sites to a shared helper in one of the exceptions,
+  which costs a refactor and buys no coverage.
+  - Residual gap: a test helper can now run any git command, including one
+    that should have been a typed operation in `internal/vcs`. Review still
+    has to notice that.
+- **D2. The `os/exec` uses in `internal/cli` and `internal/gate` are
+  intended.** `internal/cli` relaunches its own binary and `internal/gate`
+  only calls `LookPath`. Neither starts an agent or runs git, so both stay in
+  the `exec` allowlist with those reasons.
+- **D3. `pure-core` does not cover `internal/pipeline`.** It imports
+  `internal/agents` and `internal/config` on purpose: `New` refuses a path
+  the resolved adapter has not declared, and each stage's fix round limit is
+  read from `config.FixRounds`. The rule stays on `internal/graph` and `internal/findings`.
 
 ## 7. Rollout
 
-1. Settle D1-D3.
-2. Land the depguard rules with their positive-control test. The tree is
-   already clean for them.
+1. Settle D1-D3. Done (section 6).
+2. Write D1's test-file exemption into `CLAUDE.md`, then land the depguard
+   rules with their positive-control test. The tree is already clean for
+   them.
 3. Triage and fix the 30 `citeclaim` cases, then land `citeclaim`.
 4. Land `gitexec`, `standin`, `answerliteral`, and `producers`. The last one
    retires `producers_test.go` in the same change.
