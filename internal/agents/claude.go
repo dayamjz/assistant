@@ -531,15 +531,19 @@ func (r *claudeRunner) arguments(grant Grant, inv Invocation, resume string) []s
 // mode in the CLI's own settings never decides a grant, and each tool list
 // names only tools of the CLI's that a grant has to rule in or out.
 //
-//   - GrantRead runs in the default mode with the editing tools and the shell
-//     denied, so it can read the copy and nothing else, whatever allow rules
-//     the CLI's settings carry.
+//   - GrantRead runs in the default mode with the built-in editing tools
+//     (Edit, Write, NotebookEdit) and the shell denied, whatever allow rules
+//     the CLI's settings carry. Only those are denied: any other tool those
+//     settings allow, an MCP server's tools included, stays usable by a
+//     review, and reading is not confined to the copy.
 //   - GrantEdit runs in acceptEdits, so its edits are taken without a prompt
 //     nobody is there to answer, with the shell denied.
-//   - GrantWorker runs in acceptEdits with git allowed and no other command.
+//   - GrantWorker runs in acceptEdits with git allowed. It denies nothing,
+//     so a command the CLI's settings allow reaches a worker too, and git
+//     itself runs what a repository's hooks and configuration name.
 //
 // An unrecognized grant is GrantRead's, so a grant this function has not
-// learned edits nothing.
+// learned is denied what GrantRead is denied.
 func claudeGrantFlags(g Grant) []string {
 	switch g {
 	case GrantEdit:
