@@ -131,7 +131,11 @@
 //     task copy only once that liveness is Dead; so Complete is reached in
 //     production by a landed task whose worker is gone, and a landed task
 //     whose worker still runs, or whose terminal could not be observed,
-//     stays Landed with its copy.
+//     stays Landed with its copy. That service ends a worker it holds once
+//     the task resolves Landed and asks again when the terminal next reads
+//     Dead, so a landed task keeps its copy while its worker is one that
+//     service does not hold, or while the proof refuses; its landed.go
+//     says so.
 //   - A merge record reading closed lands nothing and is not read here: the
 //     run it ended is failed, and the run tier says so. The record's reason
 //     is not carried into the detail.

@@ -742,8 +742,15 @@ type TaskStopped struct {
 	// Ended is how the worker was ended, in the service's words.
 	Ended string `json:"ended"`
 	// Hold is the hold the stop registered, open, which a retry answer
-	// relaunches through the anchored relaunch and a stop answer leaves.
+	// relaunches through the anchored relaunch and a stop answer leaves. It
+	// is the zero hold when Finished is set.
 	Hold store.Hold `json:"hold"`
+	// Finished is the state the task resolved in from internal/taskstate's
+	// terminal tier when it was read after the worker ended, landed or
+	// complete, in which case no hold was registered because the work is
+	// finished and nothing is owed a relaunch. It is empty when the stop
+	// registered Hold.
+	Finished taskstate.State `json:"finished,omitempty"`
 }
 
 // Wakes is the answer to a drain of the wake queue: the queued rows, oldest

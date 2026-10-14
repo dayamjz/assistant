@@ -11,9 +11,11 @@ import (
 // Where the cleanup decision is called from, and with what.
 //
 // PRD principle P12 is internal/tasks' decision and this service is its
-// caller, at three sites and through no verb or protocol method: the table
-// PRD section 9 fixes has none, and the journey harness records the
-// consequence as package reach.
+// caller, at three sites and through no verb: the table PRD section 9
+// fixes has none, and the journey harness records the consequence as
+// package reach. The one protocol method that reaches it is the
+// coordinator's task.stop, and only for a task already Landed, on
+// landed.go's terms; it asks the decision and does not widen it.
 //
 // A run's copy is reclaimed when the run finishes, in settle and in the
 // checks-hold closure, through reclaimCopy, after the move that finished it
@@ -26,7 +28,11 @@ import (
 // state PRD section 6's lifecycle has cleanup move to Complete. The task is
 // found the way the resolver finds it, through internal/taskstate's
 // Basis.LandedRun, so the run that landed it and the task that is cleaned
-// up are one attribution and not two.
+// up are one attribution and not two. A landing site does not ask the
+// decision directly: it settles the task through landed.go, which ends the
+// worker this service holds for it first, and which also asks the decision
+// again when a landed task's terminal is next observed Dead, from the
+// supervisor's pass and from task.stop.
 //
 // An investigation task's copy is cleaned up when its report is stored,
 // through storeTaskReport, which stores it through internal/tasks and then
@@ -41,10 +47,11 @@ import (
 // Terminals, and never a second read: a site that read the launched map or
 // probed on its own would be a second owner of the fact a person sees on
 // the task surface. internal/tasks examines a task copy only once that
-// liveness is Dead, so a landed delivery task whose worker is still running
-// refuses with ReasonTerminalLive and keeps its copy, one whose terminal
-// could not be observed refuses with ReasonTerminalUnobserved, and one whose
-// worker is gone is examined and removed on P12's proof. What the probe does
+// liveness is Dead, so a landed delivery task whose worker still reads
+// running refuses with ReasonTerminalLive and keeps its copy, one whose
+// terminal could not be observed, a worker an earlier service launched
+// among them, refuses with ReasonTerminalUnobserved, and one whose worker
+// is gone is examined and removed on P12's proof. What the probe does
 // not close is the window after it: the liveness is as of the read, and a
 // worker that starts writing in the copy between the read and the removal
 // is caught only by internal/tasks' inventory re-read, which that package
@@ -70,9 +77,10 @@ func (s *Service) reclaimed(ctx context.Context, record store.Run) {
 	}
 }
 
-// cleanUpLanded cleans up the copy of every delivery task the run's merge
-// record landed, and logs what came of each. A run with no merge record
-// reading merged landed nothing and this returns at once.
+// cleanUpLanded settles every delivery task the run's merge record landed,
+// on landed.go's terms: it ends the worker this service holds for it and
+// then asks the cleanup decision, and logs what came of each. A run with no
+// merge record reading merged landed nothing and this returns at once.
 func (s *Service) cleanUpLanded(ctx context.Context, record store.Run) {
 	merge, ended, err := s.store.MergeRecord(ctx, record.ID)
 	if err != nil {
@@ -91,7 +99,7 @@ func (s *Service) cleanUpLanded(ctx context.Context, record store.Run) {
 		if r.State.Basis.LandedRun != record.ID || r.Record.Shape != store.TaskDelivery {
 			continue
 		}
-		s.logCleanup(s.cleaner.CleanUp(ctx, tasks.TaskCopy{Task: r.Record.ID, Terminal: r.State.Basis.Process}))
+		s.settleLanded(ctx, r.Record.ID)
 	}
 }
 
