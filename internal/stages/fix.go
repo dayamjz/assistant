@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/config"
@@ -64,9 +67,10 @@ type FixDeps struct {
 	// unexported on the same terms as StageDeps.git.
 	git []vcs.Option
 	// redact removes credentials from text on its way into anything this path
-	// persists or reports, which is the fix summary: it is written into run
-	// state and into a commit subject, and an agent that echoed a remote URL
-	// with a credential in it would put one in both.
+	// persists or reports, which is the fixer's account: its summary is
+	// written into run state and into a commit subject, the account itself
+	// into the commit body, and an agent that echoed a remote URL with a
+	// credential in it would put one in all three.
 	redact redact.Redactor
 }
 
@@ -131,9 +135,10 @@ func (d FixDeps) Copy(ctx context.Context, repositoryID, runID string) (*vcs.Rep
 // # The residual gaps
 //
 //   - What the agent actually did is its own account. Nothing here checks that
-//     the summary describes the diff, and the commit records the summary as its
-//     subject, so a misleading summary becomes a misleading commit message. What
-//     is checked is the change itself, by the stage that re-runs.
+//     the summary describes the diff, and the commit records the summary in its
+//     subject and the account as its body, so a misleading account becomes a
+//     misleading commit message. What is checked is the change itself, by the
+//     stage that re-runs.
 //   - A round that commits work the agent did not mean to include is possible:
 //     the commit takes every change in the copy, including anything a previous
 //     failed round left behind. The copy is the run's own and nothing else
@@ -214,20 +219,23 @@ func applyFixRound(ctx context.Context, deps FixDeps, in pipeline.FixInput) (pip
 	}
 
 	summary := fixSummary(deps.redact, result.Text, in.Stage)
+	rendered := summary
 	subject, err := deps.Config.RenderFixMessage(summary)
 	if err != nil {
 		// The template and the summary together decide this, and the summary
 		// is the agent's text. A round whose subject cannot be rendered still
 		// changed the copy, so it is recorded under a subject this package
 		// owns rather than dropped.
-		subject, err = deps.Config.RenderFixMessage(fmt.Sprintf("resolve %s findings", in.Stage))
+		rendered = fallbackFixSummary(in.Stage)
+		subject, err = deps.Config.RenderFixMessage(rendered)
 		if err != nil {
 			return pipeline.FixOutput{}, fmt.Errorf(
 				"stages: recording the %s stage's fix round: %w", in.Stage, err)
 		}
 	}
+	body := fixBody(deps.redact, result.Text, rendered)
 
-	committed, err := copied.CommitAll(ctx, subject)
+	committed, err := copied.CommitAllWithBody(ctx, subject, body)
 	if errors.Is(err, vcs.ErrNothingToCommit) {
 		return pipeline.FixOutput{Summary: nothingChanged(in.Stage, summary)}, nil
 	}
@@ -261,7 +269,10 @@ func nothingChanged(stage pipeline.Stage, summary string) string {
 		"What the fixer reported: %s", stage, summary)
 }
 
-// fixSummary is the agent's account of the round, redacted and bounded.
+// fixSummary is the agent's account of the round, redacted and bounded, as
+// config.FixMessagePlaceholder is rendered with: the first line of what the
+// fixer replied, without a conventional-commit prefix of its own, and ending
+// on a word.
 //
 // It is redacted because it is persisted twice over - into run state and into
 // a commit subject - and an agent that echoed a remote URL carrying a
@@ -270,28 +281,138 @@ func nothingChanged(stage pipeline.Stage, summary string) string {
 // here means the round reports something rather than failing over the length of
 // an agent's prose.
 //
-// An agent that said nothing gets a sentence saying so rather than an empty
-// summary, because the summary is what the next round and the re-review read as
-// the account of this one.
+// # Where it is cut
+//
+// A line longer than maxFixSummaryRunes is cut at the last whitespace at or
+// before that many runes, trailing punctuation that would read as dangling is
+// dropped, and "..." marks the cut, so the subject ends on a whole word. A
+// first line with no whitespace in that reach - one long path or URL - has no
+// word to end on, and the summary is fallbackFixSummary's sentence instead. In
+// both cases fixBody puts the account in the commit's body.
+//
+// # The agent's own prefix
+//
+// The fixer is asked for a line that becomes a commit subject, and agents
+// write one with its conventional-commit prefix, which commit.fix_message
+// would then nest inside the configured one: "fix: docs(agents): ...". A
+// leading prefix whose type is one conventionalPrefix names, with or without a
+// scope and a breaking-change mark, is removed, once, before the line is
+// measured. The template is the operator's choice of what a fix subject is
+// prefixed with, so the agent's is dropped whatever the template says, and its
+// words stay in the body. A type outside that list is kept as the agent's
+// prose, because a line like "Note: ..." is not a prefix.
+//
+// An agent that said nothing - or nothing past its prefix - gets a sentence
+// saying so rather than an empty summary, because the summary is what the
+// next round and the re-review read as the account of this one.
 func fixSummary(redactor redact.Redactor, text string, stage pipeline.Stage) string {
 	summary := strings.TrimSpace(redactor.Redact(text))
 	if line, _, found := strings.Cut(summary, "\n"); found {
 		summary = strings.TrimSpace(line)
 	}
+	if prefix := conventionalPrefix.FindString(summary); prefix != "" {
+		summary = strings.TrimSpace(summary[len(prefix):])
+	}
 	if summary == "" {
 		return fmt.Sprintf("the %s stage's fixer reported nothing about what it did", stage)
 	}
-	if limit := maxFixSummaryRunes; len([]rune(summary)) > limit {
-		summary = strings.TrimSpace(string([]rune(summary)[:limit])) + "..."
+	runes := []rune(summary)
+	if len(runes) <= maxFixSummaryRunes {
+		return summary
 	}
-	return summary
+	for i := maxFixSummaryRunes; i > 0; i-- {
+		if !unicode.IsSpace(runes[i]) {
+			continue
+		}
+		head := strings.TrimRightFunc(string(runes[:i]), func(r rune) bool {
+			return unicode.IsSpace(r) || strings.ContainsRune(",;:-", r)
+		})
+		if head != "" {
+			return head + "..."
+		}
+		break
+	}
+	return fallbackFixSummary(stage)
 }
+
+// fallbackFixSummary is the summary a round is recorded under when the agent's
+// line cannot be: it names the stage whose findings the round was asked to
+// resolve, which is the one thing this package knows about the round without
+// the agent.
+func fallbackFixSummary(stage pipeline.Stage) string {
+	return fmt.Sprintf("resolve %s findings", stage)
+}
+
+// conventionalPrefix matches a conventional-commit prefix at the start of a
+// line: a type from the list conventional commits are written with, any letter
+// case, an optional parenthesized scope, an optional "!", a colon, and the
+// whitespace after it or the end of the line.
+var conventionalPrefix = regexp.MustCompile(
+	`^(?i:feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([^()]*\))?!?:(\s+|$)`)
 
 // maxFixSummaryRunes bounds the summary so that the rendered commit subject
 // stays inside config.MaxCommitSubjectRunes with room for the template around
 // it. config owns the real limit and refuses what exceeds it; this is what
 // keeps an ordinary round from reaching that refusal.
 const maxFixSummaryRunes = 60
+
+// fixBody is the commit body a round is recorded with: the fixer's whole
+// reply, redacted, so that what the subject had to cut or drop is still in
+// the history. rendered is the summary the subject was actually rendered
+// with, and the body is empty when that already is the whole reply, which is
+// the case of a short plain line, so a commit says nothing twice; a reply the
+// subject fell back from is always kept.
+//
+// It is redacted on the same terms as fixSummary. It is not held to the
+// subject's character rule, which config.RenderFixMessage refuses on, because
+// a body is many lines; instead every control character other than a line
+// break or a tab, and every Unicode format character, is replaced with
+// U+FFFD, so nothing in it can reorder or hide text while what the agent wrote
+// stays visible. Line endings are made "\n" and trailing whitespace is trimmed
+// from each line.
+//
+// It is bounded at maxFixBodyBytes, because the body reaches git as one
+// command-line argument and operating systems cap how long a command line may
+// be; past that it is cut after the last whole line that fits, or at a rune
+// boundary when no line does, and a closing line says it was cut and how long
+// the reply was. The reply itself is bounded before this by the output limit
+// internal/agents reads an invocation under.
+func fixBody(redactor redact.Redactor, text, rendered string) string {
+	text = strings.ReplaceAll(redactor.Redact(text), "\r\n", "\n")
+	lines := strings.Split(text, "\n")
+	for i, line := range lines {
+		lines[i] = strings.TrimRightFunc(strings.Map(func(r rune) rune {
+			if r == '\t' || (!unicode.IsControl(r) && !unicode.Is(unicode.Cf, r)) {
+				return r
+			}
+			return unicode.ReplacementChar
+		}, line), unicode.IsSpace)
+	}
+	body := strings.Trim(strings.Join(lines, "\n"), "\n")
+	if body == "" || body == rendered {
+		return ""
+	}
+	if len(body) <= maxFixBodyBytes {
+		return body
+	}
+	cut := maxFixBodyBytes
+	for cut > 0 && !utf8.RuneStart(body[cut]) {
+		cut--
+	}
+	kept := body[:cut]
+	if at := strings.LastIndex(kept, "\n"); at > 0 {
+		kept = kept[:at]
+	}
+	return strings.TrimRight(kept, "\n") + fmt.Sprintf(
+		"\n\n[cut: the fixer's reply was %d bytes, and a fix commit's body records at most %d]",
+		len(body), maxFixBodyBytes)
+}
+
+// maxFixBodyBytes bounds a fix commit's body. Chosen, not measured: it is far
+// above a fixer's ordinary reply, which it is asked to keep to one line, and
+// chosen to sit well inside the command-line limits of the platforms this
+// builds for.
+const maxFixBodyBytes = 8 << 10
 
 // fixFacts is what the run's state says about the change a round is fixing.
 type fixFacts struct {
@@ -368,8 +489,10 @@ func fixPrompt(f fixFacts, in pipeline.FixInput, judge string) string {
 		"change is committed for you. Do not push, and do not change git configuration or " +
 		"history.\n\nWhen you are done, reply with one short line saying what you changed. " +
 		"That line becomes the commit subject, so write it as one: say what changed, not that " +
-		"you were asked to change it. If you could not fix something, say which and why, and " +
-		"leave those files alone rather than guessing.")
+		"you were asked to change it. Leave off a type or scope prefix such as \"fix:\": the " +
+		"subject's format is configured for you. Anything you write after that line is kept in the " +
+		"commit body. If you could not fix something, say which and why, and leave those files " +
+		"alone rather than guessing.")
 	return b.String()
 }
 

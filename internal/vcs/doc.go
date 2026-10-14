@@ -164,8 +164,9 @@
 // that is not a fast-forward; a caller passing such a refspec has chosen that.
 // UpdateRef writes one full reference name at a commit already in the
 // repository and fetches nothing, and CreateRef does the same only where the
-// name does not exist yet. CommitAll records the working copy as a commit and
-// moves the branch or detached HEAD it was made on; SwitchToNewBranch and
+// name does not exist yet. CommitAll and CommitAllWithBody record the working
+// copy as a commit and move the branch or detached HEAD it was made on;
+// SwitchToNewBranch and
 // Detach move HEAD itself, to a new branch or to no branch; and AdvanceBranch
 // and MoveBranch move one branch from a commit the caller names to another,
 // as a compare-and-swap, with the working tree when it is checked out there.
