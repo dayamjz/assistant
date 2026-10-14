@@ -54,13 +54,28 @@
 // The record of such an ending is PRD section 8's merge record, written once:
 // internal/runs' two pull request moves write it with the status in one
 // transaction, and its RecordMergeAfterPass writes it beside a run that had
-// already passed when autonomy.go's merge was read back merged; settle makes
+// already passed when its pull request was later read merged at the head the
+// run observed, by autonomy.go after the program's own merge or by
+// mergeread.go's pass for a person's; settle makes
 // the same two moves for the live wait from what
 // the checks body wrote under pipeline.KeyPullRequestEnd and its head key,
 // and report reads that record to derive the run's passed, so a stage body
 // decides nothing about a run's status, the run's own row stores the fact
 // nowhere, and the record, not a checkpoint still standing at the checks
 // stage, says what ended the run.
+//
+// # A person's merge is read on an interval, and mergeread.go owns it
+//
+// Nothing else reads a pull request after its run ends checks-passed, so
+// mergeread.go's pass is what writes the merge record for a merge a person
+// makes then: once as the service opens, on a goroutine after recovery so
+// serving waits on no code host for it, and once every mergeReadInterval
+// after, each pass reading each checks-passed run that recorded a
+// repository on the code host and a pull request number at most once. It
+// records only a pull request read merged at the head the run observed, and
+// it is the same read autonomy.go records the program's own merge with.
+// mergeread.go says why that trigger and not recovery alone, a read verb, or
+// the supervisor loop's pass, and what the interval leaves open.
 //
 // # A restart reaps the agent processes an earlier service recorded
 //

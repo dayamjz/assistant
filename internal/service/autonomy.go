@@ -7,8 +7,6 @@ import (
 
 	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/forge"
-	"github.com/dayamjz/assistant/internal/graph"
-	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/store"
 )
 
@@ -39,10 +37,12 @@ import (
 // Whether the merge is allowed is the code host's: a refusal from it is
 // reported in the service's log as what it is and nothing is retried, with
 // another method or without the binding. The merge writes no record. A
-// code-host read after it, the same Get the checks stage reads a pull
-// request's end with, writes the merge record when it reads the pull request
-// merged, through internal/runs' RecordMergeAfterPass, and the run reads
-// passed from then on; a read that does not find it merged records nothing.
+// code-host read after it writes the merge record when it reads the pull
+// request merged at the head the run observed, and the run reads passed from
+// then on; a read that does not records nothing. That read is mergeread.go's
+// recordMergeRead, the same one a person's merge is read with, so the
+// program's merge and a person's are recorded on one rule; when mergeread.go's
+// own pass reads this merge first, the record it wrote is the one record.
 // The one-line outcome PRD section 6 asks for is the log line naming the
 // pull request's URL as that read reported it.
 //
@@ -51,9 +51,9 @@ import (
 //   - The merge is attempted once, as the run settles. A refusal is not
 //     re-asked later, by a restart or otherwise, and the run stays
 //     checks-passed for a person to merge.
-//   - A merge a person makes after a run ended checks-passed is still not
-//     read by anything in this build; only the read after the program's own
-//     merge records one.
+//   - A merge the code host accepted and the read after it could not
+//     record is left to mergeread.go's next pass, which reads it like a
+//     person's merge.
 //   - The outcome line is the service log's; no surface phrases it from the
 //     record yet.
 //   - Which merge method is used is internal/forge's GitHub adapter's
@@ -114,37 +114,13 @@ func mergeAfterLiveRead(ctx context.Context, provider forge.Provider, number int
 	return provider.Merge(ctx, number, observed)
 }
 
-// autonomyFacts is what the merge reads off a passed run's final state: the
-// repository on the code host, the pull request's number, and the head the
-// run observed, which is the commit its push stage forwarded.
-type autonomyFacts struct {
-	specifier string
-	number    int
-	observed  string
-}
-
-// autonomyFactsOf reads the facts off a run's state, and reports false for a
-// run that recorded no pull request on a code host, which has nothing to
-// merge.
-func autonomyFactsOf(state graph.State) (autonomyFacts, bool) {
-	specifier, number, err := recordedPullRequest(state)
-	if err != nil {
-		return autonomyFacts{}, false
-	}
-	observed := ""
-	if v, ok := state.Get(string(pipeline.KeyPushed)); ok {
-		observed, _ = v.Text()
-	}
-	return autonomyFacts{specifier: specifier, number: number, observed: observed}, true
-}
-
 // mergeUnderAutonomy is called for a run settle moved to passed with no pull
 // request read ending it, and merges it on this file's terms when its
 // repository is listed. It returns nil for a run it does not act on, before
 // anything is read, and the refusal, which settle logs, for one it refused;
 // on a recorded merge it cleans up what the merge landed and releases what it
 // cleared, as settle does for a run its pull request's merge ended.
-func (s *Service) mergeUnderAutonomy(ctx context.Context, built *driver, record store.Run, facts autonomyFacts) error {
+func (s *Service) mergeUnderAutonomy(ctx context.Context, built *driver, record store.Run, facts passedPullRequest) error {
 	if !s.cfg.MergesIn(facts.specifier) {
 		return nil
 	}
@@ -160,23 +136,14 @@ func (s *Service) mergeUnderAutonomy(ctx context.Context, built *driver, record 
 	if _, err := mergeAfterLiveRead(ctx, provider, number, facts.observed, forge.DeclaredNoCI(resolved.cfg)); err != nil {
 		return fmt.Errorf("service: run %s: %w", record.ID, err)
 	}
-	read, err := provider.Get(ctx, number)
-	if err != nil {
-		return fmt.Errorf("service: run %s: pull request %d was merged and the read after it failed, so nothing was recorded: %w",
-			record.ID, number, err)
-	}
-	if read.State != forge.PullRequestStateMerged {
-		return fmt.Errorf("service: run %s: the forge accepted the merge of pull request %d and a read after it found it %s, "+
-			"so nothing was recorded", record.ID, number, read.State)
-	}
-	if _, err := built.runs.RecordMergeAfterPass(ctx, record.ID, store.PullRequestRead{
-		PullRequest: number, Head: read.HeadCommit, End: store.PullRequestMerged,
-	}); err != nil {
-		return fmt.Errorf("service: run %s: pull request %d was read merged and the record could not be written: %w",
-			record.ID, number, err)
+	read, err := s.recordMergeRead(ctx, built, record, provider, facts)
+	switch {
+	case errors.Is(err, store.ErrMergeRecorded):
+		// The person-merge read in mergeread.go read the merge first and
+		// recorded it, and cleaned up after it; the record is written once.
+	case err != nil:
+		return fmt.Errorf("service: run %s: the forge accepted the merge of pull request %d, and %w", record.ID, number, err)
 	}
 	s.log.Printf("run %s: merged %s under %s", record.ID, read.URL, config.KeyAutonomyMerge)
-	s.cleanUpLanded(ctx, record)
-	s.releaseQueued(ctx)
 	return nil
 }

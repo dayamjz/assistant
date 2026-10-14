@@ -289,6 +289,11 @@ type Service struct {
 	// check that a branch has no run and the creation of one are a single
 	// decision rather than a check a second caller can win the race to.
 	starting map[branchKey]*branchGate
+	// mergeReadsSettled holds the runs mergeread.go's pass will not read
+	// again in this service's life: a pull request read merged at another
+	// head, and a run that recorded no observed head. It is memory and
+	// nothing durable, guarded by mu; mergeread.go owns it.
+	mergeReadsSettled map[string]bool
 
 	revision atomic.Uint64
 	// published is the basis of the last task.state this service sent per
@@ -472,6 +477,10 @@ func Open(ctx context.Context, o Options) (*Service, error) {
 		_ = s.Close()
 		return nil, err
 	}
+	// A person's merge of a run that ended checks-passed is read for once
+	// recovery is done and then on mergeread.go's interval, on a goroutine
+	// of its own, so serving waits on no code host for it.
+	s.startMergeReads()
 	return s, nil
 }
 

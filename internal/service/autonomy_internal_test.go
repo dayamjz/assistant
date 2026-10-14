@@ -192,7 +192,7 @@ func TestAnUnlistedRepositoryIsNeverMerged(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = st.Close() })
 	host := forgetest.New(t, readyScript())
-	facts := autonomyFacts{specifier: autonomyRepository, number: autonomyNumber, observed: autonomyHead}
+	facts := passedPullRequest{specifier: autonomyRepository, number: autonomyNumber, observed: autonomyHead}
 	record := store.Run{ID: "run-1", RepositoryID: "nowhere", Status: store.RunPassed}
 
 	for name, listed := range map[string][]string{"the default": nil, "another repository": {"owner/other"}} {

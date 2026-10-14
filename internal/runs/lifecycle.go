@@ -123,7 +123,8 @@ func (s *Service) PassOnMerge(ctx context.Context, id string, read store.PullReq
 
 // RecordMergeAfterPass records that a run which had already passed, with no
 // pull request read ending it, was then read as merged: the code-host read
-// after a merge internal/service made under PRD section 6's autonomy flag.
+// after a merge internal/service made under PRD section 6's autonomy flag,
+// or its periodic read of a merge a person made.
 // It is not a move: the run's status stays passed, which no row of this
 // table leads out of, and the store writes the merge record beside it once,
 // so machine.OutcomeOf reads the run as passed from then on. A run that is
