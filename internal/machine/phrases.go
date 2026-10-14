@@ -1376,8 +1376,10 @@ var PhraseNoReading = Phrase{
 // surface: a decision and a fix round's offer, a row per doctor check and
 // result and the verdict, the service lifecycle, the two rows for a command
 // given none of its subcommands, a rerun refused because the checkout
-// moved, a gate created, reattached
-// and removed, the gate's own rows, and the rows pointing at a run's evidence
+// moved, a gate created, reattached and removed, a row per source of the
+// default branch an init recorded with the row for an answer naming none and
+// a row per refusal to record one, the gate's own rows, and the rows pointing
+// at a run's evidence
 // and the two notices beside it, and the catch-up read's: a heading and an
 // empty row per part, a row per kind of landed record, the row for what a
 // read left out, and the two rows for a mark, and custody's: a row per class
@@ -1436,5 +1438,6 @@ func TablePhrases() []Phrase {
 		phraseUnderWay, phraseNothingUnderWay, phraseStoppedUndecided, phraseNothingStopped)
 	out = append(out, phraseWasMerged, phraseCopyCleared, LandedMorePhrase(LandedLimit), MarkedPhrase(Marked{}),
 		MarkedPhrase(Marked{Marks: []store.SeenMark{{}}}))
+	out = append(out, defaultBranchRows()...)
 	return append(out, custodyRows()...)
 }
