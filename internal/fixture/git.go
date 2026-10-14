@@ -75,7 +75,12 @@ func newGitRunner(binary, home string) (*gitRunner, error) {
 		"[init]\n\tdefaultBranch = " + DefaultBranch + "\n" +
 		"[commit]\n\tgpgsign = false\n" +
 		"[tag]\n\tgpgsign = false\n" +
-		"[core]\n\tautocrlf = false\n"
+		"[core]\n\tautocrlf = false\n" +
+		// Automatic maintenance off, so no git forked into the background
+		// outlives the build or a test that reads this file and races its
+		// cleanup (#119).
+		"[gc]\n\tauto = 0\n" +
+		"[maintenance]\n\tauto = false\n"
 	if err := os.WriteFile(config, []byte(content), 0o600); err != nil {
 		return nil, fmt.Errorf("fixture: writing the git configuration the build runs under: %w", err)
 	}
