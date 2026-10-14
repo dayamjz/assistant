@@ -2,6 +2,7 @@ package service
 
 import (
 	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -213,11 +214,22 @@ func TestACopyRetargetedBetweenDispatchAndLaunchIsRefusedAndNotLaunched(t *testi
 // dispatches and never launches: the launch is refused with
 // *agents.CapabilityError naming the capability, nothing is recorded, the
 // task stays Dispatched from the record with its proof in the slot, and the
-// attempt keeps no session. The shipped adapter's stand-in is such an
-// adapter in this build.
+// attempt keeps no session. The Cursor adapter is such an adapter, built
+// here over the stand-in's own arguments so nothing it could start is this
+// test binary running its tests again.
 func TestARunnerWithoutWorkerSessionsLeavesTheTaskDispatched(t *testing.T) {
 	ctx := t.Context()
-	subject := newLaunchSubject(t, standin.New(t, standin.Script{}))
+	agent := standin.New(t, standin.Script{})
+	subject := newLaunchSubject(t, agent)
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cursor, err := agents.CursorFactory(agents.WithCursorBinary(self)).New(ctx, agent.Arguments())
+	if err != nil {
+		t.Fatalf("building the cursor adapter over the stand-in: %v", err)
+	}
+	subject.service.catalog = agents.NewCatalog(fixedRunner{runner: cursor})
 	d, err := subject.service.dispatchTask(ctx, subject.task)
 	if err != nil {
 		t.Fatalf("dispatching: %v", err)

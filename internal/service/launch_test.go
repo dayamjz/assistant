@@ -23,10 +23,10 @@ import (
 // on what the stand-in recorded, never on a file it polls (#124).
 const launchWait = 30 * time.Second
 
-// workerAgent is scriptedAgent over the one adapter in this build that
-// declares worker sessions, agents.ScriptedFactory through
-// standin.NewWorker, so a service resolving "auto" reaches an agent a task's
-// worker can be started on. The review step is the same one scriptedAgent
+// workerAgent is scriptedAgent over the scripted adapter,
+// agents.ScriptedFactory through standin.NewWorker, whose worker reads and
+// writes plain lines these tests can script and read, so a service resolving
+// "auto" reaches an agent a task's worker can be started on. The review step is the same one scriptedAgent
 // carries, for the same reason; the worker greets, answers a status line,
 // and otherwise lingers until the service ends it.
 func workerAgent(t *testing.T) (*agents.Catalog, *standin.Agent) {
@@ -100,8 +100,9 @@ func readsRunning(got taskstate.Resolution) bool {
 	return got.State == taskstate.Running && got.Source == taskstate.SourceProcess && got.Basis.Process == taskstate.Live
 }
 
-// workerOptions is options with the worker-capable agent in place of the
-// shipped adapter's stand-in.
+// workerOptions is options with the line-mode worker agent in place of the
+// shipped adapter's stand-in, whose stream-mode worker these tests do not
+// script.
 func workerOptions(t *testing.T, h *home.Home) (service.Options, *standin.Agent) {
 	t.Helper()
 	o := options(t, h)
@@ -336,8 +337,7 @@ func TestADispatchedInvestigationTaskIsLaunched(t *testing.T) {
 }
 
 // A service resolved to an adapter that has not declared worker sessions,
-// which the shipped adapter's stand-in is, dispatches the task and launches
-// nothing: the task stays Dispatched from the record with its attempt
+// which the Cursor adapter is, dispatches the task and launches nothing: the task stays Dispatched from the record with its attempt
 // standing and no session recorded on it, so the probe has nothing to ask
 // and the process tier stays out of the answer, and the service holds no
 // session. The typed
@@ -350,7 +350,7 @@ func TestAnAdapterWithoutWorkerSessionsDispatchesAndNeverLaunches(t *testing.T) 
 	repository := recordRepository(t, h, subject)
 	id := recordDispatchedTask(t, h, repository, store.TaskDelivery, "task/one")
 
-	withService(t, h, func(running serviceUnderTest) {
+	withServiceOptions(t, workerlessOptions(t, h), func(running serviceUnderTest) {
 		if got := taskState(t, running.client, id); got.State != taskstate.Dispatched || got.Source != taskstate.SourceEvent {
 			t.Fatalf("the task resolves %s from %s, want Dispatched from the record", got.State, got.Source)
 		}

@@ -24,15 +24,13 @@
 // output are all that package's, and this one adds no second builder for any
 // of them.
 //
-// Which adapter answers is stated rather than implied. In this build only
-// the scripted adapter, agents.ScriptedFactory, declares worker sessions, and
-// the tests stand it up through internal/agents/standin's worker mode. No
-// shipped adapter declares the capability, so nothing here can launch a real
-// worker: whether the real claude binary runs usefully as a long-lived,
-// stdin-driven process is #95 line K, and the Claude Code adapter's
-// declaration is a change of its own, made when the invocation mode is known
-// and a probe can check it. Everything this package establishes, it
-// establishes against the stand-in.
+// Which adapter answers is stated rather than implied. The Claude Code
+// adapter declares worker sessions, starting the CLI with stream-json on both
+// streams, and the scripted adapter, agents.ScriptedFactory, declares them
+// over plain lines; internal/agents states what its conformance probe does
+// and does not establish about the real CLI. The tests here stand up the
+// scripted adapter through internal/agents/standin's line mode, so
+// everything this package establishes, it establishes against the stand-in.
 //
 // # Create takes a proof, not a path
 //
@@ -54,16 +52,19 @@
 // and never as screen diffing. The comparison stays in the supervisor; this
 // package returns bytes and a digest and no verdict.
 //
-// The normalization is derived from what the stand-in's worker mode emits,
+// The normalization is derived from what the stand-in's line mode emits,
 // which is newline-terminated lines of plain text on both streams,
 // interleaved in arrival order, and from one shape of redraw a line-oriented
 // process can put on a pipe, a carriage return that overwrites the line it
 // is on. Normalize states the rules; what it deliberately does not normalize
 // is listed there too, and the reason is the same each time: a rule for
 // output nothing in this repository has been shown to produce would be
-// designed against a guess. The real adapter's output format is not known
-// here, and when it is, the rules are revisited against it rather than
-// extended now.
+// designed against a guess. The Claude Code adapter's worker writes
+// stream-json on standard output, one JSON object per line, and those are
+// newline-terminated lines the same rules read. The rules have not been
+// revisited against that output beyond this: whether a digest
+// over it changes only when the worker makes progress is not established
+// here, and it is revisited against the output rather than extended now.
 //
 // # Probe answers from what the provider can see
 //

@@ -42,13 +42,12 @@ const (
 	// long as it runs, takes no purpose, and can be told nothing that names a
 	// review shape, because WorkerSpec has no shape at all.
 	//
-	// No adapter this build ships declares it. The scripted adapter the tests
-	// run against does, so the conformance suite can hold the mechanism to the
-	// declaration and a layer built on workers can run against the stand-in;
-	// the Claude Code adapter's declaration is a change of its own, made when
-	// the invocation mode it runs as a worker in is known and a probe can
-	// check it. Until then nothing here can launch a real worker, and this
-	// row says so rather than implying a fleet runs.
+	// The Claude Code adapter declares it, over the CLI's stream-json input
+	// mode, and the scripted adapter the tests run against declares it over
+	// plain lines. The conformance suite holds both declarations to the
+	// mechanism against the stand-in, which is all it can hold them to: the
+	// package documentation states what that does not establish about the
+	// real CLI.
 	CapabilityWorkerSessions Capability = "worker_sessions"
 )
 
