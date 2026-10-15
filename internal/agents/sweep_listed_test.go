@@ -327,6 +327,10 @@ func TestABlockerWhoseNameCannotBeReadIsStillReported(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitEnded(t, d, "the process killed before its name is read")
+	// The descriptor closing does not show the process has left the
+	// process table: a macOS run read the name after it closed. What the
+	// assertion is about is a process that reads absent, so wait for that.
+	waitAbsent(t, d.id)
 	if b := agents.BlockerOf(d.id, uids); b.NameErr == nil || b.Name != "" || b.Identity != d.id || !strings.Contains(b.String(), "name unreadable") {
 		t.Fatalf("the blocker for an ended process reads %+v (%s), want the name unreadable", b, b)
 	}

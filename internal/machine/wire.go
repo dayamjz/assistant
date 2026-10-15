@@ -608,6 +608,12 @@ type Init struct {
 	// of DefaultBranchSources. It is this answer's and not the record's: the
 	// record keeps the branch and not how it was learned.
 	DefaultBranchSource DefaultBranchSource `json:"default_branch_source"`
+	// Commands is what init found and did about the commands the checks
+	// run: what it offered, what it wrote, and why it offered nothing for a
+	// key. It is this answer's and not the record's: nothing here records
+	// it, and a run reads its commands from the default branch's copy of
+	// the configuration file rather than from anything init wrote.
+	Commands CommandProposals `json:"commands"`
 }
 
 // Eject is the answer to removing a gate and its records.

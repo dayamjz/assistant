@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/config"
@@ -28,10 +29,11 @@ type fixture struct {
 	inGate map[string]bool
 	// posture is what the posture reader answers for the project, and
 	// postureErr, when set, fails it instead, as an unreadable trusted copy
-	// does. postureAsked counts the reads.
+	// does. postureAsked counts the reads; it is atomic because two intakes
+	// under the exclusion test read the posture from two goroutines.
 	posture      config.Delivery
 	postureErr   error
-	postureAsked int
+	postureAsked atomic.Int32
 	// exclusion is the per-branch exclusion the queue takes. It is a keyed
 	// mutex in the shape of internal/service's branch gate, so a test here
 	// establishes what the queue does under one without opening a service.
@@ -102,7 +104,7 @@ func newFixture(t *testing.T) *fixture {
 			return filepath.Join(root, "repos", r.ID+".git"), nil
 		},
 		Posture: func(context.Context, store.Repository, string) (config.Delivery, error) {
-			f.postureAsked++
+			f.postureAsked.Add(1)
 			return f.posture, f.postureErr
 		},
 	})
