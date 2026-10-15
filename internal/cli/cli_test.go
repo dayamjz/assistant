@@ -44,8 +44,8 @@ var specified = []string{"init", "status", "runs", "rerun", "sync", "tasks", "wa
 // coordinator's service methods, which the owner decided on #227 is
 // dispatched beside the table, and "worker" is a task's worker's route back
 // to the program, which #226 asked for on the same terms. PRD section 9
-// names the first three outside its table and does not mention the fourth,
-// which is a finding against it rather than a row here.
+// names all four outside its table, the fourth by the owner's decision, so
+// none of them is a row here.
 // TestTheGateVerbServesTheHooksAndNothingElse, host_test.go's
 // TestTheHostVerbServesTheHookAndNothingElse, coordinator_test.go's
 // TestTheCoordinatorVerbServesItsTableAndNothingElse and worker_test.go's

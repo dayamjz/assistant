@@ -20,9 +20,9 @@
 // finding to raise against the specification, not a row to add quietly. The
 // four things this binary answers to that are not in that table are the
 // gate hook interface, the host hook interface, the coordinator's client and
-// a worker's route, which the sections below are about; section 9 names the
-// first three outside its table and does not mention the fourth, which is a
-// finding against it. The first two are not a precedent for the third, which
+// a worker's route, which the sections below are about; section 9 names all
+// four outside its table, the fourth by the owner's decision. The first two
+// are not a precedent for the third, which
 // the owner decided on #227, nor the three for the fourth, which #226 asked
 // for, and the four are not a precedent for a fifth.
 //
