@@ -80,8 +80,10 @@ func TestTheWaitOnAnIdleFleetAnswersEmptyAtItsBound(t *testing.T) {
 }
 
 // The service pushes a queued wake to the coordinator and never to a
-// worker, the push takes nothing from the queue, and the drain that follows
-// is what takes it, across a service restart.
+// worker, the push takes nothing from the queue, a drain hands the row out
+// without closing it, and the row comes back until the coordinator
+// acknowledges it: delivery is at least once, decided by attachment and not
+// by a clock.
 //
 // From the worker, both the wait and the wake stream are refused as a
 // worker, on wakes.list's terms. From outside every worker group the wake
@@ -92,11 +94,19 @@ func TestTheWaitOnAnIdleFleetAnswersEmptyAtItsBound(t *testing.T) {
 // the row's identifier as its revision; the open event stream carries no
 // wake. The pushed row is read back from the records and is still queued,
 // so the push was a notice and not the drain (P8: what the coordinator was
-// told is not the record of what is true now). The service is then closed
-// and a second one opened on the same home: a wait armed against it answers
-// at once with that row, recorded as handled by the coordinator in the
-// records, a second wait does not return it, and acknowledging it is
-// refused because the drain already was its acknowledgement.
+// told is not the record of what is true now).
+//
+// While the stream is held the coordinator is attached: a drain hands the
+// row out, recorded as handed to the coordinator and still queued, and a
+// second drain does not hand it out again under it. The stream is then
+// closed without acknowledging, which is the coordinator going away, and a
+// drain is handed the row a second time. The service is then closed and a
+// second one opened on the same home, which is the restart: a wait armed
+// against it answers at once with the same row, still not acknowledged, a
+// third handout. Acknowledging it is accepted and recorded as the
+// coordinator's, and after that no wait returns it and acknowledging it
+// again is refused, which is the positive control: an acknowledged row does
+// not come back.
 //
 // The second service is configured with relaunch_attempts at zero. A
 // restart's reconciliation otherwise relaunches the task and, as the
@@ -107,7 +117,7 @@ func TestTheWaitOnAnIdleFleetAnswersEmptyAtItsBound(t *testing.T) {
 //
 // It cites P9, because the coordinator is woken by the wake rather than by
 // asking again, and P8.
-func TestAQueuedWakeIsPushedToTheCoordinatorAndDrainedOnce(t *testing.T) {
+func TestAWakeIsHandedOutUntilTheCoordinatorAcknowledgesIt(t *testing.T) {
 	principles.Cite(t, principles.P9)
 	principles.Cite(t, principles.P8)
 	var h *home.Home
@@ -156,8 +166,8 @@ func TestAQueuedWakeIsPushedToTheCoordinatorAndDrainedOnce(t *testing.T) {
 				gone = row.ID
 			}
 		}
-		if row := wakeRow(t, recordsOf(t, h), task, gone); !row.Queued() {
-			t.Fatalf("after the push the records hold %+v, want wake %d still queued: a push is not a drain", row, gone)
+		if row := wakeRow(t, recordsOf(t, h), task, gone); !row.Queued() || row.HandedOutAt.IsKnown() {
+			t.Fatalf("after the push the records hold %+v, want wake %d still queued and not handed out: a push is not a drain", row, gone)
 		}
 		for {
 			quiet, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
@@ -170,6 +180,25 @@ func TestAQueuedWakeIsPushedToTheCoordinatorAndDrainedOnce(t *testing.T) {
 				t.Fatalf("the open event stream carried a wake: %+v", event)
 			}
 		}
+
+		if !handedOut(mustList(t, w.running.client), gone, 1) {
+			t.Fatalf("a drain while the stream is held did not hand out wake %d", gone)
+		}
+		if row := wakeRow(t, recordsOf(t, h), task, gone); !row.Queued() || row.HandedOutTo != store.Known(store.AcknowledgedByCoordinator()) {
+			t.Fatalf("after the drain the records hold %+v, want wake %d handed to the coordinator and still queued", row, gone)
+		}
+		if again := mustList(t, w.running.client); listed(again, gone) {
+			t.Fatalf("a second drain while the coordinator is attached handed wake %d out again: %+v", gone, again)
+		}
+
+		pushes.Close()
+		deadline := time.Now().Add(30 * time.Second)
+		for !handedOut(mustList(t, w.running.client), gone, 2) {
+			if !time.Now().Before(deadline) {
+				t.Fatalf("wake %d was never handed out again after the coordinator's stream closed", gone)
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
 	})
 
 	if err := os.WriteFile(h.ConfigFile(), []byte(`{"supervision_beacon_interval": "1s", "relaunch_attempts": 0}`+"\n"), 0o600); err != nil {
@@ -179,21 +208,22 @@ func TestAQueuedWakeIsPushedToTheCoordinatorAndDrainedOnce(t *testing.T) {
 	withServiceOptions(t, o, func(running serviceUnderTest) {
 		began := time.Now()
 		restarted := mustWait(t, running.client, 60)
-		if !drainedAll(restarted, []int64{gone}) || time.Since(began) > 30*time.Second {
-			t.Fatalf("a wait armed after the restart answered %+v after %s, want wake %d drained at once", restarted, time.Since(began), gone)
-		}
-		if row := wakeRow(t, recordsOf(t, h), task, gone); row.Queued() || row.AcknowledgedBy != store.Known(store.AcknowledgedByCoordinator()) {
-			t.Fatalf("after the drain the records hold %+v, want wake %d recorded as handled by the coordinator", row, gone)
-		}
-		for _, wake := range mustWait(t, running.client, 1).Wakes {
-			if wake.ID == gone {
-				t.Fatalf("wake %d was drained and a second wait returned it again", gone)
-			}
+		if !handedOut(restarted, gone, 3) || time.Since(began) > 30*time.Second {
+			t.Fatalf("a wait armed after the restart answered %+v after %s, want wake %d handed out again at once", restarted, time.Since(began), gone)
 		}
 		var acknowledged machine.Acknowledged
+		if err := running.client.Call(t.Context(), ipc.MethodWakesAcknowledge, machine.AcknowledgeRequest{Wakes: []int64{gone}}, &acknowledged); err != nil {
+			t.Fatalf("acknowledging the handed-out wake: %v", err)
+		}
+		if row := wakeRow(t, recordsOf(t, h), task, gone); row.Queued() || row.AcknowledgedBy != store.Known(store.AcknowledgedByCoordinator()) {
+			t.Fatalf("after the acknowledgement the records hold %+v, want wake %d closed by the coordinator", row, gone)
+		}
+		if after := mustWait(t, running.client, 1); listed(after, gone) {
+			t.Fatalf("wake %d was acknowledged and a wait returned it again: %+v", gone, after)
+		}
 		err := running.client.Call(t.Context(), ipc.MethodWakesAcknowledge, machine.AcknowledgeRequest{Wakes: []int64{gone}}, &acknowledged)
 		if !errors.Is(err, ipc.ErrInvalidRequest) {
-			t.Fatalf("acknowledging a drained wake = %v (%+v), want ErrInvalidRequest", err, acknowledged)
+			t.Fatalf("acknowledging an acknowledged wake again = %v (%+v), want ErrInvalidRequest", err, acknowledged)
 		}
 	})
 }
@@ -201,8 +231,9 @@ func TestAQueuedWakeIsPushedToTheCoordinatorAndDrainedOnce(t *testing.T) {
 // The control for the push: a coordinator that never holds the wake stream
 // and only polls wakes.list still gets the wake, because the queue rather
 // than the push is what carries it. The worker is ended, and the list is
-// polled until it returns the task's terminal-gone wake, which it returns
-// recorded as handled; the next list does not return it.
+// polled until it returns the task's terminal-gone wake, handed out and
+// still queued. A coordinator that holds no stream is not attached, so the
+// next list hands it out again; once it is acknowledged, no list returns it.
 //
 // It cites P9: absence of a listener does not make a crashed worker
 // invisible.
@@ -216,13 +247,9 @@ func TestAWakeReachesACoordinatorThatOnlyPolls(t *testing.T) {
 		var gone int64
 		deadline := time.Now().Add(60 * time.Second)
 		for gone == 0 {
-			var listed machine.Wakes
-			if err := w.running.client.Call(t.Context(), ipc.MethodWakesList, machine.WakesRequest{}, &listed); err != nil {
-				t.Fatalf("wakes.list: %v", err)
-			}
-			for _, wake := range listed.Wakes {
-				if wake.Queued() {
-					t.Fatalf("wakes.list returned %+v still queued, want every row it lists drained", wake)
+			for _, wake := range mustList(t, w.running.client).Wakes {
+				if !wake.HandedOut() {
+					t.Fatalf("wakes.list returned %+v, want every row it lists handed out and still queued", wake)
 				}
 				if wake.TaskID == w.task && wake.Kind == string(supervisor.KindTerminalGone) {
 					gone = wake.ID
@@ -233,16 +260,48 @@ func TestAWakeReachesACoordinatorThatOnlyPolls(t *testing.T) {
 			}
 			time.Sleep(100 * time.Millisecond)
 		}
-		var again machine.Wakes
-		if err := w.running.client.Call(t.Context(), ipc.MethodWakesList, machine.WakesRequest{}, &again); err != nil {
-			t.Fatalf("wakes.list: %v", err)
+		if again := mustList(t, w.running.client); !listed(again, gone) {
+			t.Fatalf("wake %d was not acknowledged and the next list, with no stream held, did not hand it out again: %+v", gone, again)
 		}
-		for _, wake := range again.Wakes {
-			if wake.ID == gone {
-				t.Fatalf("wake %d was drained and the next list returned it again", gone)
-			}
+		var acknowledged machine.Acknowledged
+		if err := w.running.client.Call(t.Context(), ipc.MethodWakesAcknowledge, machine.AcknowledgeRequest{Wakes: []int64{gone}}, &acknowledged); err != nil {
+			t.Fatalf("acknowledging: %v", err)
+		}
+		if after := mustList(t, w.running.client); listed(after, gone) {
+			t.Fatalf("wake %d was acknowledged and the next list returned it again: %+v", gone, after)
 		}
 	})
+}
+
+// mustList is one wakes.list, failing the test unless it answered.
+func mustList(t *testing.T, client *ipc.Client) machine.Wakes {
+	t.Helper()
+	var out machine.Wakes
+	if err := client.Call(t.Context(), ipc.MethodWakesList, machine.WakesRequest{}, &out); err != nil {
+		t.Fatalf("wakes.list: %v", err)
+	}
+	return out
+}
+
+// listed reports whether an answer carries the wake.
+func listed(w machine.Wakes, id int64) bool {
+	for _, wake := range w.Wakes {
+		if wake.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+// handedOut reports whether an answer carries the wake still queued and
+// handed out for the given time.
+func handedOut(w machine.Wakes, id, handouts int64) bool {
+	for _, wake := range w.Wakes {
+		if wake.ID == id {
+			return wake.HandedOut() && wake.Handouts == store.Known(handouts)
+		}
+	}
+	return false
 }
 
 // mustWait is one wakes.wait with the bound given, failing the test unless
@@ -283,19 +342,4 @@ func wakeRow(t *testing.T, records *store.Store, task string, id int64) store.Wa
 	}
 	t.Fatalf("task %s has no wake %d: %+v", task, id, wakes)
 	return store.Wake{}
-}
-
-// drainedAll reports whether every one of ids is a row of the answer that
-// the drain recorded as handled.
-func drainedAll(w machine.Wakes, ids []int64) bool {
-	for _, id := range ids {
-		found := false
-		for _, wake := range w.Wakes {
-			found = found || (wake.ID == id && !wake.Queued())
-		}
-		if !found {
-			return false
-		}
-	}
-	return len(ids) > 0
 }

@@ -82,3 +82,41 @@ func TestEveryCoordinatorAnswerReadsAsAListedRow(t *testing.T) {
 		}
 	}
 }
+
+// A person's listing names every wake kind internal/supervisor's table holds
+// that can reach the queue, which is every kind but one whose class always
+// absorbs, in a row of its own, each listed in TablePhrases so the vocabulary test
+// holds it, and says whether the coordinator has been handed the row. The
+// positive control is a kind outside the table, which reads as the
+// unfamiliar row rather than as any kind's.
+func TestAListedNoticeReadsAsItsKindsRow(t *testing.T) {
+	table := machine.TablePhrases()
+	unfamiliar := machine.QueuedWakePhrase(machine.QueuedWake{Wake: store.Wake{Kind: "a-kind-nobody-defined"}})
+	if !slices.Contains(table, unfamiliar) {
+		t.Fatalf("the unfamiliar row %q is not in TablePhrases", unfamiliar)
+	}
+	seen := map[machine.Phrase]supervisor.Kind{}
+	for _, row := range supervisor.Kinds() {
+		if row.Class == supervisor.ClassAbsorb {
+			continue
+		}
+		got := machine.QueuedWakePhrase(machine.QueuedWake{Wake: store.Wake{Kind: string(row.Kind)}})
+		if got == unfamiliar {
+			t.Errorf("wake kind %s reads as the unfamiliar row", row.Kind)
+		}
+		if other, ok := seen[got]; ok && got != unfamiliar {
+			t.Errorf("wake kinds %s and %s read as the same row %q", other, row.Kind, got)
+		}
+		seen[got] = row.Kind
+		if !slices.Contains(table, got) {
+			t.Errorf("the row for %s is not in TablePhrases: %q", row.Kind, got)
+		}
+	}
+	handed := machine.QueuedWake{Wake: store.Wake{HandedOutAt: store.Known(time.Now())}}
+	if machine.QueuedWakeStanding(handed) == machine.QueuedWakeStanding(machine.QueuedWake{}) {
+		t.Error("a row handed out and one nobody was handed read alike")
+	}
+	if machine.QueuedWakesPhrase(machine.QueuedWakes{}) == machine.QueuedWakesPhrase(machine.QueuedWakes{Wakes: make([]machine.QueuedWake, 1)}) {
+		t.Error("an empty queue and one with a notice read alike")
+	}
+}

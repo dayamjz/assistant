@@ -157,11 +157,13 @@ var oracle = map[cell]supervisor.Level{
 
 // eventKindWithRole picks a task event kind of the given role from
 // taskstate's real table, so the event wakes here are built the way the loop
-// builds them and never from a kind this test invented.
+// builds them and never from a kind this test invented. It skips a routine
+// kind, which the flowchart's event rows do not describe and which
+// TestARoutineEntryIsAbsorbedAndNoOtherIs checks on its own.
 func eventKindWithRole(t *testing.T, role taskstate.Role) string {
 	t.Helper()
 	for _, row := range taskstate.Kinds() {
-		if row.Role == role {
+		if row.Role == role && !row.Routine {
 			return row.Kind
 		}
 	}
@@ -547,5 +549,49 @@ func TestTheTableIsClosedAndTheProducerlessKindIsNamed(t *testing.T) {
 	}
 	if len(unproduced) != 1 || unproduced[0] != supervisor.KindCheckResult {
 		t.Errorf("the kinds marked as having no producer are %v, want exactly the check result", unproduced)
+	}
+}
+
+// An entry taskstate marks routine, the intake's and the dispatch's, is the
+// program's record of an act the coordinator asked for, so it is absorbed
+// as routine whatever the evidence, window or surfaced flag say. Every other
+// kind in taskstate's table classifies as it did, which is the positive
+// control: an event with no decision verb that is not routine still
+// surfaces without evidence. The table holds routine to program kinds, and
+// the isolation refusal, a program kind that reports something going
+// wrong, is not routine.
+func TestARoutineEntryIsAbsorbedAndNoOtherIs(t *testing.T) {
+	principles.Cite(t, principles.P9)
+	routine := 0
+	for _, row := range taskstate.Kinds() {
+		w := supervisor.Event(row.Kind)
+		if w.Routine() != row.Routine {
+			t.Errorf("%q: Event built routine=%v, taskstate's row says %v", row.Kind, w.Routine(), row.Routine)
+		}
+		if row.Routine && row.Writer != taskstate.WriterProgram {
+			t.Errorf("%q is routine and a %s kind; only the program's own records may be", row.Kind, row.Writer)
+		}
+		for _, evidence := range []supervisor.Evidence{absent, proof} {
+			for _, win := range []supervisor.WindowState{open, elapsed} {
+				got := supervisor.Classify(w, evidence, win, false, noStall)
+				switch {
+				case row.Routine && (got.Level != supervisor.Absorb || got.Reason != supervisor.ReasonRoutine):
+					t.Errorf("routine %q with evidence=%s window=%s: got %+v, want absorbed as routine", row.Kind, evidence, win, got)
+				case !row.Routine && got.Reason == supervisor.ReasonRoutine:
+					t.Errorf("%q is not routine and was absorbed as routine: %+v", row.Kind, got)
+				case !row.Routine && evidence == absent && !got.Surfaces():
+					t.Errorf("%q is not routine and did not surface without evidence: %+v", row.Kind, got)
+				}
+			}
+		}
+		if row.Routine {
+			routine++
+		}
+	}
+	if routine == 0 {
+		t.Fatal("taskstate's table marks no kind routine, so nothing here was checked")
+	}
+	if row, _ := taskstate.Lookup("isolation-refused"); row.Routine {
+		t.Error("the isolation refusal is routine, so a dispatch that refused to launch would wake nobody")
 	}
 }

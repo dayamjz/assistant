@@ -45,11 +45,17 @@ import (
 //
 // Which tasks a pass watches is supervisor.StateInFlight's table plus the
 // tasks with a queued wake, which is the set PRD section 5's "work is in
-// flight" names. One detection is made for every task, watched or not: an
-// open hold naming it or one of its runs, because a run moved to held
-// surfaces always and a task so held is not in flight on its state, so
-// nothing but this detection would carry the hold to the queue that then
-// keeps the task in flight. A second is made for every task on the same
+// flight" names. One detection is made for every task, watched or not, in
+// two halves: an open hold record naming it or one of its runs, and an
+// attributed run whose record stands held. A run's own hold is not a hold
+// record: a run halted at a stage moves to held through internal/runs and
+// registers none, so the second half is what carries it, keyed by the run
+// and the count of its moves into held that the move itself wrote, so each
+// hold of a run surfaces once and a later hold of the same run surfaces
+// again. Both are made for every task because a run moved to held surfaces
+// always and a task so held is not in flight on its state, so nothing but
+// this detection would carry the hold to the queue that then keeps the task
+// in flight. A second is made for every task on the same
 // terms: a message the record says was written and not acknowledged once
 // escalation_window has elapsed from its written instant, PRD section 6's
 // "an unacknowledged message surfaces once", read from the message record
@@ -645,12 +651,14 @@ func surfacedKey(kind supervisor.Kind, marker string) string { return string(kin
 // count, and providerWideSurfaced is the pass's one-surface memory for the
 // provider-wide case.
 //
-// The detections, in order: an open hold not yet surfaced, a message
+// The detections, in order: an open hold not yet surfaced, an attributed
+// run whose record stands held and whose hold has not surfaced, unless an
+// open hold record names that run, which already carries it, a message
 // written and not acknowledged once escalation_window has elapsed from the
 // instant the record says it was written, not yet surfaced, and for a
 // watched task each event past the marker's sequence and then its terminal.
-// The first two are made for every task, watched or not, and each surfaces
-// once: its key is in the wake table afterwards. The
+// The first three are made for every task, watched or not, and each
+// surfaces once: its key is in the wake table afterwards. The
 // terminal
 // reading is one of: terminal gone, with the case and the unobserved-since
 // instant in the marker, surfaced once per reference and case and then
@@ -679,9 +687,24 @@ func decide(o observation, cfg config.Config, now time.Time, providerWideSurface
 	}
 	seen := func(kind supervisor.Kind, marker string) bool { return o.surfaced[surfacedKey(kind, marker)] }
 
+	recorded := make(map[string]bool)
 	for _, h := range o.observed.Snapshot.Holds {
+		if !h.Open() {
+			continue
+		}
+		if run, ok := h.RunID.Get(); ok {
+			recorded[run] = true
+		}
 		marker := "hold:" + h.Key
-		if !h.Open() || seen(supervisor.KindHoldOpened, marker) {
+		if seen(supervisor.KindHoldOpened, marker) {
+			continue
+		}
+		wake, _ := supervisor.Of(supervisor.KindHoldOpened)
+		detect(wake, marker, supervisor.WindowOpen, false, supervisor.Stall{})
+	}
+	for _, r := range o.observed.Snapshot.Runs {
+		marker := runHeldMarker(r)
+		if r.Status != store.RunHeld || recorded[r.ID] || seen(supervisor.KindHoldOpened, marker) {
 			continue
 		}
 		wake, _ := supervisor.Of(supervisor.KindHoldOpened)
@@ -794,6 +817,17 @@ func decide(o observation, cfg config.Config, now time.Time, providerWideSurface
 // already in the wake table is not made again and the store holds the pair
 // unique.
 func messageUnacknowledgedMarker(id int64) string { return fmt.Sprintf("message:%d", id) }
+
+// runHeldMarker composes the marker of the wake for a run moved to held:
+// the run and how many moves into held its record counts, which
+// internal/store's transitionRun writes in the statement that makes each
+// move, so every hold of a run is one wake and the next hold of the same
+// run, after an answer released it, is another. A run held before the count
+// was recorded reads as zero, which no move counted since can collide with,
+// because the first counted move is one.
+func runHeldMarker(r store.Run) string {
+	return fmt.Sprintf("run-held:%s:%d", r.ID, r.HeldMoves.Or(0))
+}
 
 // terminalGoneMarker composes a terminal-gone wake's marker: the case, the
 // session reference and the unobserved-since instant, which is what

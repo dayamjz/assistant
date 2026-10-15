@@ -54,6 +54,16 @@ import (
 // and approving a hold of notes alike. Nothing else is answered: not skip, not
 // cancel, and not a hold whose report reads as neither.
 //
+// Two kinds of ask leave the whole hold for a person, and the service log
+// says which finding and why. An ask whose action was P3's default rather
+// than the stage's, findings.Finding.ActionDefaulted, because P3's point is
+// that an action nobody could read waits for a human. And an ask whose remedy
+// lies outside the change, findings.Finding.RemedyOutsideChange, such as a
+// command stage with no command configured, because a fix round edits the
+// change and so cannot resolve it. Both facts are the finding's own, set
+// where the report is normalized or built, so nothing here matches an
+// identifier.
+//
 // # What it never answers
 //
 // The push, pull request and checks holds, because those stages are not
@@ -63,9 +73,9 @@ import (
 // for another target, a head no review approved, a target that moved) and
 // hold there; P7's are refusals to run at all, before any stage launches, so
 // there is no hold to answer. A pre-push stage that later grows a P6 or P7
-// refusal of its own would be answered with a fix round here, and nothing in
-// this file would notice; that stage would need to raise its refusal where
-// this does not reach.
+// refusal of its own would be answered with a fix round here unless it marks
+// its ask RemedyOutsideChange, and nothing in this file would notice; that
+// stage would need to raise its refusal where this does not reach.
 //
 // # Bounds
 //
@@ -73,38 +83,54 @@ import (
 // round's own edges, so pipeline.RequestedFixRounds and the run-wide step
 // budget bound it, and an answer internal/graph refuses for either is taken
 // as the consent stopping: the hold stays open for a person and the refusal is
-// logged. A park ends the run as it always does; consent answers holds and a
-// park is not one.
+// recorded. It is given through graph.Executor.AnswerUnattended, because
+// nobody attended it, so the requested cycle's edge back is not exempt from
+// the convergence check for a round consent asked for: a round that left the
+// run's state as the round before it on that edge left it parks the run
+// converged. A park ends the run as it always does; consent answers holds and
+// a park is not one.
 //
 // # How each answer is recorded
 //
-// Every answer is a hold row registered and resolved together by
-// store.RecordHoldResolution, keyed by the run and the checkpoint the decision
+// Every answer is a hold row keyed by the run and the checkpoint the decision
 // stood at, resolved as store.ResolvedByStandingConsent: the program's answer,
-// never a person's and never a caller's. It is written once the run has moved
-// past that checkpoint, which is what makes it an answer that was applied
-// rather than one that was offered. Request.HoldResolver is not consulted,
-// because nothing on the socket answered this: the program did.
+// never a person's and never a caller's. The row is written open, saying what
+// consent is about to answer, before the answer is given, and a row the store
+// refuses means the answer is not given. It is resolved with the answer once
+// internal/graph reports the checkpoint carrying it written, and with a
+// resolution beginning "not applied: " when the answer was refused. A service
+// that stops in between leaves the row open, and finishConsentRows finishes
+// it when the service next opens, from the run's history and without giving
+// the answer. A row already resolved for a decision still open is a decision
+// consent took and could not apply, so it is not taken a second time.
+// Request.HoldResolver is not consulted, because nothing on the socket
+// answered this: the program did.
 //
 // # Residual gaps
 //
-//   - The record is written after the answer is applied, so a service that
-//     dies between the two leaves an applied answer with no hold row. The run's
-//     record still says it was under standing consent, so the history
-//     understates which decisions consent answered rather than claiming one
-//     a person made.
-//   - A report the review stage recorded no longer says whether an ask was
-//     stated by the reviewer or is P3's default for an action nobody could
-//     read, so both are sent to the requested round alike. P3 is held by the
-//     finding stopping at a hold rather than entering the automatic loop; the
-//     consent then answers that hold as the operator consented it would.
+//   - The open row is visible to a reader of the open holds, catching up
+//     among them, between being written and being resolved: the moment it
+//     takes internal/graph to check and write the answer, or, after a service
+//     stopped there, until the next open finishes it. A history recovery
+//     cannot read leaves it open longer, saying so in the log.
+//   - A report recorded before findings.Finding.ActionDefaulted existed says
+//     false for every finding, so an ask P3 supplied there reads as stated
+//     and is sent to a round. The same holds for a finding a stage built by
+//     hand and never normalized; every stage report is normalized by the
+//     stage node before it is recorded.
 //   - What PRD section 5 has the decision-model record keep about a person's
 //     answer at a hold is not written for a consent answer, because it is not
 //     a person's: the follow-up kind that record keeps is a person's answer.
-//   - The requested round's cycle is exempt from the convergence bound on the
-//     ground that a person asked for each round. Under consent the program
-//     asked, so RequestedFixRounds and the budget are what stop a round that
-//     changes nothing.
+//     The owner's decision on #253 keeps this a stated gap until that record
+//     keeps follow-ups for any program-side answer.
+//   - The convergence check compares a round with the round before it on the
+//     same edge, and a stage's re-run report carries the hold the previous
+//     requested round left, which the report the first round read did not.
+//     So the first two rounds at a hold never compare equal, and a run of
+//     rounds that change nothing is parked at the third at the earliest,
+//     which is the round RequestedFixRounds would have refused the next one
+//     after. What the bound changes there is how such a run ends, parked
+//     rather than held, not how many rounds it spends.
 
 // ErrStandingConsentNotAllowed reports a request for standing consent on a
 // run of a repository whose trusted configuration does not allow it. It
@@ -193,40 +219,59 @@ func (a consentAnswer) resolution() string {
 	return string(a.option) + ": " + strings.Join(a.selected, ", ")
 }
 
+// consentNotApplied begins the resolution of a hold row whose answer was
+// written down and never applied, so a reader of the record can tell an
+// answer the run took from one it did not without reading the run's history.
+const consentNotApplied = "not applied: "
+
 // consentAnswerAt decides what standing consent answers the decision a result
 // stands at, on this file's terms, and false for a decision it does not
 // answer. It reads the result alone: whether the run is under consent and
 // whether the repository still allows it are the caller's to have asked.
-func consentAnswerAt(result graph.Result) (consentAnswer, bool) {
+//
+// A decision consent would otherwise answer and leaves for a person because
+// of a finding it carries comes back false with why set to a sentence saying
+// which finding and why, so the caller can record it; every other false
+// carries an empty why, because it is not a decision consent answers at all.
+func consentAnswerAt(result graph.Result) (answer consentAnswer, ok bool, why string) {
 	if result.Status != graph.StatusHalted || result.Decision == nil {
-		return consentAnswer{}, false
+		return consentAnswer{}, false, ""
 	}
-	stage, ok := heldStage(result.Position)
-	if !ok || !stage.Requestable() {
-		return consentAnswer{}, false
+	stage, found := heldStage(result.Position)
+	if !found || !stage.Requestable() {
+		return consentAnswer{}, false, ""
 	}
 	report, err := pipeline.StageReport(result.State, stage)
 	if err != nil {
-		return consentAnswer{}, false
+		return consentAnswer{}, false, ""
 	}
 	// The hold a requested round leaves so its result is seen is the fix
 	// review, which consent accepts rather than sends to another round;
 	// internal/pipeline is what tells it from an ask anything else raised.
 	review, reviewed, err := pipeline.FixReviewFinding(result.State, stage)
 	if err != nil {
-		return consentAnswer{}, false
+		return consentAnswer{}, false, ""
 	}
-	answer := consentAnswer{stage: stage}
+	answer = consentAnswer{stage: stage}
 	actionable := false
 	for _, f := range report.Findings {
 		if reviewed && f.ID == review {
 			continue
 		}
-		if f.Holds() || f.FixEligible() {
+		switch {
+		case f.Holds() && f.ActionDefaulted:
+			// P3: an action nobody could read waits for a person, and
+			// consent is not one.
+			return consentAnswer{}, false, fmt.Sprintf("finding %s at the %s stage stated no action this "+
+				"build could read, and P3 leaves such a finding for a person", f.ID, stage)
+		case f.Holds() && f.RemedyOutsideChange:
+			// A round edits the change, and what resolves this lies
+			// outside it, so a round asked for it is spent on nothing.
+			return consentAnswer{}, false, fmt.Sprintf("finding %s at the %s stage is resolved outside "+
+				"the change, so no fix round can resolve it", f.ID, stage)
+		case f.Holds() || f.FixEligible():
 			answer.selected = append(answer.selected, f.ID)
-			continue
-		}
-		if f.Action != findings.ActionNote {
+		case f.Action != findings.ActionNote:
 			actionable = true
 		}
 	}
@@ -234,24 +279,24 @@ func consentAnswerAt(result graph.Result) (consentAnswer, bool) {
 	case actionable:
 		// A finding that neither holds, is fix-eligible, nor is a note is
 		// one a normalized report cannot carry; nothing here answers for it.
-		return consentAnswer{}, false
+		return consentAnswer{}, false, ""
 	case len(answer.selected) > 0:
 		request := pipeline.FixRequest{Selected: answer.selected}
 		if _, err := request.Select(report); err != nil {
-			return consentAnswer{}, false
+			return consentAnswer{}, false, ""
 		}
 		detail, err := request.Encode()
 		if err != nil {
-			return consentAnswer{}, false
+			return consentAnswer{}, false, ""
 		}
 		answer.option, answer.detail = pipeline.OutcomeFixRequested, detail
 	default:
 		answer.option = pipeline.OutcomeApproved
 	}
 	if !slices.Contains(result.Decision.Options, string(answer.option)) {
-		return consentAnswer{}, false
+		return consentAnswer{}, false, ""
 	}
-	return answer, true
+	return answer, true, ""
 }
 
 // underStandingConsent answers, under standing consent, the decision a
@@ -262,15 +307,16 @@ func consentAnswerAt(result graph.Result) (consentAnswer, bool) {
 // advance it in between.
 //
 // A result is returned as it came for a run not under consent, a repository
-// whose resolution no longer allows it, and a decision consent does not
-// answer. An answer internal/graph refuses before moving the run, such as one
-// past RequestedFixRounds or the budget, ends the answering with the decision
+// whose resolution no longer allows it, a decision consent does not answer,
+// and a decision whose hold row cannot be written or was written before. An
+// answer internal/graph refuses before moving the run, such as one past
+// RequestedFixRounds or the budget, ends the answering with the decision
 // still open; one it accepted and whose segment then failed is returned as
-// that failure, after its record is written.
+// that failure.
 func (s *Service) underStandingConsent(ctx context.Context, runID string, topo *topology, result graph.Result) (graph.Result, error) {
 	for {
-		answer, ok := consentAnswerAt(result)
-		if !ok {
+		answer, ok, why := consentAnswerAt(result)
+		if !ok && why == "" {
 			return result, nil
 		}
 		record, err := s.store.Run(ctx, runID)
@@ -281,39 +327,36 @@ func (s *Service) underStandingConsent(ctx context.Context, runID string, topo *
 		if !record.StandingConsent.IsKnown() {
 			return result, nil
 		}
+		if !ok {
+			s.log.Printf("run %s holds for a person: it is under standing consent and %s", runID, why)
+			return result, nil
+		}
 		if !topo.allowsConsent {
 			s.log.Printf("run %s holds for a person: it is under standing consent and its repository's trusted "+
 				"configuration no longer sets %s", runID, config.KeyAllowStandingConsent)
 			return result, nil
 		}
-		next, err := topo.executor.AnswerWith(ctx, runID, string(answer.option), answer.detail)
-		applied := err == nil || s.movedPast(ctx, runID, result.Checkpoint.Seq)
-		if applied {
-			s.recordConsentAnswer(ctx, runID, result, answer)
+		key := StandingConsentHoldKey(runID, result.Checkpoint.Seq)
+		if !s.writeConsentAnswer(ctx, runID, key, result, answer) {
+			return result, nil
 		}
+		applied := false
+		next, err := topo.executor.AnswerUnattended(ctx, runID, string(answer.option), answer.detail,
+			func(graph.CheckpointID) {
+				applied = true
+				s.finishConsentAnswer(ctx, runID, key, answer.resolution())
+			})
 		if err != nil {
 			if applied {
 				return graph.Result{}, err
 			}
+			s.finishConsentAnswer(ctx, runID, key, consentNotApplied+"refused: "+err.Error())
 			s.log.Printf("run %s holds for a person: standing consent's %s at the %s stage was refused: %v",
 				runID, answer.option, answer.stage, err)
 			return result, nil
 		}
 		result = next
 	}
-}
-
-// movedPast reports whether the run's latest checkpoint is later than seq,
-// which is what says an answer to the decision at seq was written. A history
-// that cannot be read reports false, so an answer whose fate is unknown is
-// not recorded as given.
-func (s *Service) movedPast(ctx context.Context, runID string, seq int) bool {
-	latest, err := s.checkpoints.Latest(context.WithoutCancel(ctx), runID)
-	if err != nil {
-		s.log.Printf("run %s: could not read whether standing consent's answer was applied: %v", runID, err)
-		return false
-	}
-	return latest.Seq > seq
 }
 
 // StandingConsentHoldKey is the key a decision standing consent answered is
@@ -325,33 +368,168 @@ func (s *Service) movedPast(ctx context.Context, runID string, seq int) bool {
 // ChecksHoldKey's terms: the key names a hold and resolving one is this
 // package's.
 func StandingConsentHoldKey(runID string, seq int) string {
-	return "run/" + runID + "/standing-consent/" + strconv.Itoa(seq)
+	return consentKeyPrefix(runID) + strconv.Itoa(seq)
 }
 
-// recordConsentAnswer writes the hold row for one answer standing consent
-// gave, registered and resolved together as the program's. A row the store
-// refuses is logged rather than failing the run: the answer was applied, and
-// the run's own record still says it ran under consent.
-func (s *Service) recordConsentAnswer(ctx context.Context, runID string, at graph.Result, answer consentAnswer) {
-	key := StandingConsentHoldKey(runID, at.Checkpoint.Seq)
-	_, err := s.store.RecordHoldResolution(context.WithoutCancel(ctx), store.HoldClosure{
-		Hold: store.Hold{
-			Key:     key,
-			RunID:   store.Known(runID),
-			Subject: "what to do about the findings this change stopped on before it was sent upstream",
-			Detail: fmt.Sprintf("run %s held at the %s stage's hold, checkpoint %d; answered under standing consent",
-				runID, answer.stage, at.Checkpoint.Seq),
-		},
-		Resolution: answer.resolution(),
-		By:         store.ResolvedByStandingConsent(),
+// consentKeyPrefix is what every key StandingConsentHoldKey gives for runID
+// begins with.
+func consentKeyPrefix(runID string) string { return "run/" + runID + "/standing-consent/" }
+
+// consentKeySeq is StandingConsentHoldKey read back: the checkpoint a key
+// written for runID names, and false for a key that function did not write
+// for that run. It is the one reader of that key's shape, so the two cannot
+// disagree.
+func consentKeySeq(runID, key string) (int, bool) {
+	rest, found := strings.CutPrefix(key, consentKeyPrefix(runID))
+	if !found {
+		return 0, false
+	}
+	seq, err := strconv.Atoi(rest)
+	if err != nil || seq < 1 || StandingConsentHoldKey(runID, seq) != key {
+		return 0, false
+	}
+	return seq, true
+}
+
+// writeConsentAnswer writes the hold row for one answer standing consent is
+// about to give, open, before the answer is applied, and reports whether the
+// answer may go ahead. That order is P6's refuse-and-report stance applied to
+// the record: an answer is never applied that has no record, a row the store
+// refuses means the answer is not given, and a row whose answer was then not
+// applied is finished as such, here or by finishConsentRows after a restart.
+//
+// A row already resolved under that key is a decision consent has already
+// taken at this checkpoint, so it is not taken again: the decision is left
+// for a person. An open one is this decision's own row from an attempt that
+// did not finish it, and the answer goes ahead under it.
+func (s *Service) writeConsentAnswer(ctx context.Context, runID, key string, at graph.Result, answer consentAnswer) bool {
+	h, err := s.store.RegisterHold(context.WithoutCancel(ctx), store.Hold{
+		Key:     key,
+		RunID:   store.Known(runID),
+		Subject: "what to do about the findings this change stopped on before it was sent upstream",
+		Detail: fmt.Sprintf("run %s held at the %s stage's hold, checkpoint %d; standing consent answers it with %s",
+			runID, answer.stage, at.Checkpoint.Seq, answer.resolution()),
 	})
 	if err != nil {
-		s.log.Printf("run %s: standing consent answered %s at the %s stage and the record of it was refused: %v",
-			runID, answer.resolution(), answer.stage, err)
+		s.log.Printf("run %s holds for a person: standing consent would answer %s at the %s stage and the record "+
+			"of it was refused, so the answer was not given: %v", runID, answer.resolution(), answer.stage, err)
+		return false
+	}
+	if resolution, done := h.Resolution.Get(); done {
+		s.log.Printf("run %s holds for a person: standing consent already decided the %s stage's hold at checkpoint "+
+			"%d (%s), and does not decide it twice", runID, answer.stage, at.Checkpoint.Seq, resolution)
+		return false
+	}
+	return true
+}
+
+// finishConsentAnswer resolves the hold row writeConsentAnswer wrote, as the
+// program's under standing consent, with what became of the answer: the
+// answer itself once it was applied, or why it was not. A resolution the
+// store refuses is logged and leaves the row open, and finishConsentRows
+// finishes it when the service next opens.
+func (s *Service) finishConsentAnswer(ctx context.Context, runID, key, resolution string) {
+	if _, err := s.store.ResolveHold(context.WithoutCancel(ctx), key, resolution, store.ResolvedByStandingConsent()); err != nil {
+		s.log.Printf("run %s: standing consent's record %s could not be finished with %q: %v", runID, key, resolution, err)
 		return
 	}
-	s.log.Printf("run %s: standing consent answered %s at the %s stage", runID, answer.resolution(), answer.stage)
+	s.log.Printf("run %s: standing consent's record %s: %s", runID, key, resolution)
 	s.publishHoldByKey(context.WithoutCancel(ctx), key)
+}
+
+// finishConsentRows is recovery's half of the hold-row-first order: every
+// standing consent row left open by a service that stopped between writing it
+// and finishing it is finished from the run's checkpoint history, which is
+// the record of whether its answer was applied.
+//
+// The decision the row was written for is the checkpoint its key names, and
+// the answer is what consentAnswerAt derives there again, since the answer is
+// a function of that checkpoint. The checkpoint after it is the claim an
+// applied answer wrote. A claim carrying that answer finishes the row with
+// it; no claim, or a claim carrying another answer, finishes it as not
+// applied, and the decision is the run's to hold for a person as it already
+// does. Nothing is answered here: an answer the service did not live to
+// apply is reported, never given after the fact.
+//
+// A row whose run history cannot be read, or whose answer can no longer be
+// derived where a claim exists to compare it with, is left open and logged,
+// because finishing it would claim a fact nothing verified; it stays among
+// the open holds a person is shown until a later open can read it.
+func (s *Service) finishConsentRows(ctx context.Context) {
+	open, err := s.store.OpenHolds(ctx)
+	if err != nil {
+		s.log.Printf("recovery could not list open holds to finish standing consent's records: %v", err)
+		return
+	}
+	for _, h := range open {
+		runID, ofRun := h.RunID.Get()
+		if !ofRun {
+			continue
+		}
+		seq, ours := consentKeySeq(runID, h.Key)
+		if !ours {
+			continue
+		}
+		resolution, verified := s.consentRowOutcome(ctx, runID, seq)
+		if !verified {
+			continue
+		}
+		s.finishConsentAnswer(ctx, runID, h.Key, resolution)
+	}
+}
+
+// consentRowOutcome is what became of the answer standing consent wrote a row
+// for at the run's checkpoint seq, as the row's resolution, and false where
+// that cannot be verified; finishConsentRows says how it is decided.
+func (s *Service) consentRowOutcome(ctx context.Context, runID string, seq int) (string, bool) {
+	history, err := s.checkpoints.History(ctx, runID)
+	if err != nil {
+		s.log.Printf("recovery left standing consent's record for run %s at checkpoint %d open: the run's history "+
+			"could not be read: %v", runID, seq, err)
+		return "", false
+	}
+	var decision, claim *graph.Checkpoint
+	for i := range history {
+		switch history[i].Seq {
+		case seq:
+			decision = &history[i]
+		case seq + 1:
+			claim = &history[i]
+		}
+	}
+	if decision == nil {
+		s.log.Printf("recovery left standing consent's record for run %s at checkpoint %d open: the run's history "+
+			"holds no such checkpoint", runID, seq)
+		return "", false
+	}
+	if claim == nil {
+		return consentNotApplied + "the service stopped before the answer was applied, and the decision is left " +
+			"for a person", true
+	}
+	answer, ok, _ := consentAnswerAt(decision.Result())
+	if !ok {
+		s.log.Printf("recovery left standing consent's record for run %s at checkpoint %d open: the answer it was "+
+			"written for can no longer be derived to compare with what the run took", runID, seq)
+		return "", false
+	}
+	given, detail := claimedAnswer(claim.State, answer.stage)
+	if given != string(answer.option) || detail != answer.detail {
+		return fmt.Sprintf("%sthe decision at checkpoint %d was answered %q, not with this record's answer",
+			consentNotApplied, seq, given), true
+	}
+	return answer.resolution(), true
+}
+
+// claimedAnswer is the answer and the detail a claim checkpoint carries at
+// stage's hold, empty where it carries none.
+func claimedAnswer(state graph.State, stage pipeline.Stage) (answer, detail string) {
+	if v, ok := state.Get(string(stage.AnswerKey())); ok {
+		answer, _ = v.Text()
+	}
+	if v, ok := state.Get(string(stage.RequestKey())); ok {
+		detail, _ = v.Text()
+	}
+	return answer, detail
 }
 
 // answerHeldUnderConsent is attaching to a held run that is under standing
@@ -368,7 +546,12 @@ func (s *Service) answerHeldUnderConsent(ctx context.Context, record store.Run) 
 	if err != nil {
 		return s.view(ctx, record.ID)
 	}
-	if _, ok := consentAnswerAt(latest.Result()); !ok {
+	if _, ok, _ := consentAnswerAt(latest.Result()); !ok {
+		return s.view(ctx, record.ID)
+	}
+	if h, err := s.store.Hold(ctx, StandingConsentHoldKey(record.ID, latest.Seq)); err == nil && !h.Open() {
+		// Consent already decided this decision and it is still open, so its
+		// answer was not applied; it is the person's now.
 		return s.view(ctx, record.ID)
 	}
 	built, err := s.driverFor(ctx)

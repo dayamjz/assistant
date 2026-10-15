@@ -569,6 +569,10 @@ func noTestCommandConfigured() findings.Report {
 			ID:       "test-no-command",
 			Severity: findings.SeverityWarning,
 			Action:   findings.ActionAsk,
+			// The remedy is a configuration key the branch under
+			// validation cannot set for itself, so no fix round can
+			// resolve this; standing consent leaves it for a person.
+			RemedyOutsideChange: true,
 			Description: "No test command is configured, so the test stage had nothing targeted to " +
 				"run and could not gather evidence that this change does what it set out to do. " +
 				"Setting commands.test in the repository's configuration document on the default " +

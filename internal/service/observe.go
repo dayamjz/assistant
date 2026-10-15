@@ -73,6 +73,12 @@ import (
 //   - An execution a hard kill interrupted has no row, so the record
 //     understates how often a stage ran rather than holding an end nobody
 //     observed.
+//   - An answer standing consent gives at a hold is not recorded as a
+//     follow-up of kind answer, because that kind is a person's answer and
+//     consent's is the program's. A round it asks for is still recorded as a
+//     fix follow-up of every path the round's commit touched. This stays a
+//     stated gap, by the owner's decision on #253, until this record keeps
+//     follow-ups for any program-side answer.
 
 // observeStages wraps every one of the nine stages' bodies so their
 // executions are recorded, walking the stage table rather than naming fields

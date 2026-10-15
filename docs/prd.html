@@ -1212,7 +1212,8 @@ flowchart TD
     Queued, Dispatched, Running, Paused, Validating, or Unknown, or has a wake not yet
     acknowledged; a task that resolves Held, Ready, Reported, Failed, Landed, or Complete is not in
     flight by its state alone, because the only one it waits on is you and the wake that told you
-    is in the queue.
+    is in the queue. A wake counts until it is acknowledged, not until it is drained: a wake handed
+    out to the coordinator and not yet acknowledged keeps its task in flight.
   </p>
   <div class="overflow-x-auto rounded-box border border-base-content/10 bg-base-100 mb-8">
     <table class="table table-sm table-zebra">
@@ -1445,7 +1446,7 @@ flowchart TD
     <div class="card card-border bg-base-200 border-warning/40">
       <div class="card-body">
         <h4 class="card-title text-sm">On, by your explicit instruction</h4>
-        <p class="text-xs opacity-90">Assistant resolves routine gates itself and merges a run that ended <code>checks-passed</code> in a repository you listed for it. It still escalates anything destructive, irreversible, or security-sensitive, and it never merges a failing pull request. Every autonomous merge produces a one-line outcome with the full URL.</p>
+        <p class="text-xs opacity-90">Assistant resolves routine gates itself, through section 9's standing consent and by no second mechanism, and merges a run that ended <code>checks-passed</code> in a repository you listed for it. It still escalates anything destructive, irreversible, or security-sensitive, and it never merges a failing pull request. Every autonomous merge produces a one-line outcome with the full URL.</p>
       </div>
     </div>
   </div>
@@ -1889,11 +1890,11 @@ flowchart TB
         <tr><td><b>task</b></td><td>Authoritative</td><td>Shape, project, launch notation (how the worker was started), delivery posture (recorded at intake or promotion, in a field of its own), isolated copy path, session reference, linked run, linked pull request.</td></tr>
         <tr><td><b>task state</b></td><td>Resolved on read</td><td>Not a stored row. A resolution with its source attached, computed on each read from the records that own its facts, as of one consistent read of them; section 6 says what it rests on. Distinct from the event log, per P8.</td></tr>
         <tr><td><b>task event</b></td><td>History</td><td>Append-only. Every append is a wake.</td></tr>
-        <tr><td><b>wake</b></td><td>Authoritative, appended</td><td>The durable wake queue, one row per actionable wake, written in the same transaction as the detector markers it advances and drained by the coordinator. A table here and not a directory, so a wake and its markers are one write. Draining acknowledges a row and never deletes it: drained rows are kept, and a row is actionable until acknowledged.</td></tr>
+        <tr><td><b>wake</b></td><td>Authoritative, appended</td><td>The durable wake queue, one row per actionable wake, written in the same transaction as the detector markers it advances and drained by the coordinator. A table here and not a directory, so a wake and its markers are one write. Draining hands a row out; acknowledging closes it. The coordinator acknowledges a row after it has acted on it, and a row handed out and never acknowledged is handed out again: after a restart, and once the coordinator it was handed to is no longer attached. No row is deleted: closed rows are kept, and a row is actionable until acknowledged.</td></tr>
         <tr><td><b>merge record</b></td><td>Authoritative, appended</td><td>Append-only and written once, by the code-host read that ends a run on a merge: the pull request, the head read, and when. The code host owns the merge; this is the program's record that it saw it. The run's <code>passed</code> on a merge and the task's Landed are both derived from this one record, and neither stores the fact again.</td></tr>
         <tr><td><b>local landing record</b></td><td>Authoritative, appended</td><td>Append-only and written once, by the approved fast-forward that delivers a <code>local</code> task: the task, the commit, the local default branch's tip before and after, and when. The task's Landed for a <code>local</code> task is derived from it, read in the same tier as the merge record.</td></tr>
         <tr><td><b>cleanup record</b></td><td>Authoritative, appended</td><td>Append-only and written once, recording the cleanup check it was made from. The task's Complete is derived from it. With the merge record it is what section 6's resolver reads in the tier above the run tier.</td></tr>
-        <tr><td><b>hold</b></td><td>Authoritative</td><td>A decision waiting on you, with a stable key. Idempotent to register. Closed only by an explicit resolution, recorded with who made it, never by the surrounding work finishing. The one resolution the service makes itself is for the hold the checks stage raises when <code>checks_timeout</code> elapses: when the pull request that hold waits on is read as merged or closed, the question it asked no longer exists, and the service records that reading as the resolution and itself as the resolver. Every other hold keeps the rule.</td></tr>
+        <tr><td><b>hold</b></td><td>Authoritative</td><td>A decision waiting on you, with a stable key. Idempotent to register. Closed only by an explicit resolution, recorded with who made it, never by the surrounding work finishing. One resolution the service makes itself is for the hold the checks stage raises when <code>checks_timeout</code> elapses: when the pull request that hold waits on is read as merged or closed, the question it asked no longer exists, and the service records that reading as the resolution and itself as the resolver. The other is each answer section 9's standing consent gives, recorded under the resolver that consent has of its own. Every other hold keeps the rule.</td></tr>
         <tr><td><b>message</b></td><td>Authoritative, appended</td><td>One row per message sent to a worker: the task, the attempt, the text with credentials removed, and who sent it, derived from the surface. Each of written, refused, and acknowledged is recorded on it once and never revised, and it is the one place whether a message was delivered is read from. Section 6's steering says what writes each.</td></tr>
         <tr><td><b>seen mark</b></td><td>Authoritative, appended</td><td>One row per merge or cleanup record you were shown and marked seen, keyed the way that record is keyed. One per home. It is what section 9's catch-up reads to decide what landed since you last looked, and nothing else reads it.</td></tr>
         <tr><td><b>agent invocation</b></td><td>History</td><td>Purpose, agent, model, timing, failure category, token usage, and the run and stage it served where it served one. Never prompts, outputs, diffs, or credentials. The run and stage were added later, so a row written before them reads both as unknown, never as a guess.</td></tr>
@@ -1941,7 +1942,11 @@ flowchart TB
         drawn from a closed set of values. The set is closed, so there is no free-text alternative
         that could grow into an unaudited one. The service is a member of that set, as the member named
         <code>program</code>, for the one resolution this document gives it on a fact it re-read,
-        with nobody deciding anything. The value meaning a person decided cannot be produced
+        with nobody deciding anything. It is a member a second time, as
+        <code>standing-consent</code>, for each answer section 9's standing consent gives. The two
+        differ in what happened: <code>program</code> closes a question that no longer exists, on a
+        fact it re-read, while <code>standing-consent</code> answers a question that still exists,
+        decided by the program on consent you gave in advance. The value meaning a person decided cannot be produced
         by any path an agent reaches, on any surface. An agent driving the machine interface resolves
         holds with the same options and the same authority as you, per section 9; what it cannot do
         is produce a record saying a person decided.
@@ -2137,9 +2142,12 @@ flowchart TB
     Standing consent is a flag on <code>assistant</code> too, <code>--standing-consent</code>, and it
     needs the repository's <code>allow_standing_consent</code>, read only from the trusted copy, so a
     pushed branch cannot allow it for itself (P7). Given when a run starts or is attached to, it puts
-    that run under standing consent; without the key it is refused as incorrect usage and changes
-    nothing. The program then answers the holds of the stages before push itself: a fix round over
-    every finding that is not a note, and approval where only notes remain, within section 5's bounds.
+    that run under standing consent, and given a task, as answering is, it puts the task's current
+    run under it without checking out the task's branch; without the key it is refused as incorrect
+    usage and changes nothing. The program then answers the holds of the stages before push itself: a
+    fix round over every finding that is not a note, and approval where only notes remain, within
+    section 5's bounds. A hold carrying an <code>ask</code> whose action the stage never stated (P3),
+    or one no fix round can resolve, such as a stage with no command configured, is left for you.
     It never answers the push, pull request, or checks holds, and never answers past a refusal P6 or
     P7 produces. Each answer is recorded as the program's, never as a person's, and status, the run
     listing, the run's record, and the pull request body say the run ran under it. No verb is added.

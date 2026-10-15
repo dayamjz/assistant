@@ -294,3 +294,90 @@ func TestAnAnswerWithAMisplacedDetailWritesNothing(t *testing.T) {
 		t.Fatalf("a well-formed answer came to %v, %v", got.Status, err)
 	}
 }
+
+// An answer the caller declares nobody attended does not carry the Answered
+// exemption: on answeredLoop, whose rounds change nothing, the second
+// unattended round parks converged on the marked edge, with the run's round
+// limit untouched. The positive control is the same run shape answered by a
+// person, which TestAnAnsweredBackEdgeIsExemptFromConvergenceAndNothingElse
+// already walks three rounds without parking, and again here: a run that
+// alternates is measured against the round before it whoever asked for that
+// one, so an unattended round after a person's that changed nothing parks
+// too, while the person's own round never does.
+func TestAnUnattendedAnswerIsHeldToConvergenceOnAnAnsweredEdge(t *testing.T) {
+	ctx := context.Background()
+
+	start := func(t *testing.T) *graph.Executor {
+		t.Helper()
+		g := mustBuild(t, answeredLoop(&recorder{}, true))
+		exec := mustExecutor(t, g, graph.NewMemoryStore(), 100)
+		if _, err := exec.Run(ctx, "run", mustState(t, g, nil)); err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		return exec
+	}
+
+	t.Run("two unattended rounds", func(t *testing.T) {
+		exec := start(t)
+		var claims []graph.CheckpointID
+		claimed := func(id graph.CheckpointID) { claims = append(claims, id) }
+		first, err := exec.AnswerUnattended(ctx, "run", "again", "", claimed)
+		if err != nil || first.Status != graph.StatusHalted {
+			t.Fatalf("the first unattended round came to %v, %v; want it to return to the hold", first.Status, err)
+		}
+		second, err := exec.AnswerUnattended(ctx, "run", "again", "", claimed)
+		if err != nil {
+			t.Fatalf("the second unattended round: %v", err)
+		}
+		if second.Status != graph.StatusConverged {
+			t.Fatalf("the second unattended no-op round came to %s at %q, want converged", second.Status, second.Position)
+		}
+		park, ok := second.Park()
+		if !ok || park.Edge == nil || park.Edge.From != "redo" || park.Edge.To != "work" {
+			t.Fatalf("the park names %+v, want the answered edge from redo to work", park)
+		}
+		if len(claims) != 2 || claims[0].Seq == 0 || claims[1].Seq <= claims[0].Seq {
+			t.Fatalf("the claim was reported as %v, want once per answer, in order", claims)
+		}
+	})
+
+	t.Run("a person's round then an unattended one", func(t *testing.T) {
+		exec := start(t)
+		if got, err := exec.Answer(ctx, "run", "again"); err != nil || got.Status != graph.StatusHalted {
+			t.Fatalf("the person's round came to %v, %v", got.Status, err)
+		}
+		got, err := exec.AnswerUnattended(ctx, "run", "again", "", nil)
+		if err != nil {
+			t.Fatalf("the unattended round: %v", err)
+		}
+		if got.Status != graph.StatusConverged {
+			t.Fatalf("an unattended round that changed nothing since the person's came to %s, want converged", got.Status)
+		}
+	})
+
+	t.Run("an unattended round then a person's", func(t *testing.T) {
+		exec := start(t)
+		if got, err := exec.AnswerUnattended(ctx, "run", "again", "", nil); err != nil || got.Status != graph.StatusHalted {
+			t.Fatalf("the unattended round came to %v, %v", got.Status, err)
+		}
+		// The unattended fact lapsed at the hold, so the person's round
+		// keeps the exemption.
+		for i := range 2 {
+			got, err := exec.Answer(ctx, "run", "again")
+			if err != nil || got.Status != graph.StatusHalted {
+				t.Fatalf("the person's round %d came to %v, %v; want it to return to the hold", i+1, got.Status, err)
+			}
+		}
+	})
+
+	t.Run("a refused answer reports no claim", func(t *testing.T) {
+		exec := start(t)
+		called := false
+		if _, err := exec.AnswerUnattended(ctx, "run", "never offered", "", func(graph.CheckpointID) { called = true }); !errors.Is(err, graph.ErrAnswerNotAllowed) {
+			t.Fatalf("an answer the halt point does not offer came to %v, want graph.ErrAnswerNotAllowed", err)
+		}
+		if called {
+			t.Fatal("a refused answer reported a claim")
+		}
+	})
+}

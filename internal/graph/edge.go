@@ -149,7 +149,9 @@ type Edge struct {
 	// every traversal of it follows an answer someone gave at a halt point.
 	// Any guard operator and value on that key qualifies. What the build
 	// cannot check is that the value is one only a person gives, because the
-	// graph does not know who answers; that rests on who calls Answer.
+	// graph does not know who answers; that rests on who calls Answer. A
+	// traversal that follows an answer given through
+	// Executor.AnswerUnattended is not exempt.
 	Answered bool
 }
 

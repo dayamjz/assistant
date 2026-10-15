@@ -258,8 +258,8 @@ func fixNode(stage Stage, fixer Fixer) graph.Node {
 // run's copy, and the push stage later forwards what the round committed. A
 // round that changed no key its fixer writes says so in that hold; it returns
 // to the hold rather than parking, because the edge back to the stage is
-// graph.Edge.Answered, exempt from convergence and still bounded by
-// RequestedFixRounds. The fixer's own
+// graph.Edge.Answered, exempt from convergence for an attended answer and
+// still bounded by RequestedFixRounds. The fixer's own
 // holds travel with it, which is how the judge rule reaches this round on the
 // same terms it reaches an automatic one: decided from the commit the round
 // made, by whatever fix body the pipeline was given.

@@ -137,6 +137,16 @@ type Run struct {
 	// keeps saying so. Which decisions it answered, and that each was the
 	// program's, is the hold record ResolvedByStandingConsent names.
 	StandingConsent Optional[time.Time] `json:"standing_consent"`
+	// HeldMoves is how many times the run has moved into held, which
+	// transitionRun counts in the statement that makes each move, so the
+	// count that names a hold is durable with the hold itself. It is what
+	// keys the supervisor loop's wake for a run moved to held, one wake per
+	// hold, read off this row rather than off any history (P8). It is
+	// unknown for a run recorded before the column existed until its first
+	// move into held after that, which counts as one. The json "-" tag keeps
+	// it off every answer that composes this record: it identifies a hold for
+	// the loop and is nothing a reader decides from.
+	HeldMoves Optional[int64] `json:"-"`
 	// CreatedAt is when the run was recorded, which PRD section 8 requires to
 	// precede the creation of its directory.
 	CreatedAt time.Time `json:"created_at"`
@@ -405,9 +415,14 @@ func (s *Store) transitionRun(ctx context.Context, id string, from []RunStatus, 
 			return &RunStatusError{Run: id, Expected: slices.Clone(from), Actual: current.Status, To: to}
 		}
 		now := encodeTime(nowUTC())
-		if _, err := tx.ExecContext(ctx,
-			`UPDATE run SET status = ?, updated_at = ? WHERE id = ?`,
-			string(to), now, id); err != nil {
+		// A move into held counts itself in the same statement, so the hold
+		// and the count that names it are one write; run_held_moves'
+		// trigger refuses the column changing any other way.
+		move := `UPDATE run SET status = ?, updated_at = ? WHERE id = ?`
+		if to == RunHeld {
+			move = `UPDATE run SET status = ?, updated_at = ?, held_moves = coalesce(held_moves, 0) + 1 WHERE id = ?`
+		}
+		if _, err := tx.ExecContext(ctx, move, string(to), now, id); err != nil {
 			return fmt.Errorf("store: moving run %s to %s: %w", id, to, err)
 		}
 		if also != nil {
@@ -580,7 +595,7 @@ const runColumns = `SELECT
 	id, repository_id, branch, submitted_head, base, current_head, status,
 	approved_commit, push_binding, pull_request, fixer_session, intent, intent_source,
 	build_version, build_revision, build_modified, build_go, config_digest,
-	config_rejections, resolved_agent, park, standing_consent,
+	config_rejections, resolved_agent, park, standing_consent, held_moves,
 	created_at, updated_at`
 
 func scanRun(sc scanner) (Run, error) {
@@ -592,7 +607,7 @@ func scanRun(sc scanner) (Run, error) {
 		&r.ID, &r.RepositoryID, &r.Branch, &r.SubmittedHead, &r.Base, &r.CurrentHead, &status,
 		&r.ApprovedCommit, &r.PushBinding, &r.PullRequest, &r.FixerSession, &r.Intent, &r.IntentSource,
 		&r.Build.Version, &r.Build.Revision, &modified, &r.Build.Go, &r.ConfigDigest,
-		&rejections, &r.ResolvedAgent, &park, &consent,
+		&rejections, &r.ResolvedAgent, &park, &consent, &r.HeldMoves,
 		&created, &updated,
 	); err != nil {
 		return Run{}, err

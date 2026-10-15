@@ -1225,6 +1225,12 @@ func (s *Service) reconcile(ctx context.Context, runID string) (store.Run, error
 // because it is continued, and the first read of the resumed wait reads the
 // pull request itself, which is step 1.
 func (s *Service) recover(ctx context.Context) {
+	// Standing consent writes a decision's hold row before it applies the
+	// answer, so a service that stopped between the two left a row open.
+	// Each is finished from the run's history before any run is continued,
+	// so nothing has moved a run past the checkpoint its row names since
+	// that service stopped; consent.go owns how.
+	s.finishConsentRows(ctx)
 	repositories, err := s.store.Repositories(ctx)
 	if err != nil {
 		s.log.Printf("recovery could not list repositories: %v", err)

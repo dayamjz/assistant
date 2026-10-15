@@ -80,10 +80,10 @@
 // A pushed wake is TypeWakeQueued, a state event, so overflow treats it as
 // state: it is never discarded as activity, and it is evicted only into the
 // gap marker. A coordinator that receives the marker drains the durable
-// queue, which gives back every wake still queued, so an eviction loses no
-// wake the queue still holds. The event is a notice and not the record: it
-// acknowledges nothing, and whether the wake is still actionable is the
-// queue's to say.
+// queue, which gives back every wake still queued that was not already
+// handed out to it, so an eviction loses no wake the queue still holds. The
+// event is a notice and not the record: it hands out and acknowledges
+// nothing, and whether the wake is still actionable is the queue's to say.
 //
 // # Where state may be discarded, and why that is not the exception it looks like
 //
@@ -221,8 +221,8 @@
 // decision, and it is unchanged by this.
 //
 // Request.WakeAcknowledger is the same rule for the wake queue: every
-// acknowledgement arriving over this protocol is
-// store.AcknowledgedByCoordinator, derived from the surface and read from no
+// acknowledgement arriving over this protocol, and every drain's record of
+// who it handed rows to, is store.AcknowledgedByCoordinator, derived from the surface and read from no
 // frame, so a worker refused the method by the handler and a coordinator
 // admitted to it can say nothing different about who acknowledged.
 // Request.MessageSender is the same rule for a message sent to a worker:

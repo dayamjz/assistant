@@ -128,6 +128,9 @@ func Pending(name string) pipeline.Implementation {
 			ID:       "pending-" + name,
 			Severity: findings.SeverityWarning,
 			Action:   findings.ActionAsk,
+			// The remedy is a stage body this build does not have, which no
+			// fix round can write into the change.
+			RemedyOutsideChange: true,
 			Description: fmt.Sprintf(
 				"The %s stage is not implemented in this build. It read nothing, checked nothing, "+
 					"and established nothing about this change. Approving carries the run past a stage "+

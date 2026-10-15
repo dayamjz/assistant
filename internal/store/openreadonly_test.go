@@ -44,7 +44,7 @@ func TestOpenReadOnlyReadsTheRecordAndRefusesEveryWrite(t *testing.T) {
 	if err := r.AcknowledgeWakes(ctx, []int64{appended.Wake.ID}, AcknowledgedByProgram()); !errors.Is(err, ErrReadOnly) {
 		t.Fatalf("a read-only acknowledgement = %v, want ErrReadOnly", err)
 	}
-	if _, err := r.DrainWakes(ctx, 10, AcknowledgedByProgram()); !errors.Is(err, ErrReadOnly) {
+	if _, err := r.DrainWakes(ctx, 10, WakeHandout{To: AcknowledgedByProgram(), Under: "u"}); !errors.Is(err, ErrReadOnly) {
 		t.Fatalf("a read-only drain = %v, want ErrReadOnly, because a drain acknowledges", err)
 	}
 	if _, err := r.AppendWakeWithMarkers(ctx, incarnationOf(t, w), WakeRequest{TaskID: task, Kind: "hold-opened", Marker: "hold-2"},
