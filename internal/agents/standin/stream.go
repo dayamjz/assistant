@@ -158,7 +158,12 @@ func serveStreamWorker(control string, args []string) int {
 			if !exchange.answers(text) {
 				continue
 			}
-			if err := writeTurn(session, dir, exchange.Reply); err != nil {
+			reply, err := exchange.answer(text)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "standin: "+err.Error())
+				return exitNoOutput
+			}
+			if err := writeTurn(session, dir, reply); err != nil {
 				fmt.Fprintln(os.Stderr, "standin: writing a reply: "+err.Error())
 				return exitNoOutput
 			}

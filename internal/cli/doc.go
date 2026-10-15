@@ -195,7 +195,7 @@
 // sibling given together, a file that cannot be read, and wake identifiers
 // that are not numbers are incorrect usage. The refusal rests on the
 // service's placement of its caller, and coordinatorVerbName names the gap
-// in that placement: #225.
+// in that placement: a parent chain the kernel rewrote.
 //
 // The subcommand comes first after the verb, for the gate verb's reason:
 // several subcommands take flags with values, and a scan for the subcommand
