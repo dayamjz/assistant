@@ -41,6 +41,12 @@
 // that added a field to its own prompt must not cause an otherwise valid set of
 // findings to be thrown away.
 //
+// ParseReportThrough is ParseReport for a caller that must not keep part of
+// what was printed, such as a credential: it runs a rewrite over every string
+// Report.Rewritten names after decoding and before Normalize, so an identifier
+// derived there digests the rewritten text, while which object is the report
+// is still decided from the output as printed.
+//
 // It does not tolerate ambiguity about what it read. A report with no summary
 // is refused rather than read as a clean pass, since a truncated output that
 // decodes to an empty object is exactly the case where a silent "no findings"

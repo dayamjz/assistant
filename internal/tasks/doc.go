@@ -94,8 +94,8 @@
 // whole life is otherwise the window between the proof and the removal.
 //
 // An investigation copy answers to PRD section 11 first: its report must be
-// stored, through StoreReport, which parses it with findings.ParseReport so
-// P3 applies and registers every ask finding as a hold in the transaction
+// stored, through StoreReport, which parses it with findings.ParseReport's
+// rules so P3 applies and registers every ask finding as a hold in the transaction
 // that stores the row, and every hold the store recorded with the report
 // must have a row; an open hold does not block, because it survives in the
 // store. It then skips the proofs only as scratch, when its inventory equals
@@ -104,6 +104,15 @@
 // three like a delivery copy. A fix finding in the report is recorded as
 // evidence and reaches no fixer, and a hold keeps the worker's words as
 // evidence for a surface to translate rather than relay (P13).
+//
+// Those words are kept with their credentials removed by internal/redact, and
+// the removal is in StoreReport because every filing passes it before
+// anything is stored. It runs on the decoded report before Normalize, through
+// findings.ParseReportThrough, rather than on the filed text before the parse,
+// so a derived finding identifier, and so a hold key, digests redacted text,
+// and a redaction that cuts to the end of a line cannot break the JSON it ran
+// over; the stored body and the evidence copy are the filed text redacted
+// whole. report.go says why and what it leaves.
 //
 // # Promotion flips the contract in place, protected first
 //
@@ -360,4 +369,8 @@
 //   - The evidence copy of a report is written after the row, so a crash
 //     between the two leaves a stored report with no copy. The row is the
 //     source and nothing reads the copy.
+//   - A report stored before StoreReport redacted it keeps whatever
+//     credential it was filed with: a stored report is written once and never
+//     revised, so nothing here rewrites one. A credential in a shape
+//     internal/redact does not recognize is stored as written.
 package tasks

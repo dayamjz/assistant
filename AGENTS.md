@@ -540,9 +540,14 @@ Each has cost this repository more than one round of review.
   proof, and no remedy names a flag. The record is written before the
   removal and marked after, anchored to the shape, so a second call
   completes a crashed one. An investigation copy answers to PRD section 11
-  first through `StoreReport`, which parses with `findings.ParseReport`,
-  registers every ask as a hold in the row's transaction, and keeps a fix
-  finding as evidence that reaches no fixer. A task copy is examined only
+  first through `StoreReport`, which parses with `findings.ParseReport`'s
+  rules, registers every ask as a hold in the row's transaction, and keeps a fix
+  finding as evidence that reaches no fixer. It is the one point a filing
+  passes before it is stored, so it is where the report passes
+  `internal/redact`: on the decoded report before `Normalize`, through
+  `findings.ParseReportThrough`, so hold keys digest redacted text, and never
+  on the filed text before the parse, which a cut to the end of a line can
+  break. A task copy is examined only
   once its terminal probed `Dead`, and `internal/service` passes the
   liveness its own task reader resolved through the session provider, so a
   landed task whose worker runs keeps its copy with the live refusal; its
@@ -686,7 +691,10 @@ Each has cost this repository more than one round of review.
   processes that ask for it, and two roots naming one directory are two homes.
 - `internal/redact` is the one owner of credential removal, which
   `internal/store` refuses to open without and `internal/vcs`,
-  `internal/forge`, and `internal/stages` take. It recognizes a credential in
+  `internal/forge`, `internal/stages`, `internal/pipeline` and
+  `internal/tasks` take. Which strings a report carries is
+  `findings.Report.Rewritten`'s to say, and the last two redact a whole
+  report through it rather than through a list of their own. It recognizes a credential in
   a URL's userinfo and a bearer or Authorization value and nothing else, and
   says so; adding a shape means adding it there, never a second remover at a
   call site.

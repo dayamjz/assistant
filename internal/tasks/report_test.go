@@ -117,3 +117,21 @@ func TestStoreReportRefusesWhatItCannotRead(t *testing.T) {
 		t.Fatalf("a report for no task = %v, want ErrNotFound", err)
 	}
 }
+
+// A refusal quoting what was filed quotes it redacted, and still says which
+// refusal it is. findings.ErrNoReport quotes the filed text itself, so it is
+// the refusal whose text the parse's own redaction never reaches; the
+// control is the text around the credential, quoted as filed.
+func TestAReportRefusalQuotesTheFiledTextRedacted(t *testing.T) {
+	s := newCleanupSubject(t, nil)
+	tk := s.investigationTask(t)
+	const secret = "hunter2-url-password"
+	_, err := s.cleaner.StoreReport(context.Background(), tk.id,
+		"no report here, only https://deploy:"+secret+"@example.com/o/r.git")
+	if !errors.Is(err, ErrReportUnreadable) || !errors.Is(err, findings.ErrNoReport) {
+		t.Fatalf("an unreadable report = %v, want ErrReportUnreadable wrapping the parser's refusal", err)
+	}
+	if text := err.Error(); strings.Contains(text, secret) || !strings.Contains(text, "no report here, only https://redacted@example.com") {
+		t.Fatalf("the refusal reads %q, want the filed text quoted with its credential removed", text)
+	}
+}
