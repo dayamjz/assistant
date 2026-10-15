@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os/exec"
 	"slices"
+	"strings"
 )
 
 // ScriptedName is the name the scripted adapter answers to.
@@ -67,11 +68,11 @@ func (f *scriptedFactory) New(ctx context.Context, args []string) (Runner, error
 // refuses the pair if they ever disagree.
 type scriptedRunner struct{ *claudeRunner }
 
-// Capabilities declares resumable sessions and worker sessions, because both
-// mechanisms are here. Instruction suppression is not declared, for the
+// Capabilities declares resumable sessions, worker sessions and terminal
+// workers, because all three mechanisms are here. Instruction suppression is not declared, for the
 // reason the Claude Code adapter gives.
 func (r *scriptedRunner) Capabilities() Capabilities {
-	return Declare(CapabilityResumableSessions, CapabilityWorkerSessions)
+	return Declare(CapabilityResumableSessions, CapabilityWorkerSessions, CapabilityTerminalWorkers)
 }
 
 // Start launches the binary as a worker: the configured entry's own
@@ -96,4 +97,57 @@ func (r *scriptedRunner) Start(ctx context.Context, spec WorkerSpec) (Worker, er
 		return nil, err
 	}
 	return worker, nil
+}
+
+// StartInTerminal launches the binary as a terminal worker on t: the same
+// command line and environment Start uses, hosted on the terms
+// TerminalWorkerRunner's mechanism states, with every send typed as plain
+// lines through terminalLines. It is what makes this adapter a
+// TerminalWorkerRunner.
+func (r *scriptedRunner) StartInTerminal(ctx context.Context, t Terminal, spec WorkerSpec) (TerminalWorker, error) {
+	if err := spec.Validate(); err != nil {
+		return nil, err
+	}
+	worker, err := startTerminalWorker(ctx, t, procSpecTerminal{
+		bin:    r.resolved,
+		args:   slices.Clone(r.extra),
+		dir:    spec.Dir,
+		env:    WorkerEnvironment(r.settings.base, spec.Env),
+		grace:  r.settings.grace,
+		maxOut: r.settings.maxOut,
+	}, spec.Instructions, terminalLines)
+	if err != nil {
+		return nil, err
+	}
+	return worker, nil
+}
+
+// TerminalLineLimit is the longest line, in bytes and without its newline,
+// the scripted adapter's terminal framing types. The stand-in reads lines in
+// the terminal's line-editing mode, which bounds a line: on Linux a
+// 10000-byte line typed into a tmux pane reached the reading program as its
+// first 4095 bytes, which TestATerminalCutsALongLineTheFramingRefuses
+// records, and macOS's <limits.h> declares MAX_CANON as 1024, which no test
+// here has exercised. The limit is set below both, so a line is refused here
+// rather than cut there.
+const TerminalLineLimit = 1023
+
+// terminalLines is the scripted adapter's terminal framing: plainLine's bytes,
+// refused when any line is longer than TerminalLineLimit, with an error
+// wrapping ErrInvalidInvocation, before anything is typed.
+func terminalLines(text string) ([]byte, error) {
+	framed, err := plainLine(text)
+	if err != nil {
+		return nil, err
+	}
+	for i, line := range strings.Split(strings.TrimSuffix(string(framed), "\n"), "\n") {
+		if len(line) > TerminalLineLimit {
+			return nil, &invocationFieldError{
+				field: "text",
+				reason: fmt.Sprintf("line %d is %d bytes, over the %d a terminal worker's line may be typed with",
+					i+1, len(line), TerminalLineLimit),
+			}
+		}
+	}
+	return framed, nil
 }

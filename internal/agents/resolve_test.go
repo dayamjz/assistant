@@ -30,7 +30,10 @@ type stubFactory struct {
 	// workers says whether the runner carries the worker mechanism, on the
 	// same terms as sessions.
 	workers bool
-	args    []string
+	// terminals says whether the runner carries the terminal worker
+	// mechanism, on the same terms; it is built alone, without the other two.
+	terminals bool
+	args      []string
 	// namedOnly makes the factory decline AutoEligible.
 	namedOnly bool
 }
@@ -52,6 +55,8 @@ func (f *stubFactory) New(_ context.Context, args []string) (agents.Runner, erro
 func (f *stubFactory) runner() agents.Runner {
 	base := &stubRunner{name: f.name, declared: agents.Declare(f.declares...)}
 	switch {
+	case f.terminals:
+		return &terminalStubRunner{stubRunner: base}
 	case f.sessions && f.workers:
 		return &sessionWorkerStubRunner{sessionStubRunner: &sessionStubRunner{stubRunner: base}}
 	case f.sessions:
@@ -104,6 +109,18 @@ type workerStubRunner struct{ *stubRunner }
 func (r *workerStubRunner) Start(context.Context, agents.WorkerSpec) (agents.Worker, error) {
 	return nil, errStubWorkerReached
 }
+
+// terminalStubRunner carries the terminal worker mechanism and refuses to
+// start one, on workerStubRunner's terms.
+type terminalStubRunner struct{ *stubRunner }
+
+func (r *terminalStubRunner) StartInTerminal(context.Context, agents.Terminal, agents.WorkerSpec) (agents.TerminalWorker, error) {
+	return nil, errStubTerminalReached
+}
+
+// errStubTerminalReached is what a stub adapter's terminal mechanism answers
+// with.
+var errStubTerminalReached = errors.New("the stub adapter starts no terminal worker")
 
 // sessionWorkerStubRunner carries both mechanisms.
 type sessionWorkerStubRunner struct{ *sessionStubRunner }

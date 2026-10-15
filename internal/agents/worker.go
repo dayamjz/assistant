@@ -157,8 +157,15 @@ type Capture struct {
 	// Text is the retained output, which is the most recent of it.
 	Text string
 	// Dropped is how many bytes of earlier output were discarded to keep Text
-	// within the limit. Zero means Text is everything the worker wrote.
+	// within the limit. Zero means Text is everything the worker wrote,
+	// unless Uncounted says otherwise.
 	Dropped int64
+	// Uncounted is true when output may have been discarded before this
+	// package read it, by a host that keeps its own bounded history and no
+	// count of what it let go: a terminal worker's server is one. A pipe
+	// worker never sets it, because every byte it wrote reached the tail
+	// Dropped counts against.
+	Uncounted bool
 }
 
 // OpenWorker starts a worker on r. It is the only route to one this package
