@@ -826,7 +826,10 @@ Each has cost this repository more than one round of review.
   And whether anything is advancing a run is a third
   fact neither the record nor the checkpoint holds: it lives in the slot a run
   advances in, `report` reads it rather than inferring it, and it travels as
-  `machine.Run.Advancing`. It is also where PRD section 11's step 3 lives:
+  `machine.Run.Advancing`. The slot also holds the graph its segment runs, so
+  `machine.Run.Activity` (the stage, `pipeline.RoundOf` over the checkpoint's
+  counters, and when the checkpoint was appended) is read only for a run in
+  flight and never kept anywhere. It is also where PRD section 11's step 3 lives:
   `checkshold.go` re-reads a run's pull request before the hold the checks
   stage raised at `checks_timeout` elapse is resumed, at recovery and at a
   response, and only that hold, which `stages.ChecksTimeoutHeld` identifies
@@ -941,7 +944,11 @@ Each has cost this repository more than one round of review.
   the usage view: `runs --usage=WINDOW` answers with the open `usage.read`,
   totalled by `machine.UsageOf` from the invocation record, whose run and
   stage `internal/service`'s `containRunner` stamps from the context its
-  observe wrappers mark. A verb that acts on a run calls the service;
+  observe wrappers mark. So is the log view: `runs RUN --log=STAGE` answers
+  with the open `run.log`, a bounded tail of `home.StageLog`, which
+  `internal/service`'s `stagelog.go` alone writes (around every body, fix
+  round and agent call, redacted) and alone reads; it is evidence nothing
+  decides from. A verb that acts on a run calls the service;
   a verb whose job includes reporting that the service is down does not.
   Two commands stand outside that table, and together they are not a
   precedent for a third: each is the interface something external requires,

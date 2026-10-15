@@ -531,7 +531,7 @@ func TestAStalledRunRecordSurfaces(t *testing.T) {
 
 	// The control: a segment advancing the run is positive evidence, and
 	// the next pass absorbs on it rather than on time.
-	if err := l.service.claim(run.ID, func() {}); err != nil {
+	if err := l.service.claim(run.ID, func() {}, nil); err != nil {
 		t.Fatalf("claiming the run's slot: %v", err)
 	}
 	r = l.pass(t)
@@ -574,7 +574,7 @@ func TestASlotDisagreeingWithTheRecordSurfaces(t *testing.T) {
 	}
 	l := openLoop(t, h, records, nil, nil)
 	defer func() { _ = l.service.Close() }()
-	if err := l.service.claim(run.ID, func() {}); err != nil {
+	if err := l.service.claim(run.ID, func() {}, nil); err != nil {
 		t.Fatalf("claiming the run's slot: %v", err)
 	}
 

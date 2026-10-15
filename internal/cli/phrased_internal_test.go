@@ -187,6 +187,8 @@ func fixtures(t *testing.T) map[string]any {
 	halted := graph.StatusHalted
 	withDetails.Progress, withDetails.Position = &halted, "hold:test"
 	withDetails.Stages = []machine.Stage{{Stage: "test", Outcome: "passed", Ran: true}}
+	withDetails.Activity = &machine.Activity{Stage: "test", Round: 1, Limit: 3,
+		Since: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC), Active: 90 * time.Second}
 	return map[string]any{
 		"status":  status,
 		"run":     run,
@@ -213,6 +215,11 @@ func fixtures(t *testing.T) map[string]any {
 		"details":  withDetails,
 		"findings": fixtureDecision(),
 		"usage":    fixtureUsage(),
+		// The end of a review's log: the run, the stage and the path name it,
+		// and a reply carries what the agent wrote.
+		"log": machine.StageLog{Run: sampleID, Stage: "review", Path: filepath.Join(root, "logs", sampleID, "review.log"),
+			Written: true, Size: 4096, Omitted: 4000,
+			Text: "--- agent invocation: purpose review, agent claude\n--- reply:\nthe review found nothing\n--- end of reply\n"},
 		"doctor": machine.Doctor{
 			Checks: []machine.Check{
 				{Name: machine.CheckHome, OK: true, Blocking: true, Detail: root},
@@ -460,14 +467,15 @@ func TestTheUnphrasedRenderersPrintWhatTheyAreListedFor(t *testing.T) {
 }
 
 // TestTheMessagePointingAtEvidenceIsPhrased is P13 for the three evidence
-// documents PRD section 9 names. P13 lets an evidence document keep exact
+// documents PRD section 9 names, written by four rows because the log view is
+// part of the detail view. P13 lets an evidence document keep exact
 // identifiers and stage names and keeps the message that points at one
 // phrased, so a run carrying the two a run carries is rendered and each
 // document is taken out from behind its pointer; what is left - the
 // pointers, the run's head, the notice that its starting inputs were not
 // applied, and the decision - is held to the derived forbidden set line by
-// line. The usage view is an answer of its own, so it is rendered the way
-// runs --usage reaches it, through readOut, and held the same way.
+// line. The usage view and the log view are answers of their own, so each is
+// rendered the way runs reaches it, through readOut, and held the same way.
 //
 // It is not passed for looking at nothing. Each evidence fixture is shown to
 // carry a forbidden word on its own, so taking it out is what lets the rest
@@ -514,8 +522,8 @@ func TestTheMessagePointingAtEvidenceIsPhrased(t *testing.T) {
 		}
 		blocks = append(blocks, block)
 	}
-	if len(blocks)+len(answers) != 3 {
-		t.Fatalf("%d renderers are evidence; PRD section 9 names three evidence documents", len(blocks)+len(answers))
+	if len(blocks)+len(answers) != 4 {
+		t.Fatalf("%d renderers are evidence; PRD section 9 names three evidence documents, the detail view written by two", len(blocks)+len(answers))
 	}
 	for name, block := range answers {
 		var answered bytes.Buffer

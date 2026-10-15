@@ -96,13 +96,13 @@ func TestAnEndingThroughTheProtocolIsOrderedAgainstTheSegmentItEnds(t *testing.T
 		s := &Service{advancing: make(map[string]*slot)}
 		segment, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		if err := s.claim("run", cancel); err != nil {
+		if err := s.claim("run", cancel, nil); err != nil {
 			t.Fatalf("claiming the slot of a run nothing is advancing: %v", err)
 		}
 		if !s.isAdvancing("run") {
 			t.Fatal("a run whose slot a segment holds is not reported as advancing")
 		}
-		if err := s.claim("run", func() {}); !errors.Is(err, ErrRunAdvancing) {
+		if err := s.claim("run", func() {}, nil); !errors.Is(err, ErrRunAdvancing) {
 			t.Fatalf("a second segment was refused the slot with %v, want the run being advanced", err)
 		}
 
@@ -128,7 +128,7 @@ func TestAnEndingThroughTheProtocolIsOrderedAgainstTheSegmentItEnds(t *testing.T
 		// advanced, and isAdvancing answers false for this same slot, so
 		// borrowing that message would hand a caller the opposite of what the
 		// other surface reports about it.
-		refused := s.claim("run", func() {})
+		refused := s.claim("run", func() {}, nil)
 		if !errors.Is(refused, ErrRunEnding) {
 			t.Fatalf("a segment took the slot of a run whose ending was being written: %v", refused)
 		}
@@ -148,7 +148,7 @@ func TestAnEndingThroughTheProtocolIsOrderedAgainstTheSegmentItEnds(t *testing.T
 		// take it. Whether that caller then advances the run is a question for
 		// the record it read, which the slot no longer answers.
 		forget()
-		if err := s.claim("run", func() {}); err != nil {
+		if err := s.claim("run", func() {}, nil); err != nil {
 			t.Fatalf("the slot was not given back once the ending was written: %v", err)
 		}
 		if s.release("run") {

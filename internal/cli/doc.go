@@ -269,15 +269,16 @@
 // failure code, so a type added without a renderer fails loudly rather than
 // reaching a person as a Go value.
 //
-// The three that are not phrased are named in the renderings table, each
-// with its voice, and all three are evidence: a run's details, the findings
-// holding a decision and the usage view are the detail view, the relay of a
-// finding that needs a decision and the usage view, the three detailed
-// evidence documents PRD section 9 names, which P13 lets keep exact
-// identifiers and stage names. Each row carries the phrase-table row that
-// points a person at it, and writeEvidence, which the run renderer reaches
-// the first two through, and writePointed, which readOut reaches the usage
-// view through, write that row first, so the message pointing at the
+// The four that are not phrased are named in the renderings table, each
+// with its voice, and all four are evidence: a run's details and a stage's
+// log are the detail view, which PRD section 9 makes the log view part of,
+// and the findings holding a decision and the usage view are the relay of a
+// finding that needs a decision and the usage view, so the four rows are the
+// three detailed evidence documents that section names, which P13 lets keep
+// exact identifiers and stage names. Each row carries the phrase-table row
+// that points a person at it, and writeEvidence, which the run renderer
+// reaches the first two through, and writePointed, which readOut reaches the
+// usage view and the log view through, write that row first, so the message pointing at the
 // evidence is phrased like every other line; what a run says about a request
 // it did not apply is a status line and is a row beside the evidence rather
 // than part of it. A plan, which was the last unsettled row, is phrased:

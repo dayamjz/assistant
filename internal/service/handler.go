@@ -137,6 +137,8 @@ func (s *Service) handle(ctx context.Context, req ipc.Request) (json.RawMessage,
 		return call(ctx, req, func(ctx context.Context, r machine.UsageRequest) (machine.Usage, error) {
 			return s.usage(ctx, r)
 		})
+	case ipc.MethodRunLog:
+		return call(ctx, req, s.runLog)
 	case ipc.MethodServiceStop:
 		return call(ctx, req, func(ctx context.Context, r machine.LifecycleRequest) (machine.Lifecycle, error) {
 			return s.lifecycle(ctx, req, r, false)

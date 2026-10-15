@@ -352,9 +352,10 @@ func Coverage() []Established {
 				", enumerating that list rather than keeping one, with the fallback a typed refusal " +
 				"that prints no Go value; internal/cli's command-line tests drive init, doctor, eject " +
 				"and a push through the gate's hooks the same way. The renderers it enumerates as " +
-				"evidence, which are " + strings.Join(p13Evidence, ", ") + ", are the three detailed " +
-				"evidence documents PRD section 9 names, the detail view, the relay of a finding that " +
-				"needs a decision and the usage view, and keep exact identifiers and stage names as P13 lets them; " +
+				"evidence, which are " + strings.Join(p13Evidence, ", ") + ", write the three detailed " +
+				"evidence documents PRD section 9 names, the detail view, of which the log view is part, " +
+				"the relay of a finding that needs a decision and the usage view, and keep exact " +
+				"identifiers and stage names as P13 lets them; " +
 				"internal/cli's evidence test cites P13 for the phrase-table row pointing at each and " +
 				"every line beside them, against counterfeits it must reject. None is enumerated as " +
 				"unsettled: the plan, the last that was, speaks internal/custody's classes, refusals " +
@@ -387,7 +388,7 @@ var (
 	p13Covered = []string{"status", "run", "runs", "tasks", "task", "service", "event", "host stop", "host install",
 		"decision", "doctor", "lifecycle", "init", "plan", "eject", "health", "admission", "notification",
 		"task answer", "catch up", "marked seen", "fallback"}
-	p13Evidence  = []string{"details", "findings", "usage"}
+	p13Evidence  = []string{"details", "findings", "usage", "log"}
 	p13Remaining []string
 )
 

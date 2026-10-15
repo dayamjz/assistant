@@ -42,6 +42,10 @@ import (
 //   - A person's answer at a hold: respond records each path a held finding
 //     is located at as a follow-up, of kind answer, once the answer is
 //     accepted.
+//   - The stage's log: when each body and each fix round began and ended,
+//     with what it returned, written to PRD section 8's per-stage log, which
+//     stagelog.go owns. It is evidence, never read back here, and never
+//     state.
 //
 // The residual gaps:
 //
@@ -97,12 +101,14 @@ func (s *Service) observeStage(impl pipeline.Implementation) pipeline.Implementa
 			run := readText(in.State, pipeline.KeyRun)
 			mark := s.answerMark(run)
 			started := time.Now()
+			s.logBodyBegan(run, in.Stage, started)
 			out, err := body(withServing(ctx, in.Stage.String()), in)
 			// The end is the start plus the monotonic time elapsed, so a wall
 			// clock stepped back mid-execution cannot record an end before
 			// its start.
 			ended := started.Add(time.Since(started))
 			s.recordExecution(run, in.Stage, started, ended)
+			s.logBodyEnded(run, in.Stage, started, ended, out.Report, err)
 			if err == nil {
 				s.recordFindings(run, in.Stage, out.Report, mark)
 			}
@@ -128,7 +134,10 @@ func (s *Service) observeFixer(fixer pipeline.Fixer,
 			run := readText(in.State, pipeline.KeyRun)
 			before := readText(in.State, pipeline.KeyHead)
 			mark := s.answerMark(run)
+			started := time.Now()
+			s.logRoundBegan(run, in, started)
 			out, err := body(withServing(ctx, in.Stage.String()), in)
+			s.logRoundEnded(run, in.Stage, started, started.Add(time.Since(started)), out, err)
 			if err != nil {
 				return out, err
 			}

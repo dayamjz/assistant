@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/dayamjz/assistant/internal/graph"
 	"github.com/dayamjz/assistant/internal/store"
@@ -67,6 +68,31 @@ func (s *Store) Latest(ctx context.Context, run string) (graph.Checkpoint, error
 		return graph.Checkpoint{}, err
 	}
 	return decode(entry)
+}
+
+// LatestWritten is Latest with when that checkpoint was appended, which
+// internal/store records beside every entry and graph.Checkpoint does not
+// carry. A checkpoint of a running run is written immediately before the node
+// its position names starts, so for such a checkpoint this is when that node
+// began, to within the write; for any other it is only when the run came to
+// stand there.
+//
+// It is a read of the record of a run's position and nothing else, on the
+// terms store.LatestGraphCheckpoint states: the latest entry is a complete
+// position rather than the last line of an event log.
+func (s *Store) LatestWritten(ctx context.Context, run string) (graph.Checkpoint, time.Time, error) {
+	entry, err := s.records.LatestGraphCheckpoint(ctx, run)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return graph.Checkpoint{}, time.Time{}, fmt.Errorf("%w: %q", graph.ErrNoSuchRun, run)
+		}
+		return graph.Checkpoint{}, time.Time{}, err
+	}
+	c, err := decode(entry)
+	if err != nil {
+		return graph.Checkpoint{}, time.Time{}, err
+	}
+	return c, entry.WrittenAt, nil
 }
 
 // History implements [graph.CheckpointStore].

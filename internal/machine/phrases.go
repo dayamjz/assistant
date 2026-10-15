@@ -1045,6 +1045,17 @@ var (
 		Consequence: "It counts those calls and nothing else: a worker's own turns are not in it, it carries no price, and a count the agent did not report is shown as unreported rather than as nothing.",
 		Decision:    "Nothing to decide from it alone.",
 	}
+	// PhraseStageLogFollows points at the end of one stage's log in one run,
+	// part of the detail view's evidence: what the stage and its agent calls
+	// wrote, with each call's account and its full reply, under the exact
+	// names the log was written with. It says the text is cut to its end and
+	// has had credentials removed, because a reader who took either for the
+	// whole verbatim output would read it wrong.
+	PhraseStageLogFollows = Phrase{
+		Outcome:     "What this step of the run wrote while it worked follows, in the exact words it was recorded in.",
+		Consequence: "Only its end is shown, with a line saying where the whole of it is, and credentials were removed before it was kept.",
+		Decision:    "Nothing to decide from it alone.",
+	}
 	// PhraseInputsNotApplied is the row for a request whose run-starting
 	// inputs went to no run, because the branch already had one and the
 	// request attached to it. Which inputs they were is the structured
@@ -1467,7 +1478,7 @@ func TablePhrases() []Phrase {
 	out = append(out, InitPhrase(Init{}), InitPhrase(Init{Reattached: true}), EjectPhrase(Eject{Removed: true}), EjectPhrase(Eject{}))
 	out = append(out, PhraseAdmitted, PhraseValidationBegun, PhraseSupersededEarlier, PhraseNothingStartedFor, PhraseNothingSent, PhraseNoReading)
 	out = append(out, PhraseCopyBusy, PhraseCopyStillBusy)
-	out = append(out, PhraseRunRecordFollows, PhraseFindingsFollow, PhraseUsageFollows, PhraseInputsNotApplied, PhraseAnswerNotApplied)
+	out = append(out, PhraseRunRecordFollows, PhraseFindingsFollow, PhraseUsageFollows, PhraseStageLogFollows, PhraseInputsNotApplied, PhraseAnswerNotApplied)
 	out = append(out, phraseWaitingOnYou, phraseNothingWaiting, phraseLandedSince, phraseNothingLanded,
 		phraseUnderWay, phraseNothingUnderWay, phraseStoppedUndecided, phraseNothingStopped)
 	out = append(out, phraseWasMerged, phraseCopyCleared, LandedMorePhrase(LandedLimit), MarkedPhrase(Marked{}),

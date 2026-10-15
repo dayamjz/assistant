@@ -148,6 +148,17 @@ const (
 	// assistant runs --usage prints. It is open, because it reads and
 	// changes nothing, so a driving agent gets the same model a person does.
 	MethodUsageRead Method = "usage.read"
+	// MethodRunLog is PRD section 9's log view: the end of one stage's log in
+	// one run, section 8's per-stage log, bounded and saying what it left
+	// out, which assistant runs RUN --log=STAGE prints. It is open, because
+	// it reads and changes nothing, on run.get's terms. It is a wider read
+	// than run.get: a log holds each agent call's account and a fixer's whole
+	// reply, where a run's answer and a fix commit's body carry bounded
+	// summaries, so an agent inside a stage can read in full what an earlier
+	// round of any run said. That is text it reads and not a session it
+	// resumes, which is what P4 separates, but it is named here rather than
+	// left for a reader to assume the two reads are the same.
+	MethodRunLog Method = "run.log"
 	// MethodServiceStop stops the service.
 	MethodServiceStop Method = "service.stop"
 	// MethodServiceRestart restarts the service.
@@ -241,6 +252,7 @@ var specs = []Spec{
 	{MethodCatchUpRead, KindRequest, AccessOpen, "Read what waits on you, what landed unseen, what is under way, and what stopped."},
 	{MethodCatchUpMark, KindRequest, AccessRestricted, "Mark seen exactly the landed records a catch-up read showed."},
 	{MethodUsageRead, KindRequest, AccessOpen, "Read what the agent calls recorded in a window cost."},
+	{MethodRunLog, KindRequest, AccessOpen, "Read the end of one stage's log in one run."},
 	{MethodServiceStop, KindRequest, AccessRestricted, "Stop the service."},
 	{MethodServiceRestart, KindRequest, AccessRestricted, "Restart the service."},
 	{MethodEventsSubscribe, KindStream, AccessOpen, "Open the event stream."},

@@ -79,6 +79,30 @@ func (g *Graph) IsBackEdge(i int) bool {
 	return g.back[i]
 }
 
+// Entered reports how many times a run whose bound accounting is c has taken
+// an edge into node, summed over every edge that enters it. It is how a reader
+// asks a run's counters a question about one node without indexing the
+// positional traversal vector itself, which only means something against the
+// edges it was kept against.
+//
+// So it asks the same question a resume does first: counters this graph would
+// refuse to resume are refused here with the same *CheckpointError, rather
+// than read against edges that did not produce them. A node the graph does not
+// declare has been entered no times, which is not an error: a stage built
+// without a fix node has taken no automatic round, and that is the answer.
+func (g *Graph) Entered(c Counters, node string) (int, error) {
+	if err := g.validateCounters(c); err != nil {
+		return 0, err
+	}
+	total := 0
+	for i, e := range g.edges {
+		if e.To == node {
+			total += c.Traversals[i]
+		}
+	}
+	return total, nil
+}
+
 // NewState returns the initial state for a run: every declared key holding the
 // zero value of its declared kind, with values applied on top. An override
 // naming an undeclared key, or holding a value of the wrong kind, is refused.
