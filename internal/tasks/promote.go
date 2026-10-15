@@ -27,9 +27,9 @@ import (
 //
 // # The flip comes first, and it is one anchored write
 //
-// store.TransitionTaskShape writes the shape, the repository, the branch and
-// the delivery posture on the task row together with the "promoted" entry,
-// in one transaction,
+// store.TransitionTaskShape writes the shape, the repository, the branch,
+// the delivery posture and the delivery intent on the task row together with
+// the "promoted" entry, in one transaction,
 // anchored to the event sequence the resolution this promotion decided from
 // had read. Delivery protection therefore starts before the copy changes:
 // from the flip on, a cleanup decides over a delivery copy or refuses with
@@ -226,9 +226,11 @@ type Promotion struct {
 	// its current HEAD. It is held to intake's rules: the name, a branch
 	// that exists in the gate or has a run, and the same-branch floor.
 	Branch string
-	// Intent is what the delivery is to do, written under the task's
-	// instructions for the worker. It is refused empty: a delivery with
-	// nothing to do is not one, and the report is not it.
+	// Intent is what the delivery is to do. It is recorded on the task row
+	// in the flip, as store.Task.DeliveryIntent, which is what the run a
+	// worker's push of the branch starts reads, and written under the
+	// task's instructions for the worker. It is refused empty: a delivery
+	// with nothing to do is not one, and the report is not it.
 	Intent string
 	// Delivery is a delivery posture the coordinator asks to record in place
 	// of the project's, as text decoded by config.ParseDelivery, or empty to
@@ -373,7 +375,7 @@ func (q *Queue) Promote(ctx context.Context, req Promotion) (Promoted, error) {
 			q.betweenReadAndWrite()
 		}
 		out.Task, out.Event, err = q.store.TransitionTaskShape(ctx, req.Task, store.TaskInvestigation, store.TaskDelivery,
-			repository.ID, branch, posture, r.State.Basis.EventSequence, detail)
+			repository.ID, branch, posture, strings.TrimSpace(req.Intent), r.State.Basis.EventSequence, detail)
 		return err
 	}
 	release, err := q.hold(ctx, repository.ID, branch)
@@ -537,7 +539,10 @@ const isolationRefusedKind = "isolation-refused"
 // are appended to the instructions under. It is exported for one consumer,
 // internal/service's task intent (intakeInstructions in workers.go), which
 // reads the instructions file as the coordinator wrote it at intake and stops
-// at the first section the program appended, this one among them.
+// at the first section the program appended, this one among them. That
+// consumer reads the file only for a task with no recorded delivery intent,
+// so this section matters there only for a task promoted before the store
+// recorded one.
 const PromotionHeading = "## Promoted to delivery, written by the program at promotion"
 
 // appendPromotion appends the delivery intent and the second check to the

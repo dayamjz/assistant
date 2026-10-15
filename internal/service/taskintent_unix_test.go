@@ -12,6 +12,8 @@ import (
 	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/forge/forgetest"
 	"github.com/dayamjz/assistant/internal/gate"
+	"github.com/dayamjz/assistant/internal/ipc"
+	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/redact"
@@ -75,6 +77,12 @@ func TestAWorkersPushCarriesItsTasksIntentAndAPersonsDoesNot(t *testing.T) {
 	}
 	task := recordDispatchedTaskWith(t, h, repository, store.TaskDelivery, branch, store.Unknown[config.Delivery](),
 		project, instructions)
+	// The control for TestAPromotedTasksWorkerPushCarriesItsDeliveryIntent:
+	// a task never promoted records no delivery intent, so its run takes its
+	// body from the instructions intake wrote.
+	if recorded, err := records.Task(t.Context(), task); err != nil || recorded.DeliveryIntent.IsKnown() {
+		t.Fatalf("the task intake recorded reads %+v (%v), want no delivery intent", recorded, err)
+	}
 
 	provider := forgetest.New(t, forgetest.Script{
 		forgetest.OpRepository: {forgetest.Repository("dayamjz/assistant")},
@@ -166,6 +174,86 @@ func TestAWorkersPushCarriesItsTasksIntentAndAPersonsDoesNot(t *testing.T) {
 			if !strings.Contains(edited.Stdin, want) {
 				t.Fatalf("the person's pull request body does not carry %q:\n%s", want, edited.Stdin)
 			}
+		}
+	})
+}
+
+// A promoted task's worker push starts a run whose intent is the task's
+// project and the delivery intent its promotion recorded, under the source
+// "task", and not the investigation instructions intake wrote: the
+// investigation is launched by the service, promoted through task.promote
+// from outside every worker group with an intent carrying a credential, and
+// its worker pushes the promoted branch from inside its process group
+// through the real gate hooks. The run's record carries the project and the
+// delivery intent with the credential redacted, and neither the intake text
+// nor anything of the section promotion appended to the instructions file.
+// TestAWorkersPushCarriesItsTasksIntentAndAPersonsDoesNot is the control: a
+// task never promoted carries its intake instructions as before. Then a
+// person's push of the promoted branch, from outside every worker group,
+// starts a run with no intent, recorded as absent (P1: a person's push is
+// consent to validation, and nothing about it is read off a task).
+func TestAPromotedTasksWorkerPushCarriesItsDeliveryIntent(t *testing.T) {
+	principles.Cite(t, principles.P1)
+	const (
+		branch   = "task/promoted"
+		delivery = "Cap the images at 200 KB, mirroring from https://worker:s3cret@example.invalid/images.git."
+	)
+	launchedWorkerOf(t, store.TaskInvestigation, "", func(w launched) {
+		var promoted machine.TaskPromoted
+		if err := w.running.client.Call(t.Context(), ipc.MethodTaskPromote, machine.TaskPromoteRequest{
+			Task: w.task, Repository: w.repository.ID, Branch: branch, Intent: "\n" + delivery + "\n",
+		}, &promoted); err != nil {
+			t.Fatalf("the promotion: %v", err)
+		}
+		records := openRecords(t, w.home)
+		defer func() { _ = records.Close() }()
+		recorded, err := records.Task(t.Context(), w.task)
+		if err != nil || recorded.Shape != store.TaskDelivery || recorded.DeliveryIntent != store.Known(delivery) {
+			t.Fatalf("the promoted task reads %+v (%v), want a delivery task recording the intent it was promoted with",
+				recorded, err)
+		}
+		// The instructions file holds both texts, so the run's intent below
+		// is decided by which one the service read and not by what the file
+		// happened to hold.
+		path, err := w.home.TaskInstructions(w.task)
+		if err != nil {
+			t.Fatal(err)
+		}
+		file, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, want := range []string{"Do the work the coordinator asked for.", delivery} {
+			if !strings.Contains(string(file), want) {
+				t.Fatalf("the instructions file does not carry %q:\n%s", want, file)
+			}
+		}
+
+		head := workerPushes(t, w, branch)
+		worker := runSubmitted(t, records, w.repository.ID, head)
+		wantIntent := recorded.Project + "\n\nCap the images at 200 KB, mirroring from https://" + redact.Marker +
+			"@example.invalid/images.git."
+		if worker.Intent != wantIntent {
+			t.Fatalf("the promoted worker's run records the intent\n%q\nwant\n%q", worker.Intent, wantIntent)
+		}
+		if worker.IntentSource != "task" {
+			t.Fatalf("the promoted worker's run records the intent source %q, want task", worker.IntentSource)
+		}
+		for _, absent := range []string{"Do the work the coordinator asked for", "written by the program", "s3cret"} {
+			if strings.Contains(worker.Intent, absent) {
+				t.Fatalf("the promoted worker's run records an intent carrying %q:\n%s", absent, worker.Intent)
+			}
+		}
+
+		primary := w.repository.WorkingPath
+		own := git(t, primary, "rev-parse", "refs/heads/work")
+		if out, err := tryGitIn(t, primary, "push", "--force", gate.RemoteName, "work:refs/heads/"+branch); err != nil {
+			t.Fatalf("the person's push was refused:\n%s", out)
+		}
+		person := runSubmitted(t, records, w.repository.ID, own)
+		if person.Intent != "" || person.IntentSource != "absent" {
+			t.Fatalf("the person's run records the intent %q from %q, want none, recorded as absent",
+				person.Intent, person.IntentSource)
 		}
 	})
 }

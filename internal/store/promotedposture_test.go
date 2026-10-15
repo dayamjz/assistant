@@ -54,7 +54,7 @@ func TestTheDeliveryPostureIsWrittenOnceAtIntakeOrPromotion(t *testing.T) {
 	}
 	promoted := seedInvestigation(t, s, "taskaaaaaabb")
 	if _, _, err := s.TransitionTaskShape(ctx, promoted.ID, TaskInvestigation, TaskDelivery, "repo-1", "promoted",
-		config.DeliveryLocal, 2, "promoted in the test"); err != nil {
+		config.DeliveryLocal, "Deliver it.", 2, "promoted in the test"); err != nil {
 		t.Fatalf("the promotion's own write of the posture: %v", err)
 	}
 	if got := postureOf(t, s, promoted.ID); got != Known(config.DeliveryLocal) {

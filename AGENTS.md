@@ -783,10 +783,11 @@ Each has cost this repository more than one round of review.
   neither, always starting its run, and
   on Windows no peer is placed at all, which both files state as a limit.
   The run a worker's push of its own task's branch starts takes the task's
-  project and intake instructions as its intent, recorded under the source
-  `task` and never `supplied`, which `workers.go`'s `pushIntent` decides from
-  the same relation; a person's push carries none. Three
-  state events have producers here and `publish.go` owns two: `task.state` is
+  project and, for a promoted task, the delivery intent its promotion recorded
+  on the task row, or otherwise its intake instructions, as its intent,
+  recorded under the source `task` and never `supplied`, which `workers.go`'s
+  `pushIntent` decides from the same relation; a person's push carries none.
+  Three state events have producers here and `publish.go` owns two: `task.state` is
   published from the supervisor loop's pass, the one reader that resolves
   every task, once per change by `taskstate.Basis` equality and not per pass,
   and `hold.state` at the two sites a hold is written, as the store returned
