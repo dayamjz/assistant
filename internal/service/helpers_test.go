@@ -663,3 +663,25 @@ func afterIntent() []pipeline.Stage {
 	order := pipeline.Order()
 	return append([]pipeline.Stage(nil), order[1:]...)
 }
+
+// recordsOf opens the home's database read-only beside the service that
+// holds it, so what is asserted is the record.
+func recordsOf(t *testing.T, h *home.Home) *store.Store {
+	t.Helper()
+	records, err := store.OpenReadOnly(t.Context(), h.Database())
+	if err != nil {
+		t.Fatalf("opening the store read-only: %v", err)
+	}
+	t.Cleanup(func() { _ = records.Close() })
+	return records
+}
+
+// taskCount is how many tasks the home records.
+func taskCount(t *testing.T, h *home.Home) int {
+	t.Helper()
+	all, err := recordsOf(t, h).Tasks(t.Context())
+	if err != nil {
+		t.Fatalf("reading the tasks: %v", err)
+	}
+	return len(all)
+}
