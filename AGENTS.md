@@ -475,11 +475,14 @@ Each has cost this repository more than one round of review.
   open hold naming the task resolves `Held` above every run, `Validating` and
   `Ready` included, and below the terminal tier, read off the holds
   `TaskSnapshot` already carries; an answered hold is not read, and
-  `Basis.Hold` names the one that was. `Complete` for an investigation task is not
-  resolved: `internal/store` now holds the stored report and its holds, and
-  `internal/tasks` verifies them before the cleanup record, but the snapshot
-  does not carry the report and the tier declines rather than approximating,
-  which `doc.go` says. Read its `doc.go` for the residual gaps, and for why PRD
+  `Basis.Hold` names the one that was. The report tier, `SourceReport`, sits
+  between the run and the terminal: an investigation task with a stored
+  report resolves `Reported` whether its terminal is live or dead, read from
+  the `task_report` row `TaskSnapshot` carries as `ReportStoredAt` and never
+  from the `report-ready` entry beside it (P8); a promoted task is not read by
+  it. `Reported` is not `Complete`: an investigation never resolves
+  `Complete` in this build, because the edge's "findings relayed" has no
+  record here, which `doc.go` says. Read its `doc.go` for the residual gaps, and for why PRD
   section 8's "task state" row is read as a resolution rather than a row.
 - `internal/tasks` is PRD section 8's tasks module as far as this build takes
   it: intake, queueing, the P11 assertion, the P12 cleanup decision and
@@ -638,7 +641,10 @@ Each has cost this repository more than one round of review.
   owe a supervision cycle: a closed table over `taskstate.States()` that its
   test derives from that function, so a new state fails until placed, and
   `InFlightOf` reads it beside `store.UnacknowledgedWakes`, because a hold
-  nobody has been told about is in flight whatever its state says. Read its
+  nobody has been told about is in flight whatever its state says.
+  `terminal.go` is the same kind of closed table for which states have their
+  terminal read at all, every state but `Reported`, so a delivered
+  investigation raises no `terminal-gone`. Read its
   `doc.go` for the residual gaps: the
   check-result kind has no producer, the repetition count is read for the
   unchanged terminal alone, and freshness blocks falsely across a suspend or a clock
@@ -846,9 +852,11 @@ Each has cost this repository more than one round of review.
   under its number (`framedMessage`) so it can acknowledge it; a report
   filed while the worker runs keeps its copy with the live refusal, and
   `landed.go`'s pass asks again once the terminal is Dead without ever
-  ending a reported worker, which promotion may still need; and
-  reconciliation relaunches nothing whose newest entry is the report,
-  because `taskstate` resolves such a task Unknown over a dead terminal. `landed.go` ends a landed task's worker through the
+  ending a reported worker, which promotion may still need; and neither
+  reconciliation nor supervision treats a reported investigation's ended
+  worker as a crash, because `taskstate` resolves it `Reported`: the
+  reconciliation table leaves `Reported` alone, and the supervisor loop
+  reads no terminal `supervisor.TerminalWatched` excludes. `landed.go` ends a landed task's worker through the
   session this service holds and asks the decision again when the terminal
   is next observed `Dead`, from the supervisor's pass (once per reference
   per service life) and from `task.stop`; a `Dead` terminal is only the

@@ -218,19 +218,17 @@ assistant --json coordinator await --timeout 5m   # blocks, then lists queued wa
   is the supervision's cadence, not the wait's. Check
   `assistant coordinator supervision` at session start and after any exit
   `1` from `await`.
-- **A finished investigation reads `unknown`, not `reported`.** A worker
-  files its report through `assistant worker`, and the task's history then
-  ends in `report-ready`. While the worker runs, the task reads `running`;
-  once it has ended, `unknown` with `state.basis.process` `dead`, because a
-  dead terminal outranks the history. Read
-  `state.basis.event_kind` (`report-ready`) and `state.superseded` to see
-  the report's claim. The program does not relaunch such a task, but the
-  wake queue still reports its terminal as gone. Decisions the report
-  raised are holds; answer them with `assistant --task ID --answer ...`.
-  Promote an investigation before its worker ends: once it has ended and
-  nothing but the report's decisions holds the task, its copy is cleaned up
-  and it can no longer be promoted. A stop's hold keeps the copy until you
-  answer it.
+- **Promote an investigation before its worker ends.** Once a worker
+  files its report through `assistant worker`, the task reads `reported`
+  (`state.source` is `report`) whether its worker is still running or has
+  ended. The program does not relaunch it, and the wake queue does not
+  report its ended terminal as gone. Decisions the report raised are holds,
+  and the task reads `held` until you answer them with
+  `assistant --task ID --answer ...`. Once the worker has ended and nothing
+  but the report's decisions holds the task, its copy is cleaned up and it
+  can no longer be promoted. A stop's hold keeps the copy until you answer
+  it. A reported investigation reads `reported`, never `complete`, even
+  after its copy is gone.
 - **An orphaned command is placed as yours.** The service decides who is a
   worker by walking the caller's parent chain to the first process in a
   worker group, or that is itself a worker, so a worker's command in a

@@ -98,6 +98,8 @@
 // whose decisions were never registered cannot exist through this package;
 // the parsed report is opaque bytes here, and the hold keys are the one
 // fact the row holds about its contents, which is what cleanup verifies.
+// TaskSnapshot carries the row's existence, as the instant it was written,
+// for internal/taskstate's report tier, which resolves Reported from it.
 // Migration 21's run_copy_sweep table holds the third record about a run's
 // copy, RunCopySweep: what the latest sweep of a finished run's copy came to,
 // from a closed set, with the occasion that asked it. It is one row per run

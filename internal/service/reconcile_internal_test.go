@@ -68,6 +68,7 @@ func TestADeadTerminalInAHandedOffStateIsLeftAlone(t *testing.T) {
 		{taskstate.Validating, taskstate.SourceRun},
 		{taskstate.Ready, taskstate.SourceRun},
 		{taskstate.Reported, taskstate.SourceEvent},
+		{taskstate.Reported, taskstate.SourceReport},
 		{taskstate.Held, taskstate.SourceRun},
 		{taskstate.Landed, taskstate.SourceRecord},
 		{taskstate.Complete, taskstate.SourceRecord},
@@ -176,26 +177,32 @@ func TestTheRelaunchBoundCountsRelaunchesFromAttemptRows(t *testing.T) {
 }
 
 // An investigation whose worker filed its report and then ended resolves
-// Unknown from the process tier over its dead terminal, a relaunch row, and
-// is relaunched by nothing: the resolver recorded the report as the newest
-// entry it read. The control is the same resolution with any other newest
-// entry, which relaunches, and the same reading within the bound's hold
-// answered retry, which still relaunches nothing.
+// Reported from internal/taskstate's report tier over its dead terminal,
+// which the table leaves alone, past the bound with its hold answered retry
+// too. The control is an investigation with no stored report whose worker
+// died: Unknown from the process tier, which relaunches, and still does when
+// the resolver's newest entry is a report-ready line, because a line of the
+// history with no report row is not a delivery and nothing here reads it as
+// one any more (P8).
 func TestAReportedInvestigationIsNotRelaunched(t *testing.T) {
-	gone := taskstate.Resolution{State: taskstate.Unknown, Source: taskstate.SourceProcess,
-		Basis: taskstate.Basis{Process: taskstate.Dead, EventKind: store.ReportReadyEventKind}}
+	reported := taskstate.Resolution{State: taskstate.Reported, Source: taskstate.SourceReport,
+		Basis: taskstate.Basis{Process: taskstate.Dead, ReportStored: true, EventKind: store.ReportReadyEventKind}}
 	attempts := []store.TaskAttempt{{Sequence: 1}}
-	if got := decideReconciliation(gone, attempts, 2, relaunchAnswers{}); got.action != reconcileNothing || got.reason == "" {
-		t.Errorf("a reported investigation's dead terminal decides %+v, want nothing with a reason", got)
+	if got := decideReconciliation(reported, attempts, 2, relaunchAnswers{}); got.action != reconcileNothing {
+		t.Errorf("a reported investigation's dead terminal decides %+v, want nothing", got)
 	}
-	if got := decideReconciliation(gone, append(attempts, store.TaskAttempt{Sequence: 2}, store.TaskAttempt{Sequence: 3}), 1,
+	if got := decideReconciliation(reported, append(attempts, store.TaskAttempt{Sequence: 2}, store.TaskAttempt{Sequence: 3}), 1,
 		relaunchAnswers{bound: boundRetry}); got.action != reconcileNothing {
 		t.Errorf("a reported investigation past the bound with its hold answered retry decides %+v, want nothing", got)
 	}
-	working := gone
-	working.Basis.EventKind = "working"
-	if got := decideReconciliation(working, attempts, 2, relaunchAnswers{}); got.action != reconcileRelaunch {
-		t.Errorf("a dead terminal whose newest entry is not a report decides %+v, want a relaunch", got)
+	gone := taskstate.Resolution{State: taskstate.Unknown, Source: taskstate.SourceProcess,
+		Basis: taskstate.Basis{Process: taskstate.Dead, EventKind: "working"}}
+	if got := decideReconciliation(gone, attempts, 2, relaunchAnswers{}); got.action != reconcileRelaunch {
+		t.Errorf("a dead terminal with no stored report decides %+v, want a relaunch", got)
+	}
+	gone.Basis.EventKind = store.ReportReadyEventKind
+	if got := decideReconciliation(gone, attempts, 2, relaunchAnswers{}); got.action != reconcileRelaunch {
+		t.Errorf("a dead terminal whose newest entry is a report-ready line with no report row decides %+v, want a relaunch", got)
 	}
 }
 

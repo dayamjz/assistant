@@ -58,16 +58,16 @@ import (
 // derives the table's domain from taskstate.States, Sources and Livenesses,
 // so a state or a source added later fails until a row decides it.
 //
-// A reported investigation is the one shape the table's word for it does not
-// reach: internal/taskstate resolves a task whose terminal is Dead as
-// Unknown from SourceProcess, never from its history, so an investigation
-// whose worker filed its report and then ended reaches the table as Unknown
-// over a dead terminal, a relaunch row. decideReconciliation turns that row
-// into nothing when the resolution's newest entry, Basis.EventKind, is
-// store.ReportReadyEventKind, which only a stored report appends: the
-// resolver's own record of what it read, never the log's tail read here
-// (P8). An entry the worker appended after its report is newer, and such a
-// task is relaunched as any other whose worker is gone.
+// A reported investigation reaches the table as Reported over whatever its
+// terminal reads, from internal/taskstate's report tier, which reads the
+// stored report row and outranks the process tier, so the table's Reported
+// row is what leaves it alone and nothing here reads which entry was newest.
+// Before that tier existed such a task resolved Unknown from SourceProcess
+// once its worker ended, a relaunch row, and decideReconciliation turned it
+// into nothing on Basis.EventKind; that rule is gone because the resolution
+// it guarded against can no longer be produced for a task with a stored
+// report, and keeping it would have left a second, weaker owner of the same
+// fact.
 //
 // Surface and hold never come from the table. decideReconciliation turns a
 // relaunch row into a surface for a Failed whose deciding event is the
@@ -282,10 +282,6 @@ func decideReconciliation(r taskstate.Resolution, attempts []store.TaskAttempt, 
 	if r.State == taskstate.Failed && r.Source == taskstate.SourceEvent && r.Basis.EventKind == isolationRefusedKind {
 		return reconcileDecision{action: reconcileSurface, surfaced: surfacedIsolationRefused,
 			reason: "its copy was refused by the isolation assertion, which a relaunch would assert again"}
-	}
-	if r.Basis.EventKind == store.ReportReadyEventKind {
-		return reconcileDecision{action: reconcileNothing,
-			reason: "its newest entry is the report its worker filed, so the investigation is delivered"}
 	}
 	if answered.stopped == boundStop {
 		return reconcileDecision{action: reconcileNothing,

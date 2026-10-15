@@ -518,7 +518,11 @@
 // ambiguous-liveness row, while one whose process is gone reads Dead and is
 // relaunched. Both files state what the mechanism does not establish, a
 // dead terminal not being proof that nothing still writes in the copy among
-// it.
+// it. An investigation with a stored report is not a terminal gone with the
+// work not landed: internal/taskstate resolves it Reported from the report
+// row whatever its terminal reads, and the table leaves Reported alone, so
+// it is never relaunched, and reconcile.go says why the rule that read the
+// resolver's newest history entry for the same purpose was removed.
 //
 // The one change the fleet work makes to the run path is beside it, in
 // copy.go. A run's copy used to be cut after a fetch of the submitted commit
@@ -567,7 +571,11 @@
 // Options.Terminals is the seam the terminal reading arrives through, which
 // the product leaves to this service's own session provider, on
 // terminals.go's terms, so the loop absorbs an unchanged live worker on the
-// handle's evidence and surfaces a dead one.
+// handle's evidence and surfaces a dead one. The exception is a task that
+// resolves Reported: internal/supervisor's TerminalWatched leaves its
+// terminal unread, so an investigation whose worker ends after filing its
+// report raises no terminal-gone wake, while one that never reported still
+// does; supervise.go's header says why.
 //
 // # Four state events have a producer here, and publish.go owns two
 //
