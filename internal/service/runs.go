@@ -1736,9 +1736,11 @@ const (
 	// in this build fills it in.
 	intentSourceAbsent = "absent"
 	// intentSourceTask is an intent the program read off the task whose
-	// worker pushed the run's branch: the task's project and the
-	// instructions the coordinator wrote at intake, which workers.go's
-	// pushIntent decides from the worker group set and the task's records.
+	// worker pushed the run's branch: the task's project and, for a
+	// promoted task, the delivery intent its promotion recorded, or
+	// otherwise the instructions the coordinator wrote at intake, which
+	// workers.go's pushIntent decides from the worker group set and the
+	// task's records.
 	// Nobody stated it as acceptance criteria for this run, so it is never
 	// supplied, and a person's push of the same branch never carries it.
 	intentSourceTask = "task"

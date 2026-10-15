@@ -319,7 +319,7 @@ func promotedWithDecisions(t *testing.T, h *home.Home, subject, branch string) s
 		t.Fatalf("reading the investigation's history: %v (%d entries)", err, len(events))
 	}
 	if _, _, err := records.TransitionTaskShape(t.Context(), id, store.TaskInvestigation, store.TaskDelivery,
-		repository.ID, branch, config.DeliveryGated, events[len(events)-1].Sequence, "promoted with its decisions open"); err != nil {
+		repository.ID, branch, config.DeliveryGated, "Deliver it.", events[len(events)-1].Sequence, "promoted with its decisions open"); err != nil {
 		t.Fatalf("promoting the investigation: %v", err)
 	}
 	return id

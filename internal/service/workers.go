@@ -279,11 +279,14 @@ var noPushedIntent = pushedIntent{source: intentSourceAbsent}
 //
 // A run whose update is a task's own branch, in the repository the gate
 // resolved to, pushed from inside that task's worker group, takes its
-// intent from the task: the task record's project as the first line and the
-// task's instructions, as the coordinator wrote them at intake, as the body.
-// It is recorded under intentSourceTask, never intentSourceSupplied, so the
-// run starts with pipeline.Start.IntentSupplied false and every stage frames
-// it as a hint rather than as acceptance criteria a person stated.
+// intent from the task, as taskIntent composes it: the task record's project
+// as the first line, and as the body the delivery intent its promotion
+// recorded or, for a task with none, its instructions as the coordinator
+// wrote them at intake. It is recorded under intentSourceTask, never
+// intentSourceSupplied, so the run starts with pipeline.Start.IntentSupplied
+// false and every stage frames it as a hint rather than as acceptance
+// criteria a person stated, which is how PRD section 5 frames intent read off
+// a task.
 //
 // Everything else carries no intent, as every push did before: a person's
 // push, a push whose pusher's group could not be read (followed as a
@@ -296,11 +299,15 @@ var noPushedIntent = pushedIntent{source: intentSourceAbsent}
 // The text passes through internal/redact before it is recorded, because it
 // reaches the run record and, through the pull request stage, a code host.
 //
-// Residual gaps: the instructions file is a file under the home that the
-// worker's own user can write, so what it holds when the push arrives is as
-// trustworthy as that directory is against the worker, which is why the
-// intent is a hint and not a contract; and a task's instructions name what
-// the coordinator asked the worker for, which PRD section 5's "what the gate
+// Residual gaps: for a task with no recorded delivery intent, the
+// instructions file is a file under the home that the worker's own user can
+// write, so what it holds when the push arrives is as trustworthy as that
+// directory is against the worker. A promoted task's intent is read from the
+// task record instead, which no surface a worker is admitted to writes; the
+// database is still a file under the same home, so that is not a boundary
+// against a worker that writes the home's files directly. Either way the
+// intent is a hint and not a contract. And a task's intent names what the
+// coordinator asked the worker for, which PRD section 5's "what the gate
 // does not establish" leaves where it was: the lens measures the change
 // against that text and never asks where it came from.
 func (s *Service) pushIntent(ctx context.Context, from ipc.Request, found subject, update gate.RefUpdate) pushedIntent {
@@ -321,12 +328,21 @@ func (s *Service) pushIntent(ctx context.Context, from ipc.Request, found subjec
 	return pushedIntent{text: s.taskIntent(task), source: intentSourceTask}
 }
 
-// taskIntent composes a task's intent: its project, then its instructions as
-// intakeInstructions reads them. Instructions that cannot be read leave the
-// project alone, which is logged; intake refuses an empty project, so the
-// text is never empty for a task intake recorded.
+// taskIntent composes a task's intent: its project, then a body. A promoted
+// task's body is the delivery intent its promotion recorded on the task row,
+// store.Task.DeliveryIntent, and the instructions file is not read: what the
+// delivery is to do is that record, not the investigation the coordinator
+// wrote at intake. Every other task's body is its instructions as
+// intakeInstructions reads them, which is also what a task promoted before
+// the store recorded a delivery intent gets, since it has none to read.
+// Instructions that cannot be read leave the project alone, which is logged;
+// intake refuses an empty project, so the text is never empty for a task
+// intake recorded.
 func (s *Service) taskIntent(task store.Task) string {
 	project := strings.TrimSpace(task.Project)
+	if delivery, ok := task.DeliveryIntent.Get(); ok {
+		return redact.New().Redact(strings.TrimSpace(project + "\n\n" + strings.TrimSpace(delivery)))
+	}
 	body := ""
 	path, err := s.home.TaskInstructions(task.ID)
 	if err == nil {
@@ -354,11 +370,13 @@ func (s *Service) taskIntent(task store.Task) string {
 // words to the worker, and they carry a shell line naming paths under the
 // home, so they are not what the work is for and do not reach a code host.
 //
-// What that leaves out is a promoted task's delivery intent, which is in the
-// promotion section: such a task's run carries its project and its
-// investigation instructions. And text the coordinator wrote that happens to
-// begin a line with one of those headings ends its own instructions there,
-// which can only shorten the intent and never add to it.
+// A promoted task's delivery intent is in the promotion section and is not
+// read here: taskIntent reads it off the task record and does not call this
+// for such a task. The one promoted task that reaches this is one promoted
+// before the store recorded a delivery intent, whose run carries its project
+// and its investigation instructions. And text the coordinator wrote that
+// happens to begin a line with one of those headings ends its own
+// instructions there, which can only shorten the intent and never add to it.
 func intakeInstructions(text string) string {
 	end := len(text)
 	for _, heading := range []string{secondCheckHeading, tasks.PromotionHeading} {

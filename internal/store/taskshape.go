@@ -24,17 +24,26 @@ const PromotedEventKind = "promoted"
 var ErrShapeTransition = errors.New("store: the only shape transition is investigation to delivery")
 
 // TransitionTaskShape flips a task from one shape to the other and gives it
-// the repository, the branch and the delivery posture its new shape works
-// under, in one transaction with the event that records the move: the task
-// row's shape, repository_id, branch and delivery are written together, and
-// an event of kind PromotedEventKind with the given detail is appended, so a
-// task is never read as a delivery task naming no branch or as an
-// investigation task on one, and a task promoted through it is never read as
-// a delivery task with no posture. It returns the task as stored and the
-// event appended. The one move it makes is from TaskInvestigation to
-// TaskDelivery; any other pair is ErrShapeTransition, an empty repository or
-// branch is refused before anything is read, and so is a posture outside
-// config.Delivery's closed set, which is ErrUnknownDelivery.
+// the repository, the branch, the delivery posture and the delivery intent its
+// new shape works under, in one transaction with the event that records the
+// move: the task row's shape, repository_id, branch, delivery and
+// delivery_intent are written together, and an event of kind
+// PromotedEventKind with the given detail is appended, so a task is never
+// read as a delivery task naming no branch or as an investigation task on
+// one, and a task promoted through it is never read as a delivery task with
+// no posture or no intent. It returns the task as stored and the event
+// appended. The one move it makes is from TaskInvestigation to TaskDelivery;
+// any other pair is ErrShapeTransition, an empty repository, branch or intent
+// is refused before anything is read, and so is a posture outside
+// config.Delivery's closed set, which is ErrUnknownDelivery. The intent is
+// stored as given, on doc.go's terms for every column but the repository
+// URLs.
+//
+// The intent is Task.DeliveryIntent, and the triggers of the migration
+// promotedIntentMigration names hold it to this one write on the posture's
+// terms: an insert naming it is refused, and so is an update unless the row
+// had none, is given text that is not blank, and moves from investigation to
+// delivery in the same statement.
 //
 // The posture is the one write of the delivery column after CreateTask's,
 // and the schema holds it to that: migration 27's trigger refuses an update
@@ -67,7 +76,7 @@ var ErrShapeTransition = errors.New("store: the only shape transition is investi
 // which internal/tasks' Promote answers for, and the store records what it
 // was asked to. Its one writer is that function.
 func (s *Store) TransitionTaskShape(ctx context.Context, id string, from, to TaskShape, repository, branch string,
-	delivery config.Delivery, anchor int64, detail string) (Task, TaskEvent, error) {
+	delivery config.Delivery, intent string, anchor int64, detail string) (Task, TaskEvent, error) {
 	if strings.TrimSpace(id) == "" {
 		return Task{}, TaskEvent{}, fmt.Errorf("store: a shape transition names no task")
 	}
@@ -82,6 +91,9 @@ func (s *Store) TransitionTaskShape(ctx context.Context, id string, from, to Tas
 	}
 	if !delivery.Recognized() {
 		return Task{}, TaskEvent{}, fmt.Errorf("store: task %s: %w: %q", id, ErrUnknownDelivery, delivery)
+	}
+	if strings.TrimSpace(intent) == "" {
+		return Task{}, TaskEvent{}, fmt.Errorf("store: task %s: a promotion records what the delivery is to do", id)
 	}
 
 	now := nowUTC()
@@ -110,8 +122,8 @@ func (s *Store) TransitionTaskShape(ctx context.Context, id string, from, to Tas
 			return &TaskMovedError{Task: id, Anchor: AnchoredEvent, Expected: anchor, Stands: tip}
 		}
 		if _, err := tx.ExecContext(ctx,
-			`UPDATE task SET shape = ?, repository_id = ?, branch = ?, delivery = ? WHERE id = ?`,
-			string(to), repository, branch, string(delivery), id); err != nil {
+			`UPDATE task SET shape = ?, repository_id = ?, branch = ?, delivery = ?, delivery_intent = ? WHERE id = ?`,
+			string(to), repository, branch, string(delivery), intent, id); err != nil {
 			return err
 		}
 		sequence = tip + 1

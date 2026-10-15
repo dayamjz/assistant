@@ -516,7 +516,7 @@ flowchart LR
         <tr><th class="w-10">#</th><th class="w-32">Stage</th><th>What it does and why it sits here</th><th class="w-24">Fix rounds</th></tr>
       </thead>
       <tbody>
-        <tr><td class="prd-num">1</td><td><b>Intent</b></td><td>Establishes what you set out to do. Supplied intent is authoritative acceptance criteria; inferred intent is a low-confidence hint, and the two are framed differently in every downstream prompt. This stage never blocks a run.</td><td class="opacity-60">none</td></tr>
+        <tr><td class="prd-num">1</td><td><b>Intent</b></td><td>Establishes what you set out to do. Supplied intent is authoritative acceptance criteria; inferred intent is a low-confidence hint, and the two are framed differently in every downstream prompt. Intent read off the task a worker was given is a source of its own and is framed as inferred intent is: a hint, never acceptance criteria. This stage never blocks a run.</td><td class="opacity-60">none</td></tr>
         <tr><td class="prd-num">2</td><td><b>Rebase</b></td><td>Fetches fresh upstream and the branch target, then rebases onto them, so everything after runs against current code. Stops if the branch would quietly carry commits from your local default branch that were never pushed. If nothing remains to change, the run ends successfully and the rest is skipped.</td><td class="prd-num">3</td></tr>
         <tr><td class="prd-num">3</td><td><b>Review</b></td><td>Independent review of the change against the diff and your intent. Runs before tests so it reads code the fixer has not touched. Gets one automatic fix round, restricted to <code>fix</code> findings. Any <code>ask</code> finding holds immediately and is never included in that round.</td><td class="prd-num">1</td></tr>
         <tr><td class="prd-num">4</td><td><b>Test</b></td><td>Targeted validation of this change and this intent, not a full suite. If no targeted check can establish the intent, the stage must write one, verify manually with recorded evidence, or report that sufficient evidence is not possible.</td><td class="prd-num">3</td></tr>
@@ -664,9 +664,9 @@ flowchart LR
       <code>fix</code> or <code>ask</code>. A line being unexplained is not that bar. A change nobody
       asked for that is also wrong is reported for being wrong.</li>
     <li>The lens is measured against the recorded intent and inherits that intent's source. Against
-      supplied intent it compares a change to acceptance criteria; against inferred intent it
-      compares a change to a low-confidence hint, which is the second reason its default is
-      <code>note</code>.</li>
+      supplied intent it compares a change to acceptance criteria; against inferred intent, or
+      intent read off a task, it compares a change to a low-confidence hint, which is the second
+      reason its default is <code>note</code>.</li>
     <li>Being guidance, it is strengthened the way review is strengthened anywhere, through
       path-scoped review rules. No key in the configuration schema turns it off, and turning it off
       would not skip a stage, because it is not one.</li>

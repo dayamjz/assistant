@@ -55,6 +55,11 @@ const invocationServedMigration = "agent invocation run and stage"
 // for the reason sealCheckpointTableMigration is a constant.
 const runParkMigration = "run park record"
 
+// promotedIntentMigration names the migration that adds the delivery intent
+// a promotion records, for the reason sealCheckpointTableMigration is a
+// constant.
+const promotedIntentMigration = "task delivery intent recorded at promotion"
+
 // schema is the migration list this package applies. Adding a column means
 // appending a migration whose ALTER TABLE names a nullable column with no
 // default, so rows written before it reads back unknown; migrate refuses
@@ -1276,6 +1281,46 @@ var schema = []migration{
 				WHEN OLD.park IS NOT NULL OR NEW.park IS NULL OR OLD.status <> 'terminated'
 				BEGIN
 					SELECT RAISE(ABORT, 'store: a run''s park is written once, with the move that ends it terminated, and is not revised');
+				END`,
+		},
+	},
+	{
+		version: 29,
+		name:    promotedIntentMigration,
+		statements: []string{
+			// PRD section 5's promotion is given what the delivery is to do,
+			// and until this column the one place it went was the
+			// instructions file, which the worker is told to re-read and
+			// which its own user can write. This is the record of it that
+			// internal/service reads instead: the delivery intent as the
+			// coordinator asked for it, written by TransitionTaskShape in
+			// the same update that flips the shape, so no reader sees a
+			// promoted task without it or an investigation task with it.
+			//
+			// It is nullable with no default, so an investigation task, a
+			// task intake recorded as delivery, and a task promoted before
+			// this migration all read back unknown. The two triggers make it
+			// promotion's alone, on migration 27's terms: an insert naming a
+			// value is refused, because intake records no promotion; and an
+			// update naming the column is refused unless the row had none,
+			// is given text that is not blank, and moves from investigation
+			// to delivery in the same statement. No statement clears it and
+			// none revises it. An update that does not name the column
+			// cannot change it, so it does not reach the update trigger.
+			`ALTER TABLE task ADD COLUMN delivery_intent TEXT`,
+			`CREATE TRIGGER task_delivery_intent_is_not_inserted
+				BEFORE INSERT ON task
+				WHEN NEW.delivery_intent IS NOT NULL
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a task''s delivery intent is written by the promotion that makes it a delivery task, never at intake');
+				END`,
+			`CREATE TRIGGER task_delivery_intent_is_written_once
+				BEFORE UPDATE OF delivery_intent ON task
+				WHEN OLD.delivery_intent IS NOT NULL OR NEW.delivery_intent IS NULL
+					OR trim(NEW.delivery_intent) = ''
+					OR OLD.shape <> 'investigation' OR NEW.shape <> 'delivery'
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a task''s delivery intent is written once, by the promotion that makes it a delivery task, and is not revised');
 				END`,
 		},
 	},
