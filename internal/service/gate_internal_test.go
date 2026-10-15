@@ -31,7 +31,7 @@ func TestEveryPathThatCreatesARunAsksForTheBranchGateFirst(t *testing.T) {
 			return err
 		}},
 		{"rerun", func(ctx context.Context, s *Service) error {
-			_, err := s.claimRerun(ctx, key, "head")
+			_, err := s.claimRerun(ctx, key, "head", "")
 			return err
 		}},
 		{"push", func(ctx context.Context, s *Service) error {

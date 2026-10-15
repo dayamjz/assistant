@@ -89,9 +89,10 @@ type StoredReport struct {
 	Holds []store.Hold
 	// Event is the store.ReportReadyEventKind entry the store appended to
 	// the task's history in the same transaction as Record. It claims
-	// Reported at internal/taskstate's event tier; whether that claim is
-	// the answer is the resolver's precedence, which a live or dead
-	// terminal outranks.
+	// Reported at internal/taskstate's log tier, which is never what
+	// resolves an investigation task with a stored report: the resolver
+	// reads Reported from Record's row instead, at a tier above the
+	// terminal (P8).
 	Event store.TaskEvent
 	// Evidence is the path of the evidence copy.
 	Evidence string

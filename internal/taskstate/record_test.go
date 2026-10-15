@@ -82,11 +82,11 @@ func TestTheRecordTierOutranksTheRun(t *testing.T) {
 	}
 
 	// An investigation task that names a merged run is Landed and no more:
-	// Complete on its edge needs facts no record holds in this build.
+	// the terminal tier resolves no Complete for an investigation.
 	investigation := store.Task{ID: "t", Shape: store.TaskInvestigation}
 	got = Resolve(Inputs{Task: investigation, Runs: []store.Run{runIn("r1", store.RunPassed, 1)}, MergeRecords: []store.MergeRecord{merged("r1", 7)}, Cleanup: cleanup(true)})
 	if got.State != Landed {
-		t.Fatalf("an investigation task landed and removed resolved %s, want landed: nothing records its report or its holds", got.State)
+		t.Fatalf("an investigation task landed and removed resolved %s, want landed: the tier resolves no Complete for an investigation", got.State)
 	}
 }
 
@@ -259,10 +259,12 @@ func TestAWorkerEventNamedLandedChangesNothing(t *testing.T) {
 // Complete through the store. A delivery task's cleanup record, proof then
 // removal, on a Landed task resolves Complete and on a Ready task leaves it
 // Ready. An investigation task with a report-ready entry, a registered hold
-// and a removal stays Reported: PRD section 5's edge asks for a stored report
-// and registered holds, and no record in this build holds the first, so the
-// state is unreachable rather than approximated. When such a record exists
-// this is the test that moves to Complete.
+// and a removal is never Complete: the terminal tier does not resolve
+// Complete for an investigation at all, and this one has the history entry
+// and no report row, so with no terminal to observe the log is what answers
+// Reported. The same task with a stored report resolves Reported from the
+// report tier instead, which TestAFiledReportIsReadThroughTheSnapshot
+// checks.
 func TestCompleteIsLandedAndRemovedForADeliveryTask(t *testing.T) {
 	ctx := context.Background()
 	s := openStore(t)
@@ -330,7 +332,8 @@ func TestCompleteIsLandedAndRemovedForADeliveryTask(t *testing.T) {
 		t.Fatalf("RegisterHold: %v", err)
 	}
 	// While its hold is open the investigation waits on a person, which the
-	// hold tier says above the report entry; answered, the entry decides.
+	// hold tier says above the report entry; answered, the entry decides,
+	// because no report row was stored for it.
 	if got := resolveTask(t, s, inquiry.ID); got.State != Held || got.Source != SourceHold {
 		t.Fatalf("an investigation with a report entry and an open hold resolved %s from %s, want held from the hold", got.State, got.Source)
 	}
@@ -342,7 +345,7 @@ func TestCompleteIsLandedAndRemovedForADeliveryTask(t *testing.T) {
 	}
 	recordCleanup(inquiry.ID, store.TaskInvestigation)
 	if got := resolveTask(t, s, inquiry.ID); got.State != Reported || got.Source != SourceEvent || !got.Basis.CleanupRemoved {
-		t.Fatalf("an investigation removed resolved %s from %s (basis %+v); Complete needs a stored report, which no record holds",
+		t.Fatalf("an investigation removed resolved %s from %s (basis %+v); the terminal tier resolves no Complete for an investigation",
 			got.State, got.Source, got.Basis)
 	}
 }

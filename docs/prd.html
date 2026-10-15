@@ -1116,9 +1116,10 @@ stateDiagram-v2
     <li>A terminal record the program wrote once for this task: Landed, derived from the merge record the code-host read writes or, for a <code>local</code> task, from the local landing record, or Complete, the cleanup proof. This outranks a run, because a passed run resolves Ready forever and only a record of what happened after it can move a task past that. A terminal record is final for the task. A run attributed to the same branch afterwards does not displace it. Work that continues after Landed is a new task.</li>
     <li>The hold tier: an open hold naming this task, which resolves Held, because the task is waiting on you. It sits below the terminal record and above the run, so a task waiting on you never resolves Failed or Unknown, and a terminal record still outranks it.</li>
     <li>A validation run attributed to this task's own branch, whether active or finished. This outranks everything below, because a worker handed off to the gate stops writing to its own log.</li>
+    <li>A stored report: an investigation task whose report is stored resolves Reported. The report is a record the program wrote once, not an event, so it outranks the terminal below it: a worker still running after it filed and a worker whose terminal has ended have both delivered, and neither is a crash. The answer rests on the stored report and never on the log entry that says one was filed. A stored report is not Complete: Complete for an investigation stays the terminal record of the lifecycle's Reported to Complete edge, in the first tier, and is not inferred from the report or from the cleanup proof alone, so a reported investigation whose copy is gone without that record still resolves Reported. A promoted task is a delivery task and is not read by this tier.</li>
     <li>A live process signal from the task's terminal.</li>
     <li>The event log, and only when its most recent event maps to a recognized state.</li>
-    <li>Otherwise, unknown. A dead terminal with no attributed run reports unknown rather than trusting a stale event.</li>
+    <li>Otherwise, unknown. A dead terminal with no attributed run and no stored report reports unknown rather than trusting a stale event.</li>
   </ol>
   <p class="mb-8 opacity-90">
     An event that closes a decision is decision-only: it never becomes current state, and its text
@@ -1181,7 +1182,7 @@ flowchart TD
     <div class="card card-border bg-base-200">
       <div class="card-body">
         <h4 class="card-title text-sm">Absence of evidence surfaces</h4>
-        <p class="text-xs opacity-90">A wake is absorbed only when something positively proves work is proceeding. A worker that finished, crashed, or silently stopped produces no such proof, so it surfaces. Never absorb on elapsed time alone. Two kinds surface always and are never read as no change: terminal gone, which is a capture that failed, a probe that could not observe the terminal, or a terminal that died; and a run moved to held, which carries no worker event at all, because the supervisor that notices a stall is the one that notices a hold.</p>
+        <p class="text-xs opacity-90">A wake is absorbed only when something positively proves work is proceeding. A worker that finished, crashed, or silently stopped produces no such proof, so it surfaces. Never absorb on elapsed time alone. Two kinds surface always and are never read as no change: terminal gone, which is a capture that failed, a probe that could not observe the terminal, or a terminal that died; and a run moved to held, which carries no worker event at all, because the supervisor that notices a stall is the one that notices a hold. A task that resolves Reported from its stored report is not watched for terminal gone: its worker has delivered, so a terminal that ends after the report is the work finishing, not a crash, and the report's own decisions reach you as holds.</p>
       </div>
     </div>
     <div class="card card-border bg-base-200">
@@ -2041,7 +2042,7 @@ flowchart TB
         <tr><td><code>assistant init</code></td><td>Create or repair the gate for this repository.</td></tr>
         <tr><td><code>assistant status</code></td><td>Repository, gate, service, active run, and local branch state.</td></tr>
         <tr><td><code>assistant runs</code></td><td>Recent runs, newest first.</td></tr>
-        <tr><td><code>assistant rerun</code></td><td>Start a fresh run from the last known head, inheriting the recorded intent. The last known head is the commit the branch's last run pushed, or the commit it was submitted with when it pushed nothing. When the checkout stands on another commit, rerun refuses and starts nothing: behind what the run pushed, it names <code>assistant sync</code>; anywhere else, it names a push to the gate or a start with an intent.</td></tr>
+        <tr><td><code>assistant rerun</code></td><td>Start a fresh run from the last known head, inheriting the recorded intent. The last known head is the commit the branch's last run pushed, or the commit it was submitted with when it pushed nothing. When the checkout stands on another commit, rerun refuses and starts nothing: behind what the run pushed, it names <code>assistant sync</code>; anywhere else, it names a push to the gate or a start with an intent. Given <code>--intent</code>, the fresh run takes that intent in place of the recorded one and records it as supplied, which is acceptance criteria, the standing an intent given to a start has when nothing is said about it. That is all a replaced intent changes: the head a rerun validates and its refusal are the same with it or without it. An empty intent is refused as incorrect usage and starts nothing.</td></tr>
         <tr><td><code>assistant sync</code></td><td>Reconcile your local branch with what the pipeline pushed, or recover work it holds. Prints the exact plan and requires confirmation.</td></tr>
         <tr><td><code>assistant tasks</code></td><td>List fleet work with its resolved current state.</td></tr>
         <tr><td><code>assistant watch</code></td><td>Fleet view: everything in flight, everything waiting on you.</td></tr>
@@ -2097,6 +2098,13 @@ flowchart TB
     way. Given a task with no hold of its own open, it answers the hold on the task's current run,
     so a run a task produced is answered without checking out the task's branch. No verb is added
     for it.
+  </p>
+  <p class="mb-4 opacity-90">
+    Ending a run is a flag on <code>assistant</code> too, <code>--cancel</code>. Alone it ends this
+    branch's run, wherever it stands. Written <code>--cancel=RUN</code> it ends the run named, and it
+    reads no working copy, so it ends that run from anywhere. A run the home has no record of, and a
+    run that has already ended, are refused as incorrect usage, in a sentence saying there was nothing
+    to end and why, and nothing changes. No verb is added for it.
   </p>
   <p class="mb-4 opacity-90">
     Standing consent is a flag on <code>assistant</code> too, <code>--standing-consent</code>, and it
