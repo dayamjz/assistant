@@ -219,6 +219,42 @@ type Finding struct {
 	// Action decides who resolves the finding. Anything unrecognized becomes
 	// ActionAsk in Normalize, and only ActionFix is ever fix-eligible.
 	Action Action `json:"action,omitempty"`
+	// ActionDefaulted records that Action is P3's default rather than what
+	// the stage said: the stage stated no action, an empty one, one this
+	// package does not recognize, or one that was not a string, and Normalize
+	// resolved it to ActionAsk. It is false for an action the stage stated,
+	// ask included, so after Normalize the two ways a finding comes to be an
+	// ask stay distinguishable once the raw value is gone.
+	//
+	// Normalize owns it, on terms that only ever fail toward a person. It sets
+	// it for an action Action.Stated rejects, clears it for a fix or a note,
+	// and leaves it as it stands on a stated ask, so a report normalized,
+	// stored, and normalized again keeps it. A value a stage wrote into this
+	// field itself is therefore believed only where it makes an ask the
+	// defaulted kind, which can hold a finding for a person and can never
+	// make anything fix-eligible: FixEligible does not read it.
+	//
+	// What reads it is a caller deciding whether a program may answer a hold
+	// on a person's behalf, internal/service's standing consent; P3's point is
+	// that an action nobody could read waits for a human. A finding built by
+	// hand and never normalized, and a report stored before the field
+	// existed, carry false whatever the stage said.
+	ActionDefaulted bool `json:"action_defaulted,omitempty"`
+	// RemedyOutsideChange records that what resolves this finding lies
+	// outside the change under validation: a configuration key, which the
+	// branch under validation cannot set for itself, or a stage body this
+	// build does not have. No edit a fix round makes to the change can
+	// resolve it, so a round asked for it is spent on nothing.
+	//
+	// The program sets it where it builds such a finding, and the finding
+	// says so rather than a list of identifiers somewhere else, so the fact
+	// has one owner and travels with the report through storage. It decides
+	// nothing about Action and is not read by FixEligible, Holds, Fixable, or
+	// Held. What reads it is a caller deciding whether a program may answer a
+	// hold with a fix round, internal/service's standing consent, which
+	// leaves such an ask for a person. A stage's agent can write it too, and
+	// that only ever keeps one of its own asks for a person.
+	RemedyOutsideChange bool `json:"remedy_outside_change,omitempty"`
 	// Location is where the finding is, and may name nothing.
 	Location Location `json:"location,omitzero"`
 	// Cites are the repository-relative paths this finding relies on beyond
@@ -253,12 +289,20 @@ func (f Finding) FixEligible() bool { return f.Action == ActionFix }
 func (f Finding) Holds() bool { return f.Action == ActionAsk }
 
 // normalized returns the finding with its text trimmed, its action and
-// severity resolved to recognized values, and a negative line replaced by
+// severity resolved to recognized values, whether its action was defaulted
+// recorded on ActionDefaulted's terms, and a negative line replaced by
 // zero. It does not touch the identifier; NormalizeFindings owns that, because
 // assigning one requires seeing the whole set.
 func (f Finding) normalized() Finding {
 	f.ID = strings.TrimSpace(f.ID)
+	stated := f.Action.Stated()
 	f.Action = ParseAction(string(f.Action))
+	switch {
+	case !stated:
+		f.ActionDefaulted = true
+	case f.Action != ActionAsk:
+		f.ActionDefaulted = false
+	}
 	f.Severity = ParseSeverity(string(f.Severity))
 	f.Description = strings.TrimSpace(f.Description)
 	f.Cites = trimmedEntries(f.Cites)

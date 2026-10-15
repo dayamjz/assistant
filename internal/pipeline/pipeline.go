@@ -178,11 +178,13 @@ func wire(b *graph.Builder, stage Stage, impl Implementation, fixer Fixer, round
 		// bound first for the reason the automatic entry does: every return
 		// follows an entry it counted.
 		//
-		// The edge back is graph.Edge.Answered: every traversal follows the
-		// person's answer at the hold, which internal/graph checks at build,
-		// so a round that changed nothing returns to the hold for them to see
-		// rather than parking the run on convergence. RequestedFixRounds and
-		// the run-wide budget still bound it.
+		// The edge back is graph.Edge.Answered: every traversal follows an
+		// answer at the hold, which internal/graph checks at build, so a
+		// round a person asked for that changed nothing returns to the hold
+		// for them to see rather than parking the run on convergence. A round
+		// asked for by an unattended answer is not exempt, which
+		// internal/graph decides from how the answer was given.
+		// RequestedFixRounds and the run-wide budget bound both.
 		//
 		// The edge in is guarded on the answer key rather than on the
 		// outcome the hold node writes from it. Both say the same thing once

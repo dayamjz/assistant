@@ -100,6 +100,8 @@ func ResolvedByProgram() Resolver { return Resolver{name: "program"} }
 // decide it: the program did, on consent given in advance. Recording both
 // under one value would make a history unable to say which of the two
 // happened, which is the misattribution this vocabulary exists to prevent.
+// PRD section 8 names it as the second member the service resolves as, and
+// draws that same line between the two.
 //
 // It has one producer, internal/service's consent.go, and a test there holds
 // it to that. Like every member it records and does not gate.

@@ -54,7 +54,9 @@ func (s *Service) handle(ctx context.Context, req ipc.Request) (json.RawMessage,
 			return s.view(ctx, r.Run)
 		})
 	case ipc.MethodRunStart:
-		return call(ctx, req, s.start)
+		return call(ctx, req, func(ctx context.Context, r machine.StartRequest) (machine.Run, error) {
+			return s.startTo(ctx, req, r)
+		})
 	case ipc.MethodRunRerun:
 		return call(ctx, req, s.rerun)
 	case ipc.MethodRunRespond:

@@ -32,6 +32,14 @@
 //     are built on that one predicate, so neither can return an ask or a note.
 //     Held and Report.Held select the other way, on ActionAsk.
 //
+// Normalize also records which of the two ways an ask came about, on
+// Finding.ActionDefaulted: the stage said "ask", or P3 supplied it. The raw
+// value is gone after Normalize, and this one bit is what survives of it, so a
+// caller deciding whether a program may answer a hold on a person's behalf can
+// leave P3's asks to a person. The bit is sticky on an ask and cleared on a
+// fix or a note, so it can hold a finding for a person and never make one
+// fix-eligible.
+//
 // # Agent output is untrusted input
 //
 // ParseReport takes whatever an agent printed and either returns a normalized,

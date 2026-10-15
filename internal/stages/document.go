@@ -323,6 +323,10 @@ func noDocumentCommandConfigured() findings.Report {
 			ID:       "document-no-command",
 			Severity: findings.SeverityWarning,
 			Action:   findings.ActionAsk,
+			// The remedy is a configuration key the branch under
+			// validation cannot set for itself, so no fix round can
+			// resolve this; standing consent leaves it for a person.
+			RemedyOutsideChange: true,
 			Description: "No document command is configured, so the document stage had nothing to " +
 				"run and could not update documentation or verify that it is current. " +
 				"Setting commands.document in the repository's configuration document on the default " +

@@ -52,25 +52,49 @@ func consentingSubject(t *testing.T, h *home.Home, trusted string) string {
 }
 
 // reviewWithFindings is the stand-in a consenting run is driven against: its
-// first review reports one fix finding, one ask finding, and one whose action
-// nobody stated, all located on the path the change touched so the review's
+// first review reports one fix finding and one ask finding the reviewer
+// stated, both located on the path the change touched so the review's
 // binding keeps them; every review after that is clean; and every other
 // invocation, which is a fix round, says it resolved what it was given.
 func reviewWithFindings(t *testing.T) *standin.Agent {
 	t.Helper()
+	return reviewThen(t, statedFindings()...)
+}
+
+// statedFindings is reviewWithFindings' first review: a fix finding and an
+// ask finding, each with the action the reviewer stated.
+func statedFindings() []findings.Finding {
 	located := findings.Location{Path: "work.txt", Line: 1}
+	return []findings.Finding{
+		{ID: "rename", Severity: findings.SeverityWarning, Action: findings.ActionFix,
+			Location: located, Description: "the name says the opposite of what the file holds"},
+		{ID: "scope", Severity: findings.SeverityWarning, Action: findings.ActionAsk,
+			Location: located, Description: "this widens what the change was asked to do"},
+	}
+}
+
+// reviewThen is a stand-in whose first review reports first, every review
+// after that is clean, and every other invocation, which is a fix round,
+// says it resolved what it was given.
+func reviewThen(t *testing.T, first ...findings.Finding) *standin.Agent {
+	t.Helper()
 	return standin.New(t, standin.Script{Steps: []standin.Step{
-		{Match: standin.MatchReview(), Reply: standin.Reviewed("three findings",
-			findings.Finding{ID: "rename", Severity: findings.SeverityWarning, Action: findings.ActionFix,
-				Location: located, Description: "the name says the opposite of what the file holds"},
-			findings.Finding{ID: "scope", Severity: findings.SeverityWarning, Action: findings.ActionAsk,
-				Location: located, Description: "this widens what the change was asked to do"},
-			findings.Finding{ID: "unstated", Severity: findings.SeverityWarning,
-				Location: located, Description: "a finding whose reviewer stated no action"},
-		)},
+		{Match: standin.MatchReview(), Reply: standin.Reviewed("the first review's findings", first...)},
 		{Match: standin.MatchReview(), Times: standin.Always, Reply: standin.Reviewed("the change reads cleanly")},
 		{Times: standin.Always, Reply: standin.Text("resolved the selected findings")},
 	}})
+}
+
+// fixRounds is every call the agent took that was not a review, which in
+// these runs is every fix round.
+func fixRounds(agent *standin.Agent) []standin.Call {
+	var rounds []standin.Call
+	for _, call := range agent.Calls() {
+		if !strings.Contains(call.Prompt, "It must be exactly ") {
+			rounds = append(rounds, call)
+		}
+	}
+	return rounds
 }
 
 // consentOptions is a service whose run walks the real rebase, review, push
@@ -158,25 +182,20 @@ func consentAnswers(t *testing.T, records *store.Store, runID string) []store.Ho
 	return out
 }
 
-// A run whose review reports a fix finding, an ask finding and a finding with
-// no stated action reaches checks-passed with nobody answering it, because it
-// runs under standing consent: the review's hold is answered with one fix
-// round over all three, the hold that round leaves so its result is seen is
-// accepted, and the run walks on through the real push and pull request
+// A run whose review reports a fix finding and an ask finding, each with the
+// action the reviewer stated, reaches checks-passed with nobody answering it,
+// because it runs under standing consent: the review's hold is answered with
+// one fix round over both, the hold that round leaves so its result is seen
+// is accepted, and the run walks on through the real push and pull request
 // bodies. Each answer is recorded as the program's under its own member of
 // the closed set and never as a person's or a caller's, and the run record,
 // the run listing and the pull request body each say the run ran under
 // standing consent.
 //
-// P3 is cited because the finding with no stated action is the case it
-// covers: it became an ask and stopped the stage at a hold rather than
-// entering the automatic loop, and the hold was answered by the consent the
-// operator gave, with the record saying so. P1 is cited because consent here
-// is given on purpose, per run, by the flag, and is not implied by the push or
-// the key alone.
+// P1 is cited because consent here is given on purpose, per run, by the flag,
+// and is not implied by the push or the key alone.
 func TestARunUnderStandingConsentReachesChecksPassedUnattended(t *testing.T) {
 	principles.Cite(t, principles.P1)
-	principles.Cite(t, principles.P3)
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
 	subject := consentingSubject(t, h, allowsConsent)
@@ -207,16 +226,11 @@ func TestARunUnderStandingConsentReachesChecksPassedUnattended(t *testing.T) {
 		}
 
 		// One fix round, over every finding that was not a note.
-		var rounds []standin.Call
-		for _, call := range agent.Calls() {
-			if !strings.Contains(call.Prompt, "It must be exactly ") {
-				rounds = append(rounds, call)
-			}
-		}
+		rounds := fixRounds(agent)
 		if len(rounds) != 1 {
 			t.Fatalf("the fixer was invoked %d times, want once", len(rounds))
 		}
-		for _, said := range []string{"the name says the opposite", "this widens what the change", "whose reviewer stated no action"} {
+		for _, said := range []string{"the name says the opposite", "this widens what the change"} {
 			if !strings.Contains(rounds[0].Prompt, said) {
 				t.Fatalf("the round was not asked to resolve %q:\n%s", said, rounds[0].Prompt)
 			}

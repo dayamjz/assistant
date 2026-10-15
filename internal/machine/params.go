@@ -88,6 +88,15 @@ type StartRequest struct {
 	// internal/service decides in source, so no value here can make a record
 	// say a person or a caller decided.
 	StandingConsent bool `json:"standing_consent,omitempty"`
+	// Task selects the run through a task instead of a working copy, for
+	// standing consent alone: the run selected is the task's current run, on
+	// RespondRequest.Task's terms, and the call attaches to it with
+	// StandingConsent and never starts one. It is how a coordinator puts a
+	// task's run under consent without checking the task's branch out. A
+	// request naming a task is refused as invalid unless it asks for
+	// standing consent and carries no working copy and none of the inputs
+	// that start a run, because a run of a task is started by its push.
+	Task string `json:"task,omitempty"`
 }
 
 // RerunRequest starts a fresh run of the branch the working copy is standing

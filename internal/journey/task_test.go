@@ -590,13 +590,17 @@ func awaitTask(t *testing.T, j *journey.Journey, id string, done func(machine.Ta
 }
 
 // awaitRunStopped reads the run off the binary until it is no longer
-// executing, and fails after a bound.
+// executing and its record has left pending and running, and fails after a
+// bound. The second condition is needed because the service writes the
+// checkpoint a run stops at before it moves the record, so for a moment the
+// outcome already reads the stop while the record still reads running, and a
+// caller comparing against the record would see the two disagree.
 func awaitRunStopped(t *testing.T, j *journey.Journey, id string) machine.Run {
 	t.Helper()
 	deadline := time.Now().Add(60 * time.Second)
 	for {
 		run := decodeRun(t, j.Command("runs", id))
-		if run.Outcome != machine.OutcomeExecuting {
+		if run.Outcome != machine.OutcomeExecuting && !recordUnsettled(run.Record.Status) {
 			return run
 		}
 		if time.Now().After(deadline) {
@@ -604,6 +608,12 @@ func awaitRunStopped(t *testing.T, j *journey.Journey, id string) machine.Run {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
+}
+
+// recordUnsettled reports whether a run record has yet to move to the status
+// its stop gives it.
+func recordUnsettled(status store.RunStatus) bool {
+	return status == store.RunPending || status == store.RunRunning
 }
 
 // awaitWorkerLine waits until the stand-in's worker has recorded the first

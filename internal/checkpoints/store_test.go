@@ -192,6 +192,7 @@ func TestACheckpointReadsBackAsItWasWritten(t *testing.T) {
 				Traversals:   []int{1, 0, 2},
 				Fingerprints: []string{"one", "", "three"},
 				EdgeDigest:   "a-digest",
+				Unattended:   true,
 			},
 			ForkedFrom: &origin,
 		}
@@ -219,6 +220,7 @@ func TestACheckpointReadsBackAsItWasWritten(t *testing.T) {
 		}
 		if got.Counters.Steps != want.Counters.Steps || got.Counters.Budget != want.Counters.Budget ||
 			got.Counters.EdgeDigest != want.Counters.EdgeDigest ||
+			got.Counters.Unattended != want.Counters.Unattended ||
 			!equalInts(got.Counters.Traversals, want.Counters.Traversals) ||
 			!equalStrings(got.Counters.Fingerprints, want.Counters.Fingerprints) {
 			t.Errorf("it reads back with counters %+v, want %+v", got.Counters, want.Counters)

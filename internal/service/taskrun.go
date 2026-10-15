@@ -44,11 +44,23 @@ import (
 // carries a fix round, which only a run takes. Either way nothing is
 // answered, and the refusal says to answer the task's own decision first.
 //
+// # Standing consent given a task
+//
+// Standing consent reaches the same run the same way, through run.start
+// given a task, so a coordinator puts a task's run under consent without a
+// checkout of its branch either. It selects the run on the terms above,
+// refusal of a task with a hold of its own open included, and differs in one
+// respect: the run need not be held, because consent given to a run that is
+// executing answers its next decision. Whether the repository allows consent
+// is read from its trusted copy first, as a start from a working copy reads
+// it, and a refusal leaves the run as it was.
+//
 // # Who may ask
 //
 // A task's worker is refused, from the caller's credentials, on
 // MethodTaskRespond's terms: no worker answers a hold, its own task's
-// included. Selecting a run by naming it is unchanged by this file.
+// included, and no worker puts a run under consent to answer them either.
+// Selecting a run by naming it is unchanged by this file.
 //
 // # Residual gaps
 //
@@ -89,6 +101,66 @@ func (s *Service) respondTo(ctx context.Context, req ipc.Request, r machine.Resp
 // ipc.ErrRefused, and an unknown task is ipc.ErrRefused too; each refusal
 // carries the internal/machine row a person reads about it.
 func (s *Service) taskRun(ctx context.Context, id string) (store.Run, error) {
+	record, err := s.taskCurrentRun(ctx, id)
+	if err != nil {
+		return store.Run{}, err
+	}
+	if record.Status != store.RunHeld {
+		return store.Run{}, fmt.Errorf("%w: task %s has no hold open and its run %s is %s, not waiting on an answer. %s",
+			ipc.ErrRefused, id, record.ID, record.Status, machine.PhraseTaskNothingWaiting)
+	}
+	return record, nil
+}
+
+// startTo is run.start, the run selected through a working copy or, for
+// standing consent, through a task, on StartRequest.Task's terms. The task's
+// run is the one taskCurrentRun selects, refused on the same terms an answer
+// given the task is, except that it need not be held: consent given to a run
+// that is executing answers its next decision. Whether the repository allows
+// consent is read before the record is touched, as start reads it.
+func (s *Service) startTo(ctx context.Context, req ipc.Request, r machine.StartRequest) (machine.Run, error) {
+	if r.Task == "" {
+		return s.start(ctx, r)
+	}
+	switch {
+	case r.WorkingPath != "":
+		return machine.Run{}, fmt.Errorf("%w: a start names working copy %s and task %s, and selects its run one way",
+			ipc.ErrInvalidRequest, r.WorkingPath, r.Task)
+	case !r.StandingConsent:
+		return machine.Run{}, fmt.Errorf("%w: a start given task %s asks for nothing; a task selects a run only to put it "+
+			"under standing consent", ipc.ErrInvalidRequest, r.Task)
+	case len(startInputs(r)) > 0:
+		return machine.Run{}, fmt.Errorf("%w: a start given task %s carries %s, which start a run, and a task's run is "+
+			"started by its push", ipc.ErrInvalidRequest, r.Task, strings.Join(startInputs(r), ", "))
+	}
+	if err := s.refuseWorker(req); err != nil {
+		return machine.Run{}, err
+	}
+	record, err := s.taskCurrentRun(ctx, r.Task)
+	if err != nil {
+		return machine.Run{}, err
+	}
+	repository, err := s.store.Repository(ctx, record.RepositoryID)
+	if err != nil {
+		return machine.Run{}, err
+	}
+	allowed, err := s.standingConsentAllowed(ctx, repository)
+	if err != nil {
+		return machine.Run{}, err
+	}
+	if !allowed {
+		return machine.Run{}, standingConsentRefused(repository)
+	}
+	if record, err = s.giveStandingConsent(ctx, record); err != nil {
+		return machine.Run{}, err
+	}
+	return s.attach(ctx, record.ID)
+}
+
+// taskCurrentRun is the task's current run, reconciled against its
+// checkpoint, whatever it is doing, or a typed refusal on taskRun's terms for
+// every case but a run that is not held.
+func (s *Service) taskCurrentRun(ctx context.Context, id string) (store.Run, error) {
 	if strings.TrimSpace(id) == "" {
 		return store.Run{}, fmt.Errorf("%w: an answer given a task names no task", ipc.ErrInvalidRequest)
 	}
@@ -121,13 +193,5 @@ func (s *Service) taskRun(ctx context.Context, id string) (store.Run, error) {
 		return store.Run{}, fmt.Errorf("%w: task %s has no hold open and its branch %s has no run under way. %s",
 			ipc.ErrRefused, id, branch, machine.PhraseTaskNothingWaiting)
 	}
-	record, err := s.reconcile(ctx, active.ID)
-	if err != nil {
-		return store.Run{}, err
-	}
-	if record.Status != store.RunHeld {
-		return store.Run{}, fmt.Errorf("%w: task %s has no hold open and its run %s is %s, not waiting on an answer. %s",
-			ipc.ErrRefused, id, record.ID, record.Status, machine.PhraseTaskNothingWaiting)
-	}
-	return record, nil
+	return s.reconcile(ctx, active.ID)
 }

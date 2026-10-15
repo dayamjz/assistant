@@ -245,13 +245,26 @@ wait.
 that run under standing consent, which lets the program answer the holds of
 the stages before push without you: a fix round over every finding that is
 not a note, and approval of the hold a round leaves once only notes remain.
+`assistant --task ID --standing-consent` does the same for a task's current
+run, from anywhere, without checking the task's branch out.
+
 It never answers the push, pull request, or checks holds, so a push refusal
-still waits for you, and the three-round limit and the run budget still bound
-it. The repository has to allow it with `"allow_standing_consent": true` in
+still waits for you. It also leaves a hold for you when a finding there is an
+ask whose action the reviewer never stated, or one no fix round can resolve,
+such as a test, document or lint stage with no command configured; the
+service log says which finding and why. The three-round limit and the run
+budget still bound the rounds it asks for, and so does the convergence bound,
+which a round you ask for yourself is exempt from: a run whose consented
+rounds leave nothing changed parks rather than waiting for you.
+
+The repository has to allow it with `"allow_standing_consent": true` in
 `assistant.json` on the default branch; without that the flag is refused as
-incorrect usage, and a branch cannot set the key for itself. Each answer is
-recorded as the program's, and status, the run listing, and the pull request
-body say the run ran under standing consent.
+incorrect usage, and a branch cannot set the key for itself. Setting the key
+in your own configuration file, `config.yaml` under the home, allows it in
+every repository the home serves. That is allowed on purpose, as a choice you
+make for all of them at once; the flag is still needed per run. Each answer
+is recorded as the program's, and status, the run listing, and the pull
+request body say the run ran under standing consent.
 
 ## Watch a worker in a terminal
 

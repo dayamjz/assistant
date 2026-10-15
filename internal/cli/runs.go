@@ -49,9 +49,12 @@ import (
 // answer given to the hold on its current run instead, the run --answer
 // reaches from a checkout of the task's branch, so a coordinator answers a
 // task's run without checking that branch out anywhere. It is read only
-// with --answer, and the fix round's flags go with --answer fix to the
-// task's run, as they would to this branch's. Neither needs a working copy,
-// so the command answers from wherever it is run.
+// with --answer or --standing-consent, and the fix round's flags go with
+// --answer fix to the task's run, as they would to this branch's. With
+// --standing-consent it puts the task's current run under standing consent
+// and attaches to it, the way the flag does for this branch's run, and the
+// flags that start a run are refused beside it. None of these needs a
+// working copy, so the command answers from wherever it is run.
 //
 // --cancel ends this branch's run, and given a run as --cancel=RUN it ends
 // that run instead, which PRD section 9 has it do from anywhere: like --task,
@@ -75,7 +78,8 @@ func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 		set.StringVar(&intent, "intent", "", "what this change sets out to do, in your own terms")
 		set.BoolVar(&suppliedFlag, "intent-supplied", false, "treat the intent as authoritative acceptance criteria rather than a hint")
 		set.StringVar(&answer, "answer", "", "answer the decision the run is holding on, or with --task the task's")
-		set.StringVar(&task, "task", "", "with --answer: the task whose hold is answered, or with none of its own open, the hold on the task's current run")
+		set.StringVar(&task, "task", "", "with --answer: the task whose hold is answered, or with none of its own open, the hold on the task's current run; "+
+			"with --standing-consent: the task whose current run is put under standing consent")
 		set.Var(&cancel, cancelFlagName, "end this branch's run, wherever it stands; written --"+cancelFlagName+
 			"=RUN it ends the run RUN instead, from anywhere")
 		set.StringVar(&skip, "skip", "", "comma-separated stages this one run does not take")
@@ -110,11 +114,13 @@ func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 		}
 	}
 	tasked := flagWasSet(in.flags, "task")
-	if tasked && !answered {
-		return nil, usagef("--task names the task whose hold --answer closes, and it is read only with --answer")
+	if tasked && !answered && !consent {
+		return nil, usagef("--task names the task whose hold --answer closes, or whose run --standing-consent is given to, " +
+			"and it is read only with one of the two")
 	}
 	if tasked && strings.TrimSpace(task) == "" {
-		return nil, usagef("--task was given no task; it takes the identifier of the task whose hold is answered")
+		return nil, usagef("--task was given no task; it takes the identifier of the task whose hold is answered " +
+			"or whose run is put under standing consent")
 	}
 	if answered && strings.TrimSpace(answer) == "" {
 		return nil, usagef("--answer was given an empty answer; it takes one of the options the decision offered")
@@ -147,6 +153,14 @@ func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 				Severity: findings.SeverityWarning, Action: findings.ActionFix, Description: text,
 			})
 		}
+	}
+	if tasked && !answered {
+		for _, name := range []string{"intent", "intent-supplied", "skip"} {
+			if flagWasSet(in.flags, name) {
+				return nil, usagef("--task with --standing-consent attaches to the task's run, and --%s is for starting one; pass one", name)
+			}
+		}
+		return in.consentGivenTask(ctx, task)
 	}
 	if tasked {
 		return in.answerGivenTask(ctx, task, answer, request)
@@ -267,6 +281,20 @@ func (in *invocation) answerGivenTask(ctx context.Context, task, answer string, 
 	in.progressf("answering the decision task %s's run is holding on with %q; this blocks until the run needs another decision", task, answer)
 	var run machine.Run
 	err := in.callService(ctx, ipc.MethodRunRespond, machine.RespondRequest{Task: task, Answer: answer, Fix: request}, &run)
+	return run, err
+}
+
+// consentGivenTask puts the task's current run under standing consent and
+// attaches to it, the run --standing-consent reaches from a checkout of the
+// task's branch, so a coordinator gives consent to a task's run without
+// checking that branch out anywhere. Which run that is, and every refusal, are
+// the service's, on the terms an answer given the task meets, except that the
+// run need not be held yet. It reads no working copy, so it is answered from
+// wherever it is run.
+func (in *invocation) consentGivenTask(ctx context.Context, task string) (any, error) {
+	in.progressf("putting task %s's run under standing consent; this blocks while the run advances", task)
+	var run machine.Run
+	err := in.callService(ctx, ipc.MethodRunStart, machine.StartRequest{Task: task, StandingConsent: true}, &run)
 	return run, err
 }
 
