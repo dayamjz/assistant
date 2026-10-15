@@ -275,6 +275,12 @@ func fixtures(t *testing.T) map[string]any {
 			Task: sampleID, Attempt: 2, Session: sampleID, Ended: "the worker's process group was ended",
 			Hold: store.Hold{Key: "task/" + sampleID + "/stopped/2", TaskID: store.Known(sampleID), Subject: "whether to begin this work again"},
 		},
+		"task peek": machine.TaskPeek{
+			Task: sampleID, Attempt: 2, Session: sampleID, Liveness: "live",
+			Output:  "worker ready\nrunning the tests for " + sampleID + " in " + filepath.Join(root, "tasks", sampleID, "copy") + "\n",
+			Dropped: 12,
+			Attach:  []string{"/usr/bin/tmux", "-S", filepath.Join(root, "terminals", "0123456789abcdef"), "attach-session", "-t", "worker"},
+		},
 		"task relaunch": machine.TaskRelaunched{Task: sampleID, Attempt: 2, Superseded: sampleID, Swept: "swept " + filepath.Join(root, "tasks", sampleID, "copy")},
 		"task promotion": machine.TaskPromoted{
 			Record: store.Task{ID: sampleID, Shape: store.TaskDelivery, Project: "the parser", Branch: store.Known("feature/parser")},

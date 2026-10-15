@@ -109,6 +109,10 @@ func (s *Service) handle(ctx context.Context, req ipc.Request) (json.RawMessage,
 		return call(ctx, req, func(ctx context.Context, r machine.TaskRequest) (machine.TaskStopped, error) {
 			return s.stopTask(ctx, req, r)
 		})
+	case ipc.MethodTaskPeek:
+		return call(ctx, req, func(ctx context.Context, r machine.TaskRequest) (machine.TaskPeek, error) {
+			return s.peekTask(ctx, req, r)
+		})
 	case ipc.MethodTaskInterrupt:
 		return call(ctx, req, func(ctx context.Context, r machine.TaskRequest) (struct{}, error) {
 			return s.interruptTask(ctx, req, r)

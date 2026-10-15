@@ -196,6 +196,7 @@ func TestTheCoordinatorClientDrivesEveryMethodAndRefusesAWorker(t *testing.T) {
 		{"create", "--shape", "investigation", "--project", "two", "--instructions", "Look into it.", "--repository", repository},
 		{"message", id, "--text", "carry on"},
 		{"stop", id},
+		{"peek", id},
 		{"relaunch", id},
 		{"promote", id, "--repository", repository, "--branch", "task/mine", "--intent", "Deliver it."},
 		{"wakes"},
@@ -231,6 +232,23 @@ func TestTheCoordinatorClientDrivesEveryMethodAndRefusesAWorker(t *testing.T) {
 		t.Fatalf("the human message answer exited %s with:\n%s%s", plain.code, plain.stdout, plain.stderr)
 	}
 	vocabtest.Assert(t, plain.stdout)
+
+	// A peek reads the worker's recent output, which this pipe-hosted
+	// worker has no terminal to attach to; the person's rendering carries
+	// none of the output.
+	var peeked machine.TaskPeek
+	coordinate(t, h, subject, &peeked, "peek", id)
+	if peeked.Task != id || peeked.Attempt != 1 || peeked.Liveness != string(taskstate.Live) || len(peeked.Attach) != 0 {
+		t.Fatalf("peek answered %+v, want task %s's live first attempt and no terminal to attach to", peeked, id)
+	}
+	plainPeek := run(t, h, subject, "coordinator", "peek", id)
+	if plainPeek.code != machine.ExitOK || !strings.Contains(plainPeek.stdout, machine.PeekPhrase(peeked).String()) {
+		t.Fatalf("the human peek answer exited %s with:\n%s%s", plainPeek.code, plainPeek.stdout, plainPeek.stderr)
+	}
+	if peeked.Output != "" && strings.Contains(plainPeek.stdout, strings.TrimSpace(peeked.Output)) {
+		t.Fatalf("the human peek answer relays the worker's output:\n%s", plainPeek.stdout)
+	}
+	vocabtest.Assert(t, plainPeek.stdout)
 
 	// The worker ends on a message, and its task reads Unknown from the
 	// dead terminal.

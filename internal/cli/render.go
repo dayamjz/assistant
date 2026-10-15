@@ -261,6 +261,9 @@ var renderings = []rendering{
 	{name: "task stop", voice: VoicePhrased, of: typeOf[machine.TaskStopped](), render: func(w io.Writer, v any) {
 		writeln(w, machine.StopPhrase(v.(machine.TaskStopped)))
 	}},
+	{name: "task peek", voice: VoicePhrased, of: typeOf[machine.TaskPeek](), render: func(w io.Writer, v any) {
+		writeln(w, machine.PeekPhrase(v.(machine.TaskPeek)))
+	}},
 	{name: "task relaunch", voice: VoicePhrased, of: typeOf[machine.TaskRelaunched](), render: func(w io.Writer, v any) {
 		writeln(w, machine.TaskRelaunchedPhrase(v.(machine.TaskRelaunched)))
 	}},

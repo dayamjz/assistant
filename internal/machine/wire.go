@@ -771,6 +771,43 @@ type TaskMessaged struct {
 	SentBy string `json:"sent_by"`
 }
 
+// MaxPeekBytes is the most of a worker's output task.peek answers with, in
+// bytes, from the end. It is a fixed limit in the program and not a setting,
+// on MaxMessageBytes' terms.
+const MaxPeekBytes = 16 << 10
+
+// TaskPeek is the answer to task.peek: the latest attempt's worker's recent
+// output as the service's session provider holds it, after
+// internal/redact and then cut to MaxPeekBytes from the end, with how the
+// terminal probed and, where the provider hosts the worker in a terminal,
+// the command a person attaches with.
+//
+// The output is evidence for the coordinator, never text to relay to a
+// person (P13): the person-facing rendering is PeekPhrase and carries none
+// of it.
+type TaskPeek struct {
+	// Task is the task read.
+	Task string `json:"task"`
+	// Attempt is the attempt whose worker was read.
+	Attempt int64 `json:"attempt"`
+	// Session is that attempt's session reference.
+	Session string `json:"session"`
+	// Liveness is how the terminal probed, internal/taskstate's word.
+	Liveness string `json:"liveness"`
+	// Output is the recent output, redacted and bounded.
+	Output string `json:"output"`
+	// Dropped is how many bytes of earlier output are not in Output: what the
+	// provider's capture let go plus what the bound here cut.
+	Dropped int64 `json:"dropped"`
+	// Uncounted is true when output may also have been let go before it was
+	// read, by a terminal whose own history keeps no count of it.
+	Uncounted bool `json:"uncounted,omitempty"`
+	// Attach is the command line a person runs to watch the worker's
+	// terminal and type into it, the binary first; empty for a worker with
+	// no terminal, which every pipe-hosted worker is.
+	Attach []string `json:"attach,omitempty"`
+}
+
 // TaskStopped is the answer to task.stop: the attempt whose worker was
 // ended, how it was ended, and the hold registered once the probe read its
 // terminal dead. It is answered only after that probe; a stop the probe did

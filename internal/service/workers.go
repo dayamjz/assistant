@@ -43,8 +43,8 @@ import (
 // gate.admit holds a worker's push to admit_workers.go's rule; and
 // gate.notify records the run a worker's push of its own task's branch
 // starts with the task's intent, which pushIntent below decides. The set is
-// internal/session's, produced by session.Pipe.Create for the worker
-// process's lifetime, and this service reaches it through the driver that
+// internal/session's, produced by the provider's Create, session.Pipe's or
+// session.Tmux's, for the worker process's lifetime, and this service reaches it through the driver that
 // holds the provider. session.Workers' doc says why it is not a second
 // meaning of the containment registry.
 //
