@@ -313,3 +313,37 @@ func TestHoldingNamesTheTestStageExactlyWhenNoCommandIsConfigured(t *testing.T) 
 		}
 	}
 }
+
+// A command stage with no command configured, and a stage standing in for a
+// body this build does not have, hold on an ask whose remedy lies outside the
+// change: a configuration key the branch cannot set for itself, or a body.
+// The finding says so itself, so a caller deciding whether a fix round could
+// resolve the hold reads it off the report rather than off a list of
+// identifiers. The bodies are run the way the pipeline runs them, and each
+// is required to hold at all, so the assertion cannot pass over no asks.
+func TestAnAskNoFixRoundCanResolveSaysSoOnTheFinding(t *testing.T) {
+	t.Parallel()
+	all := stages.All(stages.StageDeps{Config: config.Defaults()})
+	reports := map[string]pipeline.Implementation{
+		"test":     implementationFor(t, all, pipeline.StageTest),
+		"document": implementationFor(t, all, pipeline.StageDocument),
+		"lint":     implementationFor(t, all, pipeline.StageLint),
+		"pending":  stages.Pending("review"),
+	}
+	for name, impl := range reports {
+		out, err := impl.NewBody()(t.Context(), pipeline.Input{})
+		if err != nil {
+			t.Fatalf("running the %s body with no command configured: %v", name, err)
+		}
+		report := out.Report.Normalize()
+		held := report.Held()
+		if len(held) == 0 {
+			t.Fatalf("the %s body reported %+v, which holds for nobody", name, report)
+		}
+		for _, f := range held {
+			if !f.RemedyOutsideChange {
+				t.Errorf("the %s body's ask %q does not say its remedy lies outside the change", name, f.ID)
+			}
+		}
+	}
+}

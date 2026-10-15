@@ -58,3 +58,30 @@ func TestAPushedBranchCannotAllowStandingConsent(t *testing.T) {
 		t.Fatalf("the trusted copy's key was not taken: %v, %v", res.Config.AllowStandingConsent, err)
 	}
 }
+
+// The operator's own file allows standing consent too, and in every
+// repository the home serves, because the key's trust class admits it. That
+// is kept on purpose, by the owner's decision on #253: an operator setting it
+// there has chosen it for all of them at once. A repository's trusted copy
+// cannot take the global allowance away by leaving the key out, and the
+// control is a global file that does not set it, which allows nothing.
+func TestTheOperatorsFileAllowsStandingConsentInEveryRepository(t *testing.T) {
+	global := mustParse(t, OriginGlobal, `{"allow_standing_consent": true}`)
+	for name, trusted := range map[string]Layer{
+		"no trusted copy":           Absent(OriginTrusted),
+		"a trusted copy without it": mustParse(t, OriginTrusted, `{"no_ci": true}`),
+		"a trusted copy setting it": mustParse(t, OriginTrusted, `{"allow_standing_consent": true}`),
+	} {
+		res, err := ResolveRun(global, trusted, Absent(OriginPushed))
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if !res.Config.AllowStandingConsent {
+			t.Errorf("%s: the operator's file allowed standing consent and the resolution does not", name)
+		}
+	}
+	silent := mustParse(t, OriginGlobal, `{"checks_timeout": "1h"}`)
+	if res, err := ResolveRun(silent, Absent(OriginTrusted), Absent(OriginPushed)); err != nil || res.Config.AllowStandingConsent {
+		t.Fatalf("a global file that does not set the key resolved to %v (%v)", res.Config.AllowStandingConsent, err)
+	}
+}

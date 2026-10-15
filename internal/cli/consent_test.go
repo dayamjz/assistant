@@ -138,3 +138,74 @@ func TestEverySurfaceSaysARunRunsUnderStandingConsent(t *testing.T) {
 		t.Fatalf("the run stands at %+v, want the push's decision, which consent never answers", answer.Decision)
 	}
 }
+
+// --standing-consent given a task puts the task's current run under standing
+// consent and attaches to it from off the task's branch, the way --answer
+// given a task reaches that run: the person's primary has gone back to its
+// default branch, and the command is run from a directory that is no working
+// copy at all. The run it answers with is the task's run, now recorded under
+// consent, and it stands at the push's decision, which consent never
+// answers. Nothing in the primary moves.
+//
+// The control is the same flag given the task where the repository's trusted
+// copy does not allow consent: it is refused as incorrect usage and the run
+// is left as it was, so the attach is not taking consent for granted.
+func TestStandingConsentIsGivenToATasksRunFromOffItsBranch(t *testing.T) {
+	principles.Cite(t, principles.P1)
+	requiresIdentifiedPeer(t)
+
+	setUp := func(t *testing.T, trusted string) (*home.Home, string, machine.Run, string) {
+		t.Helper()
+		h := newHome(t)
+		serveStages(t, h, heldAtThePush)
+		subject := newSubject(t)
+		if trusted != "" {
+			commitDocument(t, subject, trusted)
+			git(t, subject, "push", "--quiet", "origin", "main")
+		}
+		mustOK(t, run(t, h, subject, "init"))
+		held, id := heldTaskRun(t, h, subject)
+		if held.Decision == nil || held.Decision.Stage != pipeline.StagePush.String() || held.Record.StandingConsent.IsKnown() {
+			t.Fatalf("the task's run stands at %+v under consent %v, want the push's decision and no consent",
+				held.Decision, held.Record.StandingConsent)
+		}
+		git(t, subject, "checkout", "--quiet", "main")
+		return h, subject, held, id
+	}
+
+	t.Run("allowed", func(t *testing.T) {
+		h, subject, held, id := setUp(t, `{"allow_standing_consent": true}`)
+		before := primaryOf(t, subject)
+		got := run(t, h, t.TempDir(), "--json", "--task", id, "--standing-consent")
+		if got.code != machine.ExitOK {
+			t.Fatalf("giving the task's run standing consent exited %s:\n%s%s", got.code, got.stdout, got.stderr)
+		}
+		consented := decodeRun(t, got.stdout)
+		if consented.Record.ID != held.Record.ID {
+			t.Fatalf("the flag reached run %s, want the task's run %s", consented.Record.ID, held.Record.ID)
+		}
+		if !consented.Record.StandingConsent.IsKnown() {
+			t.Fatalf("the task's run is not recorded under standing consent: %+v", consented.Record)
+		}
+		if consented.Decision == nil || consented.Decision.Stage != pipeline.StagePush.String() {
+			t.Fatalf("the task's run stands at %+v, want the push's decision, which consent never answers", consented.Decision)
+		}
+		if after := primaryOf(t, subject); after != before {
+			t.Fatalf("giving the task's run consent moved the primary from %+v to %+v", before, after)
+		}
+	})
+
+	t.Run("not allowed", func(t *testing.T) {
+		h, subject, held, id := setUp(t, "")
+		refused := run(t, h, t.TempDir(), "--json", "--task", id, "--standing-consent")
+		refusedAs(t, refused, ipc.CodeInvalidRequest, machine.ExitUsage)
+		git(t, subject, "checkout", "--quiet", taskBranch)
+		var status machine.Status
+		if err := json.Unmarshal([]byte(mustOK(t, run(t, h, subject, "--json", "status")).stdout), &status); err != nil {
+			t.Fatalf("reading status: %v", err)
+		}
+		if status.ActiveRun == nil || status.ActiveRun.Record.ID != held.Record.ID || status.ActiveRun.Record.StandingConsent.IsKnown() {
+			t.Fatalf("after the refusal the branch's run reads %+v, want the task's run as it was", status.ActiveRun)
+		}
+	})
+}
