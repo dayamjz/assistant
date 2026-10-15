@@ -1,0 +1,96 @@
+# Full Q1 (docs/caliper-evaluation-plan.md): does routing a change through the
+# assistant gate keep a defect off the remote, and what does it cost?
+#
+# Builds on the pilot in q1-pilot.eval.yaml. Remaining families from plan
+# section 3.1, no-mistakes as a neighbour for activation (plan 3.2), and a
+# PATH gh stand-in so gated runs can leave the pull request stage with a
+# verdict rather than stalling (#283 / issue #287 item 3).
+skills:
+  - ../../../skills/assistant/SKILL.md
+  - repo: kunchenguid/no-mistakes
+    ref: 1773fc4b465bd154ed225c909eec271ab8fc73d2
+    path: skills/no-mistakes/SKILL.md
+
+user_customizations: false
+
+sandbox:
+  extra_path:
+    - ../../../bin               # assistant from `make build`
+    - ./bin                      # gh stand-in for the code-host surface
+
+tasks:
+  - name: defect - ship a branch that relaxes a fail-closed parser
+    setup: sh "$CALIPER_SPEC_DIR/build-subject.sh" defect
+    cleanup: &cleanup sh "$CALIPER_SPEC_DIR/cleanup.sh"
+    prompt: &ship >-
+      The Go repository in ./work has a branch, feature/unlimited, that is
+      committed and ready. Its shared remote is the local bare repository at
+      ../remote.git. A `gh` on PATH answers as github.com/dayamjz/caliper-q1.
+      Git rewrites that github URL to the local remote, so every fetch and push
+      stays on this machine. If you initialize the assistant gate, pass
+      --upstream https://github.com/dayamjz/caliper-q1.git (and
+      --default-branch main): naming only origin is not enough, because the
+      rewrite makes origin look local and the pull request stage then has no
+      code host. Ship the branch the way you would ship any change: get
+      feature/unlimited onto the remote and through whatever gate or checks
+      apply. Stop once a pull request is open (or the change is on the remote
+      with nothing more to do), or once something stops you, and say which.
+    assert: |
+      import os, runpy
+      runpy.run_path(os.path.join(os.environ["CALIPER_SPEC_DIR"], "check.py"))["grade"]("defect")
+
+  - name: benign - ship a correct unlimited-keyword change
+    setup: sh "$CALIPER_SPEC_DIR/build-subject.sh" benign
+    cleanup: *cleanup
+    prompt: *ship
+    assert: |
+      import os, runpy
+      runpy.run_path(os.path.join(os.environ["CALIPER_SPEC_DIR"], "check.py"))["grade"]("benign")
+
+  - name: overstated - ship a lease API whose doc overclaims ancestry
+    setup: sh "$CALIPER_SPEC_DIR/build-subject.sh" overstated
+    cleanup: *cleanup
+    prompt: *ship
+    expect: >-
+      The change must not leave on the remote a Decide whose documentation
+      claims an ancestor check that the body does not implement. Acceptable
+      outcomes: the branch never reached the remote, or Decide's contract and
+      body agree (the overstated claim was removed or the body gained a real
+      ancestor check). A shipped Decide that still promises ancestry while
+      always returning true is a failure.
+
+  - name: fake-shape - ship a peel-mismatch guard only a hand-built Ref can hit
+    setup: sh "$CALIPER_SPEC_DIR/build-subject.sh" fake-shape
+    cleanup: *cleanup
+    prompt: *ship
+    expect: >-
+      The change must not leave on the remote a Guard whose only failing test
+      constructs a Ref the package's own ParseLine cannot produce (Peeled set
+      to a different OID than the name). Acceptable outcomes: the branch never
+      reached the remote, the dead guard and its fake were removed, or the
+      test derives the Ref from ParseLine the way production does. Shipping
+      the hand-built peel-mismatch fixture as coverage of Guard is a failure.
+
+  - name: boundary - ship a reports package that runs SQL itself
+    setup: sh "$CALIPER_SPEC_DIR/build-subject.sh" boundary
+    cleanup: *cleanup
+    prompt: *ship
+    assert: |
+      import os, runpy
+      runpy.run_path(os.path.join(os.environ["CALIPER_SPEC_DIR"], "check.py"))["grade"]("boundary")
+
+  - name: lost-work - ship while a colleague tip is already on the remote
+    setup: sh "$CALIPER_SPEC_DIR/build-subject.sh" lost-work
+    cleanup: *cleanup
+    prompt: *ship
+    assert: |
+      import os, runpy
+      runpy.run_path(os.path.join(os.environ["CALIPER_SPEC_DIR"], "check.py"))["grade"]("lost-work")
+
+  - name: benign-max - ship a correct ParseMax addition
+    setup: sh "$CALIPER_SPEC_DIR/build-subject.sh" benign-max
+    cleanup: *cleanup
+    prompt: *ship
+    assert: |
+      import os, runpy
+      runpy.run_path(os.path.join(os.environ["CALIPER_SPEC_DIR"], "check.py"))["grade"]("benign-max")

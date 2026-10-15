@@ -1,10 +1,11 @@
 # Caliper Q1 pilot, 2026-10-15
 
-This is step 3 of `docs/caliper-evaluation-plan.md`: one task family, Q1 only,
-k = 1. It checks that grading separates a blocked change from a shipped one,
-and projects the cost of a full run. It is not a measurement of whether the
-gate stops defects. The figures below are four attempts and support no claim
-about rates.
+This is step 3 of `docs/caliper-evaluation-plan.md`: two of the plan's
+section 3.1 rows (strict stance relaxed in one path, and the benign control),
+Q1 only, k = 1. It checks that grading separates a blocked change from a
+shipped one, and projects the cost of a full run. It is not a measurement of
+whether the gate stops defects. The figures below are four attempts and
+support no claim about rates.
 
 ## What ran
 
@@ -74,9 +75,15 @@ Raw results are `evals/caliper/q1/result-ablated.json` and
 The gated arm used about 2.1 times the agent tokens and 2.6 times the wall
 clock of the bare arm. Caliper counts only the agent under test. The gate's
 own review and fix agents ran inside each attempt's temporary home, and their
-usage was deleted with it, so this ratio understates the gate's cost. The
-checked-in spec's `cleanup:` now saves `assistant --json runs --usage`
-outside the attempt before stopping the service, so a full run can add it. The plan's Q1 is six task families at k = 5 in two arms:
+usage was deleted with it, so this ratio understates the gate's cost. That
+observation disagrees with plan section 3.3, which assumed "caliper run
+reports tokens per attempt, and a gated attempt includes the gate's own
+review agent." The pilot falsified that assumption: caliper does not include
+the gate's agents, and the temporary home deleted their usage with the
+attempt. The checked-in spec's `cleanup:` now saves
+`assistant --json runs --usage=1h` and `assistant --json runs` outside the
+attempt before stopping the service, so a full run can add the gate's usage
+from those files. The plan's Q1 is six task families at k = 5 in two arms:
 30 gated attempts at the observed ~260K agent tokens and 30 bare ones at
 ~120K. That projects to about 11M agent tokens before the gate's own usage.
 Confirm headroom with `quota-axi` first.
@@ -114,10 +121,10 @@ Confirm headroom with `quota-axi` first.
   never holds. The pilot is about review. It says nothing about how an agent
   handles that stage's hold.
 - **The automatic review fix round changed what shipped.** This build's
-  default (`fix_rounds.review`) produces that. `no-mistakes` defaults to 0
-  automatic review rounds. Q1's grading counts the fixed branch as "defect
-  kept off the remote", which is what the remote shows, but a reader should
-  know the gate rewrote the change rather than holding it.
+  default (`fix_rounds.review`) produces that. Q1's grading counts the
+  fixed branch as "defect kept off the remote", which is what the remote
+  shows, but a reader should know the gate rewrote the change rather than
+  holding it.
 - **Not isolated from the operator's machine.** Caliper's `sandbox:` scans
   transcripts, and it runs Claude Code with `--dangerously-skip-permissions`
   under a temporary HOME on the operator's machine and account. The tasks
@@ -127,9 +134,7 @@ Confirm headroom with `quota-axi` first.
 
 ## Next
 
-1. Write the remaining families from the plan's section 3.1 with defects
-   that do not announce themselves: fake shape, boundary breach, lost work,
-   overstated contract. Add a second benign control.
-2. Add `no-mistakes` as the neighbour, and a subject on a code host or a
-   stand-in for one, so a gated run can reach a verdict.
-3. Run Q1 at k = 5 with `--judge-model` pinned, in a disposable environment.
+The harness for the remaining families, the `no-mistakes` neighbour, and the
+code-host stand-in is in `evals/caliper/q1/q1.eval.yaml` and recorded in
+`docs/evaluations/2026-10-15-caliper-q1-harness.md`. What remains is the
+full agent run at k = 5 and its write-up (issue #287 items 4–5).
