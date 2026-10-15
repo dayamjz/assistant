@@ -323,7 +323,8 @@ Each has cost this repository more than one round of review.
   so `Resolve` rather than the type is what keeps an assertion on it from
   finding an undeclared session mechanism. What a started agent may do is its
   `Grant`, decided by role in `grant.go` and never by a caller: only a fix
-  round edits, a worker edits and is allowed git, everything else reads; the
+  round edits, a worker edits and is allowed git and the one command line
+  its `WorkerSpec.Route` names, everything else reads; the
   permission and tool-list flags are reserved so an entry cannot widen one,
   and only the Claude Code adapter translates a grant. An adapter declares what it supports
   through `Runner.Capabilities`, the set is the table in `capability.go`, and
@@ -776,7 +777,10 @@ Each has cost this repository more than one round of review.
   refusal; a chain the kernel rewrote when an intermediate process exited
   places a worker's push as a person's, which admission then does not
   confine, and `workers.go` states which way each rule goes. The methods: `task.event`
-  admits only a worker and holds the kind to `taskstate`'s writer column,
+  admits only a worker and holds the kind to `taskstate`'s writer column, and
+  hands the two kinds with a record beside the history to that record's
+  writer (`acknowledgeMessage`, and `route.go`'s `fileReport`, whose request
+  detail is the report);
   `wakes.list`, `wakes.acknowledge` and `supervision.assert` refuse one; the
   coordinator's task methods (`coordinator.go`'s create, promote and
   relaunch, `steer.go`'s message, stop and interrupt, and `task.respond`)
@@ -822,7 +826,14 @@ Each has cost this repository more than one round of review.
   delivery task a merge record landed and for an investigation task whose
   report `storeTaskReport` stored, passing the terminal's liveness as the
   service's own task reader resolved it, never a second read, and no verb
-  reaches any of it. `landed.go` ends a landed task's worker through the
+  reaches any of it. A launched worker is told and granted its route back,
+  `Options.WorkerRoute`, on `route.go`'s terms; a worker's message arrives
+  under its number (`framedMessage`) so it can acknowledge it; a report
+  filed while the worker runs keeps its copy with the live refusal, and
+  `landed.go`'s pass asks again once the terminal is Dead without ever
+  ending a reported worker, which promotion may still need; and
+  reconciliation relaunches nothing whose newest entry is the report,
+  because `taskstate` resolves such a task Unknown over a dead terminal. `landed.go` ends a landed task's worker through the
   session this service holds and asks the decision again when the terminal
   is next observed `Dead`, from the supervisor's pass (once per reference
   per service life) and from `task.stop`; a `Dead` terminal is only the
@@ -955,10 +966,11 @@ Each has cost this repository more than one round of review.
   stage `internal/service`'s `containRunner` stamps from the context its
   observe wrappers mark. A verb that acts on a run calls the service;
   a verb whose job includes reporting that the service is down does not.
-  Three commands stand outside that table, each dispatched beside it rather
+  Four commands stand outside that table, each dispatched beside it rather
   than added to it. `gate` and `host` are each the interface something
-  external requires; `coordinator` is the owner's decision on #227, not a
-  precedent those two set, and a fourth is a finding. `assistant gate` is
+  external requires; `coordinator` is the owner's decision on #227 and
+  `worker` is #226's, neither a precedent the others set, and section 9 does
+  not mention `worker`, which is a finding against it; a fifth is a finding. `assistant gate` is
   what `internal/gate`'s installed hooks and the `assistant` remote's
   receive command invoke, and its subcommands are the
   `gateHooks` table in `gate.go`. `assistant host` is
@@ -987,6 +999,12 @@ Each has cost this repository more than one round of review.
   service from the socket's credentials and the caller's parent chain, and
   `coordinator.go` names the gap in that placement, a reparented chain. `skills/coordinator/SKILL.md` is what it tells a
   coordinating agent, and claims only what the build does.
+  `assistant worker` is a launched worker's route back to the program: its
+  subcommands are the `workerActions` table in `worker.go`, each one
+  `task.event`, and `workerRoute` is the one composition of the prefix
+  (binary, `--home`, verb) that service start passes as
+  `service.Options.WorkerRoute`. It decides nothing either: a person's shell
+  running the same line is refused by the service with `not-worker`.
   What a person reads is rendered through the `renderings` table in
   `render.go`, which `readOut` dispatches through and `Renderings` enumerates:
   every renderer but four is phrased through `internal/machine`'s table and

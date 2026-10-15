@@ -172,9 +172,10 @@ func fixturePlan() machine.Plan {
 
 // fixtures is a value for every renderer, each carrying the words its old
 // rendering printed: identifiers in the generator's format, paths under a
-// sample home, stage names and state labels. The fallback's is a real answer
-// shape this surface has no renderer for, a worker's appended entry, so the
-// refusal is exercised on a value a service does produce.
+// sample home, stage names and state labels. The fallback's is a real shape
+// this surface has no renderer for, a history entry as the service
+// publishes it in a task.event state event, so the refusal is exercised on
+// a value a service does produce.
 func fixtures(t *testing.T) map[string]any {
 	t.Helper()
 	root := vocabtest.SampleRoot()
@@ -288,8 +289,10 @@ func fixtures(t *testing.T) map[string]any {
 		"supervision":        supervisor.Arm{Outcome: supervisor.ArmAttached, Sequence: 12},
 		"catch up":           fixtureCatchUp(),
 		"marked seen":        machine.Marked{Marks: []store.SeenMark{{SeenRecord: store.SeenRecord{Kind: store.SeenMerge, Key: sampleID}}}},
-		"fallback": machine.Appended{Event: store.TaskEvent{TaskID: sampleID, Sequence: 3, Kind: "waiting-external",
+		"worker event": machine.Appended{Event: store.TaskEvent{TaskID: sampleID, Sequence: 3, Kind: "waiting-external",
 			Detail: "an upstream release of the parser"}},
+		"fallback": store.TaskEvent{TaskID: sampleID, Sequence: 3, Kind: "waiting-external",
+			Detail: "an upstream release of the parser"},
 	}
 }
 
@@ -681,8 +684,8 @@ func TestAnAnswerWithNoRendererIsRefusedRatherThanDumped(t *testing.T) {
 	if code := render(in, value, nil); code != machine.ExitOK {
 		t.Fatalf("the same answer as a document exited %s, want ok", code)
 	}
-	var decoded machine.Appended
-	if err := json.Unmarshal(stdout.Bytes(), &decoded); err != nil || decoded.Event.TaskID != sampleID {
+	var decoded store.TaskEvent
+	if err := json.Unmarshal(stdout.Bytes(), &decoded); err != nil || decoded.TaskID != sampleID {
 		t.Fatalf("the same answer as a document did not carry it: %v\n%s", err, stdout.String())
 	}
 }

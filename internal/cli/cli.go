@@ -71,8 +71,9 @@ func usagef(format string, a ...any) error {
 // verb is one command. Every row is a command PRD section 9's table names, and
 // the table below is the whole of what that table drives; the subcommands
 // internal/gate requires are gateHooks in gate.go, the coordinator's host's
-// are hostHooks in host.go, and the coordinator's own are coordinatorActions
-// in coordinator.go, rather than rows here.
+// are hostHooks in host.go, the coordinator's own are coordinatorActions in
+// coordinator.go, and a worker's are workerActions in worker.go, rather than
+// rows here.
 type verb struct {
 	// name is what a caller types, empty for the command with no verb.
 	name string
@@ -92,9 +93,9 @@ type verb struct {
 
 // verbs is the surface a caller drives. It is PRD section 9's table and nothing
 // else: a verb that section does not describe is a finding against the
-// specification rather than a row here, and the three commands this binary
-// answers to that section names outside its table are dispatched beside it;
-// see gateVerbName, hostVerbName and coordinatorVerbName.
+// specification rather than a row here, and the four commands this binary
+// answers to outside that table are dispatched beside it; see gateVerbName,
+// hostVerbName, coordinatorVerbName and workerVerbName.
 var verbs = []verb{
 	{"", "Attach to this branch's active run. With no run, start one.", attachOrStart},
 	{"init", "Create or repair the gate for this repository.", initGate},
@@ -176,6 +177,12 @@ func dispatch(ctx context.Context, in *invocation) (any, error) {
 	// dispatched beside the table on the same terms; see coordinatorVerbName.
 	if name == coordinatorVerbName {
 		return coordinatorVerb(ctx, in)
+	}
+	// And a worker's route back to the program, which #226 asked for and
+	// which is dispatched beside the table on the same terms; see
+	// workerVerbName.
+	if name == workerVerbName {
+		return workerVerb(ctx, in)
 	}
 	return nil, usagef("%q is not a command. %s", name, usageText())
 }
@@ -456,8 +463,8 @@ func (in *invocation) progressf(format string, a ...any) {
 
 // usageText is the command list: the verb table read out, and then the gate
 // hook subcommands gateUsage reads out under a heading saying a push invokes
-// them rather than a person, the host's, and the coordinator's under a
-// heading saying who runs them.
+// them rather than a person, the host's, the coordinator's and a worker's,
+// each under a heading saying who runs them.
 func usageText() string {
 	var b strings.Builder
 	b.WriteString("Usage: assistant [--json] [--home PATH] [command]\n\nCommands:\n")
@@ -478,6 +485,8 @@ func usageText() string {
 	b.WriteString(hostUsage())
 	b.WriteString("\n")
 	b.WriteString(coordinatorUsage())
+	b.WriteString("\n")
+	b.WriteString(workerUsage())
 	return b.String()
 }
 

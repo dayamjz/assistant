@@ -11,7 +11,9 @@ package agents
 // files of the isolated copy it is pointed at and runs nothing, because the
 // stage body that asked for it commits what changed and the stages after it
 // run the configured commands. A worker edits its task's copy and commits and
-// pushes there, so it is granted git as well. Its grant allows git rather
+// pushes there, so it is granted git as well, and the one command line its
+// WorkerSpec names as its route back to the program, so it can say what it
+// did without a person answering a prompt. Its grant allows those rather
 // than denying everything else, so it does not narrow what the agent's own
 // settings already allow, and git runs whatever a repository's hooks and
 // configuration name.
@@ -40,8 +42,12 @@ const (
 	GrantRead Grant = iota
 	// GrantEdit edits files and runs no command.
 	GrantEdit
-	// GrantWorker edits files and runs git. It adds git to what the agent
-	// may run and takes nothing away.
+	// GrantWorker edits files and runs git, and commands beginning with
+	// WorkerSpec.Route when the spec names one. It adds those to what the
+	// agent may run and takes nothing away. Which command the route names
+	// is the caller's, and the translation allows a prefix of a command
+	// line, so what the route runs with whatever follows the prefix is the
+	// routed program's to refuse.
 	GrantWorker
 )
 

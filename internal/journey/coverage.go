@@ -387,7 +387,7 @@ var (
 	p13Covered = []string{"status", "run", "runs", "tasks", "task", "service", "event", "host stop", "host install",
 		"decision", "doctor", "lifecycle", "init", "plan", "eject", "health", "admission", "notification",
 		"task answer", "catch up", "marked seen", "task created", "task message", "task stop", "task relaunch",
-		"task promotion", "wakes", "wakes acknowledged", "supervision", "fallback"}
+		"task promotion", "wakes", "wakes acknowledged", "supervision", "worker event", "fallback"}
 	p13Evidence  = []string{"details", "findings", "usage"}
 	p13Remaining []string
 )

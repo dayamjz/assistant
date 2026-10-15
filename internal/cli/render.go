@@ -276,6 +276,9 @@ var renderings = []rendering{
 	{name: "supervision", voice: VoicePhrased, of: typeOf[supervisor.Arm](), render: func(w io.Writer, v any) {
 		writeln(w, machine.ArmPhrase(v.(supervisor.Arm)))
 	}},
+	{name: "worker event", voice: VoicePhrased, of: typeOf[machine.Appended](), render: func(w io.Writer, v any) {
+		writeln(w, machine.AppendedPhrase(v.(machine.Appended)))
+	}},
 	usageRendering,
 }
 

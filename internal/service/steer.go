@@ -34,9 +34,12 @@ import (
 //
 // task.message reads the task's latest attempt, appends the message record
 // naming that attempt through store.AppendMessage, which removes credentials
-// from the text, and then sends what the record holds through the session
+// from the text, and then sends what the record holds, under a heading
+// naming the record's identifier (framedMessage), through the session
 // provider's Send, which the Claude Code adapter frames as one stream-json
-// user message. The send's answer is recorded once: written when Send
+// user message. The heading is how a worker knows which number to
+// acknowledge, since nothing else on its input names the record. The send's
+// answer is recorded once: written when Send
 // returned, refused with its reason when it failed or when this service
 // holds no session for that attempt's reference. Nothing resends, here or
 // anywhere: a refusal is answered to the caller as *messageRefused with the
@@ -258,7 +261,7 @@ func (s *Service) messageTask(ctx context.Context, req ipc.Request, r machine.Ta
 	if err != nil {
 		return machine.TaskMessaged{}, err
 	}
-	if sendErr := s.sendMessage(ctx, r.Task, ref, m.Text); sendErr != nil {
+	if sendErr := s.sendMessage(ctx, r.Task, ref, framedMessage(m)); sendErr != nil {
 		refused, err := s.store.MarkMessageRefused(ctx, m.ID, sendErr.Error())
 		if err != nil {
 			return machine.TaskMessaged{}, fmt.Errorf("service: message %d to task %s was not written (%w) and that could not be recorded: %w",
@@ -481,13 +484,20 @@ func steeringNote(note string, unacknowledged []store.Message) string {
 	}
 	if len(unacknowledged) > 0 {
 		b.WriteString("\nMessages it sent the previous worker that were never acknowledged, oldest first. " +
-			"Acknowledge each one you act on through the task event path as " + store.MessageAcknowledgedEventKind +
-			" with the message's number.\n")
+			"Acknowledge each one you act on, by its number.\n")
 		for _, m := range unacknowledged {
-			fmt.Fprintf(&b, "\n### Message %d\n\n%s\n", m.ID, m.Text)
+			b.WriteString("\n" + framedMessage(m) + "\n")
 		}
 	}
 	return b.String()
+}
+
+// framedMessage is a message as a worker reads it: the record's text under a
+// heading naming the record's identifier, which is the number the worker
+// acknowledges it by. A live send and a relaunch's note both frame a message
+// this way, so a worker is told one shape for both.
+func framedMessage(m store.Message) string {
+	return fmt.Sprintf("### Message %d\n\n%s", m.ID, m.Text)
 }
 
 // unacknowledgedOf is every message to the task's attempt whose

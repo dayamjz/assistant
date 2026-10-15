@@ -235,10 +235,11 @@ func (in *invocation) serveHere(parent context.Context) error {
 		return err
 	}
 	running, err := service.Open(ctx, service.Options{
-		Home:      in.home,
-		NewStages: stages.All,
-		NewFixer:  stages.Fix,
-		Build:     build,
+		Home:        in.home,
+		NewStages:   stages.All,
+		NewFixer:    stages.Fix,
+		Build:       build,
+		WorkerRoute: workerRoute(in.env.Executable, in.home.Root()),
 	})
 	if err != nil {
 		return err

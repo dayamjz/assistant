@@ -514,7 +514,7 @@ func (r *claudeRunner) invoke(ctx context.Context, purpose Purpose, inv Invocati
 // option.
 func (r *claudeRunner) arguments(grant Grant, inv Invocation, resume string) []string {
 	args := slices.Clone(r.extra)
-	args = append(args, claudeGrantFlags(grant)...)
+	args = append(args, claudeGrantFlags(grant, "")...)
 	args = append(args, "--print", "--output-format", "json")
 	if inv.Model != "" {
 		args = append(args, "--model", inv.Model)
@@ -538,18 +538,29 @@ func (r *claudeRunner) arguments(grant Grant, inv Invocation, resume string) []s
 //     review, and reading is not confined to the copy.
 //   - GrantEdit runs in acceptEdits, so its edits are taken without a prompt
 //     nobody is there to answer, with the shell denied.
-//   - GrantWorker runs in acceptEdits with git allowed. It denies nothing,
-//     so a command the CLI's settings allow reaches a worker too, and git
-//     itself runs what a repository's hooks and configuration name.
+//   - GrantWorker runs in acceptEdits with git allowed, and, given a
+//     route, commands beginning with it: the list is "Bash(git:*)" and then
+//     "Bash(ROUTE:*)" with the route written exactly as WorkerSpec.Validate
+//     accepted it, joined by a comma into the one argument. It denies
+//     nothing, so a command the CLI's settings allow reaches a worker too,
+//     and git itself runs what a repository's hooks and configuration name.
+//     How the CLI reads a rule whose prefix holds spaces or quotes is the
+//     CLI's; what this buys is that the rule on the command line and the
+//     prefix the worker is told to type are the same text.
 //
 // An unrecognized grant is GrantRead's, so a grant this function has not
-// learned is denied what GrantRead is denied.
-func claudeGrantFlags(g Grant) []string {
+// learned is denied what GrantRead is denied. route is read only for
+// GrantWorker.
+func claudeGrantFlags(g Grant, route string) []string {
 	switch g {
 	case GrantEdit:
 		return []string{"--permission-mode", "acceptEdits", "--disallowedTools", "Bash"}
 	case GrantWorker:
-		return []string{"--permission-mode", "acceptEdits", "--allowedTools", "Bash(git:*)"}
+		allowed := "Bash(git:*)"
+		if route != "" {
+			allowed += ",Bash(" + route + ":*)"
+		}
+		return []string{"--permission-mode", "acceptEdits", "--allowedTools", allowed}
 	}
 	return []string{"--permission-mode", "default", "--disallowedTools", "Edit,Write,NotebookEdit,Bash"}
 }
