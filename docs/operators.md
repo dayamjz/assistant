@@ -139,11 +139,25 @@ Three things follow for whoever runs the service:
 ## Waiting on a fleet
 
 A coordinator agent running tasks through `assistant coordinator` does not
-need to poll the wake queue. Reading the queue is a drain: `assistant
-coordinator wakes` lists the queued wakes, oldest first, and records each one
-it lists as handled, so the next read does not list it again. Read it with
-`--json`, because the structured answer is the only place a drained wake's
-task and kind are shown.
+need to poll the wake queue. A person can look at the queue with `assistant
+coordinator wakes`: it lists the waiting wakes, oldest first, by the project
+of the work each is about, and says whether the coordinator has been handed
+each one. It takes nothing, so the coordinator still gets every wake it
+showed.
+
+The coordinator reads the queue with `--json`, which is a drain: `assistant
+--json coordinator wakes` hands out the wakes on offer, oldest first, and
+closes none of them. A wake stays waiting until the coordinator acts on it and
+then acknowledges it with `assistant coordinator acknowledge`, which is the
+only thing that records a wake as handled. A wake handed out and never
+acknowledged is handed out again: after a service restart, and once the
+coordinator it was handed to is no longer attached. The service counts the
+coordinator as attached while its wake stream, `listen` below, is held, so a
+coordinator that holds `listen` is not handed its own wakes twice, and one
+whose `listen` ended, because it went away, gets them back on its next
+drain. A coordinator that holds no stream is never attached, so every drain
+hands it the wakes it has not acknowledged yet. The structured answer counts,
+in `handouts`, how many times each wake has been handed out.
 
 The service can push wakes to the coordinator. `assistant coordinator listen`
 holds the coordinator's wake stream and prints each wake as the service
@@ -153,18 +167,20 @@ queues it, until it is interrupted:
 assistant --json coordinator listen
 ```
 
-It records nothing as handled: a wake it prints stays queued until a drain
-takes it or `assistant coordinator acknowledge` names it. Its first line is a
-gap marker, and a gap later means some pushes were missed; either way, drain
-the queue, which gives back every wake still queued. It suits a host that can
-run a command in the background and start a turn on its output. It ends with
-success when interrupted, and as an operational failure when the stream ends
-any other way, a service stop included, so it has to be started again.
+It hands out and records nothing: a wake it prints stays waiting until a drain
+hands it out and an acknowledgement closes it, or until `assistant coordinator
+acknowledge` names it. Its first line is a gap marker, and a gap later means
+some pushes were missed; either way, drain the queue, which gives back every
+wake still waiting that this coordinator was not already handed. It suits a
+host that can run a command in the background and start a turn on its
+output. It ends with success when interrupted, and as an operational failure
+when the stream ends any other way, a service stop included, so it has to be
+started again.
 
 A coordinator that cannot hold a stream waits instead. `assistant coordinator
-await` blocks until the queue holds a wake nobody has acknowledged, then
-drains it the way `assistant coordinator wakes` does, or lists none once its
-bound passes:
+await` blocks until the queue holds a wake on offer, then drains it the way
+`assistant --json coordinator wakes` does, or lists none once its bound
+passes:
 
 ```sh
 assistant --json coordinator await --timeout 5m
@@ -172,16 +188,21 @@ assistant --json coordinator await --timeout 5m
 
 The bound is whole seconds from `1s` to `1h`, and `5m` when none is given;
 anything else is refused as incorrect usage rather than clamped. A wake it
-returned is not returned again. That is the specification's "draining
-acknowledges a row", and its cost is stated rather than hidden: a coordinator
-that drains a wake and then stops before acting on it does not get it back
-from the queue. The row is kept in the record, and the task's own state, which
-`assistant tasks` reads, still shows what happened to the work.
+returned is still waiting until it is acknowledged, so the loop is: wait, act
+on each wake, acknowledge it, wait again. A coordinator that waits again
+before acknowledging is answered at once with the same wakes.
 
-`assistant coordinator acknowledge` records as handled a wake the coordinator
-dealt with without draining it, one `listen` printed. Naming a wake a drain
-already took is refused as incorrect usage, because the drain was its
-acknowledgement.
+Delivery is at least once, and the limits are stated rather than hidden. The
+service cannot see the coordinator, only its stream: a `listen` left running
+after its host died keeps what it was handed until that process ends, and two
+streams held at once, a person's and the coordinator's, count as one, so the
+coordinator going away is not noticed until both have closed. A coordinator
+that holds `listen` and never acknowledges what it acted on is not handed
+those wakes again, and they keep the work counted as in flight.
+
+`assistant coordinator acknowledge` closes the wakes it names, whether a drain
+handed them out or `listen` printed them. Naming a wake already acknowledged
+is refused as incorrect usage, and so is naming a number no wake has.
 
 Neither `await` nor `listen` keeps anything between calls, so after a service
 restart, which ends either as an operational failure, starting them again
@@ -193,8 +214,8 @@ A restart does not leave that queue exactly as it was. When the service
 starts it reconciles every task, and a task whose worker's terminal is gone
 with its work not landed and no report filed for it is relaunched, up to
 `relaunch_attempts` times (2 unless configured). A relaunch records each still-queued `terminal-gone`
-wake about the session it replaced as handled by the program, so the next
-drain does not return it. Read `assistant tasks` after a restart as well as
+wake about the session it replaced as handled by the program, so no later
+drain returns it. Read `assistant tasks` after a restart as well as
 the queue: a relaunched task shows its new attempt there, and a task past
 `relaunch_attempts` holds for an answer instead of being relaunched.
 

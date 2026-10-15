@@ -33,7 +33,7 @@ import (
 // every restricted method before a handler runs. The worker group set
 // answers which task the peer is the worker of, and the handlers whose
 // answer depends on it apply it here: task.event admits only a worker and
-// attributes the entry to its task; wakes.list, wakes.acknowledge,
+// attributes the entry to its task; wakes.list, wakes.peek, wakes.acknowledge,
 // wakewait.go's wakes.wait and wakes.subscribe, supervision.assert, coordinator.go's task.create, task.promote and
 // task.relaunch, steer.go's task.message, task.stop and task.interrupt,
 // taskholds.go's task.respond and catchup.go's catchup.mark are the
@@ -243,30 +243,77 @@ func (s *Service) publishTaskEvent(event store.TaskEvent) {
 }
 
 // listWakes drains the queue for the coordinator, on store.DrainWakes'
-// terms: oldest first, bounded, and acknowledging exactly the rows it
-// returns, by req.WakeAcknowledger, so a second drain does not return them.
-// A worker is refused before anything is read or written.
+// terms and wakewait.go's: oldest first, bounded, handing out the rows on
+// offer to req.WakeAcknowledger under the wake stream's open stretch, and
+// closing none. A worker is refused before anything is read or written.
 func (s *Service) listWakes(ctx context.Context, req ipc.Request, r machine.WakesRequest) (machine.Wakes, error) {
 	if err := s.refuseWorker(req); err != nil {
 		return machine.Wakes{}, err
 	}
-	limit := r.Limit
-	if limit == 0 {
-		limit = machine.DefaultWakesLimit
+	limit, err := wakesLimit(r)
+	if err != nil {
+		return machine.Wakes{}, err
 	}
-	wakes, err := s.store.DrainWakes(ctx, limit, req.WakeAcknowledger())
+	wakes, err := s.store.DrainWakes(ctx, limit, s.wakeHandout(req))
 	if err != nil {
 		return machine.Wakes{}, err
 	}
 	return machine.Wakes{Wakes: wakes}, nil
 }
 
-// acknowledgeWakes records that the coordinator handled the named wakes
-// without draining them: rows it learned of from the wake stream or a
-// task's history. A drain already acknowledged what it returned, so naming a
-// drained row is the store's refusal of an already acknowledged identifier.
-// Who acknowledged is req.WakeAcknowledger, derived from the surface and
-// read from nothing the caller sent. A worker is refused; a batch the store
+// peekWakes is a person's reading of the queue: every queued row, handed
+// out or not, oldest first, beside the project of the task it names, read
+// through store.QueuedWakes, which hands out and acknowledges nothing. A
+// worker is refused before anything is read, on listWakes' terms. A row
+// whose task cannot be read fails the reading rather than being shown
+// without its project.
+func (s *Service) peekWakes(ctx context.Context, req ipc.Request, r machine.WakesRequest) (machine.QueuedWakes, error) {
+	if err := s.refuseWorker(req); err != nil {
+		return machine.QueuedWakes{}, err
+	}
+	limit, err := wakesLimit(r)
+	if err != nil {
+		return machine.QueuedWakes{}, err
+	}
+	queued, err := s.store.QueuedWakes(ctx, limit)
+	if err != nil {
+		return machine.QueuedWakes{}, err
+	}
+	projects := make(map[string]string)
+	out := machine.QueuedWakes{Wakes: make([]machine.QueuedWake, 0, len(queued))}
+	for _, w := range queued {
+		project, ok := projects[w.TaskID]
+		if !ok {
+			task, err := s.store.Task(ctx, w.TaskID)
+			if err != nil {
+				return machine.QueuedWakes{}, err
+			}
+			project = task.Project
+			projects[w.TaskID] = project
+		}
+		out.Wakes = append(out.Wakes, machine.QueuedWake{Wake: w, Project: project})
+	}
+	return out, nil
+}
+
+// wakesLimit is a request's bound with zero read as machine.DefaultWakesLimit.
+// A negative limit is ipc.ErrInvalidRequest, which the command line refuses
+// before it asks.
+func wakesLimit(r machine.WakesRequest) (int, error) {
+	switch {
+	case r.Limit < 0:
+		return 0, fmt.Errorf("%w: a limit of %d wakes is never negative", ipc.ErrInvalidRequest, r.Limit)
+	case r.Limit == 0:
+		return machine.DefaultWakesLimit, nil
+	}
+	return r.Limit, nil
+}
+
+// acknowledgeWakes records that the coordinator acted on the named wakes,
+// which is what closes them: rows a drain handed it, or rows it learned of
+// from the wake stream or a task's history, on the same terms. Who
+// acknowledged is req.WakeAcknowledger, derived from the surface and read
+// from nothing the caller sent. A worker is refused; a batch the store
 // refuses, for an unknown or an already acknowledged identifier, writes
 // nothing and the refusal is the store's.
 func (s *Service) acknowledgeWakes(ctx context.Context, req ipc.Request, r machine.AcknowledgeRequest) (machine.Acknowledged, error) {

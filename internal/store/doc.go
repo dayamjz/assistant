@@ -195,28 +195,29 @@
 // CurrentIncarnation. It is one row rather than a history because the
 // question is present tense, and the epoch only grows across restarts.
 //
-// Draining acknowledges, which is PRD section 8's "draining acknowledges a
-// row and never deletes it". DrainWakes reads the queued rows oldest first
-// under a batch limit and acknowledges exactly those rows, by the drainer, in
-// the transaction that read them, so a second drain does not return them and
-// the table keeps them. A row is actionable until acknowledged, and a drain
-// is an acknowledgement, so delivery to a drain is at most once: a consumer
-// that drained a row and crashed before acting on it, or whose answer never
-// reached its caller, is not handed the row again. That is the PRD's text
-// rather than a choice made here, and wake.go's DrainWakes states it; what
-// is left to such a consumer is the kept row in TaskWakes and whatever the
-// supervisor loop surfaces next. QueuedWakes is the read that takes nothing,
-// for the program's own reconciliation and relaunch, which must see what
-// stands for the coordinator without handing it over. AcknowledgeWakes is
-// the acknowledgement of a row that was not drained, a batch that checks
-// every identifier and then writes every row in one transaction, so an
-// unknown identifier or a row already acknowledged, a drained one included,
+// Draining hands a row out, and acknowledging closes it, which is PRD
+// section 8 as the owner amended it. DrainWakes reads the queued rows on
+// offer oldest first under a batch limit and records a handout on exactly
+// those rows, who to, under which attachment and when, in the transaction
+// that read them; it closes nothing, so every row it returns is still
+// queued. A row is on offer when no drain has handed it out, or when the
+// attachment it was last handed out under is not one the drain names as
+// still attached; which attachments those are is the caller's, and
+// internal/service's wakewait.go owns that rule and its residual gap. So a
+// consumer that drained a row and went away before acting on it is handed
+// the row again: delivery is at least once. QueuedWakes is the read that
+// hands out nothing, for the program's own reconciliation and relaunch and
+// a person's listing, and OfferedWakes counts what a drain would offer
+// without making one. AcknowledgeWakes is what closes a row, handed out or
+// not, a batch that checks every identifier and then writes every row in
+// one transaction, so an unknown identifier or a row already acknowledged
 // refuses the batch with a *WakeIDError and writes nothing, and a subset
 // acknowledged leaves the rest queued. UnacknowledgedWakes is the queue's
 // half of PRD section 5's "work is in flight": how many queued rows each
-// task has, which internal/supervisor's in-flight table reads beside the
-// resolved states. Which states are in flight is that table's and not this
-// package's.
+// task has, handed out or not, which internal/supervisor's in-flight table
+// reads beside the resolved states, so a wake keeps its task in flight
+// until it is acknowledged. Which states are in flight is that table's and
+// not this package's.
 //
 // Who acknowledged is an Acknowledger, closed on Resolver's terms and for
 // Resolver's reason: a struct with one unexported field, so no text a
@@ -224,8 +225,9 @@
 // decided in source at that surface. There is no member meaning a person,
 // because no surface here witnesses one and the queue is the coordinator's.
 // AcknowledgedByCoordinator's producer is internal/ipc's
-// Request.WakeAcknowledger, which internal/service passes to DrainWakes for
-// the coordinator's drains and to AcknowledgeWakes for its acknowledgements,
+// Request.WakeAcknowledger, which internal/service passes to DrainWakes as
+// who the coordinator's drains hand rows to and to AcknowledgeWakes for its
+// acknowledgements,
 // each refused for a task's worker. AcknowledgedByProgram's one producer is
 // internal/service's relaunch, for the terminal-gone rows about the session
 // it replaced. This records and does not gate: every member closes a row on

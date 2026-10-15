@@ -61,7 +61,9 @@ func TaskInFlight(s taskstate.State, unacknowledged int) (inFlight, decided bool
 // returns. A task is in flight when its state is, on inFlightByState's
 // terms, or when it has a queued wake, whatever its state: a hold nobody has
 // been told about keeps the guard, and acknowledging the wake is what
-// releases it, which a drain does for every row it returns. A task present only in unacknowledged counts too.
+// releases it: a drain hands a row out and releases nothing, so a wake keeps
+// its task in flight until the coordinator acknowledges it acted. A task
+// present only in unacknowledged counts too.
 //
 // The answer is InFlightSome when any task is in flight, InFlightNone when
 // none is, including over an empty fleet, and InFlightUnknown when any task's

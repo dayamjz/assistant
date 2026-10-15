@@ -142,6 +142,7 @@ type Wake struct {
 	kind         Kind
 	event        string
 	unrecognized bool
+	routine      bool
 }
 
 // Of builds a wake of a kind that the loop observed directly. It refuses
@@ -169,6 +170,11 @@ func Of(kind Kind) (Wake, error) {
 // read as an event with no decision verb, on taskstate's own terms that a
 // close is decision-only and claims no state; whether a close should surface
 // on its own is not decided here.
+//
+// A row taskstate marks Routine, the program's record of an act the
+// coordinator asked for or the program made itself, is an event with no
+// decision verb marked routine, which Classify absorbs with ReasonRoutine:
+// which entries those are is taskstate's table and not a list here.
 func Event(eventKind string) Wake {
 	row, ok := taskstate.Lookup(eventKind)
 	switch {
@@ -177,7 +183,7 @@ func Event(eventKind string) Wake {
 	case row.Role == taskstate.RoleDecisionOpen:
 		return Wake{kind: KindDecisionEvent, event: eventKind}
 	default:
-		return Wake{kind: KindPlainEvent, event: eventKind}
+		return Wake{kind: KindPlainEvent, event: eventKind, routine: row.Routine}
 	}
 }
 
@@ -192,3 +198,7 @@ func (w Wake) Event() string { return w.event }
 // Unrecognized reports whether the wake is an event whose kind taskstate has
 // no row for.
 func (w Wake) Unrecognized() bool { return w.unrecognized }
+
+// Routine reports whether the wake is an event whose kind taskstate marks
+// Routine.
+func (w Wake) Routine() bool { return w.routine }
