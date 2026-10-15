@@ -117,4 +117,9 @@ var (
 	// which would present a stage that found something as one that found
 	// nothing.
 	ErrBadReport = errors.New("pipeline: a stage's recorded report could not be read")
+	// ErrRebaseNotOffered is returned when a stage body asks to send the run
+	// back to the rebase stage and the stage table does not give that stage
+	// the path. The step fails rather than routing on, because a request the
+	// topology has no edge for would otherwise be dropped without a word.
+	ErrRebaseNotOffered = errors.New("pipeline: the stage asked for a rebase after the push and has no path back to rebase")
 )

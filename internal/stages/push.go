@@ -46,6 +46,26 @@ import (
 // since the observation is refused twice over: by internal/safety against its
 // fresh read, and by the remote against the lease.
 //
+// # A second push (P6)
+//
+// A run the checks stage sent back to rebase reaches this stage again with
+// pipeline.KeyPushed already naming the commit it forwarded the first time,
+// and the branch it now updates is one this run rewrote. The anchor for that
+// update has to be an observation of the branch standing at that commit,
+// which is what the rebase stage's second pass records and the only one it
+// records. This stage asks safety.RequireObservedAt of the anchor before it
+// decides, so an anchor from the first pass, taken before the run pushed
+// anything, is refused here and held rather than reaching a decision. That
+// anchor reaches here when the second pass held and a person carried the run
+// on, and the decision would refuse most such anchors anyway, since the first
+// push moved the branch off them. The one it would not is a branch somebody
+// put back where it stood before the run, which the old anchor matches again;
+// this rule is what refuses that one. The
+// decision over an accepted anchor is the usual one against a fresh read, so
+// a branch that moved between the rebase stage's observation and this push is
+// refused as any moved target is, and the commits an anchored force reports
+// dropping are ones the branch held when the first push left it.
+//
 // # Reviewed commit ancestry (P6)
 //
 // The push stage requires that a completed review approved a commit this one
@@ -93,6 +113,9 @@ import (
 //   - The checks stage's fix rounds run after this stage and are not reviewed
 //     here. Nothing in this build pushes the commits they make, and the
 //     checks stage holds on one rather than reading checks it cannot be in.
+//     A rebase the checks stage sends the run back for is different: it
+//     comes back through the review stage, and through here, before it is
+//     pushed.
 //   - A judge path a later round deleted, which judge.go already held that
 //     round's stage for, is reported again by this review's judge lens: it
 //     cannot tell which edits a person already accepted, so it asks again
@@ -128,6 +151,7 @@ func Push(deps StageDeps) pipeline.Implementation {
 		pipeline.KeyBase,
 		pipeline.KeyHead,
 		pipeline.KeyPushAnchor,
+		pipeline.KeyPushed,
 		pipeline.KeyIntent,
 		pipeline.KeyIntentSupplied,
 	}, pipeline.StageResultKeys(pipeline.StageReview)...)
@@ -193,6 +217,18 @@ func pushVerifiedCommit(ctx context.Context, deps StageDeps, in pipeline.Input) 
 	target := pushTarget(facts.branch)
 	if facts.anchor.Target() != target {
 		return anchorForAnotherTarget(facts, target), nil
+	}
+	// A second push is anchored only where the first one left the branch.
+	// Asking it here rather than trusting the stage that recorded the anchor
+	// is what refuses a first-pass anchor, which predates the first push.
+	if facts.pushed != "" {
+		if err := safety.RequireObservedAt(facts.anchor, facts.pushed); err != nil {
+			var refusal *safety.Refusal
+			if errors.As(err, &refusal) {
+				return pushRefused(facts, target, refusal), nil
+			}
+			return pipeline.Output{}, err
+		}
 	}
 
 	// Commits this run wrote after the review are reviewed before anything is
@@ -634,6 +670,9 @@ type pushState struct {
 	branch     string
 	base       string
 	head       string
+	// pushed is the commit an earlier execution of this stage forwarded, and
+	// empty until one did. It is what makes this execution a second push.
+	pushed string
 	// reviewOutcome is how the review stage ended, which is what says whether
 	// a review completed at all.
 	reviewOutcome pipeline.Outcome
@@ -667,6 +706,7 @@ func readPushState(state pipeline.Reader) (pushState, error) {
 		{pipeline.KeyBranch, &facts.branch},
 		{pipeline.KeyBase, &facts.base},
 		{pipeline.KeyHead, &facts.head},
+		{pipeline.KeyPushed, &facts.pushed},
 		{pipeline.KeyIntent, &facts.intent},
 	}
 	for _, entry := range toRead {
