@@ -66,8 +66,10 @@ type Run struct {
 	// nothing reads this field to decide anything: where a run's work stands
 	// and what it pushed are its checkpoint's, which is what a rerun and
 	// assistant sync read. The column stays because a migration may not drop
-	// one.
-	CurrentHead Optional[string] `json:"current_head"`
+	// one. The json "-" tag keeps it off every answer that composes this
+	// record, so no wire document carries a field that is null on every run;
+	// a document that does carry the key is not read into this field.
+	CurrentHead Optional[string] `json:"-"`
 	// Status is where the run stands.
 	Status RunStatus `json:"status"`
 	// ApprovedCommit is the commit a completed review approved. It is unknown

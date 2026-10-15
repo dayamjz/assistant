@@ -19,17 +19,52 @@ import (
 // fails this test rather than agreeing with itself.
 var defaultBranchRemedies = []string{"--default-branch", "git remote set-head origin --auto"}
 
+// refusalExit is the code each refusal to record a default branch exits
+// with, written out here rather than read from internal/cli, so a mapping that
+// moved fails this test rather than agreeing with itself. The three reasons a
+// working copy holds no answer for are incorrect usage, because the caller
+// supplies the remedy; a read that failed is an operational failure, because
+// the caller got nothing wrong.
+var refusalExit = map[machine.DefaultBranchRefusal]machine.Code{
+	machine.DefaultBranchNoOrigin:      machine.ExitUsage,
+	machine.DefaultBranchUnrecorded:    machine.ExitUsage,
+	machine.DefaultBranchOutsideOrigin: machine.ExitUsage,
+	machine.DefaultBranchUnreadable:    machine.ExitFailure,
+}
+
+// Every refusal internal/machine declares has a decided exit code here, so a
+// reason added later fails this rather than going untested at whatever code
+// failureExit happens to give it, and the table names nothing that set does
+// not.
+func TestEveryDefaultBranchRefusalHasADecidedExit(t *testing.T) {
+	t.Parallel()
+	declared := machine.DefaultBranchRefusals()
+	for _, reason := range declared {
+		if _, ok := refusalExit[reason]; !ok {
+			t.Errorf("no exit code is decided for the %s refusal", reason)
+		}
+	}
+	if len(refusalExit) != len(declared) {
+		t.Errorf("the exit table names %d refusals and internal/machine declares %d", len(refusalExit), len(declared))
+	}
+}
+
 // refusedDefaultBranch runs init with args and holds it to the refusal for
-// reason: it fails, both renderings carry internal/machine's row for that
-// reason and both remedies, and nothing was set up, so the working copy has
-// no gate remote and the home binds it to no gate.
+// reason: it exits with refusalExit's code for that reason in both renderings,
+// both renderings carry internal/machine's row for that reason and both
+// remedies, and nothing was set up, so the working copy has no gate remote and
+// the home binds it to no gate.
 func refusedDefaultBranch(t *testing.T, h *home.Home, subject string, reason machine.DefaultBranchRefusal, args ...string) {
 	t.Helper()
 	row := machine.DefaultBranchRefusalPhrase(reason).String()
+	want, decided := refusalExit[reason]
+	if !decided {
+		t.Fatalf("no exit code is decided for the %s refusal", reason)
+	}
 
 	plain := run(t, h, subject, append([]string{"init"}, args...)...)
-	if plain.code != machine.ExitFailure {
-		t.Fatalf("init exited %s, want a refusal:\n%s%s", plain.code, plain.stdout, plain.stderr)
+	if plain.code != want {
+		t.Fatalf("init refused for %s exited %s, want %s:\n%s%s", reason, plain.code, want, plain.stdout, plain.stderr)
 	}
 	if !strings.Contains(plain.stderr, row) {
 		t.Errorf("the refusal does not carry the %s row %q:\n%s", reason, row, plain.stderr)
@@ -41,8 +76,8 @@ func refusedDefaultBranch(t *testing.T, h *home.Home, subject string, reason mac
 	}
 
 	structured := run(t, h, subject, append([]string{"--json", "init"}, args...)...)
-	if structured.code != machine.ExitFailure {
-		t.Fatalf("init --json exited %s, want a refusal:\n%s%s", structured.code, structured.stdout, structured.stderr)
+	if structured.code != want {
+		t.Fatalf("init --json refused for %s exited %s, want %s:\n%s%s", reason, structured.code, want, structured.stdout, structured.stderr)
 	}
 	var failure machine.Failure
 	if err := json.Unmarshal([]byte(structured.stdout), &failure); err != nil {
@@ -153,6 +188,11 @@ func TestInitRefusesAnOriginHeadPointingOutsideOrigin(t *testing.T) {
 	git(t, subject, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/heads/a-feature")
 
 	refusedDefaultBranch(t, h, subject, machine.DefaultBranchOutsideOrigin)
+
+	git(t, subject, "remote", "set-head", "origin", "--auto")
+	if answer := recordedDefaultBranch(t, h, subject); answer.Repository.DefaultBranch != "main" {
+		t.Fatalf("after the remedy init recorded %q, want main", answer.Repository.DefaultBranch)
+	}
 }
 
 // --default-branch is the answer when it is given, over whatever origin
@@ -218,5 +258,13 @@ func TestInitRefusesAnOriginHeadGitCannotRead(t *testing.T) {
 	refusedDefaultBranch(t, h, subject, machine.DefaultBranchUnreadable)
 	if got := run(t, h, subject, "init"); !strings.Contains(got.stderr, "Cause: ") {
 		t.Errorf("the unreadable refusal does not give the cause its row points at:\n%s", got.stderr)
+	}
+
+	if err := os.Remove(loose); err != nil {
+		t.Fatalf("removing the damaged reference: %v", err)
+	}
+	git(t, subject, "remote", "set-head", "origin", "--auto")
+	if answer := recordedDefaultBranch(t, h, subject); answer.Repository.DefaultBranch != "main" {
+		t.Fatalf("after the remedy init recorded %q, want main", answer.Repository.DefaultBranch)
 	}
 }
