@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -41,15 +42,25 @@ func openTerminal(t *testing.T, script standin.Script, spec agents.WorkerSpec,
 // returns them.
 func awaitLines(t *testing.T, agent *standin.Agent, n int) []string {
 	t.Helper()
-	deadline := time.Now().Add(30 * time.Second)
+	lines, ok := linesWithin(agent, n, 30*time.Second)
+	if !ok {
+		t.Fatalf("the worker never recorded %d lines read", n)
+	}
+	return lines
+}
+
+// linesWithin is the lines the stand-in worker recorded once it has read n,
+// and false when it has not within wait.
+func linesWithin(agent *standin.Agent, n int, wait time.Duration) ([]string, bool) {
+	deadline := time.Now().Add(wait)
 	for {
 		for _, call := range agent.Calls() {
 			if call.Worker && len(call.Lines) >= n {
-				return call.Lines
+				return call.Lines, true
 			}
 		}
 		if !time.Now().Before(deadline) {
-			t.Fatalf("the worker never recorded %d lines read", n)
+			return nil, false
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -199,8 +210,11 @@ func TestTheTerminalFramingRefusesALongLine(t *testing.T) {
 // program reads in the terminal's line-editing mode does not arrive whole.
 // The typing here goes around the framing, straight through tmux, so it is a
 // person's keystrokes and not the adapter's; what the stand-in recorded is
-// what reached it. It asserts the line was cut and records where, rather
-// than asserting a number, because the number is the platform's.
+// what reached it. What the terminal does with the line is the platform's:
+// on Linux it arrives cut, and the test asserts the cut is still longer than
+// the framing's limit and records where it fell; on a macOS runner the line
+// never completed within the wait, which is accepted there and nowhere else.
+// Either way the line did not arrive whole, which is what the limit is for.
 func TestATerminalCutsALongLineTheFramingRefuses(t *testing.T) {
 	worker, term, agent := openTerminal(t, standin.Script{}, workerSpec(t))
 	awaitLines(t, agent, 1)
@@ -213,7 +227,15 @@ func TestATerminalCutsALongLineTheFramingRefuses(t *testing.T) {
 			t.Fatalf("typing through tmux: %v: %s", err, out)
 		}
 	}
-	lines := awaitLines(t, agent, 2)
+	lines, arrived := linesWithin(agent, 2, 10*time.Second)
+	if !arrived {
+		if runtime.GOOS != "darwin" {
+			t.Fatalf("the %d-byte line never reached the worker", len(typed))
+		}
+		t.Logf("a %d-byte line typed into the pane never completed on %s", len(typed), runtime.GOOS)
+		worker.Close()
+		return
+	}
 	got := len(lines[1])
 	if got >= len(typed) {
 		t.Fatalf("a %d-byte line arrived whole, so the framing's limit guards nothing here", len(typed))

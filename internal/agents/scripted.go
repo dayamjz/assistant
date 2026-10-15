@@ -127,9 +127,9 @@ func (r *scriptedRunner) StartInTerminal(ctx context.Context, t Terminal, spec W
 // the terminal's line-editing mode, which bounds a line: on Linux a
 // 10000-byte line typed into a tmux pane reached the reading program as its
 // first 4095 bytes, which TestATerminalCutsALongLineTheFramingRefuses
-// records, and macOS's <limits.h> declares MAX_CANON as 1024, which no test
-// here has exercised. The limit is set below both, so a line is refused here
-// rather than cut there.
+// records. On a macOS CI runner the same line never completed at all, and a
+// line at this limit arrived whole. The limit is set below what either
+// platform kept, so a line is refused here rather than cut or lost there.
 const TerminalLineLimit = 1023
 
 // terminalLines is the scripted adapter's terminal framing: plainLine's bytes,
