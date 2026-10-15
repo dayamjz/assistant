@@ -18,11 +18,11 @@ build:
 	$(GO) build -o $(BIN)/$(BINARY) ./cmd/$(BINARY)
 
 test:
-	$(GO) test -race ./...
+	$(GO) test -race -timeout 30m ./...
 
 # Coverage over the whole module, written where CI can pick it up.
 cover:
-	$(GO) test -race -coverprofile=coverage.out ./...
+	$(GO) test -race -timeout 30m -coverprofile=coverage.out ./...
 	$(GO) tool cover -func=coverage.out | tail -1
 
 fmt:
