@@ -40,6 +40,9 @@ const (
 	// it, so the anchor the run holds is not the state being updated. Nothing
 	// this update could lose was identified, and the update is still refused:
 	// an anchor that does not describe the current target protects nothing.
+	//
+	// RequireObservedAt refuses with it too, for an observation that does not
+	// find the target where an earlier update by the run left it.
 	ReasonTargetMoved Reason = "target-moved"
 	// ReasonWouldDiscard is the target holds commits the proposed commit does
 	// not contain, so the update would drop them from the branch. The refusal

@@ -246,11 +246,36 @@ The same read of the pull request carries whether the code host can merge it.
 Checks that passed are not a pass until the host also reports the pull request
 mergeable; until then the run waits on the same terms, and an elapsed wait over
 passed checks holds with `ci-mergeability-unknown`, which is re-read like the
-other elapsed holds. A pull request the host reports as conflicting with its
-base holds at once with `ci-conflicted`, whatever its checks say. The run does
-not rebase or re-push a branch it has already pushed, and it never decides what
-conflicting content should be: rebase the branch yourself and push it through
-the gate, which starts a new run that reviews the result.
+other elapsed holds.
+
+A pull request the host reports as conflicting with its base is answered at
+once, whatever its checks say, by sending the run back to the rebase stage
+(PRD section 14, decision 7). The rebase stage observes the branch and goes on
+only if it still stands at the commit this run pushed, then replays the run's
+head onto the freshly fetched base. If that applies cleanly, the result goes
+through review again, in a session of its own, then the test, document and
+lint stages, and a second push anchored on the commit the first push left
+there, before the checks stage reads the pull request again. The run takes
+this path at most twice (`RebaseAfterPushRounds`); a third conflict parks the
+run rather than rebasing again.
+
+The run never decides on its own what conflicting content should be. A rebase
+that does not apply cleanly is abandoned and holds with
+`rebase-after-push-conflict`, with nothing rewritten: rebase the branch yourself
+and push it through the gate, which starts a new run that reviews the result. A
+fix round you ask for at that hold is your explicit answer, and the rebase stage
+then rebases its result only if that applies cleanly. The second pass also
+holds instead of rebasing when the branch moved after this run pushed it
+(`rebase-after-push-branch-moved`), so a commit somebody else pushed there is
+never dropped, and the second push is refused and held like any other when the
+branch moves after the rebase stage observed it. A rebase that leaves nothing
+to push holds too, rather than ending the run past an open pull request.
+
+The checks stage holds with `ci-conflicted`, as before, where that path cannot
+do its job: the run pushed nothing, its head is not the commit it pushed, or
+the run skips the rebase, review or push stage. The fix round limits of the
+stages the path passes through are per run, so a stage that spent its rounds
+on the first pass has none left on the second.
 
 A failing check is still sent to the checks stage's fix rounds
 (`fix_rounds.checks`). The round commits in the run's isolated copy, but that
@@ -297,7 +322,9 @@ Two things that review does not cover:
 - The checks stage's fix rounds. That stage runs after the push, so nothing
   reviews the commits its rounds make, and nothing in this build pushes them;
   the stage holds with `ci-fix-not-pushed` rather than reporting on checks
-  that never saw the round's commit.
+  that never saw the round's commit. A rebase the checks stage sends the run
+  back for is not one of these: it is reviewed by the review stage before the
+  second push, as described above.
 - Earlier rounds' own accounts. The reviewer of the later commits is handed
   each stage's last fix summary as a claim to check. A stage that took more
   than one round is represented by its last summary, and its earlier rounds

@@ -437,7 +437,10 @@ Each has cost this repository more than one round of review.
   riding as the hold's `Halt.Detail`, and it always holds again after. It
   exists only at the stage table's requestable stages, the ones before push,
   and its edge back is `graph.Edge.Answered`, exempt from convergence and
-  from no other bound. Read its
+  from no other bound. The checks stage's path back to rebase (`repush.go`) is
+  a third, the one edge from a stage to an earlier stage, and because of it
+  `internal/graph` reads every hold exit on that path as a back edge, so those
+  carry a bound too. Read its
   `doc.go` before changing the loop or the holds, and for the residual gaps: no
   review reads what a person left unselected, and convergence is over the whole
   state.

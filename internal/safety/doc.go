@@ -107,6 +107,17 @@
 // describe the current target protects nothing, so proceeding on it would be a
 // blind force wearing a lease.
 //
+// # A second update of a branch the run already updated
+//
+// A run that rebases a branch it already pushed updates that branch a second
+// time, and an observation taken then would anchor to whatever the branch
+// holds by that point, including commits somebody else pushed after the run's
+// first update. RequireObservedAt is the rule for that case: the anchor of the
+// second update must be an observation of the branch standing at the commit
+// the first update left there, so an anchored force over it drops only what
+// the branch held when the run updated it. Its doc comment states what it
+// leaves to the caller.
+//
 // # Fail closed on an unverifiable fact
 //
 // Every fact a decision rests on is either established or the update is

@@ -72,33 +72,41 @@ type stageSpec struct {
 	// at pr or ci, which run after it, leaves a commit nothing in this build
 	// pushes.
 	requestable bool
+	// rebasesAfterPush says this stage may send the run back to the rebase
+	// stage once the push has happened, PRD section 14 decision 7's rebase of
+	// a conflicted pull request. It is exactly the checks stage: it is the one
+	// stage that reads whether the pull request still merges, and the run then
+	// passes review, the checks before push, and a second anchored push before
+	// it stands here again. wire builds the back edge that path takes, bounded
+	// by RebaseAfterPushRounds, from this column and nothing else.
+	rebasesAfterPush bool
 }
 
 // stageTable is the pipeline: nine rows, in the fixed order a run takes them.
 var stageTable = []stageSpec{
 	{StageIntent, "intent",
-		func(s *Stages) *Implementation { return &s.Intent }, nil, "", true},
+		func(s *Stages) *Implementation { return &s.Intent }, nil, "", true, false},
 	{StageRebase, "rebase",
 		func(s *Stages) *Implementation { return &s.Rebase },
-		func(r *config.FixRounds) *int { return &r.Rebase }, config.KeyFixRoundsRebase, true},
+		func(r *config.FixRounds) *int { return &r.Rebase }, config.KeyFixRoundsRebase, true, false},
 	{StageReview, "review",
 		func(s *Stages) *Implementation { return &s.Review },
-		func(r *config.FixRounds) *int { return &r.Review }, config.KeyFixRoundsReview, true},
+		func(r *config.FixRounds) *int { return &r.Review }, config.KeyFixRoundsReview, true, false},
 	{StageTest, "test",
 		func(s *Stages) *Implementation { return &s.Test },
-		func(r *config.FixRounds) *int { return &r.Test }, config.KeyFixRoundsTest, true},
+		func(r *config.FixRounds) *int { return &r.Test }, config.KeyFixRoundsTest, true, false},
 	{StageDocument, "document",
-		func(s *Stages) *Implementation { return &s.Document }, nil, "", true},
+		func(s *Stages) *Implementation { return &s.Document }, nil, "", true, false},
 	{StageLint, "lint",
 		func(s *Stages) *Implementation { return &s.Lint },
-		func(r *config.FixRounds) *int { return &r.Lint }, config.KeyFixRoundsLint, true},
+		func(r *config.FixRounds) *int { return &r.Lint }, config.KeyFixRoundsLint, true, false},
 	{StagePush, "push",
-		func(s *Stages) *Implementation { return &s.Push }, nil, "", false},
+		func(s *Stages) *Implementation { return &s.Push }, nil, "", false, false},
 	{StagePR, "pr",
-		func(s *Stages) *Implementation { return &s.PR }, nil, "", false},
+		func(s *Stages) *Implementation { return &s.PR }, nil, "", false, false},
 	{StageCI, "ci",
 		func(s *Stages) *Implementation { return &s.CI },
-		func(r *config.FixRounds) *int { return &r.Checks }, config.KeyFixRoundsChecks, false},
+		func(r *config.FixRounds) *int { return &r.Checks }, config.KeyFixRoundsChecks, false, true},
 }
 
 // spec returns the stage's row, and false when s names no stage.
@@ -217,6 +225,16 @@ func ParkedStage(p graph.Park) (Stage, bool) {
 		return StageOfNode(p.Edge.From)
 	}
 	return StageOfNode(p.Node)
+}
+
+// RebasesAfterPush reports whether this stage may send a run back to the
+// rebase stage after the push, which the stage table answers: the checks
+// stage, and no other. The back edge it takes is the one wire builds from
+// this stage's node to the rebase stage's, and RebaseAfterPushRounds bounds
+// it.
+func (s Stage) RebasesAfterPush() bool {
+	row, ok := s.spec()
+	return ok && row.rebasesAfterPush
 }
 
 // Requestable reports whether a person may ask for a fix round at this
