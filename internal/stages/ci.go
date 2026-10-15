@@ -22,14 +22,64 @@ import (
 //
 // PRD section 5 gives this stage two jobs: watch CI and mergeability, and fix
 // failures and conflicts. This implementation reads the checks on the pull
-// request's head and reports what the provider says once they settle. It does
-// not judge mergeability.
+// request's head and whether the provider reports the pull request mergeable,
+// and reports what it read once both are settled. It fixes neither a conflict
+// nor a failure in a way that reaches the pull request: a conflict holds for a
+// person, and a fix round's commit holds rather than being pushed. The two
+// sections below say why.
 //
-// A pass establishes that every registered check settled and passed at the
-// moment this invocation last read them. It does not establish that they stayed
-// green, that the code was reviewed by a person, or that the provider will
-// merge it: those are the provider's policies and this stage reports what it
-// reads rather than deciding on the provider's behalf.
+// A pass establishes that every registered check settled and passed, and that
+// the provider reported the pull request mergeable, in the reads this
+// invocation last made. It does not establish that either stayed so, that the
+// code was reviewed by a person, or that the provider will merge it: those are
+// the provider's policies and this stage reports what it reads rather than
+// deciding on the provider's behalf.
+//
+// # Mergeability, and a conflict
+//
+// Mergeability is read off the same read of the pull request that comes
+// before the checks, forge.PullRequest.Mergeability, which forge keeps apart
+// from the checks on purpose. A pull request the provider positively reports
+// as conflicted holds the stage at once with an ask finding, whatever its
+// checks say, and its checks are not read: a conflict is not something
+// waiting resolves, and resolving one means deciding what conflicting content
+// should be, which is a person's decision and never this run's.
+//
+// That is detect-and-hold and not PRD section 5's "resolves conflicts". A
+// rebase here would rewrite a branch the push stage already forwarded, so it
+// would need a second anchored update of that branch and a review of the
+// rebased commits before the update. PRD section 14 decision 7 describes the
+// review of later commits at the push stage only and says the checks stage's
+// rounds are not covered, and nothing in the PRD describes re-pushing from
+// this stage, so this body ships neither; the hold says how a person moves
+// the work on instead.
+//
+// Checks that passed are not a pass until the provider has also reported the
+// pull request mergeable. A mergeability the provider has not reported, or
+// one this build does not recognize, which forge maps to its zero value, is
+// waited through on the terms below, and an elapsed wait over passed checks
+// holds naming mergeability as what it was still waiting on. Checks that
+// failed are settled whatever the mergeability, because their findings are
+// what this stage's fix rounds are for.
+//
+// # A fix round's commit is not pushed
+//
+// A fix round at this stage commits in the run's isolated copy after the push
+// stage forwarded the branch, so the pull request and its checks still stand
+// on the pushed commit. PRD section 14 decision 7 has the commits a round
+// writes after review reviewed before they are pushed, and says this stage's
+// rounds run after the push and are not covered; nothing in this build pushes
+// them either. So when this stage runs again after one of its own rounds and
+// the run's head is not the commit the push stage forwarded, it holds with an
+// ask finding naming both commits and saying the round's commit will not
+// reach the pull request, rather than reading checks that cannot have seen
+// it. That is decided from pipeline.KeyHead, pipeline.KeyPushed and this
+// stage's own fix key, never from what the fixer said it did.
+//
+// The round still runs, because PRD section 5 gives this stage fix rounds and
+// its commit is something a person can take forward through the gate, where
+// it is reviewed like any other change. What happens to the copy holding it
+// when the run settles is internal/tasks' CleanUpRun's decision.
 //
 // # The code host and the repository
 //
@@ -120,10 +170,12 @@ import (
 // its checks, where a refusal still fails the step as it always did. What
 // that costs is a provider that answers for checks and not for the pull
 // request: a run of a merged pull request then keeps waiting until the
-// timeout, and the service's re-read at the hold that leaves is the next
-// chance to notice. The refusal itself is a typed value this body reads and
-// classifies as not read; nothing is logged and nothing is carried into the
-// report, because an elapsed report may not vary with what one read said.
+// timeout, and so does a run whose checks passed, because a pull request that
+// was not read reports no mergeability; the service's re-read at the hold that
+// leaves is the next chance to notice a merge or a close. The refusal itself
+// is a typed value this body reads and classifies as not read; nothing is
+// logged and nothing is carried into the report, because an elapsed report
+// may not vary with what one read said.
 //
 // What the timeout is measured from is not in the run's graph state, because
 // that state is the convergence fingerprint and an instant written there
@@ -159,9 +211,9 @@ import (
 // read that the wait ran out on holds rather than re-arming, because whether
 // the base advanced is then unknown, and holding hands that to a person.
 //
-// An elapsed wait ends the row, as settled checks do. A wait whose segment
-// ended any other way - a failed read, a cancellation, a supersession - leaves
-// its row behind; internal/store's ChecksWait says what that costs.
+// An elapsed wait ends the row, as settled checks, a conflict and a fix
+// round nothing pushes do. A wait whose segment ended any other way - a
+// failed read, a cancellation, a supersession - leaves its row behind; internal/store's ChecksWait says what that costs.
 //
 // # Who is waiting, and on whose behalf
 //
@@ -212,6 +264,7 @@ func CI(deps StageDeps) pipeline.Implementation {
 		Reads: []pipeline.Key{
 			pipeline.KeyForgeRepository, pipeline.KeyPullRequest,
 			pipeline.KeyRepository, pipeline.KeyRun, pipeline.KeyBase,
+			pipeline.KeyHead, pipeline.KeyPushed, pipeline.StageCI.FixKey(),
 		},
 		Writes: []pipeline.Key{pipeline.KeyPullRequestEnd, pipeline.KeyPullRequestEndHead},
 		NewBody: func() pipeline.Body {
@@ -308,6 +361,20 @@ func runChecks(ctx context.Context, deps StageDeps, in pipeline.Input) (pipeline
 				},
 			}, nil
 		}
+		if facts.unpushedRound() {
+			cancel()
+			if err := w.end(ctx); err != nil {
+				return pipeline.Output{}, err
+			}
+			return pipeline.Output{Report: unpushedRoundReport(facts)}, nil
+		}
+		if pr.Mergeability == forge.MergeabilityConflicted {
+			cancel()
+			if err := w.end(ctx); err != nil {
+				return pipeline.Output{}, err
+			}
+			return pipeline.Output{Report: conflictedReport(pr, facts)}, nil
+		}
 		checksReport, err := provider.Checks(readCtx, facts.pullRequest)
 		if err != nil {
 			cancel()
@@ -317,7 +384,7 @@ func runChecks(ctx context.Context, deps StageDeps, in pipeline.Input) (pipeline
 			return pipeline.Output{}, fmt.Errorf("stages: reading checks for pull request %d: %w", facts.pullRequest, err)
 		}
 		result := checksReport.Evaluate(forge.DeclaredNoCI(deps.Config))
-		if settled(result.Verdict) {
+		if settled(result.Verdict, pr.Mergeability) {
 			cancel()
 			if err := w.end(ctx); err != nil {
 				return pipeline.Output{}, err
@@ -395,13 +462,20 @@ func elapsedDuring(segment, read context.Context) bool {
 	return segment.Err() == nil && errors.Is(read.Err(), context.DeadlineExceeded)
 }
 
-// settled reports whether a verdict ends the wait. Passed and failed do; no
+// settled reports whether a verdict, read beside the pull request's
+// mergeability, ends the wait. Failed does whatever the mergeability, because
+// its findings are what the fix rounds are for. Passed does only once the
+// provider has reported the pull request mergeable: a conflicted one never
+// reaches here, and any other mergeability is one the provider has not
+// settled, which is waited through on the same terms as a running check. No
 // checks and running are what the stage waits through, per forge's own
 // statement of each.
-func settled(v forge.Verdict) bool {
+func settled(v forge.Verdict, m forge.Mergeability) bool {
 	switch v {
-	case forge.VerdictPassed, forge.VerdictFailed:
+	case forge.VerdictFailed:
 		return true
+	case forge.VerdictPassed:
+		return m == forge.MergeabilityMergeable
 	case forge.VerdictNoChecks, forge.VerdictRunning:
 		return false
 	default:
@@ -533,6 +607,21 @@ type ciFacts struct {
 	repositoryID    string
 	runID           string
 	base            string
+	// head is the commit the run stands on now, pushed is the commit the
+	// push stage forwarded, and roundRan says a fix round of this stage has
+	// left its summary, which is the state a round leaves behind.
+	head     string
+	pushed   string
+	roundRan bool
+}
+
+// unpushedRound reports whether a fix round of this stage moved the run's
+// head off the commit the push stage forwarded, so the head is a commit
+// nothing will push. Only this stage's own round is asked about: the pull
+// request stage writes no head, and the stages before push are behind the
+// push stage's own review of later commits.
+func (f ciFacts) unpushedRound() bool {
+	return f.roundRan && f.head != "" && f.head != f.pushed
 }
 
 // readCIState reads the facts this stage needs from the run's state: which
@@ -549,6 +638,8 @@ func readCIState(state pipeline.Reader) (ciFacts, error) {
 		{pipeline.KeyRepository, &facts.repositoryID},
 		{pipeline.KeyRun, &facts.runID},
 		{pipeline.KeyBase, &facts.base},
+		{pipeline.KeyHead, &facts.head},
+		{pipeline.KeyPushed, &facts.pushed},
 	}
 	for _, t := range texts {
 		value, err := state.Get(t.key)
@@ -557,6 +648,13 @@ func readCIState(state pipeline.Reader) (ciFacts, error) {
 		}
 		*t.into, _ = value.Text()
 	}
+
+	summary, err := state.Get(pipeline.StageCI.FixKey())
+	if err != nil {
+		return ciFacts{}, err
+	}
+	text, _ := summary.Text()
+	facts.roundRan = text != ""
 
 	prValue, err := state.Get(pipeline.KeyPullRequest)
 	if err != nil {
@@ -633,7 +731,7 @@ func pullRequestEndedReport(end store.PullRequestEnd, pr forge.PullRequest) find
 	return report
 }
 
-// The identifiers of the two findings an elapsed wait holds on. They are
+// The identifiers of the findings an elapsed wait holds on. They are
 // what ChecksTimeoutHeld reads, so a report built elsewhere cannot pass as
 // that hold by carrying the words.
 const (
@@ -643,6 +741,22 @@ const (
 	// findingNoChecks is the hold for no checks registered and no no_ci
 	// declaration when checks_timeout elapsed.
 	findingNoChecks = "ci-no-checks"
+	// findingMergeabilityUnknown is the hold for checks that passed on a pull
+	// request the provider had not reported mergeable when checks_timeout
+	// elapsed.
+	findingMergeabilityUnknown = "ci-mergeability-unknown"
+)
+
+// The identifiers of the two holds that are a person's decision from the
+// start rather than a wait that ran out, so ChecksTimeoutHeld never reads
+// either as the elapsed hold.
+const (
+	// findingConflicted is the hold for a pull request the provider reports
+	// as conflicting with its base.
+	findingConflicted = "ci-conflicted"
+	// findingUnpushedRound is the hold for a commit this stage's own fix
+	// round made, which nothing pushes.
+	findingUnpushedRound = "ci-fix-not-pushed"
 )
 
 // ChecksTimeoutHeld reports whether report is the checks stage holding
@@ -651,8 +765,9 @@ const (
 // and the only hold it may.
 //
 // It is true exactly when the report holds and every finding it holds on is
-// one of the two an elapsed wait raises. A report holding on anything else -
-// the stage's own hold on a run with no pull request, or a hold a fix round
+// one of those an elapsed wait raises. A report holding on anything else -
+// the stage's own hold on a run with no pull request, on a conflict, on a fix
+// round's commit nothing pushes, or a hold a fix round
 // raised that the stage node appended, such as the judge rule's - is a hold
 // on a person's decision, and a pull request's state must not answer a
 // question a person was asked, so a report carrying both is not this hold
@@ -663,7 +778,7 @@ func ChecksTimeoutHeld(report findings.Report) bool {
 		return false
 	}
 	for _, f := range held {
-		if f.ID != findingChecksRunning && f.ID != findingNoChecks {
+		if f.ID != findingChecksRunning && f.ID != findingNoChecks && f.ID != findingMergeabilityUnknown {
 			return false
 		}
 	}
@@ -749,6 +864,23 @@ func checksElapsedReport(result forge.ChecksResult, prNumber int, timeout time.D
 	answers := "Approving carries the run forward before the checks settle; skipping records this stage as " +
 		"skipped; cancelling ends the run."
 
+	if result.Verdict == forge.VerdictPassed {
+		// Passed checks reach an elapsed wait only when the provider never
+		// reported the pull request mergeable in the reads the wait made.
+		report.Summary = fmt.Sprintf(
+			"Checks passed on pull request %d, but the code host had not reported whether it can be merged; %s",
+			prNumber, elapsed)
+		report.Findings = append(report.Findings, findings.Finding{
+			ID:       findingMergeabilityUnknown,
+			Severity: findings.SeverityWarning,
+			Action:   findings.ActionAsk,
+			Description: "Every registered check passed, but the code host did not report this pull request " +
+				"as mergeable into its base, so the checks stage cannot establish that it merges. It waited for " +
+				"that answer until " + elapsed + ". Approving carries the run forward without it; skipping " +
+				"records this stage as skipped; cancelling ends the run.",
+		})
+		return report
+	}
 	if result.Verdict == forge.VerdictNoChecks {
 		report.Summary = fmt.Sprintf(
 			"No checks registered on pull request %d and nothing declares that this repository has none; %s",
@@ -777,6 +909,67 @@ func checksElapsedReport(result forge.ChecksResult, prNumber int, timeout time.D
 			elapsed, checksNames(waiting), answers),
 	})
 	return report
+}
+
+// conflictedReport is the report for a pull request the provider reports as
+// conflicting with its base. It holds, and it says that this run will not
+// resolve the conflict and what a person does instead.
+//
+// It names the pull request's head as the provider read it and nothing that
+// varies between two reads of the same conflict, because the report is
+// recorded in the run's graph state.
+func conflictedReport(pr forge.PullRequest, facts ciFacts) findings.Report {
+	base := pr.Base
+	if base == "" {
+		base = facts.base
+	}
+	return findings.Report{
+		Revision: pr.HeadCommit,
+		Summary: fmt.Sprintf("Pull request %d conflicts with its base branch %s, as the code host reports it, "+
+			"so its checks were not read. This run does not rebase a branch it has pushed.", pr.Number, base),
+		Findings: []findings.Finding{{
+			ID:       findingConflicted,
+			Severity: findings.SeverityError,
+			Action:   findings.ActionAsk,
+			Description: fmt.Sprintf("The code host reports that pull request %d cannot be merged into %s because "+
+				"the two conflict. Resolving it means deciding what the conflicting content should be, which this run never "+
+				"decides for you, and this build does not rebase or re-push a branch after the push stage. "+
+				"Rebase the branch onto %s yourself and push it through the gate: that starts a new run, which "+
+				"reviews the result before it reaches the pull request. Approving carries this run past a pull "+
+				"request that cannot merge; skipping records this stage as skipped; cancelling ends the run.",
+				pr.Number, base, base),
+		}},
+	}
+}
+
+// unpushedRoundReport is the report for a run whose head a fix round of this
+// stage moved off the pushed commit. It holds, names both commits, and says
+// the round's commit will not reach the pull request: PRD section 14 decision
+// 7 leaves this stage's rounds unreviewed, and nothing in this build pushes
+// them, so reading the checks again could only read the pushed commit's.
+func unpushedRoundReport(facts ciFacts) findings.Report {
+	pushed := facts.pushed
+	if pushed == "" {
+		pushed = "(nothing: the push stage forwarded no commit in this run)"
+	}
+	return findings.Report{
+		Revision: facts.head,
+		Summary: fmt.Sprintf("A fix round at the checks stage committed %s in this run's isolated copy. It will not "+
+			"be reviewed or pushed by this run, so pull request %d still stands on %s.",
+			facts.head, facts.pullRequest, pushed),
+		Findings: []findings.Finding{{
+			ID:       findingUnpushedRound,
+			Severity: findings.SeverityWarning,
+			Action:   findings.ActionAsk,
+			Description: fmt.Sprintf("This stage's fix round committed %s on top of %s, the commit the push stage "+
+				"forwarded. A commit a fix round writes after review is reviewed before it is pushed, and the "+
+				"checks stage runs after the push, so nothing in this build reviews or pushes this one: the pull "+
+				"request and its checks still stand on %s. To use the round's change, take %s from this run's "+
+				"isolated copy and push it through the gate, which starts a run that reviews it. Approving carries "+
+				"this run past the checks that failed; skipping records this stage as skipped; cancelling ends "+
+				"the run.", facts.head, pushed, pushed, facts.head),
+		}},
+	}
 }
 
 // checksNames renders a list of checks as a comma-separated string for a
