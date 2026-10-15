@@ -19,7 +19,9 @@ type State string
 // PassOnMerge; the cleanup record has none yet (#108), and the rule that
 // reads it is here so its writer inherits a consumer. Complete is resolved
 // for a delivery task only: for an investigation task it is not reachable in
-// this build, and the package comment says why. Held is resolved by three
+// this build, and the package comment says why. Reported is resolved by the
+// report tier, from the stored report of an investigation task, and by the
+// log only where no tier above it answered. Held is resolved by three
 // tiers: the hold tier, from an open hold naming the task; the run tier,
 // from a held run; and the log, from a decision the worker opened. Unknown
 // is the resolver declining to say.
@@ -63,14 +65,21 @@ const (
 	// because PRD section 6 has a task waiting on a person never resolve
 	// Failed or Unknown, whatever its run says, while a terminal record
 	// still outranks it.
-	SourceHold    Source = "hold"
-	SourceRun     Source = "run"
+	SourceHold Source = "hold"
+	SourceRun  Source = "run"
+	// SourceReport is the report tier: the stored report of an
+	// investigation task, internal/store's task_report row, which resolves
+	// Reported. It sits below the run tier and above the process tier,
+	// because PRD section 6 has a filed report outrank the terminal's
+	// liveness: a worker still running after it filed, and one that ended,
+	// have both delivered, and neither is a crash.
+	SourceReport  Source = "report"
 	SourceProcess Source = "process"
 	SourceEvent   Source = "event"
 	SourceNone    Source = "none"
 )
 
-var sources = []Source{SourceRecord, SourceHold, SourceRun, SourceProcess, SourceEvent, SourceNone}
+var sources = []Source{SourceRecord, SourceHold, SourceRun, SourceReport, SourceProcess, SourceEvent, SourceNone}
 
 // Sources returns the closed set of sources in precedence order. The result
 // is a copy. A table keyed on a Source derives its domain from here, so a
@@ -128,6 +137,12 @@ type Inputs struct {
 	// approved fast-forward has delivered it. A record naming another task
 	// is not this task's and is not read.
 	LocalLanding store.Optional[store.LocalLanding]
+	// ReportStoredAt is when the task's report row was written, and unknown
+	// while the task has no stored report: store.TaskSnapshot's field of the
+	// same name, read from the row and never from the history entry
+	// appended beside it. It decides the report tier for an investigation
+	// task only; a promoted task keeps its row and is no longer read by it.
+	ReportStoredAt store.Optional[time.Time]
 	// Process is what the terminal looked like, as of when it was asked.
 	Process Liveness
 	// Advancing is whether the service is executing the newest of Runs now:
@@ -204,6 +219,11 @@ type Basis struct {
 	// for a task cleanup has not reached.
 	CleanupRecorded bool `json:"cleanup_recorded"`
 	CleanupRemoved  bool `json:"cleanup_removed"`
+	// ReportStored is whether the task has a stored report row. It is
+	// recorded whether or not it decided, and for a delivery task too, which
+	// a promoted investigation is: it decided exactly when Source is
+	// SourceReport.
+	ReportStored bool `json:"report_stored"`
 	// Hold is the key of the oldest open hold naming the task, read on
 	// Resolve's terms, and empty when none is open. It is recorded whether
 	// or not it decided, as LandedRun is: it decided exactly when Source is

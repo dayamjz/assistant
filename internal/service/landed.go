@@ -129,10 +129,14 @@ func landedCleanupOwed(r taskstate.Resolution) bool {
 // investigation, its copy not recorded removed, the report as the newest
 // entry the resolver read (Basis.EventKind), and every hold open on the
 // task one a report's ask finding registered (tasks.HoldKey's space). The
-// state is not read: internal/taskstate resolves such a task Running while
-// its worker runs, Unknown once its terminal is Dead, and Reported only
-// while the terminal is unobserved, so the entry the resolver recorded is
-// the reading that says the report was filed. A finding hold does not keep
+// state is not read: internal/taskstate resolves such a task Reported from
+// its report tier, but Held from the hold tier above it while a finding hold
+// is open, and a finding hold is exactly what must not keep the copy, so the
+// state cannot be the predicate. The rule is #259's and is kept as it stood:
+// an entry the worker appended after its report makes the cleanup not owed
+// here, where Basis.ReportStored would still say a report is stored; that
+// is a narrower reading than the report tier's, stated rather than widened
+// in the change that added the tier. A finding hold does not keep
 // the copy, because PRD section 11 has the hold survive cleanup; any other
 // open hold does, because a stop's or a relaunch bound's retry would
 // relaunch in this copy. It reads what the resolver recorded and the holds

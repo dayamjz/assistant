@@ -74,9 +74,11 @@ func (s *Service) branchInGate(ctx context.Context, repository store.Repository,
 // logs what came of each. It is called when a run finishes and when the
 // service opens, which are the moments this build knows a blocker can have
 // cleared: a task resolves Failed from a run that failed or was ended,
-// Reported from an entry a worker appended while no service watched, and
-// Landed from the merge record the checks-hold closure writes. There is one
-// moment more that it does not cover: an answer to a hold naming a task
+// Reported from a stored report, and
+// Landed from the merge record the checks-hold closure writes. A report is
+// filed through task.event, which is not one of those moments, so a task
+// queued behind an investigation that reports is released at the next of
+// them. There is one moment more that it does not cover: an answer to a hold naming a task
 // takes the task out of internal/taskstate's hold tier, which resolves Held
 // and does not clear, and back to what the tiers below say, which may.
 // taskholds.go's respondTask does not call this, so a successor queued
