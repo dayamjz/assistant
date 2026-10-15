@@ -183,7 +183,11 @@
 // Three codes, per PRD section 9, and internal/machine owns them: success and
 // normal decision points, operational failure, and incorrect usage. The host
 // hook's block status is the one exit this package maps itself, because it
-// is the host's protocol rather than section 9's; see hostBlockCode. A run that
+// is the host's protocol rather than section 9's; see hostBlockCode. Which of
+// the two failure codes a failure ends with is decided once, in failureExit:
+// a command line refused here and a request the service answered
+// invalid-request are both incorrect usage, whatever method answered, and
+// every other failure is operational. A run that
 // stopped to ask something is a success, because the answer goes back through
 // the same surface and an agent that read a decision as a failure would stop
 // driving exactly when it should carry on. A run that is still advancing is a

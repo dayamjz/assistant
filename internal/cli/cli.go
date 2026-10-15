@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/dayamjz/assistant/internal/home"
+	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/vcs"
@@ -515,11 +516,7 @@ func render(in *invocation, answer any, err error) machine.Code {
 	}
 	encoder := machine.NewEncoder(env.Stdout)
 	if err != nil {
-		code := machine.ExitFailure
-		var usage usageError
-		if errors.As(err, &usage) {
-			code = machine.ExitUsage
-		}
+		code := failureExit(err)
 		failure := machine.Failure{Error: err.Error(), Code: failureCode(err), NextAction: nextAction(err)}
 		if in.json {
 			_ = encoder.Encode(failure)
@@ -549,6 +546,33 @@ func render(in *invocation, answer any, err error) machine.Code {
 		return machine.ExitFailure
 	}
 	return exitFor(answer)
+}
+
+// failureExit is the code a failure ends with, and the one place that
+// decides it.
+//
+// Incorrect usage is a request the caller got wrong, wherever that was
+// noticed: a command line this package refused before asking anything, or a
+// request the service answered with ipc.ErrInvalidRequest, which is its code
+// for a request it serves but will not read as given, such as an answer the
+// hold does not offer. Deciding it here rather than at each verb is what keeps
+// a method that gains an invalid-request refusal from exiting as an
+// operational failure because nobody added a case for it. Every other failure,
+// a refused, worker, unavailable or internal answer among them, is
+// operational.
+//
+// ipc.ErrInvalidRequest is matched as the sentinel, so it covers the two
+// places this binary's own client raises it as well: a request body it could
+// not encode and a stream method called as a request. Either would be a defect
+// in this binary rather than in the caller's command line, and this exits
+// with incorrect usage for it all the same, which is the gap in reading the
+// code rather than where it was raised.
+func failureExit(err error) machine.Code {
+	var usage usageError
+	if errors.As(err, &usage) || errors.Is(err, ipc.ErrInvalidRequest) {
+		return machine.ExitUsage
+	}
+	return machine.ExitFailure
 }
 
 // answer writes something that is neither a failure nor a verb's result: the
