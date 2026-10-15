@@ -100,8 +100,9 @@ const testProjectionBytes = 8 << 10
 // has to say so, and this paragraph and that header line are where it does.
 //
 // That file is the run's test evidence and nothing more. PRD section 8's
-// authoritative per-stage log is logs/<run>/<stage>.log, home.StageLog owns
-// that path and that role, and this stage neither writes it nor claims it.
+// per-stage log is logs/<run>/<stage>.log: home.StageLog owns that path,
+// internal/service's stagelog.go is its one writer and reader, and this stage
+// neither writes it nor claims it.
 //
 // The report names the evidence file, and the finding carries a bounded tail
 // of the output with a marker saying how much earlier output it leaves out and

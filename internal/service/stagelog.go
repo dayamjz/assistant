@@ -53,7 +53,10 @@ import (
 //   - Writing is best-effort. A log that cannot be opened or written is
 //     reported in the service log and the stage goes on, because a gate that
 //     stopped validating when a disk filled would be worse than a log with a
-//     hole in it, and nothing on the run's answer says a write was lost.
+//     hole in it. A lost write leaves no mark in the file and nothing on the
+//     run's answer says one was lost, so the file is PRD section 8's full
+//     output only as far as its writes landed, and a reader cannot tell a
+//     hole from a stage that wrote nothing there.
 //   - What reaches the log is what passes through these two wrappers. A body
 //     that resolved an adapter of its own stands outside contain.go's wrapper
 //     on the terms that file states, so its calls are not here; and the test,
@@ -61,8 +64,8 @@ import (
 //     home.Evidence, which the stage's report names and this log does not
 //     copy.
 //   - A file grows for as long as its run does. Nothing here rotates or
-//     bounds it: PRD section 8 makes it the authoritative full output, and the
-//     bound is on what a read returns.
+//     bounds it: PRD section 8 makes it the full output, and the bound is on
+//     what a read returns.
 
 // stageLogEntry appends one section to a run's stage log. run and stage come
 // from this service's own marks on the context or from the run's state, never

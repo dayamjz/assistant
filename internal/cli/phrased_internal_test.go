@@ -535,8 +535,8 @@ func TestTheUnphrasedRenderersPrintWhatTheyAreListedFor(t *testing.T) {
 }
 
 // TestTheMessagePointingAtEvidenceIsPhrased is P13 for the three evidence
-// documents PRD section 9 names, written by four rows because the log view is
-// part of the detail view. P13 lets an evidence document keep exact
+// documents P13 names and for the log view, a fourth that section 9
+// describes and P13's list does not yet name. P13 lets an evidence document keep exact
 // identifiers and stage names and keeps the message that points at one
 // phrased, so a run carrying the two a run carries is rendered and each
 // document is taken out from behind its pointer; what is left - the
@@ -591,7 +591,7 @@ func TestTheMessagePointingAtEvidenceIsPhrased(t *testing.T) {
 		blocks = append(blocks, block)
 	}
 	if len(blocks)+len(answers) != 4 {
-		t.Fatalf("%d renderers are evidence; PRD section 9 names three evidence documents, the detail view written by two", len(blocks)+len(answers))
+		t.Fatalf("%d renderers are evidence; P13 names three evidence documents and the log view is a fourth", len(blocks)+len(answers))
 	}
 	for name, block := range answers {
 		var answered bytes.Buffer

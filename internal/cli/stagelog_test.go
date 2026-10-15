@@ -302,7 +302,7 @@ func TestStatusShowsTheRunningStagesRoundAndHowLongItHasRun(t *testing.T) {
 	}
 
 	human := run(t, h, subject, "status")
-	if !strings.Contains(human.stdout, "Active     review, round 1 of 1, running for ") {
+	if !strings.Contains(human.stdout, "Active     review, in fix round 1 (1 automatic allowed), running for ") {
 		t.Errorf("status as a person reads it does not say what is running:\n%s", human.stdout)
 	}
 

@@ -39,7 +39,8 @@ type Activity struct {
 }
 
 // StageLogTailBytes bounds how much of a per-stage log one read returns. PRD
-// section 8 makes the log the authoritative full output and has anything
+// section 8 makes the log the full output, which this build writes best
+// effort (internal/service's stagelog.go names the holes), and has anything
 // travelling elsewhere be a bounded projection that says what it left out and
 // how to read the rest, so a read returns at most this many bytes from the
 // end of the file and StageLog says how many it omitted and where the whole

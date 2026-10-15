@@ -1047,7 +1047,7 @@ var (
 		Decision:    "Nothing to decide from it alone.",
 	}
 	// PhraseStageLogFollows points at the end of one stage's log in one run,
-	// part of the detail view's evidence: what the stage and its agent calls
+	// an evidence document of its own: what the stage and its agent calls
 	// wrote, with each call's account and its full reply, under the exact
 	// names the log was written with. It says the text is cut to its end and
 	// has had credentials removed, because a reader who took either for the

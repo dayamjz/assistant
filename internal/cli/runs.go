@@ -374,8 +374,7 @@ func (in *invocation) localStatus(ctx context.Context, working string, cause err
 // takes --limit, and either given with it is refused rather than ignored.
 //
 // The log view is --log on this command with a run named, on the same terms:
-// PRD section 9 makes it a flag on runs and part of the detail view's
-// evidence, and adds no verb. It names the stage whose log is read, and a
+// PRD section 9 makes it a flag on runs and adds no verb. It names the stage whose log is read, and a
 // fix round is in the log of the stage whose findings it fixed. readLog says
 // what it refuses.
 func listRuns(ctx context.Context, in *invocation) (any, error) {

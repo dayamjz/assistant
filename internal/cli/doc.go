@@ -305,12 +305,14 @@
 // reaching a person as a Go value.
 //
 // The four that are not phrased are named in the renderings table, each
-// with its voice, and all four are evidence: a run's details and a stage's
-// log are the detail view, which PRD section 9 makes the log view part of,
-// and the findings holding a decision and the usage view are the relay of a
-// finding that needs a decision and the usage view, so the four rows are the
-// three detailed evidence documents that section names, which P13 lets keep
-// exact identifiers and stage names. Each row carries the phrase-table row
+// with its voice, and all four are evidence: a run's details, the findings
+// holding a decision and the usage view are the detail view, the relay of a
+// finding that needs a decision and the usage view, the three detailed
+// evidence documents P13 names, which it lets keep exact identifiers and
+// stage names; a stage's log is the log view, which PRD section 9 describes
+// as an answer of its own and P13's list does not yet name. Rendering it as
+// evidence is this build's reading, raised for the PRD's owner rather than
+// settled here. Each row carries the phrase-table row
 // that points a person at it, and writeEvidence, which the run renderer
 // reaches the first two through, and writePointed, which readOut reaches the
 // usage view and the log view through, write that row first, so the message pointing at the
