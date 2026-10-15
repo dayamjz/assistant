@@ -99,6 +99,10 @@ type Config struct {
 	// pushed branch; KeyAllowStandingConsent says what it allows and what it
 	// does not.
 	AllowStandingConsent bool
+	// SessionProvider is the terminal session provider the service starts
+	// workers through. A Config from Resolve holds a member of the closed
+	// set; KeySessionProvider says why only the operator's file sets it.
+	SessionProvider SessionProvider
 }
 
 // MergesIn reports whether repository, named as the code host names it, is
@@ -232,7 +236,34 @@ const (
 	DefaultCommitFixMessage = "fix: " + FixMessagePlaceholder
 	// DefaultDelivery is PRD section 10's default delivery posture: the gate.
 	DefaultDelivery = DeliveryGated
+	// DefaultSessionProvider is the reference provider, the one PRD section
+	// 12's phase 1 names, so a home whose operator chose nothing runs its
+	// workers exactly as it did before the key existed.
+	DefaultSessionProvider = SessionProviderPipe
 )
+
+// SessionProvider names a terminal session provider. The set is closed:
+// decoding refuses any other text, so a misspelled provider is refused where
+// the operator wrote it rather than read as the default.
+type SessionProvider string
+
+const (
+	// SessionProviderPipe is the reference provider: the worker is the
+	// service's own child, read and written over pipes, and nothing can be
+	// attached to.
+	SessionProviderPipe SessionProvider = "pipe"
+	// SessionProviderTmux hosts each worker in a tmux server of its own,
+	// which a person can attach to, watch, and type into. It needs a tmux
+	// binary on the service's PATH and an agent adapter that declares
+	// terminal workers; internal/session's Tmux states both refusals.
+	SessionProviderTmux SessionProvider = "tmux"
+)
+
+// sessionProviders is the closed set, in the order a refusal names them.
+var sessionProviders = []SessionProvider{SessionProviderPipe, SessionProviderTmux}
+
+// Recognized reports whether p is a member of the closed set.
+func (p SessionProvider) Recognized() bool { return slices.Contains(sessionProviders, p) }
 
 // DecisionModel is the mode of the decision-model checks. The three values
 // below are the whole set: decoding refuses any other text, so a Config from

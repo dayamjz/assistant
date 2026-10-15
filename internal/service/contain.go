@@ -133,6 +133,12 @@ func servedOn(ctx context.Context) agents.Served {
 // outside this wrapper, and its calls are recorded by whatever recorder that
 // adapter was built with, if any.
 //
+// It is also where every such invocation reaches the run's stage log: once
+// it returns, its account and its full reply, or the error it ended with, are
+// written to the log of the stage agents.Served names, which stagelog.go
+// owns and redacts. The invocation record keeps no output by design; the log
+// is where the output is kept, as evidence.
+//
 // The wrapper preserves the shape agents.Resolve vouched for: a runner with
 // resumable sessions stays an agents.SessionRunner and one without stays a
 // plain agents.Runner, so agents.OpenFixer reads the same declaration and
@@ -149,7 +155,7 @@ func servedOn(ctx context.Context) agents.Served {
 // admission, so a worker is obtained from the agent this wraps and registered
 // in a set of whoever owns the task, never in this registry.
 func (s *Service) containRunner(r agents.Runner) agents.Runner {
-	wrapped := containedRunner{inner: r, registry: s.registry}
+	wrapped := containedRunner{inner: r, registry: s.registry, log: s.logInvocation}
 	if sessions, ok := r.(agents.SessionRunner); ok {
 		return containedSessionRunner{containedRunner: wrapped, sessions: sessions}
 	}
@@ -160,7 +166,17 @@ func (s *Service) containRunner(r agents.Runner) agents.Runner {
 type containedRunner struct {
 	inner    agents.Runner
 	registry *registry
+	// log writes what an invocation came to into the log of the stage it
+	// served, which stagelog.go owns; it is the same seam's third use beside
+	// registration and the stamp, for the same reason: every invocation of a
+	// run passes here.
+	log invocationLog
 }
+
+// invocationLog is how the wrappers hand an invocation's account and reply
+// to the stage log: the run and stage it served, its purpose, and what it
+// returned.
+type invocationLog func(agents.Served, agents.Purpose, agents.Result, error)
 
 func (c containedRunner) Name() string { return c.inner.Name() }
 
@@ -180,7 +196,17 @@ func (c containedRunner) Run(ctx context.Context, purpose agents.Purpose, inv ag
 	agents.Result, error) {
 	inv.Started = c.registry.starter(advancingRun(ctx), string(purpose))
 	inv.Served = servedOn(ctx)
-	return c.inner.Run(ctx, purpose, inv)
+	result, err := c.inner.Run(ctx, purpose, inv)
+	c.log.write(inv.Served, purpose, result, err)
+	return result, err
+}
+
+// write hands one invocation to the stage log, and does nothing for a
+// wrapper built without one.
+func (l invocationLog) write(served agents.Served, purpose agents.Purpose, result agents.Result, err error) {
+	if l != nil {
+		l(served, purpose, result, err)
+	}
 }
 
 // containedSessionRunner is containRunner's session-carrying half, and the
@@ -195,20 +221,24 @@ func (c containedSessionRunner) Fixer(ctx context.Context, resume string) (agent
 	if err != nil {
 		return nil, err
 	}
-	return containedFixer{inner: fixer, registry: c.registry}, nil
+	return containedFixer{inner: fixer, registry: c.registry, log: c.log}, nil
 }
 
 // containedFixer registers each fix round's invocation on the same terms as
-// containedRunner registers a stage's.
+// containedRunner registers a stage's, and writes it to the stage log on the
+// same terms too, which is where a fixer's full reply is kept.
 type containedFixer struct {
 	inner    agents.Fixer
 	registry *registry
+	log      invocationLog
 }
 
 func (c containedFixer) Apply(ctx context.Context, inv agents.Invocation) (agents.Result, error) {
 	inv.Started = c.registry.starter(advancingRun(ctx), string(agents.PurposeFix))
 	inv.Served = servedOn(ctx)
-	return c.inner.Apply(ctx, inv)
+	result, err := c.inner.Apply(ctx, inv)
+	c.log.write(inv.Served, agents.PurposeFix, result, err)
+	return result, err
 }
 
 func (c containedFixer) Reference() string { return c.inner.Reference() }

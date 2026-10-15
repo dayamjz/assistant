@@ -168,13 +168,22 @@ func launchedWorkerOf(t *testing.T, shape store.TaskShape, branch string, body f
 func launchedWorkerUnder(t *testing.T, shape store.TaskShape, branch string, posture store.Optional[config.Delivery],
 	body func(w launched)) {
 	t.Helper()
+	launchedWorkerConfigured(t, shape, branch, posture, `{"supervision_beacon_interval": "1s"}`, body)
+}
+
+// launchedWorkerConfigured is launchedWorkerUnder with the home's global
+// configuration document stated, so a test can launch the worker under
+// another session provider and nothing else about the launch differs.
+func launchedWorkerConfigured(t *testing.T, shape store.TaskShape, branch string, posture store.Optional[config.Delivery],
+	global string, body func(w launched)) {
+	t.Helper()
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
 	subject := newSubject(t)
 	quietMaintenance(t, subject)
 	repository := recordRepository(t, h, subject)
 	quietMaintenance(t, gateRepositoryOf(t, h, subject))
-	if err := os.WriteFile(h.ConfigFile(), []byte(`{"supervision_beacon_interval": "1s"}`+"\n"), 0o600); err != nil {
+	if err := os.WriteFile(h.ConfigFile(), []byte(global+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	id := recordDispatchedTaskUnder(t, h, repository, shape, branch, posture)

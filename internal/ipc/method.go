@@ -110,6 +110,13 @@ const (
 	// on MethodTaskCreate's terms, refused for a worker before the
 	// capability is asked.
 	MethodTaskInterrupt Method = "task.interrupt"
+	// MethodTaskPeek reads a running task's worker's recent output, as the
+	// session provider holding it captures it, redacted and bounded, with
+	// the command a person attaches with where the provider has one. It
+	// reads and writes nothing else. It is the coordinator's on
+	// MethodTaskCreate's terms, so no worker reads its own or a sibling's
+	// terminal through the service.
+	MethodTaskPeek Method = "task.peek"
 	// MethodWakesList drains the durable wake queue for the coordinator: it
 	// returns the queued wakes, oldest first, and acknowledges none, so a
 	// row stays actionable until MethodWakesAcknowledge names it. It is the
@@ -122,6 +129,15 @@ const (
 	// derives who resolved a hold. Refused for a task's worker on
 	// MethodWakesList's terms.
 	MethodWakesAcknowledge Method = "wakes.acknowledge"
+	// MethodWakesWait is the blocking form of MethodWakesList: it answers
+	// as soon as the queue holds a queued wake, with the rows a drain would
+	// return, or once the bound the request names elapses with none, and
+	// it acknowledges nothing. It is a request rather than a stream, so it
+	// answers once and holds one of its connection's in-flight slots while
+	// it waits. It keeps no state across calls, so arming it again after a
+	// service restart reads the durable queue as the first call did.
+	// Refused for a task's worker on MethodWakesList's terms.
+	MethodWakesWait Method = "wakes.wait"
 	// MethodSupervisionAssert is PRD section 5's arm verification over the
 	// socket: it answers whether the supervisor loop of the service that
 	// holds this home is live, as the closed set internal/supervisor's Arm
@@ -148,6 +164,17 @@ const (
 	// assistant runs --usage prints. It is open, because it reads and
 	// changes nothing, so a driving agent gets the same model a person does.
 	MethodUsageRead Method = "usage.read"
+	// MethodRunLog is PRD section 9's log view: the end of one stage's log in
+	// one run, section 8's per-stage log, bounded and saying what it left
+	// out, which assistant runs RUN --log=STAGE prints. It is open, because
+	// it reads and changes nothing, on run.get's terms. It is a wider read
+	// than run.get: a log holds each agent call's account and a fixer's whole
+	// reply, where a run's answer and a fix commit's body carry bounded
+	// summaries, so an agent inside a stage can read in full what an earlier
+	// round of any run said. That is text it reads and not a session it
+	// resumes, which is what P4 separates, but it is named here rather than
+	// left for a reader to assume the two reads are the same.
+	MethodRunLog Method = "run.log"
 	// MethodServiceStop stops the service.
 	MethodServiceStop Method = "service.stop"
 	// MethodServiceRestart restarts the service.
@@ -235,12 +262,15 @@ var specs = []Spec{
 	{MethodTaskMessage, KindRequest, AccessRestricted, "Send a message to a running task's worker, recorded first, for the coordinator."},
 	{MethodTaskStop, KindRequest, AccessRestricted, "End a running task's worker, prove it dead, and hold the task, for the coordinator."},
 	{MethodTaskInterrupt, KindRequest, AccessRestricted, "Interrupt a worker's turn; refused, since no adapter declares the capability."},
+	{MethodTaskPeek, KindRequest, AccessRestricted, "Read a running task's worker's recent output, redacted and bounded, for the coordinator."},
 	{MethodWakesList, KindRequest, AccessRestricted, "Drain the wake queue: list the queued wakes, acknowledging none."},
 	{MethodWakesAcknowledge, KindRequest, AccessRestricted, "Record that the coordinator handled the named wakes."},
+	{MethodWakesWait, KindRequest, AccessRestricted, "Block until the wake queue holds a queued wake or a bound elapses, acknowledging none."},
 	{MethodSupervisionAssert, KindRequest, AccessRestricted, "Verify that the supervisor loop of this home's service is live."},
 	{MethodCatchUpRead, KindRequest, AccessOpen, "Read what waits on you, what landed unseen, what is under way, and what stopped."},
 	{MethodCatchUpMark, KindRequest, AccessRestricted, "Mark seen exactly the landed records a catch-up read showed."},
 	{MethodUsageRead, KindRequest, AccessOpen, "Read what the agent calls recorded in a window cost."},
+	{MethodRunLog, KindRequest, AccessOpen, "Read the end of one stage's log in one run."},
 	{MethodServiceStop, KindRequest, AccessRestricted, "Stop the service."},
 	{MethodServiceRestart, KindRequest, AccessRestricted, "Restart the service."},
 	{MethodEventsSubscribe, KindStream, AccessOpen, "Open the event stream."},

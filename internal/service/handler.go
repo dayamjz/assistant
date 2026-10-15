@@ -34,8 +34,9 @@ import (
 // one question a handler asks of a caller is the other relation,
 // whether it is a task's worker, and workers.go derives that from the same
 // credentials for the methods whose answer depends on it: the five there,
-// coordinator.go's three, steer.go's three, taskholds.go's task.respond,
-// catchup.go's catchup.mark and custody.go's branch.sync.
+// wakewait.go's wakes.wait, coordinator.go's three, steer.go's three,
+// taskholds.go's task.respond, catchup.go's catchup.mark and custody.go's
+// branch.sync.
 func (s *Service) handle(ctx context.Context, req ipc.Request) (json.RawMessage, error) {
 	switch req.Method {
 	case ipc.MethodHealth:
@@ -109,6 +110,10 @@ func (s *Service) handle(ctx context.Context, req ipc.Request) (json.RawMessage,
 		return call(ctx, req, func(ctx context.Context, r machine.TaskRequest) (machine.TaskStopped, error) {
 			return s.stopTask(ctx, req, r)
 		})
+	case ipc.MethodTaskPeek:
+		return call(ctx, req, func(ctx context.Context, r machine.TaskRequest) (machine.TaskPeek, error) {
+			return s.peekTask(ctx, req, r)
+		})
 	case ipc.MethodTaskInterrupt:
 		return call(ctx, req, func(ctx context.Context, r machine.TaskRequest) (struct{}, error) {
 			return s.interruptTask(ctx, req, r)
@@ -120,6 +125,10 @@ func (s *Service) handle(ctx context.Context, req ipc.Request) (json.RawMessage,
 	case ipc.MethodWakesAcknowledge:
 		return call(ctx, req, func(ctx context.Context, r machine.AcknowledgeRequest) (machine.Acknowledged, error) {
 			return s.acknowledgeWakes(ctx, req, r)
+		})
+	case ipc.MethodWakesWait:
+		return call(ctx, req, func(ctx context.Context, r machine.WakeWaitRequest) (machine.Wakes, error) {
+			return s.waitWakes(ctx, req, r)
 		})
 	case ipc.MethodSupervisionAssert:
 		return call(ctx, req, func(ctx context.Context, _ struct{}) (supervisor.Arm, error) {
@@ -137,6 +146,8 @@ func (s *Service) handle(ctx context.Context, req ipc.Request) (json.RawMessage,
 		return call(ctx, req, func(ctx context.Context, r machine.UsageRequest) (machine.Usage, error) {
 			return s.usage(ctx, r)
 		})
+	case ipc.MethodRunLog:
+		return call(ctx, req, s.runLog)
 	case ipc.MethodServiceStop:
 		return call(ctx, req, func(ctx context.Context, r machine.LifecycleRequest) (machine.Lifecycle, error) {
 			return s.lifecycle(ctx, req, r, false)

@@ -183,6 +183,23 @@ const (
 	// own push does, and only through the posture recorded on the task at
 	// intake: it never changes what a person's push to the gate does.
 	KeyDelivery Key = "delivery"
+
+	// KeySessionProvider is "session_provider": which terminal session
+	// provider the service starts a task's worker through, PRD section 8's
+	// session module. Its values are SessionProvider's closed set and its
+	// default is SessionProviderPipe, the reference provider.
+	//
+	// It is global-only, and that is a P7 decision rather than a convenience.
+	// The provider decides which program the service runs to start every
+	// worker - "tmux" has the service run the tmux binary on the operator's
+	// PATH and have its server start the agent - so it chooses which process
+	// starts with the operator's credentials, which is what TrustCommands
+	// guards; and it is one choice for the whole service, made when the
+	// service first builds its agent, so no repository's copy, trusted or
+	// pushed, is the document it could be read from. A repository file
+	// naming it is refused at parse time like every global-only key.
+	// internal/service reads it once per service, in driverFor.
+	KeySessionProvider Key = "session_provider"
 )
 
 // cloneSlice copies a slice-valued configuration value. A default and a parsed
@@ -285,6 +302,8 @@ var specs = []spec{
 		func(c *Config, v any) { c.Delivery = v.(Delivery) }},
 	{KeyAllowStandingConsent, TrustTrusted, false, decodeBool,
 		func(c *Config, v any) { c.AllowStandingConsent = v.(bool) }},
+	{KeySessionProvider, TrustGlobal, DefaultSessionProvider, decodeSessionProvider,
+		func(c *Config, v any) { c.SessionProvider = v.(SessionProvider) }},
 }
 
 // specByKey indexes the schema, and sections holds every dotted prefix a key

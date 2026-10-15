@@ -55,6 +55,16 @@ var (
 		Consequence: "A worker that stops or needs a decision will go unnoticed until one is.",
 		Decision:    "Run assistant service start.",
 	}
+	phrasePeekAttachable = Phrase{
+		Outcome:     "The worker's recent output was read, and its terminal can be watched.",
+		Consequence: "Its output is for the coordinator to read and is not repeated here; what you type in its terminal reaches the worker as its own input.",
+		Decision:    "To watch it yourself, repeat with --json and run the command it names to attach; nothing to decide otherwise.",
+	}
+	phrasePeekUnattached = Phrase{
+		Outcome:     "The worker's recent output was read; it runs without a terminal anyone can watch.",
+		Consequence: "Its output is for the coordinator to read and is not repeated here.",
+		Decision:    "Repeat with --json to read it; nothing to decide otherwise.",
+	}
 	phraseFleetNotWatched = Phrase{
 		Outcome:     "The service is up, but nothing in it could be shown to be watching the fleet.",
 		Consequence: "A worker that stops or needs a decision may go unnoticed.",
@@ -71,6 +81,18 @@ func TaskCreatedPhrase(c TaskCreated) Phrase {
 		return phraseTaskCreatedBehind
 	}
 	return phraseTaskCreated
+}
+
+// PeekPhrase is what a person reads about a task.peek answer: whether the
+// worker's terminal can be watched. Neither the output nor the attach
+// command is in a row: the output is never relayed to a person (P13), and
+// the command names a path under the home, which the forbidden set keeps
+// from a person, so the row says to read it from the structured answer.
+func PeekPhrase(p TaskPeek) Phrase {
+	if len(p.Attach) > 0 {
+		return phrasePeekAttachable
+	}
+	return phrasePeekUnattached
 }
 
 // TaskPromotedPhrase is what a person reads about a task.promote answer. A
@@ -133,5 +155,6 @@ func coordinatorRows() []Phrase {
 		phraseTaskCreated, phraseTaskCreatedBehind, phraseTaskPromoted, phraseTaskRelaunched,
 		phraseNoNotices, WakesPhrase(Wakes{Wakes: make([]store.Wake, 1)}), AcknowledgedPhrase(Acknowledged{Wakes: []int64{1}}),
 		phraseFleetWatched, phraseFleetNoService, phraseFleetNotWatched,
+		phrasePeekAttachable, phrasePeekUnattached,
 	}
 }

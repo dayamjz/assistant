@@ -177,7 +177,8 @@
 // coordinatorActions in coordinator.go holds "assistant coordinator" and its
 // subcommands, one for each of the coordinator's service methods that has
 // no command in the table: create, message, stop, relaunch and promote a
-// task, list and acknowledge the wake queue, and verify supervision. The
+// task, list, wait on and acknowledge the wake queue, and verify
+// supervision. The
 // owner decided on #227 to keep PRD section 9's table as it is and ship this
 // client beside it, as the gate and host verbs are, and section 9 says so
 // beside the table. It is one verb so the door beside the table is one door.
@@ -192,8 +193,14 @@
 // is refused with ipc.ErrWorker, decided from the socket's credentials, and
 // nothing here holds a second copy of that rule. The command line is
 // checked before the service is asked: operands, a flag and its -file
-// sibling given together, a file that cannot be read, and wake identifiers
-// that are not numbers are incorrect usage. The refusal rests on the
+// sibling given together, a file that cannot be read, wake identifiers
+// that are not numbers, and a wait bound outside
+// machine.WakeWaitRequest.Bounds' range are incorrect usage. await is
+// the one subcommand that blocks: it is one request that the service
+// answers when the queue holds a queued wake or its bound elapses, so the
+// coordinator can block a turn on it instead of polling, and a service that
+// stops under it ends the call as an operational failure that the caller
+// re-arms. The refusal rests on the
 // service's placement of its caller, and coordinatorVerbName names the gap
 // in that placement: a parent chain the kernel rewrote.
 //
@@ -305,15 +312,18 @@
 // failure code, so a type added without a renderer fails loudly rather than
 // reaching a person as a Go value.
 //
-// The three that are not phrased are named in the renderings table, each
-// with its voice, and all three are evidence: a run's details, the findings
+// The four that are not phrased are named in the renderings table, each
+// with its voice, and all four are evidence: a run's details, the findings
 // holding a decision and the usage view are the detail view, the relay of a
 // finding that needs a decision and the usage view, the three detailed
-// evidence documents PRD section 9 names, which P13 lets keep exact
-// identifiers and stage names. Each row carries the phrase-table row that
-// points a person at it, and writeEvidence, which the run renderer reaches
-// the first two through, and writePointed, which readOut reaches the usage
-// view through, write that row first, so the message pointing at the
+// evidence documents P13 names, which it lets keep exact identifiers and
+// stage names; a stage's log is the log view, which PRD section 9 describes
+// as an answer of its own and P13's list does not yet name. Rendering it as
+// evidence is this build's reading, raised for the PRD's owner rather than
+// settled here. Each row carries the phrase-table row
+// that points a person at it, and writeEvidence, which the run renderer
+// reaches the first two through, and writePointed, which readOut reaches the
+// usage view and the log view through, write that row first, so the message pointing at the
 // evidence is phrased like every other line; what a run says about a request
 // it did not apply is a status line and is a row beside the evidence rather
 // than part of it. A plan, which was the last unsettled row, is phrased:

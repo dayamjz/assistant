@@ -60,7 +60,10 @@ func newSubject(t *testing.T) *subject {
 	t.Setenv("GIT_CONFIG_GLOBAL", cfg)
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
 
-	root := t.TempDir()
+	// The root is short rather than the test's own directory, which carries
+	// the test's name: the tmux provider puts each worker's socket under it,
+	// and a local socket path is bounded.
+	root := standin.SocketDir(t)
 	h, err := home.Open(root)
 	if err != nil {
 		t.Fatalf("home.Open: %v", err)
@@ -78,7 +81,7 @@ func newSubject(t *testing.T) *subject {
 	}
 	rawGit(t, primary, "add", "README")
 	rawGit(t, primary, "commit", "-q", "-m", "first")
-	gatePath := filepath.Join(root, "repos", "subject.git")
+	gatePath := filepath.Join(h.Root(), "repos", "subject.git")
 	if err := os.MkdirAll(filepath.Dir(gatePath), 0o700); err != nil {
 		t.Fatal(err)
 	}

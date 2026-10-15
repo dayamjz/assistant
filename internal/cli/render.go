@@ -88,10 +88,12 @@ const (
 	// VoiceEvidence is a renderer that writes one of the three detailed
 	// evidence documents PRD section 9 names - the detail view, the usage
 	// view, and the relay of a finding that needs a decision - which P13
-	// lets keep exact identifiers and stage names. Its row carries the
-	// phrase-table row that points a person at it, and writeEvidence, which
-	// the run renderer writes the first and last through, and writePointed,
-	// which readOut writes the usage view through, write that row first,
+	// lets keep exact identifiers and stage names, or the log view, a fourth
+	// that section 9 describes and P13's list does not yet name. Its row carries
+	// the phrase-table row that points a person at it, and writeEvidence,
+	// which the run renderer writes the first and last through, and
+	// writePointed, which readOut writes the usage view and the log view
+	// through, write that row first,
 	// because the message that points at an evidence document stays
 	// phrased.
 	VoiceEvidence
@@ -170,7 +172,7 @@ func writePointed(w io.Writer, row rendering, value any) {
 // answer's type through it, and Renderings reads it out, so a renderer added
 // here is enumerated and one added anywhere else is not reached.
 //
-// Every row but three is phrased: what it prints is a phrase from
+// Every row but four is phrased: what it prints is a phrase from
 // internal/machine's table, or one beside a word that is the person's own -
 // a branch name, a project, a reference a change carried, the repository's
 // default branch - or an agent's, escaped. The stop guard's answer is phrased
@@ -185,9 +187,10 @@ func writePointed(w io.Writer, row rendering, value any) {
 // it holds it. readOutHostInstall prints each on a line of its own after a
 // label, so the row is never mixed with them.
 //
-// The three that are not phrased are named, so that the claim about the
+// The four that are not phrased are named, so that the claim about the
 // rest is bounded by an enumeration. They are evidence documents, which P13
-// names as the exception to its rule and PRD section 9 names as these three:
+// names as the exception to its rule and PRD section 9 names as three
+// documents, with the log view a fourth that P13's list does not name:
 //
 //   - details is the detail view's evidence for a run: where its execution
 //     stands, the reason a bound parked it, the keys its configuration
@@ -203,6 +206,12 @@ func writePointed(w io.Writer, row rendering, value any) {
 //   - usage is the usage view, runs --usage's answer: what the agent calls
 //     in a window cost, grouped by agent, model and purpose and by run and
 //     stage, under those exact names.
+//   - log is the log view, runs RUN --log=STAGE's answer: the end of one
+//     stage's log, with each agent call's account and reply as the log
+//     holds them. It is an answer of its own and not part of the detail
+//     view, so it is a fourth evidence document, which section 9 describes
+//     and P13's list of three does not yet name; that gap is the owner's to
+//     settle, and this row does not settle it.
 //
 // The first two name no answer type, so readOut never dispatches to either;
 // the run renderer reaches each through writeEvidence, behind the phrased
@@ -211,11 +220,12 @@ func writePointed(w io.Writer, row rendering, value any) {
 // this package rather than a mechanism: readOutDetails and readOutFindings
 // are callable from anywhere here, and the evidence test reads the run
 // renderer, so a new caller that skipped writeEvidence would print no
-// pointer and nothing would fail until a test rendered it. The usage row
-// names its answer type, and readOut writes any evidence row it dispatches
-// to through writePointed, so on that path the pointer is the dispatch's
-// rather than a caller's to remember; readOutUsage is still callable
-// directly, on the same terms as the other two. What a run says about a request it
+// pointer and nothing would fail until a test rendered it. The usage and
+// log rows name their answer types, and readOut writes any evidence row it
+// dispatches to through writePointed, so on that path the pointer is the
+// dispatch's rather than a caller's to remember; readOutUsage and
+// readOutStageLog are still callable directly, on the same terms as the
+// other two. What a run says about a request it
 // did not apply - starting inputs that went to no run, or an answer the
 // service closed the decision ahead of - is a status line rather than
 // evidence, so readOutRun prints it as a phrased row and not in details.
@@ -261,6 +271,9 @@ var renderings = []rendering{
 	{name: "task stop", voice: VoicePhrased, of: typeOf[machine.TaskStopped](), render: func(w io.Writer, v any) {
 		writeln(w, machine.StopPhrase(v.(machine.TaskStopped)))
 	}},
+	{name: "task peek", voice: VoicePhrased, of: typeOf[machine.TaskPeek](), render: func(w io.Writer, v any) {
+		writeln(w, machine.PeekPhrase(v.(machine.TaskPeek)))
+	}},
 	{name: "task relaunch", voice: VoicePhrased, of: typeOf[machine.TaskRelaunched](), render: func(w io.Writer, v any) {
 		writeln(w, machine.TaskRelaunchedPhrase(v.(machine.TaskRelaunched)))
 	}},
@@ -277,6 +290,7 @@ var renderings = []rendering{
 		writeln(w, machine.ArmPhrase(v.(supervisor.Arm)))
 	}},
 	usageRendering,
+	logRendering,
 }
 
 // fallback is the row for an answer no row claims. It is not in the table,
@@ -302,6 +316,13 @@ var (
 	usageRendering = rendering{name: "usage", voice: VoiceEvidence, of: typeOf[machine.Usage](),
 		render: func(w io.Writer, v any) { readOutUsage(w, v.(machine.Usage)) },
 		points: machine.PhraseUsageFollows}
+	// logRendering is the log view, runs RUN --log=STAGE's answer, a fourth
+	// evidence document beside the three P13 names: it is an answer of its
+	// own, so it names its type and
+	// readOut writes it through writePointed, on the usage row's terms.
+	logRendering = rendering{name: "log", voice: VoiceEvidence, of: typeOf[machine.StageLog](),
+		render: func(w io.Writer, v any) { readOutStageLog(w, v.(machine.StageLog)) },
+		points: machine.PhraseStageLogFollows}
 )
 
 func typeOf[T any]() reflect.Type { return reflect.TypeOf((*T)(nil)).Elem() }
@@ -435,6 +456,9 @@ func readOutRun(w io.Writer, r machine.Run) {
 func readOutDetails(w io.Writer, r machine.Run) {
 	if r.Progress != nil {
 		writef(w, "Position   %s after %d of %d steps\n", positionOf(r), r.Steps, r.Budget)
+	}
+	if a := r.Activity; a != nil {
+		writef(w, "Active     %s\n", activityLine(*a, r.Position))
 	}
 	if r.Reason != "" {
 		writef(w, "Reason     %s\n", printable(r.Reason))
@@ -801,3 +825,53 @@ func locationOf(f findings.Finding) string {
 func writef(w io.Writer, format string, a ...any) { _, _ = fmt.Fprintf(w, format, a...) }
 
 func writeln(w io.Writer, a ...any) { _, _ = fmt.Fprintln(w, a...) }
+
+// activityLine is the details line for what a segment is doing now: the
+// stage, whether it is checking or in a fix round, how many rounds against
+// the run's automatic limit there, and how long the node at the run's
+// position has been running, in the exact terms the answer carries, because
+// the details are evidence. Round counts rounds entered, so the position is
+// what tells "in round 1" from "checking after round 1", and a line that
+// said only "round 1 of 1" would read the same for both.
+func activityLine(a machine.Activity, position string) string {
+	limit := "no automatic fix rounds"
+	if a.Limit > 0 {
+		limit = fmt.Sprintf("%d automatic allowed", a.Limit)
+	}
+	var doing string
+	stage, ok := pipeline.ParseStage(a.Stage)
+	switch {
+	case ok && (position == stage.FixNode() || position == stage.RequestNode()):
+		doing = fmt.Sprintf("in fix round %d (%s)", a.Round, limit)
+	case ok && position == stage.HoldNode():
+		doing = fmt.Sprintf("taking an answer after %d fix round(s) (%s)", a.Round, limit)
+	default:
+		doing = fmt.Sprintf("checking after %d fix round(s) (%s)", a.Round, limit)
+	}
+	return printable(fmt.Sprintf("%s, %s, running for %s since %s",
+		a.Stage, doing, a.Active.Round(time.Second), a.Since.UTC().Format(time.RFC3339)))
+}
+
+// readOutStageLog prints the log view: which log it is and where the whole
+// of it is, how much of its start the read left out, and then the end of it
+// line by line, every line escaped, since a log holds an agent's reply as the
+// agent wrote it. It is reached through the renderings table's evidence row,
+// so the phrase that points at it is written first; a log that was never
+// written says so rather than printing nothing, so the pointer never stands
+// over an empty document.
+func readOutStageLog(w io.Writer, l machine.StageLog) {
+	writef(w, "Log        run %s, stage %s, at %s\n", printable(l.Run), printable(l.Stage), printable(l.Path))
+	if !l.Written {
+		writeln(w, "Written    never: nothing was logged for this stage in this run")
+		return
+	}
+	if l.Omitted > 0 {
+		writef(w, "Omitted    the first %d of %d bytes; the whole log is at %s\n", l.Omitted, l.Size, printable(l.Path))
+	} else {
+		writef(w, "Omitted    nothing; all %d bytes follow\n", l.Size)
+	}
+	writeln(w)
+	for _, line := range strings.Split(strings.TrimRight(l.Text, "\n"), "\n") {
+		writef(w, "%s\n", printable(line))
+	}
+}

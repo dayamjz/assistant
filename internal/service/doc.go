@@ -387,8 +387,9 @@
 // # A worker is placed by a second relation, and four methods turn on it
 //
 // The other thing the same credentials decide is which task a peer is the
-// worker of. That is internal/session's worker group set, which session.Pipe
-// fills for exactly each worker process's lifetime, and this service reads
+// worker of. That is internal/session's worker group set, which the
+// service's session provider fills for exactly each worker process's
+// lifetime, whichever of session.Pipe and session.Tmux it is, and this service reads
 // it through the driver that holds the provider; workers.go owns the
 // derivation - credentials, then the peer's parent chain, which placement.go
 // walks to the first process whose group is a worker group the set holds or
@@ -403,8 +404,8 @@
 // says why. task.event admits only a worker and appends to its own task's
 // history, holding the kind to internal/taskstate's writer column so a
 // worker cannot append what the program decides; wakes.list,
-// wakes.acknowledge and supervision.assert are the coordinator's and refuse
-// a worker, with who acknowledged derived by internal/ipc's
+// wakes.acknowledge, wakes.wait and supervision.assert are the
+// coordinator's and refuse a worker, with who acknowledged derived by internal/ipc's
 // Request.WakeAcknowledger and read from nothing; catchup.mark, which moves
 // PRD section 9's seen mark and which catchup.go owns, refuses a worker on
 // the same terms while catchup.read stays open; and gate.admit holds a
@@ -443,9 +444,11 @@
 // the fresh proof and the task's instructions file, and records the
 // session's reference on the attempt dispatch claimed, through
 // store.SetAttemptSession, which is the one record of which terminal an
-// attempt runs in. The provider is this service's, built in driverFor as a
-// session.Pipe over the agent as resolved and before containRunner wraps it,
-// because the wrapper carries no worker arm; the sessions it creates are
+// attempt runs in. The provider is this service's, built in driverFor over
+// the agent as resolved and before containRunner wraps it, because the
+// wrapper carries no worker arm: a session.Pipe by default, or a
+// session.Tmux when the operator's file sets config.KeySessionProvider to
+// tmux, which terminals.go's sessionHost decides; the sessions it creates are
 // held per task, one per attempt, and Close ends exactly those and no
 // worker an earlier service of this home started.
 //

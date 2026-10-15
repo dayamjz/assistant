@@ -436,6 +436,20 @@ func decodeDelivery(k Key, v any) (any, error) {
 	}
 }
 
+// decodeSessionProvider reads a session provider, spelled exactly. Any other
+// text is refused rather than read as the default, because a provider the
+// operator misspelled is one they did not get.
+func decodeSessionProvider(k Key, v any) (any, error) {
+	s, err := asString(k, v)
+	if err != nil {
+		return nil, err
+	}
+	if p := SessionProvider(s); p.Recognized() {
+		return p, nil
+	}
+	return nil, keyErr(k, v, `expected "pipe" or "tmux"`)
+}
+
 func decodeFixMessage(k Key, v any) (any, error) {
 	s, err := asString(k, v)
 	if err != nil {

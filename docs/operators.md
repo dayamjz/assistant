@@ -100,6 +100,39 @@ the identifier of any finding the stage reported, including a fix or note
 finding the hold does not list. `assistant --json status` lists every one, with
 its identifier, under `active_run.stages[].report.findings`.
 
+## Waiting on a fleet
+
+A coordinator agent running tasks through `assistant coordinator` does not
+need to poll the wake queue. `assistant coordinator await` blocks until the
+queue holds a wake nobody has acknowledged, then lists the queued wakes the
+same way `assistant coordinator wakes` does, or lists none once its bound
+passes:
+
+```sh
+assistant --json coordinator await --timeout 5m
+```
+
+The bound is whole seconds from `1s` to `1h`, and `5m` when none is given;
+anything else is refused as incorrect usage rather than clamped. The wait
+acknowledges nothing, so a wake it returned keeps being returned until
+`assistant coordinator acknowledge` names it. It keeps nothing between calls,
+so after a service restart, which ends a wait in progress as an operational
+failure, waiting again reads the same durable queue; `assistant coordinator
+supervision` confirms the service is watching the fleet again first. Like the
+other coordinator subcommands, it is refused for a task's worker.
+
+A restart does not leave that queue exactly as it was. When the service
+starts it reconciles every task, and a task whose worker's terminal is gone
+with its work not landed is relaunched, up to `relaunch_attempts` times
+(2 unless configured). A relaunch records each still-queued `terminal-gone`
+wake about the session it replaced as handled by the program, so the next
+wait does not return it. Read `assistant tasks` after a restart as well as
+the queue: a relaunched task shows its new attempt there, and a task past
+`relaunch_attempts` holds for an answer instead of being relaunched.
+
+How soon it answers after a worker stops is set by the service's supervision
+pass, which records the wake, not by the wait.
+
 ## Standing consent
 
 `assistant --standing-consent` starts or attaches to this branch's run and puts
@@ -113,6 +146,47 @@ it. The repository has to allow it with `"allow_standing_consent": true` in
 incorrect usage, and a branch cannot set the key for itself. Each answer is
 recorded as the program's, and status, the run listing, and the pull request
 body say the run ran under standing consent.
+
+## Watch a worker in a terminal
+
+By default a worker runs on pipes the service holds, which nothing can attach
+to. To host each worker in a terminal you can watch and type into, set the
+provider in your own configuration file, `config.yaml` under the home (by
+default `~/.assistant`), which is read as a JSON document:
+
+```json
+{"session_provider": "tmux"}
+```
+
+Only that file may set it: a repository's `assistant.json` naming it is
+refused, trusted copy or pushed, because the provider decides which program
+the service runs to start every worker. The service reads it when it first
+resolves an agent, so restart the service after changing it.
+
+Each worker then runs as the one process of a tmux server of its own, on a
+socket under the home's `terminals` directory, started with no tmux
+configuration file. `assistant --json coordinator peek ID` reads the worker's
+recent output, redacted and cut to the last 16 KiB, and its `attach` field is
+the command that attaches you:
+
+```sh
+tmux -S ~/.assistant/terminals/SOCKET attach-session -t worker
+```
+
+What you type there is the worker's input, exactly as a message is, and the
+program keeps no record of it: the worker acts on it, and the coordinator
+reconciles around what the worker then does. A command the worker runs
+because you typed it is the worker's, so its pushes are held to the worker's
+own branch like any other. A new window you open in that server is not the
+worker: its pushes are a person's and start the full run.
+
+Two things it needs. tmux has to be on the service's PATH; without it every
+launch is refused and the task stays dispatched, which the service log says.
+And the resolved agent has to declare terminal workers, which in this build
+only the scripted adapter the tests use does, so a service resolved to Claude
+Code launches no worker under this setting. A worker an earlier service
+started is never attached to or read through the new one: its terminal reads
+as unobservable until it ends, as it does under the default provider.
 
 ## Keep your CI required
 

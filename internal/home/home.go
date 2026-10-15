@@ -128,12 +128,36 @@ func (h *Home) InstanceFile() string { return filepath.Join(h.root, "instance") 
 // to define.
 func (h *Home) Beacon() string { return filepath.Join(h.root, "beacon") }
 
-// StageLog is one stage's log, which PRD section 8 makes the authoritative
-// full output of that stage. What travels in findings, streams, and prompts is
-// a bounded projection of this file.
+// StageLog is one stage's log, which PRD section 8 names the authoritative
+// full output of that stage; this build writes it best effort, so it is that
+// output only as far as its writes landed, and a lost write leaves no mark.
+// What travels in findings, streams, and prompts is a bounded projection of
+// what was written. This package composes the path and
+// nothing here writes or reads it: internal/service's stagelog.go is its one
+// writer and its one reader, and the run's directory under logs is created
+// there, on the terms Create states for everything below its directories.
 func (h *Home) StageLog(runID, stage string) string {
 	return filepath.Join(h.root, "logs", runID, stage+".log")
 }
+
+// TerminalSocket is the socket one tmux-hosted worker's own server listens
+// on, named by name, which internal/session chooses and which must be a
+// single path element: the server is started with this path and nothing
+// else addresses it, so the session package spells no path under the root.
+// It sits under the root rather than tmux's own default directory because
+// the default moves with the environment of whichever process starts the
+// server, and a path the service composes does not.
+//
+// The path is used as a local socket, so it is bounded by the platform's
+// socket path length; the caller refuses a root too long to hold one, since
+// this accessor touches nothing. The directory is created by Create and,
+// for a home created before it was listed, by whoever starts the server.
+func (h *Home) TerminalSocket(name string) string { return filepath.Join(h.TerminalSockets(), name) }
+
+// TerminalSockets is the directory TerminalSocket's paths are in. It is
+// created owner-only, like every directory here, which is what keeps
+// another user from reaching a worker's server through it.
+func (h *Home) TerminalSockets() string { return filepath.Join(h.root, "terminals") }
 
 // ServiceLog is the bounded lifecycle log, which OpenLog writes.
 func (h *Home) ServiceLog() string { return filepath.Join(h.root, "logs", "service.log") }
@@ -151,7 +175,7 @@ func (h *Home) ServiceLog() string { return filepath.Join(h.root, "logs", "servi
 // created by a build that listed one keeps an empty queue/ directory that
 // nothing reads, and nothing here removes it: Create makes directories and
 // removes none.
-var directories = []string{"worktrees", "evidence", "tasks", "logs"}
+var directories = []string{"worktrees", "evidence", "tasks", "logs", "terminals"}
 
 // Create makes the home root and the directories under it, and is safe to run
 // against a home that already exists.

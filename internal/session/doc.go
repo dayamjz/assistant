@@ -12,8 +12,12 @@
 // interface, and a provider that offers more does so through
 // internal/agents' capability table, which is the one owner of what an
 // adapter declares, when it adds its declarer and its probe there. Pipe is
-// the reference provider PRD section 12's phase 1 names, and the only one in
-// this build.
+// the reference provider PRD section 12's phase 1 names, and Tmux is the
+// second, which the owner brought into phase 1 on #229; the section below
+// on the tmux provider says what it adds and what it does not change.
+// Host is what a service holds of either: the five operations, the worker
+// group set, and the capture and attach a caller holding only a recorded
+// reference reads, all answered out of one held set.
 //
 // Only internal/agents starts an agent process. Pipe starts nothing: Create
 // asks the agents.Runner it was built over for a worker through
@@ -126,9 +130,10 @@
 // # The worker group set
 //
 // Workers is the set of live worker groups, keyed by the process group a
-// worker leads and naming the task it was created for, and Pipe is its one
-// producer: Create joins the group when the session is created and the
-// membership ends when the worker's process does or Close ends the session.
+// worker leads and naming the task it was created for, and the providers
+// here are its producers, through the one held set both embed: Create joins
+// the group when the session is created and the membership ends when the
+// worker's process does or Close ends the session.
 // It is the authority input the worker-to-program paths derive a task from:
 // a caller's kernel credentials name a process, the process has a group,
 // and the set says whose worker that group is, so no caller states a task.
@@ -137,6 +142,38 @@
 // the set and answers only by group. It is deliberately not that registry,
 // and Workers' doc says why: a worker registered as a stage would have every
 // push it makes refused before admission.
+//
+// # The tmux provider
+//
+// Tmux hosts each worker as the one process of a tmux server of its own,
+// through agents.OpenTerminalWorker, which refuses an adapter that has not
+// declared agents.CapabilityTerminalWorkers; internal/agents' terminal.go
+// owns the server, the environment, the typing and the screen capture. What
+// a provider decides it decides through the held set Pipe uses, so Probe's
+// rule, the reference, the restart answer and the worker group set are the
+// ones above, unchanged. Capture is a screen rather than a stream there, and
+// Send is typed into the pane, which is the same input a person attached to
+// it types into. AttachReference is the one thing it answers that Pipe
+// cannot.
+//
+// Placement. The pane's process is the agent, the server's child and the
+// leader of its own process group, and that group is what joins Workers, for
+// exactly the process's lifetime as Pipe's worker's does. The server is not a
+// member. internal/service places a peer by walking its parent chain to a
+// member, and that walk was tested over a real tmux server: a command the
+// worker runs in a process group of its own is the pane process's
+// descendant and is placed as the worker's, and so is a command a person
+// types into the worker's window, which the worker runs; a shell a person
+// opens in a new window of the same server, the client a person attaches
+// with, a person's shell typing in from outside, and the server itself are
+// placed as no worker, because none of them descends from the pane's
+// process. Registering the server instead would have placed every one of
+// them as the worker's.
+//
+// Containment. A tmux-hosted worker's group is registered nowhere else:
+// internal/service's containment registry has no worker arm under either
+// provider, on the terms Workers states, so the worker set membership above
+// is the whole of the registration and its lifetime is the process's.
 //
 // # Restart
 //
@@ -179,6 +216,13 @@
 //     provider started replaces the old entry; one reused for a process this
 //     provider did not start is not a member, so nothing is placed by a
 //     number alone.
+//   - Under the tmux provider, Done trails the pane process's exit by up to
+//     internal/agents' poll interval, so membership does too; and a Capture
+//     of a tmux worker that has ended answers the last screen its handle
+//     read, not a final one.
+//   - Under the tmux provider, nothing records what a person types into an
+//     attached window: it reaches the worker as its own input and is
+//     indistinguishable from a Send once it has.
 //   - The route walk over the handle types reads exported fields and the
 //     results of exported methods, so what Pipe holds in its unexported
 //     fields, the agents.Runner among them, is outside what it inspects, and
