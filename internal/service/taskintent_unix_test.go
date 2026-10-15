@@ -299,13 +299,3 @@ func waitForgeCall(t *testing.T, provider *forgetest.Provider, op forgetest.Op) 
 		time.Sleep(10 * time.Millisecond)
 	}
 }
-
-// flagValue is the value of the first argument carrying prefix.
-func flagValue(args []string, prefix string) string {
-	for _, a := range args {
-		if v, ok := strings.CutPrefix(a, prefix); ok {
-			return v
-		}
-	}
-	return ""
-}

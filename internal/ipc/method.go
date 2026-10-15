@@ -129,6 +129,15 @@ const (
 	// derives who resolved a hold. Refused for a task's worker on
 	// MethodWakesList's terms.
 	MethodWakesAcknowledge Method = "wakes.acknowledge"
+	// MethodWakesWait is the blocking form of MethodWakesList: it answers
+	// as soon as the queue holds a queued wake, with the rows a drain would
+	// return, or once the bound the request names elapses with none, and
+	// it acknowledges nothing. It is a request rather than a stream, so it
+	// answers once and holds one of its connection's in-flight slots while
+	// it waits. It keeps no state across calls, so arming it again after a
+	// service restart reads the durable queue as the first call did.
+	// Refused for a task's worker on MethodWakesList's terms.
+	MethodWakesWait Method = "wakes.wait"
 	// MethodSupervisionAssert is PRD section 5's arm verification over the
 	// socket: it answers whether the supervisor loop of the service that
 	// holds this home is live, as the closed set internal/supervisor's Arm
@@ -245,6 +254,7 @@ var specs = []Spec{
 	{MethodTaskPeek, KindRequest, AccessRestricted, "Read a running task's worker's recent output, redacted and bounded, for the coordinator."},
 	{MethodWakesList, KindRequest, AccessRestricted, "Drain the wake queue: list the queued wakes, acknowledging none."},
 	{MethodWakesAcknowledge, KindRequest, AccessRestricted, "Record that the coordinator handled the named wakes."},
+	{MethodWakesWait, KindRequest, AccessRestricted, "Block until the wake queue holds a queued wake or a bound elapses, acknowledging none."},
 	{MethodSupervisionAssert, KindRequest, AccessRestricted, "Verify that the supervisor loop of this home's service is live."},
 	{MethodCatchUpRead, KindRequest, AccessOpen, "Read what waits on you, what landed unseen, what is under way, and what stopped."},
 	{MethodCatchUpMark, KindRequest, AccessRestricted, "Mark seen exactly the landed records a catch-up read showed."},

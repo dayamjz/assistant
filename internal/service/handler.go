@@ -34,8 +34,9 @@ import (
 // one question a handler asks of a caller is the other relation,
 // whether it is a task's worker, and workers.go derives that from the same
 // credentials for the methods whose answer depends on it: the five there,
-// coordinator.go's three, steer.go's three, taskholds.go's task.respond,
-// catchup.go's catchup.mark and custody.go's branch.sync.
+// wakewait.go's wakes.wait, coordinator.go's three, steer.go's three,
+// taskholds.go's task.respond, catchup.go's catchup.mark and custody.go's
+// branch.sync.
 func (s *Service) handle(ctx context.Context, req ipc.Request) (json.RawMessage, error) {
 	switch req.Method {
 	case ipc.MethodHealth:
@@ -124,6 +125,10 @@ func (s *Service) handle(ctx context.Context, req ipc.Request) (json.RawMessage,
 	case ipc.MethodWakesAcknowledge:
 		return call(ctx, req, func(ctx context.Context, r machine.AcknowledgeRequest) (machine.Acknowledged, error) {
 			return s.acknowledgeWakes(ctx, req, r)
+		})
+	case ipc.MethodWakesWait:
+		return call(ctx, req, func(ctx context.Context, r machine.WakeWaitRequest) (machine.Wakes, error) {
+			return s.waitWakes(ctx, req, r)
 		})
 	case ipc.MethodSupervisionAssert:
 		return call(ctx, req, func(ctx context.Context, _ struct{}) (supervisor.Arm, error) {

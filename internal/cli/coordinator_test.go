@@ -22,8 +22,10 @@ import (
 // subcommand written after a flag are each incorrect usage, because the
 // subcommand comes first. And the command line is checked before the
 // service is asked anything: each refusal below is reached with no service
-// at all, while a well-formed request with none is the operational failure
-// that names how to start one.
+// at all, among them a wait whose bound is outside
+// machine.WakeWaitRequest.Bounds' range or not whole seconds, while a
+// well-formed request with none, a wait at either end of that range
+// included, is the operational failure that names how to start one.
 func TestTheCoordinatorVerbServesItsTableAndNothingElse(t *testing.T) {
 	t.Parallel()
 	h := newHome(t)
@@ -75,16 +77,25 @@ func TestTheCoordinatorVerbServesItsTableAndNothingElse(t *testing.T) {
 		{"coordinator", "acknowledge"},
 		{"coordinator", "acknowledge", "seven"},
 		{"coordinator", "wakes", "--limit", "-1"},
+		{"coordinator", "await", "--timeout", "500ms"},
+		{"coordinator", "await", "--timeout", "1500ms"},
+		{"coordinator", "await", "--timeout", "-1s"},
+		{"coordinator", "await", "--timeout", "61m"},
+		{"coordinator", "await", "--timeout", "100000h"},
+		{"coordinator", "await", "--limit", "-1"},
+		{"coordinator", "await", "now"},
 		{"coordinator", "supervision", "now"},
 	} {
 		if got := run(t, h, subject, args...); got.code != machine.ExitUsage {
 			t.Fatalf("assistant %s exited %s, want incorrect usage:\n%s%s", strings.Join(args, " "), got.code, got.stdout, got.stderr)
 		}
 	}
-	got := run(t, h, subject, "--json", "coordinator", "wakes")
-	var failure machine.Failure
-	if got.code != machine.ExitFailure || json.Unmarshal([]byte(got.stdout), &failure) != nil ||
-		!strings.Contains(failure.NextAction, "assistant service start") {
-		t.Fatalf("assistant coordinator wakes with no service exited %s with:\n%s%s", got.code, got.stdout, got.stderr)
+	for _, args := range [][]string{{"wakes"}, {"await", "--timeout", "1s"}, {"await", "--timeout", "1h"}} {
+		got := run(t, h, subject, append([]string{"--json", "coordinator"}, args...)...)
+		var failure machine.Failure
+		if got.code != machine.ExitFailure || json.Unmarshal([]byte(got.stdout), &failure) != nil ||
+			!strings.Contains(failure.NextAction, "assistant service start") {
+			t.Fatalf("assistant coordinator %s with no service exited %s with:\n%s%s", strings.Join(args, " "), got.code, got.stdout, got.stderr)
+		}
 	}
 }
