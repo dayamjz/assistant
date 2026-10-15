@@ -123,7 +123,10 @@ func (g *Graph) NewState(values map[string]Value) (State, error) {
 // does not match it. This is the half of validating a checkpoint on read that
 // needs a graph; decoding already refused unknown fields and unrecognized
 // enumerations. A checkpoint is resumed with the user's credentials, so a
-// mismatch is refused rather than repaired.
+// mismatch is refused rather than repaired. The one absence it accepts is a
+// late key's, which Key.Late declares and the executor fills in at the zero
+// value of the key's kind; that is a key the checkpoint could not have held,
+// not a mismatch.
 func (g *Graph) Validate(c Checkpoint) error {
 	if c.Run == "" {
 		return &CheckpointError{Field: "run", Detail: "is empty"}
@@ -184,15 +187,22 @@ type stateMismatch struct {
 
 // checkStateShape is the single owner of what the right shape for a state is:
 // exactly the graph's declared keys, each holding a value of its declared
-// kind. It returns nil when s matches, and otherwise the mismatch, which each
-// caller wraps in the error type its own boundary reports.
+// kind, except that a late key may be absent, for the reason Key.Late gives.
+// It returns nil when s matches, and otherwise the mismatch, which each caller
+// wraps in the error type its own boundary reports.
 func (g *Graph) checkStateShape(s State) *stateMismatch {
-	if len(s.values) != len(g.keys) {
-		return &stateMismatch{detail: fmt.Sprintf(
-			"holds %d keys, the graph declares %d", len(s.values), len(g.keys))}
+	for name := range s.values {
+		if _, ok := g.keyIndex[name]; !ok {
+			return &stateMismatch{detail: fmt.Sprintf(
+				"holds key %q, which the graph does not declare (it holds %d keys, the graph declares %d)",
+				name, len(s.values), len(g.keys))}
+		}
 	}
 	for _, k := range g.keys {
 		v, ok := s.values[k.Name]
+		if !ok && k.Late {
+			continue
+		}
 		if !ok {
 			return &stateMismatch{detail: fmt.Sprintf("is missing declared key %q", k.Name)}
 		}
@@ -204,6 +214,31 @@ func (g *Graph) checkStateShape(s State) *stateMismatch {
 		}
 	}
 	return nil
+}
+
+// fillLate returns s holding every late key it lacks at the zero value of that
+// key's kind, and s itself when it lacks none. It is how a state checkStateShape
+// accepted without a late key becomes one that holds every declared key before
+// the executor acts on it, so no body and no checkpoint the executor writes
+// sees the absence.
+func (g *Graph) fillLate(s State) State {
+	var filled State
+	for _, k := range g.keys {
+		if !k.Late {
+			continue
+		}
+		if _, ok := s.values[k.Name]; ok {
+			continue
+		}
+		if filled.values == nil {
+			filled = s.Clone()
+		}
+		filled.values[k.Name] = zeroValue(k.Kind)
+	}
+	if filled.values == nil {
+		return s
+	}
+	return filled
 }
 
 func (g *Graph) validateState(s State) error {

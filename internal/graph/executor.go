@@ -139,7 +139,7 @@ func (e *Executor) Run(ctx context.Context, run string, initial State) (Result, 
 		Run:      run,
 		Position: e.graph.start,
 		Status:   StatusRunning,
-		State:    initial.Clone(),
+		State:    e.graph.fillLate(initial.Clone()),
 		Counters: e.graph.newCounters(e.budget),
 	}
 	if start, _ := e.graph.Node(e.graph.start); start.Halt != nil {
@@ -432,7 +432,12 @@ func (e *Executor) read(ctx context.Context, run string) (Checkpoint, error) {
 	if err := e.graph.Validate(cp); err != nil {
 		return Checkpoint{}, err
 	}
-	return cp.clone(), nil
+	// Validate accepts a state written before a late key existed, and this is
+	// where that key is filled in, so nothing the executor does with the
+	// checkpoint from here on, and nothing it writes, lacks it.
+	owned := cp.clone()
+	owned.State = e.graph.fillLate(owned.State)
+	return owned, nil
 }
 
 // advance runs nodes from cp.Position until the graph completes, halts, or a
@@ -619,7 +624,7 @@ func (e *Executor) checkEdgeBounds(cp *Checkpoint, edge int) (Status, string) {
 			declared.From, declared.To, declared.Rounds)
 	}
 	if e.graph.back[edge] && !declared.Answered {
-		fingerprint := cp.State.fingerprint()
+		fingerprint := e.graph.fingerprint(cp.State)
 		if prev := cp.Counters.Fingerprints[edge]; prev != "" && prev == fingerprint {
 			return StatusConverged, fmt.Sprintf(
 				"the round from %q to %q changed no state", declared.From, declared.To)

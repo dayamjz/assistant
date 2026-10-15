@@ -173,6 +173,14 @@
 // The schema does not depend on configuration: a run's state holds the same
 // keys whatever the fix round limits are.
 //
+// It does depend on the build, and a key added to it is one every checkpoint
+// written before it lacks. internal/graph refuses such a checkpoint as a state
+// missing a declared key, unless the key's row marks it late, which passes
+// internal/graph's Key.Late through: the run resumes reading the key's zero
+// value. A row may be late only when that zero value is how a run without the
+// key behaved. KeySubmittedSubject is the one late row, so a checkpoint
+// lacking any other key is still refused.
+//
 // The topology does depend on it. This package adds exactly one edge, the back
 // edge from a stage's fix node to that stage's node, for each stage whose fix
 // round limit is above zero, so whether a limit is zero decides the graph's
