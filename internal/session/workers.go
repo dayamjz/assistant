@@ -30,10 +30,10 @@ type Membership struct {
 // one lookup, which P14 forbids, and a worker registered as a stage would
 // have every push it makes refused before admission.
 //
-// Its one producer is Pipe.Create, which joins the worker's group when the
-// session is created and leaves it when the worker's process ends or Close
-// ends the session; the join is unexported so a membership cannot be stated
-// from outside this package. A group whose worker has exited is not a
+// Its producers are the providers' Create, Pipe's and Tmux's, which join the
+// worker's group when the session is created and leave it when the worker's
+// process ends or Close ends the session; the join is unexported so a
+// membership cannot be stated from outside this package. A group whose worker has exited is not a
 // member even before the leave has run: Member reads the worker's done
 // signal, so the answer never outlives the process it is about.
 //
