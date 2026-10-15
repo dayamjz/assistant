@@ -53,13 +53,17 @@ func TestMain(m *testing.M) {
 //
 // It is the arrangement internal/agents/standin already uses for the same
 // reason, and it recognizes the invocation the same way: by what the command
-// line says. A test binary is never run with "gate" or "coordinator" as its
-// first argument by the testing package. The second is how a test reaches
-// the coordinator's client from a process of its own, which is the one way
-// the credentials the service reads can be a worker's rather than this
-// test's: see coordinator_unix_test.go.
+// line says. A test binary is never run with "gate", "coordinator" or
+// "worker" as its first argument by the testing package, nor with "--home"
+// and a path before "worker". The second is how a test reaches the
+// coordinator's client from a process of its own, which is the one way the
+// credentials the service reads can be a worker's rather than this test's:
+// see coordinator_unix_test.go. The last two are a worker's route, which
+// the service writes as this binary, --home and the verb, and which a
+// worker runs: see worker_unix_test.go.
 func hookMain() {
-	if len(os.Args) < 2 || (os.Args[1] != "gate" && os.Args[1] != "coordinator") {
+	if len(os.Args) < 2 || (os.Args[1] != "gate" && os.Args[1] != "coordinator" && os.Args[1] != "worker" &&
+		(len(os.Args) < 4 || os.Args[1] != "--home" || os.Args[3] != "worker")) {
 		return
 	}
 	workingDir, err := os.Getwd()
@@ -301,17 +305,20 @@ func serveCatalog(t *testing.T, h *home.Home, served func(stages.StageDeps) pipe
 func serveFixing(t *testing.T, h *home.Home, served func(stages.StageDeps) pipeline.Stages,
 	fixer func(stages.FixDeps) pipeline.Fixer, catalog *agents.Catalog) func() {
 	t.Helper()
+	return serveOptions(t, service.Options{Home: h, NewStages: served, NewFixer: fixer, Catalog: catalog})
+}
+
+// serveOptions serves the home o names with o, filling in this build's
+// identity, until the test ends, and returns a function that stops it
+// sooner, on serveCatalog's terms.
+func serveOptions(t *testing.T, o service.Options) func() {
+	t.Helper()
 	build, err := store.CurrentBuild()
 	if err != nil {
 		t.Fatalf("reading this build's identity: %v", err)
 	}
-	running, err := service.Open(t.Context(), service.Options{
-		Home:      h,
-		NewStages: served,
-		NewFixer:  fixer,
-		Build:     build,
-		Catalog:   catalog,
-	})
+	o.Build = build
+	running, err := service.Open(t.Context(), o)
 	if err != nil {
 		t.Fatalf("opening the service: %v", err)
 	}

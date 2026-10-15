@@ -158,11 +158,13 @@ func (s *Service) refuseWorker(req ipc.Request) error {
 // is held to internal/taskstate's table, refusing with ipc.ErrWorker a kind
 // whose writer is the program and with ipc.ErrInvalidRequest a kind the
 // table has no row for or a detail its decoder refuses. A peer placed as no
-// task's worker is ipc.ErrNotWorker. The one kind with a record beside the
-// history, store.MessageAcknowledgedEventKind, is written through
-// acknowledgeMessage instead, so its event and the message record are one
-// transaction. The entry is published as ipc.TypeTaskEvent once it is
-// recorded.
+// task's worker is ipc.ErrNotWorker. The two kinds with a record beside the
+// history are written through that record's writer instead, so the event
+// and the record are one transaction: store.MessageAcknowledgedEventKind
+// through acknowledgeMessage, and store.ReportReadyEventKind through
+// route.go's fileReport, for which the request's detail is the report
+// rather than the entry's. The entry is published as ipc.TypeTaskEvent once
+// it is recorded.
 func (s *Service) taskEvent(ctx context.Context, req ipc.Request, r machine.TaskEventRequest) (machine.Appended, error) {
 	m, ok, err := s.workerPeer(req)
 	if err != nil {
@@ -186,8 +188,11 @@ func (s *Service) taskEvent(ctx context.Context, req ipc.Request, r machine.Task
 			return machine.Appended{}, fmt.Errorf("%w: the detail of a %q event: %w", ipc.ErrInvalidRequest, r.Kind, err)
 		}
 	}
-	if r.Kind == store.MessageAcknowledgedEventKind {
+	switch r.Kind {
+	case store.MessageAcknowledgedEventKind:
 		return s.acknowledgeMessage(ctx, m.Task, r.Detail)
+	case store.ReportReadyEventKind:
+		return s.fileReport(ctx, m.Task, r.Detail)
 	}
 	event, err := s.store.AppendTaskEvent(ctx, m.Task, r.Kind, r.Detail)
 	if err != nil {
@@ -222,8 +227,12 @@ func (s *Service) acknowledgeMessage(ctx context.Context, task, detail string) (
 }
 
 // publishTaskEvent tells subscribers a history grew. It is a state event on
-// ipc's terms, so it carries a revision.
+// ipc's terms, so it carries a revision. A service with no publisher, one a
+// test built by hand, publishes nothing, as publishHoldState does.
 func (s *Service) publishTaskEvent(event store.TaskEvent) {
+	if s.events == nil {
+		return
+	}
 	payload, err := json.Marshal(event)
 	if err != nil {
 		return

@@ -403,7 +403,9 @@
 // applied by handlers, not by internal/ipc's access class, and that table
 // says why. task.event admits only a worker and appends to its own task's
 // history, holding the kind to internal/taskstate's writer column so a
-// worker cannot append what the program decides; wakes.list,
+// worker cannot append what the program decides, and writing a message
+// acknowledgement and an investigation's report through their own records;
+// a launched worker reaches it over the route route.go gives it; wakes.list,
 // wakes.acknowledge, wakes.wait, the wake stream wakes.subscribe and
 // supervision.assert are the coordinator's and refuse a worker, with who
 // acknowledged, by a drain or by an acknowledgement, derived by internal/ipc's

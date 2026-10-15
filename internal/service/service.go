@@ -162,6 +162,15 @@ type Options struct {
 	// its identity. A test passes a double to script what a terminal
 	// answers.
 	Terminals Terminals
+	// WorkerRoute is the command line prefix a launched worker reaches this
+	// service through, on route.go's terms: internal/cli passes the absolute
+	// path of the program, --home naming this home, and its worker verb.
+	// Empty, which a test that opens the service without internal/cli
+	// passes, launches every worker with git alone and tells it of no
+	// route. A route internal/agents refuses is refused at each launch,
+	// which is logged and leaves the task dispatched, on launch.go's terms
+	// for a launch that fails.
+	WorkerRoute string
 	// hooks are the seams this package's tests drive the loop through. They
 	// are here rather than on the Service because the loop starts inside
 	// Open; supervise.go says what each is, and the product sets none.
@@ -238,6 +247,8 @@ type Service struct {
 	// home and code host; cleanup.go says which of its entries this service
 	// calls and from where.
 	cleaner *tasks.Cleaner
+	// workerRoute is Options.WorkerRoute, fixed when the service opens.
+	workerRoute string
 
 	// stageLogMu serializes appends to the per-stage logs and the reads of
 	// them, so a section stagelog.go writes is never interleaved with another
@@ -458,6 +469,8 @@ func Open(ctx context.Context, o Options) (*Service, error) {
 		launched:   make(map[string]*session.Session),
 		starting:   make(map[branchKey]*branchGate),
 		stopping:   make(chan struct{}),
+
+		workerRoute: o.WorkerRoute,
 	}
 	s.stopCtx, s.stopCancel = context.WithCancel(context.WithoutCancel(ctx))
 	// The terminal seam is the service's own provider unless a test passed

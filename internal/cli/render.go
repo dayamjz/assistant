@@ -85,12 +85,11 @@ const (
 	// forbidden set, or one beside text that is the person's own or an
 	// agent's, escaped.
 	VoicePhrased
-	// VoiceEvidence is a renderer that writes one of the three detailed
-	// evidence documents PRD section 9 names - the detail view, the usage
-	// view, and the relay of a finding that needs a decision - which P13
-	// lets keep exact identifiers and stage names, or the log view, a fourth
-	// that section 9 describes and P13's list does not yet name. Its row carries
-	// the phrase-table row that points a person at it, and writeEvidence,
+	// VoiceEvidence is a renderer that writes one of the four detailed
+	// evidence documents P13 and PRD section 9 name - the detail view, the
+	// usage view, the log view, and the relay of a finding that needs a
+	// decision - which P13 lets keep exact identifiers and stage names. Its
+	// row carries the phrase-table row that points a person at it, and writeEvidence,
 	// which the run renderer writes the first and last through, and
 	// writePointed, which readOut writes the usage view and the log view
 	// through, write that row first,
@@ -189,8 +188,8 @@ func writePointed(w io.Writer, row rendering, value any) {
 //
 // The four that are not phrased are named, so that the claim about the
 // rest is bounded by an enumeration. They are evidence documents, which P13
-// names as the exception to its rule and PRD section 9 names as three
-// documents, with the log view a fourth that P13's list does not name:
+// names as the exception to its rule and P13 and PRD section 9 name as four
+// documents:
 //
 //   - details is the detail view's evidence for a run: where its execution
 //     stands, the reason a bound parked it, the keys its configuration
@@ -209,9 +208,7 @@ func writePointed(w io.Writer, row rendering, value any) {
 //   - log is the log view, runs RUN --log=STAGE's answer: the end of one
 //     stage's log, with each agent call's account and reply as the log
 //     holds them. It is an answer of its own and not part of the detail
-//     view, so it is a fourth evidence document, which section 9 describes
-//     and P13's list of three does not yet name; that gap is the owner's to
-//     settle, and this row does not settle it.
+//     view, so it is the fourth evidence document P13's list names.
 //
 // The first two name no answer type, so readOut never dispatches to either;
 // the run renderer reaches each through writeEvidence, behind the phrased
@@ -289,6 +286,9 @@ var renderings = []rendering{
 	{name: "supervision", voice: VoicePhrased, of: typeOf[supervisor.Arm](), render: func(w io.Writer, v any) {
 		writeln(w, machine.ArmPhrase(v.(supervisor.Arm)))
 	}},
+	{name: "worker event", voice: VoicePhrased, of: typeOf[machine.Appended](), render: func(w io.Writer, v any) {
+		writeln(w, machine.AppendedPhrase(v.(machine.Appended)))
+	}},
 	usageRendering,
 	logRendering,
 }
@@ -316,9 +316,9 @@ var (
 	usageRendering = rendering{name: "usage", voice: VoiceEvidence, of: typeOf[machine.Usage](),
 		render: func(w io.Writer, v any) { readOutUsage(w, v.(machine.Usage)) },
 		points: machine.PhraseUsageFollows}
-	// logRendering is the log view, runs RUN --log=STAGE's answer, a fourth
-	// evidence document beside the three P13 names: it is an answer of its
-	// own, so it names its type and
+	// logRendering is the log view, runs RUN --log=STAGE's answer, the
+	// fourth evidence document P13 names: it is an answer of its own, so it
+	// names its type and
 	// readOut writes it through writePointed, on the usage row's terms.
 	logRendering = rendering{name: "log", voice: VoiceEvidence, of: typeOf[machine.StageLog](),
 		render: func(w io.Writer, v any) { readOutStageLog(w, v.(machine.StageLog)) },

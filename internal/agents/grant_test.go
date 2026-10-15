@@ -1,7 +1,9 @@
 package agents_test
 
 import (
+	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -109,32 +111,72 @@ func TestTheClaudeAdapterWritesEachRolesGrant(t *testing.T) {
 }
 
 // A worker runs under the worker grant: edits and git, and the stand-in
-// records the command line it was started with.
+// records the command line it was started with. A worker whose spec names a
+// route back to the program is also allowed commands beginning with it, in
+// the same list and written as the spec gave it, so the rule the CLI reads
+// and the prefix a worker is told to type are the same text; the worker with
+// no route is the control, granted git and nothing more.
 func TestTheClaudeWorkerRunsUnderTheWorkerGrant(t *testing.T) {
 	t.Parallel()
-	agent := standin.New(t, standin.Script{Worker: &standin.WorkerScript{}},
-		agents.WithTerminationGrace(300*time.Millisecond))
-	worker, err := agents.OpenWorker(t.Context(), agent.Runner(), agents.WorkerSpec{
-		Dir: t.TempDir(), Instructions: "Work on the task in this copy.",
-	})
-	if err != nil {
-		t.Fatalf("starting the worker: %v", err)
+	const route = "/opt/assistant/bin/assistant --home /var/lib/assistant worker"
+	for _, c := range []struct {
+		name  string
+		route string
+		want  grantFlags
+	}{
+		{"no route", "", workerGrant},
+		{"a route", route, grantFlags{mode: "acceptEdits", allowed: "Bash(git:*),Bash(" + route + ":*)"}},
+	} {
+		agent := standin.New(t, standin.Script{Worker: &standin.WorkerScript{}},
+			agents.WithTerminationGrace(300*time.Millisecond))
+		worker, err := agents.OpenWorker(t.Context(), agent.Runner(), agents.WorkerSpec{
+			Dir: t.TempDir(), Instructions: "Work on the task in this copy.", Route: c.route,
+		})
+		if err != nil {
+			t.Fatalf("%s: starting the worker: %v", c.name, err)
+		}
+		args := workerArgs(t, agent)
+		worker.Close()
+		if got := grantOf(args); got != c.want {
+			t.Errorf("%s: the worker ran under %+v, want %+v (command line %q)", c.name, got, c.want, args)
+		}
 	}
+}
+
+// workerArgs waits for the stand-in's record of the worker it was started
+// as, and returns the command line it read.
+func workerArgs(t *testing.T, agent *standin.Agent) []string {
+	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for {
 		for _, c := range agent.Calls() {
 			if c.Worker {
-				worker.Close()
-				if got := grantOf(c.Args); got != workerGrant {
-					t.Errorf("the worker ran under %+v, want %+v (command line %q)", got, workerGrant, c.Args)
-				}
-				return
+				return c.Args
 			}
 		}
 		if time.Now().After(deadline) {
-			worker.Close()
 			t.Fatalf("no worker call was recorded: %s", agent.Calls())
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// A route that would change the shape of the tool list it is written into
+// is refused before anything starts, as an invalid invocation naming the
+// field: a comma would end the entry, a parenthesis close it, and a line
+// break or surrounding white space is not the prefix a worker types.
+func TestAWorkerRouteThatWouldReshapeTheToolListIsRefused(t *testing.T) {
+	t.Parallel()
+	for _, route := range []string{
+		"/bin/assistant worker,Bash", "/bin/assistant worker)", "/bin/(x)/assistant",
+		"/bin/assistant\nworker", " /bin/assistant worker", "/bin/assistant worker ",
+	} {
+		err := agents.WorkerSpec{Dir: t.TempDir(), Instructions: "Work.", Route: route}.Validate()
+		if !errors.Is(err, agents.ErrInvalidInvocation) || !strings.Contains(err.Error(), "Route") {
+			t.Errorf("route %q = %v, want an invalid invocation naming Route", route, err)
+		}
+	}
+	if err := (agents.WorkerSpec{Dir: t.TempDir(), Instructions: "Work.", Route: "'/a b/assistant' --home /h worker"}).Validate(); err != nil {
+		t.Errorf("a quoted route with spaces was refused: %v", err)
 	}
 }

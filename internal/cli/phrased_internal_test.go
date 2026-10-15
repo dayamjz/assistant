@@ -172,9 +172,10 @@ func fixturePlan() machine.Plan {
 
 // fixtures is a value for every renderer, each carrying the words its old
 // rendering printed: identifiers in the generator's format, paths under a
-// sample home, stage names and state labels. The fallback's is a real answer
-// shape this surface has no renderer for, a worker's appended entry, so the
-// refusal is exercised on a value a service does produce.
+// sample home, stage names and state labels. The fallback's is a real shape
+// this surface has no renderer for, a history entry as the service
+// publishes it in a task.event state event, so the refusal is exercised on
+// a value a service does produce.
 func fixtures(t *testing.T) map[string]any {
 	t.Helper()
 	root := vocabtest.SampleRoot()
@@ -301,8 +302,10 @@ func fixtures(t *testing.T) map[string]any {
 		"supervision":        supervisor.Arm{Outcome: supervisor.ArmAttached, Sequence: 12},
 		"catch up":           fixtureCatchUp(),
 		"marked seen":        machine.Marked{Marks: []store.SeenMark{{SeenRecord: store.SeenRecord{Kind: store.SeenMerge, Key: sampleID}}}},
-		"fallback": machine.Appended{Event: store.TaskEvent{TaskID: sampleID, Sequence: 3, Kind: "waiting-external",
+		"worker event": machine.Appended{Event: store.TaskEvent{TaskID: sampleID, Sequence: 3, Kind: "waiting-external",
 			Detail: "an upstream release of the parser"}},
+		"fallback": store.TaskEvent{TaskID: sampleID, Sequence: 3, Kind: "waiting-external",
+			Detail: "an upstream release of the parser"},
 	}
 }
 
@@ -540,9 +543,8 @@ func TestTheUnphrasedRenderersPrintWhatTheyAreListedFor(t *testing.T) {
 	}
 }
 
-// TestTheMessagePointingAtEvidenceIsPhrased is P13 for the three evidence
-// documents P13 names and for the log view, a fourth that section 9
-// describes and P13's list does not yet name. P13 lets an evidence document keep exact
+// TestTheMessagePointingAtEvidenceIsPhrased is P13 for the four evidence
+// documents P13 names, the log view among them. P13 lets an evidence document keep exact
 // identifiers and stage names and keeps the message that points at one
 // phrased, so a run carrying the two a run carries is rendered and each
 // document is taken out from behind its pointer; what is left - the
@@ -597,7 +599,7 @@ func TestTheMessagePointingAtEvidenceIsPhrased(t *testing.T) {
 		blocks = append(blocks, block)
 	}
 	if len(blocks)+len(answers) != 4 {
-		t.Fatalf("%d renderers are evidence; P13 names three evidence documents and the log view is a fourth", len(blocks)+len(answers))
+		t.Fatalf("%d renderers are evidence; P13 names four evidence documents", len(blocks)+len(answers))
 	}
 	for name, block := range answers {
 		var answered bytes.Buffer
@@ -695,8 +697,8 @@ func TestAnAnswerWithNoRendererIsRefusedRatherThanDumped(t *testing.T) {
 	if code := render(in, value, nil); code != machine.ExitOK {
 		t.Fatalf("the same answer as a document exited %s, want ok", code)
 	}
-	var decoded machine.Appended
-	if err := json.Unmarshal(stdout.Bytes(), &decoded); err != nil || decoded.Event.TaskID != sampleID {
+	var decoded store.TaskEvent
+	if err := json.Unmarshal(stdout.Bytes(), &decoded); err != nil || decoded.TaskID != sampleID {
 		t.Fatalf("the same answer as a document did not carry it: %v\n%s", err, stdout.String())
 	}
 }

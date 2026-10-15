@@ -108,8 +108,8 @@ import (
 
 // launchTask launches the worker for a dispatch that reached proven: it
 // asserts the copy again, creates the terminal session with the task's
-// instructions, records the session's reference on the attempt, and holds
-// the session. A copy that fails the assertion is an *isolationRefused,
+// instructions and the route back to this service, on route.go's terms,
+// records the session's reference on the attempt, and holds the session. A copy that fails the assertion is an *isolationRefused,
 // recorded; an agent without worker sessions is a *agents.CapabilityError,
 // wrapped, with nothing recorded; a session whose reference could not be
 // recorded is ended before the error is reported.
@@ -129,7 +129,8 @@ func (s *Service) launchTask(ctx context.Context, d dispatched) (*session.Sessio
 	launched, err := built.sessions.Create(ctx, session.Spec{
 		TaskID:       d.id,
 		Isolation:    fresh,
-		Instructions: string(instructions) + d.note,
+		Instructions: string(instructions) + d.note + s.routeSection(d.want.Shape),
+		Route:        s.workerRoute,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("service: launching task %s attempt %d: %w", d.id, d.attempt, err)

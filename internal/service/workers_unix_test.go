@@ -346,6 +346,87 @@ func TestAWorkerAppendsToItsOwnHistoryAndNoOneElseCan(t *testing.T) {
 	})
 }
 
+// An investigation's report arrives as the worker's task.event of the
+// report kind, with the report as the request's detail, and is written
+// through the report's own record rather than appended. A report that
+// cannot be read is refused as an invalid request and nothing is stored or
+// appended. A readable one is stored, its ask finding and its finding
+// naming no action are registered as holds (P3), and the history gains one
+// report entry, the one the answer names, with an empty detail: the report
+// is the stored row and not the entry. A second report is refused and the
+// first stands, and the same request from a peer in no worker group is
+// refused as one. A delivery task's worker filing a report is refused as an
+// invalid request, since only an investigation files one.
+func TestAWorkersReportIsStoredThroughItsRecordAndOnlyAnInvestigationFilesOne(t *testing.T) {
+	principles.Cite(t, principles.P3)
+	launchedWorkerOf(t, store.TaskInvestigation, "", func(w launched) {
+		running, task := w.running, w.task
+		before := historyOf(t, w.home, task)
+		if _, code := callAs(t, w, ipc.MethodTaskEvent,
+			machine.TaskEventRequest{Kind: store.ReportReadyEventKind, Detail: "nothing here is a report"}); code != ipc.CodeInvalidRequest {
+			t.Fatalf("an unreadable report was refused with %q, want %q", code, ipc.CodeInvalidRequest)
+		}
+		if _, err := recordsOf(t, w.home).TaskReport(t.Context(), task); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("an unreadable report was stored: %v", err)
+		}
+		if after := historyOf(t, w.home, task); len(after) != len(before) {
+			t.Fatalf("an unreadable report grew the history from %d to %d entries", len(before), len(after))
+		}
+
+		report := `{"summary":"looked","findings":[` +
+			`{"severity":"warning","action":"ask","description":"Should the old path be kept?"},` +
+			`{"severity":"warning","description":"Is the cache keyed right?"},` +
+			`{"severity":"info","action":"note","description":"The tests are thin here."}]}`
+		answer, code := callAs(t, w, ipc.MethodTaskEvent, machine.TaskEventRequest{Kind: store.ReportReadyEventKind, Detail: report})
+		if code != "" {
+			t.Fatalf("the worker's report was refused with %q", code)
+		}
+		var appended machine.Appended
+		if err := json.Unmarshal(answer, &appended); err != nil {
+			t.Fatalf("the answer does not decode: %v\n%s", err, answer)
+		}
+		stored, err := recordsOf(t, w.home).TaskReport(t.Context(), task)
+		if err != nil || stored.Body != report || len(stored.HoldKeys) != 2 {
+			t.Fatalf("the report was stored as %+v (%v), want the body and two decisions", stored, err)
+		}
+		for _, key := range stored.HoldKeys {
+			if h, err := recordsOf(t, w.home).Hold(t.Context(), key); err != nil || !h.Open() || h.TaskID.Or("") != task {
+				t.Fatalf("hold %s = %+v, %v; want open and naming the task", key, h, err)
+			}
+		}
+		history := historyOf(t, w.home, task)
+		if len(history) != len(before)+1 || history[len(history)-1] != appended.Event ||
+			appended.Event.Kind != store.ReportReadyEventKind || appended.Event.Detail != "" {
+			t.Fatalf("the history is %+v and the answer %+v, want one report entry more with no detail", history, appended)
+		}
+
+		if _, code := callAs(t, w, ipc.MethodTaskEvent,
+			machine.TaskEventRequest{Kind: store.ReportReadyEventKind, Detail: `{"summary":"again"}`}); code != ipc.CodeInvalidRequest {
+			t.Fatalf("a second report was refused with %q, want %q", code, ipc.CodeInvalidRequest)
+		}
+		var outside machine.Appended
+		if err := running.client.Call(t.Context(), ipc.MethodTaskEvent,
+			machine.TaskEventRequest{Kind: store.ReportReadyEventKind, Detail: report}, &outside); !errors.Is(err, ipc.ErrNotWorker) {
+			t.Fatalf("a report from a peer in no worker group = %v, want ErrNotWorker", err)
+		}
+		if again, err := recordsOf(t, w.home).TaskReport(t.Context(), task); err != nil || again.Body != report {
+			t.Fatalf("the refused reports disturbed the first: %+v, %v", again, err)
+		}
+		if after := historyOf(t, w.home, task); len(after) != len(history) {
+			t.Fatalf("refused reports grew the history to %d entries from %d", len(after), len(history))
+		}
+	})
+	launchedWorker(t, "task/report", func(w launched) {
+		if _, code := callAs(t, w, ipc.MethodTaskEvent,
+			machine.TaskEventRequest{Kind: store.ReportReadyEventKind, Detail: `{"summary":"looked"}`}); code != ipc.CodeInvalidRequest {
+			t.Fatalf("a delivery task's report was refused with %q, want %q", code, ipc.CodeInvalidRequest)
+		}
+		if _, err := recordsOf(t, w.home).TaskReport(t.Context(), w.task); !errors.Is(err, store.ErrNotFound) {
+			t.Fatalf("a delivery task's report was stored: %v", err)
+		}
+	})
+}
+
 // The queue and arm verification are the coordinator's. A drain from outside
 // every worker group returns what the loop surfaced and acknowledges it in
 // the same step, recorded as the coordinator, the derived acknowledger, so

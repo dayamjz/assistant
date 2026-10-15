@@ -81,11 +81,10 @@
 // and a fix round's offer, a row per doctor check and result keyed on the
 // check names declared beside them and the verdict, the service lifecycle, a
 // gate created, reattached and removed, the gate's own rows for a change sent
-// to it, the rows pointing at the three evidence documents section 9 names -
-// the detail view, the findings relayed for a decision, and the usage view,
-// whose shape is Usage in usage.go - the row pointing at the log view, a
-// fourth evidence document whose shape is StageLog in stagelog.go and which
-// P13's list does not yet name, and the refusal for an answer with no
+// to it, the rows pointing at the four evidence documents P13 and section 9
+// name - the detail view, the findings relayed for a decision, the usage
+// view, whose shape is Usage in usage.go, and the log view, whose shape is
+// StageLog in stagelog.go - and the refusal for an answer with no
 // renderer. No task row carries an outcome word, because PRD section 6
 // makes a task's state its own vocabulary and a task with no run has no
 // outcome. The vocabulary test cites P13 for the rows here, and which of
