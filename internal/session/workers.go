@@ -33,9 +33,11 @@ type Membership struct {
 // Its producers are the providers' Create, Pipe's and Tmux's, which join the
 // worker's group when the session is created and leave it when the worker's
 // process ends or Close ends the session; the join is unexported so a
-// membership cannot be stated from outside this package. A group whose worker has exited is not a
-// member even before the leave has run: Member reads the worker's done
-// signal, so the answer never outlives the process it is about.
+// membership cannot be stated from outside this package. A group whose
+// worker's done signal has closed is not a member even before the leave has
+// run, so the answer is as current as that signal and no more: a pipe worker's
+// closes when the process is reaped, while a terminal worker's is polled and
+// can trail the exit by up to internal/agents' terminalPoll.
 //
 // A Workers is safe for concurrent use.
 type Workers struct {
@@ -57,7 +59,7 @@ func NewWorkers() *Workers {
 }
 
 // Member reports the membership of a process group, and whether the group
-// leads a worker this set holds whose process has not ended.
+// leads a worker this set holds whose done signal has not closed.
 func (w *Workers) Member(group int) (Membership, bool) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
