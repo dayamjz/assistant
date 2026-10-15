@@ -251,6 +251,42 @@ func (e *Executor) Answer(ctx context.Context, run, answer string) (Result, erro
 // answer it does list given with no detail is refused with ErrDetailRequired.
 // Both are refused before anything is written, so the decision stays open.
 func (e *Executor) AnswerWith(ctx context.Context, run, answer, detail string) (Result, error) {
+	return e.answer(ctx, run, answer, detail, false, nil)
+}
+
+// AnswerUnattended is AnswerWith for an answer the caller declares no person
+// gave, such as one a program gives on consent granted in advance. It is
+// refused, accepted, and recorded on exactly AnswerWith's terms, with two
+// differences.
+//
+// The first is the bound. Edge.Answered exempts a back edge from the
+// convergence check because a person asked for the round it closes; that
+// reason does not hold for an answer nobody attended, so a traversal of an
+// Answered edge that follows this answer is held to the convergence check
+// like any other back edge, and a round that changed no state parks the run
+// StatusConverged. The fact travels in the run's Counters, so it survives a
+// resume between the answer and the traversal, and every answer writes it,
+// so the next answer at a halt point decides afresh.
+//
+// The second is claimed: when it is non-nil it is called once, with the
+// identifier of the checkpoint carrying the answer, after that checkpoint is
+// written and before any node runs. It is how a caller learns the answer was
+// applied rather than inferring it from where the run stands afterwards, and
+// it is not called for an answer refused before that write. It runs on the
+// caller's goroutine and its outcome decides nothing here: the answer is
+// applied once the checkpoint is written, whatever the callback does.
+//
+// The executor does not know who answers, so the declaration is the caller's,
+// and an AnswerWith call for an answer nobody attended keeps the exemption.
+// That rests on the caller as Edge.Answered's own reading does.
+func (e *Executor) AnswerUnattended(ctx context.Context, run, answer, detail string, claimed func(CheckpointID)) (Result, error) {
+	return e.answer(ctx, run, answer, detail, true, claimed)
+}
+
+// answer is AnswerWith and AnswerUnattended: unattended is what the claim
+// records about who gave the answer, and claimed is called once the claim is
+// written, when non-nil.
+func (e *Executor) answer(ctx context.Context, run, answer, detail string, unattended bool, claimed func(CheckpointID)) (Result, error) {
 	cp, err := e.load(ctx, run)
 	if err != nil {
 		return Result{}, err
@@ -292,8 +328,12 @@ func (e *Executor) AnswerWith(ctx context.Context, run, answer, detail string) (
 	cp.State = acc.work
 	cp.Decision = nil
 	cp.Status = StatusRunning
+	cp.Counters.Unattended = unattended
 	if err := e.persist(ctx, &cp); err != nil {
 		return Result{}, err
+	}
+	if claimed != nil {
+		claimed(cp.ID())
 	}
 	return e.advance(ctx, cp)
 }
@@ -623,11 +663,19 @@ func (e *Executor) checkEdgeBounds(cp *Checkpoint, edge int) (Status, string) {
 			"the edge from %q to %q reached its bound of %d rounds",
 			declared.From, declared.To, declared.Rounds)
 	}
-	if e.graph.back[edge] && !declared.Answered {
+	if e.graph.back[edge] {
+		// An Answered edge records its fingerprint on every traversal and is
+		// compared only when the answer it follows was unattended, so such a
+		// round is measured against the round before it on this edge whoever
+		// asked for that one.
 		fingerprint := e.graph.fingerprint(cp.State)
-		if prev := cp.Counters.Fingerprints[edge]; prev != "" && prev == fingerprint {
-			return StatusConverged, fmt.Sprintf(
-				"the round from %q to %q changed no state", declared.From, declared.To)
+		held := !declared.Answered || cp.Counters.Unattended
+		if prev := cp.Counters.Fingerprints[edge]; held && prev != "" && prev == fingerprint {
+			reason := fmt.Sprintf("the round from %q to %q changed no state", declared.From, declared.To)
+			if declared.Answered {
+				reason += ", and the answer that asked for it was not a person's"
+			}
+			return StatusConverged, reason
 		}
 		cp.Counters.Fingerprints[edge] = fingerprint
 	}

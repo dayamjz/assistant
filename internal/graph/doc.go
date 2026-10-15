@@ -98,6 +98,15 @@
 // this round" rests on the caller. internal/pipeline's request cycle rests on
 // internal/service being the only caller of AnswerWith in this build.
 //
+// A caller that knows nobody attended an answer says so with
+// AnswerUnattended, and the exemption then does not apply: a traversal of an
+// Answered edge that follows such an answer is held to the convergence check
+// like any other back edge. Every traversal of an Answered edge records its
+// fingerprint, so an unattended round is compared with the round before it on
+// that edge whoever asked for that one. The declaration is the caller's, as
+// the exemption's reading is: an unattended answer given through AnswerWith
+// keeps the exemption, and nothing here can tell.
+//
 // All three have to survive a resume intact, and intact means more than the
 // counts. A count is meaningless without the bound it is compared against and
 // the edge it accrued on, so a checkpoint's Counters carry those too: the
