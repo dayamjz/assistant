@@ -262,6 +262,10 @@ type supervisionHooks struct {
 	// kick makes the current incarnation run a pass when it is idle: a
 	// receive on it, by the loop, is one pass.
 	kick chan struct{}
+	// wakeRecheck replaces wakeWaitRecheck for an armed wakes.wait when it
+	// is positive, so a test can push the recheck past its own bound and
+	// show that the bell this loop rings is what answers the wait.
+	wakeRecheck time.Duration
 }
 
 // incarnation is one incarnation of the loop: its fence, its context, when it
@@ -546,7 +550,9 @@ func (s *Service) readTerminal(c *incarnation, ref string, probed session.Observ
 // record makes the pass's writes for one task: each surfaced detection with
 // the markers in one transaction, or the markers alone when nothing
 // surfaced, and nothing when the task was not watched and nothing was
-// detected. Every write is fenced by the incarnation.
+// detected. Every write is fenced by the incarnation. A write that
+// appended a row rings wakeBell after it committed, so an armed wakes.wait
+// reads the queue again; a replay that appended nothing rings nothing.
 func (s *Service) record(c *incarnation, id string, d decision) taskReport {
 	out := taskReport{Watched: d.watched, Detections: d.detections}
 	surfaced := 0
@@ -564,6 +570,9 @@ func (s *Service) record(c *incarnation, id string, d decision) taskReport {
 			return out
 		}
 		out.Detections[i].Disposition = appended.Disposition
+		if appended.Disposition == store.WakeAppended {
+			s.wakeBell.ring()
+		}
 	}
 	if surfaced == 0 && d.write {
 		ctx, cancel := s.sup.bound(c.ctx)

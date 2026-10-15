@@ -5,7 +5,6 @@ package service_test
 import (
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/dayamjz/assistant/internal/checkpoints"
 	"github.com/dayamjz/assistant/internal/forge/forgetest"
@@ -112,23 +111,4 @@ func TestAPersonsPushIsTitledWithItsCommitsSubjectOrItsBranch(t *testing.T) {
 			}
 		}
 	})
-}
-
-// createdFor polls the scripted provider's record until it holds a pull
-// request creation for head, and returns it.
-func createdFor(t *testing.T, provider *forgetest.Provider, head string) forgetest.Call {
-	t.Helper()
-	deadline := time.Now().Add(launchWait)
-	for {
-		for _, c := range provider.Calls() {
-			if c.Op == forgetest.OpCreate && flagValue(c.Args, "--head=") == head {
-				return c
-			}
-		}
-		if !time.Now().Before(deadline) {
-			t.Fatalf("the provider was never asked to create a pull request for %s; it was asked for %+v",
-				head, provider.Calls())
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
 }

@@ -103,8 +103,11 @@ func intendedRepository(ctx context.Context, working, upstream, defaultBranch st
 		return store.Repository{}, "", err
 	}
 	if upstream == "" {
-		if upstream, err = repo.RemoteURL(ctx, "origin"); err != nil {
-			return store.Repository{}, "", fmt.Errorf("this working copy has no origin, so name the upstream with --upstream: %w", err)
+		upstream, err = repo.RemoteURL(ctx, "origin")
+		if errors.Is(err, vcs.ErrRemoteNotFound) {
+			return store.Repository{}, "", upstreamRefused{cause: err}
+		} else if err != nil {
+			return store.Repository{}, "", fmt.Errorf("reading this working copy's origin to take the upstream from: %w", err)
 		}
 	}
 	source := machine.DefaultBranchFromFlag
@@ -186,6 +189,24 @@ func (e defaultBranchRefused) Error() string {
 
 // Unwrap resolves to what was read.
 func (e defaultBranchRefused) Unwrap() error { return e.cause }
+
+// upstreamRefused is init's refusal when it was given no --upstream and the
+// working copy has no remote named origin to take the upstream from, read out
+// as internal/machine's PhraseInitNoUpstream. It is a type rather than text so
+// that failureExit can decide its exit code from what it is: the remedy is a
+// flag the caller supplies, so it is incorrect usage. A read of origin that
+// failed for another reason is not this refusal and stays an operational
+// failure, because the caller got nothing wrong.
+type upstreamRefused struct {
+	cause error
+}
+
+// Error is the row a person reads, which says all there is.
+func (e upstreamRefused) Error() string { return machine.PhraseInitNoUpstream.String() }
+
+// Unwrap resolves to what was read, so errors.Is on vcs.ErrRemoteNotFound
+// survives the rewording.
+func (e upstreamRefused) Unwrap() error { return e.cause }
 
 // eject removes the gate and its records.
 //
@@ -290,7 +311,8 @@ func syncBranch(ctx context.Context, in *invocation) (any, error) {
 // names, which is worth knowing and is not the same as being unable to start.
 // The code host row is the same kind: a run can start without a runnable
 // provider command line and the stages that talk to the code host refuse
-// there, so the row informs before a stage does and stops nothing.
+// there, so the row informs before a stage does and stops nothing. The commit
+// identity row is the same kind again: commitIdentity says why.
 func doctor(ctx context.Context, in *invocation) (any, error) {
 	if err := in.parseFlags("doctor", func(*flag.FlagSet) {}); err != nil {
 		return nil, err
@@ -315,7 +337,11 @@ func doctor(ctx context.Context, in *invocation) (any, error) {
 	}
 
 	if records != nil && workErr == nil {
-		add(gateCheck(ctx, records, working))
+		gated := gateCheck(ctx, records, working)
+		add(gated)
+		if gated.OK {
+			add(commitIdentity(ctx, in.home.Root(), records, working))
+		}
 	}
 
 	service := in.serviceState(ctx)
@@ -399,6 +425,57 @@ func gateCheck(ctx context.Context, records *store.Store, working string) machin
 		}
 	}
 	return machine.Check{Name: machine.CheckGate, OK: true, Blocking: true, Detail: "bound to " + binding.GateID}
+}
+
+// commitIdentity reports whether git names an author and a committer for a
+// commit made in this working copy's gate repository, which is the repository
+// a run's isolated copy is a linked worktree of and so the configuration a
+// commit made in that copy is resolved against: the working copy's own
+// repository configuration is not part of it, which is why this does not ask
+// the working copy. The gate is located the way internal/service locates it
+// before cutting a copy, and the question is vcs.Repository.CommitIdentity,
+// whose contract says what its answer does and does not establish. It is made
+// only when the gate check passed, because without a gate there is no
+// repository a run's copy would be cut from to ask.
+//
+// It does not block. A run can start without an identity, and a step that has
+// to record a change, a fix round or a rebase onto a moved upstream, fails
+// there with git's own refusal; nothing supplies an identity in its place.
+// What the row buys is that the operator learns here and is told the remedy.
+//
+// It answers for this process's environment. The commit is made by the
+// service, which may have been started with another one, so an identity set
+// only in a variable such as GIT_AUTHOR_NAME, or a GIT_CONFIG_GLOBAL that
+// differs between the two, can make this answer differ from what a run meets.
+func commitIdentity(ctx context.Context, home string, records *store.Store, working string) machine.Check {
+	failed := func(err error) machine.Check {
+		return machine.Check{
+			Name: machine.CheckCommitIdentity,
+			Detail: "git could not name who a commit made in this checkout's gate is recorded under; set one with " +
+				"git config --global user.name and git config --global user.email: " + err.Error(),
+		}
+	}
+	binding, err := records.GateBinding(ctx, working)
+	if err != nil {
+		return failed(err)
+	}
+	path, err := gate.RepositoryFor(home, binding.GateID)
+	if err != nil {
+		return failed(err)
+	}
+	bare, err := vcs.OpenBare(ctx, path, vcs.WithRedactor(redact.New()))
+	if err != nil {
+		return failed(err)
+	}
+	identity, err := bare.CommitIdentity(ctx)
+	if err != nil {
+		return failed(err)
+	}
+	detail := "author " + identity.Author
+	if identity.Committer != identity.Author {
+		detail += ", committer " + identity.Committer
+	}
+	return machine.Check{Name: machine.CheckCommitIdentity, OK: true, Detail: detail}
 }
 
 // codeHost reports whether the code-host provider command line resolves on

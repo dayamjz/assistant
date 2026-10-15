@@ -154,7 +154,8 @@ func taskCountOf(t *testing.T, h *home.Home, dir string) int {
 // Unknown from the dead terminal; the wake queue lists a wake for that task
 // and keeps listing it until the client acknowledges it, recorded as the
 // coordinator, and a second acknowledgement of the same wake is refused as
-// incorrect usage; a relaunch begins attempt 2 and the service launches it;
+// incorrect usage; a wait armed before the worker ended answers with queued
+// rows, and one armed after the acknowledgement does not return them; a relaunch begins attempt 2 and the service launches it;
 // a stop ends that attempt's worker and opens the hold naming the task;
 // arm verification answers that the loop is live; and an investigation
 // created through the client is promoted to a delivery on a branch.
@@ -199,6 +200,7 @@ func TestTheCoordinatorClientDrivesEveryMethodAndRefusesAWorker(t *testing.T) {
 		{"relaunch", id},
 		{"promote", id, "--repository", repository, "--branch", "task/mine", "--intent", "Deliver it."},
 		{"wakes"},
+		{"await", "--timeout", "1s"},
 		{"acknowledge", "1"},
 		{"supervision"},
 	} {
@@ -232,6 +234,17 @@ func TestTheCoordinatorClientDrivesEveryMethodAndRefusesAWorker(t *testing.T) {
 	}
 	vocabtest.Assert(t, plain.stdout)
 
+	// A wait is armed before the worker ends, so it is blocking in the
+	// service while the end happens.
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	armed := make(chan invocation, 1)
+	go func() {
+		armed <- runArgsIn(t.Context(), executable, subject, "--home", h.Root(), "--json", "coordinator", "await", "--timeout", "60s")
+	}()
+
 	// The worker ends on a message, and its task reads Unknown from the
 	// dead terminal.
 	coordinate(t, h, subject, &messaged, "message", id, "--text", endWorker)
@@ -262,6 +275,17 @@ func TestTheCoordinatorClientDrivesEveryMethodAndRefusesAWorker(t *testing.T) {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
+	// The armed wait answered with queued rows, as a list would read them.
+	waited := <-armed
+	var woken machine.Wakes
+	if waited.code != machine.ExitOK || json.Unmarshal([]byte(waited.stdout), &woken) != nil || len(woken.Wakes) == 0 {
+		t.Fatalf("the armed coordinator wait exited %s with:\n%s%s", waited.code, waited.stdout, waited.stderr)
+	}
+	for _, w := range woken.Wakes {
+		if !w.Queued() || w.ID == 0 {
+			t.Fatalf("the armed wait answered %+v, want queued rows", woken)
+		}
+	}
 	var again machine.Wakes
 	coordinate(t, h, subject, &again, "wakes", "--limit", strconv.Itoa(machine.DefaultWakesLimit))
 	if !listsAll(again, ours) {
@@ -286,6 +310,15 @@ func TestTheCoordinatorClientDrivesEveryMethodAndRefusesAWorker(t *testing.T) {
 		}
 	}
 	refusedAs(t, run(t, h, subject, "--json", "coordinator", "acknowledge", ackArgs[1]), ipc.CodeInvalidRequest, machine.ExitUsage)
+	var waitedAfter machine.Wakes
+	coordinate(t, h, subject, &waitedAfter, "await", "--timeout", "1s")
+	for _, w := range waitedAfter.Wakes {
+		for _, acked := range ours {
+			if w.ID == acked {
+				t.Fatalf("wake %d was acknowledged and a wait returned it again", acked)
+			}
+		}
+	}
 
 	// A relaunch of the gone terminal begins attempt 2, which the service
 	// launches.

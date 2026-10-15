@@ -177,7 +177,8 @@
 // coordinatorActions in coordinator.go holds "assistant coordinator" and its
 // subcommands, one for each of the coordinator's service methods that has
 // no command in the table: create, message, stop, relaunch and promote a
-// task, list and acknowledge the wake queue, and verify supervision. The
+// task, list, wait on and acknowledge the wake queue, and verify
+// supervision. The
 // owner decided on #227 to keep PRD section 9's table as it is and ship this
 // client beside it, as the gate and host verbs are, and section 9 says so
 // beside the table. It is one verb so the door beside the table is one door.
@@ -192,8 +193,14 @@
 // is refused with ipc.ErrWorker, decided from the socket's credentials, and
 // nothing here holds a second copy of that rule. The command line is
 // checked before the service is asked: operands, a flag and its -file
-// sibling given together, a file that cannot be read, and wake identifiers
-// that are not numbers are incorrect usage. The refusal rests on the
+// sibling given together, a file that cannot be read, wake identifiers
+// that are not numbers, and a wait bound outside
+// machine.WakeWaitRequest.Bounds' range are incorrect usage. await is
+// the one subcommand that blocks: it is one request that the service
+// answers when the queue holds a queued wake or its bound elapses, so the
+// coordinator can block a turn on it instead of polling, and a service that
+// stops under it ends the call as an operational failure that the caller
+// re-arms. The refusal rests on the
 // service's placement of its caller, and coordinatorVerbName names the gap
 // in that placement: a parent chain the kernel rewrote.
 //
@@ -219,7 +226,8 @@
 // the two failure codes a failure ends with is decided once, in failureExit:
 // a command line refused here and a request the service answered
 // invalid-request are both incorrect usage, whatever method answered, as is
-// init's refusal when the working copy holds no default branch to read, and
+// init's refusal when the working copy holds no default branch to read, or
+// no origin to take the upstream from and no --upstream naming one, and
 // every other failure is operational. A run that
 // stopped to ask something is a success, because the answer goes back through
 // the same surface and an agent that read a decision as a failure would stop

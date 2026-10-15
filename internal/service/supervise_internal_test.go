@@ -185,6 +185,15 @@ func openLoop(t *testing.T, h *home.Home, records *store.Store, terminals Termin
 func openLoopWith(t *testing.T, h *home.Home, records *store.Store, terminals Terminals, clock *fakeClock,
 	catalog *agents.Catalog) *loopSubject {
 	t.Helper()
+	return openLoopHooked(t, h, records, terminals, clock, catalog, nil)
+}
+
+// openLoopHooked is openLoopWith with a last say over the hooks the service
+// is opened with, for a test that needs a seam the others leave unset; nil
+// changes nothing.
+func openLoopHooked(t *testing.T, h *home.Home, records *store.Store, terminals Terminals, clock *fakeClock,
+	catalog *agents.Catalog, adjust func(*supervisionHooks)) *loopSubject {
+	t.Helper()
 	if err := records.Close(); err != nil {
 		t.Fatalf("closing the records: %v", err)
 	}
@@ -206,6 +215,9 @@ func openLoopWith(t *testing.T, h *home.Home, records *store.Store, terminals Te
 	}
 	if clock != nil {
 		hooks.now = clock.Now
+	}
+	if adjust != nil {
+		adjust(&hooks)
 	}
 	running, err := Open(t.Context(), Options{
 		Home: h, NewStages: stages.All, NewFixer: stages.Fix, Build: build, LockWait: -1,

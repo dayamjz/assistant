@@ -24,6 +24,12 @@ and sets up no gate; record it with `git remote set-head origin --auto`, or name
 the branch with `--default-branch`. Either way `init` says which branch it
 recorded and where that answer came from.
 
+`init` takes the upstream, where validated changes go, from the working copy's
+origin. When there is no origin and `--upstream` names none, `init` refuses,
+sets up no gate, and exits with the incorrect-usage code (2). Name the
+repository with `--upstream`; a working copy with no origin also has no default
+branch to learn, so give `--default-branch` beside it.
+
 The test and lint stages run the commands the trusted configuration names and
 hold for you when it names none. To shorten that setup, `init` reads the
 checkout's files for the commands the repository already declares (a
@@ -51,6 +57,19 @@ A run walks nine stages in a fixed order: intent, rebase, review, test,
 document, lint, push, pull request, and checks. Each stage that cannot decide
 holds for a person, and `assistant status` and `assistant doctor` say where a
 run stands and what stops one.
+
+Fix rounds and the rebase stage record commits in the run's isolated copy,
+which is a linked worktree of the gate repository, so they take the committer
+identity git resolves there: your global or system configuration and the gate
+repository's own, not the working copy's. With no `user.name` or `user.email`
+in effect, such a step fails with git's own refusal, and nothing supplies an
+identity in its place. `assistant doctor` asks git the same question in the
+gate repository and reports the answer as its "commit identity" check, with
+`git config --global user.name` and `git config --global user.email` as the
+remedy. The check does not stop a run from starting, and it answers for the
+environment doctor runs in, so an identity set only in variables such as
+`GIT_AUTHOR_NAME`, or a different `GIT_CONFIG_GLOBAL` for the service, can
+make it disagree with what a run meets.
 
 ## Answering a hold
 
@@ -80,6 +99,39 @@ The hold lists only the findings that are holding the stage. `--select` takes
 the identifier of any finding the stage reported, including a fix or note
 finding the hold does not list. `assistant --json status` lists every one, with
 its identifier, under `active_run.stages[].report.findings`.
+
+## Waiting on a fleet
+
+A coordinator agent running tasks through `assistant coordinator` does not
+need to poll the wake queue. `assistant coordinator await` blocks until the
+queue holds a wake nobody has acknowledged, then lists the queued wakes the
+same way `assistant coordinator wakes` does, or lists none once its bound
+passes:
+
+```sh
+assistant --json coordinator await --timeout 5m
+```
+
+The bound is whole seconds from `1s` to `1h`, and `5m` when none is given;
+anything else is refused as incorrect usage rather than clamped. The wait
+acknowledges nothing, so a wake it returned keeps being returned until
+`assistant coordinator acknowledge` names it. It keeps nothing between calls,
+so after a service restart, which ends a wait in progress as an operational
+failure, waiting again reads the same durable queue; `assistant coordinator
+supervision` confirms the service is watching the fleet again first. Like the
+other coordinator subcommands, it is refused for a task's worker.
+
+A restart does not leave that queue exactly as it was. When the service
+starts it reconciles every task, and a task whose worker's terminal is gone
+with its work not landed is relaunched, up to `relaunch_attempts` times
+(2 unless configured). A relaunch records each still-queued `terminal-gone`
+wake about the session it replaced as handled by the program, so the next
+wait does not return it. Read `assistant tasks` after a restart as well as
+the queue: a relaunched task shows its new attempt there, and a task past
+`relaunch_attempts` holds for an answer instead of being relaunched.
+
+How soon it answers after a worker stops is set by the service's supervision
+pass, which records the wake, not by the wait.
 
 ## Standing consent
 

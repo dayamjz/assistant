@@ -777,7 +777,8 @@ Each has cost this repository more than one round of review.
   places a worker's push as a person's, which admission then does not
   confine, and `workers.go` states which way each rule goes. The methods: `task.event`
   admits only a worker and holds the kind to `taskstate`'s writer column,
-  `wakes.list`, `wakes.acknowledge` and `supervision.assert` refuse one; the
+  `wakes.list`, `wakes.acknowledge`, `wakes.wait` and `supervision.assert`
+  refuse one; the
   coordinator's task methods (`coordinator.go`'s create, promote and
   relaunch, `steer.go`'s message, stop and interrupt, and `task.respond`)
   refuse one through the same `refuseWorker`. `steer.go` is PRD section 6's
@@ -993,7 +994,12 @@ Each has cost this repository more than one round of review.
   `coordinator.go`, and it decides nothing: a worker is refused by the
   service from the socket's credentials and the caller's parent chain, and
   `coordinator.go` names the gap in that placement, a reparented chain. `skills/coordinator/SKILL.md` is what it tells a
-  coordinating agent, and claims only what the build does.
+  coordinating agent, and claims only what the build does. Its `await` is
+  `internal/service`'s `wakes.wait`: one request answered from a
+  `store.DrainWakes` read when the queue holds a queued wake or its bound
+  elapses, acknowledging nothing, woken by a bell the supervisor loop rings
+  on an append and never read as a record; `wakewait.go` owns that and its
+  gaps, and `machine.WakeWaitRequest.Bounds` is the one owner of the range.
   What a person reads is rendered through the `renderings` table in
   `render.go`, which `readOut` dispatches through and `Renderings` enumerates:
   every renderer but four is phrased through `internal/machine`'s table and

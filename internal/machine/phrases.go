@@ -1105,6 +1105,10 @@ const (
 	// CheckGate is whether the checkout is bound to a gate and has the
 	// repository record a run is resolved against.
 	CheckGate = "gate"
+	// CheckCommitIdentity is whether git names an author and a committer
+	// for a commit made in the checkout's gate, which is where a run's copy
+	// takes its identity from.
+	CheckCommitIdentity = "commit identity"
 	// CheckService is whether a service answered for the home.
 	CheckService = "service"
 	// CheckAgent is whether a coding agent resolves for a run.
@@ -1121,7 +1125,7 @@ const (
 // CheckNames is every check name phraseByCheck has rows for, in the order
 // assistant doctor makes them. The result is a copy.
 func CheckNames() []string {
-	return []string{CheckHome, CheckDatabase, CheckWorkingCopy, CheckGate, CheckService,
+	return []string{CheckHome, CheckDatabase, CheckWorkingCopy, CheckGate, CheckCommitIdentity, CheckService,
 		CheckAgent, CheckNamedOnlyAgents, CheckCodeHost, CheckStages}
 }
 
@@ -1150,6 +1154,13 @@ var phraseByCheck = map[string][2]Phrase{
 	CheckGate: {
 		{Outcome: "This checkout is set up for validation.", Consequence: "A change sent from here is validated before it goes anywhere.", Decision: "Nothing to do."},
 		{Outcome: "This checkout is not set up for validation.", Consequence: "A run cannot start from it.", Decision: "Run assistant init here."},
+	},
+	CheckCommitIdentity: {
+		{Outcome: "Git names who a change made during a run is recorded under.", Consequence: "A step that has to record a change can do so.", Decision: "Nothing to do."},
+		{Outcome: "Git could not name who a change made during a run is recorded under.",
+			Consequence: "A run can still start, and a step that has to record a change, such as a fix round or bringing your branch up to date, fails until git has both.",
+			Decision: `Run git config --global user.name "Your Name" and git config --global user.email "you@example.com", then run assistant doctor again; ` +
+				"if both are already set, run assistant --json doctor for what git said."},
 	},
 	CheckService: {PhraseServiceUp, PhraseServiceAbsent},
 	CheckAgent: {
@@ -1435,7 +1446,8 @@ var PhraseNoReading = Phrase{
 // given none of its subcommands, the two rows for a rerun refused because
 // the checkout moved, a gate created, reattached and removed, a row per source of the
 // default branch an init recorded with the row for an answer naming none and
-// a row per refusal to record one, the gate's own rows, and the rows pointing
+// a row per refusal to record one, the row for an init that could not learn
+// where changes go, the gate's own rows, and the rows pointing
 // at a run's evidence
 // and the three notices beside it, and the catch-up read's: a heading and an
 // empty row per part, a row per kind of landed record, the row for what a
@@ -1499,6 +1511,7 @@ func TablePhrases() []Phrase {
 	out = append(out, phraseWasMerged, phraseCopyCleared, LandedMorePhrase(LandedLimit), MarkedPhrase(Marked{}),
 		MarkedPhrase(Marked{Marks: []store.SeenMark{{}}}))
 	out = append(out, defaultBranchRows()...)
+	out = append(out, upstreamRows()...)
 	out = append(out, commandsRows()...)
 	out = append(out, custodyRows()...)
 	return append(out, coordinatorRows()...)
