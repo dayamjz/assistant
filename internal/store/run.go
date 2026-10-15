@@ -61,9 +61,14 @@ type Run struct {
 	SubmittedHead string `json:"submitted_head"`
 	// Base is the commit the branch is measured against.
 	Base string `json:"base"`
-	// CurrentHead is the branch tip as the run last observed it. It is unknown
-	// until the run has observed one.
-	CurrentHead Optional[string] `json:"current_head"`
+	// CurrentHead is a dead column: nothing in production writes it, since
+	// SetRunHead has no production caller, and it stays only because a
+	// migration may not drop a column. A run's last pushed head is in its
+	// checkpoint, not here. The json "-" tag keeps it off every answer that
+	// composes this record, so no wire document carries a field that is null
+	// on every run; a document that does carry the key is not read into this
+	// field.
+	CurrentHead Optional[string] `json:"-"`
 	// Status is where the run stands.
 	Status RunStatus `json:"status"`
 	// ApprovedCommit is the commit a completed review approved. It is unknown
@@ -425,7 +430,8 @@ func (s *Store) SetRunFixerSession(ctx context.Context, id, reference string) er
 	return s.updateRun(ctx, id, "fixer_session", reference)
 }
 
-// SetRunHead records the branch tip the run has observed.
+// SetRunHead writes the CurrentHead column. It has no production caller, so
+// the column it writes is dead; see Run.CurrentHead.
 func (s *Store) SetRunHead(ctx context.Context, id, head string) error {
 	return s.updateRun(ctx, id, "current_head", head)
 }
