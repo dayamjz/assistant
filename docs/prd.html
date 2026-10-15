@@ -2092,7 +2092,8 @@ flowchart TB
     it happened. The relaunch after a stop is no new method: it is the answer to the stop's hold.
   </p>
   <p class="mb-8 opacity-90">
-    These methods, with draining and acknowledging the wake queue and arm verification, are reached
+    These methods, with listing, awaiting, and acknowledging the wake queue, reading a worker's
+    recent output, and arm verification, are reached
     through <code>assistant coordinator …</code>, a client dispatched beside the table on the same
     terms as <code>assistant gate</code> and <code>assistant host</code>. It adds no row. It is the
     interface the coordinator requires, and the third command outside the table by the owner's
