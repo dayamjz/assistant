@@ -13,9 +13,9 @@ import (
 )
 
 // titleLimit is how long a derived pull request title may be before it is cut
-// short. It bounds a title this stage composed out of intent text, which is
-// prose a person wrote for another purpose and is under no length rule of its
-// own. A title a person set on an existing pull request is never touched, so
+// short. It bounds a title this stage composed out of intent text or a commit
+// subject, which were written for another purpose and are under no length
+// rule of their own. A title a person set on an existing pull request is never touched, so
 // nothing here shortens anything a person chose.
 const titleLimit = 72
 
@@ -195,6 +195,7 @@ func pullRequestReads() []pipeline.Key {
 		pipeline.KeyIntent,
 		pipeline.KeyIntentSupplied,
 		pipeline.KeySubmitted,
+		pipeline.KeySubmittedSubject,
 		pipeline.KeyHead,
 		pipeline.KeyPushed,
 		pipeline.KeyDecisionChecks,
@@ -215,6 +216,7 @@ type runFacts struct {
 	intent          string
 	supplied        bool
 	submitted       string
+	subject         string
 	head            string
 	pushed          string
 	stages          []pipeline.StageResult
@@ -289,6 +291,7 @@ func readRunFacts(state pipeline.Reader) (runFacts, error) {
 		{pipeline.KeyBase, &facts.base},
 		{pipeline.KeyIntent, &facts.intent},
 		{pipeline.KeySubmitted, &facts.submitted},
+		{pipeline.KeySubmittedSubject, &facts.subject},
 		{pipeline.KeyHead, &facts.head},
 		{pipeline.KeyPushed, &facts.pushed},
 	} {
@@ -322,22 +325,29 @@ func readRunFacts(state pipeline.Reader) (runFacts, error) {
 
 // pullRequestTitle derives the title a pull request is opened with.
 //
-// It is the first line of the run's intent, and the branch name when the run
-// carries no intent, because those are the only two things this stage knows
-// that name the change. Nothing here consults the code host: a pull request
-// that already exists keeps the title it has, per forge.Submit, so this is
-// what a new one is opened with and never what an existing one is renamed to.
+// It is the first line of the run's intent; without one, the subject of the
+// commit the run was submitted, pipeline.KeySubmittedSubject; and without
+// either, the branch name. Those are the things this stage knows that name the
+// change, in the order of how much each says about it. A task worker's push
+// carries the task's intent, so its project still titles its pull request, and
+// a person's push carries none, so its commit's subject does. A run that
+// checkpointed before the subject key existed reads it as empty and is titled
+// as it was then. Nothing here consults the code host: a pull request that
+// already exists keeps the title it has, per forge.Submit, so this is what a
+// new one is opened with and never what an existing one is renamed to.
 //
-// The result carries no line break, since the first line is all it takes, and
-// it is cut at titleLimit so that intent prose does not become a title nobody
-// can read. A run with neither an intent nor a branch yields the empty string,
-// which internal/forge refuses before it invokes anything.
+// The subject is read from state and never from git, because this stage
+// invokes none, and the service that wrote it removed credentials from it
+// first. The result carries no line break, since the first line is all it
+// takes, and it is cut at titleLimit so that neither intent prose nor a long
+// subject becomes a title nobody can read. A run with no intent, no subject,
+// and no branch yields the empty string, which internal/forge refuses before
+// it invokes anything.
 func pullRequestTitle(facts runFacts) string {
-	first := facts.intent
-	if index := strings.IndexAny(first, "\r\n"); index >= 0 {
-		first = first[:index]
+	first := firstLine(facts.intent)
+	if first == "" {
+		first = firstLine(facts.subject)
 	}
-	first = strings.TrimSpace(first)
 	if first == "" {
 		return facts.branch
 	}
@@ -346,6 +356,15 @@ func pullRequestTitle(facts runFacts) string {
 		return strings.TrimSpace(string(runes[:titleLimit-3])) + "..."
 	}
 	return first
+}
+
+// firstLine is text up to its first line break, with the space around it
+// trimmed.
+func firstLine(text string) string {
+	if index := strings.IndexAny(text, "\r\n"); index >= 0 {
+		text = text[:index]
+	}
+	return strings.TrimSpace(text)
 }
 
 // pullRequestReport is what the stage reports. Every finding is a note: the

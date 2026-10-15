@@ -58,6 +58,22 @@ const (
 	// KeySubmitted is the commit the push submitted to the gate, which is what
 	// the run was asked to validate. It is a run input and never changes.
 	KeySubmitted Key = "submitted"
+	// KeySubmittedSubject is the subject of the commit KeySubmitted names: the
+	// first line of its message that is not blank, as internal/vcs reads it,
+	// with credentials removed by internal/redact. It is a run input and
+	// never changes, and the pull request stage titles a pull request with it
+	// when the run carries no intent, which is how a stage that invokes no git
+	// knows what the commit says about itself.
+	//
+	// It is empty when the commit's message has no such line, when the
+	// service could not read it, and in a run that checkpointed before this
+	// key existed. Its row is late for that last reason, so such a run
+	// resumes reading it as empty, which is how it behaved before, rather than
+	// being refused for lacking it. It leaves the convergence bound as it was
+	// in both kinds of run: no node writes it, so it cannot make two rounds of
+	// one run differ, and internal/graph's Key.Late is why the empty value a
+	// resumed older run reads fingerprints as the absence that run recorded.
+	KeySubmittedSubject Key = "submitted.subject"
 	// KeyHead is the commit the run is working on now. It starts at
 	// KeySubmitted and moves when a rebase or a fix round rewrites it, so it
 	// carries a merge rule, which is what lets more than one node write it.
@@ -172,38 +188,43 @@ type keySpec struct {
 	kind  graph.Kind
 	merge graph.Merge
 	owner owner
+	// late marks a key added after runs may already have checkpointed without
+	// it, which internal/graph's Key.Late defines. Only a key whose zero
+	// value is how a run without it behaved may carry it.
+	late bool
 }
 
 // sharedKeys is the part of the schema that is not per stage.
 var sharedKeys = []keySpec{
-	{KeyRepository, graph.KindText, graph.MergeNone, ownerRun},
-	{KeyRun, graph.KindText, graph.MergeNone, ownerRun},
-	{KeyForgeRepository, graph.KindText, graph.MergeNone, ownerRun},
-	{KeyBranch, graph.KindText, graph.MergeNone, ownerRun},
-	{KeyBase, graph.KindText, graph.MergeNone, ownerRun},
-	{KeySubmitted, graph.KindText, graph.MergeNone, ownerRun},
-	{KeySkip, graph.KindList, graph.MergeNone, ownerRun},
-	{KeyHead, graph.KindText, graph.MergeLastWriteWins, ownerStage},
-	{KeyIntent, graph.KindText, graph.MergeNone, ownerStage},
-	{KeyIntentSupplied, graph.KindBool, graph.MergeNone, ownerRun},
-	{KeyDiffEmpty, graph.KindBool, graph.MergeNone, ownerStage},
-	{KeyApproved, graph.KindText, graph.MergeNone, ownerStage},
+	{KeyRepository, graph.KindText, graph.MergeNone, ownerRun, false},
+	{KeyRun, graph.KindText, graph.MergeNone, ownerRun, false},
+	{KeyForgeRepository, graph.KindText, graph.MergeNone, ownerRun, false},
+	{KeyBranch, graph.KindText, graph.MergeNone, ownerRun, false},
+	{KeyBase, graph.KindText, graph.MergeNone, ownerRun, false},
+	{KeySubmitted, graph.KindText, graph.MergeNone, ownerRun, false},
+	{KeySubmittedSubject, graph.KindText, graph.MergeNone, ownerRun, true},
+	{KeySkip, graph.KindList, graph.MergeNone, ownerRun, false},
+	{KeyHead, graph.KindText, graph.MergeLastWriteWins, ownerStage, false},
+	{KeyIntent, graph.KindText, graph.MergeNone, ownerStage, false},
+	{KeyIntentSupplied, graph.KindBool, graph.MergeNone, ownerRun, false},
+	{KeyDiffEmpty, graph.KindBool, graph.MergeNone, ownerStage, false},
+	{KeyApproved, graph.KindText, graph.MergeNone, ownerStage, false},
 	// The anchor carries a merge rule because the stage that observes it takes
 	// fix rounds, so a run may write it more than once. Each write is a fresh
 	// observation of the same target, and the last one is the state the change
 	// was finally brought up to date against, which is the one the push has to
 	// be anchored on.
-	{KeyPushAnchor, graph.KindText, graph.MergeLastWriteWins, ownerStage},
-	{KeyPushed, graph.KindText, graph.MergeNone, ownerStage},
-	{KeyPullRequest, graph.KindText, graph.MergeNone, ownerStage},
-	{KeyChecks, graph.KindText, graph.MergeNone, ownerStage},
-	{KeyPullRequestEnd, graph.KindText, graph.MergeNone, ownerStage},
-	{KeyPullRequestEndHead, graph.KindText, graph.MergeNone, ownerStage},
+	{KeyPushAnchor, graph.KindText, graph.MergeLastWriteWins, ownerStage, false},
+	{KeyPushed, graph.KindText, graph.MergeNone, ownerStage, false},
+	{KeyPullRequest, graph.KindText, graph.MergeNone, ownerStage, false},
+	{KeyChecks, graph.KindText, graph.MergeNone, ownerStage, false},
+	{KeyPullRequestEnd, graph.KindText, graph.MergeNone, ownerStage, false},
+	{KeyPullRequestEndHead, graph.KindText, graph.MergeNone, ownerStage, false},
 	// The review takes fix rounds and writes this on every execution, so it
 	// carries the anchor's merge rule for the anchor's reason: the last write
 	// is the record of the review the run finally stood on.
-	{KeyDecisionChecks, graph.KindText, graph.MergeLastWriteWins, ownerStage},
-	{KeyCancelled, graph.KindBool, graph.MergeNone, ownerPipeline},
+	{KeyDecisionChecks, graph.KindText, graph.MergeLastWriteWins, ownerStage, false},
+	{KeyCancelled, graph.KindBool, graph.MergeNone, ownerPipeline, false},
 }
 
 // ReportKey is where the stage's report lands, encoded as JSON. The stage node
@@ -258,15 +279,15 @@ func buildSchema() map[Key]keySpec {
 		add(spec)
 	}
 	for _, row := range stageTable {
-		add(keySpec{row.stage.ReportKey(), graph.KindText, graph.MergeNone, ownerPipeline})
-		add(keySpec{row.stage.OutcomeKey(), graph.KindText, graph.MergeLastWriteWins, ownerPipeline})
-		add(keySpec{row.stage.AnswerKey(), graph.KindText, graph.MergeNone, ownerPipeline})
+		add(keySpec{row.stage.ReportKey(), graph.KindText, graph.MergeNone, ownerPipeline, false})
+		add(keySpec{row.stage.OutcomeKey(), graph.KindText, graph.MergeLastWriteWins, ownerPipeline, false})
+		add(keySpec{row.stage.AnswerKey(), graph.KindText, graph.MergeNone, ownerPipeline, false})
 		// Both a stage's fix node and its request node write these, which is
 		// what the merge rule is for: each write is the latest round's
 		// account, whichever kind of round it was.
-		add(keySpec{row.stage.FixKey(), graph.KindText, graph.MergeLastWriteWins, ownerPipeline})
-		add(keySpec{row.stage.HeldKey(), graph.KindText, graph.MergeLastWriteWins, ownerPipeline})
-		add(keySpec{row.stage.RequestKey(), graph.KindText, graph.MergeNone, ownerPipeline})
+		add(keySpec{row.stage.FixKey(), graph.KindText, graph.MergeLastWriteWins, ownerPipeline, false})
+		add(keySpec{row.stage.HeldKey(), graph.KindText, graph.MergeLastWriteWins, ownerPipeline, false})
+		add(keySpec{row.stage.RequestKey(), graph.KindText, graph.MergeNone, ownerPipeline, false})
 	}
 	return out
 }
@@ -289,7 +310,7 @@ func graphKeys() []graph.Key {
 	out := make([]graph.Key, len(keys))
 	for i, key := range keys {
 		spec := schema[key]
-		out[i] = graph.Key{Name: string(key), Kind: spec.kind, Merge: spec.merge}
+		out[i] = graph.Key{Name: string(key), Kind: spec.kind, Merge: spec.merge, Late: spec.late}
 	}
 	return out
 }
