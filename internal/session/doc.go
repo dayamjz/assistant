@@ -32,9 +32,14 @@
 // adapter declares worker sessions, starting the CLI with stream-json on both
 // streams, and the scripted adapter, agents.ScriptedFactory, declares them
 // over plain lines; internal/agents states what its conformance probe does
-// and does not establish about the real CLI. The tests here stand up the
-// scripted adapter through internal/agents/standin's line mode, so
-// everything this package establishes, it establishes against the stand-in.
+// and does not establish about the real CLI. Both adapters declare terminal
+// workers too, which the tmux provider below needs: the Claude Code adapter
+// over the CLI's interactive interface, reached without a person, and the
+// scripted one over plain lines. The tests here stand up the scripted
+// adapter through internal/agents/standin's line mode, and the Claude Code
+// adapter through its interactive mode where the route a worker is started
+// with is the question, so everything this package establishes, it
+// establishes against the stand-in.
 //
 // # Create takes a proof, not a path
 //
@@ -154,7 +159,8 @@
 // ones above, unchanged. Capture is a screen rather than a stream there, and
 // Send is typed into the pane, which is the same input a person attached to
 // it types into. AttachReference is the one thing it answers that Pipe
-// cannot.
+// cannot. Create hands the adapter the same WorkerSpec Pipe does, the route
+// among it, so a worker's grant is the same under either provider.
 //
 // Placement. The pane's process is the agent, the server's child and the
 // leader of its own process group, and that group is what joins Workers, for
@@ -223,6 +229,13 @@
 //   - Under the tmux provider, nothing records what a person types into an
 //     attached window: it reaches the worker as its own input and is
 //     indistinguishable from a Send once it has.
+//   - Under the tmux provider with Claude Code, a person attached to the
+//     pane can still type "!" or "/" into an empty input and run a shell or
+//     a slash command, since only a Send is given the leading space that
+//     stops that; a long or multi-line Send reaches the model wrapped as
+//     pasted content; a Send waits for a running turn to end, under its
+//     caller's bound; and all of it rests on screen text observed of one CLI
+//     version. internal/agents' terminal.go states each.
 //   - The route walk over the handle types reads exported fields and the
 //     results of exported methods, so what Pipe holds in its unexported
 //     fields, the agents.Runner among them, is outside what it inspects, and

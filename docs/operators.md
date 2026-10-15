@@ -301,11 +301,44 @@ worker: its pushes are a person's and start the full run.
 
 Two things it needs. tmux has to be on the service's PATH; without it every
 launch is refused and the task stays dispatched, which the service log says.
-And the resolved agent has to declare terminal workers, which in this build
-only the scripted adapter the tests use does, so a service resolved to Claude
-Code launches no worker under this setting. A worker an earlier service
-started is never attached to or read through the new one: its terminal reads
-as unobservable until it ends, as it does under the default provider.
+And the resolved agent has to declare terminal workers, which Claude Code
+does. A worker an earlier service started is never attached to or read
+through the new one: its terminal reads as unobservable until it ends, as it
+does under the default provider.
+
+A Claude Code worker under tmux runs the CLI's interactive interface rather
+than its pipe mode, and reaches its conversation without anyone answering
+the CLI's first-run screens: each worker gets a configuration directory of
+its own, in the system's temporary directory, that records onboarding as
+done, trusts the worker's copy, and approves its API key, and the directory
+is removed when the worker ends. Your own `~/.claude.json` is not read or
+written; whether the CLI still reads anything else under your home, such as
+your settings, has not been established. That directory carries none of your
+login, so the service needs `ANTHROPIC_API_KEY` in its environment; without
+it every Claude Code launch under tmux is refused with an error naming the
+variable. The directory holds the key's last 20 characters, which is how
+the CLI records an approval, and never the whole key.
+
+What you see in the pane is the CLI's flat screen reader layout. A message
+the program sends waits until the worker's current turn has ended and its
+input is empty, and then arrives as one paste, so a message of several lines
+stays one message. The service waits 10 seconds for that, so a message sent
+during a longer turn is refused, with nothing typed, and the message record
+says so; send it again once the turn has ended. A message beginning with `!` or `/` is sent with a
+space in front, so it reaches the worker as a message rather than running as
+a shell command or a slash command. Some limits are worth knowing:
+
+- What you type in the pane is not given that space. Typing `!` into an
+  empty input there runs a shell command outside the worker's permissions,
+  as it does in any Claude Code session.
+- A long or multi-line message reaches the model wrapped as pasted content
+  rather than as bare text.
+- All of this rests on what Claude Code 2.1.301 drew on screen and kept in
+  its state file. A later version that draws something else has its workers
+  refused at start, or its messages refused, rather than typed at blind; one
+  that draws the same and behaves differently is not detected.
+- Instructions longer than about 16 KB do not fit the command that starts a
+  tmux worker and are refused.
 
 ## Keep your CI required
 

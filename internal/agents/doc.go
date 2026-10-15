@@ -151,8 +151,12 @@
 // of P4, started with the same WorkerSpec and the same environment builder;
 // what differs is that the agent is a tmux server's child rather than this
 // process's, that everything reaching it is typed, and that its capture is
-// a screen. Only the scripted adapter declares it, and capability.go says
-// why the Claude Code adapter does not.
+// a screen. The scripted adapter declares it over plain lines, and the
+// Claude Code adapter over its interactive interface, reached without a
+// person through a configuration directory of the worker's own and typed
+// into once its screen reads ready; claudeterminal.go states those terms,
+// and capability.go how the declaration is held where no installed CLI is
+// there to probe.
 //
 // Four gaps are left open and named.
 //

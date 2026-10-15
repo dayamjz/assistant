@@ -144,7 +144,7 @@
         <p class="text-sm opacity-90">
           Every worker is one you can read and reach. In phase 1 the Claude Code worker runs in its
           command line's standard-input stream-json mode: you read it through the service's capture
-          and reach it through Send. A terminal-hosted mode is a later option, not a promise. If you intervene directly in a worker, that
+          and reach it through Send. Under the tmux session provider it runs in its interactive interface instead, typed into through Send; that mode is an option, not a promise. If you intervene directly in a worker, that
           intervention is authoritative and the coordinator reconciles around it.
         </p>
       </div>
@@ -1260,7 +1260,8 @@ flowchart TD
           <td><b>Message</b></td>
           <td>The program appends a message record naming the task, the attempt, and the text,
             with credentials removed, then sends the text through the terminal session provider's
-            Send, which the Claude Code adapter frames as one stream-json user message. The text is
+            Send, which the Claude Code adapter frames as one stream-json user message, or under the
+            tmux provider types as one bracketed paste once the worker's screen reads ready. The text is
             bounded by a fixed limit in the program and refused rather than truncated above it.
             Nothing resends a message.</td>
           <td>Three facts on the message record, each written once. <b>Written</b>: Send

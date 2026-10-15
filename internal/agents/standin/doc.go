@@ -100,10 +100,10 @@
 //
 // # The worker modes, and what a worker's Call proves
 //
-// A stand-in is started as a worker in one of two modes, each chosen by the
+// A stand-in is started as a worker in one of three modes, each chosen by the
 // command line the adapter built, which is what the wire carries.
 //
-// Stream mode is the Claude Code adapter's: --print with --input-format
+// Stream mode is the Claude Code adapter's pipe worker: --print with --input-format
 // stream-json. New builds that adapter, and a test reaches its worker
 // through agents.OpenWorker exactly as it reaches a fixer through
 // agents.OpenFixer. The worker reads one JSON message per line and answers a
@@ -122,7 +122,8 @@
 // that; a reader of a worker's output that relied on exactly three would be
 // relying on the stand-in.
 //
-// Line mode is the scripted adapter's: no --print at all. NewWorker builds
+// Line mode is the scripted adapter's: no --print at all, and no screen
+// reader flag. NewWorker builds
 // agents.ScriptedFactory, which starts one. The worker reads its standard
 // input line by line, instructions first, and answers each line as
 // Script.Worker says; a line nothing answers draws a note on standard error
@@ -131,8 +132,37 @@
 // as a worker; the mode exists so a layer built on workers can script plain
 // lines and read them back.
 //
-// In either mode an exchange may Run what the line carries as a shell
-// command, which is how a test has a worker do something rather than say
+// Interactive mode is the Claude Code adapter's terminal worker:
+// --ax-screen-reader among the flags before "--", and no --print. New's
+// runner starts one through agents.OpenTerminalWorker, in a tmux pane. It
+// models the CLI's interactive interface as it was observed in a tmux pane,
+// on version 2.1.301 with that flag, against a local server standing in
+// for the model (#254), and serveInteractiveWorker and input state its
+// rules. In short: it puts its terminal in raw mode and asks for bracketed
+// paste; it opens on a first-run screen, and never leaves it, unless the
+// .claude.json in its CLAUDE_CONFIG_DIR records onboarding, trust for the
+// directory it runs in exactly, and, where ANTHROPIC_API_KEY is set, an
+// approval naming that key's last twenty characters; it draws nothing for
+// Startup and drops an Enter typed before it draws; it answers the one word
+// after "--" as its first message, and a command line without one is
+// refused; it keeps a bracketed paste whole and takes a carriage return
+// outside one as Enter; it takes a "!" or a "/" typed into an empty input as
+// a shell or a slash command, which it records and runs nothing for; it
+// shows a turn as running for Turn, queueing what is submitted meanwhile;
+// and its footer and input line are the text the CLI drew, redrawn in place.
+// What it does not model is everything else the CLI draws and does: the
+// model's reply is the script's, a "!" command is not run, a paste is not
+// collapsed or wrapped, the footer is modelled in acceptEdits mode only,
+// and no first-run screen answers a key. Like the stream mode's sources,
+// this is an observation of one version that nothing here re-checks;
+// internal/agents runs the same probe against an installed CLI where there
+// is one, and says what the model rests on where there is not. The
+// environment is still not recorded: the key is read to check an approval
+// and is written nowhere, and the configuration directory is a path, which
+// Call.ConfigDir carries.
+//
+// In any of the three modes an exchange may Run what the line carries as a
+// shell command, which is how a test has a worker do something rather than say
 // something: push to a gate, or call the service. The command runs where a
 // command the Claude Code CLI's Bash tool runs was observed to, in a process
 // group the worker does not lead, so whatever reaches the service from it

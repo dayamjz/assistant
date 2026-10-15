@@ -3,6 +3,7 @@ package session_test
 import (
 	"context"
 	"errors"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
@@ -232,8 +233,11 @@ func TestTmuxRefusesBeforeAnythingStarts(t *testing.T) {
 		t.Errorf("an unproven copy started %d stand-in processes", len(calls))
 	}
 
-	claude := standin.New(t, standin.Script{})
-	undeclared := session.NewTmux(sub.home, claude.Runner(), standin.Tmux(t))
+	cursor, err := agents.CursorFactory(agents.WithCursorBinary(standinBinary(t))).New(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("building the cursor adapter: %v", err)
+	}
+	undeclared := session.NewTmux(sub.home, cursor, standin.Tmux(t))
 	_, err = undeclared.Create(context.Background(), sub.spec("x"))
 	var refusal *agents.CapabilityError
 	if !errors.As(err, &refusal) || refusal.Capability != agents.CapabilityTerminalWorkers {
@@ -250,4 +254,43 @@ func TestTmuxRefusesBeforeAnythingStarts(t *testing.T) {
 	if _, err := pipe.AttachReference(ps.Reference().String()); !errors.Is(err, session.ErrNotAttachable) {
 		t.Errorf("a pipe session answered %v to an attach, want ErrNotAttachable", err)
 	}
+}
+
+// standinBinary is this test binary, which a factory is pointed at where the
+// adapter is never run.
+func standinBinary(t *testing.T) string {
+	t.Helper()
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatalf("locating the test binary: %v", err)
+	}
+	return self
+}
+
+// A Claude Code worker under the tmux provider reaches its conversation
+// with its instructions, and runs under the grant a pipe worker gets, route
+// and all: the provider hands the adapter the spec's route, which the
+// adapter writes into the worker's tool list.
+func TestTmuxStartsAClaudeCodeWorkerWithItsRoute(t *testing.T) {
+	sub := newSubject(t)
+	const route = "/opt/assistant/bin/assistant worker"
+	claude := standin.New(t, standin.Script{}, agents.WithTerminationGrace(2*time.Second),
+		agents.WithBaseEnvironment([]string{"PATH=" + os.Getenv("PATH"), "HOME=" + t.TempDir(),
+			agents.ClaudeKeyVariable + "=standin-placeholder-key-0123456789abcdefghij"}))
+	p := session.NewTmux(sub.home, claude.Runner(), standin.Tmux(t))
+	spec := sub.spec("begin the task")
+	spec.Route = route
+	createIn(t, p, spec)
+	awaitRead(t, claude, "begin the task")
+	for _, call := range claude.Calls() {
+		if !call.Interactive {
+			continue
+		}
+		i := slices.Index(call.Args, "--allowedTools")
+		if i < 0 || i+1 >= len(call.Args) || call.Args[i+1] != "Bash(git:*),Bash("+route+":*)" {
+			t.Errorf("the worker was started with %q, want its tool list to carry the route", call.Args)
+		}
+		return
+	}
+	t.Fatal("no interactive worker was recorded")
 }

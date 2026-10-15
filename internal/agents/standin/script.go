@@ -64,7 +64,26 @@ type WorkerScript struct {
 	// Exit is the status the worker exits with once its standard input has
 	// been closed.
 	Exit int `json:"exit,omitempty"`
+	// Startup is how long an interactive worker takes to draw its interface
+	// after it starts, during which an Enter it reads is dropped. Zero is
+	// DefaultStartup. Line and stream workers do not read it.
+	Startup time.Duration `json:"startup,omitempty"`
+	// Turn is how long an interactive worker shows a turn as running before
+	// it answers, during which a message submitted to it is queued. Zero is
+	// DefaultTurn. Line and stream workers do not read it.
+	Turn time.Duration `json:"turn,omitempty"`
 }
+
+// DefaultStartup and DefaultTurn are an interactive worker's Startup and
+// Turn when a script leaves them zero. They are shorter than what the
+// Claude Code CLI took when it was observed, about three seconds to draw
+// its interface against a local server, so a test pays little for them,
+// and long enough that a typist who does not wait for the interface, or
+// for a turn to end, is caught by them.
+const (
+	DefaultStartup = 300 * time.Millisecond
+	DefaultTurn    = 200 * time.Millisecond
+)
 
 // Exchange is one scripted reply to a line a worker reads.
 type Exchange struct {

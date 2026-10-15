@@ -13,3 +13,20 @@ func ListUnder(ctx context.Context, dir string) ([]Identity, error) {
 	found, err := listUnder(ctx, dir)
 	return found.under, err
 }
+
+// ReadClaudeScreen is claudeScreen's reading of a screen as a word, "not
+// drawn", "drawn" or "ready", so a test can hold the reader to screens the
+// CLI drew.
+func ReadClaudeScreen(screen string) string {
+	switch claudeScreen(screen) {
+	case screenDrawn:
+		return "drawn"
+	case screenReady:
+		return "ready"
+	}
+	return "not drawn"
+}
+
+// ClaudeObservedVersion is the Claude Code version the terminal mode's
+// observations were made on.
+const ClaudeObservedVersion = claudeObservedVersion

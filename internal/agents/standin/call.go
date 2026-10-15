@@ -57,6 +57,29 @@ type Call struct {
 	// be behind the worker; Agent.Calls states the terms. It is empty for a
 	// one-shot invocation, whose input is Prompt.
 	Lines []string `json:"lines,omitempty"`
+	// Interactive reports that the worker drew the interactive interface
+	// the package documentation models: --ax-screen-reader was among the
+	// flags before "--" and --print was not. It is the process's own
+	// account of how it decided, like Worker. An interactive worker records
+	// in Lines every message it answered, the one after "--" first, as the
+	// text it submitted, so a leading space a typist added is part of it.
+	Interactive bool `json:"interactive,omitempty"`
+	// ConfigDir is the CLAUDE_CONFIG_DIR an interactive worker read its
+	// first-run state from, empty when none was set. It is a path and not a
+	// credential, which is why this one variable is recorded when the rest
+	// of the environment is not.
+	ConfigDir string `json:"config_dir,omitempty"`
+	// Queued is every message an interactive worker had submitted to it
+	// while it was drawing a turn, in order; each is also in Lines, where it
+	// was answered after that turn ended.
+	Queued []string `json:"queued,omitempty"`
+	// Shell is every input an interactive worker took as a shell command,
+	// because it began with "!" typed into an empty input, without the "!".
+	// The stand-in records it and runs nothing.
+	Shell []string `json:"shell,omitempty"`
+	// Slash is every input an interactive worker took as a slash command,
+	// because it began with "/" typed into an empty input, with the "/".
+	Slash []string `json:"slash,omitempty"`
 }
 
 // Answered reports whether a step of the script answered this invocation. It

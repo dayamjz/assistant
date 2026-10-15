@@ -416,9 +416,29 @@ func TestTheSuiteRefusesADeclarationNothingProbes(t *testing.T) {
 // proves is a property of this package rather than of whatever is installed.
 // The adapter declares worker sessions, so this is where the worker probe
 // runs against the stream-json framing the adapter writes, read by the
-// stand-in's stream mode, which ends on a line it cannot read.
+// stand-in's stream mode, which ends on a line it cannot read. It declares
+// terminal workers too, so the terminal probe runs here against the
+// stand-in's interactive mode, which opens on a first-run screen and never
+// draws its interface unless the configuration the adapter seeded answers
+// every question that screen asks. The base environment carries a key
+// because a terminal worker is refused without one, and the key is
+// stand-in text, which the stand-in reads only to check its approval.
 func TestTheShippedAdapterConformsToItsDeclaration(t *testing.T) {
-	conform(t, standin.New(t, standin.Script{}, agents.WithTerminationGrace(300*time.Millisecond)).Runner())
+	conform(t, standin.New(t, standin.Script{},
+		agents.WithTerminationGrace(300*time.Millisecond),
+		agents.WithBaseEnvironment(withStandinKey(os.Environ())),
+	).Runner())
+}
+
+// standinKey is the value the stand-in's terminal workers are given as
+// their API key. It is no credential, and nothing it is given to sends it
+// anywhere.
+const standinKey = "standin-placeholder-key-0123456789abcdefghij"
+
+// withStandinKey is env with standinKey as the key a Claude Code terminal
+// worker reads.
+func withStandinKey(env []string) []string {
+	return append(slices.Clone(env), agents.ClaudeKeyVariable+"="+standinKey)
 }
 
 // The worker probe has to be able to fail on a worker that cannot read what
@@ -505,8 +525,8 @@ func TestWhatTheScriptedAdapterDeclares(t *testing.T) {
 }
 
 // What the shipped adapter declares is a fact about it, so it is asserted
-// rather than derived. Claude Code has resumable sessions and worker
-// sessions, and it has no instruction-suppression mechanism, so a run
+// rather than derived. Claude Code has resumable sessions, worker sessions
+// and terminal workers, and it has no instruction-suppression mechanism, so a run
 // configured to suppress a repository's own instructions is refused against
 // it.
 //
@@ -517,7 +537,8 @@ func TestWhatTheScriptedAdapterDeclares(t *testing.T) {
 func TestWhatTheShippedAdapterDeclares(t *testing.T) {
 	claude := newRunner(t)
 	claudeDeclared := claude.Capabilities()
-	wantClaude := []agents.Capability{agents.CapabilityResumableSessions, agents.CapabilityWorkerSessions}
+	wantClaude := []agents.Capability{agents.CapabilityResumableSessions, agents.CapabilityWorkerSessions,
+		agents.CapabilityTerminalWorkers}
 	if got := claudeDeclared.List(); !slices.Equal(got, wantClaude) {
 		t.Errorf("the claude adapter declares %v, want exactly %v", got, wantClaude)
 	}

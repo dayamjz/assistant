@@ -366,10 +366,16 @@ Each has cost this repository more than one round of review.
   how a test gets a runner whose worker it can script line by line.
   `terminal_workers` is the same worker hosted in a tmux server of its own
   (`OpenTerminalWorker`, `terminal.go`): the server's child, typed to and
-  captured as a screen. Only the scripted adapter declares it, with a framing
-  that refuses a line the terminal would cut; the Claude Code adapter does
-  not, because its interactive mode opened on a first-run screen when tried,
-  and `capability.go` says so. Reading agent output is `internal/findings`' job and
+  captured as a screen, on an adapter-owned `terminalTyping`. The scripted
+  adapter declares it over plain lines, with a framing that refuses a line
+  the terminal would cut. The Claude Code adapter declares it over the CLI's
+  interactive interface (`claudeterminal.go`): a per-worker
+  `CLAUDE_CONFIG_DIR` seeded so no first-run screen appears,
+  `ANTHROPIC_API_KEY` or a typed refusal, and every send one bracketed paste
+  typed only once the screen reads ready. All of it is pinned to screen text
+  observed of one CLI version; the stand-in's interactive mode models it for
+  CI, a probe against an installed CLI checks the model where one exists,
+  and `capability.go` owns how the two meet. Reading agent output is `internal/findings`' job and
   never a second parser here; the one choice this package makes is `Shape`, and
   `ShapeReview` is the only one carrying a `findings.Demand`, which
   `Invocation.Validate` requires there and refuses everywhere else. It also owns
