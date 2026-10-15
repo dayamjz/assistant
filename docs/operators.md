@@ -132,35 +132,68 @@ Three things follow for whoever runs the service:
 ## Waiting on a fleet
 
 A coordinator agent running tasks through `assistant coordinator` does not
-need to poll the wake queue. `assistant coordinator await` blocks until the
-queue holds a wake nobody has acknowledged, then lists the queued wakes the
-same way `assistant coordinator wakes` does, or lists none once its bound
-passes:
+need to poll the wake queue. Reading the queue is a drain: `assistant
+coordinator wakes` lists the queued wakes, oldest first, and records each one
+it lists as handled, so the next read does not list it again. Read it with
+`--json`, because the structured answer is the only place a drained wake's
+task and kind are shown.
+
+The service can push wakes to the coordinator. `assistant coordinator listen`
+holds the coordinator's wake stream and prints each wake as the service
+queues it, until it is interrupted:
+
+```sh
+assistant --json coordinator listen
+```
+
+It records nothing as handled: a wake it prints stays queued until a drain
+takes it or `assistant coordinator acknowledge` names it. Its first line is a
+gap marker, and a gap later means some pushes were missed; either way, drain
+the queue, which gives back every wake still queued. It suits a host that can
+run a command in the background and start a turn on its output. It ends with
+success when interrupted, and as an operational failure when the stream ends
+any other way, a service stop included, so it has to be started again.
+
+A coordinator that cannot hold a stream waits instead. `assistant coordinator
+await` blocks until the queue holds a wake nobody has acknowledged, then
+drains it the way `assistant coordinator wakes` does, or lists none once its
+bound passes:
 
 ```sh
 assistant --json coordinator await --timeout 5m
 ```
 
 The bound is whole seconds from `1s` to `1h`, and `5m` when none is given;
-anything else is refused as incorrect usage rather than clamped. The wait
-acknowledges nothing, so a wake it returned keeps being returned until
-`assistant coordinator acknowledge` names it. It keeps nothing between calls,
-so after a service restart, which ends a wait in progress as an operational
-failure, waiting again reads the same durable queue; `assistant coordinator
-supervision` confirms the service is watching the fleet again first. Like the
-other coordinator subcommands, it is refused for a task's worker.
+anything else is refused as incorrect usage rather than clamped. A wake it
+returned is not returned again. That is the specification's "draining
+acknowledges a row", and its cost is stated rather than hidden: a coordinator
+that drains a wake and then stops before acting on it does not get it back
+from the queue. The row is kept in the record, and the task's own state, which
+`assistant tasks` reads, still shows what happened to the work.
+
+`assistant coordinator acknowledge` records as handled a wake the coordinator
+dealt with without draining it, one `listen` printed. Naming a wake a drain
+already took is refused as incorrect usage, because the drain was its
+acknowledgement.
+
+Neither `await` nor `listen` keeps anything between calls, so after a service
+restart, which ends either as an operational failure, starting them again
+reads the same durable queue; `assistant coordinator supervision` confirms
+the service is watching the fleet again first. Like the other coordinator
+subcommands, all of these are refused for a task's worker.
 
 A restart does not leave that queue exactly as it was. When the service
 starts it reconciles every task, and a task whose worker's terminal is gone
 with its work not landed is relaunched, up to `relaunch_attempts` times
 (2 unless configured). A relaunch records each still-queued `terminal-gone`
 wake about the session it replaced as handled by the program, so the next
-wait does not return it. Read `assistant tasks` after a restart as well as
+drain does not return it. Read `assistant tasks` after a restart as well as
 the queue: a relaunched task shows its new attempt there, and a task past
 `relaunch_attempts` holds for an answer instead of being relaunched.
 
-How soon it answers after a worker stops is set by the service's supervision
-pass, which records the wake, not by the wait.
+How soon a wake is pushed or answered after a worker stops is set by the
+service's supervision pass, which records the wake, not by the stream or the
+wait.
 
 ## Standing consent
 
@@ -275,11 +308,36 @@ The same read of the pull request carries whether the code host can merge it.
 Checks that passed are not a pass until the host also reports the pull request
 mergeable; until then the run waits on the same terms, and an elapsed wait over
 passed checks holds with `ci-mergeability-unknown`, which is re-read like the
-other elapsed holds. A pull request the host reports as conflicting with its
-base holds at once with `ci-conflicted`, whatever its checks say. The run does
-not rebase or re-push a branch it has already pushed, and it never decides what
-conflicting content should be: rebase the branch yourself and push it through
-the gate, which starts a new run that reviews the result.
+other elapsed holds.
+
+A pull request the host reports as conflicting with its base is answered at
+once, whatever its checks say, by sending the run back to the rebase stage
+(PRD section 14, decision 7). The rebase stage observes the branch and goes on
+only if it still stands at the commit this run pushed, then replays the run's
+head onto the freshly fetched base. If that applies cleanly, the result goes
+through review again, in a session of its own, then the test, document and
+lint stages, and a second push anchored on the commit the first push left
+there, before the checks stage reads the pull request again. The run takes
+this path at most twice (`RebaseAfterPushRounds`); a third conflict parks the
+run rather than rebasing again.
+
+The run never decides on its own what conflicting content should be. A rebase
+that does not apply cleanly is abandoned and holds with
+`rebase-after-push-conflict`, with nothing rewritten: rebase the branch yourself
+and push it through the gate, which starts a new run that reviews the result. A
+fix round you ask for at that hold is your explicit answer, and the rebase stage
+then rebases its result only if that applies cleanly. The second pass also
+holds instead of rebasing when the branch moved after this run pushed it
+(`rebase-after-push-branch-moved`), so a commit somebody else pushed there is
+never dropped, and the second push is refused and held like any other when the
+branch moves after the rebase stage observed it. A rebase that leaves nothing
+to push holds too, rather than ending the run past an open pull request.
+
+The checks stage holds with `ci-conflicted`, as before, where that path cannot
+do its job: the run pushed nothing, its head is not the commit it pushed, or
+the run skips the rebase, review or push stage. The fix round limits of the
+stages the path passes through are per run, so a stage that spent its rounds
+on the first pass has none left on the second.
 
 A failing check is still sent to the checks stage's fix rounds
 (`fix_rounds.checks`). The round commits in the run's isolated copy, but that
@@ -326,7 +384,9 @@ Two things that review does not cover:
 - The checks stage's fix rounds. That stage runs after the push, so nothing
   reviews the commits its rounds make, and nothing in this build pushes them;
   the stage holds with `ci-fix-not-pushed` rather than reporting on checks
-  that never saw the round's commit.
+  that never saw the round's commit. A rebase the checks stage sends the run
+  back for is not one of these: it is reviewed by the review stage before the
+  second push, as described above.
 - Earlier rounds' own accounts. The reviewer of the later commits is handed
   each stage's last fix summary as a claim to check. A stage that took more
   than one round is represented by its last summary, and its earlier rounds

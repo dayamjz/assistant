@@ -79,6 +79,16 @@ const (
 	// reading the history back, which the gap marker makes it do, and an
 	// overflowing stream may not discard it as progress noise.
 	TypeTaskEvent Type = "task.event"
+	// TypeWakeQueued is a wake the supervisor loop appended to the durable
+	// wake queue, pushed to the coordinator on MethodWakesSubscribe and never
+	// on the open event stream. Its revision is the wake row's identifier,
+	// which the store assigns in the order it accepted the rows. It is state
+	// rather than activity, so an overflowing stream may not discard it as
+	// noise: it can be evicted only into the gap marker, and a coordinator
+	// that receives the marker drains the queue, which is the read that
+	// gives back every wake still queued. A pushed wake is a notice and not
+	// the record: whether it is still actionable is the queue's to say.
+	TypeWakeQueued Type = "wake.queued"
 
 	// TypeGap says the stream discarded something. It is produced by this
 	// package rather than published, and a consumer that receives one must
@@ -101,6 +111,7 @@ var classes = map[Type]Class{
 	TypeHoldState:       ClassState,
 	TypeTaskState:       ClassState,
 	TypeTaskEvent:       ClassState,
+	TypeWakeQueued:      ClassState,
 	TypeGap:             ClassControl,
 	TypeServiceStopping: ClassControl,
 }

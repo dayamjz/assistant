@@ -18,7 +18,10 @@ import (
 // session start and reconcile only the tasks recorded in this home: a
 // terminal gone with the work not landed is relaunched in its own copy with
 // the same instructions plus a note, ambiguous liveness is left alone, and
-// queued wakes are drained before anything else. This file is that pass as
+// queued wakes are drained before anything else. The drain is the
+// coordinator's, and draining acknowledges, so the pass reads the queue with
+// store.QueuedWakes and takes nothing: what it reads is logged as standing
+// for the coordinator, whose own drain is what hands it over. This file is that pass as
 // the service runs it, inside recover, after the runs are reconciled and
 // before anything is served, and before supervise.go's loop begins. "Before
 // serving anything" is a property of the claim and not of the launch: the
@@ -204,7 +207,8 @@ const reconcileProbeTimeout = time.Second
 // restart behind a provider that never answers is still a restart.
 const reconcileProbeBound = 15 * time.Second
 
-// reconcileDrainLimit bounds the drain that is the pass's input. A queue
+// reconcileDrainLimit bounds the read of the queue that is the pass's input,
+// a store.QueuedWakes read that acknowledges nothing. A queue
 // longer than this has a coordinator that stopped reading it; the pass reads
 // the oldest rows and says so.
 const reconcileDrainLimit = 4096
@@ -347,10 +351,10 @@ func (s *Service) reconcileTasks(ctx context.Context) {
 	if s.terminals == nil {
 		s.log.Printf("reconciliation: this service has no terminal seam, so every terminal reads unobserved and nothing is relaunched")
 	}
-	queued, err := s.store.DrainWakes(ctx, reconcileDrainLimit)
+	queued, err := s.store.QueuedWakes(ctx, reconcileDrainLimit)
 	switch {
 	case err != nil:
-		s.log.Printf("reconciliation: the queued wakes could not be drained: %v", err)
+		s.log.Printf("reconciliation: the queued wakes could not be read: %v", err)
 	case len(queued) > 0:
 		s.log.Printf("reconciliation: %d queued wake(s) stand for the coordinator%s", len(queued), drainNote(len(queued)))
 	}
@@ -393,12 +397,12 @@ func (s *Service) reconcileTasks(ctx context.Context) {
 	}
 }
 
-// drainNote is the words for a drain that hit its limit.
+// drainNote is the words for a read of the queue that hit its limit.
 func drainNote(n int) string {
 	if n < reconcileDrainLimit {
 		return ""
 	}
-	return ", which is the drain's limit, so more may stand"
+	return ", which is the read's limit, so more may stand"
 }
 
 // latestSession is the session reference of the latest attempt, and whether

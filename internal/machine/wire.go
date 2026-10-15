@@ -839,14 +839,19 @@ type TaskStopped struct {
 	Finished taskstate.State `json:"finished,omitempty"`
 }
 
-// Wakes is the answer to a drain of the wake queue: the queued rows, oldest
-// first, as internal/store holds them. Every row is still queued when this is
-// answered, because a drain acknowledges nothing; the coordinator
-// acknowledges what it handled through AcknowledgeRequest, and a row it did
-// not acknowledge is returned by the next drain, which is at-least-once
-// delivery stated on the answer rather than assumed by the reader.
+// Wakes is the answer to a drain of the wake queue: the rows that were
+// queued, oldest first, as internal/store holds them after the drain. A drain
+// acknowledges what it returns, so every row here is already recorded as
+// handled and no later drain returns it: delivery to a drain is at most once,
+// stated on the answer rather than assumed by the reader, and this answer is
+// the one place the caller is handed each row.
+//
+// Who the drain recorded as acknowledging is in the record and not on this
+// wire: store.Acknowledger has no text form outside internal/store, so a
+// decoded row's AcknowledgedBy is known and reads as nobody. HandledAt is the
+// field a reader of this answer can rely on.
 type Wakes struct {
-	// Wakes are the queued rows, oldest first, at most the requested limit.
+	// Wakes are the drained rows, oldest first, at most the requested limit.
 	Wakes []store.Wake `json:"wakes"`
 }
 

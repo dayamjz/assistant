@@ -111,6 +111,20 @@ type Output struct {
 	// Writes are the state writes the stage asks for, at most one per key.
 	// Every key must be one the implementation declared.
 	Writes map[Key]graph.Value
+	// Rebase asks the run to go back to the rebase stage, which is how the
+	// checks stage answers a pull request that conflicts with its base after
+	// the push: the run rebases, reviews, runs the checks before push again,
+	// and pushes a second time on an anchor internal/safety's
+	// RequireObservedAt accepts, before it stands at the checks stage again.
+	//
+	// Only a stage whose row says Stage.RebasesAfterPush may ask; any other
+	// stage asking fails the step with ErrRebaseNotOffered. The request is
+	// honoured only over a report that would otherwise pass, so a report that
+	// holds or carries fix findings routes as it would without it: a hold or
+	// a fix round is never traded for a rebase. The path is a back edge
+	// bounded by RebaseAfterPushRounds, and a request past that bound parks
+	// the run rather than taking it.
+	Rebase bool
 }
 
 // Fixer applies a stage's fix-eligible findings. It is a separate contract

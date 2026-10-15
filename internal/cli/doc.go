@@ -187,7 +187,7 @@
 // coordinatorActions in coordinator.go holds "assistant coordinator" and its
 // subcommands, one for each of the coordinator's service methods that has
 // no command in the table: create, message, stop, relaunch and promote a
-// task, list, wait on and acknowledge the wake queue, and verify
+// task, drain, wait on, listen to and acknowledge the wake queue, and verify
 // supervision. The
 // owner decided on #227 to keep PRD section 9's table as it is and ship this
 // client beside it, as the gate and host verbs are, and section 9 says so
@@ -205,12 +205,17 @@
 // checked before the service is asked: operands, a flag and its -file
 // sibling given together, a file that cannot be read, wake identifiers
 // that are not numbers, and a wait bound outside
-// machine.WakeWaitRequest.Bounds' range are incorrect usage. await is
-// the one subcommand that blocks: it is one request that the service
-// answers when the queue holds a queued wake or its bound elapses, so the
-// coordinator can block a turn on it instead of polling, and a service that
-// stops under it ends the call as an operational failure that the caller
-// re-arms. The refusal rests on the
+// machine.WakeWaitRequest.Bounds' range are incorrect usage. Draining
+// acknowledges, PRD section 8's "draining acknowledges a row": wakes and
+// await each record the rows they list as handled, so a row is listed by
+// one drain and not again, and acknowledge is for a row the coordinator
+// handled without draining it. Two subcommands block. await is one request
+// that the service answers, with a drain, when the queue holds a queued
+// wake or its bound elapses, so the coordinator can block a turn on it
+// instead of polling. listen is the one stream: the service pushes each
+// wake on it as it is queued, and it prints each one until interrupted and
+// records nothing as handled. A service that stops under either ends it as
+// an operational failure that the caller arms again. The refusal rests on the
 // service's placement of its caller, and coordinatorVerbName names the gap
 // in that placement: a parent chain the kernel rewrote.
 //

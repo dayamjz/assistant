@@ -236,30 +236,39 @@
 // The shift never reached convergence, even before it was refused, and the
 // reasoning is short enough to check rather than take on trust. internal/graph
 // writes and reads a fingerprint only on a back edge and skips the comparison
-// when the slot is empty. The only back edges here are the fix nodes' returns,
-// one per stage taking rounds. What the conclusion rests on is that an index
-// which is a back edge under two different configurations belongs to the same
-// stage in both:
+// when the slot is empty. The back edges here are the fix nodes' returns, the
+// requested rounds' returns, the path back from the checks stage to rebase,
+// and the hold exits on that path, which internal/graph reads as back edges
+// for the reason repush.go gives. What the conclusion rests on is that an
+// index which is a back edge under two different configurations belongs to the
+// same stage in both:
 // a fingerprint that is read is never another edge's, and a slot the new graph
 // reads but the old one never wrote is empty and skipped.
 //
 // The arithmetic is worth writing out, because a conclusion a reader cannot
 // check is worth no more than no conclusion. Every stage is wired by wire,
-// which emits five edges for every stage, the fix node's return before them
-// when the stage's round limit is above zero, and before that the two edges of
+// which emits a stage's edges as one block, in this order: the two edges of
 // the requested-round cycle when the pipeline was given a fixer and the stage
-// is requestable, whose second is that cycle's back edge. Which stages are
-// requestable is the stage table's, not the configuration's, so with a fixer
-// given a stage's block has a fixed part, five edges plus two at a
-// requestable stage, and a configured part, the one fix return. A stage's
-// block starts at the sum of the earlier stages' fixed parts plus the number
-// of earlier stages taking rounds, at most four. Its back edges sit at most
-// two past that start at a requestable stage, whose fixed part is seven, and
-// at the start itself at any other, whose fixed part is five. Either way every
-// back edge of a stage stays below the sum of the fixed parts up to and
-// including it, which is where the next stage's block starts before any
-// configured edge, so the ranges two stages draw from are disjoint, whatever
-// pair of round limits they come from.
+// is requestable, whose second is a back edge; the hold's two exits, whose
+// second is a back edge at a stage on the path back from the checks stage; that
+// path itself, at the stage that takes it; the fix node's return when the
+// stage's round limit is above zero; and the stage's own three edges. Which of
+// these a stage has, apart from the fix return, is the stage table's and not
+// the configuration's, so a block has a fixed part, five edges plus two at a
+// requestable stage given a fixer and one at the stage that rebases after
+// push, and a configured part, the one fix return. A block starts at the sum
+// of the earlier stages' fixed parts plus the number of earlier stages taking
+// rounds, at most four.
+//
+// A stage's back edges sit at least one edge into its block, and its last one
+// is its fix return, three edges before the block ends, or for a stage taking
+// no rounds an edge sitting at least four before. So a stage's last back edge
+// stays below the sum of the fixed parts up to and including it, plus one,
+// whenever fewer than four earlier stages take rounds or the stage takes none,
+// and that sum plus one is the earliest the next stage's first back edge can
+// sit. The one stage that can take rounds with four stages before it taking
+// them too is ci, and nothing comes after ci. Either way the ranges two stages
+// draw from are disjoint, whatever pair of round limits they come from.
 //
 // A pipeline with a fixer and one without differ in their fixed parts, so
 // their indices do not line up and nothing above says they do. They differ in
@@ -267,13 +276,13 @@
 // carried from one to the other, which is the paragraph after next.
 //
 // The emission order settles the formula and not the conclusion so long as
-// every back edge stays within the slots ahead of its block's fixed five: a
-// constant added to every index leaves index-to-stage injective. It is the
-// uniqueness that TestBackEdgeIndicesNeverCrossStagesAcrossConfigurations
-// pins, over every combination of which stages take rounds, and not the order;
-// what would break it is a stage table admitting more than five stages that
-// take rounds, or a back edge moved later in its block, where one stage's
-// index could land in the next one's range.
+// every back edge stays ahead of its stage's own three edges: a constant added
+// to every index leaves index-to-stage injective. It is the uniqueness that
+// TestBackEdgeIndicesNeverCrossStagesAcrossConfigurations pins, over every
+// combination of which stages take rounds, and not the order; what would break
+// it is a stage table admitting more than five stages that take rounds, or a
+// back edge moved behind its stage's own edges, where one stage's index could
+// land in the next one's range.
 //
 // The claim withdrawn there was that a fingerprint read from the wrong slot
 // could defeat convergence, and it is worth saying why that counts as a
@@ -315,12 +324,13 @@
 // # The fix loop and its three bounds
 //
 // A stage that returns fix-eligible findings, has rounds remaining, and is
-// under budget runs a fixer and re-runs to verify. That is the one cycle in
-// the whole design, and internal/graph requires every back edge to carry a
-// bound at construction, so none of the three bounds can be left until a run
-// starts:
+// under budget runs a fixer and re-runs to verify. That is the fix cycle, and
+// internal/graph requires every back edge to carry a bound at construction, so
+// none of the three bounds can be left until a run starts. The other two
+// cycles here, a round a person asks for and the path back from the checks
+// stage, are described below. The fix cycle's three bounds:
 //
-//   - Per-stage rounds. Each stage's limit bounds the one cycle it sits on.
+//   - Per-stage rounds. Each stage's limit bounds the fix cycle it sits on.
 //     Both of that cycle's edges carry the limit, because the graph requires a
 //     bound on the back edge, and the edge that reaches that bound first is
 //     the one into the fixer, because that is where a round is decided: a
@@ -349,6 +359,42 @@
 // enters the loop: classify holds the stage for one whatever the limit allows,
 // so its presence holds the stage rather than being fixed and re-reviewed by
 // the session that prescribed the fix.
+//
+// # The path back from the checks stage
+//
+// PRD section 14 decision 7 has the checks stage rebase a pull request the
+// code host reports as conflicting with its base after the push. P2 fixes the
+// nine stages, so that is not a tenth stage and not a rebase inside the
+// checks stage's body: it is a path between stages that already exist. A
+// stage whose row says Stage.RebasesAfterPush, which is the checks stage, asks
+// for it with Output.Rebase, its node records OutcomeRebase, and a back edge
+// from its node to the rebase stage's takes the run through rebase, review,
+// the checks before push, push, and the pull request stage before it stands at
+// the checks stage again. Every one of those stages runs its own body on its
+// own terms, so the review is the review stage's, with no session behind it,
+// and the push is decided by internal/safety like the first one.
+//
+// What makes the second pass a rebase of a pushed branch rather than a second
+// first pass belongs to the stage bodies, which read pipeline.KeyPushed: the
+// rebase stage anchors the second push only where the first one left the
+// branch and holds when the rebase does not apply cleanly, and the push stage
+// refuses an anchor that does not name the commit it pushed. internal/stages
+// owns both. This package owns that the path exists, that only the checks
+// stage may take it, and that it is bounded.
+//
+// It is bounded by RebaseAfterPushRounds on the edge, by the run-wide budget,
+// and by convergence, as every unanswered back edge is. The fix round limits
+// of the stages it passes through are per run and not per pass, so a stage
+// that spent its rounds on the first pass has none left on the second, and a
+// fix-eligible finding there parks the run in front of its fixer rather than
+// taking a round. Building the edge also makes internal/graph read each hold's
+// exit along the path as a back edge, and repush.go says what bound those
+// carry and why it never fires before the path's own.
+//
+// A request is honoured only over a report that would otherwise pass. A
+// report that holds or carries fix findings routes as it would without one,
+// and a stage the table does not give the path to fails the step with
+// ErrRebaseNotOffered rather than having the request dropped.
 //
 // # Halt points
 //

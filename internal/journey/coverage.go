@@ -266,7 +266,10 @@ func Coverage() []Established {
 				"terminal-ish wait surfaces once and again after a real change and not after a " +
 				"redraw; and through the product's own terminal seam over the service's session " +
 				"provider, a worker the service launched is absorbed on its unchanged live screen " +
-				"and surfaced as terminal gone once it has exited. Evidence derivation is " +
+				"and surfaced as terminal gone once it has exited. Its wake tests cite it for the " +
+				"coordinator's side: a queued wake is pushed on the coordinator's wake stream and " +
+				"refused to a worker, a wait is woken by the loop's append, and a coordinator that " +
+				"only polls still drains the wake. Evidence derivation is " +
 				"internal/taskstate's. The task walk here reaches a worker and reads its task as " +
 				"Running with progress off the binary, but it classifies no wake and cites nothing " +
 				"for P9, and the kind for an " +
