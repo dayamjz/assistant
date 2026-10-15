@@ -1,6 +1,8 @@
 package machine
 
 import (
+	"fmt"
+
 	"github.com/dayamjz/assistant/internal/gate"
 	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/store"
@@ -87,10 +89,86 @@ type StartRequest struct {
 // The branch is read from the working copy this names, the same way a start
 // reads it, so a rerun never acts on a branch the caller is not on. A branch
 // with no run of its own is refused by that branch's name rather than answered
-// with another branch's run.
+// with another branch's run. A working copy whose HEAD is not the head the
+// branch's last run recorded is refused with RerunMoved, and no run begins.
 type RerunRequest struct {
 	Working
 }
+
+// RerunMoved is a rerun refused because the working copy it names stands at a
+// commit other than the one the rerun would validate: Local is the commit the
+// working copy's HEAD resolved to, Recorded is the head the branch's last run
+// recorded, which is what a rerun validates, Branch is the branch both are
+// about, and Reason says which of the two remedies applies. A rerun refused
+// this way began no run and recorded nothing, and reading HEAD changed nothing
+// in the working copy.
+//
+// It is a refusal rather than an answer, so it travels as an error: its
+// message is the row Phrase chooses, followed by both commits and the
+// commands for the remedy. The commits and the commands are machine text a
+// person copies, so they are beside the row rather than in it.
+type RerunMoved struct {
+	// Branch is the branch the working copy is on.
+	Branch string `json:"branch"`
+	// Local is the commit the working copy stands at.
+	Local string `json:"local"`
+	// Recorded is the commit a rerun of Branch would validate.
+	Recorded string `json:"recorded"`
+	// Reason is why the two differ, as far as the refusing side established
+	// it.
+	Reason RerunMovedReason `json:"reason"`
+}
+
+// RerunMovedReason is which way a refused rerun's two commits differ, and so
+// which remedy its refusal names.
+type RerunMovedReason string
+
+const (
+	// RerunMovedElsewhere is every difference not established as
+	// RerunMovedBehind: Local is ahead of Recorded, the two have diverged,
+	// Recorded is the commit that was submitted rather than the run's own
+	// work, or the ancestry could not be read. The remedy validates Local:
+	// a push to the gate's remote, or a start with an intent.
+	RerunMovedElsewhere RerunMovedReason = "elsewhere"
+	// RerunMovedBehind is Local established as an ancestor of Recorded where
+	// Recorded is work the run recorded past the commit it was submitted.
+	// The remedy is assistant sync, which reconciles the branch with what the
+	// pipeline holds: it prints its plan and changes nothing until it is
+	// repeated with --confirm.
+	RerunMovedBehind RerunMovedReason = "behind"
+)
+
+// Phrase is the row for this refusal's reason. A reason outside the two is
+// phrased as RerunMovedElsewhere, whose remedy validates the local commit and
+// assumes nothing about how the two are related.
+func (m RerunMoved) Phrase() Phrase {
+	if m.Reason == RerunMovedBehind {
+		return phraseRerunBehind
+	}
+	return phraseRerunMoved
+}
+
+// Error is the refusal as a person reads it: the row, then the commit they
+// are on, the commit a rerun would validate, and the commands for the remedy
+// the row names.
+func (m RerunMoved) Error() string {
+	head := fmt.Sprintf("%s %s %s. %s %s.", m.Phrase(), rerunLocalLabel, m.Local, rerunRecordedLabel, m.Recorded)
+	if m.Reason == RerunMovedBehind {
+		return fmt.Sprintf("%s %s assistant sync prints the plan, and assistant sync --confirm carries it out.",
+			head, rerunCatchUpLabel)
+	}
+	return fmt.Sprintf("%s %s git push %s %s, or assistant --intent followed by what it sets out to do.",
+		head, rerunRemedyLabel, gate.RemoteName, m.Branch)
+}
+
+// The labels RerunMoved puts before the machine text it carries beside its
+// row.
+const (
+	rerunLocalLabel    = "The commit you are on:"
+	rerunRecordedLabel = "The commit a fresh run would validate:"
+	rerunRemedyLabel   = "To validate yours:"
+	rerunCatchUpLabel  = "To catch up:"
+)
 
 // RespondRequest answers the decision a run is holding on, and blocks until
 // the run reaches its next decision point or a terminal outcome.

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/dayamjz/assistant/internal/findings"
@@ -31,7 +32,11 @@ var (
 	// writes none of its own, which would be a round with nothing to resolve.
 	ErrEmptyFixRequest = errors.New("pipeline: the fix request selects no finding and adds none")
 	// ErrUnknownFinding is returned for a request selecting an identifier the
-	// stage's recorded report does not carry.
+	// stage's recorded report does not carry. The refusal names every such
+	// identifier, in the order the request selected them, and every
+	// identifier the report does carry, so a caller holding an identifier
+	// from an earlier report can correct the selection without reading the
+	// report some other way.
 	ErrUnknownFinding = errors.New("pipeline: the fix request selects a finding the stage did not report")
 	// ErrUnusableFixRequest is returned for a request that cannot be read, or
 	// that adds a finding of its own with no description.
@@ -90,10 +95,14 @@ type Selection struct {
 // no description, and a request that comes to nothing to resolve.
 func (r FixRequest) Select(report findings.Report) (Selection, error) {
 	chosen := make(map[string]bool, len(r.Selected))
+	var order []string
 	for _, id := range r.Selected {
 		id = strings.TrimSpace(id)
 		if id == "" {
 			continue
+		}
+		if _, seen := chosen[id]; !seen {
+			order = append(order, id)
 		}
 		chosen[id] = false
 	}
@@ -106,10 +115,14 @@ func (r FixRequest) Select(report findings.Report) (Selection, error) {
 		}
 		out.Unselected = append(out.Unselected, f)
 	}
-	for id, found := range chosen {
-		if !found {
-			return Selection{}, fmt.Errorf("%w: %q", ErrUnknownFinding, id)
+	var unknown []string
+	for _, id := range order {
+		if !chosen[id] {
+			unknown = append(unknown, strconv.Quote(id))
 		}
+	}
+	if len(unknown) > 0 {
+		return Selection{}, fmt.Errorf("%w: %s; %s", ErrUnknownFinding, strings.Join(unknown, ", "), reported(report))
 	}
 	for _, own := range r.Findings {
 		own.ID = ""
@@ -126,6 +139,22 @@ func (r FixRequest) Select(report findings.Report) (Selection, error) {
 	}
 	out.Notes = strings.TrimSpace(r.Notes)
 	return out, nil
+}
+
+// reported names the identifiers a report carries, in the order the stage
+// reported them, for a refusal that says what could have been selected. A
+// finding with no identifier cannot be selected, so it is not named.
+func reported(report findings.Report) string {
+	var ids []string
+	for _, f := range report.Findings {
+		if f.ID != "" {
+			ids = append(ids, strconv.Quote(f.ID))
+		}
+	}
+	if len(ids) == 0 {
+		return "the stage reported no finding that can be selected"
+	}
+	return "the stage reported " + strings.Join(ids, ", ")
 }
 
 // Encode renders the request as the text the hold's detail key holds.

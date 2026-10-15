@@ -1226,6 +1226,57 @@ func LifecyclePhrase(l Lifecycle) Phrase {
 	}
 }
 
+// subcommandsPlaceholder stands in for a command's subcommands in
+// SubcommandPhrase's row when it is listed without them, as TablePhrases
+// lists it.
+const subcommandsPlaceholder = "the subcommands it takes"
+
+// SubcommandPhrase is what a person reads when a command that does its work
+// through a subcommand was given none of its subcommands: given says whether
+// a word stood where one belongs, and subcommands are the ones it takes, in
+// the order the command's table holds them. The decision names them, because
+// they are the words a person types next, and says --help lists what each
+// one does. It is the refusal's sentence and decides nothing about the exit
+// code, which is the caller's.
+func SubcommandPhrase(given bool, subcommands []string) Phrase {
+	listed := strings.Join(subcommands, ", ")
+	if strings.TrimSpace(listed) == "" {
+		listed = subcommandsPlaceholder
+	}
+	outcome := "Nothing was done, because this command needs a subcommand to say what to do and was given none."
+	if given {
+		outcome = "Nothing was done, because this command needs a subcommand to say what to do and none it takes was given."
+	}
+	return Phrase{
+		Outcome:     outcome,
+		Consequence: "Nothing changed.",
+		Decision:    "Repeat it with one of " + listed + " right after the command; --help lists what each one does.",
+	}
+}
+
+// The rows for a rerun refused because the checkout stands at a commit other
+// than the one the rerun would validate, chosen by RerunMoved.Phrase. Which
+// two commits, and the commands for the remedy, are RerunMoved's to print
+// beside the row.
+var (
+	// phraseRerunMoved is RerunMovedElsewhere's row: the remedy validates the
+	// person's own commit.
+	phraseRerunMoved = Phrase{
+		Outcome:     "No run was begun, because the commit this checkout stands at is not the one a fresh run of its branch would validate.",
+		Consequence: "A fresh run would vet the commit the gate last recorded for this branch rather than yours, so none was begun and nothing in this checkout was changed.",
+		Decision:    "Send your commit to the gate, or start a run on it with the command named after this.",
+	}
+	// phraseRerunBehind is RerunMovedBehind's row: the commit a rerun would
+	// validate is the last run's work and already contains the person's, so
+	// the remedy brings that work into the checkout rather than validating
+	// the older commit.
+	phraseRerunBehind = Phrase{
+		Outcome:     "No run was begun, because this checkout is behind: the last run's work goes past the commit it stands at.",
+		Consequence: "A fresh run would vet that work rather than what you have here, so none was begun and nothing in this checkout was changed.",
+		Decision:    "Bring the last run's work into this checkout with the command named after this, which shows its plan before it changes anything.",
+	}
+)
+
 // InitPhrase is what a person reads once a gate was created or reattached for
 // their checkout. The next decision names the remote a change is sent to,
 // which is internal/gate's, because sending a branch there is how a person
@@ -1357,10 +1408,12 @@ var PhraseNoReading = Phrase{
 // rows for an answer to a task's hold and the two cleanup rows, the
 // stream's four, the status rows, and the rows for the rest of the command
 // surface: a decision and a fix round's offer, a row per doctor check and
-// result and the verdict, the service lifecycle, a gate created, reattached
-// and removed, a row per source of the default branch an init recorded with
-// the row for an answer naming none and a row per refusal to record one, the
-// gate's own rows, and the rows pointing at a run's evidence
+// result and the verdict, the service lifecycle, the two rows for a command
+// given none of its subcommands, the two rows for a rerun refused because
+// the checkout moved, a gate created, reattached and removed, a row per source of the
+// default branch an init recorded with the row for an answer naming none and
+// a row per refusal to record one, the gate's own rows, and the rows pointing
+// at a run's evidence
 // and the two notices beside it, and the catch-up read's: a heading and an
 // empty row per part, a row per kind of landed record, the row for what a
 // read left out, and the two rows for a mark, and custody's: a row per class
@@ -1410,6 +1463,7 @@ func TablePhrases() []Phrase {
 	}
 	out = append(out, phraseCheckUnfamiliar, phraseRunCanStart, phraseRunCannotStart)
 	out = append(out, LifecyclePhrase(Lifecycle{Accepted: true, Restarting: true}), LifecyclePhrase(Lifecycle{Accepted: true}), LifecyclePhrase(Lifecycle{}))
+	out = append(out, SubcommandPhrase(false, nil), SubcommandPhrase(true, nil), phraseRerunMoved, phraseRerunBehind)
 	out = append(out, InitPhrase(Init{}), InitPhrase(Init{Reattached: true}), EjectPhrase(Eject{Removed: true}), EjectPhrase(Eject{}))
 	out = append(out, PhraseAdmitted, PhraseValidationBegun, PhraseSupersededEarlier, PhraseNothingStartedFor, PhraseNothingSent, PhraseNoReading)
 	out = append(out, PhraseCopyBusy, PhraseCopyStillBusy)

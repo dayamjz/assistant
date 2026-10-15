@@ -63,20 +63,25 @@ var gateHooks = []struct {
 // removes the ambiguity. --json and --home written before the verb are already
 // read by parseGlobal, and written after the subcommand they reach the verb's
 // own flag set.
+//
+// --help where the subcommand belongs is answered with the subcommand table,
+// and anything else there, or nothing, is incorrect usage phrased as what the
+// verb needs and the subcommands to choose from.
 func gateVerb(ctx context.Context, in *invocation) (any, error) {
-	if len(in.args) == 0 {
-		return nil, usagef("assistant gate needs one of: %s", strings.Join(gateHookNames(), ", "))
-	}
-	named := in.args[0]
-	for _, hook := range gateHooks {
-		if named != hook.name {
-			continue
+	if len(in.args) > 0 {
+		named := in.args[0]
+		for _, hook := range gateHooks {
+			if named != hook.name {
+				continue
+			}
+			in.args = in.args[1:]
+			return hook.run(ctx, in)
 		}
-		in.args = in.args[1:]
-		return hook.run(ctx, in)
+		if isHelp(named) {
+			return nil, subcommandHelp(gateVerbName, gateUsage())
+		}
 	}
-	return nil, usagef("assistant gate %s names none of: %s, which come first after the verb",
-		named, strings.Join(gateHookNames(), ", "))
+	return nil, subcommandRefusal(gateVerbName, in.args, gateHookNames())
 }
 
 // gateHookNames is the two read out, for a refusal that says what was

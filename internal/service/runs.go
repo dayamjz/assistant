@@ -142,7 +142,15 @@ func (s *Service) rerun(ctx context.Context, req machine.RerunRequest) (machine.
 	if err != nil {
 		return machine.Run{}, fmt.Errorf("service: reading the branch to run again: %w", err)
 	}
-	record, err := s.claimRerun(ctx, branchKey{repository: repository.ID, branch: branch})
+	local, err := working.ResolveCommit(ctx, "HEAD")
+	if err != nil {
+		return machine.Run{}, fmt.Errorf("service: reading the commit this checkout stands at: %w", err)
+	}
+	record, err := s.claimRerun(ctx, branchKey{repository: repository.ID, branch: branch}, local)
+	var moved rerunMoved
+	if errors.As(err, &moved) {
+		return machine.Run{}, s.placeMoved(ctx, repository, moved)
+	}
 	if err != nil {
 		return machine.Run{}, err
 	}
@@ -164,7 +172,15 @@ func (s *Service) rerun(ctx context.Context, req machine.RerunRequest) (machine.
 // the branch with two runs. Reading the run being carried forward is inside
 // the claim too, because the head and the intent the new record is built from
 // have to be the ones that were there when the decision was made.
-func (s *Service) claimRerun(ctx context.Context, key branchKey) (store.Run, error) {
+//
+// local is the commit the caller's working copy stood at when the request was
+// read. A rerun validates the head the branch's last run recorded, so when
+// local is a different commit the rerun is refused with rerunMoved naming both
+// and nothing is created: validating the recorded head would re-vet a commit
+// the person has moved on from and say nothing about theirs. local is read
+// before the claim, as start reads its head, so a commit made after that read
+// and before the claim is not seen.
+func (s *Service) claimRerun(ctx context.Context, key branchKey, local string) (store.Run, error) {
 	release, err := s.holdBranch(ctx, key)
 	if err != nil {
 		return store.Run{}, err
@@ -180,16 +196,75 @@ func (s *Service) claimRerun(ctx context.Context, key branchKey) (store.Run, err
 	} else if active {
 		return store.Run{}, fmt.Errorf("service: %s already has a run in flight; end it before starting another", key.branch)
 	}
+	recorded := previous.CurrentHead.Or(previous.SubmittedHead)
+	if local != recorded {
+		return store.Run{}, rerunMoved{
+			moved: machine.RerunMoved{Branch: key.branch, Local: local, Recorded: recorded,
+				Reason: machine.RerunMovedElsewhere},
+			run:  previous.ID,
+			work: recorded != previous.SubmittedHead,
+		}
+	}
 	return s.create(ctx, run{
 		repository: key.repository,
 		branch:     key.branch,
-		head:       previous.CurrentHead.Or(previous.SubmittedHead),
+		head:       recorded,
 		base:       previous.Base,
 		intent:     previous.Intent,
 		source:     previous.IntentSource,
 		supplied:   previous.IntentSource == intentSourceSupplied,
 	})
 }
+
+// rerunMoved is machine.RerunMoved as this service refuses with it: on the
+// wire it is ipc.ErrRefused, because the request was readable and the records
+// decided against it, and its message is the refusal's own text with no
+// prefix. errors.As still reaches the machine.RerunMoved inside.
+type rerunMoved struct {
+	moved machine.RerunMoved
+	// run is the run whose recorded head the rerun would have validated.
+	run string
+	// work is whether that head is the run's own work rather than the commit
+	// it was submitted: a recorded current head that differs from the
+	// submitted one.
+	work bool
+}
+
+// placeMoved settles which remedy a refused rerun names, and returns the
+// refusal.
+//
+// It is RerunMovedBehind only when the recorded head is the run's own work and
+// the gate repository the run was cut from establishes the local commit as
+// its ancestor; that is the case assistant sync reconciles. Every other case
+// keeps RerunMovedElsewhere, including a gate repository that cannot be
+// opened and an ancestry it cannot answer, such as a local commit it does
+// not hold, because a remedy chosen on a read that failed would be a guess.
+// A local commit behind the commit that was submitted is RerunMovedElsewhere
+// too: the head a rerun validates is then the submitted commit rather than
+// work the run recorded, and whether sync has anything to bring in is decided
+// by internal/custody from the run's checkpoint, which this does not read.
+//
+// It reads the gate repository and writes nothing anywhere.
+func (s *Service) placeMoved(ctx context.Context, repository store.Repository, moved rerunMoved) error {
+	if !moved.work {
+		return moved
+	}
+	bare, err := s.gateRepositoryOf(ctx, repository, moved.run)
+	if err != nil {
+		return moved
+	}
+	behind, err := bare.IsAncestor(ctx, moved.moved.Local, moved.moved.Recorded)
+	if err == nil && behind {
+		moved.moved.Reason = machine.RerunMovedBehind
+	}
+	return moved
+}
+
+// Error is the refusal's own text.
+func (r rerunMoved) Error() string { return r.moved.Error() }
+
+// Unwrap resolves to the wire category and to the refusal.
+func (r rerunMoved) Unwrap() []error { return []error{ipc.ErrRefused, r.moved} }
 
 // respond answers the decision a run is holding on and blocks until it reaches
 // the next one or a terminal outcome.
@@ -272,6 +347,13 @@ func (s *Service) respond(ctx context.Context, req machine.RespondRequest) (mach
 // is refused too: it would otherwise be an instruction nobody acted on.
 // internal/graph refuses both shapes again, so this is the early half and not
 // the only one.
+//
+// A fix request that selects nothing, selects a finding the held stage's
+// report does not carry, or adds a finding with no description is the
+// caller's request being wrong rather than this service failing, so it crosses
+// the wire as ipc.ErrInvalidRequest with pipeline's refusal beneath it, which
+// names the identifiers the report does carry. The refusals about where the
+// run holds are not that and keep their own codes.
 func (s *Service) fixRequestFor(ctx context.Context, runID string, req machine.RespondRequest) (string, error) {
 	if req.Answer != string(pipeline.OutcomeFixRequested) {
 		if req.Fix != nil {
@@ -281,8 +363,8 @@ func (s *Service) fixRequestFor(ctx context.Context, runID string, req machine.R
 		return "", nil
 	}
 	if req.Fix == nil {
-		return "", fmt.Errorf("%w: run %s was answered %q with nothing selected to fix",
-			pipeline.ErrEmptyFixRequest, runID, req.Answer)
+		return "", fmt.Errorf("%w: %w: run %s was answered %q with nothing selected to fix",
+			ipc.ErrInvalidRequest, pipeline.ErrEmptyFixRequest, runID, req.Answer)
 	}
 	cp, err := s.checkpoints.Latest(ctx, runID)
 	if err != nil {
@@ -300,7 +382,7 @@ func (s *Service) fixRequestFor(ctx context.Context, runID string, req machine.R
 		return "", err
 	}
 	if _, err := req.Fix.Select(report); err != nil {
-		return "", err
+		return "", fmt.Errorf("%w: run %s: %w", ipc.ErrInvalidRequest, runID, err)
 	}
 	return req.Fix.Encode()
 }

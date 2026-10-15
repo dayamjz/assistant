@@ -70,8 +70,10 @@ type verb struct {
 	// reader comparing the two finds a summary that says what the verb does
 	// rather than one that repeats a line the verb does not answer to: rerun
 	// says it acts on the branch you are standing on, which the table leaves
-	// open and this build settles, and sync leaves out the table's plan and
-	// confirmation, which this build has no custody module to carry out.
+	// open and this build settles, and that it is refused when the working
+	// copy stands at another commit, which the table does not mention; sync
+	// leaves out the table's plan and confirmation, which this build has no
+	// custody module to carry out.
 	summary string
 	// run does the work and returns the answer to render.
 	run func(context.Context, *invocation) (any, error)
@@ -87,7 +89,7 @@ var verbs = []verb{
 	{"init", "Create or repair the gate for this repository.", initGate},
 	{"status", "Repository, gate, service, active run, and local branch state.", reportStatus},
 	{"runs", "Recent runs, newest first.", listRuns},
-	{"rerun", "Start a fresh run of this branch from its last known head, inheriting the recorded intent.", rerun},
+	{"rerun", "Start a fresh run of this branch from its last known head, inheriting the recorded intent; refused when you are on another commit.", rerun},
 	{"sync", "Reconcile your local branch with what the pipeline pushed, or recover work it holds.", syncBranch},
 	{"tasks", "List fleet work with its resolved current state.", listTasks},
 	{"watch", "Fleet view: everything in flight, everything waiting on you.", watch},
@@ -458,6 +460,39 @@ func usageText() string {
 	b.WriteString("\n")
 	b.WriteString(hostUsage())
 	return b.String()
+}
+
+// isHelp reports whether an argument asks for help, in the three spellings the
+// flag package answers to, so a verb that dispatches on a subcommand before any
+// flag set is built answers the same words a verb's own flags do.
+func isHelp(arg string) bool {
+	return arg == "-h" || arg == "-help" || arg == "--help"
+}
+
+// subcommandHelp is the help a verb that takes a subcommand answers with when
+// asked for it rather than given one: a usage line and then listing, which is
+// that verb's subcommand table read out one line each, the way usageText reads
+// out the verb table. The verb's own reader of its table writes listing, so the
+// help cannot list a subcommand the verb does not dispatch or leave one out.
+func subcommandHelp(verb, listing string) helpAnswer {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Usage: %s <subcommand> [flags]\n", commandName(verb))
+	b.WriteString(listing)
+	fmt.Fprintf(&b, "\n\n  %s <subcommand> --help lists that subcommand's own flags.", commandName(verb))
+	return helpAnswer{text: b.String()}
+}
+
+// subcommandRefusal is incorrect usage of a verb that takes a subcommand and
+// was given none of its subcommands: args are what stood after the verb, empty
+// when nothing did, and names are the subcommands it takes. The sentence is
+// machine.SubcommandPhrase's, after the command line as it was written,
+// escaped, so the person sees what was refused and what to type instead.
+func subcommandRefusal(verb string, args, names []string) error {
+	written := commandName(verb)
+	if len(args) > 0 {
+		written += " " + printable(strings.Join(args, " "))
+	}
+	return usagef("%s: %s", written, machine.SubcommandPhrase(len(args) > 0, names))
 }
 
 // render writes the answer and returns the exit code.
