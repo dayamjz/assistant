@@ -37,6 +37,13 @@ func VerifyArm(ctx context.Context, h *home.Home, interval time.Duration, clock 
 	deadline := clock().Add(wait)
 	for {
 		obs, _ := ObserveFiles(ctx, h)
+		// A look taken after ctx ended is not a reading: the lock probe
+		// refuses on an ended context and leaves the lock unknown, which
+		// ArmOf would answer as the service down. The verdict is the one
+		// this function states for a wait cut short instead.
+		if err := ctx.Err(); err != nil {
+			return supervisor.Arm{Outcome: supervisor.ArmFailed, Reason: supervisor.ArmNoBeacon}, err
+		}
 		now := clock()
 		waitOver := !now.Before(deadline)
 		if arm, settled := supervisor.ArmOf(asked, obs, fresh, now, waitOver); settled {
