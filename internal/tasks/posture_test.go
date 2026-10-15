@@ -27,14 +27,14 @@ func TestIntakeRecordsTheProjectsPostureOnADeliveryTask(t *testing.T) {
 		if err != nil || stored.Delivery != got.Task.Delivery {
 			t.Fatalf("the stored task carries %v, %v", stored.Delivery, err)
 		}
-		if f.postureAsked != 1 {
-			t.Fatalf("the posture was read %d times for one intake", f.postureAsked)
+		if f.postureAsked.Load() != 1 {
+			t.Fatalf("the posture was read %d times for one intake", f.postureAsked.Load())
 		}
 	}
 	f := newFixture(t)
 	investigation := f.create(t, Request{Shape: "investigation", Project: "one", Instructions: "look", Repository: repo})
-	if investigation.Task.Delivery.IsKnown() || f.postureAsked != 0 {
-		t.Fatalf("an investigation was recorded under %v after %d posture reads", investigation.Task.Delivery, f.postureAsked)
+	if investigation.Task.Delivery.IsKnown() || f.postureAsked.Load() != 0 {
+		t.Fatalf("an investigation was recorded under %v after %d posture reads", investigation.Task.Delivery, f.postureAsked.Load())
 	}
 }
 
