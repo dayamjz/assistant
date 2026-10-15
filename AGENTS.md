@@ -958,9 +958,9 @@ Each has cost this repository more than one round of review.
   stage `internal/service`'s `containRunner` stamps from the context its
   observe wrappers mark. So is the log view: `runs RUN --log=STAGE` answers
   with the open `run.log`, a bounded tail of `home.StageLog`, which
-  `internal/service`'s `stagelog.go` alone writes (around every body, fix
-  round and agent call, redacted) and alone reads; it is evidence nothing
-  decides from. A verb that acts on a run calls the service;
+  `internal/service`'s `stagelog.go` alone writes, best effort (around every
+  body, fix round and agent call, redacted), and alone reads; it is evidence
+  nothing decides from. A verb that acts on a run calls the service;
   a verb whose job includes reporting that the service is down does not.
   Three commands stand outside that table, each dispatched beside it rather
   than added to it. `gate` and `host` are each the interface something
