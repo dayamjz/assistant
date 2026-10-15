@@ -231,7 +231,7 @@
 // gone. It applies no migration, takes no writer connection, and refuses
 // every write with ErrReadOnly, which inTx answers because there is no pool
 // a write could go through. It takes no redactor, because the redactor
-// guards the two URL columns on their way in and a handle that writes
+// guards the four redacted columns on their way in and a handle that writes
 // nothing never reaches them; what any read returns of those columns is the
 // redacted text the writer stored. Its callers, the guards, read the queued
 // wakes and the in-flight counts, neither of which carries a repository URL,
@@ -397,17 +397,18 @@
 // would need synchronous FULL and would pay an fsync per commit for it; this
 // package does not make that claim.
 //
-// # The repository URL columns are stored redacted
+// # Four columns are stored redacted
 //
 // PRD section 8 stores repository URLs with credentials removed and recovers
 // the credentialed URL from the gate at run time. P14 gives credential removal
 // one owner, so this package does not implement it: Open requires a
 // [vcs.Redactor] and fails with ErrNoRedactor without one.
 //
-// What the redactor covers is two columns, repository.upstream_url and
-// repository.fork_url, which are the columns PRD section 8 designates for
-// repository URLs. UpsertRepository is the only accessor that reaches the
-// redactor, and it runs it on both of them on the way in.
+// What the redactor covers is four columns, and three accessors reach it.
+// UpsertRepository runs it on repository.upstream_url and
+// repository.fork_url, the columns PRD section 8 designates for repository
+// URLs. AppendMessage runs it on message.text, what was sent to a worker, and
+// MarkMessageRefused runs it on message.refusal, why a send failed.
 //
 // Every other column holds exactly what the caller passed. A push binding, a
 // pull request reference, a run's intent, a promoted task's delivery intent,
@@ -429,7 +430,7 @@
 // not establish that the redactor removes every credential, because one probe
 // of one shape cannot, and because deciding which shapes count is the
 // redactor's question rather than this package's. There is no second check on
-// the two columns it covers either: adding a per-URL opinion about what a
+// the columns it covers either: adding a per-URL opinion about what a
 // credential looks like would make this package the second owner of the
 // question P14 gives to one.
 //
