@@ -73,6 +73,7 @@ func (r probeRunner) Run(_ context.Context, _ agents.Purpose, inv agents.Invocat
 }
 
 func TestEveryInvocationOfTheResolvedAgentIsRegisteredWhileItRuns(t *testing.T) {
+	t.Parallel()
 	s := &Service{registry: newRegistry()}
 	probe := &startedProbe{t: t, registry: s.registry, wantRun: "run-1", wantStage: "review"}
 	wrapped := s.containRunner(probeRunner{probe: probe})
@@ -113,6 +114,7 @@ func (f probeFixer) Apply(_ context.Context, inv agents.Invocation) (agents.Resu
 func (f probeFixer) Reference() string { return "probe-session" }
 
 func TestAFixRoundOfTheResolvedAgentIsRegisteredWhileItRuns(t *testing.T) {
+	t.Parallel()
 	s := &Service{registry: newRegistry()}
 	probe := &startedProbe{t: t, registry: s.registry, wantRun: "run-2",
 		wantStage: string(agents.PurposeFix)}
@@ -145,6 +147,7 @@ func TestAFixRoundOfTheResolvedAgentIsRegisteredWhileItRuns(t *testing.T) {
 // context weakens the refusal's wording and not the relation: the group is
 // registered either way.
 func TestAnInvocationOutsideARunIsStillContained(t *testing.T) {
+	t.Parallel()
 	s := &Service{registry: newRegistry()}
 	probe := &startedProbe{t: t, registry: s.registry, wantRun: "", wantStage: "intent"}
 	wrapped := s.containRunner(probeRunner{probe: probe})
@@ -168,6 +171,7 @@ func TestAnInvocationOutsideARunIsStillContained(t *testing.T) {
 // which really is a WorkerRunner, so the assertions below are about what the
 // wrapper removed and not about an adapter that never had it.
 func TestTheWrappedShippedAdapterOffersAStageNoWorker(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P4)
 	resolved := standin.New(t, standin.Script{}).Runner()
 	if _, ok := resolved.(agents.WorkerRunner); !ok || !resolved.Capabilities().Has(agents.CapabilityWorkerSessions) {

@@ -224,6 +224,7 @@ type launched struct {
 // gate's references are read with git after each push rather than taken from
 // the answer.
 func TestAWorkersPushIsHeldToItsOwnBranchForwardAndAPersonsIsNot(t *testing.T) {
+	t.Parallel()
 	launchedWorker(t, "task/one", func(w launched) {
 		running, task, gateRepo := w.running, w.task, w.gateRepo
 		h := running.service
@@ -307,6 +308,7 @@ func TestAWorkersPushIsHeldToItsOwnBranchForwardAndAPersonsIsNot(t *testing.T) {
 // row for; and the same request from a peer in no worker group is refused
 // as one. The history read back afterwards is the store's own.
 func TestAWorkerAppendsToItsOwnHistoryAndNoOneElseCan(t *testing.T) {
+	t.Parallel()
 	launchedWorker(t, "task/two", func(w launched) {
 		running, task := w.running, w.task
 		answer, code := callAs(t, w, ipc.MethodTaskEvent, machine.TaskEventRequest{Kind: "working", Detail: "on it"})
@@ -358,6 +360,7 @@ func TestAWorkerAppendsToItsOwnHistoryAndNoOneElseCan(t *testing.T) {
 // refused as one. A delivery task's worker filing a report is refused as an
 // invalid request, since only an investigation files one.
 func TestAWorkersReportIsStoredThroughItsRecordAndOnlyAnInvestigationFilesOne(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P3)
 	launchedWorkerOf(t, store.TaskInvestigation, "", func(w launched) {
 		running, task := w.running, w.task
@@ -443,6 +446,7 @@ func TestAWorkersReportIsStoredThroughItsRecordAndOnlyAnInvestigationFilesOne(t 
 // surfaces its terminal as gone. The refusals from the worker are
 // asked first, while the worker is still live.
 func TestTheQueueAndArmVerificationAreTheCoordinatorsAndNotAWorkers(t *testing.T) {
+	t.Parallel()
 	launchedWorker(t, "task/three", func(w launched) {
 		running, task := w.running, w.task
 		for _, method := range []ipc.Method{ipc.MethodWakesList, ipc.MethodWakesPeek, ipc.MethodWakesAcknowledge, ipc.MethodWakesSubscribe, ipc.MethodSupervisionAssert} {
@@ -527,6 +531,7 @@ func TestTheQueueAndArmVerificationAreTheCoordinatorsAndNotAWorkers(t *testing.T
 // the same landed record, is taken, which is the positive control that the
 // refusal is the worker relation's and not the request's.
 func TestTheSeenMarkIsNotAWorkers(t *testing.T) {
+	t.Parallel()
 	launchedWorker(t, "task/four", func(w launched) {
 		running := w.running
 		records, err := store.Open(t.Context(), w.home.Database(), store.WithRedactor(redact.New()))
@@ -635,6 +640,7 @@ func historyOf(t *testing.T, h *home.Home, task string) []store.TaskEvent {
 // for P14 because the test is about one fact having one owner, with the
 // control being the registration that makes the other relation answer.
 func TestAWorkerIsPlacedByTheWorkerSetAndNotByContainment(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P14)
 	launchedWorker(t, "task/four", func(w launched) {
 		task, group := w.task, w.group
@@ -670,6 +676,7 @@ func TestAWorkerIsPlacedByTheWorkerSetAndNotByContainment(t *testing.T) {
 // it, recorded with the resolver the surface derives and with nothing the
 // request said.
 func TestATasksHoldIsAnsweredByTheCoordinatorAndNotItsWorker(t *testing.T) {
+	t.Parallel()
 	launchedWorker(t, "task/four", func(w launched) {
 		records := openRecords(t, w.home)
 		defer func() { _ = records.Close() }()
@@ -710,6 +717,7 @@ func TestATasksHoldIsAnsweredByTheCoordinatorAndNotItsWorker(t *testing.T) {
 // no run under way: a different code, so the worker's refusal is shown to
 // be about who asked and not about what was asked.
 func TestATasksRunIsNotAnsweredThroughTheTaskByItsWorker(t *testing.T) {
+	t.Parallel()
 	launchedWorker(t, "task/four", func(w launched) {
 		request := machine.RespondRequest{Task: w.task, Answer: "approved"}
 		if _, code := callAs(t, w, ipc.MethodRunRespond, request); code != ipc.CodeWorker {

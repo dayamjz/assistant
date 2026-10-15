@@ -35,6 +35,7 @@ import (
 // a worker's commit there has a subject of its own, and its pull request is
 // still titled with the task's project.
 func TestAPersonsPushIsTitledWithItsCommitsSubjectOrItsBranch(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 
 	const (

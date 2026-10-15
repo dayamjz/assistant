@@ -23,6 +23,7 @@ import (
 // out of the durable checkpoint history, which is what internal/checkpoints
 // landed for.
 func TestARunSurvivesTheProcessThatStartedItAndIsAnsweredByAnother(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
 	subject := newSubject(t)
@@ -83,6 +84,7 @@ func TestARunSurvivesTheProcessThatStartedItAndIsAnsweredByAnother(t *testing.T)
 // skips cost this test is those stages, and what they keep is everything else
 // of the walk, which is the part no other test reaches.
 func TestARunAnsweredThroughToTheEndCompletes(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
 	subject := newSubject(t)
@@ -109,6 +111,7 @@ func TestARunAnsweredThroughToTheEndCompletes(t *testing.T) {
 // decision its last checkpoint still carries. Reading the checkpoint alone
 // would offer an answer to a run that is over.
 func TestARunEndedWhileHoldingReportsThatItEnded(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
 	subject := newSubject(t)
@@ -142,6 +145,7 @@ func TestARunEndedWhileHoldingReportsThatItEnded(t *testing.T) {
 
 // Cancelling at a hold ends the run without undoing anything, and says so.
 func TestCancellingAtAHoldEndsTheRun(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
 	subject := newSubject(t)
@@ -163,6 +167,7 @@ func TestCancellingAtAHoldEndsTheRun(t *testing.T) {
 // PRD section 9's bare command attaches to this branch's active run and starts
 // one only when there is none.
 func TestAttachingTwiceDoesNotStartASecondRun(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
 	subject := newSubject(t)
@@ -190,6 +195,7 @@ func TestAttachingTwiceDoesNotStartASecondRun(t *testing.T) {
 // assistant init in, and starting a run there is refused rather than served
 // against a repository this service invented.
 func TestARunCannotStartInAWorkingCopyWithNoGate(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
 	subject := newSubject(t)
@@ -209,6 +215,7 @@ func TestARunCannotStartInAWorkingCopyWithNoGate(t *testing.T) {
 // platform with no peer credentials serves them while refusing everything that
 // drives a run.
 func TestReadingIsServedWhoeverIsAsking(t *testing.T) {
+	t.Parallel()
 	h := newHome(t)
 	withService(t, h, func(running serviceUnderTest) {
 		var health machine.Health
@@ -249,6 +256,7 @@ func TestReadingIsServedWhoeverIsAsking(t *testing.T) {
 // starts an agent in. Nothing in this build calls StageStarted, so this is the
 // only place the guard is shown to fire at all.
 func TestACallerInsideAnActiveStageIsRefused(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
 	subject := newSubject(t)
@@ -291,6 +299,7 @@ func TestACallerInsideAnActiveStageIsRefused(t *testing.T) {
 // honest answer for a build whose stages launch no agent, and it is a refusal
 // rather than a record written against a stage that never ran.
 func TestAStageResultIsRefusedWhenNoStageIsRunning(t *testing.T) {
+	t.Parallel()
 	h := newHome(t)
 	withService(t, h, func(running serviceUnderTest) {
 		var nothing struct{}
@@ -307,6 +316,7 @@ func TestAStageResultIsRefusedWhenNoStageIsRunning(t *testing.T) {
 // force. PRD section 9 makes that refusal the default and requires the flag to
 // be for this act rather than a general agreement to everything.
 func TestStoppingRefusesWhileRunsAreActiveAndForceCarriesIt(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
 	subject := newSubject(t)
@@ -347,6 +357,7 @@ func TestStoppingRefusesWhileRunsAreActiveAndForceCarriesIt(t *testing.T) {
 // the checkpoint says the run is waiting for a decision is a run nobody can
 // answer, because responding is refused for a run that is not held.
 func TestRecoveryReconcilesARecordAgainstItsCheckpoint(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
 	subject := newSubject(t)
@@ -384,6 +395,7 @@ func TestRecoveryReconcilesARecordAgainstItsCheckpoint(t *testing.T) {
 // A checkpoint history is what a resume reads, so a run reports the same
 // position through a service that never executed it.
 func TestTheReportedPositionComesFromTheDurableCheckpoint(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
 	subject := newSubject(t)
@@ -414,6 +426,7 @@ func TestTheReportedPositionComesFromTheDurableCheckpoint(t *testing.T) {
 // A hold relays the stage's findings in full, unsummarized and unjudged, which
 // is what PRD section 9 requires of a finding that needs a decision.
 func TestADecisionCarriesTheFindingsVerbatim(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
 	subject := newSubject(t)
@@ -476,6 +489,7 @@ func waitFor(t *testing.T, holds func() bool, what string) {
 // opposite of what is true. What tells them apart is whether anything is
 // advancing the run, and it is the action rather than the outcome that differs.
 func TestARunThatNeverExecutedIsReportedRatherThanResumed(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
 	subject := newSubject(t)

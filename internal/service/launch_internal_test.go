@@ -115,6 +115,7 @@ func waitLiveness(t *testing.T, p session.Provider, ref string, want taskstate.L
 // no session, and the stand-in recorded no worker. The time-of-check gap
 // that remains is between this assertion and the process starting.
 func TestACopyRetargetedBetweenDispatchAndLaunchIsRefusedAndNotLaunched(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P11)
 	ctx := t.Context()
 
@@ -218,6 +219,7 @@ func TestACopyRetargetedBetweenDispatchAndLaunchIsRefusedAndNotLaunched(t *testi
 // here over the stand-in's own arguments so nothing it could start is this
 // test binary running its tests again.
 func TestARunnerWithoutWorkerSessionsLeavesTheTaskDispatched(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	agent := standin.New(t, standin.Script{})
 	subject := newLaunchSubject(t, agent)
@@ -274,6 +276,7 @@ func TestARunnerWithoutWorkerSessionsLeavesTheTaskDispatched(t *testing.T) {
 // reference probes Dead through the same provider afterwards, by identity
 // alone, and the service holds no session for the task.
 func TestCloseEndsTheSessionsTheServiceLaunched(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	subject := newLaunchSubject(t, workerStandIn(t))
 	d, err := subject.service.dispatchTask(ctx, subject.task)

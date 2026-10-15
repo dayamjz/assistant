@@ -26,6 +26,7 @@ import (
 // It cites P9: an armed coordinator is woken by an actionable wake, not on
 // a timer.
 func TestAnArmedWaitIsWokenByTheLoopsAppendAndNotByItsRecheck(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P9)
 	h, records := loopHome(t)
 	ctx := t.Context()

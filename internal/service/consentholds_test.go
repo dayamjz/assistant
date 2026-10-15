@@ -53,6 +53,7 @@ func serviceLog(t *testing.T, h *home.Home) string {
 // round and carries to checks-passed, so the difference is the stated action
 // and nothing else about the run.
 func TestStandingConsentLeavesAnAskWhoseActionWasDefaultedForAPerson(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P3)
 	requiresIdentifiedPeer(t)
 	located := findings.Location{Path: "work.txt", Line: 1}
@@ -62,6 +63,7 @@ func TestStandingConsentLeavesAnAskWhoseActionWasDefaultedForAPerson(t *testing.
 	}
 
 	t.Run("defaulted", func(t *testing.T) {
+		t.Parallel()
 		h := newHome(t)
 		subject := consentingSubject(t, h, allowsConsent)
 		agent := reviewThen(t, finding(findings.ActionUnset))
@@ -93,6 +95,7 @@ func TestStandingConsentLeavesAnAskWhoseActionWasDefaultedForAPerson(t *testing.
 	})
 
 	t.Run("stated", func(t *testing.T) {
+		t.Parallel()
 		h := newHome(t)
 		subject := consentingSubject(t, h, allowsConsent)
 		agent := reviewThen(t, finding(findings.ActionAsk))
@@ -118,6 +121,7 @@ func TestStandingConsentLeavesAnAskWhoseActionWasDefaultedForAPerson(t *testing.
 // at the test stage with no further round taken and nothing recorded as the
 // program's answer there. The service log says why.
 func TestStandingConsentSendsNoRoundToAnAskNoAgentCanFix(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
 	subject := consentingSubject(t, h, allowsConsent)
@@ -178,6 +182,7 @@ func TestStandingConsentSendsNoRoundToAnAskNoAgentCanFix(t *testing.T) {
 // hold the previous round left, which the report the first round read did
 // not, so the bound fires on the third round and no earlier.
 func TestARoundStandingConsentAsksForIsHeldToConvergence(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	located := findings.Location{Path: "work.txt", Line: 1}
 	stuck := func(t *testing.T) *standin.Agent {
@@ -190,6 +195,7 @@ func TestARoundStandingConsentAsksForIsHeldToConvergence(t *testing.T) {
 	}
 
 	t.Run("under consent", func(t *testing.T) {
+		t.Parallel()
 		h := newHome(t)
 		subject := consentingSubject(t, h, allowsConsent)
 		agent := stuck(t)
@@ -210,6 +216,7 @@ func TestARoundStandingConsentAsksForIsHeldToConvergence(t *testing.T) {
 	})
 
 	t.Run("a person asking", func(t *testing.T) {
+		t.Parallel()
 		h := newHome(t)
 		subject := consentingSubject(t, h, allowsConsent)
 		agent := stuck(t)
@@ -258,6 +265,7 @@ func TestARoundStandingConsentAsksForIsHeldToConvergence(t *testing.T) {
 //     always refusing;
 //   - another answer: the row is finished as not applied, naming it.
 func TestRecoveryFinishesAStandingConsentRowFromTheRunsHistory(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P6)
 	requiresIdentifiedPeer(t)
 
@@ -321,6 +329,7 @@ func TestRecoveryFinishesAStandingConsentRowFromTheRunsHistory(t *testing.T) {
 	consents := []string{"rename", "scope"}
 
 	t.Run("no answer was applied", func(t *testing.T) {
+		t.Parallel()
 		h := newHome(t)
 		subject := consentingSubject(t, h, allowsConsent)
 		agent := reviewWithFindings(t)
@@ -341,6 +350,7 @@ func TestRecoveryFinishesAStandingConsentRowFromTheRunsHistory(t *testing.T) {
 	})
 
 	t.Run("the row's answer was applied", func(t *testing.T) {
+		t.Parallel()
 		h := newHome(t)
 		subject := consentingSubject(t, h, allowsConsent)
 		agent := reviewWithFindings(t)
@@ -355,6 +365,7 @@ func TestRecoveryFinishesAStandingConsentRowFromTheRunsHistory(t *testing.T) {
 	})
 
 	t.Run("another answer was applied", func(t *testing.T) {
+		t.Parallel()
 		h := newHome(t)
 		subject := consentingSubject(t, h, allowsConsent)
 		agent := reviewWithFindings(t)
@@ -376,6 +387,7 @@ func TestRecoveryFinishesAStandingConsentRowFromTheRunsHistory(t *testing.T) {
 // consent, which reaches the lookup and is refused there instead, as a task
 // the home has no record of.
 func TestAStartGivenATaskIsForStandingConsentAlone(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
 	withService(t, h, func(running serviceUnderTest) {

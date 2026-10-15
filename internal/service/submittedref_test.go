@@ -12,24 +12,19 @@ import (
 	"github.com/dayamjz/assistant/internal/machine"
 )
 
-// quietMaintenance turns git's automatic maintenance off for every repository
-// the test and the service under it create, so no git a test started outlives
-// its temporary directory (#119). The raw git helper here insulates each
-// invocation from the machine's configuration with an absent file, so the
-// repositories the test makes are configured one by one; the service's own
-// git runs under internal/vcs, which keeps GIT_CONFIG_GLOBAL, so the clone it
-// cuts reads this file.
+// quietMaintenance turns git's automatic maintenance off in each repository
+// a test creates by hand, so no git a test started outlives its temporary
+// directory (#119). The raw git helper here insulates each invocation from
+// the machine's configuration with an absent file, so those repositories are
+// configured one by one. The service's own git runs under internal/vcs, which
+// keeps GIT_CONFIG_GLOBAL, and TestMain names a file turning maintenance off
+// there for the whole process, so the clones the service cuts read it too.
 func quietMaintenance(t *testing.T, repositories ...string) {
 	t.Helper()
 	for _, dir := range repositories {
 		git(t, dir, "config", "gc.auto", "0")
 		git(t, dir, "config", "maintenance.auto", "false")
 	}
-	cfg := filepath.Join(t.TempDir(), "gitconfig")
-	if err := os.WriteFile(cfg, []byte("[gc]\n\tauto = 0\n[maintenance]\n\tauto = false\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("GIT_CONFIG_GLOBAL", cfg)
 }
 
 // refsOf is every reference in a repository with its commit, as git lists
@@ -51,6 +46,7 @@ func refsOf(t *testing.T, dir string) string {
 // TestARunIsGivenAnIsolatedCopyAndGivesItBack reads that: the copy and the
 // run's reference are reclaimed when the run settles.
 func TestAPushOfACommitOnlyInATaskCloneStartsARunWithoutTouchingTheWorkingCopy(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
 	subject := newSubject(t)
@@ -125,6 +121,7 @@ func TestAPushOfACommitOnlyInATaskCloneStartsARunWithoutTouchingTheWorkingCopy(t
 // seen: the start fetches it into the gate under the run's reference at
 // creation, and the copy is cut from there.
 func TestAStartFetchesTheWorkingCopysCommitIntoTheGateAtCreation(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
 	subject := newSubject(t)

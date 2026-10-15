@@ -76,6 +76,7 @@ func pidIn(t *testing.T, path string) int {
 // walk places it as the worker's, and the group read alone would not have.
 // The server itself, and this test process, are placed as nobody's.
 func TestUnderTmuxAWorkersCommandIsPlacedThroughTheServer(t *testing.T) {
+	t.Parallel()
 	worker, term, dir := terminalWorker(t)
 	group := worker.Group()
 	member := oneWorker(group)
@@ -141,6 +142,7 @@ func TestUnderTmuxAWorkersCommandIsPlacedThroughTheServer(t *testing.T) {
 // authoritative, and what it makes the worker do is the worker's act, read
 // off the kernel's chain like every other.
 func TestUnderTmuxAPersonsShellOnTheSameServerIsNotTheWorker(t *testing.T) {
+	t.Parallel()
 	worker, term, dir := terminalWorker(t)
 	member := oneWorker(worker.Group())
 	t.Cleanup(func() { _ = os.WriteFile(filepath.Join(dir, "release"), nil, 0o600) })

@@ -33,6 +33,7 @@ func cleanupService(t *testing.T) (*Service, *store.Store, *home.Home) {
 	if err := h.Create(); err != nil {
 		t.Fatalf("creating the home: %v", err)
 	}
+	seedDatabase(t, h.Database())
 	records, err := store.Open(ctx, h.Database(), store.WithRedactor(redact.New()))
 	if err != nil {
 		t.Fatalf("opening the store: %v", err)
@@ -69,6 +70,7 @@ func serviceLog(t *testing.T, h *home.Home) string {
 // refuses as such; a run no merge record landed calls nothing, and a task
 // the run is not attributed to is not touched.
 func TestAMergeRecordCallsTheLandedTasksCleanup(t *testing.T) {
+	t.Parallel()
 	s, records, h := cleanupService(t)
 	ctx := context.Background()
 	repository, err := records.UpsertRepository(ctx, store.Repository{
@@ -130,6 +132,7 @@ func TestAMergeRecordCallsTheLandedTasksCleanup(t *testing.T) {
 // as the service's reader resolved it after the store, which for a service
 // with no terminal seam is Unobserved and refuses as such.
 func TestStoringAReportCallsTheInvestigationsCleanup(t *testing.T) {
+	t.Parallel()
 	s, records, h := cleanupService(t)
 	ctx := context.Background()
 	copyPath, _ := h.TaskCopy("lookedaaaaaa")
@@ -168,6 +171,7 @@ func TestStoringAReportCallsTheInvestigationsCleanup(t *testing.T) {
 // reader, examines the copy on the proof and removes it, and the task
 // resolves Complete from the cleanup record.
 func TestATaskCopyIsKeptWhileItsWorkerRunsAndTheLandingEndsItAndRemovesTheCopy(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P12)
 	ctx := t.Context()
 	sub := newLaunchSubject(t, workerStandIn(t))

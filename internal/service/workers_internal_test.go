@@ -11,6 +11,7 @@ import (
 // a line: the isolation check dispatch appends, and the promotion section
 // internal/tasks appends, in either order.
 func TestIntakeInstructionsStopAtTheFirstSectionTheProgramAppended(t *testing.T) {
+	t.Parallel()
 	const written = "Cap every page's images.\n\nKeep them under 200 KB."
 	check := "\n\n" + secondCheckHeading + "\n\nRun this line first.\n\n    test -d /home/x/tasks/1/copy\n"
 	promoted := "\n\n" + tasks.PromotionHeading + "\n\nThe intent for it is: ship it.\n"

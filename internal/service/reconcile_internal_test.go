@@ -22,6 +22,7 @@ var reconcileActions = map[reconcileAction]bool{reconcileRelaunch: true, reconci
 // is a worker that handed off or a person's; Live and Unobserved relaunch
 // nothing, Unobserved being the ambiguous liveness that is left alone.
 func TestTheReconciliationTableDecidesEveryDerivedRow(t *testing.T) {
+	t.Parallel()
 	states, sources, livenesses := taskstate.States(), taskstate.Sources(), taskstate.Livenesses()
 	if len(states) == 0 || len(sources) == 0 || len(livenesses) != 3 {
 		t.Fatalf("the derived domain is %d states, %d sources and %d liveness values", len(states), len(sources), len(livenesses))
@@ -61,6 +62,7 @@ func TestTheReconciliationTableDecidesEveryDerivedRow(t *testing.T) {
 // terminal in each of the states a handed-off or delivered worker leaves
 // relaunches nothing, from the source each is resolved from.
 func TestADeadTerminalInAHandedOffStateIsLeftAlone(t *testing.T) {
+	t.Parallel()
 	for _, row := range []struct {
 		state  taskstate.State
 		source taskstate.Source
@@ -100,6 +102,7 @@ func TestADeadTerminalInAHandedOffStateIsLeftAlone(t *testing.T) {
 // isolation assertion's own refusal surfaces whatever the count or the
 // answer, read off Basis.EventKind.
 func TestTheRelaunchBoundCountsRelaunchesFromAttemptRows(t *testing.T) {
+	t.Parallel()
 	dead := taskstate.Resolution{State: taskstate.Failed, Source: taskstate.SourceRun, Basis: taskstate.Basis{Process: taskstate.Dead}}
 	attempts := func(n int) []store.TaskAttempt {
 		out := make([]store.TaskAttempt, n)
@@ -185,6 +188,7 @@ func TestTheRelaunchBoundCountsRelaunchesFromAttemptRows(t *testing.T) {
 // history with no report row is not a delivery and nothing here reads it as
 // one any more (P8).
 func TestAReportedInvestigationIsNotRelaunched(t *testing.T) {
+	t.Parallel()
 	reported := taskstate.Resolution{State: taskstate.Reported, Source: taskstate.SourceReport,
 		Basis: taskstate.Basis{Process: taskstate.Dead, ReportStored: true, EventKind: store.ReportReadyEventKind}}
 	attempts := []store.TaskAttempt{{Sequence: 1}}
@@ -211,6 +215,7 @@ func TestAReportedInvestigationIsNotRelaunched(t *testing.T) {
 // any of the three gone cases; a row of another task, another kind, another
 // reference, or a marker composed another way is not.
 func TestASupersededWakeIsMatchedByTaskKindAndReference(t *testing.T) {
+	t.Parallel()
 	const ref = "terminal1:0123456789abcdef0123456789abcdef:taskaaaaaaaa:42:7"
 	since := time.Unix(1_700_000_000, 0)
 	for _, g := range []gone{goneDead, goneUnobservable, goneProviderWide} {

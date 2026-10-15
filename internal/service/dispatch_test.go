@@ -100,6 +100,7 @@ func sameFile(t *testing.T, a, b string) bool {
 // primary is the person's, which is PRD principle P1. Launching is
 // launch_test.go's subject.
 func TestADispatchedDeliveryTaskIsCutAnIsolatedClone(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P1)
 	h := newHome(t)
 	subject := newSubject(t)
@@ -214,6 +215,7 @@ func TestADispatchedDeliveryTaskIsCutAnIsolatedClone(t *testing.T) {
 // at the default branch's tip. The adapter declares no worker sessions, so
 // the copy is read as dispatch left it.
 func TestADispatchedInvestigationTaskIsCutADetachedCloneWithNoRemote(t *testing.T) {
+	t.Parallel()
 	h := newHome(t)
 	subject := newSubject(t)
 	quietMaintenance(t, subject)
@@ -263,6 +265,7 @@ func TestADispatchedInvestigationTaskIsCutADetachedCloneWithNoRemote(t *testing.
 // wrong shape is refused with the shape's own token, so the two refusals
 // read apart in the history.
 func TestARetryAfterACrashRefusesTheHalfWrittenCopyAndLeavesIt(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P6)
 	service.RequireSweepClearsHere(t, "a dispatch retry refusing the half-written copy for isolation")
 	h := newHome(t)
@@ -356,6 +359,7 @@ func TestARetryAfterACrashRefusesTheHalfWrittenCopyAndLeavesIt(t *testing.T) {
 // line: run with real git it fails in the primary checkout, fails in a linked
 // worktree of the primary, and passes in the copy.
 func TestTheSecondCheckInTheInstructionsDiscriminatesTheCopy(t *testing.T) {
+	t.Parallel()
 	if _, err := exec.LookPath("sh"); err != nil {
 		t.Skip("the second check is a POSIX shell line and this platform has no sh")
 	}

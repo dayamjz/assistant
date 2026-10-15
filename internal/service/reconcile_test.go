@@ -75,6 +75,7 @@ func launchedAndEnded(t *testing.T, h *home.Home, id string) session.Reference {
 // dead session is acknowledged by the program, and a hold wake stays queued
 // for the coordinator.
 func TestARestartRelaunchesADeadTerminalInPlace(t *testing.T) {
+	t.Parallel()
 	service.RequireSweepClearsHere(t, "a restart relaunching a dead terminal in place")
 	h := newHome(t)
 	subject := newSubject(t)
@@ -197,6 +198,12 @@ func TestARestartRelaunchesADeadTerminalInPlace(t *testing.T) {
 // across two starts. What tells the person about the silence is the
 // supervisor loop's terminal-gone row, which it writes as unobservable with
 // the unobserved-since marker; reconciliation writes none of its own.
+//
+// It does not run in parallel. It bounds how long Open takes from above, at
+// the reconciliation probe's bound, and the package's other tests running
+// beside it would be measuring their load rather than Open. A serial test
+// runs before any parallel one resumes, so it measures an otherwise idle
+// process.
 func TestABlockingProviderLeavesOpenWithinTheBoundAndRelaunchesNothing(t *testing.T) {
 	h := newHome(t)
 	subject := newSubject(t)
@@ -244,6 +251,7 @@ func TestABlockingProviderLeavesOpenWithinTheBoundAndRelaunchesNothing(t *testin
 // no service watched, so the service that opens next releases it before it
 // serves, and the task reads Dispatched through the first request.
 func TestAQueuedTaskAtStartIsReleased(t *testing.T) {
+	t.Parallel()
 	h := newHome(t)
 	subject := newSubject(t)
 	repository := recordRepository(t, h, subject)

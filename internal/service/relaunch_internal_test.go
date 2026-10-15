@@ -120,6 +120,7 @@ func endsWith(kinds []string, suffix ...string) bool {
 // asserts the copy, and the records show one new attempt and one relaunched
 // note. Run under the race detector, which make test does.
 func TestTwoRelaunchersOfOneDeadTerminalBeginOneAttempt(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P6)
 	requireSweepClearsHere(t, "that two relaunchers of one dead terminal begin one attempt")
 	sub := newRelaunchSubject(t)
@@ -182,6 +183,7 @@ func TestTwoRelaunchersOfOneDeadTerminalBeginOneAttempt(t *testing.T) {
 // reads Dispatched from its new attempt and not Unknown from the dead
 // terminal, and a second pass of reconciliation relaunches nothing.
 func TestARelaunchReusesTheStandingCopyAndASecondPassDoesNotRelaunchAgain(t *testing.T) {
+	t.Parallel()
 	requireSweepClearsHere(t, "a relaunch reusing its standing copy")
 	sub := newRelaunchSubject(t)
 	ctx := t.Context()
@@ -268,6 +270,7 @@ func TestARelaunchReusesTheStandingCopyAndASecondPassDoesNotRelaunchAgain(t *tes
 // launches. The retarget is the copy path replaced by a link to the
 // primary, which is the shape the principle names.
 func TestARelaunchRefusesACopyThatBecameThePrimary(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P11)
 	sub := newRelaunchSubject(t)
 	ctx := t.Context()
@@ -327,6 +330,7 @@ func subjectPrimary(t *testing.T, sub *relaunchSubject) (primary, upstream, defa
 // A copy that no longer stands is refused with the copy-missing token and
 // never cut again: PRD section 11's relaunch is in that same copy.
 func TestARelaunchRefusesAMissingCopyRatherThanCuttingOne(t *testing.T) {
+	t.Parallel()
 	sub := newRelaunchSubject(t)
 	ctx := t.Context()
 	if err := os.RemoveAll(sub.copy); err != nil {
@@ -347,6 +351,7 @@ func TestARelaunchRefusesAMissingCopyRatherThanCuttingOne(t *testing.T) {
 // itself working, holds the relaunch, which is refused naming the holder
 // with no attempt begun and no event appended.
 func TestARelaunchWaitsOnALiveTaskHoldingTheBranch(t *testing.T) {
+	t.Parallel()
 	sub := newRelaunchSubject(t)
 	ctx := t.Context()
 	task, err := sub.records.Task(ctx, sub.task)
@@ -393,6 +398,7 @@ func TestARelaunchWaitsOnALiveTaskHoldingTheBranch(t *testing.T) {
 // terminal-gone and the hold-opened, are the supervisor loop's and this
 // hand-built service runs no loop.
 func TestAFailedRunIsRelaunchedUpToTheBoundAndThenHeld(t *testing.T) {
+	t.Parallel()
 	requireSweepClearsHere(t, "a failed run relaunched up to its bound")
 	sub := newRelaunchSubject(t)
 	ctx := t.Context()
@@ -481,6 +487,7 @@ func TestAFailedRunIsRelaunchedUpToTheBoundAndThenHeld(t *testing.T) {
 // another session and a row of another kind stay queued for the
 // coordinator.
 func TestARelaunchAcknowledgesOnlyTheWakesItSuperseded(t *testing.T) {
+	t.Parallel()
 	requireSweepClearsHere(t, "a relaunch acknowledging the wakes it superseded")
 	sub := newRelaunchSubject(t)
 	ctx := t.Context()
@@ -534,6 +541,7 @@ func TestARelaunchAcknowledgesOnlyTheWakesItSuperseded(t *testing.T) {
 // and a relaunch asked for directly is refused as not due. Nothing is
 // recorded in either direction.
 func TestATaskWhoseSessionIsAnotherHomesIsNotReconciled(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	other, err := home.Open(t.TempDir())
 	if err != nil {
@@ -546,6 +554,7 @@ func TestATaskWhoseSessionIsAnotherHomesIsNotReconciled(t *testing.T) {
 	if err := h.Create(); err != nil {
 		t.Fatal(err)
 	}
+	seedDatabase(t, h.Database())
 	records, err := store.Open(ctx, h.Database(), store.WithRedactor(redact.New()))
 	if err != nil {
 		t.Fatal(err)
@@ -609,6 +618,7 @@ func TestATaskWhoseSessionIsAnotherHomesIsNotReconciled(t *testing.T) {
 // reference reads Dead through the same seam, which is the reading the
 // relaunch tests above start from.
 func TestARestartOverASurvivingWorkerLeavesTheTaskAlone(t *testing.T) {
+	t.Parallel()
 	ctx := t.Context()
 	sub := newLaunchSubject(t, workerStandIn(t))
 	sub.service.terminals = heldTerminals{sub.service}
@@ -667,6 +677,7 @@ func TestARestartOverASurvivingWorkerLeavesTheTaskAlone(t *testing.T) {
 // such a service leaves the launched task alone rather than starting a
 // second worker beside one it cannot see.
 func TestWithoutAProbeNothingIsRelaunchedOrDispatchedAgain(t *testing.T) {
+	t.Parallel()
 	sub := newRelaunchSubject(t)
 	ctx := t.Context()
 	sub.restart.terminals = nil

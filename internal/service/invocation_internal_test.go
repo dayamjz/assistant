@@ -17,8 +17,11 @@ import (
 // collapsed the two would fabricate zeros for exactly the invocations whose
 // cost is least visible elsewhere.
 func TestInvocationRecorderFeedsTheStoreHistory(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
-	st, err := store.Open(ctx, filepath.Join(t.TempDir(), "state.db"),
+	database := filepath.Join(t.TempDir(), "state.db")
+	seedDatabase(t, database)
+	st, err := store.Open(ctx, database,
 		store.WithRedactor(redact.New()))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
@@ -71,6 +74,7 @@ func TestInvocationRecorderFeedsTheStoreHistory(t *testing.T) {
 // The row is dropped, which is the understatement invocation.go states, and
 // nothing else happens.
 func TestInvocationRecorderWithoutAStoreDropsTheRecord(t *testing.T) {
+	t.Parallel()
 	rec := invocationRecorder{s: &Service{}}
 	rec.RecordInvocation(agents.Record{Purpose: agents.PurposeFix, Agent: "claude"})
 }

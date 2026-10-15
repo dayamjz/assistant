@@ -19,6 +19,7 @@ import (
 // held behind an interface-typed field, and the unexported fields of an
 // implementation, which is the mechanism and not a gap.
 func TestNoRouteFromTheTerminalSeamToAFixerSession(t *testing.T) {
+	t.Parallel()
 	for _, root := range []reflect.Type{
 		reflect.TypeOf((*service.Terminals)(nil)).Elem(),
 		reflect.TypeOf(service.Options{}.Terminals),

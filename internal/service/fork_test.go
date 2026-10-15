@@ -17,6 +17,7 @@ import (
 	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/redact"
+	"github.com/dayamjz/assistant/internal/service"
 	"github.com/dayamjz/assistant/internal/store"
 )
 
@@ -45,6 +46,7 @@ func forkedSubject(t *testing.T, h *home.Home, fork string) (subject, forkPath s
 	if err := h.Create(); err != nil {
 		t.Fatalf("creating the home: %v", err)
 	}
+	service.SeedDatabase(t, h.Database())
 	records, err := store.Open(t.Context(), h.Database(), store.WithRedactor(redact.New()))
 	if err != nil {
 		t.Fatalf("opening the store: %v", err)
@@ -110,6 +112,7 @@ func hasBranch(path, branch string) bool {
 // went to one place: a run pushing where it always did would leave the
 // branch there.
 func TestARunWithAForkSendsItsBranchToTheForkAndProposesItToTheUpstream(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
 	subject, forkPath := forkedSubject(t, h, forkURL)
@@ -177,6 +180,7 @@ func TestARunWithAForkSendsItsBranchToTheForkAndProposesItToTheUpstream(t *testi
 // upstream changed, and nothing was proposed. The control is the test above,
 // where the fork was left alone and the same push went through.
 func TestAPushToAForkIsAnchoredOnTheForksBranch(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P6)
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
@@ -218,6 +222,7 @@ func TestAPushToAForkIsAnchoredOnTheForksBranch(t *testing.T) {
 // assistant init does not record such a fork, so the record is written here
 // directly, which is the case the begin-time check exists for.
 func TestARunWhoseForkDoesNotResolveIsRefusedBeforeItStarts(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
 	subject, forkPath := forkedSubject(t, h, "https://example.invalid/someone/assistant.git")

@@ -28,6 +28,7 @@ import (
 // worker's group is registered the way a stage's is, which is what shows the
 // check was looking.
 func TestAWorkerIsNotContainedAndTheWrapperOffersNoWorker(t *testing.T) {
+	t.Parallel()
 	agent := standin.NewWorker(t, standin.Script{}, agents.WithTerminationGrace(300*time.Millisecond))
 	resolved := agent.Runner()
 	if _, ok := resolved.(agents.WorkerRunner); !ok {

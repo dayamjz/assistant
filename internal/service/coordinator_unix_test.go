@@ -57,6 +57,7 @@ func kindsOf(t *testing.T, h *home.Home, id string) []string {
 // the method reached Create rather than a second implementation of it, and
 // a request intake cannot read is refused as invalid.
 func TestTaskCreateIsTheCoordinatorsAndNotAWorkers(t *testing.T) {
+	t.Parallel()
 	launchedWorker(t, "task/create", func(w launched) {
 		running := w.running
 		investigation := machine.TaskCreateRequest{
@@ -116,6 +117,7 @@ func TestTaskCreateIsTheCoordinatorsAndNotAWorkers(t *testing.T) {
 // has the gate as its assistant remote. Asked again, it is refused by the
 // records, because the task is no longer an investigation.
 func TestAnInvestigationCannotPromoteItselfAndTheCoordinatorCan(t *testing.T) {
+	t.Parallel()
 	launchedWorkerOf(t, store.TaskInvestigation, "", func(w launched) {
 		running, task := w.running, w.task
 		promotion := machine.TaskPromoteRequest{
@@ -171,6 +173,7 @@ func TestAnInvestigationCannotPromoteItselfAndTheCoordinatorCan(t *testing.T) {
 // dispatched entry, the launch records a session on the new attempt, and a
 // second relaunch is refused with the attempts still two.
 func TestTheCoordinatorRelaunchesADeadTerminalThroughTheAnchoredRelaunch(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P6)
 	service.RequireSweepClearsHere(t, "a coordinator relaunching a dead terminal in its standing copy")
 	launchedWorker(t, "task/relaunch", func(w launched) {

@@ -196,6 +196,7 @@ func resolvedCopy(t *testing.T, h *home.Home, id string) string {
 // with the terminal Dead, because no run is attributed and a dead terminal
 // outranks the log. Nothing wrote an event for either.
 func TestADispatchedDeliveryTaskIsLaunched(t *testing.T) {
+	t.Parallel()
 	h := newHome(t)
 	subject := newSubject(t)
 	quietMaintenance(t, subject)
@@ -306,6 +307,7 @@ func TestADispatchedDeliveryTaskIsLaunched(t *testing.T) {
 // reads Running from the process tier while its worker runs. Close ends the
 // worker: the reference probes Dead afterwards.
 func TestADispatchedInvestigationTaskIsLaunched(t *testing.T) {
+	t.Parallel()
 	h := newHome(t)
 	subject := newSubject(t)
 	quietMaintenance(t, subject)
@@ -353,6 +355,7 @@ func TestADispatchedInvestigationTaskIsLaunched(t *testing.T) {
 // refusal behind that is launch_internal_test.go's to show; this is the
 // record's view of a fleet over such an adapter.
 func TestAnAdapterWithoutWorkerSessionsDispatchesAndNeverLaunches(t *testing.T) {
+	t.Parallel()
 	h := newHome(t)
 	subject := newSubject(t)
 	quietMaintenance(t, subject)

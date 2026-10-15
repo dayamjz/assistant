@@ -22,6 +22,7 @@ import (
 // The first stage is held inside its body for the whole of the second call, so
 // the two overlap for certain rather than by timing.
 func TestARunAdvancesInOnePlaceAtATime(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	h := newHome(t)
 	subject := newSubject(t)

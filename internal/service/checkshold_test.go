@@ -302,6 +302,7 @@ func mustBeResolvedByTheProgram(t *testing.T, hold store.Hold, state string) {
 // passed, with the record saying a merge ended it; the checks stage's report
 // is untouched, so it still says the checks were not read to a verdict.
 func TestRecoveryEndsAnElapsedChecksHoldWhosePullRequestWasMerged(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	c := newChecksHoldSubject(t)
 
@@ -377,6 +378,7 @@ func readMergeRecord(t *testing.T, h *home.Home, runID string) *store.MergeRecor
 // same terms and fails the run, with the reason the record carries, and the
 // answer is answered with the run as it then stands rather than applied.
 func TestRespondingToAnElapsedChecksHoldReReadsThePullRequestFirst(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	c := newChecksHoldSubject(t)
 
@@ -414,6 +416,7 @@ func TestRespondingToAnElapsedChecksHoldReReadsThePullRequestFirst(t *testing.T)
 // stage, and no hold is recorded as closed by the program. The pull request
 // is still read first, which the count shows.
 func TestOnlyAMergedOrClosedPullRequestClosesTheChecksHold(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	for _, tc := range []struct {
 		name  string
@@ -423,6 +426,7 @@ func TestOnlyAMergedOrClosedPullRequestClosesTheChecksHold(t *testing.T) {
 		{"unrecognized", forge.PullRequestStateUnknown},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			c := newChecksHoldSubject(t)
 			withServiceOptions(t, c.options(t, false), func(running serviceUnderTest) {
 				runID := startAtChecksHold(t, c, running.client).Record.ID
@@ -456,6 +460,7 @@ func TestOnlyAMergedOrClosedPullRequestClosesTheChecksHold(t *testing.T) {
 // section 5's terms, and that is what makes the count after the answer a
 // control rather than an absence.
 func TestAHoldOnAPersonsDecisionIsNeverReRead(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	c := newChecksHoldSubject(t)
 	c.provider.set(forge.PullRequestStateMerged)
@@ -507,6 +512,7 @@ func TestAHoldOnAPersonsDecisionIsNeverReRead(t *testing.T) {
 // The control is the merged state those same runs would otherwise have been
 // ended on: once the host answers again, the next look ends the run.
 func TestAPullRequestThatCannotBeReadLeavesTheHoldToThePerson(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	for _, tc := range []struct {
 		name string
@@ -525,6 +531,7 @@ func TestAPullRequestThatCannotBeReadLeavesTheHoldToThePerson(t *testing.T) {
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			c := newChecksHoldSubject(t)
 			var runID string
 			withServiceOptions(t, c.options(t, false), func(running serviceUnderTest) {
@@ -575,8 +582,10 @@ func TestAPullRequestThatCannotBeReadLeavesTheHoldToThePerson(t *testing.T) {
 // write rolls the resolution back with it, so no hold row says the program
 // resolved a hold on a run a person resumed.
 func TestTheHoldClosureAndTheMoveAreOneTransaction(t *testing.T) {
+	t.Parallel()
 	requiresIdentifiedPeer(t)
 	t.Run("a hold already resolved is left and the run still moves", func(t *testing.T) {
+		t.Parallel()
 		c := newChecksHoldSubject(t)
 		var runID string
 		withServiceOptions(t, c.options(t, false), func(running serviceUnderTest) {
@@ -607,6 +616,7 @@ func TestTheHoldClosureAndTheMoveAreOneTransaction(t *testing.T) {
 	})
 
 	t.Run("a move refused by a person's answer rolls the resolution back", func(t *testing.T) {
+		t.Parallel()
 		c := newChecksHoldSubject(t)
 		withServiceOptions(t, c.options(t, false), func(running serviceUnderTest) {
 			runID := startAtChecksHold(t, c, running.client).Record.ID

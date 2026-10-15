@@ -80,6 +80,7 @@ func reportedFromTheReport(process taskstate.Liveness) func(taskstate.Resolution
 // second attempt and a session for it, and the reported investigation is
 // left with its one attempt and no session.
 func TestAReportedInvestigationOutranksItsTerminal(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P8)
 	service.RequireSweepClearsHere(t, "a restart relaunching the control investigation in place")
 	requiresIdentifiedPeer(t)

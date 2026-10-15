@@ -42,7 +42,38 @@ func TestMain(m *testing.M) {
 	hookMain()
 	callMain()
 	service.EarlierServiceMain()
-	os.Exit(m.Run())
+	os.Exit(runQuietly(m))
+}
+
+// runQuietly runs the tests with git's automatic maintenance off for every
+// git this process and its children start, so no git a test started outlives
+// its temporary directory (#119). The service's own git runs under
+// internal/vcs, which keeps GIT_CONFIG_GLOBAL, so the file named here is the
+// one every repository a test or the service under it creates reads.
+//
+// It is set once for the process rather than per test with t.Setenv because
+// t.Setenv refuses a test that runs in parallel, and the setting is the same
+// for every test: a per-test file held nothing a test could tell apart. The
+// raw git helper above still names an absent file of its own, so what a test
+// builds by hand is insulated from this one as it was from the machine's.
+func runQuietly(m *testing.M) int {
+	dir, err := os.MkdirTemp("", "gitconfig")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "making the quiet git configuration:", err)
+		return 1
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+	cfg := filepath.Join(dir, "gitconfig")
+	if err := os.WriteFile(cfg, []byte("[gc]\n\tauto = 0\n[maintenance]\n\tauto = false\n"), 0o600); err != nil {
+		fmt.Fprintln(os.Stderr, "writing the quiet git configuration:", err)
+		return 1
+	}
+	if err := os.Setenv("GIT_CONFIG_GLOBAL", cfg); err != nil {
+		fmt.Fprintln(os.Stderr, "naming the quiet git configuration:", err)
+		return 1
+	}
+	defer service.RemoveDatabaseTemplate()
+	return m.Run()
 }
 
 // hookMain lets this binary act as the command a gate's hooks invoke, on
@@ -280,6 +311,7 @@ func recordRepository(t *testing.T, h *home.Home, workingPath string) store.Repo
 	if err := h.Create(); err != nil {
 		t.Fatalf("creating the home: %v", err)
 	}
+	service.SeedDatabase(t, h.Database())
 	records, err := store.Open(t.Context(), h.Database(), store.WithRedactor(redact.New()))
 	if err != nil {
 		t.Fatalf("opening the store: %v", err)
@@ -636,6 +668,7 @@ func serviceWithClient(t *testing.T, h *home.Home) (serviceUnderTest, error) {
 // record where a service that died would have left it.
 func openRecords(t *testing.T, h *home.Home) *store.Store {
 	t.Helper()
+	service.SeedDatabase(t, h.Database())
 	records, err := store.Open(t.Context(), h.Database(), store.WithRedactor(redact.New()))
 	if err != nil {
 		t.Fatalf("opening the store: %v", err)

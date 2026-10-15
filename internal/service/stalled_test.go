@@ -35,6 +35,7 @@ import (
 // that would have every blocking call claim its own finished segment is still
 // running.
 func TestAReadSaysWhetherAnythingIsAdvancingTheRun(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P14)
 	requiresIdentifiedPeer(t)
 	h := newHome(t)

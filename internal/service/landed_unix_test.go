@@ -117,6 +117,7 @@ func removed(t *testing.T, w launched) bool {
 // Complete. The removal is the proof's: the copy's work is on the
 // upstream's default branch, which is what the decision examined.
 func TestATaskThatLandsWhileItsWorkerRunsEndsWithTheWorkerGoneAndItsCopyRemoved(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P12)
 	streamWorker(t, "task/landing", passingConfig, func(w launched, _ *standin.Agent) {
 		ref := w.session.Reference().String()
@@ -174,6 +175,7 @@ func stopHoldsOf(t *testing.T, w launched) []store.Hold {
 // which removes the copy on P12's proof; the supervisor does not look
 // again within the test, so the removal is the stop path's.
 func TestAStopOfALandedTaskRaisesNoRelaunchHoldAndOfALiveOneDoes(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P12)
 	for _, tc := range []struct {
 		name   string
@@ -240,6 +242,7 @@ func unprovenLines(t *testing.T, w launched) int {
 // the cleanup. The bound is read over three intervals of wall time, so a
 // pass delayed past them would leave it unexercised rather than failed.
 func TestALandedCopyWhoseProofFailsIsKeptAfterTheStop(t *testing.T) {
+	t.Parallel()
 	principles.Cite(t, principles.P12)
 	principles.Cite(t, principles.P6)
 	streamWorker(t, "task/unproven", passingConfig, func(w launched, _ *standin.Agent) {
