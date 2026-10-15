@@ -1,6 +1,6 @@
 ---
 name: coordinator
-description: Run a fleet of assistant tasks as their coordinator - create delivery and investigation tasks, steer, stop, relaunch and promote them, drain and acknowledge the wake queue, and verify supervision - through the assistant coordinator client. Use when the user asks you to coordinate, dispatch, spawn, steer or supervise assistant tasks or workers, or to act on what the fleet's wake queue reports.
+description: Run a fleet of assistant tasks as their coordinator - create delivery and investigation tasks, steer, stop, relaunch and promote them, wait on, drain and acknowledge the wake queue, and verify supervision - through the assistant coordinator client. Use when the user asks you to coordinate, dispatch, spawn, steer or supervise assistant tasks or workers, or to act on what the fleet's wake queue reports.
 ---
 
 # coordinator
@@ -154,10 +154,39 @@ assistant coordinator acknowledge 12 13     # the ids you handled
   `hold-opened`, a decision waits on an answer; for
   `message-unacknowledged`, the worker has not acknowledged a message.
 
+## Wait for a wake
+
+Instead of polling, block on the queue between turns of work:
+
+```sh
+assistant --json coordinator await --timeout 5m   # blocks, then lists queued wakes
+```
+
+- It answers as soon as the queue holds a wake that is not acknowledged,
+  with the same rows `wakes` would list, or once the bound passes with an
+  empty list. An empty list always means the bound passed.
+- It acknowledges nothing. A wake it returned is returned again, at once,
+  by the next `await` or `wakes` until you acknowledge it. So the loop is:
+  wait, act on each wake, acknowledge the ones you handled, wait again.
+- `--timeout` is whole seconds from `1s` to `1h`; the default is `5m`.
+  Anything else is refused as incorrect usage, exit `2`, and nothing is
+  clamped. Choose a bound shorter than the limit your own tool puts on one
+  command, or run it in the background if your tool allows that.
+- `--limit N` bounds the answer, as on `wakes`.
+- If the service stops or restarts while you wait, the command exits `1`.
+  Nothing is lost: run `assistant coordinator supervision` to confirm the
+  watch is live again, then wait again. Wakes still queued are returned at
+  once. A restart can itself relaunch a task whose worker is gone, and
+  then records that task's `terminal-gone` wake as handled by the program,
+  so after a restart read `assistant tasks` as well as the queue.
+
 ## Known gaps in this build
 
-- **No blocking wait (#228).** `wakes` answers at once. Nothing here sleeps
-  until a wake arrives, so you poll the queue or read `assistant watch`.
+- **Waking depends on the watch.** A wait answers when the service's
+  supervision records a wake, so how soon it answers after a worker stops
+  is the supervision's cadence, not the wait's. Check
+  `assistant coordinator supervision` at session start and after any exit
+  `1` from `await`.
 - **Workers cannot report back (#226).** A worker has no route to the
   program's event method. So a message the worker read and acted on is
   never recorded as read, and `message-unacknowledged` wakes arrive for it

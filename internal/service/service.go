@@ -267,6 +267,10 @@ type Service struct {
 	// service that restarts holds none of these and relaunches. Close ends
 	// every session here, and launch.go owns the map.
 	launched map[string]*session.Session
+	// wakeBell is rung when the supervisor loop appends a wake, so an armed
+	// wakes.wait reads the queue again; wakewait.go owns it and says why it
+	// is a hint and never a record.
+	wakeBell wakeBell
 	// betweenAttemptReadAndClaim runs in a dispatch after the attempts have
 	// been read and before the attempt is claimed. It is nil in production
 	// and set only by this package's tests, which use it to hold two

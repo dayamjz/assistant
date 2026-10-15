@@ -81,6 +81,30 @@ the identifier of any finding the stage reported, including a fix or note
 finding the hold does not list. `assistant --json status` lists every one, with
 its identifier, under `active_run.stages[].report.findings`.
 
+## Waiting on a fleet
+
+A coordinator agent running tasks through `assistant coordinator` does not
+need to poll the wake queue. `assistant coordinator await` blocks until the
+queue holds a wake nobody has acknowledged, then lists the queued wakes the
+same way `assistant coordinator wakes` does, or lists none once its bound
+passes:
+
+```sh
+assistant --json coordinator await --timeout 5m
+```
+
+The bound is whole seconds from `1s` to `1h`, and `5m` when none is given;
+anything else is refused as incorrect usage rather than clamped. The wait
+acknowledges nothing, so a wake it returned keeps being returned until
+`assistant coordinator acknowledge` names it. It keeps nothing between calls,
+so after a service restart, which ends a wait in progress as an operational
+failure, waiting again reads the same durable queue; `assistant coordinator
+supervision` confirms the service is watching the fleet again first. Like the
+other coordinator subcommands, it is refused for a task's worker.
+
+How soon it answers after a worker stops is set by the service's supervision
+pass, which records the wake, not by the wait.
+
 ## Keep your CI required
 
 The gate is not your CI (PRD section 12 lists "Being your CI" as a permanent
