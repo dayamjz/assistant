@@ -687,13 +687,16 @@ func readOutLifecycle(w io.Writer, answer machine.Lifecycle) {
 // and the one fact here they may want to correct with --default-branch, after
 // internal/machine's row for where that answer came from, so a wrong one is
 // visible when it is written. The gate's identifier and where it lives are
-// the structured rendering's.
+// the structured rendering's. Then the command offer, through
+// readOutCommands, whose file name and commands are printed as machine text
+// beside its rows.
 func readOutInit(w io.Writer, answer machine.Init) {
 	writeln(w, machine.InitPhrase(answer))
 	if branch := answer.Repository.DefaultBranch; branch != "" {
 		writeln(w, machine.DefaultBranchPhrase(answer.DefaultBranchSource))
 		writef(w, "Default branch %s\n", printable(branch))
 	}
+	readOutCommands(w, answer.Commands)
 }
 
 // readOutPlan prints what custody found or did for the branch, beside the

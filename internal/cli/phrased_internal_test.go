@@ -230,6 +230,18 @@ func fixtures(t *testing.T) map[string]any {
 			Gate:                machine.Gate{Present: true, ID: sampleID, Repository: filepath.Join(root, "repos", sampleID+".git")},
 			Repository:          store.Repository{ID: sampleID, WorkingPath: "/somewhere/parser", DefaultBranch: "main"},
 			DefaultBranchSource: machine.DefaultBranchFromOrigin,
+			// One command written and one only offered, each read out of a
+			// file whose name and whose stage words the rows must leave to
+			// the machine text beside them.
+			Commands: machine.CommandProposals{
+				File: "assistant.json",
+				Proposed: []machine.ProposedCommand{
+					{Key: "commands.test", Command: "make test", Source: "Makefile target test", Written: true},
+					{Key: "commands.lint", Command: "go vet ./...", Source: "go.mod"},
+				},
+				Configured: []string{"commands.document"},
+				Result:     machine.CommandsWritten,
+			},
 		},
 		"plan":      fixturePlan(),
 		"eject":     machine.Eject{Removed: true, Repository: sampleID, Runs: 2},
@@ -359,6 +371,21 @@ func TestThePhrasedRenderersSpeakTheTableAndTheJSONKeepsIdentifiers(t *testing.T
 		"host install": func(v any) []string {
 			a := v.(machine.HostInstall)
 			return []string{hostInstallFileLabel + " " + a.Settings, hostInstallLineLabel + " " + a.Line, hostInstallConflictLabel + " " + a.Conflict}
+		},
+		"init": func(v any) []string {
+			c := v.(machine.Init).Commands
+			lines := []string{commandsFileLabel + " " + c.File}
+			for _, key := range c.Configured {
+				lines = append(lines, commandsConfiguredLabel+" "+key)
+			}
+			for _, p := range c.Proposed {
+				label := commandsProposedLabel
+				if p.Written {
+					label = commandsWrittenLabel
+				}
+				lines = append(lines, commandLine(label, p))
+			}
+			return lines
 		},
 	}
 	// An answer whose every field is one the derived set does not forbid has
