@@ -15,9 +15,10 @@ import (
 )
 
 // hostVerbName is the second command this binary answers to that PRD section
-// 9's table does not name, and with gateVerbName the last: section 9 says
-// the two are not a precedent for a third, because each is the interface a
-// hook this program installed or asked for requires.
+// 9's table does not name: section 9 says it and gateVerbName are not a
+// precedent for a third, because each is the interface a hook this program
+// installed or asked for requires. coordinatorVerbName is a third by the
+// owner's decision on #227, not by that precedent.
 //
 // This one is the interface the coordinator's host requires. PRD section 5's
 // stop guard acts through a hook the host fires at turn end, which runs

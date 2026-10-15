@@ -1418,7 +1418,9 @@ var PhraseNoReading = Phrase{
 // empty row per part, a row per kind of landed record, the row for what a
 // read left out, and the two rows for a mark, and custody's: a row per class
 // planned and carried out and as status prints it, a row per refusal, and a
-// row per step. A templated row is listed with its
+// row per step, and the coordinator client's: a created task begun and one
+// recorded behind other work, a promotion, a relaunch, a drain with and
+// without notices, an acknowledgement, and arm verification's three. A templated row is listed with its
 // placeholder filled in. The result is a copy. Phrases is the same list as
 // strings.
 func TablePhrases() []Phrase {
@@ -1474,5 +1476,6 @@ func TablePhrases() []Phrase {
 		MarkedPhrase(Marked{Marks: []store.SeenMark{{}}}))
 	out = append(out, defaultBranchRows()...)
 	out = append(out, commandsRows()...)
-	return append(out, custodyRows()...)
+	out = append(out, custodyRows()...)
+	return append(out, coordinatorRows()...)
 }
