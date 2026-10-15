@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/findings"
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
@@ -62,6 +63,7 @@ func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 		note         string
 		own          repeated
 		task         string
+		consent      bool
 	)
 	if err := in.parseFlags("", func(set *flag.FlagSet) {
 		set.StringVar(&intent, "intent", "", "what this change sets out to do, in your own terms")
@@ -74,6 +76,9 @@ func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 			"the hold lists only the findings holding it, and "+everyFindingIsIn)
 		set.StringVar(&note, "note", "", "with --answer fix: a note for the fixer")
 		set.Var(&own, "finding", "with --answer fix: a finding of your own for the round to resolve; may be repeated")
+		set.BoolVar(&consent, "standing-consent", false, "put the run this starts or attaches to under standing consent, "+
+			"where the repository's default branch sets "+string(config.KeyAllowStandingConsent)+": the program then answers "+
+			"the decisions about findings before the push itself, and never the push, pull request or checks ones")
 	}); err != nil {
 		return nil, err
 	}
@@ -99,7 +104,7 @@ func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 		return nil, usagef("--answer and --cancel are two different things to do with one run; pass one")
 	}
 	if acting := actingOnTheRunInFlight(answered, cancel); acting != "" {
-		for _, name := range []string{"intent", "intent-supplied", "skip"} {
+		for _, name := range []string{"intent", "intent-supplied", "skip", "standing-consent"} {
 			if flagWasSet(in.flags, name) {
 				return nil, usagef("%s acts on the run this branch already has, and --%s is for starting one; pass one", acting, name)
 			}
@@ -144,6 +149,10 @@ func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 		Intent:         intent,
 		IntentSupplied: supplied,
 		Skip:           splitList(skip),
+		// Whether the repository allows it is the service's to read, from
+		// the trusted copy; a refusal comes back as an invalid request and
+		// exits as incorrect usage.
+		StandingConsent: consent,
 	}, &run)
 	return run, err
 }
@@ -363,15 +372,26 @@ func (in *invocation) localStatus(ctx context.Context, working string, cause err
 // reads the whole home's invocation history rather than this working copy's
 // runs, because the record names no repository, so it neither names a run nor
 // takes --limit, and either given with it is refused rather than ignored.
+//
+// The log view is --log on this command with a run named, on the same terms:
+// PRD section 9 makes it a flag on runs and adds no verb. It names the stage whose log is read, and a
+// fix round is in the log of the stage whose findings it fixed. readLog says
+// what it refuses.
 func listRuns(ctx context.Context, in *invocation) (any, error) {
 	var limit int
 	var usage usageFlag
+	var stage string
 	if err := in.parseArgs("runs", 1, func(set *flag.FlagSet) {
 		set.IntVar(&limit, "limit", 0, "how many runs to report, newest first; zero means all of them")
 		set.Var(&usage, usageFlagName, "report what the agent calls of the last WINDOW cost, written --"+usageFlagName+
 			"=WINDOW as 24h, 90m or 7d; alone it is "+machine.DefaultUsageWindow)
+		set.StringVar(&stage, logFlagName, "", "with a run named: print the end of that run's log for the stage STAGE, "+
+			"which holds its fix rounds too; one of "+strings.Join(stageNames(), ", "))
 	}); err != nil {
 		return nil, err
+	}
+	if flagWasSet(in.flags, logFlagName) {
+		return readLog(ctx, in, stage, limit, usage.set)
 	}
 	if usage.set {
 		return readUsage(ctx, in, usage, limit)
@@ -410,6 +430,45 @@ func readUsage(ctx context.Context, in *invocation, usage usageFlag, limit int) 
 	var answer machine.Usage
 	err := in.callService(ctx, ipc.MethodUsageRead, machine.UsageRequest{Window: usage.window}, &answer)
 	return answer, err
+}
+
+// readLog is runs RUN --log=STAGE: the end of one stage's log in the run
+// named. It names one run and reads one file, so a run must be named, the
+// stage must be one of the nine, and --limit and --usage are refused beside
+// it rather than ignored; each refusal is incorrect usage, decided here before
+// the service is asked. Which part of the log is returned, and how much is
+// left out, is the service's to bound and machine.StageLog's to say.
+func readLog(ctx context.Context, in *invocation, stage string, limit int, usage bool) (any, error) {
+	if len(in.args) != 1 {
+		return nil, usagef("--%s reads one run's log and takes the run as its argument, as assistant runs RUN --%s=%s",
+			logFlagName, logFlagName, pipeline.StageReview)
+	}
+	if _, ok := pipeline.ParseStage(stage); !ok {
+		return nil, usagef("--%s takes one of the stages: %s; it was given %q", logFlagName, strings.Join(stageNames(), ", "), stage)
+	}
+	if limit != 0 {
+		return nil, usagef("--limit counts runs, and --%s reads one run's log", logFlagName)
+	}
+	if usage {
+		return nil, usagef("--%s and --%s are two different reads; pass one", logFlagName, usageFlagName)
+	}
+	var answer machine.StageLog
+	err := in.callService(ctx, ipc.MethodRunLog, machine.StageLogRequest{Run: in.args[0], Stage: stage}, &answer)
+	return answer, err
+}
+
+// logFlagName is the flag on runs that asks for the log view, named once so
+// the declaration, the refusals and a test read the same word.
+const logFlagName = "log"
+
+// stageNames is the nine stage names in the order a run takes them, for a
+// flag's help and a refusal that says what was expected.
+func stageNames() []string {
+	var names []string
+	for _, stage := range pipeline.Order() {
+		names = append(names, stage.String())
+	}
+	return names
 }
 
 // usageFlagName is the flag on runs that asks for the usage view, named once

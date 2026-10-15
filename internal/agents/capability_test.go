@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"reflect"
 	"runtime"
 	"slices"
@@ -159,6 +160,78 @@ var probes = []probe{{
 		}
 		if refusal.Agent != r.Name() {
 			t.Errorf("the refusal names agent %q, want %q", refusal.Agent, r.Name())
+		}
+	},
+}, {
+	capability: agents.CapabilityTerminalWorkers,
+	declared: func(t testing.TB, r agents.Runner) {
+		t.Helper()
+		if _, ok := r.(agents.TerminalWorkerRunner); !ok {
+			t.Errorf("%s declares %s and is no TerminalWorkerRunner, so nothing can start one on it",
+				r.Name(), agents.CapabilityTerminalWorkers)
+			return
+		}
+		// The worker probe's question, asked of a worker hosted in a
+		// terminal: it starts, it is typed to twice and reacts each time
+		// while still running, and Close ends it. Without tmux it is not
+		// asked at all, and standin.Tmux says so rather than this passing.
+		term := agents.Terminal{Tmux: standin.Tmux(t), Socket: filepath.Join(standin.SocketDir(t), "c")}
+		dir, err := os.MkdirTemp("", "conform-terminal-")
+		if err != nil {
+			t.Fatalf("making a directory for the worker: %v", err)
+		}
+		defer os.RemoveAll(dir)
+		worker, err := agents.OpenTerminalWorker(t.Context(), r, term, agents.WorkerSpec{
+			Dir: dir, Instructions: "conformance: a terminal worker is being started",
+		})
+		if err != nil {
+			t.Errorf("%s declares %s and OpenTerminalWorker could not start one: %v",
+				r.Name(), agents.CapabilityTerminalWorkers, err)
+			return
+		}
+		defer worker.Close()
+		if worker.Group() <= 0 {
+			t.Errorf("%s started a terminal worker in group %d, want a positive identifier", r.Name(), worker.Group())
+		}
+		for _, text := range []string{
+			"conformance: a first message after the instructions",
+			"conformance: a second message, with \"quotes\" and a\nsecond line",
+		} {
+			mark := written(worker)
+			if err := worker.Send(t.Context(), text); err != nil {
+				t.Errorf("%s's terminal worker refused a send while running: %v", r.Name(), err)
+				return
+			}
+			if !reacted(t, worker, mark) {
+				t.Errorf("%s's terminal worker ended on what it was typed rather than reading it: %s",
+					r.Name(), worker.Capture().Text)
+				return
+			}
+		}
+		worker.Close()
+		select {
+		case <-worker.Done():
+		default:
+			t.Errorf("%s's terminal worker is not done after Close returned", r.Name())
+		}
+	},
+	undeclared: func(t testing.TB, r agents.Runner) {
+		t.Helper()
+		if _, ok := r.(agents.TerminalWorkerRunner); ok {
+			t.Errorf("%s has not declared %s and carries the mechanism anyway",
+				r.Name(), agents.CapabilityTerminalWorkers)
+		}
+		_, err := agents.OpenTerminalWorker(t.Context(), r,
+			agents.Terminal{Tmux: "/nonexistent/tmux", Socket: "/nonexistent/s"},
+			agents.WorkerSpec{Dir: os.TempDir(), Instructions: "anything"})
+		var refusal *agents.CapabilityError
+		if !errors.As(err, &refusal) {
+			t.Fatalf("%s has not declared %s and OpenTerminalWorker answered %v, want a *CapabilityError",
+				r.Name(), agents.CapabilityTerminalWorkers, err)
+		}
+		if refusal.Capability != agents.CapabilityTerminalWorkers || refusal.Agent != r.Name() {
+			t.Errorf("the refusal names %q on %q, want %q on %q",
+				refusal.Capability, refusal.Agent, agents.CapabilityTerminalWorkers, r.Name())
 		}
 	},
 }}
@@ -344,6 +417,28 @@ func TestTheWorkerProbeRefusesAWorkerThatEndsOnWhatItIsSent(t *testing.T) {
 	}
 }
 
+// The terminal probe's positive control, on the worker probe's terms: the
+// stand-in's command line here puts it in stream mode, which ends on the
+// first plain line typed at it, so a terminal worker that cannot read what
+// it is typed is what the suite must refuse.
+func TestTheTerminalProbeRefusesAWorkerThatEndsOnWhatItIsTyped(t *testing.T) {
+	standin.Tmux(t)
+	agent := standin.NewWorker(t, standin.Script{})
+	misframed, err := agents.ScriptedFactory(
+		agents.WithBinary(helperBinary(t)),
+		agents.WithTerminationGrace(300*time.Millisecond),
+	).New(t.Context(), append(agent.Arguments(), "--print", "--input-format", "stream-json"))
+	if err != nil {
+		t.Fatalf("building the misframing runner: %v", err)
+	}
+	p, _ := probeFor(agents.CapabilityTerminalWorkers)
+	recorder := &recordingTB{TB: t}
+	onItsOwnGoroutine(func() { p.declared(recorder, misframed) })
+	if !recorder.failed {
+		t.Fatal("the terminal probe accepted a worker that ends on every line typed at it")
+	}
+}
+
 // TestAnAdapterWithoutSessionsConformsToItsDeclaration runs the same suite
 // against a second adapter that declares nothing, which is the case the
 // declaration exists for and the one this build has no real example of.
@@ -359,12 +454,13 @@ func TestTheScriptedAdapterConformsToItsDeclaration(t *testing.T) {
 	conform(t, newWorkerRunner(t))
 }
 
-// What the scripted adapter declares is a fact about it too: both mechanisms,
-// and not suppression. The second half holds for the reason the shipped
+// What the scripted adapter declares is a fact about it too: the three
+// mechanisms it carries, and not suppression. The second half holds for the reason the shipped
 // adapter's does.
 func TestWhatTheScriptedAdapterDeclares(t *testing.T) {
 	declared := newWorkerRunner(t).Capabilities()
-	want := []agents.Capability{agents.CapabilityResumableSessions, agents.CapabilityWorkerSessions}
+	want := []agents.Capability{agents.CapabilityResumableSessions, agents.CapabilityWorkerSessions,
+		agents.CapabilityTerminalWorkers}
 	if got := declared.List(); !slices.Equal(got, want) {
 		t.Errorf("the scripted adapter declares %v, want exactly %v", got, want)
 	}
@@ -478,6 +574,22 @@ func TestResolveRefusesAnAdapterWhoseDeclarationDoesNotMatchWhatItIs(t *testing.
 			name:      "quiet-worker",
 			available: true,
 			workers:   true,
+		},
+		want: "does not declare it",
+	}, {
+		name: "declares terminal workers it cannot start",
+		factory: &stubFactory{
+			name:      "terminal-boaster",
+			available: true,
+			declares:  []agents.Capability{agents.CapabilityTerminalWorkers},
+		},
+		want: "carries no mechanism",
+	}, {
+		name: "starts terminal workers it did not declare",
+		factory: &stubFactory{
+			name:      "quiet-terminal",
+			available: true,
+			terminals: true,
 		},
 		want: "does not declare it",
 	}, {

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
@@ -64,9 +65,11 @@ var coordinatorActions = []struct {
 	{"create", "", "Record a new task through intake; a task nothing blocks has its worker begun after the answer.", coordinatorCreate},
 	{"message", "<task>", "Send the worker of a running task a message, recorded before it is written.", coordinatorMessage},
 	{"stop", "<task>", "End a task's worker, prove it ended, and hold the task for an answer.", coordinatorStop},
+	{"peek", "<task>", "Read a task's worker's recent output, redacted and bounded, and how to attach to its terminal.", coordinatorPeek},
 	{"relaunch", "<task>", "Begin a new attempt of a task whose worker is gone, in its own copy.", coordinatorRelaunch},
 	{"promote", "<task>", "Turn an investigation task into a delivery on a branch, in its own copy.", coordinatorPromote},
 	{"wakes", "", "List the queued wakes, oldest first, acknowledging none.", coordinatorWakes},
+	{"await", "", "Block until a wake is queued or the bound elapses, then list the queued wakes, acknowledging none.", coordinatorAwait},
 	{"acknowledge", "<wake>...", "Record that the named wakes were handled, so a later list leaves them out.", coordinatorAcknowledge},
 	{"supervision", "", "Verify that this home's service is watching the fleet.", coordinatorSupervision},
 }
@@ -200,6 +203,23 @@ func coordinatorStop(ctx context.Context, in *invocation) (any, error) {
 	return stopped, err
 }
 
+// coordinatorPeek is task.peek: the recent output of the worker of the
+// task's latest attempt, redacted and bounded by the service, and the
+// command a person attaches to its terminal with where the service's
+// session provider hosts it in one. The output is in the structured answer
+// only, beside the command; what a person reads is PeekPhrase, because a
+// worker's output is never relayed to a person (P13) and the command names
+// a path under the home.
+func coordinatorPeek(ctx context.Context, in *invocation) (any, error) {
+	task, err := in.taskOperand(coordinatorCommand("peek"), func(*flag.FlagSet) {})
+	if err != nil {
+		return nil, err
+	}
+	var peeked machine.TaskPeek
+	err = in.callService(ctx, ipc.MethodTaskPeek, machine.TaskRequest{Task: task}, &peeked)
+	return peeked, err
+}
+
 // coordinatorRelaunch is task.relaunch, through the one anchored relaunch
 // PRD section 11's reconciliation uses. A task whose worker is still live,
 // and one a stop holds, are refused by the service: the relaunch after a
@@ -255,6 +275,49 @@ func coordinatorWakes(ctx context.Context, in *invocation) (any, error) {
 	}
 	var wakes machine.Wakes
 	err = in.callService(ctx, ipc.MethodWakesList, request, &wakes)
+	return wakes, err
+}
+
+// coordinatorAwait is wakes.wait, named await rather than wait because a
+// subcommand name reaches a person in the refusal that lists the
+// subcommands, and internal/machine/vocabtest's Forbidden set, which
+// internal/cli's P13 tests hold that text to, derives a term from every row
+// of internal/supervisor's wake-kind table, its kind and its class:
+// supervisor.ClassWait is the bare word "wait".
+//
+// It is one call that blocks until the queue holds a queued wake or the
+// bound elapses, answered as coordinatorWakes' answer is, so an empty list
+// is the bound elapsing. It acknowledges
+// nothing, so a wait armed again before coordinatorAcknowledge names what
+// was handled is answered at once with the same rows.
+//
+// --timeout is a duration in whole seconds, and its range and default are
+// machine.WakeWaitRequest.Bounds', which is checked here before the service
+// is asked and again by the service: a bound outside the range, a fraction
+// of a second, and a negative limit are incorrect usage, never clamped. A
+// wait the service ends before its bound, because the service stopped, is
+// an operational failure, and arming it again is the caller's to do.
+func coordinatorAwait(ctx context.Context, in *invocation) (any, error) {
+	name := coordinatorCommand("await")
+	var request machine.WakeWaitRequest
+	var timeout time.Duration
+	err := in.parseFlags(name, func(set *flag.FlagSet) {
+		set.DurationVar(&timeout, "timeout", 0, fmt.Sprintf("how long to block, in whole seconds from %s to %s; 0 is %s",
+			machine.MinWakeWaitTimeout, machine.MaxWakeWaitTimeout, machine.DefaultWakeWaitTimeout))
+		set.IntVar(&request.Limit, "limit", 0, fmt.Sprintf("at most this many wakes, oldest first; 0 is %d", machine.DefaultWakesLimit))
+	})
+	if err != nil {
+		return nil, err
+	}
+	if timeout%time.Second != 0 {
+		return nil, usagef("assistant %s --timeout is %s, and the bound is a whole number of seconds", name, timeout)
+	}
+	request.TimeoutSeconds = int(timeout / time.Second)
+	if _, _, err := request.Bounds(); err != nil {
+		return nil, usagef("assistant %s: %v", name, err)
+	}
+	var wakes machine.Wakes
+	err = in.callService(ctx, ipc.MethodWakesWait, request, &wakes)
 	return wakes, err
 }
 

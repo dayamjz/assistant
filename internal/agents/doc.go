@@ -144,6 +144,16 @@
 // wrapper around the resolved agent carries no worker arm and the handle is
 // obtained from the agent it wraps; its own tests hold that.
 //
+// A worker can also be hosted in a terminal a person attaches to:
+// CapabilityTerminalWorkers names that mechanism, TerminalWorkerRunner
+// carries it, OpenTerminalWorker is the one route to it, and terminal.go
+// owns the whole of it and its gaps. It is the same worker on the same side
+// of P4, started with the same WorkerSpec and the same environment builder;
+// what differs is that the agent is a tmux server's child rather than this
+// process's, that everything reaching it is typed, and that its capture is
+// a screen. Only the scripted adapter declares it, and capability.go says
+// why the Claude Code adapter does not.
+//
 // Four gaps are left open and named.
 //
 // A send its context cut off is not taken back. The bytes already in the

@@ -16,7 +16,9 @@ jobs:
   check:
     name: check (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    # Above the test step's -timeout 30m with room for setup, vet and lint,
+    # so go test's own bound is the one that ends a slow package.
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
@@ -28,6 +30,20 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+
+      # The terminal session provider's tests run against a real tmux, and
+      # the Test step requires one, so they fail here rather than skip.
+      - name: Install tmux
+        shell: bash
+        run: |
+          if ! command -v tmux >/dev/null 2>&1; then
+            if [ "$RUNNER_OS" = "macOS" ]; then
+              brew install tmux
+            else
+              sudo apt-get update && sudo apt-get install -y tmux
+            fi
+          fi
+          tmux -V
 
       - name: Verify formatting
         run: |
@@ -55,14 +71,19 @@ jobs:
         run: make lint-guard-test
 
       # The race detector is the point of this job, so it is not optional.
+      # The timeout is explicit because internal/service has run past go
+      # test's ten-minute default on a macOS runner, which fails the package
+      # with a panic and no assertion having failed.
       # Verbose output goes to a file so a skipped test leaves a trace: a
       # package that skipped its assertions still reads ok, and the step
       # after this one lists every skip with its message.
       - name: Test
         shell: bash
+        env:
+          ASSISTANT_REQUIRE_TMUX: "1"
         run: |
           set -o pipefail
-          go test -race -count=1 -v ./... > test.log 2>&1 || status=$?
+          go test -race -count=1 -timeout 30m -v ./... > test.log 2>&1 || status=$?
           grep -E '^(ok|FAIL|--- FAIL|panic:|\?)[[:space:]]' test.log || true
           if [ -n "${status:-}" ]; then
             echo "::group::full test output"

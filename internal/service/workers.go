@@ -34,7 +34,7 @@ import (
 // answers which task the peer is the worker of, and the handlers whose
 // answer depends on it apply it here: task.event admits only a worker and
 // attributes the entry to its task; wakes.list, wakes.acknowledge,
-// supervision.assert, coordinator.go's task.create, task.promote and
+// wakewait.go's wakes.wait, supervision.assert, coordinator.go's task.create, task.promote and
 // task.relaunch, steer.go's task.message, task.stop and task.interrupt,
 // taskholds.go's task.respond and catchup.go's catchup.mark are the
 // coordinator's and refuse a worker, task.respond so that no worker answers a
@@ -43,8 +43,8 @@ import (
 // gate.admit holds a worker's push to admit_workers.go's rule; and
 // gate.notify records the run a worker's push of its own task's branch
 // starts with the task's intent, which pushIntent below decides. The set is
-// internal/session's, produced by session.Pipe.Create for the worker
-// process's lifetime, and this service reaches it through the driver that
+// internal/session's, produced by the provider's Create, session.Pipe's or
+// session.Tmux's, for the worker process's lifetime, and this service reaches it through the driver that
 // holds the provider. session.Workers' doc says why it is not a second
 // meaning of the containment registry.
 //

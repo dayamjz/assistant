@@ -128,6 +128,15 @@ type Run struct {
 	// a run parked before the column existed, whose park only its checkpoint
 	// still names: the record understates rather than guessing.
 	Park Optional[RunPark] `json:"park"`
+	// StandingConsent is when the run was put under the standing consent PRD
+	// section 9 describes, known exactly when GiveRunStandingConsent recorded
+	// it. It is unknown for every run nobody gave consent to and for a run
+	// recorded before the column existed, which is the same fact: no
+	// decision of that run was answered on consent. Once known it is never
+	// cleared, so the record of a run whose decisions the program answered
+	// keeps saying so. Which decisions it answered, and that each was the
+	// program's, is the hold record ResolvedByStandingConsent names.
+	StandingConsent Optional[time.Time] `json:"standing_consent"`
 	// CreatedAt is when the run was recorded, which PRD section 8 requires to
 	// precede the creation of its directory.
 	CreatedAt time.Time `json:"created_at"`
@@ -501,6 +510,47 @@ func (s *Store) SetRunResolvedAgent(ctx context.Context, id, name string) error 
 	return s.updateRun(ctx, id, "resolved_agent", name)
 }
 
+// GiveRunStandingConsent records that the run was put under standing consent,
+// now, and returns the run as stored. A run already given it keeps the
+// instant it was first given and is returned unchanged, because consent given
+// twice is the one consent rather than a second; a run that does not exist is
+// ErrNotFound.
+//
+// It records and decides nothing. Whether a repository allows standing
+// consent, whether a run may still be given it, and what the program then
+// answers are internal/service's, and the migration that added the column
+// keeps it from ever being cleared.
+func (s *Store) GiveRunStandingConsent(ctx context.Context, id string) (Run, error) {
+	err := s.inTx(ctx, func(tx *sql.Tx) error {
+		now := encodeTime(nowUTC())
+		result, err := tx.ExecContext(ctx,
+			`UPDATE run SET standing_consent = ?, updated_at = ? WHERE id = ? AND standing_consent IS NULL`,
+			now, now, id)
+		if err != nil {
+			return err
+		}
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if affected == 1 {
+			return nil
+		}
+		var exists int
+		switch err := tx.QueryRowContext(ctx, `SELECT 1 FROM run WHERE id = ?`, id).Scan(&exists); {
+		case isNoRows(err):
+			return ErrNotFound
+		case err != nil:
+			return err
+		}
+		return nil
+	})
+	if err != nil {
+		return Run{}, fmt.Errorf("store: giving run %s standing consent: %w", id, err)
+	}
+	return s.Run(ctx, id)
+}
+
 // updateRun writes one column of one run. The column name is never a caller's
 // string: it comes from the fixed set above, so no accessor composes SQL from
 // input.
@@ -530,19 +580,19 @@ const runColumns = `SELECT
 	id, repository_id, branch, submitted_head, base, current_head, status,
 	approved_commit, push_binding, pull_request, fixer_session, intent, intent_source,
 	build_version, build_revision, build_modified, build_go, config_digest,
-	config_rejections, resolved_agent, park,
+	config_rejections, resolved_agent, park, standing_consent,
 	created_at, updated_at`
 
 func scanRun(sc scanner) (Run, error) {
 	var r Run
 	var status, created, updated string
 	var modified int
-	var rejections, park Optional[string]
+	var rejections, park, consent Optional[string]
 	if err := sc.Scan(
 		&r.ID, &r.RepositoryID, &r.Branch, &r.SubmittedHead, &r.Base, &r.CurrentHead, &status,
 		&r.ApprovedCommit, &r.PushBinding, &r.PullRequest, &r.FixerSession, &r.Intent, &r.IntentSource,
 		&r.Build.Version, &r.Build.Revision, &modified, &r.Build.Go, &r.ConfigDigest,
-		&rejections, &r.ResolvedAgent, &park,
+		&rejections, &r.ResolvedAgent, &park, &consent,
 		&created, &updated,
 	); err != nil {
 		return Run{}, err
@@ -554,6 +604,9 @@ func scanRun(sc scanner) (Run, error) {
 		return Run{}, err
 	}
 	if r.Park, err = parkValue(park); err != nil {
+		return Run{}, err
+	}
+	if r.StandingConsent, err = optionalTimeValue(consent, "standing_consent"); err != nil {
 		return Run{}, err
 	}
 	if r.CreatedAt, err = decodeTime(created); err != nil {

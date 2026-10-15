@@ -56,8 +56,8 @@ var specified = []string{"init", "status", "runs", "rerun", "sync", "tasks", "wa
 var unspecified = []string{
 	"start", "attach", "respond", "answer", "cancel", "stop", "restart",
 	"machine", "agent", "push", "version", "help", "config", "logs", "stage",
-	"task", "fleet", "create", "message", "relaunch", "promote", "wakes", "acknowledge", "supervision",
-	"report", "event",
+	"task", "fleet", "create", "message", "relaunch", "promote", "wakes", "await", "acknowledge", "supervision",
+	"peek", "report", "event",
 }
 
 func TestEveryCommandTheSpecificationNamesIsServed(t *testing.T) {
@@ -1160,9 +1160,11 @@ func TestAnInitThatCannotCompleteCreatesNothing(t *testing.T) {
 	h := newHome(t)
 	subject := newSubjectWithoutOrigin(t)
 
+	// The refusal is incorrect usage, because its remedy is --upstream, a flag
+	// the caller supplies; what it says is checked beside the init tests.
 	refused := run(t, h, subject, "init")
-	if refused.code != machine.ExitFailure {
-		t.Fatalf("init with no origin and no --upstream exited %s, want failure:\n%s%s",
+	if refused.code != machine.ExitUsage {
+		t.Fatalf("init with no origin and no --upstream exited %s, want incorrect usage:\n%s%s",
 			refused.code, refused.stdout, refused.stderr)
 	}
 

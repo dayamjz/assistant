@@ -37,9 +37,11 @@ import (
 // from the text, and then sends what the record holds, under a heading
 // naming the record's identifier (framedMessage), through the session
 // provider's Send, which the Claude Code adapter frames as one stream-json
-// user message. The heading is how a worker knows which number to
-// acknowledge, since nothing else on its input names the record. The send's
-// answer is recorded once: written when Send
+// user message, and which the tmux provider types into the worker's terminal
+// through the adapter's terminal framing, which refuses a line longer than it
+// may type, so such a message is recorded refused. The heading is how a
+// worker knows which number to acknowledge, since nothing else on its input
+// names the record. The send's answer is recorded once: written when Send
 // returned, refused with its reason when it failed or when this service
 // holds no session for that attempt's reference. Nothing resends, here or
 // anywhere: a refusal is answered to the caller as *messageRefused with the

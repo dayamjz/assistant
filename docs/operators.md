@@ -24,6 +24,12 @@ and sets up no gate; record it with `git remote set-head origin --auto`, or name
 the branch with `--default-branch`. Either way `init` says which branch it
 recorded and where that answer came from.
 
+`init` takes the upstream, where validated changes go, from the working copy's
+origin. When there is no origin and `--upstream` names none, `init` refuses,
+sets up no gate, and exits with the incorrect-usage code (2). Name the
+repository with `--upstream`; a working copy with no origin also has no default
+branch to learn, so give `--default-branch` beside it.
+
 The test and lint stages run the commands the trusted configuration names and
 hold for you when it names none. To shorten that setup, `init` reads the
 checkout's files for the commands the repository already declares (a
@@ -51,6 +57,19 @@ A run walks nine stages in a fixed order: intent, rebase, review, test,
 document, lint, push, pull request, and checks. Each stage that cannot decide
 holds for a person, and `assistant status` and `assistant doctor` say where a
 run stands and what stops one.
+
+Fix rounds and the rebase stage record commits in the run's isolated copy,
+which is a linked worktree of the gate repository, so they take the committer
+identity git resolves there: your global or system configuration and the gate
+repository's own, not the working copy's. With no `user.name` or `user.email`
+in effect, such a step fails with git's own refusal, and nothing supplies an
+identity in its place. `assistant doctor` asks git the same question in the
+gate repository and reports the answer as its "commit identity" check, with
+`git config --global user.name` and `git config --global user.email` as the
+remedy. The check does not stop a run from starting, and it answers for the
+environment doctor runs in, so an identity set only in variables such as
+`GIT_AUTHOR_NAME`, or a different `GIT_CONFIG_GLOBAL` for the service, can
+make it disagree with what a run meets.
 
 ## Answering a hold
 
@@ -110,6 +129,94 @@ Three things follow for whoever runs the service:
   when the coordinator stops it, and only on the cleanup check's proof. A
   report filed by a worker that is still running keeps its copy.
 
+## Waiting on a fleet
+
+A coordinator agent running tasks through `assistant coordinator` does not
+need to poll the wake queue. `assistant coordinator await` blocks until the
+queue holds a wake nobody has acknowledged, then lists the queued wakes the
+same way `assistant coordinator wakes` does, or lists none once its bound
+passes:
+
+```sh
+assistant --json coordinator await --timeout 5m
+```
+
+The bound is whole seconds from `1s` to `1h`, and `5m` when none is given;
+anything else is refused as incorrect usage rather than clamped. The wait
+acknowledges nothing, so a wake it returned keeps being returned until
+`assistant coordinator acknowledge` names it. It keeps nothing between calls,
+so after a service restart, which ends a wait in progress as an operational
+failure, waiting again reads the same durable queue; `assistant coordinator
+supervision` confirms the service is watching the fleet again first. Like the
+other coordinator subcommands, it is refused for a task's worker.
+
+A restart does not leave that queue exactly as it was. When the service
+starts it reconciles every task, and a task whose worker's terminal is gone
+with its work not landed is relaunched, up to `relaunch_attempts` times
+(2 unless configured). A relaunch records each still-queued `terminal-gone`
+wake about the session it replaced as handled by the program, so the next
+wait does not return it. Read `assistant tasks` after a restart as well as
+the queue: a relaunched task shows its new attempt there, and a task past
+`relaunch_attempts` holds for an answer instead of being relaunched.
+
+How soon it answers after a worker stops is set by the service's supervision
+pass, which records the wake, not by the wait.
+
+## Standing consent
+
+`assistant --standing-consent` starts or attaches to this branch's run and puts
+that run under standing consent, which lets the program answer the holds of
+the stages before push without you: a fix round over every finding that is
+not a note, and approval of the hold a round leaves once only notes remain.
+It never answers the push, pull request, or checks holds, so a push refusal
+still waits for you, and the three-round limit and the run budget still bound
+it. The repository has to allow it with `"allow_standing_consent": true` in
+`assistant.json` on the default branch; without that the flag is refused as
+incorrect usage, and a branch cannot set the key for itself. Each answer is
+recorded as the program's, and status, the run listing, and the pull request
+body say the run ran under standing consent.
+
+## Watch a worker in a terminal
+
+By default a worker runs on pipes the service holds, which nothing can attach
+to. To host each worker in a terminal you can watch and type into, set the
+provider in your own configuration file, `config.yaml` under the home (by
+default `~/.assistant`), which is read as a JSON document:
+
+```json
+{"session_provider": "tmux"}
+```
+
+Only that file may set it: a repository's `assistant.json` naming it is
+refused, trusted copy or pushed, because the provider decides which program
+the service runs to start every worker. The service reads it when it first
+resolves an agent, so restart the service after changing it.
+
+Each worker then runs as the one process of a tmux server of its own, on a
+socket under the home's `terminals` directory, started with no tmux
+configuration file. `assistant --json coordinator peek ID` reads the worker's
+recent output, redacted and cut to the last 16 KiB, and its `attach` field is
+the command that attaches you:
+
+```sh
+tmux -S ~/.assistant/terminals/SOCKET attach-session -t worker
+```
+
+What you type there is the worker's input, exactly as a message is, and the
+program keeps no record of it: the worker acts on it, and the coordinator
+reconciles around what the worker then does. A command the worker runs
+because you typed it is the worker's, so its pushes are held to the worker's
+own branch like any other. A new window you open in that server is not the
+worker: its pushes are a person's and start the full run.
+
+Two things it needs. tmux has to be on the service's PATH; without it every
+launch is refused and the task stays dispatched, which the service log says.
+And the resolved agent has to declare terminal workers, which in this build
+only the scripted adapter the tests use does, so a service resolved to Claude
+Code launches no worker under this setting. A worker an earlier service
+started is never attached to or read through the new one: its terminal reads
+as unobservable until it ends, as it does under the default provider.
+
 ## Keep your CI required
 
 The gate is not your CI (PRD section 12 lists "Being your CI" as a permanent
@@ -164,6 +271,23 @@ A repository with no CI at all must say so by setting `no_ci` in its trusted
 configuration. Without that declaration an empty list of checks is not treated
 as a pass.
 
+The same read of the pull request carries whether the code host can merge it.
+Checks that passed are not a pass until the host also reports the pull request
+mergeable; until then the run waits on the same terms, and an elapsed wait over
+passed checks holds with `ci-mergeability-unknown`, which is re-read like the
+other elapsed holds. A pull request the host reports as conflicting with its
+base holds at once with `ci-conflicted`, whatever its checks say. The run does
+not rebase or re-push a branch it has already pushed, and it never decides what
+conflicting content should be: rebase the branch yourself and push it through
+the gate, which starts a new run that reviews the result.
+
+A failing check is still sent to the checks stage's fix rounds
+(`fix_rounds.checks`). The round commits in the run's isolated copy, but that
+commit is not reviewed and nothing in this build pushes it, so the next time
+the stage runs it holds with `ci-fix-not-pushed`, naming the round's commit and
+the commit the pull request still stands on, instead of reading checks that
+could not have seen the fix.
+
 ## Keep `commands.test` targeted
 
 `commands.test` is empty by default. When you set it, the test stage runs that
@@ -200,7 +324,9 @@ holds unless that review raises nothing but notes (PRD section 14, decision 7).
 Two things that review does not cover:
 
 - The checks stage's fix rounds. That stage runs after the push, so nothing
-  reviews the commits its rounds make, and nothing in this build pushes them.
+  reviews the commits its rounds make, and nothing in this build pushes them;
+  the stage holds with `ci-fix-not-pushed` rather than reporting on checks
+  that never saw the round's commit.
 - Earlier rounds' own accounts. The reviewer of the later commits is handed
   each stage's last fix summary as a claim to check. A stage that took more
   than one round is represented by its last summary, and its earlier rounds

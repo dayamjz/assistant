@@ -2,6 +2,7 @@ package machine
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/dayamjz/assistant/internal/gate"
 	"github.com/dayamjz/assistant/internal/pipeline"
@@ -77,6 +78,16 @@ type StartRequest struct {
 	// run on purpose: P2 lets a person skip a stage deliberately for one run
 	// and never lets a standing configuration skip one on their behalf.
 	Skip []string `json:"skip,omitempty"`
+	// StandingConsent asks for the run this call starts or attaches to to be
+	// put under the standing consent PRD section 9 describes, which the
+	// service refuses as an invalid request when the repository's trusted
+	// copy does not allow it. Once given it stays given for that run.
+	//
+	// It asks for consent and says nothing about who answers anything: every
+	// answer the consent then gives is recorded as the program's, which
+	// internal/service decides in source, so no value here can make a record
+	// say a person or a caller decided.
+	StandingConsent bool `json:"standing_consent,omitempty"`
 }
 
 // RerunRequest starts a fresh run of the branch the working copy is standing
@@ -428,6 +439,67 @@ type WakesRequest struct {
 // bound keeps one answer inside a frame rather than paging the queue.
 const DefaultWakesLimit = 100
 
+// WakeWaitRequest arms the blocking wait on the durable wake queue. The
+// wait answers as soon as the queue holds at least one queued wake, with
+// the queued rows as a drain returns them, or once its bound elapses with
+// none; the answer is Wakes either way, so an empty answer is the bound
+// elapsing and nothing else. It acknowledges nothing, on WakesRequest's
+// terms, so a wake it returned is returned again by the next wait until
+// AcknowledgeRequest names it.
+type WakeWaitRequest struct {
+	// TimeoutSeconds is how long the wait may block, in whole seconds,
+	// from MinWakeWaitTimeout to MaxWakeWaitTimeout. Zero means
+	// DefaultWakeWaitTimeout; anything else outside the range is refused
+	// by Bounds, never clamped.
+	TimeoutSeconds int `json:"timeout_seconds,omitempty"`
+	// Limit bounds how many queued wakes the answer carries, on
+	// WakesRequest.Limit's terms: zero means DefaultWakesLimit, and a
+	// negative limit is refused by Bounds.
+	Limit int `json:"limit,omitempty"`
+}
+
+// The wait's bound. The range and the default are chosen, not measured.
+// The lower end is the smallest bound worth a round trip, and the upper end
+// is what keeps one call from holding a request slot on its connection
+// without limit, which is the cost a wait has for the service. A caller
+// whose host ends a shell command sooner than the default passes a smaller
+// bound; nothing here knows any host's limit.
+const (
+	// MinWakeWaitTimeout is the shortest bound a wait accepts.
+	MinWakeWaitTimeout = time.Second
+	// MaxWakeWaitTimeout is the longest bound a wait accepts.
+	MaxWakeWaitTimeout = time.Hour
+	// DefaultWakeWaitTimeout is the bound of a wait that names none.
+	DefaultWakeWaitTimeout = 5 * time.Minute
+)
+
+// Bounds is how long the wait blocks and how many wakes its answer may
+// carry, with each zero replaced by its default, and the one owner of which
+// requests are in range: the command line checks it before asking, and the
+// service checks it again on arrival, so a request either side refuses is
+// refused by the same rule. A bound outside the range, a bound too large to
+// be a duration among them, and a negative limit are an error naming what
+// was wrong; nothing is clamped.
+func (r WakeWaitRequest) Bounds() (time.Duration, int, error) {
+	if r.Limit < 0 {
+		return 0, 0, fmt.Errorf("a wait's limit is %d, and a limit is never negative", r.Limit)
+	}
+	limit := r.Limit
+	if limit == 0 {
+		limit = DefaultWakesLimit
+	}
+	if r.TimeoutSeconds == 0 {
+		return DefaultWakeWaitTimeout, limit, nil
+	}
+	// The seconds are compared before they are multiplied, so a count too
+	// large for a duration is refused rather than wrapped into the range.
+	if r.TimeoutSeconds < int(MinWakeWaitTimeout/time.Second) || r.TimeoutSeconds > int(MaxWakeWaitTimeout/time.Second) {
+		return 0, 0, fmt.Errorf("a wait's bound is %d second(s), and it must be from %s to %s",
+			r.TimeoutSeconds, MinWakeWaitTimeout, MaxWakeWaitTimeout)
+	}
+	return time.Duration(r.TimeoutSeconds) * time.Second, limit, nil
+}
+
 // AcknowledgeRequest records that the coordinator handled queued wakes.
 //
 // It carries no field saying who acknowledged. Who did is derived from the
@@ -458,4 +530,15 @@ type MarkSeenRequest struct {
 type UsageRequest struct {
 	// Window is how far back the read reaches, such as 24h or 7d.
 	Window string `json:"window,omitempty"`
+}
+
+// StageLogRequest names one stage of one run, whose per-stage log the
+// run.log method answers with a bounded tail of. Stage is one of the nine
+// stage names; a fix round is logged under the stage whose findings it fixes,
+// so it has no name of its own here.
+type StageLogRequest struct {
+	// Run is the run's identifier.
+	Run string `json:"run"`
+	// Stage is the stage's name.
+	Stage string `json:"stage"`
 }

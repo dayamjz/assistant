@@ -198,9 +198,17 @@ push goes through the gate like anyone's, unless its task was recorded under the
 `assistant watch` opens with a catch-up of what landed and what waits on you,
 and `assistant runs --usage` totals what the stage agents' calls cost.
 
-What this build does not do yet, so nothing here claims it: the only session
-provider is `internal/session`'s pipe, so a worker does not yet run in a
-terminal you can attach to and type into; `direct` delivery stays deferred under
+A worker can also run in a terminal you can attach to and type into: with
+`"session_provider": "tmux"` in your own configuration file, each worker is
+hosted in a tmux server of its own, `assistant coordinator peek ID` reads its
+recent output, redacted and bounded, and names the command that attaches to
+it. That needs tmux on the service's PATH and an agent adapter that declares
+terminal workers, which in this build only the scripted test adapter does.
+
+What this build does not do yet, so nothing here claims it: the Claude Code
+adapter declares no terminal mode, so a service resolved to it and configured
+for tmux launches no worker, and the pipe provider stays the default and the
+only one that runs a real agent; `direct` delivery stays deferred under
 PRD section 12 and is refused at parse; routing among agents waits for a
 second adapter; and interrupting a worker is refused because no adapter
 declares it.
@@ -271,7 +279,7 @@ their terminal.
 
 ```sh
 make build     # build the binary into ./bin
-make test      # go test -race ./...
+make test      # go test -race -timeout 30m ./...
 make lint      # vet and golangci-lint
 make check     # lint and test, what CI runs
 ```
@@ -284,6 +292,7 @@ git push assistant BRANCH      # hand a branch to the gate, which starts a run
 assistant                      # attach to this branch's run, or start one
 assistant --answer approved    # answer the decision it is holding on
 assistant --answer fix --select ID --note TEXT   # ask for one fix round there
+assistant --standing-consent   # let the program answer this run's pre-push holds, where the repository allows it
 assistant tasks                # fleet work and where each task stands
 assistant watch                # catch up, then follow everything in flight
 assistant runs --usage=7d      # what the stage agents' calls cost, by agent and run

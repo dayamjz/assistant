@@ -245,6 +245,11 @@ type Service struct {
 	// workerRoute is Options.WorkerRoute, fixed when the service opens.
 	workerRoute string
 
+	// stageLogMu serializes appends to the per-stage logs and the reads of
+	// them, so a section stagelog.go writes is never interleaved with another
+	// and a read never sees half of one. stagelog.go owns it.
+	stageLogMu sync.Mutex
+
 	// mu guards the lazily built driver and topologies, the set of runs being
 	// advanced, and the branch gates. It is never held across a run's
 	// execution.
@@ -278,6 +283,10 @@ type Service struct {
 	// service that restarts holds none of these and relaunches. Close ends
 	// every session here, and launch.go owns the map.
 	launched map[string]*session.Session
+	// wakeBell is rung when the supervisor loop appends a wake, so an armed
+	// wakes.wait reads the queue again; wakewait.go owns it and says why it
+	// is a hint and never a record.
+	wakeBell wakeBell
 	// betweenAttemptReadAndClaim runs in a dispatch after the attempts have
 	// been read and before the attempt is claimed. It is nil in production
 	// and set only by this package's tests, which use it to hold two
@@ -357,15 +366,17 @@ type driver struct {
 	agent agents.Resolution
 	runs  *runs.Service
 	// sessions is the terminal session provider launch.go starts a task's
-	// worker through, and the one heldTerminals probes and captures through,
-	// held as the concrete provider because a capture by reference is that
-	// provider's own operation beside the five session.Provider names. It is
-	// built over the resolved runner before containRunner wraps it, because
+	// worker through, and the one heldTerminals probes, captures and attaches
+	// through, held as a session.Host because a capture and an attach by
+	// reference are a held provider's own reads beside the five
+	// session.Provider names; terminals.go's sessionHost decides which
+	// provider it is. It is built over the resolved runner before
+	// containRunner wraps it, because
 	// the wrapper carries no worker arm on purpose - contain.go says why a
 	// worker is not registered as a stage - so the one route to a worker is
 	// the unwrapped agent, and this is the one place that agent is held
 	// unwrapped.
-	sessions *session.Pipe
+	sessions session.Host
 	// workers is the worker group set the provider above produces, held
 	// here so a peer can be placed in a task's worker group without
 	// asking the provider's concrete type; workers.go reads it. It is nil
@@ -382,6 +393,11 @@ type driver struct {
 type topology struct {
 	pipeline *pipeline.Pipeline
 	executor *graph.Executor
+	// allowsConsent is whether this resolution's trusted copy allows standing
+	// consent, config.KeyAllowStandingConsent. It is the resolution's and so
+	// the topology's: the digest covers the documents it was read from, and
+	// consent.go reads it per segment rather than once per run.
+	allowsConsent bool
 }
 
 // Open takes the home's lock, opens its database, binds its socket, and
@@ -725,7 +741,7 @@ func (s *Service) driverFor(ctx context.Context) (*driver, error) {
 	}
 	// The session provider is built over the agent as resolved, before the
 	// wrapper below takes its worker arm away; driver.sessions says why.
-	sessions := session.NewPipe(s.home, resolution.Runner)
+	sessions := s.sessionHost(resolution.Runner)
 	// Every invocation of a run passes through the resolved runner or the
 	// fixer it opens, so wrapping here is what registers each one's process
 	// group with the containment registry for as long as it runs; contain.go
@@ -790,7 +806,7 @@ func (s *Service) topologyFor(built *driver, resolved runResolution) (*topology,
 		s.forge,
 		redactor,
 		vcs.WithRedactor(redactor),
-	).WithJudge(s.judge).WithChecksWaits(s.store)
+	).WithJudge(s.judge).WithChecksWaits(s.store).WithRunRecords(s.store)
 	// The fix seam is built here, beside the stage seam and deliberately apart
 	// from it. It carries the one thing a stage body may not have: a route to
 	// the run's fixer role, which internal/runs hands out per run and which
@@ -822,7 +838,7 @@ func (s *Service) topologyFor(built *driver, resolved runResolution) (*topology,
 	if err != nil {
 		return nil, err
 	}
-	topo := &topology{pipeline: pipe, executor: executor}
+	topo := &topology{pipeline: pipe, executor: executor, allowsConsent: resolved.cfg.AllowStandingConsent}
 	s.topologies[resolved.digest] = topo
 	return topo, nil
 }

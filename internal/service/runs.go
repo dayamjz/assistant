@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/dayamjz/assistant/internal/forge"
 	"github.com/dayamjz/assistant/internal/graph"
@@ -54,6 +55,18 @@ func (s *Service) start(ctx context.Context, req machine.StartRequest) (machine.
 	if err != nil {
 		return machine.Run{}, err
 	}
+	// Standing consent asked for where the repository does not allow it is
+	// refused before any run is recorded or touched, so the refusal leaves
+	// nothing behind; consent.go owns the rule.
+	if req.StandingConsent {
+		allowed, err := s.standingConsentAllowed(ctx, repository)
+		if err != nil {
+			return machine.Run{}, err
+		}
+		if !allowed {
+			return machine.Run{}, standingConsentRefused(repository)
+		}
+	}
 	// Everything the record is built from is read before the branch is
 	// claimed, so what the claim holds is the decision and the write - the
 	// row, and the one fetch create makes to record the commit in the gate -
@@ -69,6 +82,11 @@ func (s *Service) start(ctx context.Context, req machine.StartRequest) (machine.
 	})
 	if err != nil {
 		return machine.Run{}, err
+	}
+	if req.StandingConsent {
+		if record, err = s.giveStandingConsent(ctx, record); err != nil {
+			return machine.Run{}, err
+		}
 	}
 	if !created {
 		view, err := s.attach(ctx, record.ID)
@@ -359,7 +377,7 @@ func (s *Service) respond(ctx context.Context, req machine.RespondRequest) (mach
 	// recorded as what followed the decision-model answers about them only
 	// once the answer is accepted; observe.go says what that record is.
 	stage, paths, mark := s.heldPaths(ctx, record.ID)
-	answered, err := s.advance(ctx, record.ID, func(ctx context.Context) (graph.Result, error) {
+	answered, err := s.advance(ctx, record.ID, topo, func(ctx context.Context) (graph.Result, error) {
 		return topo.executor.AnswerWith(ctx, record.ID, req.Answer, detail)
 	})
 	if err == nil {
@@ -477,6 +495,9 @@ func (s *Service) attach(ctx context.Context, runID string) (machine.Run, error)
 	if err != nil {
 		return machine.Run{}, err
 	}
+	if settled.Status == store.RunHeld && settled.StandingConsent.IsKnown() {
+		return s.answerHeldUnderConsent(ctx, settled)
+	}
 	if settled.Status != store.RunRunning && settled.Status != store.RunPending {
 		return s.view(ctx, settled.ID)
 	}
@@ -523,7 +544,7 @@ func (s *Service) attach(ctx context.Context, runID string) (machine.Run, error)
 	// attaching asks where a run stands, and "it is moving" is an answer to
 	// that. Taking the slot and reporting the refusal is what makes this a
 	// decision rather than a check that another caller can win the race to.
-	view, err := s.advance(ctx, settled.ID, func(ctx context.Context) (graph.Result, error) {
+	view, err := s.advance(ctx, settled.ID, topo, func(ctx context.Context) (graph.Result, error) {
 		return topo.executor.Resume(ctx, settled.ID)
 	})
 	if errors.Is(err, ErrRunAdvancing) || errors.Is(err, ErrRunEnding) {
@@ -606,7 +627,7 @@ func (s *Service) begin(ctx context.Context, record store.Run, start pipeline.St
 	if _, err := built.runs.Start(ctx, record.ID); err != nil {
 		return machine.Run{}, err
 	}
-	return s.advance(ctx, record.ID, func(ctx context.Context) (graph.Result, error) {
+	return s.advance(ctx, record.ID, topo, func(ctx context.Context) (graph.Result, error) {
 		return topo.executor.Run(ctx, record.ID, initial)
 	})
 }
@@ -758,12 +779,16 @@ func baseCommit(ctx context.Context, working *vcs.Repository, head, defaultBranc
 // segment starts and released after the record has been reconciled, so a
 // caller that reads an answer and immediately asks again finds the record
 // already settled rather than the run still moving.
-func (s *Service) advance(ctx context.Context, runID string, step func(context.Context) (graph.Result, error)) (machine.Run, error) {
+//
+// topo is the topology the segment executes. The slot holds its graph for as
+// long as it stands, so a read can ask the run's counters what they say about
+// a stage; activity says why that is the slot's to hold.
+func (s *Service) advance(ctx context.Context, runID string, topo *topology, step func(context.Context) (graph.Result, error)) (machine.Run, error) {
 	// The segment carries which run it advances, so the containment wrapper
 	// around the resolved agent can register an invocation under the run that
 	// launched it without any stage body carrying the fact there.
 	segment, cancel := context.WithCancel(withAdvancing(context.WithoutCancel(ctx), runID))
-	if err := s.claim(runID, cancel); err != nil {
+	if err := s.claim(runID, cancel, topo.pipeline.Graph()); err != nil {
 		cancel()
 		return machine.Run{}, err
 	}
@@ -787,6 +812,13 @@ func (s *Service) advance(ctx context.Context, runID string, step func(context.C
 	defer stop()
 
 	result, err := step(segment)
+	if err == nil {
+		// A decision standing consent answers is answered here, in this
+		// segment and this slot, so the run is not recorded held at a
+		// decision the program is about to answer; consent.go owns what it
+		// answers and what it never does.
+		result, err = s.underStandingConsent(segment, runID, topo, result)
+	}
 	if err != nil {
 		s.log.Printf("run %s stopped: %v", runID, err)
 		how.stranded = true
@@ -1258,6 +1290,11 @@ type slot struct {
 	// ended is whether the run was ended through the protocol while this slot
 	// stood.
 	ended bool
+	// graph is the topology the segment under this slot executes, nil for a
+	// slot standing for an ending. It is what the run's counters were kept
+	// against, so it is the one graph a reading of them may be made against
+	// while the segment stands; activity reads it.
+	graph *graph.Graph
 }
 
 // claim takes the one slot a run advances in.
@@ -1269,7 +1306,7 @@ type slot struct {
 // what isAdvancing reports about the same slot: nothing is executing under an
 // ending's, and saying a run is advancing when it is being ended is the
 // disagreement this package exists to keep out of its answers.
-func (s *Service) claim(runID string, cancel context.CancelFunc) error {
+func (s *Service) claim(runID string, cancel context.CancelFunc, topology *graph.Graph) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if held, taken := s.advancing[runID]; taken {
@@ -1278,7 +1315,7 @@ func (s *Service) claim(runID string, cancel context.CancelFunc) error {
 		}
 		return fmt.Errorf("%w: %s", ErrRunAdvancing, runID)
 	}
-	s.advancing[runID] = &slot{cancel: cancel}
+	s.advancing[runID] = &slot{cancel: cancel, graph: topology}
 	return nil
 }
 
@@ -1365,6 +1402,20 @@ func (s *Service) isAdvancing(runID string) bool {
 	defer s.mu.Unlock()
 	held, taken := s.advancing[runID]
 	return taken && held.cancel != nil
+}
+
+// advancingGraph is the graph the segment advancing a run executes, and false
+// when no segment is advancing it. It answers from the same slot isAdvancing
+// does, under the same lock, so a graph is only ever handed out for a run
+// that fact says is in flight.
+func (s *Service) advancingGraph(runID string) (*graph.Graph, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	held, taken := s.advancing[runID]
+	if !taken || held.cancel == nil || held.graph == nil {
+		return nil, false
+	}
+	return held.graph, true
 }
 
 // branchKey is the branch of one repository, which is what a run is started
@@ -1596,7 +1647,7 @@ func (s *Service) report(ctx context.Context, runID string, result *graph.Result
 	// from graph state; decision.go says why.
 	answer.Proposals = s.proposals(ctx, record)
 	if result == nil {
-		latest, err := s.checkpoints.Latest(ctx, runID)
+		latest, written, err := s.checkpoints.LatestWritten(ctx, runID)
 		if err != nil {
 			if !errors.Is(err, graph.ErrNoSuchRun) {
 				// A position that is there and cannot be read is a failure to
@@ -1614,6 +1665,9 @@ func (s *Service) report(ctx context.Context, runID string, result *graph.Result
 		}
 		read := latest.Result()
 		result = &read
+		if standing.Advancing {
+			answer.Activity = s.activity(runID, latest, written, time.Now())
+		}
 	}
 	status := result.Status
 	answer.Progress = &status
@@ -1658,6 +1712,52 @@ func (s *Service) report(ctx context.Context, runID string, result *graph.Result
 		answer.Decision = decisionView(*result.Decision, result.State)
 	}
 	return answer, nil
+}
+
+// activity is what the segment advancing a run is doing, read off the
+// checkpoint it last wrote and when internal/store appended it, or nil when
+// there is nothing in flight at a stage to describe.
+//
+// Every part of it is read from its owner. The stage is the checkpoint's
+// position, which a running run's checkpoint names as the node about to run.
+// The round is pipeline.RoundOf over the checkpoint's counters, read against
+// the graph the advancing slot holds: those counters are positional and mean
+// something only against the edges they were kept against, and the segment
+// in flight is executing exactly that graph, so the slot rather than a fresh
+// resolution of the run's configuration is where the graph is taken from. A
+// segment that ended between the advancing read and this one has no slot,
+// and the answer then carries no activity rather than a reading made against
+// a graph nobody is running. The time is the entry's append, so nothing here
+// keeps a clock of its own for a run.
+//
+// Nothing decides anything from it. It describes a node in flight for a
+// person or an agent to read, which is why a reading that cannot be made is
+// logged and left out rather than failing an answer whose outcome, position
+// and decision were all read.
+func (s *Service) activity(runID string, latest graph.Checkpoint, written, now time.Time) *machine.Activity {
+	if latest.Status != graph.StatusRunning {
+		return nil
+	}
+	stage, ok := pipeline.StageOfNode(latest.Position)
+	if !ok {
+		return nil
+	}
+	topology, ok := s.advancingGraph(runID)
+	if !ok {
+		return nil
+	}
+	round, err := pipeline.RoundOf(topology, latest.Counters, stage)
+	if err != nil {
+		if s.log != nil {
+			s.log.Printf("reporting run %s without its %s stage's round: %v", runID, stage, err)
+		}
+		return nil
+	}
+	active := now.Sub(written)
+	if active < 0 {
+		active = 0
+	}
+	return &machine.Activity{Stage: stage.String(), Round: round.Taken, Limit: round.Limit, Since: written, Active: active}
 }
 
 // stageViews reports what became of each of the nine stages, in the order a

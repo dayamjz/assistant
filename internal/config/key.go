@@ -154,6 +154,25 @@ const (
 	// lists a repository. What the live read requires is internal/service's;
 	// whether a merge is allowed is the code host's.
 	KeyAutonomyMerge Key = "autonomy.merge"
+	// KeyAllowStandingConsent is "allow_standing_consent": whether a run of
+	// this repository may be put under the standing consent PRD section 9
+	// describes, answering the decisions its stages before push hold on
+	// without a person. It allows and does not turn on: a run is put under
+	// it only by the per-run flag PRD section 9 gives the bare command, and
+	// that flag is refused where this resolved false.
+	//
+	// It is trusted-only, so a pushed branch can never allow standing consent
+	// for itself (P7): a pushed copy setting it is dropped at the merge and
+	// reported as a rejection like any other trusted-only key. The class also
+	// admits the operator's own file, as it does for every trusted-only key,
+	// so an operator who sets it there allows it in every repository of the
+	// home. It is false by default. What the consent answers, and what it
+	// never answers, is internal/service's consent.go.
+	//
+	// PRD section 9 names the flag and this key; section 10's schema table
+	// does not yet carry a row for it, which is the same position
+	// KeyAllowPushedCommands was chosen in.
+	KeyAllowStandingConsent Key = "allow_standing_consent"
 
 	// KeyDelivery is "delivery": PRD section 10's delivery posture, the path
 	// a repository's delivery tasks ship on, section 6's delivery modes. It
@@ -164,6 +183,23 @@ const (
 	// own push does, and only through the posture recorded on the task at
 	// intake: it never changes what a person's push to the gate does.
 	KeyDelivery Key = "delivery"
+
+	// KeySessionProvider is "session_provider": which terminal session
+	// provider the service starts a task's worker through, PRD section 8's
+	// session module. Its values are SessionProvider's closed set and its
+	// default is SessionProviderPipe, the reference provider.
+	//
+	// It is global-only, and that is a P7 decision rather than a convenience.
+	// The provider decides which program the service runs to start every
+	// worker - "tmux" has the service run the tmux binary on the operator's
+	// PATH and have its server start the agent - so it chooses which process
+	// starts with the operator's credentials, which is what TrustCommands
+	// guards; and it is one choice for the whole service, made when the
+	// service first builds its agent, so no repository's copy, trusted or
+	// pushed, is the document it could be read from. A repository file
+	// naming it is refused at parse time like every global-only key.
+	// internal/service reads it once per service, in driverFor.
+	KeySessionProvider Key = "session_provider"
 )
 
 // cloneSlice copies a slice-valued configuration value. A default and a parsed
@@ -264,6 +300,10 @@ var specs = []spec{
 		func(c *Config, v any) { c.AutonomyMerge = cloneSlice(v.([]string)) }},
 	{KeyDelivery, TrustTrusted, DefaultDelivery, decodeDelivery,
 		func(c *Config, v any) { c.Delivery = v.(Delivery) }},
+	{KeyAllowStandingConsent, TrustTrusted, false, decodeBool,
+		func(c *Config, v any) { c.AllowStandingConsent = v.(bool) }},
+	{KeySessionProvider, TrustGlobal, DefaultSessionProvider, decodeSessionProvider,
+		func(c *Config, v any) { c.SessionProvider = v.(SessionProvider) }},
 }
 
 // specByKey indexes the schema, and sections holds every dotted prefix a key

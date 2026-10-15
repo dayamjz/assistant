@@ -49,6 +49,26 @@ const (
 	// package documentation states what that does not establish about the
 	// real CLI.
 	CapabilityWorkerSessions Capability = "worker_sessions"
+	// CapabilityTerminalWorkers is an adapter that can be started as a
+	// worker hosted in a terminal a person can attach to, and driven by
+	// typing into that terminal: internal/session's tmux provider is the
+	// path that needs it. TerminalWorkerRunner carries the mechanism and
+	// OpenTerminalWorker is the one route to it. It sits on the fixer side
+	// of P4 for the reasons CapabilityWorkerSessions does: StartInTerminal
+	// takes a WorkerSpec, which has no purpose and no shape.
+	//
+	// It is separate from CapabilityWorkerSessions because the two are
+	// different claims about the agent: that one is that the agent reads
+	// framed messages on a pipe; this one is that the agent reads what a
+	// person would type, in a terminal, and what is typed there reaches the
+	// conversation. Only the scripted adapter declares it, over plain lines
+	// in the terminal's line-editing mode, with a framing that refuses a
+	// line that mode would cut. The Claude Code adapter does not: started
+	// in a terminal without --print, the command line opens its interactive
+	// interface, which was observed to open with a first-run screen rather
+	// than a prompt, so text typed at it would not be guaranteed to reach a
+	// conversation, and no probe here can model that interface.
+	CapabilityTerminalWorkers Capability = "terminal_workers"
 )
 
 // capabilitySpec is one row of the capability table: the capability, and how
@@ -73,6 +93,10 @@ var capabilityTable = []capabilitySpec{
 	{CapabilitySuppressProjectInstructions, nil},
 	{CapabilityWorkerSessions, func(r Runner) bool {
 		_, ok := r.(WorkerRunner)
+		return ok
+	}},
+	{CapabilityTerminalWorkers, func(r Runner) bool {
+		_, ok := r.(TerminalWorkerRunner)
 		return ok
 	}},
 }

@@ -1846,7 +1846,7 @@ flowchart TB
       <thead><tr><th class="w-40">Record</th><th class="w-28">Kind</th><th>Notes</th></tr></thead>
       <tbody>
         <tr><td><b>repository</b></td><td>Authoritative</td><td>Working path, upstream and optional fork, default branch. URLs are stored with credentials removed; the credentialed URL is recovered from the gate at run time.</td></tr>
-        <tr><td><b>run</b></td><td>Authoritative</td><td>Branch, submitted head, base, current head, status, the commit a completed review approved, the push binding, pull request state, intent and its source, and the exact build that produced this run.</td></tr>
+        <tr><td><b>run</b></td><td>Authoritative</td><td>Branch, submitted head, base, status, the commit a completed review approved, the push binding, pull request state, intent and its source, and the exact build that produced this run.</td></tr>
         <tr><td><b>stage result</b></td><td>Authoritative</td><td>Per stage: status, findings, duration, log path, last activity, and the effective fix limit.</td></tr>
         <tr><td><b>round</b></td><td>History</td><td>One row per stage execution. Findings, which findings were selected and by whom, the exact payload sent to the fixer, and the one-line summary. This is what the pull request narrative is generated from.</td></tr>
         <tr><td><b>checkpoint history</b></td><td>Authoritative, appended</td><td>One entry per position a run has stood in: state, the node it has not yet run, the status it stood in, the decision it is halted on when it is halted, the bound accounting, and, on an entry a fork produced, the entry it was copied from. Appended after every node and never revised. The entry with the highest sequence is where the run stands, and it is the only record that answers that.</td></tr>
@@ -2043,11 +2043,35 @@ flowchart TB
     and stage purposes; the line pointing at it is phrased. No verb is added.
   </p>
   <p class="mb-4 opacity-90">
+    The <b>log view</b> is a flag on <code>assistant runs</code> given with a run, naming a stage. It
+    reads that run's section 8 per-stage log for the stage, where a fix round is logged under the stage
+    whose findings it fixes. The service writes it, best effort, around each stage body and each round:
+    when it began and ended, what it returned, and the account and full reply of each agent call that
+    passes through the service's own wrapper, redacted on the way in. A write that fails is reported in
+    the service log and leaves no mark in the stage's log. What the view prints is a bounded tail with a
+    marker saying how much it left out and where the whole log is. A log is evidence and never state:
+    nothing decides anything from it (P8). It is an answer of its own, apart from the detail view, and it
+    keeps exact identifiers and stage names, so it is rendered as an evidence document; P13's list of
+    evidence documents does not name it, and the line pointing at it is phrased. The local protocol
+    carries the same read as one open method. No verb is added.
+  </p>
+  <p class="mb-4 opacity-90">
     Answering a hold is a flag on <code>assistant</code>, and it takes a task as well as a run, so a
     hold a task raised with no run behind it, an investigation's among them, is answered the same
     way. Given a task with no hold of its own open, it answers the hold on the task's current run,
     so a run a task produced is answered without checking out the task's branch. No verb is added
     for it.
+  </p>
+  <p class="mb-4 opacity-90">
+    Standing consent is a flag on <code>assistant</code> too, <code>--standing-consent</code>, and it
+    needs the repository's <code>allow_standing_consent</code>, read only from the trusted copy, so a
+    pushed branch cannot allow it for itself (P7). Given when a run starts or is attached to, it puts
+    that run under standing consent; without the key it is refused as incorrect usage and changes
+    nothing. The program then answers the holds of the stages before push itself: a fix round over
+    every finding that is not a note, and approval where only notes remain, within section 5's bounds.
+    It never answers the push, pull request, or checks holds, and never answers past a refusal P6 or
+    P7 produces. Each answer is recorded as the program's, never as a person's, and status, the run
+    listing, the run's record, and the pull request body say the run ran under it. No verb is added.
   </p>
   <p class="mb-8 opacity-90">
     Creating a task, promoting an investigation to delivery, and relaunching a task whose terminal

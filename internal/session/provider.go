@@ -26,9 +26,38 @@ var ErrNotHeld = errors.New("session: the provider does not hold this session")
 // the refusal, so no session this provider cannot name goes on running.
 var ErrIdentity = errors.New("session: the worker's identity could not be read after it started")
 
+// ErrNotAttachable is AttachReference's answer for a session the provider
+// holds whose worker has no terminal a person can attach to, which every
+// session Pipe holds is.
+var ErrNotAttachable = errors.New("session: this session's worker has no terminal to attach to")
+
+// Host is a Provider as the service that launches through it holds one: the
+// five operations, the worker group set the provider produces, and the two
+// reads a caller holding only a recorded reference makes, a capture and the
+// command a person attaches with. Both reads answer out of the same held set
+// Probe answers Live from, so a reference reads Live, captures, and attaches
+// through one lookup; every other reference is ErrNotHeld. Pipe and Tmux are
+// the two in this build.
+//
+// It is not a widening of Provider: the five operations stay the whole of
+// what PRD section 8's row names, and these three are what a service needs
+// of a provider it holds, which a second implementation of the row would
+// owe as well.
+type Host interface {
+	Provider
+	// Workers is the worker group set, on the terms Workers states.
+	Workers() *Workers
+	// CaptureReference is Capture addressed by an encoded reference.
+	CaptureReference(ctx context.Context, ref string) (Capture, error)
+	// AttachReference is the command line a person runs to attach to the
+	// held session ref names, the binary first; ErrNotAttachable for a held
+	// session with no terminal, ErrNotHeld for any other reference.
+	AttachReference(ref string) ([]string, error)
+}
+
 // Provider is PRD section 8's terminal session provider: the five operations
-// and nothing else. Pipe is the reference implementation and the only one in
-// this build; a second provider implements these five and adds any optional
+// and nothing else. Pipe is the reference implementation and Tmux the second;
+// a further provider implements these five and adds any optional
 // behaviour it has as a row in internal/agents' capability table, never as a
 // method here.
 type Provider interface {
@@ -87,9 +116,13 @@ type Spec struct {
 // route to the worker, the runner, or anything that starts an agent, which
 // the route walk in the tests holds it to.
 type Session struct {
-	ref    Reference
-	owner  *Pipe
+	ref Reference
+	// owner is the provider that created the session, compared by identity.
+	owner  any
 	worker agents.Worker
+	// attach is the command a person runs to attach to the worker's
+	// terminal, and nil for a worker that has none.
+	attach []string
 	// leave takes the worker's group out of the provider's Workers; it is
 	// idempotent and runs when the process ends and when Close ends it.
 	leave func()
@@ -106,8 +139,14 @@ type Capture struct {
 	// output limit.
 	Text string
 	// Dropped is how many bytes of earlier output fell off the front to keep
-	// Text within the limit; zero means Text is everything.
+	// Text within the limit; zero means Text is everything, unless
+	// Uncounted says otherwise.
 	Dropped int64
+	// Uncounted is true when output may also have fallen off before it was
+	// read, uncounted, which agents.Capture.Uncounted states; a tmux-hosted
+	// worker's server keeps a bounded history of its own. A pipe-backed
+	// worker never sets it.
+	Uncounted bool
 	// Digest is Digest(Text): a hash over the normalized stream, equal for
 	// two captures whose normalized text is equal. It is over the retained
 	// window only.

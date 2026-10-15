@@ -604,9 +604,18 @@ func render(in *invocation, answer any, err error) machine.Code {
 // answer may well be there and git could not read it, so it stays an
 // operational failure, as does a reason outside machine.DefaultBranchRefusals,
 // which internal/machine already reads out as the unreadable row.
+//
+// Init's refusal to record an upstream it was not given is incorrect usage on
+// the same terms: the working copy has no origin to take it from, and the
+// answer is --upstream, which the caller supplies. A read of origin that
+// failed for another reason is not that refusal and stays operational.
 func failureExit(err error) machine.Code {
 	var usage usageError
 	if errors.As(err, &usage) || errors.Is(err, ipc.ErrInvalidRequest) {
+		return machine.ExitUsage
+	}
+	var unnamed upstreamRefused
+	if errors.As(err, &unnamed) {
 		return machine.ExitUsage
 	}
 	var unproven defaultBranchRefused
