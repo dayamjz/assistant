@@ -2052,9 +2052,8 @@ flowchart TB
   <p class="mb-8 opacity-90">
     Creating a task, promoting an investigation to delivery, and relaunching a task whose terminal
     is gone are the coordinator's typed commands from section 8, and each is a service method
-    rather than a command: none is a row in the table above, a person never types one, and they sit
-    beside the table on the same terms as <code>assistant gate</code> and <code>assistant host</code>
-    without being a third command. Each is coordinator-only. A caller whose process is inside a
+    rather than a verb: none is a row in the table above, and each is reached through the
+    coordinator client described below. Each is coordinator-only. A caller whose process is inside a
     registered worker group, which the service decides from the credentials the socket reports and
     never from anything the caller says about itself, is refused, so an investigation cannot
     promote itself and no worker can create or relaunch a task. Relaunch goes through the one
@@ -2066,6 +2065,14 @@ flowchart TB
     Messaging a running worker and stopping one are service methods on the same terms, and
     coordinator-only for the same reason. Section 6's steering owns what each does and what proves
     it happened. The relaunch after a stop is no new method: it is the answer to the stop's hold.
+  </p>
+  <p class="mb-8 opacity-90">
+    These methods, with draining and acknowledging the wake queue and arm verification, are reached
+    through <code>assistant coordinator …</code>, a client dispatched beside the table on the same
+    terms as <code>assistant gate</code> and <code>assistant host</code>. It adds no row. It is the
+    interface the coordinator requires, and the third command outside the table by the owner's
+    decision rather than a precedent the first two set. Each subcommand is one service method, and
+    the service, not the client, refuses a worker.
   </p>
 
   <h3 id="catch-up" class="prd-anchor text-xl font-semibold mb-3">Catching up</h3>

@@ -955,11 +955,12 @@ Each has cost this repository more than one round of review.
   stage `internal/service`'s `containRunner` stamps from the context its
   observe wrappers mark. A verb that acts on a run calls the service;
   a verb whose job includes reporting that the service is down does not.
-  Two commands stand outside that table, and together they are not a
-  precedent for a third: each is the interface something external requires,
-  so each is dispatched beside the table rather than added to it.
-  `assistant gate` is what `internal/gate`'s installed hooks and the
-  `assistant` remote's receive command invoke, and its subcommands are the
+  Three commands stand outside that table, each dispatched beside it rather
+  than added to it. `gate` and `host` are each the interface something
+  external requires; `coordinator` is the owner's decision on #227, not a
+  precedent those two set, and a fourth is a finding. `assistant gate` is
+  what `internal/gate`'s installed hooks and the `assistant` remote's
+  receive command invoke, and its subcommands are the
   `gateHooks` table in `gate.go`. `assistant host` is
   what the coordinator's host invokes from the hook it fires at turn end, its
   subcommands are the `hostHooks` table in `host.go`, and `stop` is PRD section
@@ -980,6 +981,12 @@ Each has cost this repository more than one round of review.
   checkout's `assistant.json` only on `--accept-commands` or a y at a terminal
   (`Environment.Interactive`, never under `--json`), and every write says it
   reaches no run until the file lands on the default branch (P7).
+  `assistant coordinator` is the client for the coordinator's service
+  methods, its subcommands are the `coordinatorActions` table in
+  `coordinator.go`, and it decides nothing: a worker is refused by the
+  service from the socket's credentials, and `coordinator.go` names the gap
+  in that placement (#225). `skills/coordinator/SKILL.md` is what it tells a
+  coordinating agent, and claims only what the build does.
   What a person reads is rendered through the `renderings` table in
   `render.go`, which `readOut` dispatches through and `Renderings` enumerates:
   every renderer but four is phrased through `internal/machine`'s table and
