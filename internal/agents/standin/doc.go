@@ -131,6 +131,16 @@
 // as a worker; the mode exists so a layer built on workers can script plain
 // lines and read them back.
 //
+// In either mode an exchange may Run what the line carries as a shell
+// command, which is how a test has a worker do something rather than say
+// something: push to a gate, or call the service. The command runs where a
+// command the Claude Code CLI's Bash tool runs was observed to, in a process
+// group the worker does not lead, so whatever reaches the service from it
+// arrives from outside the worker's group, as a real worker's push does; a
+// rule placing a worker's descendants by the worker's group alone cannot pass
+// a test that drives the worker this way. runCommand says what of the CLI it
+// does not model.
+//
 // A worker's Call is the exception to "complete or absent": it is written
 // when the worker starts and rewritten whole, under the same number, as each
 // line arrives, so a reader sees a record complete up to some line and

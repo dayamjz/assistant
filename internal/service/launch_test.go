@@ -40,6 +40,11 @@ func workerAgent(t *testing.T) (*agents.Catalog, *standin.Agent) {
 		Worker: &standin.WorkerScript{
 			Greeting: "worker ready",
 			Exchanges: []standin.Exchange{
+				// A command the test has the worker run, in a process group
+				// of its own as a real worker's command runs; first, so a
+				// command that happens to carry another exchange's text is
+				// still run. workers_unix_test.go's asWorker sends it.
+				{Contains: shellMarker, Run: true},
 				{Contains: "status", Reply: "still working on it"},
 				// The relaunch note's first line, answered so a test waits on
 				// the worker's output for the note rather than on its record.
@@ -57,6 +62,10 @@ func workerAgent(t *testing.T) (*agents.Catalog, *standin.Agent) {
 	}, agents.WithTerminationGrace(2*time.Second))
 	return agents.NewCatalog(fixedFactory{runner: agent.Runner()}), agent
 }
+
+// shellMarker begins a line workerAgent's worker runs the rest of as a
+// command, through its Run exchange.
+const shellMarker = "run-in-shell: "
 
 // waitProbe polls the provider's Probe until the reference answers want.
 // It polls the provider's in-memory answer and never the stand-in's record.

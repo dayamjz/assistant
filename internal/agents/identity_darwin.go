@@ -35,3 +35,21 @@ func startOf(proc unix.ExternProc) uint64 {
 	t := proc.P_starttime
 	return uint64(t.Sec)*1_000_000 + uint64(t.Usec)
 }
+
+// lineage reads the parent and the process group from the same process
+// table entry startTime reads.
+func lineage(pid int) (Lineage, bool, error) {
+	procs, err := unix.SysctlKinfoProcSlice("kern.proc.pid", pid)
+	if err != nil {
+		return Lineage{}, false, err
+	}
+	if len(procs) == 0 || procs[0].Proc.P_stat == szomb {
+		return Lineage{}, false, nil
+	}
+	entry := procs[0]
+	return Lineage{
+		Identity: Identity{PID: pid, Start: startOf(entry.Proc)},
+		Parent:   int(entry.Eproc.Ppid),
+		Group:    int(entry.Eproc.Pgid),
+	}, true, nil
+}

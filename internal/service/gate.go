@@ -97,17 +97,21 @@ func (s *Service) gateSubject(ctx context.Context, id string) (subject, error) {
 // reference in the gate changes, on the one surface a push arrives on. The
 // registry has a producer now: containRunner registers every invocation the
 // resolved agent runs for as long as its process group exists, so an agent
-// inside a stage that pushes to the gate is a caller Ancestry places inside
-// that stage. The gaps that remain are stated on StageStarted rather than
-// implied here.
+// inside a stage that pushes to the gate from that group is a caller Ancestry
+// places inside that stage. A push from a command the agent ran in a group of
+// its own is not, which contain_unix.go's processGroup states; the other gaps
+// are stated on StageStarted rather than implied here.
 //
 // A task's worker is the one pusher that is placed and not refused: its
-// process group is in the worker group set and in no stage, so containment
-// passes it, and what admission then asks of it is admit_workers.go's rule,
-// decided from the same credentials - only the task's own branch, only
-// forward, never a deletion. A person's push meets none of that: a peer in
-// no worker group is held to exactly what this method held every push to
-// before the rule existed.
+// process group is in no stage, so containment passes it, and placement.go
+// places it as the worker by walking its parent chain to a process in the
+// worker group set. What admission then asks of it is admit_workers.go's
+// rule, decided from the same credentials - only the task's own branch, only
+// forward, never a deletion. A person's push meets none of that: a peer
+// placed as no task's worker is held to exactly what this method held every
+// push to before the rule existed. workers.go says which way a push goes
+// when placement cannot tell, and the one shape of a worker's push it places
+// as a person's.
 func (s *Service) admit(ctx context.Context, from ipc.Request, req machine.GateRequest) (machine.Admission, error) {
 	// Resolving is the check; the resolution itself is the notification's to
 	// use.

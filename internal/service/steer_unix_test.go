@@ -28,8 +28,8 @@ import (
 // against the shipped Claude Code adapter's worker: the stand-in in stream
 // mode, which reads one stream-json user message per line, so a message the
 // program sends is framed by the real adapter and read off the wire by the
-// process. A request from the worker is a child process placed in the
-// worker's process group, on workers_unix_test.go's terms. Every effect is
+// process. A request from the worker is a command the worker runs in a
+// process group of its own, on workers_unix_test.go's terms. Every effect is
 // read back from the store, or from the stand-in's own record of the lines
 // it read, rather than taken from an answer.
 
@@ -47,6 +47,9 @@ func streamWorkerAgent(t *testing.T) (*agents.Catalog, *standin.Agent) {
 		}},
 		Worker: &standin.WorkerScript{
 			Exchanges: []standin.Exchange{
+				// A command the test has the worker run, on launch_test.go's
+				// workerAgent's terms.
+				{Contains: shellMarker, Run: true},
 				{Contains: "Stopped by the coordinator", Reply: "the stop note was read"},
 				{Contains: "git rev-parse --show-toplevel", Reply: "the instructions were read"},
 				{Contains: "stay on scope", Reply: "heard: stay on scope"},
@@ -59,7 +62,7 @@ func streamWorkerAgent(t *testing.T) (*agents.Catalog, *standin.Agent) {
 
 // streamWorker records and dispatches a delivery task, serves a service
 // over the stream worker with the configuration given, and hands the body
-// the running service, the task, the worker's group, and the stand-in.
+// the running service, the task, the worker, and the stand-in.
 func streamWorker(t *testing.T, branch, config string, body func(w launched, agent *standin.Agent)) {
 	t.Helper()
 	requiresIdentifiedPeer(t)
@@ -120,7 +123,7 @@ func linesCarrying(t *testing.T, agent *standin.Agent, text string) int {
 }
 
 // PRD section 6's message, and P8 for its acknowledgement. task.message is
-// the coordinator's: from the worker's own group it is refused with the
+// the coordinator's: from the worker it is refused with the
 // worker code and no record is written; a request the program cannot carry
 // whole, empty or over the fixed limit, is refused before anything is
 // recorded. From this process, in no worker group, the record is appended
@@ -134,11 +137,11 @@ func linesCarrying(t *testing.T, agent *standin.Agent, text string) int {
 func TestAMessageIsRecordedWrittenAndAcknowledgedFromTheRecord(t *testing.T) {
 	principles.Cite(t, principles.P8)
 	streamWorker(t, "task/message", steerConfig, func(w launched, agent *standin.Agent) {
-		running, task, group := w.running, w.task, w.group
+		running, task := w.running, w.task
 		request := machine.TaskMessageRequest{Task: task, Text: "stay on scope: the parser only"}
 
-		if _, code := callAs(t, group, running.service, ipc.MethodTaskMessage, request); code != ipc.CodeWorker {
-			t.Fatalf("task.message from the worker's group answered %q, want %q", code, ipc.CodeWorker)
+		if _, code := callAs(t, w, ipc.MethodTaskMessage, request); code != ipc.CodeWorker {
+			t.Fatalf("task.message from the worker answered %q, want %q", code, ipc.CodeWorker)
 		}
 		for _, bad := range []machine.TaskMessageRequest{
 			{Task: task, Text: "   "},
@@ -173,7 +176,7 @@ func TestAMessageIsRecordedWrittenAndAcknowledgedFromTheRecord(t *testing.T) {
 
 		before := historyOf(t, w.home, task)
 		id := strconv.FormatInt(stored[0].ID, 10)
-		answer, code := callAs(t, group, running.service, ipc.MethodTaskEvent,
+		answer, code := callAs(t, w, ipc.MethodTaskEvent,
 			machine.TaskEventRequest{Kind: store.MessageAcknowledgedEventKind, Detail: id})
 		if code != "" {
 			t.Fatalf("the worker's acknowledgement was refused with %q", code)
@@ -201,7 +204,7 @@ func TestAMessageIsRecordedWrittenAndAcknowledgedFromTheRecord(t *testing.T) {
 			{"a message that does not exist", "999"},
 			{"a detail that names no message", "the parser one"},
 		} {
-			if _, code := callAs(t, group, running.service, ipc.MethodTaskEvent,
+			if _, code := callAs(t, w, ipc.MethodTaskEvent,
 				machine.TaskEventRequest{Kind: store.MessageAcknowledgedEventKind, Detail: refused.detail}); code != ipc.CodeInvalidRequest {
 				t.Errorf("acknowledging %s answered %q, want %q", refused.name, code, ipc.CodeInvalidRequest)
 			}
@@ -218,7 +221,7 @@ func TestAMessageIsRecordedWrittenAndAcknowledgedFromTheRecord(t *testing.T) {
 }
 
 // PRD principle P6 at a stop: task.stop is the coordinator's and refused
-// from the worker's group with the worker still running. From this process
+// from the worker with the worker still running. From this process
 // it ends the worker, leaves the copy as the worker left it, and answers
 // only once the probe reads the terminal dead, with a hold keyed by the
 // stopped attempt; the task then reads Held from the hold tier over its
@@ -237,11 +240,11 @@ func TestAStopIsProvenDeadThenHeldAndItsRetryIsTheAnchoredRelaunch(t *testing.T)
 	principles.Cite(t, principles.P6)
 	service.RequireSweepClearsHere(t, "a relaunch after a stop in the stopped worker's copy")
 	streamWorker(t, "task/stop", steerConfig, func(w launched, agent *standin.Agent) {
-		running, task, group := w.running, w.task, w.group
+		running, task := w.running, w.task
 		request := machine.TaskRequest{Task: task}
 
-		if _, code := callAs(t, group, running.service, ipc.MethodTaskStop, request); code != ipc.CodeWorker {
-			t.Fatalf("task.stop from the worker's group answered %q, want %q", code, ipc.CodeWorker)
+		if _, code := callAs(t, w, ipc.MethodTaskStop, request); code != ipc.CodeWorker {
+			t.Fatalf("task.stop from the worker answered %q, want %q", code, ipc.CodeWorker)
 		}
 		if got := listedTask(t, running.client, task); !readsRunning(got) {
 			t.Fatalf("after the refused stop the task reads %+v, want still running", got)
@@ -395,7 +398,7 @@ func waitRelaunched(t *testing.T, running serviceUnderTest, h *home.Home, task, 
 }
 
 // PRD section 6's "interrupt is not offered": task.interrupt is refused from
-// the worker's group with the worker code, as every coordinator method is,
+// the worker with the worker code, as every coordinator method is,
 // and from this process with the records' refusal naming the capability no
 // adapter declares, while the same adapter's declaration of worker
 // sessions, which the stream worker runs on, shows the refusal is read off
@@ -403,10 +406,10 @@ func waitRelaunched(t *testing.T, running serviceUnderTest, h *home.Home, task, 
 // runs on after both: nothing was interrupted.
 func TestAnInterruptIsRefusedAsUndeclared(t *testing.T) {
 	streamWorker(t, "task/interrupt", steerConfig, func(w launched, agent *standin.Agent) {
-		running, task, group := w.running, w.task, w.group
+		running, task := w.running, w.task
 		request := machine.TaskRequest{Task: task}
-		if _, code := callAs(t, group, running.service, ipc.MethodTaskInterrupt, request); code != ipc.CodeWorker {
-			t.Fatalf("task.interrupt from the worker's group answered %q, want %q", code, ipc.CodeWorker)
+		if _, code := callAs(t, w, ipc.MethodTaskInterrupt, request); code != ipc.CodeWorker {
+			t.Fatalf("task.interrupt from the worker answered %q, want %q", code, ipc.CodeWorker)
 		}
 		var out struct{}
 		err := running.client.Call(t.Context(), ipc.MethodTaskInterrupt, request, &out)

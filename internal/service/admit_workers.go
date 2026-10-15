@@ -13,9 +13,9 @@ import (
 	"github.com/dayamjz/assistant/internal/vcs"
 )
 
-// The admission rule for a worker's push: a push whose peer is inside a
-// worker group may update only refs/heads/<that task's branch>, forward
-// only, and may delete nothing. It is #95 line 19's proposed rule, open
+// The admission rule for a worker's push: a push whose peer is placed as a
+// task's worker, on workers.go's terms, may update only refs/heads/<that
+// task's branch>, forward only, and may delete nothing. It is #95 line 19's proposed rule, open
 // there, built as #91's issue text states it.
 //
 // # Whose decision it is
@@ -52,6 +52,13 @@ import (
 //
 // # What it does not cover
 //
+//   - A worker's push placement cannot follow back to the worker. Placement
+//     walks the pushing process's parent chain, so a push the Claude Code
+//     CLI runs in a process group of its own is held to this rule; a push
+//     whose chain the kernel rewrote, because a process between it and the
+//     worker exited first, is placed as a person's and this rule never sees
+//     it. placement.go names the shape and workers.go which way every rule
+//     then goes. A chain placement could not read is refused, not admitted.
 //   - An investigation task names no branch, so its worker's push is refused
 //     whatever it carries.
 //   - Nothing here reads whether the pushed commit is the copy's head, only
@@ -59,10 +66,10 @@ import (
 //   - The gate's standing value and the hook's are two reads; a push that
 //     lands between them is refused by the mismatch rather than raced.
 
-// admitWorkerPush applies the rule to a push whose peer is a task's worker,
-// and does nothing for every other peer. A refusal wraps ipc.ErrWorker and
-// names the update; a fact that could not be established wraps
-// ipc.ErrUnavailable.
+// admitWorkerPush applies the rule to a push whose peer is placed as a task's
+// worker, and does nothing for a peer placed as nobody's. A refusal wraps
+// ipc.ErrWorker and names the update; a fact that could not be established,
+// whether the peer is a worker among them, wraps ipc.ErrUnavailable.
 func (s *Service) admitWorkerPush(ctx context.Context, from ipc.Request, req machine.GateRequest) error {
 	m, ok, err := s.workerPeer(from)
 	if err != nil {
