@@ -3,6 +3,7 @@ package vcs
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 )
 
@@ -47,12 +48,41 @@ var ErrNothingToCommit = errors.New("vcs: the working copy holds no change to co
 // does not amend. A detached HEAD is committed onto exactly as a branch is:
 // the commit is written and HEAD moves to it, which is what an isolated copy
 // checked out detached wants.
+//
+// The subject is recorded as given, under the same verbatim cleanup
+// CommitAllWithBody describes, so what a caller passed is what the commit says.
 func (r *Repository) CommitAll(ctx context.Context, subject string) (string, error) {
+	return r.CommitAllWithBody(ctx, subject, "")
+}
+
+// CommitAllWithBody is CommitAll with a message body below the subject. Every
+// rule CommitAll states holds for it unchanged, including what the subject may
+// carry; an empty body records exactly what CommitAll would.
+//
+// # The body
+//
+// A body may run to many lines, which a subject may not. It is refused when it
+// carries a NUL byte, which no command-line argument can hold, and is otherwise
+// passed to git as the value of the --message option attached in one argument,
+// so no line of it is read as an option of its own. The message is recorded
+// with --cleanup=verbatim: the subject, a blank line, and the body as given,
+// so a commit.cleanup setting in the user's git configuration does not remove
+// lines of it, such as ones beginning with a comment character.
+//
+// It decides nothing about what the body says. A body line shaped like a
+// trailer reads as one to tools that parse trailers, and a caller writing text
+// it did not author into a body owns that.
+func (r *Repository) CommitAllWithBody(ctx context.Context, subject, body string) (string, error) {
 	if r.kind != KindWorktree {
 		return "", ErrNotARepository
 	}
 	if err := checkArg("subject", subject); err != nil {
 		return "", err
+	}
+	if strings.ContainsRune(body, 0) {
+		// The body is not quoted back: it may be long, and it is text the
+		// caller chose to record rather than an argument it spelled.
+		return "", fmt.Errorf("%w: the commit body contains a NUL byte", ErrInvalidArgument)
 	}
 	// Staging first is what makes the emptiness check and the commit agree:
 	// both then read the index, so a file that arrived between the two cannot
@@ -67,7 +97,11 @@ func (r *Repository) CommitAll(ctx context.Context, subject string) (string, err
 	if !staged {
 		return "", ErrNothingToCommit
 	}
-	if _, err := r.run(ctx, "commit", "commit", "--quiet", "--no-verify", "--message", subject); err != nil {
+	args := []string{"commit", "--quiet", "--no-verify", "--cleanup=verbatim", "--message", subject}
+	if body != "" {
+		args = append(args, "--message="+body)
+	}
+	if _, err := r.run(ctx, "commit", args...); err != nil {
 		return "", err
 	}
 	return r.ResolveCommit(ctx, "HEAD")
