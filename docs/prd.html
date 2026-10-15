@@ -516,7 +516,7 @@ flowchart LR
         <tr><th class="w-10">#</th><th class="w-32">Stage</th><th>What it does and why it sits here</th><th class="w-24">Fix rounds</th></tr>
       </thead>
       <tbody>
-        <tr><td class="prd-num">1</td><td><b>Intent</b></td><td>Establishes what you set out to do. Supplied intent is authoritative acceptance criteria; inferred intent is a low-confidence hint, and the two are framed differently in every downstream prompt. This stage never blocks a run.</td><td class="opacity-60">none</td></tr>
+        <tr><td class="prd-num">1</td><td><b>Intent</b></td><td>Establishes what you set out to do. Supplied intent is authoritative acceptance criteria; inferred intent is a low-confidence hint, and the two are framed differently in every downstream prompt. Intent read off the task a worker was given is a source of its own and is framed as inferred intent is: a hint, never acceptance criteria. This stage never blocks a run.</td><td class="opacity-60">none</td></tr>
         <tr><td class="prd-num">2</td><td><b>Rebase</b></td><td>Fetches fresh upstream and the branch target, then rebases onto them, so everything after runs against current code. Stops if the branch would quietly carry commits from your local default branch that were never pushed. If nothing remains to change, the run ends successfully and the rest is skipped.</td><td class="prd-num">3</td></tr>
         <tr><td class="prd-num">3</td><td><b>Review</b></td><td>Independent review of the change against the diff and your intent. Runs before tests so it reads code the fixer has not touched. Gets one automatic fix round, restricted to <code>fix</code> findings. Any <code>ask</code> finding holds immediately and is never included in that round.</td><td class="prd-num">1</td></tr>
         <tr><td class="prd-num">4</td><td><b>Test</b></td><td>Targeted validation of this change and this intent, not a full suite. If no targeted check can establish the intent, the stage must write one, verify manually with recorded evidence, or report that sufficient evidence is not possible.</td><td class="prd-num">3</td></tr>
@@ -664,9 +664,9 @@ flowchart LR
       <code>fix</code> or <code>ask</code>. A line being unexplained is not that bar. A change nobody
       asked for that is also wrong is reported for being wrong.</li>
     <li>The lens is measured against the recorded intent and inherits that intent's source. Against
-      supplied intent it compares a change to acceptance criteria; against inferred intent it
-      compares a change to a low-confidence hint, which is the second reason its default is
-      <code>note</code>.</li>
+      supplied intent it compares a change to acceptance criteria; against inferred intent, or
+      intent read off a task, it compares a change to a low-confidence hint, which is the second
+      reason its default is <code>note</code>.</li>
     <li>Being guidance, it is strengthened the way review is strengthened anywhere, through
       path-scoped review rules. No key in the configuration schema turns it off, and turning it off
       would not skip a stage, because it is not one.</li>
@@ -2018,6 +2018,15 @@ flowchart TB
     </table>
   </div>
   <p class="mb-4 opacity-90">
+    <code>assistant init</code> records the repository the gate validates, and takes two flags.
+    <code>--upstream</code> names the remote the change is destined for, and without it that is the
+    working copy's origin. <code>--default-branch</code> names the branch trusted configuration is
+    read from. Without it, init takes the branch the working copy records origin's HEAD as naming,
+    which it reads locally without fetching, and never the branch checked out. When the working copy
+    has no origin, records no HEAD for it, or records one outside origin's branches, init refuses and
+    sets up no gate and records no repository. Either way it reports which branch it recorded and where that came from.
+  </p>
+  <p class="mb-4 opacity-90">
     The <b>usage view</b> is a flag on <code>assistant runs</code>, taking a window. It reads section
     8's agent invocation record and totals it by agent, model, and purpose, and by run and stage
     where a row names them: calls, failures by category, duration, and each token count. A count the
@@ -2160,7 +2169,7 @@ flowchart TB
         <tr><td><b>Blocking calls</b></td><td>Starting or responding blocks until the next decision point or a terminal outcome. A long call is working, not stalled, and a run never advances past a decision on its own. The bare start attaches, so a run already being advanced is reported where it stands rather than advanced twice, and that one call returns <code>executing</code> instead. A run with no recorded position that nothing is advancing cannot be attached to and carried on, so it is told to end and start a fresh run rather than to attach.</td></tr>
         <tr><td><b>One answer, no disagreement</b></td><td>A reported run must not be able to describe its record and its execution disagreeing. The fact of whether something is advancing the run right now is an <i>input</i> to the outcome, never a field carried alongside it, and the recommended next action is derived from the pair rather than written at each branch. Absence of a checkpoint is its own case, not a status standing in for one. This is structural: the surface that builds the answer must not be able to assign the action at all.</td></tr>
         <tr><td><b>Structured output</b></td><td>Machine-readable on standard output, progress on standard error. Control characters are escaped visibly rather than emitted raw.</td></tr>
-        <tr><td><b>Stable exit codes</b></td><td>Success and normal decision points; operational failure; incorrect usage. Three meanings, never overloaded. A run that has not executed is not an operational failure: it is unfinished, so it exits with the first meaning and its next action says what to do.</td></tr>
+        <tr><td><b>Stable exit codes</b></td><td>Success and normal decision points; operational failure; incorrect usage. Three meanings, never overloaded. Incorrect usage is a request the caller got wrong, whether the command line could not be parsed or the service answered the request as invalid, and it is the same code for every method. A run that has not executed is not an operational failure: it is unfinished, so it exits with the first meaning and its next action says what to do.</td></tr>
         <tr id="outcome-set"><td><b>Outcomes</b></td><td>Six, in two groups, and this row is where the set is stated. Each one is marked with a <code>data-outcome</code> attribute naming its group, so the set, its order, and its grouping can be read off this row alone; a build whose own set differs in any of the three is wrong against this row rather than merely inconsistent with it. Four say a run is finished with. <code data-outcome="finished">checks-passed</code> means validated and green but not merged, and it means stop driving and ask the person. <code data-outcome="finished">passed</code> means merged. A pull request closed without merging ends the run as <code>failed</code>, with the reason recorded. <code data-outcome="finished">failed</code> and <code data-outcome="finished">cancelled</code> are terminal and require a next action, never silence. Two say it is not. <code data-outcome="unfinished">decision</code> is the decision point a blocking call returns at, and <code data-outcome="unfinished">executing</code> is a run whose execution has not finished, which only an answer that reported the run without advancing it can carry. It covers three situations a reader must act on differently: a segment in flight; a segment that stopped without settling, leaving the run at a resumable position with nothing moving it; and a run with no recorded position at all. The outcome is the same for all three because none is finished with. What separates them is the next action, decided by whether anything is advancing the run and whether a checkpoint recorded a position. Every outcome carries a next action, terminal or not.</td></tr>
         <tr><td><b>Relay verbatim</b></td><td>A finding that needs a decision is relayed with its full text, unsummarized and unjudged, unless standing consent to resolve unattended was given. That relay is a detailed evidence document in P13's sense, so the finding keeps its exact identifiers; P13's "never text to relay" governs worker reports and tool output, not a finding you are asked to decide on, and the message asking for the decision is still phrased.</td></tr>
       </tbody>

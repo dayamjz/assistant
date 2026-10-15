@@ -242,7 +242,7 @@ func (s *promotionSubject) resolve(t *testing.T, id string) taskstate.Resolution
 func (s *promotionSubject) untouched(t *testing.T, tk task, n int) {
 	t.Helper()
 	record := s.record(t, tk.id)
-	if record.Shape != store.TaskInvestigation || record.Branch.IsKnown() {
+	if record.Shape != store.TaskInvestigation || record.Branch.IsKnown() || record.DeliveryIntent.IsKnown() {
 		t.Fatalf("the refused promotion wrote the record: %+v", record)
 	}
 	if history := s.history(t, tk.id); len(history) != n {
@@ -257,8 +257,8 @@ func (s *promotionSubject) untouched(t *testing.T, tk task, n int) {
 // shapes the standing copy: afterwards the copy has exactly one remote,
 // assistant at this home's gate, HEAD is on the task's branch at the commit
 // the investigation had reached, the assertion passes on the delivery
-// expectation, the intent is in the instructions, and the promoted entry is
-// in the history. A second promotion refuses on the shape, a task in a
+// expectation, the intent is on the task's record and in the instructions,
+// and the promoted entry is in the history. A second promotion refuses on the shape, a task in a
 // state outside the table refuses with nothing written, and an anchor the
 // history moved past refuses with nothing written.
 func TestPromoteFlipsTheTaskInPlaceAndShapesItsCopy(t *testing.T) {
@@ -273,6 +273,9 @@ func TestPromoteFlipsTheTaskInPlaceAndShapesItsCopy(t *testing.T) {
 		got := s.promote(t, request(tk.id))
 		if got.Task.Shape != store.TaskDelivery || got.Task.RepositoryID.Or("") != cleanupRepository || got.Task.Branch.Or("") != "topic" {
 			t.Fatalf("the task reads %+v, want delivery on %s topic", got.Task, cleanupRepository)
+		}
+		if stored := s.record(t, tk.id); stored.DeliveryIntent != store.Known("make the change the report found") {
+			t.Fatalf("the stored task records the delivery intent %v, want the request's", stored.DeliveryIntent)
 		}
 		if got.Event.Kind != store.PromotedEventKind || got.Event.Sequence != int64(before+1) ||
 			!strings.Contains(got.Event.Detail, "no report stored") {

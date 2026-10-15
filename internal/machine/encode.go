@@ -21,13 +21,16 @@ const (
 	// a failure would stop driving exactly when it should carry on.
 	ExitOK Code = 0
 	// ExitFailure is an operational failure: something the command was asked
-	// to do could not be done. A refused request, an unreachable service, and
-	// a run that ended without a verdict are all this.
+	// to do could not be done. A request the service read and refused
+	// against its records, an unreachable service, and a run that ended
+	// without a verdict are all this.
 	ExitFailure Code = 1
-	// ExitUsage is incorrect usage: the command line itself was wrong. It is
-	// separate from ExitFailure so that a driving agent can tell a request it
-	// got wrong from a request the system could not serve, which are fixed in
-	// entirely different ways.
+	// ExitUsage is incorrect usage: the request the command line made was
+	// wrong, whether the command line could not be parsed or the service
+	// answered the request it made as invalid. It is separate from
+	// ExitFailure so that a driving agent can tell a request it got wrong
+	// from a request the system could not serve, which are fixed in entirely
+	// different ways.
 	ExitUsage Code = 2
 )
 

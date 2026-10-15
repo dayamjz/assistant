@@ -34,9 +34,10 @@ func historyOf(t *testing.T, s *Store, id string) []TaskEvent {
 	return events
 }
 
-// The shape transition writes the shape, the repository, the branch and the
-// delivery posture together with the event that records it, in one
-// transaction, and every refusal leaves all five as they were. PRD principle P14 is what the test
+// The shape transition writes the shape, the repository, the branch, the
+// delivery posture and the delivery intent together with the event that
+// records it, in one transaction, and every refusal leaves all six as they
+// were. PRD principle P14 is what the test
 // claims: the task row is the one owner of the four facts, and the flip is
 // one write of that row rather than three writes a reader could see in
 // between, which is checked by holding the row and the history to their
@@ -54,7 +55,8 @@ func TestTheShapeTransitionWritesShapeRepositoryAndBranchTogether(t *testing.T) 
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got.Shape != TaskInvestigation || got.Branch.IsKnown() || got.RepositoryID.Or("") != "repo-1" {
+		if got.Shape != TaskInvestigation || got.Branch.IsKnown() || got.RepositoryID.Or("") != "repo-1" ||
+			got.DeliveryIntent.IsKnown() {
 			t.Fatalf("%s: the task reads %+v, want the investigation task as seeded", when, got)
 		}
 		if after := historyOf(t, s, task.ID); len(after) != len(before) {
@@ -62,25 +64,30 @@ func TestTheShapeTransitionWritesShapeRepositoryAndBranchTogether(t *testing.T) 
 		}
 	}
 
-	t.Run("the reverse move, an empty repository and an empty branch refuse before anything is read", func(t *testing.T) {
-		if _, _, err := s.TransitionTaskShape(ctx, task.ID, TaskDelivery, TaskInvestigation, "repo-1", "topic", config.DeliveryGated, 2, "d"); !errors.Is(err, ErrShapeTransition) {
+	t.Run("the reverse move, an empty repository, branch or intent refuse before anything is read", func(t *testing.T) {
+		if _, _, err := s.TransitionTaskShape(ctx, task.ID, TaskDelivery, TaskInvestigation, "repo-1", "topic", config.DeliveryGated, "Deliver it.", 2, "d"); !errors.Is(err, ErrShapeTransition) {
 			t.Fatalf("delivery to investigation = %v, want ErrShapeTransition", err)
 		}
-		if _, _, err := s.TransitionTaskShape(ctx, task.ID, TaskInvestigation, TaskInvestigation, "repo-1", "topic", config.DeliveryGated, 2, "d"); !errors.Is(err, ErrShapeTransition) {
+		if _, _, err := s.TransitionTaskShape(ctx, task.ID, TaskInvestigation, TaskInvestigation, "repo-1", "topic", config.DeliveryGated, "Deliver it.", 2, "d"); !errors.Is(err, ErrShapeTransition) {
 			t.Fatalf("investigation to investigation = %v, want ErrShapeTransition", err)
 		}
-		if _, _, err := s.TransitionTaskShape(ctx, task.ID, TaskInvestigation, TaskDelivery, "", "topic", config.DeliveryGated, 2, "d"); err == nil {
+		if _, _, err := s.TransitionTaskShape(ctx, task.ID, TaskInvestigation, TaskDelivery, "", "topic", config.DeliveryGated, "Deliver it.", 2, "d"); err == nil {
 			t.Fatal("an empty repository was accepted")
 		}
-		if _, _, err := s.TransitionTaskShape(ctx, task.ID, TaskInvestigation, TaskDelivery, "repo-1", " ", config.DeliveryGated, 2, "d"); err == nil {
+		if _, _, err := s.TransitionTaskShape(ctx, task.ID, TaskInvestigation, TaskDelivery, "repo-1", " ", config.DeliveryGated, "Deliver it.", 2, "d"); err == nil {
 			t.Fatal("an empty branch was accepted")
 		}
+		for _, blank := range []string{"", " \n\t"} {
+			if _, _, err := s.TransitionTaskShape(ctx, task.ID, TaskInvestigation, TaskDelivery, "repo-1", "topic", config.DeliveryGated, blank, 2, "d"); err == nil {
+				t.Fatalf("the blank intent %q was accepted", blank)
+			}
+		}
 		for _, posture := range []config.Delivery{"", "direct", "fast"} {
-			if _, _, err := s.TransitionTaskShape(ctx, task.ID, TaskInvestigation, TaskDelivery, "repo-1", "topic", posture, 2, "d"); !errors.Is(err, ErrUnknownDelivery) {
+			if _, _, err := s.TransitionTaskShape(ctx, task.ID, TaskInvestigation, TaskDelivery, "repo-1", "topic", posture, "Deliver it.", 2, "d"); !errors.Is(err, ErrUnknownDelivery) {
 				t.Fatalf("posture %q = %v, want ErrUnknownDelivery", posture, err)
 			}
 		}
-		if _, _, err := s.TransitionTaskShape(ctx, "nope", TaskInvestigation, TaskDelivery, "repo-1", "topic", config.DeliveryGated, 2, "d"); !errors.Is(err, ErrNotFound) {
+		if _, _, err := s.TransitionTaskShape(ctx, "nope", TaskInvestigation, TaskDelivery, "repo-1", "topic", config.DeliveryGated, "Deliver it.", 2, "d"); !errors.Is(err, ErrNotFound) {
 			t.Fatalf("a task that does not exist = %v, want ErrNotFound", err)
 		}
 		unchanged(t, "after the refusals")
@@ -89,7 +96,7 @@ func TestTheShapeTransitionWritesShapeRepositoryAndBranchTogether(t *testing.T) 
 	t.Run("an anchor the history moved past refuses", func(t *testing.T) {
 		// The seeded task has two entries, queued and dispatched; a caller
 		// that read only the first is behind.
-		_, _, err := s.TransitionTaskShape(ctx, task.ID, TaskInvestigation, TaskDelivery, "repo-1", "topic", config.DeliveryGated, 1, "d")
+		_, _, err := s.TransitionTaskShape(ctx, task.ID, TaskInvestigation, TaskDelivery, "repo-1", "topic", config.DeliveryGated, "Deliver it.", 1, "d")
 		var moved *TaskMovedError
 		if !errors.As(err, &moved) || !errors.Is(err, ErrTaskMoved) {
 			t.Fatalf("a stale anchor = %v, want a *TaskMovedError matching ErrTaskMoved", err)
@@ -100,14 +107,14 @@ func TestTheShapeTransitionWritesShapeRepositoryAndBranchTogether(t *testing.T) 
 		unchanged(t, "after the stale anchor")
 	})
 
-	t.Run("the one write flips all three and appends the event", func(t *testing.T) {
-		got, event, err := s.TransitionTaskShape(ctx, task.ID, TaskInvestigation, TaskDelivery, "repo-1", "topic", config.DeliveryLocal, 2, "promoted in the test")
+	t.Run("the one write flips the shape, records what it works under, and appends the event", func(t *testing.T) {
+		got, event, err := s.TransitionTaskShape(ctx, task.ID, TaskInvestigation, TaskDelivery, "repo-1", "topic", config.DeliveryLocal, "Deliver it.", 2, "promoted in the test")
 		if err != nil {
 			t.Fatalf("TransitionTaskShape: %v", err)
 		}
 		if got.Shape != TaskDelivery || got.RepositoryID.Or("") != "repo-1" || got.Branch.Or("") != "topic" ||
-			got.Delivery != Known(config.DeliveryLocal) {
-			t.Fatalf("the task reads %+v, want delivery on repo-1 topic under local", got)
+			got.Delivery != Known(config.DeliveryLocal) || got.DeliveryIntent != Known("Deliver it.") {
+			t.Fatalf("the task reads %+v, want delivery on repo-1 topic under local, to deliver it", got)
 		}
 		if event.Sequence != 3 || event.Kind != PromotedEventKind || event.Detail != "promoted in the test" || event.At.IsZero() {
 			t.Fatalf("the event is %+v, want promoted at sequence 3 with the detail", event)
@@ -117,19 +124,21 @@ func TestTheShapeTransitionWritesShapeRepositoryAndBranchTogether(t *testing.T) 
 			t.Fatalf("the history is %+v, want the promoted entry third", history)
 		}
 		read, err := s.Task(ctx, task.ID)
-		if err != nil || read.Shape != TaskDelivery || read.Branch.Or("") != "topic" || read.Delivery != Known(config.DeliveryLocal) {
+		if err != nil || read.Shape != TaskDelivery || read.Branch.Or("") != "topic" || read.Delivery != Known(config.DeliveryLocal) ||
+			read.DeliveryIntent != Known("Deliver it.") {
 			t.Fatalf("Task = %+v, %v; want the flip read back", read, err)
 		}
 	})
 
 	t.Run("a second transition of the same task refuses as moved", func(t *testing.T) {
-		_, _, err := s.TransitionTaskShape(ctx, task.ID, TaskInvestigation, TaskDelivery, "repo-1", "other", config.DeliveryGated, 3, "d")
+		_, _, err := s.TransitionTaskShape(ctx, task.ID, TaskInvestigation, TaskDelivery, "repo-1", "other", config.DeliveryGated, "Deliver something else.", 3, "d")
 		if !errors.Is(err, ErrTaskShapeMoved) {
 			t.Fatalf("a second promotion = %v, want ErrTaskShapeMoved", err)
 		}
 		read, err := s.Task(ctx, task.ID)
-		if err != nil || read.Branch.Or("") != "topic" || read.Delivery != Known(config.DeliveryLocal) {
-			t.Fatalf("the second promotion moved the branch or the posture: %+v, %v", read, err)
+		if err != nil || read.Branch.Or("") != "topic" || read.Delivery != Known(config.DeliveryLocal) ||
+			read.DeliveryIntent != Known("Deliver it.") {
+			t.Fatalf("the second promotion moved the branch, the posture or the intent: %+v, %v", read, err)
 		}
 		if history := historyOf(t, s, task.ID); len(history) != 3 {
 			t.Fatalf("the refused transition appended: %+v", history)
@@ -150,7 +159,7 @@ func TestTheShapeTransitionAndTheCleanupClaimExcludeEachOther(t *testing.T) {
 		if _, err := s.RecordTaskCleanup(ctx, TaskCleanup{TaskID: task.ID, Proof: CleanupProofScratch}, TaskInvestigation); err != nil {
 			t.Fatalf("RecordTaskCleanup: %v", err)
 		}
-		_, _, err := s.TransitionTaskShape(ctx, task.ID, TaskInvestigation, TaskDelivery, "repo-1", "topic", config.DeliveryGated, 2, "d")
+		_, _, err := s.TransitionTaskShape(ctx, task.ID, TaskInvestigation, TaskDelivery, "repo-1", "topic", config.DeliveryGated, "Deliver it.", 2, "d")
 		if !errors.Is(err, ErrCleanupRecorded) {
 			t.Fatalf("promoting a claimed task = %v, want ErrCleanupRecorded", err)
 		}
@@ -165,7 +174,7 @@ func TestTheShapeTransitionAndTheCleanupClaimExcludeEachOther(t *testing.T) {
 
 	t.Run("the transition refuses a cleanup decided over the old shape", func(t *testing.T) {
 		task := seedInvestigation(t, s, "taskaaaaaaad")
-		if _, _, err := s.TransitionTaskShape(ctx, task.ID, TaskInvestigation, TaskDelivery, "repo-1", "topic", config.DeliveryGated, 2, "d"); err != nil {
+		if _, _, err := s.TransitionTaskShape(ctx, task.ID, TaskInvestigation, TaskDelivery, "repo-1", "topic", config.DeliveryGated, "Deliver it.", 2, "d"); err != nil {
 			t.Fatalf("TransitionTaskShape: %v", err)
 		}
 		_, err := s.RecordTaskCleanup(ctx, TaskCleanup{TaskID: task.ID, Proof: CleanupProofScratch}, TaskInvestigation)

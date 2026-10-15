@@ -187,12 +187,13 @@ const everyFindingIsIn = "every finding with its identifier is under active_run.
 // answer. Whether it selects anything the held stage reported is the
 // service's to check, against the report it holds.
 //
-// A request the service answers with ipc.ErrInvalidRequest is incorrect usage:
-// the service raises it for an answer whose fix request is wrong, such as an
-// identifier the held stage's current report does not carry, and for a
-// request body it could not read. The refusal keeps the code it crossed the
-// wire with and gains where every reported identifier is, so a caller holding
-// one from an earlier report can correct the selection.
+// A request the service answers with ipc.ErrInvalidRequest is incorrect usage,
+// which render decides for every method alike: the service raises it here for
+// an answer whose fix request is wrong, such as an identifier the held stage's
+// current report does not carry, and for a request body it could not read.
+// What this adds is where every reported identifier is, so a caller holding
+// one from an earlier report can correct the selection; the refusal keeps the
+// code it crossed the wire with.
 func (in *invocation) answerDecision(ctx context.Context, working, answer string, request *pipeline.FixRequest) (any, error) {
 	active, err := in.activeRun(ctx, working, "answer")
 	if err != nil {
@@ -202,7 +203,7 @@ func (in *invocation) answerDecision(ctx context.Context, working, answer string
 	var run machine.Run
 	err = in.callService(ctx, ipc.MethodRunRespond, machine.RespondRequest{Run: active, Answer: answer, Fix: request}, &run)
 	if errors.Is(err, ipc.ErrInvalidRequest) {
-		return nil, usageError{err: fmt.Errorf("%w; %s", err, everyFindingIsIn)}
+		return nil, fmt.Errorf("%w; %s", err, everyFindingIsIn)
 	}
 	return run, err
 }
