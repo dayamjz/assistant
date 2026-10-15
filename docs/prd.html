@@ -450,7 +450,7 @@ flowchart TB
       </div>
       <div class="collapse-content text-sm opacity-90 space-y-2">
         <p>Everything Assistant says to you names the project outcome, the consequence, and the next decision. Internal terms do not appear: no task identifiers, no isolated-copy paths, no watcher or wake vocabulary, no stage names, no state labels, no compressed safety jargon. Worker reports and tool output are evidence to read, never text to relay.</p>
-        <p>Detailed evidence documents may keep exact identifiers. Section 9 names which outputs are evidence documents: the detail view, the usage view, and the relay of a finding that needs your decision. The message that points you at one still translates, and so does every plain status line.</p>
+        <p>Detailed evidence documents may keep exact identifiers. Section 9 names which outputs are evidence documents: the detail view, the usage view, the log view of one stage of a run, and the relay of a finding that needs your decision. The message that points you at one still translates, and so does every plain status line.</p>
         <p><b>Prevents:</b> a tool that is technically correct and practically unusable, because using it requires holding its implementation in your head.</p>
       </div>
     </div>
@@ -1317,8 +1317,8 @@ flowchart TD
   <p class="mb-8 opacity-90">
     This is a testable contract, not a style preference. The translation table below should be
     enforced by a test that asserts both the required wording and the absence of the internal terms.
-    It governs everything a person reads except the three detailed evidence documents section 9
-    names, the detail view, the usage view, and the relay of a finding that needs your decision, where exact
+    It governs everything a person reads except the four detailed evidence documents section 9
+    names, the detail view, the usage view, the log view of one stage of a run, and the relay of a finding that needs your decision, where exact
     identifiers and stage names stay. The plain status lines are not evidence documents and stay
     phrased.
   </p>
@@ -1934,7 +1934,8 @@ flowchart TB
   tasks/&lt;id&gt;/copy        the task's isolated copy, a full clone of your checkout with an assistant remote
   instance               the service's instance identity, written once by the service at start; not state
   beacon                 the supervisor's liveness beacon, written by the supervisor loop; not state
-  logs/&lt;run&gt;/&lt;stage&gt;.log per-stage logs, the authoritative full output
+  logs/&lt;run&gt;/&lt;stage&gt;.log per-stage logs, the stage's full output as far as its writes landed;
+                         writes are best effort, and a lost write leaves no mark
   logs/service.log       bounded lifecycle log with rotation</code></pre>
   </div>
   <ul class="list-disc pl-6 space-y-1.5 mb-8 opacity-90">
@@ -2051,8 +2052,8 @@ flowchart TB
     the service log and leaves no mark in the stage's log. What the view prints is a bounded tail with a
     marker saying how much it left out and where the whole log is. A log is evidence and never state:
     nothing decides anything from it (P8). It is an answer of its own, apart from the detail view, and it
-    keeps exact identifiers and stage names, so it is rendered as an evidence document; P13's list of
-    evidence documents does not name it, and the line pointing at it is phrased. The local protocol
+    keeps exact identifiers and stage names, so it is a detailed evidence document in P13's sense and
+    P13's list names it; the line pointing at it is phrased. The local protocol
     carries the same read as one open method. No verb is added.
   </p>
   <p class="mb-4 opacity-90">
@@ -2091,12 +2092,30 @@ flowchart TB
     it happened. The relaunch after a stop is no new method: it is the answer to the stop's hold.
   </p>
   <p class="mb-8 opacity-90">
-    These methods, with draining and acknowledging the wake queue and arm verification, are reached
+    These methods, with listing, awaiting, and acknowledging the wake queue, reading a worker's
+    recent output, and arm verification, are reached
     through <code>assistant coordinator …</code>, a client dispatched beside the table on the same
     terms as <code>assistant gate</code> and <code>assistant host</code>. It adds no row. It is the
     interface the coordinator requires, and the third command outside the table by the owner's
     decision rather than a precedent the first two set. Each subcommand is one service method, and
     the service, not the client, refuses a worker.
+  </p>
+  <p class="mb-8 opacity-90">
+    What is reached beside the table rather than as a verb is two clients. The coordinator client's
+    subcommands are <code>create</code>, <code>message</code>, <code>stop</code>, <code>peek</code>,
+    <code>relaunch</code>, <code>promote</code>, <code>wakes</code>, <code>await</code>,
+    <code>acknowledge</code>, and <code>supervision</code>. <code>await</code> blocks until the wake
+    queue holds a wake nobody has acknowledged, or until a bound the caller gives elapses, and then
+    lists the queue, acknowledging nothing. <code>peek</code> reads a task's worker's recent output,
+    redacted and bounded, and how to attach to its terminal where the provider offers that; the
+    output and the attach command travel only in the machine interface, because worker output is
+    evidence and never relayed (P13). The worker route, <code>assistant worker …</code>, is the route
+    a launched worker uses to acknowledge a message, file an investigation's report, and record an
+    event about how its work stands. It is dispatched beside the table on the same terms and adds no
+    row: it is the interface a launched worker requires, and the fourth command outside the table by
+    the owner's decision rather than a precedent the first three set. Each of its subcommands is one
+    service method, and the service, not the client, refuses it for a person's shell, deciding from
+    the credentials the socket reports and never from anything the caller says about itself.
   </p>
 
   <h3 id="catch-up" class="prd-anchor text-xl font-semibold mb-3">Catching up</h3>
@@ -2350,12 +2369,14 @@ flowchart TB
         <tr><td><code>delivery</code></td><td><code>gated</code></td><td>The delivery posture of this repository's delivery tasks, section 6: <code>gated</code> or <code>local</code>. Read only from the trusted copy, so a branch cannot choose a lighter path for itself. <code>direct</code> is deferred and is rejected at parse time. It never changes what a person's push to the gate does.</td></tr>
         <tr><td><code>autonomy.merge</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td>empty</td><td>The repositories, each named as the code host names it, where section 6's autonomy flag may merge a run that ended <code>checks-passed</code>, after the live read section 6 gives. Empty means the program merges nothing.</td></tr>
         <tr><td><code>allow_pushed_commands</code></td><td><code>false</code></td><td>The opt-out that lets the pushed branch set commands and agent selection. It is itself readable only from the trusted copy, so a branch cannot enable it for itself.</td></tr>
+        <tr><td><code>allow_standing_consent</code></td><td><code>false</code></td><td>Whether a run of this repository may be put under section 9's standing consent. It allows and does not turn on: only the per-run flag section 9 gives puts a run under it, and that flag is refused where this is false. Read only from the trusted copy, so a pushed branch cannot allow standing consent for itself; like every trusted-only key, the operator's own file may also set it, which allows it in every repository of the home.</td></tr>
         <tr><td><code>checks_timeout</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code>168h</code></td><td>Idle timeout, re-armed whenever the base branch advances. On elapse the run holds rather than ending, and that hold is the one section 11's recovery step 3 applies to.</td></tr>
         <tr><td><code>escalation_window</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code>30m</code></td><td>How long a terminal may stay unchanged, with positive evidence of progress, before the supervisor surfaces it anyway. It is also how often a crashed worker that is still silent surfaces again. The default is chosen, not measured; the limits table bounds it on both sides, and those bounds are chosen, not measured.</td></tr>
         <tr><td><code>recheck_window</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code>2h</code></td><td>How long a declared external wait may sit idle before it surfaces, so a forgotten wait cannot stay invisible. The default is chosen, not measured; the limits table bounds it on both sides, and those bounds are chosen, not measured.</td></tr>
         <tr><td><code>supervision_beacon_interval</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code>10s</code></td><td>How often the supervisor loop rewrites its liveness beacon. A beacon is stale at three times this interval, and arm verification waits five times it for the first beacon; both are fixed multiples of this row, not rows of their own. It stops nothing and parks nothing. The default is chosen, not measured; the limits table bounds it on both sides, and those bounds are chosen, not measured.</td></tr>
         <tr><td><code>stall_inspection_count</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code class="prd-num">3</code></td><td>How many times the same unchanged screen may surface before the next surface demands a deeper inspection, section 11's repeated stall. It raises the level of what surfaces and bounds nothing. The default is chosen, not measured; the limits table bounds it on both sides, and those bounds are chosen, not measured.</td></tr>
         <tr><td><code>relaunch_attempts</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code class="prd-num">2</code></td><td>How many times reconciliation relaunches a task that resolves Failed with its terminal gone, in place, counted from the task's attempt history. Past it the task holds for you, and you decide whether it is retried: nothing retries a task automatically without bound. Zero relaunches nothing and holds every such task. It is a bound on a task, not one of the three loop bounds, and stops no run. The default is chosen, not measured; the limits table bounds it, and the ceiling is chosen, not measured.</td></tr>
+        <tr><td><code>session_provider</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code>pipe</code></td><td>Which terminal session provider the service starts every worker through: <code>pipe</code>, the reference provider, or <code>tmux</code>. It chooses which program starts every worker, and so which process starts with your credentials, and it is one choice for the whole service, so no repository copy, trusted or pushed, may set it (P7).</td></tr>
         <tr><td><code>session_reuse</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code>true</code></td><td>One durable fixer session per run. Review turns are always fresh regardless, per P4.</td></tr>
         <tr><td><code>decision_model</code> <span class="badge badge-error badge-outline badge-xs align-middle">global-only</span></td><td><code>evaluate</code></td><td>The mode of the checks in section 5, "Checks a decision model may add": <code>evaluate</code>, <code>enforce</code>, or <code>off</code>. They run against the one supported provider, and only where the provider's key is in the operator's environment, never in a configuration file; with the key present they send the changed lines of every reviewed file to that provider.</td></tr>
         <tr><td><code>commit.fix_message</code></td><td><code>fix: {summary}</code></td><td>Subject line for fix commits. <code>{summary}</code> is the single required substitution, replaced by the agent's summary of the fix; a template without it is invalid. The template, the agent's summary, and the rendered result are each validated for length and for characters that could disguise content before anything is staged.</td></tr>
@@ -2532,7 +2553,7 @@ flowchart TB
         <ul class="text-sm opacity-90 space-y-2.5">
           <li><b>Agent adapters beyond Claude Code.</b> Each one is a week of quirks, and agents without a native output schema need a whole parsing path. Build the interface now, the adapters when you need them.</li>
           <li><b>Extra forge adapters.</b> Same reasoning. Do not promise breadth ahead of demand.</li>
-          <li><b>Extra session providers.</b> One reference provider proves the abstraction. Four more prove nothing new.</li>
+          <li><b>Extra session providers.</b> One reference provider proves the abstraction, and tmux is now a provider beside it, chosen with <code>session_provider</code>. Running Claude Code workers under tmux is still open: the adapter declares no terminal mode, so a service resolved to Claude Code with <code>session_provider: tmux</code> launches no worker. Further providers prove nothing new.</li>
           <li><b>Delegate coordinators.</b> The most complex feature in either source project. It only earns its cost at a fleet size you have not reached.</li>
           <li><b>The direct delivery mode.</b> The gate is the thesis, and this is the one mode that shares unvalidated work. When it is promoted, the program forwards the worker's pushed commit from the gate with an anchored update and the worker gains no second remote, and the merge record is its landed record. The local mode is not deferred: it shares nothing, and section 6 specifies it.</li>
           <li><b>Agent routing by model, effort, or quota.</b> Routing among adapters means nothing with one, so it is specified when a second adapter is promoted. Section 9's usage view is the measurement it will start from.</li>
