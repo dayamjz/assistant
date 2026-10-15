@@ -3,9 +3,12 @@
 package cli_test
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"strconv"
@@ -16,6 +19,7 @@ import (
 
 	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/agents/standin"
+	"github.com/dayamjz/assistant/internal/cli"
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
@@ -151,11 +155,12 @@ func taskCountOf(t *testing.T, h *home.Home, dir string) int {
 // do what they say, read back from the records rather than taken from the
 // answer: a message is recorded and written, and its human rendering is the
 // phrase table's; a message the worker ends on ends it, and its task reads
-// Unknown from the dead terminal; the wake queue lists a wake for that task
-// and keeps listing it until the client acknowledges it, recorded as the
-// coordinator, and a second acknowledgement of the same wake is refused as
-// incorrect usage; a wait armed before the worker ended answers with queued
-// rows, and one armed after the acknowledgement does not return them; a relaunch begins attempt 2 and the service launches it;
+// Unknown from the dead terminal; a listen held before the end is pushed a
+// wake about the task, which the push leaves queued, so acknowledging it by
+// number is accepted and recorded as the coordinator's; a drain lists the
+// rest recorded as handled, and neither a second drain
+// nor a wait lists any of them again, while acknowledging any of them is
+// refused as incorrect usage; a relaunch begins attempt 2 and the service launches it;
 // a stop ends that attempt's worker and opens the hold naming the task;
 // arm verification answers that the loop is live; and an investigation
 // created through the client is promoted to a delivery on a branch.
@@ -202,6 +207,7 @@ func TestTheCoordinatorClientDrivesEveryMethodAndRefusesAWorker(t *testing.T) {
 		{"promote", id, "--repository", repository, "--branch", "task/mine", "--intent", "Deliver it."},
 		{"wakes"},
 		{"await", "--timeout", "1s"},
+		{"listen"},
 		{"acknowledge", "1"},
 		{"supervision"},
 	} {
@@ -252,16 +258,19 @@ func TestTheCoordinatorClientDrivesEveryMethodAndRefusesAWorker(t *testing.T) {
 	}
 	vocabtest.Assert(t, plainPeek.stdout)
 
-	// A wait is armed before the worker ends, so it is blocking in the
-	// service while the end happens.
+	// The coordinator holds the wake stream before the worker ends, so the
+	// wake the loop queues when it does is pushed to it. The stream opens
+	// with a gap, which is how a listener learns it is attached.
 	executable, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
-	armed := make(chan invocation, 1)
-	go func() {
-		armed <- runArgsIn(t.Context(), executable, subject, "--home", h.Root(), "--json", "coordinator", "await", "--timeout", "60s")
-	}()
+	listenCtx, stopListening := context.WithCancel(t.Context())
+	defer stopListening()
+	lines, listened := listening(listenCtx, executable, subject, h)
+	if opened := nextEvent(t, lines, 30*time.Second); opened.Type != ipc.TypeGap {
+		t.Fatalf("the wake stream opened with %+v, want the opening gap", opened)
+	}
 
 	// The worker ends on a message, and its task reads Unknown from the
 	// dead terminal.
@@ -278,64 +287,69 @@ func TestTheCoordinatorClientDrivesEveryMethodAndRefusesAWorker(t *testing.T) {
 		time.Sleep(50 * time.Millisecond)
 	}
 
-	// The queue lists a wake for the task until it is acknowledged.
-	var queued machine.Wakes
-	var ours []int64
-	for len(ours) == 0 {
-		if !time.Now().Before(deadline.Add(30 * time.Second)) {
-			t.Fatalf("the queue never listed a wake for task %s: %+v", id, queued)
+	// The stream pushes a wake about the task, and the push takes nothing:
+	// the row it names is still queued, so acknowledging it by its number,
+	// without draining, is accepted and recorded as the coordinator's.
+	var pushed store.Wake
+	for pushed.ID == 0 {
+		event := nextEvent(t, lines, 60*time.Second)
+		if event.Type != ipc.TypeWakeQueued {
+			continue
 		}
-		coordinate(t, h, subject, &queued, "wakes")
-		for _, w := range queued.Wakes {
-			if w.TaskID == id && w.Queued() {
-				ours = append(ours, w.ID)
-			}
+		var w store.Wake
+		if err := json.Unmarshal(event.Payload, &w); err != nil {
+			t.Fatalf("a pushed wake does not read as a wake row: %v\n%s", err, event.Payload)
 		}
-		time.Sleep(50 * time.Millisecond)
-	}
-	// The armed wait answered with queued rows, as a list would read them.
-	waited := <-armed
-	var woken machine.Wakes
-	if waited.code != machine.ExitOK || json.Unmarshal([]byte(waited.stdout), &woken) != nil || len(woken.Wakes) == 0 {
-		t.Fatalf("the armed coordinator wait exited %s with:\n%s%s", waited.code, waited.stdout, waited.stderr)
-	}
-	for _, w := range woken.Wakes {
-		if !w.Queued() || w.ID == 0 {
-			t.Fatalf("the armed wait answered %+v, want queued rows", woken)
+		if w.TaskID == id && w.Queued() && event.Revision == uint64(w.ID) {
+			pushed = w
 		}
 	}
-	var again machine.Wakes
-	coordinate(t, h, subject, &again, "wakes", "--limit", strconv.Itoa(machine.DefaultWakesLimit))
-	if !listsAll(again, ours) {
-		t.Fatalf("a second list without an acknowledgement returned %+v, want wakes %v again", again, ours)
-	}
-	ackArgs := []string{"acknowledge"}
-	for _, w := range ours {
-		ackArgs = append(ackArgs, strconv.FormatInt(w, 10))
+	stopListening()
+	go func() {
+		for range lines {
+		}
+	}()
+	if ended := <-listened; ended.code != machine.ExitOK {
+		t.Fatalf("an interrupted listen exited %s:\n%s", ended.code, ended.stderr)
 	}
 	var acknowledged machine.Acknowledged
-	coordinate(t, h, subject, &acknowledged, ackArgs...)
-	if acknowledged.By != store.AcknowledgedByCoordinator().String() || len(acknowledged.Wakes) != len(ours) {
-		t.Fatalf("acknowledge answered %+v, want wakes %v recorded as the coordinator's", acknowledged, ours)
+	coordinate(t, h, subject, &acknowledged, "acknowledge", strconv.FormatInt(pushed.ID, 10))
+	if acknowledged.By != store.AcknowledgedByCoordinator().String() || len(acknowledged.Wakes) != 1 || acknowledged.Wakes[0] != pushed.ID {
+		t.Fatalf("acknowledge answered %+v, want wake %d recorded as the coordinator's", acknowledged, pushed.ID)
 	}
-	var after machine.Wakes
-	coordinate(t, h, subject, &after, "wakes")
-	for _, w := range after.Wakes {
-		for _, acked := range ours {
-			if w.ID == acked {
-				t.Fatalf("wake %d was acknowledged and is still listed", acked)
-			}
+
+	// A drain lists what else is queued and records every row it lists as
+	// handled, so a second drain lists none of them, and
+	// naming a drained row in an acknowledgement is refused as incorrect
+	// usage, as naming the acknowledged one again is. A wait after them
+	// returns none of them either.
+	var drained machine.Wakes
+	coordinate(t, h, subject, &drained, "wakes", "--limit", strconv.Itoa(machine.DefaultWakesLimit))
+	taken := []int64{pushed.ID}
+	for _, w := range drained.Wakes {
+		if w.ID == pushed.ID {
+			t.Fatalf("a drain listed wake %d after it was acknowledged: %+v", pushed.ID, drained)
 		}
+		if w.Queued() {
+			t.Fatalf("a drain listed %+v, want every row recorded as handled", w)
+		}
+		taken = append(taken, w.ID)
 	}
-	refusedAs(t, run(t, h, subject, "--json", "coordinator", "acknowledge", ackArgs[1]), ipc.CodeInvalidRequest, machine.ExitUsage)
+	var again machine.Wakes
+	coordinate(t, h, subject, &again, "wakes")
 	var waitedAfter machine.Wakes
 	coordinate(t, h, subject, &waitedAfter, "await", "--timeout", "1s")
-	for _, w := range waitedAfter.Wakes {
-		for _, acked := range ours {
-			if w.ID == acked {
-				t.Fatalf("wake %d was acknowledged and a wait returned it again", acked)
+	for _, listed := range []machine.Wakes{again, waitedAfter} {
+		for _, w := range listed.Wakes {
+			for _, gone := range taken {
+				if w.ID == gone {
+					t.Fatalf("wake %d was already taken and was listed again: %+v", gone, listed)
+				}
 			}
 		}
+	}
+	for _, gone := range taken {
+		refusedAs(t, run(t, h, subject, "--json", "coordinator", "acknowledge", strconv.FormatInt(gone, 10)), ipc.CodeInvalidRequest, machine.ExitUsage)
 	}
 
 	// A relaunch of the gone terminal begins attempt 2, which the service
@@ -381,16 +395,57 @@ func TestTheCoordinatorClientDrivesEveryMethodAndRefusesAWorker(t *testing.T) {
 	}
 }
 
-// listsAll reports whether every one of ids is a queued row of the list.
-func listsAll(list machine.Wakes, ids []int64) bool {
-	for _, id := range ids {
-		found := false
-		for _, w := range list.Wakes {
-			found = found || (w.ID == id && w.Queued())
+// listening runs assistant --json coordinator listen through cli.Run under
+// ctx and hands each line it writes to lines as it is written, so a test
+// reads the stream while it is held; done receives its exit once ctx ends
+// it. It takes nothing from testing.T, so it is safe beside the test's own
+// goroutine.
+func listening(ctx context.Context, executable, dir string, h *home.Home) (<-chan string, <-chan invocation) {
+	reader, writer := io.Pipe()
+	lines := make(chan string, 64)
+	done := make(chan invocation, 1)
+	go func() {
+		defer close(lines)
+		scanner := bufio.NewScanner(reader)
+		scanner.Buffer(make([]byte, 0, 64*1024), 1<<20)
+		for scanner.Scan() {
+			lines <- scanner.Text()
 		}
-		if !found {
-			return false
+		_, _ = io.Copy(io.Discard, reader)
+	}()
+	go func() {
+		var errs bytes.Buffer
+		code := cli.Run(ctx, cli.Environment{
+			Args:       []string{"--home", h.Root(), "--json", "coordinator", "listen"},
+			Stdout:     writer,
+			Stderr:     &errs,
+			Getenv:     func(string) string { return "" },
+			WorkingDir: dir,
+			Executable: executable,
+			Version:    "assistant (test)",
+		})
+		_ = writer.Close()
+		done <- invocation{code: code, stderr: errs.String()}
+	}()
+	return lines, done
+}
+
+// nextEvent is the next line listening wrote, read as an event, failing
+// the test when none arrives within wait or the line is not one.
+func nextEvent(t *testing.T, lines <-chan string, wait time.Duration) ipc.Event {
+	t.Helper()
+	select {
+	case line, ok := <-lines:
+		if !ok {
+			t.Fatal("the listen ended before the event this test waits for")
 		}
+		var event ipc.Event
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			t.Fatalf("listen wrote %q, which is not an event: %v", line, err)
+		}
+		return event
+	case <-time.After(wait):
+		t.Fatalf("listen wrote nothing for %s", wait)
 	}
-	return true
+	return ipc.Event{}
 }

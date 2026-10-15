@@ -293,9 +293,6 @@ func promotedWithDecisions(t *testing.T, h *home.Home, subject, branch string) s
 	}, store.Disposition{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := records.AppendTaskEvent(t.Context(), id, "report-ready", "the findings are filed"); err != nil {
-		t.Fatal(err)
-	}
 	raw := `{"summary":"two decisions","findings":[` +
 		`{"severity":"warning","action":"ask","description":"Whether the old index may be dropped."},` +
 		`{"severity":"warning","action":"ask","description":"Whether the cache should move."}]}`
@@ -311,7 +308,7 @@ func promotedWithDecisions(t *testing.T, h *home.Home, subject, branch string) s
 	for _, f := range report.Held() {
 		holds = append(holds, store.Hold{Key: tasks.HoldKey(id, f.ID), TaskID: store.Known(id), Subject: f.Description, Detail: f.Description})
 	}
-	if _, err := records.StoreTaskReport(t.Context(), store.TaskReport{TaskID: id, Body: raw, Report: encoded}, holds); err != nil {
+	if _, _, err := records.StoreTaskReport(t.Context(), store.TaskReport{TaskID: id, Body: raw, Report: encoded}, holds); err != nil {
 		t.Fatal(err)
 	}
 	events, err := records.TaskEvents(t.Context(), id, 0, 0)

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	"github.com/dayamjz/assistant/internal/vcs"
 )
@@ -70,6 +71,26 @@ type WorkerSpec struct {
 	// variables are removed. A value may be a credential, so no part of it is
 	// recorded.
 	Env map[string]string
+	// Route is the command line prefix the worker reaches the program
+	// through, written as the shell text a command must begin with, such as
+	// an absolute path to the program followed by its own arguments. It is
+	// optional: empty, the worker's grant is GrantWorker's git and nothing
+	// more. Set, an adapter that translates grants adds commands beginning
+	// with it to what the worker may run without asking, which is the one
+	// widening GrantWorker takes from a spec; see GrantWorker for what that
+	// does and does not cover. What the route is is the caller's: this
+	// package does not check that it names the program, and an adapter
+	// writes it as given.
+	Route string
+}
+
+// routeRefused is the characters a Route may not carry, because a grant's
+// translation writes the route as text inside a tool list: a comma would
+// end the entry and a parenthesis would close it, so either changes the
+// list's shape, and a control character, a line break among them, is not
+// a command line prefix at all.
+func routeRefused(r rune) bool {
+	return r == ',' || r == '(' || r == ')' || unicode.IsControl(r)
 }
 
 // Validate reports whether the spec can be started at all. Every refusal
@@ -87,6 +108,10 @@ func (s WorkerSpec) Validate() error {
 	}
 	if err := validateDir(s.Dir); err != nil {
 		return err
+	}
+	if s.Route != "" && (strings.TrimSpace(s.Route) != s.Route || strings.IndexFunc(s.Route, routeRefused) >= 0) {
+		return &invocationFieldError{field: "Route",
+			reason: "a route may not begin or end with white space, nor carry a comma, a parenthesis or a control character"}
 	}
 	return validateEnv(s.Env)
 }

@@ -36,23 +36,28 @@ var specified = []string{"init", "status", "runs", "rerun", "sync", "tasks", "wa
 // not name is a finding to raise against the specification rather than a row
 // to add quietly, so each of these has to be refused as incorrect usage.
 //
-// "gate", "host" and "coordinator" are deliberately not among them. None is
-// a candidate for that table: "gate" is the interface internal/gate requires
-// of this surface, invoked by the hooks it installs, "host" is the interface
-// the coordinator's host requires, invoked by the hook it fires at turn end,
-// and "coordinator" is the client for the coordinator's service methods,
-// which the owner decided on #227 is dispatched beside the table; PRD
-// section 9 names all three outside its table.
+// "gate", "host", "coordinator" and "worker" are deliberately not among
+// them. None is a candidate for that table: "gate" is the interface
+// internal/gate requires of this surface, invoked by the hooks it installs,
+// "host" is the interface the coordinator's host requires, invoked by the
+// hook it fires at turn end, "coordinator" is the client for the
+// coordinator's service methods, which the owner decided on #227 is
+// dispatched beside the table, and "worker" is a task's worker's route back
+// to the program, which #226 asked for on the same terms. PRD section 9
+// names all four outside its table, the fourth by the owner's decision, so
+// none of them is a row here.
 // TestTheGateVerbServesTheHooksAndNothingElse, host_test.go's
-// TestTheHostVerbServesTheHookAndNothingElse and coordinator_test.go's
-// TestTheCoordinatorVerbServesItsTableAndNothingElse hold what each may be.
-// The coordinator's subcommands are among the names refused here, so none
-// of them reaches the surface as a verb of its own.
+// TestTheHostVerbServesTheHookAndNothingElse, coordinator_test.go's
+// TestTheCoordinatorVerbServesItsTableAndNothingElse and worker_test.go's
+// TestTheWorkerVerbServesItsTableAndNothingElse hold what each may be.
+// The coordinator's subcommands, and the worker's acknowledge, are among
+// the names refused here, so none of them reaches the surface as a verb of
+// its own.
 var unspecified = []string{
 	"start", "attach", "respond", "answer", "cancel", "stop", "restart",
 	"machine", "agent", "push", "version", "help", "config", "logs", "stage",
-	"task", "fleet", "create", "message", "relaunch", "promote", "wakes", "await", "acknowledge", "supervision",
-	"peek",
+	"task", "fleet", "create", "message", "relaunch", "promote", "wakes", "await", "listen", "acknowledge", "supervision",
+	"peek", "report", "event",
 }
 
 func TestEveryCommandTheSpecificationNamesIsServed(t *testing.T) {

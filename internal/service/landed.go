@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"strings"
 
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/tasks"
@@ -53,6 +54,21 @@ import (
 // P12's proof, made by that package over the copy and the upstream, and a
 // stop's Dead is never handed over in place of the resolution's.
 //
+// # A reported investigation
+//
+// An investigation's copy is owed the same decision once its report is
+// stored, and cleanup.go's storeTaskReport asks it at once; but the worker
+// that filed the report is usually still running then, so that ask keeps
+// the copy with the live refusal. The pass therefore asks again, on the
+// same once-per-reference terms, for an investigation reportedCleanupOwed
+// accepts whose terminal it read Dead. It never ends such a worker: a
+// reported investigation may still be promoted, which needs its worker and
+// its copy, so the worker ends when the coordinator stops it or when it
+// exits on its own, and the copy goes only after that. Nothing here reads
+// the report: whether it is stored and its holds registered is
+// internal/tasks' to verify inside the decision, and the predicate only
+// decides that the decision is worth asking.
+//
 // # Cadence
 //
 // The landing sites run once per landing record. The stop path runs once
@@ -88,6 +104,11 @@ import (
 //   - What the decision answered goes to the log, as at every task-copy
 //     site, and travels on no answer: task.stop's answer says no hold was
 //     registered and not whether the copy was removed.
+//   - A reported investigation's worker that neither exits nor is stopped
+//     keeps its copy for as long as it runs; nothing here ends it.
+//   - A removed investigation copy cannot be promoted, which internal/tasks
+//     refuses as a missing copy, so a coordinator that means to promote a
+//     reported investigation does so before stopping its worker.
 
 // landedEnds reports whether a resolution is in internal/taskstate's terminal
 // tier, the one that says the task's work is finished: Landed, or Complete
@@ -101,6 +122,40 @@ func landedEnds(r taskstate.Resolution) bool {
 // not yet Complete.
 func landedCleanupOwed(r taskstate.Resolution) bool {
 	return landedEnds(r) && r.State == taskstate.Landed
+}
+
+// reportedCleanupOwed reports whether o is an investigation whose filed
+// report makes the cleanup decision worth asking for its copy: still an
+// investigation, its copy not recorded removed, the report as the newest
+// entry the resolver read (Basis.EventKind), and every hold open on the
+// task one a report's ask finding registered (tasks.HoldKey's space). The
+// state is not read: internal/taskstate resolves such a task Running while
+// its worker runs, Unknown once its terminal is Dead, and Reported only
+// while the terminal is unobserved, so the entry the resolver recorded is
+// the reading that says the report was filed. A finding hold does not keep
+// the copy, because PRD section 11 has the hold survive cleanup; any other
+// open hold does, because a stop's or a relaunch bound's retry would
+// relaunch in this copy. It reads what the resolver recorded and the holds
+// the snapshot carries, never the log's tail (P8), and decides nothing
+// about the copy: internal/tasks verifies the report inside the decision.
+func reportedCleanupOwed(o taskstate.Observed) bool {
+	if o.Snapshot.Task.Shape != store.TaskInvestigation || o.State.Basis.CleanupRemoved ||
+		o.State.Basis.EventKind != store.ReportReadyEventKind {
+		return false
+	}
+	findings := tasks.HoldKey(o.Snapshot.Task.ID, "")
+	for _, h := range o.Snapshot.Holds {
+		if h.Open() && !strings.HasPrefix(h.Key, findings) {
+			return false
+		}
+	}
+	return true
+}
+
+// copyCleanupOwed reports whether the cleanup decision is still owed for
+// o's copy, as a landed task's or as a reported investigation's.
+func copyCleanupOwed(o taskstate.Observed) bool {
+	return landedCleanupOwed(o.State) || reportedCleanupOwed(o)
 }
 
 // settleLanded is what a landing site does about one landed task: it ends
@@ -156,11 +211,11 @@ func (s *Service) cleanUpLandedTask(ctx context.Context, id string) {
 }
 
 // askLandedCleanup asks the cleanup decision for a task read in o, when o
-// says it is still owed one, with the terminal o resolved, and logs what
-// the decision answered. A Dead terminal's reference is remembered in
+// says it is still owed one, landed or reported (copyCleanupOwed), with the
+// terminal o resolved, and logs what the decision answered. A Dead terminal's reference is remembered in
 // landedTried first.
 func (s *Service) askLandedCleanup(ctx context.Context, o taskstate.Observed) {
-	if !landedCleanupOwed(o.State) {
+	if !copyCleanupOwed(o) {
 		return
 	}
 	id := o.Snapshot.Task.ID
@@ -177,8 +232,10 @@ func (s *Service) askLandedCleanup(ctx context.Context, o taskstate.Observed) {
 // landedFromPass is the supervisor pass's trigger, over the resolutions the
 // pass already read, on the file comment's terms: for each task in the
 // terminal tier, it ends the worker this service still holds for the latest
-// attempt, and for each one still owed a cleanup whose terminal the pass
-// read Dead under a reference not yet tried, it asks the decision. The work
+// attempt, and for each one still owed a cleanup, landed or a reported
+// investigation, whose terminal the pass read Dead under a reference not
+// yet tried, it asks the decision. A reported investigation's worker is
+// never ended here. The work
 // goes to a goroutine registered through startWork under the task's slot;
 // a slot already taken, or a service giving up its home, skips the task
 // until the next pass. A service built by hand without a cleaner asks
@@ -188,13 +245,14 @@ func (s *Service) landedFromPass(observed []taskstate.Observed) {
 		return
 	}
 	for _, o := range observed {
-		if !landedEnds(o.State) {
+		landed := landedEnds(o.State)
+		if !landed && !reportedCleanupOwed(o) {
 			continue
 		}
 		id := o.Snapshot.Task.ID
 		ref := latestRef(o.Snapshot.Attempts)
-		held := ref != "" && s.holdsSession(id, ref)
-		owed := landedCleanupOwed(o.State) && o.State.Basis.Process == taskstate.Dead && !s.landedWasTried(id, ref)
+		held := landed && ref != "" && s.holdsSession(id, ref)
+		owed := copyCleanupOwed(o) && o.State.Basis.Process == taskstate.Dead && !s.landedWasTried(id, ref)
 		if !held && !owed {
 			continue
 		}

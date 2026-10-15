@@ -34,7 +34,7 @@ import (
 // answers which task the peer is the worker of, and the handlers whose
 // answer depends on it apply it here: task.event admits only a worker and
 // attributes the entry to its task; wakes.list, wakes.acknowledge,
-// wakewait.go's wakes.wait, supervision.assert, coordinator.go's task.create, task.promote and
+// wakewait.go's wakes.wait and wakes.subscribe, supervision.assert, coordinator.go's task.create, task.promote and
 // task.relaunch, steer.go's task.message, task.stop and task.interrupt,
 // taskholds.go's task.respond and catchup.go's catchup.mark are the
 // coordinator's and refuse a worker, task.respond so that no worker answers a
@@ -158,11 +158,13 @@ func (s *Service) refuseWorker(req ipc.Request) error {
 // is held to internal/taskstate's table, refusing with ipc.ErrWorker a kind
 // whose writer is the program and with ipc.ErrInvalidRequest a kind the
 // table has no row for or a detail its decoder refuses. A peer placed as no
-// task's worker is ipc.ErrNotWorker. The one kind with a record beside the
-// history, store.MessageAcknowledgedEventKind, is written through
-// acknowledgeMessage instead, so its event and the message record are one
-// transaction. The entry is published as ipc.TypeTaskEvent once it is
-// recorded.
+// task's worker is ipc.ErrNotWorker. The two kinds with a record beside the
+// history are written through that record's writer instead, so the event
+// and the record are one transaction: store.MessageAcknowledgedEventKind
+// through acknowledgeMessage, and store.ReportReadyEventKind through
+// route.go's fileReport, for which the request's detail is the report
+// rather than the entry's. The entry is published as ipc.TypeTaskEvent once
+// it is recorded.
 func (s *Service) taskEvent(ctx context.Context, req ipc.Request, r machine.TaskEventRequest) (machine.Appended, error) {
 	m, ok, err := s.workerPeer(req)
 	if err != nil {
@@ -186,8 +188,11 @@ func (s *Service) taskEvent(ctx context.Context, req ipc.Request, r machine.Task
 			return machine.Appended{}, fmt.Errorf("%w: the detail of a %q event: %w", ipc.ErrInvalidRequest, r.Kind, err)
 		}
 	}
-	if r.Kind == store.MessageAcknowledgedEventKind {
+	switch r.Kind {
+	case store.MessageAcknowledgedEventKind:
 		return s.acknowledgeMessage(ctx, m.Task, r.Detail)
+	case store.ReportReadyEventKind:
+		return s.fileReport(ctx, m.Task, r.Detail)
 	}
 	event, err := s.store.AppendTaskEvent(ctx, m.Task, r.Kind, r.Detail)
 	if err != nil {
@@ -222,8 +227,12 @@ func (s *Service) acknowledgeMessage(ctx context.Context, task, detail string) (
 }
 
 // publishTaskEvent tells subscribers a history grew. It is a state event on
-// ipc's terms, so it carries a revision.
+// ipc's terms, so it carries a revision. A service with no publisher, one a
+// test built by hand, publishes nothing, as publishHoldState does.
 func (s *Service) publishTaskEvent(event store.TaskEvent) {
+	if s.events == nil {
+		return
+	}
 	payload, err := json.Marshal(event)
 	if err != nil {
 		return
@@ -234,7 +243,9 @@ func (s *Service) publishTaskEvent(event store.TaskEvent) {
 }
 
 // listWakes drains the queue for the coordinator, on store.DrainWakes'
-// terms: oldest first, bounded, acknowledging nothing. A worker is refused.
+// terms: oldest first, bounded, and acknowledging exactly the rows it
+// returns, by req.WakeAcknowledger, so a second drain does not return them.
+// A worker is refused before anything is read or written.
 func (s *Service) listWakes(ctx context.Context, req ipc.Request, r machine.WakesRequest) (machine.Wakes, error) {
 	if err := s.refuseWorker(req); err != nil {
 		return machine.Wakes{}, err
@@ -243,14 +254,17 @@ func (s *Service) listWakes(ctx context.Context, req ipc.Request, r machine.Wake
 	if limit == 0 {
 		limit = machine.DefaultWakesLimit
 	}
-	wakes, err := s.store.DrainWakes(ctx, limit)
+	wakes, err := s.store.DrainWakes(ctx, limit, req.WakeAcknowledger())
 	if err != nil {
 		return machine.Wakes{}, err
 	}
 	return machine.Wakes{Wakes: wakes}, nil
 }
 
-// acknowledgeWakes records that the coordinator handled the named wakes.
+// acknowledgeWakes records that the coordinator handled the named wakes
+// without draining them: rows it learned of from the wake stream or a
+// task's history. A drain already acknowledged what it returned, so naming a
+// drained row is the store's refusal of an already acknowledged identifier.
 // Who acknowledged is req.WakeAcknowledger, derived from the surface and
 // read from nothing the caller sent. A worker is refused; a batch the store
 // refuses, for an unknown or an already acknowledged identifier, writes

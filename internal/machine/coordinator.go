@@ -106,17 +106,20 @@ func TaskPromotedPhrase(TaskPromoted) Phrase { return phraseTaskPromoted }
 func TaskRelaunchedPhrase(TaskRelaunched) Phrase { return phraseTaskRelaunched }
 
 // WakesPhrase is what a person reads about a drain of the wake queue: how
-// many rows are queued, or that none are. Which work each row is about and
-// what kind of notice it is are the structured rendering's, because a
-// kind is a word the derived forbidden set keeps from a person.
+// many rows the drain took, or that none were waiting. A drain acknowledges
+// what it returns, so the rows it names are already recorded as handled and
+// a repeat does not list them again; the phrase says so rather than inviting
+// a repeat that would come back empty. Which work each row is about and what
+// kind of notice it is are the structured rendering's, because a kind is a
+// word the derived forbidden set keeps from a person.
 func WakesPhrase(w Wakes) Phrase {
 	if len(w.Wakes) == 0 {
 		return phraseNoNotices
 	}
 	return Phrase{
-		Outcome:     fmt.Sprintf("%d notice(s) about the fleet are waiting to be handled, oldest first.", len(w.Wakes)),
-		Consequence: "Each stays, and is listed again on every read, until it is acknowledged.",
-		Decision:    "Repeat with --json to read what each is about, then acknowledge the ones you handled.",
+		Outcome:     fmt.Sprintf("%d notice(s) about the fleet were waiting, oldest first, and this read recorded them as handled.", len(w.Wakes)),
+		Consequence: "They are not listed again, so what each was about is only in this answer's --json form.",
+		Decision:    "Run assistant tasks to see how the work stands, and read notices with --json so each one's subject is kept.",
 	}
 }
 
@@ -154,7 +157,22 @@ func coordinatorRows() []Phrase {
 	return []Phrase{
 		phraseTaskCreated, phraseTaskCreatedBehind, phraseTaskPromoted, phraseTaskRelaunched,
 		phraseNoNotices, WakesPhrase(Wakes{Wakes: make([]store.Wake, 1)}), AcknowledgedPhrase(Acknowledged{Wakes: []int64{1}}),
-		phraseFleetWatched, phraseFleetNoService, phraseFleetNotWatched,
+		phraseFleetWatched, phraseFleetNoService, phraseFleetNotWatched, phraseWorkerRecorded,
 		phrasePeekAttachable, phrasePeekUnattached,
 	}
 }
+
+// phraseWorkerRecorded is what a person reads of a worker's task.event
+// answer, the one answer the worker's route has. It names neither the kind
+// nor the task's state, each a word the derived forbidden set keeps from a
+// person; the structured rendering carries the entry.
+var phraseWorkerRecorded = Phrase{
+	Outcome:     "What the worker said about its work is recorded in the work's history.",
+	Consequence: "The coordinator reads it from there.",
+	Decision:    "Nothing to decide.",
+}
+
+// AppendedPhrase is what a person reads about a task.event answer. An entry
+// the service refused is a refusal and never an answer, so there is one
+// row.
+func AppendedPhrase(Appended) Phrase { return phraseWorkerRecorded }

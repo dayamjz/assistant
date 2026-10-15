@@ -552,7 +552,8 @@ func (s *Service) readTerminal(c *incarnation, ref string, probed session.Observ
 // surfaced, and nothing when the task was not watched and nothing was
 // detected. Every write is fenced by the incarnation. A write that
 // appended a row rings wakeBell after it committed, so an armed wakes.wait
-// reads the queue again; a replay that appended nothing rings nothing.
+// reads the queue again, and pushes the row to the coordinator's wake
+// stream through publishWake; a replay that appended nothing does neither.
 func (s *Service) record(c *incarnation, id string, d decision) taskReport {
 	out := taskReport{Watched: d.watched, Detections: d.detections}
 	surfaced := 0
@@ -572,6 +573,7 @@ func (s *Service) record(c *incarnation, id string, d decision) taskReport {
 		out.Detections[i].Disposition = appended.Disposition
 		if appended.Disposition == store.WakeAppended {
 			s.wakeBell.ring()
+			s.publishWake(appended.Wake)
 		}
 	}
 	if surfaced == 0 && d.write {

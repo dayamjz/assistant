@@ -427,25 +427,27 @@ type TaskPromoteRequest struct {
 	Delivery string `json:"delivery,omitempty"`
 }
 
-// WakesRequest drains the durable wake queue.
+// WakesRequest drains the durable wake queue: the queued wakes it returns
+// are acknowledged in the same step, PRD section 8's "draining acknowledges
+// a row", so a second drain does not return them.
 type WakesRequest struct {
-	// Limit bounds how many queued wakes are returned, oldest first. Zero
-	// means DefaultWakesLimit.
+	// Limit bounds how many queued wakes are returned and acknowledged,
+	// oldest first. Zero means DefaultWakesLimit.
 	Limit int `json:"limit,omitempty"`
 }
 
 // DefaultWakesLimit is how many queued wakes a drain returns when the caller
-// names no bound. A drain is read before every coordinator turn, so the
-// bound keeps one answer inside a frame rather than paging the queue.
+// names no bound. A drain is made before every coordinator turn, so the
+// bound keeps one answer inside a frame; a row past it stays queued for the
+// next drain.
 const DefaultWakesLimit = 100
 
 // WakeWaitRequest arms the blocking wait on the durable wake queue. The
-// wait answers as soon as the queue holds at least one queued wake, with
-// the queued rows as a drain returns them, or once its bound elapses with
-// none; the answer is Wakes either way, so an empty answer is the bound
-// elapsing and nothing else. It acknowledges nothing, on WakesRequest's
-// terms, so a wake it returned is returned again by the next wait until
-// AcknowledgeRequest names it.
+// wait answers as soon as the queue holds at least one queued wake, with a
+// drain on WakesRequest's terms, so the rows it returns are acknowledged and
+// the next wait does not return them, or once its bound elapses with none;
+// the answer is Wakes either way, so an empty answer is the bound elapsing
+// and nothing else.
 type WakeWaitRequest struct {
 	// TimeoutSeconds is how long the wait may block, in whole seconds,
 	// from MinWakeWaitTimeout to MaxWakeWaitTimeout. Zero means
@@ -500,15 +502,18 @@ func (r WakeWaitRequest) Bounds() (time.Duration, int, error) {
 	return time.Duration(r.TimeoutSeconds) * time.Second, limit, nil
 }
 
-// AcknowledgeRequest records that the coordinator handled queued wakes.
+// AcknowledgeRequest records that the coordinator handled queued wakes it
+// did not drain: rows it learned of from the wake stream or a task's
+// history. A drain already acknowledges what it returns.
 //
 // It carries no field saying who acknowledged. Who did is derived from the
 // surface, never read from a request, which internal/ipc's
 // Request.WakeAcknowledger states on the same terms as Request.HoldResolver.
 type AcknowledgeRequest struct {
-	// Wakes are the identifiers of the rows a drain returned and the caller
-	// handled. A subset leaves the rest queued; an identifier no wake has,
-	// or one already acknowledged, refuses the whole batch.
+	// Wakes are the identifiers of the queued rows the caller handled. A
+	// subset leaves the rest queued; an identifier no wake has, or one
+	// already acknowledged, a drained one included, refuses the whole
+	// batch.
 	Wakes []int64 `json:"wakes"`
 }
 

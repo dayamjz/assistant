@@ -100,38 +100,100 @@ the identifier of any finding the stage reported, including a fix or note
 finding the hold does not list. `assistant --json status` lists every one, with
 its identifier, under `active_run.stages[].report.findings`.
 
+## How a task's worker reports back
+
+A task's worker tells the program about its work with one command,
+`assistant worker`, run from its own copy. The service starts every worker
+with that command's full prefix: this binary's absolute path, `--home`
+naming the service's home, and `worker`. That prefix is what the Claude
+Code adapter's worker is allowed to run besides git without asking, and what
+its instructions tell it to type. Through it a worker acknowledges a
+coordinator's message by the number it arrived under, files an
+investigation's report once on standard input, and records how its work
+stands.
+
+Three things follow for whoever runs the service:
+
+- The prefix is fixed when the service starts. A binary moved or replaced
+  afterwards, or a home moved, is not seen by a running service's workers
+  until it is restarted.
+- The service decides who the caller is the worker of from the socket's
+  credentials and the caller's parent chain, never from anything the
+  command says. Running the same line from your own shell is refused as no
+  task's worker, and nothing is recorded. On a platform where the service
+  identifies no socket peer, every call is refused that way, a worker's
+  included.
+- A filed report's decisions are holds you answer with
+  `assistant --task ID --answer ...`. The investigation's copy is removed
+  only after its worker has ended, which it does when it exits on its own or
+  when the coordinator stops it, and only on the cleanup check's proof. A
+  report filed by a worker that is still running keeps its copy.
+
 ## Waiting on a fleet
 
 A coordinator agent running tasks through `assistant coordinator` does not
-need to poll the wake queue. `assistant coordinator await` blocks until the
-queue holds a wake nobody has acknowledged, then lists the queued wakes the
-same way `assistant coordinator wakes` does, or lists none once its bound
-passes:
+need to poll the wake queue. Reading the queue is a drain: `assistant
+coordinator wakes` lists the queued wakes, oldest first, and records each one
+it lists as handled, so the next read does not list it again. Read it with
+`--json`, because the structured answer is the only place a drained wake's
+task and kind are shown.
+
+The service can push wakes to the coordinator. `assistant coordinator listen`
+holds the coordinator's wake stream and prints each wake as the service
+queues it, until it is interrupted:
+
+```sh
+assistant --json coordinator listen
+```
+
+It records nothing as handled: a wake it prints stays queued until a drain
+takes it or `assistant coordinator acknowledge` names it. Its first line is a
+gap marker, and a gap later means some pushes were missed; either way, drain
+the queue, which gives back every wake still queued. It suits a host that can
+run a command in the background and start a turn on its output. It ends with
+success when interrupted, and as an operational failure when the stream ends
+any other way, a service stop included, so it has to be started again.
+
+A coordinator that cannot hold a stream waits instead. `assistant coordinator
+await` blocks until the queue holds a wake nobody has acknowledged, then
+drains it the way `assistant coordinator wakes` does, or lists none once its
+bound passes:
 
 ```sh
 assistant --json coordinator await --timeout 5m
 ```
 
 The bound is whole seconds from `1s` to `1h`, and `5m` when none is given;
-anything else is refused as incorrect usage rather than clamped. The wait
-acknowledges nothing, so a wake it returned keeps being returned until
-`assistant coordinator acknowledge` names it. It keeps nothing between calls,
-so after a service restart, which ends a wait in progress as an operational
-failure, waiting again reads the same durable queue; `assistant coordinator
-supervision` confirms the service is watching the fleet again first. Like the
-other coordinator subcommands, it is refused for a task's worker.
+anything else is refused as incorrect usage rather than clamped. A wake it
+returned is not returned again. That is the specification's "draining
+acknowledges a row", and its cost is stated rather than hidden: a coordinator
+that drains a wake and then stops before acting on it does not get it back
+from the queue. The row is kept in the record, and the task's own state, which
+`assistant tasks` reads, still shows what happened to the work.
+
+`assistant coordinator acknowledge` records as handled a wake the coordinator
+dealt with without draining it, one `listen` printed. Naming a wake a drain
+already took is refused as incorrect usage, because the drain was its
+acknowledgement.
+
+Neither `await` nor `listen` keeps anything between calls, so after a service
+restart, which ends either as an operational failure, starting them again
+reads the same durable queue; `assistant coordinator supervision` confirms
+the service is watching the fleet again first. Like the other coordinator
+subcommands, all of these are refused for a task's worker.
 
 A restart does not leave that queue exactly as it was. When the service
 starts it reconciles every task, and a task whose worker's terminal is gone
 with its work not landed is relaunched, up to `relaunch_attempts` times
 (2 unless configured). A relaunch records each still-queued `terminal-gone`
 wake about the session it replaced as handled by the program, so the next
-wait does not return it. Read `assistant tasks` after a restart as well as
+drain does not return it. Read `assistant tasks` after a restart as well as
 the queue: a relaunched task shows its new attempt there, and a task past
 `relaunch_attempts` holds for an answer instead of being relaunched.
 
-How soon it answers after a worker stops is set by the service's supervision
-pass, which records the wake, not by the wait.
+How soon a wake is pushed or answered after a worker stops is set by the
+service's supervision pass, which records the wake, not by the stream or the
+wait.
 
 ## Standing consent
 

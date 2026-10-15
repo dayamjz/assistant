@@ -117,27 +117,41 @@ const (
 	// MethodTaskCreate's terms, so no worker reads its own or a sibling's
 	// terminal through the service.
 	MethodTaskPeek Method = "task.peek"
-	// MethodWakesList drains the durable wake queue for the coordinator: it
-	// returns the queued wakes, oldest first, and acknowledges none, so a
-	// row stays actionable until MethodWakesAcknowledge names it. It is the
-	// coordinator's and refused for a task's worker, which the handler
-	// decides from the caller's credentials against the worker group set.
+	// MethodWakesList drains the durable wake queue for the coordinator, PRD
+	// section 8's drain: it returns the queued wakes, oldest first, and
+	// acknowledges exactly the rows it returns, so a second drain does not
+	// return them and the rows are kept. Who acknowledged is derived from
+	// this surface by Request.WakeAcknowledger. It is the coordinator's and
+	// refused for a task's worker, which the handler decides from the
+	// caller's credentials against the worker group set.
 	MethodWakesList Method = "wakes.list"
 	// MethodWakesAcknowledge records that the coordinator handled the named
-	// wakes. Who acknowledged is never in the request: it is derived from
-	// this surface by Request.WakeAcknowledger, the way Request.HoldResolver
-	// derives who resolved a hold. Refused for a task's worker on
-	// MethodWakesList's terms.
+	// wakes without draining them: rows it learned of from
+	// MethodWakesSubscribe or a task's history. A row a drain returned is
+	// already acknowledged and naming it is refused. Who acknowledged is
+	// never in the request: it is derived from this surface by
+	// Request.WakeAcknowledger, the way Request.HoldResolver derives who
+	// resolved a hold. Refused for a task's worker on MethodWakesList's
+	// terms.
 	MethodWakesAcknowledge Method = "wakes.acknowledge"
 	// MethodWakesWait is the blocking form of MethodWakesList: it answers
-	// as soon as the queue holds a queued wake, with the rows a drain would
-	// return, or once the bound the request names elapses with none, and
-	// it acknowledges nothing. It is a request rather than a stream, so it
-	// answers once and holds one of its connection's in-flight slots while
-	// it waits. It keeps no state across calls, so arming it again after a
-	// service restart reads the durable queue as the first call did.
-	// Refused for a task's worker on MethodWakesList's terms.
+	// as soon as the queue holds a queued wake, with the rows a drain
+	// returns and acknowledges, or once the bound the request names elapses
+	// with none. It is a request rather than a stream, so it answers once
+	// and holds one of its connection's in-flight slots while it waits. It
+	// keeps no state across calls, so arming it again after a service
+	// restart reads the durable queue as the first call did. Refused for a
+	// task's worker on MethodWakesList's terms.
 	MethodWakesWait Method = "wakes.wait"
+	// MethodWakesSubscribe opens the coordinator's wake stream: the service
+	// pushes each wake the supervisor queues, as a TypeWakeQueued event,
+	// without being asked again, which is PRD section 5's "then wake the
+	// coordinator". It acknowledges nothing, because pushing is not
+	// draining: the row stays queued until a drain or MethodWakesAcknowledge
+	// takes it. It is restricted, and its handler refuses a task's worker on
+	// MethodWakesList's terms before anything is written, so neither a
+	// contained caller nor a worker is sent a coordinator's wake.
+	MethodWakesSubscribe Method = "wakes.subscribe"
 	// MethodSupervisionAssert is PRD section 5's arm verification over the
 	// socket: it answers whether the supervisor loop of the service that
 	// holds this home is live, as the closed set internal/supervisor's Arm
@@ -179,8 +193,10 @@ const (
 	MethodServiceStop Method = "service.stop"
 	// MethodServiceRestart restarts the service.
 	MethodServiceRestart Method = "service.restart"
-	// MethodEventsSubscribe opens the event stream. It is the only streaming
-	// method, and it answers with events rather than with a result.
+	// MethodEventsSubscribe opens the event stream, which answers with events
+	// rather than with a result. It is open, so it carries nothing a
+	// restricted caller alone may read: a coordinator's wakes travel on
+	// MethodWakesSubscribe instead.
 	MethodEventsSubscribe Method = "events.subscribe"
 )
 
@@ -263,9 +279,10 @@ var specs = []Spec{
 	{MethodTaskStop, KindRequest, AccessRestricted, "End a running task's worker, prove it dead, and hold the task, for the coordinator."},
 	{MethodTaskInterrupt, KindRequest, AccessRestricted, "Interrupt a worker's turn; refused, since no adapter declares the capability."},
 	{MethodTaskPeek, KindRequest, AccessRestricted, "Read a running task's worker's recent output, redacted and bounded, for the coordinator."},
-	{MethodWakesList, KindRequest, AccessRestricted, "Drain the wake queue: list the queued wakes, acknowledging none."},
-	{MethodWakesAcknowledge, KindRequest, AccessRestricted, "Record that the coordinator handled the named wakes."},
-	{MethodWakesWait, KindRequest, AccessRestricted, "Block until the wake queue holds a queued wake or a bound elapses, acknowledging none."},
+	{MethodWakesList, KindRequest, AccessRestricted, "Drain the wake queue: list the queued wakes and acknowledge them."},
+	{MethodWakesAcknowledge, KindRequest, AccessRestricted, "Record that the coordinator handled the named wakes without draining them."},
+	{MethodWakesWait, KindRequest, AccessRestricted, "Block until the wake queue holds a queued wake or a bound elapses, then drain it."},
+	{MethodWakesSubscribe, KindStream, AccessRestricted, "Open the coordinator's wake stream, which pushes each wake as it is queued."},
 	{MethodSupervisionAssert, KindRequest, AccessRestricted, "Verify that the supervisor loop of this home's service is live."},
 	{MethodCatchUpRead, KindRequest, AccessOpen, "Read what waits on you, what landed unseen, what is under way, and what stopped."},
 	{MethodCatchUpMark, KindRequest, AccessRestricted, "Mark seen exactly the landed records a catch-up read showed."},
@@ -292,22 +309,17 @@ var specByMethod = func() map[Method]Spec {
 // disagree with itself about a method's access, so it is refused rather than
 // letting the last row quietly win.
 //
-// A streaming method that is restricted is refused too, and that one is about
-// where a decision runs rather than about the table. Opening a stream is
-// ordered against a cancel that may follow it on the same connection, so the
-// server opens it on the goroutine that reads that connection, and deciding
-// containment there would put a caller's Ancestry on the path that reads every
-// other request on it. Serving such a method needs the stream path to carry its
-// own authorization the way a request already does, so the table may not
-// declare one until it can.
+// A streaming method may be restricted. Opening a stream is ordered against a
+// cancel that may follow it on the same connection, so the server opens it on
+// the goroutine that reads that connection; a restricted one is opened there
+// and decided on a goroutine of its own, the access check and then the
+// handler, before anything it carries is written, which server.go's
+// startAdmittedStream owns.
 func indexSpecs(rows []Spec) (map[Method]Spec, error) {
 	m := make(map[Method]Spec, len(rows))
 	for _, s := range rows {
 		if _, dup := m[s.Method]; dup {
 			return nil, fmt.Errorf("ipc: method table declares %q twice", s.Method)
-		}
-		if s.Kind == KindStream && s.Access == AccessRestricted {
-			return nil, fmt.Errorf("ipc: %q opens a stream and is restricted, which the server would have to decide on the goroutine reading the connection", s.Method)
 		}
 		m[s.Method] = s
 	}

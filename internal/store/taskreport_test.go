@@ -7,11 +7,13 @@ import (
 	"testing"
 )
 
-// A report is stored with the holds registered from it in one transaction,
-// written once. The control for atomicity is a fault planted at the hold
-// table: with it, nothing is stored, not the report row and not the holds
-// registered before the one that failed, so a crash between the two writes
-// cannot leave a stored report whose decisions were never registered.
+// A report is stored with the holds registered from it and the history entry
+// that records it in one transaction, written once. The control for
+// atomicity is a fault planted at the hold table: with it, nothing is
+// stored, not the report row, not the holds registered before the one that
+// failed, and not the entry, so a crash between the writes cannot leave a
+// stored report whose decisions were never registered, nor a history saying
+// a report is ready with no report behind it (P8).
 func TestStoreTaskReportRegistersTheHoldsOrStoresNothing(t *testing.T) {
 	ctx := context.Background()
 	s := openStore(t)
@@ -35,7 +37,7 @@ func TestStoreTaskReportRegistersTheHoldsOrStoresNothing(t *testing.T) {
 		"hold no task":   {TaskReport{TaskID: task.ID, Body: "x", Report: []byte("{}")}, []Hold{{Key: "k", Subject: "s"}}},
 		"hold elsewhere": {TaskReport{TaskID: task.ID, Body: "x", Report: []byte("{}")}, []Hold{{Key: "k", TaskID: Known("other"), Subject: "s"}}},
 	} {
-		if _, err := s.StoreTaskReport(ctx, bad.report, bad.holds); err == nil {
+		if _, _, err := s.StoreTaskReport(ctx, bad.report, bad.holds); err == nil {
 			t.Errorf("%s was stored", name)
 		}
 		if _, err := s.TaskReport(ctx, task.ID); !errors.Is(err, ErrNotFound) {
@@ -49,8 +51,11 @@ func TestStoreTaskReportRegistersTheHoldsOrStoresNothing(t *testing.T) {
 		BEGIN SELECT RAISE(ABORT, 'planted fault'); END`); err != nil {
 		t.Fatalf("planting the fault: %v", err)
 	}
-	if _, err := s.StoreTaskReport(ctx, TaskReport{TaskID: task.ID, Body: "the report", Report: []byte(`{"summary":"s"}`)}, holds); err == nil {
+	if _, _, err := s.StoreTaskReport(ctx, TaskReport{TaskID: task.ID, Body: "the report", Report: []byte(`{"summary":"s"}`)}, holds); err == nil {
 		t.Fatal("StoreTaskReport succeeded past the planted fault, so the control shows nothing")
+	}
+	if n := countKind(t, s, task.ID, ReportReadyEventKind); n != 0 {
+		t.Fatalf("the failed store left %d %s entries in the history", n, ReportReadyEventKind)
 	}
 	if _, err := s.TaskReport(ctx, task.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("the report survived the failed registration: %v", err)
@@ -62,9 +67,16 @@ func TestStoreTaskReportRegistersTheHoldsOrStoresNothing(t *testing.T) {
 		t.Fatalf("lifting the fault: %v", err)
 	}
 
-	stored, err := s.StoreTaskReport(ctx, TaskReport{TaskID: task.ID, Body: "the report", Report: []byte(`{"summary":"s"}`)}, holds)
+	stored, event, err := s.StoreTaskReport(ctx, TaskReport{TaskID: task.ID, Body: "the report", Report: []byte(`{"summary":"s"}`)}, holds)
 	if err != nil {
 		t.Fatalf("StoreTaskReport: %v", err)
+	}
+	history, err := s.TaskEvents(ctx, task.ID, 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if last := history[len(history)-1]; last != event || event.Kind != ReportReadyEventKind || event.Detail != "" {
+		t.Fatalf("the history ends %+v and the answer named %+v, want the %s entry the store appended", last, event, ReportReadyEventKind)
 	}
 	if stored.Body != "the report" || string(stored.Report) != `{"summary":"s"}` || stored.RecordedAt.IsZero() ||
 		!reflect.DeepEqual(stored.HoldKeys, []string{holds[0].Key, holds[1].Key}) {
@@ -76,8 +88,11 @@ func TestStoreTaskReportRegistersTheHoldsOrStoresNothing(t *testing.T) {
 			t.Fatalf("hold %s = %+v, %v; want open and naming the task", h.Key, got, err)
 		}
 	}
-	if _, err := s.StoreTaskReport(ctx, TaskReport{TaskID: task.ID, Body: "again", Report: []byte(`{}`)}, nil); !errors.Is(err, ErrTaskReportStored) {
+	if _, _, err := s.StoreTaskReport(ctx, TaskReport{TaskID: task.ID, Body: "again", Report: []byte(`{}`)}, nil); !errors.Is(err, ErrTaskReportStored) {
 		t.Fatalf("a second report = %v, want ErrTaskReportStored", err)
+	}
+	if n := countKind(t, s, task.ID, ReportReadyEventKind); n != 1 {
+		t.Fatalf("a refused second report left %d %s entries, want the first one alone", n, ReportReadyEventKind)
 	}
 	if again, err := s.TaskReport(ctx, task.ID); err != nil || !reflect.DeepEqual(again, stored) {
 		t.Fatalf("the second write disturbed the first: %+v, %v", again, err)
@@ -88,7 +103,7 @@ func TestStoreTaskReportRegistersTheHoldsOrStoresNothing(t *testing.T) {
 		t.Fatalf("ResolveHold: %v", err)
 	}
 	other := seedTask(t, s, "taskaaaaaaac")
-	if _, err := s.StoreTaskReport(ctx, TaskReport{TaskID: other.ID, Body: "x", Report: []byte(`{}`)},
+	if _, _, err := s.StoreTaskReport(ctx, TaskReport{TaskID: other.ID, Body: "x", Report: []byte(`{}`)},
 		[]Hold{{Key: holds[0].Key, TaskID: Known(other.ID), Subject: "the same decision"}}); err != nil {
 		t.Fatalf("storing a report naming an existing key: %v", err)
 	}
@@ -104,10 +119,26 @@ func TestStoreTaskReportRegistersTheHoldsOrStoresNothing(t *testing.T) {
 	}
 	// An empty hold list is a known fact.
 	third := seedTask(t, s, "taskaaaaaaad")
-	if got, err := s.StoreTaskReport(ctx, TaskReport{TaskID: third.ID, Body: "x", Report: []byte(`{}`)}, nil); err != nil ||
+	if got, _, err := s.StoreTaskReport(ctx, TaskReport{TaskID: third.ID, Body: "x", Report: []byte(`{}`)}, nil); err != nil ||
 		got.HoldKeys == nil || len(got.HoldKeys) != 0 {
 		t.Fatalf("a report with no decisions = %+v, %v; want an empty key list", got, err)
 	}
+}
+
+// countKind is how many entries of kind the task's history holds.
+func countKind(t *testing.T, s *Store, task, kind string) int {
+	t.Helper()
+	history, err := s.TaskEvents(context.Background(), task, 0, 0)
+	if err != nil {
+		t.Fatalf("reading the history of task %s: %v", task, err)
+	}
+	n := 0
+	for _, e := range history {
+		if e.Kind == kind {
+			n++
+		}
+	}
+	return n
 }
 
 // ForgetHoldForTest is the counterfeit builder and nothing more: it deletes

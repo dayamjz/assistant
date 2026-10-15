@@ -34,5 +34,13 @@ func Subcommands() map[string][][2]string {
 	for _, action := range coordinatorActions {
 		out[coordinatorVerbName] = append(out[coordinatorVerbName], [2]string{action.name, action.summary})
 	}
+	for _, action := range workerActions {
+		out[workerVerbName] = append(out[workerVerbName], [2]string{action.name, action.summary})
+	}
 	return out
 }
+
+// WorkerRoute is the route the service start gives a worker for a binary at
+// executable serving the home at root, so a test that opens the service
+// itself gives its workers the route the product would.
+func WorkerRoute(executable, root string) string { return workerRoute(executable, root) }

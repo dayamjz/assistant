@@ -705,7 +705,7 @@ var schema = []migration{
 			// handled_at and acknowledged_by are the one revision a row
 			// takes, together and once: the acknowledgement. acknowledged_by
 			// is the closed set acknowledger.go names, and AcknowledgeWakes
-			// is the only accessor that writes either column.
+			// and DrainWakes are the only accessors that write either column.
 			`CREATE TABLE wake (
 				id              INTEGER PRIMARY KEY,
 				task_id         TEXT NOT NULL REFERENCES task(id),

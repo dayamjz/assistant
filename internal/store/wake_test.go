@@ -198,86 +198,129 @@ func TestAWakeAndItsMarkersAreOneWrite(t *testing.T) {
 	}
 }
 
-// Draining is a read. Two drains with no acknowledgement between them return
-// the same rows in the same order, oldest first, bounded by the limit.
-func TestDrainingWithoutAcknowledgingReturnsTheSameRows(t *testing.T) {
+// Reading the queue is a read. Two reads with nothing between them return
+// the same rows in the same order, oldest first, bounded by the limit, and
+// neither acknowledges anything.
+func TestReadingTheQueueReturnsTheSameRows(t *testing.T) {
 	ctx := context.Background()
 	s := openStore(t)
 	task := seedTask(t, s, "taskaaaaaaab").ID
 	for i := int64(1); i <= 3; i++ {
 		surface(t, s, task, "A", i)
 	}
-	first, err := s.DrainWakes(ctx, 10)
+	first, err := s.QueuedWakes(ctx, 10)
 	if err != nil || len(first) != 3 {
-		t.Fatalf("DrainWakes = %d rows (%v), want 3", len(first), err)
+		t.Fatalf("QueuedWakes = %d rows (%v), want 3", len(first), err)
 	}
-	second, err := s.DrainWakes(ctx, 10)
+	second, err := s.QueuedWakes(ctx, 10)
 	if err != nil || len(second) != 3 {
-		t.Fatalf("the second drain = %d rows (%v), want the same 3", len(second), err)
+		t.Fatalf("the second read = %d rows (%v), want the same 3", len(second), err)
 	}
 	for i := range first {
-		if first[i].ID != second[i].ID || !first[i].Queued() {
-			t.Fatalf("drain %d: row %d is %+v, the first drain had %+v", 2, i, second[i], first[i])
+		if first[i].ID != second[i].ID || !second[i].Queued() {
+			t.Fatalf("read 2: row %d is %+v, the first read had %+v", i, second[i], first[i])
 		}
 		if i > 0 && first[i].ID <= first[i-1].ID {
-			t.Fatalf("drain is not oldest first: %d then %d", first[i-1].ID, first[i].ID)
+			t.Fatalf("the read is not oldest first: %d then %d", first[i-1].ID, first[i].ID)
 		}
 	}
-	bounded, err := s.DrainWakes(ctx, 2)
+	bounded, err := s.QueuedWakes(ctx, 2)
 	if err != nil || len(bounded) != 2 || bounded[0].ID != first[0].ID {
-		t.Fatalf("DrainWakes(2) = %+v (%v), want the two oldest", bounded, err)
+		t.Fatalf("QueuedWakes(2) = %+v (%v), want the two oldest", bounded, err)
 	}
-	if _, err := s.DrainWakes(ctx, 0); err == nil {
-		t.Fatal("a drain with no bound was accepted")
+	if _, err := s.QueuedWakes(ctx, 0); err == nil {
+		t.Fatal("a read with no bound was accepted")
 	}
 }
 
-// At-least-once delivery means a consumer sees a wake again until it
-// acknowledges it, and handles it once because it is idempotent over the
-// row's identifier: a crash between handling and acknowledging, simulated by
-// closing the store, re-drains the row, the consumer recognizes it, and the
-// acknowledgement records who made it.
-func TestACrashBetweenHandlingAndAcknowledgingRedrains(t *testing.T) {
+// Draining acknowledges exactly what it returned. A bounded drain returns
+// the two oldest rows, acknowledged by the drainer and still kept; a second
+// drain returns the one row the first left, and a third returns none. Every
+// row is still in the task's history, so draining deleted nothing, and
+// naming a drained row in an acknowledgement is refused because the drain
+// already was one. A drain naming nobody, and one with no bound, are refused
+// before anything is written.
+func TestDrainingAcknowledgesWhatItReturned(t *testing.T) {
+	ctx := context.Background()
+	s := openStore(t)
+	task := seedTask(t, s, "taskaaaaaaab").ID
+	var ids []int64
+	for i := int64(1); i <= 3; i++ {
+		ids = append(ids, surface(t, s, task, "A", i).Wake.ID)
+	}
+	if _, err := s.DrainWakes(ctx, 10, Acknowledger{}); !errors.Is(err, ErrNoAcknowledger) {
+		t.Fatalf("a drain naming nobody = %v, want ErrNoAcknowledger", err)
+	}
+	if _, err := s.DrainWakes(ctx, 0, AcknowledgedByCoordinator()); err == nil {
+		t.Fatal("a drain with no bound was accepted")
+	}
+	if left, _ := s.QueuedWakes(ctx, 10); len(left) != 3 {
+		t.Fatalf("a refused drain acknowledged something: %d left", len(left))
+	}
+
+	first, err := s.DrainWakes(ctx, 2, AcknowledgedByCoordinator())
+	if err != nil || len(first) != 2 || first[0].ID != ids[0] || first[1].ID != ids[1] {
+		t.Fatalf("DrainWakes(2) = %+v (%v), want rows %d and %d", first, err, ids[0], ids[1])
+	}
+	for _, w := range first {
+		if w.Queued() || w.AcknowledgedBy != Known(AcknowledgedByCoordinator()) {
+			t.Fatalf("a drained row reads %+v, want it acknowledged by the coordinator", w)
+		}
+	}
+	second, err := s.DrainWakes(ctx, 10, AcknowledgedByCoordinator())
+	if err != nil || len(second) != 1 || second[0].ID != ids[2] {
+		t.Fatalf("the second drain = %+v (%v), want only row %d", second, err, ids[2])
+	}
+	third, err := s.DrainWakes(ctx, 10, AcknowledgedByCoordinator())
+	if err != nil || len(third) != 0 {
+		t.Fatalf("the third drain = %+v (%v), want none", third, err)
+	}
+
+	kept, err := s.TaskWakes(ctx, task)
+	if err != nil || len(kept) != 3 {
+		t.Fatalf("after draining the history holds %d rows (%v), want all 3 kept", len(kept), err)
+	}
+	for _, w := range kept {
+		if w.Queued() {
+			t.Fatalf("row %d is still queued after it was drained", w.ID)
+		}
+	}
+	var idErr *WakeIDError
+	if err := s.AcknowledgeWakes(ctx, ids[:1], AcknowledgedByCoordinator()); !errors.As(err, &idErr) || !errors.Is(err, ErrWakeAcknowledged) {
+		t.Fatalf("acknowledging a drained row = %v, want *WakeIDError with ErrWakeAcknowledged", err)
+	}
+}
+
+// A drain is the acknowledgement, so a consumer that drained a row and
+// crashed before acting on it is not handed the row again: delivery to a
+// drain is at most once, which is what PRD section 8's "draining
+// acknowledges a row" gives and what DrainWakes states. The crash is
+// simulated by closing the store. What survives it is the row itself, kept
+// and acknowledged by the drainer, so the history a reconciliation reads
+// still shows that the wake surfaced.
+func TestACrashAfterADrainDoesNotRedeliverAndKeepsTheRow(t *testing.T) {
 	ctx := context.Background()
 	path := t.TempDir() + "/state.db"
 	s := openStoreAt(t, path)
 	task := seedTask(t, s, "taskaaaaaaab").ID
 	surface(t, s, task, "A", 1)
 
-	handled := map[int64]int{}
-	consume := func(wakes []Wake) {
-		for _, w := range wakes {
-			handled[w.ID]++
-		}
+	first, err := s.DrainWakes(ctx, 10, AcknowledgedByCoordinator())
+	if err != nil || len(first) != 1 {
+		t.Fatalf("DrainWakes = %+v (%v), want one row", first, err)
 	}
-	first, err := s.DrainWakes(ctx, 10)
-	if err != nil {
-		t.Fatalf("DrainWakes: %v", err)
-	}
-	consume(first)
-	consume(first) // delivered twice: the consumer counts, the handling below is once
 	if err := s.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 
 	s = openStoreAt(t, path)
-	again, err := s.DrainWakes(ctx, 10)
-	if err != nil || len(again) != 1 || again[0].ID != first[0].ID {
-		t.Fatalf("after the crash the drain = %+v (%v), want the unacknowledged row %d again", again, err, first[0].ID)
-	}
-	consume(again)
-	if len(handled) != 1 || handled[first[0].ID] != 3 {
-		t.Fatalf("the consumer saw %v, want one row delivered three times", handled)
-	}
-	if err := s.AcknowledgeWakes(ctx, []int64{first[0].ID}, AcknowledgedByCoordinator()); err != nil {
-		t.Fatalf("AcknowledgeWakes: %v", err)
-	}
-	if left, err := s.DrainWakes(ctx, 10); err != nil || len(left) != 0 {
-		t.Fatalf("after the acknowledgement the drain = %+v (%v), want nothing", left, err)
+	if again, err := s.DrainWakes(ctx, 10, AcknowledgedByCoordinator()); err != nil || len(again) != 0 {
+		t.Fatalf("after the crash the drain = %+v (%v), want nothing: the first drain acknowledged it", again, err)
 	}
 	wakes, err := s.TaskWakes(ctx, task)
-	if err != nil || len(wakes) != 1 || wakes[0].Queued() || wakes[0].AcknowledgedBy != Known(AcknowledgedByCoordinator()) {
-		t.Fatalf("the acknowledged row reads back as %+v (%v)", wakes, err)
+	if err != nil || len(wakes) != 1 || wakes[0].ID != first[0].ID || wakes[0].Queued() ||
+		wakes[0].AcknowledgedBy != Known(AcknowledgedByCoordinator()) {
+		t.Fatalf("the drained row reads back as %+v (%v), want it kept and acknowledged by the coordinator", wakes, err)
 	}
 }
 
@@ -306,14 +349,14 @@ func TestAcknowledgingIsABatchThatNamesWhoAndRefusesWhatItCannot(t *testing.T) {
 	if !errors.As(err, &idErr) || idErr.ID != 999 || !errors.Is(err, ErrWakeUnknown) {
 		t.Fatalf("a batch with an unknown id = %v, want *WakeIDError{999, ErrWakeUnknown}", err)
 	}
-	if left, _ := s.DrainWakes(ctx, 10); len(left) != 3 {
+	if left, _ := s.QueuedWakes(ctx, 10); len(left) != 3 {
 		t.Fatalf("the refused batch acknowledged something: %d left", len(left))
 	}
 
 	if err := s.AcknowledgeWakes(ctx, ids[:2], AcknowledgedByProgram()); err != nil {
 		t.Fatalf("acknowledging a subset: %v", err)
 	}
-	left, err := s.DrainWakes(ctx, 10)
+	left, err := s.QueuedWakes(ctx, 10)
 	if err != nil || len(left) != 1 || left[0].ID != ids[2] {
 		t.Fatalf("after a subset the drain = %+v (%v), want only %d", left, err, ids[2])
 	}
@@ -322,7 +365,7 @@ func TestAcknowledgingIsABatchThatNamesWhoAndRefusesWhatItCannot(t *testing.T) {
 	if !errors.As(err, &idErr) || idErr.ID != ids[0] || !errors.Is(err, ErrWakeAcknowledged) {
 		t.Fatalf("a batch naming an acknowledged row = %v, want *WakeIDError{%d, ErrWakeAcknowledged}", err, ids[0])
 	}
-	if left, _ := s.DrainWakes(ctx, 10); len(left) != 1 {
+	if left, _ := s.QueuedWakes(ctx, 10); len(left) != 1 {
 		t.Fatalf("the refused batch acknowledged the rest: %d left", len(left))
 	}
 }

@@ -173,9 +173,6 @@ func TestAnInvestigationsHoldIsAnsweredGivenTheTask(t *testing.T) {
 	}, store.Disposition{}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := records.AppendTaskEvent(t.Context(), id, "report-ready", "the findings are filed"); err != nil {
-		t.Fatal(err)
-	}
 	raw := `{"summary":"two decisions","findings":[` +
 		`{"severity":"warning","action":"ask","description":"Whether the old index may be dropped."},` +
 		`{"severity":"warning","description":"Whether the cache should move."}]}`
@@ -194,7 +191,7 @@ func TestAnInvestigationsHoldIsAnsweredGivenTheTask(t *testing.T) {
 	if len(holds) != 2 {
 		t.Fatalf("the report holds %d findings, want both: one ask and one with no action, which P3 makes an ask", len(holds))
 	}
-	if _, err := records.StoreTaskReport(t.Context(), store.TaskReport{TaskID: id, Body: raw, Report: encoded}, holds); err != nil {
+	if _, _, err := records.StoreTaskReport(t.Context(), store.TaskReport{TaskID: id, Body: raw, Report: encoded}, holds); err != nil {
 		t.Fatal(err)
 	}
 	_ = records.Close()

@@ -10,10 +10,20 @@ import (
 	"time"
 )
 
+// ReportReadyEventKind is the kind of the event StoreTaskReport appends in
+// the transaction that stores a task's report, so the history entry that
+// says a report is ready and the stored report are one write and cannot
+// disagree (P8). Its detail is empty: the report is the task_report row, and
+// the history names that it exists rather than carrying a second copy. As
+// with OpeningEventKind, the store records the word and internal/taskstate's
+// table is what gives it a meaning.
+const ReportReadyEventKind = "report-ready"
+
 // TaskReport is PRD section 11's stored report: what an investigation task's
 // worker filed, kept here so it survives the copy's cleanup. It is written
 // once, by StoreTaskReport, in the same transaction as the holds registered
-// from it, and never revised.
+// from it and the ReportReadyEventKind entry that records it in the task's
+// history, and never revised.
 //
 // Body is the worker's text as it arrived and Report is the same text as the
 // writer parsed it; both are evidence on PRD principle P13's terms, never
@@ -39,8 +49,10 @@ type TaskReport struct {
 	RecordedAt time.Time `json:"recorded_at"`
 }
 
-// StoreTaskReport writes a task's report and registers the holds the writer
-// derived from it, in one transaction, and returns the report as stored.
+// StoreTaskReport writes a task's report, registers the holds the writer
+// derived from it, and appends a ReportReadyEventKind entry to the task's
+// history, in one transaction, and returns the report as stored and the
+// entry as appended.
 // The holds are registered on RegisterHold's terms, so a key already
 // registered is left as it stands, resolved or not; every hold must name
 // the report's task and nothing else is checked about it, because what a
@@ -50,36 +62,42 @@ type TaskReport struct {
 // of them rolls the report back with it.
 //
 // It refuses a task that already has a report with ErrTaskReportStored and
-// leaves the first standing, a task that does not exist with ErrNotFound,
-// wrapped, an empty body, an empty parsed report, and a hold naming no key,
-// no subject, or another task. RecordedAt is assigned here.
-func (s *Store) StoreTaskReport(ctx context.Context, r TaskReport, holds []Hold) (TaskReport, error) {
+// leaves the first standing, with nothing appended, a task that does not
+// exist with ErrNotFound, wrapped, an empty body, an empty parsed report, and
+// a hold naming no key, no subject, or another task. RecordedAt is assigned
+// here.
+//
+// The entry is appended after whatever the history already holds, anchored
+// to nothing: a report is filed once per task, which the refusal above
+// enforces, so there is no decision an anchor would protect.
+func (s *Store) StoreTaskReport(ctx context.Context, r TaskReport, holds []Hold) (TaskReport, TaskEvent, error) {
 	if strings.TrimSpace(r.TaskID) == "" {
-		return TaskReport{}, fmt.Errorf("store: a task report names no task")
+		return TaskReport{}, TaskEvent{}, fmt.Errorf("store: a task report names no task")
 	}
 	if strings.TrimSpace(r.Body) == "" {
-		return TaskReport{}, fmt.Errorf("store: task %s: the report body is empty", r.TaskID)
+		return TaskReport{}, TaskEvent{}, fmt.Errorf("store: task %s: the report body is empty", r.TaskID)
 	}
 	if len(r.Report) == 0 {
-		return TaskReport{}, fmt.Errorf("store: task %s: the parsed report is empty", r.TaskID)
+		return TaskReport{}, TaskEvent{}, fmt.Errorf("store: task %s: the parsed report is empty", r.TaskID)
 	}
 	keys := make([]string, 0, len(holds))
 	for _, h := range holds {
 		switch {
 		case strings.TrimSpace(h.Key) == "":
-			return TaskReport{}, fmt.Errorf("store: task %s: a hold has no key", r.TaskID)
+			return TaskReport{}, TaskEvent{}, fmt.Errorf("store: task %s: a hold has no key", r.TaskID)
 		case strings.TrimSpace(h.Subject) == "":
-			return TaskReport{}, fmt.Errorf("store: task %s: hold %s has no subject", r.TaskID, h.Key)
+			return TaskReport{}, TaskEvent{}, fmt.Errorf("store: task %s: hold %s has no subject", r.TaskID, h.Key)
 		case h.TaskID.Or("") != r.TaskID:
-			return TaskReport{}, fmt.Errorf("store: task %s: hold %s names task %q rather than this one", r.TaskID, h.Key, h.TaskID.Or(""))
+			return TaskReport{}, TaskEvent{}, fmt.Errorf("store: task %s: hold %s names task %q rather than this one", r.TaskID, h.Key, h.TaskID.Or(""))
 		}
 		keys = append(keys, h.Key)
 	}
 	encodedKeys, err := json.Marshal(keys)
 	if err != nil {
-		return TaskReport{}, fmt.Errorf("store: task %s: encoding the hold keys: %w", r.TaskID, err)
+		return TaskReport{}, TaskEvent{}, fmt.Errorf("store: task %s: encoding the hold keys: %w", r.TaskID, err)
 	}
 	now := encodeTime(nowUTC())
+	var event TaskEvent
 	err = s.inTx(ctx, func(tx *sql.Tx) error {
 		if err := taskExists(ctx, tx, r.TaskID); err != nil {
 			return err
@@ -105,12 +123,17 @@ func (s *Store) StoreTaskReport(ctx context.Context, r TaskReport, holds []Hold)
 				return fmt.Errorf("registering hold %s: %w", h.Key, err)
 			}
 		}
-		return nil
+		event, err = appendTaskEventTx(ctx, tx, r.TaskID, ReportReadyEventKind, "", Unknown[int64]())
+		return err
 	})
 	if err != nil {
-		return TaskReport{}, fmt.Errorf("store: storing the report of task %s: %w", r.TaskID, err)
+		return TaskReport{}, TaskEvent{}, fmt.Errorf("store: storing the report of task %s: %w", r.TaskID, err)
 	}
-	return s.TaskReport(ctx, r.TaskID)
+	stored, err := s.TaskReport(ctx, r.TaskID)
+	if err != nil {
+		return TaskReport{}, TaskEvent{}, err
+	}
+	return stored, event, nil
 }
 
 // TaskReport returns a task's stored report, or ErrNotFound when none has

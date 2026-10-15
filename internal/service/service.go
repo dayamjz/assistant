@@ -162,6 +162,15 @@ type Options struct {
 	// its identity. A test passes a double to script what a terminal
 	// answers.
 	Terminals Terminals
+	// WorkerRoute is the command line prefix a launched worker reaches this
+	// service through, on route.go's terms: internal/cli passes the absolute
+	// path of the program, --home naming this home, and its worker verb.
+	// Empty, which a test that opens the service without internal/cli
+	// passes, launches every worker with git alone and tells it of no
+	// route. A route internal/agents refuses is refused at each launch,
+	// which is logged and leaves the task dispatched, on launch.go's terms
+	// for a launch that fails.
+	WorkerRoute string
 	// hooks are the seams this package's tests drive the loop through. They
 	// are here rather than on the Service because the loop starts inside
 	// Open; supervise.go says what each is, and the product sets none.
@@ -179,6 +188,11 @@ type Service struct {
 	lock   *home.Lock
 	log    *home.Log
 	events *ipc.Publisher
+	// wakes is the coordinator's wake stream, ipc.MethodWakesSubscribe's
+	// publisher, which wakewait.go's publishWake is the one producer for.
+	// It is a publisher of its own rather than events because events is
+	// open to every caller and a wake is the coordinator's.
+	wakes *ipc.Publisher
 
 	listener net.Listener
 	server   *ipc.Server
@@ -233,6 +247,8 @@ type Service struct {
 	// home and code host; cleanup.go says which of its entries this service
 	// calls and from where.
 	cleaner *tasks.Cleaner
+	// workerRoute is Options.WorkerRoute, fixed when the service opens.
+	workerRoute string
 
 	// stageLogMu serializes appends to the per-stage logs and the reads of
 	// them, so a section stagelog.go writes is never interleaved with another
@@ -453,6 +469,8 @@ func Open(ctx context.Context, o Options) (*Service, error) {
 		launched:   make(map[string]*session.Session),
 		starting:   make(map[branchKey]*branchGate),
 		stopping:   make(chan struct{}),
+
+		workerRoute: o.WorkerRoute,
 	}
 	s.stopCtx, s.stopCancel = context.WithCancel(context.WithoutCancel(ctx))
 	// The terminal seam is the service's own provider unless a test passed
@@ -537,6 +555,9 @@ func (s *Service) openParts(ctx context.Context, o Options) error {
 	if s.events, err = ipc.NewPublisher(ipc.PublisherConfig{}); err != nil {
 		return err
 	}
+	if s.wakes, err = ipc.NewPublisher(ipc.PublisherConfig{}); err != nil {
+		return err
+	}
 
 	// A socket left behind by a service that was killed names nothing, because
 	// this process holds the lock that would have stopped a live one from
@@ -556,6 +577,7 @@ func (s *Service) openParts(ctx context.Context, o Options) error {
 		Handler:  ipc.HandlerFunc(s.handle),
 		Ancestry: ancestry,
 		Events:   s.events,
+		Streams:  map[ipc.Method]*ipc.Publisher{ipc.MethodWakesSubscribe: s.wakes},
 		ReportPanic: func(value any, stack []byte) {
 			s.log.Printf("a handler panicked: %v\n%s", value, stack)
 		},
@@ -649,6 +671,9 @@ func (s *Service) Close() error {
 		errs = append(errs, s.closeSessions()...)
 		if s.events != nil {
 			errs = append(errs, s.events.Close())
+		}
+		if s.wakes != nil {
+			errs = append(errs, s.wakes.Close())
 		}
 		if s.store != nil {
 			errs = append(errs, s.store.Close())

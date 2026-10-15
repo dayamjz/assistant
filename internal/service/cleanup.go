@@ -34,11 +34,14 @@ import (
 // again when a landed task's terminal is next observed Dead, from the
 // supervisor's pass and from task.stop.
 //
-// An investigation task's copy is cleaned up when its report is stored,
-// through storeTaskReport, which stores it through internal/tasks and then
-// asks for the cleanup. Nothing in this build calls storeTaskReport: the
-// worker that would file a report is #91's, and the method is here so the
-// site exists before the producer does, which its test drives in process.
+// An investigation task's copy is cleaned up once its report is stored. The
+// report arrives from the task's worker over its route, as task.event's
+// report kind, which workers.go hands to route.go's fileReport, and
+// storeTaskReport stores it through internal/tasks and then asks for the
+// cleanup. The worker that filed it is usually still running then, so that
+// first ask is refused with the live terminal and keeps the copy; landed.go's
+// pass asks again once the terminal is observed Dead, on the terms it states
+// for a reported investigation, and that is the ask that removes the copy.
 //
 // Both task-copy sites hand internal/tasks the terminal's liveness as the
 // service's task reader resolved it, Basis.Process of the resolution the
@@ -104,11 +107,13 @@ func (s *Service) cleanUpLanded(ctx context.Context, record store.Run) {
 }
 
 // storeTaskReport stores an investigation task's report through
-// internal/tasks and then asks for its copy's cleanup, which is the
-// investigation half of the lifecycle's Complete edge. It returns what the
-// store refused; the cleanup's answer goes to the log on this file's terms,
-// and a task whose terminal could not be read after the report was stored
-// is a cleanup not asked for rather than one asked with a stated liveness.
+// internal/tasks, publishes the holds it registered and the history entry
+// that claims Reported at internal/taskstate's event tier, and then asks for
+// its copy's cleanup, which is the investigation half of the lifecycle's
+// Complete edge. It returns what the store refused; the cleanup's answer
+// goes to the log on this file's terms, and a task whose terminal could not
+// be read after the report was stored is a cleanup not asked for rather than
+// one asked with a stated liveness.
 func (s *Service) storeTaskReport(ctx context.Context, taskID, raw string) (tasks.StoredReport, error) {
 	stored, err := s.cleaner.StoreReport(ctx, taskID, raw)
 	if err != nil {
@@ -121,6 +126,7 @@ func (s *Service) storeTaskReport(ctx context.Context, taskID, raw string) (task
 	for _, h := range stored.Holds {
 		s.publishHoldState(h)
 	}
+	s.publishTaskEvent(stored.Event)
 	resolved, err := s.tasks().Resolved(ctx, taskID)
 	if err != nil {
 		s.log.Printf("the isolated copy of task %s was not cleaned up: its terminal could not be read: %v", taskID, err)

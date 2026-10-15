@@ -57,6 +57,12 @@ type StoredReport struct {
 	// report's order, as stored. A hold already registered under its key is
 	// the existing one.
 	Holds []store.Hold
+	// Event is the store.ReportReadyEventKind entry the store appended to
+	// the task's history in the same transaction as Record. It claims
+	// Reported at internal/taskstate's event tier; whether that claim is
+	// the answer is the resolver's precedence, which a live or dead
+	// terminal outranks.
+	Event store.TaskEvent
 	// Evidence is the path of the evidence copy.
 	Evidence string
 }
@@ -69,8 +75,8 @@ type StoredReport struct {
 func HoldKey(taskID, findingID string) string { return "task/" + taskID + "/finding/" + findingID }
 
 // StoreReport parses raw as the task's report, stores it with the holds its
-// ask findings become, writes the evidence copy, and returns what it
-// recorded. The task must be an investigation task; a report the parser
+// ask findings become and the history entry that records it, writes the
+// evidence copy, and returns what it recorded. The task must be an investigation task; a report the parser
 // refuses is ErrReportUnreadable, wrapped, and a task that already has one
 // is store.ErrTaskReportStored, wrapped, with the first report standing.
 //
@@ -107,11 +113,11 @@ func (c *Cleaner) StoreReport(ctx context.Context, taskID, raw string) (StoredRe
 			Detail:  detail,
 		})
 	}
-	record, err := c.store.StoreTaskReport(ctx, store.TaskReport{TaskID: taskID, Body: raw, Report: encoded}, holds)
+	record, event, err := c.store.StoreTaskReport(ctx, store.TaskReport{TaskID: taskID, Body: raw, Report: encoded}, holds)
 	if err != nil {
 		return StoredReport{}, err
 	}
-	stored := StoredReport{Record: record, Report: report}
+	stored := StoredReport{Record: record, Report: report, Event: event}
 	for _, h := range holds {
 		got, err := c.store.Hold(ctx, h.Key)
 		if err != nil {

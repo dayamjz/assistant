@@ -148,6 +148,14 @@ func decodeIsolationRefusal(detail string) error {
 // it claims nothing, its detail is the message's identifier, and
 // internal/store appends it only in the transaction that records the
 // acknowledgement on the message, so the history and the record agree.
+// "report-ready" is the same shape for an investigation's report: its one
+// writer in the product is store.StoreTaskReport, which appends it with an
+// empty detail in the transaction that stores the report and registers its
+// holds, and internal/service's worker event path hands the kind to that
+// write rather than appending it, so a history the product wrote saying a
+// report is ready has the report behind it. store.AppendTaskEvent still
+// records the word for any caller that names it, which is how tests build a
+// history; nothing here can tell such an entry from the product's.
 var kinds = []Row{
 	{Kind: store.OpeningEventKind, Role: RoleState, State: Queued, Writer: WriterProgram},
 	{Kind: store.DispatchedEventKind, Role: RoleState, State: Dispatched, Writer: WriterProgram},
@@ -159,7 +167,7 @@ var kinds = []Row{
 	{Kind: "waiting-external", Role: RoleState, State: Paused, Writer: WriterWorker},
 	{Kind: "handed-off", Role: RoleState, State: Validating, Writer: WriterWorker},
 	{Kind: "validation-started", Role: RoleState, State: Validating, Writer: WriterWorker},
-	{Kind: "report-ready", Role: RoleState, State: Reported, Writer: WriterWorker},
+	{Kind: store.ReportReadyEventKind, Role: RoleState, State: Reported, Writer: WriterWorker},
 	{Kind: "failed", Role: RoleState, State: Failed, Writer: WriterWorker},
 	{Kind: "decision-open", Role: RoleDecisionOpen, State: Held, Writer: WriterWorker},
 	{Kind: "decision-closed", Role: RoleDecisionClosed, Writer: WriterWorker},

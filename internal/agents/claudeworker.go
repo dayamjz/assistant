@@ -44,7 +44,7 @@ func (r *claudeRunner) Start(ctx context.Context, spec WorkerSpec) (Worker, erro
 	}
 	worker, err := startWorker(ctx, procSpec{
 		bin:    r.resolved,
-		args:   r.workerArguments(),
+		args:   r.workerArguments(spec.Route),
 		dir:    spec.Dir,
 		env:    WorkerEnvironment(r.settings.base, spec.Env),
 		grace:  r.settings.grace,
@@ -57,9 +57,9 @@ func (r *claudeRunner) Start(ctx context.Context, spec WorkerSpec) (Worker, erro
 }
 
 // workerArguments builds a worker's command line: the configured entry's own
-// flags, then the worker's grant, then the four Start states.
-func (r *claudeRunner) workerArguments() []string {
-	args := append(slices.Clone(r.extra), claudeGrantFlags(GrantWorker)...)
+// flags, then the worker's grant with its route, then the four Start states.
+func (r *claudeRunner) workerArguments(route string) []string {
+	args := append(slices.Clone(r.extra), claudeGrantFlags(GrantWorker, route)...)
 	return append(args,
 		"--print",
 		"--input-format", "stream-json",
