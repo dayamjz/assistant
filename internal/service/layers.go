@@ -67,6 +67,15 @@ var ErrPushedConfig = errors.New("service: the pushed configuration document is 
 // in the operator's configuration, resolves it.
 var ErrRepositoryAgent = errors.New("service: this build resolves one agent per service, from the operator's configuration, and this repository's configuration asks for a different agent list")
 
+// ErrForkUnresolved reports a repository record naming a fork that a run
+// cannot push to and propose from: the fork or its upstream is not a
+// repository on the code host this build addresses, or the fork names the
+// upstream itself. The run is refused before anything is recorded as running,
+// because pushing anywhere else would be a guess about where its work goes.
+// Running assistant init again with a fork that resolves, or without one,
+// resolves it.
+var ErrForkUnresolved = errors.New("service: the repository record names a fork this run cannot push to and propose from")
+
 // trustedRef is the name the gate repository holds a run's freshly fetched
 // default-branch tip under. It is named for the run so concurrent runs cannot
 // overwrite each other's, on the same terms as submittedRef, and it is

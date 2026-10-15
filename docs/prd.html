@@ -2055,7 +2055,7 @@ flowchart TB
     </table>
   </div>
   <p class="mb-4 opacity-90">
-    <code>assistant init</code> records the repository the gate validates, and takes three flags.
+    <code>assistant init</code> records the repository the gate validates, and takes four flags.
     <code>--upstream</code> names the remote the change is destined for, and without it that is the
     working copy's origin. <code>--default-branch</code> names the branch trusted configuration is
     read from. Without it, init takes the branch the working copy records origin's HEAD as naming,
@@ -2068,6 +2068,33 @@ flowchart TB
     never replaces a key the file already names and offers nothing for <code>commands.document</code>. A written
     command reaches no run until the file lands on the default branch, because commands are read there (P7), and
     init says so.
+  </p>
+  <p class="mb-4 opacity-90">
+    The fourth is <code>--fork-url</code>, for <b>fork pull requests</b>. It names a fork of the upstream, and with
+    it a run sends its branch to the fork and proposes the pull request from the fork to the upstream. The
+    repository record holds the fork beside the upstream as a field of its own, so the repository a run writes its
+    branch to and the one its pull request targets are never read out of each other. init records a fork only when
+    the fork and the upstream are both repositories on the code host this build proposes changes on and the fork is
+    not the upstream itself; otherwise it refuses as incorrect usage and sets up no gate and records no repository.
+    A run whose record names a fork that cannot be resolved is refused before it starts, rather than sent to the
+    upstream instead. The push to the fork is anchored on the fork's branch, observed before the work, as every
+    push is (P6), and opening the pull request is confirmed against both repositories it names before anything is
+    written. Without the flag init records no fork, and a run sends its branch to the upstream. No verb is added.
+  </p>
+  <p class="mb-4 opacity-90">
+    The <b>managed service</b> is a pair of flags on <code>assistant service</code>. <code>start --install</code>
+    hands the home's service to the operating system's own service manager, a launchd agent on macOS and a systemd
+    user unit on Linux, so it is brought up again when the user logs in, including after the machine restarts; on
+    Linux it comes up at boot without a login only where the user's lingering is enabled, which install does not
+    change. <code>stop --uninstall</code> stops the service through its own stop, which refuses while runs are
+    active as every stop does, and only then removes what install set up. The home's lock still allows one
+    service per home, so install is refused while a service is up, and a start with a managed service set up goes
+    through the manager rather than starting a second. A restart under the manager ends the service for the
+    manager to bring up again. On macOS, install refuses when the home, the program, or a checkout the home serves
+    is inside Documents, Desktop or Downloads, which macOS keeps from a program its service manager starts unless
+    the user grants it access, and names both remedies: move them out, or grant the program Full Disk Access and
+    install again with a flag saying so, which the program cannot check. On Windows, and wherever neither manager is
+    available, install is refused. No verb is added.
   </p>
   <p class="mb-4 opacity-90">
     The <b>usage view</b> is a flag on <code>assistant runs</code>, taking a window. It reads section

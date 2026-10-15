@@ -11,7 +11,9 @@
 // sets the adapter asks for. PullRequest is the pr view answer for
 // forge.GitHub's pull request fields, with gh's own key order and vocabulary
 // and every field the adapter ignores alongside the ones it reads; Repository
-// is the repo view answer the adapter's write confirmation asks for;
+// is the repo view answer the adapter's write confirmation asks for, of which
+// an adapter opened for a fork asks two, the addressed repository first; List
+// is the pr list a Find from a fork reads;
 // MergeMethods is the repo view a merge reads the permitted methods through,
 // Merged the answer to an accepted pr merge, and Checks the check rollup for
 // a head; Exit is
@@ -166,6 +168,47 @@ func PullRequest(v PullRequestView) Response {
 		Title       string `json:"title"`
 		URL         string `json:"url"`
 	}{v.Base, v.Head, v.HeadCommit, v.Draft, v.Mergeable, v.Number, v.State, v.Title, v.URL})
+	return Response{Stdout: string(body) + "\n"}
+}
+
+// ListEntry is one open pull request in the answer to the pr list a Find
+// from a fork reads: its number, and the owner and name of the repository its
+// head branch lives in. An empty HeadName is a head repository gh reports as
+// absent, which is how a pull request from a deleted fork reads.
+type ListEntry struct {
+	Number    int
+	HeadOwner string
+	HeadName  string
+}
+
+// List is gh's answer to the pr list the adapter reads a pull request from a
+// fork through: per entry the number and gh's headRepository and
+// headRepositoryOwner objects, with the identifiers gh puts beside the fields
+// the adapter reads. A Find that is not from a fork asks for the number alone,
+// and Raw states that answer.
+func List(entries ...ListEntry) Response {
+	type repository struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	}
+	type owner struct {
+		ID    string `json:"id"`
+		Login string `json:"login"`
+	}
+	type entry struct {
+		HeadRepository      *repository `json:"headRepository"`
+		HeadRepositoryOwner owner       `json:"headRepositoryOwner"`
+		Number              int         `json:"number"`
+	}
+	out := make([]entry, 0, len(entries))
+	for i, e := range entries {
+		row := entry{Number: e.Number, HeadRepositoryOwner: owner{ID: fmt.Sprintf("U_owner%d", i), Login: e.HeadOwner}}
+		if e.HeadName != "" {
+			row.HeadRepository = &repository{ID: fmt.Sprintf("R_repo%d", i), Name: e.HeadName}
+		}
+		out = append(out, row)
+	}
+	body, _ := json.Marshal(out)
 	return Response{Stdout: string(body) + "\n"}
 }
 

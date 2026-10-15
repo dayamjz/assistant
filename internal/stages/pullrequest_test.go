@@ -200,6 +200,16 @@ func (h hostFor) Open(repository string) (forge.Provider, error) {
 	return h.provider, nil
 }
 
+// OpenFork refuses what the real GitHubHost.OpenFork refuses before any
+// request - an empty repository or fork - and otherwise answers with the one
+// modelled provider, which does not model a fork's head.
+func (h hostFor) OpenFork(repository, fork string) (forge.Provider, error) {
+	if fork == "" {
+		return nil, fmt.Errorf("head repository %w: it is required", forge.ErrInvalidArgument)
+	}
+	return h.Open(repository)
+}
+
 var _ forge.Host = hostFor{}
 
 // runState is a run's state as the pull request stage reads it, built from a

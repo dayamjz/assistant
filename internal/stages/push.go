@@ -154,6 +154,7 @@ func Push(deps StageDeps) pipeline.Implementation {
 		pipeline.KeyPushed,
 		pipeline.KeyIntent,
 		pipeline.KeyIntentSupplied,
+		pipeline.KeyForkRepository,
 	}, pipeline.StageResultKeys(pipeline.StageReview)...)
 	for _, stage := range fixingAfterReview() {
 		reads = append(reads, stage.FixKey())
@@ -214,7 +215,7 @@ func pushVerifiedCommit(ctx context.Context, deps StageDeps, in pipeline.Input) 
 	if !facts.anchorRecorded {
 		return noAnchorToPushOn(facts), nil
 	}
-	target := pushTarget(facts.branch)
+	target := pushTarget(facts.branch, facts.fork)
 	if facts.anchor.Target() != target {
 		return anchorForAnotherTarget(facts, target), nil
 	}
@@ -673,6 +674,9 @@ type pushState struct {
 	// pushed is the commit an earlier execution of this stage forwarded, and
 	// empty until one did. It is what makes this execution a second push.
 	pushed string
+	// fork is the fork the run forwards its commit to, empty when it forwards
+	// to the upstream; pushTarget reads it.
+	fork string
 	// reviewOutcome is how the review stage ended, which is what says whether
 	// a review completed at all.
 	reviewOutcome pipeline.Outcome
@@ -708,6 +712,7 @@ func readPushState(state pipeline.Reader) (pushState, error) {
 		{pipeline.KeyHead, &facts.head},
 		{pipeline.KeyPushed, &facts.pushed},
 		{pipeline.KeyIntent, &facts.intent},
+		{pipeline.KeyForkRepository, &facts.fork},
 	}
 	for _, entry := range toRead {
 		v, err := state.Get(entry.key)

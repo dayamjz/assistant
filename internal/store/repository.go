@@ -38,6 +38,18 @@ type Repository struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+// PushURL is the remote a run forwards its validated commit to: the fork when
+// the record names one, and the upstream otherwise. It is the one answer to
+// that question, so a reader verifying what a run pushed reads the same
+// remote the run pushed to. Like both fields it reads, it is the redacted
+// form.
+func (r Repository) PushURL() string {
+	if fork, ok := r.ForkURL.Get(); ok {
+		return fork
+	}
+	return r.UpstreamURL
+}
+
 // UpsertRepository writes r and returns the record as stored, which for its two
 // URL fields is the redacted form: UpstreamURL and ForkURL each pass through the
 // redactor Open was given before they are bound to a statement, and nothing

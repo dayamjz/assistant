@@ -178,6 +178,18 @@ func (s *Service) ensureCopy(ctx context.Context, record store.Run) error {
 				upstreamRemote, record.ID, err)
 		}
 	}
+	// A record naming a fork gets the fork's remote beside the upstream's, from
+	// the same row begin derived pipeline.KeyForkRepository from, so the
+	// remote the push stage forwards to and the fork the pull request is
+	// proposed from are the one record read twice. A record naming none sets
+	// nothing, and a fork remote an earlier record left on the gate is not
+	// what such a run pushes to: internal/stages' pushTarget names it only
+	// when the run carries a fork.
+	if fork, ok := repository.ForkURL.Get(); ok {
+		if err := bare.SetRemote(ctx, forkRemote, fork); err != nil {
+			return fmt.Errorf("service: pointing %s at the fork for run %s: %w", forkRemote, record.ID, err)
+		}
+	}
 	held, err := bare.ResolveCommit(ctx, submittedRef(record.ID))
 	if err != nil {
 		return fmt.Errorf("service: the gate repository holds no %s for run %s, so the commit it validates "+
@@ -303,6 +315,10 @@ func submittedRef(runID string) string { return "refs/assistant/runs/" + runID }
 // two have to be the same name or the stage fetches from a remote nobody
 // configured.
 const upstreamRemote = stages.UpstreamRemote
+
+// forkRemote is the name the run's copy reaches the fork under, on
+// upstreamRemote's terms.
+const forkRemote = stages.ForkRemote
 
 // copyStanding reports whether a usable copy is already at path.
 //

@@ -30,8 +30,21 @@ import (
 // against one reference and an update made to another is the failure the
 // anchor exists to prevent, and it is not one either stage could notice on its
 // own.
-func pushTarget(branch string) safety.Target {
-	return safety.Target{Remote: UpstreamRemote, Ref: "refs/heads/" + branch}
+//
+// fork is pipeline.KeyForkRepository as the run carries it. A run that names
+// a fork forwards its commit to the branch on ForkRemote rather than on
+// UpstreamRemote, and because this one function decides the remote for the
+// rebase stage's observation and the push stage's update alike, the anchor of
+// a push to a fork is an observation of the fork's branch, taken before the
+// work, on the same terms as any other push (P6). A run whose anchor was
+// recorded against the other remote is refused at the push, as an anchor for
+// another target always is.
+func pushTarget(branch, fork string) safety.Target {
+	remote := UpstreamRemote
+	if fork != "" {
+		remote = ForkRemote
+	}
+	return safety.Target{Remote: remote, Ref: "refs/heads/" + branch}
 }
 
 // anchorRecord is the durable form of an observation as it travels in run

@@ -35,6 +35,20 @@ type Host interface {
 	// It performs no request. Whether the repository exists, and whether the
 	// specifier still names it, are answers the Provider's own calls carry.
 	Open(repository string) (Provider, error)
+
+	// OpenFork returns the Provider addressing repository whose pull requests
+	// are proposed from fork, a different repository on the same host that
+	// holds the head branch: the run pushed there, and the pull request is
+	// proposed to repository. Find reads only a pull request whose head lives
+	// in fork, and Open names fork as the head; every other call addresses
+	// repository exactly as Open's Provider does.
+	//
+	// It refuses an empty repository, an empty fork, and a fork naming
+	// repository itself, on Open's terms: a fork this run did not name, or
+	// one standing in for the repository, is a guess about where the head
+	// lives. Like Open it performs no request, and a write through the
+	// Provider confirms both repositories before it lands.
+	OpenFork(repository, fork string) (Provider, error)
 }
 
 // GitHubHost is the Host that opens GitHub adapters. It holds what NewGitHub
@@ -56,8 +70,8 @@ var _ Host = (*GitHubHost)(nil)
 // on the same terms NewGitHub states, and redact is required there for the
 // reason given there.
 //
-// An option naming a repository is accepted and then overridden, because Open
-// applies the repository it was given last. A host with a repository fixed in
+// An option naming a repository or a head repository is accepted and then
+// overridden, because Open and OpenFork apply the ones they were given last. A host with a repository fixed in
 // its options would open the same repository for every run, which is the
 // lifetime mistake this type exists to prevent, so it cannot be made by
 // passing one here.
@@ -78,9 +92,35 @@ func (h *GitHubHost) Open(repository string) (Provider, error) {
 			reason: "is required, because a provider that resolves one for itself would address a repository this run never named",
 		}
 	}
-	opts := make([]Option, 0, len(h.opts)+1)
+	return h.open(repository, "")
+}
+
+// OpenFork returns the GitHub adapter addressing repository, as owner/name,
+// whose pull requests are proposed from fork, as owner/name. Both are
+// refused when empty, and NewGitHub refuses a fork naming repository.
+func (h *GitHubHost) OpenFork(repository, fork string) (Provider, error) {
+	if repository == "" {
+		return nil, &argumentError{
+			what:   "repository",
+			reason: "is required, because a provider that resolves one for itself would address a repository this run never named",
+		}
+	}
+	if fork == "" {
+		return nil, &argumentError{
+			what:   "head repository",
+			reason: "is required, because a pull request from a fork this run did not name would be proposed from a repository nobody chose",
+		}
+	}
+	return h.open(repository, fork)
+}
+
+// open builds the adapter for repository and head, applying both after the
+// host's own options so that neither can be fixed for every run by passing
+// it to NewGitHubHost.
+func (h *GitHubHost) open(repository, head string) (Provider, error) {
+	opts := make([]Option, 0, len(h.opts)+2)
 	opts = append(opts, h.opts...)
-	opts = append(opts, WithRepository(repository))
+	opts = append(opts, WithRepository(repository), WithHeadRepository(head))
 	adapter, err := NewGitHub(h.redact, opts...)
 	if err != nil {
 		// The refusal is returned without the adapter beside it. NewGitHub

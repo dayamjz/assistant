@@ -84,12 +84,12 @@ func (s *Service) syncBranch(ctx context.Context, req ipc.Request, r machine.Syn
 		return machine.Plan{Refusal: read.refusal.Reason, Detail: read.refusal.Error()}, nil
 	}
 	c := read.classification
-	steps := custody.Steps(c, read.gatePath, repository.UpstreamURL)
+	steps := custody.Steps(c, read.gatePath, repository.PushURL())
 	plan := machine.Plan{Classification: &c, Steps: steps, Detail: c.Detail}
 	if !r.Confirm || !c.Class.Acts() {
 		return plan, nil
 	}
-	result, err := custody.Apply(ctx, working, c, read.gatePath, repository.UpstreamURL)
+	result, err := custody.Apply(ctx, working, c, read.gatePath, repository.PushURL())
 	plan.Done = result.Done
 	if err != nil {
 		var refusal *custody.Refusal

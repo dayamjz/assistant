@@ -48,6 +48,15 @@ func (h scriptedHost) Open(repository string) (forge.Provider, error) {
 	return h.provider, nil
 }
 
+// OpenFork is Open for a run whose record names a fork, refusing an empty
+// fork the way the GitHub host does; the scripted provider models no head.
+func (h scriptedHost) OpenFork(repository, fork string) (forge.Provider, error) {
+	if fork == "" {
+		return nil, forge.ErrInvalidArgument
+	}
+	return h.Open(repository)
+}
+
 var _ forge.Host = scriptedHost{}
 
 // scriptedProvider answers Get with the pull request as the test says it

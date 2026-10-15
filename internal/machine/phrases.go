@@ -1474,7 +1474,10 @@ var PhraseNoReading = Phrase{
 // the checkout moved, a gate created, reattached and removed, a row per source of the
 // default branch an init recorded with the row for an answer naming none and
 // a row per refusal to record one, the row for an init that could not learn
-// where changes go, the gate's own rows, and the rows pointing
+// where changes go, a row per refusal of a fork and the row for one
+// recorded, a row per refusal internal/managed makes, the refusal of an
+// install beside a service that is up, and the rows for a managed service
+// set up, removed and ending for a restart, the gate's own rows, and the rows pointing
 // at a run's evidence
 // and the three notices beside it, and the catch-up read's: a heading and an
 // empty row per part, a row per kind of landed record, the row for what a
@@ -1540,6 +1543,8 @@ func TablePhrases() []Phrase {
 		MarkedPhrase(Marked{Marks: []store.SeenMark{{}}}))
 	out = append(out, defaultBranchRows()...)
 	out = append(out, upstreamRows()...)
+	out = append(out, forkRows()...)
+	out = append(out, managedRows()...)
 	out = append(out, commandsRows()...)
 	out = append(out, custodyRows()...)
 	return append(out, coordinatorRows()...)

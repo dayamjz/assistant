@@ -162,6 +162,15 @@ func (h *Home) TerminalSockets() string { return filepath.Join(h.root, "terminal
 // ServiceLog is the bounded lifecycle log, which OpenLog writes.
 func (h *Home) ServiceLog() string { return filepath.Join(h.root, "logs", "service.log") }
 
+// ManagedServiceOutput is where a service started by the operating system's
+// service manager has its standard output and error written, for a manager
+// that takes a file for them. internal/managed writes it into the service
+// definition and the manager opens it; nothing here bounds it, unlike
+// ServiceLog, because the process writing it is not this package's.
+func (h *Home) ManagedServiceOutput() string {
+	return filepath.Join(h.root, "logs", "managed-service.log")
+}
+
 // directories are the directories this package creates, relative to the root.
 // Everything deeper is created by whoever writes it.
 //

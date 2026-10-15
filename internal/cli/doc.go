@@ -66,7 +66,11 @@
 //
 // Running the service in the foreground is --foreground on service start,
 // because the process that serves and the command that launches it are one
-// binary.
+// binary. Handing it to the operating system's service manager is --install
+// on service start and --uninstall on service stop, which managed.go owns,
+// and --managed beside --foreground is what a definition --install wrote
+// starts it with. A fork is --fork-url on init. Section 9 names all four by
+// the owner's decision on #234; none is a verb.
 //
 // One thing the protocol serves has no command at all: returning a stage's
 // result, which internal/ipc leaves open to a caller contained by an active
@@ -263,8 +267,9 @@
 // a command line refused here and a request the service answered
 // invalid-request are both incorrect usage, whatever method answered, as is
 // init's refusal when the working copy holds no default branch to read, or
-// no origin to take the upstream from and no --upstream naming one, and
-// every other failure is operational. A run that
+// no origin to take the upstream from and no --upstream naming one, or a fork
+// it cannot propose from, and a removal of a managed service with none set
+// up, and every other failure is operational. A run that
 // stopped to ask something is a success, because the answer goes back through
 // the same surface and an agent that read a decision as a failure would stop
 // driving exactly when it should carry on. A run that is still advancing is a
