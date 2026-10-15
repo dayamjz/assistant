@@ -37,11 +37,15 @@ var runStates = map[store.RunStatus]State{
 //     a cleanup record on a task that has not landed is a disk reclamation
 //     and leaves the state to the tiers below, a record naming a run outside
 //     Runs is not the task's, and a merge record reading closed is read by
-//     the run tier through the run's own status. An investigation task has
-//     no Complete here: PRD section 6 does not infer it from the stored
-//     report, and the edge's "findings relayed" has no record this package
-//     reads, so a reported investigation whose copy was removed stays
-//     Reported from the report tier; the package comment states that gap.
+//     the run tier through the run's own status. An investigation task is
+//     Complete here when its findings relayed record exists, which the
+//     coordinator's record of PRD section 6's "findings relayed" writes;
+//     Basis.Relayed says so. It is read from the record and never from the
+//     history entry written beside it (P8), and it is not inferred from the
+//     stored report or from the cleanup record, so a reported investigation
+//     whose copy was removed and whose findings nobody recorded relayed
+//     stays Reported from the report tier. A delivery task, which a
+//     promoted investigation is, is not made Complete by such a record.
 //     A terminal record is final: a
 //     newer run in Runs, attributed by branch or named by the task, does not
 //     displace it, which is PRD section 6's "work that continues after
@@ -126,6 +130,10 @@ func Resolve(in Inputs) Resolution {
 	if isHeld {
 		out.Basis.Hold = hold.Key
 	}
+	relay, isRelayed := in.Relay.Get()
+	isRelayed = isRelayed && relay.TaskID == in.Task.ID
+	out.Basis.Relayed = isRelayed
+	isRelayed = isRelayed && in.Task.Shape == store.TaskInvestigation
 	reportedAt, isReported := in.ReportStoredAt.Get()
 	out.Basis.ReportStored = isReported
 	isReported = isReported && in.Task.Shape == store.TaskInvestigation
@@ -135,6 +143,10 @@ func Resolve(in Inputs) Resolution {
 		out.State, out.Source, out.Detail = fromRecords(in.Task, landed, in.MergeRecords, in.Cleanup)
 	case isLocal:
 		out.State, out.Source, out.Detail = fromLocalRecord(in.Task, local, in.Cleanup)
+	case isRelayed:
+		out.State, out.Source = Complete, SourceRecord
+		out.Detail = store.Known("the coordinator recorded the investigation's findings relayed at " +
+			relay.RecordedAt.UTC().Format(time.RFC3339))
 	case isHeld:
 		out.State, out.Source, out.Detail = Held, SourceHold, store.Known(hold.Subject)
 	case ok:

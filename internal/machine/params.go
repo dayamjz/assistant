@@ -88,6 +88,15 @@ type StartRequest struct {
 	// internal/service decides in source, so no value here can make a record
 	// say a person or a caller decided.
 	StandingConsent bool `json:"standing_consent,omitempty"`
+	// Task selects the run through a task instead of a working copy, for
+	// standing consent alone: the run selected is the task's current run, on
+	// RespondRequest.Task's terms, and the call attaches to it with
+	// StandingConsent and never starts one. It is how a coordinator puts a
+	// task's run under consent without checking the task's branch out. A
+	// request naming a task is refused as invalid unless it asks for
+	// standing consent and carries no working copy and none of the inputs
+	// that start a run, because a run of a task is started by its push.
+	Task string `json:"task,omitempty"`
 }
 
 // RerunRequest starts a fresh run of the branch the working copy is standing
@@ -501,12 +510,13 @@ type TaskPromoteRequest struct {
 	Delivery string `json:"delivery,omitempty"`
 }
 
-// WakesRequest drains the durable wake queue: the queued wakes it returns
-// are acknowledged in the same step, PRD section 8's "draining acknowledges
-// a row", so a second drain does not return them.
+// WakesRequest drains the durable wake queue: the queued wakes on offer are
+// handed out and stay queued until they are acknowledged, PRD section 8's
+// "draining hands a row out; acknowledging closes it". It is also the
+// request of a person's reading of the queue, which hands out nothing.
 type WakesRequest struct {
-	// Limit bounds how many queued wakes are returned and acknowledged,
-	// oldest first. Zero means DefaultWakesLimit.
+	// Limit bounds how many queued wakes are returned, oldest first. Zero
+	// means DefaultWakesLimit.
 	Limit int `json:"limit,omitempty"`
 }
 
@@ -517,11 +527,11 @@ type WakesRequest struct {
 const DefaultWakesLimit = 100
 
 // WakeWaitRequest arms the blocking wait on the durable wake queue. The
-// wait answers as soon as the queue holds at least one queued wake, with a
-// drain on WakesRequest's terms, so the rows it returns are acknowledged and
-// the next wait does not return them, or once its bound elapses with none;
-// the answer is Wakes either way, so an empty answer is the bound elapsing
-// and nothing else.
+// wait answers as soon as the queue holds at least one wake on offer, with a
+// drain on WakesRequest's terms, so the rows it returns are handed out and
+// stay queued until they are acknowledged, or once its bound elapses with
+// none; the answer is Wakes either way, so an empty answer is the bound
+// elapsing and nothing else.
 type WakeWaitRequest struct {
 	// TimeoutSeconds is how long the wait may block, in whole seconds,
 	// from MinWakeWaitTimeout to MaxWakeWaitTimeout. Zero means
@@ -576,18 +586,17 @@ func (r WakeWaitRequest) Bounds() (time.Duration, int, error) {
 	return time.Duration(r.TimeoutSeconds) * time.Second, limit, nil
 }
 
-// AcknowledgeRequest records that the coordinator handled queued wakes it
-// did not drain: rows it learned of from the wake stream or a task's
-// history. A drain already acknowledges what it returns.
+// AcknowledgeRequest records that the coordinator acted on queued wakes,
+// which is what closes them: rows a drain handed it, or rows it learned of
+// from the wake stream or a task's history.
 //
 // It carries no field saying who acknowledged. Who did is derived from the
 // surface, never read from a request, which internal/ipc's
 // Request.WakeAcknowledger states on the same terms as Request.HoldResolver.
 type AcknowledgeRequest struct {
-	// Wakes are the identifiers of the queued rows the caller handled. A
-	// subset leaves the rest queued; an identifier no wake has, or one
-	// already acknowledged, a drained one included, refuses the whole
-	// batch.
+	// Wakes are the identifiers of the queued rows the caller acted on,
+	// handed out or not. A subset leaves the rest queued; an identifier no
+	// wake has, or one already acknowledged, refuses the whole batch.
 	Wakes []int64 `json:"wakes"`
 }
 

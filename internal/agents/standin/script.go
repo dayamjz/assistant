@@ -89,8 +89,30 @@ type Exchange struct {
 	// with its Ran, encoded as one line of JSON, in place of Reply, which
 	// must therefore be empty; a script breaking either rule is refused when
 	// the Agent is built. The command's standard input is empty. runCommand
-	// says what it does not model.
+	// says what it does not model, and bashCheck the one refusal of the
+	// CLI's it does.
 	Run bool `json:"run,omitempty"`
+	// Write makes the worker write a file before it answers, the way the
+	// Claude Code CLI's file editing tool writes one: the rest of the line
+	// after the first occurrence of Contains, which must therefore be set,
+	// is a path on its first line and the file's content after that line.
+	// The path is resolved against the worker's own working directory, and
+	// one that is absolute or resolves outside that directory is refused
+	// without writing, which is #267's observation that writing outside the
+	// copy needed an approval nobody was there to give. The worker answers
+	// with its Wrote, encoded as one line of JSON, in place of Reply, which
+	// must therefore be empty, and an exchange may not both Run and Write; a
+	// script breaking either rule is refused when the Agent is built.
+	Write bool `json:"write,omitempty"`
+}
+
+// Wrote is what a worker answers for a line a Write exchange took: the path
+// as the line named it and, when nothing was written, why.
+type Wrote struct {
+	// Path is the path as the line named it.
+	Path string `json:"wrote"`
+	// Refused is why nothing was written, and empty when the file was.
+	Refused string `json:"refused,omitempty"`
 }
 
 // Ran is what a worker answers for a line a Run exchange took: the command
@@ -109,6 +131,10 @@ type Ran struct {
 	// Group is the process group the shell ran in, read while it ran, and
 	// zero where this platform reports none.
 	Group int `json:"group"`
+	// Refused is why the command was not run at all, the refusal bashCheck
+	// models, and empty for a command the worker ran. A refused command has
+	// Exit -1 and no group.
+	Refused string `json:"refused,omitempty"`
 }
 
 // answers reports whether this exchange accepts the line.

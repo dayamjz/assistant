@@ -199,9 +199,13 @@ Each has cost this repository more than one round of review.
   `supervisor_incarnation` with `ErrStaleIncarnation` inside the same
   transaction: the store owns which loop incarnation is current, and that is
   the fence `internal/service`'s repair in place rests on. A
-  drain acknowledges what it returns (PRD section 8), so delivery to a drain
-  is at most once and the row is kept; `QueuedWakes` is the read that takes
-  nothing, for the program's own reconciliation, and `OpenReadOnly` is the open
+  drain hands rows out and an acknowledgement closes them (PRD section 8):
+  `DrainWakes` records who and under which attachment, migration 31, and a
+  row handed out under an attachment the caller no longer names as held is
+  handed out again, so delivery is at least once and which attachments are
+  held is `internal/service`'s `wakewait.go`; `QueuedWakes` is the read that
+  takes nothing, for the program's own reconciliation and a person's
+  listing, and `OpenReadOnly` is the open
   a reader with no service takes, answering `ErrUnreadable` for what it
   cannot read. It also holds the run checkpoint history the durability layer needs,
   which is the only record of a run's position: opaque payloads indexed by run
@@ -486,7 +490,9 @@ Each has cost this repository more than one round of review.
   no meaning. The terminal tier, `SourceRecord`, outranks every run and is
   derived: `Landed` from the merge record of an attributed run, or from a
   local task's own local landing record, and `Complete` from that and the
-  cleanup record's removal, for a delivery task; nothing
+  cleanup record's removal, for a delivery task, or from an investigation's
+  findings relayed record (`store.RecordTaskRelay`, written only through the
+  coordinator's `task.relay`); nothing
   there reads a code host or writes a record, and no event kind is named
   `landed` or `complete`. The hold tier, `SourceHold`, is the second: an
   open hold naming the task resolves `Held` above every run, `Validating` and
@@ -497,9 +503,10 @@ Each has cost this repository more than one round of review.
   report resolves `Reported` whether its terminal is live or dead, read from
   the `task_report` row `TaskSnapshot` carries as `ReportStoredAt` and never
   from the `report-ready` entry beside it (P8); a promoted task is not read by
-  it. `Reported` is not `Complete`: an investigation never resolves
-  `Complete` in this build, because the edge's "findings relayed" has no
-  record here, which `doc.go` says. Read its `doc.go` for the residual gaps, and for why PRD
+  it. `Reported` is not `Complete`: an investigation resolves `Complete`
+  only from its findings relayed record, read from the row and never from the
+  `findings-relayed` note beside it, and never from its report or its
+  cleanup record, which `doc.go` says. Read its `doc.go` for the residual gaps, and for why PRD
   section 8's "task state" row is read as a resolution rather than a row.
 - `internal/tasks` is PRD section 8's tasks module as far as this build takes
   it: intake, queueing, the P11 assertion, the P12 cleanup decision and
@@ -538,7 +545,8 @@ Each has cost this repository more than one round of review.
   copy path is `home.TaskCopy`, recorded as a reservation. `Create` has no
   caller in this build, by design: PRD section 9 has no verb that creates a
   task, and adding one is a finding. `Release` is called from
-  `internal/service` when a run finishes and at open, except where a push
+  `internal/service` when a run finishes, at open, and once an
+  investigation's report is stored, except where a push
   supersedes a run, since that push creates the branch's next run under the
   same exclusion and the branch stays live. Read its
   `doc.go` before changing the floor or the clear condition, and for the
@@ -1070,16 +1078,18 @@ Each has cost this repository more than one round of review.
   `coordinator.go` names the gap in that placement, a reparented chain. `skills/coordinator/SKILL.md` is what it tells a
   coordinating agent, and claims only what the build does. `peek`'s output
   and attach command are in the structured answer only, because a worker's
-  output is never relayed (P13) and the command names a home path. Its `wakes`
-  and `await` drain, and a drain acknowledges what it returns: `await` is
-  `internal/service`'s `wakes.wait`, one request answered with a
-  `store.DrainWakes` when the queue holds a queued wake or its bound elapses,
-  woken by a bell the supervisor loop rings on an append and never read as a
-  record. Its `listen` holds `wakes.subscribe`, on which the service pushes
-  each wake the loop appends and acknowledges nothing; `acknowledge` is for a
-  row handled without a drain. `wakewait.go` owns the push, the wait and
-  their gaps, and `machine.WakeWaitRequest.Bounds` is the one owner of the
-  range.
+  output is never relayed (P13) and the command names a home path. Its
+  `wakes --json` and `await` drain, and a drain hands rows out and closes
+  none; `wakes` without `--json` is `wakes.peek`, a person's listing that
+  hands out nothing. `await` is `internal/service`'s `wakes.wait`, one
+  request answered with a `store.DrainWakes` when the queue holds a row on
+  offer or its bound elapses, woken by a bell the supervisor loop rings on an
+  append and never read as a record. Its `listen` holds `wakes.subscribe`,
+  on which the service pushes each wake the loop appends, and holding it is
+  what the service reads as the coordinator attached; `acknowledge`, made
+  after acting, is what closes a row. `wakewait.go` owns the push, the wait,
+  when a handed-out row is handed out again, and their gaps, and
+  `machine.WakeWaitRequest.Bounds` is the one owner of the range.
   `assistant worker` is a launched worker's route back to the program: its
   subcommands are the `workerActions` table in `worker.go`, each one
   `task.event`, and `workerRoute` is the one composition of the prefix

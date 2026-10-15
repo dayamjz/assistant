@@ -276,6 +276,16 @@ type Counters struct {
 	// not settle it, because a change that drops one edge and adds another
 	// leaves the length alone.
 	EdgeDigest string `json:"edge_digest"`
+	// Unattended records that the latest answer the run took was given by
+	// Executor.AnswerUnattended, so a traversal of an Edge.Answered back edge
+	// is held to the convergence check rather than exempt from it. Every
+	// answer writes it on the checkpoint that claims the run, true for
+	// AnswerUnattended and false for Answer and AnswerWith, and the build
+	// admits Answered only on an edge every traversal of which follows an
+	// answer, so the value a traversal reads is always its own answer's. A
+	// checkpoint written before the field existed carries false, which is the
+	// exemption every answer had then.
+	Unattended bool `json:"unattended,omitempty"`
 }
 
 // clone returns counters whose slices are independent of these, so a value

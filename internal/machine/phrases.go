@@ -728,13 +728,13 @@ var (
 		Decision:    "Nothing to decide until it does.",
 	}
 	// PhraseNoticeQueued is the row for a wake pushed on the coordinator's
-	// wake stream: a notice is waiting, and it stays waiting until a drain
-	// takes it, because the push acknowledges nothing. Which work it is
-	// about and its kind are the structured rendering's.
+	// wake stream: a notice is waiting, and it stays waiting until it is
+	// acknowledged, because neither the push nor a drain closes it. Which
+	// work it is about and its kind are the structured rendering's.
 	PhraseNoticeQueued = Phrase{
 		Outcome:     "A notice about the fleet is waiting to be handled.",
-		Consequence: "It stays waiting until it is read with assistant coordinator wakes, which records it as handled.",
-		Decision:    "Run assistant --json coordinator wakes to read and take it.",
+		Consequence: "It stays waiting until it is acknowledged after it is acted on.",
+		Decision:    "Run assistant --json coordinator wakes to take it, act on it, then acknowledge it.",
 	}
 	// PhraseActivity is the row for a worker's or a stage's output arriving
 	// on the stream. P13 makes that output something to read and never

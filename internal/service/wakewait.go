@@ -13,8 +13,8 @@ import (
 )
 
 // How the coordinator learns of a wake: the two ways PRD section 5's "write
-// to the durable wake queue, then wake the coordinator" reaches it, and the
-// drain both lead to.
+// to the durable wake queue, then wake the coordinator" reaches it, the drain
+// both lead to, and when a row a drain handed out is handed out again.
 //
 // # The push
 //
@@ -25,11 +25,11 @@ import (
 // wakes and never events, which is open to every caller; internal/ipc opens
 // the stream only after admitWakeStream, wakes.list's worker refusal, has
 // admitted the caller, so a task's worker is never sent a wake. The event is
-// a notice, ipc.TypeWakeQueued with the row as it was appended, and it
-// acknowledges nothing: pushing is not draining. It is state on internal/ipc's
-// terms, so an overflowing stream never drops it as noise and evicts it only
-// into the gap marker, and a coordinator that receives the marker, the first
-// delivery of every attach included, drains the queue.
+// a notice, ipc.TypeWakeQueued with the row as it was appended, and it hands
+// out and acknowledges nothing: pushing is not draining. It is state on
+// internal/ipc's terms, so an overflowing stream never drops it as noise and
+// evicts it only into the gap marker, and a coordinator that receives the
+// marker, the first delivery of every attach included, drains the queue.
 //
 // The narrowest reading of "wake the coordinator" is what is built: the
 // service pushes to a coordinator client that is attached to this socket. It
@@ -37,23 +37,54 @@ import (
 // a turn; a coordinator that holds no stream is woken by nothing pushed, and
 // its own wait or drain is what reaches the queue.
 //
+// # The drain hands out, and the acknowledgement closes
+//
+// PRD section 8 as the owner amended it: draining hands a row out, and
+// acknowledging closes it. wakes.list and wakes.wait are store.DrainWakes,
+// which records each row it returns as handed out to the coordinator, under
+// an attachment, and leaves it queued; wakes.acknowledge, which the
+// coordinator calls after it acted, is what closes a row. A row a drain
+// handed out still counts for the stop guard and the pull guard, because
+// both read store.UnacknowledgedWakes.
+//
+// Which rows a drain offers is decided by attachment and never by a clock.
+// The coordinator is attached while this service's wake stream is held:
+// wakeAttachment reads the stream publisher's ipc.Publisher.Attachment, a
+// stretch that begins when a subscription opens with none open and ends
+// when the last one closes, and names it by this service's instance and the
+// stretch's number. A drain made while the stream is held hands its rows out
+// under that stretch and holds it, so a later drain in the same stretch does
+// not offer them again: a coordinator that is still attached is not handed
+// its own rows twice. A row is offered again by the first drain after the
+// stretch it was handed out under is no longer the one open, which is three
+// cases:
+//
+//   - The coordinator went away: its stream ended, the process holding it
+//     died with it or was stopped, and the next drain, by a coordinator that
+//     attached again or by one that only polls, is offered the row.
+//   - The service restarted: the instance in every earlier stretch's name is
+//     not this service's, so nothing handed out before is held.
+//   - A drain was made with no stream held at all: it is handed out under a
+//     name no stretch holds, so the next drain is offered it again. A
+//     coordinator that only polls is never attached, so it is handed a row
+//     on every drain until it acknowledges it, which is the at-least-once
+//     delivery it gets in place of an attachment the service can observe.
+//
 // # The wait
 //
-// wakes.wait blocks one call until the queue holds a queued row or its bound
-// elapses, so a coordinator that does not hold the stream still pays no turns
-// for an idle fleet (P9's "supervision costs nothing until something is
-// actionable", from the coordinator's side). It answers with a drain: every
-// answer is store.DrainWakes, the drain wakes.list makes, so the rows it
-// returns are acknowledged by the coordinator in the transaction that read
-// them, and the next wait does not return them. A wait armed while a row is
-// already queued answers at once. When the bound elapses the queue is
-// drained one last time, so an empty answer means the queue held no queued
-// row at the bound. Between those, the wait checks for a queued row with
-// store.UnacknowledgedWakes, a read, and drains only when one is there, so
-// an idle wait writes nothing. A context that ended is checked before every
-// drain, so a caller that went away is not answered with rows nobody will
-// read; the window between a drain's commit and its answer reaching the
-// caller is the residual gap below.
+// wakes.wait blocks one call until the queue holds a row on offer or its
+// bound elapses, so a coordinator that does not hold the stream still pays
+// no turns for an idle fleet (P9's "supervision costs nothing until
+// something is actionable", from the coordinator's side). It answers with a
+// drain: every answer is store.DrainWakes on the terms above. A wait armed
+// while a row is already on offer answers at once. When the bound elapses
+// the queue is drained one last time, so an empty answer means the queue
+// offered no row at the bound. Between those, the wait counts the rows on
+// offer with store.OfferedWakes, a read, and drains only when one is there,
+// so an idle wait writes nothing. A context that ended is checked before
+// every drain, so a caller that went away is not answered with rows nobody
+// will read; a caller that went away after the drain committed has had them
+// handed out, and the rules above hand them out again.
 //
 // # What wakes the wait early
 //
@@ -63,10 +94,10 @@ import (
 // says the queue is worth reading again. The wait takes the bell's channel
 // before each read, so a row appended after the read rings a channel the
 // wait already holds and is not missed between the read and the block. A
-// row that reached the table by any path that does not ring the bell is
-// still found, by a read at least once per wakeWaitRecheck; that bounds how
-// late such a row can be answered and is the whole of what the recheck is
-// for.
+// row that came on offer by any path that does not ring the bell, a stretch
+// of the stream ending among them, is still found, by a read at least once
+// per wakeWaitRecheck; that bounds how late such a row can be answered and
+// is the whole of what the recheck is for.
 //
 // # A restart
 //
@@ -74,18 +105,30 @@ import (
 // no record of what was pushed or returned. A service that stops closes the
 // connection, a wait's call fails as an operational failure and a stream
 // ends, and a coordinator that arms either again against the next service
-// reads the durable queue on the same terms as before: a wait drains what is
-// still queued at once, and a stream opens gapped, which is the coordinator's
-// signal to drain. Arming again is the caller's to do: nothing here
-// reconnects.
+// reads the durable queue: every row still queued is on offer, handed out
+// before the restart or not.
 //
 // # Residual gaps
 //
-//   - Draining acknowledges, so delivery to a drain is at most once, which is
-//     PRD section 8's text and store.DrainWakes' doc. A wait whose caller
-//     went away after the drain committed, or a coordinator that crashed
-//     after a drain and before acting, has had its rows acknowledged; they
-//     are kept in the table and not handed out again.
+//   - The service cannot see a coordinator, only its stream. A coordinator
+//     whose stream outlives it, a listen process left running after its
+//     host died, holds what was handed out under it until that process
+//     ends; and two streams that overlap are one stretch, so a coordinator
+//     that went away while another stream was held, a person's own or a
+//     second coordinator's, is not noticed until every stream has closed.
+//   - A coordinator that holds the stream, drains and keeps running without
+//     acknowledging what it acted on is never handed those rows again by
+//     this service, and they keep their tasks in flight; that is the
+//     acknowledgement left undone, which nothing here can make for it.
+//   - A coordinator that only polls is handed a row it has not acknowledged
+//     on every drain, so it sees a row again even when it did act; it is
+//     acknowledging that stops that, and a wait it arms before
+//     acknowledging answers at once.
+//   - A subscription internal/ipc opened for a caller its admission then
+//     refuses, such as a task's worker, is counted as open for as long as
+//     the admission takes, so it can begin or extend a stretch for that
+//     moment. That can only hold rows handed out in that moment, and only
+//     until the stretch ends.
 //   - A pushed wake reaches only a coordinator attached when it is
 //     published; one attached later learns of it from the gap marker it
 //     opens with and the drain that follows.
@@ -143,7 +186,6 @@ func (s *Service) waitWakes(ctx context.Context, req ipc.Request, r machine.Wake
 	if err != nil {
 		return machine.Wakes{}, fmt.Errorf("%w: %w", ipc.ErrInvalidRequest, err)
 	}
-	by := req.WakeAcknowledger()
 	ended := func() error {
 		return fmt.Errorf("%w: the wait ended before its bound: %w", ipc.ErrUnavailable, ctx.Err())
 	}
@@ -157,15 +199,15 @@ func (s *Service) waitWakes(ctx context.Context, req ipc.Request, r machine.Wake
 	defer recheck.Stop()
 	for {
 		rung := s.wakeBell.armed()
-		queued, err := s.store.UnacknowledgedWakes(ctx)
+		offered, err := s.store.OfferedWakes(ctx, s.wakeHandout(req).Held)
 		if err != nil {
 			return machine.Wakes{}, err
 		}
-		if len(queued) > 0 {
+		if offered > 0 {
 			if ctx.Err() != nil {
 				return machine.Wakes{}, ended()
 			}
-			wakes, err := s.store.DrainWakes(ctx, limit, by)
+			wakes, err := s.store.DrainWakes(ctx, limit, s.wakeHandout(req))
 			if err != nil {
 				return machine.Wakes{}, err
 			}
@@ -180,7 +222,7 @@ func (s *Service) waitWakes(ctx context.Context, req ipc.Request, r machine.Wake
 			if ctx.Err() != nil {
 				return machine.Wakes{}, ended()
 			}
-			wakes, err := s.store.DrainWakes(ctx, limit, by)
+			wakes, err := s.store.DrainWakes(ctx, limit, s.wakeHandout(req))
 			if err != nil {
 				return machine.Wakes{}, err
 			}
@@ -189,6 +231,24 @@ func (s *Service) waitWakes(ctx context.Context, req ipc.Request, r machine.Wake
 			return machine.Wakes{}, ended()
 		}
 	}
+}
+
+// wakeHandout is what a coordinator's drain made now hands rows out as, on
+// the terms above: to who req.WakeAcknowledger says, under the stretch of
+// the wake stream that is open, holding that stretch, or, with no stretch
+// open, under a name nothing holds and holding nothing. A service with no
+// wake publisher, which Open never builds and this package's internal tests
+// build by hand, is never attached.
+func (s *Service) wakeHandout(req ipc.Request) store.WakeHandout {
+	h := store.WakeHandout{To: req.WakeAcknowledger(), Under: s.instance + "/unattached"}
+	if s.wakes == nil {
+		return h
+	}
+	if number, open := s.wakes.Attachment(); open {
+		h.Under = fmt.Sprintf("%s/stream/%d", s.instance, number)
+		h.Held = []string{h.Under}
+	}
+	return h
 }
 
 // admitWakeStream is the handler's half of wakes.subscribe: internal/ipc

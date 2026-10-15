@@ -14,6 +14,14 @@ import (
 // answer is the line a worker prints for a line this exchange took: Reply,
 // or for a Run exchange the Ran of the command the line carries.
 func (e Exchange) answer(line string) (string, error) {
+	if e.Write {
+		_, rest, _ := strings.Cut(line, e.Contains)
+		encoded, err := json.Marshal(writeFile(rest))
+		if err != nil {
+			return "", fmt.Errorf("encoding what a write did: %w", err)
+		}
+		return string(encoded), nil
+	}
 	if !e.Run {
 		return e.Reply, nil
 	}
@@ -29,6 +37,17 @@ func (e Exchange) answer(line string) (string, error) {
 // with no Contains to find the command after, and one with a Reply the Ran
 // would replace.
 func (e Exchange) valid() error {
+	if e.Write {
+		switch {
+		case e.Run:
+			return errors.New("an exchange either Runs a command or Writes a file, not both")
+		case e.Contains == "":
+			return errors.New("a Write exchange needs a Contains, which is what its path follows")
+		case e.Reply != "":
+			return fmt.Errorf("a Write exchange answers with its Wrote, so its Reply %q would never be printed", e.Reply)
+		}
+		return nil
+	}
 	if !e.Run {
 		return nil
 	}
@@ -58,6 +77,9 @@ func (e Exchange) valid() error {
 // /bin/sh, reports that in the Ran rather than running in this process's
 // group, so a test reading Ran.Group is told which shape it got.
 func runCommand(command string) Ran {
+	if refused := bashCheck(command); refused != "" {
+		return Ran{Command: command, Exit: -1, Refused: refused}
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), HangFor)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "/bin/sh", "-c", command)
@@ -87,4 +109,20 @@ func runCommand(command string) Ran {
 		ran.Stderr += "standin: waiting for the command: " + err.Error() + "\n"
 	}
 	return ran
+}
+
+// bashCheck is the one refusal of the Claude Code CLI's Bash tool the
+// stand-in models, and it is modelled on one observation and no more: #267
+// saw the CLI's safety check refuse a here-document whose text combined JSON
+// braces with quotes, which is the shape a report filed on standard input
+// through a here-document has. So a command holding a here-document
+// operator, a brace, and a quote is refused without running, with the reason
+// this returns; every other command is run. Not modelled: whatever else the
+// CLI's check refuses, which the observation did not record, and whether the
+// CLI would have asked a person rather than refused where one was present.
+func bashCheck(command string) string {
+	if strings.Contains(command, "<<") && strings.ContainsAny(command, "{}") && strings.ContainsAny(command, `"'`) {
+		return "standin: the command combines a here-document with braces and quotes, which the Claude Code CLI's Bash check refused (#267)"
+	}
+	return ""
 }

@@ -233,14 +233,23 @@ func TestReadingTheQueueReturnsTheSameRows(t *testing.T) {
 	}
 }
 
-// Draining acknowledges exactly what it returned. A bounded drain returns
-// the two oldest rows, acknowledged by the drainer and still kept; a second
-// drain returns the one row the first left, and a third returns none. Every
-// row is still in the task's history, so draining deleted nothing, and
-// naming a drained row in an acknowledgement is refused because the drain
-// already was one. A drain naming nobody, and one with no bound, are refused
-// before anything is written.
-func TestDrainingAcknowledgesWhatItReturned(t *testing.T) {
+// handout is the handout a drain makes under the attachment named, holding
+// what held names.
+func handout(under string, held ...string) WakeHandout {
+	return WakeHandout{To: AcknowledgedByCoordinator(), Under: under, Held: held}
+}
+
+// Draining hands out what it returns and closes nothing. A bounded drain
+// returns the two oldest rows, still queued, recorded as handed out to the
+// coordinator under the drain's attachment once; a second drain that holds
+// that attachment returns only the row the first left, and a third returns
+// none. A drain that no longer holds the attachment is offered all three
+// again, counted as a second handout for the two. Acknowledging a handed-out
+// row is accepted and closes it, after which no drain returns it, and
+// acknowledging it again is refused. A drain naming nobody, one with no
+// bound, and one under no attachment are refused before anything is
+// written.
+func TestDrainingHandsOutAndOnlyAnAcknowledgementCloses(t *testing.T) {
 	ctx := context.Background()
 	s := openStore(t)
 	task := seedTask(t, s, "taskaaaaaaab").ID
@@ -248,79 +257,179 @@ func TestDrainingAcknowledgesWhatItReturned(t *testing.T) {
 	for i := int64(1); i <= 3; i++ {
 		ids = append(ids, surface(t, s, task, "A", i).Wake.ID)
 	}
-	if _, err := s.DrainWakes(ctx, 10, Acknowledger{}); !errors.Is(err, ErrNoAcknowledger) {
+	if _, err := s.DrainWakes(ctx, 10, WakeHandout{Under: "a"}); !errors.Is(err, ErrNoAcknowledger) {
 		t.Fatalf("a drain naming nobody = %v, want ErrNoAcknowledger", err)
 	}
-	if _, err := s.DrainWakes(ctx, 0, AcknowledgedByCoordinator()); err == nil {
+	if _, err := s.DrainWakes(ctx, 0, handout("a", "a")); err == nil {
 		t.Fatal("a drain with no bound was accepted")
 	}
-	if left, _ := s.QueuedWakes(ctx, 10); len(left) != 3 {
-		t.Fatalf("a refused drain acknowledged something: %d left", len(left))
+	if _, err := s.DrainWakes(ctx, 10, handout(" ", "a")); err == nil {
+		t.Fatal("a drain under no attachment was accepted")
+	}
+	if left, _ := s.QueuedWakes(ctx, 10); len(left) != 3 || left[0].HandedOutAt.IsKnown() {
+		t.Fatalf("a refused drain wrote something: %+v", left)
 	}
 
-	first, err := s.DrainWakes(ctx, 2, AcknowledgedByCoordinator())
+	first, err := s.DrainWakes(ctx, 2, handout("a", "a"))
 	if err != nil || len(first) != 2 || first[0].ID != ids[0] || first[1].ID != ids[1] {
 		t.Fatalf("DrainWakes(2) = %+v (%v), want rows %d and %d", first, err, ids[0], ids[1])
 	}
 	for _, w := range first {
-		if w.Queued() || w.AcknowledgedBy != Known(AcknowledgedByCoordinator()) {
-			t.Fatalf("a drained row reads %+v, want it acknowledged by the coordinator", w)
+		if !w.Queued() || !w.HandedOut() || w.HandedOutTo != Known(AcknowledgedByCoordinator()) ||
+			w.HandedOutUnder != Known("a") || w.Handouts != Known(int64(1)) || w.AcknowledgedBy.IsKnown() {
+			t.Fatalf("a drained row reads %+v, want it queued and handed out once to the coordinator under a", w)
 		}
 	}
-	second, err := s.DrainWakes(ctx, 10, AcknowledgedByCoordinator())
+	second, err := s.DrainWakes(ctx, 10, handout("a", "a"))
 	if err != nil || len(second) != 1 || second[0].ID != ids[2] {
 		t.Fatalf("the second drain = %+v (%v), want only row %d", second, err, ids[2])
 	}
-	third, err := s.DrainWakes(ctx, 10, AcknowledgedByCoordinator())
-	if err != nil || len(third) != 0 {
-		t.Fatalf("the third drain = %+v (%v), want none", third, err)
+	if third, err := s.DrainWakes(ctx, 10, handout("a", "a")); err != nil || len(third) != 0 {
+		t.Fatalf("the third drain = %+v (%v), want none while a is held", third, err)
+	}
+	if n, err := s.OfferedWakes(ctx, []string{"a"}); err != nil || n != 0 {
+		t.Fatalf("OfferedWakes(a) = %d (%v), want 0", n, err)
+	}
+	if n, err := s.OfferedWakes(ctx, nil); err != nil || n != 3 {
+		t.Fatalf("OfferedWakes() = %d (%v), want 3", n, err)
 	}
 
-	kept, err := s.TaskWakes(ctx, task)
-	if err != nil || len(kept) != 3 {
-		t.Fatalf("after draining the history holds %d rows (%v), want all 3 kept", len(kept), err)
+	again, err := s.DrainWakes(ctx, 10, handout("b", "b"))
+	if err != nil || len(again) != 3 {
+		t.Fatalf("a drain that no longer holds a = %+v (%v), want all three again", again, err)
 	}
-	for _, w := range kept {
-		if w.Queued() {
-			t.Fatalf("row %d is still queued after it was drained", w.ID)
-		}
+	if again[0].Handouts != Known(int64(2)) || again[2].Handouts != Known(int64(2)) || again[0].HandedOutUnder != Known("b") {
+		t.Fatalf("a row handed out again reads %+v, want a second handout under b", again[0])
+	}
+
+	if err := s.AcknowledgeWakes(ctx, ids[:1], AcknowledgedByCoordinator()); err != nil {
+		t.Fatalf("acknowledging a handed-out row: %v", err)
+	}
+	after, err := s.DrainWakes(ctx, 10, handout("c"))
+	if err != nil || len(after) != 2 || after[0].ID != ids[1] {
+		t.Fatalf("a drain after the acknowledgement = %+v (%v), want rows %d and %d only", after, err, ids[1], ids[2])
 	}
 	var idErr *WakeIDError
 	if err := s.AcknowledgeWakes(ctx, ids[:1], AcknowledgedByCoordinator()); !errors.As(err, &idErr) || !errors.Is(err, ErrWakeAcknowledged) {
-		t.Fatalf("acknowledging a drained row = %v, want *WakeIDError with ErrWakeAcknowledged", err)
+		t.Fatalf("acknowledging a closed row again = %v, want *WakeIDError with ErrWakeAcknowledged", err)
+	}
+	kept, err := s.TaskWakes(ctx, task)
+	if err != nil || len(kept) != 3 || kept[0].Queued() || !kept[1].Queued() {
+		t.Fatalf("the history reads %+v (%v), want all 3 kept and only the acknowledged one closed", kept, err)
 	}
 }
 
-// A drain is the acknowledgement, so a consumer that drained a row and
-// crashed before acting on it is not handed the row again: delivery to a
-// drain is at most once, which is what PRD section 8's "draining
-// acknowledges a row" gives and what DrainWakes states. The crash is
-// simulated by closing the store. What survives it is the row itself, kept
-// and acknowledged by the drainer, so the history a reconciliation reads
-// still shows that the wake surfaced.
-func TestACrashAfterADrainDoesNotRedeliverAndKeepsTheRow(t *testing.T) {
+// A drain records a handout and closes nothing, so a consumer that drained a
+// row and was lost before acting on it is handed the row again: delivery is
+// at least once. The loss is simulated by closing the store and opening it
+// again, as a restart does, and the drain after it names a new attachment
+// and holds no old one, as a restarted service's does. The positive control
+// is the row the consumer acknowledged before the loss, which no drain
+// returns again.
+func TestALossAfterADrainRedeliversAndAnAcknowledgedRowIsNot(t *testing.T) {
 	ctx := context.Background()
 	path := t.TempDir() + "/state.db"
 	s := openStoreAt(t, path)
 	task := seedTask(t, s, "taskaaaaaaab").ID
-	surface(t, s, task, "A", 1)
+	acted := surface(t, s, task, "A", 1).Wake.ID
+	lost := surface(t, s, task, "A", 2).Wake.ID
 
-	first, err := s.DrainWakes(ctx, 10, AcknowledgedByCoordinator())
-	if err != nil || len(first) != 1 {
-		t.Fatalf("DrainWakes = %+v (%v), want one row", first, err)
+	first, err := s.DrainWakes(ctx, 10, handout("before", "before"))
+	if err != nil || len(first) != 2 {
+		t.Fatalf("DrainWakes = %+v (%v), want two rows", first, err)
+	}
+	if err := s.AcknowledgeWakes(ctx, []int64{acted}, AcknowledgedByCoordinator()); err != nil {
+		t.Fatalf("AcknowledgeWakes: %v", err)
 	}
 	if err := s.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
 
 	s = openStoreAt(t, path)
-	if again, err := s.DrainWakes(ctx, 10, AcknowledgedByCoordinator()); err != nil || len(again) != 0 {
-		t.Fatalf("after the crash the drain = %+v (%v), want nothing: the first drain acknowledged it", again, err)
+	again, err := s.DrainWakes(ctx, 10, handout("after", "after"))
+	if err != nil || len(again) != 1 || again[0].ID != lost || again[0].Handouts != Known(int64(2)) {
+		t.Fatalf("after the loss the drain = %+v (%v), want only row %d, handed out a second time", again, err, lost)
 	}
-	wakes, err := s.TaskWakes(ctx, task)
-	if err != nil || len(wakes) != 1 || wakes[0].ID != first[0].ID || wakes[0].Queued() ||
-		wakes[0].AcknowledgedBy != Known(AcknowledgedByCoordinator()) {
-		t.Fatalf("the drained row reads back as %+v (%v), want it kept and acknowledged by the coordinator", wakes, err)
+}
+
+// A handout is recorded on a queued row and nowhere else, and counted once
+// per drain: the schema refuses handing out a row already acknowledged, a
+// handout that leaves who, under what or when unknown, and one that does not
+// count exactly one more. The control is the drain's own write, which the
+// trigger lets through.
+func TestTheSchemaKeepsAHandoutToAQueuedRow(t *testing.T) {
+	ctx := context.Background()
+	s := openStore(t)
+	task := seedTask(t, s, "taskaaaaaaab").ID
+	queued := surface(t, s, task, "A", 1).Wake.ID
+	closed := surface(t, s, task, "A", 2).Wake.ID
+	if err := s.AcknowledgeWakes(ctx, []int64{closed}, AcknowledgedByProgram()); err != nil {
+		t.Fatalf("AcknowledgeWakes: %v", err)
+	}
+	full := `UPDATE wake SET handed_out_at = '2026-01-01T00:00:00Z', handed_out_to = 'coordinator',
+		handed_out_under = 'x', handouts = coalesce(handouts, 0) + 1 WHERE id = ?`
+	if err := rawWrite(ctx, s, full, closed); err == nil {
+		t.Fatal("an acknowledged row was handed out")
+	}
+	for name, statement := range map[string]string{
+		"no attachment":    `UPDATE wake SET handed_out_at = '2026-01-01T00:00:00Z', handed_out_to = 'coordinator', handouts = 1 WHERE id = ?`,
+		"no count":         `UPDATE wake SET handed_out_at = '2026-01-01T00:00:00Z', handed_out_to = 'coordinator', handed_out_under = 'x' WHERE id = ?`,
+		"a count of two":   `UPDATE wake SET handed_out_at = '2026-01-01T00:00:00Z', handed_out_to = 'coordinator', handed_out_under = 'x', handouts = 2 WHERE id = ?`,
+		"nobody handed to": `UPDATE wake SET handed_out_at = '2026-01-01T00:00:00Z', handed_out_under = 'x', handouts = 1 WHERE id = ?`,
+	} {
+		if err := rawWrite(ctx, s, statement, queued); err == nil {
+			t.Errorf("a handout with %s was accepted", name)
+		}
+	}
+	if err := rawWrite(ctx, s, full, queued); err != nil {
+		t.Fatalf("a whole handout of a queued row was refused: %v", err)
+	}
+	if drained, err := s.DrainWakes(ctx, 10, handout("y")); err != nil || len(drained) != 1 || drained[0].Handouts != Known(int64(2)) {
+		t.Fatalf("the drain after it = %+v (%v), want the row handed out a second time", drained, err)
+	}
+}
+
+// The handout migration is additive: the database is taken back to the
+// shape without it and the shipped migration applied over the rows. A row
+// still queued then reads back with no handout, which is true of it, and the
+// trigger refuses again. The migration is found by name.
+func TestTheWakeHandoutMigrationKeepsEarlierRows(t *testing.T) {
+	ctx := context.Background()
+	s := openStore(t)
+	var added migration
+	for _, m := range schema {
+		if m.name == wakeHandoutMigration {
+			added = m
+		}
+	}
+	if added.version == 0 {
+		t.Fatalf("the shipped schema has no migration named %q", wakeHandoutMigration)
+	}
+	task := seedTask(t, s, "taskaaaaaaab").ID
+	id := surface(t, s, task, "A", 1).Wake.ID
+	for _, statement := range []string{
+		`DROP TRIGGER wake_is_handed_out_while_queued`,
+		`ALTER TABLE wake DROP COLUMN handed_out_at`,
+		`ALTER TABLE wake DROP COLUMN handed_out_to`,
+		`ALTER TABLE wake DROP COLUMN handed_out_under`,
+		`ALTER TABLE wake DROP COLUMN handouts`,
+	} {
+		if _, err := s.write.ExecContext(ctx, statement); err != nil {
+			t.Fatalf("rolling the schema back: %v", err)
+		}
+	}
+	if _, err := s.write.ExecContext(ctx, `DELETE FROM schema_migration WHERE version = ?`, added.version); err != nil {
+		t.Fatalf("forgetting the migration: %v", err)
+	}
+	if err := migrate(ctx, s.write, schema); err != nil {
+		t.Fatalf("applying the shipped migration over the old rows: %v", err)
+	}
+	queued, err := s.QueuedWakes(ctx, 10)
+	if err != nil || len(queued) != 1 || queued[0].ID != id || queued[0].HandedOutAt.IsKnown() || queued[0].Handouts.IsKnown() {
+		t.Fatalf("the earlier row reads back %+v (%v), want it queued with no handout", queued, err)
+	}
+	if err := rawWrite(ctx, s, `UPDATE wake SET handouts = 5 WHERE id = ?`, id); err == nil {
+		t.Fatal("the reapplied migration did not refuse a partial handout")
 	}
 }
 

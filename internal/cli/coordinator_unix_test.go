@@ -156,11 +156,13 @@ func taskCountOf(t *testing.T, h *home.Home, dir string) int {
 // answer: a message is recorded and written, and its human rendering is the
 // phrase table's; a message the worker ends on ends it, and its task reads
 // Unknown from the dead terminal; a listen held before the end is pushed a
-// wake about the task, which the push leaves queued, so acknowledging it by
-// number is accepted and recorded as the coordinator's; a drain lists the
-// rest recorded as handled, and neither a second drain
-// nor a wait lists any of them again, while acknowledging any of them is
-// refused as incorrect usage; a relaunch begins attempt 2 and the service launches it;
+// wake about the task, which the push leaves queued; a person's listing
+// without --json names it and hands nothing out; a drain hands it out and
+// closes nothing, a second drain hands it out again because no stream is
+// held, and once the coordinator acknowledges what it was handed, recorded
+// as the coordinator's, neither a drain nor a wait lists any of it again,
+// while acknowledging any of it again is refused as incorrect usage; a
+// relaunch begins attempt 2 and the service launches it;
 // a stop ends that attempt's worker and opens the hold naming the task;
 // arm verification answers that the loop is live; and an investigation
 // created through the client is promoted to a delivery on a branch.
@@ -288,8 +290,7 @@ func TestTheCoordinatorClientDrivesEveryMethodAndRefusesAWorker(t *testing.T) {
 	}
 
 	// The stream pushes a wake about the task, and the push takes nothing:
-	// the row it names is still queued, so acknowledging it by its number,
-	// without draining, is accepted and recorded as the coordinator's.
+	// the row it names is still queued and handed out to nobody.
 	var pushed store.Wake
 	for pushed.ID == 0 {
 		event := nextEvent(t, lines, 60*time.Second)
@@ -300,7 +301,7 @@ func TestTheCoordinatorClientDrivesEveryMethodAndRefusesAWorker(t *testing.T) {
 		if err := json.Unmarshal(event.Payload, &w); err != nil {
 			t.Fatalf("a pushed wake does not read as a wake row: %v\n%s", err, event.Payload)
 		}
-		if w.TaskID == id && w.Queued() && event.Revision == uint64(w.ID) {
+		if w.TaskID == id && w.Queued() && !w.HandedOut() && event.Revision == uint64(w.ID) {
 			pushed = w
 		}
 	}
@@ -312,38 +313,58 @@ func TestTheCoordinatorClientDrivesEveryMethodAndRefusesAWorker(t *testing.T) {
 	if ended := <-listened; ended.code != machine.ExitOK {
 		t.Fatalf("an interrupted listen exited %s:\n%s", ended.code, ended.stderr)
 	}
-	var acknowledged machine.Acknowledged
-	coordinate(t, h, subject, &acknowledged, "acknowledge", strconv.FormatInt(pushed.ID, 10))
-	if acknowledged.By != store.AcknowledgedByCoordinator().String() || len(acknowledged.Wakes) != 1 || acknowledged.Wakes[0] != pushed.ID {
-		t.Fatalf("acknowledge answered %+v, want wake %d recorded as the coordinator's", acknowledged, pushed.ID)
-	}
 
-	// A drain lists what else is queued and records every row it lists as
-	// handled, so a second drain lists none of them, and
-	// naming a drained row in an acknowledgement is refused as incorrect
-	// usage, as naming the acknowledged one again is. A wait after them
-	// returns none of them either.
+	// A person's listing, without --json, reads the queue in the phrase
+	// table's words, naming the pushed wake by its task's project, and
+	// hands out nothing: the drain after it is the pushed row's first
+	// handout.
+	listing := run(t, h, subject, "coordinator", "wakes")
+	if listing.code != machine.ExitOK || !strings.Contains(listing.stdout, "about the fleet are waiting") ||
+		!strings.Contains(listing.stdout, "\none: ") {
+		t.Fatalf("the human listing exited %s with:\n%s%s", listing.code, listing.stdout, listing.stderr)
+	}
+	vocabtest.Assert(t, listing.stdout)
+
+	// A drain hands out what is queued and closes none of it: every row it
+	// lists is still queued, and the pushed one is handed out for the first
+	// time. With no stream held the coordinator is not attached, so a
+	// second drain hands the same rows out again. Acknowledging them after
+	// acting is what closes them, and it is recorded as the coordinator's;
+	// after it neither a drain nor a wait lists any of them, and naming one
+	// again is refused as incorrect usage.
 	var drained machine.Wakes
 	coordinate(t, h, subject, &drained, "wakes", "--limit", strconv.Itoa(machine.DefaultWakesLimit))
-	taken := []int64{pushed.ID}
+	if !handedOutAs(drained, pushed.ID, 1) {
+		t.Fatalf("the first drain after the listing = %+v, want wake %d handed out for the first time", drained, pushed.ID)
+	}
+	var taken []int64
+	var handed []string
 	for _, w := range drained.Wakes {
-		if w.ID == pushed.ID {
-			t.Fatalf("a drain listed wake %d after it was acknowledged: %+v", pushed.ID, drained)
-		}
-		if w.Queued() {
-			t.Fatalf("a drain listed %+v, want every row recorded as handled", w)
+		if !w.Queued() || !w.HandedOut() {
+			t.Fatalf("a drain listed %+v, want every row still queued and handed out", w)
 		}
 		taken = append(taken, w.ID)
+		handed = append(handed, strconv.FormatInt(w.ID, 10))
 	}
 	var again machine.Wakes
-	coordinate(t, h, subject, &again, "wakes")
+	coordinate(t, h, subject, &again, "wakes", "--limit", strconv.Itoa(machine.DefaultWakesLimit))
+	if !handedOutAs(again, pushed.ID, 2) {
+		t.Fatalf("a second drain with no stream held = %+v, want wake %d handed out again", again, pushed.ID)
+	}
+	var acknowledged machine.Acknowledged
+	coordinate(t, h, subject, &acknowledged, append([]string{"acknowledge"}, handed...)...)
+	if acknowledged.By != store.AcknowledgedByCoordinator().String() || len(acknowledged.Wakes) != len(handed) {
+		t.Fatalf("acknowledge answered %+v, want the handed-out rows recorded as the coordinator's", acknowledged)
+	}
+	var after machine.Wakes
+	coordinate(t, h, subject, &after, "wakes")
 	var waitedAfter machine.Wakes
 	coordinate(t, h, subject, &waitedAfter, "await", "--timeout", "1s")
-	for _, listed := range []machine.Wakes{again, waitedAfter} {
+	for _, listed := range []machine.Wakes{after, waitedAfter} {
 		for _, w := range listed.Wakes {
 			for _, gone := range taken {
 				if w.ID == gone {
-					t.Fatalf("wake %d was already taken and was listed again: %+v", gone, listed)
+					t.Fatalf("wake %d was acknowledged and was listed again: %+v", gone, listed)
 				}
 			}
 		}
@@ -448,4 +469,15 @@ func nextEvent(t *testing.T, lines <-chan string, wait time.Duration) ipc.Event 
 		t.Fatalf("listen wrote nothing for %s", wait)
 	}
 	return ipc.Event{}
+}
+
+// handedOutAs reports whether an answer carries the wake still queued and
+// handed out for the given time.
+func handedOutAs(w machine.Wakes, id, handouts int64) bool {
+	for _, wake := range w.Wakes {
+		if wake.ID == id {
+			return wake.HandedOut() && wake.Handouts == store.Known(handouts)
+		}
+	}
+	return false
 }

@@ -57,7 +57,7 @@ type Outcome struct {
 // dispatched entry it appends is itself a wake, which is how the coordinator
 // learns of it. It is idempotent, so a caller that cannot tell whether
 // anything cleared calls it anyway; internal/service does so when a run
-// settles and when it opens.
+// settles, when it opens, and once an investigation's report is stored.
 //
 // A task is considered when its record names a blocker and its resolution is
 // Queued from the event tier. The dispatched entry is then appended with

@@ -68,10 +68,11 @@ var coordinatorActions = []struct {
 	{"peek", "<task>", "Read a task's worker's recent output, redacted and bounded, and how to attach to its terminal.", coordinatorPeek},
 	{"relaunch", "<task>", "Begin a new attempt of a task whose worker is gone, in its own copy.", coordinatorRelaunch},
 	{"promote", "<task>", "Turn an investigation task into a delivery on a branch, in its own copy.", coordinatorPromote},
-	{"wakes", "", "Drain the queued wakes, oldest first: list them and record them as handled.", coordinatorWakes},
-	{"await", "", "Block until a wake is queued or the bound elapses, then drain the queued wakes.", coordinatorAwait},
-	{"listen", "", "Hold the wake stream: print each wake as it is queued, until interrupted, recording none as handled.", coordinatorListen},
-	{"acknowledge", "<wake>...", "Record that the named wakes were handled without draining them, so a later drain leaves them out.", coordinatorAcknowledge},
+	{"relayed", "<task>", "Record that a reported investigation's findings were relayed, which finishes it.", coordinatorRelayed},
+	{"wakes", "", "With --json, drain the queued wakes, oldest first: hand them out, closing none; without it, list them and take none.", coordinatorWakes},
+	{"await", "", "Block until a wake is on offer or the bound elapses, then drain the queued wakes.", coordinatorAwait},
+	{"listen", "", "Hold the wake stream: print each wake as it is queued, until interrupted, handing out none.", coordinatorListen},
+	{"acknowledge", "<wake>...", "Record that the named wakes were acted on, which closes them, so no drain hands them out again.", coordinatorAcknowledge},
 	{"supervision", "", "Verify that this home's service is watching the fleet.", coordinatorSupervision},
 }
 
@@ -261,10 +262,29 @@ func coordinatorPromote(ctx context.Context, in *invocation) (any, error) {
 	return promoted, err
 }
 
-// coordinatorWakes is wakes.list, PRD section 8's drain: the rows it lists
-// are recorded as handled by the coordinator in the same step, so a second
-// drain does not list them. Its structured answer is therefore the only
-// place a drained row's subject is shown to the caller.
+// coordinatorRelayed is task.relay: the coordinator's record that it relayed
+// the findings of the investigation named, PRD section 6's Reported to
+// Complete edge. Whether the task has findings to relay, an investigation
+// that reads Reported from its stored report, is the service's to decide,
+// and a task that does not is its refusal.
+func coordinatorRelayed(ctx context.Context, in *invocation) (any, error) {
+	task, err := in.taskOperand(coordinatorCommand("relayed"), func(*flag.FlagSet) {})
+	if err != nil {
+		return nil, err
+	}
+	var relayed machine.TaskRelayed
+	err = in.callService(ctx, ipc.MethodTaskRelay, machine.TaskRequest{Task: task}, &relayed)
+	return relayed, err
+}
+
+// coordinatorWakes is two readings of the queue, chosen by the rendering
+// the invocation asked for. With --json it is wakes.list, PRD section 8's
+// drain, which is the coordinator's: the rows it lists are handed out to the
+// coordinator and stay queued until coordinatorAcknowledge closes them, and
+// a row not acknowledged is handed out again once the coordinator it was
+// handed to is no longer attached. Without --json it is wakes.peek, a
+// person's listing, which hands out and acknowledges nothing, so a person
+// who runs it to look takes nothing from the coordinator.
 func coordinatorWakes(ctx context.Context, in *invocation) (any, error) {
 	var request machine.WakesRequest
 	err := in.parseFlags(coordinatorCommand("wakes"), func(set *flag.FlagSet) {
@@ -275,6 +295,11 @@ func coordinatorWakes(ctx context.Context, in *invocation) (any, error) {
 	}
 	if request.Limit < 0 {
 		return nil, usagef("assistant %s --limit is %d, and a limit is never negative", coordinatorCommand("wakes"), request.Limit)
+	}
+	if !in.json {
+		var queued machine.QueuedWakes
+		err = in.callService(ctx, ipc.MethodWakesPeek, request, &queued)
+		return queued, err
 	}
 	var wakes machine.Wakes
 	err = in.callService(ctx, ipc.MethodWakesList, request, &wakes)
@@ -288,10 +313,12 @@ func coordinatorWakes(ctx context.Context, in *invocation) (any, error) {
 // of internal/supervisor's wake-kind table, its kind and its class:
 // supervisor.ClassWait is the bare word "wait".
 //
-// It is one call that blocks until the queue holds a queued wake or the
-// bound elapses, answered as coordinatorWakes' answer is and draining as it
-// does, so an empty list is the bound elapsing and a row it lists is not
-// listed again.
+// It is one call that blocks until the queue holds a wake on offer or the
+// bound elapses, answered as coordinatorWakes' --json answer is and draining
+// as it does, so an empty list is the bound elapsing, and a row it lists
+// stays queued until it is acknowledged. It drains in either rendering: a
+// wait is the coordinator's, and a person reads the queue with
+// coordinatorWakes.
 //
 // --timeout is a duration in whole seconds, and its range and default are
 // machine.WakeWaitRequest.Bounds', which is checked here before the service
@@ -324,11 +351,11 @@ func coordinatorAwait(ctx context.Context, in *invocation) (any, error) {
 }
 
 // coordinatorAcknowledge is wakes.acknowledge, naming the wakes as
-// operands: the acknowledgement of rows the coordinator handled without
-// draining them, ones coordinatorListen printed. Who acknowledged is derived
-// by the service from the surface and is not something this sends. A batch
-// naming a wake no row has, or one already acknowledged, a drained one
-// included, is the store's refusal of the whole batch, answered as
+// operands: the coordinator saying it acted on them, which is what closes a
+// row, one a drain handed it or one coordinatorListen printed. Who
+// acknowledged is derived by the service from the surface and is not
+// something this sends. A batch naming a wake no row has, or one already
+// acknowledged, is the store's refusal of the whole batch, answered as
 // ipc.ErrInvalidRequest.
 func coordinatorAcknowledge(ctx context.Context, in *invocation) (any, error) {
 	name := coordinatorCommand("acknowledge")
@@ -358,11 +385,13 @@ func coordinatorAcknowledge(ctx context.Context, in *invocation) (any, error) {
 // for a coordinator whose host can run a command in the background and
 // start a turn on what it prints; a coordinator that cannot uses await.
 //
-// It records nothing as handled, because a push is not a drain: a wake it
-// prints stays queued until coordinatorWakes or coordinatorAwait drains it
-// or coordinatorAcknowledge names it. The stream opens with a gap, and a
-// gap later on means wakes were missed; either is the coordinator's signal
-// to drain, which gives back everything still queued.
+// It hands out and records nothing, because a push is not a drain: a wake it
+// prints stays queued until coordinatorAcknowledge names it. Holding it is
+// what the service reads as the coordinator being attached, so a row a
+// drain hands out while it runs is not handed out again until it ends. The
+// stream opens with a gap, and a gap later on means wakes were missed;
+// either is the coordinator's signal to drain, which gives back everything
+// still queued that it was not already handed.
 //
 // An interrupt ends it with success. The stream ending any other way, the
 // service stopping under it included, is an operational failure, so a host

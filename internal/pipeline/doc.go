@@ -542,14 +542,19 @@
 // selection, notes, and own findings, and the fixer is told what was left
 // unselected; what PRD section 5 says a later review does with that history,
 // not re-reporting what a person already decided, is not done: no review
-// reads it. Convergence does not apply to the requested cycle: its edge back
-// is graph.Edge.Answered, which internal/graph admits only because every
-// traversal follows the person's answer at the hold. A requested round that
-// changed nothing therefore returns to the hold, which says so, rather than
-// parking the run, so approve, skip, and cancel stay open; RequestedFixRounds
-// and the run-wide budget are what bound it. "Changed nothing" is measured as
-// the request node measures it, over the keys the fixer writes, and not over
-// the whole state.
+// reads it. Convergence does not apply to a round a person asked for: the
+// requested cycle's edge back is graph.Edge.Answered, which internal/graph
+// admits only because every traversal follows an answer at the hold. A
+// requested round that changed nothing therefore returns to the hold, which
+// says so, rather than parking the run, so approve, skip, and cancel stay
+// open; RequestedFixRounds and the run-wide budget are what bound it. "Changed
+// nothing" is measured as the request node measures it, over the keys the
+// fixer writes, and not over the whole state. A round asked for by an answer
+// given through graph.Executor.AnswerUnattended, which is how
+// internal/service's standing consent answers, is held to the convergence
+// check over the whole state instead, against the round before it on the same
+// edge; this package builds the same edges either way, and which call
+// answered is the caller's.
 //
 // Convergence is computed over the whole state, which is internal/graph's
 // definition and not this package's. Two things a round writes therefore

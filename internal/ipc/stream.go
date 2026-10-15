@@ -59,6 +59,9 @@ type Publisher struct {
 	mu     sync.Mutex
 	subs   map[*Subscription]struct{}
 	closed bool
+	// attachments counts the subscriptions that opened on an empty set,
+	// which is what numbers Attachment's stretches.
+	attachments uint64
 }
 
 // NewPublisher returns a publisher with no subscribers, or an error naming what
@@ -100,6 +103,9 @@ func (p *Publisher) Subscribe(backlog int) (*Subscription, error) {
 	}
 	s := newSubscription(backlog, true)
 	s.pub = p
+	if len(p.subs) == 0 {
+		p.attachments++
+	}
 	p.subs[s] = struct{}{}
 	return s, nil
 }
@@ -164,6 +170,25 @@ func (p *Publisher) Subscribers() int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return len(p.subs)
+}
+
+// Attachment reports which stretch of open subscriptions this publisher is
+// in, and whether one is open at all. A stretch begins when a subscription
+// opens on a publisher that had none open and ends when the last open one
+// detaches, whichever way it detaches: closed by its consumer, ended under a
+// delivery, or ended by Close. Its number is counted from one within this
+// publisher's life and never reused, so a caller that recorded the number
+// can tell later whether the stretch it saw is still the one open: it is
+// exactly when Attachment reports the same number and open.
+//
+// It counts subscriptions and knows nothing of who holds them. Two that
+// overlap are one stretch, so one consumer leaving while another stays is
+// not an end, and a subscription a caller's admission later refuses is
+// counted for as long as it is open.
+func (p *Publisher) Attachment() (number uint64, open bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.attachments, len(p.subs) > 0
 }
 
 // Close ends every subscription and refuses later ones. A consumer still

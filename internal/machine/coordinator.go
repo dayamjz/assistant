@@ -10,7 +10,7 @@ import (
 // The coordinator client's rows: what a person reads of the answers to the
 // coordinator's methods that the steering rows in phrases.go do not already
 // phrase. A message and a stop read as MessagePhrase and StopPhrase; a
-// created task, a promotion, a relaunch, a drain of the wake queue, an
+// created task, a promotion, a relaunch, a relay, a drain of the wake queue, an
 // acknowledgement and arm verification read as the rows here.
 //
 // None names a wake's kind, a task's state or the arm's outcome, because
@@ -39,6 +39,11 @@ var (
 		Outcome:     "The work was begun again in its own local copy, by a new worker.",
 		Consequence: "This answer comes before the worker does, so whether it began shows in the listing.",
 		Decision:    "Nothing to decide now; run assistant tasks to see how it goes.",
+	}
+	phraseTaskRelayed = Phrase{
+		Outcome:     "The investigation is recorded as finished: its findings were passed on.",
+		Consequence: "Its worker is ended and its local copy is removed once that is proven safe; its findings stay on record.",
+		Decision:    "Nothing to decide.",
 	}
 	phraseNoNotices = Phrase{
 		Outcome:     "No notices about the fleet are waiting to be handled.",
@@ -105,22 +110,126 @@ func TaskPromotedPhrase(TaskPromoted) Phrase { return phraseTaskPromoted }
 // is one row.
 func TaskRelaunchedPhrase(TaskRelaunched) Phrase { return phraseTaskRelaunched }
 
+// TaskRelayedPhrase is what a person reads about a task.relay answer. A
+// relay the records refused is a refusal and never an answer, so there is
+// one row.
+func TaskRelayedPhrase(TaskRelayed) Phrase { return phraseTaskRelayed }
+
 // WakesPhrase is what a person reads about a drain of the wake queue: how
-// many rows the drain took, or that none were waiting. A drain acknowledges
-// what it returns, so the rows it names are already recorded as handled and
-// a repeat does not list them again; the phrase says so rather than inviting
-// a repeat that would come back empty. Which work each row is about and what
-// kind of notice it is are the structured rendering's, because a kind is a
-// word the derived forbidden set keeps from a person.
+// many rows the drain handed out, or that none were on offer. A drain closes
+// nothing, so the phrase says the rows stay waiting until each is
+// acknowledged, and that a row not acknowledged comes back. Which work each
+// row is about and what kind of notice it is are the structured rendering's,
+// because a kind is a word the derived forbidden set keeps from a person.
 func WakesPhrase(w Wakes) Phrase {
 	if len(w.Wakes) == 0 {
 		return phraseNoNotices
 	}
 	return Phrase{
-		Outcome:     fmt.Sprintf("%d notice(s) about the fleet were waiting, oldest first, and this read recorded them as handled.", len(w.Wakes)),
-		Consequence: "They are not listed again, so what each was about is only in this answer's --json form.",
-		Decision:    "Run assistant tasks to see how the work stands, and read notices with --json so each one's subject is kept.",
+		Outcome:     fmt.Sprintf("%d notice(s) about the fleet were handed to the coordinator, oldest first, and none is recorded as handled yet.", len(w.Wakes)),
+		Consequence: "Each stays waiting until it is acknowledged, and one not acknowledged is handed out again if the coordinator goes away first.",
+		Decision:    "Act on each, then run assistant coordinator acknowledge with the numbers the --json form lists.",
 	}
+}
+
+// QueuedWakesPhrase is what a person reads above a listing of the queue:
+// how many rows wait, or that none do. The listing hands out nothing, and
+// the phrase says so, because the drain it replaced for a person took what
+// it showed.
+func QueuedWakesPhrase(q QueuedWakes) Phrase {
+	if len(q.Wakes) == 0 {
+		return phraseNoNotices
+	}
+	return Phrase{
+		Outcome:     fmt.Sprintf("%d notice(s) about the fleet are waiting, oldest first.", len(q.Wakes)),
+		Consequence: "Listing them here took none of them: each stays waiting until the coordinator acts on it and acknowledges it.",
+		Decision:    "Nothing to decide here; run assistant tasks to see how the work stands.",
+	}
+}
+
+// The rows a listed notice reads as, one per wake kind internal/supervisor's
+// table holds that can reach the queue, which is every kind but the one
+// whose class always absorbs, and one for a kind this build has no row for. Each names what
+// the notice says about the work in a person's words and never the kind.
+var (
+	phraseNoticeHold = Phrase{
+		Outcome:     "A decision about this work is waiting on an answer.",
+		Consequence: "The work does not go on past it until it is answered.",
+		Decision:    "Run assistant watch to see the decision and the answer that closes it.",
+	}
+	phraseNoticeWorkerGone = Phrase{
+		Outcome:     "This work's worker has ended, or could not be checked.",
+		Consequence: "Nothing moves the work on until it is begun again or let go.",
+		Decision:    "Run assistant tasks to see how the work stands.",
+	}
+	phraseNoticeMessage = Phrase{
+		Outcome:     "This work's worker has not acknowledged a message sent to it.",
+		Consequence: "It may not have read what it was told.",
+		Decision:    "Run assistant tasks to see how the work stands.",
+	}
+	phraseNoticeDecisionRaised = Phrase{
+		Outcome:     "This work's worker raised a decision.",
+		Consequence: "It may be waiting on the answer.",
+		Decision:    "Run assistant watch to see what it asks.",
+	}
+	phraseNoticeUnproven = Phrase{
+		Outcome:     "This work changed with nothing showing that it is moving.",
+		Consequence: "It may have finished, or stopped.",
+		Decision:    "Run assistant tasks to see how the work stands.",
+	}
+	phraseNoticeIdle = Phrase{
+		Outcome:     "This work's worker has shown the same screen with nothing showing that it is moving.",
+		Consequence: "It may have finished, or stopped.",
+		Decision:    "Run assistant tasks to see how the work stands.",
+	}
+	phraseNoticeOutsideWait = Phrase{
+		Outcome:     "This work's worker said it was waiting on something outside the work, and that has gone on past the time set for it.",
+		Consequence: "What it waits on may not clear by itself.",
+		Decision:    "Run assistant tasks to see how the work stands.",
+	}
+	phraseNoticeCheckResult = Phrase{
+		Outcome:     "A check result for this work arrived.",
+		Consequence: "It may change what happens next.",
+		Decision:    "Run assistant tasks to see how the work stands.",
+	}
+	phraseNoticeUnfamiliar = Phrase{
+		Outcome:     "Something about this work needs a look, of a kind this build cannot describe.",
+		Consequence: "Its structured form says what it is.",
+		Decision:    "Repeat with --json to read it.",
+	}
+)
+
+// noticeRows is which row each wake kind reads as. A kind with no entry
+// reads as phraseNoticeUnfamiliar, so a kind added to internal/supervisor's
+// table without a row here is shown rather than dropped.
+var noticeRows = map[supervisor.Kind]Phrase{
+	supervisor.KindHoldOpened:            phraseNoticeHold,
+	supervisor.KindTerminalGone:          phraseNoticeWorkerGone,
+	supervisor.KindMessageUnacknowledged: phraseNoticeMessage,
+	supervisor.KindDecisionEvent:         phraseNoticeDecisionRaised,
+	supervisor.KindPlainEvent:            phraseNoticeUnproven,
+	supervisor.KindTerminalUnchanged:     phraseNoticeIdle,
+	supervisor.KindDeclaredWait:          phraseNoticeOutsideWait,
+	supervisor.KindCheckResult:           phraseNoticeCheckResult,
+}
+
+// QueuedWakePhrase is the row one listed notice reads as, chosen by its
+// kind, which the row never names.
+func QueuedWakePhrase(w QueuedWake) Phrase {
+	if row, ok := noticeRows[supervisor.Kind(w.Wake.Kind)]; ok {
+		return row
+	}
+	return phraseNoticeUnfamiliar
+}
+
+// QueuedWakeStanding is what a person reads after a listed notice: whether a
+// drain has handed it to the coordinator. Either way it is still waiting,
+// because the listing shows only rows nobody has acknowledged.
+func QueuedWakeStanding(w QueuedWake) string {
+	if w.Wake.HandedOut() {
+		return "The coordinator has been handed it and has not yet said it acted on it."
+	}
+	return "The coordinator has not been handed it yet."
 }
 
 // AcknowledgedPhrase is what a person reads once wakes were acknowledged:
@@ -129,7 +238,7 @@ func WakesPhrase(w Wakes) Phrase {
 func AcknowledgedPhrase(a Acknowledged) Phrase {
 	return Phrase{
 		Outcome:     fmt.Sprintf("%d notice(s) about the fleet are recorded as handled.", len(a.Wakes)),
-		Consequence: "They are not listed again.",
+		Consequence: "They are not handed out again.",
 		Decision:    "Nothing to decide.",
 	}
 }
@@ -155,8 +264,11 @@ func ArmPhrase(a supervisor.Arm) Phrase {
 // with the counted rows' placeholder filled in.
 func coordinatorRows() []Phrase {
 	return []Phrase{
-		phraseTaskCreated, phraseTaskCreatedBehind, phraseTaskPromoted, phraseTaskRelaunched,
+		phraseTaskCreated, phraseTaskCreatedBehind, phraseTaskPromoted, phraseTaskRelaunched, phraseTaskRelayed,
 		phraseNoNotices, WakesPhrase(Wakes{Wakes: make([]store.Wake, 1)}), AcknowledgedPhrase(Acknowledged{Wakes: []int64{1}}),
+		QueuedWakesPhrase(QueuedWakes{Wakes: make([]QueuedWake, 1)}),
+		phraseNoticeHold, phraseNoticeWorkerGone, phraseNoticeMessage, phraseNoticeDecisionRaised,
+		phraseNoticeUnproven, phraseNoticeIdle, phraseNoticeOutsideWait, phraseNoticeCheckResult, phraseNoticeUnfamiliar,
 		phraseFleetWatched, phraseFleetNoService, phraseFleetNotWatched, phraseWorkerRecorded,
 		phrasePeekAttachable, phrasePeekUnattached,
 	}

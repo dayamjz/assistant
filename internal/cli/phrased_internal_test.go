@@ -302,6 +302,10 @@ func fixtures(t *testing.T) map[string]any {
 			Attach:  []string{"/usr/bin/tmux", "-S", filepath.Join(root, "terminals", "0123456789abcdef"), "attach-session", "-t", "worker"},
 		},
 		"task relaunch": machine.TaskRelaunched{Task: sampleID, Attempt: 2, Superseded: sampleID, Swept: "swept " + filepath.Join(root, "tasks", sampleID, "copy")},
+		"task relay": machine.TaskRelayed{
+			Record: store.TaskRelay{TaskID: sampleID, Event: 6, RecordedAt: time.Date(2026, 10, 13, 9, 0, 0, 0, time.UTC)},
+			Event:  store.TaskEvent{TaskID: sampleID, Sequence: 6, Kind: store.FindingsRelayedEventKind},
+		},
 		"task promotion": machine.TaskPromoted{
 			Record: store.Task{ID: sampleID, Shape: store.TaskDelivery, Project: "the parser", Branch: store.Known("feature/parser")},
 			Event:  store.TaskEvent{TaskID: sampleID, Sequence: 5, Kind: "promoted", Detail: "feature/parser"},
@@ -309,6 +313,13 @@ func fixtures(t *testing.T) map[string]any {
 		},
 		"wakes": machine.Wakes{Wakes: []store.Wake{
 			{ID: 7, TaskID: sampleID, Kind: string(supervisor.KindTerminalGone), Marker: sampleID, CreatedAt: time.Date(2026, 10, 13, 9, 0, 0, 0, time.UTC)},
+		}},
+		"queued wakes": machine.QueuedWakes{Wakes: []machine.QueuedWake{
+			{Project: "the parser", Wake: store.Wake{ID: 7, TaskID: sampleID, Kind: string(supervisor.KindTerminalGone), Marker: sampleID,
+				CreatedAt: time.Date(2026, 10, 13, 9, 0, 0, 0, time.UTC), HandedOutAt: store.Known(time.Date(2026, 10, 13, 9, 1, 0, 0, time.UTC)),
+				Handouts: store.Known(int64(1))}},
+			{Project: "the parser", Wake: store.Wake{ID: 8, TaskID: sampleID, Kind: string(supervisor.KindHoldOpened), Marker: "hold:" + sampleID,
+				CreatedAt: time.Date(2026, 10, 13, 9, 2, 0, 0, time.UTC)}},
 		}},
 		"wakes acknowledged": machine.Acknowledged{Wakes: []int64{7}, By: store.AcknowledgedByCoordinator().String()},
 		"supervision":        supervisor.Arm{Outcome: supervisor.ArmAttached, Sequence: 12},

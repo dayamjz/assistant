@@ -254,7 +254,8 @@
 // so no worker creates a task. The end-to-end harness still plants the
 // tasks it reads through internal/store, which internal/journey's coverage
 // says. Release does have a
-// caller: internal/service calls it when a run finishes and when it opens.
+// caller: internal/service calls it when a run finishes, when it opens, and
+// once an investigation's report is stored.
 // A merge record is written only at two of those finishes, internal/service's
 // settle for a run whose checks stage read the merge and its checks-hold
 // closure for one read at recovery or before a resume, and both call Release

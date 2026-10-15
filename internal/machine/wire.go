@@ -771,6 +771,17 @@ type TaskRelaunched struct {
 	Swept string `json:"swept,omitempty"`
 }
 
+// TaskRelayed is the answer to task.relay: the findings relayed record the
+// coordinator's statement wrote and the history entry written with it, both
+// internal/store's records rather than a second shape of them. The task's
+// Complete is resolved from Record and read from task.get.
+type TaskRelayed struct {
+	// Record is the findings relayed record as stored.
+	Record store.TaskRelay `json:"record"`
+	// Event is the findings-relayed entry the task's history now carries.
+	Event store.TaskEvent `json:"event"`
+}
+
 // TaskMessaged is the answer to task.message: the message record as the
 // send left it, which is the one place delivery is read from (P8). Delivery
 // is written when the provider's Send returned and refused, with the
@@ -848,20 +859,43 @@ type TaskStopped struct {
 	Finished taskstate.State `json:"finished,omitempty"`
 }
 
-// Wakes is the answer to a drain of the wake queue: the rows that were
-// queued, oldest first, as internal/store holds them after the drain. A drain
-// acknowledges what it returns, so every row here is already recorded as
-// handled and no later drain returns it: delivery to a drain is at most once,
-// stated on the answer rather than assumed by the reader, and this answer is
-// the one place the caller is handed each row.
+// Wakes is the answer to a drain of the wake queue: the rows on offer,
+// oldest first, as internal/store holds them after the drain. A drain hands
+// out what it returns and closes nothing, so every row here is still queued
+// until the caller acknowledges it after acting on it, and a row not
+// acknowledged is handed out again once the caller it was handed to is no
+// longer attached: delivery is at least once, so a caller may be handed a
+// row it has seen, and Handouts counts how many times it has been.
 //
-// Who the drain recorded as acknowledging is in the record and not on this
-// wire: store.Acknowledger has no text form outside internal/store, so a
-// decoded row's AcknowledgedBy is known and reads as nobody. HandledAt is the
-// field a reader of this answer can rely on.
+// Who the drain handed the rows to is in the record and not on this wire:
+// store.Acknowledger has no text form outside internal/store, so
+// HandedOutTo is kept off it. HandedOutAt and Handouts are the fields a
+// reader can rely on.
 type Wakes struct {
-	// Wakes are the drained rows, oldest first, at most the requested limit.
+	// Wakes are the rows handed out, oldest first, at most the requested
+	// limit.
 	Wakes []store.Wake `json:"wakes"`
+}
+
+// QueuedWakes is the answer to a person's reading of the wake queue: every
+// queued row, handed out or not, oldest first, each beside the project of
+// the task it is about. The reading hands out and acknowledges nothing, so
+// the rows are exactly where they were for the coordinator's drain.
+type QueuedWakes struct {
+	// Wakes are the queued rows, oldest first, at most the requested limit.
+	Wakes []QueuedWake `json:"wakes"`
+}
+
+// QueuedWake is one queued row and the project of the task it is about,
+// which is what a person's rendering names it by: a task's identifier and a
+// wake's kind are words P13 keeps from a person, and the structured
+// rendering carries both.
+type QueuedWake struct {
+	// Wake is the row as the store holds it.
+	Wake store.Wake `json:"wake"`
+	// Project is the project of the task the row names, as the task record
+	// holds it.
+	Project string `json:"project"`
 }
 
 // Acknowledged is the answer to an acknowledgement: which rows were closed
