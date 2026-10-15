@@ -71,14 +71,16 @@ func (s *Service) branchInGate(ctx context.Context, repository store.Repository,
 }
 
 // releaseQueued dispatches every queued task whose blocker has cleared, and
-// logs what came of each. It is called when a run finishes and when the
-// service opens, which are the moments this build knows a blocker can have
-// cleared: a task resolves Failed from a run that failed or was ended,
-// Reported from a stored report, and
-// Landed from the merge record the checks-hold closure writes. A report is
-// filed through task.event, which is not one of those moments, so a task
-// queued behind an investigation that reports is released at the next of
-// them. There is one moment more that it does not cover: an answer to a hold naming a task
+// logs what came of each. It is called when a run finishes, when the
+// service opens, and when an investigation's report is stored, which are the
+// moments this build knows a blocker can have cleared: a task resolves
+// Failed from a run that failed or was ended, Reported from a stored report,
+// and Landed from the merge record the checks-hold closure writes. The
+// report's call is cleanup.go's storeTaskReport, through
+// releaseInBackground, once the report row is stored, so a task queued
+// behind an investigation is released by the record that made its blocker
+// Reported and not by the history entry beside it (P8). There is one moment
+// more that it does not cover: an answer to a hold naming a task
 // takes the task out of internal/taskstate's hold tier, which resolves Held
 // and does not clear, and back to what the tiers below say, which may.
 // taskholds.go's respondTask does not call this, so a successor queued
@@ -129,4 +131,25 @@ func (s *Service) releaseQueued(ctx context.Context) {
 	// independent did from the start; dispatch.go cuts and proves each one's
 	// copy, once per service, from here.
 	s.dispatchDue(ctx)
+}
+
+// releaseInBackground runs releaseQueued on a goroutine registered through
+// startWork, so a caller that is answering a request, a worker filing its
+// report, does not wait on cutting a released task's copy, and Close still
+// waits for the release. A service giving up its home releases nothing, and
+// the next open's call releases what this one would have.
+func (s *Service) releaseInBackground() {
+	if s.queue == nil {
+		// A service built by hand without a queue has nothing queued; Open
+		// always builds one.
+		return
+	}
+	if !s.startWork() {
+		s.log.Printf("queued tasks were not released because this service is giving up the home; the next start releases them")
+		return
+	}
+	go func() {
+		defer s.work.Done()
+		s.releaseQueued(s.stopCtx)
+	}()
 }

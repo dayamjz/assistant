@@ -10,7 +10,7 @@ import (
 // The coordinator client's rows: what a person reads of the answers to the
 // coordinator's methods that the steering rows in phrases.go do not already
 // phrase. A message and a stop read as MessagePhrase and StopPhrase; a
-// created task, a promotion, a relaunch, a drain of the wake queue, an
+// created task, a promotion, a relaunch, a relay, a drain of the wake queue, an
 // acknowledgement and arm verification read as the rows here.
 //
 // None names a wake's kind, a task's state or the arm's outcome, because
@@ -39,6 +39,11 @@ var (
 		Outcome:     "The work was begun again in its own local copy, by a new worker.",
 		Consequence: "This answer comes before the worker does, so whether it began shows in the listing.",
 		Decision:    "Nothing to decide now; run assistant tasks to see how it goes.",
+	}
+	phraseTaskRelayed = Phrase{
+		Outcome:     "The investigation is recorded as finished: its findings were passed on.",
+		Consequence: "Its worker is ended and its local copy is removed once that is proven safe; its findings stay on record.",
+		Decision:    "Nothing to decide.",
 	}
 	phraseNoNotices = Phrase{
 		Outcome:     "No notices about the fleet are waiting to be handled.",
@@ -104,6 +109,11 @@ func TaskPromotedPhrase(TaskPromoted) Phrase { return phraseTaskPromoted }
 // A relaunch the records refused is a refusal and never an answer, so there
 // is one row.
 func TaskRelaunchedPhrase(TaskRelaunched) Phrase { return phraseTaskRelaunched }
+
+// TaskRelayedPhrase is what a person reads about a task.relay answer. A
+// relay the records refused is a refusal and never an answer, so there is
+// one row.
+func TaskRelayedPhrase(TaskRelayed) Phrase { return phraseTaskRelayed }
 
 // WakesPhrase is what a person reads about a drain of the wake queue: how
 // many rows the drain handed out, or that none were on offer. A drain closes
@@ -254,7 +264,7 @@ func ArmPhrase(a supervisor.Arm) Phrase {
 // with the counted rows' placeholder filled in.
 func coordinatorRows() []Phrase {
 	return []Phrase{
-		phraseTaskCreated, phraseTaskCreatedBehind, phraseTaskPromoted, phraseTaskRelaunched,
+		phraseTaskCreated, phraseTaskCreatedBehind, phraseTaskPromoted, phraseTaskRelaunched, phraseTaskRelayed,
 		phraseNoNotices, WakesPhrase(Wakes{Wakes: make([]store.Wake, 1)}), AcknowledgedPhrase(Acknowledged{Wakes: []int64{1}}),
 		QueuedWakesPhrase(QueuedWakes{Wakes: make([]QueuedWake, 1)}),
 		phraseNoticeHold, phraseNoticeWorkerGone, phraseNoticeMessage, phraseNoticeDecisionRaised,

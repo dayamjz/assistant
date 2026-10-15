@@ -109,8 +109,15 @@ naming the service's home, and `worker`. That prefix is what the Claude
 Code adapter's worker is allowed to run besides git without asking, and what
 its instructions tell it to type. Through it a worker acknowledges a
 coordinator's message by the number it arrived under, files an
-investigation's report once on standard input, and records how its work
-stands.
+investigation's report once, and records how its work stands. The
+instructions tell an investigation's worker to write its report with its
+file editing tool into `assistant-report.json` at the top of its copy and
+file it with `worker report --file assistant-report.json`, because the
+Claude Code CLI's Bash check refuses a report written inline as a
+here-document. The command removes the file once the report is filed, so it
+does not stay in the copy; a report the service refuses leaves the file in
+place to be corrected. `--file -` still reads the report from standard
+input.
 
 Three things follow for whoever runs the service:
 
@@ -135,6 +142,15 @@ Three things follow for whoever runs the service:
   `terminal-gone` wake for it. An investigation that ends without filing a
   report still reads `unknown` and is still reported and relaunched as a
   worker that died.
+- Filing a report releases a task the coordinator queued behind the
+  investigation as soon as it reads `reported`, without waiting for a run
+  to finish or a restart. One whose report raised decisions reads `held`
+  until they are answered, and what is queued behind it is released at the
+  next of those instead.
+- A reported investigation reads `complete` only once the coordinator
+  records its findings relayed with `assistant coordinator relayed ID`. The
+  service then ends the worker it holds for the task and removes its copy on
+  the cleanup check's proof; the stored report and its holds stay.
 
 ## Waiting on a fleet
 

@@ -61,6 +61,12 @@ type TaskSnapshot struct {
 	// same transaction, so the answer rests on the record and not on a line
 	// of the history (P8).
 	ReportStoredAt Optional[time.Time]
+	// Relay is the task's findings relayed record, and unknown while none
+	// has been written. It is carried for internal/taskstate's terminal
+	// tier, which derives an investigation's Complete from it, and it is
+	// the row and never the FindingsRelayedEventKind entry appended beside
+	// it (P8).
+	Relay Optional[TaskRelay]
 }
 
 // TaskSnapshot reads one task and the records its state is resolved from, as
@@ -230,6 +236,13 @@ func snapshotOf(ctx context.Context, q querier, task Task) (TaskSnapshot, error)
 		snap.ReportStoredAt = Known(at)
 	case !isNoRows(err):
 		return TaskSnapshot{}, fmt.Errorf("reading the report of task %s: %w", task.ID, err)
+	}
+
+	switch relay, err := taskRelayOf(ctx, q, task.ID); {
+	case err == nil:
+		snap.Relay = Known(relay)
+	case !isNoRows(err):
+		return TaskSnapshot{}, fmt.Errorf("reading the findings relayed record of task %s: %w", task.ID, err)
 	}
 
 	query = holdColumns + ` FROM hold WHERE task_id = ?`

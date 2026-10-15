@@ -1,6 +1,6 @@
 ---
 name: coordinator
-description: Run a fleet of assistant tasks as their coordinator - create delivery and investigation tasks, steer, peek at, stop, relaunch and promote them, listen to, wait on, drain and acknowledge the wake queue, and verify supervision
+description: Run a fleet of assistant tasks as their coordinator - create delivery and investigation tasks, steer, peek at, stop, relaunch and promote them, record an investigation's findings relayed, listen to, wait on, drain and acknowledge the wake queue, and verify supervision
 ---
 
 # coordinator
@@ -64,7 +64,12 @@ assistant coordinator create --shape investigation --project NAME \
 The answer comes once the task is recorded and before any worker exists.
 `record.blocker_task` is set exactly when the task was queued behind other
 work. Whether the worker launched is read afterwards, from
-`assistant --json tasks ID`.
+`assistant --json tasks ID`. A task queued behind an investigation is
+released, and its worker begun, as soon as that investigation's report is
+filed and it reads `reported`; one whose report raised decisions reads
+`held` until you answer them, and what was queued behind it is released at
+the service's next release, a run finishing or a restart, rather than at
+your answer.
 
 ## Read the fleet
 
@@ -156,6 +161,21 @@ It turns the investigation into a delivery on the branch, in place, in the
 same copy. `--intent-file` works as `--instructions-file` does, and
 `--delivery` as it does on create. Promoting a task that is not an
 investigation is refused.
+
+## Record an investigation's findings relayed
+
+```sh
+assistant coordinator relayed ID
+```
+
+Once you have passed a reported investigation's findings on to the person,
+record it. The task then reads `complete` (`state.source` is `record`,
+`state.basis.relayed` is true): the service ends the worker it holds for it
+and removes its copy once that is proven safe, and the stored report and
+its decisions stay. It is refused for a task that is not an investigation
+reading `reported` from its report: a delivery task, an investigation with
+no report or with a decision still open, and one already recorded. A
+relayed investigation cannot be promoted, so promote first if you mean to.
 
 ## Drain the wake queue
 
@@ -279,7 +299,8 @@ assistant --json coordinator await --timeout 5m   # blocks, then drains
   but the report's decisions holds the task, its copy is cleaned up and it
   can no longer be promoted. A stop's hold keeps the copy until you answer
   it. A reported investigation reads `reported`, never `complete`, even
-  after its copy is gone.
+  after its copy is gone, until you record its findings relayed with
+  `assistant coordinator relayed ID`, which also ends its worker.
 - **An orphaned command is placed as yours.** The service decides who is a
   worker by walking the caller's parent chain to the first process in a
   worker group, or that is itself a worker, so a worker's command in a

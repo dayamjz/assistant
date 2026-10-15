@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
@@ -32,18 +33,25 @@ import (
 // stream worker is to run; the worker runs the rest of the message.
 const runMarker = "please run: "
 
+// writeMarker is what a coordinator's message carries ahead of a file the
+// stream worker is to write with its file editing tool: a path on the first
+// line, relative to the worker's copy, and the content after it.
+const writeMarker = "please write: "
+
 // serveRouted serves the home with the shipped Claude Code adapter's worker,
 // the stand-in in stream mode, as the resolved agent, and with the route the
 // product's service start gives a worker: this test binary, which hookMain
 // hands to cli.Run, --home naming the home, and the worker verb. The worker
 // runs what a message carries after runMarker, in a process group of its
-// own, and ends on endWorker.
+// own, writes what a message carries after writeMarker the way the Claude
+// Code CLI's file editing tool writes a file, and ends on endWorker.
 func serveRouted(t *testing.T, h *home.Home) (*standin.Agent, string) {
 	t.Helper()
 	agent := standin.New(t, standin.Script{
 		Steps: []standin.Step{{Match: standin.MatchReview(), Times: standin.Always, Reply: standin.Reviewed("the change reads cleanly")}},
 		Worker: &standin.WorkerScript{
 			Exchanges: []standin.Exchange{
+				{Contains: writeMarker, Write: true},
 				{Contains: runMarker, Run: true},
 				{Contains: endWorker, Reply: "worker finished", Ends: true},
 			},
@@ -85,31 +93,60 @@ func workerCall(t *testing.T, agent *standin.Agent, n int) standin.Call {
 
 // routeCommands is the commands the worker's instructions tell it to type,
 // read off the instructions it was started with: each indented line that
-// begins with the route, and for a here-document the lines through its
-// terminator, keyed by the subcommand.
+// begins with the route, keyed by the subcommand.
 func routeCommands(t *testing.T, instructions, route string) map[string]string {
 	t.Helper()
 	commands := map[string]string{}
-	lines := strings.Split(instructions, "\n")
-	for i := 0; i < len(lines); i++ {
-		line, ok := strings.CutPrefix(lines[i], "    "+route+" ")
+	for _, text := range strings.Split(instructions, "\n") {
+		line, ok := strings.CutPrefix(text, "    "+route+" ")
 		if !ok {
 			continue
 		}
-		command := route + " " + line
-		if _, doc, here := strings.Cut(line, "<<'"); here {
-			terminator := strings.TrimSuffix(doc, "'")
-			for i++; i < len(lines); i++ {
-				body := strings.TrimPrefix(lines[i], "    ")
-				command += "\n" + body
-				if body == terminator {
-					break
-				}
-			}
-		}
-		commands[strings.Fields(line)[0]] = command
+		commands[strings.Fields(line)[0]] = route + " " + line
 	}
 	return commands
+}
+
+// reportFile is the file the report command the instructions name reads
+// from, the one word after its --file.
+func reportFile(t *testing.T, command string) string {
+	t.Helper()
+	_, named, ok := strings.Cut(command, " --file ")
+	if !ok || len(strings.Fields(named)) != 1 || named == "-" {
+		t.Fatalf("the report command reads %q, which names no file to file from", command)
+	}
+	return named
+}
+
+// fileReport has the worker of task id file report the way its
+// instructions say a worker shaped like the Claude Code CLI can: it writes
+// the report with its file editing tool into the file the report command
+// names, inside its copy, and then runs that command. It waits until the
+// report is stored and the command has removed the file.
+func fileReport(t *testing.T, h *home.Home, subject, id, command, report string) {
+	t.Helper()
+	file := reportFile(t, command)
+	copyPath, err := h.TaskCopy(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	written := filepath.Join(copyPath, file)
+	messageWorker(t, h, subject, id, writeMarker+file+"\n"+report)
+	waitFor(t, "the report written in the copy", func() bool {
+		_, err := os.Stat(written)
+		return err == nil
+	})
+	messageWorker(t, h, subject, id, runMarker+command)
+	waitFor(t, "the report", func() bool {
+		records := openStore(t, h)
+		defer func() { _ = records.Close() }()
+		_, err := records.TaskReport(t.Context(), id)
+		return err == nil
+	})
+	waitFor(t, "the report file's removal", func() bool {
+		_, err := os.Lstat(written)
+		return errors.Is(err, os.ErrNotExist)
+	})
 }
 
 // messageWorker sends the task's worker a message through the
@@ -168,8 +205,13 @@ func historyKinds(t *testing.T, h *home.Home, id string) map[string]int {
 // A message reaches the worker under its number, and the worker's
 // acknowledge command records it read on the message record, in the same
 // write as the history entry the record names (P8); the message that
-// carried the command stays unread. The worker's report command files a
-// report on standard input: it is stored, the history records it once, and
+// carried the command stays unread. The worker files its report the way the
+// instructions say, which is the way a worker shaped like the Claude Code
+// CLI can (#267): it writes the report with its file editing tool into the
+// file the report command names, inside its copy, and runs that command,
+// whose here-document predecessor the stand-in refuses as the CLI's Bash
+// check did. The report is stored, the command removes the file so it
+// cannot stay in the copy, the history records the report once, and
 // each of its findings that asks, or names no action, becomes a hold (P3),
 // so the task reads Held over the report until a person answers both, and
 // then Reported from the stored report while the worker's terminal is still
@@ -246,23 +288,12 @@ func TestAWorkerReportsBackThroughTheRouteItsGrantAllows(t *testing.T) {
 	}
 
 	// A report through the route: an ask, a finding naming no action, and a
-	// note, on standard input.
+	// note, written into the copy and filed from there.
 	report := `{"summary": "Empty input reaches the tokenizer unchecked.", "findings": [` +
 		`{"severity": "warning", "action": "ask", "description": "Whether empty input should be an error."}, ` +
 		`{"severity": "warning", "description": "Whether the tokenizer should own the check."}, ` +
 		`{"severity": "info", "action": "note", "description": "The tests cover no empty input."}]}`
-	example := strings.Split(commands["report"], "\n")
-	if len(example) != 3 {
-		t.Fatalf("the report command reads %q, want the command, the example and the terminator", commands["report"])
-	}
-	filing := example[0] + "\n" + report + "\n" + example[2]
-	messageWorker(t, h, subject, id, runMarker+filing)
-	waitFor(t, "the report", func() bool {
-		records := openStore(t, h)
-		defer func() { _ = records.Close() }()
-		_, err := records.TaskReport(t.Context(), id)
-		return err == nil
-	})
+	fileReport(t, h, subject, id, commands["report"], report)
 	if n := historyKinds(t, h, id)[store.ReportReadyEventKind]; n != 1 {
 		t.Fatalf("the history records the report %d times, want once", n)
 	}

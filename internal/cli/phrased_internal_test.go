@@ -302,6 +302,10 @@ func fixtures(t *testing.T) map[string]any {
 			Attach:  []string{"/usr/bin/tmux", "-S", filepath.Join(root, "terminals", "0123456789abcdef"), "attach-session", "-t", "worker"},
 		},
 		"task relaunch": machine.TaskRelaunched{Task: sampleID, Attempt: 2, Superseded: sampleID, Swept: "swept " + filepath.Join(root, "tasks", sampleID, "copy")},
+		"task relay": machine.TaskRelayed{
+			Record: store.TaskRelay{TaskID: sampleID, Event: 6, RecordedAt: time.Date(2026, 10, 13, 9, 0, 0, 0, time.UTC)},
+			Event:  store.TaskEvent{TaskID: sampleID, Sequence: 6, Kind: store.FindingsRelayedEventKind},
+		},
 		"task promotion": machine.TaskPromoted{
 			Record: store.Task{ID: sampleID, Shape: store.TaskDelivery, Project: "the parser", Branch: store.Known("feature/parser")},
 			Event:  store.TaskEvent{TaskID: sampleID, Sequence: 5, Kind: "promoted", Detail: "feature/parser"},

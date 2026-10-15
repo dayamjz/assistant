@@ -51,7 +51,7 @@ var workerActions = []struct {
 	run      func(context.Context, *invocation) (any, error)
 }{
 	{"acknowledge", "<message>", "Record that the message with this number was read and acted on.", workerAcknowledge},
-	{"report", "", "File the investigation's report, read from --file, which - reads from standard input.", workerReport},
+	{"report", "", "File the investigation's report, read from --file and removed once filed; - reads standard input.", workerReport},
 	{"event", "<kind>", "Record how the work stands, as one of the kinds a worker may append.", workerEvent},
 }
 
@@ -136,18 +136,36 @@ func workerAcknowledge(ctx context.Context, in *invocation) (any, error) {
 
 // workerReport is task.event for store.ReportReadyEventKind, with the
 // report as the request's detail. The report is read whole from --file, a
-// path resolved against the directory the command was run in or - for
-// standard input, because a report written into the worker's copy would be
-// an untracked file that keeps the copy from being cleaned up. Whether the
-// report can be read, and whether the task may file one, is the service's;
-// an empty report, a missing --file and one over the protocol's bound on a
-// request are incorrect usage here. A report under that bound whose request
-// is still over it once encoded is refused by the protocol rather than here.
+// path resolved against the directory the command was run in, or - for
+// standard input. Whether the report can be read, and whether the task may
+// file one, is the service's; an empty report, a missing --file and one over
+// the protocol's bound on a request are incorrect usage here. A report under
+// that bound whose request is still over it once encoded is refused by the
+// protocol rather than here.
+//
+// A file named by --file is removed once the service answers that the report
+// was filed, and not before, so a report the service refused stays where the
+// worker wrote it to be corrected. That is #267's form: internal/service's
+// route tells a worker to write its report into a file in its own copy with
+// its file editing tool and name it here, because the Claude Code CLI's Bash
+// check refused a here-document carrying the report on standard input. A
+// file left in the copy would be an untracked file that keeps the copy from
+// being cleaned up, and one that could be committed if the investigation is
+// promoted to a delivery, so this command is what removes it. A removal that
+// fails is reported as a reportFileKept, an operational failure naming the
+// entry that was filed, so a worker reading the answer knows the report is in
+// and the file is still there. Standard input leaves nothing to remove.
+//
+// What that does not cover: a worker whose command is ended between the
+// answer and the removal leaves the file, which the copy's cleanup then
+// refuses on as untracked rather than removing; and the file named is
+// removed whatever it is, a file the repository tracks included, which
+// leaves that copy's tree dirty and its cleanup refused in the same way.
 func workerReport(ctx context.Context, in *invocation) (any, error) {
 	name := workerCommand("report")
 	var file string
 	if err := in.parseFlags(name, func(set *flag.FlagSet) {
-		set.StringVar(&file, "file", "", "the report, or - to read it from standard input")
+		set.StringVar(&file, "file", "", "the report, removed once it is filed, or - to read it from standard input")
 	}); err != nil {
 		return nil, err
 	}
@@ -181,8 +199,34 @@ func workerReport(ctx context.Context, in *invocation) (any, error) {
 	case strings.TrimSpace(string(raw)) == "":
 		return nil, usagef("the report is empty")
 	}
-	return in.appendEvent(ctx, store.ReportReadyEventKind, string(raw))
+	answer, err := in.appendEvent(ctx, store.ReportReadyEventKind, string(raw))
+	if err != nil || file == "-" {
+		return answer, err
+	}
+	if err := os.Remove(file); err != nil && !errors.Is(err, os.ErrNotExist) {
+		appended, _ := answer.(machine.Appended)
+		return nil, reportFileKept{path: file, entry: appended.Event.Sequence, err: err}
+	}
+	return answer, nil
 }
+
+// reportFileKept is a report the service filed whose file could not be
+// removed afterwards. It is not a refusal of the report, which stands; it
+// exits as an operational failure so the worker is told the file is still in
+// its copy and how to remove it.
+type reportFileKept struct {
+	path  string
+	entry int64
+	err   error
+}
+
+func (e reportFileKept) Error() string {
+	return fmt.Sprintf("the report was filed as entry %d of the history, and %s could not be removed afterwards: %v; "+
+		"remove it with git clean -f -- followed by that path, because a file left in the copy keeps it from being cleaned up",
+		e.entry, e.path, e.err)
+}
+
+func (e reportFileKept) Unwrap() error { return e.err }
 
 // workerEvent is task.event for the kind named as the operand, with
 // --detail as its detail. Which kinds a worker may append, and what detail
