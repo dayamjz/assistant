@@ -191,7 +191,9 @@ asserted isolated before its worker starts, and the worker is started through
 the resolved adapter's worker sessions, which the Claude Code adapter declares.
 A supervisor loop keeps a durable wake queue for the coordinator and pushes
 each wake to a coordinator holding `assistant coordinator listen`; a drain
-takes what is queued and records it as handled. `assistant host install` prints, or with `--write` adds, the stop guard that
+hands out what is queued, and only the coordinator's acknowledgement after it
+acted records a wake as handled, so a wake handed out and never acknowledged
+is handed out again. `assistant host install` prints, or with `--write` adds, the stop guard that
 keeps the coordinator's turn from ending while work is in flight with no live
 supervisor. A worker's
 push goes through the gate like anyone's, unless its task was recorded under the

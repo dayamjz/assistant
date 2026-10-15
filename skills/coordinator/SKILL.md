@@ -163,25 +163,35 @@ The service queues a wake when something needs the coordinator. Every turn
 that handles a wake drains the queue before doing anything else:
 
 ```sh
-assistant --json coordinator wakes          # takes the queued wakes, oldest first
+assistant --json coordinator wakes          # hands you the queued wakes, oldest first
+assistant coordinator acknowledge 12 13     # after you acted on wakes 12 and 13
 ```
 
-- Draining acknowledges. Every wake a drain lists is recorded as handled in
-  the same step, and no later drain lists it again. Always drain with
-  `--json`: the answer is the only place you are handed each wake.
-- So act on every wake a drain returned before your turn ends. If you stop
-  between the drain and acting, the queue will not give that wake back; read
-  `assistant tasks` to recover what happened to the work.
+- A drain hands wakes out and records none as handled. Always drain with
+  `--json`: without it, `wakes` is a person's listing that hands out
+  nothing.
+- Act on each wake, then acknowledge it by its `id`. Acknowledging is the
+  only thing that records a wake as handled, and a wake keeps its task
+  counted as in flight until you do.
+- A wake you were handed and did not acknowledge is handed out again: after
+  a service restart, and on your next drain once you are no longer
+  attached. You are attached while you hold `listen`; if you hold no
+  `listen`, every drain hands you the wakes you have not acknowledged yet.
+  So a wake can reach you twice: `handouts` counts how many times it has
+  been handed out, and a repeat may be one you already acted on. Read the
+  task before acting again.
 - `--limit N` bounds one drain; the default is 100. Wakes past the limit
   stay queued for the next drain.
 - Each wake names a `task_id` and a `kind`. Read the task before acting:
   for `terminal-gone`, relaunch it or decide to let it go; for
-  `hold-opened`, a decision waits on an answer; for
-  `message-unacknowledged`, the worker has not acknowledged a message.
-- `assistant coordinator acknowledge 12 13` records as handled wakes you
-  dealt with without draining them, ones `listen` printed. Naming an id no
-  wake has, or one already acknowledged, a drained one included, refuses
-  the whole batch with code `invalid-request`.
+  `hold-opened`, a decision waits on an answer, the task's own or one its
+  branch's run is held at, and `assistant --task ID --answer ...` reaches
+  either; for `message-unacknowledged`, the worker has not acknowledged a
+  message. The program's own records of creating and dispatching a task
+  wake nobody.
+- `acknowledge` also closes a wake `listen` printed that you dealt with
+  without draining. Naming an id no wake has, or one already acknowledged,
+  refuses the whole batch with code `invalid-request`.
 
 ## Be woken by the service
 
@@ -193,11 +203,14 @@ assistant --json coordinator listen     # one line per wake, until interrupted
 
 - Run it in the background if your tool can start a turn on a background
   command's output, and keep one running while work is in flight.
-- It records nothing as handled. Each line it prints is a notice that a
-  wake is queued; drain to take it, or acknowledge the one id you dealt
-  with.
+- It hands out and records nothing. Each line it prints is a notice that a
+  wake is queued; drain to be handed it, and acknowledge it once you acted.
+- Holding it is what makes you attached: wakes a drain hands you while it
+  runs are not handed out again under you. When it ends, whatever you were
+  handed and did not acknowledge comes back on the next drain.
 - Its first line is a gap marker, and a gap later on means pushes were
-  missed. On either, drain: the drain gives back every wake still queued.
+  missed. On either, drain: the drain gives back every wake still queued
+  that you were not already handed.
 - If the service stops, `listen` exits `1`. Run `assistant coordinator
   supervision`, then start `listen` again and drain.
 
@@ -214,11 +227,14 @@ to one is yours.
 assistant --json coordinator await --timeout 5m   # blocks, then drains
 ```
 
-- It answers as soon as the queue holds a wake that is not acknowledged,
-  draining it as `wakes` does, or once the bound passes with an empty list.
-  An empty list always means the bound passed.
-- A wake it returned is recorded as handled and is not returned again. So
-  the loop is: wait, act on each wake it returned, wait again.
+- It answers as soon as the queue holds a wake on offer to you, draining it
+  as `wakes --json` does, or once the bound passes with an empty list. An
+  empty list always means the bound passed. It drains with or without
+  `--json`.
+- A wake it returned is still waiting until you acknowledge it. So the loop
+  is: wait, act on each wake it returned, acknowledge them, wait again. A
+  wait armed before you acknowledge answers at once with the same wakes
+  when you hold no `listen`.
 - `--timeout` is whole seconds from `1s` to `1h`; the default is `5m`.
   Anything else is refused as incorrect usage, exit `2`, and nothing is
   clamped. Choose a bound shorter than the limit your own tool puts on one
@@ -226,7 +242,9 @@ assistant --json coordinator await --timeout 5m   # blocks, then drains
 - `--limit N` bounds the answer, as on `wakes`.
 - If the service stops or restarts while you wait, the command exits `1`.
   Run `assistant coordinator supervision` to confirm the watch is live
-  again, then arm the wait again; wakes still queued are drained at once.
+  again, then arm the wait again; wakes still queued are drained at once,
+  the ones you were handed before the restart and did not acknowledge
+  included.
   A restart can change the queue first: on start the service relaunches a
   task whose worker's terminal is gone and whose work has not landed, up
   to `relaunch_attempts` times (2 unless configured), and records that
@@ -241,9 +259,13 @@ assistant --json coordinator await --timeout 5m   # blocks, then drains
   after a worker stops is the supervision's cadence. Check
   `assistant coordinator supervision` at session start and after any exit
   `1` from `await` or `listen`.
-- **A drained wake is not given back.** Draining records it as handled, so a
-  turn that drains and then ends without acting has lost it from the queue.
-  The task's state in `assistant tasks` still shows what happened.
+- **Being attached is your stream, not you.** The service sees `listen`,
+  not your session. A `listen` left running after your session died keeps
+  what you were handed until that process ends, and two streams held at
+  once count as one, so a coordinator going away is not noticed until every
+  stream has closed. If you hold `listen` and never acknowledge what you
+  acted on, you are not handed it again, and it keeps the work counted as in
+  flight: acknowledge as you go.
 - **The service pushes only to `listen`.** It does not start a turn in your
   host by itself; a coordinator holding neither `listen` nor `await` is
   woken by nothing.

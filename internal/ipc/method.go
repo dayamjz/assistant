@@ -118,39 +118,49 @@ const (
 	// terminal through the service.
 	MethodTaskPeek Method = "task.peek"
 	// MethodWakesList drains the durable wake queue for the coordinator, PRD
-	// section 8's drain: it returns the queued wakes, oldest first, and
-	// acknowledges exactly the rows it returns, so a second drain does not
-	// return them and the rows are kept. Who acknowledged is derived from
-	// this surface by Request.WakeAcknowledger. It is the coordinator's and
-	// refused for a task's worker, which the handler decides from the
-	// caller's credentials against the worker group set.
+	// section 8's drain as the owner amended it: it returns the queued wakes
+	// on offer, oldest first, and records them as handed out to the
+	// coordinator, closing none. A row handed out stays queued until
+	// MethodWakesAcknowledge closes it, and is handed out again once the
+	// coordinator it was handed to is no longer attached, which the service
+	// decides and internal/service's wakewait.go states. Who it was handed to
+	// is derived from this surface by Request.WakeAcknowledger. It is the
+	// coordinator's and refused for a task's worker, which the handler
+	// decides from the caller's credentials against the worker group set.
 	MethodWakesList Method = "wakes.list"
-	// MethodWakesAcknowledge records that the coordinator handled the named
-	// wakes without draining them: rows it learned of from
-	// MethodWakesSubscribe or a task's history. A row a drain returned is
-	// already acknowledged and naming it is refused. Who acknowledged is
-	// never in the request: it is derived from this surface by
-	// Request.WakeAcknowledger, the way Request.HoldResolver derives who
-	// resolved a hold. Refused for a task's worker on MethodWakesList's
+	// MethodWakesPeek lists the queued wakes, handed out or not, oldest
+	// first, and hands out and acknowledges nothing: it is the person's
+	// reading of the queue, which leaves every row where it was for the
+	// coordinator's drain. Refused for a task's worker on MethodWakesList's
 	// terms.
+	MethodWakesPeek Method = "wakes.peek"
+	// MethodWakesAcknowledge records that the coordinator acted on the named
+	// wakes, which is what closes a row: one a drain handed out, or one it
+	// learned of from MethodWakesSubscribe or a task's history. A row
+	// already acknowledged is refused. Who acknowledged is never in the
+	// request: it is derived from this surface by Request.WakeAcknowledger,
+	// the way Request.HoldResolver derives who resolved a hold. Refused for a
+	// task's worker on MethodWakesList's terms.
 	MethodWakesAcknowledge Method = "wakes.acknowledge"
 	// MethodWakesWait is the blocking form of MethodWakesList: it answers
-	// as soon as the queue holds a queued wake, with the rows a drain
-	// returns and acknowledges, or once the bound the request names elapses
-	// with none. It is a request rather than a stream, so it answers once
-	// and holds one of its connection's in-flight slots while it waits. It
-	// keeps no state across calls, so arming it again after a service
-	// restart reads the durable queue as the first call did. Refused for a
-	// task's worker on MethodWakesList's terms.
+	// as soon as the queue holds a wake on offer, with the rows a drain
+	// hands out, or once the bound the request names elapses with none. It
+	// is a request rather than a stream, so it answers once and holds one
+	// of its connection's in-flight slots while it waits. It keeps no state
+	// across calls, so arming it again after a service restart reads the
+	// durable queue as the first call did. Refused for a task's worker on
+	// MethodWakesList's terms.
 	MethodWakesWait Method = "wakes.wait"
 	// MethodWakesSubscribe opens the coordinator's wake stream: the service
 	// pushes each wake the supervisor queues, as a TypeWakeQueued event,
 	// without being asked again, which is PRD section 5's "then wake the
-	// coordinator". It acknowledges nothing, because pushing is not
-	// draining: the row stays queued until a drain or MethodWakesAcknowledge
-	// takes it. It is restricted, and its handler refuses a task's worker on
-	// MethodWakesList's terms before anything is written, so neither a
-	// contained caller nor a worker is sent a coordinator's wake.
+	// coordinator". It hands out and acknowledges nothing, because pushing
+	// is not draining. Holding it is also what the service reads as the
+	// coordinator being attached, so a row a drain handed out while it is
+	// held is not handed out again until it ends. It is restricted, and its
+	// handler refuses a task's worker on MethodWakesList's terms before
+	// anything is written, so neither a contained caller nor a worker is
+	// sent a coordinator's wake.
 	MethodWakesSubscribe Method = "wakes.subscribe"
 	// MethodSupervisionAssert is PRD section 5's arm verification over the
 	// socket: it answers whether the supervisor loop of the service that
@@ -279,9 +289,10 @@ var specs = []Spec{
 	{MethodTaskStop, KindRequest, AccessRestricted, "End a running task's worker, prove it dead, and hold the task, for the coordinator."},
 	{MethodTaskInterrupt, KindRequest, AccessRestricted, "Interrupt a worker's turn; refused, since no adapter declares the capability."},
 	{MethodTaskPeek, KindRequest, AccessRestricted, "Read a running task's worker's recent output, redacted and bounded, for the coordinator."},
-	{MethodWakesList, KindRequest, AccessRestricted, "Drain the wake queue: list the queued wakes and acknowledge them."},
-	{MethodWakesAcknowledge, KindRequest, AccessRestricted, "Record that the coordinator handled the named wakes without draining them."},
-	{MethodWakesWait, KindRequest, AccessRestricted, "Block until the wake queue holds a queued wake or a bound elapses, then drain it."},
+	{MethodWakesList, KindRequest, AccessRestricted, "Drain the wake queue: hand out the queued wakes on offer, closing none."},
+	{MethodWakesPeek, KindRequest, AccessRestricted, "List the queued wakes without handing out or acknowledging any."},
+	{MethodWakesAcknowledge, KindRequest, AccessRestricted, "Record that the coordinator acted on the named wakes, which closes them."},
+	{MethodWakesWait, KindRequest, AccessRestricted, "Block until the wake queue holds a wake on offer or a bound elapses, then drain it."},
 	{MethodWakesSubscribe, KindStream, AccessRestricted, "Open the coordinator's wake stream, which pushes each wake as it is queued."},
 	{MethodSupervisionAssert, KindRequest, AccessRestricted, "Verify that the supervisor loop of this home's service is live."},
 	{MethodCatchUpRead, KindRequest, AccessOpen, "Read what waits on you, what landed unseen, what is under way, and what stopped."},

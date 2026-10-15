@@ -65,6 +65,16 @@ const promotedIntentMigration = "task delivery intent recorded at promotion"
 // is a constant.
 const runStandingConsentMigration = "run standing consent"
 
+// wakeHandoutMigration names the migration that records a wake's handout,
+// which makes delivery at least once, for the reason
+// sealCheckpointTableMigration is a constant.
+const wakeHandoutMigration = "wake handouts"
+
+// runHeldMovesMigration names the migration that counts a run's moves into
+// held, which is what identifies one hold of a run, for the reason
+// sealCheckpointTableMigration is a constant.
+const runHeldMovesMigration = "run held moves"
+
 // schema is the migration list this package applies. Adding a column means
 // appending a migration whose ALTER TABLE names a nullable column with no
 // default, so rows written before it reads back unknown; migrate refuses
@@ -690,8 +700,9 @@ var schema = []migration{
 			// actionable wake, a table here and not a directory so a wake and
 			// the detector markers it advances are one write. It is
 			// authoritative and appended: a row is actionable until it is
-			// acknowledged, and draining acknowledges a row and never deletes
-			// it, so drained rows are kept.
+			// acknowledged, and no row is deleted, so closed rows are kept.
+			// A drain acknowledged what it took until migration 31 made it a
+			// handout instead.
 			//
 			// kind is a word the supervisor's own table gives a meaning to;
 			// this package records it and decides nothing from it. marker is
@@ -704,8 +715,9 @@ var schema = []migration{
 			//
 			// handled_at and acknowledged_by are the one revision a row
 			// takes, together and once: the acknowledgement. acknowledged_by
-			// is the closed set acknowledger.go names, and AcknowledgeWakes
-			// and DrainWakes are the only accessors that write either column.
+			// is the closed set acknowledger.go names. AcknowledgeWakes is the
+			// only accessor that writes either column; DrainWakes wrote them
+			// too until migration 31 gave a drain a handout of its own.
 			`CREATE TABLE wake (
 				id              INTEGER PRIMARY KEY,
 				task_id         TEXT NOT NULL REFERENCES task(id),
@@ -1354,6 +1366,85 @@ var schema = []migration{
 				WHEN OLD.standing_consent IS NOT NULL OR NEW.standing_consent IS NULL
 				BEGIN
 					SELECT RAISE(ABORT, 'store: a run''s standing consent is given once and is neither revised nor withdrawn');
+				END`,
+		},
+	},
+	{
+		version: 31,
+		name:    wakeHandoutMigration,
+		statements: []string{
+			// PRD section 8 as the owner amended it: draining hands a row
+			// out, and acknowledging closes it. Migration 15 made the
+			// acknowledgement the one revision a wake row takes, and a drain
+			// wrote it, so delivery was at most once. These four columns are
+			// the handout a drain writes instead, which leaves the row
+			// queued until AcknowledgeWakes closes it.
+			//
+			// handed_out_at is when the latest drain handed the row out,
+			// handed_out_to who it was handed to, in the closed set
+			// acknowledger.go names, and handed_out_under the attachment it
+			// was handed out under, which internal/service composes and this
+			// package compares and never interprets: a drain passes the
+			// attachments still attached, and a row handed out under one of
+			// them is not handed out again. handouts counts the drains that
+			// handed the row out.
+			//
+			// All four are nullable with no default. A row written before
+			// this migration reads back with no handout, which is true of
+			// every row still queued then, because a drain before it
+			// acknowledged what it took, and is unknown rather than false of
+			// a row acknowledged before it. DrainWakes is the one accessor
+			// that writes them. The trigger keeps a handout to a queued row
+			// and to whole handouts: an update naming any of the four is
+			// refused once the row is acknowledged, when it leaves any of
+			// the three facts unknown, or when it does not count exactly one
+			// more handout than the row had. An update that does not name
+			// them, the acknowledgement's, cannot change them, so it does not
+			// reach the trigger, and wake_is_acknowledged_once still makes
+			// the acknowledgement the row's last revision of those two.
+			`ALTER TABLE wake ADD COLUMN handed_out_at TEXT`,
+			`ALTER TABLE wake ADD COLUMN handed_out_to TEXT`,
+			`ALTER TABLE wake ADD COLUMN handed_out_under TEXT`,
+			`ALTER TABLE wake ADD COLUMN handouts INTEGER`,
+			`CREATE TRIGGER wake_is_handed_out_while_queued
+				BEFORE UPDATE OF handed_out_at, handed_out_to, handed_out_under, handouts ON wake
+				WHEN OLD.handled_at IS NOT NULL
+					OR NEW.handed_out_at IS NULL OR NEW.handed_out_to IS NULL OR NEW.handed_out_under IS NULL
+					OR NEW.handouts IS NOT coalesce(OLD.handouts, 0) + 1
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a wake is handed out only while it is queued, and each handout is counted once');
+				END`,
+		},
+	},
+	{
+		version: 32,
+		name:    runHeldMovesMigration,
+		statements: []string{
+			// How many times a run has moved into held. PRD section 5 has a
+			// run moved to held surface always, and a run can hold, be
+			// answered, and hold again at a later stage, so the supervisor
+			// loop needs a component that advances on every hold to key the
+			// wake by. This is that component, and it is written where the
+			// hold becomes durable: transitionRun increments it in the
+			// statement that moves the status to held, so no run reads as
+			// held without the count that names this hold, and the loop
+			// reads it from the run row rather than from any history (P8).
+			//
+			// It is nullable with no default, so a run written before it
+			// reads back unknown; the first move into held after it counts
+			// from there as one. The trigger makes it count moves into held
+			// and nothing else: an update naming it is refused unless the
+			// same statement moves the status from something else to held
+			// and the count is exactly one more than it was. An update that
+			// does not name the column cannot change it, so it does not
+			// reach the trigger.
+			`ALTER TABLE run ADD COLUMN held_moves INTEGER`,
+			`CREATE TRIGGER run_held_moves_count_moves_into_held
+				BEFORE UPDATE OF held_moves ON run
+				WHEN OLD.status = 'held' OR NEW.status <> 'held'
+					OR NEW.held_moves IS NOT coalesce(OLD.held_moves, 0) + 1
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a run''s held moves count its moves into held, one per move, and nothing else');
 				END`,
 		},
 	},

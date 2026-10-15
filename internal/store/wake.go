@@ -11,7 +11,8 @@ import (
 
 // Wake is one row of PRD section 8's durable wake queue: an actionable wake
 // the supervisor loop wrote, actionable until it is acknowledged and kept
-// afterwards. The kind is a word internal/supervisor's table gives a meaning
+// afterwards. A drain hands a row out and leaves it queued; only the
+// acknowledgement closes it. The kind is a word internal/supervisor's table gives a meaning
 // to, and the marker is the component the loop composed to keep one
 // detection from being queued twice; this package records both and reads
 // neither.
@@ -33,10 +34,34 @@ type Wake struct {
 	// AcknowledgedBy is who acknowledged it, and unknown while it is still
 	// queued.
 	AcknowledgedBy Optional[Acknowledger] `json:"acknowledged_by"`
+	// HandedOutAt is when the latest drain handed the row out, and unknown
+	// while no drain has. A row handed out is still queued.
+	HandedOutAt Optional[time.Time] `json:"handed_out_at"`
+	// HandedOutTo is who the latest drain handed the row to, and unknown
+	// while no drain has. It is kept off the wire for AcknowledgedBy's
+	// reason, which internal/machine's Wakes states: an Acknowledger has no
+	// text form outside this package, so the record is where it is read.
+	HandedOutTo Optional[Acknowledger] `json:"-"`
+	// HandedOutUnder is the attachment the latest drain handed the row out
+	// under, as the drain's caller composed it, and unknown while no drain
+	// has. This package compares it and never interprets it; it is kept off
+	// the wire because it is the service's own bookkeeping.
+	HandedOutUnder Optional[string] `json:"-"`
+	// Handouts is how many drains have handed the row out, so a reader can
+	// tell a wake handed out again from one handed out for the first time.
+	// It is unknown for a row no drain has handed out, and for a row
+	// acknowledged before handouts were recorded, which a drain of that
+	// build may have taken.
+	Handouts Optional[int64] `json:"handouts"`
 }
 
-// Queued reports whether the wake has not been acknowledged.
+// Queued reports whether the wake has not been acknowledged, handed out or
+// not.
 func (w Wake) Queued() bool { return !w.HandledAt.IsKnown() }
+
+// HandedOut reports whether a drain has handed the wake out and it has not
+// been acknowledged since.
+func (w Wake) HandedOut() bool { return w.Queued() && w.HandedOutAt.IsKnown() }
 
 // WakeRequest is the wake a loop asks to append: the task, the kind, and the
 // marker it composed.
@@ -387,10 +412,10 @@ func wakeMarkersOf(ctx context.Context, q querier, taskID string) (WakeMarkers, 
 }
 
 // QueuedWakes returns the queued wakes, oldest first, at most limit of them,
-// and acknowledges none: it is a read, for a caller that has to see what
-// stands for the coordinator without handing it over, which is the
-// program's own reconciliation and relaunch and nothing that reaches a
-// coordinator. A row it returns stays actionable. The limit must be
+// handed out or not, and hands out none: it is a read, for a caller that
+// has to see what stands for the coordinator without handing it over, which
+// is the program's own reconciliation and relaunch and a person's listing of
+// the queue. A row it returns stays where it was. The limit must be
 // positive; a batch with no bound is not a batch.
 func (s *Store) QueuedWakes(ctx context.Context, limit int) ([]Wake, error) {
 	if limit < 1 {
@@ -411,36 +436,100 @@ func (s *Store) QueuedWakes(ctx context.Context, limit int) ([]Wake, error) {
 	return out, nil
 }
 
-// DrainWakes is PRD section 8's drain: it returns the queued wakes, oldest
-// first, at most limit of them, and acknowledges exactly the rows it returns,
-// by, in the one transaction that read them. "Draining acknowledges a row and
-// never deletes it": the rows are returned as they stand after the drain,
-// acknowledged and kept, and a second drain does not return them.
+// WakeHandout is what a drain hands rows out as: who to, under which
+// attachment, and which attachments are still attached.
 //
-// Delivery is therefore what the PRD's text gives and no more: a row is
-// actionable until it is acknowledged, and a drain is an acknowledgement, so
-// a row is handed to at most one drain. A consumer that drained a row and
-// then crashed, or whose answer never reached its caller, has had it
-// acknowledged all the same; the row is kept, so TaskWakes still shows it,
-// and nothing hands it out again. That is a delivery at most once to a
-// drain, and it is stated here rather than softened: a caller wanting to see
-// what is queued without taking it uses QueuedWakes, and one wanting to
-// close a row it learned of some other way uses AcknowledgeWakes.
+// The attachments are the caller's: internal/service composes them from its
+// own identity and the coordinator's wake stream, and this package compares
+// them as text and never interprets one. What it promises is the comparison:
+// a queued row last handed out under an attachment named in Held is not
+// handed out again, and every other queued row is.
+type WakeHandout struct {
+	// To is who the rows are handed to. The zero Acknowledger is refused
+	// with ErrNoAcknowledger.
+	To Acknowledger
+	// Under is the attachment the rows are handed out under, which a later
+	// drain names in Held for as long as it is attached. It may not be
+	// blank.
+	Under string
+	// Held are the attachments still attached. A row last handed out under
+	// one of them is held for it and not offered; empty holds nothing, so
+	// every queued row is offered.
+	Held []string
+}
+
+func (h WakeHandout) validate() error {
+	if _, err := acknowledgerText(h.To); err != nil {
+		return err
+	}
+	if strings.TrimSpace(h.Under) == "" {
+		return errors.New("store: a wake handout names no attachment it is made under")
+	}
+	return nil
+}
+
+// offeredClause is the condition a queued row is offered on, with its
+// arguments: never handed out, or handed out under an attachment held does
+// not name.
+func offeredClause(held []string) (string, []any) {
+	clause := `handled_at IS NULL`
+	if len(held) == 0 {
+		return clause, nil
+	}
+	marks := make([]string, len(held))
+	args := make([]any, len(held))
+	for i, h := range held {
+		marks[i], args[i] = "?", h
+	}
+	return clause + ` AND (handed_out_under IS NULL OR handed_out_under NOT IN (` + strings.Join(marks, ",") + `))`, args
+}
+
+// OfferedWakes reports how many queued rows a drain made now with held as
+// its WakeHandout.Held would offer, and hands out none. It is a read, for a
+// wait that has to know whether a drain is worth its write.
+func (s *Store) OfferedWakes(ctx context.Context, held []string) (int, error) {
+	if err := s.live(); err != nil {
+		return 0, err
+	}
+	clause, args := offeredClause(held)
+	var n int
+	if err := s.read.QueryRowContext(ctx, `SELECT count(*) FROM wake WHERE `+clause, args...).Scan(&n); err != nil {
+		return 0, fmt.Errorf("store: counting the offered wakes: %w", err)
+	}
+	return n, nil
+}
+
+// DrainWakes is PRD section 8's drain as the owner amended it: draining
+// hands a row out, and acknowledging closes it. It returns the queued rows
+// on offer, oldest first, at most limit of them, and records on exactly
+// those rows, in the one transaction that read them, that they were handed
+// out to h.To under h.Under, now, and one handout more. It closes nothing:
+// every row it returns is still queued, and only AcknowledgeWakes takes it
+// off the queue.
 //
-// The limit must be positive, the zero Acknowledger is refused with
-// ErrNoAcknowledger, both before anything is read, and a handle opened read
-// only refuses with ErrReadOnly, because a drain writes.
-func (s *Store) DrainWakes(ctx context.Context, limit int, by Acknowledger) ([]Wake, error) {
+// A row is on offer when it is queued and was never handed out, or was last
+// handed out under an attachment h.Held does not name. So a row handed out
+// is not handed out again for as long as the caller names its attachment as
+// held, and is handed out again by the first drain that does not, which is
+// how a coordinator that drained and then went away before acting gets the
+// row back: delivery is at least once. When an attachment stops being held
+// is the caller's to decide; nothing here reads a clock to decide it.
+//
+// The limit must be positive and the handout must name who and under what,
+// all before anything is read; the zero Acknowledger is ErrNoAcknowledger. A
+// handle opened read only refuses with ErrReadOnly, because a drain writes.
+func (s *Store) DrainWakes(ctx context.Context, limit int, h WakeHandout) ([]Wake, error) {
 	if limit < 1 {
 		return nil, fmt.Errorf("store: a drain limit of %d is not a batch size", limit)
 	}
-	who, err := acknowledgerText(by)
-	if err != nil {
+	if err := h.validate(); err != nil {
 		return nil, fmt.Errorf("store: draining wakes: %w", err)
 	}
+	to, _ := acknowledgerText(h.To)
+	clause, args := offeredClause(h.Held)
 	var out []Wake
-	err = s.inTx(ctx, func(tx *sql.Tx) error {
-		rows, err := tx.QueryContext(ctx, `SELECT id FROM wake WHERE handled_at IS NULL ORDER BY id LIMIT ?`, limit)
+	err := s.inTx(ctx, func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx, `SELECT id FROM wake WHERE `+clause+` ORDER BY id LIMIT ?`, append(args, limit)...)
 		if err != nil {
 			return err
 		}
@@ -463,8 +552,10 @@ func (s *Store) DrainWakes(ctx context.Context, limit int, by Acknowledger) ([]W
 		out = make([]Wake, 0, len(ids))
 		for _, id := range ids {
 			if _, err := tx.ExecContext(ctx,
-				`UPDATE wake SET handled_at = ?, acknowledged_by = ? WHERE id = ? AND handled_at IS NULL`,
-				now, who, id); err != nil {
+				`UPDATE wake SET handed_out_at = ?, handed_out_to = ?, handed_out_under = ?,
+					handouts = coalesce(handouts, 0) + 1
+				WHERE id = ? AND handled_at IS NULL`,
+				now, to, h.Under, id); err != nil {
 				return err
 			}
 			drained, err := scanWake(tx.QueryRowContext(ctx, wakeColumns+` FROM wake WHERE id = ?`, id))
@@ -482,7 +573,7 @@ func (s *Store) DrainWakes(ctx context.Context, limit int, by Acknowledger) ([]W
 }
 
 // TaskWakes returns every wake of a task, acknowledged or not, oldest first.
-// It is the history of what surfaced for the task, drained rows included;
+// It is the history of what surfaced for the task, closed rows included;
 // which of them is still actionable is QueuedWakes' question.
 func (s *Store) TaskWakes(ctx context.Context, taskID string) ([]Wake, error) {
 	if err := s.live(); err != nil {
@@ -500,12 +591,13 @@ func (s *Store) TaskWakes(ctx context.Context, taskID string) ([]Wake, error) {
 	return out, nil
 }
 
-// UnacknowledgedWakes returns how many queued wakes each task has, keyed by
-// task identifier, with no entry for a task that has none. It is the queue's
-// half of what internal/supervisor's in-flight table reads: a task with a
-// row here is one somebody has not been told about, whatever its state
-// says. The count is taken as of one read; which tasks are in flight by
-// state is not decided here.
+// UnacknowledgedWakes returns how many queued wakes each task has, handed
+// out or not, keyed by task identifier, with no entry for a task that has
+// none. It is the queue's half of what internal/supervisor's in-flight table
+// reads: a task with a row here is one the coordinator has not acknowledged
+// acting on, whatever its state says, so a wake keeps its task in flight
+// until it is acknowledged and not until it is drained. The count is taken
+// as of one read; which tasks are in flight by state is not decided here.
 func (s *Store) UnacknowledgedWakes(ctx context.Context) (map[string]int, error) {
 	if err := s.live(); err != nil {
 		return nil, err
@@ -539,15 +631,14 @@ func (s *Store) UnacknowledgedWakes(ctx context.Context) (map[string]int, error)
 // with ErrNoAcknowledger and an empty batch is refused, both before anything
 // is read.
 //
-// The acknowledgement is the one revision a wake row takes, and it is what
-// takes the row out of QueuedWakes, DrainWakes and UnacknowledgedWakes.
-// DrainWakes writes the same revision for every row it returns, so this is
-// the acknowledgement of a row that was not drained: one a caller learned of
-// some other way, from a pushed notice or a task's history, and handled
-// without draining the rest of the queue. A row a drain returned is already
-// acknowledged, and naming it here is ErrWakeAcknowledged. It records who
-// acknowledged and does not gate on it: every member of the set closes a row
-// on the same terms.
+// The acknowledgement is what closes a row, and the last revision it takes:
+// it takes the row out of QueuedWakes, DrainWakes and UnacknowledgedWakes,
+// and no drain hands it out again. A row a drain handed out is still queued
+// and is acknowledged here on the same terms as one nobody drained, which is
+// how the coordinator says it acted on what a drain handed it; a row it
+// learned of some other way, from a pushed notice or a task's history, is
+// acknowledged the same way. It records who acknowledged and does not gate
+// on it: every member of the set closes a row on the same terms.
 func (s *Store) AcknowledgeWakes(ctx context.Context, ids []int64, by Acknowledger) error {
 	if len(ids) == 0 {
 		return errors.New("store: an acknowledgement names no wakes")
@@ -581,7 +672,8 @@ func (s *Store) AcknowledgeWakes(ctx context.Context, ids []int64, by Acknowledg
 	})
 }
 
-const wakeColumns = `SELECT id, task_id, kind, marker, created_at, handled_at, acknowledged_by`
+const wakeColumns = `SELECT id, task_id, kind, marker, created_at, handled_at, acknowledged_by,
+	handed_out_at, handed_out_to, handed_out_under, handouts`
 
 func wakeByKey(ctx context.Context, q querier, w WakeRequest) (Wake, error) {
 	return scanWake(q.QueryRowContext(ctx, wakeColumns+` FROM wake WHERE task_id = ? AND kind = ? AND marker = ?`,
@@ -591,8 +683,9 @@ func wakeByKey(ctx context.Context, q querier, w WakeRequest) (Wake, error) {
 func scanWake(sc scanner) (Wake, error) {
 	var w Wake
 	var created string
-	var handled, by Optional[string]
-	if err := sc.Scan(&w.ID, &w.TaskID, &w.Kind, &w.Marker, &created, &handled, &by); err != nil {
+	var handled, by, handedAt, handedTo Optional[string]
+	if err := sc.Scan(&w.ID, &w.TaskID, &w.Kind, &w.Marker, &created, &handled, &by,
+		&handedAt, &handedTo, &w.HandedOutUnder, &w.Handouts); err != nil {
 		return Wake{}, err
 	}
 	var err error
@@ -603,6 +696,12 @@ func scanWake(sc scanner) (Wake, error) {
 		return Wake{}, err
 	}
 	if w.AcknowledgedBy, err = acknowledgerValue(by, "acknowledged_by"); err != nil {
+		return Wake{}, err
+	}
+	if w.HandedOutAt, err = optionalTimeValue(handedAt, "handed_out_at"); err != nil {
+		return Wake{}, err
+	}
+	if w.HandedOutTo, err = acknowledgerValue(handedTo, "handed_out_to"); err != nil {
 		return Wake{}, err
 	}
 	return w, nil
