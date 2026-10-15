@@ -455,10 +455,11 @@ func (u *usageFlag) IsBoolFlag() bool { return true }
 // The branch is the working copy's, the same way attaching and status read it,
 // so a caller never restarts a branch they are not on.
 //
-// The last known head is the one the branch's last run recorded, and the
-// service refuses the rerun when the working copy's HEAD is another commit,
-// with machine.RerunMoved naming both and a remedy: assistant sync when the
-// local commit is established as behind work the run recorded, and otherwise
+// The last known head is the commit the branch's last run pushed, or the one
+// it was submitted with when it pushed nothing, and the service refuses the
+// rerun when the working copy's HEAD is another commit, with
+// machine.RerunMoved naming both and a remedy: assistant sync when the local
+// commit is established as behind work the run pushed, and otherwise
 // the two commands that validate the local one. That refusal is the
 // service's, decided while it holds the branch; this command only reports it,
 // and neither reads anything but HEAD from the working copy, so a refused

@@ -2005,7 +2005,7 @@ flowchart TB
         <tr><td><code>assistant init</code></td><td>Create or repair the gate for this repository.</td></tr>
         <tr><td><code>assistant status</code></td><td>Repository, gate, service, active run, and local branch state.</td></tr>
         <tr><td><code>assistant runs</code></td><td>Recent runs, newest first.</td></tr>
-        <tr><td><code>assistant rerun</code></td><td>Start a fresh run from the last known head, inheriting the recorded intent.</td></tr>
+        <tr><td><code>assistant rerun</code></td><td>Start a fresh run from the last known head, inheriting the recorded intent. The last known head is the commit the branch's last run pushed, or the commit it was submitted with when it pushed nothing. When the checkout stands on another commit, rerun refuses and starts nothing: behind what the run pushed, it names <code>assistant sync</code>; anywhere else, it names a push to the gate or a start with an intent.</td></tr>
         <tr><td><code>assistant sync</code></td><td>Reconcile your local branch with what the pipeline pushed, or recover work it holds. Prints the exact plan and requires confirmation.</td></tr>
         <tr><td><code>assistant tasks</code></td><td>List fleet work with its resolved current state.</td></tr>
         <tr><td><code>assistant watch</code></td><td>Fleet view: everything in flight, everything waiting on you.</td></tr>

@@ -115,9 +115,9 @@ func startInputs(req machine.StartRequest) []string {
 }
 
 // rerun starts a fresh run of the branch the caller is standing on, from that
-// branch's last known head and inheriting the intent recorded there, and
-// blocks while it advances that run, answering at its next decision point or a
-// terminal outcome. It never answers with a run still executing, because the
+// branch's last known head, which lastKnownHead defines, and inheriting the
+// intent recorded there, and blocks while it advances that run, answering at
+// its next decision point or a terminal outcome. It never answers with a run still executing, because the
 // branch it would report one for is the branch it refuses.
 //
 // The branch is read from the working copy, exactly as start reads it. A verb
@@ -174,12 +174,13 @@ func (s *Service) rerun(ctx context.Context, req machine.RerunRequest) (machine.
 // have to be the ones that were there when the decision was made.
 //
 // local is the commit the caller's working copy stood at when the request was
-// read. A rerun validates the head the branch's last run recorded, so when
-// local is a different commit the rerun is refused with rerunMoved naming both
-// and nothing is created: validating the recorded head would re-vet a commit
-// the person has moved on from and say nothing about theirs. local is read
-// before the claim, as start reads its head, so a commit made after that read
-// and before the claim is not seen.
+// read. A rerun validates the branch's last known head, which lastKnownHead
+// reads, so when local is a different commit the rerun is refused with
+// rerunMoved naming both and nothing is created: validating that head would
+// re-vet a commit the person has moved on from, or vet work they do not yet
+// have, and say nothing about theirs. local is read before the claim, as
+// start reads its head, so a commit made after that read and before the claim
+// is not seen.
 func (s *Service) claimRerun(ctx context.Context, key branchKey, local string) (store.Run, error) {
 	release, err := s.holdBranch(ctx, key)
 	if err != nil {
@@ -196,7 +197,10 @@ func (s *Service) claimRerun(ctx context.Context, key branchKey, local string) (
 	} else if active {
 		return store.Run{}, fmt.Errorf("service: %s already has a run in flight; end it before starting another", key.branch)
 	}
-	recorded := previous.CurrentHead.Or(previous.SubmittedHead)
+	recorded, err := s.lastKnownHead(ctx, previous)
+	if err != nil {
+		return store.Run{}, err
+	}
 	if local != recorded {
 		return store.Run{}, rerunMoved{
 			moved: machine.RerunMoved{Branch: key.branch, Local: local, Recorded: recorded,
@@ -216,6 +220,33 @@ func (s *Service) claimRerun(ctx context.Context, key branchKey, local string) (
 	})
 }
 
+// lastKnownHead is the commit a rerun of previous's branch validates: what
+// previous's pipeline last pushed, and the commit it was submitted with when
+// it pushed nothing.
+//
+// What a run pushed has one owner, its checkpoint position, and this reads it
+// through positionOf, the same read internal/custody classifies the branch
+// from for assistant sync, so the commit a rerun refuses against and the
+// commit sync reconciles the checkout with are one fact read one way. The
+// record's CurrentHead is not consulted: nothing in this build writes it, and
+// a second record of the push is what P14 forbids.
+//
+// A run with no checkpoint, or whose checkpoint records no push, pushed
+// nothing, so it falls back to the submitted commit. A checkpoint that cannot
+// be read is an error rather than that fallback, because validating the
+// submitted commit of a run that did push would re-vet what the pipeline had
+// already moved past.
+func (s *Service) lastKnownHead(ctx context.Context, previous store.Run) (string, error) {
+	position, err := s.positionOf(ctx, previous.ID)
+	if err != nil {
+		return "", err
+	}
+	if position.Pushed != "" {
+		return position.Pushed, nil
+	}
+	return previous.SubmittedHead, nil
+}
+
 // rerunMoved is machine.RerunMoved as this service refuses with it: on the
 // wire it is ipc.ErrRefused, because the request was readable and the records
 // decided against it, and its message is the refusal's own text with no
@@ -225,8 +256,7 @@ type rerunMoved struct {
 	// run is the run whose recorded head the rerun would have validated.
 	run string
 	// work is whether that head is the run's own work rather than the commit
-	// it was submitted: a recorded current head that differs from the
-	// submitted one.
+	// it was submitted: a pushed commit that differs from the submitted one.
 	work bool
 }
 
@@ -241,8 +271,10 @@ type rerunMoved struct {
 // not hold, because a remedy chosen on a read that failed would be a guess.
 // A local commit behind the commit that was submitted is RerunMovedElsewhere
 // too: the head a rerun validates is then the submitted commit rather than
-// work the run recorded, and whether sync has anything to bring in is decided
-// by internal/custody from the run's checkpoint, which this does not read.
+// work the run pushed, so sync has nothing of the run's to bring in. Sync's
+// own plan is internal/custody's, which also reads the run's copy and the
+// local branch; this names sync on the pushed commit and ancestry alone, and
+// sync decides what it does when it is asked.
 //
 // It reads the gate repository and writes nothing anywhere.
 func (s *Service) placeMoved(ctx context.Context, repository store.Repository, moved rerunMoved) error {
