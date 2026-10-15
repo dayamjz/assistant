@@ -271,7 +271,7 @@ their terminal.
 
 ```sh
 make build     # build the binary into ./bin
-make test      # go test -race ./...
+make test      # go test -race -timeout 30m ./...
 make lint      # vet and golangci-lint
 make check     # lint and test, what CI runs
 ```
