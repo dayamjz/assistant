@@ -223,8 +223,10 @@ func TestAnInvestigationsHoldIsAnsweredGivenTheTask(t *testing.T) {
 	}
 }
 
-// --task is read only with --answer, takes a task, and is not a fix round's.
-// Each is incorrect usage, decided before any service is asked.
+// --task is read only with --answer and takes a task, and it acts on one
+// thing at a time. Each is incorrect usage, decided before any service is
+// asked. A fix round given --task is not among them: it goes to the task's
+// run, which taskrun_test.go drives.
 func TestTheTaskFlagIsReadOnlyWithAnAnswer(t *testing.T) {
 	t.Parallel()
 	h := newHome(t)
@@ -232,7 +234,7 @@ func TestTheTaskFlagIsReadOnlyWithAnAnswer(t *testing.T) {
 	for _, args := range [][]string{
 		{"--task", "abcdefghij23"},
 		{"--task", "", "--answer", "retry"},
-		{"--task", "abcdefghij23", "--answer", "fix", "--note", "do it"},
+		{"--task", "abcdefghij23", "--answer", "retry", "--note", "do it"},
 		{"--task", "abcdefghij23", "--answer", "retry", "--cancel"},
 		{"--task", "abcdefghij23", "--answer", "retry", "--intent", "something"},
 	} {

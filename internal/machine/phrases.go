@@ -256,6 +256,30 @@ var phraseTaskHeld = Phrase{
 const taskAnswerDecision = "Answer it with assistant --task and the work's identifier, which assistant tasks --json shows, " +
 	"followed by --answer and your answer."
 
+// The rows for an answer given a task that reaches no run's decision, which
+// internal/service's refusal carries after the identifiers it names. An
+// answer given a task closes the task's own decision while one is open, and
+// otherwise the decision its current validation is waiting on; these say why
+// neither was answered, and the decision says what to read before answering
+// again, since the identifiers are the refusal's and not the row's.
+var (
+	// PhraseTaskOwnHoldFirst is the row for an answer meant for the task's
+	// run, refused because the task has a decision of its own open, which
+	// is answered first.
+	PhraseTaskOwnHoldFirst = Phrase{
+		Outcome:     "Nothing was answered, because this work is waiting on a decision of its own, and that one is answered before anything its validation waits on.",
+		Consequence: "Both decisions stay open, and the work does not move until you answer.",
+		Decision:    "Answer the work's own decision first, the same way and without the options only a fix round takes, then give this answer again.",
+	}
+	// PhraseTaskNothingWaiting is the row for an answer given a task when
+	// neither the task nor its current validation is waiting on one.
+	PhraseTaskNothingWaiting = Phrase{
+		Outcome:     "Nothing was answered, because neither this work nor a validation of it is waiting on a decision.",
+		Consequence: "Nothing changed.",
+		Decision:    "Read where the work stands with assistant tasks, and answer when it waits on you.",
+	}
+)
+
 // NoWordYet is the row for a task whose newest history entry is a note the
 // program appended, a promotion or a relaunch, and which therefore resolves
 // Unknown: the worker was launched, or launched again, and has not reported
@@ -1377,8 +1401,9 @@ var PhraseNoReading = Phrase{
 
 // TablePhrases returns every row this table holds, as a person reads each,
 // which is what the vocabulary test walks: the pull guard's three rows, the
-// stop guard's two turn rows, a row per task state, the hold tier's row and
-// NoWordYet, a row per outcome and the three OutcomeExecuting splits into,
+// stop guard's two turn rows, a row per task state, the hold tier's row,
+// NoWordYet, the local landing row and the two rows for an answer given a
+// task that reached no decision, a row per outcome and the three OutcomeExecuting splits into,
 // the three hold rows (open, answered, and open naming a task), the six
 // rows for an answer to a task's hold and the two cleanup rows, the
 // stream's four, the status rows, and the rows for the rest of the command
@@ -1412,7 +1437,7 @@ func TablePhrases() []Phrase {
 			out = append(out, p)
 		}
 	}
-	out = append(out, phraseTaskHeld, NoWordYet, phraseTaskLandedLocally)
+	out = append(out, phraseTaskHeld, NoWordYet, phraseTaskLandedLocally, PhraseTaskOwnHoldFirst, PhraseTaskNothingWaiting)
 	for _, outcome := range Outcomes() {
 		if p, ok := phraseByOutcome[outcome]; ok {
 			out = append(out, p)

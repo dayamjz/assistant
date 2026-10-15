@@ -547,3 +547,25 @@ func TestATasksHoldIsAnsweredByTheCoordinatorAndNotItsWorker(t *testing.T) {
 		}
 	})
 }
+
+// Answering a task's run through the task is the coordinator's on the same
+// terms as answering the task's own hold: run.respond selecting the run by
+// the task is refused to the task's own worker with ErrWorker, decided from
+// its process group before any record is read. The control is the same
+// request from outside every worker group, which gets past that refusal to
+// the records and is refused there instead, because the task's branch has
+// no run under way: a different code, so the worker's refusal is shown to
+// be about who asked and not about what was asked.
+func TestATasksRunIsNotAnsweredThroughTheTaskByItsWorker(t *testing.T) {
+	launchedWorker(t, "task/four", func(w launched) {
+		request := machine.RespondRequest{Task: w.task, Answer: "approved"}
+		if _, code := callAs(t, w.group, w.running.service, ipc.MethodRunRespond, request); code != ipc.CodeWorker {
+			t.Fatalf("run.respond given the task from its own worker answered %q, want %q", code, ipc.CodeWorker)
+		}
+		var run machine.Run
+		err := w.running.client.Call(t.Context(), ipc.MethodRunRespond, request, &run)
+		if !errors.Is(err, ipc.ErrRefused) || !strings.Contains(err.Error(), machine.PhraseTaskNothingWaiting.String()) {
+			t.Fatalf("run.respond given the task from outside every worker group: %v, want the refusal that nothing waits", err)
+		}
+	})
+}
