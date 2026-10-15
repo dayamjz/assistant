@@ -53,7 +53,11 @@ import (
 // leader of its own process group; Group reports its identifier, read off
 // tmux's own answer at creation, and its Identity is read straight after, so
 // every later question about the process is asked through that identity and
-// never through the bare number. Because the process is the server's child
+// never through the bare number. tmux's answer can arrive before the process
+// leads that group, so StartInTerminal reads the process's lineage until it
+// does and refuses, ending the server, if it is gone first, if its lineage
+// cannot be read, or if it does not within terminalCommandTimeout; a handle is never returned naming a group
+// that is not there yet. Because the process is the server's child
 // and not this one's, nothing here can wait on it: Done is closed when a
 // poll of the identity, every terminalPoll, reads it absent or replaced, so
 // it trails the exit by up to that interval. On a platform with no
@@ -310,6 +314,10 @@ func startTerminalWorker(ctx context.Context, t Terminal, spec procSpecTerminal,
 		killTerminalServer(t)
 		return nil, fmt.Errorf("terminal worker process %d was not running when looked for", pid)
 	}
+	if err := awaitGroupLeader(ctx, identity); err != nil {
+		killTerminalServer(t)
+		return nil, err
+	}
 
 	w := &tmuxWorker{
 		terminal: t,
@@ -325,6 +333,44 @@ func startTerminalWorker(ctx context.Context, t Terminal, spec procSpecTerminal,
 		return nil, fmt.Errorf("typing the worker's instructions: %w", err)
 	}
 	return w, nil
+}
+
+// awaitGroupLeader returns once the process id names leads its own process
+// group, which is what Group reports and what EndGroup signals. tmux answers
+// with the pane's process identifier once that process exists, and the
+// answer has been observed to arrive while the process was still in the
+// server's group (#273), so a handle returned then would name a group that
+// did not exist yet: a Close in that window would signal nothing and read
+// the group as gone. The wait is on the process's own lineage, read until
+// it leads its group, and it ends in an error when the process is gone or
+// replaced, when the lineage cannot be read, which is every platform but
+// Linux and macOS, when ctx ends, or when terminalCommandTimeout passes
+// without it leading one, since an agent that put itself in another group
+// is not a worker Group could answer for.
+func awaitGroupLeader(ctx context.Context, id Identity) error {
+	bound := time.NewTimer(terminalCommandTimeout)
+	defer bound.Stop()
+	tick := time.NewTicker(time.Millisecond)
+	defer tick.Stop()
+	for {
+		lineage, found, err := ReadLineage(id.PID)
+		switch {
+		case err != nil:
+			return fmt.Errorf("reading the process group of terminal worker process %d: %w", id.PID, err)
+		case !found || lineage.Identity != id:
+			return fmt.Errorf("terminal worker process %d ended before it led its own process group", id.PID)
+		case lineage.Group == id.PID:
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-bound.C:
+			return fmt.Errorf("terminal worker process %d was still in process group %d after %v, not leading its own",
+				id.PID, lineage.Group, terminalCommandTimeout)
+		case <-tick.C:
+		}
+	}
 }
 
 // withoutTmux is env without the two variables that tell a tmux client it is

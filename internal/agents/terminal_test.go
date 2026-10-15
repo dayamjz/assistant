@@ -76,6 +76,13 @@ func TestATerminalWorkerIsTypedToAndEndedWithItsServer(t *testing.T) {
 		Exchanges: []standin.Exchange{{Contains: "ping", Reply: "pong from the pane"}},
 	}}
 	worker, term, agent := openTerminal(t, script, workerSpec(t))
+	// Read before anything else gives the process time: the group the
+	// handle names is led by the pane's process as soon as the handle is
+	// returned, which tmux's own answer at creation does not ensure (#273).
+	if lineage, found, err := agents.ReadLineage(worker.Group()); err != nil || !found || lineage.Group != worker.Group() {
+		t.Fatalf("on return the pane's process is in group %d (found %v, %v), want it leading its own, %d",
+			lineage.Group, found, err, worker.Group())
+	}
 
 	awaitWorkerOutput(t, worker, "terminal stand-in ready")
 	identity, found, err := agents.Identify(worker.Group())

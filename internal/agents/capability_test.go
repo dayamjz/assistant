@@ -125,7 +125,7 @@ var probes = []probe{{
 				t.Errorf("%s's worker refused a send while running: %v", r.Name(), err)
 				return
 			}
-			if !reacted(t, worker, mark) {
+			if !reacted(t, worker, mark, written) {
 				t.Errorf("%s's worker ended on what it was sent rather than reading it, so it is not driveable: %s",
 					r.Name(), worker.Capture().Text)
 				return
@@ -181,8 +181,17 @@ var probes = []probe{{
 			t.Fatalf("making a directory for the worker: %v", err)
 		}
 		defer os.RemoveAll(dir)
+		const instructions = "conformance: a terminal worker is being started"
+		// What is typed is echoed onto the screen by the terminal whether or
+		// not the worker ever reads it, so a screen that grew says nothing
+		// on its own: a worker that has not yet read a line, under load,
+		// shows the echo of both sends and nothing of its own. The probe
+		// counts only the lines that are no echo of anything it typed, so
+		// it waits on the worker's own writing.
+		typed := strings.Split(instructions, "\n")
+		own := func(w agents.Worker) int64 { return ownLines(w, typed) }
 		worker, err := agents.OpenTerminalWorker(t.Context(), r, term, agents.WorkerSpec{
-			Dir: dir, Instructions: "conformance: a terminal worker is being started",
+			Dir: dir, Instructions: instructions,
 		})
 		if err != nil {
 			t.Errorf("%s declares %s and OpenTerminalWorker could not start one: %v",
@@ -197,12 +206,13 @@ var probes = []probe{{
 			"conformance: a first message after the instructions",
 			"conformance: a second message, with \"quotes\" and a\nsecond line",
 		} {
-			mark := written(worker)
+			typed = append(typed, strings.Split(text, "\n")...)
+			mark := own(worker)
 			if err := worker.Send(t.Context(), text); err != nil {
 				t.Errorf("%s's terminal worker refused a send while running: %v", r.Name(), err)
 				return
 			}
-			if !reacted(t, worker, mark) {
+			if !reacted(t, worker, mark, own) {
 				t.Errorf("%s's terminal worker ended on what it was typed rather than reading it: %s",
 					r.Name(), worker.Capture().Text)
 				return
@@ -243,18 +253,40 @@ func written(w agents.Worker) int64 {
 	return got.Dropped + int64(len(got.Text))
 }
 
-// reacted waits until the worker has written past mark while still running,
-// and reports false once it has ended, whether or not it wrote first: a
-// worker that wrote and then ended was not left driveable by what it read.
-// A worker that is still exiting when it is looked at reads as having
-// reacted, which is why the probe sends twice. The wait is bounded by the
-// test's own context.
-func reacted(t testing.TB, w agents.Worker, mark int64) bool {
+// ownLines is how many lines of a terminal worker's screen are not the
+// echo of a line in typed, which is everything the probe has typed at it so
+// far. The terminal echoes each typed line onto the screen as it arrives,
+// before and whether or not the worker reads it, so only a line that is no
+// such echo is something the worker wrote. A line the worker writes that
+// happens to equal a typed one is not counted either, which can only make
+// the probe wait for more, never accept sooner. What this does not cover is
+// an echo caught partway, with part of a typed line on the screen: that
+// part is no typed line and counts as the worker's. Each send is pasted
+// whole in one tmux command, so the probe has not been seen to look
+// between the halves of one, but nothing here rules it out.
+func ownLines(w agents.Worker, typed []string) int64 {
+	var n int64
+	for _, line := range strings.Split(strings.TrimRight(w.Capture().Text, "\n"), "\n") {
+		if line != "" && !slices.Contains(typed, line) {
+			n++
+		}
+	}
+	return n
+}
+
+// reacted waits until measure reads the worker past mark while it is still
+// running, and reports false once it has ended, whether or not it wrote
+// first: a worker that wrote and then ended was not left driveable by what
+// it read. measure has to count only what the worker itself wrote, which is
+// written for a pipe and ownLines for a terminal. A worker that is still
+// exiting when it is looked at reads as having reacted, which is why the
+// probe sends twice. The wait is bounded by the test's own context.
+func reacted(t testing.TB, w agents.Worker, mark int64, measure func(agents.Worker) int64) bool {
 	t.Helper()
 	tick := time.NewTicker(5 * time.Millisecond)
 	defer tick.Stop()
 	for {
-		if written(w) > mark {
+		if measure(w) > mark {
 			select {
 			case <-w.Done():
 				// It wrote and ended: what it wrote was its last.
