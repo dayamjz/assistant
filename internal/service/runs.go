@@ -147,6 +147,10 @@ func (s *Service) rerun(ctx context.Context, req machine.RerunRequest) (machine.
 		return machine.Run{}, fmt.Errorf("service: reading the commit this checkout stands at: %w", err)
 	}
 	record, err := s.claimRerun(ctx, branchKey{repository: repository.ID, branch: branch}, local)
+	var moved rerunMoved
+	if errors.As(err, &moved) {
+		return machine.Run{}, s.placeMoved(ctx, repository, moved)
+	}
 	if err != nil {
 		return machine.Run{}, err
 	}
@@ -194,7 +198,12 @@ func (s *Service) claimRerun(ctx context.Context, key branchKey, local string) (
 	}
 	recorded := previous.CurrentHead.Or(previous.SubmittedHead)
 	if local != recorded {
-		return store.Run{}, rerunMoved{machine.RerunMoved{Branch: key.branch, Local: local, Recorded: recorded}}
+		return store.Run{}, rerunMoved{
+			moved: machine.RerunMoved{Branch: key.branch, Local: local, Recorded: recorded,
+				Reason: machine.RerunMovedElsewhere},
+			run:  previous.ID,
+			work: recorded != previous.SubmittedHead,
+		}
 	}
 	return s.create(ctx, run{
 		repository: key.repository,
@@ -211,7 +220,45 @@ func (s *Service) claimRerun(ctx context.Context, key branchKey, local string) (
 // wire it is ipc.ErrRefused, because the request was readable and the records
 // decided against it, and its message is the refusal's own text with no
 // prefix. errors.As still reaches the machine.RerunMoved inside.
-type rerunMoved struct{ moved machine.RerunMoved }
+type rerunMoved struct {
+	moved machine.RerunMoved
+	// run is the run whose recorded head the rerun would have validated.
+	run string
+	// work is whether that head is the run's own work rather than the commit
+	// it was submitted: a recorded current head that differs from the
+	// submitted one.
+	work bool
+}
+
+// placeMoved settles which remedy a refused rerun names, and returns the
+// refusal.
+//
+// It is RerunMovedBehind only when the recorded head is the run's own work and
+// the gate repository the run was cut from establishes the local commit as
+// its ancestor; that is the case assistant sync reconciles. Every other case
+// keeps RerunMovedElsewhere, including a gate repository that cannot be
+// opened and an ancestry it cannot answer, such as a local commit it does
+// not hold, because a remedy chosen on a read that failed would be a guess.
+// A local commit behind the commit that was submitted is RerunMovedElsewhere
+// too: the head a rerun validates is then the submitted commit rather than
+// work the run recorded, and whether sync has anything to bring in is decided
+// by internal/custody from the run's checkpoint, which this does not read.
+//
+// It reads the gate repository and writes nothing anywhere.
+func (s *Service) placeMoved(ctx context.Context, repository store.Repository, moved rerunMoved) error {
+	if !moved.work {
+		return moved
+	}
+	bare, err := s.gateRepositoryOf(ctx, repository, moved.run)
+	if err != nil {
+		return moved
+	}
+	behind, err := bare.IsAncestor(ctx, moved.moved.Local, moved.moved.Recorded)
+	if err == nil && behind {
+		moved.moved.Reason = machine.RerunMovedBehind
+	}
+	return moved
+}
 
 // Error is the refusal's own text.
 func (r rerunMoved) Error() string { return r.moved.Error() }

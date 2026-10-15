@@ -426,10 +426,12 @@ func (u *usageFlag) IsBoolFlag() bool { return true }
 //
 // The last known head is the one the branch's last run recorded, and the
 // service refuses the rerun when the working copy's HEAD is another commit,
-// with machine.RerunMoved naming both and the two commands that validate the
-// local one. That refusal is the service's, decided while it holds the
-// branch; this command only reports it, and neither reads anything but HEAD
-// from the working copy, so a refused rerun changes nothing there.
+// with machine.RerunMoved naming both and a remedy: assistant sync when the
+// local commit is established as behind work the run recorded, and otherwise
+// the two commands that validate the local one. That refusal is the
+// service's, decided while it holds the branch; this command only reports it,
+// and neither reads anything but HEAD from the working copy, so a refused
+// rerun changes nothing there.
 func rerun(ctx context.Context, in *invocation) (any, error) {
 	if err := in.parseFlags("rerun", func(*flag.FlagSet) {}); err != nil {
 		return nil, err

@@ -1230,19 +1230,28 @@ func SubcommandPhrase(given bool, subcommands []string) Phrase {
 	}
 }
 
-// phraseRerunMoved is the row for a rerun refused because the checkout stands
-// at a commit other than the one the rerun would validate. Which two commits,
-// and the commands that validate the person's own, are RerunMoved's to print
-// beside it.
-var phraseRerunMoved = Phrase{
-	Outcome:     "No run was begun, because the commit this checkout stands at is not the one a fresh run of its branch would validate.",
-	Consequence: "A fresh run would vet the commit the gate last recorded for this branch rather than yours, so none was begun and nothing in this checkout was changed.",
-	Decision:    "Send your commit to the gate, or start a run on it with the command named after this.",
-}
-
-// RerunMovedPhrase is what a person reads about a rerun refused because the
-// checkout moved away from the commit it would validate.
-func RerunMovedPhrase() Phrase { return phraseRerunMoved }
+// The rows for a rerun refused because the checkout stands at a commit other
+// than the one the rerun would validate, chosen by RerunMoved.Phrase. Which
+// two commits, and the commands for the remedy, are RerunMoved's to print
+// beside the row.
+var (
+	// phraseRerunMoved is RerunMovedElsewhere's row: the remedy validates the
+	// person's own commit.
+	phraseRerunMoved = Phrase{
+		Outcome:     "No run was begun, because the commit this checkout stands at is not the one a fresh run of its branch would validate.",
+		Consequence: "A fresh run would vet the commit the gate last recorded for this branch rather than yours, so none was begun and nothing in this checkout was changed.",
+		Decision:    "Send your commit to the gate, or start a run on it with the command named after this.",
+	}
+	// phraseRerunBehind is RerunMovedBehind's row: the commit a rerun would
+	// validate is the last run's work and already contains the person's, so
+	// the remedy brings that work into the checkout rather than validating
+	// the older commit.
+	phraseRerunBehind = Phrase{
+		Outcome:     "No run was begun, because this checkout is behind: the last run's work goes past the commit it stands at.",
+		Consequence: "A fresh run would vet that work rather than what you have here, so none was begun and nothing in this checkout was changed.",
+		Decision:    "Bring the last run's work into this checkout with the command named after this, which shows its plan before it changes anything.",
+	}
+)
 
 // InitPhrase is what a person reads once a gate was created or reattached for
 // their checkout. The next decision names the remote a change is sent to,
@@ -1375,8 +1384,8 @@ var PhraseNoReading = Phrase{
 // stream's four, the status rows, and the rows for the rest of the command
 // surface: a decision and a fix round's offer, a row per doctor check and
 // result and the verdict, the service lifecycle, the two rows for a command
-// given none of its subcommands, a rerun refused because the checkout
-// moved, a gate created, reattached and removed, a row per source of the
+// given none of its subcommands, the two rows for a rerun refused because
+// the checkout moved, a gate created, reattached and removed, a row per source of the
 // default branch an init recorded with the row for an answer naming none and
 // a row per refusal to record one, the gate's own rows, and the rows pointing
 // at a run's evidence
@@ -1429,7 +1438,7 @@ func TablePhrases() []Phrase {
 	}
 	out = append(out, phraseCheckUnfamiliar, phraseRunCanStart, phraseRunCannotStart)
 	out = append(out, LifecyclePhrase(Lifecycle{Accepted: true, Restarting: true}), LifecyclePhrase(Lifecycle{Accepted: true}), LifecyclePhrase(Lifecycle{}))
-	out = append(out, SubcommandPhrase(false, nil), SubcommandPhrase(true, nil), phraseRerunMoved)
+	out = append(out, SubcommandPhrase(false, nil), SubcommandPhrase(true, nil), phraseRerunMoved, phraseRerunBehind)
 	out = append(out, InitPhrase(Init{}), InitPhrase(Init{Reattached: true}), EjectPhrase(Eject{Removed: true}), EjectPhrase(Eject{}))
 	out = append(out, PhraseAdmitted, PhraseValidationBegun, PhraseSupersededEarlier, PhraseNothingStartedFor, PhraseNothingSent, PhraseNoReading)
 	out = append(out, PhraseCopyBusy, PhraseCopyStillBusy)
