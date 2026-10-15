@@ -71,6 +71,9 @@ type GitHub struct {
 	// retried rather than leaving an adapter that refuses every later write
 	// because one invocation failed once.
 	confirmed bool
+	// headConfirmed is the same record for the head repository, on the same
+	// terms, and stays false for an adapter that names none.
+	headConfirmed bool
 }
 
 var _ Provider = (*GitHub)(nil)
@@ -106,6 +109,25 @@ func NewGitHub(redact vcs.Redactor, opts ...Option) (*GitHub, error) {
 			reason: "must be owner/name, with no scheme, no userinfo, and no path beyond the two segments",
 		}
 	}
+	if s.head != "" {
+		switch {
+		case s.repo == "":
+			return nil, &argumentError{
+				what:   "head repository",
+				reason: "needs the repository the pull request is proposed to, because a head repository alone names no base",
+			}
+		case !validRepository(s.head):
+			return nil, &argumentError{
+				what:   "head repository",
+				reason: "must be owner/name, with no scheme, no userinfo, and no path beyond the two segments",
+			}
+		case strings.EqualFold(s.head, s.repo):
+			return nil, &argumentError{
+				what:   "head repository",
+				reason: "names the repository the pull request is proposed to, so it is not a fork of it",
+			}
+		}
+	}
 	if s.dir == "" && s.repo == "" {
 		return nil, &argumentError{
 			what:   "adapter",
@@ -128,6 +150,9 @@ func NewGitHub(redact vcs.Redactor, opts ...Option) (*GitHub, error) {
 func (g *GitHub) Find(ctx context.Context, head string) (PullRequest, bool, error) {
 	if err := g.checkRef("head branch", head); err != nil {
 		return PullRequest{}, false, err
+	}
+	if g.settings.head != "" {
+		return g.findFromHeadRepository(ctx, head)
 	}
 	const op = "find"
 	out, err := g.run(ctx, op, "", "pr", "list", "--head="+head, "--state=open", "--limit=2", "--json=number")
@@ -163,6 +188,92 @@ func (g *GitHub) Find(ctx context.Context, head string) (PullRequest, bool, erro
 	return pr, true, nil
 }
 
+// headListLimit is how many open pull requests a Find from a head repository
+// reads for one branch name. A read that comes back this full is refused
+// rather than searched, because the one this run owns may be past it.
+const headListLimit = 100
+
+// headListFields are the fields that Find from a head repository reads: the
+// number, and the repository and owner the head branch lives in, which are
+// gh's headRepository and headRepositoryOwner. They are what tells this
+// fork's pull request from another fork's under the same branch name.
+const headListFields = "number,headRepository,headRepositoryOwner"
+
+// findFromHeadRepository is Find for an adapter naming a head repository.
+//
+// The branch name alone does not identify a pull request proposed from a
+// fork: any repository proposing to the addressed one can carry a branch of
+// that name. So the open pull requests listed under the branch name are kept
+// only where their head repository is this adapter's, compared ignoring
+// letter case as confirmRepository compares, and the rest are not this run's.
+// More than one kept is ReasonAmbiguous on Find's terms, and a list that
+// fills headListLimit is ReasonAmbiguous as well, because the pull request
+// this run owns may be one the read did not return.
+//
+// A pull request whose head repository the provider reports as absent, which
+// is how a deleted fork reads, is never this run's. What this rests on and
+// does not verify is that the provider lists a pull request from another
+// repository under its branch name; one it did not list is one this adapter
+// opens again, and the provider's own refusal of a second pull request for
+// the same head is what then reaches the caller.
+func (g *GitHub) findFromHeadRepository(ctx context.Context, head string) (PullRequest, bool, error) {
+	const op = "find"
+	out, err := g.run(ctx, op, "", "pr", "list", "--head="+head, "--state=open",
+		"--limit="+strconv.Itoa(headListLimit), "--json="+headListFields)
+	if err != nil {
+		return PullRequest{}, false, err
+	}
+	var list []struct {
+		Number         int `json:"number"`
+		HeadRepository *struct {
+			Name string `json:"name"`
+		} `json:"headRepository"`
+		HeadRepositoryOwner struct {
+			Login string `json:"login"`
+		} `json:"headRepositoryOwner"`
+	}
+	if err := g.decode(op, out, &list); err != nil {
+		return PullRequest{}, false, err
+	}
+	if len(list) >= headListLimit {
+		return PullRequest{}, false, &Refusal{
+			Reason: ReasonAmbiguous,
+			Op:     op,
+			Detail: "the branch name carries as many open pull requests as one read returns, so whether one of them is this run's could not be settled",
+		}
+	}
+	var mine []int
+	for _, entry := range list {
+		if entry.HeadRepository == nil || entry.HeadRepositoryOwner.Login == "" || entry.HeadRepository.Name == "" {
+			continue
+		}
+		if strings.EqualFold(entry.HeadRepositoryOwner.Login+"/"+entry.HeadRepository.Name, g.settings.head) {
+			mine = append(mine, entry.Number)
+		}
+	}
+	switch {
+	case len(mine) == 0:
+		return PullRequest{}, false, nil
+	case len(mine) > 1:
+		return PullRequest{}, false, &Refusal{
+			Reason: ReasonAmbiguous,
+			Op:     op,
+			Detail: "the branch has more than one open pull request from " + g.settings.head + ", so which one this run owns is not decidable here",
+		}
+	case mine[0] <= 0:
+		return PullRequest{}, false, &Refusal{
+			Reason: ReasonMalformed,
+			Op:     op,
+			Detail: "the provider reported a pull request with no usable number",
+		}
+	}
+	pr, err := g.Get(ctx, mine[0])
+	if err != nil {
+		return PullRequest{}, false, err
+	}
+	return pr, true, nil
+}
+
 // Get returns where a pull request stands and whether the provider can merge
 // it. Whether its checks passed is a separate call and a separate answer.
 func (g *GitHub) Get(ctx context.Context, number int) (PullRequest, error) {
@@ -191,6 +302,19 @@ func (g *GitHub) Get(ctx context.Context, number int) (PullRequest, error) {
 	return raw.pullRequest(), nil
 }
 
+// headRef is how a create names the head branch: the branch alone when it
+// lives in the addressed repository, and owner:branch when the adapter names
+// a head repository, which is the form this adapter sends gh for a head in
+// another repository. The owner is the head repository's first segment,
+// which validRepository has already held to the characters an owner takes.
+func (g *GitHub) headRef(branch string) string {
+	if g.settings.head == "" {
+		return branch
+	}
+	owner, _, _ := strings.Cut(g.settings.head, "/")
+	return owner + ":" + branch
+}
+
 // Open opens a pull request. The body travels on standard input rather than on
 // the command line, because a body written for a reviewer who was not present
 // is the one input a stage can make large and an argument list has a ceiling
@@ -215,8 +339,11 @@ func (g *GitHub) Open(ctx context.Context, spec OpenSpec) (PullRequest, error) {
 	if err := g.confirmRepository(ctx); err != nil {
 		return PullRequest{}, err
 	}
+	if err := g.confirmHeadRepository(ctx); err != nil {
+		return PullRequest{}, err
+	}
 	const op = "open"
-	args := []string{"pr", "create", "--head=" + spec.Head, "--base=" + spec.Base,
+	args := []string{"pr", "create", "--head=" + g.headRef(spec.Head), "--base=" + spec.Base,
 		"--title=" + spec.Title, "--body-file=-"}
 	if spec.Draft {
 		args = append(args, "--draft")
@@ -418,12 +545,53 @@ func (g *GitHub) confirmRepository(ctx context.Context) error {
 	if g.confirmed {
 		return nil
 	}
+	if err := g.resolvesToItself(ctx, op, g.settings.repo, "addresses"); err != nil {
+		return err
+	}
+	g.confirmed = true
+	return nil
+}
+
+// confirmHeadRepository is confirmRepository for the head repository an
+// adapter opened through Host.OpenFork names: before a write that names the
+// fork as a pull request's head, the provider is asked which repository that
+// specifier names and the write goes ahead only when it answers with the
+// specifier itself. It runs in addition to confirmRepository and not in place
+// of it, because a pull request from a fork names two repositories and a
+// write is held to every repository it names. Its gaps are
+// confirmRepository's: it is the provider's report at the moment it was
+// asked, and it is not a lock. What it does not establish is that the head
+// repository is a fork of the addressed one; the provider decides whether it
+// accepts a head from that repository, and its refusal arrives as one.
+//
+// An adapter that names no head repository has nothing to confirm here.
+func (g *GitHub) confirmHeadRepository(ctx context.Context) error {
+	if g.settings.head == "" {
+		return nil
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.headConfirmed {
+		return nil
+	}
+	if err := g.resolvesToItself(ctx, "confirm-head-repository", g.settings.head, "pushes to"); err != nil {
+		return err
+	}
+	g.headConfirmed = true
+	return nil
+}
+
+// resolvesToItself asks the provider which repository spec names and refuses
+// with ReasonWrongRepository unless the answer is spec, compared ignoring
+// letter case for the reason confirmRepository gives. role is how the refusal
+// says the run relates to spec.
+func (g *GitHub) resolvesToItself(ctx context.Context, op, spec, role string) error {
 	// The repository is an operand here and not the flag the pull request
 	// commands take, so the vector is built whole. The specifier reaching a
 	// command line as an operand is safe on the same terms it is safe as a
 	// flag value: validRepository has already refused anything carrying a
 	// scheme, userinfo, or a leading dash.
-	out, err := g.runExact(ctx, op, "", []string{"repo", "view", g.settings.repo, "--json=" + repoFields})
+	out, err := g.runExact(ctx, op, "", []string{"repo", "view", spec, "--json=" + repoFields})
 	if err != nil {
 		return err
 	}
@@ -433,7 +601,7 @@ func (g *GitHub) confirmRepository(ctx context.Context) error {
 	if err := g.decode(op, out, &raw); err != nil {
 		return err
 	}
-	if !strings.EqualFold(raw.NameWithOwner, g.settings.repo) {
+	if !strings.EqualFold(raw.NameWithOwner, spec) {
 		// The specifier and the repository behind it disagree, so nothing is
 		// written. The specifier this adapter was given is stated because a
 		// caller cannot act on the refusal without it, and it is one this
@@ -443,11 +611,10 @@ func (g *GitHub) confirmRepository(ctx context.Context) error {
 		return &Refusal{
 			Reason: ReasonWrongRepository,
 			Op:     op,
-			Detail: "this run addresses " + g.settings.repo + " and the provider reports that specifier as " +
+			Detail: "this run " + role + " " + spec + " and the provider reports that specifier as " +
 				g.redact.Redact(raw.NameWithOwner) + ", so nothing was written",
 		}
 	}
-	g.confirmed = true
 	return nil
 }
 

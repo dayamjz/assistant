@@ -50,6 +50,24 @@ const (
 	// most stages need no code host, and a stage that does refuses when this
 	// is empty rather than resolving one for itself.
 	KeyForgeRepository Key = "forge.repository"
+	// KeyForkRepository names the fork a run pushes its branch to and proposes
+	// its pull request from, in KeyForgeRepository's notation. It is a run
+	// input, derived from the run's repository record the way
+	// KeyForgeRepository is, and empty when that record names no fork, which
+	// is a run that pushes to the upstream itself.
+	//
+	// The push target is decided from it, so the anchor the rebase stage
+	// observes and the update the push stage makes are both on the fork's
+	// branch when it names one, and the pull request stage proposes from it.
+	// It is the one per-run fact that says a fork is involved: the remote the
+	// isolated copy reaches the fork under is set from the same record, and
+	// a run whose record names a fork that does not resolve is refused
+	// before it starts rather than carried here empty.
+	//
+	// Its row is late, because an empty value is how every run behaved
+	// before forks existed: a run that checkpointed without it resumes
+	// pushing to the upstream, which is what it observed its anchor on.
+	KeyForkRepository Key = "forge.fork"
 	// KeyBranch is the branch under validation. It is a run input.
 	KeyBranch Key = "branch"
 	// KeyBase is the branch target the change is rebased onto and pushed to.
@@ -199,6 +217,7 @@ var sharedKeys = []keySpec{
 	{KeyRepository, graph.KindText, graph.MergeNone, ownerRun, false},
 	{KeyRun, graph.KindText, graph.MergeNone, ownerRun, false},
 	{KeyForgeRepository, graph.KindText, graph.MergeNone, ownerRun, false},
+	{KeyForkRepository, graph.KindText, graph.MergeNone, ownerRun, true},
 	{KeyBranch, graph.KindText, graph.MergeNone, ownerRun, false},
 	{KeyBase, graph.KindText, graph.MergeNone, ownerRun, false},
 	{KeySubmitted, graph.KindText, graph.MergeNone, ownerRun, false},

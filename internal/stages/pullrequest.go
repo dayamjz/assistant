@@ -162,6 +162,12 @@ const titleLimit = 72
 // second kind, so it skips this stage for that one run rather than this body
 // softening to let it past.
 //
+// A run whose record names a fork proposes from it: pipeline.KeyForkRepository
+// is the fork, the provider is opened with forge.Host.OpenFork on the upstream
+// with the fork as the head repository, and the head branch is the one the
+// push stage forwarded to the fork. That key is never inferred here, and a
+// run that names no fork opens on the upstream alone as it always did.
+//
 // A refusal from the provider is returned rather than reported, wrapped so
 // that the reason the code host did not answer survives. This stage neither
 // retries it nor turns it into a finding: a stage that could not reach the
@@ -204,6 +210,7 @@ func pullRequestReads() []pipeline.Key {
 	reads := []pipeline.Key{
 		pipeline.KeyRun,
 		pipeline.KeyForgeRepository,
+		pipeline.KeyForkRepository,
 		pipeline.KeyBranch,
 		pipeline.KeyBase,
 		pipeline.KeyIntent,
@@ -225,15 +232,18 @@ func pullRequestReads() []pipeline.Key {
 type runFacts struct {
 	run             string
 	forgeRepository string
-	branch          string
-	base            string
-	intent          string
-	supplied        bool
-	submitted       string
-	subject         string
-	head            string
-	pushed          string
-	stages          []pipeline.StageResult
+	// forkRepository is the fork the run pushed to, empty when it pushed to
+	// the upstream; a pull request is proposed from it to forgeRepository.
+	forkRepository string
+	branch         string
+	base           string
+	intent         string
+	supplied       bool
+	submitted      string
+	subject        string
+	head           string
+	pushed         string
+	stages         []pipeline.StageResult
 	// decision is the review's record of what the decision-model checks did,
 	// and decided says whether the review wrote one.
 	decision decisionChecks
@@ -277,7 +287,7 @@ func submitPullRequest(ctx context.Context, host forge.Host, records RunRecords,
 		return pipeline.Output{}, err
 	}
 	facts.consent = readStandingConsent(ctx, records, facts.run)
-	provider, err := host.Open(facts.forgeRepository)
+	provider, err := openProvider(host, facts)
 	if err != nil {
 		return pipeline.Output{}, fmt.Errorf(
 			"stages: the %s stage could not open a provider for repository %q on the code host: %w",
@@ -308,6 +318,19 @@ func submitPullRequest(ctx context.Context, host forge.Host, records RunRecords,
 	}, nil
 }
 
+// openProvider opens the provider the pull request is submitted through: on
+// the upstream alone for a run that pushed there, and on the upstream with the
+// fork as the head repository for a run that pushed to a fork, so the pull
+// request is proposed from the repository the push stage forwarded to and
+// never from one this body inferred. Both specifiers are the run's, derived
+// from its record, and forge.Host refuses either empty.
+func openProvider(host forge.Host, facts runFacts) (forge.Provider, error) {
+	if facts.forkRepository != "" {
+		return host.OpenFork(facts.forgeRepository, facts.forkRepository)
+	}
+	return host.Open(facts.forgeRepository)
+}
+
 // readRunFacts reads everything the stage narrates. A read this stage did not
 // declare, and a recorded report that cannot be decoded, are returned as they
 // arrive: by the time the body sees either, the step has already failed.
@@ -327,6 +350,7 @@ func readRunFacts(state pipeline.Reader) (runFacts, error) {
 	}{
 		{pipeline.KeyRun, &facts.run},
 		{pipeline.KeyForgeRepository, &facts.forgeRepository},
+		{pipeline.KeyForkRepository, &facts.forkRepository},
 		{pipeline.KeyBranch, &facts.branch},
 		{pipeline.KeyBase, &facts.base},
 		{pipeline.KeyIntent, &facts.intent},

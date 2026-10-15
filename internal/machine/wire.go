@@ -73,6 +73,10 @@ type Service struct {
 	// Build is the software the service is running, known only when it
 	// answered.
 	Build *store.Build `json:"build,omitempty"`
+	// Managed is the home's managed service, present when a definition for
+	// it is set up and only on the answers that read one: assistant service
+	// status and assistant service start.
+	Managed *Managed `json:"managed,omitempty"`
 }
 
 // Gate is what is known about a working copy's gate: the local bare repository

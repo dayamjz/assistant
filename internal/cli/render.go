@@ -246,6 +246,7 @@ var renderings = []rendering{
 	findingsRendering,
 	{name: "doctor", voice: VoicePhrased, of: typeOf[machine.Doctor](), render: func(w io.Writer, v any) { readOutDoctor(w, v.(machine.Doctor)) }},
 	{name: "lifecycle", voice: VoicePhrased, of: typeOf[machine.Lifecycle](), render: func(w io.Writer, v any) { readOutLifecycle(w, v.(machine.Lifecycle)) }},
+	{name: "managed removal", voice: VoicePhrased, of: typeOf[machine.ManagedRemoval](), render: func(w io.Writer, _ any) { writeln(w, machine.PhraseManagedRemoved) }},
 	{name: "init", voice: VoicePhrased, of: typeOf[machine.Init](), render: func(w io.Writer, v any) { readOutInit(w, v.(machine.Init)) }},
 	{name: "plan", voice: VoicePhrased, of: typeOf[machine.Plan](), render: func(w io.Writer, v any) { readOutPlan(w, v.(machine.Plan)) }},
 	{name: "eject", voice: VoicePhrased, of: typeOf[machine.Eject](), render: func(w io.Writer, v any) { writeln(w, machine.EjectPhrase(v.(machine.Eject))) }},
@@ -382,15 +383,20 @@ func readOutSupervision(w io.Writer, s *machine.Supervision) {
 }
 
 // readOutService prints whether a service answered, through the phrase
-// table. The detail of why one did not is a dial error naming the socket,
+// table, and the row for a home whose service is handed to the operating
+// system's service manager, whose definition's path is the structured
+// rendering's. The detail of why one did not is a dial error naming the socket,
 // which is the structured rendering's; assistant doctor is the verb that
 // diagnoses it for a person.
 func readOutService(w io.Writer, s machine.Service) {
 	if !s.Running {
 		writeln(w, machine.PhraseServiceAbsent)
-		return
+	} else {
+		writeln(w, machine.PhraseServiceUp)
 	}
-	writeln(w, machine.PhraseServiceUp)
+	if s.Managed != nil {
+		writeln(w, machine.PhraseServiceManaged)
+	}
 }
 
 // readOutRun prints a run: its phrase, the branch, the agent it resolved,
@@ -719,7 +725,8 @@ func readOutLifecycle(w io.Writer, answer machine.Lifecycle) {
 	}
 }
 
-// readOutInit prints what became of the checkout's gate, and the branch
+// readOutInit prints what became of the checkout's gate, the row for a fork
+// when the record names one, whose URL is the structured rendering's, and the branch
 // trusted configuration is read from, which is the person's own branch name
 // and the one fact here they may want to correct with --default-branch, after
 // internal/machine's row for where that answer came from, so a wrong one is
@@ -729,6 +736,9 @@ func readOutLifecycle(w io.Writer, answer machine.Lifecycle) {
 // beside its rows.
 func readOutInit(w io.Writer, answer machine.Init) {
 	writeln(w, machine.InitPhrase(answer))
+	if answer.Repository.ForkURL.IsKnown() {
+		writeln(w, machine.PhraseInitFork)
+	}
 	if branch := answer.Repository.DefaultBranch; branch != "" {
 		writeln(w, machine.DefaultBranchPhrase(answer.DefaultBranchSource))
 		writef(w, "Default branch %s\n", printable(branch))

@@ -578,11 +578,11 @@ func (s *Service) begin(ctx context.Context, record store.Run, start pipeline.St
 	// configuration, or from whatever remote a working copy happens to carry:
 	// it is derived from the upstream this run's repository row records, which
 	// is the same row PRD section 8 makes authoritative for it.
-	forgeRepository, err := s.forgeRepositoryFor(ctx, record.RepositoryID)
+	forgeRepository, forkRepository, err := s.forgeRepositoryFor(ctx, record.RepositoryID)
 	if err != nil {
 		return machine.Run{}, err
 	}
-	start.ForgeRepository = forgeRepository
+	start.ForgeRepository, start.ForkRepository = forgeRepository, forkRepository
 	// The copy is built before the run is recorded as started, so a run that
 	// is walking has somewhere to walk. PRD section 8 orders the row before
 	// the directory and create wrote the row, so this is the second half of
@@ -646,13 +646,39 @@ func (s *Service) begin(ctx context.Context, record store.Run, start pipeline.St
 //
 // The error it does return is the record being unreadable, which is a failure
 // of the store and not an answer about the repository.
-func (s *Service) forgeRepositoryFor(ctx context.Context, repositoryID string) (string, error) {
+//
+// The second result is the fork's specifier, for a record that names a fork,
+// and empty otherwise. A fork is the strict case rather than the relaxed one:
+// a run that names one pushes there and proposes from there, so a record
+// naming a fork that does not resolve, or naming one while its upstream does
+// not resolve, or naming the upstream itself as its fork, is refused with
+// ErrForkUnresolved before anything is recorded as running. Pushing to the
+// upstream instead, or to the fork with no pull request to propose, would
+// each be a guess about where the run's work goes. assistant init refuses all
+// three before it records a fork, so this is the record being read as it is
+// rather than a second place the rule is decided.
+func (s *Service) forgeRepositoryFor(ctx context.Context, repositoryID string) (string, string, error) {
 	repository, err := s.store.Repository(ctx, repositoryID)
 	if err != nil {
-		return "", fmt.Errorf("service: reading the repository a run acts on: %w", err)
+		return "", "", fmt.Errorf("service: reading the repository a run acts on: %w", err)
 	}
-	specifier, _ := forge.GitHubRepository(repository.UpstreamURL)
-	return specifier, nil
+	specifier, upstreamResolved := forge.GitHubRepository(repository.UpstreamURL)
+	forkURL, named := repository.ForkURL.Get()
+	if !named {
+		return specifier, "", nil
+	}
+	fork, forkResolved := forge.GitHubRepository(forkURL)
+	switch {
+	case !upstreamResolved:
+		return "", "", fmt.Errorf("%w: repository %s names a fork and an upstream that is not a repository on %s, "+
+			"so there is nothing to propose its pull request to", ErrForkUnresolved, repositoryID, forge.GitHubHostname)
+	case !forkResolved:
+		return "", "", fmt.Errorf("%w: repository %s names a fork that is not a repository on %s",
+			ErrForkUnresolved, repositoryID, forge.GitHubHostname)
+	case strings.EqualFold(fork, specifier):
+		return "", "", fmt.Errorf("%w: repository %s names its upstream as its fork", ErrForkUnresolved, repositoryID)
+	}
+	return specifier, fork, nil
 }
 
 // submittedSubject is the subject of the commit a run was submitted, read from

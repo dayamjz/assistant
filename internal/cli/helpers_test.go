@@ -36,6 +36,7 @@ func TestMain(m *testing.M) {
 	// to a third party, so a test must never inherit one from whoever runs it.
 	_ = os.Unsetenv(judge.KeyVariable)
 	standin.Main()
+	standInManagerMain()
 	hookMain()
 	holdLockMain()
 	os.Exit(m.Run())
@@ -60,10 +61,13 @@ func TestMain(m *testing.M) {
 // credentials the service reads can be a worker's rather than this test's:
 // see coordinator_unix_test.go. The last two are a worker's route, which
 // the service writes as this binary, --home and the verb, and which a
-// worker runs: see worker_unix_test.go.
+// worker runs: see worker_unix_test.go. "--home", a path and "service" is a
+// service a test started through the surface or through a stand-in service
+// manager, which runs what a definition says and a definition says this
+// binary: see managed_standin_test.go.
 func hookMain() {
 	if len(os.Args) < 2 || (os.Args[1] != "gate" && os.Args[1] != "coordinator" && os.Args[1] != "worker" &&
-		(len(os.Args) < 4 || os.Args[1] != "--home" || os.Args[3] != "worker")) {
+		(len(os.Args) < 4 || os.Args[1] != "--home" || (os.Args[3] != "worker" && os.Args[3] != "service"))) {
 		return
 	}
 	workingDir, err := os.Getwd()

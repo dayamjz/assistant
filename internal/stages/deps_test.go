@@ -176,10 +176,17 @@ func text(in pipeline.Input, key pipeline.Key) (string, error) {
 // its stand-in provider rather than here.
 type recordingHost struct {
 	opened []string
+	// forks is every repository and fork OpenFork was asked for, in order.
+	forks [][2]string
 }
 
 func (h *recordingHost) Open(repository string) (forge.Provider, error) {
 	h.opened = append(h.opened, repository)
+	return nil, errors.New("this host opens no provider")
+}
+
+func (h *recordingHost) OpenFork(repository, fork string) (forge.Provider, error) {
+	h.forks = append(h.forks, [2]string{repository, fork})
 	return nil, errors.New("this host opens no provider")
 }
 

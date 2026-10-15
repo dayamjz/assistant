@@ -49,6 +49,37 @@
 // reported when it was asked, not a lock: anything that changes the answer
 // between the confirmation and the write is outside it.
 //
+// # A pull request from a fork names two repositories
+//
+// A run whose repository record names a fork pushes its branch there and
+// proposes the pull request to the upstream. Host.OpenFork is how such a run
+// reaches a Provider: the repository it addresses is the upstream, as Open's
+// is, and the fork is a second specifier the adapter holds as the head
+// repository. The two are modelled as two fields rather than as one
+// owner:branch string, so which repository is pushed to and which one the
+// pull request targets are never read out of each other.
+//
+// Every write still goes where the run said or does not happen. Open, which
+// is the write naming both, confirms the upstream and then the fork, each
+// against the provider's own answer, and creates nothing unless both hold.
+// UpdateBody and Merge name only the upstream's pull request and confirm the
+// upstream. Neither confirmation establishes that the fork is a fork of the
+// upstream: whether it accepts a head from that repository is the provider's
+// to decide, and its refusal reaches the caller as one.
+//
+// Find is the read that changes. A branch name alone does not identify a pull
+// request proposed from a fork, because any repository proposing to the
+// upstream can carry a branch of that name, so Find from a fork keeps only
+// the open pull requests whose head repository the provider reports as the
+// fork. A read that comes back as full as one read may is refused rather than
+// searched. What this rests on and does not verify is that gh lists a pull
+// request from another repository under its bare branch name; the adapter
+// sends owner:branch as a create's head, and that is the form it sends rather
+// than a claim about how gh resolves it.
+//
+// The push itself is not this package's: internal/vcs makes it, internal/safety
+// decides it on an anchor observed on the fork, and nothing here invokes git.
+//
 // # What "the same behavior on any forge" means here
 //
 // Every state a caller acts on is a typed value declared in this package, and

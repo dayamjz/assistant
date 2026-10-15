@@ -77,6 +77,14 @@ func fixtureStatus() machine.Status {
 	}
 }
 
+// withManaged is a service answer naming a managed service, so the row the
+// service renderer prints for one is held to the rule beside the service's
+// own.
+func withManaged(s machine.Service) machine.Service {
+	s.Managed = &machine.Managed{Manager: "launchd", Unit: "/Users/someone/Library/LaunchAgents/assistant.service.0123456789ab.plist"}
+	return s
+}
+
 // sampleID is an identifier in the generator's format, which the derived
 // forbidden set catches wherever it appears, so a fixture carrying it in
 // every identifier field holds a renderer to leaving all of them out.
@@ -196,8 +204,12 @@ func fixtures(t *testing.T) map[string]any {
 		"runs":    machine.Runs{Runs: []store.Run{run.Record}},
 		"tasks":   machine.Tasks{Tasks: []machine.Task{task}},
 		"task":    task,
-		"service": status.Service,
-		"event":   mustEvent(t, ipc.TypeTaskState, task),
+		"service": withManaged(status.Service),
+		"managed removal": machine.ManagedRemoval{
+			Managed: machine.Managed{Manager: "systemd", Unit: "/home/someone/.config/systemd/user/assistant-0123456789ab.service"},
+			Stopped: true,
+		},
+		"event": mustEvent(t, ipc.TypeTaskState, task),
 		// The stop guard blocked: the guard's reason and the detail are the
 		// structured rendering's, and the message is what a person reads.
 		"host stop": machine.HostStopOf(supervisor.StopVerdict{Reason: supervisor.StopLockFree}, false),
@@ -409,6 +421,7 @@ func TestThePhrasedRenderersSpeakTheTableAndTheJSONKeepsIdentifiers(t *testing.T
 	// It is named here with the reason, and the exemption checks itself.
 	carriesNothing := map[string]string{
 		"wakes acknowledged": "an acknowledgement answers with the wake rows' numbers and who the record says acknowledged them, and the set forbids neither",
+		"managed removal":    "a removal answers with the manager's name and the definition's path, which is in the user's own folders and not under the home, and the set forbids neither",
 	}
 	phrased := 0
 	for _, r := range Renderings() {

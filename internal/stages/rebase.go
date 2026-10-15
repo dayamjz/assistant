@@ -87,6 +87,7 @@ func Rebase(deps StageDeps) pipeline.Implementation {
 			pipeline.KeySubmitted,
 			pipeline.KeyHead,
 			pipeline.KeyPushed,
+			pipeline.KeyForkRepository,
 		},
 		Writes: []pipeline.Key{
 			pipeline.KeyHead,
@@ -113,13 +114,18 @@ func runRebase(ctx context.Context, deps StageDeps, in pipeline.Input) (pipeline
 		return pipeline.Output{}, err
 	}
 	pushed, _ := pushedValue.Text()
+	forkValue, err := in.State.Get(pipeline.KeyForkRepository)
+	if err != nil {
+		return pipeline.Output{}, err
+	}
+	fork, _ := forkValue.Text()
 
 	copied, err := deps.Copy(ctx, repositoryID, runID)
 	if err != nil {
 		return pipeline.Output{}, err
 	}
 	if pushed != "" {
-		return rebaseAfterPush(ctx, copied, afterPush{branch: branch, base: base, head: head, pushed: pushed})
+		return rebaseAfterPush(ctx, copied, afterPush{branch: branch, base: base, head: head, pushed: pushed, fork: fork})
 	}
 
 	// The anchor is taken here, before this stage brings the change up to date
@@ -132,7 +138,7 @@ func runRebase(ctx context.Context, deps StageDeps, in pipeline.Input) (pipeline
 	// re-run, because each one rebases onto whatever the target holds then.
 	// The anchor has to describe the state the change was actually brought up
 	// to date against, and after a second rebase that is the second reading.
-	anchor, err := safety.New(copied).Observe(ctx, pushTarget(branch))
+	anchor, err := safety.New(copied).Observe(ctx, pushTarget(branch, fork))
 	if err != nil {
 		return pipeline.Output{}, fmt.Errorf(
 			"stages: reading where %s stands before rebasing onto fresh upstream: %w", branch, err)
@@ -339,6 +345,12 @@ func rebaseConflictReport(branch, base, target string) pipeline.Output {
 // copy is cut from. A second spelling of it would be a build where the stage
 // fetches from a remote nobody configured.
 const UpstreamRemote = "origin"
+
+// ForkRemote is the name a run's isolated copy reaches the fork under, when
+// the run's repository record names one. It is one name in one place for
+// UpstreamRemote's reason: pushTarget pushes to it and internal/service sets
+// it on the gate repository the copy is cut from.
+const ForkRemote = "fork"
 
 // remoteBranches reports which of the named branches the upstream advertises.
 //

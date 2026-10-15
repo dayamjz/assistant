@@ -81,6 +81,7 @@ type settings struct {
 	bin     string
 	dir     string
 	repo    string
+	head    string
 	base    []string
 	baseSet bool
 	maxOut  int64
@@ -127,6 +128,17 @@ func WithDirectory(dir string) Option {
 // so no credentialed URL reaches a provider command line through this package.
 func WithRepository(repo string) Option {
 	return func(s *settings) { s.repo = repo }
+}
+
+// WithHeadRepository names the repository a pull request's head branch lives
+// in, as owner/name, when that is not the repository the adapter addresses:
+// a fork the run pushed to, whose pull request is proposed to the repository
+// WithRepository names. Empty, which is the default, is the addressed
+// repository itself. It is checked at construction on WithRepository's terms,
+// and an adapter naming a head repository and no repository, or one naming
+// the addressed repository again, is refused there; Host.OpenFork says why.
+func WithHeadRepository(repo string) Option {
+	return func(s *settings) { s.head = repo }
 }
 
 // WithBaseEnvironment sets the environment every invocation starts from,

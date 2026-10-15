@@ -267,6 +267,13 @@ Each has cost this repository more than one round of review.
   around. `internal/service`'s `autonomy.go` is its one caller: the
   global-only `autonomy.merge` list, the live read, and the read after the
   merge that writes the merge record.
+  A fork is the second specifier and never a rewrite of the first:
+  `Host.OpenFork` opens on the upstream with the fork as head repository,
+  `Open` confirms both before it writes, and `Find` keeps only pull requests
+  whose head lives in the fork. The run carries the fork as
+  `pipeline.KeyForkRepository` (late, empty means the upstream), and
+  `internal/stages`' `pushTarget` is the one place it picks `ForkRemote`, so
+  the rebase stage's anchor and the push are on the fork's branch together.
   Tests outside the package reach a code host through
   `internal/forge/forgetest`, a stand-in `gh` answering over the wire and
   read by the real adapter, scripted with only shapes gh produces, on
@@ -694,6 +701,17 @@ Each has cost this repository more than one round of review.
   property PRD section 8 asks for is that it cannot go stale after a hard kill.
   Read its `doc.go` for the residual gaps: an advisory lock binds only the
   processes that ask for it, and two roots naming one directory are two homes.
+- `internal/managed` is the only package that writes a service definition
+  or invokes `launchctl` or `systemctl`: `assistant service start --install`
+  and `stop --uninstall` act through it, and `internal/cli`'s `managed.go`
+  decides when (refused while a service answers, and removal only after the
+  service's own stop). A definition starts the service with `--managed`,
+  under which a restart exits with a failure for the manager to replace
+  rather than launching a successor. A launchd install refuses a home,
+  program or checkout in Documents, Desktop or Downloads unless
+  `--full-disk-access-granted`, which nothing checks. Read its `doc.go` for
+  what was verified and what was not: launchd never ran, and a systemd user
+  instance never ran under the tests.
 - `internal/redact` is the one owner of credential removal, which
   `internal/store` refuses to open without and `internal/vcs`,
   `internal/forge`, and `internal/stages` take. It recognizes a credential in
@@ -997,7 +1015,9 @@ Each has cost this repository more than one round of review.
   with the open `run.log`, a bounded tail of `home.StageLog`, which
   `internal/service`'s `stagelog.go` alone writes, best effort (around every
   body, fix round and agent call, redacted), and alone reads; it is evidence
-  nothing decides from. A verb that acts on a run calls the service;
+  nothing decides from. So are `init --fork-url` and the managed service's
+  `service start --install` and `service stop --uninstall`, which section 9
+  names by the owner's decision on #234. A verb that acts on a run calls the service;
   a verb whose job includes reporting that the service is down does not.
   Four commands stand outside that table, each dispatched beside it rather
   than added to it. `gate` and `host` are each the interface something

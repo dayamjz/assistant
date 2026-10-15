@@ -79,7 +79,9 @@ type Step struct {
 
 // Steps is what synchronizing c does, in order, and nothing for a class that
 // does nothing. gate is the gate repository the work is fetched from and
-// upstream the code host's repository the pushed commit is verified on.
+// upstream the remote the run pushed to, which the pushed commit is verified
+// on: the upstream itself, or the fork when the repository record names one,
+// as store.Repository.PushURL answers.
 //
 // It is the plan a person confirms, and Apply carries out exactly these
 // steps in this order: Apply calls this for the same arguments rather than

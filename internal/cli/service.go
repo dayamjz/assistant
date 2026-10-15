@@ -37,8 +37,8 @@ var serviceActions = []struct {
 	summary string
 	run     func(context.Context, *invocation) (any, error)
 }{
-	{"start", "Launch the service in the background and wait until it answers a readiness check.", startService},
-	{"stop", "Stop the service; refused while runs are active unless --force is given.",
+	{"start", "Launch the service in the background and wait until it answers a readiness check; --install hands it to this computer's service manager.", startService},
+	{"stop", "Stop the service; refused while runs are active unless --force is given; --uninstall stops handing it to the service manager.",
 		func(ctx context.Context, in *invocation) (any, error) {
 			return stopService(ctx, in, ipc.MethodServiceStop)
 		}},
@@ -102,7 +102,9 @@ func serviceStatus(ctx context.Context, in *invocation) (any, error) {
 	if err := in.parseFlags("service status", func(*flag.FlagSet) {}); err != nil {
 		return nil, err
 	}
-	return in.serviceState(ctx), nil
+	state := in.serviceState(ctx)
+	state.Managed = in.managedState()
+	return state, nil
 }
 
 // startService launches the background service and waits until it answers.
@@ -110,19 +112,46 @@ func serviceStatus(ctx context.Context, in *invocation) (any, error) {
 // --foreground runs it in this process instead, which is what the launched
 // copy is invoked with. It is a flag rather than a verb because the process
 // that serves and the command that launches it are one binary, and PRD
-// section 9's table has one row for the service.
+// section 9's table has one row for the service. --managed beside it is what
+// a definition internal/managed wrote invokes it with, and changes one thing:
+// see serveHere.
+//
+// --install hands the service to this computer's service manager instead of
+// launching it, which managed.go owns. A home whose service is already handed
+// over is started through the manager rather than launched beside it, so the
+// service the manager would restart and the one this brings up are one.
 func startService(ctx context.Context, in *invocation) (any, error) {
-	var foreground bool
+	var foreground, underManager, install, granted bool
 	if err := in.parseFlags("service start", func(set *flag.FlagSet) {
 		set.BoolVar(&foreground, "foreground", false, "run the service in this process rather than launching one")
+		set.BoolVar(&underManager, "managed", false, "with --foreground: this process was started by the service manager, so a restart ends it for the manager to bring up again rather than launching a successor")
+		set.BoolVar(&install, "install", false, "hand the service to this computer's service manager, launchd on macOS or systemd on Linux, so it comes back after a login or restart, and start it there")
+		set.BoolVar(&granted, "full-disk-access-granted", false, "with --install on macOS: you granted this program Full Disk Access, so a home, program or checkout in Documents, Desktop or Downloads is not refused; nothing checks it")
 	}); err != nil {
 		return nil, err
 	}
+	switch {
+	case underManager && !foreground:
+		return nil, usagef("--managed is given with --foreground, which is how a service manager starts the service")
+	case install && foreground:
+		return nil, usagef("--install hands the service to the service manager, which starts it, so it is not given with --foreground")
+	case granted && !install:
+		return nil, usagef("--full-disk-access-granted is given with --install")
+	}
 	if foreground {
-		return nil, in.serveHere(ctx)
+		return nil, in.serveHere(ctx, underManager)
+	}
+	if install {
+		return installManaged(ctx, in, granted)
 	}
 	if state := in.serviceState(ctx); state.Running {
+		state.Managed = in.managedState()
 		return state, nil
+	}
+	if m, err := in.manager(); err == nil {
+		if installed, err := m.Installed(); err == nil && installed {
+			return startManaged(ctx, in, m)
+		}
 	}
 	if err := in.launch(); err != nil {
 		return nil, err
@@ -190,11 +219,17 @@ func stopService(ctx context.Context, in *invocation, method ipc.Method) (any, e
 	if method == ipc.MethodServiceRestart {
 		verb = "restart"
 	}
-	var force bool
+	var force, uninstall bool
 	if err := in.parseFlags("service "+verb, func(set *flag.FlagSet) {
 		set.BoolVar(&force, "force", false, "carry out the "+verb+" even while runs are active")
+		if method == ipc.MethodServiceStop {
+			set.BoolVar(&uninstall, "uninstall", false, "stop handing the service to this computer's service manager: stop it, then remove what --install set up")
+		}
 	}); err != nil {
 		return nil, err
+	}
+	if uninstall {
+		return uninstallManaged(ctx, in, force)
 	}
 	// Which service is answering now is read before the request, because after
 	// it there is no way to ask: the outgoing service answers the socket until
@@ -226,7 +261,14 @@ func stopService(ctx context.Context, in *invocation, method ipc.Method) (any, e
 // this returns, which is what makes a restart one command rather than two: the
 // lock is released here first, so the successor's bounded wait for it is short
 // rather than a race it can lose.
-func (in *invocation) serveHere(parent context.Context) error {
+//
+// Under a service manager, underManager, it launches nothing and returns
+// managedRestart instead, which exits with a failure status: the definition
+// internal/managed wrote asks the manager to start the service again after a
+// failure exit and not after the success exit a requested stop ends with, so
+// the replacement is the manager's and is one the manager tracks. Whether the
+// manager does so is its own; internal/managed's doc says what was verified.
+func (in *invocation) serveHere(parent context.Context, underManager bool) error {
 	ctx, stop := signal.NotifyContext(parent, os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -251,6 +293,9 @@ func (in *invocation) serveHere(parent context.Context) error {
 		return err
 	}
 	if restarting {
+		if underManager {
+			return managedRestart{}
+		}
 		return in.launch()
 	}
 	return nil

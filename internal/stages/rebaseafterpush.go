@@ -13,13 +13,15 @@ import (
 )
 
 // afterPush is what the rebase stage's second pass reads from the run's
-// state: the branch and its base, where the run's head stands, and the commit
-// the push stage forwarded.
+// state: the branch and its base, where the run's head stands, the commit
+// the push stage forwarded, and the fork it was forwarded to, empty when it
+// went to the upstream.
 type afterPush struct {
 	branch string
 	base   string
 	head   string
 	pushed string
+	fork   string
 }
 
 // The identifiers of the holds the second pass raises, one per reason it does
@@ -54,7 +56,7 @@ const (
 // is fetched and the head replayed onto it, and anything but a clean replay
 // that changed something holds.
 func rebaseAfterPush(ctx context.Context, copied *vcs.Repository, facts afterPush) (pipeline.Output, error) {
-	target := pushTarget(facts.branch)
+	target := pushTarget(facts.branch, facts.fork)
 	anchor, err := safety.New(copied).Observe(ctx, target)
 	if err == nil {
 		err = safety.RequireObservedAt(anchor, facts.pushed)

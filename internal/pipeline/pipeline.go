@@ -326,6 +326,12 @@ type Start struct {
 	// code host and a run that cannot reach one still has to be able to walk
 	// them and report.
 	ForgeRepository string
+	// ForkRepository names the fork the run pushes to and proposes its pull
+	// request from, in ForgeRepository's notation, and is empty when the run
+	// pushes to the upstream itself. NewState refuses one given without a
+	// ForgeRepository, because a fork with no repository to propose to is
+	// half of a pair.
+	ForkRepository string
 	// Branch is the branch under validation.
 	Branch string
 	// Base is the branch target the change is rebased onto and pushed to.
@@ -357,6 +363,10 @@ func (p *Pipeline) NewState(s Start) (graph.State, error) {
 		return graph.State{}, fmt.Errorf("%w: repository %q, run %q, branch %q, base %q, submitted %q",
 			ErrIncompleteRun, s.Repository, s.Run, s.Branch, s.Base, s.Submitted)
 	}
+	if s.ForkRepository != "" && s.ForgeRepository == "" {
+		return graph.State{}, fmt.Errorf("%w: fork %q names no repository on the code host to propose to",
+			ErrIncompleteRun, s.ForkRepository)
+	}
 	if s.IntentSupplied && strings.TrimSpace(s.Intent) == "" {
 		return graph.State{}, fmt.Errorf("%w: intent %q", ErrEmptyIntent, s.Intent)
 	}
@@ -371,6 +381,7 @@ func (p *Pipeline) NewState(s Start) (graph.State, error) {
 		string(KeyRepository):       graph.TextValue(s.Repository),
 		string(KeyRun):              graph.TextValue(s.Run),
 		string(KeyForgeRepository):  graph.TextValue(s.ForgeRepository),
+		string(KeyForkRepository):   graph.TextValue(s.ForkRepository),
 		string(KeyBranch):           graph.TextValue(s.Branch),
 		string(KeyBase):             graph.TextValue(s.Base),
 		string(KeySubmitted):        graph.TextValue(s.Submitted),

@@ -11,6 +11,7 @@ import (
 	"github.com/dayamjz/assistant/internal/home"
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
+	"github.com/dayamjz/assistant/internal/managed"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/supervisor"
 	"github.com/dayamjz/assistant/internal/vcs"
@@ -609,6 +610,18 @@ func render(in *invocation, answer any, err error) machine.Code {
 // the same terms: the working copy has no origin to take it from, and the
 // answer is --upstream, which the caller supplies. A read of origin that
 // failed for another reason is not that refusal and stays operational.
+//
+// Init's refusal of a fork is incorrect usage too, for every reason it has:
+// the fork or the upstream the caller named is not a repository a run can
+// send changes to and propose from, and the remedy is a flag the caller
+// supplies, --fork-url or --upstream.
+//
+// A request to remove a managed service from a home that has none set up is
+// incorrect usage: there is nothing it could have removed. Every other
+// refusal of a managed service is operational, the protected-folder refusal
+// among them, because what it reports is where things stand on this machine
+// rather than a command line the caller got wrong, as is the refusal of an
+// install while a service is up.
 func failureExit(err error) machine.Code {
 	var usage usageError
 	if errors.As(err, &usage) || errors.Is(err, ipc.ErrInvalidRequest) {
@@ -616,6 +629,14 @@ func failureExit(err error) machine.Code {
 	}
 	var unnamed upstreamRefused
 	if errors.As(err, &unnamed) {
+		return machine.ExitUsage
+	}
+	var unforked forkRefused
+	if errors.As(err, &unforked) {
+		return machine.ExitUsage
+	}
+	var notInstalled managedRefused
+	if errors.As(err, &notInstalled) && notInstalled.refusal.Reason == managed.ReasonNotInstalled {
 		return machine.ExitUsage
 	}
 	var unproven defaultBranchRefused

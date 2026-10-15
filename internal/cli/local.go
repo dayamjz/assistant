@@ -36,10 +36,11 @@ import (
 // repository record, a half-state a run cannot start from and no verb here
 // repairs.
 func initGate(ctx context.Context, in *invocation) (any, error) {
-	var upstream, defaultBranch string
+	var upstream, fork, defaultBranch string
 	var acceptCommands bool
 	if err := in.parseFlags("init", func(set *flag.FlagSet) {
 		set.StringVar(&upstream, "upstream", "", "the remote the change is destined for; the default is this working copy's origin")
+		set.StringVar(&fork, "fork-url", "", "a fork of the upstream that validated changes are sent to and proposed from; both must be repositories on github.com, and without it changes are sent to the upstream")
 		set.StringVar(&defaultBranch, "default-branch", "", "the branch trusted configuration is read from; the default is what this working copy records origin's HEAD as naming, and init refuses when it records none")
 		set.BoolVar(&acceptCommands, acceptCommandsFlag, false, "write every command init offers into this checkout's configuration file without asking; without it a command is written only when accepted at a terminal")
 	}); err != nil {
@@ -55,7 +56,7 @@ func initGate(ctx context.Context, in *invocation) (any, error) {
 	}
 	defer func() { _ = records.Close() }()
 
-	intended, source, err := intendedRepository(ctx, working, upstream, defaultBranch)
+	intended, source, err := intendedRepository(ctx, working, upstream, fork, defaultBranch)
 	if err != nil {
 		return nil, err
 	}
@@ -97,7 +98,14 @@ func initGate(ctx context.Context, in *invocation) (any, error) {
 //
 // The record's identifier is the gate's, which is not known until the gate is
 // built, so it is the one field the caller fills in afterwards.
-func intendedRepository(ctx context.Context, working, upstream, defaultBranch string) (store.Repository, machine.DefaultBranchSource, error) {
+//
+// A fork is recorded only beside an upstream, and only when forkOf accepts
+// the pair; the record then names both, and which one a run pushes to and
+// which one its pull request is proposed to are the record's two fields
+// rather than one read out of the other. A record without a fork is one
+// whose runs push to the upstream, so running init again without --fork-url
+// records that.
+func intendedRepository(ctx context.Context, working, upstream, fork, defaultBranch string) (store.Repository, machine.DefaultBranchSource, error) {
 	repo, err := vcs.OpenWorktree(ctx, working, vcs.WithRedactor(redact.New()))
 	if err != nil {
 		return store.Repository{}, "", err
@@ -110,6 +118,13 @@ func intendedRepository(ctx context.Context, working, upstream, defaultBranch st
 			return store.Repository{}, "", fmt.Errorf("reading this working copy's origin to take the upstream from: %w", err)
 		}
 	}
+	forkURL := store.Unknown[string]()
+	if fork != "" {
+		if err := forkOf(upstream, fork); err != nil {
+			return store.Repository{}, "", err
+		}
+		forkURL = store.Known(fork)
+	}
 	source := machine.DefaultBranchFromFlag
 	if defaultBranch == "" {
 		source = machine.DefaultBranchFromOrigin
@@ -120,9 +135,43 @@ func intendedRepository(ctx context.Context, working, upstream, defaultBranch st
 	return store.Repository{
 		WorkingPath:   working,
 		UpstreamURL:   upstream,
+		ForkURL:       forkURL,
 		DefaultBranch: defaultBranch,
 	}, source, nil
 }
+
+// forkOf refuses a fork a run could not both push to and propose from, with a
+// forkRefused saying which: a fork that is not a repository on the code host
+// this build proposes changes on, an upstream that is not one, or a fork
+// naming the upstream itself. Both are read through forge.GitHubRepository,
+// the same reading internal/service makes when a run begins, so init records
+// no fork a run would then refuse. It reads the two URLs and asks the code
+// host nothing; whether each repository exists, and whether the fork is a
+// fork of the upstream, are learned when a run first writes to them.
+func forkOf(upstream, fork string) error {
+	forkSpec, forkResolved := forge.GitHubRepository(fork)
+	if !forkResolved {
+		return forkRefused{reason: machine.ForkUnaddressable}
+	}
+	upstreamSpec, upstreamResolved := forge.GitHubRepository(upstream)
+	if !upstreamResolved {
+		return forkRefused{reason: machine.ForkUpstreamUnaddressable}
+	}
+	if strings.EqualFold(forkSpec, upstreamSpec) {
+		return forkRefused{reason: machine.ForkIsUpstream}
+	}
+	return nil
+}
+
+// forkRefused is init's refusal to record the fork it was given, read out in
+// internal/machine's row for the reason. Every reason's remedy is a flag the
+// caller supplies, so failureExit reads it as incorrect usage.
+type forkRefused struct {
+	reason machine.ForkRefusal
+}
+
+// Error is the row a person reads, which says all there is.
+func (e forkRefused) Error() string { return machine.ForkRefusalPhrase(e.reason).String() }
 
 // originHead is the reference a clone records origin's own HEAD under.
 const originHead = "refs/remotes/origin/HEAD"
