@@ -36,7 +36,8 @@ import (
 // instructions intake wrote as its body, with the isolation check dispatch
 // appended left out and a credential in the instructions redacted, under the
 // source "task" and never "supplied"; the pull request the stage opened is
-// titled with the project; its body frames the intent as a hint, carries the
+// titled with the project, although the worker's commit has a subject of its
+// own, because an intent outranks the subject (#217); its body frames the intent as a hint, carries the
 // scope lens's own note about the path the reviewer did not trace, and not
 // the note the lens leaves when it did not run. Then a person's push of the
 // same branch, from outside every worker group, starts a run with no intent,

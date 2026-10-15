@@ -539,6 +539,13 @@ func (s *Service) begin(ctx context.Context, record store.Run, start pipeline.St
 	if err := s.ensureCopy(ctx, record); err != nil {
 		return machine.Run{}, err
 	}
+	// The subject is settled here, from the record, for the reason the code
+	// host's repository is: every way a run starts comes through this, so a
+	// push, a start, and a rerun all carry one and no call site can forget it.
+	// The gate repository holds the submitted commit whichever way the run
+	// started, because create recorded it there under the run's own
+	// reference before this was called.
+	start.SubmittedSubject = s.submittedSubject(ctx, record)
 	resolved, err := s.resolveRunConfig(ctx, record)
 	if err != nil {
 		return machine.Run{}, err
@@ -593,6 +600,39 @@ func (s *Service) forgeRepositoryFor(ctx context.Context, repositoryID string) (
 	}
 	specifier, _ := forge.GitHubRepository(repository.UpstreamURL)
 	return specifier, nil
+}
+
+// submittedSubject is the subject of the commit a run was submitted, read from
+// the gate repository through internal/vcs and passed through internal/redact,
+// because it reaches graph state, every checkpoint, and through the pull
+// request stage's title a code host. It becomes pipeline.KeySubmittedSubject,
+// and that stage titles a run without intent with it.
+//
+// A subject that cannot be read is logged and answered as empty, so a run
+// without intent is titled with its branch, as every such run was before the
+// subject was read. That is the fallback issue #217 settles on for an empty
+// subject rather than a refusal relaxed: a title is the one thing the subject
+// decides, and a run that could not read it validates the same commit either
+// way. The read
+// failing at all is unexpected, since create recorded the commit in the gate
+// repository before begin was called.
+func (s *Service) submittedSubject(ctx context.Context, record store.Run) string {
+	repository, err := s.store.Repository(ctx, record.RepositoryID)
+	if err != nil {
+		s.log.Printf("run %s: the repository record could not be read, so the submitted commit's subject "+
+			"is not recorded and its pull request is titled without it: %v", record.ID, err)
+		return ""
+	}
+	bare, err := s.gateRepositoryOf(ctx, repository, record.ID)
+	if err == nil {
+		var subject string
+		if subject, err = bare.CommitSubject(ctx, record.SubmittedHead); err == nil {
+			return redact.New().Redact(subject)
+		}
+	}
+	s.log.Printf("run %s: the subject of %s could not be read, so its pull request is titled without it: %v",
+		record.ID, record.SubmittedHead, err)
+	return ""
 }
 
 // run is what a new run is recorded from. It is a struct because the six

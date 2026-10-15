@@ -10,6 +10,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/findings"
 	"github.com/dayamjz/assistant/internal/forge"
 	"github.com/dayamjz/assistant/internal/graph"
@@ -213,6 +214,7 @@ type runState struct {
 	intent          string
 	supplied        bool
 	submitted       string
+	subject         string
 	head            string
 	pushed          string
 	recorded        map[pipeline.Stage]recordedStage
@@ -233,16 +235,17 @@ type recordedStage struct {
 func (r runState) state(t *testing.T) map[pipeline.Key]graph.Value {
 	t.Helper()
 	out := map[pipeline.Key]graph.Value{
-		pipeline.KeyRun:             graph.TextValue(r.run),
-		pipeline.KeyForgeRepository: graph.TextValue(r.forgeRepository),
-		pipeline.KeyBranch:          graph.TextValue(r.branch),
-		pipeline.KeyBase:            graph.TextValue(r.base),
-		pipeline.KeyIntent:          graph.TextValue(r.intent),
-		pipeline.KeyIntentSupplied:  graph.BoolValue(r.supplied),
-		pipeline.KeySubmitted:       graph.TextValue(r.submitted),
-		pipeline.KeyHead:            graph.TextValue(r.head),
-		pipeline.KeyPushed:          graph.TextValue(r.pushed),
-		pipeline.KeyDecisionChecks:  r.decision,
+		pipeline.KeyRun:              graph.TextValue(r.run),
+		pipeline.KeyForgeRepository:  graph.TextValue(r.forgeRepository),
+		pipeline.KeyBranch:           graph.TextValue(r.branch),
+		pipeline.KeyBase:             graph.TextValue(r.base),
+		pipeline.KeyIntent:           graph.TextValue(r.intent),
+		pipeline.KeyIntentSupplied:   graph.BoolValue(r.supplied),
+		pipeline.KeySubmitted:        graph.TextValue(r.submitted),
+		pipeline.KeySubmittedSubject: graph.TextValue(r.subject),
+		pipeline.KeyHead:             graph.TextValue(r.head),
+		pipeline.KeyPushed:           graph.TextValue(r.pushed),
+		pipeline.KeyDecisionChecks:   r.decision,
 	}
 	for stage, recorded := range r.recorded {
 		out[stage.OutcomeKey()] = graph.TextValue(string(recorded.outcome))
@@ -787,16 +790,52 @@ func TestThePullRequestStageReportsOnlyNotes(t *testing.T) {
 }
 
 // The title a new pull request is opened with comes from the run, because the
-// run is all this stage knows that names the change.
+// run is all this stage knows that names the change: the intent's first line,
+// then the submitted commit's subject, then the branch.
+//
+// The subject cases are #217's: a person's push carries no intent and is
+// titled with its commit's subject, a task worker's push carries the task's
+// intent and keeps it even with a subject beside it, and an empty subject,
+// which is also what a run that checkpointed before the key existed reads,
+// falls back to the branch.
 func TestThePullRequestTitleComesFromTheRun(t *testing.T) {
 	t.Parallel()
 	long := strings.Repeat("a very wordy intent ", 10)
 	for _, c := range []struct {
-		name   string
-		intent string
-		want   func(string) bool
-		says   string
+		name    string
+		intent  string
+		subject string
+		want    func(string) bool
+		says    string
 	}{
+		{
+			name:    "the commit subject when the run carries no intent",
+			subject: "Greet the person by name",
+			want:    func(got string) bool { return got == "Greet the person by name" },
+			says:    "the submitted commit's subject",
+		},
+		{
+			name:    "the intent over the commit subject",
+			intent:  "Ship the greeting task\n\nthe task's instructions",
+			subject: "Greet the person by name",
+			want:    func(got string) bool { return got == "Ship the greeting task" },
+			says:    "the first line of the intent",
+		},
+		{
+			name:    "the branch when the subject is blank and there is no intent",
+			subject: "  ",
+			want:    func(got string) bool { return got == "feature/greeting" },
+			says:    "the branch name",
+		},
+		{
+			name:    "cut short when the subject is long",
+			subject: strings.Repeat("a long subject ", 10),
+			want: func(got string) bool {
+				return len([]rune(got)) == 72 && strings.HasSuffix(got, "...") &&
+					strings.HasPrefix(got, "a long subject")
+			},
+			says: "the subject cut short",
+		},
 		{
 			name:   "the first line of the intent",
 			intent: "Add a greeting\n\nand the reasoning behind it",
@@ -823,6 +862,7 @@ func TestThePullRequestTitleComesFromTheRun(t *testing.T) {
 			t.Parallel()
 			run := aRun()
 			run.intent = c.intent
+			run.subject = c.subject
 			h := newHost()
 			mustRunPR(t, h, run)
 			h.mu.Lock()
@@ -965,4 +1005,137 @@ func countPrefix(calls []string, prefix string) int {
 		}
 	}
 	return n
+}
+
+// A run that checkpointed before pipeline.KeySubmittedSubject existed resumes
+// and opens its pull request titled with the branch, which is how it would
+// have been titled then (#217).
+//
+// The run is a real pipeline whose push stage holds, so it stops at that
+// hold with a checkpoint written, and whose pull request stage is the real
+// body over a modelled code host. The older checkpoint is that checkpoint
+// with the key taken out of its state, which is the one thing a build without
+// the row would have written differently: a mutation of the real record rather
+// than one written from nothing. Answering the hold under the current build
+// resumes it through internal/graph's validation of a stored checkpoint.
+//
+// The control is the same checkpoint left whole, which opens its pull request
+// titled with the subject, so the branch title above is the absent key's doing
+// and not a run that never carried a subject (P6: a run a person holds is not
+// stranded by a build that adds a key).
+func TestARunFromBeforeTheSubjectKeyIsTitledWithItsBranch(t *testing.T) {
+	principles.Cite(t, principles.P6)
+	const (
+		branch  = "feature/greeting"
+		subject = "Greet the person by name"
+	)
+	for _, c := range []struct {
+		name  string
+		older bool
+		want  string
+	}{
+		{"a checkpoint from before the key", true, branch},
+		{"the same checkpoint with the key", false, subject},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			h := newHost()
+			all := pipeline.ConstantStages("nothing to report")
+			all.Push = pipeline.Constant("the push waits on a person", findings.Finding{
+				ID: "hold-the-push", Action: findings.ActionAsk, Severity: findings.SeverityInfo,
+				Description: "a person decides whether this is pushed",
+			})
+			all.PR = stages.PullRequest(stages.StageDeps{Forge: hostFor{provider: h}})
+			p, err := pipeline.New(pipeline.Options{Stages: all, Budget: config.DefaultRunBudget})
+			if err != nil {
+				t.Fatalf("building the pipeline: %v", err)
+			}
+			first := graph.NewMemoryStore()
+			exec, err := p.Executor(first)
+			if err != nil {
+				t.Fatal(err)
+			}
+			state, err := p.NewState(pipeline.Start{
+				Repository: "repo-1", Run: "run-1", ForgeRepository: "owner/example",
+				Branch: branch, Base: "main", Submitted: "1111111111111111111111111111111111111111",
+				SubmittedSubject: subject,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			held, err := exec.Run(t.Context(), "run", state)
+			if err != nil {
+				t.Fatalf("running to the push stage's hold: %v", err)
+			}
+			if held.Status != graph.StatusHalted {
+				t.Fatalf("the run stopped %s (%s), want halted at the push stage's hold", held.Status, held.Reason)
+			}
+			stored, err := first.Latest(t.Context(), "run")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if c.older {
+				stored = withoutStateKey(t, stored, pipeline.KeySubmittedSubject)
+			}
+			restored := graph.NewMemoryStore()
+			if _, err := restored.Write(t.Context(), graph.CheckpointID{}, stored); err != nil {
+				t.Fatalf("storing the checkpoint: %v", err)
+			}
+			resumed, err := p.Executor(restored)
+			if err != nil {
+				t.Fatal(err)
+			}
+			done, err := resumed.Answer(t.Context(), "run", string(pipeline.OutcomeApproved))
+			if err != nil {
+				t.Fatalf("answering the push stage's hold: %v", err)
+			}
+			if done.Status != graph.StatusCompleted {
+				t.Fatalf("the resumed run stopped %s (%s), want completed", done.Status, done.Reason)
+			}
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			pr, ok := h.open[branch]
+			if !ok {
+				t.Fatalf("the resumed run opened no pull request for %s", branch)
+			}
+			if pr.Title != c.want {
+				t.Fatalf("the pull request was opened titled %q, want %q", pr.Title, c.want)
+			}
+		})
+	}
+}
+
+// withoutStateKey is cp with key removed from its state, through the
+// checkpoint's own wire form, and fails when the key was not there to remove.
+func withoutStateKey(t *testing.T, cp graph.Checkpoint, key pipeline.Key) graph.Checkpoint {
+	t.Helper()
+	encoded, err := json.Marshal(cp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &fields); err != nil {
+		t.Fatal(err)
+	}
+	var state map[string]json.RawMessage
+	if err := json.Unmarshal(fields["state"], &state); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := state[string(key)]; !ok {
+		t.Fatalf("the checkpoint's state holds no %q to remove", key)
+	}
+	delete(state, string(key))
+	if fields["state"], err = json.Marshal(state); err != nil {
+		t.Fatal(err)
+	}
+	if encoded, err = json.Marshal(fields); err != nil {
+		t.Fatal(err)
+	}
+	var out graph.Checkpoint
+	if err := json.Unmarshal(encoded, &out); err != nil {
+		t.Fatalf("decoding the older checkpoint: %v", err)
+	}
+	if _, ok := out.State.Get(string(key)); ok {
+		t.Fatalf("the older checkpoint still holds %q", key)
+	}
+	return out
 }
