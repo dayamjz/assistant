@@ -193,10 +193,15 @@ func TestARerunValidatesWhatTheRunPushedAndBehindItNamesSync(t *testing.T) {
 	if got := run(t, h, subject, "init"); got.code != machine.ExitOK {
 		t.Fatalf("assistant init exited %s:\n%s%s", got.code, got.stdout, got.stderr)
 	}
+	identifyGate(t, h, subject)
 	const branch = "a-change"
 	standingOnChange(t, subject, branch)
 	submitted := git(t, subject, "rev-parse", "HEAD")
-	first := decodeRun(t, run(t, h, subject, "--json", "--intent", "a change with its tradeoffs stated").stdout)
+	started := run(t, h, subject, "--json", "--intent", "a change with its tradeoffs stated")
+	if started.code != machine.ExitOK {
+		t.Fatalf("the start exited %s:\n%s%s\nthe agent was asked:\n%v", started.code, started.stdout, started.stderr, agent.Calls())
+	}
+	first := decodeRun(t, started.stdout)
 	if first.Record.SubmittedHead != submitted {
 		t.Fatalf("the run validated %s, want the commit the checkout stood at, %s", first.Record.SubmittedHead, submitted)
 	}
@@ -300,6 +305,29 @@ func TestARerunValidatesWhatTheRunPushedAndBehindItNamesSync(t *testing.T) {
 		t.Fatalf("the rerun is run %s of %s, want a fresh run of the pushed commit %s (submitted was %s)",
 			rerun.Record.ID, rerun.Record.SubmittedHead, work, submitted)
 	}
+}
+
+// identifyGate gives the gate's repository a committer identity. A run's
+// isolated copy is a linked worktree of that repository and shares its
+// configuration, and a fix round that changed something commits there, which
+// needs an identity. On an operator's machine their global configuration
+// supplies it; a CI runner carries none, and without one the fix round fails
+// with git's "Author identity unknown" and the run never reaches its push. It
+// is internal/service's identifyGateRepository, reached through the command
+// surface's status rather than the service's records.
+func identifyGate(t *testing.T, h *home.Home, subject string) {
+	t.Helper()
+	var status machine.Status
+	if got := run(t, h, subject, "--json", "status"); json.Unmarshal([]byte(got.stdout), &status) != nil ||
+		status.Gate == nil || status.Gate.ID == "" {
+		t.Fatalf("status names no gate:\n%s%s", got.stdout, got.stderr)
+	}
+	repository, err := gate.RepositoryFor(h.Root(), status.Gate.ID)
+	if err != nil {
+		t.Fatalf("locating the gate repository: %v", err)
+	}
+	git(t, repository, "config", "user.name", "test")
+	git(t, repository, "config", "user.email", "test@example.invalid")
 }
 
 // fixedFile is the file the stand-in test stage below asks for and the fix
