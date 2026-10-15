@@ -11,8 +11,8 @@ import (
 // A read-only open reads what a writer recorded and writes nothing: the
 // queued wakes a writer appended are drained from it, every write is
 // ErrReadOnly, and the file is untouched by the open. The read needs no
-// redactor, because nothing it can do reaches the two columns the redactor
-// is for.
+// redactor, because nothing it can do writes the columns the redactor is
+// for.
 func TestOpenReadOnlyReadsTheRecordAndRefusesEveryWrite(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "state.db")
