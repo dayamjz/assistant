@@ -2043,6 +2043,19 @@ flowchart TB
     and stage purposes; the line pointing at it is phrased. No verb is added.
   </p>
   <p class="mb-4 opacity-90">
+    The <b>log view</b> is a flag on <code>assistant runs</code> given with a run, naming a stage. It
+    reads that run's section 8 per-stage log for the stage, where a fix round is logged under the stage
+    whose findings it fixes. The service writes it, best effort, around each stage body and each round:
+    when it began and ended, what it returned, and the account and full reply of each agent call that
+    passes through the service's own wrapper, redacted on the way in. A write that fails is reported in
+    the service log and leaves no mark in the stage's log. What the view prints is a bounded tail with a
+    marker saying how much it left out and where the whole log is. A log is evidence and never state:
+    nothing decides anything from it (P8). It is an answer of its own, apart from the detail view, and it
+    keeps exact identifiers and stage names, so it is rendered as an evidence document; P13's list of
+    evidence documents does not name it, and the line pointing at it is phrased. The local protocol
+    carries the same read as one open method. No verb is added.
+  </p>
+  <p class="mb-4 opacity-90">
     Answering a hold is a flag on <code>assistant</code>, and it takes a task as well as a run, so a
     hold a task raised with no run behind it, an investigation's among them, is answered the same
     way. Given a task with no hold of its own open, it answers the hold on the task's current run,

@@ -531,3 +531,14 @@ type UsageRequest struct {
 	// Window is how far back the read reaches, such as 24h or 7d.
 	Window string `json:"window,omitempty"`
 }
+
+// StageLogRequest names one stage of one run, whose per-stage log the
+// run.log method answers with a bounded tail of. Stage is one of the nine
+// stage names; a fix round is logged under the stage whose findings it fixes,
+// so it has no name of its own here.
+type StageLogRequest struct {
+	// Run is the run's identifier.
+	Run string `json:"run"`
+	// Stage is the stage's name.
+	Stage string `json:"stage"`
+}

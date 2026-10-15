@@ -234,6 +234,11 @@ type Service struct {
 	// calls and from where.
 	cleaner *tasks.Cleaner
 
+	// stageLogMu serializes appends to the per-stage logs and the reads of
+	// them, so a section stagelog.go writes is never interleaved with another
+	// and a read never sees half of one. stagelog.go owns it.
+	stageLogMu sync.Mutex
+
 	// mu guards the lazily built driver and topologies, the set of runs being
 	// advanced, and the branch gates. It is never held across a run's
 	// execution.

@@ -246,6 +246,12 @@ type Run struct {
 	// Position is the node that has not run, empty exactly when the run
 	// completed.
 	Position string `json:"position,omitempty"`
+	// Activity is what the segment advancing this run is doing now: the stage
+	// its position belongs to, that stage's fix round, and how long the node
+	// at Position has been running. It is present only on an answer that
+	// found a segment advancing the run, because it describes a node in
+	// flight and a run nothing is advancing has none.
+	Activity *Activity `json:"activity,omitempty"`
 	// Reason explains a run that ended without a verdict on the change: which
 	// bound parked it, or, for a run its pull request ended by closing
 	// without a merge, the reason the record carries for that. It is empty
