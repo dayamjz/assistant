@@ -143,19 +143,12 @@ func (w managedWorld) untilDown(t *testing.T, h *home.Home) {
 	}
 }
 
-// stop stops the service for h and waits until nothing answers.
-//
-// A plain stop of a service in another process can come back as a connection
-// that ended with no answer, after the service logged the stop as accepted;
-// it was observed here under the race detector with no managed service
-// involved, and it is the existing stop's and not this change's. This
-// accepts that one failure, and only that one, because what the tests below
-// need from the step is that the service went down, which untilDown then
-// establishes either way.
+// stop stops the service for h, requires the stop to succeed, and waits
+// until nothing answers.
 func (w managedWorld) stop(t *testing.T, h *home.Home) {
 	t.Helper()
 	got := w.run(t, h, "", "service", "stop")
-	if got.code != machine.ExitOK && !strings.Contains(got.stderr, "client closed") {
+	if got.code != machine.ExitOK {
 		t.Fatalf("stopping the service exited %s:\n%s%s", got.code, got.stdout, got.stderr)
 	}
 	w.untilDown(t, h)

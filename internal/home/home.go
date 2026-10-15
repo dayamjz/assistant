@@ -78,8 +78,8 @@ func Open(root string) (*Home, error) {
 // Root is the absolute path of the home root.
 func (h *Home) Root() string { return h.root }
 
-// ConfigFile is the global configuration document, which config.Resolve reads
-// as its global layer.
+// ConfigFile is the global configuration document, a YAML document that
+// config.ParseYAML reads and config.Resolve takes as its global layer.
 func (h *Home) ConfigFile() string { return filepath.Join(h.root, "config.yaml") }
 
 // Database is the embedded database internal/store opens.

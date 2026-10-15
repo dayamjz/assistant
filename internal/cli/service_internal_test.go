@@ -40,7 +40,7 @@ func TestReadinessIsNotSatisfiedByTheServiceItWasToldToReplace(t *testing.T) {
 	// A wait for a replacement is not satisfied by the service being replaced.
 	bounded, cancel := context.WithTimeout(t.Context(), 300*time.Millisecond)
 	defer cancel()
-	if state, err := in.waitReady(bounded, first.Instance); err == nil {
+	if state, err := in.waitReady(bounded, first.Instance, nil); err == nil {
 		t.Fatalf("the wait for a replacement was satisfied by the outgoing service: %+v", state)
 	}
 
@@ -57,7 +57,7 @@ func TestReadinessIsNotSatisfiedByTheServiceItWasToldToReplace(t *testing.T) {
 	if second.Instance == first.Instance {
 		t.Fatalf("two services of one home answer as the same process %q", second.Instance)
 	}
-	if _, err := in.waitReady(t.Context(), first.Instance); err != nil {
+	if _, err := in.waitReady(t.Context(), first.Instance, nil); err != nil {
 		t.Fatalf("the wait was not satisfied by the replacement: %v", err)
 	}
 }

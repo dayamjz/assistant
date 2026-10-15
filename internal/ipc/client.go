@@ -121,22 +121,45 @@ func (c *Client) Call(ctx context.Context, method Method, params, out any) error
 	if err := c.w.write(ctx, frame{ID: id, Method: method, Marker: c.marker, Params: body}); err != nil {
 		return fmt.Errorf("ipc: sending %s: %w", method, err)
 	}
+	var f frame
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
 	case <-c.done:
-		return c.closedErr()
-	case f := <-reply:
-		if f.Error != nil {
-			return f.Error
+		var answered bool
+		if f, answered = answerBeforeEnd(reply); !answered {
+			return c.closedErr()
 		}
-		if out == nil {
-			return nil
-		}
-		if err := json.Unmarshal(nullIfEmpty(f.Result), out); err != nil {
-			return fmt.Errorf("ipc: decoding the answer to %s: %w", method, err)
-		}
+	case f = <-reply:
+	}
+	if f.Error != nil {
+		return f.Error
+	}
+	if out == nil {
 		return nil
+	}
+	if err := json.Unmarshal(nullIfEmpty(f.Result), out); err != nil {
+		return fmt.Errorf("ipc: decoding the answer to %s: %w", method, err)
+	}
+	return nil
+}
+
+// answerBeforeEnd takes an answer that arrived before the connection ended,
+// for a caller that saw the end first.
+//
+// The goroutine reading the connection hands an answer to its call before it
+// reads the next frame, and it marks the client ended only once a read fails,
+// so an answer the connection carried ahead of its end is already waiting in
+// reply by the time done is closed. A select over both cannot tell which
+// came first and picks either, which is how a service that answered a stop
+// and then exited could be reported as a connection that ended with no
+// answer. Looking here once done is closed is what puts the answer first.
+func answerBeforeEnd(reply chan frame) (frame, bool) {
+	select {
+	case f := <-reply:
+		return f, true
+	default:
+		return frame{}, false
 	}
 }
 

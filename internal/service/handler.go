@@ -480,6 +480,17 @@ func (s *Service) stageReport(_ context.Context, req machine.StageReportRequest)
 // yes-to-everything one. Force is that flag, and the refusal carries the runs
 // so a caller can see what it would be ending.
 //
+// A restart also reads the home's configuration file first, the one a
+// replacement resolves at start, and refuses when it cannot be read or
+// parsed, leaving this service serving: stopping it for a replacement that
+// would refuse to start leaves the home with no service at all. Force does
+// not override that, because it is runs being interrupted that force
+// consents to. What this establishes is that the file parsed when the
+// restart was asked for, not that the replacement starts: the replacement
+// reads the file again, so an edit in between is not covered, and neither is
+// a start that fails for a reason other than this file, which the
+// replacement writes to the service log instead.
+//
 // Every invocation is recorded with who called it, which is what the peer's
 // credentials say and never what the caller says about itself.
 func (s *Service) lifecycle(ctx context.Context, req ipc.Request, params machine.LifecycleRequest, restarting bool) (machine.Lifecycle, error) {
@@ -488,6 +499,13 @@ func (s *Service) lifecycle(ctx context.Context, req ipc.Request, params machine
 		verb = "restart"
 	}
 	s.log.Printf("%s requested by %s (marker %q, force %v)", verb, peerOf(req), req.Peer.Marker(), params.Force)
+
+	if restarting {
+		if _, _, _, err := resolveConfig(s.home.ConfigFile()); err != nil {
+			s.log.Printf("restart refused: a replacement would not start on the configuration file: %v", err)
+			return machine.Lifecycle{ConfigurationRefused: true, Detail: err.Error()}, nil
+		}
+	}
 
 	active, err := s.activeRuns(ctx)
 	if err != nil {
@@ -522,9 +540,10 @@ func peerOf(req ipc.Request) string {
 	return creds.String()
 }
 
-// resolveConfig reads the operator's global configuration document, and
-// returns it as a layer, resolved on its own against the schema defaults, and
-// as the digest that identifies the document.
+// resolveConfig reads the operator's global configuration document, which is
+// YAML and is parsed with config.ParseYAML, and returns it as a layer,
+// resolved on its own against the schema defaults, and as the digest that
+// identifies the document. A refusal names the file.
 //
 // A document that is there and cannot be read or parsed refuses, rather than
 // falling back to defaults: PRD section 10 makes invalid configuration a
@@ -547,8 +566,8 @@ func resolveConfig(path string) (config.Layer, config.Config, string, error) {
 	case err != nil:
 		return config.Layer{}, config.Config{}, "", fmt.Errorf("service: reading %s: %w", path, err)
 	default:
-		if global, err = config.Parse(config.OriginGlobal, document); err != nil {
-			return config.Layer{}, config.Config{}, "", err
+		if global, err = config.ParseYAML(config.OriginGlobal, document); err != nil {
+			return config.Layer{}, config.Config{}, "", fmt.Errorf("service: %s: %w", path, err)
 		}
 	}
 	resolution, err := config.Resolve(global, config.Absent(config.OriginTrusted))

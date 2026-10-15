@@ -3,6 +3,7 @@ package ipc_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
@@ -135,4 +136,99 @@ func (c *watchedConn) Write(p []byte) (int, error) {
 	n, err := c.Conn.Write(p)
 	c.written.Store(true)
 	return n, err
+}
+
+// An answer that reached the caller is the answer even when the connection
+// ends straight after it. That is the shape a service stopping itself
+// produces: its stop is answered, and the work deferred to after the answer
+// ends the service, which closes the connection. The caller must read the
+// answer it was sent rather than the end of input that followed it.
+//
+// The ending is the server's own: the deferred work closes the connection
+// the server accepted, as Server.Close does to every connection it holds, so
+// what the client reads on the wire is a whole answer and then the end of
+// input, which is all the real mechanism can put there. It is repeated
+// because the defect it guards was an unordered choice between the two, and
+// one attempt would pass by chance about half the time it ran.
+func TestAnAnswerFollowedByTheConnectionEndingIsStillTheAnswer(t *testing.T) {
+	dir, err := os.MkdirTemp("", "ipc")
+	if err != nil {
+		t.Fatalf("temp dir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	socket := filepath.Join(dir, "s")
+
+	accepted := make(chan net.Conn, 1)
+	ended := make(chan struct{}, 1)
+	handler := ipc.HandlerFunc(func(_ context.Context, req ipc.Request) (json.RawMessage, error) {
+		req.AfterAnswer(func() {
+			_ = (<-accepted).Close()
+			ended <- struct{}{}
+		})
+		return json.RawMessage(`{"ok":true}`), nil
+	})
+	srv, err := ipc.NewServer(ipc.ServerConfig{
+		Handler:  handler,
+		Ancestry: &recordingAncestry{},
+		Events:   publisher(t, ipc.PublisherConfig{}),
+	})
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	listener := &handingListener{Listener: listenLocal(t, socket), accepted: accepted}
+	done := make(chan error, 1)
+	go func() { done <- srv.Serve(listener) }()
+	t.Cleanup(func() {
+		_ = srv.Close()
+		_ = listener.Close()
+		<-done
+	})
+
+	const attempts = 200
+	lost := 0
+	for range attempts {
+		ctx, cancel := callCtx(t)
+		client, err := ipc.Dial(ctx, socket, ipc.ClientConfig{})
+		if err != nil {
+			cancel()
+			t.Fatalf("Dial: %v", err)
+		}
+		var out struct {
+			OK bool `json:"ok"`
+		}
+		err = client.Call(ctx, ipc.MethodHealth, nil, &out)
+		// The next connection is accepted only once this one has ended, so
+		// each attempt's deferred work ends the connection it answered on.
+		<-ended
+		cancel()
+		_ = client.Close()
+		switch {
+		case errors.Is(err, ipc.ErrClientClosed):
+			lost++
+		case err != nil:
+			t.Fatalf("calling the server: %v", err)
+		case !out.OK:
+			t.Fatal("the call succeeded with an answer that never arrived")
+		}
+	}
+	if lost > 0 {
+		t.Fatalf("%d of %d answers that were written before the connection ended were reported as the connection ending", lost, attempts)
+	}
+}
+
+// handingListener passes each connection it accepts to the test, so the test
+// can end one the way the server ends every connection it holds. The test
+// takes each before the next is dialled.
+type handingListener struct {
+	net.Listener
+	accepted chan net.Conn
+}
+
+func (l *handingListener) Accept() (net.Conn, error) {
+	conn, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	l.accepted <- conn
+	return conn, nil
 }
