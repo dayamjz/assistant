@@ -7,12 +7,15 @@ import (
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/agents/standin"
+	"github.com/dayamjz/assistant/internal/forge/forgetest"
 )
 
 // The stand-in agent is this test binary re-executed, so a package whose tests
-// run an agent has to answer as one. internal/agents/standin's first New in a
-// process refuses loudly when this is missing, rather than letting the
-// resulting agent failures read as the stage under test misbehaving.
+// run an agent has to answer as one, and the stand-in code host the checks
+// tests read a pull request from is the same binary again. Each stand-in's
+// first New in a process refuses loudly when its Main was not called, rather
+// than letting the resulting failures read as the stage under test
+// misbehaving.
 //
 // It also turns automatic git maintenance off for the git the stage bodies
 // run through internal/vcs, not only for the test helper's own git. A
@@ -24,6 +27,7 @@ import (
 // nothing else about the configuration changes.
 func TestMain(m *testing.M) {
 	standin.Main()
+	forgetest.Main()
 	cleanup, err := maintenanceOff()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "turning git maintenance off for the stage tests:", err)

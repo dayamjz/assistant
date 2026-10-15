@@ -91,7 +91,8 @@ import (
 //     stage read, not the later commits. Those are reviewed here like any
 //     other, and a person is asked again only if that review raises something.
 //   - The checks stage's fix rounds run after this stage and are not reviewed
-//     here. Nothing in this build pushes the commits they make.
+//     here. Nothing in this build pushes the commits they make, and the
+//     checks stage holds on one rather than reading checks it cannot be in.
 //   - A judge path a later round deleted, which judge.go already held that
 //     round's stage for, is reported again by this review's judge lens: it
 //     cannot tell which edits a person already accepted, so it asks again

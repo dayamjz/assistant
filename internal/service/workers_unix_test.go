@@ -6,14 +6,16 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/dayamjz/assistant/internal/agents/standin"
 	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/gate"
 	"github.com/dayamjz/assistant/internal/home"
@@ -21,70 +23,125 @@ import (
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/principles"
 	"github.com/dayamjz/assistant/internal/redact"
-	"github.com/dayamjz/assistant/internal/service"
 	"github.com/dayamjz/assistant/internal/session"
 	"github.com/dayamjz/assistant/internal/store"
 	"github.com/dayamjz/assistant/internal/supervisor"
 )
 
-// These tests make requests from inside a real worker's process group. The
-// worker is the stand-in in worker mode, launched by the service for a
-// dispatched task exactly as launch_test.go has it launched, and a request
-// from it is a child process this test places in the worker's group with
-// setpgid before it runs: a git push from the task's copy, whose hooks reach
-// the service through the gate as a person's would, or this binary making
-// one call. The credentials the service reads are then that child's, which
-// the kernel attributes and nothing here states, and the group they resolve
-// to is the one the real adapter started the worker in. A membership
-// written by hand reaches nothing in any of them.
+// These tests make requests the way a real worker makes them: the worker
+// runs them. The worker is the stand-in in worker mode, launched by the
+// service for a dispatched task exactly as launch_test.go has it launched,
+// and a request from it is a command the test sends the worker as a line,
+// which the worker runs through a shell of its own, in a process group the
+// worker does not lead. That is the shape #225 observed of a command the
+// Claude Code CLI's Bash tool runs, and every helper here fails the test if
+// the command did not run in it. The request is a git push from the task's
+// copy, whose hooks reach the service through the gate as a person's would,
+// or this binary making one call. The credentials the service reads are
+// then those of a process the worker started, which the kernel attributes
+// and nothing here states, and the service places it by walking that
+// process's parent chain to the worker. A membership written by hand
+// reaches nothing in any of them.
 
-// inGroup is a command placed in a process group, which has to be one a
-// process in this session leads.
-func inGroup(ctx context.Context, group int, dir, name string, args ...string) *exec.Cmd {
-	cmd := exec.CommandContext(ctx, name, args...)
-	cmd.Dir = dir
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true, Pgid: group}
-	cmd.WaitDelay = 5 * time.Second
-	cmd.Env = append(os.Environ(),
-		"GIT_AUTHOR_NAME=test", "GIT_AUTHOR_EMAIL=test@example.invalid",
-		"GIT_COMMITTER_NAME=test", "GIT_COMMITTER_EMAIL=test@example.invalid",
-	)
-	return cmd
-}
+// shellCalls numbers the commands sent to workers in this binary, so each
+// command's answer can be told from every other's however alike the
+// commands are.
+var shellCalls atomic.Int64
 
-// gitAs runs git in dir from inside a process group and returns its output
-// and error, for a push whose admission is the point.
-func gitAs(t *testing.T, group int, dir string, args ...string) (string, error) {
+// asWorker has the launched task's worker run command and returns what the
+// worker reported of it. The test fails if the command ran in the worker's
+// own process group, or in none the worker could read, since a request from
+// there is not the shape these tests exist to exercise.
+func asWorker(t *testing.T, w launched, command string) standin.Ran {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
-	defer cancel()
-	out, err := inGroup(ctx, group, dir, "git", args...).CombinedOutput()
-	return string(out), err
+	command = fmt.Sprintf(": call %d; %s", shellCalls.Add(1), command)
+	if err := w.provider.Send(t.Context(), w.session, shellMarker+command); err != nil {
+		t.Fatalf("sending the worker a command: %v", err)
+	}
+	deadline := time.Now().Add(90 * time.Second)
+	for {
+		got, err := w.provider.Capture(w.session)
+		if err != nil {
+			t.Fatalf("Capture: %v", err)
+		}
+		for _, line := range strings.Split(got.Text, "\n") {
+			// A line-mode worker prints the Ran as a line of its own, and a
+			// stream-mode worker as the text of a result line.
+			text := line
+			var turn struct {
+				Type   string `json:"type"`
+				Result string `json:"result"`
+			}
+			if json.Unmarshal([]byte(line), &turn) == nil && turn.Type == "result" {
+				text = turn.Result
+			}
+			var ran standin.Ran
+			if json.Unmarshal([]byte(text), &ran) != nil || ran.Command != command {
+				continue
+			}
+			if ran.Group <= 0 || ran.Group == w.group {
+				t.Fatalf("the worker ran %q in group %d, and its own group is %d: not the shape a real worker's command has",
+					command, ran.Group, w.group)
+			}
+			return ran
+		}
+		if !time.Now().Before(deadline) {
+			t.Fatalf("the worker never answered %q; its output is:\n%s", command, got.Text)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
 }
 
-// callAs makes one call on the service's socket from a process inside a
-// group, through callMain, and returns the answer or the wire code the call
-// was refused with.
-func callAs(t *testing.T, group int, running *service.Service, method ipc.Method, params any) (json.RawMessage, ipc.Code) {
+// shellQuote quotes each word for a POSIX shell and joins them.
+func shellQuote(words ...string) string {
+	quoted := make([]string, len(words))
+	for i, word := range words {
+		quoted[i] = "'" + strings.ReplaceAll(word, "'", `'\''`) + "'"
+	}
+	return strings.Join(quoted, " ")
+}
+
+// gitAs has the worker run git in dir and returns its output and an error
+// when git failed, for a push whose admission is the point. The identity a
+// commit needs is stated on the command line, since a CI runner has none.
+func gitAs(t *testing.T, w launched, dir string, args ...string) (string, error) {
+	t.Helper()
+	ran := asWorker(t, w, "cd "+shellQuote(dir)+" && "+
+		"GIT_AUTHOR_NAME=test GIT_AUTHOR_EMAIL=test@example.invalid "+
+		"GIT_COMMITTER_NAME=test GIT_COMMITTER_EMAIL=test@example.invalid "+
+		shellQuote(append([]string{"git"}, args...)...))
+	out := ran.Stdout + ran.Stderr
+	if ran.Exit != 0 {
+		return out, fmt.Errorf("git exited with status %d", ran.Exit)
+	}
+	return out, nil
+}
+
+// callAs has the worker make one call on the service's socket through
+// callMain, and returns the answer or the wire code the call was refused
+// with. The parameters reach the command through a file rather than on the
+// line the worker reads, so a test counting the lines that carry a text
+// counts what the program wrote to the worker and not what it asked the
+// worker to run.
+func callAs(t *testing.T, w launched, method ipc.Method, params any) (json.RawMessage, ipc.Code) {
 	t.Helper()
 	body, err := json.Marshal(params)
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
-	defer cancel()
-	cmd := inGroup(ctx, group, t.TempDir(), testCommand(t), callVerb, running.Socket(), string(method), string(body))
-	var stdout, stderr strings.Builder
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	err = cmd.Run()
-	var exit *exec.ExitError
-	switch {
-	case err == nil:
-		return json.RawMessage(stdout.String()), ""
-	case errors.As(err, &exit) && exit.ExitCode() == 1:
-		return nil, ipc.Code(stderr.String())
+	file := filepath.Join(t.TempDir(), "params.json")
+	if err := os.WriteFile(file, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ran := asWorker(t, w, shellQuote(testCommand(t), callVerb, w.running.service.Socket(), string(method))+
+		` "$(cat `+shellQuote(file)+`)"`)
+	switch ran.Exit {
+	case 0:
+		return json.RawMessage(ran.Stdout), ""
+	case 1:
+		return nil, ipc.Code(ran.Stderr)
 	default:
-		t.Fatalf("calling %s from group %d: %v\n%s%s", method, group, err, stdout.String(), stderr.String())
+		t.Fatalf("calling %s from the worker: %+v", method, ran)
 		return nil, ""
 	}
 }
@@ -149,8 +206,8 @@ type launched struct {
 
 // A worker's push is admitted to its own branch and refused everywhere
 // else, decided from the pushing process's credentials and never from the
-// push: the same git, from the same copy, in the worker's process group,
-// creates the task's branch and is admitted while a stage is registered, so
+// push: the same git, from the same copy, run by the worker in a process
+// group of its own, creates the task's branch and is admitted while a stage is registered, so
 // containment was asked and did not place it; pushes the branch under
 // another name, deletes it, and rewinds it, and each is refused before any
 // reference moves; and a person's push of the same branch, from outside
@@ -159,16 +216,16 @@ type launched struct {
 // the answer.
 func TestAWorkersPushIsHeldToItsOwnBranchForwardAndAPersonsIsNot(t *testing.T) {
 	launchedWorker(t, "task/one", func(w launched) {
-		running, task, group, gateRepo := w.running, w.task, w.group, w.gateRepo
+		running, task, gateRepo := w.running, w.task, w.gateRepo
 		h := running.service
 		copyPath := resolvedCopy(t, w.home, task)
 		quietMaintenance(t, copyPath)
 		if err := os.WriteFile(filepath.Join(copyPath, "work.txt"), []byte("the worker's change\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		mustGitAs(t, group, copyPath, "add", "-A")
-		mustGitAs(t, group, copyPath, "commit", "--quiet", "-m", "the worker's change")
-		head := mustGitAs(t, group, copyPath, "rev-parse", "HEAD")
+		mustGitAs(t, w, copyPath, "add", "-A")
+		mustGitAs(t, w, copyPath, "commit", "--quiet", "-m", "the worker's change")
+		head := mustGitAs(t, w, copyPath, "rev-parse", "HEAD")
 
 		// A stage is registered, so admission's containment check reads the
 		// pusher's group rather than answering no without looking, and the
@@ -176,7 +233,7 @@ func TestAWorkersPushIsHeldToItsOwnBranchForwardAndAPersonsIsNot(t *testing.T) {
 		forget := h.StageStarted("run-under-validation", "review", 424242)
 		defer forget()
 
-		out, err := gitAs(t, group, copyPath, "push", gate.RemoteName, "task/one")
+		out, err := gitAs(t, w, copyPath, "push", gate.RemoteName, "task/one")
 		if err != nil {
 			t.Fatalf("the worker's push of its own branch was refused:\n%s", out)
 		}
@@ -197,7 +254,7 @@ func TestAWorkersPushIsHeldToItsOwnBranchForwardAndAPersonsIsNot(t *testing.T) {
 			{"a deletion", []string{"push", gate.RemoteName, ":task/one"}, "deletes it"},
 		}
 		for _, push := range refused {
-			out, err := gitAs(t, group, copyPath, push.args...)
+			out, err := gitAs(t, w, copyPath, push.args...)
 			if err == nil {
 				t.Fatalf("%s by the worker was admitted:\n%s", push.name, out)
 			}
@@ -208,8 +265,8 @@ func TestAWorkersPushIsHeldToItsOwnBranchForwardAndAPersonsIsNot(t *testing.T) {
 				t.Fatalf("%s changed the gate's references:\nbefore: %s\nafter:  %s", push.name, before, got)
 			}
 		}
-		mustGitAs(t, group, copyPath, "commit", "--quiet", "--amend", "-m", "the worker's change, rewritten")
-		out, err = gitAs(t, group, copyPath, "push", "--force", gate.RemoteName, "task/one")
+		mustGitAs(t, w, copyPath, "commit", "--quiet", "--amend", "-m", "the worker's change, rewritten")
+		out, err = gitAs(t, w, copyPath, "push", "--force", gate.RemoteName, "task/one")
 		if err == nil {
 			t.Fatalf("a rewind by the worker was admitted:\n%s", out)
 		}
@@ -242,8 +299,8 @@ func TestAWorkersPushIsHeldToItsOwnBranchForwardAndAPersonsIsNot(t *testing.T) {
 // as one. The history read back afterwards is the store's own.
 func TestAWorkerAppendsToItsOwnHistoryAndNoOneElseCan(t *testing.T) {
 	launchedWorker(t, "task/two", func(w launched) {
-		running, task, group := w.running, w.task, w.group
-		answer, code := callAs(t, group, running.service, ipc.MethodTaskEvent, machine.TaskEventRequest{Kind: "working", Detail: "on it"})
+		running, task := w.running, w.task
+		answer, code := callAs(t, w, ipc.MethodTaskEvent, machine.TaskEventRequest{Kind: "working", Detail: "on it"})
 		if code != "" {
 			t.Fatalf("the worker's event was refused with %q", code)
 		}
@@ -254,10 +311,10 @@ func TestAWorkerAppendsToItsOwnHistoryAndNoOneElseCan(t *testing.T) {
 		if appended.Event.TaskID != task || appended.Event.Kind != "working" || appended.Event.Detail != "on it" || appended.Event.Sequence < 2 {
 			t.Fatalf("the worker's event was recorded as %+v, want a working entry of task %s after its opening", appended.Event, task)
 		}
-		if _, code := callAs(t, group, running.service, ipc.MethodTaskEvent, machine.TaskEventRequest{Kind: store.DispatchedEventKind}); code != ipc.CodeWorker {
+		if _, code := callAs(t, w, ipc.MethodTaskEvent, machine.TaskEventRequest{Kind: store.DispatchedEventKind}); code != ipc.CodeWorker {
 			t.Fatalf("the worker appended %q, refused with %q, want %q", store.DispatchedEventKind, code, ipc.CodeWorker)
 		}
-		if _, code := callAs(t, group, running.service, ipc.MethodTaskEvent, machine.TaskEventRequest{Kind: "promoted-myself"}); code != ipc.CodeInvalidRequest {
+		if _, code := callAs(t, w, ipc.MethodTaskEvent, machine.TaskEventRequest{Kind: "promoted-myself"}); code != ipc.CodeInvalidRequest {
 			t.Fatalf("an unrecognized kind was refused with %q, want %q", code, ipc.CodeInvalidRequest)
 		}
 
@@ -285,23 +342,23 @@ func TestAWorkerAppendsToItsOwnHistoryAndNoOneElseCan(t *testing.T) {
 // records the coordinator as the derived acknowledger and takes the rows out
 // of the next drain, arm verification answers from the real beacon the
 // service's own loop writes, and every one of the three is refused from the
-// worker's group. The wake drained is one the service's supervisor loop
+// worker. The wake drained is one the service's supervisor loop
 // surfaced for the launched task, not one written for the test: the loop
 // observes the worker through the service's own provider, so a live worker
 // is absorbed on its handle's evidence and nothing is queued for it; the
 // test ends the worker through that handle, and the loop's next pass
-// surfaces its terminal as gone. The refusals from the worker's group are
-// asked first, while the group still leads a live worker.
+// surfaces its terminal as gone. The refusals from the worker are
+// asked first, while the worker is still live.
 func TestTheQueueAndArmVerificationAreTheCoordinatorsAndNotAWorkers(t *testing.T) {
 	launchedWorker(t, "task/three", func(w launched) {
-		running, task, group := w.running, w.task, w.group
+		running, task := w.running, w.task
 		for _, method := range []ipc.Method{ipc.MethodWakesList, ipc.MethodWakesAcknowledge, ipc.MethodSupervisionAssert} {
 			params := any(struct{}{})
 			if method == ipc.MethodWakesAcknowledge {
 				params = machine.AcknowledgeRequest{Wakes: []int64{1}}
 			}
-			if _, code := callAs(t, group, running.service, method, params); code != ipc.CodeWorker {
-				t.Fatalf("%s from the worker's group answered %q, want %q", method, code, ipc.CodeWorker)
+			if _, code := callAs(t, w, method, params); code != ipc.CodeWorker {
+				t.Fatalf("%s from the worker answered %q, want %q", method, code, ipc.CodeWorker)
 			}
 		}
 
@@ -368,13 +425,13 @@ func TestTheQueueAndArmVerificationAreTheCoordinatorsAndNotAWorkers(t *testing.T
 
 // The seen mark PRD section 9's catching up reads is moved by the person or
 // the coordinator and never by a task's worker: catchup.mark from the
-// worker's group is refused as a worker and writes nothing, while the open
+// worker is refused as a worker and writes nothing, while the open
 // read answers it; the same mark from outside every worker group, naming
 // the same landed record, is taken, which is the positive control that the
 // refusal is the worker relation's and not the request's.
 func TestTheSeenMarkIsNotAWorkers(t *testing.T) {
 	launchedWorker(t, "task/four", func(w launched) {
-		running, group := w.running, w.group
+		running := w.running
 		records, err := store.Open(t.Context(), w.home.Database(), store.WithRedactor(redact.New()))
 		if err != nil {
 			t.Fatal(err)
@@ -397,14 +454,14 @@ func TestTheSeenMarkIsNotAWorkers(t *testing.T) {
 		}
 		mark := machine.MarkSeenRequest{Records: []store.SeenRecord{{Kind: store.SeenMerge, Key: landed}}}
 
-		if _, code := callAs(t, group, running.service, ipc.MethodCatchUpMark, mark); code != ipc.CodeWorker {
-			t.Fatalf("catchup.mark from the worker's group answered %q, want %q", code, ipc.CodeWorker)
+		if _, code := callAs(t, w, ipc.MethodCatchUpMark, mark); code != ipc.CodeWorker {
+			t.Fatalf("catchup.mark from the worker answered %q, want %q", code, ipc.CodeWorker)
 		}
 		if marks, err := records.SeenMarks(t.Context()); err != nil || len(marks) != 0 {
 			t.Fatalf("the refused mark wrote %+v (%v)", marks, err)
 		}
-		if _, code := callAs(t, group, running.service, ipc.MethodCatchUpRead, struct{}{}); code != "" {
-			t.Fatalf("catchup.read from the worker's group was refused with %q, and it is open", code)
+		if _, code := callAs(t, w, ipc.MethodCatchUpRead, struct{}{}); code != "" {
+			t.Fatalf("catchup.read from the worker was refused with %q, and it is open", code)
 		}
 
 		var marked machine.Marked
@@ -419,9 +476,9 @@ func TestTheSeenMarkIsNotAWorkers(t *testing.T) {
 }
 
 // mustGitAs is gitAs failing the test on an error.
-func mustGitAs(t *testing.T, group int, dir string, args ...string) string {
+func mustGitAs(t *testing.T, w launched, dir string, args ...string) string {
 	t.Helper()
-	out, err := gitAs(t, group, dir, args...)
+	out, err := gitAs(t, w, dir, args...)
 	if err != nil {
 		t.Fatalf("git %s in %s: %v\n%s", strings.Join(args, " "), dir, err, out)
 	}
@@ -510,8 +567,7 @@ func TestAWorkerIsPlacedByTheWorkerSetAndNotByContainment(t *testing.T) {
 
 // Answering a task's hold is the coordinator's and not a worker's: a hold
 // naming the launched task, the shape an investigation's report registers,
-// is refused to the task's own worker from its process group with
-// ErrWorker and stays open, which is what keeps an investigation from
+// is refused to the task's own worker with ErrWorker and stays open, which is what keeps an investigation from
 // answering its own decision and a worker from retrying itself past its
 // relaunch bound. The same answer from outside every worker group closes
 // it, recorded with the resolver the surface derives and with nothing the
@@ -528,7 +584,7 @@ func TestATasksHoldIsAnsweredByTheCoordinatorAndNotItsWorker(t *testing.T) {
 			t.Fatal(err)
 		}
 		request := machine.TaskRespondRequest{Task: w.task, Answer: "approve"}
-		if _, code := callAs(t, w.group, w.running.service, ipc.MethodTaskRespond, request); code != ipc.CodeWorker {
+		if _, code := callAs(t, w, ipc.MethodTaskRespond, request); code != ipc.CodeWorker {
 			t.Fatalf("task.respond from the task's own worker answered %q, want %q", code, ipc.CodeWorker)
 		}
 		if got, err := records.Hold(t.Context(), hold.Key); err != nil || !got.Open() {
@@ -559,7 +615,7 @@ func TestATasksHoldIsAnsweredByTheCoordinatorAndNotItsWorker(t *testing.T) {
 func TestATasksRunIsNotAnsweredThroughTheTaskByItsWorker(t *testing.T) {
 	launchedWorker(t, "task/four", func(w launched) {
 		request := machine.RespondRequest{Task: w.task, Answer: "approved"}
-		if _, code := callAs(t, w.group, w.running.service, ipc.MethodRunRespond, request); code != ipc.CodeWorker {
+		if _, code := callAs(t, w, ipc.MethodRunRespond, request); code != ipc.CodeWorker {
 			t.Fatalf("run.respond given the task from its own worker answered %q, want %q", code, ipc.CodeWorker)
 		}
 		var run machine.Run

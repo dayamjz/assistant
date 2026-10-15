@@ -1,0 +1,345 @@
+//go:build unix
+
+package cli_test
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"os"
+	"os/exec"
+	"strconv"
+	"strings"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/dayamjz/assistant/internal/agents"
+	"github.com/dayamjz/assistant/internal/agents/standin"
+	"github.com/dayamjz/assistant/internal/home"
+	"github.com/dayamjz/assistant/internal/ipc"
+	"github.com/dayamjz/assistant/internal/machine"
+	"github.com/dayamjz/assistant/internal/machine/vocabtest"
+	"github.com/dayamjz/assistant/internal/session"
+	"github.com/dayamjz/assistant/internal/stages"
+	"github.com/dayamjz/assistant/internal/store"
+	"github.com/dayamjz/assistant/internal/supervisor"
+	"github.com/dayamjz/assistant/internal/taskstate"
+)
+
+// endWorker is the line the coordinated worker ends on, so a test ends a
+// worker through the client's own message rather than through a handle the
+// service holds. It is a phrase no instructions or note here carries.
+const endWorker = "please end the work now"
+
+// serveCoordinated serves the home with the worker-capable stand-in as the
+// resolved agent, on serveWorkers' terms, whose worker answers a steering
+// line and ends on endWorker.
+func serveCoordinated(t *testing.T, h *home.Home) func() {
+	t.Helper()
+	agent := standin.NewWorker(t, standin.Script{
+		Steps: []standin.Step{{Match: standin.MatchReview(), Times: standin.Always, Reply: standin.Reviewed("the change reads cleanly")}},
+		Worker: &standin.WorkerScript{
+			Greeting: "worker ready",
+			Exchanges: []standin.Exchange{
+				{Contains: endWorker, Reply: "worker finished", Ends: true},
+				{Contains: "carry on", Reply: "carrying on"},
+			},
+		},
+	}, agents.WithTerminationGrace(2*time.Second))
+	return serveCatalog(t, h, stages.All, agents.NewCatalog(fixedFactory{runner: agent.Runner()}))
+}
+
+// coordinate runs the coordinator's client through cli.Run in this process,
+// as --json, and decodes its answer into out, failing the test unless it
+// exited successfully.
+func coordinate(t *testing.T, h *home.Home, dir string, out any, args ...string) {
+	t.Helper()
+	got := run(t, h, dir, append([]string{"--json", "coordinator"}, args...)...)
+	if got.code != machine.ExitOK {
+		t.Fatalf("assistant coordinator %s exited %s:\n%s%s", strings.Join(args, " "), got.code, got.stdout, got.stderr)
+	}
+	if err := json.Unmarshal([]byte(got.stdout), out); err != nil {
+		t.Fatalf("decoding assistant coordinator %s: %v\n%s", strings.Join(args, " "), err, got.stdout)
+	}
+}
+
+// coordinateAs runs the coordinator's client as a process of its own placed
+// in a process group, which has to be one a process in this session leads,
+// and returns what it wrote and exited with. The process is this test
+// binary, which hookMain hands to cli.Run, so what runs is the product; the
+// credentials the service reads are that process's, which the kernel
+// attributes and nothing here states.
+func coordinateAs(t *testing.T, group int, h *home.Home, dir string, args ...string) invocation {
+	t.Helper()
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 60*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, executable, append([]string{"coordinator"}, append(args, "--json", "--home", h.Root())...)...)
+	cmd.Dir = dir
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true, Pgid: group}
+	cmd.WaitDelay = 5 * time.Second
+	var stdout, stderr strings.Builder
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	err = cmd.Run()
+	got := invocation{stdout: stdout.String(), stderr: stderr.String()}
+	var exit *exec.ExitError
+	switch {
+	case err == nil:
+		got.code = machine.ExitOK
+	case errors.As(err, &exit):
+		got.code = machine.Code(exit.ExitCode())
+	default:
+		t.Fatalf("running the client in group %d: %v\n%s%s", group, err, got.stdout, got.stderr)
+	}
+	return got
+}
+
+// workerGroup is the process group the worker of the task's latest attempt
+// leads, read off the session reference that attempt records: the adapter
+// starts a worker as the leader of a group of its own.
+func workerGroup(t *testing.T, h *home.Home, id string) int {
+	t.Helper()
+	attempts := attemptsOf(t, h, id)
+	ref, ok := attempts[len(attempts)-1].SessionRef.Get()
+	if !ok {
+		t.Fatalf("task %s's latest attempt records no session", id)
+	}
+	parsed, err := session.ParseReference(ref)
+	if err != nil {
+		t.Fatalf("reading the session reference %q: %v", ref, err)
+	}
+	return parsed.PID
+}
+
+// repositoryOf is the repository record's identifier as assistant --json
+// status reports it in the working copy, which is where the coordinator
+// skill tells an agent to read it.
+func repositoryOf(t *testing.T, h *home.Home, dir string) string {
+	t.Helper()
+	got := run(t, h, dir, "--json", "status")
+	var status machine.Status
+	if err := json.Unmarshal([]byte(got.stdout), &status); err != nil || status.Repository == nil {
+		t.Fatalf("assistant --json status reported no repository (%v):\n%s%s", err, got.stdout, got.stderr)
+	}
+	return status.Repository.ID
+}
+
+// taskCountOf is how many tasks assistant --json tasks lists.
+func taskCountOf(t *testing.T, h *home.Home, dir string) int {
+	t.Helper()
+	got := run(t, h, dir, "--json", "tasks")
+	var tasks machine.Tasks
+	if err := json.Unmarshal([]byte(got.stdout), &tasks); err != nil {
+		t.Fatalf("decoding assistant --json tasks: %v\n%s", err, got.stdout)
+	}
+	return len(tasks.Tasks)
+}
+
+// The coordinator's client drives every coordinator method through cli.Run
+// against a live service, and each is refused from inside a worker's
+// process group.
+//
+// A delivery task is created through the client and its worker launched by
+// the service. While that worker lives, every subcommand is run by a process
+// placed in its group: each exits as an operational failure carrying the
+// worker code and the next action naming why, and the create recorded no
+// task. The same subcommands from this test's process, in no worker group,
+// do what they say, read back from the records rather than taken from the
+// answer: a message is recorded and written, and its human rendering is the
+// phrase table's; a message the worker ends on ends it, and its task reads
+// Unknown from the dead terminal; the wake queue lists a wake for that task
+// and keeps listing it until the client acknowledges it, recorded as the
+// coordinator, and a second acknowledgement of the same wake is refused as
+// incorrect usage; a relaunch begins attempt 2 and the service launches it;
+// a stop ends that attempt's worker and opens the hold naming the task;
+// arm verification answers that the loop is live; and an investigation
+// created through the client is promoted to a delivery on a branch.
+func TestTheCoordinatorClientDrivesEveryMethodAndRefusesAWorker(t *testing.T) {
+	requiresIdentifiedPeer(t)
+	requireSweepClears(t)
+	vocabtest.Control(t)
+	quietGit(t)
+	h := newHome(t)
+	subject := newSubject(t)
+	if err := h.Create(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(h.ConfigFile(), []byte(`{"supervision_beacon_interval": "1s"}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	serveCoordinated(t, h)
+	if got := run(t, h, subject, "init"); got.code != machine.ExitOK {
+		t.Fatalf("assistant init exited %s:\n%s%s", got.code, got.stdout, got.stderr)
+	}
+	repository := repositoryOf(t, h, subject)
+
+	var created machine.TaskCreated
+	coordinate(t, h, subject, &created, "create", "--shape", "delivery", "--project", "one",
+		"--instructions", "Do the work the coordinator asked for.", "--repository", repository, "--branch", "task/one")
+	id := created.Record.ID
+	if created.Record.Shape != store.TaskDelivery || created.Record.BlockerTask.IsKnown() || created.Cause != "independent" {
+		t.Fatalf("create answered %+v, want an independent delivery task", created)
+	}
+	if raw, err := os.ReadFile(created.Instructions); err != nil || string(raw) != "Do the work the coordinator asked for." {
+		t.Fatalf("the instructions file reads %q (%v), want the flag's text", raw, err)
+	}
+	waitSessions(t, h, id, 1)
+	group := workerGroup(t, h, id)
+
+	// From the worker's group, every subcommand is refused, typed.
+	before := taskCountOf(t, h, subject)
+	for _, args := range [][]string{
+		{"create", "--shape", "investigation", "--project", "two", "--instructions", "Look into it.", "--repository", repository},
+		{"message", id, "--text", "carry on"},
+		{"stop", id},
+		{"relaunch", id},
+		{"promote", id, "--repository", repository, "--branch", "task/mine", "--intent", "Deliver it."},
+		{"wakes"},
+		{"acknowledge", "1"},
+		{"supervision"},
+	} {
+		got := coordinateAs(t, group, h, subject, args...)
+		if got.code != machine.ExitFailure {
+			t.Fatalf("coordinator %s from the worker's group exited %s, want an operational failure:\n%s%s",
+				strings.Join(args, " "), got.code, got.stdout, got.stderr)
+		}
+		var failure machine.Failure
+		if err := json.Unmarshal([]byte(got.stdout), &failure); err != nil {
+			t.Fatalf("coordinator %s from the worker's group wrote no failure document: %v\n%s", args[0], err, got.stdout)
+		}
+		if failure.Code != string(ipc.CodeWorker) || !strings.Contains(failure.NextAction, "worker group") {
+			t.Fatalf("coordinator %s from the worker's group was refused %+v, want the worker code and why", args[0], failure)
+		}
+	}
+	if after := taskCountOf(t, h, subject); after != before {
+		t.Fatalf("a create refused for a worker recorded a task: %d tasks, want %d", after, before)
+	}
+
+	// A message, recorded and written, and read out as the phrase table's.
+	var messaged machine.TaskMessaged
+	coordinate(t, h, subject, &messaged, "message", id, "--text", "carry on with the parser")
+	if messaged.Message.TaskID != id || messaged.Message.Text != "carry on with the parser" ||
+		messaged.Delivery != store.DeliveryWritten || messaged.SentBy == "" {
+		t.Fatalf("message answered %+v, want the record written to task %s", messaged, id)
+	}
+	plain := run(t, h, subject, "coordinator", "message", id, "--text", "carry on once more")
+	if plain.code != machine.ExitOK || !strings.Contains(plain.stdout, machine.MessagePhrase(store.Message{WrittenAt: store.Known(time.Now())}).String()) {
+		t.Fatalf("the human message answer exited %s with:\n%s%s", plain.code, plain.stdout, plain.stderr)
+	}
+	vocabtest.Assert(t, plain.stdout)
+
+	// The worker ends on a message, and its task reads Unknown from the
+	// dead terminal.
+	coordinate(t, h, subject, &messaged, "message", id, "--text", endWorker)
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		state := taskOf(t, h, subject, id).State
+		if state.State == taskstate.Unknown && state.Basis.Process == taskstate.Dead {
+			break
+		}
+		if !time.Now().Before(deadline) {
+			t.Fatalf("the ended worker's task never read Unknown from a dead terminal: %+v", state)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	// The queue lists a wake for the task until it is acknowledged.
+	var queued machine.Wakes
+	var ours []int64
+	for len(ours) == 0 {
+		if !time.Now().Before(deadline.Add(30 * time.Second)) {
+			t.Fatalf("the queue never listed a wake for task %s: %+v", id, queued)
+		}
+		coordinate(t, h, subject, &queued, "wakes")
+		for _, w := range queued.Wakes {
+			if w.TaskID == id && w.Queued() {
+				ours = append(ours, w.ID)
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	var again machine.Wakes
+	coordinate(t, h, subject, &again, "wakes", "--limit", strconv.Itoa(machine.DefaultWakesLimit))
+	if !listsAll(again, ours) {
+		t.Fatalf("a second list without an acknowledgement returned %+v, want wakes %v again", again, ours)
+	}
+	ackArgs := []string{"acknowledge"}
+	for _, w := range ours {
+		ackArgs = append(ackArgs, strconv.FormatInt(w, 10))
+	}
+	var acknowledged machine.Acknowledged
+	coordinate(t, h, subject, &acknowledged, ackArgs...)
+	if acknowledged.By != store.AcknowledgedByCoordinator().String() || len(acknowledged.Wakes) != len(ours) {
+		t.Fatalf("acknowledge answered %+v, want wakes %v recorded as the coordinator's", acknowledged, ours)
+	}
+	var after machine.Wakes
+	coordinate(t, h, subject, &after, "wakes")
+	for _, w := range after.Wakes {
+		for _, acked := range ours {
+			if w.ID == acked {
+				t.Fatalf("wake %d was acknowledged and is still listed", acked)
+			}
+		}
+	}
+	refusedAs(t, run(t, h, subject, "--json", "coordinator", "acknowledge", ackArgs[1]), ipc.CodeInvalidRequest, machine.ExitUsage)
+
+	// A relaunch of the gone terminal begins attempt 2, which the service
+	// launches.
+	var relaunched machine.TaskRelaunched
+	coordinate(t, h, subject, &relaunched, "relaunch", id)
+	if relaunched.Task != id || relaunched.Attempt != 2 {
+		t.Fatalf("relaunch answered %+v, want attempt 2 of task %s", relaunched, id)
+	}
+	waitSessions(t, h, id, 2)
+
+	// A stop ends that worker and opens the hold naming the task.
+	var stopped machine.TaskStopped
+	coordinate(t, h, subject, &stopped, "stop", id)
+	if stopped.Task != id || stopped.Attempt != 2 || stopped.Hold.Key == "" || stopped.Finished != "" {
+		t.Fatalf("stop answered %+v, want attempt 2 ended and a hold registered", stopped)
+	}
+	if open := openHoldsOf(t, h, id); len(open) != 1 || open[0].Key != stopped.Hold.Key {
+		t.Fatalf("after the stop the task's open holds are %+v, want the stop's %s", open, stopped.Hold.Key)
+	}
+
+	// Arm verification answers that the service's own loop is live.
+	var arm supervisor.Arm
+	coordinate(t, h, subject, &arm, "supervision")
+	if arm.Outcome != supervisor.ArmStarted && arm.Outcome != supervisor.ArmAttached {
+		t.Fatalf("supervision answered %+v, want a live loop", arm)
+	}
+
+	// An investigation created through the client is promoted through it.
+	var investigation machine.TaskCreated
+	coordinate(t, h, subject, &investigation, "create", "--shape", "investigation", "--project", "two",
+		"--instructions", "Find out why the build is slow.", "--repository", repository)
+	waitSessions(t, h, investigation.Record.ID, 1)
+	var promoted machine.TaskPromoted
+	coordinate(t, h, subject, &promoted, "promote", investigation.Record.ID,
+		"--repository", repository, "--branch", "task/promoted", "--intent", "Make the build fast.")
+	if promoted.Record.ID != investigation.Record.ID || promoted.Record.Shape != store.TaskDelivery ||
+		promoted.Record.Branch.Or("") != "task/promoted" || promoted.Event.Kind != "promoted" {
+		t.Fatalf("promote answered %+v, want task %s a delivery on task/promoted", promoted, investigation.Record.ID)
+	}
+	if read := taskOf(t, h, subject, investigation.Record.ID); read.Record.Shape != store.TaskDelivery {
+		t.Fatalf("after the promotion the task reads %+v, want a delivery", read.Record)
+	}
+}
+
+// listsAll reports whether every one of ids is a queued row of the list.
+func listsAll(list machine.Wakes, ids []int64) bool {
+	for _, id := range ids {
+		found := false
+		for _, w := range list.Wakes {
+			found = found || (w.ID == id && w.Queued())
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}

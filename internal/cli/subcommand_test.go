@@ -12,7 +12,7 @@ import (
 )
 
 // Asking a verb that takes a subcommand for help is answered rather than
-// refused: --help on service, gate and host exits successfully and lists
+// refused: --help on service, gate, host and coordinator exits successfully and lists
 // every row of that verb's subcommand table, name and summary, the way the
 // top-level help lists the verb table. The table is read from what each verb
 // dispatches on, so a row added there and left out of the help fails here.
@@ -23,8 +23,8 @@ func TestHelpOnAVerbWithSubcommandsListsThem(t *testing.T) {
 	h := newHome(t)
 	subject := newSubject(t)
 	tables := cli.Subcommands()
-	if len(tables) != 3 {
-		t.Fatalf("the verbs that take a subcommand are %v, want service, gate and host", tables)
+	if len(tables) != 4 {
+		t.Fatalf("the verbs that take a subcommand are %v, want service, gate, host and coordinator", tables)
 	}
 	for verb, rows := range tables {
 		if len(rows) == 0 {

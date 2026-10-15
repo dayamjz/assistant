@@ -36,16 +36,22 @@ var specified = []string{"init", "status", "runs", "rerun", "sync", "tasks", "wa
 // not name is a finding to raise against the specification rather than a row
 // to add quietly, so each of these has to be refused as incorrect usage.
 //
-// "gate" and "host" are deliberately not among them. Neither is a command a
-// person types or a candidate for that table: "gate" is the interface
-// internal/gate requires of this surface, invoked by the hooks it installs,
-// and "host" is the interface the coordinator's host requires, invoked by the
-// hook it fires at turn end; PRD section 9 names both outside its table.
-// TestTheGateVerbServesTheHooksAndNothingElse and host_test.go's
-// TestTheHostVerbServesTheHookAndNothingElse hold what each may be.
+// "gate", "host" and "coordinator" are deliberately not among them. None is
+// a candidate for that table: "gate" is the interface internal/gate requires
+// of this surface, invoked by the hooks it installs, "host" is the interface
+// the coordinator's host requires, invoked by the hook it fires at turn end,
+// and "coordinator" is the client for the coordinator's service methods,
+// which the owner decided on #227 is dispatched beside the table; PRD
+// section 9 names all three outside its table.
+// TestTheGateVerbServesTheHooksAndNothingElse, host_test.go's
+// TestTheHostVerbServesTheHookAndNothingElse and coordinator_test.go's
+// TestTheCoordinatorVerbServesItsTableAndNothingElse hold what each may be.
+// The coordinator's subcommands are among the names refused here, so none
+// of them reaches the surface as a verb of its own.
 var unspecified = []string{
 	"start", "attach", "respond", "answer", "cancel", "stop", "restart",
 	"machine", "agent", "push", "version", "help", "config", "logs", "stage",
+	"task", "fleet", "create", "message", "relaunch", "promote", "wakes", "acknowledge", "supervision",
 }
 
 func TestEveryCommandTheSpecificationNamesIsServed(t *testing.T) {

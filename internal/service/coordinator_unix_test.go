@@ -20,9 +20,9 @@ import (
 )
 
 // These tests drive the coordinator's three task methods over the service's
-// real socket. The refusals are asked from a child process placed in a
-// launched worker's process group, on workers_unix_test.go's terms, so the
-// credentials the service places are the kernel's; each refusal's positive
+// real socket. The refusals are asked by a launched worker, as a command it
+// runs in a process group of its own, on workers_unix_test.go's terms, so
+// the credentials the service places are the kernel's; each refusal's positive
 // control is the same request from this test's own process, which is in no
 // worker group, and what each one did is read back from the store rather
 // than taken from the answer.
@@ -70,7 +70,7 @@ func kindsOf(t *testing.T, h *home.Home, id string) []string {
 	return kinds
 }
 
-// task.create is the coordinator's. From the worker's process group it is
+// task.create is the coordinator's. From the worker it is
 // refused with the worker code and no task is recorded; from this process,
 // in no worker group, the same request records an investigation task
 // through intake, with the instructions written where intake writes them.
@@ -80,14 +80,14 @@ func kindsOf(t *testing.T, h *home.Home, id string) []string {
 // a request intake cannot read is refused as invalid.
 func TestTaskCreateIsTheCoordinatorsAndNotAWorkers(t *testing.T) {
 	launchedWorker(t, "task/create", func(w launched) {
-		running, group := w.running, w.group
+		running := w.running
 		investigation := machine.TaskCreateRequest{
 			Shape: "investigation", Project: "one", Instructions: "Find out why the build is slow.\n",
 			Repository: w.repository.ID,
 		}
 		before := taskCount(t, w.home)
-		if _, code := callAs(t, group, running.service, ipc.MethodTaskCreate, investigation); code != ipc.CodeWorker {
-			t.Fatalf("task.create from the worker's group answered %q, want %q", code, ipc.CodeWorker)
+		if _, code := callAs(t, w, ipc.MethodTaskCreate, investigation); code != ipc.CodeWorker {
+			t.Fatalf("task.create from the worker answered %q, want %q", code, ipc.CodeWorker)
 		}
 		if got := taskCount(t, w.home); got != before {
 			t.Fatalf("a refused task.create recorded a task: %d tasks, want %d", got, before)
@@ -139,11 +139,11 @@ func TestTaskCreateIsTheCoordinatorsAndNotAWorkers(t *testing.T) {
 // records, because the task is no longer an investigation.
 func TestAnInvestigationCannotPromoteItselfAndTheCoordinatorCan(t *testing.T) {
 	launchedWorkerOf(t, store.TaskInvestigation, "", func(w launched) {
-		running, task, group := w.running, w.task, w.group
+		running, task := w.running, w.task
 		promotion := machine.TaskPromoteRequest{
 			Task: task, Repository: w.repository.ID, Branch: "task/promoted", Intent: "Fix the slow build.",
 		}
-		if _, code := callAs(t, group, running.service, ipc.MethodTaskPromote, promotion); code != ipc.CodeWorker {
+		if _, code := callAs(t, w, ipc.MethodTaskPromote, promotion); code != ipc.CodeWorker {
 			t.Fatalf("task.promote from the investigation's own worker answered %q, want %q", code, ipc.CodeWorker)
 		}
 		if stored, err := recordsOf(t, w.home).Task(t.Context(), task); err != nil || stored.Shape != store.TaskInvestigation {
@@ -184,7 +184,7 @@ func TestAnInvestigationCannotPromoteItselfAndTheCoordinatorCan(t *testing.T) {
 
 // PRD principle P6 at the coordinator's relaunch: task.relaunch goes
 // through the anchored relaunch reconciliation uses, and its record is that
-// relaunch's. From the worker's process group it is refused with the worker
+// relaunch's. From the worker it is refused with the worker
 // code; from this process, while the worker runs, it is refused by the
 // records, since a live terminal is not one the table relaunches, and no
 // attempt is added. Once the worker has ended and the task reads Unknown
@@ -196,10 +196,10 @@ func TestTheCoordinatorRelaunchesADeadTerminalThroughTheAnchoredRelaunch(t *test
 	principles.Cite(t, principles.P6)
 	service.RequireSweepClearsHere(t, "a coordinator relaunching a dead terminal in its standing copy")
 	launchedWorker(t, "task/relaunch", func(w launched) {
-		running, task, group := w.running, w.task, w.group
+		running, task := w.running, w.task
 		request := machine.TaskRequest{Task: task}
-		if _, code := callAs(t, group, running.service, ipc.MethodTaskRelaunch, request); code != ipc.CodeWorker {
-			t.Fatalf("task.relaunch from the worker's group answered %q, want %q", code, ipc.CodeWorker)
+		if _, code := callAs(t, w, ipc.MethodTaskRelaunch, request); code != ipc.CodeWorker {
+			t.Fatalf("task.relaunch from the worker answered %q, want %q", code, ipc.CodeWorker)
 		}
 		var relaunched machine.TaskRelaunched
 		if err := running.client.Call(t.Context(), ipc.MethodTaskRelaunch, request, &relaunched); !errors.Is(err, ipc.ErrRefused) {

@@ -42,13 +42,13 @@ func TestALocalTasksPushStartsNoRunAndItsApprovalFastForwards(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(copyPath, "local.txt"), []byte("made on this machine\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		mustGitAs(t, w.group, copyPath, "add", "-A")
-		mustGitAs(t, w.group, copyPath, "commit", "--quiet", "-m", "the local change")
-		head := mustGitAs(t, w.group, copyPath, "rev-parse", "HEAD")
+		mustGitAs(t, w, copyPath, "add", "-A")
+		mustGitAs(t, w, copyPath, "commit", "--quiet", "-m", "the local change")
+		head := mustGitAs(t, w, copyPath, "rev-parse", "HEAD")
 		primary := w.repository.WorkingPath
 		tip := git(t, primary, "rev-parse", "refs/heads/main")
 
-		out, err := gitAs(t, w.group, copyPath, "push", gate.RemoteName, "task/local")
+		out, err := gitAs(t, w, copyPath, "push", gate.RemoteName, "task/local")
 		if err != nil {
 			t.Fatalf("the local task's push was refused:\n%s", out)
 		}
