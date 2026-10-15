@@ -657,7 +657,7 @@ func TestAFailedCaptureIsTerminalGoneWithItsCase(t *testing.T) {
 			t.Fatalf("task %s surfaced terminal gone again: %+v", task, detectionsOf(second, task, supervisor.KindTerminalGone))
 		}
 	}
-	queued, err := l.records(t).DrainWakes(t.Context(), 100)
+	queued, err := l.records(t).QueuedWakes(t.Context(), 100)
 	if err != nil {
 		t.Fatalf("draining: %v", err)
 	}

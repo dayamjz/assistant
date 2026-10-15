@@ -853,6 +853,10 @@ func TestEveryEventTypeHasAPhrase(t *testing.T) {
 			if line != machine.PhraseWorkerSpoke.String() {
 				t.Errorf("a worker's history entry renders %q", line)
 			}
+		case ipc.TypeWakeQueued:
+			if line != machine.PhraseNoticeQueued.String() {
+				t.Errorf("a pushed wake renders %q", line)
+			}
 		case ipc.TypeGap:
 			if line != machine.PhraseUpdatesMissed.String() {
 				t.Errorf("a gap renders %q", line)

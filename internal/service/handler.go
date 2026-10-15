@@ -34,9 +34,10 @@ import (
 // one question a handler asks of a caller is the other relation,
 // whether it is a task's worker, and workers.go derives that from the same
 // credentials for the methods whose answer depends on it: the five there,
-// wakewait.go's wakes.wait, coordinator.go's three, steer.go's three,
+// wakewait.go's wakes.wait and wakes.subscribe, coordinator.go's three, steer.go's three,
 // taskholds.go's task.respond, catchup.go's catchup.mark and custody.go's
-// branch.sync.
+// branch.sync. wakes.subscribe is a stream, so internal/ipc asks this only
+// whether the caller may hold it, and an error here is its refusal.
 func (s *Service) handle(ctx context.Context, req ipc.Request) (json.RawMessage, error) {
 	switch req.Method {
 	case ipc.MethodHealth:
@@ -130,6 +131,11 @@ func (s *Service) handle(ctx context.Context, req ipc.Request) (json.RawMessage,
 		return call(ctx, req, func(ctx context.Context, r machine.WakeWaitRequest) (machine.Wakes, error) {
 			return s.waitWakes(ctx, req, r)
 		})
+	case ipc.MethodWakesSubscribe:
+		// The wake stream is internal/ipc's to open and pump; what the
+		// handler is asked is only whether this caller may hold it, and
+		// the answer is wakes.list's.
+		return nil, s.admitWakeStream(req)
 	case ipc.MethodSupervisionAssert:
 		return call(ctx, req, func(ctx context.Context, _ struct{}) (supervisor.Arm, error) {
 			return s.assertSupervision(ctx, req)

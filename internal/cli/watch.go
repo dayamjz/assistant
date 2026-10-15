@@ -123,7 +123,9 @@ func (in *invocation) report(v any) {
 // build names but nothing produces, and a type this build does not know all
 // read as the one row for an update the view cannot describe; a history
 // entry a worker appended is said to have been added and its words are not
-// relayed, since the task's resolved state follows on its own event; the
+// relayed, since the task's resolved state follows on its own event; a wake
+// pushed on the coordinator's wake stream is said to be waiting, and its
+// kind is not relayed; the
 // stream's own two control events have rows of their own; and output
 // arriving as activity is said to have arrived and is not relayed.
 //
@@ -152,6 +154,8 @@ func eventLine(event ipc.Event) string {
 		return printable(machine.HoldPhrase(hold).String())
 	case ipc.TypeTaskEvent:
 		return machine.PhraseWorkerSpoke.String()
+	case ipc.TypeWakeQueued:
+		return machine.PhraseNoticeQueued.String()
 	case ipc.TypeGap:
 		return machine.PhraseUpdatesMissed.String()
 	case ipc.TypeServiceStopping:

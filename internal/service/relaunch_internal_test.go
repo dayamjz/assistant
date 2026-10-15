@@ -523,7 +523,7 @@ func TestARelaunchAcknowledgesOnlyTheWakesItSuperseded(t *testing.T) {
 			t.Errorf("%s wake was acknowledged: %+v", name, got)
 		}
 	}
-	if queued, err := sub.records.DrainWakes(ctx, 10); err != nil || len(queued) != 2 {
+	if queued, err := sub.records.QueuedWakes(ctx, 10); err != nil || len(queued) != 2 {
 		t.Fatalf("the queue holds %+v (%v), want the two rows the relaunch did not supersede", queued, err)
 	}
 }

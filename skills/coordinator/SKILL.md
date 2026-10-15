@@ -1,6 +1,6 @@
 ---
 name: coordinator
-description: Run a fleet of assistant tasks as their coordinator - create delivery and investigation tasks, steer, peek at, stop, relaunch and promote them, wait on, drain and acknowledge the wake queue, and verify supervision
+description: Run a fleet of assistant tasks as their coordinator - create delivery and investigation tasks, steer, peek at, stop, relaunch and promote them, listen to, wait on, drain and acknowledge the wake queue, and verify supervision
 ---
 
 # coordinator
@@ -156,43 +156,66 @@ investigation is refused.
 
 ## Drain the wake queue
 
-The service queues a wake when something needs the coordinator. Drain it,
-act, then acknowledge what you handled:
+The service queues a wake when something needs the coordinator. Every turn
+that handles a wake drains the queue before doing anything else:
 
 ```sh
-assistant --json coordinator wakes          # queued wakes, oldest first
-assistant coordinator acknowledge 12 13     # the ids you handled
+assistant --json coordinator wakes          # takes the queued wakes, oldest first
 ```
 
-- Listing acknowledges nothing. A wake stays queued, and is listed again,
-  until you acknowledge it. Delivery is at least once, so handle a wake you
-  have already seen without harm.
-- `--limit N` bounds one list; the default is 100.
-- Acknowledging an id no wake has, or one already acknowledged, refuses the
-  whole batch with code `invalid-request`.
+- Draining acknowledges. Every wake a drain lists is recorded as handled in
+  the same step, and no later drain lists it again. Always drain with
+  `--json`: the answer is the only place you are handed each wake.
+- So act on every wake a drain returned before your turn ends. If you stop
+  between the drain and acting, the queue will not give that wake back; read
+  `assistant tasks` to recover what happened to the work.
+- `--limit N` bounds one drain; the default is 100. Wakes past the limit
+  stay queued for the next drain.
 - Each wake names a `task_id` and a `kind`. Read the task before acting:
   for `terminal-gone`, relaunch it or decide to let it go; for
   `hold-opened`, a decision waits on an answer; for
   `message-unacknowledged`, the worker has not acknowledged a message.
+- `assistant coordinator acknowledge 12 13` records as handled wakes you
+  dealt with without draining them, ones `listen` printed. Naming an id no
+  wake has, or one already acknowledged, a drained one included, refuses
+  the whole batch with code `invalid-request`.
+
+## Be woken by the service
+
+The service pushes each wake to a coordinator holding its wake stream:
+
+```sh
+assistant --json coordinator listen     # one line per wake, until interrupted
+```
+
+- Run it in the background if your tool can start a turn on a background
+  command's output, and keep one running while work is in flight.
+- It records nothing as handled. Each line it prints is a notice that a
+  wake is queued; drain to take it, or acknowledge the one id you dealt
+  with.
+- Its first line is a gap marker, and a gap later on means pushes were
+  missed. On either, drain: the drain gives back every wake still queued.
+- If the service stops, `listen` exits `1`. Run `assistant coordinator
+  supervision`, then start `listen` again and drain.
 
 ## Wait for a wake
 
-Instead of polling, block on the queue. The specification has the
-coordinator hold exactly one supervision wait whenever work is in flight,
-resumed as the last action of every turn: end each turn by arming one
-`await`. The build does not enforce one: a second wait armed beside the
-first is served too, and keeping to one is yours.
+If you cannot hold `listen`, block on the queue instead of polling. The
+specification has the coordinator hold exactly one supervision wait whenever
+work is in flight, resumed as the last action of every turn: end each turn
+by arming one `await` (or by keeping `listen` running). The build does not
+enforce one: a second wait armed beside the first is served too, and keeping
+to one is yours.
 
 ```sh
-assistant --json coordinator await --timeout 5m   # blocks, then lists queued wakes
+assistant --json coordinator await --timeout 5m   # blocks, then drains
 ```
 
 - It answers as soon as the queue holds a wake that is not acknowledged,
-  with the same rows `wakes` would list, or once the bound passes with an
-  empty list. An empty list always means the bound passed.
-- It acknowledges nothing. A wake it returned is returned again, at once,
-  by the next `await` or `wakes` until you acknowledge it. So the loop is:
-  wait, act on each wake, acknowledge the ones you handled, wait again.
+  draining it as `wakes` does, or once the bound passes with an empty list.
+  An empty list always means the bound passed.
+- A wake it returned is recorded as handled and is not returned again. So
+  the loop is: wait, act on each wake it returned, wait again.
 - `--timeout` is whole seconds from `1s` to `1h`; the default is `5m`.
   Anything else is refused as incorrect usage, exit `2`, and nothing is
   clamped. Choose a bound shorter than the limit your own tool puts on one
@@ -200,7 +223,7 @@ assistant --json coordinator await --timeout 5m   # blocks, then lists queued wa
 - `--limit N` bounds the answer, as on `wakes`.
 - If the service stops or restarts while you wait, the command exits `1`.
   Run `assistant coordinator supervision` to confirm the watch is live
-  again, then arm the wait again; wakes still queued are returned at once.
+  again, then arm the wait again; wakes still queued are drained at once.
   A restart can change the queue first: on start the service relaunches a
   task whose worker's terminal is gone and whose work has not landed, up
   to `relaunch_attempts` times (2 unless configured), and records that
@@ -210,11 +233,17 @@ assistant --json coordinator await --timeout 5m   # blocks, then lists queued wa
 
 ## Known gaps in this build
 
-- **Waking depends on the watch.** A wait answers when the service's
-  supervision records a wake, so how soon it answers after a worker stops
-  is the supervision's cadence, not the wait's. Check
+- **Waking depends on the watch.** A push and a wait both follow the
+  service's supervision recording a wake, so how soon either reaches you
+  after a worker stops is the supervision's cadence. Check
   `assistant coordinator supervision` at session start and after any exit
-  `1` from `await`.
+  `1` from `await` or `listen`.
+- **A drained wake is not given back.** Draining records it as handled, so a
+  turn that drains and then ends without acting has lost it from the queue.
+  The task's state in `assistant tasks` still shows what happened.
+- **The service pushes only to `listen`.** It does not start a turn in your
+  host by itself; a coordinator holding neither `listen` nor `await` is
+  woken by nothing.
 - **Workers cannot report back (#226).** A worker has no route to the
   program's event method. So a message the worker read and acted on is
   never recorded as read, and `message-unacknowledged` wakes arrive for it
