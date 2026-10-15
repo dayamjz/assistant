@@ -1,6 +1,6 @@
 ---
 name: coordinator
-description: Run a fleet of assistant tasks as their coordinator - create delivery and investigation tasks, steer, stop, relaunch and promote them, drain and acknowledge the wake queue, and verify supervision - through the assistant coordinator client. Use when the user asks you to coordinate, dispatch, spawn, steer or supervise assistant tasks or workers, or to act on what the fleet's wake queue reports.
+description: Run a fleet of assistant tasks as their coordinator - create delivery and investigation tasks, steer, peek at, stop, relaunch and promote them, drain and acknowledge the wake queue, and verify supervision - through the assistant coordinator client. Use when the user asks you to coordinate, dispatch, spawn, steer or supervise assistant tasks or workers, or to act on what the fleet's wake queue reports.
 ---
 
 # coordinator
@@ -88,6 +88,27 @@ The message is recorded first and then written to the worker of the task's
 latest attempt. The answer's `delivery` is `written` when it reached the
 worker's input. Text is limited to 16 KiB and refused, not cut, above it. A
 task with no launched worker, or one this service does not hold, is refused.
+
+## Peek at a worker
+
+```sh
+assistant --json coordinator peek ID
+```
+
+It reads the recent output of the worker of the task's latest attempt, as
+the service holds it: `output` is redacted of the credential shapes the
+program recognizes and cut to the last 16 KiB, `dropped` counts what is not
+in it, and `liveness` is how the worker's terminal probed. When the service
+hosts workers in tmux, `attach` is the command a person runs to watch the
+worker and type into it; it is empty for a worker with no terminal. What
+someone types there reaches the worker as its own input, the same input a
+message is written to, and the program records nothing of it, so reconcile
+around it as you would around any change you did not make: read the task
+and its history rather than assuming your last message was the last word.
+
+The output is for you to read and never to repeat to the person. A worker
+this service did not launch, such as one an earlier service started, is
+refused rather than read.
 
 ## Stop a worker
 

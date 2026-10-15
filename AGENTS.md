@@ -349,7 +349,13 @@ Each has cost this repository more than one round of review.
   which proves the wire this package writes and nothing about an installed
   CLI, and its `doc.go` says what the stand-in models and from where.
   `ScriptedFactory` declares it over plain lines, and `standin.NewWorker` is
-  how a test gets a runner whose worker it can script line by line. Reading agent output is `internal/findings`' job and
+  how a test gets a runner whose worker it can script line by line.
+  `terminal_workers` is the same worker hosted in a tmux server of its own
+  (`OpenTerminalWorker`, `terminal.go`): the server's child, typed to and
+  captured as a screen. Only the scripted adapter declares it, with a framing
+  that refuses a line the terminal would cut; the Claude Code adapter does
+  not, because its interactive mode opened on a first-run screen when tried,
+  and `capability.go` says so. Reading agent output is `internal/findings`' job and
   never a second parser here; the one choice this package makes is `Shape`, and
   `ShapeReview` is the only one carrying a `findings.Demand`, which
   `Invocation.Validate` requires there and refuses everywhere else. It also owns
@@ -382,7 +388,8 @@ Each has cost this repository more than one round of review.
   carries in a process group the worker does not lead, the shape #225
   observed of the Claude Code CLI's Bash tool, so a test of a worker rule
   drives a worker's push or call that way rather than placing it in the
-  worker's group itself. A consuming package's `TestMain` must call `standin.Main()`, and the
+  worker's group itself. `standin.Tmux` resolves tmux or skips naming why,
+  and fails instead where CI sets `ASSISTANT_REQUIRE_TMUX`. A consuming package's `TestMain` must call `standin.Main()`, and the
   first `New` in a process refuses loudly when it did not. Read its
   `doc.go` for what a recorded `Call` does and does not prove about P4, and for
   the two residual gaps.
@@ -562,7 +569,12 @@ Each has cost this repository more than one round of review.
   `internal/agents` keeps for a fixer: `Provider` is the five operations and
   nothing else, there is no capability table here, and an optional behaviour
   a later provider has is a row in `internal/agents`' table with its probe
-  and declarer. `Pipe` is the reference provider and starts nothing: `Create`
+  and declarer. `Tmux` is the second provider, chosen by the global-only
+  `session_provider` key: the agents' terminal mechanism per worker, with
+  `AttachReference`; both embed one held set (`held.go`), so Probe's rule, the
+  reference and the worker set have one implementation, and `Host` is what a
+  service holds. `doc.go`'s tmux section owns the placement and containment
+  answers. `Pipe` is the reference provider and starts nothing: `Create`
   refuses an unproven `tasks.Isolation` with `ErrUnproven` and then asks the
   resolved runner for a worker through `agents.OpenWorker`, so an adapter
   without `worker_sessions` is refused there; its tests run the scripted
@@ -570,7 +582,7 @@ Each has cost this repository more than one round of review.
   `launch.go`, which hands it a proof asserted again at launch rather than
   dispatch's; `Create` itself re-derives nothing. Its one observing caller
   is that package's `terminals.go`, which probes through `Probe` and
-  captures through `Pipe.CaptureReference`, the capture addressed by the
+  captures through `CaptureReference`, the capture addressed by the
   record's reference out of the same held set `Probe` answers `Live` from,
   so the reference to handle lookup has one owner. Three things there are
   mechanism rather than rule.
@@ -588,8 +600,8 @@ Each has cost this repository more than one round of review.
   output stream and not a screen, with the rules derived from what the
   stand-in emits and the real adapter's format stated unknown; the
   comparison is the supervisor's. `Workers` is the set of live worker groups,
-  keyed by the process group a worker leads and naming its task, and `Pipe`
-  is its one producer: `Create` joins the group and the membership ends with
+  keyed by the process group a worker leads and naming its task, and the
+  providers' `Create` produce it: it joins the group and the membership ends with
   the process or with `Close`, the join is unexported, and `Member` reads the
   worker's done signal, so nothing a caller states is a membership. It is
   the authority input every worker-to-program path derives a task from and it
@@ -662,7 +674,8 @@ Each has cost this repository more than one round of review.
   is `internal/supervisor`'s. A task's paths (`Task`, `TaskCopy`,
   `TaskInstructions`, `TaskReport`) are all composed here from an identifier
   `ValidTaskID` accepted, and the report's evidence copy sits beside the copy
-  so cleanup leaves it. The wake
+  so cleanup leaves it. `TerminalSocket` is a tmux-hosted worker's
+  socket, named by the session package and composed here. The wake
   queue is not in the layout at all: it is `internal/store`'s table, so no
   path to a `queue/` is composed and `Create` makes none, while an older home
   keeps an empty one nothing reads. The lock is
@@ -779,8 +792,9 @@ Each has cost this repository more than one round of review.
   admits only a worker and holds the kind to `taskstate`'s writer column,
   `wakes.list`, `wakes.acknowledge` and `supervision.assert` refuse one; the
   coordinator's task methods (`coordinator.go`'s create, promote and
-  relaunch, `steer.go`'s message, stop and interrupt, and `task.respond`)
-  refuse one through the same `refuseWorker`. `steer.go` is PRD section 6's
+  relaunch, `steer.go`'s message, stop and interrupt, `peek.go`'s peek, and
+  `task.respond`) refuse one through the same `refuseWorker`. `task.peek`
+  redacts a held worker's capture before bounding it, never the reverse. `steer.go` is PRD section 6's
   steering: a message is a `store.Message` record first and a `Send` second,
   never resent, acknowledged only by the worker's `message-acknowledged`
   event, which `store.AcknowledgeMessage` writes with the record in one
@@ -871,7 +885,7 @@ Each has cost this repository more than one round of review.
   `launch.go`, which follows a proven dispatch in the same pass: it observes
   and asserts the copy again under the same environment, refusing exactly as
   dispatch does, creates the terminal session through `session.Create` over
-  the service's `session.Pipe` - built in `driverFor` on the resolved agent
+  the service's provider - built in `driverFor` on the resolved agent
   before `containRunner` takes its worker arm away - and records
   `Session.Reference()` on the attempt through `store.SetAttemptSession`.
   Every task reader is built through `reader`, probing through the
@@ -889,7 +903,8 @@ Each has cost this repository more than one round of review.
   the `*agents.CapabilityError` logged and nothing recorded, so such a task
   reads Dispatched from the record; and `Close` ends only the sessions this
   service created. A path already standing at the
-  copy's path is asserted and never removed. The environment half of P11 is
+  copy's path is asserted and never removed. Which provider `driverFor`
+  builds is `terminals.go`'s `sessionHost`, from the global layer only. The environment half of P11 is
   only as strong as every launch path building its environment through
   `agents.WorkerEnvironment`, which every assertion and the worker's start
   do; no second strip list exists or should. A launched task is never
@@ -986,7 +1001,9 @@ Each has cost this repository more than one round of review.
   `coordinator.go`, and it decides nothing: a worker is refused by the
   service from the socket's credentials and the caller's parent chain, and
   `coordinator.go` names the gap in that placement, a reparented chain. `skills/coordinator/SKILL.md` is what it tells a
-  coordinating agent, and claims only what the build does.
+  coordinating agent, and claims only what the build does. `peek`'s output
+  and attach command are in the structured answer only, because a worker's
+  output is never relayed (P13) and the command names a home path.
   What a person reads is rendered through the `renderings` table in
   `render.go`, which `readOut` dispatches through and `Renderings` enumerates:
   every renderer but four is phrased through `internal/machine`'s table and

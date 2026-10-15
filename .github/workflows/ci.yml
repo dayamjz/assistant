@@ -29,6 +29,20 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      # The terminal session provider's tests run against a real tmux, and
+      # the Test step requires one, so they fail here rather than skip.
+      - name: Install tmux
+        shell: bash
+        run: |
+          if ! command -v tmux >/dev/null 2>&1; then
+            if [ "$RUNNER_OS" = "macOS" ]; then
+              brew install tmux
+            else
+              sudo apt-get update && sudo apt-get install -y tmux
+            fi
+          fi
+          tmux -V
+
       - name: Verify formatting
         run: |
           unformatted=$(gofmt -l .)
@@ -60,6 +74,8 @@ jobs:
       # after this one lists every skip with its message.
       - name: Test
         shell: bash
+        env:
+          ASSISTANT_REQUIRE_TMUX: "1"
         run: |
           set -o pipefail
           go test -race -count=1 -v ./... > test.log 2>&1 || status=$?
