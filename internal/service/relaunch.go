@@ -370,11 +370,13 @@ func (s *Service) relaunchClaimed(ctx context.Context, id, stopNote string) (rel
 
 // acknowledgeSuperseded acknowledges, as the program, every queued wake that
 // is about the session the relaunch replaced, on supersededBy's terms, and
-// leaves every other row for the coordinator. It reports to the log: the
+// leaves every other row for the coordinator. It reads the queue with
+// store.QueuedWakes, which takes nothing, because a drain would acknowledge
+// every row it returned as the program's. It reports to the log: the
 // relaunch has already been recorded, and a row left queued is a wake the
 // coordinator reads about a session that is gone, which is the safe side.
 func (s *Service) acknowledgeSuperseded(ctx context.Context, id, ref string) {
-	queued, err := s.store.DrainWakes(ctx, reconcileDrainLimit)
+	queued, err := s.store.QueuedWakes(ctx, reconcileDrainLimit)
 	if err != nil {
 		s.log.Printf("the wakes superseded by relaunching task %s could not be read: %v", id, err)
 		return

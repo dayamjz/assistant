@@ -188,6 +188,11 @@ type Service struct {
 	lock   *home.Lock
 	log    *home.Log
 	events *ipc.Publisher
+	// wakes is the coordinator's wake stream, ipc.MethodWakesSubscribe's
+	// publisher, which wakewait.go's publishWake is the one producer for.
+	// It is a publisher of its own rather than events because events is
+	// open to every caller and a wake is the coordinator's.
+	wakes *ipc.Publisher
 
 	listener net.Listener
 	server   *ipc.Server
@@ -550,6 +555,9 @@ func (s *Service) openParts(ctx context.Context, o Options) error {
 	if s.events, err = ipc.NewPublisher(ipc.PublisherConfig{}); err != nil {
 		return err
 	}
+	if s.wakes, err = ipc.NewPublisher(ipc.PublisherConfig{}); err != nil {
+		return err
+	}
 
 	// A socket left behind by a service that was killed names nothing, because
 	// this process holds the lock that would have stopped a live one from
@@ -569,6 +577,7 @@ func (s *Service) openParts(ctx context.Context, o Options) error {
 		Handler:  ipc.HandlerFunc(s.handle),
 		Ancestry: ancestry,
 		Events:   s.events,
+		Streams:  map[ipc.Method]*ipc.Publisher{ipc.MethodWakesSubscribe: s.wakes},
 		ReportPanic: func(value any, stack []byte) {
 			s.log.Printf("a handler panicked: %v\n%s", value, stack)
 		},
@@ -662,6 +671,9 @@ func (s *Service) Close() error {
 		errs = append(errs, s.closeSessions()...)
 		if s.events != nil {
 			errs = append(errs, s.events.Close())
+		}
+		if s.wakes != nil {
+			errs = append(errs, s.wakes.Close())
 		}
 		if s.store != nil {
 			errs = append(errs, s.store.Close())

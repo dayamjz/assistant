@@ -68,9 +68,10 @@ var coordinatorActions = []struct {
 	{"peek", "<task>", "Read a task's worker's recent output, redacted and bounded, and how to attach to its terminal.", coordinatorPeek},
 	{"relaunch", "<task>", "Begin a new attempt of a task whose worker is gone, in its own copy.", coordinatorRelaunch},
 	{"promote", "<task>", "Turn an investigation task into a delivery on a branch, in its own copy.", coordinatorPromote},
-	{"wakes", "", "List the queued wakes, oldest first, acknowledging none.", coordinatorWakes},
-	{"await", "", "Block until a wake is queued or the bound elapses, then list the queued wakes, acknowledging none.", coordinatorAwait},
-	{"acknowledge", "<wake>...", "Record that the named wakes were handled, so a later list leaves them out.", coordinatorAcknowledge},
+	{"wakes", "", "Drain the queued wakes, oldest first: list them and record them as handled.", coordinatorWakes},
+	{"await", "", "Block until a wake is queued or the bound elapses, then drain the queued wakes.", coordinatorAwait},
+	{"listen", "", "Hold the wake stream: print each wake as it is queued, until interrupted, recording none as handled.", coordinatorListen},
+	{"acknowledge", "<wake>...", "Record that the named wakes were handled without draining them, so a later drain leaves them out.", coordinatorAcknowledge},
 	{"supervision", "", "Verify that this home's service is watching the fleet.", coordinatorSupervision},
 }
 
@@ -260,8 +261,10 @@ func coordinatorPromote(ctx context.Context, in *invocation) (any, error) {
 	return promoted, err
 }
 
-// coordinatorWakes is wakes.list. It acknowledges nothing, so a wake it
-// lists is listed again until coordinatorAcknowledge names it.
+// coordinatorWakes is wakes.list, PRD section 8's drain: the rows it lists
+// are recorded as handled by the coordinator in the same step, so a second
+// drain does not list them. Its structured answer is therefore the only
+// place a drained row's subject is shown to the caller.
 func coordinatorWakes(ctx context.Context, in *invocation) (any, error) {
 	var request machine.WakesRequest
 	err := in.parseFlags(coordinatorCommand("wakes"), func(set *flag.FlagSet) {
@@ -286,10 +289,9 @@ func coordinatorWakes(ctx context.Context, in *invocation) (any, error) {
 // supervisor.ClassWait is the bare word "wait".
 //
 // It is one call that blocks until the queue holds a queued wake or the
-// bound elapses, answered as coordinatorWakes' answer is, so an empty list
-// is the bound elapsing. It acknowledges
-// nothing, so a wait armed again before coordinatorAcknowledge names what
-// was handled is answered at once with the same rows.
+// bound elapses, answered as coordinatorWakes' answer is and draining as it
+// does, so an empty list is the bound elapsing and a row it lists is not
+// listed again.
 //
 // --timeout is a duration in whole seconds, and its range and default are
 // machine.WakeWaitRequest.Bounds', which is checked here before the service
@@ -322,10 +324,12 @@ func coordinatorAwait(ctx context.Context, in *invocation) (any, error) {
 }
 
 // coordinatorAcknowledge is wakes.acknowledge, naming the wakes as
-// operands. Who acknowledged is derived by the service from the surface
-// and is not something this sends. A batch naming a wake no row has, or one
-// already acknowledged, is the store's refusal of the whole batch, answered
-// as ipc.ErrInvalidRequest.
+// operands: the acknowledgement of rows the coordinator handled without
+// draining them, ones coordinatorListen printed. Who acknowledged is derived
+// by the service from the surface and is not something this sends. A batch
+// naming a wake no row has, or one already acknowledged, a drained one
+// included, is the store's refusal of the whole batch, answered as
+// ipc.ErrInvalidRequest.
 func coordinatorAcknowledge(ctx context.Context, in *invocation) (any, error) {
 	name := coordinatorCommand("acknowledge")
 	if err := in.parseArgs(name, math.MaxInt, func(*flag.FlagSet) {}); err != nil {
@@ -345,6 +349,53 @@ func coordinatorAcknowledge(ctx context.Context, in *invocation) (any, error) {
 	var acknowledged machine.Acknowledged
 	err := in.callService(ctx, ipc.MethodWakesAcknowledge, request, &acknowledged)
 	return acknowledged, err
+}
+
+// coordinatorListen is wakes.subscribe, the coordinator's wake stream: the
+// service pushes each wake as the supervisor queues it, PRD section 5's
+// "then wake the coordinator", and this prints each one as it arrives, in
+// the rendering the invocation asked for, until it is interrupted. It is
+// for a coordinator whose host can run a command in the background and
+// start a turn on what it prints; a coordinator that cannot uses await.
+//
+// It records nothing as handled, because a push is not a drain: a wake it
+// prints stays queued until coordinatorWakes or coordinatorAwait drains it
+// or coordinatorAcknowledge names it. The stream opens with a gap, and a
+// gap later on means wakes were missed; either is the coordinator's signal
+// to drain, which gives back everything still queued.
+//
+// An interrupt ends it with success. The stream ending any other way, the
+// service stopping under it included, is an operational failure, so a host
+// watching it sees that it has to be armed again rather than a quiet exit.
+func coordinatorListen(ctx context.Context, in *invocation) (any, error) {
+	if err := in.parseFlags(coordinatorCommand("listen"), func(*flag.FlagSet) {}); err != nil {
+		return nil, err
+	}
+	client, err := in.connect(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = client.Close() }()
+	stream, err := client.SubscribeTo(ctx, ipc.MethodWakesSubscribe, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer stream.Close()
+	in.progressf("listening for notices about the fleet; interrupt to stop")
+	for {
+		event, err := stream.Recv(ctx)
+		switch {
+		case err == nil:
+			in.report(event)
+		case ctx.Err() != nil:
+			return nil, nil
+		case errors.Is(err, ipc.ErrStreamClosed):
+			return nil, fmt.Errorf("%w: the service ended the stream of notices; run assistant %s again once it is back",
+				ipc.ErrUnavailable, coordinatorCommand("listen"))
+		default:
+			return nil, err
+		}
+	}
 }
 
 // coordinatorSupervision is supervision.assert, PRD section 5's arm

@@ -29,9 +29,9 @@ func TestOpenReadOnlyReadsTheRecordAndRefusesEveryWrite(t *testing.T) {
 		t.Fatalf("OpenReadOnly: %v", err)
 	}
 	t.Cleanup(func() { _ = r.Close() })
-	drained, err := r.DrainWakes(ctx, 10)
-	if err != nil || len(drained) != 1 || drained[0].ID != appended.Wake.ID {
-		t.Fatalf("the read-only drain = %+v (%v), want the writer's wake %d", drained, err, appended.Wake.ID)
+	queued, err := r.QueuedWakes(ctx, 10)
+	if err != nil || len(queued) != 1 || queued[0].ID != appended.Wake.ID {
+		t.Fatalf("the read-only read of the queue = %+v (%v), want the writer's wake %d", queued, err, appended.Wake.ID)
 	}
 	counts, err := r.UnacknowledgedWakes(ctx)
 	if err != nil || counts[task] != 1 {
@@ -44,6 +44,9 @@ func TestOpenReadOnlyReadsTheRecordAndRefusesEveryWrite(t *testing.T) {
 	if err := r.AcknowledgeWakes(ctx, []int64{appended.Wake.ID}, AcknowledgedByProgram()); !errors.Is(err, ErrReadOnly) {
 		t.Fatalf("a read-only acknowledgement = %v, want ErrReadOnly", err)
 	}
+	if _, err := r.DrainWakes(ctx, 10, AcknowledgedByProgram()); !errors.Is(err, ErrReadOnly) {
+		t.Fatalf("a read-only drain = %v, want ErrReadOnly, because a drain acknowledges", err)
+	}
 	if _, err := r.AppendWakeWithMarkers(ctx, incarnationOf(t, w), WakeRequest{TaskID: task, Kind: "hold-opened", Marker: "hold-2"},
 		MarkerAdvance{}); !errors.Is(err, ErrReadOnly) {
 		t.Fatalf("a read-only append = %v, want ErrReadOnly", err)
@@ -53,14 +56,14 @@ func TestOpenReadOnlyReadsTheRecordAndRefusesEveryWrite(t *testing.T) {
 	}
 	// The writer still sees the row queued: nothing the reader did reached
 	// the file.
-	if left, err := w.DrainWakes(ctx, 10); err != nil || len(left) != 1 {
-		t.Fatalf("the writer's drain after the read-only session = %+v (%v)", left, err)
+	if left, err := w.QueuedWakes(ctx, 10); err != nil || len(left) != 1 {
+		t.Fatalf("the writer's read after the read-only session = %+v (%v)", left, err)
 	}
 	if err := r.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
-	if _, err := r.DrainWakes(ctx, 10); !errors.Is(err, ErrClosed) {
-		t.Fatalf("a drain after Close = %v, want ErrClosed", err)
+	if _, err := r.QueuedWakes(ctx, 10); !errors.Is(err, ErrClosed) {
+		t.Fatalf("a read after Close = %v, want ErrClosed", err)
 	}
 }
 

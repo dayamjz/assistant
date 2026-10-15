@@ -386,26 +386,95 @@ func wakeMarkersOf(ctx context.Context, q querier, taskID string) (WakeMarkers, 
 	return m, nil
 }
 
-// DrainWakes returns the queued wakes, oldest first, at most limit of them,
-// and acknowledges none: a drain is a read, and a row stays actionable until
-// AcknowledgeWakes names it. That is at-least-once delivery by construction,
-// so a consumer that handled a wake and did not acknowledge it, because it
-// crashed or ended its turn between the two, is handed the same row again,
-// and every consumer is idempotent over a wake it has seen. The limit must be
+// QueuedWakes returns the queued wakes, oldest first, at most limit of them,
+// and acknowledges none: it is a read, for a caller that has to see what
+// stands for the coordinator without handing it over, which is the
+// program's own reconciliation and relaunch and nothing that reaches a
+// coordinator. A row it returns stays actionable. The limit must be
 // positive; a batch with no bound is not a batch.
-func (s *Store) DrainWakes(ctx context.Context, limit int) ([]Wake, error) {
+func (s *Store) QueuedWakes(ctx context.Context, limit int) ([]Wake, error) {
 	if limit < 1 {
-		return nil, fmt.Errorf("store: a drain limit of %d is not a batch size", limit)
+		return nil, fmt.Errorf("store: a limit of %d queued wakes is not a batch size", limit)
 	}
 	if err := s.live(); err != nil {
 		return nil, err
 	}
 	rows, err := s.read.QueryContext(ctx, wakeColumns+` FROM wake WHERE handled_at IS NULL ORDER BY id LIMIT ?`, limit)
 	if err != nil {
-		return nil, fmt.Errorf("store: draining wakes: %w", err)
+		return nil, fmt.Errorf("store: reading the queued wakes: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 	out, err := collectWakes(rows)
+	if err != nil {
+		return nil, fmt.Errorf("store: reading the queued wakes: %w", err)
+	}
+	return out, nil
+}
+
+// DrainWakes is PRD section 8's drain: it returns the queued wakes, oldest
+// first, at most limit of them, and acknowledges exactly the rows it returns,
+// by, in the one transaction that read them. "Draining acknowledges a row and
+// never deletes it": the rows are returned as they stand after the drain,
+// acknowledged and kept, and a second drain does not return them.
+//
+// Delivery is therefore what the PRD's text gives and no more: a row is
+// actionable until it is acknowledged, and a drain is an acknowledgement, so
+// a row is handed to at most one drain. A consumer that drained a row and
+// then crashed, or whose answer never reached its caller, has had it
+// acknowledged all the same; the row is kept, so TaskWakes still shows it,
+// and nothing hands it out again. That is a delivery at most once to a
+// drain, and it is stated here rather than softened: a caller wanting to see
+// what is queued without taking it uses QueuedWakes, and one wanting to
+// close a row it learned of some other way uses AcknowledgeWakes.
+//
+// The limit must be positive, the zero Acknowledger is refused with
+// ErrNoAcknowledger, both before anything is read, and a handle opened read
+// only refuses with ErrReadOnly, because a drain writes.
+func (s *Store) DrainWakes(ctx context.Context, limit int, by Acknowledger) ([]Wake, error) {
+	if limit < 1 {
+		return nil, fmt.Errorf("store: a drain limit of %d is not a batch size", limit)
+	}
+	who, err := acknowledgerText(by)
+	if err != nil {
+		return nil, fmt.Errorf("store: draining wakes: %w", err)
+	}
+	var out []Wake
+	err = s.inTx(ctx, func(tx *sql.Tx) error {
+		rows, err := tx.QueryContext(ctx, `SELECT id FROM wake WHERE handled_at IS NULL ORDER BY id LIMIT ?`, limit)
+		if err != nil {
+			return err
+		}
+		var ids []int64
+		for rows.Next() {
+			var id int64
+			if err := rows.Scan(&id); err != nil {
+				_ = rows.Close()
+				return err
+			}
+			ids = append(ids, id)
+		}
+		if err := rows.Close(); err != nil {
+			return err
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		now := encodeTime(nowUTC())
+		out = make([]Wake, 0, len(ids))
+		for _, id := range ids {
+			if _, err := tx.ExecContext(ctx,
+				`UPDATE wake SET handled_at = ?, acknowledged_by = ? WHERE id = ? AND handled_at IS NULL`,
+				now, who, id); err != nil {
+				return err
+			}
+			drained, err := scanWake(tx.QueryRowContext(ctx, wakeColumns+` FROM wake WHERE id = ?`, id))
+			if err != nil {
+				return err
+			}
+			out = append(out, drained)
+		}
+		return nil
+	})
 	if err != nil {
 		return nil, fmt.Errorf("store: draining wakes: %w", err)
 	}
@@ -413,8 +482,8 @@ func (s *Store) DrainWakes(ctx context.Context, limit int) ([]Wake, error) {
 }
 
 // TaskWakes returns every wake of a task, acknowledged or not, oldest first.
-// It is the history of what surfaced for the task; which of them is still
-// actionable is DrainWakes' question.
+// It is the history of what surfaced for the task, drained rows included;
+// which of them is still actionable is QueuedWakes' question.
 func (s *Store) TaskWakes(ctx context.Context, taskID string) ([]Wake, error) {
 	if err := s.live(); err != nil {
 		return nil, err
@@ -465,15 +534,20 @@ func (s *Store) UnacknowledgedWakes(ctx context.Context) (map[string]int, error)
 // one transaction: every row is checked and then every row is written, so a
 // batch that names an identifier no wake has, a *WakeIDError with
 // ErrWakeUnknown, or a wake already acknowledged, a *WakeIDError with
-// ErrWakeAcknowledged, writes nothing. A batch naming a subset of what a
-// drain returned leaves the rest queued. The zero Acknowledger is refused
+// ErrWakeAcknowledged, writes nothing. A batch naming a subset of the
+// queued rows leaves the rest queued. The zero Acknowledger is refused
 // with ErrNoAcknowledger and an empty batch is refused, both before anything
 // is read.
 //
 // The acknowledgement is the one revision a wake row takes, and it is what
-// takes the row out of DrainWakes and out of UnacknowledgedWakes. It records
-// who acknowledged and does not gate on it: every member of the set closes a
-// row on the same terms.
+// takes the row out of QueuedWakes, DrainWakes and UnacknowledgedWakes.
+// DrainWakes writes the same revision for every row it returns, so this is
+// the acknowledgement of a row that was not drained: one a caller learned of
+// some other way, from a pushed notice or a task's history, and handled
+// without draining the rest of the queue. A row a drain returned is already
+// acknowledged, and naming it here is ErrWakeAcknowledged. It records who
+// acknowledged and does not gate on it: every member of the set closes a row
+// on the same terms.
 func (s *Store) AcknowledgeWakes(ctx context.Context, ids []int64, by Acknowledger) error {
 	if len(ids) == 0 {
 		return errors.New("store: an acknowledgement names no wakes")

@@ -147,13 +147,28 @@ type Stream struct {
 	sub *Subscription
 }
 
-// Subscribe opens the event stream. It returns once the service has
-// acknowledged the subscription, so a refusal is reported here rather than at
-// the first delivery.
+// Subscribe opens the event stream, MethodEventsSubscribe. It returns once
+// the service has acknowledged the subscription, so a refusal is reported
+// here rather than at the first delivery.
 //
 // The stream opens gapped: its first delivery is a gap marker, and a consumer
 // must reconcile before applying a delta.
 func (c *Client) Subscribe(ctx context.Context, params any) (*Stream, error) {
+	return c.SubscribeTo(ctx, MethodEventsSubscribe, params)
+}
+
+// SubscribeTo opens the stream a streaming method names, on Subscribe's
+// terms: it returns once the service acknowledged it or refused it, and the
+// stream opens gapped. A method that answers once rather than streaming is
+// refused here with ErrInvalidRequest, before anything is sent.
+//
+// A restricted stream is acknowledged only once the service has decided the
+// caller may hold it, so a refusal, a worker's on MethodWakesSubscribe for
+// one, arrives here and no event of that stream ever reaches this client.
+func (c *Client) SubscribeTo(ctx context.Context, method Method, params any) (*Stream, error) {
+	if spec, ok := Lookup(method); !ok || spec.Kind != KindStream {
+		return nil, fmt.Errorf("%w: %q does not open a stream, use Call", ErrInvalidRequest, method)
+	}
 	body, err := encodeParams(params)
 	if err != nil {
 		return nil, err
@@ -174,13 +189,13 @@ func (c *Client) Subscribe(ctx context.Context, params any) (*Stream, error) {
 	}
 	c.streams[id] = sub
 	c.mu.Unlock()
-	if err := c.w.write(ctx, frame{ID: id, Method: MethodEventsSubscribe, Marker: c.marker, Params: body}); err != nil {
+	if err := c.w.write(ctx, frame{ID: id, Method: method, Marker: c.marker, Params: body}); err != nil {
 		c.unregister(id)
 		// A frame refused before it was written leaves nothing at the service,
 		// and a frame the connection failed under may have arrived whole. The
 		// cancel costs one small frame and covers the second case.
 		c.release(id, ErrStreamClosed)
-		return nil, fmt.Errorf("ipc: opening the event stream: %w", err)
+		return nil, fmt.Errorf("ipc: opening the %s stream: %w", method, err)
 	}
 	defer c.unregister(id)
 	select {
