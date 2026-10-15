@@ -68,6 +68,7 @@ var coordinatorActions = []struct {
 	{"peek", "<task>", "Read a task's worker's recent output, redacted and bounded, and how to attach to its terminal.", coordinatorPeek},
 	{"relaunch", "<task>", "Begin a new attempt of a task whose worker is gone, in its own copy.", coordinatorRelaunch},
 	{"promote", "<task>", "Turn an investigation task into a delivery on a branch, in its own copy.", coordinatorPromote},
+	{"relayed", "<task>", "Record that a reported investigation's findings were relayed, which finishes it.", coordinatorRelayed},
 	{"wakes", "", "Drain the queued wakes, oldest first: list them and record them as handled.", coordinatorWakes},
 	{"await", "", "Block until a wake is queued or the bound elapses, then drain the queued wakes.", coordinatorAwait},
 	{"listen", "", "Hold the wake stream: print each wake as it is queued, until interrupted, recording none as handled.", coordinatorListen},
@@ -259,6 +260,21 @@ func coordinatorPromote(ctx context.Context, in *invocation) (any, error) {
 	var promoted machine.TaskPromoted
 	err = in.callService(ctx, ipc.MethodTaskPromote, request, &promoted)
 	return promoted, err
+}
+
+// coordinatorRelayed is task.relay: the coordinator's record that it relayed
+// the findings of the investigation named, PRD section 6's Reported to
+// Complete edge. Whether the task has findings to relay, an investigation
+// that reads Reported from its stored report, is the service's to decide,
+// and a task that does not is its refusal.
+func coordinatorRelayed(ctx context.Context, in *invocation) (any, error) {
+	task, err := in.taskOperand(coordinatorCommand("relayed"), func(*flag.FlagSet) {})
+	if err != nil {
+		return nil, err
+	}
+	var relayed machine.TaskRelayed
+	err = in.callService(ctx, ipc.MethodTaskRelay, machine.TaskRequest{Task: task}, &relayed)
+	return relayed, err
 }
 
 // coordinatorWakes is wakes.list, PRD section 8's drain: the rows it lists

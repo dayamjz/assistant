@@ -65,6 +65,11 @@ const promotedIntentMigration = "task delivery intent recorded at promotion"
 // is a constant.
 const runStandingConsentMigration = "run standing consent"
 
+// taskRelayMigration names the migration that adds the record of a
+// reported investigation's findings relayed, for the reason
+// sealCheckpointTableMigration is a constant.
+const taskRelayMigration = "task findings relayed record"
+
 // schema is the migration list this package applies. Adding a column means
 // appending a migration whose ALTER TABLE names a nullable column with no
 // default, so rows written before it reads back unknown; migrate refuses
@@ -1354,6 +1359,36 @@ var schema = []migration{
 				WHEN OLD.standing_consent IS NOT NULL OR NEW.standing_consent IS NULL
 				BEGIN
 					SELECT RAISE(ABORT, 'store: a run''s standing consent is given once and is neither revised nor withdrawn');
+				END`,
+		},
+	},
+	{
+		version: 31,
+		name:    taskRelayMigration,
+		statements: []string{
+			// PRD section 6's lifecycle edge from Reported to Complete is
+			// taken on "findings relayed", and this is the record of it:
+			// the coordinator's statement, made through the service, that
+			// it relayed a reported investigation's findings. It is written
+			// once, by RecordTaskRelay, in the transaction that appends the
+			// FindingsRelayedEventKind entry its event column names, and
+			// internal/taskstate's terminal tier resolves the task Complete
+			// from the row and never from the entry (P8). One row per task,
+			// sealed on local_landing's terms.
+			`CREATE TABLE task_relay (
+				task_id     TEXT PRIMARY KEY REFERENCES task(id),
+				event       INTEGER NOT NULL,
+				recorded_at TEXT NOT NULL
+			) STRICT`,
+			`CREATE TRIGGER task_relay_is_written_once
+				BEFORE UPDATE ON task_relay
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a task''s findings relayed record is written once and is not updated');
+				END`,
+			`CREATE TRIGGER task_relay_is_not_removed
+				BEFORE DELETE ON task_relay
+				BEGIN
+					SELECT RAISE(ABORT, 'store: a task''s findings relayed record is written once and is not deleted');
 				END`,
 		},
 	},

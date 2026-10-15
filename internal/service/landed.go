@@ -69,6 +69,20 @@ import (
 // internal/tasks' to verify inside the decision, and the predicate only
 // decides that the decision is worth asking.
 //
+// # A relayed investigation
+//
+// Once the coordinator records an investigation's findings relayed, the task
+// resolves Complete from internal/taskstate's terminal tier, read from the
+// findings relayed record, and it is treated as every task in that tier is:
+// owed no relaunch and keeping no worker, so the worker this service holds
+// for it is ended, and the cleanup decision is owed for its copy while the
+// record carries no removal. That is decided from the record the resolution
+// read (Basis.Relayed beside the terminal tier's Complete), never from the
+// log's tail: the relay appends its own entry after the report's, so the
+// report-ready reading below would otherwise stop owing the copy the moment
+// the findings were relayed. A relayed investigation is not promotable, so
+// nothing here has to keep its worker for a promotion.
+//
 // # Cadence
 //
 // The landing sites run once per landing record. The stop path runs once
@@ -111,8 +125,9 @@ import (
 //     reported investigation does so before stopping its worker.
 
 // landedEnds reports whether a resolution is in internal/taskstate's terminal
-// tier, the one that says the task's work is finished: Landed, or Complete
-// on top of it. Such a task is owed no relaunch and keeps no worker.
+// tier, the one that says the task's work is finished: Landed, Complete on
+// top of it, or an investigation's Complete from its findings relayed
+// record. Such a task is owed no relaunch and keeps no worker.
 func landedEnds(r taskstate.Resolution) bool {
 	return r.Source == taskstate.SourceRecord
 }
@@ -127,7 +142,8 @@ func landedCleanupOwed(r taskstate.Resolution) bool {
 // reportedCleanupOwed reports whether o is an investigation whose filed
 // report makes the cleanup decision worth asking for its copy: still an
 // investigation, its copy not recorded removed, the report as the newest
-// entry the resolver read (Basis.EventKind), and every hold open on the
+// entry the resolver read (Basis.EventKind) or the task resolved Complete
+// from its findings relayed record (relayedEnds), and every hold open on the
 // task one a report's ask finding registered (tasks.HoldKey's space). The
 // state is not read: internal/taskstate resolves such a task Reported from
 // its report tier, but Held from the hold tier above it while a finding hold
@@ -144,7 +160,7 @@ func landedCleanupOwed(r taskstate.Resolution) bool {
 // about the copy: internal/tasks verifies the report inside the decision.
 func reportedCleanupOwed(o taskstate.Observed) bool {
 	if o.Snapshot.Task.Shape != store.TaskInvestigation || o.State.Basis.CleanupRemoved ||
-		o.State.Basis.EventKind != store.ReportReadyEventKind {
+		(o.State.Basis.EventKind != store.ReportReadyEventKind && !relayedEnds(o.State)) {
 		return false
 	}
 	findings := tasks.HoldKey(o.Snapshot.Task.ID, "")
@@ -154,6 +170,13 @@ func reportedCleanupOwed(o taskstate.Observed) bool {
 		}
 	}
 	return true
+}
+
+// relayedEnds reports whether a resolution is an investigation's Complete
+// from internal/taskstate's terminal tier, read from its findings relayed
+// record (Basis.Relayed), rather than a delivery task's.
+func relayedEnds(r taskstate.Resolution) bool {
+	return landedEnds(r) && r.State == taskstate.Complete && r.Basis.Relayed
 }
 
 // copyCleanupOwed reports whether the cleanup decision is still owed for
@@ -185,7 +208,7 @@ func (s *Service) settleLanded(ctx context.Context, id string) {
 func (s *Service) endLandedWorker(ctx context.Context, id string) {
 	latest, ok, err := s.latestAttempt(ctx, id)
 	if err != nil {
-		s.log.Printf("task %s landed and its latest attempt could not be read, so its worker was not ended: %v", id, err)
+		s.log.Printf("task %s is finished and its latest attempt could not be read, so its worker was not ended: %v", id, err)
 		return
 	}
 	ref, launched := latest.SessionRef.Get()
@@ -195,9 +218,9 @@ func (s *Service) endLandedWorker(ctx context.Context, id string) {
 	ended, err := s.endHeldWorker(id, ref)
 	switch {
 	case err != nil:
-		s.log.Printf("task %s landed and its worker (session %s) was not ended: %v", id, ref, err)
+		s.log.Printf("task %s is finished and its worker (session %s) was not ended: %v", id, ref, err)
 	case ended:
-		s.log.Printf("task %s landed, so this service ended its worker (session %s) through the session it holds", id, ref)
+		s.log.Printf("task %s is finished, so this service ended its worker (session %s) through the session it holds", id, ref)
 	}
 }
 

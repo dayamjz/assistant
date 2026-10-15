@@ -486,7 +486,9 @@ Each has cost this repository more than one round of review.
   no meaning. The terminal tier, `SourceRecord`, outranks every run and is
   derived: `Landed` from the merge record of an attributed run, or from a
   local task's own local landing record, and `Complete` from that and the
-  cleanup record's removal, for a delivery task; nothing
+  cleanup record's removal, for a delivery task, or from an investigation's
+  findings relayed record (`store.RecordTaskRelay`, written only through the
+  coordinator's `task.relay`); nothing
   there reads a code host or writes a record, and no event kind is named
   `landed` or `complete`. The hold tier, `SourceHold`, is the second: an
   open hold naming the task resolves `Held` above every run, `Validating` and
@@ -497,9 +499,10 @@ Each has cost this repository more than one round of review.
   report resolves `Reported` whether its terminal is live or dead, read from
   the `task_report` row `TaskSnapshot` carries as `ReportStoredAt` and never
   from the `report-ready` entry beside it (P8); a promoted task is not read by
-  it. `Reported` is not `Complete`: an investigation never resolves
-  `Complete` in this build, because the edge's "findings relayed" has no
-  record here, which `doc.go` says. Read its `doc.go` for the residual gaps, and for why PRD
+  it. `Reported` is not `Complete`: an investigation resolves `Complete`
+  only from its findings relayed record, read from the row and never from the
+  `findings-relayed` note beside it, and never from its report or its
+  cleanup record, which `doc.go` says. Read its `doc.go` for the residual gaps, and for why PRD
   section 8's "task state" row is read as a resolution rather than a row.
 - `internal/tasks` is PRD section 8's tasks module as far as this build takes
   it: intake, queueing, the P11 assertion, the P12 cleanup decision and
@@ -538,7 +541,8 @@ Each has cost this repository more than one round of review.
   copy path is `home.TaskCopy`, recorded as a reservation. `Create` has no
   caller in this build, by design: PRD section 9 has no verb that creates a
   task, and adding one is a finding. `Release` is called from
-  `internal/service` when a run finishes and at open, except where a push
+  `internal/service` when a run finishes, at open, and once an
+  investigation's report is stored, except where a push
   supersedes a run, since that push creates the branch's next run under the
   same exclusion and the branch stays live. Read its
   `doc.go` before changing the floor or the clear condition, and for the

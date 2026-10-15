@@ -31,6 +31,7 @@ func TestMethodTableIsWrittenDownHere(t *testing.T) {
 		"task.create":        true,
 		"task.promote":       true,
 		"task.relaunch":      true,
+		"task.relay":         true,
 		"task.message":       true,
 		"task.stop":          true,
 		"task.interrupt":     true,

@@ -964,7 +964,8 @@ flowchart TD
     <li><b>The result is reviewed again before it is pushed.</b> It passes the review stage in a
       fresh session with no memory of any fix, then the test, document, and lint stages, as the
       first pass did. Fix round limits are per run, so a stage that spent its rounds on the first
-      pass has none left on the second.</li>
+      pass has none left on the second. The second pass shares the run's fix rounds, so a stage
+      that spent them on the first pass parks on a fix finding in the second.</li>
     <li><b>The second push is anchored on the first.</b> The push stage updates the branch only on
       an observation of it standing at the commit the first push left there, checked against the
       live target like any push, so a branch that moved after the rebase stage observed it is
@@ -2163,7 +2164,8 @@ flowchart TB
   </p>
   <p class="mb-8 opacity-90">
     These methods, with listing, awaiting, and acknowledging the wake queue, reading a worker's
-    recent output, and arm verification, are reached
+    recent output, recording that a reported investigation's findings were relayed, and arm
+    verification, are reached
     through <code>assistant coordinator …</code>, a client dispatched beside the table on the same
     terms as <code>assistant gate</code> and <code>assistant host</code>. It adds no row. It is the
     interface the coordinator requires, and the third command outside the table by the owner's
@@ -2173,8 +2175,8 @@ flowchart TB
   <p class="mb-8 opacity-90">
     What is reached beside the table rather than as a verb is two clients. The coordinator client's
     subcommands are <code>create</code>, <code>message</code>, <code>stop</code>, <code>peek</code>,
-    <code>relaunch</code>, <code>promote</code>, <code>wakes</code>, <code>await</code>,
-    <code>acknowledge</code>, and <code>supervision</code>. <code>await</code> blocks until the wake
+    <code>relaunch</code>, <code>promote</code>, <code>relayed</code>, <code>wakes</code>,
+    <code>await</code>, <code>acknowledge</code>, and <code>supervision</code>. <code>await</code> blocks until the wake
     queue holds a wake nobody has acknowledged, or until a bound the caller gives elapses, and then
     lists the queue, acknowledging nothing. <code>peek</code> reads a task's worker's recent output,
     redacted and bounded, and how to attach to its terminal where the provider offers that; the
@@ -2526,7 +2528,7 @@ flowchart TB
     <table class="table table-sm table-zebra">
       <thead><tr><th class="w-52">Situation</th><th>Response</th></tr></thead>
       <tbody>
-        <tr><td>Terminal gone, work not landed</td><td>Preserve the isolated copy. Prove no live process owns it, then relaunch in that same copy with the same instructions plus a note about what already happened. Never a fresh generic launch while the copy is unaccounted for. Where the platform has no sweep, that proof cannot be made, so the relaunch is refused and goes ahead only on your answer to retry it, given to the hold the refusal raises on the task with <code>--task</code> and <code>--answer</code>, as at the relaunch bound (P6).</td></tr>
+        <tr><td>Terminal gone, work not landed</td><td>Preserve the isolated copy. Prove no live process owns it, then relaunch in that same copy with the same instructions plus a note about what already happened. Never a fresh generic launch while the copy is unaccounted for. Where the platform has no sweep, that proof cannot be made, so the relaunch is refused and goes ahead only on your answer to retry it, given to the hold the refusal raises on the task with <code>--task</code> and <code>--answer</code>, as at the relaunch bound (P6). A task that resolves Reported is not relaunched: its stored report is what it delivered (section 6), so a reported investigation whose terminal is gone is left as it is.</td></tr>
         <tr><td>Terminal alive, screen unchanged</td><td>Only a stall if nothing positively proves progress. A worker thinking for a long time is not stuck.</td></tr>
         <tr><td>Repeated stall on the same unchanged screen</td><td>Escalates. Once the same unchanged screen has surfaced <code>stall_inspection_count</code> times, section 10's key, the next surface demands a deeper inspection rather than another surface look. The count raises the level of what surfaces and stops nothing.</td></tr>
         <tr><td>Ambiguous liveness</td><td>Leave it alone. Relaunching on an ambiguous reading risks two supervisors for one task, which is worse than one late check.</td></tr>

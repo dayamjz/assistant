@@ -49,16 +49,25 @@
 // cleared. No event kind is named landed or complete, and a worker's event by
 // either name is a word with no row, which answers nothing (P8).
 //
-// Complete for an investigation task is not resolved in this build. PRD
-// section 6 does not infer it from the stored report: Reported is not
-// Complete, and the lifecycle's Reported to Complete edge asks for findings
-// relayed and decisions recorded as well as the cleanup proof. internal/tasks'
-// CleanUp verifies the report and its holds before it writes the cleanup
-// record, but "findings relayed" has no record this package reads, so
-// rather than derive Complete from the cleanup record and the report, the
-// tier declines, and a reported investigation whose copy was removed stays
-// Reported from the report tier below.
-//
+// Complete for an investigation task is resolved in this tier from its own
+// record: the findings relayed record, store.RecordTaskRelay's row, which the
+// coordinator writes through internal/service's coordinator-only method once
+// it has relayed a reported investigation's findings. That is the
+// lifecycle's Reported to Complete edge, and the record is the one thing
+// that takes it: PRD section 6 does not infer Complete from the stored
+// report or from the cleanup record, so a reported investigation whose copy
+// was removed and whose findings nobody recorded relayed stays Reported from
+// the report tier below. The record is the coordinator's word and nothing
+// here witnesses the relay. It is read from the row, never from the
+// "findings-relayed" entry appended beside it, which is a note (P8). Its
+// writer refuses a task that is not an investigation, one with no stored
+// report, and one an open hold names, inside the transaction that writes it,
+// which are the decisions the edge asks to be recorded; the cleanup proof
+// the edge also names is not required for Complete here, and whether the
+// copy is then removed is internal/service's decision, made from the record.
+// A delivery task, which a promoted investigation is, is not made Complete by
+// such a record.
+
 // # The report tier
 //
 // PRD section 6 puts a stored report between the run and the terminal: an
@@ -193,7 +202,8 @@
 //     Clears does not clear Held, so a task held at its relaunch bound now
 //     holds its branch against a queued successor until it is answered.
 //     An answer does not release that successor itself: Release runs where
-//     internal/service calls it, when a run finishes and at open, and that
+//     internal/service calls it, when a run finishes, at open, and once an
+//     investigation's report is stored, and that
 //     package's releaseQueued says the answer is not one of those sites.
 //   - The log still claims Reported from a "report-ready" entry where no
 //     tier above it answered, which for an investigation means an entry

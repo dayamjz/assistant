@@ -103,6 +103,10 @@ func (s *Service) handle(ctx context.Context, req ipc.Request) (json.RawMessage,
 		return call(ctx, req, func(ctx context.Context, r machine.TaskRequest) (machine.TaskRelaunched, error) {
 			return s.relaunchTaskFor(ctx, req, r)
 		})
+	case ipc.MethodTaskRelay:
+		return call(ctx, req, func(ctx context.Context, r machine.TaskRequest) (machine.TaskRelayed, error) {
+			return s.relayTask(ctx, req, r)
+		})
 	case ipc.MethodTaskMessage:
 		return call(ctx, req, func(ctx context.Context, r machine.TaskMessageRequest) (machine.TaskMessaged, error) {
 			return s.messageTask(ctx, req, r)

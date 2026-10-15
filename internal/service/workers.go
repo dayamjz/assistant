@@ -34,8 +34,8 @@ import (
 // answers which task the peer is the worker of, and the handlers whose
 // answer depends on it apply it here: task.event admits only a worker and
 // attributes the entry to its task; wakes.list, wakes.acknowledge,
-// wakewait.go's wakes.wait and wakes.subscribe, supervision.assert, coordinator.go's task.create, task.promote and
-// task.relaunch, steer.go's task.message, task.stop and task.interrupt,
+// wakewait.go's wakes.wait and wakes.subscribe, supervision.assert, coordinator.go's task.create, task.promote,
+// task.relaunch and task.relay, steer.go's task.message, task.stop and task.interrupt,
 // taskholds.go's task.respond and catchup.go's catchup.mark are the
 // coordinator's and refuse a worker, task.respond so that no worker answers a
 // hold, its own task's included, and catchup.mark so that no worker moves
