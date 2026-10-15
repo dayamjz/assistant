@@ -273,6 +273,9 @@ type Promoted struct {
 	// Instructions is the file the intent and the second check were
 	// written to.
 	Instructions string
+	// Brief is the text appended to that file, PromotionBrief's, which a
+	// caller holding a live worker sends it too.
+	Brief string
 	// Isolation is the proof the copy passed after it was shaped.
 	Isolation Isolation
 }
@@ -453,10 +456,12 @@ func (q *Queue) Promote(ctx context.Context, req Promotion) (Promoted, error) {
 	}
 	out.Isolation = proof
 
-	if err := appendPromotion(instructions, req.Intent, secondCheck); err != nil {
+	brief := PromotionBrief(branch, req.Intent, secondCheck)
+	if err := appendPromotion(instructions, brief); err != nil {
 		return Promoted{}, fmt.Errorf("tasks: writing the intent into the instructions of task %s: %w", req.Task, err)
 	}
 	out.Instructions = instructions
+	out.Brief = brief
 	return out, nil
 }
 
@@ -545,22 +550,33 @@ const isolationRefusedKind = "isolation-refused"
 // recorded one.
 const PromotionHeading = "## Promoted to delivery, written by the program at promotion"
 
-// appendPromotion appends the delivery intent and the second check to the
-// instructions file. The file is the one thing the worker was started with,
-// and a worker told to re-read it is told there what the contract now is.
-func appendPromotion(path, intent, line string) error {
+// PromotionBrief is what a promoted task's worker is told its contract now
+// is: the heading, the branch it delivers on and where it pushes, the intent
+// as the coordinator gave it, and the second check, line, to run before
+// committing anything further. The intent is the request's, and every other
+// word is fixed here, so the instructions file and the message a live worker
+// is sent at promotion carry one text.
+func PromotionBrief(branch, intent, line string) string {
+	return PromotionHeading + "\n\n" +
+		"This task is now a delivery task. Its deliverable is a change on the branch " + branch + ", pushed only to the " +
+		"assistant remote, which is the gate this task's delivery goes through, and the intent for it is:\n\n" +
+		strings.TrimSpace(intent) + "\n\n" +
+		"Before committing anything further, run this line in the working copy you were started in and stop if it " +
+		"exits non-zero: it checks that you are in the isolated copy the program cut for this task, now with the " +
+		"one remote a delivery copy has.\n\n    " + line + "\n"
+}
+
+// appendPromotion appends the brief to the instructions file. The file is
+// the one thing the worker was started with, and a worker told to re-read
+// it, or a worker begun on the task later, is told there what the contract
+// now is.
+func appendPromotion(path, brief string) error {
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = f.Close() }()
-	text := "\n\n" + PromotionHeading + "\n\n" +
-		"This task is now a delivery task. Its deliverable is a change on the task's branch, pushed only to the " +
-		"assistant remote, and the intent for it is:\n\n" + strings.TrimSpace(intent) + "\n\n" +
-		"Before committing anything further, run this line in the working copy you were started in and stop if it " +
-		"exits non-zero: it checks that you are in the isolated copy the program cut for this task, now with the " +
-		"one remote a delivery copy has.\n\n    " + line + "\n"
-	if _, err := f.WriteString(text); err != nil {
+	if _, err := f.WriteString("\n\n" + brief); err != nil {
 		return err
 	}
 	return f.Sync()

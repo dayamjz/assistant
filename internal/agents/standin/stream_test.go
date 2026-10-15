@@ -87,3 +87,57 @@ func TestTheStreamModeRefusesAGreeting(t *testing.T) {
 		t.Errorf("the stream-mode worker printed its greeting:\n%s", got)
 	}
 }
+
+// An exchange playing Recorded lines prints them as they are, in place of
+// the turn a stream-mode worker otherwise prints, and the Claude Code
+// adapter's capture of them says they are stream-json, so the transcript
+// reader reads them as the agent's. The same lines from a line-mode worker
+// are marked text, the control that the mark is the adapter's and not the
+// bytes'. A script that would play lines beside a Reply or a Run, or a line
+// that would print as two, is refused before anything starts.
+func TestRecordedLinesArePlayedAsTheyAre(t *testing.T) {
+	t.Parallel()
+	recorded := []string{
+		`{"type":"system","subtype":"thinking_tokens","tokens":4}`,
+		`{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"played back"}]}}`,
+	}
+	script := Script{Worker: &WorkerScript{Exchanges: []Exchange{{Contains: "play", Recorded: recorded}}}}
+	stream, err := agents.OpenWorker(t.Context(), New(t, script).Runner(), agents.WorkerSpec{Dir: t.TempDir(), Instructions: "play it"})
+	if err != nil {
+		t.Fatalf("starting the stream worker: %v", err)
+	}
+	t.Cleanup(stream.Close)
+	waitForOutput(t, stream, "played back")
+	captured := stream.Capture()
+	if captured.Text != strings.Join(recorded, "\n")+"\n" || captured.Format != agents.OutputStreamJSON {
+		t.Fatalf("the stream worker printed %q marked %q, want exactly the recorded lines marked stream-json", captured.Text, captured.Format)
+	}
+	read := agents.ReadTranscript(captured.Text, captured.Format, false)
+	if len(read.Events) != 1 || read.Events[0].Text != "played back" || read.Omitted != 1 {
+		t.Fatalf("the played lines read as %+v with %d left out, want the text and the counter left out", read.Events, read.Omitted)
+	}
+
+	line, err := agents.OpenWorker(t.Context(), NewWorker(t, script).Runner(), agents.WorkerSpec{Dir: t.TempDir(), Instructions: "play it"})
+	if err != nil {
+		t.Fatalf("starting the line worker: %v", err)
+	}
+	t.Cleanup(line.Close)
+	waitForOutput(t, line, "played back")
+	if got := line.Capture(); got.Format != agents.OutputText || !strings.Contains(got.Text, recorded[0]) {
+		t.Fatalf("the line worker printed %q marked %q, want the recorded lines marked text", got.Text, got.Format)
+	}
+
+	for _, bad := range []Exchange{
+		{Contains: "x", Reply: "also this", Recorded: recorded},
+		{Contains: "x", Run: true, Recorded: recorded},
+		{Contains: "x", Write: true, Recorded: recorded},
+		{Contains: "x", Recorded: []string{"one\ntwo"}},
+	} {
+		if err := bad.valid(); err == nil {
+			t.Errorf("the exchange %+v was accepted, want it refused", bad)
+		}
+	}
+	if err := (Exchange{Contains: "x", Recorded: recorded}).valid(); err != nil {
+		t.Errorf("a well-formed playback was refused: %v", err)
+	}
+}

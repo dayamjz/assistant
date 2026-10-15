@@ -140,7 +140,7 @@ func installManaged(ctx context.Context, in *invocation, granted bool) (any, err
 		return nil, asManagedRefusal(err)
 	}
 	in.progressf("waiting for the service the manager started to answer a readiness check")
-	state, err := in.waitReady(ctx, "")
+	state, err := in.waitReady(ctx, "", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -157,7 +157,7 @@ func startManaged(ctx context.Context, in *invocation, m *managed.Manager) (any,
 		return nil, asManagedRefusal(err)
 	}
 	in.progressf("waiting for the service the manager started to answer a readiness check")
-	state, err := in.waitReady(ctx, "")
+	state, err := in.waitReady(ctx, "", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -226,17 +226,33 @@ func uninstallManaged(ctx context.Context, in *invocation, force bool) (any, err
 // waitGone polls the readiness method until the service stops answering or
 // the wait runs out, which is a failure that leaves everything as it was.
 func (in *invocation) waitGone(ctx context.Context) error {
+	gone, err := in.stoppedAnswering(ctx)
+	switch {
+	case err != nil:
+		return err
+	case !gone:
+		return errors.New(machine.PhraseManagedStillUp.String() + " Its log: " + in.home.ServiceLog())
+	}
+	return nil
+}
+
+// stoppedAnswering polls the readiness method until nothing answers it, and
+// reports whether that happened before the wait ran out. Not answering is
+// any failure to get a readiness answer, a refused connection and a missing
+// socket among them, which is what a service that has let go of the home
+// leaves.
+func (in *invocation) stoppedAnswering(ctx context.Context) (bool, error) {
 	deadline := time.Now().Add(readyTimeout)
 	for {
 		if _, err := in.serviceHealth(ctx); err != nil {
-			return nil
+			return true, nil
 		}
 		if !time.Now().Before(deadline) {
-			return errors.New(machine.PhraseManagedStillUp.String() + " Its log: " + in.home.ServiceLog())
+			return false, nil
 		}
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return false, ctx.Err()
 		case <-time.After(readyPoll):
 		}
 	}

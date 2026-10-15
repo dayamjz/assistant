@@ -271,11 +271,20 @@ request body say the run ran under standing consent.
 By default a worker runs on pipes the service holds, which nothing can attach
 to. To host each worker in a terminal you can watch and type into, set the
 provider in your own configuration file, `config.yaml` under the home (by
-default `~/.assistant`), which is read as a JSON document:
+default `~/.assistant`), which is a YAML document:
 
-```json
-{"session_provider": "tmux"}
+```yaml
+session_provider: tmux
 ```
+
+It is read strictly: an unrecognized key, a key written twice, and a value of
+the wrong type are each refused by name rather than ignored or converted, so
+`yes` is not `true` and `"3"` is not `3`. A file written as JSON, as this one
+used to be, still reads the same, except that the escape `\/` is refused; write
+`/` instead. A file that does not parse stops the service from
+starting; `assistant service start` and `assistant service restart` print why,
+and a restart leaves the running service up rather than replacing it with one
+that cannot start.
 
 Only that file may set it: a repository's `assistant.json` naming it is
 refused, trusted copy or pushed, because the provider decides which program
@@ -285,7 +294,7 @@ resolves an agent, so restart the service after changing it.
 Each worker then runs as the one process of a tmux server of its own, on a
 socket under the home's `terminals` directory, started with no tmux
 configuration file. `assistant --json coordinator peek ID` reads the worker's
-recent output, redacted and cut to the last 16 KiB, and its `attach` field is
+recent output as a transcript, redacted and bounded to 16 KiB, and its `attach` field is
 the command that attaches you:
 
 ```sh

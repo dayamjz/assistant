@@ -142,43 +142,85 @@ func startService(ctx context.Context, in *invocation) (any, error) {
 		return nil, in.serveHere(ctx, underManager)
 	}
 	if install {
+		if err := in.startableConfiguration(); err != nil {
+			return nil, err
+		}
 		return installManaged(ctx, in, granted)
 	}
 	if state := in.serviceState(ctx); state.Running {
 		state.Managed = in.managedState()
 		return state, nil
 	}
+	if err := in.startableConfiguration(); err != nil {
+		return nil, err
+	}
 	if m, err := in.manager(); err == nil {
 		if installed, err := m.Installed(); err == nil && installed {
 			return startManaged(ctx, in, m)
 		}
 	}
-	if err := in.launch(); err != nil {
+	exited, err := in.launch()
+	if err != nil {
 		return nil, err
 	}
 	in.progressf("waiting for the service to answer a readiness check")
-	state, err := in.waitReady(ctx, "")
+	state, err := in.waitReady(ctx, "", exited)
 	if err != nil {
 		return nil, err
 	}
 	return state, nil
 }
 
+// startConfigurationRefused is a start refused before anything was launched,
+// because the service reads the home's configuration file as it starts and
+// would refuse to start on it. It reads out as internal/machine's row and
+// then the file's own refusal, which names the file, the key and the value.
+type startConfigurationRefused struct{ err error }
+
+// Error is the row, then the refusal.
+func (e startConfigurationRefused) Error() string {
+	return machine.PhraseStartConfigurationRefused.String() + " " + e.err.Error()
+}
+
+// Unwrap resolves to the refusal of the file.
+func (e startConfigurationRefused) Unwrap() error { return e.err }
+
+// startableConfiguration reads the home's configuration file the way a
+// starting service resolves it, and refuses when that read would refuse, so
+// a start that cannot succeed says why here rather than as a readiness wait
+// that runs out. It answers for that file when it is read here and for
+// nothing else a start can fail on; the service reads the file again as it
+// starts.
+func (in *invocation) startableConfiguration() error {
+	if _, err := service.GlobalConfig(in.home.ConfigFile()); err != nil {
+		return startConfigurationRefused{err: err}
+	}
+	return nil
+}
+
 // launch starts a copy of this binary serving in the background. It is
 // detached from this process's own lifetime, because the service outlives the
 // command that started it.
-func (in *invocation) launch() error {
+//
+// The channel it returns is closed once that copy has exited. It is waited for
+// on a goroutine of its own, so nothing here blocks for the life of the
+// service; a command that ends first simply stops watching, and the service,
+// detached, goes on.
+func (in *invocation) launch() (<-chan struct{}, error) {
 	cmd := exec.Command(in.env.Executable, "--home", in.home.Root(), "service", "start", "--foreground")
 	cmd.Stdin = nil
 	cmd.Stdout = nil
 	cmd.Stderr = nil
 	detach(cmd)
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("launching the service: %w", err)
+		return nil, fmt.Errorf("launching the service: %w", err)
 	}
-	// The child is not waited for: it outlives this command, and a wait here
-	// would either block for the life of the service or reap it early.
-	return cmd.Process.Release()
+	exited := make(chan struct{})
+	go func() {
+		_ = cmd.Wait()
+		close(exited)
+	}()
+	return exited, nil
 }
 
 // waitReady polls the readiness method until the service answers or the wait
@@ -189,7 +231,13 @@ func (in *invocation) launch() error {
 // out: the outgoing service is still bound to the socket when it accepts a
 // restart, so the first answer would otherwise be its. It is empty when
 // nothing is being replaced.
-func (in *invocation) waitReady(ctx context.Context, replacing string) (machine.Service, error) {
+//
+// exited is closed when the process this command launched to answer has
+// exited, and is nil when this command launched nothing it can watch. A
+// launched process that exited while nothing answers is reported then rather
+// than when the wait runs out, and both failures point at the service log,
+// where a service that held the home's lock and could not start writes why.
+func (in *invocation) waitReady(ctx context.Context, replacing string, exited <-chan struct{}) (machine.Service, error) {
 	deadline := time.Now().Add(readyTimeout)
 	for {
 		health, err := in.serviceHealth(ctx)
@@ -197,6 +245,9 @@ func (in *invocation) waitReady(ctx context.Context, replacing string) (machine.
 		case err != nil:
 		case replacing == "" || health.Instance != replacing:
 			return in.serviceStateFrom(health), nil
+		}
+		if gone(exited) {
+			return machine.Service{}, fmt.Errorf("the service exited before it answered a readiness check; why is in its log at %s", in.home.ServiceLog())
 		}
 		if !time.Now().Before(deadline) {
 			return machine.Service{}, fmt.Errorf("the service did not become ready within %s; its log is at %s", readyTimeout, in.home.ServiceLog())
@@ -209,11 +260,35 @@ func (in *invocation) waitReady(ctx context.Context, replacing string) (machine.
 	}
 }
 
+// gone reports whether a channel launch returned has been closed. A nil
+// channel is a launch nobody is watching and is never gone.
+func gone(exited <-chan struct{}) bool {
+	if exited == nil {
+		return false
+	}
+	select {
+	case <-exited:
+		return true
+	default:
+		return false
+	}
+}
+
 // stopService stops or restarts the running service.
 //
 // PRD section 9 makes both refuse while runs are active, list the affected
 // runs, and require an explicit flag for this act rather than a general
 // yes-to-everything one, which is why the flag is named for what it forces.
+//
+// A request whose connection ended before any answer arrived is decided by
+// what the service then does rather than reported as a failed request,
+// because a service ending as it acts on a stop is one way that connection
+// ends. A stop is answered as accepted once nothing answers a readiness
+// check within the wait, and a restart once a service other than the one
+// asked answers one; either wait running out returns the ended connection as
+// the failure. What that observation does not establish is that this request,
+// rather than something else acting at the same moment, is what ended the
+// service.
 func stopService(ctx context.Context, in *invocation, method ipc.Method) (any, error) {
 	verb := "stop"
 	if method == ipc.MethodServiceRestart {
@@ -240,18 +315,52 @@ func stopService(ctx context.Context, in *invocation, method ipc.Method) (any, e
 	}
 	var answer machine.Lifecycle
 	if err := in.callService(ctx, method, machine.LifecycleRequest{Force: force}, &answer); err != nil {
-		return nil, err
+		if !endedUnanswered(err) {
+			return nil, err
+		}
+		return decideByObservation(ctx, in, method, outgoing.Instance, err)
 	}
 	if !answer.Accepted {
 		return answer, nil
 	}
 	if method == ipc.MethodServiceRestart {
 		in.progressf("waiting for the replacement service to answer a readiness check")
-		if _, err := in.waitReady(ctx, outgoing.Instance); err != nil {
+		if _, err := in.waitReady(ctx, outgoing.Instance, nil); err != nil {
 			return nil, err
 		}
 	}
 	return answer, nil
+}
+
+// endedUnanswered reports whether a request failed because its connection
+// ended before the service answered it, as opposed to the service answering
+// with a refusal, which is decided on what it said.
+func endedUnanswered(err error) bool {
+	var answered *ipc.Error
+	return errors.Is(err, ipc.ErrClientClosed) && !errors.As(err, &answered)
+}
+
+// decideByObservation settles a stop or a restart whose connection ended with
+// no answer, on stopService's terms: by whether the service stopped answering,
+// or for a restart by whether a different service answers, within the wait.
+// ended is the request's own failure, returned when neither is seen.
+func decideByObservation(ctx context.Context, in *invocation, method ipc.Method, outgoing string, ended error) (any, error) {
+	if method == ipc.MethodServiceRestart {
+		in.progressf("the restart got no answer; waiting for a replacement service to answer a readiness check")
+		if _, err := in.waitReady(ctx, outgoing, nil); err != nil {
+			return nil, fmt.Errorf("%w; no replacement answered: %w", ended, err)
+		}
+		return machine.Lifecycle{Accepted: true, Restarting: true}, nil
+	}
+	in.progressf("the stop got no answer; waiting for the service to stop answering")
+	gone, err := in.stoppedAnswering(ctx)
+	switch {
+	case err != nil:
+		return nil, errors.Join(ended, err)
+	case !gone:
+		return nil, fmt.Errorf("%w; the service was still answering %s later", ended, readyTimeout)
+	}
+	return machine.Lifecycle{Accepted: true}, nil
 }
 
 // serveHere runs the service in this process until it is told to stop or the
@@ -296,7 +405,8 @@ func (in *invocation) serveHere(parent context.Context, underManager bool) error
 		if underManager {
 			return managedRestart{}
 		}
-		return in.launch()
+		_, err := in.launch()
+		return err
 	}
 	return nil
 }

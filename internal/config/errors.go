@@ -11,8 +11,10 @@ var (
 	// ErrInvalid is wrapped by every refusal that names a configuration key.
 	// The wrapping KeyError says which key, which value, and why.
 	ErrInvalid = errors.New("config: invalid configuration")
-	// ErrMalformed is returned when a document is not well-formed JSON, so no
-	// key can be named. Nothing in the document is applied.
+	// ErrMalformed is returned when a document is not well-formed in its
+	// format, JSON for Parse and YAML for ParseYAML, or does not hold one
+	// object at its top, so no key can be named. Nothing in the document is
+	// applied.
 	ErrMalformed = errors.New("config: malformed configuration document")
 	// ErrUnknownOrigin is returned when a layer is parsed without stating the
 	// origin its bytes came from. Trust is a property of where a document was

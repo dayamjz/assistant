@@ -28,9 +28,9 @@ import (
 // object of type "user" whose message carries the text, framed by
 // claudeUserMessage. That is the shape Anthropic's Agent SDK writes to the
 // same CLI for a string prompt. What comes back is the CLI's stream-json
-// output, one JSON object per line, which this package does not read: a
-// worker produces no Result, and Capture hands the lines over as the bytes
-// they are.
+// output, one JSON object per line: a worker produces no Result, and Capture
+// hands the lines over as the bytes they are, marked OutputStreamJSON, which
+// ReadTranscript in transcript.go is the one reader of.
 //
 // What this buys is a worker the caller drives and ends on the terms Worker
 // states, over a wire this package frames rather than one it leaves to a
@@ -49,7 +49,7 @@ func (r *claudeRunner) Start(ctx context.Context, spec WorkerSpec) (Worker, erro
 		env:    WorkerEnvironment(r.settings.base, spec.Env),
 		grace:  r.settings.grace,
 		maxOut: r.settings.maxOut,
-	}, spec.Instructions, claudeUserMessage)
+	}, spec.Instructions, claudeUserMessage, OutputStreamJSON)
 	if err != nil {
 		return nil, err
 	}
