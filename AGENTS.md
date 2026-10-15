@@ -767,7 +767,8 @@ Each has cost this repository more than one round of review.
   worker is placed by the other relation over the same credentials, the
   worker group set `internal/session` holds, and `workers.go` owns that
   derivation (credentials, then the peer's parent chain, which `placement.go`
-  walks to a process in a worker group reading each process through
+  walks to a process in a worker group, or one that is itself a worker the
+  set holds, reading each process through
   `agents.ReadLineage`, then the set) and the four methods
   that turn on it. It walks the chain rather than reading the peer's own
   group as containment does, because #225 observed the Claude Code CLI's Bash
