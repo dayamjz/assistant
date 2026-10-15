@@ -114,6 +114,19 @@
 // takes on its own terms: a halt point's answer key may not be preseeded, so
 // what a fresh run begins from is that state without those keys.
 //
+// State keys are outside the digest, and a checkpoint's state must hold
+// exactly the keys the graph declares, so a graph that declares one more key
+// refuses every checkpoint written before it did. Key.Late is the one way past
+// that, and it is declared per key rather than granted to every absence: a
+// late key may be missing from a checkpoint's state, the executor fills it in
+// at its kind's zero value before anything reads it, and a late key holding
+// that zero value is left out of the convergence fingerprint, so a fingerprint
+// a run recorded before the key existed still compares equal to the same state
+// read back afterwards. What it does not cover is a key whose zero value would
+// mean something to the run that the key's absence did not; declaring a key
+// late is the declarer's statement that its zero value is how a run that never
+// had it behaves, and nothing here checks that statement.
+//
 // The budget is settled differently, because raising one on a resume is a
 // legitimate thing to want and refusing it outright would only push a caller
 // into forking to work around it. The bound in force is the one the run
