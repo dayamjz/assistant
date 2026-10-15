@@ -36,7 +36,9 @@ import (
 // naming that attempt through store.AppendMessage, which removes credentials
 // from the text, and then sends what the record holds through the session
 // provider's Send, which the Claude Code adapter frames as one stream-json
-// user message. The send's answer is recorded once: written when Send
+// user message and the tmux provider types into the worker's terminal
+// through the adapter's terminal framing, which refuses a line longer than
+// it may type, so such a message is recorded refused. The send's answer is recorded once: written when Send
 // returned, refused with its reason when it failed or when this service
 // holds no session for that attempt's reference. Nothing resends, here or
 // anywhere: a refusal is answered to the caller as *messageRefused with the

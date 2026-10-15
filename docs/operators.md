@@ -147,6 +147,47 @@ incorrect usage, and a branch cannot set the key for itself. Each answer is
 recorded as the program's, and status, the run listing, and the pull request
 body say the run ran under standing consent.
 
+## Watch a worker in a terminal
+
+By default a worker runs on pipes the service holds, which nothing can attach
+to. To host each worker in a terminal you can watch and type into, set the
+provider in your own configuration file, `config.yaml` under the home (by
+default `~/.assistant`), which is read as a JSON document:
+
+```json
+{"session_provider": "tmux"}
+```
+
+Only that file may set it: a repository's `assistant.json` naming it is
+refused, trusted copy or pushed, because the provider decides which program
+the service runs to start every worker. The service reads it when it first
+resolves an agent, so restart the service after changing it.
+
+Each worker then runs as the one process of a tmux server of its own, on a
+socket under the home's `terminals` directory, started with no tmux
+configuration file. `assistant --json coordinator peek ID` reads the worker's
+recent output, redacted and cut to the last 16 KiB, and its `attach` field is
+the command that attaches you:
+
+```sh
+tmux -S ~/.assistant/terminals/SOCKET attach-session -t worker
+```
+
+What you type there is the worker's input, exactly as a message is, and the
+program keeps no record of it: the worker acts on it, and the coordinator
+reconciles around what the worker then does. A command the worker runs
+because you typed it is the worker's, so its pushes are held to the worker's
+own branch like any other. A new window you open in that server is not the
+worker: its pushes are a person's and start the full run.
+
+Two things it needs. tmux has to be on the service's PATH; without it every
+launch is refused and the task stays dispatched, which the service log says.
+And the resolved agent has to declare terminal workers, which in this build
+only the scripted adapter the tests use does, so a service resolved to Claude
+Code launches no worker under this setting. A worker an earlier service
+started is never attached to or read through the new one: its terminal reads
+as unobservable until it ends, as it does under the default provider.
+
 ## Keep your CI required
 
 The gate is not your CI (PRD section 12 lists "Being your CI" as a permanent

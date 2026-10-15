@@ -3,7 +3,11 @@ package service
 import (
 	"context"
 	"fmt"
+	"os/exec"
+	"path/filepath"
 
+	"github.com/dayamjz/assistant/internal/agents"
+	"github.com/dayamjz/assistant/internal/config"
 	"github.com/dayamjz/assistant/internal/session"
 )
 
@@ -19,7 +23,7 @@ import (
 // identity proves gone reads Dead, and everything else, a survivor an earlier
 // service launched, another home's reference, and every failure to read,
 // reads Unobserved, on that package's terms. Capture is answered out of the
-// same held set, through session.Pipe.CaptureReference, so the reference a
+// same held set, through the provider's CaptureReference, so the reference a
 // probe answers Live for is the one a capture reads, and the reference to
 // handle lookup has one owner, the provider's held set; nothing here reads
 // the launched map for either question. Every task reader this service
@@ -71,6 +75,35 @@ import (
 //     across a probe would deadlock, and none does, which is a rule the
 //     readers keep and nothing enforces.
 
+// sessionHost builds the provider this service launches workers through, as
+// the operator's file chose with config.KeySessionProvider, over r, the
+// resolved agent unwrapped. It reads only the global layer, which is the one
+// layer that key may come from, so no repository's copy chooses how this
+// service starts processes (P7).
+//
+// For tmux the binary is resolved off this process's PATH once, here, and
+// the provider holds the absolute path. A machine with none still gets a
+// tmux provider, one built with no binary: every Create on it is refused
+// with session.ErrNoTmux, which launch.go reports as it reports an adapter
+// without the capability, the task staying Dispatched, while probes answer
+// on the shared identity rule as they would for any provider. The service
+// does not fall back to the pipe provider: the operator chose an attachable
+// terminal, and a worker they cannot attach to is not what they chose.
+func (s *Service) sessionHost(r agents.Runner) session.Host {
+	if s.cfg.SessionProvider != config.SessionProviderTmux {
+		return session.NewPipe(s.home, r)
+	}
+	tmux, err := exec.LookPath("tmux")
+	if err == nil {
+		tmux, err = filepath.Abs(tmux)
+	}
+	if err != nil {
+		s.log.Printf("the configured session provider is tmux and no tmux binary could be resolved, so no worker will launch: %v", err)
+		tmux = ""
+	}
+	return session.NewTmux(s.home, r, tmux)
+}
+
 // heldTerminals is the Terminals over this service's own session provider,
 // on the file comment's terms. It is what Open wires when Options.Terminals
 // is nil, which is what the product passes.
@@ -91,7 +124,7 @@ func (h heldTerminals) Probe(ctx context.Context, ref string) session.Observatio
 	return built.sessions.Probe(ctx, ref)
 }
 
-// Capture answers through session.Pipe.CaptureReference, so a reference
+// Capture answers through the provider's CaptureReference, so a reference
 // the provider does not hold is session.ErrNotHeld, this terminal's failure,
 // and a service that cannot build a provider is ErrTerminalsUnavailable,
 // wrapped, the provider's.

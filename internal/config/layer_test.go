@@ -101,7 +101,8 @@ func TestParseAcceptsTheWholeSchema(t *testing.T) {
 		"allow_pushed_commands": true,
 		"autonomy": {"merge": ["owner/name"]},
 		"delivery": "local",
-		"allow_standing_consent": true
+		"allow_standing_consent": true,
+		"session_provider": "tmux"
 	}`
 	l := mustParse(t, OriginGlobal, doc)
 	if got, want := len(l.SetKeys()), len(Keys()); got != want {
@@ -159,6 +160,9 @@ func TestParseAcceptsTheWholeSchema(t *testing.T) {
 	}
 	if c.Delivery != DeliveryLocal {
 		t.Errorf("Delivery = %q", c.Delivery)
+	}
+	if c.SessionProvider != SessionProviderTmux {
+		t.Errorf("SessionProvider = %q", c.SessionProvider)
 	}
 }
 
@@ -228,6 +232,9 @@ func TestParseRefusalsNameTheKeyAndValue(t *testing.T) {
 		{"relaunch attempts fractional", `{"relaunch_attempts": 1.5}`, KeyRelaunchAttempts, "1.5"},
 		{"relaunch attempts over the ceiling", `{"relaunch_attempts": 21}`, KeyRelaunchAttempts, "21"},
 		{"relaunch attempts not a number", `{"relaunch_attempts": "2"}`, KeyRelaunchAttempts, `"2"`},
+		{"session provider misspelled", `{"session_provider": "Tmux"}`, KeySessionProvider, `"Tmux"`},
+		{"session provider not offered", `{"session_provider": "zellij"}`, KeySessionProvider, `"zellij"`},
+		{"session provider not a string", `{"session_provider": true}`, KeySessionProvider, "true"},
 		{"decision model misspelled", `{"decision_model": "Evaluate"}`, KeyDecisionModel, `"Evaluate"`},
 		{"decision model not a string", `{"decision_model": false}`, KeyDecisionModel, "false"},
 		{"decision model as a cutoff", `{"decision_model": "0.5"}`, KeyDecisionModel, `"0.5"`},

@@ -50,6 +50,24 @@ import (
 // Every other platform refuses the read; internal/ipc identifies no peer on
 // any of them, so the refusal is upstream of this one.
 //
+// # Under the tmux provider
+//
+// A tmux-hosted worker is not this service's child: it is the process of a
+// tmux pane, a child of a tmux server that is nobody's descendant here, and
+// it leads its own process group, which is what joins the worker set. The
+// walk needs nothing more than that, because it reads from the peer upward
+// and never needs the worker's own parent: a command the worker runs, in
+// its group or one of its own, descends from the pane's process. Everything
+// else on the same server descends from the server and not from the pane,
+// so a window a person opens there, the client a person attaches with, and
+// a person's shell that types into the pane from outside are placed as no
+// worker, while a command the person's typing makes the worker run is the
+// worker's. placement_tmux_internal_test.go reads each of those off a real
+// tmux server, and workers_tmux_unix_test.go reaches the same answers
+// through the socket's credentials. Had the server's process been the
+// member, every one of those would have been placed as the worker's, which
+// is why session.Tmux registers the pane's.
+//
 // # What it does not cover
 //
 //   - A chain the kernel has already rewritten. When a process between the

@@ -110,6 +110,13 @@ const (
 	// on MethodTaskCreate's terms, refused for a worker before the
 	// capability is asked.
 	MethodTaskInterrupt Method = "task.interrupt"
+	// MethodTaskPeek reads a running task's worker's recent output, as the
+	// session provider holding it captures it, redacted and bounded, with
+	// the command a person attaches with where the provider has one. It
+	// reads and writes nothing else. It is the coordinator's on
+	// MethodTaskCreate's terms, so no worker reads its own or a sibling's
+	// terminal through the service.
+	MethodTaskPeek Method = "task.peek"
 	// MethodWakesList drains the durable wake queue for the coordinator: it
 	// returns the queued wakes, oldest first, and acknowledges none, so a
 	// row stays actionable until MethodWakesAcknowledge names it. It is the
@@ -255,6 +262,7 @@ var specs = []Spec{
 	{MethodTaskMessage, KindRequest, AccessRestricted, "Send a message to a running task's worker, recorded first, for the coordinator."},
 	{MethodTaskStop, KindRequest, AccessRestricted, "End a running task's worker, prove it dead, and hold the task, for the coordinator."},
 	{MethodTaskInterrupt, KindRequest, AccessRestricted, "Interrupt a worker's turn; refused, since no adapter declares the capability."},
+	{MethodTaskPeek, KindRequest, AccessRestricted, "Read a running task's worker's recent output, redacted and bounded, for the coordinator."},
 	{MethodWakesList, KindRequest, AccessRestricted, "Drain the wake queue: list the queued wakes, acknowledging none."},
 	{MethodWakesAcknowledge, KindRequest, AccessRestricted, "Record that the coordinator handled the named wakes."},
 	{MethodWakesWait, KindRequest, AccessRestricted, "Block until the wake queue holds a queued wake or a bound elapses, acknowledging none."},

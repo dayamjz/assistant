@@ -65,6 +65,7 @@ var coordinatorActions = []struct {
 	{"create", "", "Record a new task through intake; a task nothing blocks has its worker begun after the answer.", coordinatorCreate},
 	{"message", "<task>", "Send the worker of a running task a message, recorded before it is written.", coordinatorMessage},
 	{"stop", "<task>", "End a task's worker, prove it ended, and hold the task for an answer.", coordinatorStop},
+	{"peek", "<task>", "Read a task's worker's recent output, redacted and bounded, and how to attach to its terminal.", coordinatorPeek},
 	{"relaunch", "<task>", "Begin a new attempt of a task whose worker is gone, in its own copy.", coordinatorRelaunch},
 	{"promote", "<task>", "Turn an investigation task into a delivery on a branch, in its own copy.", coordinatorPromote},
 	{"wakes", "", "List the queued wakes, oldest first, acknowledging none.", coordinatorWakes},
@@ -200,6 +201,23 @@ func coordinatorStop(ctx context.Context, in *invocation) (any, error) {
 	var stopped machine.TaskStopped
 	err = in.callService(ctx, ipc.MethodTaskStop, machine.TaskRequest{Task: task}, &stopped)
 	return stopped, err
+}
+
+// coordinatorPeek is task.peek: the recent output of the worker of the
+// task's latest attempt, redacted and bounded by the service, and the
+// command a person attaches to its terminal with where the service's
+// session provider hosts it in one. The output is in the structured answer
+// only, beside the command; what a person reads is PeekPhrase, because a
+// worker's output is never relayed to a person (P13) and the command names
+// a path under the home.
+func coordinatorPeek(ctx context.Context, in *invocation) (any, error) {
+	task, err := in.taskOperand(coordinatorCommand("peek"), func(*flag.FlagSet) {})
+	if err != nil {
+		return nil, err
+	}
+	var peeked machine.TaskPeek
+	err = in.callService(ctx, ipc.MethodTaskPeek, machine.TaskRequest{Task: task}, &peeked)
+	return peeked, err
 }
 
 // coordinatorRelaunch is task.relaunch, through the one anchored relaunch
