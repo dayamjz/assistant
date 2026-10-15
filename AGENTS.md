@@ -138,7 +138,10 @@ Each has cost this repository more than one round of review.
   through `Executor.AdoptBudget`, which writes the change into the run's
   history; a difference nobody asked for is `ErrBudgetChanged`. Read its
   `doc.go` before changing any of that, and `identity.go` for what the digest
-  covers and what it deliberately leaves out.
+  covers and what it deliberately leaves out. A checkpoint's state must hold
+  exactly the declared keys, so a key added to `internal/pipeline`'s table
+  refuses every older checkpoint unless its row is late (`graph.Key.Late`),
+  which is only for a key whose zero value is how a run without it behaved.
 - `internal/vcs` is the only package that invokes git. Do not shell out to git
   anywhere else; add a typed operation there instead. Its package comment states
   the two rules it applies to every invocation and the residual gaps in them.

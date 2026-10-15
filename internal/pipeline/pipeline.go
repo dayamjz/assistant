@@ -315,6 +315,10 @@ type Start struct {
 	Base string
 	// Submitted is the commit the push submitted to the gate.
 	Submitted string
+	// SubmittedSubject is the subject of the Submitted commit, already passed
+	// through internal/redact. It may be empty, and the pull request stage
+	// then titles a run without intent with the branch name.
+	SubmittedSubject string
 	// Intent is what the change set out to do, when the run carries one.
 	// Whether it is acceptance criteria or a hint is IntentSupplied's to say,
 	// not this text's.
@@ -347,15 +351,16 @@ func (p *Pipeline) NewState(s Start) (graph.State, error) {
 		skip = append(skip, stage.String())
 	}
 	return p.graph.NewState(map[string]graph.Value{
-		string(KeyRepository):      graph.TextValue(s.Repository),
-		string(KeyRun):             graph.TextValue(s.Run),
-		string(KeyForgeRepository): graph.TextValue(s.ForgeRepository),
-		string(KeyBranch):          graph.TextValue(s.Branch),
-		string(KeyBase):            graph.TextValue(s.Base),
-		string(KeySubmitted):       graph.TextValue(s.Submitted),
-		string(KeyHead):            graph.TextValue(s.Submitted),
-		string(KeyIntent):          graph.TextValue(s.Intent),
-		string(KeyIntentSupplied):  graph.BoolValue(s.IntentSupplied),
-		string(KeySkip):            graph.ListValue(skip...),
+		string(KeyRepository):       graph.TextValue(s.Repository),
+		string(KeyRun):              graph.TextValue(s.Run),
+		string(KeyForgeRepository):  graph.TextValue(s.ForgeRepository),
+		string(KeyBranch):           graph.TextValue(s.Branch),
+		string(KeyBase):             graph.TextValue(s.Base),
+		string(KeySubmitted):        graph.TextValue(s.Submitted),
+		string(KeySubmittedSubject): graph.TextValue(s.SubmittedSubject),
+		string(KeyHead):             graph.TextValue(s.Submitted),
+		string(KeyIntent):           graph.TextValue(s.Intent),
+		string(KeyIntentSupplied):   graph.BoolValue(s.IntentSupplied),
+		string(KeySkip):             graph.ListValue(skip...),
 	})
 }
