@@ -172,14 +172,12 @@ func historyKinds(t *testing.T, h *home.Home, id string) map[string]int {
 // report on standard input: it is stored, the history records it once, and
 // each of its findings that asks, or names no action, becomes a hold (P3),
 // so the task reads Held over the report until a person answers both, and
-// then Running from the worker's live terminal over the report's claim of
-// Reported, which the resolution reports as the claim it overrode. The copy
-// stands while the worker runs, and once the worker ends the service's pass
-// removes it on the scratch proof, recorded on the task (P12), never
-// because the report was filed. PRD section 6's precedence reads a dead
-// terminal with no run as Unknown rather than the history, so the report's
-// claim is what the resolution still carries then; the pull request that
-// added this test raises that as a finding.
+// then Reported from the stored report while the worker's terminal is still
+// live, because PRD section 6 has a stored report outrank the terminal. The
+// copy stands while the worker runs, and once the worker ends the service's
+// pass removes it on the scratch proof, recorded on the task (P12), never
+// because the report was filed; the task still reads Reported from the
+// report over its dead terminal and its removed copy, and never Complete.
 //
 // A person's shell running the same route is refused as no task's worker,
 // from the credentials and the parent chain the service reads and not from
@@ -284,12 +282,11 @@ func TestAWorkerReportsBackThroughTheRouteItsGrantAllows(t *testing.T) {
 	for range holds {
 		answerTask(t, h, subject, id, "approved")
 	}
-	// The worker still runs, and a live terminal outranks the history, which
-	// the resolution reports as the claim it overrode.
-	if got := taskOf(t, h, subject, id); got.State.State != taskstate.Running || got.State.Source != taskstate.SourceProcess ||
-		!claimsReported(got.State) {
-		t.Fatalf("with its decisions answered and its worker running the task reads %s from %s overriding %+v, "+
-			"want running from the process over the report's claim", got.State.State, got.State.Source, got.State.Superseded)
+	// The worker still runs, and the stored report outranks its live
+	// terminal.
+	if got := taskOf(t, h, subject, id); !reportedFrom(got.State, taskstate.Live) {
+		t.Fatalf("with its decisions answered and its worker running the task reads %s from %s (basis %+v), "+
+			"want reported from the stored report over a live terminal", got.State.State, got.State.Source, got.State.Basis)
 	}
 
 	// A person's shell running the same route is refused.
@@ -329,30 +326,19 @@ func TestAWorkerReportsBackThroughTheRouteItsGrantAllows(t *testing.T) {
 		t.Fatalf("the task records its copy removed and %s still stands: %v", copyPath, err)
 	}
 	got := taskOf(t, h, subject, id)
-	if !got.State.Basis.CleanupRemoved || got.State.Basis.Process != taskstate.Dead || !claimsReported(got.State) {
-		t.Fatalf("with its worker ended and its copy gone the task reads %s from %s with %+v overriding %+v, "+
-			"want the removal recorded over a dead terminal and the report's claim", got.State.State, got.State.Source,
-			got.State.Basis, got.State.Superseded)
+	if !got.State.Basis.CleanupRemoved || !reportedFrom(got.State, taskstate.Dead) {
+		t.Fatalf("with its worker ended and its copy gone the task reads %s from %s with %+v, "+
+			"want reported from the stored report over a dead terminal with the removal recorded", got.State.State, got.State.Source,
+			got.State.Basis)
 	}
 }
 
-// claimsReported reports whether the history's newest entry, as the
-// resolver read it, is the report and claims Reported: the answer when
-// nothing above the history decided, and otherwise the claim the answer
-// overrode.
-func claimsReported(r taskstate.Resolution) bool {
-	if r.Basis.EventKind != store.ReportReadyEventKind {
-		return false
-	}
-	if r.State == taskstate.Reported && r.Source == taskstate.SourceEvent {
-		return true
-	}
-	for _, overridden := range r.Superseded {
-		if overridden.Sequence == r.Basis.EventSequence && overridden.Claimed == taskstate.Reported {
-			return true
-		}
-	}
-	return false
+// reportedFrom reports whether r is PRD section 6's report tier answering
+// over a terminal read as process: Reported from the stored report row,
+// which the basis records, and not from the history entry beside it (P8).
+func reportedFrom(r taskstate.Resolution, process taskstate.Liveness) bool {
+	return r.State == taskstate.Reported && r.Source == taskstate.SourceReport && r.Basis.ReportStored &&
+		r.Basis.Process == process && r.Basis.EventKind == store.ReportReadyEventKind
 }
 
 // allowedTools is the value a worker's command line gave --allowedTools,

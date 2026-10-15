@@ -128,6 +128,13 @@ Three things follow for whoever runs the service:
   only after its worker has ended, which it does when it exits on its own or
   when the coordinator stops it, and only on the cleanup check's proof. A
   report filed by a worker that is still running keeps its copy.
+- Once its report is stored, an investigation reads `reported` whether its
+  worker is still running or has ended, and `held` only while a decision the
+  report raised is open. A worker that ends after filing is not a crash: a
+  restart does not relaunch the task, and supervision does not queue a
+  `terminal-gone` wake for it. An investigation that ends without filing a
+  report still reads `unknown` and is still reported and relaunched as a
+  worker that died.
 
 ## Waiting on a fleet
 
@@ -184,8 +191,8 @@ subcommands, all of these are refused for a task's worker.
 
 A restart does not leave that queue exactly as it was. When the service
 starts it reconciles every task, and a task whose worker's terminal is gone
-with its work not landed is relaunched, up to `relaunch_attempts` times
-(2 unless configured). A relaunch records each still-queued `terminal-gone`
+with its work not landed and no report filed for it is relaunched, up to
+`relaunch_attempts` times (2 unless configured). A relaunch records each still-queued `terminal-gone`
 wake about the session it replaced as handled by the program, so the next
 drain does not return it. Read `assistant tasks` after a restart as well as
 the queue: a relaunched task shows its new attempt there, and a task past

@@ -50,30 +50,44 @@
 // either name is a word with no row, which answers nothing (P8).
 //
 // Complete for an investigation task is not resolved in this build. PRD
-// section 5's edge asks for a stored report and registered holds before the
-// cleanup proof, and internal/store now holds both, the task_report row and
-// the holds registered in its transaction, with internal/tasks' CleanUp
-// verifying them before it writes the cleanup record; what this package
-// does not yet do is read the report row, which TaskSnapshot does not carry.
-// Rather than derive Complete from the cleanup record alone, the tier
-// declines, and an investigation task with a removed copy resolves from the
-// tiers below as any other task does. For one whose worker this service
-// launched that is the process tier, so it reads Running while the worker
-// runs and Unknown once its terminal is Dead, with the report's claim of
-// Reported in Superseded and Basis.EventKind naming the report; it reads
-// Reported only while its terminal is Unobserved. PRD section 6's
-// precedence puts a dead terminal above the log on purpose, and nothing
-// here bends it for a report. Carrying the report onto the snapshot and
-// reading it here is a change of its own, and the test that pins today's
-// answer is the one that moves when it lands.
+// section 6 does not infer it from the stored report: Reported is not
+// Complete, and the lifecycle's Reported to Complete edge asks for findings
+// relayed and decisions recorded as well as the cleanup proof. internal/tasks'
+// CleanUp verifies the report and its holds before it writes the cleanup
+// record, but "findings relayed" has no record this package reads, so
+// rather than derive Complete from the cleanup record and the report, the
+// tier declines, and a reported investigation whose copy was removed stays
+// Reported from the report tier below.
 //
+// # The report tier
+//
+// PRD section 6 puts a stored report between the run and the terminal: an
+// investigation task with a stored report resolves Reported from
+// SourceReport, whether its terminal is Live, Dead or Unobserved. The fact
+// is internal/store's task_report row, carried on TaskSnapshot as the
+// instant it was written, and never the "report-ready" history entry that
+// store.StoreTaskReport appends in the same transaction: the two cannot
+// disagree, and the row is the record, so the answer does not rest on a line
+// of the log (P8). An entry the worker appends after its report does not
+// move the task off Reported; one that claims a state of its own is listed
+// in Superseded. The tier sits below the hold tier, so while a decision the
+// report raised is open the task reads Held, and Reported once it is
+// answered; and below the run tier, which an investigation does not reach
+// in this build because it pushes nothing. A delivery task is not read by
+// it, so a promoted investigation, which keeps its report row, resolves on
+// the delivery tiers. Reported is not progress, so the supervisor absorbs
+// nothing on it, and internal/supervisor's tables decide what it owes:
+// Reported is not in flight on its state alone, and its terminal is not
+// read for a terminal-gone wake.
+
 // # The hold tier
 //
 // The second tier is an open hold naming the task, which resolves Held with
 // SourceHold: the task is waiting on a person. It sits below the terminal
 // tier, so Landed and Complete still outrank it, and above the whole run
-// tier, so a task waiting on a person never resolves Failed or Unknown, and
-// does not resolve Validating or Ready either while the hold is open. The
+// tier and the report tier, so a task waiting on a person never resolves
+// Failed or Unknown, and does not resolve Validating, Ready or Reported
+// either while the hold is open. The
 // holds are internal/store's, carried on TaskSnapshot, which already reads
 // every hold naming the task in the snapshot's own transaction; no record
 // is added and nothing here learns what a hold's key means. The producers in
@@ -115,7 +129,7 @@
 //     through internal/service's terminal seam by every Reader that service
 //     builds, so a launched task reads Running from this tier on the task
 //     surface while its worker runs, and Unknown from it once the worker is
-//     gone with no run attributed. A probe's answer is as of the probe,
+//     gone with no run and no stored report. A probe's answer is as of the probe,
 //     taken after the records were read, and a terminal may change
 //     afterwards. Live means the agent process is running; a probe that
 //     cannot tell an agent from the shell left in its pane would answer
@@ -181,5 +195,11 @@
 //     An answer does not release that successor itself: Release runs where
 //     internal/service calls it, when a run finishes and at open, and that
 //     package's releaseQueued says the answer is not one of those sites.
+//   - The log still claims Reported from a "report-ready" entry where no
+//     tier above it answered, which for an investigation means an entry
+//     with no report row beside it. store.StoreTaskReport is the one writer
+//     of that kind in this build and writes both in one transaction, so no
+//     production path reaches it; store.AppendTaskEvent would record the
+//     word for any in-process caller, as the Row.Writer gap above says.
 //   - A Reader loads a task's whole log for each read.
 package taskstate

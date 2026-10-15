@@ -62,6 +62,16 @@ import (
 // from the marker it last advanced to, so the events of its return are
 // classified then.
 //
+// A watched task's terminal is read only where supervisor.TerminalWatched
+// says so, which is every state but Reported. A task that resolves Reported
+// from its stored report is watched while it has a queued wake, so its
+// events past the marker are still read, but its terminal is not: PRD
+// section 6 has the report outrank the terminal, so a worker that ends after
+// filing is the work finishing, and no terminal-gone wake is made for it,
+// nor a terminal-unchanged one for a worker still running after it filed.
+// What the report raised reaches the queue as its holds, which the first
+// detection above makes for every task.
+//
 // # Terminal gone is three facts
 //
 // A terminal the pass could not observe is terminal gone, which surfaces
@@ -515,7 +525,8 @@ func (s *Service) superviseTask(c *incarnation, o taskstate.Observed, probes map
 	if n := len(o.Snapshot.Attempts); n > 0 {
 		obs.ref, _ = o.Snapshot.Attempts[n-1].SessionRef.Get()
 	}
-	if obs.watched && obs.ref != "" {
+	obs.terminal, _ = supervisor.TerminalWatched(o.State.State)
+	if obs.watched && obs.terminal && obs.ref != "" {
 		obs.screen, obs.gone = s.readTerminal(c, obs.ref, probes[obs.ref])
 	}
 	d := decide(obs, s.cfg, now, providerWideSurfaced)
@@ -598,6 +609,12 @@ type observation struct {
 	// again. The table is the owner of that fact; it is read for existence
 	// and never for what is true of the task now.
 	surfaced map[string]bool
+	// terminal is whether the task's terminal is read at all, which
+	// supervisor.TerminalWatched decides from the resolved state: false for
+	// a task that resolves Reported, whose stored report outranks its
+	// terminal, so no terminal-gone or terminal-unchanged wake is made for
+	// it however its terminal reads.
+	terminal bool
 	// ref is the latest attempt's session reference, empty when it has
 	// none.
 	ref string
@@ -694,6 +711,9 @@ func decide(o observation, cfg config.Config, now time.Time, providerWideSurface
 	}
 	d.advance.EventSequence = max(o.markers.EventSequence, o.observed.State.Basis.EventSequence)
 	d.write = true
+	if !o.terminal {
+		return d
+	}
 
 	if o.gone != "" {
 		since, ok := o.markers.UnobservedSince.Get()
