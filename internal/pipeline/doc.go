@@ -454,6 +454,26 @@
 // already a note by the time Fixable is asked, and the fix loop cannot be
 // entered by one.
 //
+// # Credentials leave a report where P3 lands
+//
+// The stage node is the one writer of a stage's report key, so it is also
+// where every string a report carries passes internal/redact, before Normalize
+// and before Validate. A fix round's summary and the holds it raises pass it
+// where the fix node and the request node write them. Graph state, every
+// checkpoint of it, and every answer read off it then hold the redacted text.
+// The remover is internal/redact's; record.go only places the call.
+//
+// That is not every text this package puts in state. A key a stage or a
+// fixer declares in its own writes is recorded as given, and so is a person's
+// fix request. An error a body returns is not a report and does not pass
+// here. A checkpoint written before this rule existed keeps what it recorded.
+//
+// State is what the convergence bound compares, and redaction is a pure
+// function of its input, so the same report always records the same text.
+// What it changes is that two reports differing only inside a credential
+// record the same text, and a round that changed nothing else changes no
+// state, so the bound fires there.
+//
 // # What this package does not promise
 //
 // The intent stage never blocking a run is owed by the intent stage

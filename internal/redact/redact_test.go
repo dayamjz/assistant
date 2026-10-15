@@ -145,3 +145,26 @@ func TestTheWordBearerInProseIsLeftAlone(t *testing.T) {
 		}
 	}
 }
+
+// Redacting text that was already redacted changes nothing. internal/pipeline
+// records a fix round's holds through Redact and then records them again
+// inside the stage's report, and it finds the round's own hold by comparing
+// the two, so a second pass that moved the text would lose that hold.
+func TestRedactingWhatWasRedactedChangesNothing(t *testing.T) {
+	t.Parallel()
+	texts := []string{
+		"https://user:s3cr3t@example.com/repo.git",
+		"https://ghp_abcdef@github.com/o/r.git and ssh://git@example.com/r.git",
+		"Authorization: Bearer abcdefgh12345678\nnext line",
+		"authorization = Basic dXNlcjpwYXNz",
+		"the token was Bearer abcdefgh12345678 in the log",
+		"a bearer of bad news and nothing else",
+	}
+	r := redact.New()
+	for _, text := range texts {
+		once := r.Redact(text)
+		if twice := r.Redact(once); twice != once {
+			t.Errorf("redacting %q gave %q, and redacting that again gave %q", text, once, twice)
+		}
+	}
+}

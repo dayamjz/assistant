@@ -72,10 +72,16 @@ func stageNode(stage Stage, impl Implementation, fixed bool) graph.Node {
 					}
 					out.Report.Findings = append(out.Report.Findings, held...)
 				}
+				// This is the one write of a stage's report into state, so
+				// it is where every report's text passes internal/redact on
+				// its way to the checkpoint and to every answer read off it.
+				// It runs first so that what Normalize derives and what
+				// Validate quotes are both made from the redacted text.
+				//
 				// Normalizing here is where P3 lands for every stage at once:
 				// a finding with a missing, empty, or unrecognized action
 				// becomes ask, and classify then holds the stage for it.
-				report := out.Report.Normalize()
+				report := redactedReport(out.Report).Normalize()
 				if err := report.Validate(); err != nil {
 					return fmt.Errorf("%w: %s: %w", ErrUnusableReport, stage, err)
 				}
@@ -227,7 +233,7 @@ func fixNode(stage Stage, fixer Fixer) graph.Node {
 				if err != nil {
 					return err
 				}
-				if err := w.Set(string(stage.FixKey()), graph.TextValue(out.Summary)); err != nil {
+				if err := w.Set(string(stage.FixKey()), graph.TextValue(redactedText(out.Summary))); err != nil {
 					return err
 				}
 				if err := w.Set(string(stage.HeldKey()), graph.TextValue(held)); err != nil {
@@ -327,11 +333,14 @@ func requestNode(stage Stage, fixer Fixer) graph.Node {
 				if err != nil {
 					return err
 				}
-				held, err := encodeHolds(stage, append(out.Holds, requestedHold(stage, out.Summary, changed)))
+				// The hold quotes the summary as it is recorded, so
+				// FixReviewFinding can render it again from the fix key.
+				account := redactedText(out.Summary)
+				held, err := encodeHolds(stage, append(out.Holds, requestedHold(stage, account, changed)))
 				if err != nil {
 					return err
 				}
-				if err := w.Set(string(stage.FixKey()), graph.TextValue(out.Summary)); err != nil {
+				if err := w.Set(string(stage.FixKey()), graph.TextValue(account)); err != nil {
 					return err
 				}
 				if err := w.Set(string(stage.HeldKey()), graph.TextValue(held)); err != nil {
@@ -409,9 +418,11 @@ func FixReviewFinding(s graph.State, stage Stage) (string, bool, error) {
 		return "", false, nil
 	}
 	summary, _ := summaryValue.Text()
+	// encodeHolds recorded the hold through redactedText, so it is compared
+	// as recorded rather than as rendered.
 	last := strings.TrimSpace(held[len(held)-1].Description)
-	if last != strings.TrimSpace(requestedHold(stage, summary, true).Description) &&
-		last != strings.TrimSpace(requestedHold(stage, summary, false).Description) {
+	if last != strings.TrimSpace(redactedText(requestedHold(stage, summary, true).Description)) &&
+		last != strings.TrimSpace(redactedText(requestedHold(stage, summary, false).Description)) {
 		return "", false, nil
 	}
 	report, err := StageReport(s, stage)
@@ -450,7 +461,10 @@ func changesState(r graph.Reader, permitted map[Key]struct{}, writes map[Key]gra
 }
 
 // encodeHolds renders what a fix round raised for its stage's next execution.
-// Every hold is normalized first, so P3 makes a missing or unrecognized action
+// Every hold passes internal/redact first, through redactedFindings, because
+// what this returns is recorded in state as it stands and not only once the
+// stage's report takes it in. Every hold is then normalized, so P3 makes a
+// missing or unrecognized action
 // an ask, and anything that is still not an ask is refused: a fixer may hold
 // its stage and may say nothing else about it. Identifiers are dropped, because
 // the stage's report assigns them when it is normalized and a fixer's own
@@ -461,7 +475,7 @@ func encodeHolds(stage Stage, holds []findings.Finding) (string, error) {
 		return "", nil
 	}
 	normalized := make([]findings.Finding, len(holds))
-	for i, hold := range findings.NormalizeFindings(holds) {
+	for i, hold := range findings.NormalizeFindings(redactedFindings(holds)) {
 		if !hold.Holds() {
 			return "", fmt.Errorf("%w: the %s stage's fix round raised %q with action %q",
 				ErrFixerFinding, stage, hold.Description, hold.Action)
