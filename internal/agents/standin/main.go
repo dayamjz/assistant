@@ -207,7 +207,12 @@ func serveWorker(control string, args []string) int {
 			if !exchange.answers(line) {
 				continue
 			}
-			if _, err := fmt.Fprintln(os.Stdout, exchange.Reply); err != nil {
+			reply, err := exchange.answer(line)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "standin: "+err.Error())
+				return exitNoOutput
+			}
+			if _, err := fmt.Fprintln(os.Stdout, reply); err != nil {
 				fmt.Fprintln(os.Stderr, "standin: writing a reply: "+err.Error())
 				return exitNoOutput
 			}

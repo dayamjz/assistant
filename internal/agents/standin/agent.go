@@ -91,6 +91,13 @@ func newAgent(tb testing.TB, script Script, probeFlag string, build factory, opt
 // prepare creates the control directory and writes the script into it.
 func prepare(tb testing.TB, script Script) string {
 	tb.Helper()
+	if script.Worker != nil {
+		for i, exchange := range script.Worker.Exchanges {
+			if err := exchange.valid(); err != nil {
+				tb.Fatalf("standin: worker exchange %d: %v", i, err)
+			}
+		}
+	}
 	control := tb.TempDir()
 	for _, dir := range []string{callsPath(control), usesPath(control)} {
 		if err := os.Mkdir(dir, 0o700); err != nil {

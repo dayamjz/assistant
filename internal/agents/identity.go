@@ -17,8 +17,9 @@ var ErrIdentityUnreadable = errors.New("agents: this platform has no process sta
 // one owner: internal/session embeds one in a terminal session's reference,
 // and the run process record internal/store keeps carries one.
 //
-// Start is compared for equality only and carries no other meaning. It is
-// read per platform: Linux from the process's stat entry in clock ticks
+// Identify and Identity.Presence compare Start for equality only, and
+// Lineage's doc states the one ordering it is also read for. It is read per
+// platform: Linux from the process's stat entry in clock ticks
 // since boot, macOS from the kernel's process table in microseconds since
 // the epoch, Windows from the process's creation time in 100-nanosecond
 // intervals since the Windows epoch. A process that exits and whose

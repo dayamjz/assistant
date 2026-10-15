@@ -163,14 +163,14 @@ assistant coordinator acknowledge 12 13     # the ids you handled
   never recorded as read, and `message-unacknowledged` wakes arrive for it
   anyway; check the work before resending. An investigation cannot file its
   report, so it never resolves as reported.
-- **A real worker's commands may not be placed as the worker's (#225).** The
-  service decides who is a worker from the caller's process group, and
-  #225 records a Claude Code worker whose git ran outside its worker's
-  group. A call from outside every worker group is placed as the
-  coordinator's and served, so the refusal is not established for such a
-  worker. A worker's grant allows git without asking and denies nothing
-  else. The refusal is tested against a process placed in a worker's group,
-  not against a real worker.
+- **An orphaned command is placed as yours.** The service decides who is a
+  worker by walking the caller's parent chain to the first process in a
+  worker group, or that is itself a worker, so a worker's command in a
+  process group of its own is still refused. A chain the service cannot
+  read is refused too. What it cannot place is a command whose parent
+  exited, so the kernel moved it under another process: that call is placed
+  as the coordinator's and served. A worker's grant allows git without
+  asking and denies nothing else.
 - **No interrupt.** The service refuses `task.interrupt` on every call,
   because no adapter declares what it needs, so the client offers none.
   Stop the worker instead.

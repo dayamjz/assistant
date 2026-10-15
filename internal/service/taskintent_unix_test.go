@@ -26,9 +26,10 @@ import (
 // branch does not.
 //
 // The worker is the stand-in in worker mode, launched by the service for a
-// dispatched task, and the push is git run inside its process group, so the
-// worker relation is the one the service derives from the kernel's
-// credentials. The run walks the real intent, rebase, review and pull
+// dispatched task, and the push is git the worker runs in a process group
+// of its own, as a real worker's runs, so the worker relation is the one the
+// service derives from the kernel's credentials by walking the pushing
+// process's parent chain. The run walks the real intent, rebase, review and pull
 // request stages, the review over the scripted reviewer and the pull request
 // over the scripted provider; the other five are stages that report and
 // pass, so the walk reaches the pull request without a person answering
@@ -107,18 +108,19 @@ func TestAWorkersPushCarriesItsTasksIntentAndAPersonsDoesNot(t *testing.T) {
 	}
 
 	withServiceOptions(t, o, func(running serviceUnderTest) {
-		sessions, launched := launchedSession(t, running.service, task)
-		waitCapture(t, sessions, launched, "worker ready")
-		group := launched.Reference().PID
+		sessions, held := launchedSession(t, running.service, task)
+		waitCapture(t, sessions, held, "worker ready")
+		w := launched{running: running, home: h, task: task, group: held.Reference().PID,
+			provider: sessions, session: held}
 		copyPath := resolvedCopy(t, h, task)
 		quietMaintenance(t, copyPath)
 		if err := os.WriteFile(filepath.Join(copyPath, "images.txt"), []byte("capped\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		mustGitAs(t, group, copyPath, "add", "-A")
-		mustGitAs(t, group, copyPath, "commit", "--quiet", "-m", "cap the images")
-		head := mustGitAs(t, group, copyPath, "rev-parse", "HEAD")
-		if out, err := gitAs(t, group, copyPath, "push", gate.RemoteName, branch); err != nil {
+		mustGitAs(t, w, copyPath, "add", "-A")
+		mustGitAs(t, w, copyPath, "commit", "--quiet", "-m", "cap the images")
+		head := mustGitAs(t, w, copyPath, "rev-parse", "HEAD")
+		if out, err := gitAs(t, w, copyPath, "push", gate.RemoteName, branch); err != nil {
 			t.Fatalf("the worker's push of its own branch was refused:\n%s", out)
 		}
 
@@ -184,7 +186,7 @@ func TestAWorkersPushCarriesItsTasksIntentAndAPersonsDoesNot(t *testing.T) {
 // "task", and not the investigation instructions intake wrote: the
 // investigation is launched by the service, promoted through task.promote
 // from outside every worker group with an intent carrying a credential, and
-// its worker pushes the promoted branch from inside its process group
+// its worker pushes the promoted branch, from a process group of its own,
 // through the real gate hooks. The run's record carries the project and the
 // delivery intent with the credential redacted, and neither the intake text
 // nor anything of the section promotion appended to the instructions file.

@@ -95,3 +95,25 @@ func commandName(id Identity) (string, error) {
 	}
 	return name, nil
 }
+
+// lineage reads the parent and the process group from the same stat entry
+// startTime reads: field 4 and field 5, after the command name.
+func lineage(pid int) (Lineage, bool, error) {
+	fields, found, err := statFields(pid)
+	if err != nil || !found {
+		return Lineage{}, false, err
+	}
+	start, running, err := startOf(pid, fields)
+	if err != nil || !running {
+		return Lineage{}, false, err
+	}
+	parent, err := strconv.Atoi(fields[1])
+	if err != nil {
+		return Lineage{}, false, fmt.Errorf("agents: /proc/%d/stat parent %q: %w", pid, fields[1], err)
+	}
+	group, err := strconv.Atoi(fields[2])
+	if err != nil {
+		return Lineage{}, false, fmt.Errorf("agents: /proc/%d/stat process group %q: %w", pid, fields[2], err)
+	}
+	return Lineage{Identity: Identity{PID: pid, Start: start}, Parent: parent, Group: group}, true, nil
+}

@@ -80,6 +80,35 @@ type Exchange struct {
 	// worker produces and the one a liveness probe has to tell from a
 	// worker that was ended by its caller.
 	Ends bool `json:"ends,omitempty"`
+	// Run makes the worker run a shell command before it answers: the rest
+	// of the line after the first occurrence of Contains, which must
+	// therefore be set, given to /bin/sh -c in the worker's own working
+	// directory, in a process group of its own that the worker does not
+	// lead, which is the shape #225 observed of a command the Claude Code
+	// CLI's Bash tool runs. The worker waits for the command and answers
+	// with its Ran, encoded as one line of JSON, in place of Reply, which
+	// must therefore be empty; a script breaking either rule is refused when
+	// the Agent is built. The command's standard input is empty. runCommand
+	// says what it does not model.
+	Run bool `json:"run,omitempty"`
+}
+
+// Ran is what a worker answers for a line a Run exchange took: the command
+// it ran, how that ended, what it wrote, and the process group it ran in, as
+// the worker read it from the operating system. A test decodes it from the
+// worker's output, which is the only place it exists.
+type Ran struct {
+	// Command is the command as the worker gave it to the shell.
+	Command string `json:"ran"`
+	// Exit is the shell's exit status, or -1 when it did not start or was
+	// ended by a signal.
+	Exit int `json:"exit"`
+	// Stdout and Stderr are what the command wrote to each.
+	Stdout string `json:"stdout"`
+	Stderr string `json:"stderr"`
+	// Group is the process group the shell ran in, read while it ran, and
+	// zero where this platform reports none.
+	Group int `json:"group"`
 }
 
 // answers reports whether this exchange accepts the line.
