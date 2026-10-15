@@ -235,7 +235,7 @@ resolves an agent, so restart the service after changing it.
 Each worker then runs as the one process of a tmux server of its own, on a
 socket under the home's `terminals` directory, started with no tmux
 configuration file. `assistant --json coordinator peek ID` reads the worker's
-recent output, redacted and cut to the last 16 KiB, and its `attach` field is
+recent output as a transcript, redacted and bounded to 16 KiB, and its `attach` field is
 the command that attaches you:
 
 ```sh

@@ -92,7 +92,7 @@ func (r *scriptedRunner) Start(ctx context.Context, spec WorkerSpec) (Worker, er
 		env:    WorkerEnvironment(r.settings.base, spec.Env),
 		grace:  r.settings.grace,
 		maxOut: r.settings.maxOut,
-	}, spec.Instructions, plainLine)
+	}, spec.Instructions, plainLine, OutputText)
 	if err != nil {
 		return nil, err
 	}

@@ -32,6 +32,9 @@ import (
 //
 // # A message is a record first
 //
+// What follows is deliverMessage's, which task.message and a promotion's
+// brief (coordinator.go's briefPromoted) both send through.
+//
 // task.message reads the task's latest attempt, appends the message record
 // naming that attempt through store.AppendMessage, which removes credentials
 // from the text, and then sends what the record holds, under a heading
@@ -259,25 +262,44 @@ func (s *Service) messageTask(ctx context.Context, req ipc.Request, r machine.Ta
 	if !ok || !launched {
 		return machine.TaskMessaged{}, fmt.Errorf("%w: %w: task %s", ipc.ErrRefused, errNoWorker, r.Task)
 	}
-	m, err := s.store.AppendMessage(ctx, r.Task, latest.Sequence, r.Text, req.MessageSender())
+	m, err := s.deliverMessage(ctx, req, r.Task, latest.Sequence, ref, r.Text)
+	var refused *messageRefused
+	if errors.As(err, &refused) {
+		return machine.TaskMessaged{}, fmt.Errorf("%w: %w", ipc.ErrRefused, err)
+	}
 	if err != nil {
 		return machine.TaskMessaged{}, err
 	}
-	if sendErr := s.sendMessage(ctx, r.Task, ref, framedMessage(m)); sendErr != nil {
+	return machine.TaskMessaged{Message: m, Delivery: m.Delivery(), SentBy: m.SentBy.String()}, nil
+}
+
+// deliverMessage is a message's record and send, on the file comment's
+// terms, for every caller that sends a worker text: task.message, and a
+// promotion's brief. It appends the record naming the attempt, sends what
+// the record holds framed by framedMessage to the worker ref names, and
+// records the send's answer once. It returns the record written, or the
+// record refused inside a *messageRefused, or an error from a record that
+// could not be read or written, beside whatever record it had by then.
+func (s *Service) deliverMessage(ctx context.Context, req ipc.Request, task string, attempt int64, ref, text string) (store.Message, error) {
+	m, err := s.store.AppendMessage(ctx, task, attempt, text, req.MessageSender())
+	if err != nil {
+		return store.Message{}, err
+	}
+	if sendErr := s.sendMessage(ctx, task, ref, framedMessage(m)); sendErr != nil {
 		refused, err := s.store.MarkMessageRefused(ctx, m.ID, sendErr.Error())
 		if err != nil {
-			return machine.TaskMessaged{}, fmt.Errorf("service: message %d to task %s was not written (%w) and that could not be recorded: %w",
-				m.ID, r.Task, sendErr, err)
+			return m, fmt.Errorf("service: message %d to task %s was not written (%w) and that could not be recorded: %w",
+				m.ID, task, sendErr, err)
 		}
-		s.log.Printf("message %d to task %s attempt %d from %s was refused: %v", m.ID, r.Task, latest.Sequence, peerOf(req), sendErr)
-		return machine.TaskMessaged{}, fmt.Errorf("%w: %w", ipc.ErrRefused, &messageRefused{Message: refused})
+		s.log.Printf("message %d to task %s attempt %d from %s was refused: %v", m.ID, task, attempt, peerOf(req), sendErr)
+		return refused, &messageRefused{Message: refused}
 	}
 	written, err := s.store.MarkMessageWritten(ctx, m.ID)
 	if err != nil {
-		return machine.TaskMessaged{}, fmt.Errorf("service: message %d to task %s was written and that could not be recorded: %w", m.ID, r.Task, err)
+		return m, fmt.Errorf("service: message %d to task %s was written and that could not be recorded: %w", m.ID, task, err)
 	}
-	s.log.Printf("message %d was written to the worker of task %s attempt %d by %s", m.ID, r.Task, latest.Sequence, peerOf(req))
-	return machine.TaskMessaged{Message: written, Delivery: written.Delivery(), SentBy: written.SentBy.String()}, nil
+	s.log.Printf("message %d was written to the worker of task %s attempt %d by %s", m.ID, task, attempt, peerOf(req))
+	return written, nil
 }
 
 // sendMessage writes text to the worker this service holds for the task,

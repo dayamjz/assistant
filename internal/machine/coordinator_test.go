@@ -3,6 +3,7 @@ package machine_test
 import (
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/machine/vocabtest"
@@ -26,11 +27,14 @@ func TestEveryCoordinatorAnswerReadsAsAListedRow(t *testing.T) {
 		t.Fatal("the control row nobody listed reads as listed, so the membership check checks nothing")
 	}
 	behind := machine.TaskCreated{Record: store.Task{BlockerTask: store.Known("abcdefghij23")}}
+	briefed := machine.TaskPromoted{Brief: machine.Briefing{Message: &store.Message{WrittenAt: store.Known(time.Now())}}}
+	refused := machine.TaskPromoted{Brief: machine.Briefing{Message: &store.Message{RefusedAt: store.Known(time.Now())}, Unsent: "refused"}}
 	queue := machine.Wakes{Wakes: []store.Wake{{ID: 1}, {ID: 2}}}
 	rows := map[string]machine.Phrase{
 		"created":      machine.TaskCreatedPhrase(machine.TaskCreated{}),
 		"behind":       machine.TaskCreatedPhrase(behind),
 		"promoted":     machine.TaskPromotedPhrase(machine.TaskPromoted{}),
+		"briefed":      machine.TaskPromotedPhrase(briefed),
 		"relaunched":   machine.TaskRelaunchedPhrase(machine.TaskRelaunched{}),
 		"no notices":   machine.WakesPhrase(machine.Wakes{}),
 		"acknowledged": machine.AcknowledgedPhrase(machine.Acknowledged{Wakes: []int64{1}}),
@@ -47,6 +51,9 @@ func TestEveryCoordinatorAnswerReadsAsAListedRow(t *testing.T) {
 	vocabtest.Assert(t, counted.String())
 	if counted == rows["no notices"] || !slices.Contains(listed, machine.WakesPhrase(machine.Wakes{Wakes: make([]store.Wake, 1)})) {
 		t.Errorf("a queue with notices reads %q, and the table must list its row apart from the empty queue's", counted)
+	}
+	if rows["promoted"] == rows["briefed"] || machine.TaskPromotedPhrase(refused) != rows["promoted"] {
+		t.Errorf("a brief written reads %q, and one refused or never sent must read apart from it", rows["briefed"])
 	}
 	if rows["created"] == rows["behind"] {
 		t.Errorf("a task recorded behind a blocker reads the same as one a worker is begun for: %q", rows["created"])

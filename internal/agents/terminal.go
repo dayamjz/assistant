@@ -498,7 +498,7 @@ func (w *tmuxWorker) Capture() Capture {
 		dropped = over
 		text = text[over:]
 	}
-	w.last = Capture{Text: text, Dropped: dropped, Uncounted: uncounted}
+	w.last = Capture{Text: text, Dropped: dropped, Uncounted: uncounted, Format: OutputText}
 	return w.last
 }
 

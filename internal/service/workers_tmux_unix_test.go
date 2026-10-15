@@ -201,7 +201,8 @@ func TestARestartUnderTmuxRelaunchesADeadTerminalInPlace(t *testing.T) {
 
 // task.peek under the tmux provider: the coordinator reads the worker's
 // recent output with the command a person attaches with, redacted before it
-// is bounded, and bounded to machine.MaxPeekBytes with what was cut counted;
+// is abbreviated and bounded, within machine.MaxPeekBytes and with what an
+// abbreviation cut counted;
 // the worker itself is refused the read, and a person's window on the
 // worker's own server is served it, which is the placement rule above
 // applied to one more coordinator method.
@@ -229,9 +230,15 @@ func TestUnderTmuxAPeekIsTheCoordinatorsRedactedAndBounded(t *testing.T) {
 			t.Fatalf("task.peek's output does not carry the line the credential was in, so its absence proves nothing; it ends:\n%s",
 				peeked.Output[max(0, len(peeked.Output)-400):])
 		}
-		if len(peeked.Output) > machine.MaxPeekBytes || peeked.Dropped == 0 {
-			t.Fatalf("task.peek answered %d bytes with %d dropped, want at most %d and the rest counted",
-				len(peeked.Output), peeked.Dropped, machine.MaxPeekBytes)
+		// The command's answer is one line of many kilobytes, so what bounds
+		// it is the abbreviation, which says what it let go.
+		cut := false
+		for _, e := range peeked.Events {
+			cut = cut || strings.HasSuffix(e.Text, "bytes more)")
+		}
+		if len(peeked.Output) > machine.MaxPeekBytes || !cut {
+			t.Fatalf("task.peek answered %d bytes with no event saying what it cut, want at most %d and the cut counted",
+				len(peeked.Output), machine.MaxPeekBytes)
 		}
 		host := w.provider.(session.Host)
 		raw, err := host.CaptureReference(t.Context(), w.session.Reference().String())

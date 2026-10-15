@@ -12,8 +12,12 @@ import (
 )
 
 // answer is the line a worker prints for a line this exchange took: Reply,
-// or for a Run exchange the Ran of the command the line carries.
+// the Recorded lines one after another, or for a Run exchange the Ran of the
+// command the line carries.
 func (e Exchange) answer(line string) (string, error) {
+	if len(e.Recorded) > 0 {
+		return strings.Join(e.Recorded, "\n"), nil
+	}
 	if !e.Run {
 		return e.Reply, nil
 	}
@@ -27,8 +31,20 @@ func (e Exchange) answer(line string) (string, error) {
 
 // valid refuses an exchange whose Run cannot be answered as Run says: one
 // with no Contains to find the command after, and one with a Reply the Ran
-// would replace.
+// would replace; and one whose Recorded lines cannot be played back as
+// Recorded says: beside a Reply or a Run they would replace, or carrying a
+// line with a newline in it.
 func (e Exchange) valid() error {
+	if len(e.Recorded) > 0 {
+		if e.Reply != "" || e.Run {
+			return errors.New("an exchange playing Recorded lines prints them in place of a Reply or a Run, so it may have neither")
+		}
+		for i, line := range e.Recorded {
+			if strings.Contains(line, "\n") {
+				return fmt.Errorf("recorded line %d carries a newline, so it would print as two", i)
+			}
+		}
+	}
 	if !e.Run {
 		return nil
 	}

@@ -5,8 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"unicode/utf8"
 
+	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/ipc"
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/redact"
@@ -37,14 +37,20 @@ import (
 // the provider still holds of it: a pipe worker's retained output, and a
 // tmux worker's last screen.
 //
-// # Redacted, then bounded
+// # Read as a transcript, redacted, abbreviated, then bounded
 //
-// The capture passes through internal/redact first and is cut to
-// machine.MaxPeekBytes from the end afterwards, at a character boundary.
-// The order is the point: a cut made first could leave half of a
-// credential at the front of what is kept, in a shape the redactor no
-// longer recognizes. What was cut is counted in Dropped beside what the
-// provider's own bound let go.
+// The capture is read as events by agents.ReadTranscript, in the format the
+// worker's adapter reported, so a Claude Code worker's stream-json reads as
+// its text, its tool calls and their results, with the counters and status
+// lines left out and counted, and anything the decoder has no row for shown
+// as a one-line marker rather than dropped. Each event's text then passes
+// through internal/redact, is abbreviated by Abbreviated, and the most
+// recent events whose rendering fits in machine.MaxPeekBytes are kept, the
+// rest counted in Earlier. The order is the point: a cut made before
+// redaction could leave half of a credential in what is kept, in a shape the
+// redactor no longer recognizes. The bound is on what is shown; what is read
+// is the provider's capture, bounded by the agent runner's output limit,
+// with what it let go counted in Dropped.
 //
 // # Residual gaps
 //
@@ -53,7 +59,10 @@ import (
 //   - The output is the coordinator's to read. The person-facing rendering
 //     carries none of it, which internal/machine's PeekPhrase states, but a
 //     caller reading the structured answer gets it as the worker wrote it,
-//     after redaction.
+//     after redaction and abbreviation.
+//   - A credential that redaction would recognize only across two events,
+//     or across the text and the tool of one, is not recognized, because
+//     each string is redacted on its own.
 
 // errNotPeekable is task.peek's refusal of a worker this service holds no
 // session for under the latest attempt's reference.
@@ -93,28 +102,60 @@ func (s *Service) peekTask(ctx context.Context, req ipc.Request, r machine.TaskR
 	case err != nil:
 		return machine.TaskPeek{}, fmt.Errorf("%w: %w (session %s)", ipc.ErrRefused, errNotPeekable, ref)
 	}
-	output, cut := boundTail(redact.New().Redact(captured.Text), machine.MaxPeekBytes)
+	transcript := agents.ReadTranscript(captured.Text, captured.Format, captured.Dropped > 0)
+	events, earlier := boundEvents(shownEvents(transcript.Events), machine.MaxPeekBytes)
 	return machine.TaskPeek{
 		Task:      r.Task,
 		Attempt:   latest.Sequence,
 		Session:   ref,
 		Liveness:  string(s.terminals.Probe(ctx, ref).Liveness),
-		Output:    output,
-		Dropped:   captured.Dropped + cut,
+		Output:    renderEvents(events),
+		Events:    events,
+		Earlier:   earlier,
+		Omitted:   transcript.Omitted,
+		Dropped:   captured.Dropped,
 		Uncounted: captured.Uncounted,
 		Attach:    attach,
 	}, nil
 }
 
-// boundTail keeps at most limit bytes from the end of text, starting at a
-// character boundary, and reports how many bytes it cut.
-func boundTail(text string, limit int) (string, int64) {
-	if len(text) <= limit {
-		return text, 0
+// shownEvents is every event redacted and then abbreviated, in that order,
+// on the file comment's terms.
+func shownEvents(events []agents.TranscriptEvent) []agents.TranscriptEvent {
+	redactor := redact.New()
+	out := make([]agents.TranscriptEvent, len(events))
+	for i, e := range events {
+		e.Tool = redactor.Redact(e.Tool)
+		e.Text = redactor.Redact(e.Text)
+		out[i] = e.Abbreviated()
 	}
-	start := len(text) - limit
-	for start < len(text) && !utf8.RuneStart(text[start]) {
-		start++
+	return out
+}
+
+// boundEvents keeps the most recent events whose rendering, one line each
+// as renderEvents writes it, fits in limit bytes, and reports how many
+// earlier ones it left out.
+func boundEvents(events []agents.TranscriptEvent, limit int) ([]agents.TranscriptEvent, int) {
+	size := 0
+	start := len(events)
+	for start > 0 {
+		next := len(events[start-1].Line()) + 1
+		if size+next > limit {
+			break
+		}
+		size += next
+		start--
 	}
-	return text[start:], int64(start)
+	return events[start:], start
+}
+
+// renderEvents is the events as a person reads them, each Line followed by
+// a newline.
+func renderEvents(events []agents.TranscriptEvent) string {
+	var b strings.Builder
+	for _, e := range events {
+		b.WriteString(e.Line())
+		b.WriteByte('\n')
+	}
+	return b.String()
 }
