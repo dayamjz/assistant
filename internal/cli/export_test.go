@@ -31,5 +31,8 @@ func Subcommands() map[string][][2]string {
 	for _, hook := range hostHooks {
 		out[hostVerbName] = append(out[hostVerbName], [2]string{hook.name, hook.summary})
 	}
+	for _, action := range coordinatorActions {
+		out[coordinatorVerbName] = append(out[coordinatorVerbName], [2]string{action.name, action.summary})
+	}
 	return out
 }

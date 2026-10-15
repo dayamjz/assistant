@@ -13,6 +13,7 @@ import (
 	"github.com/dayamjz/assistant/internal/machine"
 	"github.com/dayamjz/assistant/internal/pipeline"
 	"github.com/dayamjz/assistant/internal/store"
+	"github.com/dayamjz/assistant/internal/supervisor"
 )
 
 // readOut writes an answer for a person.
@@ -250,6 +251,30 @@ var renderings = []rendering{
 	{name: "catch up", voice: VoicePhrased, of: typeOf[machine.CatchUp](), render: func(w io.Writer, v any) { readOutCatchUp(w, v.(machine.CatchUp)) }},
 	{name: "marked seen", voice: VoicePhrased, of: typeOf[machine.Marked](), render: func(w io.Writer, v any) {
 		writeln(w, machine.MarkedPhrase(v.(machine.Marked)))
+	}},
+	{name: "task created", voice: VoicePhrased, of: typeOf[machine.TaskCreated](), render: func(w io.Writer, v any) {
+		writeln(w, machine.TaskCreatedPhrase(v.(machine.TaskCreated)))
+	}},
+	{name: "task message", voice: VoicePhrased, of: typeOf[machine.TaskMessaged](), render: func(w io.Writer, v any) {
+		writeln(w, machine.MessagePhrase(v.(machine.TaskMessaged).Message))
+	}},
+	{name: "task stop", voice: VoicePhrased, of: typeOf[machine.TaskStopped](), render: func(w io.Writer, v any) {
+		writeln(w, machine.StopPhrase(v.(machine.TaskStopped)))
+	}},
+	{name: "task relaunch", voice: VoicePhrased, of: typeOf[machine.TaskRelaunched](), render: func(w io.Writer, v any) {
+		writeln(w, machine.TaskRelaunchedPhrase(v.(machine.TaskRelaunched)))
+	}},
+	{name: "task promotion", voice: VoicePhrased, of: typeOf[machine.TaskPromoted](), render: func(w io.Writer, v any) {
+		writeln(w, machine.TaskPromotedPhrase(v.(machine.TaskPromoted)))
+	}},
+	{name: "wakes", voice: VoicePhrased, of: typeOf[machine.Wakes](), render: func(w io.Writer, v any) {
+		writeln(w, machine.WakesPhrase(v.(machine.Wakes)))
+	}},
+	{name: "wakes acknowledged", voice: VoicePhrased, of: typeOf[machine.Acknowledged](), render: func(w io.Writer, v any) {
+		writeln(w, machine.AcknowledgedPhrase(v.(machine.Acknowledged)))
+	}},
+	{name: "supervision", voice: VoicePhrased, of: typeOf[supervisor.Arm](), render: func(w io.Writer, v any) {
+		writeln(w, machine.ArmPhrase(v.(supervisor.Arm)))
 	}},
 	usageRendering,
 }
@@ -675,13 +700,16 @@ func readOutLifecycle(w io.Writer, answer machine.Lifecycle) {
 // and the one fact here they may want to correct with --default-branch, after
 // internal/machine's row for where that answer came from, so a wrong one is
 // visible when it is written. The gate's identifier and where it lives are
-// the structured rendering's.
+// the structured rendering's. Then the command offer, through
+// readOutCommands, whose file name and commands are printed as machine text
+// beside its rows.
 func readOutInit(w io.Writer, answer machine.Init) {
 	writeln(w, machine.InitPhrase(answer))
 	if branch := answer.Repository.DefaultBranch; branch != "" {
 		writeln(w, machine.DefaultBranchPhrase(answer.DefaultBranchSource))
 		writef(w, "Default branch %s\n", printable(branch))
 	}
+	readOutCommands(w, answer.Commands)
 }
 
 // readOutPlan prints what custody found or did for the branch, beside the

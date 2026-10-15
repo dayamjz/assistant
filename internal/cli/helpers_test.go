@@ -27,8 +27,10 @@ import (
 
 // TestMain lets this binary act as the stand-in agent, which the service a
 // test opens resolves instead of whatever agent is installed on the machine
-// running the tests, as the command a gate's hooks invoke, and as a second
-// process holding a home's lock for the host hook's tests.
+// running the tests, as the command a gate's hooks invoke, as the
+// coordinator's client run from a process a test placed in a worker's
+// process group, and as a second process holding a home's lock for the host
+// hook's tests.
 func TestMain(m *testing.M) {
 	// The decision-model key is the operator's consent to send changed lines
 	// to a third party, so a test must never inherit one from whoever runs it.
@@ -51,10 +53,13 @@ func TestMain(m *testing.M) {
 //
 // It is the arrangement internal/agents/standin already uses for the same
 // reason, and it recognizes the invocation the same way: by what the command
-// line says. A test binary is never run with "gate" as its first argument by
-// the testing package.
+// line says. A test binary is never run with "gate" or "coordinator" as its
+// first argument by the testing package. The second is how a test reaches
+// the coordinator's client from a process of its own, which is the one way
+// the credentials the service reads can be a worker's rather than this
+// test's: see coordinator_unix_test.go.
 func hookMain() {
-	if len(os.Args) < 2 || os.Args[1] != "gate" {
+	if len(os.Args) < 2 || (os.Args[1] != "gate" && os.Args[1] != "coordinator") {
 		return
 	}
 	workingDir, err := os.Getwd()

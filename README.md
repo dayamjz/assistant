@@ -278,6 +278,7 @@ make check     # lint and test, what CI runs
 
 ```sh
 assistant init                 # create or repair this repository's gate
+assistant init --accept-commands   # also write the test and lint commands it detects into assistant.json
 assistant service start        # start the background service for this home
 git push assistant BRANCH      # hand a branch to the gate, which starts a run
 assistant                      # attach to this branch's run, or start one

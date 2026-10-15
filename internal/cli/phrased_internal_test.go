@@ -230,6 +230,18 @@ func fixtures(t *testing.T) map[string]any {
 			Gate:                machine.Gate{Present: true, ID: sampleID, Repository: filepath.Join(root, "repos", sampleID+".git")},
 			Repository:          store.Repository{ID: sampleID, WorkingPath: "/somewhere/parser", DefaultBranch: "main"},
 			DefaultBranchSource: machine.DefaultBranchFromOrigin,
+			// One command written and one only offered, each read out of a
+			// file whose name and whose stage words the rows must leave to
+			// the machine text beside them.
+			Commands: machine.CommandProposals{
+				File: "assistant.json",
+				Proposed: []machine.ProposedCommand{
+					{Key: "commands.test", Command: "make test", Source: "Makefile target test", Written: true},
+					{Key: "commands.lint", Command: "go vet ./...", Source: "go.mod"},
+				},
+				Configured: []string{"commands.document"},
+				Result:     machine.CommandsWritten,
+			},
 		},
 		"plan":      fixturePlan(),
 		"eject":     machine.Eject{Removed: true, Repository: sampleID, Runs: 2},
@@ -248,8 +260,34 @@ func fixtures(t *testing.T) map[string]any {
 			Relaunch: &machine.RelaunchBegun{Attempt: 3, Superseded: sampleID},
 			Task:     task,
 		},
-		"catch up":    fixtureCatchUp(),
-		"marked seen": machine.Marked{Marks: []store.SeenMark{{SeenRecord: store.SeenRecord{Kind: store.SeenMerge, Key: sampleID}}}},
+		"task created": machine.TaskCreated{
+			Record: store.Task{ID: sampleID, Shape: store.TaskDelivery, Project: "the parser",
+				WorktreePath: filepath.Join(root, "tasks", sampleID, "copy"), BlockerTask: store.Known(sampleID)},
+			Cause: "floor", BlockerState: taskstate.Running,
+			Instructions: filepath.Join(root, "tasks", sampleID, "instructions.md"),
+		},
+		"task message": machine.TaskMessaged{
+			Message: store.Message{ID: 4, TaskID: sampleID, Attempt: 1, Text: "carry on with the parser",
+				WrittenAt: store.Known(time.Date(2026, 10, 13, 9, 0, 0, 0, time.UTC))},
+			Delivery: store.DeliveryWritten, SentBy: "coordinator",
+		},
+		"task stop": machine.TaskStopped{
+			Task: sampleID, Attempt: 2, Session: sampleID, Ended: "the worker's process group was ended",
+			Hold: store.Hold{Key: "task/" + sampleID + "/stopped/2", TaskID: store.Known(sampleID), Subject: "whether to begin this work again"},
+		},
+		"task relaunch": machine.TaskRelaunched{Task: sampleID, Attempt: 2, Superseded: sampleID, Swept: "swept " + filepath.Join(root, "tasks", sampleID, "copy")},
+		"task promotion": machine.TaskPromoted{
+			Record: store.Task{ID: sampleID, Shape: store.TaskDelivery, Project: "the parser", Branch: store.Known("feature/parser")},
+			Event:  store.TaskEvent{TaskID: sampleID, Sequence: 5, Kind: "promoted", Detail: "feature/parser"},
+			Head:   "0123456789abcdef0123456789abcdef01234567", Instructions: filepath.Join(root, "tasks", sampleID, "instructions.md"),
+		},
+		"wakes": machine.Wakes{Wakes: []store.Wake{
+			{ID: 7, TaskID: sampleID, Kind: string(supervisor.KindTerminalGone), Marker: sampleID, CreatedAt: time.Date(2026, 10, 13, 9, 0, 0, 0, time.UTC)},
+		}},
+		"wakes acknowledged": machine.Acknowledged{Wakes: []int64{7}, By: store.AcknowledgedByCoordinator().String()},
+		"supervision":        supervisor.Arm{Outcome: supervisor.ArmAttached, Sequence: 12},
+		"catch up":           fixtureCatchUp(),
+		"marked seen":        machine.Marked{Marks: []store.SeenMark{{SeenRecord: store.SeenRecord{Kind: store.SeenMerge, Key: sampleID}}}},
 		"fallback": machine.Appended{Event: store.TaskEvent{TaskID: sampleID, Sequence: 3, Kind: "waiting-external",
 			Detail: "an upstream release of the parser"}},
 	}
@@ -334,6 +372,27 @@ func TestThePhrasedRenderersSpeakTheTableAndTheJSONKeepsIdentifiers(t *testing.T
 			a := v.(machine.HostInstall)
 			return []string{hostInstallFileLabel + " " + a.Settings, hostInstallLineLabel + " " + a.Line, hostInstallConflictLabel + " " + a.Conflict}
 		},
+		"init": func(v any) []string {
+			c := v.(machine.Init).Commands
+			lines := []string{commandsFileLabel + " " + c.File}
+			for _, key := range c.Configured {
+				lines = append(lines, commandsConfiguredLabel+" "+key)
+			}
+			for _, p := range c.Proposed {
+				label := commandsProposedLabel
+				if p.Written {
+					label = commandsWrittenLabel
+				}
+				lines = append(lines, commandLine(label, p))
+			}
+			return lines
+		},
+	}
+	// An answer whose every field is one the derived set does not forbid has
+	// nothing a person must be kept from, so no fixture of it can carry one.
+	// It is named here with the reason, and the exemption checks itself.
+	carriesNothing := map[string]string{
+		"wakes acknowledged": "an acknowledgement answers with the wake rows' numbers and who the record says acknowledged them, and the set forbids neither",
 	}
 	phrased := 0
 	for _, r := range Renderings() {
@@ -383,7 +442,16 @@ func TestThePhrasedRenderersSpeakTheTableAndTheJSONKeepsIdentifiers(t *testing.T
 		if err := machine.NewEncoder(&document).Encode(value); err != nil {
 			t.Fatalf("encoding the %s fixture: %v", r.Name, err)
 		}
-		if n := len(vocabtest.Violations(t, document.String())); n == 0 {
+		n := len(vocabtest.Violations(t, document.String()))
+		if why, ok := carriesNothing[r.Name]; ok {
+			// The exemption holds only while it is true: an answer that
+			// came to carry a forbidden word would be held like the rest.
+			if n != 0 {
+				t.Errorf("%s is exempted because %s, and its structured rendering now carries %d forbidden word(s); drop the exemption", r.Name, why, n)
+			}
+			continue
+		}
+		if n == 0 {
 			t.Errorf("the structured rendering of %s carries no identifier, path or label, so this fixture holds the human rendering to nothing", r.Name)
 		}
 	}
