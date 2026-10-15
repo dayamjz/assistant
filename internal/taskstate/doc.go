@@ -56,10 +56,16 @@
 // verifying them before it writes the cleanup record; what this package
 // does not yet do is read the report row, which TaskSnapshot does not carry.
 // Rather than derive Complete from the cleanup record alone, the tier
-// declines, and an investigation task with a removed copy stays Reported.
-// Carrying the report onto the snapshot and reading it here is a change of
-// its own, and the test that pins today's answer is the one that moves when
-// it lands.
+// declines, and an investigation task with a removed copy resolves from the
+// tiers below as any other task does. For one whose worker this service
+// launched that is the process tier, so it reads Running while the worker
+// runs and Unknown once its terminal is Dead, with the report's claim of
+// Reported in Superseded and Basis.EventKind naming the report; it reads
+// Reported only while its terminal is Unobserved. PRD section 6's
+// precedence puts a dead terminal above the log on purpose, and nothing
+// here bends it for a report. Carrying the report onto the snapshot and
+// reading it here is a change of its own, and the test that pins today's
+// answer is the one that moves when it lands.
 //
 // # The hold tier
 //
@@ -150,8 +156,9 @@
 //     must tell one event-tier answer from another reads it rather than the
 //     log; it says which row decided and nothing about the rows before it.
 //   - Row.Writer says who may append a kind and refuses nothing itself. The
-//     worker event path that reads it (#91) is the refusal; until it exists,
-//     the column is a declaration a test pins and no mechanism enforces.
+//     worker event path that reads it, internal/service's task.event, is the
+//     refusal, and only for what arrives over that path: store.AppendTaskEvent
+//     still records any kind for any in-process caller.
 //   - The run mapping is the run's status and no finer: a failed and a
 //     terminated run both read as Failed, and nothing here says why a run is in the
 //     status it is in. It is pinned to

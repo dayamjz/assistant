@@ -49,6 +49,7 @@ func (p *Pipe) Create(ctx context.Context, spec Spec) (*Session, error) {
 	worker, err := agents.OpenWorker(ctx, p.runner, agents.WorkerSpec{
 		Dir:          spec.Isolation.Copy,
 		Instructions: spec.Instructions,
+		Route:        spec.Route,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("session: starting the worker: %w", err)

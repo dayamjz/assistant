@@ -105,6 +105,10 @@ type Spec struct {
 	// Instructions is what the worker is told first, on the terms
 	// agents.WorkerSpec.Instructions states.
 	Instructions string
+	// Route is the command line prefix the worker reaches the program
+	// through, on the terms agents.WorkerSpec.Route states, and empty for a
+	// worker given none.
+	Route string
 }
 
 // Session is the handle to one terminal session a provider created and

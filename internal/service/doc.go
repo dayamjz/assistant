@@ -403,9 +403,11 @@
 // applied by handlers, not by internal/ipc's access class, and that table
 // says why. task.event admits only a worker and appends to its own task's
 // history, holding the kind to internal/taskstate's writer column so a
-// worker cannot append what the program decides; wakes.list,
-// wakes.acknowledge, wakes.wait and supervision.assert are the
-// coordinator's and refuse a worker, with who acknowledged derived by internal/ipc's
+// worker cannot append what the program decides, and writing a message
+// acknowledgement and an investigation's report through their own records;
+// a launched worker reaches it over the route route.go gives it; wakes.list,
+// wakes.acknowledge, wakes.wait and supervision.assert are the coordinator's
+// and refuse a worker, with who acknowledged derived by internal/ipc's
 // Request.WakeAcknowledger and read from nothing; catchup.mark, which moves
 // PRD section 9's seen mark and which catchup.go owns, refuses a worker on
 // the same terms while catchup.read stays open; and gate.admit holds a

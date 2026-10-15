@@ -175,6 +175,30 @@ func TestTheRelaunchBoundCountsRelaunchesFromAttemptRows(t *testing.T) {
 	}
 }
 
+// An investigation whose worker filed its report and then ended resolves
+// Unknown from the process tier over its dead terminal, a relaunch row, and
+// is relaunched by nothing: the resolver recorded the report as the newest
+// entry it read. The control is the same resolution with any other newest
+// entry, which relaunches, and the same reading within the bound's hold
+// answered retry, which still relaunches nothing.
+func TestAReportedInvestigationIsNotRelaunched(t *testing.T) {
+	gone := taskstate.Resolution{State: taskstate.Unknown, Source: taskstate.SourceProcess,
+		Basis: taskstate.Basis{Process: taskstate.Dead, EventKind: store.ReportReadyEventKind}}
+	attempts := []store.TaskAttempt{{Sequence: 1}}
+	if got := decideReconciliation(gone, attempts, 2, relaunchAnswers{}); got.action != reconcileNothing || got.reason == "" {
+		t.Errorf("a reported investigation's dead terminal decides %+v, want nothing with a reason", got)
+	}
+	if got := decideReconciliation(gone, append(attempts, store.TaskAttempt{Sequence: 2}, store.TaskAttempt{Sequence: 3}), 1,
+		relaunchAnswers{bound: boundRetry}); got.action != reconcileNothing {
+		t.Errorf("a reported investigation past the bound with its hold answered retry decides %+v, want nothing", got)
+	}
+	working := gone
+	working.Basis.EventKind = "working"
+	if got := decideReconciliation(working, attempts, 2, relaunchAnswers{}); got.action != reconcileRelaunch {
+		t.Errorf("a dead terminal whose newest entry is not a report decides %+v, want a relaunch", got)
+	}
+}
+
 // A superseded wake is a terminal-gone row of the task whose marker, as the
 // supervisor loop composes it, names the replaced session's reference, in
 // any of the three gone cases; a row of another task, another kind, another

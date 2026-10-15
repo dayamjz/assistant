@@ -1,7 +1,8 @@
 // Package cli is the command surface: the verbs PRD section 9 specifies, the
 // flags that parameterize them, the two renderings of one answer, the
 // subcommands a gate's hooks invoke, the host verb's turn-end hook and its
-// installer, and the coordinator's client.
+// installer, the coordinator's client, and a worker's route back to the
+// program.
 //
 // A person at a terminal and an agent driving programmatically are both
 // first-class users of the same commands. They share the same decisions, the
@@ -17,11 +18,13 @@
 // PRD section 9's table names, and a command that section does not name is not
 // here: a verb this product needs and that section does not describe is a
 // finding to raise against the specification, not a row to add quietly. The
-// three things this binary answers to that are not in that table are the
-// gate hook interface, the host hook interface and the coordinator's client,
-// which the sections below are about; section 9 names all three outside its
-// table. The first two are not a precedent for the third, which the owner
-// decided on #227, and the three are not a precedent for a fourth.
+// four things this binary answers to that are not in that table are the
+// gate hook interface, the host hook interface, the coordinator's client and
+// a worker's route, which the sections below are about; section 9 names all
+// four outside its table, the fourth by the owner's decision. The first two
+// are not a precedent for the third, which
+// the owner decided on #227, nor the three for the fourth, which #226 asked
+// for, and the four are not a precedent for a fifth.
 //
 // Six things the section leaves to a verb's parameters are flags or arguments
 // rather than verbs.
@@ -207,6 +210,27 @@
 // The subcommand comes first after the verb, for the gate verb's reason:
 // several subcommands take flags with values, and a scan for the subcommand
 // would read a value as one.
+//
+// # A worker's route is the fourth
+//
+// workerActions in worker.go holds "assistant worker" and its subcommands:
+// acknowledge a message by its number, file an investigation's report, and
+// record any other kind internal/taskstate gives a worker. Each is one call
+// of task.event. It is the interface a launched worker requires: without it
+// a worker has no way to tell the program anything, so a message it acted
+// on reads unread and an investigation can never file its report. The
+// service is given workerRoute's text when service start opens it, grants a
+// worker commands beginning with exactly that text, and tells the worker
+// what to type after it, so the route a worker types is this binary by
+// absolute path with --home naming the service's home, as a gate's hooks
+// invoke it, and not whatever PATH finds.
+//
+// It decides nothing and names no task. Which task the caller is the worker
+// of is the service's, from the socket's credentials and the caller's
+// parent chain, so a person's shell running the same line is refused with
+// ipc.ErrNotWorker and nothing is appended. A report is read whole from
+// --file, a path or - for standard input, because one written into the
+// worker's copy would keep the copy from being cleaned up.
 //
 // # Which verbs need the service, and which cannot
 //

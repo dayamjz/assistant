@@ -100,6 +100,35 @@ the identifier of any finding the stage reported, including a fix or note
 finding the hold does not list. `assistant --json status` lists every one, with
 its identifier, under `active_run.stages[].report.findings`.
 
+## How a task's worker reports back
+
+A task's worker tells the program about its work with one command,
+`assistant worker`, run from its own copy. The service starts every worker
+with that command's full prefix: this binary's absolute path, `--home`
+naming the service's home, and `worker`. That prefix is what the Claude
+Code adapter's worker is allowed to run besides git without asking, and what
+its instructions tell it to type. Through it a worker acknowledges a
+coordinator's message by the number it arrived under, files an
+investigation's report once on standard input, and records how its work
+stands.
+
+Three things follow for whoever runs the service:
+
+- The prefix is fixed when the service starts. A binary moved or replaced
+  afterwards, or a home moved, is not seen by a running service's workers
+  until it is restarted.
+- The service decides who the caller is the worker of from the socket's
+  credentials and the caller's parent chain, never from anything the
+  command says. Running the same line from your own shell is refused as no
+  task's worker, and nothing is recorded. On a platform where the service
+  identifies no socket peer, every call is refused that way, a worker's
+  included.
+- A filed report's decisions are holds you answer with
+  `assistant --task ID --answer ...`. The investigation's copy is removed
+  only after its worker has ended, which it does when it exits on its own or
+  when the coordinator stops it, and only on the cleanup check's proof. A
+  report filed by a worker that is still running keeps its copy.
+
 ## Waiting on a fleet
 
 A coordinator agent running tasks through `assistant coordinator` does not

@@ -88,6 +88,9 @@ The message is recorded first and then written to the worker of the task's
 latest attempt. The answer's `delivery` is `written` when it reached the
 worker's input. Text is limited to 16 KiB and refused, not cut, above it. A
 task with no launched worker, or one this service does not hold, is refused.
+The worker reads it under a heading `Message N`, where N is the answer's
+`message.id`, and acknowledges it by that number through its own
+`assistant worker` route; the record then reads acknowledged.
 
 ## Peek at a worker
 
@@ -215,19 +218,27 @@ assistant --json coordinator await --timeout 5m   # blocks, then lists queued wa
   is the supervision's cadence, not the wait's. Check
   `assistant coordinator supervision` at session start and after any exit
   `1` from `await`.
-- **Workers cannot report back (#226).** A worker has no route to the
-  program's event method. So a message the worker read and acted on is
-  never recorded as read, and `message-unacknowledged` wakes arrive for it
-  anyway; check the work before resending. An investigation cannot file its
-  report, so it never resolves as reported.
+- **A finished investigation reads `unknown`, not `reported`.** A worker
+  files its report through `assistant worker`, and the task's history then
+  ends in `report-ready`. While the worker runs, the task reads `running`;
+  once it has ended, `unknown` with `state.basis.process` `dead`, because a
+  dead terminal outranks the history. Read
+  `state.basis.event_kind` (`report-ready`) and `state.superseded` to see
+  the report's claim. The program does not relaunch such a task, but the
+  wake queue still reports its terminal as gone. Decisions the report
+  raised are holds; answer them with `assistant --task ID --answer ...`.
+  Promote an investigation before its worker ends: once it has ended and
+  nothing but the report's decisions holds the task, its copy is cleaned up
+  and it can no longer be promoted. A stop's hold keeps the copy until you
+  answer it.
 - **An orphaned command is placed as yours.** The service decides who is a
   worker by walking the caller's parent chain to the first process in a
   worker group, or that is itself a worker, so a worker's command in a
   process group of its own is still refused. A chain the service cannot
   read is refused too. What it cannot place is a command whose parent
   exited, so the kernel moved it under another process: that call is placed
-  as the coordinator's and served. A worker's grant allows git without
-  asking and denies nothing else.
+  as the coordinator's and served. A worker's grant allows git and its own
+  `assistant worker` route without asking, and denies nothing else.
 - **No interrupt.** The service refuses `task.interrupt` on every call,
   because no adapter declares what it needs, so the client offers none.
   Stop the worker instead.

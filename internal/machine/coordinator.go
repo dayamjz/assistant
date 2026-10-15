@@ -154,7 +154,22 @@ func coordinatorRows() []Phrase {
 	return []Phrase{
 		phraseTaskCreated, phraseTaskCreatedBehind, phraseTaskPromoted, phraseTaskRelaunched,
 		phraseNoNotices, WakesPhrase(Wakes{Wakes: make([]store.Wake, 1)}), AcknowledgedPhrase(Acknowledged{Wakes: []int64{1}}),
-		phraseFleetWatched, phraseFleetNoService, phraseFleetNotWatched,
+		phraseFleetWatched, phraseFleetNoService, phraseFleetNotWatched, phraseWorkerRecorded,
 		phrasePeekAttachable, phrasePeekUnattached,
 	}
 }
+
+// phraseWorkerRecorded is what a person reads of a worker's task.event
+// answer, the one answer the worker's route has. It names neither the kind
+// nor the task's state, each a word the derived forbidden set keeps from a
+// person; the structured rendering carries the entry.
+var phraseWorkerRecorded = Phrase{
+	Outcome:     "What the worker said about its work is recorded in the work's history.",
+	Consequence: "The coordinator reads it from there.",
+	Decision:    "Nothing to decide.",
+}
+
+// AppendedPhrase is what a person reads about a task.event answer. An entry
+// the service refused is a refusal and never an answer, so there is one
+// row.
+func AppendedPhrase(Appended) Phrase { return phraseWorkerRecorded }
