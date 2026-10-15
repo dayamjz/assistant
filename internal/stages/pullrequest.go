@@ -5,11 +5,13 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/dayamjz/assistant/internal/findings"
 	"github.com/dayamjz/assistant/internal/forge"
 	"github.com/dayamjz/assistant/internal/graph"
 	"github.com/dayamjz/assistant/internal/pipeline"
+	"github.com/dayamjz/assistant/internal/store"
 )
 
 // titleLimit is how long a derived pull request title may be before it is cut
@@ -93,6 +95,18 @@ const titleLimit = 72
 // here, and a run whose review wrote none says so rather than reading as a
 // run with the checks off.
 //
+// # Whether the run ran under standing consent
+//
+// PRD section 9's standing consent is the one fact the body reads from the
+// run's record rather than from state, because it is the run row's and may be
+// given after the run began; StageDeps.records says why. The body says the
+// run ran under it, or was not under it, as the record stood when the body was
+// written, and a record it could not read is said to be unread rather than
+// read as consent not given. Consent given after this stage ran is on the
+// run's record and not in the body, which costs nothing PRD section 5 asks
+// of it: consent never answers the decisions of this stage or the two around
+// it, so a body written before it was given has no answer of it to report.
+//
 // # What the body does not carry: how many attempts it took
 //
 // PRD "what passing the gate means" says the pull request records what was
@@ -173,7 +187,7 @@ func PullRequest(deps StageDeps) pipeline.Implementation {
 		Writes: []pipeline.Key{pipeline.KeyPullRequest},
 		NewBody: func() pipeline.Body {
 			return func(ctx context.Context, in pipeline.Input) (pipeline.Output, error) {
-				return submitPullRequest(ctx, deps.Forge, in)
+				return submitPullRequest(ctx, deps.Forge, deps.records, in)
 			}
 		},
 	}
@@ -224,10 +238,35 @@ type runFacts struct {
 	// and decided says whether the review wrote one.
 	decision decisionChecks
 	decided  bool
+	// consent is what the run's record said about standing consent when
+	// the body was written.
+	consent standingConsent
+}
+
+// standingConsent is what the pull request body read about the run's standing
+// consent: whether the record could be read, and when consent was given if it
+// was.
+type standingConsent struct {
+	read  bool
+	given store.Optional[time.Time]
+}
+
+// readStandingConsent reads the run's record for whether it was put under
+// standing consent. A record that is not wired or cannot be read is reported
+// as not read, never as consent not given.
+func readStandingConsent(ctx context.Context, records RunRecords, run string) standingConsent {
+	if records == nil || run == "" {
+		return standingConsent{}
+	}
+	record, err := records.Run(ctx, run)
+	if err != nil {
+		return standingConsent{}
+	}
+	return standingConsent{read: true, given: record.StandingConsent}
 }
 
 // submitPullRequest is the stage body.
-func submitPullRequest(ctx context.Context, host forge.Host, in pipeline.Input) (pipeline.Output, error) {
+func submitPullRequest(ctx context.Context, host forge.Host, records RunRecords, in pipeline.Input) (pipeline.Output, error) {
 	if host == nil {
 		return pipeline.Output{}, fmt.Errorf(
 			"stages: the %s stage has no code host to talk to, so it cannot create or update a pull request",
@@ -237,6 +276,7 @@ func submitPullRequest(ctx context.Context, host forge.Host, in pipeline.Input) 
 	if err != nil {
 		return pipeline.Output{}, err
 	}
+	facts.consent = readStandingConsent(ctx, records, facts.run)
 	provider, err := host.Open(facts.forgeRepository)
 	if err != nil {
 		return pipeline.Output{}, fmt.Errorf(
@@ -444,6 +484,7 @@ func pullRequestReport(facts runFacts, pr forge.PullRequest) findings.Report {
 func pullRequestBody(facts runFacts) string {
 	return join(
 		bodyPreamble(facts),
+		consentLine(facts.consent),
 		"## What changed\n\n"+whatChanged(facts),
 		"## What was checked\n\n"+whatWasChecked(facts),
 		"## What the risks are\n\n"+whatTheRisksAre(facts),
@@ -471,6 +512,29 @@ func bodyPreamble(facts runFacts) string {
 	}
 	return "This body was written by the assistant delivery gate from what run " + facts.run +
 		"'s own stages recorded."
+}
+
+// consentLine says whether the run ran under standing consent, which is what
+// tells a reviewer who answered the decisions the run held on before its push:
+// the program on consent given in advance, or nobody but whoever answered each
+// one. It states only what the record said when this body was written, so a
+// record it could not read is said to be unread, and a consent given after
+// this body was written is not in it; the run's record is where that is.
+func consentLine(c standingConsent) string {
+	at, given := c.given.Get()
+	switch {
+	case !c.read:
+		return "Whether this run ran under standing consent could not be read when this body was written, " +
+			"so this body says nothing either way about who answered the decisions it held on."
+	case given:
+		return "This run ran under standing consent, given at " + at.UTC().Format(time.RFC3339) + ". " +
+			"The decisions about findings at the stages before the push were answered by the program on that " +
+			"consent, and each answer is recorded as the program's rather than a person's. The push, pull " +
+			"request and checks decisions are never answered on it."
+	default:
+		return "This run was not under standing consent when this body was written, so none of the decisions " +
+			"it held on were answered by the program on consent."
+	}
 }
 
 // whatChanged renders the change the run validated: where it goes, which

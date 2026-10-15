@@ -2043,6 +2043,17 @@ flowchart TB
     so a run a task produced is answered without checking out the task's branch. No verb is added
     for it.
   </p>
+  <p class="mb-4 opacity-90">
+    Standing consent is a flag on <code>assistant</code> too, <code>--standing-consent</code>, and it
+    needs the repository's <code>allow_standing_consent</code>, read only from the trusted copy, so a
+    pushed branch cannot allow it for itself (P7). Given when a run starts or is attached to, it puts
+    that run under standing consent; without the key it is refused as incorrect usage and changes
+    nothing. The program then answers the holds of the stages before push itself: a fix round over
+    every finding that is not a note, and approval where only notes remain, within section 5's bounds.
+    It never answers the push, pull request, or checks holds, and never answers past a refusal P6 or
+    P7 produces. Each answer is recorded as the program's, never as a person's, and status, the run
+    listing, the run's record, and the pull request body say the run ran under it. No verb is added.
+  </p>
   <p class="mb-8 opacity-90">
     Creating a task, promoting an investigation to delivery, and relaunching a task whose terminal
     is gone are the coordinator's typed commands from section 8, and each is a service method

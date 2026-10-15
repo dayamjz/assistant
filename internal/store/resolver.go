@@ -10,7 +10,7 @@ import "fmt"
 // vocabulary in this package is a defined string type, so a caller holding text
 // it was handed can turn it into a RunStatus or a TaskShape. A Resolver has one
 // unexported field and no conversion into it: outside this package the only
-// values of this type are the three the functions below return and the zero,
+// values of this type are the four the functions below return and the zero,
 // no number or string names one, and encoding/json cannot write the field, so
 // no shape decoded from a wire, a configuration file, or an agent's output
 // carries one. A resolver is chosen in source by whichever surface is
@@ -85,6 +85,26 @@ func ResolvedByMachineInterface() Resolver { return Resolver{name: "machine-inte
 // request's state must not answer a question a person was asked.
 func ResolvedByProgram() Resolver { return Resolver{name: "program"} }
 
+// ResolvedByStandingConsent is a resolution the program made itself, answering
+// a decision a run was holding on, under the standing consent PRD section 9
+// describes: a repository whose trusted copy allows it, and a run the per-run
+// flag put under it. It is the program's answer and is recorded as the
+// program's, never as a person's and never as a caller's.
+//
+// It is a member of its own rather than ResolvedByProgram for the reason that
+// value gives about itself. ResolvedByProgram closes a question that no longer
+// exists, on a fact the service re-read, with nobody deciding anything; PRD
+// section 8 gives the service exactly that one, and its producer test holds it
+// there. A resolution under standing consent answers a question that still
+// exists - what to do about the findings holding a stage - and somebody did
+// decide it: the program did, on consent given in advance. Recording both
+// under one value would make a history unable to say which of the two
+// happened, which is the misattribution this vocabulary exists to prevent.
+//
+// It has one producer, internal/service's consent.go, and a test there holds
+// it to that. Like every member it records and does not gate.
+func ResolvedByStandingConsent() Resolver { return Resolver{name: "standing-consent"} }
+
 // String renders who resolved, or "nobody" for the zero Resolver, so a
 // formatted record cannot print an empty who as though it were a value.
 func (r Resolver) String() string {
@@ -96,7 +116,7 @@ func (r Resolver) String() string {
 
 // resolvers is the closed set, and the only place it is written down.
 func resolvers() []Resolver {
-	return []Resolver{ResolvedByPerson(), ResolvedByMachineInterface(), ResolvedByProgram()}
+	return []Resolver{ResolvedByPerson(), ResolvedByMachineInterface(), ResolvedByProgram(), ResolvedByStandingConsent()}
 }
 
 // resolverText returns what the column holds for r. The zero Resolver is

@@ -77,6 +77,16 @@ type StartRequest struct {
 	// run on purpose: P2 lets a person skip a stage deliberately for one run
 	// and never lets a standing configuration skip one on their behalf.
 	Skip []string `json:"skip,omitempty"`
+	// StandingConsent asks for the run this call starts or attaches to to be
+	// put under the standing consent PRD section 9 describes, which the
+	// service refuses as an invalid request when the repository's trusted
+	// copy does not allow it. Once given it stays given for that run.
+	//
+	// It asks for consent and says nothing about who answers anything: every
+	// answer the consent then gives is recorded as the program's, which
+	// internal/service decides in source, so no value here can make a record
+	// say a person or a caller decided.
+	StandingConsent bool `json:"standing_consent,omitempty"`
 }
 
 // RerunRequest starts a fresh run of the branch the working copy is standing
