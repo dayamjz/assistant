@@ -18,11 +18,10 @@ import (
 
 // workerVerbName is the fourth command this binary answers to that PRD
 // section 9's table does not name: a task's worker's route back to the
-// program, which #226 asked for. It is dispatched beside the
-// table, as coordinatorVerbName is, rather than added to it, and section 9
-// does not mention it, which is a finding against the specification rather
-// than a precedent: the three before it are not a reason for it, and it is
-// not a reason for a fifth.
+// program, which #226 asked for. It is dispatched beside the table, as
+// coordinatorVerbName is, rather than added to it, and section 9 names it
+// there by the owner's decision. That decision is not a precedent: the three
+// before it are not a reason for it, and it is not a reason for a fifth.
 //
 // It is the interface a launched worker requires. The service starts every
 // worker with workerRoute's text as its route: the grant internal/agents
