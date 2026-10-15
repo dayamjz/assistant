@@ -984,8 +984,8 @@ Each has cost this repository more than one round of review.
   `assistant coordinator` is the client for the coordinator's service
   methods, its subcommands are the `coordinatorActions` table in
   `coordinator.go`, and it decides nothing: a worker is refused by the
-  service from the socket's credentials, and `coordinator.go` names the gap
-  in that placement (#225). `skills/coordinator/SKILL.md` is what it tells a
+  service from the socket's credentials and the caller's parent chain, and
+  `coordinator.go` names the gap in that placement, a reparented chain. `skills/coordinator/SKILL.md` is what it tells a
   coordinating agent, and claims only what the build does.
   What a person reads is rendered through the `renderings` table in
   `render.go`, which `readOut` dispatches through and `Renderings` enumerates:
