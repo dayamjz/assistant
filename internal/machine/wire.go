@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/dayamjz/assistant/internal/agents"
 	"github.com/dayamjz/assistant/internal/custody"
 	"github.com/dayamjz/assistant/internal/findings"
 	"github.com/dayamjz/assistant/internal/graph"
@@ -746,6 +747,33 @@ type TaskPromoted struct {
 	// Instructions is the file the intent and the second check were
 	// appended to.
 	Instructions string `json:"instructions"`
+	// Brief is what became of the brief the promotion sends the task's
+	// live worker: the same text that file was given.
+	Brief Briefing `json:"brief"`
+}
+
+// Briefing is what became of a promotion's brief to the worker of the
+// task's latest attempt. A brief is sent as task.message sends a message,
+// recorded first and then written, so whether it reached the worker's input
+// is read from Message, the record, and nowhere else (P8); whether the
+// worker read it is the acknowledgement the worker appends to that record
+// later. When no worker could be sent it, Message is absent and Unsent says
+// why, and the brief is still in the instructions file a worker begun on the
+// task later reads. The promotion stands either way.
+type Briefing struct {
+	// Message is the brief's message record, absent when none was appended.
+	Message *store.Message `json:"message,omitempty"`
+	// Unsent says why the brief is not known to have reached the worker's
+	// input: why no record was appended, or why the one appended was
+	// refused or could not be marked. Empty exactly when Message says
+	// written.
+	Unsent string `json:"unsent,omitempty"`
+}
+
+// Delivered reports whether the record says the brief was written to the
+// worker's input.
+func (b Briefing) Delivered() bool {
+	return b.Message != nil && b.Message.Delivery() == store.DeliveryWritten
 }
 
 // TaskRelaunched is the answer to task.relaunch: the attempt the anchored
@@ -792,16 +820,20 @@ type TaskMessaged struct {
 	SentBy string `json:"sent_by"`
 }
 
-// MaxPeekBytes is the most of a worker's output task.peek answers with, in
-// bytes, from the end. It is a fixed limit in the program and not a setting,
-// on MaxMessageBytes' terms.
+// MaxPeekBytes bounds what task.peek shows of a worker's output, in bytes
+// of Output from the end: the most recent events whose rendering fits are
+// shown, and the rest are counted in TaskPeek.Earlier. It bounds what is
+// shown and not what is read, which is the session provider's capture,
+// bounded by the agent runner's output limit. It is a fixed limit in the
+// program and not a setting, on MaxMessageBytes' terms.
 const MaxPeekBytes = 16 << 10
 
 // TaskPeek is the answer to task.peek: the latest attempt's worker's recent
-// output as the service's session provider holds it, after
-// internal/redact and then cut to MaxPeekBytes from the end, with how the
-// terminal probed and, where the provider hosts the worker in a terminal,
-// the command a person attaches with.
+// output as the service's session provider holds it, read as a transcript
+// by agents.ReadTranscript, redacted by internal/redact, abbreviated, and
+// bounded by MaxPeekBytes, with how the terminal probed and, where the
+// provider hosts the worker in a terminal, the command a person attaches
+// with.
 //
 // The output is evidence for the coordinator, never text to relay to a
 // person (P13): the person-facing rendering is PeekPhrase and carries none
@@ -815,10 +847,19 @@ type TaskPeek struct {
 	Session string `json:"session"`
 	// Liveness is how the terminal probed, internal/taskstate's word.
 	Liveness string `json:"liveness"`
-	// Output is the recent output, redacted and bounded.
+	// Output is Events rendered, one agents.TranscriptEvent.Line each, in
+	// order: what a person following the worker would read.
 	Output string `json:"output"`
-	// Dropped is how many bytes of earlier output are not in Output: what the
-	// provider's capture let go plus what the bound here cut.
+	// Events are the events Output renders, oldest first.
+	Events []agents.TranscriptEvent `json:"events"`
+	// Earlier is how many events were read from the capture and are not
+	// shown, because showing them would take Output over MaxPeekBytes.
+	Earlier int `json:"earlier,omitempty"`
+	// Omitted is how many lines and blocks of the capture were left out as
+	// noise, by agents' noise table: counters, status lines and thinking.
+	Omitted int `json:"omitted,omitempty"`
+	// Dropped is how many bytes of earlier output the provider's capture let
+	// go before this read.
 	Dropped int64 `json:"dropped"`
 	// Uncounted is true when output may also have been let go before it was
 	// read, by a terminal whose own history keeps no count of it.

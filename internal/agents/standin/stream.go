@@ -91,7 +91,8 @@ func (l streamLine) text() (string, error) {
 //     the first exchange whose Contains the text holds, with three
 //     stream-json lines on standard output: a system init, an assistant
 //     message carrying the reply as a text block, and a successful result
-//     carrying the reply. A message no exchange answers draws a note on
+//     carrying the reply. An exchange with Recorded lines prints those
+//     instead, as they are. A message no exchange answers draws a note on
 //     standard error and nothing on standard output.
 //
 // It exits when its input closes, or after a reply whose exchange says Ends.
@@ -163,7 +164,12 @@ func serveStreamWorker(control string, args []string) int {
 				fmt.Fprintln(os.Stderr, "standin: "+err.Error())
 				return exitNoOutput
 			}
-			if err := writeTurn(session, dir, reply); err != nil {
+			if len(exchange.Recorded) > 0 {
+				_, err = fmt.Fprintln(os.Stdout, reply)
+			} else {
+				err = writeTurn(session, dir, reply)
+			}
+			if err != nil {
 				fmt.Fprintln(os.Stderr, "standin: writing a reply: "+err.Error())
 				return exitNoOutput
 			}

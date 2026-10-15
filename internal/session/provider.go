@@ -151,6 +151,9 @@ type Capture struct {
 	// two captures whose normalized text is equal. It is over the retained
 	// window only.
 	Digest string
+	// Format is what Text is written in, as the worker's adapter reported
+	// it, which is what agents.ReadTranscript reads Text by.
+	Format agents.OutputFormat
 }
 
 // Reason is why a probe answered what it did. The set is closed, and the

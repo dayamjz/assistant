@@ -104,6 +104,16 @@ type Exchange struct {
 	// must therefore be empty, and an exchange may not both Run and Write; a
 	// script breaking either rule is refused when the Agent is built.
 	Write bool `json:"write,omitempty"`
+	// Recorded are lines printed on standard output verbatim, each followed
+	// by a newline, in place of the answer: in stream mode in place of the
+	// three lines a turn otherwise prints, and in line mode in place of
+	// Reply. It is how a test plays back output a real agent was recorded
+	// writing, so what it prints is that agent's shape rather than one the
+	// stand-in made up, which is the test's to keep true of what it plays.
+	// Reply must be empty and Run and Write unset beside it, and no line
+	// may carry a newline; a script breaking either rule is refused when the
+	// Agent is built.
+	Recorded []string `json:"recorded,omitempty"`
 }
 
 // Wrote is what a worker answers for a line a Write exchange took: the path

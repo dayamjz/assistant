@@ -191,6 +191,9 @@ type Capture struct {
 	// worker never sets it, because every byte it wrote reached the tail
 	// Dropped counts against.
 	Uncounted bool
+	// Format is what Text is written in, decided by the adapter that built
+	// the worker's command line; ReadTranscript reads Text by it.
+	Format OutputFormat
 }
 
 // OpenWorker starts a worker on r. It is the only route to one this package
@@ -246,6 +249,9 @@ type procWorker struct {
 	// newline. It is the adapter's: plainLine for the scripted adapter, and
 	// claudeUserMessage for the Claude Code adapter.
 	frame func(text string) ([]byte, error)
+	// format is what the worker writes, which Capture reports: the
+	// adapter's, beside frame.
+	format OutputFormat
 	// closeOnce makes Close idempotent, and closeMu guards the stdin close
 	// against a concurrent Send.
 	closeOnce sync.Once
@@ -258,7 +264,8 @@ type procWorker struct {
 // read: the instructions are written here, after the process exists, and the
 // caller reads the group off the handle rather than being told. frame is how
 // the adapter puts one send on the wire, the instructions among them.
-func startWorker(ctx context.Context, spec procSpec, instructions string, frame func(string) ([]byte, error)) (*procWorker, error) {
+func startWorker(ctx context.Context, spec procSpec, instructions string, frame func(string) ([]byte, error),
+	format OutputFormat) (*procWorker, error) {
 	// A send that cannot be framed is refused before any process exists, so
 	// a worker is never started over instructions it could not be given.
 	if _, err := frame(instructions); err != nil {
@@ -293,6 +300,7 @@ func startWorker(ctx context.Context, spec procSpec, instructions string, frame 
 		done:      make(chan struct{}),
 		slot:      make(chan struct{}, 1),
 		frame:     frame,
+		format:    format,
 		stdinOpen: true,
 	}
 	go func() {
@@ -390,7 +398,7 @@ func (w *procWorker) write(ctx context.Context, text string) error {
 // Capture returns the retained output.
 func (w *procWorker) Capture() Capture {
 	text, dropped := w.out.snapshot()
-	return Capture{Text: text, Dropped: dropped}
+	return Capture{Text: text, Dropped: dropped, Format: w.format}
 }
 
 // Group is the leader's process identifier, which names the group everywhere
