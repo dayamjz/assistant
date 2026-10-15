@@ -94,9 +94,21 @@ type RerunRequest struct {
 
 // RespondRequest answers the decision a run is holding on, and blocks until
 // the run reaches its next decision point or a terminal outcome.
+//
+// The run is named directly, or selected through the task that produced it,
+// PRD section 9's answer given a task: exactly one of Run and Task is set.
 type RespondRequest struct {
-	// Run is the run holding.
+	// Run is the run holding, and empty when Task selects it.
 	Run string `json:"run"`
+	// Task selects the run through a task, and is empty when Run names it.
+	// The run selected is the task's current run: the newest unfinished run
+	// of the task's branch in the task's repository, which is the run
+	// --answer reaches from a checkout of that branch. A task with a hold
+	// of its own open is refused rather than having its run answered past
+	// that hold, because the hold naming the task is the one an answer
+	// given the task closes first; internal/service's taskrun.go owns
+	// both rules.
+	Task string `json:"task,omitempty"`
 	// Answer is one of the options the decision offered. An answer outside
 	// them is refused by internal/graph rather than interpreted here.
 	Answer string `json:"answer"`

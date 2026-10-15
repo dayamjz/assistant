@@ -56,7 +56,9 @@ func (s *Service) handle(ctx context.Context, req ipc.Request) (json.RawMessage,
 	case ipc.MethodRunRerun:
 		return call(ctx, req, s.rerun)
 	case ipc.MethodRunRespond:
-		return call(ctx, req, s.respond)
+		return call(ctx, req, func(ctx context.Context, r machine.RespondRequest) (machine.Run, error) {
+			return s.respondTo(ctx, req, r)
+		})
 	case ipc.MethodRunCancel:
 		return call(ctx, req, s.cancel)
 	case ipc.MethodBranchSync:

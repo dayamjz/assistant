@@ -25,7 +25,9 @@ const (
 	// MethodRunRerun starts a fresh run from the last known head, inheriting
 	// the recorded intent.
 	MethodRunRerun Method = "run.rerun"
-	// MethodRunRespond answers a decision a run is holding on.
+	// MethodRunRespond answers a decision a run is holding on, the run named
+	// or selected through the task that produced it. Selecting through a
+	// task is refused for a task's worker on MethodTaskRespond's terms.
 	MethodRunRespond Method = "run.respond"
 	// MethodRunCancel ends a run.
 	MethodRunCancel Method = "run.cancel"

@@ -34,7 +34,9 @@
 // raised with no run behind it, an investigation's or a task's at its
 // relaunch bound, is answered by the same flag given --task, which section 9
 // says in as many words: answering takes a task as well as a run, and no
-// verb is added for it.
+// verb is added for it. Given a task with no hold of its own open, the same
+// flag answers the hold on the task's current run, which section 9 says too,
+// so a run a task produced is answered without a checkout of its branch.
 //
 // Reading one run or one task in full is an argument to the command that lists
 // them, because that section gives runs one row and tasks one row.

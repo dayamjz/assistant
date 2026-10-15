@@ -40,13 +40,16 @@ import (
 // read only with --answer fix and refused with anything else, because an
 // instruction given and then ignored is worse than one refused.
 //
-// --task names a task instead of this branch's run, for a hold a task raised
-// with no run behind it: PRD section 9 has answering a hold take a task as
-// well as a run, so an investigation's decision and a task held at its
-// relaunch bound are answered with the same flag and no verb of their own.
-// It is read only with --answer, and the fix round's flags are refused with
-// it, because a fix round is a run's. A task's hold needs no working copy,
-// so the command answers it from wherever it is run.
+// --task names a task instead of this branch's run: PRD section 9 has
+// answering a hold take a task as well as a run, so an investigation's
+// decision and a task held at its relaunch bound are answered with the same
+// flag and no verb of their own. A task with no hold of its own open has its
+// answer given to the hold on its current run instead, the run --answer
+// reaches from a checkout of the task's branch, so a coordinator answers a
+// task's run without checking that branch out anywhere. It is read only
+// with --answer, and the fix round's flags go with --answer fix to the
+// task's run, as they would to this branch's. Neither needs a working copy,
+// so the command answers from wherever it is run.
 func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 	var (
 		intent       string
@@ -63,7 +66,7 @@ func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 		set.StringVar(&intent, "intent", "", "what this change sets out to do, in your own terms")
 		set.BoolVar(&suppliedFlag, "intent-supplied", false, "treat the intent as authoritative acceptance criteria rather than a hint")
 		set.StringVar(&answer, "answer", "", "answer the decision the run is holding on, or with --task the task's")
-		set.StringVar(&task, "task", "", "with --answer: the task whose hold is answered, for a hold a task raised with no run behind it")
+		set.StringVar(&task, "task", "", "with --answer: the task whose hold is answered, or with none of its own open, the hold on the task's current run")
 		set.BoolVar(&cancel, "cancel", false, "end this branch's run, wherever it stands")
 		set.StringVar(&skip, "skip", "", "comma-separated stages this one run does not take")
 		set.StringVar(&selected, "select", "", "with --answer fix: comma-separated identifiers of findings the held stage reported, for the round to resolve; "+
@@ -88,9 +91,6 @@ func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 	if tasked && strings.TrimSpace(task) == "" {
 		return nil, usagef("--task was given no task; it takes the identifier of the task whose hold is answered")
 	}
-	if tasked && fixing {
-		return nil, usagef("--answer %s asks for a run's fix round, and --task answers a task's hold", pipeline.OutcomeFixRequested)
-	}
 	if answered && strings.TrimSpace(answer) == "" {
 		return nil, usagef("--answer was given an empty answer; it takes one of the options the decision offered")
 	}
@@ -114,8 +114,17 @@ func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 	if flagWasSet(in.flags, "intent-supplied") {
 		supplied = suppliedFlag
 	}
+	var request *pipeline.FixRequest
+	if fixing {
+		request = &pipeline.FixRequest{Selected: splitList(selected), Notes: note}
+		for _, text := range own {
+			request.Findings = append(request.Findings, findings.Finding{
+				Severity: findings.SeverityWarning, Action: findings.ActionFix, Description: text,
+			})
+		}
+	}
 	if tasked {
-		return in.answerTask(ctx, task, answer)
+		return in.answerGivenTask(ctx, task, answer, request)
 	}
 	working, err := in.workingCopy(ctx)
 	if err != nil {
@@ -125,15 +134,6 @@ func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 		return in.endRun(ctx, working)
 	}
 	if answered {
-		var request *pipeline.FixRequest
-		if fixing {
-			request = &pipeline.FixRequest{Selected: splitList(selected), Notes: note}
-			for _, text := range own {
-				request.Findings = append(request.Findings, findings.Finding{
-					Severity: findings.SeverityWarning, Action: findings.ActionFix, Description: text,
-				})
-			}
-		}
 		return in.answerDecision(ctx, working, answer, request)
 	}
 	in.progressf("starting or attaching to the run for this branch; this blocks while the run advances")
@@ -188,6 +188,37 @@ func (in *invocation) answerDecision(ctx context.Context, working, answer string
 	in.progressf("answering %s with %q; this blocks until the run needs another decision", active, answer)
 	var run machine.Run
 	err = in.callService(ctx, ipc.MethodRunRespond, machine.RespondRequest{Run: active, Answer: answer, Fix: request}, &run)
+	return run, err
+}
+
+// answerGivenTask answers --task: the task's own hold while one is open, and
+// otherwise the hold on the task's current run.
+//
+// Which of the two is read off the task's resolution, whose basis names the
+// oldest open hold naming the task whichever tier decided its state, so a
+// task that has landed with a hold still open is routed to that hold too. A
+// fix round goes to the run without the read, because only a run takes one.
+// The read routes and decides nothing: the service refuses an answer to the
+// task's run while the task has a hold of its own open, and refuses an
+// answer to the task's own hold when none is, so a hold that opened or
+// closed after the read is a typed refusal and never the other hold
+// answered. The basis counts a hold naming the task and a run as well, and
+// the service's own hold is one naming the task and no run; nothing in this
+// build registers the first shape, and one that did would be routed to the
+// task's own hold and refused there, never answered past.
+func (in *invocation) answerGivenTask(ctx context.Context, task, answer string, request *pipeline.FixRequest) (any, error) {
+	if request == nil {
+		var view machine.Task
+		if err := in.callService(ctx, ipc.MethodTaskGet, machine.TaskRequest{Task: task}, &view); err != nil {
+			return nil, err
+		}
+		if view.State.Basis.Hold != "" {
+			return in.answerTask(ctx, task, answer)
+		}
+	}
+	in.progressf("answering the decision task %s's run is holding on with %q; this blocks until the run needs another decision", task, answer)
+	var run machine.Run
+	err := in.callService(ctx, ipc.MethodRunRespond, machine.RespondRequest{Task: task, Answer: answer, Fix: request}, &run)
 	return run, err
 }
 
