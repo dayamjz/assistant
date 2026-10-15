@@ -51,37 +51,62 @@ import (
 // # The derivation
 //
 // Credentials name a process, read off the socket by internal/ipc and never
-// from a frame. The process belongs to a process group, read from the
-// operating system by processGroup, the same read containment makes. The
-// group is looked up in the set, which names the task. No step reads a
-// request: a task identifier in a body would be the caller's claim, and no
-// body here has a field for one.
+// from a frame. placement.go walks that process's parent chain, as the
+// operating system reports it, to the first process inside a worker group
+// the set holds or that is a worker the set holds, and the set names the
+// task. No step reads a request: a task identifier in a body would be the
+// caller's claim, and no body here has a field for one.
 //
-// Per platform the derivation is containment's. On unix internal/agents
-// starts a worker as the leader of a new process group, and what it starts
-// stays in that group unless it leaves it, so the hook a worker's push runs
-// is placed by the worker's group. On Windows contain_windows.go's
-// processGroup refuses, since that platform reports no process group for a
-// peer, so no peer is ever placed in a worker group there: with a worker
-// launched, every method here is refused for want of the fact rather than
-// answered on an assumption, and that refusal is already upstream of it,
-// because internal/ipc identifies no peer there and refuses every restricted
-// method first. That is a stated limit and not parity: on Windows a worker's
-// push cannot be told from a person's, and neither can be admitted.
+// The chain rather than the peer's own group is what places a worker's
+// descendants whatever process group they run in: a command the Claude Code
+// CLI runs in a group of its own, as #225 observed of its Bash tool, is
+// still a descendant of the worker while the processes between them stand,
+// so the hook a worker's push runs is placed by the worker's process.
+// placement.go says why that and not anything the worker's environment
+// carries, what it reads on each platform, and the descendant it loses. On
+// Windows, and on every platform but Linux and macOS, nothing is read:
+// internal/ipc identifies no peer there and refuses every restricted method
+// first, the rules here refuse an unidentified peer, and gate.notify records
+// no intent for one, so with a worker launched a worker's push cannot be
+// told from a person's and neither is admitted. That is a stated limit and
+// not parity.
+//
+// # Which way each rule goes when placement cannot tell
+//
+// Placement has three answers: a worker of a named task, not a worker, and
+// an error, which is a chain it could not read and never stands for "not a
+// worker". Each rule takes the error toward the side that claims less:
+// gate.admit refuses the push with ipc.ErrUnavailable, so admission does
+// not open on a fact it could not establish; the coordinator's methods
+// refuse; task.event refuses; and gate.notify records the run with no
+// intent.
+//
+// "Not a worker" is the answer that can be wrong toward a person, and
+// placement.go names the one shape that produces it for a real worker: a
+// chain the kernel rewrote when a process between the peer and the worker
+// exited. Such a push is admitted as a person's, unconfined by
+// admit_workers.go's rule, and starts a run with no intent; such a process
+// may call the coordinator's methods; and task.event refuses it. Admission
+// and the coordinator's refusals are the rules this leaves open, and only
+// for a process the worker's own commands took out of its tree.
 //
 // # Residual gaps
 //
-//   - A descendant that leaves its process group is outside the relation,
-//     which is the gap containment names for itself.
+//   - The chain placement.go cannot follow, above, and the rest of what that
+//     file says it does not cover.
 //   - The set is this service's memory. A worker an earlier service of this
 //     home launched is in no set here, so its push is a person's push and its
 //     events are refused; launch.go says such a worker is an orphan.
-//   - With no worker launched the set is empty and the group is not read, so
-//     a peer whose group cannot be read is refused only while a worker is
+//   - With no worker launched the set is empty and no chain is read, so a
+//     peer whose chain cannot be read is refused only while a worker is
 //     live; that is the same shape contain.go gives the registry.
+//   - The containment registry is a separate relation and still reads the
+//     peer's own process group, so a command a stage's agent runs in a group
+//     of its own is not inside that stage; contain_unix.go's processGroup
+//     says so for itself.
 
 // workerOf derives the task a peer is the worker of, on the terms above. The
-// second result is whether the peer is in any worker group; an error is a
+// second result is whether the peer is placed as any task's worker; an error is a
 // fact that could not be established, which the caller refuses on rather
 // than treating as "not a worker".
 func (s *Service) workerOf(c ipc.Credentials) (session.Membership, bool, error) {
@@ -91,16 +116,15 @@ func (s *Service) workerOf(c ipc.Credentials) (session.Membership, bool, error) 
 	if built == nil || built.workers.Empty() {
 		return session.Membership{}, false, nil
 	}
-	group, err := processGroup(c.PID)
+	m, ok, err := placeByAncestry(c.PID, readLineage, built.workers.Member)
 	if err != nil {
-		return session.Membership{}, false, fmt.Errorf("reading the process group of %s: %w", c, err)
+		return session.Membership{}, false, fmt.Errorf("placing %s: %w", c, err)
 	}
-	m, ok := built.workers.Member(group)
 	return m, ok, nil
 }
 
 // workerPeer is workerOf over a request's peer. An unidentified peer is
-// ipc.ErrUnidentifiedPeer, and a group that could not be read is
+// ipc.ErrUnidentifiedPeer, and an ancestry that could not be read is
 // ipc.ErrUnavailable, both wrapped, so neither reads as a person.
 func (s *Service) workerPeer(req ipc.Request) (session.Membership, bool, error) {
 	creds, err := req.Peer.Credentials()
@@ -115,7 +139,7 @@ func (s *Service) workerPeer(req ipc.Request) (session.Membership, bool, error) 
 	return m, ok, nil
 }
 
-// refuseWorker refuses a request from a peer inside a worker group, for the
+// refuseWorker refuses a request from a peer placed as a task's worker, for the
 // coordinator's methods. It is ipc.ErrWorker naming the task.
 func (s *Service) refuseWorker(req ipc.Request) error {
 	m, ok, err := s.workerPeer(req)
@@ -133,8 +157,8 @@ func (s *Service) refuseWorker(req ipc.Request) error {
 // worker of. The task is the derivation's and never the request's; the kind
 // is held to internal/taskstate's table, refusing with ipc.ErrWorker a kind
 // whose writer is the program and with ipc.ErrInvalidRequest a kind the
-// table has no row for or a detail its decoder refuses. A peer outside every
-// worker group is ipc.ErrNotWorker. The one kind with a record beside the
+// table has no row for or a detail its decoder refuses. A peer placed as no
+// task's worker is ipc.ErrNotWorker. The one kind with a record beside the
 // history, store.MessageAcknowledgedEventKind, is written through
 // acknowledgeMessage instead, so its event and the message record are one
 // transaction. The entry is published as ipc.TypeTaskEvent once it is
@@ -145,7 +169,7 @@ func (s *Service) taskEvent(ctx context.Context, req ipc.Request, r machine.Task
 		return machine.Appended{}, err
 	}
 	if !ok {
-		return machine.Appended{}, fmt.Errorf("%w: %s is in no worker group, so there is no task to append to",
+		return machine.Appended{}, fmt.Errorf("%w: %s is placed as no task's worker, so there is no task to append to",
 			ipc.ErrNotWorker, peerOf(req))
 	}
 	row, known := taskstate.Lookup(r.Kind)
@@ -278,7 +302,7 @@ var noPushedIntent = pushedIntent{source: intentSourceAbsent}
 // records and the pusher's credentials and from nothing the push says.
 //
 // A run whose update is a task's own branch, in the repository the gate
-// resolved to, pushed from inside that task's worker group, takes its
+// resolved to, pushed by a process placed as that task's worker, takes its
 // intent from the task, as taskIntent composes it: the task record's project
 // as the first line, and as the body the delivery intent its promotion
 // recorded or, for a task with none, its instructions as the coordinator
@@ -289,8 +313,9 @@ var noPushedIntent = pushedIntent{source: intentSourceAbsent}
 // a task.
 //
 // Everything else carries no intent, as every push did before: a person's
-// push, a push whose pusher's group could not be read (followed as a
-// person's, which is the path that claims less), and a worker's update to
+// push, a push whose pusher could not be placed (followed as a person's,
+// which is the path that claims less), a worker's push placement.go cannot
+// follow back to the worker, and a worker's update to
 // anything but its own task's branch, which admission refuses before this
 // runs. A task record that cannot be read is logged and the run carries no
 // intent, because the intent is a hint the run can do without and a push

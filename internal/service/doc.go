@@ -390,9 +390,15 @@
 // worker of. That is internal/session's worker group set, which session.Pipe
 // fills for exactly each worker process's lifetime, and this service reads
 // it through the driver that holds the provider; workers.go owns the
-// derivation - credentials, then the peer's process group read the way
-// containment reads it, then the set - and states it per platform, Windows
-// included, where no peer can be placed because none is identified. It is
+// derivation - credentials, then the peer's parent chain, which placement.go
+// walks to the first process whose group is a worker group the set holds or
+// that is itself a worker the set holds, then the set - and states it per
+// platform, Windows included, where no peer can be placed because none is
+// identified. It reads the chain rather than the peer's own group, which is
+// what containment still reads, and a chain it cannot read is a refusal,
+// never "not a worker"; placement.go names the one shape it places wrongly,
+// a chain the kernel rewrote when an intermediate process exited, which
+// places a worker's command as a person's. It is
 // applied by handlers, not by internal/ipc's access class, and that table
 // says why. task.event admits only a worker and appends to its own task's
 // history, holding the kind to internal/taskstate's writer column so a

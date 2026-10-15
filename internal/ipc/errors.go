@@ -43,8 +43,8 @@ var (
 	// appends. The message says which.
 	ErrWorker = sentinelFor(CodeWorker)
 	// ErrNotWorker reports a request refused because it is one only a task's
-	// worker may make and the peer is inside no worker group, so there is no
-	// task to attribute it to.
+	// worker may make and the peer is placed as no task's worker, so there is
+	// no task to attribute it to.
 	ErrNotWorker = sentinelFor(CodeNotWorker)
 	// ErrRefused reports a request the handler decided against the records
 	// and refused: a task a coordinator method may not act on as it stands,

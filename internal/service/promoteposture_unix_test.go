@@ -45,9 +45,9 @@ func stillAnInvestigation(t *testing.T, w launched, after string) {
 	}
 }
 
-// workerPushes commits a change in the task's copy from inside the worker's
-// process group and pushes the branch to the gate the way a delivery worker
-// does, and returns the commit.
+// workerPushes has the worker commit a change in the task's copy and push
+// the branch to the gate the way a delivery worker does, and returns the
+// commit.
 func workerPushes(t *testing.T, w launched, branch string) string {
 	t.Helper()
 	copyPath := resolvedCopy(t, w.home, w.task)
@@ -55,10 +55,10 @@ func workerPushes(t *testing.T, w launched, branch string) string {
 	if err := os.WriteFile(filepath.Join(copyPath, "promoted.txt"), []byte("the promoted change\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	mustGitAs(t, w.group, copyPath, "add", "-A")
-	mustGitAs(t, w.group, copyPath, "commit", "--quiet", "-m", "the promoted change")
-	head := mustGitAs(t, w.group, copyPath, "rev-parse", "HEAD")
-	if out, err := gitAs(t, w.group, copyPath, "push", gate.RemoteName, branch); err != nil {
+	mustGitAs(t, w, copyPath, "add", "-A")
+	mustGitAs(t, w, copyPath, "commit", "--quiet", "-m", "the promoted change")
+	head := mustGitAs(t, w, copyPath, "rev-parse", "HEAD")
+	if out, err := gitAs(t, w, copyPath, "push", gate.RemoteName, branch); err != nil {
 		t.Fatalf("the promoted worker's push was refused:\n%s", out)
 	}
 	if !strings.Contains(gateRefs(t, w.gateRepo), "refs/heads/"+branch+" "+head) {

@@ -32,14 +32,15 @@ import (
 // exits as an operational failure through failureExit like every other
 // refusal.
 //
-// The refusal is only as good as that placement, and the placement has a
-// gap this command cannot close: a process is placed by its process group,
-// and #225 records a Claude Code worker whose git ran outside the worker's
-// group. A call made from a process outside every worker group is placed as
-// the coordinator's and served, so the refusal is not established for such
-// a worker; the tests place their caller in the worker's group. What a
-// worker may run at all is its grant's, which allows git without asking and
-// denies nothing else.
+// The refusal is only as good as that placement, which internal/service
+// owns: it walks the caller's parent chain to the first process in a worker
+// group or that is itself a worker, so a worker's descendant in a group of
+// its own is still placed as the worker's, and a chain it cannot read is
+// refused rather than served. The gap this command cannot close is the one
+// internal/service's placement.go names: a chain the kernel rewrote when an
+// intermediate process exited places a worker's command as the
+// coordinator's, and that call is served. What a worker may run at all is
+// its grant's, which allows git without asking and denies nothing else.
 //
 // It is one verb rather than one per method, so the door beside the table
 // is one door: the subcommands are coordinatorActions, the one owner of

@@ -378,7 +378,11 @@ Each has cost this repository more than one round of review.
   adapter reads that, so a shape the adapter cannot produce is unsayable
   there. Started without `--print` it is a worker, reading lines and answering
   as `Script.Worker` says, and `NewWorker` is how a test gets the adapter that
-  starts one. A consuming package's `TestMain` must call `standin.Main()`, and the
+  starts one. An exchange marked `Run` has the worker run what the line
+  carries in a process group the worker does not lead, the shape #225
+  observed of the Claude Code CLI's Bash tool, so a test of a worker rule
+  drives a worker's push or call that way rather than placing it in the
+  worker's group itself. A consuming package's `TestMain` must call `standin.Main()`, and the
   first `New` in a process refuses loudly when it did not. Read its
   `doc.go` for what a recorded `Call` does and does not prove about P4, and for
   the two residual gaps.
@@ -762,8 +766,16 @@ Each has cost this repository more than one round of review.
   owners'. A task's
   worker is placed by the other relation over the same credentials, the
   worker group set `internal/session` holds, and `workers.go` owns that
-  derivation (credentials, then the peer's process group read as containment
-  reads it, then the set) and the four methods that turn on it: `task.event`
+  derivation (credentials, then the peer's parent chain, which `placement.go`
+  walks to a process in a worker group, or one that is itself a worker the
+  set holds, reading each process through
+  `agents.ReadLineage`, then the set) and the four methods
+  that turn on it. It walks the chain rather than reading the peer's own
+  group as containment does, because #225 observed the Claude Code CLI's Bash
+  tool run a command in a group of its own. A chain it cannot read is a
+  refusal; a chain the kernel rewrote when an intermediate process exited
+  places a worker's push as a person's, which admission then does not
+  confine, and `workers.go` states which way each rule goes. The methods: `task.event`
   admits only a worker and holds the kind to `taskstate`'s writer column,
   `wakes.list`, `wakes.acknowledge` and `supervision.assert` refuse one; the
   coordinator's task methods (`coordinator.go`'s create, promote and
@@ -784,7 +796,7 @@ Each has cost this repository more than one round of review.
   own push does instead of starting a run, the approval hold it raises, and
   the anchored fast-forward an approve answer makes; a person's push meets
   neither, always starting its run, and
-  on Windows no peer is placed at all, which both files state as a limit.
+  on Windows no peer is placed at all, which `workers.go` states as a limit.
   The run a worker's push of its own task's branch starts takes the task's
   project and, for a promoted task, the delivery intent its promotion recorded
   on the task row, or otherwise its intake instructions, as its intent,
@@ -972,8 +984,8 @@ Each has cost this repository more than one round of review.
   `assistant coordinator` is the client for the coordinator's service
   methods, its subcommands are the `coordinatorActions` table in
   `coordinator.go`, and it decides nothing: a worker is refused by the
-  service from the socket's credentials, and `coordinator.go` names the gap
-  in that placement (#225). `skills/coordinator/SKILL.md` is what it tells a
+  service from the socket's credentials and the caller's parent chain, and
+  `coordinator.go` names the gap in that placement, a reparented chain. `skills/coordinator/SKILL.md` is what it tells a
   coordinating agent, and claims only what the build does.
   What a person reads is rendered through the `renderings` table in
   `render.go`, which `readOut` dispatches through and `Renderings` enumerates:

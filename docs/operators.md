@@ -149,6 +149,23 @@ A repository with no CI at all must say so by setting `no_ci` in its trusted
 configuration. Without that declaration an empty list of checks is not treated
 as a pass.
 
+The same read of the pull request carries whether the code host can merge it.
+Checks that passed are not a pass until the host also reports the pull request
+mergeable; until then the run waits on the same terms, and an elapsed wait over
+passed checks holds with `ci-mergeability-unknown`, which is re-read like the
+other elapsed holds. A pull request the host reports as conflicting with its
+base holds at once with `ci-conflicted`, whatever its checks say. The run does
+not rebase or re-push a branch it has already pushed, and it never decides what
+conflicting content should be: rebase the branch yourself and push it through
+the gate, which starts a new run that reviews the result.
+
+A failing check is still sent to the checks stage's fix rounds
+(`fix_rounds.checks`). The round commits in the run's isolated copy, but that
+commit is not reviewed and nothing in this build pushes it, so the next time
+the stage runs it holds with `ci-fix-not-pushed`, naming the round's commit and
+the commit the pull request still stands on, instead of reading checks that
+could not have seen the fix.
+
 ## Keep `commands.test` targeted
 
 `commands.test` is empty by default. When you set it, the test stage runs that
@@ -185,7 +202,9 @@ holds unless that review raises nothing but notes (PRD section 14, decision 7).
 Two things that review does not cover:
 
 - The checks stage's fix rounds. That stage runs after the push, so nothing
-  reviews the commits its rounds make, and nothing in this build pushes them.
+  reviews the commits its rounds make, and nothing in this build pushes them;
+  the stage holds with `ci-fix-not-pushed` rather than reporting on checks
+  that never saw the round's commit.
 - Earlier rounds' own accounts. The reviewer of the later commits is handed
   each stage's last fix summary as a claim to check. A stage that took more
   than one round is represented by its last summary, and its earlier rounds
