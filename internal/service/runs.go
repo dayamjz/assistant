@@ -147,7 +147,17 @@ func startInputs(req machine.StartRequest) []string {
 // It refuses while a run of that branch is still active, because a rerun is a
 // second run of the same branch and PRD section 8 has runs of one branch
 // serialize. Ending the one in flight is a separate act with its own verb.
+//
+// An intent in the request replaces the inherited one, on the terms
+// machine.RerunRequest states: the fresh run records it as supplied, which is
+// what the intent stage reads as acceptance criteria. It is the only thing a
+// replacement changes, and it is read before anything else so that an intent
+// of whitespace alone is refused before the branch is claimed.
 func (s *Service) rerun(ctx context.Context, req machine.RerunRequest) (machine.Run, error) {
+	if req.Intent != "" && strings.TrimSpace(req.Intent) == "" {
+		return machine.Run{}, fmt.Errorf("%w: a rerun's replacement intent is empty; give the intent, or none to inherit the recorded one",
+			ipc.ErrInvalidRequest)
+	}
 	repository, err := s.repositoryAt(ctx, req.WorkingPath)
 	if err != nil {
 		return machine.Run{}, err
@@ -164,7 +174,7 @@ func (s *Service) rerun(ctx context.Context, req machine.RerunRequest) (machine.
 	if err != nil {
 		return machine.Run{}, fmt.Errorf("service: reading the commit this checkout stands at: %w", err)
 	}
-	record, err := s.claimRerun(ctx, branchKey{repository: repository.ID, branch: branch}, local)
+	record, err := s.claimRerun(ctx, branchKey{repository: repository.ID, branch: branch}, local, req.Intent)
 	var moved rerunMoved
 	if errors.As(err, &moved) {
 		return machine.Run{}, s.placeMoved(ctx, repository, moved)
@@ -199,7 +209,12 @@ func (s *Service) rerun(ctx context.Context, req machine.RerunRequest) (machine.
 // have, and say nothing about theirs. local is read before the claim, as
 // start reads its head, so a commit made after that read and before the claim
 // is not seen.
-func (s *Service) claimRerun(ctx context.Context, key branchKey, local string) (store.Run, error) {
+//
+// replacement is the intent that replaces the one previous recorded, empty to
+// inherit that one. A replacement is recorded as supplied, so the run's
+// intent source says a caller stated it for this run rather than carrying the
+// previous run's source over text that run never held.
+func (s *Service) claimRerun(ctx context.Context, key branchKey, local, replacement string) (store.Run, error) {
 	release, err := s.holdBranch(ctx, key)
 	if err != nil {
 		return store.Run{}, err
@@ -227,14 +242,18 @@ func (s *Service) claimRerun(ctx context.Context, key branchKey, local string) (
 			work: recorded != previous.SubmittedHead,
 		}
 	}
+	intent, source := previous.Intent, previous.IntentSource
+	if replacement != "" {
+		intent, source = replacement, intentSourceSupplied
+	}
 	return s.create(ctx, run{
 		repository: key.repository,
 		branch:     key.branch,
 		head:       recorded,
 		base:       previous.Base,
-		intent:     previous.Intent,
-		source:     previous.IntentSource,
-		supplied:   previous.IntentSource == intentSourceSupplied,
+		intent:     intent,
+		source:     source,
+		supplied:   source == intentSourceSupplied,
 	})
 }
 
@@ -315,6 +334,20 @@ func (r rerunMoved) Error() string { return r.moved.Error() }
 
 // Unwrap resolves to the wire category and to the refusal.
 func (r rerunMoved) Unwrap() []error { return []error{ipc.ErrRefused, r.moved} }
+
+// cancelRefused is machine.CancelRefused as this service refuses with it: on
+// the wire it is ipc.ErrInvalidRequest, because the caller named a run there
+// is nothing to end in, which is theirs to correct and which a command line
+// therefore exits from as incorrect usage. Its message is the refusal's own
+// text with no prefix, and errors.As still reaches the machine.CancelRefused
+// inside.
+type cancelRefused struct{ refused machine.CancelRefused }
+
+// Error is the refusal's own text.
+func (c cancelRefused) Error() string { return c.refused.Error() }
+
+// Unwrap resolves to the wire category and to the refusal.
+func (c cancelRefused) Unwrap() []error { return []error{ipc.ErrInvalidRequest, c.refused} }
 
 // respond answers the decision a run is holding on and blocks until it reaches
 // the next one or a terminal outcome.
@@ -472,7 +505,28 @@ func heldStage(position string) (pipeline.Stage, bool) {
 // reads it, under the mutex the slot is taken and given back under. What that
 // bounds on each of endRun's two branches, and what it leaves open, is written
 // down there and nowhere else.
+//
+// A run with nothing to end is refused with machine.CancelRefused before any
+// of that: an identifier no record carries, and a run whose record already
+// says it ended, which runs.Finished decides rather than a list kept here.
+// The record is read before the move, so a run that ends between the read and
+// the move is not that refusal on the read's evidence. The move then settles
+// it: internal/runs refuses to terminate a run that passed or failed, and that
+// refusal is reported as the run having ended too. A run something else
+// terminated in that window is the one case the move does not refuse, because
+// a terminate is safe to repeat, so it is answered as the ended run it now is
+// rather than refused; the run the caller asked to end has ended either way.
 func (s *Service) cancel(ctx context.Context, req machine.CancelRequest) (machine.Run, error) {
+	record, err := s.store.Run(ctx, req.Run)
+	if errors.Is(err, store.ErrNotFound) {
+		return machine.Run{}, cancelRefused{machine.CancelRefused{Run: req.Run, Reason: machine.CancelUnknownRun}}
+	}
+	if err != nil {
+		return machine.Run{}, err
+	}
+	if runs.Finished(record.Status) {
+		return machine.Run{}, cancelRefused{machine.CancelRefused{Run: req.Run, Reason: machine.CancelRunEnded, Status: record.Status}}
+	}
 	built, err := s.driverFor(ctx)
 	if err != nil {
 		return machine.Run{}, err
@@ -480,6 +534,10 @@ func (s *Service) cancel(ctx context.Context, req machine.CancelRequest) (machin
 	forget := s.endRun(req.Run)
 	defer forget()
 	if _, err := built.runs.Terminate(ctx, req.Run); err != nil {
+		var moved *store.RunStatusError
+		if errors.As(err, &moved) && runs.Finished(moved.Actual) {
+			return machine.Run{}, cancelRefused{machine.CancelRefused{Run: req.Run, Reason: machine.CancelRunEnded, Status: moved.Actual}}
+		}
 		return machine.Run{}, err
 	}
 	// The run finished, so a task queued behind the one it was attributed to
@@ -1896,7 +1954,8 @@ func stageNames() []string {
 // only what was asked.
 //
 // What reads the value, and what it changes: rerun reads it off the previous
-// run to decide pipeline.Start.IntentSupplied, and it crosses the wire as
+// run to decide pipeline.Start.IntentSupplied, or records supplied when the
+// rerun replaces the intent, and it crosses the wire as
 // store.Run's intent_source, which is what a driving agent reads off a
 // reported run. The distinction that is acted on is supplied against not
 // supplied, and that is the whole of it.

@@ -38,9 +38,11 @@ var runStates = map[store.RunStatus]State{
 //     and leaves the state to the tiers below, a record naming a run outside
 //     Runs is not the task's, and a merge record reading closed is read by
 //     the run tier through the run's own status. An investigation task has
-//     no Complete here, because the facts PRD section 5 asks for on its edge
-//     (a stored report and registered holds) have no record in this build;
-//     the package comment states that gap. A terminal record is final: a
+//     no Complete here: PRD section 6 does not infer it from the stored
+//     report, and the edge's "findings relayed" has no record this package
+//     reads, so a reported investigation whose copy was removed stays
+//     Reported from the report tier; the package comment states that gap.
+//     A terminal record is final: a
 //     newer run in Runs, attributed by branch or named by the task, does not
 //     displace it, which is PRD section 6's "work that continues after
 //     Landed is a new task".
@@ -60,11 +62,24 @@ var runStates = map[store.RunStatus]State{
 //     Ready, failed or terminated as Failed. A status outside the run
 //     vocabulary reads as Unknown from SourceRun and does not fall through,
 //     because a run exists and the log is exactly what it outranks.
-//  4. The terminal: Live reads as Running, positive evidence. Dead with no run
-//     reads as Unknown from SourceProcess and does not fall through to the
-//     log, because a stale event is what a dead terminal must not be trusted
-//     for. Unobserved skips the tier.
-//  5. The log: only when its most recent event's kind has a row in this
+//  4. A stored report: SourceReport, which resolves Reported, for an
+//     investigation task whose ReportStoredAt is known, whatever the
+//     terminal says. The report is a record the program wrote once, in the
+//     transaction that registered its holds, so a worker still running
+//     after it filed and one whose terminal has ended have both delivered;
+//     PRD section 6 has the report outrank the terminal for that reason.
+//     It is read from the report row and never from the history entry
+//     written beside it (P8), so an entry the worker appended after its
+//     report does not displace it either, and is listed in Superseded when
+//     it claims a state of its own. A delivery task, which a promoted
+//     investigation is, is not read by this tier: its row is evidence of
+//     what it was asked before, not its deliverable. Reported is not
+//     Complete: the tier says the report is in and nothing about cleanup.
+//  5. The terminal: Live reads as Running, positive evidence. Dead with no run
+//     and no stored report reads as Unknown from SourceProcess and does not
+//     fall through to the log, because a stale event is what a dead terminal
+//     must not be trusted for. Unobserved skips the tier.
+//  6. The log: only when its most recent event's kind has a row in this
 //     package's table that claims a state, or says a decision is open (Held).
 //     A kind that closes a decision, a note, an unrecognized kind, or an empty
 //     log reads as Unknown from SourceNone.
@@ -111,6 +126,9 @@ func Resolve(in Inputs) Resolution {
 	if isHeld {
 		out.Basis.Hold = hold.Key
 	}
+	reportedAt, isReported := in.ReportStoredAt.Get()
+	out.Basis.ReportStored = isReported
+	isReported = isReported && in.Task.Shape == store.TaskInvestigation
 
 	switch {
 	case isLanded:
@@ -121,6 +139,9 @@ func Resolve(in Inputs) Resolution {
 		out.State, out.Source, out.Detail = Held, SourceHold, store.Known(hold.Subject)
 	case ok:
 		out.State, out.Source, out.Detail = fromRun(run, in.Holds)
+	case isReported:
+		out.State, out.Source = Reported, SourceReport
+		out.Detail = store.Known("the investigation's report was stored at " + reportedAt.UTC().Format(time.RFC3339))
 	case in.Process == Live:
 		out.State, out.Source = Running, SourceProcess
 		out.Detail = store.Known("the task's terminal is live")
@@ -131,7 +152,8 @@ func Resolve(in Inputs) Resolution {
 		out.State, out.Source, out.Detail = fromEvents(events)
 	}
 
-	if out.Source == SourceRecord || out.Source == SourceHold || out.Source == SourceRun || out.Source == SourceProcess {
+	if out.Source == SourceRecord || out.Source == SourceHold || out.Source == SourceRun || out.Source == SourceReport ||
+		out.Source == SourceProcess {
 		out.Superseded = supersededBy(events, out.State, out.Source)
 	}
 	out.Progress = (out.State == Validating && out.Source == SourceRun && in.Advancing) ||

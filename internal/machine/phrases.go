@@ -1320,6 +1320,24 @@ var (
 	}
 )
 
+// The rows for a cancellation refused because there was nothing to end,
+// chosen by CancelRefused.Phrase. Which run was named, and the status an
+// ended one was recorded in, are CancelRefused's to print beside the row.
+var (
+	// phraseCancelUnknown is CancelUnknownRun's row.
+	phraseCancelUnknown = Phrase{
+		Outcome:     "Nothing was ended, because no run in this home has the identifier you gave.",
+		Consequence: "Nothing changed.",
+		Decision:    "Check the identifier, which assistant runs prints beside each run it lists, and repeat the command with it.",
+	}
+	// phraseCancelEnded is CancelRunEnded's row.
+	phraseCancelEnded = Phrase{
+		Outcome:     "Nothing was ended, because the run you named had already ended.",
+		Consequence: "What it recorded stands as it was, and nothing changed.",
+		Decision:    "There is nothing to end; to validate the change again, start a fresh run of its branch.",
+	}
+)
+
 // InitPhrase is what a person reads once a gate was created or reattached for
 // their checkout. The next decision names the remote a change is sent to,
 // which is internal/gate's, because sending a branch there is how a person
@@ -1512,7 +1530,8 @@ func TablePhrases() []Phrase {
 	}
 	out = append(out, phraseCheckUnfamiliar, phraseRunCanStart, phraseRunCannotStart)
 	out = append(out, LifecyclePhrase(Lifecycle{Accepted: true, Restarting: true}), LifecyclePhrase(Lifecycle{Accepted: true}), LifecyclePhrase(Lifecycle{}))
-	out = append(out, SubcommandPhrase(false, nil), SubcommandPhrase(true, nil), phraseRerunMoved, phraseRerunBehind)
+	out = append(out, SubcommandPhrase(false, nil), SubcommandPhrase(true, nil), phraseRerunMoved, phraseRerunBehind,
+		phraseCancelUnknown, phraseCancelEnded)
 	out = append(out, InitPhrase(Init{}), InitPhrase(Init{Reattached: true}), EjectPhrase(Eject{Removed: true}), EjectPhrase(Eject{}))
 	out = append(out, PhraseAdmitted, PhraseValidationBegun, PhraseSupersededEarlier, PhraseNothingStartedFor, PhraseNothingSent, PhraseNoReading)
 	out = append(out, PhraseCopyBusy, PhraseCopyStillBusy)

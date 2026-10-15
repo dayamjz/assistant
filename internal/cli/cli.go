@@ -102,7 +102,7 @@ var verbs = []verb{
 	{"init", "Create or repair the gate for this repository.", initGate},
 	{"status", "Repository, gate, service, active run, and local branch state.", reportStatus},
 	{"runs", "Recent runs, newest first.", listRuns},
-	{"rerun", "Start a fresh run of this branch from its last known head, inheriting the recorded intent; refused when you are on another commit.", rerun},
+	{"rerun", "Start a fresh run of this branch from its last known head, inheriting the recorded intent or replacing it with --intent; refused when you are on another commit.", rerun},
 	{"sync", "Reconcile your local branch with what the pipeline pushed, or recover work it holds.", syncBranch},
 	{"tasks", "List fleet work with its resolved current state.", listTasks},
 	{"watch", "Fleet view: everything in flight, everything waiting on you.", watch},
@@ -583,9 +583,11 @@ func render(in *invocation, answer any, err error) machine.Code {
 // noticed: a command line this package refused before asking anything, or a
 // request the service answered with ipc.ErrInvalidRequest, which is its code
 // for a request it serves but will not read as given, such as an answer the
-// hold does not offer. Deciding it here rather than at each verb is what keeps
-// a method that gains an invalid-request refusal from exiting as an
-// operational failure because nobody added a case for it. Every other failure,
+// hold does not offer, or a cancellation naming a run the home has no record
+// of or one that has already ended, which is machine.CancelRefused. Deciding
+// it here rather than at each verb is what keeps a method that gains an
+// invalid-request refusal from exiting as an operational failure because
+// nobody added a case for it. Every other failure,
 // a refused, worker, unavailable or internal answer among them, is
 // operational.
 //

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // TaskSnapshot is every record a task's state is resolved from, read in one
@@ -51,6 +52,15 @@ type TaskSnapshot struct {
 	// approved fast-forward has delivered it. It is carried for the same
 	// tier, which derives a local task's Landed from it.
 	LocalLanding Optional[LocalLanding]
+	// ReportStoredAt is when the task's report row was written, read from
+	// the task_report row StoreTaskReport writes, and unknown while the task
+	// has no stored report. Only the instant is carried, not the report: the
+	// row's existence is the fact internal/taskstate's report tier resolves
+	// Reported from, and the body is evidence a reader asks TaskReport for.
+	// It is the row and never the ReportReadyEventKind entry appended in the
+	// same transaction, so the answer rests on the record and not on a line
+	// of the history (P8).
+	ReportStoredAt Optional[time.Time]
 }
 
 // TaskSnapshot reads one task and the records its state is resolved from, as
@@ -208,6 +218,18 @@ func snapshotOf(ctx context.Context, q querier, task Task) (TaskSnapshot, error)
 		snap.LocalLanding = Known(landing)
 	case !isNoRows(err):
 		return TaskSnapshot{}, fmt.Errorf("reading the local landing record of task %s: %w", task.ID, err)
+	}
+
+	var reported string
+	switch err := q.QueryRowContext(ctx, `SELECT recorded_at FROM task_report WHERE task_id = ?`, task.ID).Scan(&reported); {
+	case err == nil:
+		at, err := decodeTime(reported)
+		if err != nil {
+			return TaskSnapshot{}, fmt.Errorf("reading the report of task %s: %w", task.ID, err)
+		}
+		snap.ReportStoredAt = Known(at)
+	case !isNoRows(err):
+		return TaskSnapshot{}, fmt.Errorf("reading the report of task %s: %w", task.ID, err)
 	}
 
 	query = holdColumns + ` FROM hold WHERE task_id = ?`
