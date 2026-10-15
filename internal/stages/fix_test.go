@@ -64,6 +64,165 @@ func TestAFixRoundCommitsWhatItChangedAndReportsTheNewHead(t *testing.T) {
 	}
 }
 
+// TestAFixCommitSubjectEndsOnAWordAndTheBodyKeepsTheAccount is the commit a
+// fix round writes onto the branch, read back from git.
+//
+// A subject is the fixer's first line, and three things have gone wrong with
+// it on real runs: it was cut mid-word, it nested the agent's own
+// conventional-commit prefix inside the configured one, and nothing kept what
+// the cut dropped. Each case below is a reply the scripted stand-in prints, put
+// through the real adapter and the real fix body, and the subject and body are
+// what git recorded. The first case is the positive control: a short plain
+// line is the subject as it stands and adds no body, so a body in every other
+// case is the account being kept rather than one written regardless.
+func TestAFixCommitSubjectEndsOnAWordAndTheBodyKeepsTheAccount(t *testing.T) {
+	long := "tighten the bound in total.go so a loop halts at the limit, instead of running past it"
+	unbroken := "retry-the-fetch-against-https://example.invalid/a/very/long/path/that/never/ends x"
+	for _, c := range []struct {
+		name    string
+		reply   string
+		subject string
+		body    string
+		// absent, when set, is text the commit may not carry anywhere.
+		absent string
+	}{{
+		name:    "a short plain line stands as it is",
+		reply:   "tighten the bound in total.go",
+		subject: "fix: tighten the bound in total.go",
+		body:    "",
+	}, {
+		name:    "a line longer than the bound ends on a word",
+		reply:   long,
+		subject: "fix: tighten the bound in total.go so a loop halts at the limit...",
+		body:    long,
+	}, {
+		name:    "the agent's own prefix is not nested in the configured one",
+		reply:   "docs(agents): narrow the grant comments to the tools",
+		subject: "fix: narrow the grant comments to the tools",
+		body:    "docs(agents): narrow the grant comments to the tools",
+	}, {
+		name:    "a prefix without a scope is removed the same way",
+		reply:   "Fix: guard the empty list in total.go",
+		subject: "fix: guard the empty list in total.go",
+		body:    "Fix: guard the empty list in total.go",
+	}, {
+		// A reply of no bytes at all never reaches the fix body: the adapter
+		// refuses an envelope with no result as a failed invocation. What
+		// reaches it empty is a reply of whitespace, or of a prefix alone.
+		name:    "an empty reply is said to be one",
+		reply:   " \n\t\n",
+		subject: "fix: the lint stage's fixer reported nothing about what it did",
+		body:    "",
+	}, {
+		name:    "a reply that is only a prefix is empty past it",
+		reply:   "chore:",
+		subject: "fix: the lint stage's fixer reported nothing about what it did",
+		body:    "chore:",
+	}, {
+		name:    "a line with no word to end on names the stage instead",
+		reply:   unbroken,
+		subject: "fix: resolve lint findings",
+		body:    unbroken,
+	}, {
+		name:    "everything after the first line is the body",
+		reply:   "refactor: guard the empty list\n\nThe loop in total.go read past the end.\n# kept, not a comment\n",
+		subject: "fix: guard the empty list",
+		body:    "refactor: guard the empty list\n\nThe loop in total.go read past the end.\n# kept, not a comment",
+	}, {
+		name:    "the body is redacted as the subject is",
+		reply:   "guard the empty list\n\nfetched https://someone:hunter2@example.invalid/subject.git first",
+		subject: "fix: guard the empty list",
+		body:    "guard the empty list\n\nfetched " + redact.New().Redact("https://someone:hunter2@example.invalid/subject.git") + " first",
+		absent:  "hunter2",
+	}, {
+		name:    "a character that could hide text in the body is shown instead",
+		reply:   "guard the empty list\n\nsee \u202etxt.go\x07 for why",
+		subject: "fix: guard the empty list",
+		body:    "guard the empty list\n\nsee \ufffdtxt.go\ufffd for why",
+	}, {
+		name:    "a body past its bound is cut after a whole line and says so",
+		reply:   "guard the empty list\n" + strings.Repeat("a line of the account\n", 1000),
+		subject: "fix: guard the empty list",
+		body: "guard the empty list\n" + strings.TrimSuffix(strings.Repeat("a line of the account\n", 371), "\n") +
+			"\n\n[cut: the fixer's reply was 22020 bytes, and a fix commit's body records at most 8192]",
+	}} {
+		t.Run(c.name, func(t *testing.T) {
+			run := newFixRun(t, standin.Text(c.reply))
+			write(t, run.copy, "fixed.go", "package subject\n\n// the fix\n")
+
+			out := run.apply(t, pipeline.StageLint, oneFixFinding())
+
+			head, written := out.Writes[pipeline.KeyHead]
+			if !written {
+				t.Fatalf("the round changed a file and wrote no head: %+v", out)
+			}
+			committed, _ := head.Text()
+			if got := git(t, run.copy, "log", "-1", "--format=%s", committed); got != c.subject {
+				t.Errorf("the subject is %q, want %q", got, c.subject)
+			}
+			if got := strings.TrimSpace(git(t, run.copy, "log", "-1", "--format=%b", committed)); got != c.body {
+				t.Errorf("the body is %q, want %q", got, c.body)
+			}
+			if c.absent != "" {
+				if message := git(t, run.copy, "log", "-1", "--format=%B", committed); strings.Contains(message, c.absent) {
+					t.Errorf("the commit carries %q, which redaction removes:\n%s", c.absent, message)
+				}
+			}
+			if want := strings.TrimPrefix(c.subject, "fix: "); out.Summary != want {
+				t.Errorf("the summary run state records is %q, and the subject was rendered from %q",
+					out.Summary, want)
+			}
+		})
+	}
+}
+
+// TestAFixCommitSubjectFollowsTheConfiguredTemplate is commit.fix_message
+// respected: the template decides the subject's form, the agent's own prefix
+// is still not nested inside it, and a subject the template cannot carry falls
+// back to one this package owns without losing the agent's account, which the
+// body keeps.
+func TestAFixCommitSubjectFollowsTheConfiguredTemplate(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		template string
+		reply    string
+		subject  string
+		body     string
+	}{{
+		name:     "a template of the operator's own takes the summary",
+		template: "chore(fixer): {summary}",
+		reply:    "docs(agents): narrow the grant comments",
+		subject:  "chore(fixer): narrow the grant comments",
+		body:     "docs(agents): narrow the grant comments",
+	}, {
+		name:     "a summary the template has no room for falls back and keeps the account",
+		template: "fix: {summary} [by the run's fixer, not reviewed yet]",
+		reply:    "tighten the bound in total.go so a loop halts",
+		subject:  "fix: resolve lint findings [by the run's fixer, not reviewed yet]",
+		body:     "tighten the bound in total.go so a loop halts",
+	}} {
+		t.Run(c.name, func(t *testing.T) {
+			run := newFixRun(t, standin.Text(c.reply))
+			run.deps.Config.CommitFixMessage = c.template
+			write(t, run.copy, "fixed.go", "package subject\n\n// the fix\n")
+
+			out := run.apply(t, pipeline.StageLint, oneFixFinding())
+
+			head, written := out.Writes[pipeline.KeyHead]
+			if !written {
+				t.Fatalf("the round changed a file and wrote no head: %+v", out)
+			}
+			committed, _ := head.Text()
+			if got := git(t, run.copy, "log", "-1", "--format=%s", committed); got != c.subject {
+				t.Errorf("the subject is %q, want %q", got, c.subject)
+			}
+			if got := strings.TrimSpace(git(t, run.copy, "log", "-1", "--format=%b", committed)); got != c.body {
+				t.Errorf("the body is %q, want %q", got, c.body)
+			}
+		})
+	}
+}
+
 // TestAFixRoundThatChangedNothingSaysSoAndWritesNoHead is what the graph's
 // convergence bound rests on.
 //

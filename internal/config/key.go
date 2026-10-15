@@ -132,7 +132,10 @@ const (
 	// ceiling; the floor is zero.
 	KeyRelaunchAttempts Key = "relaunch_attempts"
 	// KeyCommitFixMessage is "commit.fix_message": the fix commit subject
-	// template.
+	// template. It shapes the subject line and nothing else: a fix commit
+	// also carries a body, the fixer's whole account of the round, which
+	// internal/stages writes below the rendered subject and no template here
+	// decides. What FixMessagePlaceholder is rendered with is said there.
 	KeyCommitFixMessage Key = "commit.fix_message"
 	// KeyAllowPushedCommands is "allow_pushed_commands": the opt-out that lets
 	// a pushed branch set the command and agent keys.

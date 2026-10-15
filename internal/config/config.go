@@ -79,7 +79,8 @@ type Config struct {
 	// key in the operator's environment, which this package never reads.
 	DecisionModel DecisionModel
 	// CommitFixMessage is the subject line template for fix commits. Render it
-	// with RenderFixMessage.
+	// with RenderFixMessage. It decides the subject only; KeyCommitFixMessage
+	// says what else a fix commit carries.
 	CommitFixMessage string
 	// AllowPushedCommands is the opt-out that lets a pushed branch set the
 	// command and agent keys. It is itself never taken from a pushed branch.
@@ -307,7 +308,10 @@ func ParseDelivery(text string) (Delivery, error) {
 
 // FixMessagePlaceholder is the one substitution a fix commit subject template
 // may contain, and must contain. It is replaced by the agent's summary of the
-// fix.
+// fix. internal/stages' fixSummary owns what that summary is, including that
+// an agent's own conventional-commit prefix is removed rather than nested
+// inside the template's, and its fixBody owns the commit body, which the
+// template does not shape.
 const FixMessagePlaceholder = "{summary}"
 
 // Limits on what a document may declare. PRD section 10 requires bounded lists

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/dayamjz/assistant/internal/vcs"
@@ -122,4 +123,67 @@ func newCommitSubject(t *testing.T) (*vcs.Repository, string) {
 		t.Fatalf("opening the working copy: %v", err)
 	}
 	return repo, dir
+}
+
+// TestCommitAllWithBodyRecordsTheBodyAsGiven is the message a fix round's
+// account is recorded under.
+//
+// The repository is configured with commit.cleanup=strip, which removes lines
+// beginning with a comment character from a message git cleans, so a body line
+// like that surviving is the verbatim recording doing its job rather than the
+// default happening to keep it. A body opening with a dash is the other shape
+// that matters: it is how a list starts, and it must be recorded as text
+// rather than read as an option.
+func TestCommitAllWithBodyRecordsTheBodyAsGiven(t *testing.T) {
+	repo, dir := newCommitSubject(t)
+	rawGit(t, dir, "config", "commit.cleanup", "strip")
+	writeFile(t, filepath.Join(dir, "existing.txt"), "edited\n")
+
+	body := "- guarded the empty list\n# kept, not a comment\n\nsecond paragraph"
+	commit, err := repo.CommitAllWithBody(ctx(t), "fix: guard the empty list", body)
+	if err != nil {
+		t.Fatalf("committing with a body: %v", err)
+	}
+	raw := rawGit(t, dir, "cat-file", "commit", commit)
+	_, message, found := strings.Cut(raw, "\n\n")
+	if !found {
+		t.Fatalf("the commit object has no message:\n%s", raw)
+	}
+	if want := "fix: guard the empty list\n\n" + body + "\n"; message != want {
+		t.Fatalf("the message recorded is %q, want %q", message, want)
+	}
+}
+
+// TestCommitAllWithAnEmptyBodyRecordsTheSubjectAlone is the positive control
+// for the body: no body adds nothing below the subject, which is CommitAll's
+// message exactly.
+func TestCommitAllWithAnEmptyBodyRecordsTheSubjectAlone(t *testing.T) {
+	repo, dir := newCommitSubject(t)
+	writeFile(t, filepath.Join(dir, "existing.txt"), "edited\n")
+
+	commit, err := repo.CommitAllWithBody(ctx(t), "fix: guard the empty list", "")
+	if err != nil {
+		t.Fatalf("committing without a body: %v", err)
+	}
+	raw := rawGit(t, dir, "cat-file", "commit", commit)
+	if _, message, _ := strings.Cut(raw, "\n\n"); message != "fix: guard the empty list\n" {
+		t.Fatalf("the message recorded is %q, want the subject alone", message)
+	}
+}
+
+// TestCommitAllWithBodyRefusesANulByte keeps a body git could not be handed
+// from being handed to it cut short, and writes nothing.
+func TestCommitAllWithBodyRefusesANulByte(t *testing.T) {
+	repo, dir := newCommitSubject(t)
+	writeFile(t, filepath.Join(dir, "existing.txt"), "edited\n")
+	before, err := repo.ResolveCommit(ctx(t), "HEAD")
+	if err != nil {
+		t.Fatalf("reading HEAD: %v", err)
+	}
+	if _, err := repo.CommitAllWithBody(ctx(t), "fix: subject", "before\x00after"); !errors.Is(err, vcs.ErrInvalidArgument) {
+		t.Fatalf("a body carrying a NUL byte returned %v, want ErrInvalidArgument", err)
+	}
+	if after, err := repo.ResolveCommit(ctx(t), "HEAD"); err != nil || after != before {
+		t.Fatalf("the refusal moved HEAD from %s to %s (%v)", before, after, err)
+	}
 }
