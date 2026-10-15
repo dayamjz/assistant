@@ -992,8 +992,9 @@ Each has cost this repository more than one round of review.
   Four commands stand outside that table, each dispatched beside it rather
   than added to it. `gate` and `host` are each the interface something
   external requires; `coordinator` is the owner's decision on #227 and
-  `worker` is #226's, neither a precedent the others set, and section 9 does
-  not mention `worker`, which is a finding against it; a fifth is a finding. `assistant gate` is
+  `worker` is #226's, which section 9 now names beside the table by the
+  owner's decision; neither is a precedent the others set, and a fifth is a
+  finding. `assistant gate` is
   what `internal/gate`'s installed hooks and the `assistant` remote's
   receive command invoke, and its subcommands are the
   `gateHooks` table in `gate.go`. `assistant host` is
