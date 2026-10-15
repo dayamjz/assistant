@@ -288,6 +288,7 @@ assistant watch                # catch up, then follow everything in flight
 assistant runs --usage=7d      # what the stage agents' calls cost, by agent and run
 assistant host install         # print the stop guard line for the coordinator's host
 assistant --task ID --answer retry   # answer a task that is waiting on you
+assistant --task ID --answer approved   # with none of its own open, answer its run's decision instead
 assistant status               # repository, gate, service, run, branch
 assistant sync                 # how this branch stands against what the pipeline holds, and the plan
 assistant sync --confirm       # carry that plan out

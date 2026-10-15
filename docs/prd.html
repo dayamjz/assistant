@@ -2030,7 +2030,9 @@ flowchart TB
   <p class="mb-4 opacity-90">
     Answering a hold is a flag on <code>assistant</code>, and it takes a task as well as a run, so a
     hold a task raised with no run behind it, an investigation's among them, is answered the same
-    way. No verb is added for it.
+    way. Given a task with no hold of its own open, it answers the hold on the task's current run,
+    so a run a task produced is answered without checking out the task's branch. No verb is added
+    for it.
   </p>
   <p class="mb-8 opacity-90">
     Creating a task, promoting an investigation to delivery, and relaunching a task whose terminal
