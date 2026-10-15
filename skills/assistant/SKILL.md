@@ -125,4 +125,6 @@ assistant --json status     # the same as one document, with every finding
 assistant runs              # recent runs, newest first
 assistant watch --once      # everything in flight and everything waiting on you
 assistant --cancel          # end this branch's run, wherever it stands
+assistant --cancel=RUN      # end the run RUN, from any directory
+assistant rerun --intent "..."  # rerun this branch with a replaced intent
 ```

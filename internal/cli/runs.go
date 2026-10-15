@@ -52,25 +52,32 @@ import (
 // with --answer, and the fix round's flags go with --answer fix to the
 // task's run, as they would to this branch's. Neither needs a working copy,
 // so the command answers from wherever it is run.
+//
+// --cancel ends this branch's run, and given a run as --cancel=RUN it ends
+// that run instead, which PRD section 9 has it do from anywhere: like --task,
+// it reads no working copy, so it is answered from a directory that is not
+// one. cancelFlag says why the run is joined to the flag rather than the word
+// after it, and a run written as that word is refused by name.
 func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 	var (
 		intent       string
 		suppliedFlag bool
 		answer       string
 		skip         string
-		cancel       bool
+		cancel       cancelFlag
 		selected     string
 		note         string
 		own          repeated
 		task         string
 		consent      bool
 	)
-	if err := in.parseFlags("", func(set *flag.FlagSet) {
+	if err := in.parseArgs("", 1, func(set *flag.FlagSet) {
 		set.StringVar(&intent, "intent", "", "what this change sets out to do, in your own terms")
 		set.BoolVar(&suppliedFlag, "intent-supplied", false, "treat the intent as authoritative acceptance criteria rather than a hint")
 		set.StringVar(&answer, "answer", "", "answer the decision the run is holding on, or with --task the task's")
 		set.StringVar(&task, "task", "", "with --answer: the task whose hold is answered, or with none of its own open, the hold on the task's current run")
-		set.BoolVar(&cancel, "cancel", false, "end this branch's run, wherever it stands")
+		set.Var(&cancel, cancelFlagName, "end this branch's run, wherever it stands; written --"+cancelFlagName+
+			"=RUN it ends the run RUN instead, from anywhere")
 		set.StringVar(&skip, "skip", "", "comma-separated stages this one run does not take")
 		set.StringVar(&selected, "select", "", "with --answer fix: comma-separated identifiers of findings the held stage reported, for the round to resolve; "+
 			"the hold lists only the findings holding it, and "+everyFindingIsIn)
@@ -81,6 +88,18 @@ func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 			"the decisions about findings before the push itself, and never the push, pull request or checks ones")
 	}); err != nil {
 		return nil, err
+	}
+	// parseArgs let one word through so a run written after --cancel can be
+	// refused by name; the command still takes no argument of its own.
+	if len(in.args) > 0 {
+		if cancel.on && cancel.run == "" {
+			return nil, usagef("--%s takes its run joined to it, as --%s=%s", cancelFlagName, cancelFlagName, in.args[0])
+		}
+		return nil, usagef("%s takes %s, and was given %d: %s",
+			commandName(""), arguments(0), len(in.args), strings.Join(in.args, " "))
+	}
+	if cancel.on && cancel.named && strings.TrimSpace(cancel.run) == "" {
+		return nil, usagef("--%s= was given no run; it takes the identifier of the run to end, or nothing to end this branch's", cancelFlagName)
 	}
 	answered := flagWasSet(in.flags, "answer")
 	fixing := answered && answer == string(pipeline.OutcomeFixRequested)
@@ -100,10 +119,10 @@ func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 	if answered && strings.TrimSpace(answer) == "" {
 		return nil, usagef("--answer was given an empty answer; it takes one of the options the decision offered")
 	}
-	if answered && cancel {
+	if answered && cancel.on {
 		return nil, usagef("--answer and --cancel are two different things to do with one run; pass one")
 	}
-	if acting := actingOnTheRunInFlight(answered, cancel); acting != "" {
+	if acting := actingOnTheRunInFlight(answered, cancel.on); acting != "" {
 		for _, name := range []string{"intent", "intent-supplied", "skip", "standing-consent"} {
 			if flagWasSet(in.flags, name) {
 				return nil, usagef("%s acts on the run this branch already has, and --%s is for starting one; pass one", acting, name)
@@ -132,11 +151,14 @@ func attachOrStart(ctx context.Context, in *invocation) (any, error) {
 	if tasked {
 		return in.answerGivenTask(ctx, task, answer, request)
 	}
+	if cancel.on && cancel.run != "" {
+		return in.endNamedRun(ctx, cancel.run)
+	}
 	working, err := in.workingCopy(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if cancel {
+	if cancel.on {
 		return in.endRun(ctx, working)
 	}
 	if answered {
@@ -270,11 +292,63 @@ func (in *invocation) endRun(ctx context.Context, working string) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	in.progressf("ending %s", active)
+	return in.endNamedRun(ctx, active)
+}
+
+// endNamedRun ends the run named, wherever it stands and wherever the command
+// was run. A run the home has no record of, and one that has already ended,
+// are the service's to refuse, with machine.CancelRefused as an invalid
+// request, so they exit as incorrect usage through failureExit like any other
+// request the service will not read as given.
+func (in *invocation) endNamedRun(ctx context.Context, id string) (any, error) {
+	in.progressf("ending %s", id)
 	var run machine.Run
-	err = in.callService(ctx, ipc.MethodRunCancel, machine.CancelRequest{Run: active}, &run)
+	err := in.callService(ctx, ipc.MethodRunCancel, machine.CancelRequest{Run: id}, &run)
 	return run, err
 }
+
+// cancelFlagName is the flag on the command with no verb that ends a run,
+// named once so the declaration, the refusals and a test read the same word.
+const cancelFlagName = "cancel"
+
+// cancelFlag is --cancel: whether it asks for a run to be ended, and which run
+// when one was named.
+//
+// It is a boolean flag to the flag package, for the reason usageFlag is one:
+// --cancel alone has to stay the command that ends this branch's run, so the
+// run is written joined to it as --cancel=RUN. A boolean's own words keep
+// their meaning, so --cancel=true is --cancel alone and --cancel=false asks
+// for nothing to be ended, which actingOnTheRunInFlight relies on. A run
+// identifier is never either word, because the service mints identifiers as
+// hexadecimal.
+type cancelFlag struct {
+	// on is whether a run is to be ended.
+	on bool
+	// named is whether the flag was written with a value other than a
+	// boolean's, which is a run even when it is empty.
+	named bool
+	// run is the run named, empty for this branch's.
+	run string
+}
+
+// String is the run as given, for the flag package's usage text.
+func (c *cancelFlag) String() string { return c.run }
+
+// Set records the flag.
+func (c *cancelFlag) Set(value string) error {
+	switch value {
+	case "true":
+		c.on, c.named, c.run = true, false, ""
+	case "false":
+		c.on, c.named, c.run = false, false, ""
+	default:
+		c.on, c.named, c.run = true, true, value
+	}
+	return nil
+}
+
+// IsBoolFlag tells the flag package --cancel may be given alone.
+func (c *cancelFlag) IsBoolFlag() bool { return true }
 
 // activeRun is the identifier of the run this branch has in flight. It is
 // found the same way attaching finds it, so a caller does not have to name an
@@ -524,9 +598,22 @@ func (u *usageFlag) IsBoolFlag() bool { return true }
 // service's, decided while it holds the branch; this command only reports it,
 // and neither reads anything but HEAD from the working copy, so a refused
 // rerun changes nothing there.
+//
+// --intent replaces the inherited intent for the fresh run, which records it
+// as supplied: acceptance criteria, as an intent given to a start with nothing
+// said about its standing is. It changes nothing else about the rerun, so the
+// head validated and the refusal above are the same with it. An intent that is
+// empty or whitespace is refused as incorrect usage here before the service is
+// asked, because a caller who wrote the flag asked for a replacement.
 func rerun(ctx context.Context, in *invocation) (any, error) {
-	if err := in.parseFlags("rerun", func(*flag.FlagSet) {}); err != nil {
+	var intent string
+	if err := in.parseFlags("rerun", func(set *flag.FlagSet) {
+		set.StringVar(&intent, "intent", "", "replace the recorded intent for the fresh run; it is recorded as acceptance criteria")
+	}); err != nil {
 		return nil, err
+	}
+	if flagWasSet(in.flags, "intent") && strings.TrimSpace(intent) == "" {
+		return nil, usagef("--intent was given no intent; it takes what the change sets out to do, or leave it out to inherit the recorded one")
 	}
 	working, err := in.workingCopy(ctx)
 	if err != nil {
@@ -536,6 +623,7 @@ func rerun(ctx context.Context, in *invocation) (any, error) {
 	var run machine.Run
 	err = in.callService(ctx, ipc.MethodRunRerun, machine.RerunRequest{
 		Working: machine.Working{WorkingPath: working},
+		Intent:  intent,
 	}, &run)
 	return run, err
 }
