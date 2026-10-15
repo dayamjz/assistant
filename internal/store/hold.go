@@ -127,6 +127,39 @@ func (s *Store) ResolveHold(ctx context.Context, key, resolution string, by Reso
 	return s.Hold(ctx, key)
 }
 
+// RecordHoldResolution registers a hold and resolves it in one transaction, on
+// HoldClosure's terms, and returns the hold as stored. It is for a decision
+// the recording caller answered itself, so the hold row and its resolution
+// appear together: a reader never finds the hold open with nobody waiting on
+// it, and never finds a resolution with no hold behind it.
+//
+// It refuses a hold with no key or no subject, an empty resolution with
+// ErrNoResolution, and a resolution naming nobody with ErrNoResolver, before
+// anything is written. A key already resolved is left as it stands, which is
+// what makes recording one decision twice one record rather than a refusal:
+// the key is what says these are the same decision.
+func (s *Store) RecordHoldResolution(ctx context.Context, closing HoldClosure) (Hold, error) {
+	key := closing.Hold.Key
+	if strings.TrimSpace(key) == "" {
+		return Hold{}, fmt.Errorf("store: hold has no key")
+	}
+	if strings.TrimSpace(closing.Hold.Subject) == "" {
+		return Hold{}, fmt.Errorf("store: hold %s has no subject", key)
+	}
+	if strings.TrimSpace(closing.Resolution) == "" {
+		return Hold{}, fmt.Errorf("%w: hold %s", ErrNoResolution, key)
+	}
+	if _, err := resolverText(closing.By); err != nil {
+		return Hold{}, fmt.Errorf("store: resolving hold %s: %w", key, err)
+	}
+	if err := s.inTx(ctx, func(tx *sql.Tx) error {
+		return closeHold(ctx, tx, closing, encodeTime(nowUTC()))
+	}); err != nil {
+		return Hold{}, err
+	}
+	return s.Hold(ctx, key)
+}
+
 // Hold returns the hold with the given key, or ErrNotFound.
 func (s *Store) Hold(ctx context.Context, key string) (Hold, error) {
 	if err := s.live(); err != nil {

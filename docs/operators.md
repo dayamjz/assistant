@@ -100,6 +100,20 @@ the identifier of any finding the stage reported, including a fix or note
 finding the hold does not list. `assistant --json status` lists every one, with
 its identifier, under `active_run.stages[].report.findings`.
 
+## Standing consent
+
+`assistant --standing-consent` starts or attaches to this branch's run and puts
+that run under standing consent, which lets the program answer the holds of
+the stages before push without you: a fix round over every finding that is
+not a note, and approval of the hold a round leaves once only notes remain.
+It never answers the push, pull request, or checks holds, so a push refusal
+still waits for you, and the three-round limit and the run budget still bound
+it. The repository has to allow it with `"allow_standing_consent": true` in
+`assistant.json` on the default branch; without that the flag is refused as
+incorrect usage, and a branch cannot set the key for itself. Each answer is
+recorded as the program's, and status, the run listing, and the pull request
+body say the run ran under standing consent.
+
 ## Keep your CI required
 
 The gate is not your CI (PRD section 12 lists "Being your CI" as a permanent

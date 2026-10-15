@@ -373,7 +373,7 @@ func readOutService(w io.Writer, s machine.Service) {
 }
 
 // readOutRun prints a run: its phrase, the branch, the agent it resolved,
-// what became of its local copy and whether something it started may still
+// whether it runs under standing consent, what became of its local copy and whether something it started may still
 // be at work there, what of the request was not applied, and
 // then its details, its decision and the findings holding the decision. The
 // details and the findings are the two evidence documents, each written
@@ -389,6 +389,13 @@ func readOutRun(w io.Writer, r machine.Run) {
 	// record's own honesty carried through: an unknown is not a name.
 	if agent, ok := r.Record.ResolvedAgent.Get(); ok {
 		writef(w, "Agent      %s\n", printable(agent))
+	}
+	// Standing consent, straight off the record: the program answered some
+	// of this run's decisions, and a person reading the run is told so
+	// before anything else about it. When it was given is the structured
+	// rendering's.
+	if r.Record.StandingConsent.IsKnown() {
+		writeln(w, machine.PhraseStandingConsent)
 	}
 	if r.Cleanup != nil {
 		if phrase, ok := machine.CleanupPhrase(*r.Cleanup); ok {
@@ -564,7 +571,8 @@ func printable(text string) string {
 }
 
 // readOutRuns prints the run listing: when each run was recorded, its branch,
-// and its phrase from the record alone, on machine.RecordPhrase's terms. The
+// and its phrase from the record alone, on machine.RecordPhrase's terms, with
+// the standing consent row beneath a run whose record carries it. The
 // record's identifier is the structured rendering's, which is where a verb
 // that takes one is driven from.
 func readOutRuns(w io.Writer, runs machine.Runs) {
@@ -575,6 +583,11 @@ func readOutRuns(w io.Writer, runs machine.Runs) {
 	for _, record := range runs.Runs {
 		writef(w, "%s  %s: %s\n", record.CreatedAt.Format("2006-01-02 15:04:05"),
 			printable(record.Branch), machine.RecordPhrase(record))
+		// A run under standing consent says so on its own line beneath,
+		// off the same record, as status says it.
+		if record.StandingConsent.IsKnown() {
+			writef(w, "  %s\n", machine.PhraseStandingConsent)
+		}
 	}
 }
 

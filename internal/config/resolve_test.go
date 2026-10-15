@@ -460,6 +460,7 @@ func TestRepositoryFileStillAcceptsEveryOtherKey(t *testing.T) {
 		KeyRelaunchAttempts:            `{"relaunch_attempts": 1}`,
 		KeyAutonomyMerge:               `{"autonomy": {"merge": ["owner/name"]}}`,
 		KeyDelivery:                    `{"delivery": "local"}`,
+		KeyAllowStandingConsent:        `{"allow_standing_consent": true}`,
 	}
 	// Every schema key is covered, so a key added without a decision about its
 	// class fails here rather than going untested.

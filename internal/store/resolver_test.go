@@ -55,7 +55,7 @@ func TestResolveHoldRefusesAResolutionThatNamesNobody(t *testing.T) {
 
 	// The zero Resolver is what a caller that never thought about the question
 	// holds, and it is the only value of this type a caller outside this
-	// package can produce without naming one of the three.
+	// package can produce without naming one of the four.
 	_, err := s.ResolveHold(ctx, "k", "ship it", Resolver{})
 	if !errors.Is(err, ErrNoResolver) {
 		t.Fatalf("ResolveHold with nobody recorded: %v, want ErrNoResolver", err)
